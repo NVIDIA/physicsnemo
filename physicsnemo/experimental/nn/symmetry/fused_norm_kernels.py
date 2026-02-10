@@ -14,25 +14,133 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Fused Warp GPU kernels for equivariant normalization layers.
+"""Fused Warp GPU kernels and PyTorch custom ops for equivariant normalization layers.
 
-This file contains pure warp kernels. No PyTorch code here.
-Two-pass design:
-  - Kernel 1 (reduce): 3D grid (batch, l, channels), tile reduction over channels
-  - Kernel 2 (normalize): 3D grid (batch, l, channels), pure SIMT
+This module provides GPU-accelerated normalization for spherical harmonic features
+using NVIDIA Warp kernels, with full PyTorch autograd integration via
+``torch.library.custom_op``.
+
+Module Structure
+----------------
+The module is organized into four sections:
+
+1. **Forward Warp Kernels** - low-level GPU kernels for the forward pass.
+2. **Backward Warp Kernels** - hand-written gradient kernels for the backward pass.
+3. **Custom Op Wrappers** - ``torch.library.custom_op`` definitions that orchestrate
+   kernel launches and register autograd support, making the fused kernels usable
+   as differentiable operations within standard PyTorch training loops.
+
+Each normalization variant generally is structured with two kernels:
+
+- **Pass 1 (reduce):** A 3D grid ``(batch, l, channels)`` with cooperative
+  tile reduction over the channel dimension accumulates squared-norm statistics
+  via atomic adds. Requires ``block_dim=num_channels``.
+- **Pass 2 (normalize):** A 3D grid ``(batch, l, channels)`` in pure SIMT mode
+  (one thread per element) reads the statistics, computes ``inv_rms``, and writes
+  the normalized output.
+
+The backward pass mirrors this with two analogous kernels plus a recomputation
+of the forward statistics.
+
+Autograd Integration
+--------------------
+Each custom op (e.g., ``fused_rmsnorm``) is wired to PyTorch's autograd engine
+via four components:
+
+- **Forward function** (``@torch.library.custom_op``): Launches the forward Warp
+  kernels and returns the output tensor.
+- **Fake implementation** (``@<op>.register_fake``): Returns an empty tensor with
+  the correct shape/dtype for ``torch.compile`` tracing.
+- **Setup context** (``setup_context``): Saves input tensors and scalar attributes
+  on the autograd context for use in the backward pass.
+- **Backward function**: Launches backward Warp kernels to compute gradients for
+  the input, affine weight, and (optionally) affine bias. Non-differentiable
+  inputs (masks, weights, scalars) receive ``None``.
+
+These are connected by ``<op>.register_autograd(backward_fn, setup_context=...)``.
+
+Kernel Inventory
+----------------
+**Per-Degree LayerNorm** (used by ``FusedEquivariantLayerNorm``):
+    Each spherical harmonic degree is normalized independently with its own
+    inverse-RMS statistic. Statistics are stored as ``[batch * (lmax+1)]``
+    (flattened) in the reduce pass and read as ``[batch, lmax+1]`` (2D) in the
+    normalize pass. Uses ``inv_num_channels = 1 / num_channels``.
+
+    Forward kernels:
+        ``layernorm_grid_reduce`` /
+        ``layernorm_grid_reduce_submean`` —
+            Accumulate per-degree sum-of-squares, optionally subtracting the
+            l=0 channel mean first.
+        ``layernorm_grid_normalize`` /
+        ``layernorm_grid_normalize_submean`` /
+        ``layernorm_grid_normalize_submean_bias`` —
+            Apply per-degree inv-RMS scaling with affine weight, optional
+            mean subtraction, and optional bias at l=0.
+    Backward kernels:
+        ``layernorm_grid_backward_reduce`` /
+        ``layernorm_grid_backward_reduce_submean_bias`` —
+            Compute per-degree ``go_dot_o = sum(grad_output * output)``.
+        ``layernorm_grid_backward_normalize`` /
+        ``layernorm_grid_backward_normalize_submean`` —
+            Compute ``grad_x``, ``grad_affine_weight``, and optionally
+            ``grad_affine_bias``.
+    Custom op:
+        ``fused_layernorm`` — Orchestrates all of the above with autograd.
+
+**Global RMSNorm** (used by ``FusedEquivariantRMSNorm``):
+    A single inverse-RMS statistic is computed across *all* degrees and used to
+    scale every component. Statistics are stored as ``[batch]``.
+    Uses ``inv_num_channels = 1 / (2 * num_channels)``.
+
+    Forward kernels:
+        ``rmsnorm_grid_reduce`` /
+        ``rmsnorm_grid_reduce_submean`` —
+            Accumulate global sum-of-squares across all (l, m) positions.
+        ``rmsnorm_grid_normalize`` /
+        ``rmsnorm_grid_normalize_submean`` /
+        ``rmsnorm_grid_normalize_submean_bias`` —
+            Apply global inv-RMS scaling with affine weight, optional mean
+            subtraction, and optional bias at l=0.
+    Backward kernels:
+        ``rmsnorm_backward_reduce`` /
+        ``rmsnorm_backward_reduce_submean_bias`` —
+            Compute global ``go_dot_o = sum(grad_output * output)``.
+        ``rmsnorm_backward_normalize`` /
+        ``rmsnorm_backward_normalize_submean`` —
+            Compute ``grad_x``, ``grad_affine_weight``, and optionally
+            ``grad_affine_bias``.
+    Custom op:
+        ``fused_rmsnorm`` — Orchestrates all of the above with autograd.
+
+**LayerNormSH l>0** (used by ``FusedEquivariantLayerNormSH``):
+    Normalizes only the l>0 degrees with a single shared inverse-RMS statistic
+    (l=0 is handled separately by ``torch.nn.LayerNorm`` in the calling module).
+    Input tensors are pre-sliced to ``[batch, lmax, ...]`` (l=0 excluded).
+    Statistics are stored as ``[batch]``.
+    Uses ``inv_num_channels = 1 / (2 * num_channels)``.
+
+    Forward kernels:
+        ``layernormsh_lgt0_reduce`` —
+            Accumulate global sum-of-squares over l>0 degrees.
+        ``layernormsh_lgt0_normalize`` —
+            Apply global inv-RMS scaling with affine weight.
+    Backward kernels:
+        ``layernormsh_lgt0_backward_reduce`` —
+            Compute global ``go_dot_o`` over l>0 slice.
+        ``layernormsh_lgt0_backward_normalize`` —
+            Compute ``grad_x`` and ``grad_affine_weight`` for l>0.
+    Custom op:
+        ``fused_layernormsh_lgt0`` — Orchestrates all of the above with autograd.
+
+**Utility:**
+    ``inv_rms_transform`` —
+        Warp device function that converts a raw sum-of-squares to inverse RMS.
+        Currently unused (inv-RMS is computed inline in normalize kernels) but
+        retained for potential future use.
 """
 
 import warp as wp
-
-
-@wp.func
-def inv_rms_transform(norm_sum: float, inv_num_channels: float, eps: float) -> float:
-    """Convert accumulated sum-of-squares to inverse RMS.
-
-    Computes: 1 / sqrt(norm_sum / num_channels + eps)
-    Using pre-computed inv_num_channels = 1.0 / num_channels.
-    """
-    return 1.0 / wp.sqrt(norm_sum * inv_num_channels + eps)
 
 
 @wp.kernel
@@ -1022,6 +1130,457 @@ def rmsnorm_backward_normalize_submean(
 
 
 # =============================================================================
+# Backward Kernels for LayerNormSH (l>0)
+# =============================================================================
+
+
+@wp.kernel
+def layernormsh_lgt0_backward_reduce(
+    grad_output: wp.array4d(dtype=float),  # [batch, lmax, mmax+1, 2*channels]
+    output: wp.array4d(dtype=float),  # [batch, lmax, mmax+1, 2*channels]
+    go_dot_o: wp.array(dtype=float),  # [batch], pre-zeroed
+    mmax: int,
+    num_channels: int,
+):
+    """Compute go_dot_o[b] = sum(grad_output * output) for backward pass of l>0 normalization.
+
+    This kernel operates on the l>0 slice only (excluding l=0 scalar component).
+    Launched with wp.launch(dim=(batch, lmax, num_channels), block_dim=num_channels).
+    Uses tile reduction for efficient accumulation across channels and atomic add across l-blocks.
+
+    Parameters
+    ----------
+    grad_output : [batch, lmax, mmax+1, 2*channels]
+        Upstream gradient from loss (l>0 slice only).
+    output : [batch, lmax, mmax+1, 2*channels]
+        Forward pass output for l>0 (saved from forward).
+    go_dot_o : [batch]
+        Output: inner product per batch. Pre-zeroed by caller.
+        Multiple l-blocks write to same batch slot via atomic add.
+    mmax : int
+        Maximum order.
+    num_channels : int
+        Number of channels (= block_dim).
+    """
+    batch_idx, l_idx, c = wp.tid()
+    # l_idx is 0-based within l>0 slice, so actual degree is l_idx + 1
+    l_actual = l_idx + 1
+    num_valid_m = wp.min(l_actual, mmax) + 1
+
+    # Each thread accumulates its per-channel contribution to the inner product
+    local_sum = float(0.0)
+    for m in range(num_valid_m):
+        for ri in range(2):
+            if m == 0 and ri == 1:
+                continue
+            # No need to check validity - output is already masked to zero at invalid positions
+            go = grad_output[batch_idx, l_idx, m, ri * num_channels + c]
+            o = output[batch_idx, l_idx, m, ri * num_channels + c]
+            local_sum = local_sum + go * o
+
+    # Cooperative tile reduction across channels within the block
+    t = wp.tile(local_sum)
+    s = wp.tile_sum(t)
+
+    # Store result - multiple l-blocks atomically accumulate into the same batch slot
+    wp.tile_atomic_add(go_dot_o, s, offset=batch_idx)
+
+
+@wp.kernel
+def layernormsh_lgt0_backward_normalize(
+    grad_output: wp.array4d(dtype=float),  # [batch, lmax, mmax+1, 2*channels]
+    x_lgt0: wp.array4d(dtype=float),  # [batch, lmax, mmax+1, 2*channels]
+    norm_stats: wp.array(dtype=float),  # [batch]
+    go_dot_o: wp.array(dtype=float),  # [batch]
+    affine_weight: wp.array2d(dtype=float),  # [lmax, channels]
+    balance_weight_lgt0: wp.array2d(dtype=float),  # [lmax, mmax+1]
+    grid_mask_lgt0: wp.array3d(dtype=float),  # [lmax, mmax+1, 2]
+    grad_x: wp.array4d(dtype=float),  # [batch, lmax, mmax+1, 2*channels] - output
+    grad_affine_weight: wp.array2d(
+        dtype=float
+    ),  # [lmax, channels] - output (zeroed by caller)
+    mmax: int,
+    num_channels: int,
+    inv_num_channels: float,
+    eps: float,
+):
+    """Compute grad_x and grad_affine_weight for backward pass of l>0 normalization. Pure SIMT.
+
+    This kernel operates on the l>0 slice only (excluding l=0 scalar component).
+    Launched with wp.launch(dim=(batch, lmax, num_channels)).
+
+    Parameters
+    ----------
+    grad_output : [batch, lmax, mmax+1, 2*channels]
+        Upstream gradient (l>0 slice only).
+    x_lgt0 : [batch, lmax, mmax+1, 2*channels]
+        Input from forward pass (l>0 slice only).
+    norm_stats : [batch]
+        Raw sum-of-squares from forward reduce kernel.
+    go_dot_o : [batch]
+        Inner product of grad_output and output from backward reduce kernel.
+    affine_weight : [lmax, channels]
+        Affine scale parameters from forward (l>0 slice).
+    balance_weight_lgt0 : [lmax, mmax+1]
+        Degree balancing weights for l>0.
+    grid_mask_lgt0 : [lmax, mmax+1, 2]
+        Validity mask for l>0 (combines m<=l constraint and m=0 imaginary zeroing).
+    grad_x : [batch, lmax, mmax+1, 2*channels]
+        Output: gradient w.r.t. input x_lgt0.
+    grad_affine_weight : [lmax, channels]
+        Output: gradient w.r.t. affine_weight. Pre-zeroed by caller.
+    mmax : int
+        Maximum order.
+    num_channels : int
+        Number of channels.
+    inv_num_channels : float
+        Pre-computed 1.0 / (2 * num_channels).
+    eps : float
+        Epsilon for numerical stability.
+    """
+    batch_idx, l_idx, c = wp.tid()
+
+    # Recompute inv_rms from forward pass
+    inv_rms_val = 1.0 / wp.sqrt(norm_stats[batch_idx] * inv_num_channels + eps)
+    inv_rms_sq = inv_rms_val * inv_rms_val
+    aw = affine_weight[l_idx, c]
+    go_dot_o_val = go_dot_o[batch_idx]
+
+    for m in range(mmax + 1):
+        for ri in range(2):
+            go_val = grad_output[batch_idx, l_idx, m, ri * num_channels + c]
+            x_val = x_lgt0[batch_idx, l_idx, m, ri * num_channels + c]
+            mask_val = grid_mask_lgt0[l_idx, m, ri]
+            bw = balance_weight_lgt0[l_idx, m]
+
+            # Path A: direct gradient (applies everywhere, masked by grid_mask)
+            grad_a = go_val * inv_rms_val * aw * mask_val
+
+            # Path B: indirect through norm_stats
+            # Only at reduce-valid positions: grid_mask and balance_weight product gives correct mask
+            # (balance_weight is 0 for m>l, grid_mask is 0 for m=0 imaginary)
+            grad_b = (
+                inv_num_channels * inv_rms_sq * go_dot_o_val * bw * x_val * mask_val
+            )
+
+            grad_x[batch_idx, l_idx, m, ri * num_channels + c] = grad_a - grad_b
+
+            # Accumulate grad_affine_weight (atomic — threads across b, m, ri contribute)
+            grad_aw_contrib = go_val * x_val * inv_rms_val * mask_val
+            wp.atomic_add(grad_affine_weight, l_idx, c, grad_aw_contrib)
+
+
+# =============================================================================
+# Backward Kernels for Per-Degree LayerNorm
+# =============================================================================
+
+
+@wp.kernel
+def layernorm_grid_backward_reduce(
+    grad_output: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels]
+    output: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels]
+    go_dot_o: wp.array(dtype=float),  # [batch * lmax_p1], pre-zeroed
+    lmax_p1: int,
+    mmax: int,
+    num_channels: int,
+):
+    """Compute go_dot_o[b, l] = sum(grad_output * output) for backward pass of per-degree norm.
+
+    Launched with wp.launch(dim=(batch, lmax+1, num_channels), block_dim=num_channels).
+    Uses tile reduction for efficient accumulation across channels and atomic add to per-degree slots.
+
+    Parameters
+    ----------
+    grad_output : [batch, lmax+1, mmax+1, 2*channels]
+        Upstream gradient from loss.
+    output : [batch, lmax+1, mmax+1, 2*channels]
+        Forward pass output (saved from forward).
+    go_dot_o : [batch * lmax_p1]
+        Output: inner product per (batch, l) flattened. Pre-zeroed by caller.
+        Each (b, l) thread writes to go_dot_o[b * lmax_p1 + l] via atomic add.
+    lmax_p1 : int
+        lmax + 1.
+    mmax : int
+        Maximum order.
+    num_channels : int
+        Number of channels (= block_dim).
+    """
+    batch_idx, l_idx, c = wp.tid()
+    num_valid_m = wp.min(l_idx, mmax) + 1
+
+    # Each thread accumulates its per-channel contribution to the inner product
+    local_sum = float(0.0)
+    for m in range(num_valid_m):
+        for ri in range(2):
+            # No need to check validity - output is already masked to zero at invalid positions
+            go = grad_output[batch_idx, l_idx, m, ri * num_channels + c]
+            o = output[batch_idx, l_idx, m, ri * num_channels + c]
+            local_sum = local_sum + go * o
+
+    # Cooperative tile reduction across channels within the block
+    t = wp.tile(local_sum)
+    s = wp.tile_sum(t)
+
+    # Store result - atomic add to per-degree slot [batch * lmax_p1 + l]
+    wp.tile_atomic_add(go_dot_o, s, offset=batch_idx * lmax_p1 + l_idx)
+
+
+@wp.kernel
+def layernorm_grid_backward_normalize(
+    grad_output: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels]
+    x: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels]
+    norm_stats: wp.array2d(dtype=float),  # [batch, lmax+1]
+    go_dot_o: wp.array2d(dtype=float),  # [batch, lmax+1]
+    affine_weight: wp.array2d(dtype=float),  # [lmax+1, channels]
+    per_degree_norm_weight: wp.array2d(dtype=float),  # [lmax+1, mmax+1]
+    grid_mask: wp.array3d(dtype=float),  # [lmax+1, mmax+1, 2]
+    grad_x: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels] - output
+    grad_affine_weight: wp.array2d(
+        dtype=float
+    ),  # [lmax+1, channels] - output (zeroed by caller)
+    mmax: int,
+    num_channels: int,
+    inv_num_channels: float,
+    eps: float,
+):
+    """Compute grad_x and grad_affine_weight for backward pass of per-degree norm. Pure SIMT.
+
+    Launched with wp.launch(dim=(batch, lmax+1, num_channels)).
+
+    Parameters
+    ----------
+    grad_output : [batch, lmax+1, mmax+1, 2*channels]
+        Upstream gradient.
+    x : [batch, lmax+1, mmax+1, 2*channels]
+        Input from forward pass.
+    norm_stats : [batch, lmax+1]
+        Per-degree raw sum-of-squares from forward reduce kernel.
+    go_dot_o : [batch, lmax+1]
+        Per-degree inner product of grad_output and output from backward reduce kernel.
+    affine_weight : [lmax+1, channels]
+        Affine scale parameters from forward.
+    per_degree_norm_weight : [lmax+1, mmax+1]
+        Per-degree normalization weights.
+    grid_mask : [lmax+1, mmax+1, 2]
+        Validity mask (combines m<=l constraint and m=0 imaginary zeroing).
+    grad_x : [batch, lmax+1, mmax+1, 2*channels]
+        Output: gradient w.r.t. input x.
+    grad_affine_weight : [lmax+1, channels]
+        Output: gradient w.r.t. affine_weight. Pre-zeroed by caller.
+    mmax : int
+        Maximum order.
+    num_channels : int
+        Number of channels.
+    inv_num_channels : float
+        Pre-computed 1.0 / num_channels (not 1/(2*num_channels) — per-degree uses 1/C).
+    eps : float
+        Epsilon for numerical stability.
+    """
+    batch_idx, l_idx, c = wp.tid()
+
+    # Recompute per-degree inv_rms from forward pass
+    inv_rms_val = 1.0 / wp.sqrt(norm_stats[batch_idx, l_idx] * inv_num_channels + eps)
+    inv_rms_sq = inv_rms_val * inv_rms_val
+    aw = affine_weight[l_idx, c]
+    go_dot_o_val = go_dot_o[batch_idx, l_idx]
+
+    for m in range(mmax + 1):
+        for ri in range(2):
+            go_val = grad_output[batch_idx, l_idx, m, ri * num_channels + c]
+            x_val = x[batch_idx, l_idx, m, ri * num_channels + c]
+            mask_val = grid_mask[l_idx, m, ri]
+            pdnw = per_degree_norm_weight[l_idx, m]
+
+            # Path A: direct gradient (applies everywhere, masked by grid_mask)
+            grad_a = go_val * inv_rms_val * aw * mask_val
+
+            # Path B: indirect through norm_stats
+            # Only at reduce-valid positions: grid_mask and per_degree_norm_weight product gives correct mask
+            grad_b = (
+                inv_num_channels * inv_rms_sq * go_dot_o_val * pdnw * x_val * mask_val
+            )
+
+            grad_x[batch_idx, l_idx, m, ri * num_channels + c] = grad_a - grad_b
+
+            # Accumulate grad_affine_weight (atomic — threads across b, m, ri contribute)
+            grad_aw_contrib = go_val * x_val * inv_rms_val * mask_val
+            wp.atomic_add(grad_affine_weight, l_idx, c, grad_aw_contrib)
+
+
+@wp.kernel
+def layernorm_grid_backward_reduce_submean_bias(
+    grad_output: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels]
+    output: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels]
+    affine_bias: wp.array(dtype=float),  # [channels]
+    go_dot_o: wp.array(dtype=float),  # [batch * lmax_p1], pre-zeroed
+    lmax_p1: int,
+    mmax: int,
+    num_channels: int,
+):
+    """Compute go_dot_o[b, l] = sum(grad_output * output_no_bias) for backward pass with bias.
+
+    This kernel is used when the forward pass includes a bias term at (l=0, m=0, ri=0).
+    The go_dot_o computation must use output WITHOUT the bias added, so we subtract it inline.
+
+    Launched with wp.launch(dim=(batch, lmax+1, num_channels), block_dim=num_channels).
+    Uses tile reduction for efficient accumulation across channels and atomic add to per-degree slots.
+
+    Parameters
+    ----------
+    grad_output : [batch, lmax+1, mmax+1, 2*channels]
+        Upstream gradient from loss.
+    output : [batch, lmax+1, mmax+1, 2*channels]
+        Forward pass output WITH bias (saved from forward).
+    affine_bias : [channels]
+        Bias parameters from forward (added at l=0, m=0, ri=0).
+    go_dot_o : [batch * lmax_p1]
+        Output: inner product per (batch, l) using output_no_bias. Pre-zeroed by caller.
+    lmax_p1 : int
+        lmax + 1.
+    mmax : int
+        Maximum order.
+    num_channels : int
+        Number of channels (= block_dim).
+    """
+    batch_idx, l_idx, c = wp.tid()
+    num_valid_m = wp.min(l_idx, mmax) + 1
+
+    # Each thread accumulates its per-channel contribution to the inner product
+    local_sum = float(0.0)
+    for m in range(num_valid_m):
+        for ri in range(2):
+            # No need to check validity - output is already masked to zero at invalid positions
+            go = grad_output[batch_idx, l_idx, m, ri * num_channels + c]
+            o = output[batch_idx, l_idx, m, ri * num_channels + c]
+
+            # Subtract bias contribution at (l=0, m=0, ri=0) to get output_no_bias
+            if l_idx == 0 and m == 0 and ri == 0:
+                o = o - affine_bias[c]
+
+            local_sum = local_sum + go * o
+
+    # Cooperative tile reduction across channels within the block
+    t = wp.tile(local_sum)
+    s = wp.tile_sum(t)
+
+    # Store result - atomic add to per-degree slot [batch * lmax_p1 + l]
+    wp.tile_atomic_add(go_dot_o, s, offset=batch_idx * lmax_p1 + l_idx)
+
+
+@wp.kernel
+def layernorm_grid_backward_normalize_submean(
+    grad_output: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels]
+    x: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels]
+    l0_mean: wp.array(dtype=float),  # [batch]
+    norm_stats: wp.array2d(dtype=float),  # [batch, lmax+1]
+    go_dot_o: wp.array2d(dtype=float),  # [batch, lmax+1]
+    affine_weight: wp.array2d(dtype=float),  # [lmax+1, channels]
+    per_degree_norm_weight: wp.array2d(dtype=float),  # [lmax+1, mmax+1]
+    grid_mask: wp.array3d(dtype=float),  # [lmax+1, mmax+1, 2]
+    grad_x: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels] - output
+    grad_affine_weight: wp.array2d(
+        dtype=float
+    ),  # [lmax+1, channels] - output (zeroed by caller)
+    grad_affine_bias: wp.array(dtype=float),  # [channels] - output (zeroed by caller)
+    mmax: int,
+    num_channels: int,
+    inv_num_channels: float,
+    eps: float,
+    has_bias: int,  # 1 if bias present, 0 otherwise
+):
+    """Compute grad_x_hat, grad_affine_weight, and optionally grad_affine_bias for backward pass with subtract_mean.
+
+    This kernel computes gradients with respect to the mean-subtracted input x_hat.
+    The gradient w.r.t. x_hat is written to grad_x. The caller must then apply the
+    mean-subtraction chain rule correction at (l=0, m=0, ri=0) in PyTorch:
+
+        grad_x_hat_l0_sum = grad_x[:, 0, 0, :num_channels].sum(dim=-1, keepdim=True)
+        grad_x[:, 0, 0, :num_channels] -= grad_x_hat_l0_sum / num_channels
+
+    Launched with wp.launch(dim=(batch, lmax+1, num_channels)).
+
+    Parameters
+    ----------
+    grad_output : [batch, lmax+1, mmax+1, 2*channels]
+        Upstream gradient.
+    x : [batch, lmax+1, mmax+1, 2*channels]
+        Input from forward pass.
+    l0_mean : [batch]
+        Pre-computed l=0 channel mean from forward pass.
+    norm_stats : [batch, lmax+1]
+        Per-degree raw sum-of-squares from forward reduce kernel.
+    go_dot_o : [batch, lmax+1]
+        Per-degree inner product of grad_output and output_no_bias from backward reduce kernel.
+    affine_weight : [lmax+1, channels]
+        Affine scale parameters from forward.
+    per_degree_norm_weight : [lmax+1, mmax+1]
+        Per-degree normalization weights.
+    grid_mask : [lmax+1, mmax+1, 2]
+        Validity mask (combines m<=l constraint and m=0 imaginary zeroing).
+    grad_x : [batch, lmax+1, mmax+1, 2*channels]
+        Output: gradient w.r.t. x_hat (before mean-correction). Caller applies correction.
+    grad_affine_weight : [lmax+1, channels]
+        Output: gradient w.r.t. affine_weight. Pre-zeroed by caller.
+    grad_affine_bias : [channels]
+        Output: gradient w.r.t. affine_bias (if has_bias=1). Pre-zeroed by caller.
+    mmax : int
+        Maximum order.
+    num_channels : int
+        Number of channels.
+    inv_num_channels : float
+        Pre-computed 1.0 / num_channels (not 1/(2*num_channels) — per-degree uses 1/C).
+    eps : float
+        Epsilon for numerical stability.
+    has_bias : int
+        1 if bias is present (accumulate grad_affine_bias), 0 otherwise.
+    """
+    batch_idx, l_idx, c = wp.tid()
+
+    # Recompute per-degree inv_rms from forward pass
+    inv_rms_val = 1.0 / wp.sqrt(norm_stats[batch_idx, l_idx] * inv_num_channels + eps)
+    inv_rms_sq = inv_rms_val * inv_rms_val
+    aw = affine_weight[l_idx, c]
+    go_dot_o_val = go_dot_o[batch_idx, l_idx]
+
+    for m in range(mmax + 1):
+        for ri in range(2):
+            go_val = grad_output[batch_idx, l_idx, m, ri * num_channels + c]
+            x_val = x[batch_idx, l_idx, m, ri * num_channels + c]
+
+            # Compute x_hat: subtract mean at (l=0, m=0, ri=0)
+            x_hat_val = x_val
+            if l_idx == 0 and m == 0 and ri == 0:
+                x_hat_val = x_val - l0_mean[batch_idx]
+
+            mask_val = grid_mask[l_idx, m, ri]
+            pdnw = per_degree_norm_weight[l_idx, m]
+
+            # Path A: direct gradient (applies everywhere, masked by grid_mask)
+            grad_a = go_val * inv_rms_val * aw * mask_val
+
+            # Path B: indirect through norm_stats (uses x_hat, not x)
+            grad_b = (
+                inv_num_channels
+                * inv_rms_sq
+                * go_dot_o_val
+                * pdnw
+                * x_hat_val
+                * mask_val
+            )
+
+            # Write grad_x_hat into grad_x (caller applies mean-correction later)
+            grad_x[batch_idx, l_idx, m, ri * num_channels + c] = grad_a - grad_b
+
+            # Accumulate grad_affine_weight (atomic — uses x_hat, not x)
+            grad_aw_contrib = go_val * x_hat_val * inv_rms_val * mask_val
+            wp.atomic_add(grad_affine_weight, l_idx, c, grad_aw_contrib)
+
+            # Accumulate grad_affine_bias at (l=0, m=0, ri=0) if bias is present
+            if has_bias == 1 and l_idx == 0 and m == 0 and ri == 0:
+                wp.atomic_add(grad_affine_bias, c, go_val)
+
+
+# =============================================================================
 # Custom Op Wrappers for PyTorch Autograd Integration
 # =============================================================================
 
@@ -1443,4 +2002,643 @@ def fused_rmsnorm_backward(ctx, grad_output):
 # Register autograd
 fused_rmsnorm.register_autograd(
     fused_rmsnorm_backward, setup_context=fused_rmsnorm_setup_context
+)
+
+
+@torch.library.custom_op("physicsnemo::fused_layernormsh_lgt0", mutates_args=())
+def fused_layernormsh_lgt0(
+    x_lgt0: torch.Tensor,  # [batch, lmax, mmax+1, 2, channels] - l>0 slice
+    affine_weight: torch.Tensor,  # [lmax, channels]
+    balance_weight_lgt0: torch.Tensor,  # [lmax, mmax+1]
+    grid_mask_lgt0: torch.Tensor,  # [lmax, mmax+1, 2]
+    lmax: int,  # actual lmax (not lmax+1)
+    mmax: int,
+    num_channels: int,
+    eps: float,
+) -> torch.Tensor:
+    """Fused LayerNormSH for l>0 spherical harmonics.
+
+    Parameters
+    ----------
+    x_lgt0 : torch.Tensor
+        Input features for l>0 [batch, lmax, mmax+1, 2, channels]
+    affine_weight : torch.Tensor
+        Affine scale weights [lmax, channels]
+    balance_weight_lgt0 : torch.Tensor
+        Degree balancing weights for l>0 [lmax, mmax+1]
+    grid_mask_lgt0 : torch.Tensor
+        Grid mask for l>0 [lmax, mmax+1, 2]
+    lmax : int
+        Maximum degree (not lmax+1)
+    mmax : int
+        Maximum order
+    num_channels : int
+        Number of channels
+    eps : float
+        Epsilon for numerical stability
+
+    Returns
+    -------
+    torch.Tensor
+        Normalized features [batch, lmax, mmax+1, 2, channels]
+    """
+    batch_size = x_lgt0.shape[0]
+
+    # Reshape to 4D for kernel processing
+    x_lgt0_4d = x_lgt0.contiguous().view(batch_size, lmax, mmax + 1, 2 * num_channels)
+    output_4d = torch.empty_like(x_lgt0_4d)
+    norm_stats = torch.zeros(batch_size, device=x_lgt0.device, dtype=x_lgt0.dtype)
+
+    # Pre-compute inv_num_channels
+    inv_num_channels = 1.0 / (2 * num_channels)
+
+    # Get Warp context
+    wp_device, wp_stream = FunctionSpec.warp_launch_context(x_lgt0)
+
+    # Launch Warp kernels
+    with wp.ScopedStream(wp_stream):
+        # Reduce kernel
+        wp.launch(
+            kernel=layernormsh_lgt0_reduce,
+            dim=(batch_size, lmax, num_channels),
+            inputs=[
+                x_lgt0_4d.detach(),
+                norm_stats,
+                balance_weight_lgt0.detach(),
+                mmax,
+                num_channels,
+            ],
+            block_dim=num_channels,
+        )
+
+        # Normalize kernel
+        wp.launch(
+            kernel=layernormsh_lgt0_normalize,
+            dim=(batch_size, lmax, num_channels),
+            inputs=[
+                x_lgt0_4d.detach(),
+                output_4d,
+                norm_stats.detach(),
+                affine_weight.detach(),
+                grid_mask_lgt0.detach(),
+                mmax,
+                num_channels,
+                inv_num_channels,
+                eps,
+            ],
+        )
+
+    # Reshape back to 5D
+    return output_4d.view(batch_size, lmax, mmax + 1, 2, num_channels)
+
+
+@fused_layernormsh_lgt0.register_fake
+def _(
+    x_lgt0: torch.Tensor,
+    affine_weight: torch.Tensor,
+    balance_weight_lgt0: torch.Tensor,
+    grid_mask_lgt0: torch.Tensor,
+    lmax: int,
+    mmax: int,
+    num_channels: int,
+    eps: float,
+) -> torch.Tensor:
+    """Register fake implementation for shape inference."""
+    return torch.empty_like(x_lgt0)
+
+
+def fused_layernormsh_lgt0_setup_context(
+    ctx, inputs, output
+) -> torch.autograd.graph.saved_tensors_hooks:
+    """Setup context for backward pass."""
+    (
+        x_lgt0,
+        affine_weight,
+        balance_weight_lgt0,
+        grid_mask_lgt0,
+        lmax,
+        mmax,
+        num_channels,
+        eps,
+    ) = inputs
+
+    # Save tensors and attributes
+    ctx.save_for_backward(
+        x_lgt0, output, affine_weight, balance_weight_lgt0, grid_mask_lgt0
+    )
+    ctx.lmax = lmax
+    ctx.mmax = mmax
+    ctx.num_channels = num_channels
+    ctx.eps = eps
+
+
+def fused_layernormsh_lgt0_backward(ctx, grad_output: torch.Tensor):
+    """Backward pass for fused_layernormsh_lgt0."""
+    # Unpack saved tensors and attributes
+    x_lgt0, output, affine_weight, balance_weight_lgt0, grid_mask_lgt0 = (
+        ctx.saved_tensors
+    )
+    lmax = ctx.lmax
+    mmax = ctx.mmax
+    num_channels = ctx.num_channels
+    eps = ctx.eps
+
+    batch_size = x_lgt0.shape[0]
+
+    # Reshape to 4D for kernel processing
+    x_lgt0_4d = x_lgt0.contiguous().view(batch_size, lmax, mmax + 1, 2 * num_channels)
+    output_4d = output.contiguous().view(batch_size, lmax, mmax + 1, 2 * num_channels)
+    grad_output_4d = grad_output.contiguous().view(
+        batch_size, lmax, mmax + 1, 2 * num_channels
+    )
+
+    # Allocate gradient tensors
+    grad_x_4d = torch.empty_like(x_lgt0_4d)
+    go_dot_o = torch.zeros(batch_size, device=x_lgt0.device, dtype=x_lgt0.dtype)
+    grad_affine_weight = torch.zeros(
+        lmax, num_channels, device=x_lgt0.device, dtype=x_lgt0.dtype
+    )
+
+    # Recompute norm_stats for backward pass
+    norm_stats = torch.zeros(batch_size, device=x_lgt0.device, dtype=x_lgt0.dtype)
+
+    # Pre-compute inv_num_channels
+    inv_num_channels = 1.0 / (2 * num_channels)
+
+    # Get Warp context
+    wp_device, wp_stream = FunctionSpec.warp_launch_context(x_lgt0)
+
+    # Launch Warp kernels for backward pass
+    with wp.ScopedStream(wp_stream):
+        # Backward reduce kernel
+        wp.launch(
+            kernel=layernormsh_lgt0_backward_reduce,
+            dim=(batch_size, lmax, num_channels),
+            inputs=[
+                grad_output_4d.detach(),
+                output_4d.detach(),
+                go_dot_o,
+                mmax,
+                num_channels,
+            ],
+            block_dim=num_channels,
+        )
+
+        # Recompute forward reduce for norm_stats
+        wp.launch(
+            kernel=layernormsh_lgt0_reduce,
+            dim=(batch_size, lmax, num_channels),
+            inputs=[
+                x_lgt0_4d.detach(),
+                norm_stats,
+                balance_weight_lgt0.detach(),
+                mmax,
+                num_channels,
+            ],
+            block_dim=num_channels,
+        )
+
+        # Backward normalize kernel
+        wp.launch(
+            kernel=layernormsh_lgt0_backward_normalize,
+            dim=(batch_size, lmax, num_channels),
+            inputs=[
+                grad_output_4d.detach(),
+                x_lgt0_4d.detach(),
+                norm_stats.detach(),
+                go_dot_o.detach(),
+                affine_weight.detach(),
+                balance_weight_lgt0.detach(),
+                grid_mask_lgt0.detach(),
+                grad_x_4d,
+                grad_affine_weight,
+                mmax,
+                num_channels,
+                inv_num_channels,
+                eps,
+            ],
+        )
+
+    # Reshape grad_x back to 5D
+    grad_x = grad_x_4d.view(batch_size, lmax, mmax + 1, 2, num_channels)
+
+    # Return gradients for all 8 inputs (None for non-tensor inputs)
+    return (grad_x, grad_affine_weight, None, None, None, None, None, None)
+
+
+# Register autograd
+fused_layernormsh_lgt0.register_autograd(
+    fused_layernormsh_lgt0_backward, setup_context=fused_layernormsh_lgt0_setup_context
+)
+
+
+# ============================================================================
+# Custom Op: fused_layernorm (per-degree LayerNorm)
+# ============================================================================
+
+
+@torch.library.custom_op("physicsnemo::fused_layernorm", mutates_args=())
+def fused_layernorm(
+    x: torch.Tensor,  # [batch, lmax+1, mmax+1, 2, channels]
+    affine_weight: torch.Tensor,  # [lmax+1, channels]
+    affine_bias: torch.Tensor,  # [channels] (zeros if unused)
+    per_degree_norm_weight: torch.Tensor,  # [lmax+1, mmax+1]
+    grid_mask_3d: torch.Tensor,  # [lmax+1, mmax+1, 2]
+    lmax: int,
+    mmax: int,
+    num_channels: int,
+    eps: float,
+    subtract_mean: bool,
+    has_bias: bool,
+) -> torch.Tensor:
+    """Per-degree equivariant LayerNorm forward pass.
+
+    Normalizes each degree l independently using fused Warp kernels.
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        Input features [batch, lmax+1, mmax+1, 2, channels].
+    affine_weight : torch.Tensor
+        Affine weights [lmax+1, channels].
+    affine_bias : torch.Tensor
+        Affine bias [channels] (zeros if unused).
+    per_degree_norm_weight : torch.Tensor
+        Per-degree normalization weights [lmax+1, mmax+1].
+    grid_mask_3d : torch.Tensor
+        Grid mask [lmax+1, mmax+1, 2].
+    lmax : int
+        Maximum degree.
+    mmax : int
+        Maximum order.
+    num_channels : int
+        Number of channels.
+    eps : float
+        Epsilon for numerical stability.
+    subtract_mean : bool
+        Whether to subtract l=0 mean.
+    has_bias : bool
+        Whether to apply bias.
+
+    Returns
+    -------
+    torch.Tensor
+        Normalized features [batch, lmax+1, mmax+1, 2, channels].
+    """
+    batch_size = x.shape[0]
+    lmax_p1 = lmax + 1
+
+    # Reshape to 4D for Warp kernel compatibility
+    x_4d = x.contiguous().view(batch_size, lmax_p1, mmax + 1, 2 * num_channels)
+    output_4d = torch.empty_like(x_4d)
+
+    # Compute l=0 mean if needed
+    l0_mean = None
+    if subtract_mean:
+        l0_mean = x[:, 0, 0, 0, :].mean(dim=-1)  # [batch]
+
+    # Allocate norm_stats (per-degree, 2D but flattened for atomic ops)
+    norm_stats = torch.zeros(batch_size, lmax_p1, device=x.device, dtype=x.dtype)
+
+    inv_num_channels = 1.0 / num_channels
+
+    # Get warp context
+    wp_device, wp_stream = FunctionSpec.warp_launch_context(x)
+
+    with wp.ScopedStream(wp_stream):
+        # Pass 1: Reduce (compute norm statistics per degree)
+        if subtract_mean:
+            wp.launch(
+                layernorm_grid_reduce_submean,
+                dim=(batch_size, lmax_p1, num_channels),
+                inputs=[
+                    x_4d.detach(),
+                    l0_mean.detach(),
+                    norm_stats.view(-1),  # Flatten to 1D for atomic accumulation
+                    per_degree_norm_weight.detach(),
+                    lmax_p1,
+                    mmax,
+                    num_channels,
+                    inv_num_channels,
+                    eps,
+                ],
+                block_dim=num_channels,
+                device=wp_device,
+            )
+        else:
+            wp.launch(
+                layernorm_grid_reduce,
+                dim=(batch_size, lmax_p1, num_channels),
+                inputs=[
+                    x_4d.detach(),
+                    norm_stats.view(-1),  # Flatten to 1D for atomic accumulation
+                    per_degree_norm_weight.detach(),
+                    lmax_p1,
+                    mmax,
+                    num_channels,
+                    inv_num_channels,
+                    eps,
+                ],
+                block_dim=num_channels,
+                device=wp_device,
+            )
+
+        # Pass 2: Normalize (apply normalization)
+        if subtract_mean and has_bias:
+            wp.launch(
+                layernorm_grid_normalize_submean_bias,
+                dim=(batch_size, lmax_p1, num_channels),
+                inputs=[
+                    x_4d.detach(),
+                    output_4d,
+                    l0_mean.detach(),
+                    norm_stats.detach(),
+                    affine_weight.detach(),
+                    affine_bias.detach(),
+                    grid_mask_3d.detach(),
+                    mmax,
+                    num_channels,
+                    inv_num_channels,
+                    eps,
+                ],
+                device=wp_device,
+            )
+        elif subtract_mean:
+            wp.launch(
+                layernorm_grid_normalize_submean,
+                dim=(batch_size, lmax_p1, num_channels),
+                inputs=[
+                    x_4d.detach(),
+                    output_4d,
+                    l0_mean.detach(),
+                    norm_stats.detach(),
+                    affine_weight.detach(),
+                    grid_mask_3d.detach(),
+                    mmax,
+                    num_channels,
+                    inv_num_channels,
+                    eps,
+                ],
+                device=wp_device,
+            )
+        else:
+            wp.launch(
+                layernorm_grid_normalize,
+                dim=(batch_size, lmax_p1, num_channels),
+                inputs=[
+                    x_4d.detach(),
+                    output_4d,
+                    norm_stats.detach(),
+                    affine_weight.detach(),
+                    grid_mask_3d.detach(),
+                    mmax,
+                    num_channels,
+                    inv_num_channels,
+                    eps,
+                ],
+                device=wp_device,
+            )
+
+    # Reshape back to 5D
+    return output_4d.view(batch_size, lmax_p1, mmax + 1, 2, num_channels)
+
+
+@fused_layernorm.register_fake
+def _(
+    x: torch.Tensor,
+    affine_weight: torch.Tensor,
+    affine_bias: torch.Tensor,
+    per_degree_norm_weight: torch.Tensor,
+    grid_mask_3d: torch.Tensor,
+    lmax: int,
+    mmax: int,
+    num_channels: int,
+    eps: float,
+    subtract_mean: bool,
+    has_bias: bool,
+) -> torch.Tensor:
+    """Fake implementation for meta/tracing."""
+    return torch.empty_like(x)
+
+
+def fused_layernorm_setup_context(ctx, inputs, output) -> None:
+    """Save tensors and attributes for backward pass."""
+    (
+        x,
+        affine_weight,
+        affine_bias,
+        per_degree_norm_weight,
+        grid_mask_3d,
+        lmax,
+        mmax,
+        num_channels,
+        eps,
+        subtract_mean,
+        has_bias,
+    ) = inputs
+
+    # Save tensors
+    ctx.save_for_backward(
+        x, output, affine_weight, affine_bias, per_degree_norm_weight, grid_mask_3d
+    )
+
+    # Save attributes
+    ctx.lmax = lmax
+    ctx.mmax = mmax
+    ctx.num_channels = num_channels
+    ctx.eps = eps
+    ctx.subtract_mean = subtract_mean
+    ctx.has_bias = has_bias
+
+
+def fused_layernorm_backward(ctx, grad_output: torch.Tensor) -> tuple:
+    """Backward pass for fused_layernorm."""
+    # Unpack saved tensors
+    x, output, affine_weight, affine_bias, per_degree_norm_weight, grid_mask_3d = (
+        ctx.saved_tensors
+    )
+
+    # Unpack attributes
+    lmax = ctx.lmax
+    mmax = ctx.mmax
+    num_channels = ctx.num_channels
+    eps = ctx.eps
+    subtract_mean = ctx.subtract_mean
+    has_bias = ctx.has_bias
+
+    batch_size = x.shape[0]
+    lmax_p1 = lmax + 1
+    inv_num_channels = 1.0 / num_channels
+
+    # Reshape to 4D
+    x_4d = x.contiguous().view(batch_size, lmax_p1, mmax + 1, 2 * num_channels)
+    output_4d = output.contiguous().view(
+        batch_size, lmax_p1, mmax + 1, 2 * num_channels
+    )
+    grad_output_4d = grad_output.contiguous().view(
+        batch_size, lmax_p1, mmax + 1, 2 * num_channels
+    )
+
+    # Allocate gradients
+    grad_x_4d = torch.empty_like(x_4d)
+    go_dot_o = torch.zeros(batch_size, lmax_p1, device=x.device, dtype=x.dtype)
+    grad_affine_weight = torch.zeros(
+        lmax_p1, num_channels, device=x.device, dtype=x.dtype
+    )
+    grad_affine_bias = torch.zeros(num_channels, device=x.device, dtype=x.dtype)
+
+    # Recompute l=0 mean if needed
+    l0_mean = None
+    if subtract_mean:
+        l0_mean = x[:, 0, 0, 0, :].mean(dim=-1)  # [batch]
+
+    # Get warp context
+    wp_device, wp_stream = FunctionSpec.warp_launch_context(x)
+
+    with wp.ScopedStream(wp_stream):
+        # Backward reduce: compute go_dot_o
+        if subtract_mean and has_bias:
+            wp.launch(
+                layernorm_grid_backward_reduce_submean_bias,
+                dim=(batch_size, lmax_p1, num_channels),
+                inputs=[
+                    grad_output_4d.detach(),
+                    output_4d.detach(),
+                    affine_bias.detach(),
+                    go_dot_o.view(-1),
+                    lmax_p1,
+                    mmax,
+                    num_channels,
+                ],
+                block_dim=num_channels,
+                device=wp_device,
+            )
+        else:
+            wp.launch(
+                layernorm_grid_backward_reduce,
+                dim=(batch_size, lmax_p1, num_channels),
+                inputs=[
+                    grad_output_4d.detach(),
+                    output_4d.detach(),
+                    go_dot_o.view(-1),
+                    lmax_p1,
+                    mmax,
+                    num_channels,
+                ],
+                block_dim=num_channels,
+                device=wp_device,
+            )
+
+        # Recompute norm_stats
+        norm_stats = torch.zeros(batch_size, lmax_p1, device=x.device, dtype=x.dtype)
+        if subtract_mean:
+            wp.launch(
+                layernorm_grid_reduce_submean,
+                dim=(batch_size, lmax_p1, num_channels),
+                inputs=[
+                    x_4d.detach(),
+                    l0_mean.detach(),
+                    norm_stats.view(-1),
+                    per_degree_norm_weight.detach(),
+                    lmax_p1,
+                    mmax,
+                    num_channels,
+                    inv_num_channels,
+                    eps,
+                ],
+                block_dim=num_channels,
+                device=wp_device,
+            )
+        else:
+            wp.launch(
+                layernorm_grid_reduce,
+                dim=(batch_size, lmax_p1, num_channels),
+                inputs=[
+                    x_4d.detach(),
+                    norm_stats.view(-1),
+                    per_degree_norm_weight.detach(),
+                    lmax_p1,
+                    mmax,
+                    num_channels,
+                    inv_num_channels,
+                    eps,
+                ],
+                block_dim=num_channels,
+                device=wp_device,
+            )
+
+        # Backward normalize
+        if subtract_mean:
+            wp.launch(
+                layernorm_grid_backward_normalize_submean,
+                dim=(batch_size, lmax_p1, num_channels),
+                inputs=[
+                    grad_output_4d.detach(),
+                    x_4d.detach(),
+                    l0_mean.detach(),
+                    norm_stats.detach(),
+                    go_dot_o.detach(),
+                    affine_weight.detach(),
+                    per_degree_norm_weight.detach(),
+                    grid_mask_3d.detach(),
+                    grad_x_4d,
+                    grad_affine_weight,
+                    grad_affine_bias,
+                    mmax,
+                    num_channels,
+                    inv_num_channels,
+                    eps,
+                    1 if has_bias else 0,
+                ],
+                device=wp_device,
+            )
+        else:
+            wp.launch(
+                layernorm_grid_backward_normalize,
+                dim=(batch_size, lmax_p1, num_channels),
+                inputs=[
+                    grad_output_4d.detach(),
+                    x_4d.detach(),
+                    norm_stats.detach(),
+                    go_dot_o.detach(),
+                    affine_weight.detach(),
+                    per_degree_norm_weight.detach(),
+                    grid_mask_3d.detach(),
+                    grad_x_4d,
+                    grad_affine_weight,
+                    mmax,
+                    num_channels,
+                    inv_num_channels,
+                    eps,
+                ],
+                device=wp_device,
+            )
+
+    # Apply mean-correction chain rule for subtract_mean
+    if subtract_mean:
+        grad_x_hat_l0_sum = grad_x_4d[:, 0, 0, :num_channels].sum(dim=-1, keepdim=True)
+        grad_x_4d[:, 0, 0, :num_channels] -= grad_x_hat_l0_sum / num_channels
+
+    # Reshape grad_x back to 5D
+    grad_x = grad_x_4d.view(batch_size, lmax_p1, mmax + 1, 2, num_channels)
+
+    # Return gradients for all 11 inputs (None for non-tensor and immutable inputs)
+    return (
+        grad_x,
+        grad_affine_weight,
+        grad_affine_bias if has_bias else None,
+        None,  # per_degree_norm_weight
+        None,  # grid_mask_3d
+        None,  # lmax
+        None,  # mmax
+        None,  # num_channels
+        None,  # eps
+        None,  # subtract_mean
+        None,  # has_bias
+    )
+
+
+# Register autograd
+fused_layernorm.register_autograd(
+    fused_layernorm_backward, setup_context=fused_layernorm_setup_context
 )

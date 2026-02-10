@@ -80,6 +80,8 @@ import warp as wp
 
 from physicsnemo.core.function_spec import FunctionSpec
 from physicsnemo.experimental.nn.symmetry.fused_norm_kernels import (
+    fused_layernorm,
+    fused_layernormsh_lgt0,
     fused_rmsnorm,
     layernorm_grid_normalize,
     layernorm_grid_normalize_submean,
@@ -1454,91 +1456,52 @@ class FusedEquivariantLayerNormSH(EquivariantLayerNormSHGrid):
         if not torch.compiler.is_compiling():
             self._validate_input_shape(x)
 
-        # Fall back to unfused implementation if not on CUDA or requires grad
-        if not x.is_cuda or x.requires_grad:
+        # Fall back to PyTorch on CPU or explicitly requested
+        if not x.is_cuda or self._use_fused:
             return super().forward(x)
 
         # Get compute dtype and prepare input
         input_dtype = x.dtype
         compute_dtype = self._get_compute_dtype(input_dtype)
+        # Warp kernels only support float32
+        if compute_dtype == torch.float64:
+            compute_dtype = torch.float32
         x = self._prepare_input(x, compute_dtype)
 
         batch_size = x.shape[0]
 
-        # Process l=0 with standard LayerNorm (PyTorch)
+        # Process l=0 with standard LayerNorm
         l0_feature = x[:, 0, 0, 0, :]  # [batch, channels]
         l0_normed = self.norm_l0(l0_feature.to(input_dtype)).to(compute_dtype)
 
-        # Process l>0 with Warp kernels
-        # Extract l>0 slice and reshape to 4D
+        # Process l>0 with custom op (handles forward + backward via autograd)
         x_lgt0 = x[:, 1:, :, :, :]  # [batch, lmax, mmax+1, 2, channels]
-        x_lgt0_4d = x_lgt0.contiguous().view(
-            batch_size, self.lmax, self.mmax + 1, 2 * self.num_channels
-        )
-        output_lgt0_4d = torch.empty_like(x_lgt0_4d)
 
-        # Allocate norm_stats
-        norm_stats = torch.zeros(batch_size, dtype=compute_dtype, device=x.device)
-
-        # Get balance weight for l>0 (slice at launch time)
+        # Get parameters
         balance_weight = (
             self.balance_degree_weight
             if self.std_balance_degrees
             else self._balance_degree_weight_buffer
         )
-        balance_weight_lgt0 = balance_weight[1:, :].to(compute_dtype).detach()
-
-        # Get affine weight for l>0 (already correct shape [lmax, channels])
+        balance_weight_lgt0 = balance_weight[1:, :].to(compute_dtype)
         affine_weight = (
             self.affine_weight if self.affine else self._affine_weight_buffer
         )
-        affine_weight_warp = affine_weight.to(compute_dtype).detach()
 
-        # Get grid mask for l>0
-        grid_mask_lgt0_warp = self.grid_mask_3d_lgt0.to(compute_dtype).detach()
-
-        # Pre-compute inv_num_channels
-        inv_num_channels = 1.0 / (2.0 * self.num_channels)
-
-        # Launch Warp kernels within a single stream
-        with FunctionSpec.warp_launch_context(x):
-            # Reduce kernel
-            wp.launch(
-                kernel=layernormsh_lgt0_reduce,
-                dim=(batch_size, self.lmax, self.num_channels),
-                inputs=[
-                    x_lgt0_4d,
-                    norm_stats,
-                    balance_weight_lgt0,
-                    self.mmax,
-                    self.num_channels,
-                ],
-                block_dim=self.num_channels,
-            )
-
-            # Normalize kernel
-            wp.launch(
-                kernel=layernormsh_lgt0_normalize,
-                dim=(batch_size, self.lmax, self.num_channels),
-                inputs=[
-                    x_lgt0_4d,
-                    output_lgt0_4d,
-                    norm_stats,
-                    affine_weight_warp,
-                    grid_mask_lgt0_warp,
-                    self.mmax,
-                    self.num_channels,
-                    inv_num_channels,
-                    self.eps,
-                ],
-            )
+        output_lgt0 = fused_layernormsh_lgt0(
+            x_lgt0.contiguous(),
+            affine_weight.to(compute_dtype),
+            balance_weight_lgt0,
+            self.grid_mask_3d_lgt0.to(compute_dtype),
+            self.lmax,
+            self.mmax,
+            self.num_channels,
+            self.eps,
+        )
 
         # Assemble output
         output = torch.zeros_like(x)
         output[:, 0, 0, 0, :] = l0_normed
-        output_lgt0 = output_lgt0_4d.view(
-            batch_size, self.lmax, self.mmax + 1, 2, self.num_channels
-        )
         output[:, 1:, :, :, :] = output_lgt0
 
         # Finalize output
@@ -1627,39 +1590,19 @@ class FusedEquivariantLayerNorm(EquivariantLayerNormGrid):
         Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
             Normalized features.
         """
-        # Validate input shape (skip during torch.compile)
         if not torch.compiler.is_compiling():
             self._validate_input_shape(x)
 
-        # Fall back to PyTorch on CPU or if gradients are required
-        # Note: Full autograd support for Warp kernels requires backward kernel implementation
-        if not x.is_cuda or x.requires_grad:
+        if not x.is_cuda or not self._use_fused:
             return super().forward(x)
 
-        # Get compute dtype and cast if needed
         input_dtype = x.dtype
         compute_dtype = self._get_compute_dtype(input_dtype)
+        if compute_dtype == torch.float64:
+            compute_dtype = torch.float32
         if input_dtype != compute_dtype:
             x = x.to(compute_dtype)
 
-        batch_size = x.shape[0]
-        lmax_p1 = self.lmax + 1
-
-        # Reshape: (batch, lmax+1, mmax+1, 2, channels) -> (batch, lmax+1, mmax+1, 2*channels)
-        # as warp only supports up to 4D
-        x_4d = x.contiguous().view(
-            batch_size, lmax_p1, self.mmax + 1, 2 * self.num_channels
-        )
-        output_4d = torch.empty_like(x_4d)
-
-        # Pre-compute l=0 mean in PyTorch only when needed
-        if self.subtract_mean:
-            l0_mean = x[:, 0, 0, 0, :].mean(dim=-1)  # [batch]
-
-        # Pre-allocate inv_rms tensor (must be zeroed for atomic accumulation)
-        inv_rms = torch.zeros(batch_size, lmax_p1, device=x.device, dtype=compute_dtype)
-
-        # Get the appropriate parameters
         affine_weight = (
             self.affine_weight if self.affine else self._affine_weight_buffer
         )
@@ -1668,109 +1611,22 @@ class FusedEquivariantLayerNorm(EquivariantLayerNormGrid):
             if self.affine and self.affine_bias is not None
             else self._affine_bias_buffer
         )
+        has_bias = self.subtract_mean and self.bias_scale.item() > 0.0
 
-        # Get warp device/stream
-        wp_device, wp_stream = FunctionSpec.warp_launch_context(x)
-
-        with wp.ScopedStream(wp_stream):
-            # Kernel 1: Reduce — dispatch based on subtract_mean
-            if self.subtract_mean:
-                wp.launch(
-                    layernorm_grid_reduce_submean,
-                    dim=(batch_size, lmax_p1, self.num_channels),
-                    inputs=[
-                        x_4d.detach(),
-                        l0_mean.detach(),
-                        inv_rms.view(-1),  # Flatten to 1D for tile_atomic_add
-                        self.per_degree_norm_weight.to(compute_dtype).detach(),
-                        lmax_p1,
-                        self.mmax,
-                        self.num_channels,
-                        1.0 / self.num_channels,
-                        self.eps,
-                    ],
-                    block_dim=self.num_channels,
-                    device=wp_device,
-                )
-            else:
-                wp.launch(
-                    layernorm_grid_reduce,
-                    dim=(batch_size, lmax_p1, self.num_channels),
-                    inputs=[
-                        x_4d.detach(),
-                        inv_rms.view(-1),  # Flatten to 1D for tile_atomic_add
-                        self.per_degree_norm_weight.to(compute_dtype).detach(),
-                        lmax_p1,
-                        self.mmax,
-                        self.num_channels,
-                        1.0 / self.num_channels,
-                        self.eps,
-                    ],
-                    block_dim=self.num_channels,
-                    device=wp_device,
-                )
-            # Kernel 2: Normalize — dispatch based on subtract_mean and bias_scale
-            if self.subtract_mean and self.bias_scale.item() > 0.0:
-                wp.launch(
-                    layernorm_grid_normalize_submean_bias,
-                    dim=(batch_size, lmax_p1, self.num_channels),
-                    inputs=[
-                        x_4d.detach(),
-                        output_4d,
-                        l0_mean.detach(),
-                        inv_rms.detach(),
-                        affine_weight.to(compute_dtype).detach(),
-                        affine_bias.to(compute_dtype).detach(),
-                        self.grid_mask_3d.to(compute_dtype).detach(),
-                        self.mmax,
-                        self.num_channels,
-                        1.0 / self.num_channels,
-                        self.eps,
-                    ],
-                    device=wp_device,
-                )
-            elif self.subtract_mean:
-                wp.launch(
-                    layernorm_grid_normalize_submean,
-                    dim=(batch_size, lmax_p1, self.num_channels),
-                    inputs=[
-                        x_4d.detach(),
-                        output_4d,
-                        l0_mean.detach(),
-                        inv_rms.detach(),
-                        affine_weight.to(compute_dtype).detach(),
-                        self.grid_mask_3d.to(compute_dtype).detach(),
-                        self.mmax,
-                        self.num_channels,
-                        1.0 / self.num_channels,
-                        self.eps,
-                    ],
-                    device=wp_device,
-                )
-            else:
-                wp.launch(
-                    layernorm_grid_normalize,
-                    dim=(batch_size, lmax_p1, self.num_channels),
-                    inputs=[
-                        x_4d.detach(),
-                        output_4d,
-                        inv_rms.detach(),
-                        affine_weight.to(compute_dtype).detach(),
-                        self.grid_mask_3d.to(compute_dtype).detach(),
-                        self.mmax,
-                        self.num_channels,
-                        1.0 / self.num_channels,
-                        self.eps,
-                    ],
-                    device=wp_device,
-                )
-
-        # Reshape back: (batch, lmax+1, mmax+1, 2*channels) -> (batch, lmax+1, mmax+1, 2, channels)
-        output = output_4d.view(
-            batch_size, lmax_p1, self.mmax + 1, 2, self.num_channels
+        output = fused_layernorm(
+            x,
+            affine_weight.to(compute_dtype),
+            affine_bias.to(compute_dtype),
+            self.per_degree_norm_weight.to(compute_dtype),
+            self.grid_mask_3d.to(compute_dtype),
+            self.lmax,
+            self.mmax,
+            self.num_channels,
+            self.eps,
+            self.subtract_mean,
+            has_bias,
         )
 
-        # Cast back if needed
         if compute_dtype != input_dtype:
             output = output.to(input_dtype)
 
