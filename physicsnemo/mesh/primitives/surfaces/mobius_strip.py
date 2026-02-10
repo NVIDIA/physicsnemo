@@ -60,36 +60,41 @@ def load(
     u = torch.linspace(0, 2 * torch.pi, n_circ + 1, device=device)[:-1]
     v = torch.linspace(-width / 2, width / 2, n_width, device=device)
 
-    points = []
-    for u_val in u:
-        for v_val in v:
-            # Möbius strip parameterization
-            x = (radius + v_val * torch.cos(u_val / 2)) * torch.cos(u_val)
-            y = (radius + v_val * torch.cos(u_val / 2)) * torch.sin(u_val)
-            z = v_val * torch.sin(u_val / 2)
-            points.append([x.item(), y.item(), z.item()])
+    # Vectorized point generation
+    U, V = torch.meshgrid(u, v, indexing="ij")
+    x = (radius + V * torch.cos(U / 2)) * torch.cos(U)
+    y = (radius + V * torch.cos(U / 2)) * torch.sin(U)
+    z = V * torch.sin(U / 2)
+    points = torch.stack([x, y, z], dim=-1).reshape(-1, 3).to(dtype=torch.float32)
 
-    points = torch.tensor(points, dtype=torch.float32, device=device)
+    # Vectorized cell generation
+    # Regular cells (i < n_circ - 1): open in v, no twist
+    i_reg = torch.arange(n_circ - 1, device=device)
+    j_reg = torch.arange(n_width - 1, device=device)
+    ii, jj = torch.meshgrid(i_reg, j_reg, indexing="ij")
+    ii_flat = ii.reshape(-1)
+    jj_flat = jj.reshape(-1)
 
-    # Create cells
-    cells = []
-    for i in range(n_circ):
-        for j in range(n_width - 1):
-            idx = i * n_width + j
-            next_j = i * n_width + j + 1
+    idx_r = ii_flat * n_width + jj_flat
+    next_j_r = ii_flat * n_width + jj_flat + 1
+    next_i_r = (ii_flat + 1) * n_width + jj_flat
+    next_both_r = (ii_flat + 1) * n_width + jj_flat + 1
 
-            # Handle Möbius twist at wrap-around
-            if i == n_circ - 1:  # Last slice connecting back to first
-                # Flip width index for the half-twist: j -> (n_width - 1 - j)
-                next_i = n_width - 1 - j
-                next_both = n_width - 2 - j
-            else:
-                next_i = (i + 1) * n_width + j
-                next_both = (i + 1) * n_width + j + 1
+    tri1_reg = torch.stack([idx_r, next_j_r, next_i_r], dim=1)
+    tri2_reg = torch.stack([next_j_r, next_both_r, next_i_r], dim=1)
 
-            # Two triangles per quad
-            cells.append([idx, next_j, next_i])
-            cells.append([next_j, next_both, next_i])
+    # Twist cells (i = n_circ - 1): connects back to first slice with flipped v
+    j_tw = torch.arange(n_width - 1, device=device)
+    last_i = n_circ - 1
 
-    cells = torch.tensor(cells, dtype=torch.int64, device=device)
+    idx_t = last_i * n_width + j_tw
+    next_j_t = last_i * n_width + j_tw + 1
+    next_i_t = n_width - 1 - j_tw
+    next_both_t = n_width - 2 - j_tw
+
+    tri1_twist = torch.stack([idx_t, next_j_t, next_i_t], dim=1)
+    tri2_twist = torch.stack([next_j_t, next_both_t, next_i_t], dim=1)
+
+    cells = torch.cat([tri1_reg, tri2_reg, tri1_twist, tri2_twist], dim=0)
+
     return Mesh(points=points, cells=cells)

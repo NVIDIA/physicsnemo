@@ -26,34 +26,16 @@ Cached fields handled:
 - centroids: cell_data only
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import torch
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from physicsnemo.mesh.utilities._cache import get_cached, set_cached
+from physicsnemo.mesh.utilities._cache import CACHE_KEY, get_cached, set_cached
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
-
-
-### Cache Handling ###
-
-
-def _strip_all_caches(mesh: "Mesh") -> tuple[TensorDict, TensorDict, TensorDict]:
-    """Strip _cache from all data containers. Safe default for transformations.
-
-    Returns
-    -------
-    tuple[TensorDict, TensorDict, TensorDict]
-        Tuple of (point_data, cell_data, global_data) with _cache excluded from each.
-    """
-    return (
-        mesh.point_data.exclude("_cache"),
-        mesh.cell_data.exclude("_cache"),
-        mesh.global_data.exclude("_cache"),
-    )
 
 
 ### User Data Transformation ###
@@ -143,7 +125,7 @@ def _transform_tensordict(
             f"Expected all spatial dimensions to be {n_spatial_dims}, but got {shape}"
         )
 
-    transformed = data.exclude("_cache").named_apply(
+    transformed = data.exclude(CACHE_KEY).named_apply(
         transform_field, batch_size=batch_size
     )
     data.update(transformed)
@@ -182,7 +164,7 @@ def _build_rotation_matrix(
         return torch.stack([torch.stack([c, -s]), torch.stack([s, c])])
 
     ### 3D rotation using Rodrigues' formula: R = cI + s[u]_× + (1-c)(u⊗u)
-    axis = torch.as_tensor(axis, device=device, dtype=torch.float32)
+    axis = torch.as_tensor(axis, device=device, dtype=angle.dtype)
     if axis.shape != (3,):
         raise NotImplementedError(
             f"Rotation only supported for 2D (axis=None) or 3D (axis shape (3,)). "
@@ -264,7 +246,8 @@ def transform(
             )
 
     new_points = mesh.points @ matrix.T
-    new_point_data, new_cell_data, new_global_data = _strip_all_caches(mesh)
+    new_point_data = mesh.point_data.exclude(CACHE_KEY)
+    new_cell_data = mesh.cell_data.exclude(CACHE_KEY)
 
     ### Opt-in: areas and normals (only for square invertible matrices)
     if matrix.shape[0] == matrix.shape[1]:
@@ -333,7 +316,10 @@ def transform(
         _transform_tensordict(new_point_data, matrix, mesh.n_spatial_dims, "point_data")
     if transform_cell_data:
         _transform_tensordict(new_cell_data, matrix, mesh.n_spatial_dims, "cell_data")
+    # Transform global_data if requested (note: global_data never has cache)
+    new_global_data = mesh.global_data
     if transform_global_data:
+        new_global_data = mesh.global_data.clone()
         _transform_tensordict(
             new_global_data, matrix, mesh.n_spatial_dims, "global_data"
         )
@@ -386,7 +372,8 @@ def translate(
             )
 
     new_points = mesh.points + offset
-    new_point_data, new_cell_data, new_global_data = _strip_all_caches(mesh)
+    new_point_data = mesh.point_data.exclude(CACHE_KEY)
+    new_cell_data = mesh.cell_data.exclude(CACHE_KEY)
 
     ### Opt-in: areas (unchanged)
     if (v := get_cached(mesh.point_data, "areas")) is not None:
@@ -411,14 +398,14 @@ def translate(
         cells=mesh.cells,
         point_data=new_point_data,
         cell_data=new_cell_data,
-        global_data=new_global_data,
+        global_data=mesh.global_data,
     )
 
 
 def rotate(
     mesh: "Mesh",
     angle: float,
-    axis: torch.Tensor | list | tuple | None = None,
+    axis: torch.Tensor | list | tuple | Literal["x", "y", "z"] | None = None,
     center: torch.Tensor | list | tuple | None = None,
     transform_point_data: bool = False,
     transform_cell_data: bool = False,
@@ -432,8 +419,10 @@ def rotate(
         Input mesh to rotate.
     angle : float
         Rotation angle in radians (counterclockwise, right-hand rule).
-    axis : torch.Tensor or list or tuple or None
+    axis : torch.Tensor or list or tuple or {"x", "y", "z"} or None
         Rotation axis vector. None for 2D, shape (3,) for 3D.
+        String literals "x", "y", "z" are converted to unit vectors
+        (1,0,0), (0,1,0), (0,0,1) respectively.
     center : torch.Tensor or list or tuple or None
         Center point for rotation. If None, rotates about the origin.
     transform_point_data : bool
@@ -455,6 +444,20 @@ def rotate(
         - centroids: Rotated
         - normals: Rotated
     """
+    ### Convert string axis to one-hot tensor
+    if isinstance(axis, str):
+        axis_map = {"x": 0, "y": 1, "z": 2}
+        if axis not in axis_map:
+            raise ValueError(f"axis must be 'x', 'y', or 'z', got {axis!r}")
+        idx = axis_map[axis]
+        if idx >= mesh.n_spatial_dims:
+            raise ValueError(
+                f"axis={axis!r} is invalid for mesh with "
+                f"n_spatial_dims={mesh.n_spatial_dims}"
+            )
+        axis = torch.zeros(mesh.n_spatial_dims, device=mesh.points.device)
+        axis[idx] = 1.0
+
     if axis is not None:
         axis = torch.as_tensor(axis, device=mesh.points.device, dtype=torch.float32)
 
@@ -467,6 +470,7 @@ def rotate(
         )
 
     rotation_matrix = _build_rotation_matrix(angle, axis, mesh.points.device)
+    rotation_matrix = rotation_matrix.to(dtype=mesh.points.dtype)
 
     ### Handle center by translate-rotate-translate
     if center is not None:
