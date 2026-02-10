@@ -368,6 +368,7 @@ _VARIANT_BASE_PACKAGES: frozenset = frozenset(
     {
         "cupy",  # cupy-cuda11x, cupy-cuda12x, …
         "onnxruntime",  # onnxruntime-gpu, onnxruntime-openvino, …
+        "warp",  # pip installs as `warp-lang`
     }
 )
 
