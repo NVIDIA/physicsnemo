@@ -41,10 +41,10 @@ def test_scatter_aggregator_forward(device):
     n_obs = 100
     nbatch = 2
     nbuckets = nchannel * nplatform
-    obs_features = torch.randn(n_obs, in_dim, device=device)
-    batch_idx = torch.randint(0, nbatch, (n_obs,), device=device)
-    pix = torch.randint(0, npix, (n_obs,), device=device)
-    bucket_id = torch.randint(0, nbuckets, (n_obs,), device=device)
+    obs_features = torch.randn(n_obs, in_dim).to(device)
+    batch_idx = torch.randint(0, nbatch, (n_obs,)).to(device)
+    pix = torch.randint(0, npix, (n_obs,)).to(device)
+    bucket_id = torch.randint(0, nbuckets, (n_obs,)).to(device)
 
     assert common.validate_forward_accuracy(
         model,
