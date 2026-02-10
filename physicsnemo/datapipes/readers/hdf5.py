@@ -27,15 +27,11 @@ from typing import Any, Optional
 
 import torch
 
-try:
-    import h5py
-
-    HAS_H5PY = True
-except ImportError:
-    HAS_H5PY = False
-
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
+
+h5py = OptionalImport("h5py")
 
 
 @register()
@@ -102,10 +98,8 @@ class HDF5Reader(Reader):
         ValueError
             If no HDF5 files found in directory.
         """
-        if not HAS_H5PY:
-            raise ImportError(
-                "h5py is required for HDF5Reader. Install with: pip install h5py"
-            )
+        if not h5py.available:
+            h5py._get_module()  # Raises RuntimeError with install hint
 
         super().__init__(
             pin_memory=pin_memory,

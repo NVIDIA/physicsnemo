@@ -23,7 +23,6 @@ from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Iterable, List, Mapping, Tuple, Union
 
-import h5py
 import numpy as np
 import torch
 
@@ -38,6 +37,7 @@ if TYPE_CHECKING:
     from scipy.io import netcdf_file
 
 # Lazy imports for optional dependencies
+h5py = OptionalImport("h5py")
 dali = OptionalImport("nvidia.dali")
 dali_pth = OptionalImport("nvidia.dali.plugin.pytorch")
 nc = OptionalImport("netCDF4")

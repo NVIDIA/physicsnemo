@@ -19,7 +19,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple, Union
 
-import h5py
 import numpy as np
 import torch
 
@@ -31,6 +30,7 @@ from ..datapipe import Datapipe
 from ..meta import DatapipeMetaData
 
 # Lazy imports for optional dependencies
+h5py = OptionalImport("h5py")
 dali = OptionalImport("nvidia.dali")
 dali_pth = OptionalImport("nvidia.dali.plugin.pytorch")
 
