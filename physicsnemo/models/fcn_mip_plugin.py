@@ -21,13 +21,15 @@ from urllib.parse import urlparse
 
 import numpy as np
 import torch
-import xarray
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core import filesystem
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.models.dlwp import DLWP
 from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 from physicsnemo.utils.zenith_angle import cos_zenith_angle
+
+xarray = OptionalImport("xarray")
 
 logger = logging.getLogger(__name__)
 

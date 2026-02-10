@@ -24,12 +24,13 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import torch
 import torch.distributed as dist
-import zarr
 from torch.distributed.tensor import Replicate, Shard
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport, check_version_spec
 from physicsnemo.distributed.utils import compute_split_shapes
 from physicsnemo.domain_parallel import ShardTensor, ShardTensorSpec
+
+zarr = OptionalImport("zarr")
 
 TENSORSTORE_AVAILABLE = check_version_spec("tensorstore", hard_fail=False)
 PV_AVAILABLE = check_version_spec("pyvista", hard_fail=False)
