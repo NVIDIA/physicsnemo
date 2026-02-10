@@ -17,16 +17,16 @@
 """Unit tests for fused equivariant normalization layers.
 
 Tests verify that fused variants produce identical output to unfused reference
-implementations. Once Warp kernels are integrated, these tests serve as
-correctness validation for the fused paths.
+implementations by toggling the `_use_fused` attribute on a single layer instance.
+When `_use_fused=False`, the fused class falls back to its parent's unfused
+implementation.
 
 Tests cover:
-- Output equivalence between fused and unfused variants
-- Gradient equivalence for inputs and parameters
+- Output equivalence between fused and unfused paths (via _use_fused toggle)
+- Gradient equivalence for inputs
 - Shape preservation
-- Invalid (l, m) positions remain zero
-- m=0 imaginary component remains zero
 - Multi-precision support (float16, bfloat16, float32, float64)
+- CPU and CUDA devices (fused path is CUDA-only, CPU always uses unfused)
 """
 
 from __future__ import annotations
@@ -37,9 +37,6 @@ import pytest
 import torch
 
 from physicsnemo.experimental.nn.symmetry.layer_norm import (
-    EquivariantLayerNormGrid,
-    EquivariantLayerNormSHGrid,
-    EquivariantRMSNormSHGrid,
     FusedEquivariantLayerNorm,
     FusedEquivariantLayerNormSH,
     FusedEquivariantRMSNorm,
@@ -94,7 +91,6 @@ def lmax_mmax_layernorm_sh(request: pytest.FixtureRequest) -> tuple[int, int]:
 
 def compare_fused_unfused(
     fused_class: Type,
-    unfused_class: Type,
     lmax: int,
     mmax: int,
     num_channels: int,
@@ -105,21 +101,17 @@ def compare_fused_unfused(
 ) -> None:
     """Compare fused and unfused normalization layer outputs and gradients.
 
-    This helper function creates both fused and unfused normalization layers with
-    identical parameters, runs a forward and backward pass, and verifies that:
+    This helper function creates a single fused normalization layer instance,
+    then tests it with `_use_fused=True` (fused path) and `_use_fused=False`
+    (unfused fallback path). It verifies that:
     1. Output tensors match within dtype-appropriate tolerances
     2. Input gradients match
-    3. Parameter gradients match (if affine=True)
-    4. Output shapes are identical
-    5. Invalid (l,m) positions remain zero
-    6. m=0 imaginary components remain zero
+    3. Output shapes are identical
 
     Parameters
     ----------
     fused_class : Type
         The fused normalization class to test.
-    unfused_class : Type
-        The unfused reference normalization class.
     lmax : int
         Maximum spherical harmonic degree.
     mmax : int
@@ -133,31 +125,20 @@ def compare_fused_unfused(
     device : torch.device
         Device to run computation on.
     **layer_kwargs
-        Additional keyword arguments to pass to layer constructors
+        Additional keyword arguments to pass to layer constructor
         (e.g., subtract_mean, std_balance_degrees, affine, eps).
     """
     rtol, atol = get_rtol_atol(dtype)
 
-    # Create layers with same parameters
-    fused_layer = fused_class(
+    # Create a single layer instance
+    layer = fused_class(
         lmax=lmax,
         mmax=mmax,
         num_channels=num_channels,
         **layer_kwargs,
     ).to(device=device, dtype=dtype)
 
-    unfused_layer = unfused_class(
-        lmax=lmax,
-        mmax=mmax,
-        num_channels=num_channels,
-        **layer_kwargs,
-    ).to(device=device, dtype=dtype)
-
-    # Synchronize parameters (copy unfused to fused)
-    # Since fused inherits from unfused, they should have the same parameter structure
-    fused_layer.load_state_dict(unfused_layer.state_dict())
-
-    # Create identical input tensors with gradient tracking
+    # Create two independent input tensors with gradient tracking
     x_fused = torch.randn(
         batch_size,
         lmax + 1,
@@ -170,13 +151,33 @@ def compare_fused_unfused(
     )
     x_unfused = x_fused.clone().detach().requires_grad_(True)
 
-    # Forward pass
-    y_fused = fused_layer(x_fused)
-    y_unfused = unfused_layer(x_unfused)
+    # Create gradient tensor for backward pass
+    grad_output = torch.randn_like(x_fused)
+
+    # Forward pass with fused path (_use_fused=True is the default)
+    layer._use_fused = True
+    y_fused = layer(x_fused)
+
+    # Backward pass for fused
+    y_fused.backward(grad_output)
+
+    # Zero parameter gradients before unfused path
+    layer.zero_grad()
+
+    # Forward pass with unfused path
+    layer._use_fused = False
+    y_unfused = layer(x_unfused)
+
+    # Backward pass for unfused
+    y_unfused.backward(grad_output.clone())
+
+    # Reset to fused for cleanup
+    layer._use_fused = True
 
     # Test 1: Shape preservation
     assert y_fused.shape == y_unfused.shape
     assert y_fused.shape == x_fused.shape
+
     # Test 2: Output equivalence
     torch.testing.assert_close(
         y_fused,
@@ -185,12 +186,6 @@ def compare_fused_unfused(
         atol=atol,
         msg=f"Fused and unfused outputs differ for {fused_class.__name__}",
     )
-
-    # Backward pass
-    # Create identical gradient tensors for backward
-    grad_output = torch.randn_like(y_fused)
-    y_fused.backward(grad_output)
-    y_unfused.backward(grad_output.clone())
 
     # Test 3: Input gradient equivalence
     assert x_fused.grad is not None
@@ -225,7 +220,6 @@ class TestFusedEquivariantRMSNorm:
 
         compare_fused_unfused(
             FusedEquivariantRMSNorm,
-            EquivariantRMSNormSHGrid,
             lmax,
             mmax,
             num_channels,
@@ -250,7 +244,6 @@ class TestFusedEquivariantRMSNorm:
 
         compare_fused_unfused(
             FusedEquivariantRMSNorm,
-            EquivariantRMSNormSHGrid,
             lmax,
             mmax,
             num_channels,
@@ -275,7 +268,6 @@ class TestFusedEquivariantRMSNorm:
 
         compare_fused_unfused(
             FusedEquivariantRMSNorm,
-            EquivariantRMSNormSHGrid,
             lmax,
             mmax,
             num_channels,
@@ -300,7 +292,6 @@ class TestFusedEquivariantRMSNorm:
 
         compare_fused_unfused(
             FusedEquivariantRMSNorm,
-            EquivariantRMSNormSHGrid,
             lmax,
             mmax,
             num_channels,
@@ -329,7 +320,6 @@ class TestFusedEquivariantLayerNormSH:
 
         compare_fused_unfused(
             FusedEquivariantLayerNormSH,
-            EquivariantLayerNormSHGrid,
             lmax,
             mmax,
             num_channels,
@@ -353,7 +343,6 @@ class TestFusedEquivariantLayerNormSH:
 
         compare_fused_unfused(
             FusedEquivariantLayerNormSH,
-            EquivariantLayerNormSHGrid,
             lmax,
             mmax,
             num_channels,
@@ -377,7 +366,6 @@ class TestFusedEquivariantLayerNormSH:
 
         compare_fused_unfused(
             FusedEquivariantLayerNormSH,
-            EquivariantLayerNormSHGrid,
             lmax,
             mmax,
             num_channels,
@@ -405,7 +393,6 @@ class TestFusedEquivariantLayerNorm:
 
         compare_fused_unfused(
             FusedEquivariantLayerNorm,
-            EquivariantLayerNormGrid,
             lmax,
             mmax,
             num_channels,
@@ -429,7 +416,6 @@ class TestFusedEquivariantLayerNorm:
 
         compare_fused_unfused(
             FusedEquivariantLayerNorm,
-            EquivariantLayerNormGrid,
             lmax,
             mmax,
             num_channels,
@@ -453,7 +439,6 @@ class TestFusedEquivariantLayerNorm:
 
         compare_fused_unfused(
             FusedEquivariantLayerNorm,
-            EquivariantLayerNormGrid,
             lmax,
             mmax,
             num_channels,

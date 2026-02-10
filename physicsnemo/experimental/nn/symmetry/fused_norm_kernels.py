@@ -1803,35 +1803,68 @@ def fused_rmsnorm_setup_context(ctx, inputs, output):
     ctx.has_bias = has_bias
 
 
-def fused_rmsnorm_backward(ctx, grad_output):
-    """Backward pass for fused RMSNorm custom op.
+@torch.library.custom_op("physicsnemo::_fused_rmsnorm_backward", mutates_args=())
+def _fused_rmsnorm_backward(
+    grad_output: torch.Tensor,  # [batch, lmax+1, mmax+1, 2, channels]
+    x: torch.Tensor,  # [batch, lmax+1, mmax+1, 2, channels]
+    output: torch.Tensor,  # [batch, lmax+1, mmax+1, 2, channels]
+    affine_weight: torch.Tensor,  # [lmax+1, channels]
+    affine_bias: torch.Tensor,  # [channels]
+    balance_weight: torch.Tensor,  # [lmax+1, mmax+1]
+    grid_mask_3d: torch.Tensor,  # [lmax+1, mmax+1, 2]
+    lmax: int,
+    mmax: int,
+    num_channels: int,
+    eps: float,
+    subtract_mean: bool,
+    has_bias: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Private custom op for RMSNorm backward kernel launches.
+
+    This op wraps all wp.launch() calls from the backward pass, making them
+    compatible with torch.compile by providing a register_fake implementation.
 
     Parameters
     ----------
-    ctx : torch.autograd.function.BackwardCFunction
-        Context with saved tensors and attributes.
     grad_output : torch.Tensor
         Upstream gradient [batch, lmax+1, mmax+1, 2, channels].
+    x : torch.Tensor
+        Input to the forward pass [batch, lmax+1, mmax+1, 2, channels].
+    output : torch.Tensor
+        Output from the forward pass [batch, lmax+1, mmax+1, 2, channels].
+    affine_weight : torch.Tensor
+        Learned affine weights [lmax+1, channels].
+    affine_bias : torch.Tensor
+        Learned affine bias [channels].
+    balance_weight : torch.Tensor
+        Balancing weights [lmax+1, mmax+1].
+    grid_mask_3d : torch.Tensor
+        Grid mask [lmax+1, mmax+1, 2].
+    lmax : int
+        Maximum l degree.
+    mmax : int
+        Maximum m order.
+    num_channels : int
+        Number of channels.
+    eps : float
+        Epsilon for numerical stability.
+    subtract_mean : bool
+        Whether mean subtraction was applied in forward.
+    has_bias : bool
+        Whether bias is present.
 
     Returns
     -------
-    tuple
-        Gradients for each input: (grad_x, grad_affine_weight, grad_affine_bias,
-        None, None, None, None, None, None, None, None).
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        - grad_x: Gradient w.r.t. input [batch, lmax+1, mmax+1, 2, channels]
+        - grad_affine_weight: Gradient w.r.t. affine weights [lmax+1, channels]
+        - grad_affine_bias: Gradient w.r.t. affine bias [channels]
+
+    Notes
+    -----
+    This private op does NOT apply the mean-subtraction chain rule correction.
+    That correction is applied in the outer backward function using pure PyTorch ops.
     """
-    # Unpack saved tensors
-    x, output, affine_weight, affine_bias, balance_weight, grid_mask_3d = (
-        ctx.saved_tensors
-    )
-
-    # Unpack non-tensor attributes
-    lmax = ctx.lmax
-    mmax = ctx.mmax
-    num_channels = ctx.num_channels
-    eps = ctx.eps
-    subtract_mean = ctx.subtract_mean
-    has_bias = ctx.has_bias
-
     # Extract shapes
     batch_size = x.shape[0]
     lmax_p1 = lmax + 1
@@ -1975,19 +2008,99 @@ def fused_rmsnorm_backward(ctx, grad_output):
                 device=wp_device,
             )
 
-    # Apply mean-subtraction chain rule correction if subtract_mean
-    if subtract_mean:
-        grad_x_hat_l0_sum = grad_x_4d[:, 0, 0, :num_channels].sum(dim=-1, keepdim=True)
-        grad_x_4d[:, 0, 0, :num_channels] -= grad_x_hat_l0_sum / num_channels
-
     # Reshape grad_x back to 5D
     grad_x = grad_x_4d.view(batch_size, lmax_p1, mmax + 1, 2, num_channels)
 
-    # Return gradients for all inputs (11 total)
+    return grad_x, grad_affine_weight, grad_affine_bias
+
+
+@_fused_rmsnorm_backward.register_fake
+def _fused_rmsnorm_backward_fake(
+    grad_output,
+    x,
+    output,
+    affine_weight,
+    affine_bias,
+    balance_weight,
+    grid_mask_3d,
+    lmax,
+    mmax,
+    num_channels,
+    eps,
+    subtract_mean,
+    has_bias,
+):
+    """Fake implementation for torch.compile compatibility.
+
+    Returns tensors with correct shapes and dtypes without executing kernels.
+    """
+    lmax_p1 = lmax + 1
     return (
-        grad_x,  # grad for x
-        grad_affine_weight,  # grad for affine_weight
-        grad_affine_bias if has_bias else None,  # grad for affine_bias
+        torch.empty_like(x),
+        torch.empty(lmax_p1, num_channels, device=x.device, dtype=x.dtype),
+        torch.empty(num_channels, device=x.device, dtype=x.dtype),
+    )
+
+
+def fused_rmsnorm_backward(ctx, grad_output):
+    """Backward pass for fused RMSNorm custom op.
+
+    Parameters
+    ----------
+    ctx : torch.autograd.function.BackwardCFunction
+        Context with saved tensors and attributes.
+    grad_output : torch.Tensor
+        Upstream gradient [batch, lmax+1, mmax+1, 2, channels].
+
+    Returns
+    -------
+    tuple
+        Gradients for each input: (grad_x, grad_affine_weight, grad_affine_bias,
+        None, None, None, None, None, None, None, None).
+    """
+    # Unpack saved tensors
+    x, output, affine_weight, affine_bias, balance_weight, grid_mask_3d = (
+        ctx.saved_tensors
+    )
+
+    # Unpack attributes
+    lmax = ctx.lmax
+    mmax = ctx.mmax
+    num_channels = ctx.num_channels
+    eps = ctx.eps
+    subtract_mean = ctx.subtract_mean
+    has_bias = ctx.has_bias
+
+    # Call private custom op for kernel launches
+    grad_x, grad_affine_weight, grad_affine_bias = _fused_rmsnorm_backward(
+        grad_output,
+        x,
+        output,
+        affine_weight,
+        affine_bias,
+        balance_weight,
+        grid_mask_3d,
+        lmax,
+        mmax,
+        num_channels,
+        eps,
+        subtract_mean,
+        has_bias,
+    )
+
+    # Apply mean-subtraction chain rule correction (pure PyTorch, traceable)
+    if subtract_mean:
+        grad_x_l0_real = grad_x[:, 0, 0, 0, :]  # [batch, channels]
+        grad_x_l0_sum = grad_x_l0_real.sum(dim=-1, keepdim=True)  # [batch, 1]
+        correction = grad_x_l0_sum / num_channels
+        # Clone to avoid modifying custom op output in-place
+        grad_x = grad_x.clone()
+        grad_x[:, 0, 0, 0, :] = grad_x_l0_real - correction
+
+    return (
+        grad_x,
+        grad_affine_weight,
+        grad_affine_bias if has_bias else None,
         None,  # grad for balance_weight
         None,  # grad for grid_mask_3d
         None,  # grad for lmax
@@ -2132,17 +2245,42 @@ def fused_layernormsh_lgt0_setup_context(
     ctx.eps = eps
 
 
-def fused_layernormsh_lgt0_backward(ctx, grad_output: torch.Tensor):
-    """Backward pass for fused_layernormsh_lgt0."""
-    # Unpack saved tensors and attributes
-    x_lgt0, output, affine_weight, balance_weight_lgt0, grid_mask_lgt0 = (
-        ctx.saved_tensors
-    )
-    lmax = ctx.lmax
-    mmax = ctx.mmax
-    num_channels = ctx.num_channels
-    eps = ctx.eps
+@torch.library.custom_op(
+    "physicsnemo::_fused_layernormsh_lgt0_backward", mutates_args=()
+)
+def _fused_layernormsh_lgt0_backward(
+    grad_output: torch.Tensor,  # [batch, lmax, mmax+1, 2, channels]
+    x_lgt0: torch.Tensor,  # [batch, lmax, mmax+1, 2, channels]
+    output: torch.Tensor,  # [batch, lmax, mmax+1, 2, channels]
+    affine_weight: torch.Tensor,  # [lmax, channels]
+    balance_weight_lgt0: torch.Tensor,  # [lmax, mmax+1]
+    grid_mask_lgt0: torch.Tensor,  # [lmax, mmax+1, 2]
+    lmax: int,
+    mmax: int,
+    num_channels: int,
+    eps: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Private custom op for LayerNormSH l>0 backward kernel launches.
 
+    This private op wraps the Warp kernel launches for the backward pass,
+    making them torch.compile compatible. It should only be called by
+    fused_layernormsh_lgt0_backward.
+
+    Args:
+        grad_output: Gradient w.r.t. output [batch, lmax, mmax+1, 2, channels]
+        x_lgt0: Input tensor [batch, lmax, mmax+1, 2, channels]
+        output: Forward output [batch, lmax, mmax+1, 2, channels]
+        affine_weight: Affine weight [lmax, channels]
+        balance_weight_lgt0: Balance weights [lmax, mmax+1]
+        grid_mask_lgt0: Grid mask [lmax, mmax+1, 2]
+        lmax: Maximum degree
+        mmax: Maximum order
+        num_channels: Number of channels
+        eps: Epsilon for numerical stability
+
+    Returns:
+        Tuple of (grad_x, grad_affine_weight)
+    """
     batch_size = x_lgt0.shape[0]
 
     # Reshape to 4D for kernel processing
@@ -2221,6 +2359,53 @@ def fused_layernormsh_lgt0_backward(ctx, grad_output: torch.Tensor):
 
     # Reshape grad_x back to 5D
     grad_x = grad_x_4d.view(batch_size, lmax, mmax + 1, 2, num_channels)
+
+    return (grad_x, grad_affine_weight)
+
+
+@_fused_layernormsh_lgt0_backward.register_fake
+def _fused_layernormsh_lgt0_backward_fake(
+    grad_output,
+    x_lgt0,
+    output,
+    affine_weight,
+    balance_weight_lgt0,
+    grid_mask_lgt0,
+    lmax,
+    mmax,
+    num_channels,
+    eps,
+):
+    """Fake implementation for torch.compile."""
+    return (
+        torch.empty_like(x_lgt0),
+        torch.empty(lmax, num_channels, device=x_lgt0.device, dtype=x_lgt0.dtype),
+    )
+
+
+def fused_layernormsh_lgt0_backward(ctx, grad_output: torch.Tensor):
+    """Backward pass for fused_layernormsh_lgt0."""
+    # Unpack saved tensors and attributes
+    x_lgt0, output, affine_weight, balance_weight_lgt0, grid_mask_lgt0 = (
+        ctx.saved_tensors
+    )
+    lmax = ctx.lmax
+    mmax = ctx.mmax
+    num_channels = ctx.num_channels
+    eps = ctx.eps
+
+    grad_x, grad_affine_weight = _fused_layernormsh_lgt0_backward(
+        grad_output,
+        x_lgt0,
+        output,
+        affine_weight,
+        balance_weight_lgt0,
+        grid_mask_lgt0,
+        lmax,
+        mmax,
+        num_channels,
+        eps,
+    )
 
     # Return gradients for all 8 inputs (None for non-tensor inputs)
     return (grad_x, grad_affine_weight, None, None, None, None, None, None)
@@ -2451,21 +2636,33 @@ def fused_layernorm_setup_context(ctx, inputs, output) -> None:
     ctx.has_bias = has_bias
 
 
-def fused_layernorm_backward(ctx, grad_output: torch.Tensor) -> tuple:
-    """Backward pass for fused_layernorm."""
-    # Unpack saved tensors
-    x, output, affine_weight, affine_bias, per_degree_norm_weight, grid_mask_3d = (
-        ctx.saved_tensors
-    )
+@torch.library.custom_op("physicsnemo::_fused_layernorm_backward", mutates_args=())
+def _fused_layernorm_backward(
+    grad_output: torch.Tensor,  # [batch, lmax+1, mmax+1, 2, channels]
+    x: torch.Tensor,  # [batch, lmax+1, mmax+1, 2, channels]
+    output: torch.Tensor,  # [batch, lmax+1, mmax+1, 2, channels]
+    affine_weight: torch.Tensor,  # [lmax+1, channels]
+    affine_bias: torch.Tensor,  # [channels]
+    per_degree_norm_weight: torch.Tensor,  # [lmax+1, mmax+1]
+    grid_mask_3d: torch.Tensor,  # [lmax+1, mmax+1, 2]
+    lmax: int,
+    mmax: int,
+    num_channels: int,
+    eps: float,
+    subtract_mean: bool,
+    has_bias: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Private custom op: per-degree LayerNorm backward kernel launches.
 
-    # Unpack attributes
-    lmax = ctx.lmax
-    mmax = ctx.mmax
-    num_channels = ctx.num_channels
-    eps = ctx.eps
-    subtract_mean = ctx.subtract_mean
-    has_bias = ctx.has_bias
+    This op wraps all Warp kernel launches for the per-degree LayerNorm backward pass.
+    It does NOT apply the mean-subtraction chain rule correction, which stays in the
+    outer backward function as pure PyTorch code (torch.compile-traceable).
 
+    Returns:
+        grad_x: [batch, lmax+1, mmax+1, 2, channels]
+        grad_affine_weight: [lmax+1, channels]
+        grad_affine_bias: [channels]
+    """
     batch_size = x.shape[0]
     lmax_p1 = lmax + 1
     inv_num_channels = 1.0 / num_channels
@@ -2614,13 +2811,76 @@ def fused_layernorm_backward(ctx, grad_output: torch.Tensor) -> tuple:
                 device=wp_device,
             )
 
-    # Apply mean-correction chain rule for subtract_mean
-    if subtract_mean:
-        grad_x_hat_l0_sum = grad_x_4d[:, 0, 0, :num_channels].sum(dim=-1, keepdim=True)
-        grad_x_4d[:, 0, 0, :num_channels] -= grad_x_hat_l0_sum / num_channels
-
     # Reshape grad_x back to 5D
     grad_x = grad_x_4d.view(batch_size, lmax_p1, mmax + 1, 2, num_channels)
+
+    return grad_x, grad_affine_weight, grad_affine_bias
+
+
+@_fused_layernorm_backward.register_fake
+def _fused_layernorm_backward_fake(
+    grad_output,
+    x,
+    output,
+    affine_weight,
+    affine_bias,
+    per_degree_norm_weight,
+    grid_mask_3d,
+    lmax,
+    mmax,
+    num_channels,
+    eps,
+    subtract_mean,
+    has_bias,
+):
+    """Fake implementation for meta/tracing."""
+    lmax_p1 = lmax + 1
+    return (
+        torch.empty_like(x),
+        torch.empty(lmax_p1, num_channels, device=x.device, dtype=x.dtype),
+        torch.empty(num_channels, device=x.device, dtype=x.dtype),
+    )
+
+
+def fused_layernorm_backward(ctx, grad_output: torch.Tensor) -> tuple:
+    """Backward pass for fused_layernorm."""
+    # Unpack saved tensors
+    x, output, affine_weight, affine_bias, per_degree_norm_weight, grid_mask_3d = (
+        ctx.saved_tensors
+    )
+
+    # Unpack attributes
+    lmax = ctx.lmax
+    mmax = ctx.mmax
+    num_channels = ctx.num_channels
+    eps = ctx.eps
+    subtract_mean = ctx.subtract_mean
+    has_bias = ctx.has_bias
+
+    # Call private custom op to execute kernel launches
+    grad_x, grad_affine_weight, grad_affine_bias = _fused_layernorm_backward(
+        grad_output,
+        x,
+        output,
+        affine_weight,
+        affine_bias,
+        per_degree_norm_weight,
+        grid_mask_3d,
+        lmax,
+        mmax,
+        num_channels,
+        eps,
+        subtract_mean,
+        has_bias,
+    )
+
+    # Apply mean-subtraction chain rule correction (pure PyTorch, traceable)
+    if subtract_mean:
+        grad_x_l0_real = grad_x[:, 0, 0, 0, :]  # [batch, channels]
+        grad_x_l0_sum = grad_x_l0_real.sum(dim=-1, keepdim=True)  # [batch, 1]
+        correction = grad_x_l0_sum / num_channels
+        grad_x = grad_x.clone()
+        grad_x[:, 0, 0, 0, :] = grad_x_l0_real - correction
 
     # Return gradients for all 11 inputs (None for non-tensor and immutable inputs)
     return (
