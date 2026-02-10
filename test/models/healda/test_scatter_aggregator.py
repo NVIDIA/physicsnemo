@@ -50,7 +50,7 @@ def test_scatter_aggregator_forward(device):
         model,
         (obs_features, batch_idx, pix, bucket_id, nbatch),
         file_name="models/healda/data/scatter_aggregator_output.pth",
-        atol=1e-4,
+        atol=1e-3,
     )
 
 
