@@ -50,8 +50,8 @@ class TestPlanarPrimitives:
 
     def test_subdivision_control(self):
         """Test that subdivision parameter works."""
-        square_coarse = primitives.planar.unit_square.load(n_subdivisions=0)
-        square_fine = primitives.planar.unit_square.load(n_subdivisions=2)
+        square_coarse = primitives.planar.unit_square.load(subdivisions=0)
+        square_fine = primitives.planar.unit_square.load(subdivisions=2)
 
         assert square_fine.n_points > square_coarse.n_points
         assert square_fine.n_cells > square_coarse.n_cells

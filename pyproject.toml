@@ -161,6 +161,7 @@ utils-extras = [
 ]
 mesh-extras = [
     "matplotlib>=3.10.7",
+    "pyacvd>=0.3.2",
     "pyvista>=0.46.4",
 ]
 nn-extras = [
