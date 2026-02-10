@@ -33,6 +33,7 @@ def draw_mesh_pyvista(
     point_scalar_values: torch.Tensor | None,
     cell_scalar_values: torch.Tensor | None,
     active_scalar_source: Literal["points", "cells", None],
+    scalar_label: str | None,
     show: bool,
     cmap: str,
     vmin: float | None,
@@ -54,6 +55,8 @@ def draw_mesh_pyvista(
         Processed cell scalar values (1D tensor or None).
     active_scalar_source : {"points", "cells", None}
         Which scalar source is active ("points", "cells", or None).
+    scalar_label : str or None
+        Human-readable label for the colorbar title.
     show : bool
         Whether to call plotter.show().
     cmap : str
@@ -137,6 +140,7 @@ def draw_mesh_pyvista(
 
     ### Add mesh to plotter
     # PyVista's add_mesh handles different mesh types appropriately
+    scalar_bar_args = {"title": scalar_label} if scalar_label else None
     plotter.add_mesh(
         pv_mesh,
         scalars=scalars,
@@ -147,6 +151,7 @@ def draw_mesh_pyvista(
         edge_color="black",
         line_width=1.0 if show_edges else 0,
         clim=clim,
+        scalar_bar_args=scalar_bar_args,
         **kwargs,
     )
 
@@ -175,6 +180,7 @@ def draw_mesh_pyvista(
             render_points_as_spheres=True,
             opacity=alpha_points,
             clim=clim if point_scalars else None,
+            scalar_bar_args=scalar_bar_args if point_scalars else None,
         )
 
     ### Show plotter if requested

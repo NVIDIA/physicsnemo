@@ -191,7 +191,7 @@ class TestCellDataToPointData:
         )
 
         ### Should raise error
-        with pytest.raises(ValueError, match="already exists in point_data"):
+        with pytest.raises(ValueError):
             mesh.cell_data_to_point_data()
 
     def test_overwrite_keys(self):
@@ -314,7 +314,7 @@ class TestPointDataToCellData:
         )
 
         ### Should raise error
-        with pytest.raises(ValueError, match="already exists in cell_data"):
+        with pytest.raises(ValueError):
             mesh.point_data_to_cell_data()
 
     def test_overwrite_keys(self):

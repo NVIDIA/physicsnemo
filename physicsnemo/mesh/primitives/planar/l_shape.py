@@ -25,7 +25,7 @@ from physicsnemo.mesh.mesh import Mesh
 
 
 def load(
-    size: float = 1.0, n_subdivisions: int = 5, device: torch.device | str = "cpu"
+    size: float = 1.0, subdivisions: int = 5, device: torch.device | str = "cpu"
 ) -> Mesh:
     """Create an L-shaped non-convex domain in 2D space.
 
@@ -33,16 +33,16 @@ def load(
     - Bottom rectangle: [0, size] x [0, size/2]
     - Top rectangle: [0, size/2] x [size/2, size]
 
-    Both parts use uniform grid spacing of size/(2*n_subdivisions), and the
+    Both parts use uniform grid spacing of size/(2*subdivisions), and the
     vertices at y=size/2 for x in [0, size/2] are shared between the parts.
 
     Parameters
     ----------
     size : float
         Size of the L-shape (both overall width and height).
-    n_subdivisions : int
+    subdivisions : int
         Number of subdivisions per half-edge (so the full width has
-        2*n_subdivisions cells).
+        2*subdivisions cells).
     device : str
         Compute device ('cpu' or 'cuda').
 
@@ -51,14 +51,14 @@ def load(
     Mesh
         Mesh with n_manifold_dims=2, n_spatial_dims=2.
     """
-    if n_subdivisions < 1:
-        raise ValueError(f"n_subdivisions must be at least 1, got {n_subdivisions=}")
+    if subdivisions < 1:
+        raise ValueError(f"subdivisions must be at least 1, got {subdivisions=}")
 
     ### Grid parameters
-    step = size / (2 * n_subdivisions)
-    n_cols_bottom = 2 * n_subdivisions + 1  # x points spanning [0, size]
-    n_cols_top = n_subdivisions + 1  # x points spanning [0, size/2]
-    n_rows = n_subdivisions + 1  # y points per rectangle half
+    step = size / (2 * subdivisions)
+    n_cols_bottom = 2 * subdivisions + 1  # x points spanning [0, size]
+    n_cols_top = subdivisions + 1  # x points spanning [0, size/2]
+    n_rows = subdivisions + 1  # y points per rectangle half
 
     points = []
     cells = []
@@ -93,12 +93,12 @@ def load(
     n_top_rows = n_rows - 1  # Rows per column in top-only vertex storage
 
     for i in range(n_cols_top - 1):
-        for j in range(n_subdivisions):
+        for j in range(subdivisions):
             if j == 0:
                 # Bottom row: reference shared vertices from bottom part
-                # Shared vertices are at y=size/2 (j=n_subdivisions in bottom grid)
-                bl = i * n_rows + n_subdivisions
-                br = (i + 1) * n_rows + n_subdivisions
+                # Shared vertices are at y=size/2 (j=subdivisions in bottom grid)
+                bl = i * n_rows + subdivisions
+                br = (i + 1) * n_rows + subdivisions
                 # Top vertices are first row of top-only part
                 tl = offset + i * n_top_rows
                 tr = offset + (i + 1) * n_top_rows
