@@ -22,13 +22,15 @@ using NVIDIA Warp kernels, with full PyTorch autograd integration via
 
 Module Structure
 ----------------
-The module is organized into four sections:
+The module is organized into three sections:
 
 1. **Forward Warp Kernels** - low-level GPU kernels for the forward pass.
 2. **Backward Warp Kernels** - hand-written gradient kernels for the backward pass.
 3. **Custom Op Wrappers** - ``torch.library.custom_op`` definitions that orchestrate
    kernel launches and register autograd support, making the fused kernels usable
-   as differentiable operations within standard PyTorch training loops.
+   as differentiable operations within standard PyTorch training loops. This includes
+   public forward ops, private backward ops (for ``torch.compile`` compatibility),
+   and autograd glue connecting them.
 
 Each normalization variant generally is structured with two kernels:
 
@@ -45,19 +47,14 @@ of the forward statistics.
 Autograd Integration
 --------------------
 Each custom op (e.g., ``fused_rmsnorm``) is wired to PyTorch's autograd engine
-via four components:
+via six components per normalization variant:
 
-- **Forward function** (``@torch.library.custom_op``): Launches the forward Warp
-  kernels and returns the output tensor.
-- **Fake implementation** (``@<op>.register_fake``): Returns an empty tensor with
-  the correct shape/dtype for ``torch.compile`` tracing.
-- **Setup context** (``setup_context``): Saves input tensors and scalar attributes
-  on the autograd context for use in the backward pass.
-- **Backward function**: Launches backward Warp kernels to compute gradients for
-  the input, affine weight, and (optionally) affine bias. Non-differentiable
-  inputs (masks, weights, scalars) receive ``None``.
-
-These are connected by ``<op>.register_autograd(backward_fn, setup_context=...)``.
+- **Backward/forward custom op** (``@torch.library.custom_op``): Launches forward Warp
+  kernels and returns outputs/gradients.
+- **Backward/forward fake** (``@<op>.register_fake``): Returns an empty tensor with the
+  correct shape/dtype for ``torch.compile`` tracing.
+- **Setup context** (``setup_context``): Saves tensors and attributes on the
+  autograd context for use in the backward pass.
 
 Kernel Inventory
 ----------------
@@ -87,6 +84,8 @@ Kernel Inventory
             ``grad_affine_bias``.
     Custom op:
         ``fused_layernorm`` — Orchestrates all of the above with autograd.
+        ``_fused_layernorm_backward`` — Private backward custom op for
+            ``torch.compile`` compatibility.
 
 **Global RMSNorm** (used by ``FusedEquivariantRMSNorm``):
     A single inverse-RMS statistic is computed across *all* degrees and used to
@@ -112,6 +111,8 @@ Kernel Inventory
             ``grad_affine_bias``.
     Custom op:
         ``fused_rmsnorm`` — Orchestrates all of the above with autograd.
+        ``_fused_rmsnorm_backward`` — Private backward custom op for
+            ``torch.compile`` compatibility.
 
 **LayerNormSH l>0** (used by ``FusedEquivariantLayerNormSH``):
     Normalizes only the l>0 degrees with a single shared inverse-RMS statistic
@@ -132,6 +133,8 @@ Kernel Inventory
             Compute ``grad_x`` and ``grad_affine_weight`` for l>0.
     Custom op:
         ``fused_layernormsh_lgt0`` — Orchestrates all of the above with autograd.
+        ``_fused_layernormsh_lgt0_backward`` — Private backward custom op for
+            ``torch.compile`` compatibility.
 
 **Utility:**
     ``inv_rms_transform`` —
