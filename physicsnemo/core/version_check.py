@@ -567,7 +567,7 @@ def require_version_spec(package_name: str, spec: str = "0.0.0"):
 
 # Private registry for OptionalImport instances - ensures same instance
 # is returned for the same module name across the codebase
-_optional_import_registry: Dict[str, "OptionalImport"] = {}
+_optional_import_registry: dict[str, "OptionalImport"] = {}
 
 
 class OptionalImport:
