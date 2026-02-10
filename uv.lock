@@ -3406,10 +3406,8 @@ wheels = [
 name = "nvidia-physicsnemo"
 source = { editable = "." }
 dependencies = [
-    { name = "cftime" },
     { name = "einops" },
     { name = "gitpython" },
-    { name = "h5py" },
     { name = "hydra-core" },
     { name = "importlib-metadata" },
     { name = "jaxtyping" },
@@ -3431,15 +3429,16 @@ dependencies = [
     { name = "tqdm" },
     { name = "treelib" },
     { name = "warp-lang" },
-    { name = "xarray" },
-    { name = "zarr" },
 ]
 
 [package.optional-dependencies]
 datapipes-extras = [
     { name = "dask" },
+    { name = "h5py" },
     { name = "netcdf4" },
     { name = "tfrecord" },
+    { name = "xarray" },
+    { name = "zarr" },
 ]
 gnns = [
     { name = "cuml-cu13" },
@@ -3516,7 +3515,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cftime", specifier = ">=1.6.5" },
     { name = "cuml-cu13", marker = "extra == 'gnns'", index = "https://pypi.nvidia.com/" },
     { name = "cuml-cu13", marker = "extra == 'model-extras'", index = "https://pypi.nvidia.com/" },
     { name = "cuml-cu13", marker = "extra == 'nn-extras'", index = "https://pypi.nvidia.com/" },
@@ -3527,7 +3525,7 @@ requires-dist = [
     { name = "dask", marker = "extra == 'datapipes-extras'" },
     { name = "einops", specifier = ">=0.8.1" },
     { name = "gitpython", specifier = ">=3.1.40" },
-    { name = "h5py", specifier = ">=3.15.1" },
+    { name = "h5py", marker = "extra == 'datapipes-extras'", specifier = ">=3.15.1" },
     { name = "hydra-core", specifier = ">=1.3.2" },
     { name = "importlib-metadata", specifier = ">=8.7.1" },
     { name = "jaxtyping", specifier = ">=0.3.3" },
@@ -3589,8 +3587,8 @@ requires-dist = [
     { name = "wandb", marker = "extra == 'nn-extras'" },
     { name = "wandb", marker = "extra == 'utils-extras'" },
     { name = "warp-lang", specifier = ">=1.5.0" },
-    { name = "xarray", specifier = ">=2025.6.1" },
-    { name = "zarr", specifier = ">=3.0.0" },
+    { name = "xarray", marker = "extra == 'datapipes-extras'", specifier = ">=2025.6.1" },
+    { name = "zarr", marker = "extra == 'datapipes-extras'", specifier = ">=3.0.0" },
 ]
 provides-extras = ["datapipes-extras", "gnns", "mesh-extras", "model-extras", "nn-extras", "utils-extras"]
 
