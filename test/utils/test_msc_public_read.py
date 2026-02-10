@@ -18,9 +18,11 @@
 import os
 from pathlib import Path
 
-import zarr
+import pytest
 
 from test.conftest import requires_module
+
+zarr = pytest.importorskip("zarr")
 
 
 # Verifies that a Zarr file in a publicly accessible S3 bucket can be read using MSC (Multi-Storage Client).
