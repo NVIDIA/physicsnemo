@@ -357,6 +357,21 @@ def get_package_hint(package_name: str) -> str:
     )
 
 
+# Packages known to ship under build-variant distribution names.
+# For example, ``cupy`` is distributed as ``cupy-cuda11x``, ``cupy-cuda12x``,
+# etc. depending on the CUDA toolkit version.  Only these base names will
+# trigger the slower prefix-match fallback in :func:`get_installed_version`;
+# all other packages require an exact (or PEP 503-normalized) name match.
+# This prevents false positives such as ``"numpy"`` matching ``"numpy-stl"``,
+# which is an entirely unrelated package.
+_VARIANT_BASE_PACKAGES: frozenset = frozenset(
+    {
+        "cupy",  # cupy-cuda11x, cupy-cuda12x, …
+        "onnxruntime",  # onnxruntime-gpu, onnxruntime-openvino, …
+    }
+)
+
+
 @functools.lru_cache(maxsize=None)
 def get_installed_version(distribution_name: str) -> Optional[str]:
     """
@@ -378,9 +393,12 @@ def get_installed_version(distribution_name: str) -> Optional[str]:
     Notes
     -----
     This function handles variant package names like ``cupy-cuda12x`` when
-    searching for ``cupy``. It uses PEP 503 name normalization and requires
-    an exact match or a hyphen-delimited prefix match to avoid false positives
-    (e.g., searching for "torch" won't match "torchvision").
+    searching for ``cupy``, but **only** for packages listed in
+    ``_VARIANT_BASE_PACKAGES``.  It uses PEP 503 name normalization and
+    requires an exact match or (for known variant packages) a
+    hyphen-delimited prefix match.  Unregistered packages must match
+    exactly — e.g. searching for ``"numpy"`` will **not** match
+    ``"numpy-stl"``.
     """
     # First, try exact match (handles most cases)
     try:
@@ -398,14 +416,15 @@ def get_installed_version(distribution_name: str) -> Optional[str]:
         pass
 
     # Handle variant packages like cupy-cuda12x when searching for cupy.
-    # Require hyphen delimiter to avoid false positives:
-    # - "torch" won't match "torchvision" (no hyphen)
-    # - "cupy" will match "cupy-cuda12x" (has hyphen delimiter)
-    normalized_prefix = normalized_name + "-"
-    for dist in metadata.distributions():
-        dist_normalized = canonicalize_name(dist.metadata["Name"])
-        if dist_normalized.startswith(normalized_prefix):
-            return dist.version
+    # Only apply prefix matching for packages registered in
+    # _VARIANT_BASE_PACKAGES to avoid false positives (e.g., "numpy"
+    # should not match "numpy-stl").
+    if normalized_name in _VARIANT_BASE_PACKAGES:
+        normalized_prefix = normalized_name + "-"
+        for dist in metadata.distributions():
+            dist_normalized = canonicalize_name(dist.metadata["Name"])
+            if dist_normalized.startswith(normalized_prefix):
+                return dist.version
 
     return None
 
@@ -502,6 +521,15 @@ def require_version_spec(package_name: str, spec: str = "0.0.0"):
     Callable
         Decorator function that checks version requirement before execution.
 
+    Raises
+    ------
+    RuntimeError
+        If the package is missing or does not satisfy the version requirement.
+        Always raises ``RuntimeError`` for consistency
+        with :class:`OptionalImport`, which uses ``RuntimeError`` to avoid
+        breaking ``import physicsnemo`` for users who don't need the optional
+        dependency.
+
     Example
     -------
     >>> @require_version_spec("pyvista")
@@ -509,8 +537,8 @@ def require_version_spec(package_name: str, spec: str = "0.0.0"):
     ...     import pyvista as pv
     ...     return pv.examples.download_bunny()
 
-    If pyvista is not installed, calling the function will raise RuntimeError
-    with installation instructions.
+    If pyvista is not installed or the version is too low, calling the function
+    will raise ``RuntimeError`` with installation instructions.
     """
 
     def decorator(func):
@@ -520,9 +548,16 @@ def require_version_spec(package_name: str, spec: str = "0.0.0"):
             opt = OptionalImport(package_name)
             if not opt.available:
                 opt._get_module()  # This will raise RuntimeError with hint
-            # If version specified, also check version
+            # If version specified, also check version.
+            # Catch ImportError from check_version_spec and re-raise as
+            # RuntimeError for consistency — require_version_spec always raises
+            # RuntimeError for optional-dependency issues (both missing and
+            # version-too-low), matching OptionalImport's design rationale.
             if spec != "0.0.0":
-                check_version_spec(package_name, spec, hard_fail=True)
+                try:
+                    check_version_spec(package_name, spec, hard_fail=True)
+                except ImportError as exc:
+                    raise RuntimeError(str(exc)) from exc
             return func(*args, **kwargs)
 
         return wrapper
