@@ -1,13 +1,32 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import operator
 from collections import defaultdict
+from dataclasses import dataclass
 from functools import reduce
 from typing import Literal, Sequence
 
-import pyvista as pv
 import torch
 import torch.nn as nn
+from jaxtyping import Float
 from tensordict import TensorDict
 
+from physicsnemo.core.meta import ModelMetaData
+from physicsnemo.core.module import Module
 from physicsnemo.models.globe.boundary_mesh import BoundaryMesh
 from physicsnemo.models.globe.field_kernel import MultiscaleKernel
 from physicsnemo.models.globe.utilities.tensordict_utils import (
@@ -17,8 +36,17 @@ from physicsnemo.models.globe.utilities.tensordict_utils import (
 )
 
 
-class GLOBE(nn.Module):
-    """Green's-function-Like Operator for Boundary Element PDEs.
+@dataclass
+class MetaData(ModelMetaData):
+    jit: bool = False
+    cuda_graphs: bool = False
+    amp: bool = True
+    torch_fx: bool = False
+    onnx: bool = False
+
+
+class GLOBE(Module):
+    r"""Green's-function-Like Operator for Boundary Element PDEs.
 
     GLOBE is a neural surrogate architecture for boundary-driven elliptic PDEs that
     combines learnable Green's-function-like kernels with equivariant ML. The model
@@ -27,6 +55,7 @@ class GLOBE(nn.Module):
     information propagation before final interior evaluation.
 
     The architecture is designed to satisfy fundamental physical requirements:
+
     - Translation-, rotation-, and parity-equivariant through relative positions and
       local basis reprojection
     - Discretization-invariant via area-weighted boundary integrals
@@ -34,6 +63,7 @@ class GLOBE(nn.Module):
     - Global receptive field through all-to-all boundary-to-target evaluation
 
     Architecture overview (see paper Section 3):
+
     1. Communication hyperlayers propagate latent information between boundary
        condition partitions (Section 3.4)
     2. Each hyperlayer uses multiscale kernels operating at different reference
@@ -41,64 +71,123 @@ class GLOBE(nn.Module):
     3. Final hyperlayer evaluates fields at user-specified query points
     4. Learnable per-field calibration transforms applied to outputs
 
-    Args:
-        n_spatial_dims: Number of spatial dimensions (2 or 3).
-        output_fields: Dictionary mapping field names to types ("scalar" or "vector").
-            These are the physical fields predicted at query points in the final
-            hyperlayer.
-        boundary_condition_names: Sequence of boundary condition type identifiers
-            (e.g., ["no_slip", "freestream", "slip"]). Each BC type gets its own
-            set of kernels. Names must not contain "." for TensorDict compatibility.
-        boundary_condition_n_source_scalars: Dictionary mapping each BC type name to
-            the number of scalar features per boundary face for that BC type.
-        boundary_condition_n_source_vectors: Dictionary mapping each BC type name to
-            the number of vector features per boundary face for that BC type. The
-            face normal vector is automatically added, so don't include it in the count.
-        reference_length_names: Sequence of identifiers for reference length scales
-            (e.g., ["viscous_length", "chord_length"]). Each creates a separate kernel
-            branch in the multiscale composition.
-        reference_area: Scalar tensor used to nondimensionalize face areas. Typically
-            a characteristic area of the problem (e.g., chord^2 for airfoils).
-        n_global_scalars: Number of global scalar features (e.g., Reynolds number,
-            Mach number). These are shared across all source faces.
-        n_global_vectors: Number of global vector features (e.g., freestream velocity
-            direction). These are shared across all source faces.
-        n_communication_hyperlayers: Number of boundary-to-boundary communication
-            layers before final evaluation. Higher values enable more information
-            exchange between boundary partitions. Default: 2.
-        n_latent_scalars: Number of scalar latent channels propagated between
-            hyperlayers. Default: 12.
-        n_latent_vectors: Number of vector latent channels propagated between
-            hyperlayers. Default: 6.
-        smoothing_radius: Small value for numerical stability in magnitude computations.
-            Default: 1e-8.
-        hidden_layer_sizes: Hidden layer sizes for kernel neural networks. If None,
-            defaults to [64, 64, 64].
-        n_spherical_harmonics: Number of Legendre polynomial terms used for
-            angle-dependent features in kernel functions. Default: 4.
+    Parameters
+    ----------
+    n_spatial_dims : int
+        Number of spatial dimensions (2 or 3).
+    output_fields : dict[str, Literal["scalar", "vector"]]
+        Dictionary mapping field names to types (``"scalar"`` or ``"vector"``).
+        These are the physical fields predicted at query points in the final
+        hyperlayer.
+    boundary_condition_names : Sequence[str]
+        Sequence of boundary condition type identifiers
+        (e.g., ``["no_slip", "freestream", "slip"]``). Each BC type gets its own
+        set of kernels. Names must not contain ``"."`` for TensorDict compatibility.
+    boundary_condition_n_source_scalars : dict[str, int]
+        Dictionary mapping each BC type name to the number of scalar features per
+        boundary face for that BC type.
+    boundary_condition_n_source_vectors : dict[str, int]
+        Dictionary mapping each BC type name to the number of vector features per
+        boundary face for that BC type. The face normal vector is automatically
+        added, so don't include it in the count.
+    reference_length_names : Sequence[str]
+        Sequence of identifiers for reference length scales
+        (e.g., ``["viscous_length", "chord_length"]``). Each creates a separate
+        kernel branch in the multiscale composition.
+    reference_area : torch.Tensor
+        Scalar tensor used to nondimensionalize face areas. Typically a characteristic
+        area of the problem (e.g., chord^2 for airfoils).
+    n_global_scalars : int
+        Number of global scalar features (e.g., Reynolds number, Mach number). These
+        are shared across all source faces.
+    n_global_vectors : int
+        Number of global vector features (e.g., freestream velocity direction). These
+        are shared across all source faces.
+    n_communication_hyperlayers : int, optional, default=2
+        Number of boundary-to-boundary communication layers before final evaluation.
+        Higher values enable more information exchange between boundary partitions.
+    n_latent_scalars : int, optional, default=12
+        Number of scalar latent channels propagated between hyperlayers.
+    n_latent_vectors : int, optional, default=6
+        Number of vector latent channels propagated between hyperlayers.
+    smoothing_radius : float, optional, default=1e-8
+        Small value for numerical stability in magnitude computations.
+    hidden_layer_sizes : Sequence[int] | None, optional, default=None
+        Hidden layer sizes for kernel neural networks. If ``None``, defaults to
+        ``[64, 64, 64]``.
+    n_spherical_harmonics : int, optional, default=4
+        Number of Legendre polynomial terms used for angle-dependent features in
+        kernel functions.
 
-    Attributes:
-        kernel_layers: ModuleList of communication hyperlayers, each containing a
-            ModuleDict mapping BC type names to MultiscaleKernel instances.
-        final_field_transforms: ModuleDict of per-field linear calibration layers.
+    Forward
+    -------
+    prediction_points : Float[torch.Tensor, "n_points n_dims"]
+        Target points for field evaluation of shape :math:`(N_{points}, D)`. These
+        are typically interior domain points where the solution is predicted.
+    boundary_meshes : Sequence[BoundaryMesh]
+        Sequence of :class:`~physicsnemo.models.globe.boundary_mesh.BoundaryMesh`
+        objects representing the problem boundaries. Each mesh must have a
+        ``boundary_condition_type`` matching one of the model's
+        ``boundary_condition_names``. Multiple meshes can share the same BC type
+        (they are merged automatically).
+    reference_lengths : dict[str, torch.Tensor]
+        Dictionary mapping reference length names to scalar tensors. Keys must match
+        the model's ``reference_length_names``.
+    global_scalars : TensorDict | None, optional, default=None
+        TensorDict with ``batch_size=()`` containing problem-level scalar features.
+        The total concatenated length must match ``n_global_scalars``.
+    global_vectors : TensorDict | None, optional, default=None
+        TensorDict with ``batch_size=(n_spatial_dims,)`` containing problem-level
+        vector features. The total concatenated length must match ``n_global_vectors``.
+    chunk_size : None | int | Literal["auto"], optional, default=None
+        Controls memory usage during kernel evaluation. ``None`` evaluates all target
+        points at once, an ``int`` processes in chunks of that size, and ``"auto"``
+        automatically determines chunk size targeting ~1GB per chunk.
+    verbose : bool, optional, default=True
+        If ``True``, prints progress information during evaluation.
 
-    Example:
-        >>> model = GLOBE(
-        ...     n_spatial_dims=3,
-        ...     output_fields={"pressure": "scalar", "velocity": "vector"},
-        ...     boundary_condition_names=["no_slip", "freestream"],
-        ...     boundary_condition_n_source_scalars={"no_slip": 0, "freestream": 0},
-        ...     boundary_condition_n_source_vectors={"no_slip": 0, "freestream": 0},
-        ...     reference_length_names=["delta_FS", "chord"],
-        ...     reference_area=torch.tensor(1.0),
-        ...     n_global_scalars=0,
-        ...     n_global_vectors=0,
-        ... )
-        >>> result = model(
-        ...     prediction_points=torch.randn(100, 3),
-        ...     boundary_meshes=[wing_mesh, fuselage_mesh],
-        ...     reference_lengths={"delta_FS": torch.tensor(0.01), "chord": torch.tensor(1.0)},
-        ... )
+    Outputs
+    -------
+    TensorDict
+        TensorDict with ``batch_size=(n_points,)`` containing the predicted fields.
+        Keys are the field names from ``output_fields``. Scalar fields have shape
+        :math:`(N_{points},)`, vector fields have shape
+        :math:`(N_{points}, D)`.
+
+    Notes
+    -----
+    - ``kernel_layers`` is a :class:`~torch.nn.ModuleList` of communication
+      hyperlayers, each containing a :class:`~torch.nn.ModuleDict` mapping BC type
+      names to :class:`~physicsnemo.models.globe.field_kernel.MultiscaleKernel`
+      instances.
+    - ``final_field_transforms`` is a :class:`~torch.nn.ModuleDict` of per-field
+      linear calibration layers.
+    - Face areas are automatically normalized by ``reference_area`` to preserve
+      discretization-invariance.
+    - The face normal vector is automatically added to ``source_vectors`` for each
+      mesh.
+    - Hyperlayer communication enables long-range coupling between boundary
+      partitions, analogous to the influence coefficient matrix solve in traditional
+      boundary-element methods (but learned rather than explicitly computed).
+
+    Examples
+    --------
+    >>> model = GLOBE(
+    ...     n_spatial_dims=3,
+    ...     output_fields={"pressure": "scalar", "velocity": "vector"},
+    ...     boundary_condition_names=["no_slip", "freestream"],
+    ...     boundary_condition_n_source_scalars={"no_slip": 0, "freestream": 0},
+    ...     boundary_condition_n_source_vectors={"no_slip": 0, "freestream": 0},
+    ...     reference_length_names=["delta_FS", "chord"],
+    ...     reference_area=torch.tensor(1.0),
+    ...     n_global_scalars=0,
+    ...     n_global_vectors=0,
+    ... )
+    >>> result = model(
+    ...     prediction_points=torch.randn(100, 3),
+    ...     boundary_meshes=[wing_mesh, fuselage_mesh],
+    ...     reference_lengths={"delta_FS": torch.tensor(0.01), "chord": torch.tensor(1.0)},
+    ... )
     """
 
     def __init__(
@@ -138,7 +227,7 @@ class GLOBE(nn.Module):
                         "This must not contain any `.` characters, for nested-TensorDict compatibility."
                     )
 
-        super().__init__()
+        super().__init__(meta=MetaData())
 
         # Store arguments
         self.n_spatial_dims = n_spatial_dims
@@ -219,7 +308,7 @@ class GLOBE(nn.Module):
 
     def forward(
         self,
-        prediction_points: torch.Tensor,
+        prediction_points: Float[torch.Tensor, "n_points n_dims"],
         boundary_meshes: Sequence[BoundaryMesh],
         reference_lengths: dict[str, torch.Tensor],
         global_scalars: TensorDict | None = None,
@@ -227,87 +316,33 @@ class GLOBE(nn.Module):
         chunk_size: None | int | Literal["auto"] = None,
         verbose: bool = True,
     ) -> TensorDict:
-        """Evaluates GLOBE model to predict fields at target points from boundary conditions.
+        r"""Evaluate GLOBE model to predict fields at target points.
 
-        This method implements the full GLOBE forward pass through all communication
-        hyperlayers. The process:
+        Runs the full GLOBE forward pass: BC grouping, communication hyperlayers,
+        final evaluation, and per-field calibration. See the class docstring for
+        full input/output documentation.
 
-        1. **BC grouping and merging**: Boundary meshes are grouped by BC type and merged
-           to create one unified mesh per BC type.
+        Parameters
+        ----------
+        prediction_points : Float[torch.Tensor, "n_points n_dims"]
+            Target points of shape :math:`(N_{points}, D)`.
+        boundary_meshes : Sequence[BoundaryMesh]
+            Boundary meshes with associated BC types and face data.
+        reference_lengths : dict[str, torch.Tensor]
+            Mapping of reference length names to scalar tensors.
+        global_scalars : TensorDict | None, optional, default=None
+            Problem-level scalar features.
+        global_vectors : TensorDict | None, optional, default=None
+            Problem-level vector features.
+        chunk_size : None | int | Literal["auto"], optional, default=None
+            Controls memory usage during kernel evaluation.
+        verbose : bool, optional, default=True
+            If ``True``, prints progress information.
 
-        2. **Hyperlayer communication** (layers 0 to n_communication_hyperlayers-1):
-           - Each BC type evaluates its multiscale kernel from source faces to target faces
-           - Targets are the face centers of all boundary meshes (enabling BC-to-BC communication)
-           - Source strengths are weighted by face areas normalized by reference_area
-           - Outputs include per-branch strengths for the next layer and latent scalars/vectors
-           - Results from all source BC types are summed at each target face
-
-        3. **Final evaluation** (layer n_communication_hyperlayers):
-           - Each BC type evaluates its kernel from source faces to prediction_points
-           - Source strengths use the values propagated through hyperlayers
-           - Outputs are the requested physical fields (not latents)
-           - Results from all source BC types are summed
-
-        4. **Field calibration**: Per-field linear transforms applied (affine for scalars,
-           scale-only for vectors to preserve rotation-equivariance).
-
-        Args:
-            prediction_points: Target points for field evaluation, shape (n_points, n_spatial_dims).
-                These are typically interior domain points where you want to predict the solution.
-            boundary_meshes: Sequence of BoundaryMesh objects representing the problem boundaries.
-                Each mesh must have a boundary_condition_type matching one of the model's
-                boundary_condition_names. Multiple meshes can share the same BC type (they will
-                be merged automatically). Each mesh's face_data should contain the source
-                scalars/vectors specified during model initialization.
-            reference_lengths: Dictionary mapping reference length names to scalar tensors.
-                Keys must match the model's reference_length_names. Each value should be a
-                scalar tensor (shape ()) representing the physical length scale for that branch.
-            global_scalars: Optional TensorDict with batch_size=() containing problem-level
-                scalar features (e.g., Reynolds number). The total concatenated length must
-                match n_global_scalars. Defaults to empty if None.
-            global_vectors: Optional TensorDict with batch_size=(n_spatial_dims,) containing
-                problem-level vector features (e.g., freestream direction). The total
-                concatenated length must match n_global_vectors. Defaults to empty if None.
-            chunk_size: Controls memory usage during kernel evaluation:
-                - None: Evaluate all target points at once (fastest but high memory)
-                - int: Process target points in chunks of this size (trades speed for memory)
-                - "auto": Automatically determine chunk size targeting ~1GB per chunk
-                Default: None.
-            verbose: If True, prints progress information during evaluation. Default: True.
-
-        Returns:
-            TensorDict with batch_size=(n_points,) containing the predicted fields.
-            Keys are the field names from output_fields. Scalar fields have shape (n_points,),
-            vector fields have shape (n_points, n_spatial_dims).
-
-        Raises:
-            ValueError: If input dimensions don't match model configuration, if boundary
-                condition types in boundary_meshes are not recognized, or if reference_lengths
-                keys don't match expected names.
-
-        Note:
-            - Face areas are automatically normalized by reference_area to preserve
-              discretization-invariance
-            - The face normal vector is automatically added to source_vectors for each mesh
-            - Hyperlayer communication enables long-range coupling between boundary partitions,
-              analogous to the influence coefficient matrix solve in traditional boundary-element
-              methods (but learned rather than explicitly computed)
-
-        Example:
-            >>> # Create boundary meshes with appropriate BC types
-            >>> wing = BoundaryMesh.from_polydata(wing_surface, "no_slip")
-            >>> freestream = BoundaryMesh.from_polydata(farfield_surface, "freestream")
-            >>> # Generate interior evaluation points
-            >>> points = torch.randn(1000, 3)
-            >>> # Evaluate model
-            >>> result = model(
-            ...     prediction_points=points,
-            ...     boundary_meshes=[wing, freestream],
-            ...     reference_lengths={"delta_FS": torch.tensor(0.001), "chord": torch.tensor(1.0)},
-            ...     global_scalars=TensorDict({"Re": torch.tensor([1e6])}, batch_size=()),
-            ... )
-            >>> pressure = result["pressure"]  # shape (1000,)
-            >>> velocity = result["velocity"]  # shape (1000, 3)
+        Returns
+        -------
+        TensorDict
+            Predicted fields at target points. See class docstring for details.
         """
         device = prediction_points.device
 
@@ -327,6 +362,16 @@ class GLOBE(nn.Module):
         ### Input validation
         # Skip validation when running under torch.compile for performance
         if not torch.compiler.is_compiling():
+            if prediction_points.ndim != 2:
+                raise ValueError(
+                    f"Expected 2D prediction_points (N, D), got {prediction_points.ndim}D "
+                    f"tensor with shape {tuple(prediction_points.shape)}"
+                )
+            if prediction_points.shape[-1] != self.n_spatial_dims:
+                raise ValueError(
+                    f"Expected prediction_points with {self.n_spatial_dims} spatial dims, "
+                    f"got {prediction_points.shape[-1]}"
+                )
             # Check that input lengths are consistent with the model
             for name, (actual, expected) in {
                 "reference lengths": (
@@ -463,92 +508,3 @@ class GLOBE(nn.Module):
             ).view(original_shape)
 
         return result
-
-
-if __name__ == "__main__":
-    torch._logging.set_logs(graph_breaks=True, recompiles=True)
-    torch.set_float32_matmul_precision("high")
-    torch.manual_seed(0)
-    torch.cuda.set_per_process_memory_fraction(0.99)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    ### Make some example data
-    mesh = BoundaryMesh.from_polydata(
-        pv.examples.load_airplane(), boundary_condition_type="no_slip"
-    ).to(device)  # Surface mesh
-
-    model = GLOBE(
-        n_spatial_dims=3,
-        reference_area=torch.tensor(100.0, device=device),
-        output_fields={
-            "pressure": "scalar",
-            "velocity": "vector",
-        },
-        boundary_condition_names=["no_slip", "freestream", "slip"],
-        boundary_condition_n_source_scalars={
-            "no_slip": 0,
-            "freestream": 0,
-            "slip": 0,
-        },
-        boundary_condition_n_source_vectors={
-            "no_slip": 0,
-            "freestream": 0,
-            "slip": 0,
-        },
-        n_communication_hyperlayers=2,
-        n_latent_scalars=16,
-        n_latent_vectors=3,
-        reference_length_names=["delta_FS", "chord"],
-        n_global_scalars=0,
-        n_global_vectors=0,
-    ).to(device)
-    model.eval()
-    # model = torch.compile(model, dynamic=True, fullgraph=True)
-
-    # Generate 100 random-uniform points within the bounding box of the airplane surface
-    min_bounds = mesh.points.min(dim=0).values
-    max_bounds = mesh.points.max(dim=0).values
-    n_points = 20
-    prediction_points = torch.rand((n_points, 3), device=device)
-    prediction_points = prediction_points * (max_bounds - min_bounds) + min_bounds
-
-    reference_lengths = {
-        "delta_FS": torch.tensor(0.01, device=device),
-        "chord": torch.tensor(1.0, device=device),
-    }
-
-    n_interactions = len(prediction_points) * mesh.n_faces
-    print(
-        f"{len(prediction_points)} prediction points, {mesh.n_faces} faces --> {n_interactions} interactions"
-    )
-    print("Warming up model...")
-    for _ in range(2):
-        with torch.no_grad():
-            result = model(
-                prediction_points=prediction_points,
-                boundary_meshes=[mesh],
-                reference_lengths=reference_lengths,
-                chunk_size=None,
-                verbose=False,
-            )
-
-    import time
-
-    import tqdm
-
-    N_runs = 40
-    start_time = time.perf_counter()
-    for i in tqdm.trange(N_runs, desc="Benchmarking model performance", unit=" runs"):
-        with torch.no_grad():
-            result = model(
-                prediction_points=prediction_points,
-                boundary_meshes=[mesh],
-                reference_lengths=reference_lengths,
-                chunk_size=None,
-                verbose=False,
-            )
-    elapsed = time.perf_counter() - start_time
-    print(f"Done. Elapsed time: {elapsed:.3f} s")
-    from aerosandbox.tools.string_formatting import eng_string
-
-    print(f"Speed: {eng_string(n_interactions * N_runs / elapsed)} interactions/s")

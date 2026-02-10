@@ -1,3 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import itertools
 import operator
 from functools import cached_property, reduce
@@ -7,9 +23,11 @@ from typing import Literal, Sequence
 import torch
 import torch.nn as nn
 import tqdm
+from jaxtyping import Float
 from tensordict import TensorDict
 from torch.utils.checkpoint import checkpoint
 
+from physicsnemo.core.module import Module
 from physicsnemo.models.globe.mlp import MLP
 from physicsnemo.models.globe.pade import Pade
 from physicsnemo.models.globe.utilities.field_kernel import (
@@ -25,8 +43,8 @@ from physicsnemo.models.globe.utilities.tensordict_utils import (
 )
 
 
-class Kernel(nn.Module):
-    """A kernel function for evaluating scalar and vector fields from source points.
+class Kernel(Module):
+    r"""A kernel function for evaluating scalar and vector fields from source points.
 
     This class implements a learnable neural-network-based kernel function that
     computes scalar and vector fields at target points based on the influence of
@@ -40,21 +58,69 @@ class Kernel(nn.Module):
     conservation laws. For vector fields, the output is automatically reprojected
     onto a local coordinate system to maintain rotational invariance.
 
-    Args:
-        n_spatial_dims: Number of spatial dimensions (2 or 3).
-        output_fields: Dictionary mapping field names to their types. Each field
-            type must be either "scalar" or "vector". Vector fields have dimension
-            equal to n_spatial_dims.
-        n_source_scalars: Number of scalar properties expected per source point.
-        n_source_vectors: Number of vector properties expected per source point.
-        n_global_scalars: Number of global scalar properties.
-        n_global_vectors: Number of global vector properties.
-        smoothing_radius: Small value used to smooth power functions near zero
-            to avoid numerical instabilities. Defaults to 1e-8.
-        hidden_layer_sizes: Sequence of hidden layer sizes for the neural network.
-            Defaults to [64].
-        n_spherical_harmonics: Number of spherical harmonic terms to use as features.
-            Defaults to 4.
+    Parameters
+    ----------
+    n_spatial_dims : int
+        Number of spatial dimensions (2 or 3).
+    output_fields : dict[str, Literal["scalar", "vector"]]
+        Dictionary mapping field names to their types. Each field type must be
+        either ``"scalar"`` or ``"vector"``. Vector fields have dimension equal
+        to ``n_spatial_dims``.
+    n_source_scalars : int, optional
+        Number of scalar properties expected per source point. Default is 0.
+    n_source_vectors : int, optional
+        Number of vector properties expected per source point. Default is 0.
+    n_global_scalars : int, optional
+        Number of global scalar properties. Default is 0.
+    n_global_vectors : int, optional
+        Number of global vector properties. Default is 0.
+    smoothing_radius : float, optional
+        Small value used to smooth power functions near zero to avoid numerical
+        instabilities. Default is 1e-8.
+    hidden_layer_sizes : Sequence[int] or None, optional
+        Sequence of hidden layer sizes for the neural network. Default is ``[64]``.
+    n_spherical_harmonics : int, optional
+        Number of spherical harmonic terms to use as features. Default is 4.
+    network_type : {"pade", "mlp"}, optional
+        Type of neural network to use for the kernel function. Default is ``"pade"``.
+    spectral_norm : bool, optional
+        Whether to apply spectral normalization to network weights. Default is False.
+
+    Forward
+    -------
+    reference_length : Float[torch.Tensor, ""]
+        Scalar reference length scale used to convert position-based features
+        into dimensionless quantities.
+    source_points : Float[torch.Tensor, "n_sources n_dims"]
+        Physical coordinates of the source points, which are the centers of
+        the influence fields. Shape :math:`(N_{sources}, D)`.
+    target_points : Float[torch.Tensor, "n_targets n_dims"]
+        Physical coordinates of the target points where the field is evaluated.
+        Shape :math:`(N_{targets}, D)`.
+    source_strengths : Float[torch.Tensor, "n_sources"] or None, optional
+        Scalar strength values associated with each source point. Shape
+        :math:`(N_{sources},)`. Defaults to all ones if ``None``.
+    source_scalars : TensorDict or None, optional
+        Physically-meaningful scalars associated with each source point with
+        batch_size :math:`(N_{sources},)`. All scalars should be dimensionless.
+    source_vectors : TensorDict or None, optional
+        Physically-meaningful vectors associated with each source point with
+        batch_size :math:`(N_{sources}, D)`. All vectors should be dimensionless.
+    global_scalars : TensorDict or None, optional
+        Global physically-meaningful scalars with batch_size :math:`()`. All
+        scalars should be dimensionless.
+    global_vectors : TensorDict or None, optional
+        Global physically-meaningful vectors with batch_size :math:`(D,)`. All
+        vectors should be dimensionless.
+    verbose : bool, optional
+        Whether to print progress information during evaluation. Default is True.
+
+    Outputs
+    -------
+    TensorDict
+        TensorDict with batch_size :math:`(N_{targets},)` containing the computed
+        fields. Each scalar field has shape :math:`(N_{targets},)` and each vector
+        field has shape :math:`(N_{targets}, D)`.
     """
 
     def __init__(
@@ -112,7 +178,7 @@ class Kernel(nn.Module):
 
     @cached_property
     def network_layer_sizes(self) -> tuple[int, ...]:
-        """Computes the neural network layer sizes for the kernel function.
+        r"""Computes the neural network layer sizes for the kernel function.
 
         This cached property determines the input and output dimensions of the kernel's
         internal neural network based on the number of scalar/vector inputs and output
@@ -120,31 +186,40 @@ class Kernel(nn.Module):
         described in paper Section 3.2.2.
 
         Input features (first layer):
-        1. Raw source and global scalars (n_source_scalars + n_global_scalars)
-        2. Smoothed log-magnitudes of all vectors (n_vectors_in), where vectors include:
-           - The relative position vector r = (x_target - x_source) / reference_length
+
+        1. Raw source and global scalars (``n_source_scalars`` + ``n_global_scalars``)
+        2. Smoothed log-magnitudes of all vectors (``n_vectors_in``), where vectors include:
+
+           - The relative position vector ``r = (x_target - x_source) / reference_length``
            - Source-associated vectors (e.g., face normals, boundary condition values)
            - Global vectors (e.g., freestream velocity direction)
+
         3. Pairwise spherical harmonic features for all vector pairs: for each of the
-           C(n_vectors_in, 2) pairs, we compute n_spherical_harmonics Legendre polynomial
-           terms weighted by the product of the pair's smoothed log-magnitudes
+           ``C(n_vectors_in, 2)`` pairs, we compute ``n_spherical_harmonics`` Legendre
+           polynomial terms weighted by the product of the pair's smoothed log-magnitudes
 
         Output features (last layer):
+
         1. Direct scalar outputs (one channel per scalar field)
         2. Vector reprojection coefficients for each vector field: for each vector output,
            we generate coefficients for projection onto a local basis consisting of:
-           - The radial direction r_hat (1 basis vector)
+
+           - The radial direction ``r_hat`` (1 basis vector)
            - For each non-r input vector: axis direction + dipole/polar direction
              (2 basis vectors per non-r vector)
 
-        Returns:
-            Tuple of layer sizes: (first_layer_size, *hidden_layer_sizes, last_layer_size).
+        Returns
+        -------
+        tuple[int, ...]
+            Tuple of layer sizes:
+            ``(first_layer_size, *hidden_layer_sizes, last_layer_size)``.
             The hidden layer sizes are those provided during initialization.
 
-        Note:
-            This property is cached, so it's only computed once per kernel instance.
-            The calculation ensures rotation-invariance by working with invariant scalar
-            features in the MLP and restoring directionality through basis reprojection.
+        Notes
+        -----
+        This property is cached, so it's only computed once per kernel instance.
+        The calculation ensures rotation-invariance by working with invariant scalar
+        features in the MLP and restoring directionality through basis reprojection.
         """
         ### Inputs
         n_vectors_in: int = (
@@ -177,33 +252,42 @@ class Kernel(nn.Module):
 
     def add_semantics(
         self,
-        tensor: torch.Tensor,
+        tensor: Float[torch.Tensor, "... total_dims"],
         shape_for_scalars: torch.Size | None = None,
         shape_for_vectors: torch.Size | None = None,
     ) -> TensorDict:
-        """Adds semantics to a tensor by splitting it into named fields.
+        r"""Adds semantics to a tensor by splitting it into named fields.
 
         The input tensor is assumed to have its last dimension of size equal to the sum
         of the flattened dimensions of all output fields. This function separates the
         tensor into its constituent fields according to the model's output field
         definitions, maintaining the proper shapes for scalar and vector fields.
 
-        Args:
-            tensor: Tensor with shape (..., total_flattened_dims) where
-                total_flattened_dims is the sum of prod(shape) for all output fields.
-            shape_for_scalars: Shape to use for scalar fields. If None, defaults to ().
-            shape_for_vectors: Shape to use for vector fields. If None, defaults to
-                (n_spatial_dims,).
+        Parameters
+        ----------
+        tensor : Float[torch.Tensor, "... total_dims"]
+            Tensor with shape :math:`(\ldots, D_{total})` where :math:`D_{total}` is
+            the sum of ``prod(shape)`` for all output fields.
+        shape_for_scalars : torch.Size or None, optional
+            Shape to use for scalar fields. If ``None``, defaults to ``()``.
+        shape_for_vectors : torch.Size or None, optional
+            Shape to use for vector fields. If ``None``, defaults to
+            :math:`(D,)`.
 
-        Returns:
-            TensorDict: TensorDict with batch_size matching tensor.shape[:-1],
-                containing the separated fields with proper shapes. Each scalar field
-                has shape (*batch_size, *shape_for_scalars) and each vector field has
-                shape (*batch_size, *shape_for_vectors).
+        Returns
+        -------
+        TensorDict
+            TensorDict with ``batch_size`` matching ``tensor.shape[:-1]``,
+            containing the separated fields with proper shapes. Each scalar field
+            has shape :math:`(\ldots, S)` and each vector field has shape
+            :math:`(\ldots, V)` where :math:`S` and :math:`V` are determined by
+            ``shape_for_scalars`` and ``shape_for_vectors`` respectively.
 
-        Raises:
-            ValueError: If the size of the last dimension does not match
-                the expected total number of flattened output dimensions.
+        Raises
+        ------
+        ValueError
+            If the size of the last dimension does not match the expected total
+            number of flattened output dimensions.
         """
         if shape_for_scalars is None:
             shape_for_scalars = torch.Size([])
@@ -253,60 +337,63 @@ class Kernel(nn.Module):
     def forward(
         self,
         *,
-        reference_length: torch.Tensor,
-        source_points: torch.Tensor,
-        target_points: torch.Tensor,
-        source_strengths: torch.Tensor | None = None,
+        reference_length: Float[torch.Tensor, ""],
+        source_points: Float[torch.Tensor, "n_sources n_dims"],
+        target_points: Float[torch.Tensor, "n_targets n_dims"],
+        source_strengths: Float[torch.Tensor, "n_sources"] | None = None,
         source_scalars: TensorDict | None = None,
         source_vectors: TensorDict | None = None,
         global_scalars: TensorDict | None = None,
         global_vectors: TensorDict | None = None,
         verbose: bool = True,
     ) -> TensorDict:
-        """Evaluates a field kernel at target points based on source point influences.
+        r"""Evaluates a field kernel at target points based on source point influences.
 
-        Args:
-            reference_length: Scalar tensor, shape (). The reference length scale used
-                to convert position-based features into dimensionless quantities.
+        Parameters
+        ----------
+        reference_length : Float[torch.Tensor, ""]
+            Scalar tensor, shape :math:`()`. The reference length scale used
+            to convert position-based features into dimensionless quantities.
+        source_points : Float[torch.Tensor, "n_sources n_dims"]
+            Tensor of shape :math:`(N_{sources}, D)`. The physical coordinates
+            of the source points, which are the centers of the influence fields.
+        target_points : Float[torch.Tensor, "n_targets n_dims"]
+            Tensor of shape :math:`(N_{targets}, D)`. The physical coordinates
+            of the target points where the field is evaluated.
+        source_strengths : Float[torch.Tensor, "n_sources"] or None, optional
+            Tensor of shape :math:`(N_{sources},)`. Scalar strength values
+            associated with each source point. Defaults to all ones if ``None``.
+        source_scalars : TensorDict or None, optional
+            TensorDict with batch_size :math:`(N_{sources},)`.
+            Physically-meaningful scalars associated with each source point. All
+            scalars should be dimensionless. The total concatenated length must
+            match ``n_source_scalars``. Defaults to empty TensorDict if ``None``.
+        source_vectors : TensorDict or None, optional
+            TensorDict with batch_size :math:`(N_{sources}, D)`.
+            Physically-meaningful vectors associated with each source point. All
+            vectors should be dimensionless. Common examples include normal vectors
+            and direction vectors. The total concatenated length must match
+            ``n_source_vectors``. Defaults to empty TensorDict if ``None``.
+        global_scalars : TensorDict or None, optional
+            TensorDict with batch_size :math:`()`. Global
+            physically-meaningful scalars. All scalars should be dimensionless.
+            The total concatenated length must match ``n_global_scalars``. Defaults
+            to empty TensorDict if ``None``.
+        global_vectors : TensorDict or None, optional
+            TensorDict with batch_size :math:`(D,)`.
+            Global physically-meaningful vectors. All vectors should be
+            dimensionless. The total concatenated length must match ``n_global_vectors``.
+            Defaults to empty TensorDict if ``None``.
+        verbose : bool, optional
+            Whether to print progress information during evaluation.
+            Default is True.
 
-            source_points: Tensor of shape (n_sources, n_spatial_dims). The physical
-                coordinates of the source points, which are the centers of the
-                influence fields.
-
-            target_points: Tensor of shape (n_targets, n_spatial_dims). The physical
-                coordinates of the target points where the field is evaluated.
-
-            source_strengths: Optional tensor of shape (n_sources,). Scalar strength
-                values associated with each source point. Defaults to all ones if None.
-
-            source_scalars: Optional TensorDict with batch_size (n_sources,).
-                Physically-meaningful scalars associated with each source point. All
-                scalars should be dimensionless. The total concatenated length must
-                match n_source_scalars. Defaults to empty TensorDict if None.
-
-            source_vectors: Optional TensorDict with batch_size (n_sources, n_spatial_dims).
-                Physically-meaningful vectors associated with each source point. All
-                vectors should be dimensionless. Common examples include normal vectors
-                and direction vectors. The total concatenated length must match
-                n_source_vectors. Defaults to empty TensorDict if None.
-
-            global_scalars: Optional TensorDict with batch_size (). Global
-                physically-meaningful scalars. All scalars should be dimensionless.
-                The total concatenated length must match n_global_scalars. Defaults
-                to empty TensorDict if None.
-
-            global_vectors: Optional TensorDict with batch_size (n_spatial_dims,).
-                Global physically-meaningful vectors. All vectors should be
-                dimensionless. The total concatenated length must match n_global_vectors.
-                Defaults to empty TensorDict if None.
-
-            verbose: Whether to print progress information during evaluation.
-                Defaults to True.
-
-        Returns:
-            TensorDict: TensorDict with batch_size (n_targets,) containing the computed
-                fields. Each scalar field has shape (n_targets,) and each vector field
-                has shape (n_targets, n_spatial_dims).
+        Returns
+        -------
+        TensorDict
+            TensorDict with batch_size :math:`(N_{targets},)` containing the computed
+            fields. Each scalar field has shape :math:`(N_{targets},)` and each vector
+            field has shape :math:`(N_{targets}, D)`.
         """
         n_sources: int = len(source_points)
         n_targets: int = len(target_points)
@@ -335,6 +422,26 @@ class Kernel(nn.Module):
         ### Input validation
         # Skip validation when running under torch.compile for performance
         if not torch.compiler.is_compiling():
+            if source_points.ndim != 2:
+                raise ValueError(
+                    f"Expected source_points to be 2-dimensional, "
+                    f"got {source_points.ndim}D tensor with shape {source_points.shape}"
+                )
+            if target_points.ndim != 2:
+                raise ValueError(
+                    f"Expected target_points to be 2-dimensional, "
+                    f"got {target_points.ndim}D tensor with shape {target_points.shape}"
+                )
+            if source_points.shape[-1] != self.n_spatial_dims:
+                raise ValueError(
+                    f"Expected source_points last dimension to be {self.n_spatial_dims}, "
+                    f"got {source_points.shape[-1]}"
+                )
+            if target_points.shape[-1] != self.n_spatial_dims:
+                raise ValueError(
+                    f"Expected target_points last dimension to be {self.n_spatial_dims}, "
+                    f"got {target_points.shape[-1]}"
+                )
             for name, (actual, expected) in {
                 "source_scalars": (
                     concatenated_length(source_scalars),
@@ -615,15 +722,17 @@ class Kernel(nn.Module):
 
 
 class ChunkedKernel(Kernel):
-    """Memory-efficient kernel evaluation through automatic target point chunking.
+    r"""Memory-efficient kernel evaluation through automatic target point chunking.
 
-    ChunkedKernel extends the base Kernel class with chunking capabilities that enable
-    memory-efficient evaluation on large target point sets. The kernel evaluation has
-    O(n_sources * n_targets) memory complexity due to the all-to-all pairwise computation,
-    which can exhaust GPU memory for large problems. Chunking processes target points in
-    smaller batches, trading modest computational overhead for dramatic memory reduction.
+    :class:`ChunkedKernel` extends the base :class:`Kernel` class with chunking
+    capabilities that enable memory-efficient evaluation on large target point sets.
+    The kernel evaluation has ``O(n_sources * n_targets)`` memory complexity due to
+    the all-to-all pairwise computation, which can exhaust GPU memory for large
+    problems. Chunking processes target points in smaller batches, trading modest
+    computational overhead for dramatic memory reduction.
 
     Chunking is particularly useful in three scenarios:
+
     1. **Training**: When using downsampled query points (e.g., 4096 points) but many
        source faces, chunking can reduce memory during the backward pass.
     2. **Inference on dense grids**: When evaluating on complete high-resolution volume
@@ -636,48 +745,73 @@ class ChunkedKernel(Kernel):
     numerically identical to non-chunked evaluation - there are no approximations.
 
     Chunk size selection:
-    - chunk_size=None: No chunking, fastest but highest memory (default for small problems)
-    - chunk_size="auto": Automatically determines size targeting ~1GB per chunk
-    - chunk_size=int: Manual specification for fine control
 
-    The "auto" mode estimates memory based on network layer sizes and interaction count,
-    providing a good balance for most use cases. The implementation uses recursive calls
-    to handle the chunking logic, and the overhead is minimal for reasonable chunk sizes.
+    - ``chunk_size=None``: No chunking, fastest but highest memory (default for small
+      problems)
+    - ``chunk_size="auto"``: Automatically determines size targeting ~1GB per chunk
+    - ``chunk_size=int``: Manual specification for fine control
 
-    Inherits all other functionality from Kernel, including invariant feature engineering,
-    Padé-approximant networks, far-field decay, and equivariant vector reprojection.
+    The ``"auto"`` mode estimates memory based on network layer sizes and interaction
+    count, providing a good balance for most use cases. The implementation uses recursive
+    calls to handle the chunking logic, and the overhead is minimal for reasonable chunk
+    sizes.
 
-    Example:
-        >>> # For a large problem with 1M query points:
-        >>> kernel = ChunkedKernel(
-        ...     n_spatial_dims=3,
-        ...     output_fields={"pressure": "scalar"},
-        ...     n_source_vectors=1,
-        ...     hidden_layer_sizes=[64, 64],
-        ... )
-        >>> # Evaluate with automatic chunking to prevent OOM
-        >>> result = kernel(
-        ...     source_points=boundary_centers,  # e.g., 10k faces
-        ...     target_points=volume_points,     # e.g., 1M points
-        ...     reference_length=torch.tensor(1.0),
-        ...     source_vectors=TensorDict({"normal": normals}, ...),
-        ...     chunk_size="auto",  # Will process in chunks of ~10-20k points
-        ... )
+    Inherits all other functionality from :class:`Kernel`, including invariant feature
+    engineering, Pade-approximant networks, far-field decay, and equivariant vector
+    reprojection.
 
-    Note:
-        During training, chunking has limited benefit because PyTorch's autograd must
-        store all intermediate activations regardless. Memory reduction is most effective
-        during inference (with torch.no_grad()) where chunking can reduce peak usage by
-        orders of magnitude.
+    Parameters
+    ----------
+    Inherits all parameters from :class:`Kernel`.
+
+    Forward
+    -------
+    Same parameters as :class:`Kernel`, with the addition of:
+
+    chunk_size : None or int or {"auto"}, optional
+        Controls chunking behavior. ``"auto"`` determines chunk size targeting
+        ~1GB per chunk. An integer processes in exact chunk sizes. ``None``
+        evaluates all at once. Default is ``"auto"``.
+
+    Outputs
+    -------
+    TensorDict
+        TensorDict with batch_size :math:`(N_{targets},)` containing the computed
+        fields. Numerically identical to non-chunked :class:`Kernel` evaluation.
+
+    Examples
+    --------
+    >>> # For a large problem with 1M query points:
+    >>> kernel = ChunkedKernel(
+    ...     n_spatial_dims=3,
+    ...     output_fields={"pressure": "scalar"},
+    ...     n_source_vectors=1,
+    ...     hidden_layer_sizes=[64, 64],
+    ... )
+    >>> # Evaluate with automatic chunking to prevent OOM
+    >>> result = kernel(
+    ...     source_points=boundary_centers,  # e.g., 10k faces
+    ...     target_points=volume_points,     # e.g., 1M points
+    ...     reference_length=torch.tensor(1.0),
+    ...     source_vectors=TensorDict({"normal": normals}, ...),
+    ...     chunk_size="auto",  # Will process in chunks of ~10-20k points
+    ... )
+
+    Notes
+    -----
+    During training, chunking has limited benefit because PyTorch's autograd must
+    store all intermediate activations regardless. Memory reduction is most effective
+    during inference (with ``torch.no_grad()``) where chunking can reduce peak usage
+    by orders of magnitude.
     """
 
     def forward(
         self,
         *,
-        reference_length: torch.Tensor,
-        source_points: torch.Tensor,
-        target_points: torch.Tensor,
-        source_strengths: torch.Tensor | None = None,
+        reference_length: Float[torch.Tensor, ""],
+        source_points: Float[torch.Tensor, "n_sources n_dims"],
+        target_points: Float[torch.Tensor, "n_targets n_dims"],
+        source_strengths: Float[torch.Tensor, "n_sources"] | None = None,
         source_scalars: TensorDict | None = None,
         source_vectors: TensorDict | None = None,
         global_scalars: TensorDict | None = None,
@@ -685,22 +819,30 @@ class ChunkedKernel(Kernel):
         verbose: bool = True,
         chunk_size: None | int | Literal["auto"] = "auto",
     ) -> TensorDict:
-        """Evaluates the kernel with optional chunking for memory efficiency.
+        r"""Evaluates the kernel with optional chunking for memory efficiency.
 
-        Args:
-            chunk_size: Controls chunking behavior:
-                - "auto": Automatically determine chunk size based on estimated memory
-                  usage, targeting approximately 1GB per chunk.
-                - int: Process target points in chunks of exactly this size.
-                - None: No chunking, evaluate all target points at once.
-            **kernel_kwargs: All arguments accepted by Kernel.forward, including:
-                reference_length, source_points, target_points, source_strengths,
-                source_scalars, source_vectors, global_scalars, global_vectors, verbose.
+        Parameters
+        ----------
+        chunk_size : None or int or {"auto"}, optional
+            Controls chunking behavior:
 
-        Returns:
-            dict[str, torch.Tensor]: Dictionary mapping field names to computed tensors.
-                Each scalar field has shape (n_targets,) and each vector field has
-                shape (n_targets, n_spatial_dims).
+            - ``"auto"``: Automatically determine chunk size based on estimated memory
+              usage, targeting approximately 1GB per chunk.
+            - ``int``: Process target points in chunks of exactly this size.
+            - ``None``: No chunking, evaluate all target points at once.
+
+        **kernel_kwargs
+            All arguments accepted by :meth:`Kernel.forward`, including:
+            ``reference_length``, ``source_points``, ``target_points``,
+            ``source_strengths``, ``source_scalars``, ``source_vectors``,
+            ``global_scalars``, ``global_vectors``, ``verbose``.
+
+        Returns
+        -------
+        TensorDict
+            TensorDict mapping field names to computed tensors.
+            Each scalar field has shape :math:`(N_{targets},)` and each vector field
+            has shape :math:`(N_{targets}, D)`.
         """
         n_sources: int = len(source_points)
         n_targets: int = len(target_points)
@@ -788,19 +930,22 @@ class ChunkedKernel(Kernel):
             )
 
 
-class MultiscaleKernel(nn.Module):
-    """Multiscale kernel composition that linearly combines kernels at different length scales.
+class MultiscaleKernel(Module):
+    r"""Multiscale kernel composition that linearly combines kernels at different length scales.
 
     This class implements the multiscale kernel architecture described in paper Section 3.3.
     Physical systems often exhibit phenomena at multiple characteristic length scales
-    (e.g., viscous boundary layer thickness, geometric features, wakes). MultiscaleKernel
-    creates independent kernel branches for each reference length, allowing each to
-    specialize at different spatial scales while sharing the same functional form.
+    (e.g., viscous boundary layer thickness, geometric features, wakes).
+    :class:`MultiscaleKernel` creates independent kernel branches for each reference
+    length, allowing each to specialize at different spatial scales while sharing the
+    same functional form.
 
     Each kernel branch:
-    - Operates at a user-specified reference length (e.g., viscous_length, chord_length)
+
+    - Operates at a user-specified reference length (e.g., ``viscous_length``,
+      ``chord_length``)
     - Has its own learnable parameters (separate neural network weights)
-    - Has a learnable scale adjustment factor (log_scalefactor) that fine-tunes its
+    - Has a learnable scale adjustment factor (``log_scalefactor``) that fine-tunes its
       effective reference length during training
     - Receives the same inputs but normalizes relative positions by its effective length
     - Has separate per-source, per-branch strength values
@@ -814,41 +959,87 @@ class MultiscaleKernel(nn.Module):
     model to behave equivariantly under uniform scaling when all nondimensional parameters
     (e.g., Reynolds number) are held constant.
 
-    Args:
-        n_spatial_dims: Number of spatial dimensions (2 or 3).
-        output_fields: Dictionary mapping field names to types ("scalar" or "vector").
-        reference_length_names: Sequence of identifiers for reference length scales.
-            Each creates an independent kernel branch. Examples: ["viscous", "geometric"].
-        n_source_scalars: Number of scalar features per source face.
-        n_source_vectors: Number of vector features per source face.
-        n_global_scalars: Number of global scalar features (excluding auto-added length ratios).
-        n_global_vectors: Number of global vector features.
-        smoothing_radius: Small value for numerical stability in magnitude computations.
-        hidden_layer_sizes: Hidden layer sizes for kernel networks.
-        n_spherical_harmonics: Number of Legendre polynomial terms for angle features.
-        network_type: Type of network to use ("pade" or "mlp"). Default: "pade".
-        spectral_norm: Whether to apply spectral normalization to network weights.
+    Parameters
+    ----------
+    n_spatial_dims : int
+        Number of spatial dimensions (2 or 3).
+    output_fields : dict[str, Literal["scalar", "vector"]]
+        Dictionary mapping field names to types (``"scalar"`` or ``"vector"``).
+    reference_length_names : Sequence[str]
+        Sequence of identifiers for reference length scales. Each creates an
+        independent kernel branch. Examples: ``["viscous", "geometric"]``.
+    n_source_scalars : int, optional
+        Number of scalar features per source face. Default is 0.
+    n_source_vectors : int, optional
+        Number of vector features per source face. Default is 0.
+    n_global_scalars : int, optional
+        Number of global scalar features (excluding auto-added length ratios).
+        Default is 0.
+    n_global_vectors : int, optional
+        Number of global vector features. Default is 0.
+    smoothing_radius : float, optional
+        Small value for numerical stability in magnitude computations.
+        Default is 1e-8.
+    hidden_layer_sizes : Sequence[int] or None, optional
+        Hidden layer sizes for kernel networks. Default is ``None``.
+    n_spherical_harmonics : int, optional
+        Number of Legendre polynomial terms for angle features. Default is 4.
+    network_type : {"pade", "mlp"}, optional
+        Type of network to use. Default is ``"pade"``.
+    spectral_norm : bool, optional
+        Whether to apply spectral normalization to network weights. Default is False.
 
-    Attributes:
-        kernels: ModuleDict mapping reference length names to ChunkedKernel instances.
-        log_scalefactors: ParameterDict of learnable log-space scale adjustments per branch.
+    Forward
+    -------
+    reference_lengths : TensorDict
+        TensorDict containing the reference length scales, keyed by
+        ``reference_length_names``.
+    source_points : Float[torch.Tensor, "n_sources n_dims"]
+        Physical coordinates of the source points. Shape :math:`(N_{sources}, D)`.
+    target_points : Float[torch.Tensor, "n_targets n_dims"]
+        Physical coordinates of the target points. Shape :math:`(N_{targets}, D)`.
+    source_strengths : TensorDict or None, optional
+        Per-source, per-branch strength values. TensorDict keyed by
+        ``reference_length_names``. Defaults to all ones.
+    source_scalars : TensorDict or None, optional
+        Scalars per source point with batch_size :math:`(N_{sources},)`.
+    source_vectors : TensorDict or None, optional
+        Vectors per source point with batch_size :math:`(N_{sources}, D)`.
+    global_scalars : TensorDict or None, optional
+        Global scalar features (auto-augmented with log length ratios).
+    global_vectors : TensorDict or None, optional
+        Global vector features with batch_size :math:`(D,)`.
+    verbose : bool, optional
+        Whether to print progress. Default is True.
+    chunk_size : None or int or {"auto"}, optional
+        Chunking behavior. Default is ``"auto"``.
 
-    Example:
-        >>> kernel = MultiscaleKernel(
-        ...     n_spatial_dims=2,
-        ...     output_fields={"phi": "scalar", "u": "vector"},
-        ...     reference_length_names=["viscous_length", "chord_length"],
-        ...     n_source_vectors=1,  # e.g., normal vector
-        ...     hidden_layer_sizes=[64, 64],
-        ... )
-        >>> # At runtime, provide reference lengths as a dict:
-        >>> result = kernel(
-        ...     source_points=boundary_face_centers,
-        ...     target_points=query_points,
-        ...     reference_lengths={"viscous_length": torch.tensor(0.001), "chord_length": torch.tensor(1.0)},
-        ...     source_vectors=TensorDict({"normal": normals}, ...),
-        ...     source_strengths=TensorDict({"viscous_length": strengths_v, "chord_length": strengths_c}, ...),
-        ... )
+    Outputs
+    -------
+    TensorDict
+        TensorDict with the summed results from all kernel branches. Each scalar
+        field has shape :math:`(N_{targets},)` and each vector field has shape
+        :math:`(N_{targets}, D)`.
+
+    Examples
+    --------
+    >>> kernel = MultiscaleKernel(
+    ...     n_spatial_dims=2,
+    ...     output_fields={"phi": "scalar", "u": "vector"},
+    ...     reference_length_names=["viscous_length", "chord_length"],
+    ...     n_source_vectors=1,  # e.g., normal vector
+    ...     hidden_layer_sizes=[64, 64],
+    ... )
+    >>> # At runtime, provide reference lengths as a dict:
+    >>> result = kernel(
+    ...     source_points=boundary_face_centers,
+    ...     target_points=query_points,
+    ...     reference_lengths={"viscous_length": torch.tensor(0.001),
+    ...                        "chord_length": torch.tensor(1.0)},
+    ...     source_vectors=TensorDict({"normal": normals}, ...),
+    ...     source_strengths=TensorDict({"viscous_length": strengths_v,
+    ...                                  "chord_length": strengths_c}, ...),
+    ... )
     """
 
     def __init__(
@@ -910,8 +1101,8 @@ class MultiscaleKernel(nn.Module):
         self,
         *,
         reference_lengths: TensorDict,
-        source_points: torch.Tensor,
-        target_points: torch.Tensor,
+        source_points: Float[torch.Tensor, "n_sources n_dims"],
+        target_points: Float[torch.Tensor, "n_targets n_dims"],
         source_strengths: TensorDict | None = None,
         source_scalars: TensorDict | None = None,
         source_vectors: TensorDict | None = None,
@@ -920,26 +1111,47 @@ class MultiscaleKernel(nn.Module):
         verbose: bool = True,
         chunk_size: None | int | Literal["auto"] = "auto",
     ) -> TensorDict:
-        """Evaluates the multiscale kernel by combining results from multiple scales.
+        r"""Evaluates the multiscale kernel by combining results from multiple scales.
 
         This method evaluates each constituent kernel at its respective reference length
         (scaled by a learnable factor), automatically adds log-ratios of reference lengths
         as global scalars, and sums the results across all scales.
 
-        Args:
-            reference_lengths: Tensor of shape (n_reference_lengths,) containing the
-                reference length scales to use. Must have exactly n_reference_lengths
-                elements in the same order as expected during initialization.
-            **chunked_kernel_kwargs: All arguments accepted by ChunkedKernel.forward,
-                including chunk_size, source_points, target_points, source_strengths,
-                source_scalars, source_vectors, global_scalars, global_vectors, verbose.
-                Note that global_scalars will be augmented with log reference length
-                ratios.
+        Parameters
+        ----------
+        reference_lengths : TensorDict
+            TensorDict containing the reference length scales, keyed by
+            ``reference_length_names``.
+        source_points : Float[torch.Tensor, "n_sources n_dims"]
+            Tensor of shape :math:`(N_{sources}, D)`. Physical coordinates of
+            the source points.
+        target_points : Float[torch.Tensor, "n_targets n_dims"]
+            Tensor of shape :math:`(N_{targets}, D)`. Physical coordinates of
+            the target points.
+        source_strengths : TensorDict or None, optional
+            Per-source, per-branch strength values, keyed by
+            ``reference_length_names``. Defaults to all ones.
+        source_scalars : TensorDict or None, optional
+            TensorDict with batch_size :math:`(N_{sources},)`.
+        source_vectors : TensorDict or None, optional
+            TensorDict with batch_size :math:`(N_{sources}, D)`.
+        global_scalars : TensorDict or None, optional
+            TensorDict with batch_size :math:`()`. Will be augmented with log
+            reference length ratios.
+        global_vectors : TensorDict or None, optional
+            TensorDict with batch_size :math:`(D,)`.
+        verbose : bool, optional
+            Whether to print progress information. Default is True.
+        chunk_size : None or int or {"auto"}, optional
+            Chunking behavior passed to :meth:`ChunkedKernel.forward`.
+            Default is ``"auto"``.
 
-        Returns:
-            TensorDict: Dictionary mapping field names to the summed results
-                from all kernels. Each scalar field has shape (n_targets,) and each
-                vector field has shape (n_targets, n_spatial_dims).
+        Returns
+        -------
+        TensorDict
+            Dictionary mapping field names to the summed results from all kernels.
+            Each scalar field has shape :math:`(N_{targets},)` and each vector field
+            has shape :math:`(N_{targets}, D)`.
         """
         n_sources: int = len(source_points)
         device = source_points.device
@@ -1026,178 +1238,3 @@ class MultiscaleKernel(nn.Module):
         return result
 
 
-if __name__ == "__main__":
-    import aerosandbox.tools.pretty_plots as p
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    torch._logging.set_logs(graph_breaks=True, recompiles=True)
-    torch.set_float32_matmul_precision("high")
-    torch.manual_seed(0)
-    torch.cuda.set_per_process_memory_fraction(0.99)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    ### Test visualization
-    n_spatial_dims = 2
-
-    kernel = MultiscaleKernel(
-        reference_length_names=["small", "large"],
-        n_spatial_dims=n_spatial_dims,
-        n_source_scalars=0,
-        n_source_vectors=2,
-        output_fields={"potential": "scalar", "velocity": "vector"},
-        n_global_scalars=0,
-        n_global_vectors=0,
-        hidden_layer_sizes=[64, 64],
-    ).to(device)
-
-    kernel = torch.compile(kernel, dynamic=True, fullgraph=True)
-
-    source_points = torch.tensor(
-        [
-            [0.0, 0.0],
-        ],
-        device=device,
-    )
-
-    def f(
-        x: np.ndarray | torch.Tensor, y: np.ndarray | torch.Tensor
-    ) -> dict[str, np.ndarray]:
-        x, y = (
-            torch.as_tensor(x, device=device, dtype=torch.float32),
-            torch.as_tensor(y, device=device, dtype=torch.float32),
-        )
-        if x.shape != y.shape:
-            raise ValueError(f"Got {x.shape=} and {y.shape=}; these must be the same.")
-        x_f, y_f = x.flatten(), y.flatten()
-        target_points = torch.stack([x_f, y_f], dim=1)
-        result = kernel(
-            source_points=source_points,
-            source_scalars=TensorDict({}, batch_size=torch.Size([len(source_points)])),
-            source_vectors=TensorDict(
-                {
-                    "normal": torch.tensor([[0.0, 1.0]], device=device),
-                    "other": torch.tensor([[3.0, 1.0]], device=device),
-                },
-                batch_size=torch.Size([len(source_points), n_spatial_dims]),
-            ),
-            source_strengths=TensorDict(
-                {
-                    "small": torch.tensor([1.0], device=device),
-                    "large": torch.tensor([1.0], device=device),
-                },
-                batch_size=torch.Size([len(source_points)]),
-                device=device,
-            ),
-            target_points=target_points,
-            reference_lengths=TensorDict(
-                {
-                    "small": torch.tensor([1e-2], device=device),
-                    "large": torch.tensor([1.0], device=device),
-                },
-                batch_size=torch.Size([]),
-                device=device,
-            ),
-            global_scalars=TensorDict({}, batch_size=torch.Size([])),
-            global_vectors=TensorDict({}, batch_size=torch.Size([n_spatial_dims])),
-            verbose=False,
-            chunk_size=None,
-        )
-        return {
-            k: v.detach()
-            .reshape([*x.shape, *v.shape[1:]])
-            .cpu()
-            .numpy()
-            .astype(np.float64)
-            for k, v in result.items()
-        }
-
-    # Tests dynamic compilation
-    f(np.linspace(-1, 1, 100), np.linspace(-1, 1, 100))
-    f(np.linspace(-2, 2, 100), np.linspace(-2, 2, 100))
-    f(np.linspace(-2, 2, 60), np.linspace(-2, 2, 60))
-    f(np.linspace(-2, 2, 20), np.linspace(-2, 2, 20))
-
-    # Create 1D coordinate arrays for streamplot
-    x = torch.linspace(-1.0, 1.0, 300, device=device) * 10
-    y = torch.linspace(-1.0, 1.0, 300, device=device) * 10
-
-    # Create 2D meshgrid for function evaluation
-    X, Y = torch.meshgrid(x, y, indexing="xy")
-    result = f(X, Y)
-
-    # Convert to numpy
-    x = x.detach().cpu().numpy().astype(np.float64)
-    y = y.detach().cpu().numpy().astype(np.float64)
-    X, Y = (
-        X.detach().cpu().numpy().astype(np.float64),
-        Y.detach().cpu().numpy().astype(np.float64),
-    )
-    Z = result["potential"]
-    U, V = (
-        result["velocity"][:, :, 0],
-        result["velocity"][:, :, 1],
-    )
-
-    fig, ax = plt.subplots(1, 2, figsize=(12, 5))
-    plt.sca(ax[0])
-    c_scale = np.max(np.abs(np.percentile(Z, [0.1, 99.9])))
-    p.contour(
-        X,
-        Y,
-        Z,
-        levels=np.linspace(-c_scale, c_scale, 41),
-        extend="both",
-        cmap="RdBu_r",
-        colorbar=False,
-        linelabels=False,
-        # linewidths=0.0,
-    )
-    plt.clim(-c_scale, c_scale)
-    plt.xlim(x.min(), x.max())
-    plt.ylim(y.min(), y.max())
-    p.equal()
-    plt.colorbar()
-    p.show_plot(show=False)
-
-    plt.sca(ax[1])
-    mag = (U**2 + V**2) ** 0.5
-    mask = tuple(slice(None, None, int(res // 50)) for res in X.shape)
-    c_scale = np.percentile(mag, 99.9).item()
-    streamplot = plt.streamplot(
-        np.linspace(x.min(), x.max(), len(x)),
-        np.linspace(y.min(), y.max(), len(y)),
-        U,
-        V,
-        color=mag,
-        cmap="plasma",
-        density=2,
-        linewidth=3 * np.log1p(mag / np.median(mag)),
-        arrowstyle="fancy",
-        arrowsize=2.0,
-        # broken_streamlines=False,
-    )
-    p.contour(
-        X,
-        Y,
-        mag,
-        levels=np.linspace(0, c_scale, 10),
-        # colors="black",
-        cmap="plasma",
-        alpha=0.2,
-        colorbar=False,
-        linelabels=False,
-        zorder=1.9,
-    )
-    plt.clim(0, c_scale)
-    plt.colorbar(streamplot.lines)
-    plt.xlim(x.min(), x.max())
-    plt.ylim(y.min(), y.max())
-    p.equal()
-    p.show_plot()
-
-    print(
-        f(torch.tensor([[0.0]], device=device), torch.tensor([[0.0]], device=device))[
-            "velocity"
-        ]
-    )

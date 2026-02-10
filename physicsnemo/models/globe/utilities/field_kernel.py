@@ -17,7 +17,7 @@
 from typing import overload
 
 import torch
-import torch.nn.functional as F
+from jaxtyping import Float
 from tensordict import TensorDict
 
 
@@ -30,17 +30,26 @@ def smooth_log(x: TensorDict) -> TensorDict: ...
 
 
 def smooth_log(x: torch.Tensor | TensorDict) -> torch.Tensor | TensorDict:
-    """
-    Performs an elementwise operation on x with the following properties:
+    r"""Performs an elementwise operation on ``x`` with the following properties:
 
-    - f(x) -> 0 as x -> 0
-    - f(x) -> ln(x) as x -> infinity
-    - f(x) is smooth (C_infty continuous) for all x >= 0
-    - f(x) is monotonically increasing for x > 0
-    - Has "nicely-behaved" higher-order derivatives for all x >= 0
+    - ``f(x) -> 0`` as ``x -> 0``
+    - ``f(x) -> ln(x)`` as ``x -> infinity``
+    - ``f(x)`` is smooth (``C_infty`` continuous) for all ``x >= 0``
+    - ``f(x)`` is monotonically increasing for ``x > 0``
+    - Has "nicely-behaved" higher-order derivatives for all ``x >= 0``
 
-    Function is "intended" to be used with the domain x in [0, inf); technically it
-    remains well-defined for (-1, inf).
+    Function is "intended" to be used with the domain ``x`` in ``[0, inf)``; technically it
+    remains well-defined for ``(-1, inf)``.
+
+    Parameters
+    ----------
+    x : torch.Tensor or TensorDict
+        Input tensor or TensorDict with non-negative values.
+
+    Returns
+    -------
+    torch.Tensor or TensorDict
+        Result of the smooth log operation, same type and shape as ``x``.
     """
     return (-x).expm1().neg() * x.log1p()
 
@@ -56,29 +65,37 @@ def legendre_polynomials(x: TensorDict, n: int) -> list[TensorDict]: ...
 def legendre_polynomials(
     x: torch.Tensor | TensorDict, n: int
 ) -> list[torch.Tensor | TensorDict]:
-    """Computes the first n Legendre polynomials evaluated at x.
+    r"""Computes the first n Legendre polynomials evaluated at x.
 
-    Acts elementwise on all entries of x.
+    Acts elementwise on all entries of ``x``.
 
-    Uses the recurrence relation for efficiency:
+    Uses the recurrence relation for efficiency::
+
         P_0(x) = 1
         P_1(x) = x
         (n+1)*P_{n+1}(x) = (2n+1)*x*P_n(x) - n*P_{n-1}(x)
 
-    Args:
-        x: Input tensor of any shape.
-        n: Number of Legendre polynomials to compute (will return P_0 through P_{n-1}).
+    Parameters
+    ----------
+    x : torch.Tensor or TensorDict
+        Input tensor of any shape.
+    n : int
+        Number of Legendre polynomials to compute (will return ``P_0`` through ``P_{n-1}``).
 
-    Returns:
-        List of n tensors, where the i-th tensor is P_i(x) with the same shape as x.
+    Returns
+    -------
+    list[torch.Tensor or TensorDict]
+        List of ``n`` tensors, where the i-th tensor is ``P_i(x)`` with the same
+        shape as ``x``.
 
-    Example:
-        >>> x = torch.tensor([0.0, 0.5, 1.0])
-        >>> polys = legendre_polynomials(x, 4)
-        >>> # polys[0] is P_0(x) = 1
-        >>> # polys[1] is P_1(x) = x
-        >>> # polys[2] is P_2(x) = (3x^2 - 1)/2
-        >>> # polys[3] is P_3(x) = (5x^3 - 3x)/2
+    Example
+    -------
+    >>> x = torch.tensor([0.0, 0.5, 1.0])
+    >>> polys = legendre_polynomials(x, 4)
+    >>> # polys[0] is P_0(x) = 1
+    >>> # polys[1] is P_1(x) = x
+    >>> # polys[2] is P_2(x) = (3x^2 - 1)/2
+    >>> # polys[3] is P_3(x) = (5x^3 - 3x)/2
     """
     if n < 1:
         return []
@@ -103,14 +120,28 @@ def legendre_polynomials(
 
 
 def vector_project(
-    v: torch.Tensor,
-    n_hat: torch.Tensor,
+    v: Float[torch.Tensor, "... n_dims"],
+    n_hat: Float[torch.Tensor, "... n_dims"],
 ) -> torch.Tensor:
-    """
-    Projects vector v onto the plane orthogonal to unit vector n_hat.
+    r"""Projects vector ``v`` onto the plane orthogonal to unit vector ``n_hat``.
 
     Uses the Gram-Schmidt orthogonalization:
-        v_orth = v - (v · n_hat) * n_hat
+
+    .. math::
+
+        v_{\perp} = v - (v \cdot \hat{n}) \hat{n}
+
+    Parameters
+    ----------
+    v : Float[torch.Tensor, "... n_dims"]
+        Input vectors to project, with shape :math:`(*, D)`.
+    n_hat : Float[torch.Tensor, "... n_dims"]
+        Unit normal vectors defining the projection plane, with shape :math:`(*, D)`.
+
+    Returns
+    -------
+    torch.Tensor
+        Projected vectors with shape :math:`(*, D)`.
     """
     # Below are two equivalent implementations; on my machine the second is faster, but
     # in general einsums can be optimized more due to limiting intermediate allocations.
@@ -119,49 +150,54 @@ def vector_project(
 
 
 def polar_and_dipole_basis(
-    r_hat: torch.Tensor,
-    n_hat: torch.Tensor,
+    r_hat: Float[torch.Tensor, "... 2"],
+    n_hat: Float[torch.Tensor, "... 2"],
     normalize_basis_vectors: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Computes a local vector basis for 2D vectors that is rotation-invariant
-    w.r.t. n_hat.
+    r"""Computes a local vector basis for 2D vectors that is rotation-invariant
+    w.r.t. ``n_hat``.
 
     Notably, this isn't a true vector basis, as it has has 3 vectors, not the
     required 2. The basis is essentially a combination of a polar basis (r,
     theta) and an additional dipole-like direction (kappa) for the third vector.
-    The axis for the dipole direction is set by n_hat.
+    The axis for the dipole direction is set by ``n_hat``.
 
-    Args:
-        r_hat: Tensor of shape (..., 2), unit direction vectors (assumed to be
-            normalized).
+    Parameters
+    ----------
+    r_hat : Float[torch.Tensor, "... 2"]
+        Unit direction vectors with shape :math:`(*, 2)`, assumed to be
+        normalized.
+    n_hat : Float[torch.Tensor, "... 2"]
+        Axis vectors with shape :math:`(*, 2)`, assumed to be unit vectors.
+    normalize_basis_vectors : bool, optional
+        Whether to normalize ``e_kappa`` to be unit length
+        (``e_r`` and ``e_theta`` are always unit). If ``False``, ``e_kappa`` is essentially
+        multiplied by ``sin(theta)``. This gives the sometimes-useful property that
+        ``e_kappa`` smoothly changes on the surface of a unit circle.
 
-        n_hat: Tensor of shape (..., 2), axis vectors (assumed to be unit
-            vectors).
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        A tuple of 3 vectors, each of shape :math:`(*, 2)`:
 
-        normalize_basis_vectors: Whether to normalize e_kappa to be unit length
-            (e_r and e_theta are always unit). If False, e_kappa is essentially
-            multiplied by sin(theta). This gives the sometimes-useful property that
-            e_kappa smoothly changes on the surface of a unit circle.
-
-    Returns:
-        A tuple of 3 vectors, each of shape (..., 2):
-
-        - e_r: The radial direction, aligned with r_hat. This corresponds to the
+        - ``e_r``: The radial direction, aligned with ``r_hat``. This corresponds to the
           influence field direction associated with a point source (i.e.,
           outwards from the origin).
 
-        - e_theta: The tangential direction, orthogonal to e_r. This corresponds
+        - ``e_theta``: The tangential direction, orthogonal to ``e_r``. This corresponds
           to the vortex field direction associated with a point vortex (i.e.,
           the direction of circulation around the source).
 
-        - e_kappa: A dipole-like direction. Notably, this is orthogonal to e_r,
-          but exactly parallel to e_theta - if you need to construct a full-rank
+        - ``e_kappa``: A dipole-like direction. Notably, this is orthogonal to ``e_r``,
+          but exactly parallel to ``e_theta`` - if you need to construct a full-rank
           basis, this is the one to drop.
 
-    Edge Cases (even if normalize_basis_vectors is True):
-        - If r_hat is a zero vector, all basis vectors will be zero vectors.
-        - If r_hat is aligned with n_hat, e_kappa will be a zero vector.
+    Note
+    ----
+    Edge Cases (even if ``normalize_basis_vectors`` is ``True``):
+
+    - If ``r_hat`` is a zero vector, all basis vectors will be zero vectors.
+    - If ``r_hat`` is aligned with ``n_hat``, ``e_kappa`` will be a zero vector.
     """
     # Validate input shapes
     if not torch.compiler.is_compiling():
@@ -194,49 +230,54 @@ def polar_and_dipole_basis(
 
 
 def spherical_basis(
-    r_hat: torch.Tensor,
-    n_hat: torch.Tensor,
+    r_hat: Float[torch.Tensor, "... 3"],
+    n_hat: Float[torch.Tensor, "... 3"],
     normalize_basis_vectors: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Computes a local vector basis for 3D vectors that is rotation-invariant
-    w.r.t. n_hat.
+    r"""Computes a local vector basis for 3D vectors that is rotation-invariant
+    w.r.t. ``n_hat``.
 
     The basis is essentially a spherical coordinate system, with the axis set by
-    n_hat.
+    ``n_hat``.
 
-    Args:
-        r_hat: Tensor of shape (..., 3), unit direction vectors (assumed to be
-            normalized).
+    Parameters
+    ----------
+    r_hat : Float[torch.Tensor, "... 3"]
+        Unit direction vectors with shape :math:`(*, 3)`, assumed to be
+        normalized.
+    n_hat : Float[torch.Tensor, "... 3"]
+        Axis vectors with shape :math:`(*, 3)`, assumed to be unit vectors.
+    normalize_basis_vectors : bool, optional
+        Whether to normalize ``e_theta`` and ``e_phi`` to unit
+        length (``e_r`` is always unit). If ``False``, ``e_theta`` and ``e_phi`` are
+        essentially multiplied by ``sin(theta)``. This gives the
+        sometimes-useful property that the basis vectors smoothly change on
+        the surface of a unit sphere. (If ``e_theta`` and ``e_phi`` are normalized,
+        then there is provably no possible way for these to smoothly vary on
+        the surface of a sphere, as shown by the Hairy Ball theorem.)
 
-        n_hat: Tensor of shape (..., 3), axis vectors (assumed to be unit
-            vectors).
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        A tuple of 3 vectors, each of shape :math:`(*, 3)`:
 
-        normalize_basis_vectors: Whether to normalize e_theta and e_phi to unit
-            length (e_r is always unit). If False, e_theta and e_phi are
-            essentially multiplied by sin(theta). This gives the
-            sometimes-useful property that the basis vectors smoothly change on
-            the surface of a unit sphere. (If e_theta and e_phi are normalized,
-            then there is provably no possible way for these to smoothly vary on
-            the surface of a sphere, as shown by the Hairy Ball theorem.)
-
-    Returns:
-        A tuple of 3 vectors, each of shape (..., 3):
-
-        - e_r: The radial direction, pointing outward from the origin. This
+        - ``e_r``: The radial direction, pointing outward from the origin. This
           corresponds to the influence field direction associated with a point
           source.
 
-        - e_theta: The polar direction, orthogonal to both e_r and n_hat. This
+        - ``e_theta``: The polar direction, orthogonal to both ``e_r`` and ``n_hat``. This
           corresponds to the meridional direction in spherical coordinates.
 
-        - e_phi: The azimuthal direction, orthogonal to both e_r and e_theta.
+        - ``e_phi``: The azimuthal direction, orthogonal to both ``e_r`` and ``e_theta``.
           This corresponds to the circumferential direction in spherical
           coordinates.
 
-    Edge Cases (even if normalize_basis_vectors is True):
-        - If r_hat is a zero vector, all basis vectors will be zero vectors.
-        - If r_hat is aligned with n_hat, e_theta and e_phi will be zero vectors.
+    Note
+    ----
+    Edge Cases (even if ``normalize_basis_vectors`` is ``True``):
+
+    - If ``r_hat`` is a zero vector, all basis vectors will be zero vectors.
+    - If ``r_hat`` is aligned with ``n_hat``, ``e_theta`` and ``e_phi`` will be zero vectors.
     """
     # Validate input shapes
     if not torch.compiler.is_compiling():
@@ -266,32 +307,3 @@ def spherical_basis(
     e_phi = torch.cross(e_r, e_theta, dim=-1)
 
     return e_r, e_theta, e_phi
-
-
-if __name__ == "__main__":
-    import aerosandbox.tools.pretty_plots as p
-    import matplotlib.pyplot as plt
-    import torch
-
-    # Make a grid over the unit square
-    n = 21
-    x, y = torch.linspace(-2, 2, n), torch.linspace(-2, 2, n)
-    X, Y = torch.meshgrid(x, y, indexing="ij")
-    R = torch.stack([X, Y], dim=-1)
-    R = F.normalize(R, p=2.0, dim=-1)
-
-    n_hat = torch.tensor([0.0, 1.0])
-
-    plt.figure()
-
-    e_r, e_theta, e_kappa = polar_and_dipole_basis(
-        R, n_hat[None, None, :], normalize_basis_vectors=False
-    )
-    vector = e_kappa
-    U = vector[..., 0]
-    V = vector[..., 1]
-
-    plt.figure(figsize=(6, 6))
-    plt.quiver(X, Y, U, V)
-    p.equal()
-    p.show_plot()

@@ -1,4 +1,20 @@
-"""Utility functions for working with TensorDict objects.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+r"""Utility functions for working with TensorDict objects.
 
 This module provides helper functions for manipulating TensorDict objects,
 including concatenation of leaf tensors, computing total lengths, and
@@ -12,27 +28,32 @@ from tensordict import TensorDict
 
 
 def concatenated_length(td: TensorDict) -> int:
-    """Computes the total flattened length of all leaf tensors in a TensorDict.
+    r"""Computes the total flattened length of all leaf tensors in a TensorDict.
 
     This function calculates the sum of the number of elements in each leaf tensor,
     excluding the batch dimensions. This is useful for determining the total feature
     dimension when all tensors will be concatenated along their last dimensions.
 
-    Args:
-        td: TensorDict containing tensors with shared batch dimensions. The batch
-            dimensions are determined by td.batch_size.
+    Parameters
+    ----------
+    td : TensorDict
+        TensorDict containing tensors with shared batch dimensions. The batch
+        dimensions are determined by ``td.batch_size``.
 
-    Returns:
-        int: The total number of elements across all leaf tensors when their
-            non-batch dimensions are flattened. Returns 0 for empty TensorDicts.
+    Returns
+    -------
+    int
+        The total number of elements across all leaf tensors when their
+        non-batch dimensions are flattened. Returns 0 for empty TensorDicts.
 
-    Example:
-        >>> td = TensorDict({
-        ...     "scalars": torch.randn(10, 3),      # 3 elements per batch
-        ...     "vectors": torch.randn(10, 5, 2),   # 5*2=10 elements per batch
-        ... }, batch_size=torch.Size([10]))
-        >>> concatenated_length(td)
-        13
+    Example
+    -------
+    >>> td = TensorDict({
+    ...     "scalars": torch.randn(10, 3),      # 3 elements per batch
+    ...     "vectors": torch.randn(10, 5, 2),   # 5*2=10 elements per batch
+    ... }, batch_size=torch.Size([10]))
+    >>> concatenated_length(td)
+    13
     """
     return sum(
         prod(t.shape[td.batch_dims :])  # ty: ignore[unresolved-attribute]
@@ -41,30 +62,35 @@ def concatenated_length(td: TensorDict) -> int:
 
 
 def concatenate_leaves(td: TensorDict) -> torch.Tensor:
-    """Concatenates all leaf tensors in a TensorDict along the last dimension.
+    r"""Concatenates all leaf tensors in a TensorDict along the last dimension.
 
     This function flattens all non-batch dimensions of each leaf tensor and
     concatenates them along a new last dimension. The resulting tensor has shape
-    (*batch_size, total_features) where total_features is the sum of flattened
-    features across all leaf tensors.
+    :math:`(*, F_{\text{total}})` where :math:`F_{\text{total}}` is the sum of
+    flattened features across all leaf tensors.
 
-    Args:
-        td: TensorDict containing tensors to concatenate. All leaf tensors must
-            share the same batch dimensions as specified by td.batch_size.
+    Parameters
+    ----------
+    td : TensorDict
+        TensorDict containing tensors to concatenate. All leaf tensors must
+        share the same batch dimensions as specified by ``td.batch_size``.
 
-    Returns:
-        torch.Tensor: A tensor with shape (*td.batch_size, concatenated_length(td)).
-            For empty TensorDicts, returns an empty tensor with shape (*td.batch_size, 0)
-            on the same device as the TensorDict.
+    Returns
+    -------
+    torch.Tensor
+        A tensor with shape :math:`(*, F_{\text{total}})`.
+        For empty TensorDicts, returns an empty tensor with shape :math:`(*, 0)`
+        on the same device as the TensorDict.
 
-    Example:
-        >>> td = TensorDict({
-        ...     "a": torch.ones(2, 3, 4),      # Will contribute 3*4=12 features
-        ...     "b": torch.ones(2, 5),         # Will contribute 5 features
-        ... }, batch_size=torch.Size([2]))
-        >>> result = concatenate_leaves(td)
-        >>> result.shape
-        torch.Size([2, 17])
+    Example
+    -------
+    >>> td = TensorDict({
+    ...     "a": torch.ones(2, 3, 4),      # Will contribute 3*4=12 features
+    ...     "b": torch.ones(2, 5),         # Will contribute 5 features
+    ... }, batch_size=torch.Size([2]))
+    >>> result = concatenate_leaves(td)
+    >>> result.shape
+    torch.Size([2, 17])
     """
     tensors = tuple(td.values(include_nested=True, leaves_only=True))
     if len(tensors) == 0:
@@ -80,40 +106,50 @@ def concatenate_leaves(td: TensorDict) -> torch.Tensor:
 
 
 class RankDict(dict):
-    """Dictionary that auto-creates TensorDict values based on integer rank keys.
+    r"""Dictionary that auto-creates TensorDict values based on integer rank keys.
 
-    This specialized dictionary behaves like collections.defaultdict, but the default
+    This specialized dictionary behaves like ``collections.defaultdict``, but the default
     value depends on the key (rank). When accessing a missing rank key, it automatically
-    creates an empty TensorDict with a batch_size appropriate for that rank.
+    creates an empty TensorDict with a ``batch_size`` appropriate for that rank.
 
-    This is used internally by split_by_leaf_rank to group tensors by their rank
+    This is used internally by ``split_by_leaf_rank`` to group tensors by their rank
     (number of non-batch dimensions). The auto-initialization ensures that accessing
     any rank returns a valid TensorDict, even if no tensors of that rank exist.
 
-    Args:
-        batch_size: Base batch size for rank-0 tensors (scalars).
-        new_batch_dim: Optional dimension to append per rank level. If provided,
-            rank-k tensors get batch_size + (new_batch_dim,) * k. If None, all
-            ranks share the same batch_size.
-        device: Device for auto-created TensorDicts.
+    Parameters
+    ----------
+    batch_size : torch.Size
+        Base batch size for rank-0 tensors (scalars).
+    new_batch_dim : int or None, optional
+        Optional dimension to append per rank level. If provided,
+        rank-k tensors get ``batch_size + (new_batch_dim,) * k``. If ``None``, all
+        ranks share the same ``batch_size``.
+    device : torch.device or None, optional
+        Device for auto-created TensorDicts.
 
-    Attributes:
-        batch_size: Stored base batch size.
-        new_batch_dim: Stored per-rank dimension.
-        device: Stored device.
+    Attributes
+    ----------
+    batch_size : torch.Size
+        Stored base batch size.
+    new_batch_dim : int or None
+        Stored per-rank dimension.
+    device : torch.device or None
+        Stored device.
 
-    Example:
-        >>> rd = RankDict(batch_size=torch.Size([10]), device="cpu")
-        >>> # Accessing rank 0 (scalars) auto-creates empty TensorDict
-        >>> td0 = rd[0]  # TensorDict with batch_size=(10,)
-        >>> # Accessing rank 1 (vectors) also auto-creates
-        >>> td1 = rd[1]  # TensorDict with batch_size=(10,)
-        >>> td0["scalar"] = torch.randn(10)
-        >>> td1["vector"] = torch.randn(10, 3)
+    Example
+    -------
+    >>> rd = RankDict(batch_size=torch.Size([10]), device="cpu")
+    >>> # Accessing rank 0 (scalars) auto-creates empty TensorDict
+    >>> td0 = rd[0]  # TensorDict with batch_size=(10,)
+    >>> # Accessing rank 1 (vectors) also auto-creates
+    >>> td1 = rd[1]  # TensorDict with batch_size=(10,)
+    >>> td0["scalar"] = torch.randn(10)
+    >>> td1["vector"] = torch.randn(10, 3)
 
-    Note:
-        Negative keys raise ValueError since negative-rank tensors are nonsensical.
-        For external use, this behaves like a regular dict after initialization.
+    Note
+    ----
+    Negative keys raise ``ValueError`` since negative-rank tensors are nonsensical.
+    For external use, this behaves like a regular dict after initialization.
     """
 
     def __init__(
@@ -127,16 +163,22 @@ class RankDict(dict):
         self.device = device
 
     def __missing__(self, key: int) -> TensorDict:
-        """Auto-creates an empty TensorDict when accessing a missing rank key.
+        r"""Auto-creates an empty TensorDict when accessing a missing rank key.
 
-        Args:
-            key: Tensor rank (number of non-batch dimensions). Must be non-negative.
+        Parameters
+        ----------
+        key : int
+            Tensor rank (number of non-batch dimensions). Must be non-negative.
 
-        Returns:
-            TensorDict: Empty TensorDict with batch_size appropriate for this rank.
+        Returns
+        -------
+        TensorDict
+            Empty TensorDict with ``batch_size`` appropriate for this rank.
 
-        Raises:
-            ValueError: If key is negative.
+        Raises
+        ------
+        ValueError
+            If key is negative.
         """
         if key < 0:
             raise ValueError(f"No such thing as a tensor with rank {key}!")
@@ -151,38 +193,45 @@ class RankDict(dict):
 def split_by_leaf_rank(
     td: TensorDict, new_batch_dim: int | None = None
 ) -> RankDict[int, TensorDict]:
-    """Splits a TensorDict into multiple TensorDicts grouped by tensor rank.
+    r"""Splits a TensorDict into multiple TensorDicts grouped by tensor rank.
 
     This function groups leaf tensors by their rank (number of dimensions excluding
     batch dimensions) and returns a dictionary mapping each rank to a TensorDict
     containing all tensors of that rank. This is useful for processing tensors
     with different semantic meanings separately (e.g., scalars vs vectors vs matrices).
 
-    Args:
-        td: TensorDict to split. The batch dimensions are determined by td.batch_size.
+    Parameters
+    ----------
+    td : TensorDict
+        TensorDict to split. The batch dimensions are determined by ``td.batch_size``.
+    new_batch_dim : int or None, optional
+        Optional dimension to append per rank level in the output TensorDicts.
 
-    Returns:
-        dict[int, TensorDict]: Dictionary mapping rank (int) to TensorDict. Each
-            TensorDict has the same batch_size and device as the input, and contains
-            only the tensors with the corresponding rank. Empty TensorDicts are created
-            for ranks that have tensors.
+    Returns
+    -------
+    RankDict[int, TensorDict]
+        Dictionary mapping rank (int) to TensorDict. Each
+        TensorDict has the same ``batch_size`` and device as the input, and contains
+        only the tensors with the corresponding rank. Empty TensorDicts are created
+        for ranks that have tensors.
 
-    Example:
-        >>> td = TensorDict({
-        ...     "scalar1": torch.randn(10),         # rank 0 (only batch dim)
-        ...     "scalar2": torch.randn(10),         # rank 0
-        ...     "vector": torch.randn(10, 3),       # rank 1
-        ...     "matrix": torch.randn(10, 4, 4),    # rank 2
-        ... }, batch_size=torch.Size([10]))
-        >>> split_td = split_by_leaf_rank(td)
-        >>> list(split_td.keys())
-        [0, 1, 2]
-        >>> list(split_td[0].keys())
-        ['scalar1', 'scalar2']
-        >>> list(split_td[1].keys())
-        ['vector']
-        >>> list(split_td[2].keys())
-        ['matrix']
+    Example
+    -------
+    >>> td = TensorDict({
+    ...     "scalar1": torch.randn(10),         # rank 0 (only batch dim)
+    ...     "scalar2": torch.randn(10),         # rank 0
+    ...     "vector": torch.randn(10, 3),       # rank 1
+    ...     "matrix": torch.randn(10, 4, 4),    # rank 2
+    ... }, batch_size=torch.Size([10]))
+    >>> split_td = split_by_leaf_rank(td)
+    >>> list(split_td.keys())
+    [0, 1, 2]
+    >>> list(split_td[0].keys())
+    ['scalar1', 'scalar2']
+    >>> list(split_td[1].keys())
+    ['vector']
+    >>> list(split_td[2].keys())
+    ['matrix']
     """
     result = RankDict(
         batch_size=td.batch_size, new_batch_dim=new_batch_dim, device=td.device
@@ -196,34 +245,42 @@ def split_by_leaf_rank(
 
 
 def combine_tensordicts(*tds: TensorDict) -> TensorDict:
-    """Combines multiple TensorDicts into a single TensorDict by merging their keys.
+    r"""Combines multiple TensorDicts into a single TensorDict by merging their keys.
 
     This function creates a new TensorDict containing all key-value pairs from the
     input TensorDicts. Keys are merged via sequential update, so if multiple input
     TensorDicts contain the same key, the last one wins.
 
-    Args:
-        *tds: Variable number of TensorDict objects to combine. Must all have the
-            same batch_size and device.
+    Parameters
+    ----------
+    *tds : TensorDict
+        Variable number of TensorDict objects to combine. Must all have the
+        same ``batch_size`` and device.
 
-    Returns:
-        TensorDict: New TensorDict with batch_size and device matching the inputs,
-            containing the union of all keys. For duplicate keys, the value from the
-            last TensorDict containing that key is used.
+    Returns
+    -------
+    TensorDict
+        New TensorDict with ``batch_size`` and device matching the inputs,
+        containing the union of all keys. For duplicate keys, the value from the
+        last TensorDict containing that key is used.
 
-    Raises:
-        ValueError: If TensorDicts have different batch sizes or devices.
+    Raises
+    ------
+    ValueError
+        If TensorDicts have different batch sizes or devices.
 
-    Example:
-        >>> td1 = TensorDict({"a": torch.tensor([1, 2])}, batch_size=[2])
-        >>> td2 = TensorDict({"b": torch.tensor([3, 4])}, batch_size=[2])
-        >>> combined = combine_tensordicts(td1, td2)
-        >>> list(combined.keys())
-        ['a', 'b']
+    Example
+    -------
+    >>> td1 = TensorDict({"a": torch.tensor([1, 2])}, batch_size=[2])
+    >>> td2 = TensorDict({"b": torch.tensor([3, 4])}, batch_size=[2])
+    >>> combined = combine_tensordicts(td1, td2)
+    >>> list(combined.keys())
+    ['a', 'b']
 
-    Note:
-        This is essentially a batch-aware dictionary merge operation. The validation
-        is skipped during torch.compile for performance.
+    Note
+    ----
+    This is essentially a batch-aware dictionary merge operation. The validation
+    is skipped during ``torch.compile`` for performance.
     """
     if not torch.compiler.is_compiling():
         if not all(td.batch_size == tds[0].batch_size for td in tds):

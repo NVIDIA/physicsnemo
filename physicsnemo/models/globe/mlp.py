@@ -1,10 +1,85 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from typing import Callable, Sequence
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float
+
+from physicsnemo.core.module import Module
 
 
-class MLP(nn.Module):
+class MLP(Module):
+    r"""Multi-layer perceptron with configurable architecture.
+
+    Constructs a fully-connected feedforward neural network with optional
+    batch normalization, dropout, spectral normalization, and a user-specified
+    activation function. The architecture is defined by a sequence of layer
+    sizes, where each entry specifies the number of neurons in that layer.
+
+    Parameters
+    ----------
+    layer_sizes : Sequence[int]
+        Number of units in each layer, including input and output.
+        For example, ``[8, 32, 16, 4]`` creates an MLP with input
+        dimension 8, two hidden layers of sizes 32 and 16, and output
+        dimension 4.
+    activation_function : Callable[[torch.Tensor], torch.Tensor] | None
+        Activation applied after each hidden layer. Can be any
+        ``torch.nn`` module or callable. Defaults to ``nn.SiLU()``.
+    bias : bool
+        Whether to include a bias term in the linear layers.
+        Default ``True``.
+    dropout : float
+        Dropout probability after each activation (except the last layer).
+        Set to ``0.0`` to disable. Default ``0.0``.
+    use_batchnorm : bool
+        If ``True``, applies ``BatchNorm1d`` after each linear layer
+        (except the last). Default ``False``.
+    spectral_norm : bool
+        If ``True``, applies spectral normalization to all linear layer
+        weights, constraining the spectral norm to 1. Default ``False``.
+
+    Forward
+    -------
+    x : Float[torch.Tensor, "batch input_dim"]
+        Input tensor of shape :math:`(B, D_{in})` where :math:`D_{in}`
+        is ``layer_sizes[0]``.
+
+    Outputs
+    -------
+    Float[torch.Tensor, "batch output_dim"]
+        Output tensor of shape :math:`(B, D_{out})` where :math:`D_{out}`
+        is ``layer_sizes[-1]``.
+
+    Notes
+    -----
+    No activation, dropout, or batch normalization is applied after the
+    final output layer.
+
+    Examples
+    --------
+    >>> mlp = MLP([10, 64, 32, 3], activation_function=nn.ReLU(), dropout=0.1)
+    >>> x = torch.randn(5, 10)
+    >>> y = mlp(x)
+    >>> y.shape
+    torch.Size([5, 3])
+    """
+
     def __init__(
         self,
         layer_sizes: Sequence[int],
@@ -14,60 +89,12 @@ class MLP(nn.Module):
         use_batchnorm: bool = False,
         spectral_norm: bool = False,
     ):
-        """
-        Multi-Layer Perceptron (MLP) module with configurable architecture.
-
-        This class constructs a fully-connected feedforward neural network with
-        optional batch normalization, dropout, and a user-specified activation
-        function. The architecture is defined by a Sequence of layer sizes,
-        where each entry specifies the number of neurons in that layer.
-
-        Args:
-            layer_sizes (Sequence[int]): Sequence of integers specifying the
-            number of units in each layer, including input and output layers.
-            For example, [8, 32, 16, 4] creates an MLP with input dimension 8,
-            two hidden layers of sizes 32 and 16, and output dimension 4.
-
-            activation_function (nn.Module | Callable[[torch.Tensor],
-            torch.Tensor], optional): Activation function to use after each
-            hidden layer. Can be a torch.nn module or a callable. Defaults to
-            nn.SiLU.
-
-            bias (bool, optional): If True, adds a bias term to the linear layers.
-            Defaults to True.
-
-            dropout (float, optional): Dropout probability applied after each
-            activation (except the last layer). Set to 0.0 to disable dropout.
-            Defaults to 0.0.
-
-            use_batchnorm (bool, optional): If True, applies BatchNorm1d after
-            each linear layer (except the last). Defaults to False.
-
-            spectral_norm (bool, optional): If True, the MLP is hard-constrained
-            to have a spectral norm of 1. Defaults to False.
-
-        Example:
-            >>> mlp = MLP([10, 64, 32, 3], activation_function=nn.ReLU(), dropout=0.1, use_batchnorm=True)
-            >>> x = torch.randn(5, 10)
-            >>> y = mlp(x)
-            >>> print(y.shape)
-            torch.Size([5, 3])
-
-        Notes:
-            - No activation, dropout, or batch normalization is applied after
-              the final output layer.
-            - If a callable is provided for `activation_function`, it will be
-              wrapped as a module for use in nn.Sequential.
-            - For best performance, prefer vectorized input (batch dimension
-              first).
-
-        """
         if activation_function is None:
             activation_function = nn.SiLU()
 
         super().__init__()
 
-        ### Save inputs
+        ### Store constructor arguments
         self.layer_sizes = layer_sizes
         self.activation_function = activation_function
         self.bias = bias
@@ -75,6 +102,7 @@ class MLP(nn.Module):
         self.use_batchnorm = use_batchnorm
         self.spectral_norm = spectral_norm
 
+        ### Build layers
         layers: list[nn.Module] = []
         for i in range(len(layer_sizes) - 1):
             linear_layer = nn.Linear(
@@ -97,32 +125,33 @@ class MLP(nn.Module):
                     layers.append(nn.Dropout(p=dropout))
         self.layers = nn.Sequential(*layers)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch input_dim"]
+    ) -> Float[torch.Tensor, "batch output_dim"]:
+        r"""Forward pass through all layers.
+
+        Parameters
+        ----------
+        x : Float[torch.Tensor, "batch input_dim"]
+            Input tensor of shape :math:`(B, D_{in})`.
+
+        Returns
+        -------
+        Float[torch.Tensor, "batch output_dim"]
+            Output tensor of shape :math:`(B, D_{out})`.
         """
-        Forward pass of the MLP.
+        ### Input validation
+        # Skip validation when running under torch.compile for performance
+        if not torch.compiler.is_compiling():
+            if x.ndim != 2:
+                raise ValueError(
+                    f"Expected 2D input (B, D_in), got {x.ndim}D tensor "
+                    f"with shape {tuple(x.shape)}"
+                )
+            if x.shape[-1] != self.layer_sizes[0]:
+                raise ValueError(
+                    f"Expected input dim {self.layer_sizes[0]}, "
+                    f"got {x.shape[-1]}"
+                )
 
-        Args:
-            x (torch.Tensor): Input tensor of shape (batch_size, input_dim), where
-                input_dim must match the first entry in `layer_sizes` provided at initialization.
-
-        Returns:
-            torch.Tensor: Output tensor of shape (batch_size, output_dim), where
-                output_dim is the last entry in `layer_sizes`.
-
-        Notes:
-            - The input must be a 2D tensor (batch dimension first).
-            - No activation, dropout, or batch normalization is applied after the final output layer.
-        """
         return self.layers(x)
-
-
-if __name__ == "__main__":
-    mlp = MLP(
-        layer_sizes=[10, 64, 32, 3],
-        activation_function=nn.ReLU(),
-        dropout=0.1,
-        use_batchnorm=True,
-    )
-    x = torch.randn(5, 10)
-    y = mlp(x)
-    print(y.shape)

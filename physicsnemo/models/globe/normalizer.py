@@ -1,55 +1,91 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from typing import Literal, Sequence
 
 import torch
 import torch.nn as nn
 
+from physicsnemo.core.module import Module
 
-class Normalizer(nn.Module):
-    """Shape-aware EWMA normalization in log-space based on mean(abs(x)).
 
-    This module maintains a running estimate of mean(abs(x)) in log-space and
-    normalizes inputs by that estimate. The tracked statistic can be a scalar or
-    have arbitrary shape, controlled by the `shape` argument:
+class Normalizer(Module):
+    r"""Shape-aware EWMA normalization in log-space based on ``mean(abs(x))``.
 
-    - If a dimension in `shape` is 1, that dimension is reduced by computing the
-      mean across that axis.
-    - If a dimension in `shape` equals the corresponding dimension in the input,
-      no reduction is applied for that axis, and the statistic is maintained per
-      position along that axis.
-    - Exact zeros in the reduced axes are ignored when computing the mean. If an
-      entire reduction slice is zero, its mean is treated as 0 and the log-space
-      update naturally leaves the running estimate unchanged for that slice.
+    Maintains a running estimate of ``mean(abs(x))`` in log-space and
+    normalizes inputs by that estimate. The tracked statistic can be a
+    scalar or have arbitrary shape, controlled by the ``shape`` argument:
 
-    In training mode, each forward call:
-    1) computes mean(abs(x)) per the reduction rules above (ignoring zeros),
-    2) converts it to log-space, and
-    3) updates `ln_running_mean` via a numerically stable log-domain EWMA:
-       ln(m) = log( momentum * exp(ln_prev) + (1-momentum) * exp(ln_batch) ).
+    - If a dimension in ``shape`` is 1, that dimension is reduced by
+      computing the mean across that axis.
+    - If a dimension in ``shape`` equals the corresponding input dimension,
+      no reduction is applied and the statistic is per-position.
+    - Exact zeros in the reduced axes are ignored. If an entire reduction
+      slice is zero, the update leaves the running estimate unchanged.
 
-    In eval mode, state is not updated. In both modes, the output is:
-        x * exp(-ln_running_mean)
+    In training mode each forward call computes ``mean(abs(x))``, converts
+    to log-space, and updates ``ln_running_mean`` via a numerically stable
+    log-domain EWMA. In eval mode, state is not updated. In both modes the
+    output is :math:`x \cdot \exp(-\text{ln\_running\_mean})`.
 
-    Optional learnable affine parameters (`weight`, `bias`) can be supplied via
-    `learnable_weight_shape` and `learnable_bias_shape`, which are broadcasted to
-    the input as usual.
+    Parameters
+    ----------
+    shape : torch.Size | Sequence[int]
+        Target shape of the running statistic. Must have the same number
+        of dimensions as the input. Default ``()``.
+    momentum : float
+        EWMA momentum in :math:`[0, 1)`. Higher values emphasize
+        historical estimates. Default ``0.99``.
+    learnable_weight_shape : torch.Size | Sequence[int] | None
+        If provided, creates a learnable multiplicative ``weight``
+        parameter with the given shape. Default ``None``.
+    learnable_bias_shape : torch.Size | Sequence[int] | None
+        If provided, creates a learnable additive ``bias`` parameter
+        with the given shape. Default ``None``.
+    initialization_behavior : ``"no_op"`` | ``"first_batch"``
+        Controls how the running mean is initialized on the first
+        forward call. Default ``"no_op"``.
+    disable : bool
+        If ``True``, the normalizer is a no-op pass-through.
+        Default ``False``.
 
-    Args:
-        shape: Target shape of the running statistic. Must have the same number
-            of dimensions as the input. Dimensions set to 1 indicate a mean will
-            be taken across that axis; dimensions equal to the input size keep a
-            per-position statistic for that axis.
-        momentum: EWMA momentum in [0, 1). Higher values emphasize historical
-            estimates more strongly.
-        learnable_weight_shape: If provided, creates a learnable multiplicative
-            `weight` with the given shape.
-        learnable_bias_shape: If provided, creates a learnable additive `bias`
-            with the given shape.
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor whose rank must match ``len(shape)``.
 
-    Notes:
-        - `ln_running_mean` is stored as a registered buffer so it moves with the
-          module across devices and is included in state_dict.
-        - On initialization, `ln_running_mean` is zeros (i.e., running mean is 1).
-          This makes eval-before-train a no-op normalization.
+    Outputs
+    -------
+    torch.Tensor
+        Normalized tensor with the same shape as the input.
+
+    Notes
+    -----
+    ``ln_running_mean`` is a registered buffer, so it moves with the
+    module across devices and is included in ``state_dict``. On
+    initialization it is zeros (running mean = 1), making eval-before-train
+    a no-op normalization.
+
+    Examples
+    --------
+    >>> norm = Normalizer(shape=(1,), momentum=0.99)
+    >>> norm.train()
+    Normalizer(ln_running_mean=tensor([0.]))
+    >>> x = torch.randn(32)
+    >>> y = norm(x)  # updates running mean, returns normalized x
     """
 
     def __init__(
@@ -67,7 +103,7 @@ class Normalizer(nn.Module):
 
         super().__init__()
 
-        # Store parameters
+        ### Store parameters
         self.shape = shape
         self.momentum = momentum
         self.learnable_weight_shape = learnable_weight_shape
@@ -75,99 +111,96 @@ class Normalizer(nn.Module):
         self.initialization_behavior = initialization_behavior
         self.disable = disable
 
-        # Initialize learnable parameters, if applicable
+        ### Initialize learnable parameters, if applicable
         if not disable:
             if self.learnable_weight_shape is not None:
                 self.weight = nn.Parameter(torch.ones(self.learnable_weight_shape))
             if self.learnable_bias_shape is not None:
                 self.bias = nn.Parameter(torch.zeros(self.learnable_bias_shape))
 
-        # Uses buffers to track state across devices/checkpoints
-        # Start with ln(1.0) = 0.0 so eval before train is a no-op normalization.
+        ### Buffers to track state across devices/checkpoints
+        # Start with ln(1.0) = 0.0 so eval before train is a no-op.
         self.register_buffer("ln_running_mean", torch.zeros(shape))
         self.register_buffer("_initialized", torch.tensor(False, dtype=torch.bool))
 
     def __repr__(self) -> str:
-        """Returns a string representation showing the current running mean state.
+        r"""String representation showing the current running mean state.
 
-        Returns:
-            str: String in format "Normalizer(ln_running_mean=<tensor>)" displaying
-                the log-space running mean estimate.
+        Returns
+        -------
+        str
+            Format: ``Normalizer(ln_running_mean=<tensor>)``.
         """
         return f"Normalizer(ln_running_mean={self.ln_running_mean!r})"
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Normalize by a log-space EWMA of mean(abs(x)) with shape-aware reduction.
+        r"""Normalize by a log-space EWMA of ``mean(abs(x))``.
 
-        Behavior depends on `self.training`:
-        - Train: update `ln_running_mean` from the current batch and return the
-          normalized output.
-        - Eval: return normalized output without updating state.
+        In train mode, updates ``ln_running_mean`` from the current batch
+        and returns normalized output. In eval mode, returns normalized
+        output without updating state.
 
-        Input shape semantics:
-        - Let `x.shape == s` and `self.shape == t`. It must be that `len(s) == len(t)`.
-        - For each dimension `d`, if `t[d] == 1`, the mean over axis `d` is
-          computed (ignoring exact zeros). If `t[d] == s[d]`, no reduction is
-          performed along `d` and the statistic is per-position.
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input tensor whose rank must match ``len(self.shape)``.
 
-        Args:
-            x: Input tensor with shape matching the configured rank. Reductions
-                are performed along axes where `self.shape` has size 1.
-
-        Returns:
-            Tensor normalized by the running mean, then optionally affine
-            transformed by `weight`/`bias` if present. Shape matches `x.shape`.
+        Returns
+        -------
+        torch.Tensor
+            Normalized tensor, same shape as ``x``.
         """
         if self.disable:
             return x
 
-        ### Validate inputs
+        ### Input validation
         # Skip validation when running under torch.compile for performance
         if not torch.compiler.is_compiling():
             if len(self.shape) != len(x.shape):
-                raise ValueError(f"Shape mismatch: {self.shape=!r} != {x.shape=!r}")
+                raise ValueError(
+                    f"Expected input with {len(self.shape)} dimensions matching "
+                    f"{self.shape=!r}, got tensor with shape {tuple(x.shape)}"
+                )
 
         if self.training:
             # Compute abs(x) for statistic updates out of autograd
             values = x.detach().abs()
 
-            values[values == 0.0] = torch.nan  # Allows nanmean to ignore zero values
+            values[values == 0.0] = torch.nan  # Allows nanmean to ignore zeros
 
-            # Reduce axes where target shape has size 1, computing a mean that
-            # ignores exact zeros. If all values along an axis slice are zero,
-            # the mean is treated as zero for that slice.
+            # Reduce axes where target shape has size 1
             for dim, (desired_size, actual_size) in enumerate(zip(self.shape, x.shape)):
                 if desired_size != actual_size:
                     if desired_size == 1:
                         values = torch.nanmean(values, dim=dim, keepdim=True)
                     else:
                         raise ValueError(
-                            f"Shape mismatch for {dim=!r}: {desired_size=!r} != {actual_size=!r}"
+                            f"Shape mismatch for {dim=!r}: "
+                            f"{desired_size=!r} != {actual_size=!r}"
                         )
 
-            values[torch.isnan(values)] = 0.0  # Makes 0 the default value (no-op)
+            values[torch.isnan(values)] = 0.0  # Makes 0 the default (no-op)
 
             ln_batch_mean = values.log()
 
-            ### Now, compute the new value
-
-            # Uninitialized case:
+            ### Compute the new running mean value
+            # Uninitialized case
             if self.initialization_behavior == "first_batch":
                 new_ln_running_mean_if_uninitialized = ln_batch_mean
             elif self.initialization_behavior == "no_op":
                 new_ln_running_mean_if_uninitialized = self.ln_running_mean
             else:
                 raise ValueError(
-                    f"Invalid initialization behavior: {self.initialization_behavior=!r}"
+                    f"Invalid {self.initialization_behavior=!r}"
                 )
 
-            # Initialized case:
+            # Initialized case
             new_ln_running_mean_if_initialized = (
                 self.momentum * self.ln_running_mean
                 + (1.0 - self.momentum) * ln_batch_mean
             )
 
-            # Now, update the running mean
+            # Update
             self.ln_running_mean.copy_(
                 torch.where(
                     self._initialized,
@@ -176,30 +209,10 @@ class Normalizer(nn.Module):
                 )
             )
 
-        # Divide by running mean via multiplying by exp(-ln_running_mean)
+        # Divide by running mean via exp(-ln_running_mean)
         x = x * torch.exp(-self.ln_running_mean)
         if self.learnable_weight_shape is not None:
             x = x * self.weight
         if self.learnable_bias_shape is not None:
             x = x + self.bias
         return x
-
-
-if __name__ == "__main__":
-    normalizer = Normalizer(shape=(1,), momentum=0.99)
-
-    print("Training mode:")
-    normalizer.train()
-    torch.manual_seed(0)
-    for i in range(10):
-        x = (0 if i == 0 else 10) + torch.randn(3)
-        y = normalizer(x)
-        print(f"{i=!r}, {x=!r}, {y=!r}, {normalizer.ln_running_mean=!r}")
-
-    print("Evaluation mode:")
-    normalizer.eval()
-    torch.manual_seed(0)
-    for i in range(10):
-        x = (0 if i == 0 else 10) + torch.randn(3)
-        y = normalizer(x)
-        print(f"{i=!r}, {x=!r}, {y=!r}, {normalizer.ln_running_mean=!r}")

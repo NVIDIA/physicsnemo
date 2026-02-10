@@ -1,3 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import inspect
 import types
 from collections import defaultdict
@@ -10,11 +26,11 @@ import torch
 def check_type(
     value: Any, expected_type: type | types.GenericAlias, name: str = ""
 ) -> None:
-    """Perform runtime type checking for both simple and generic types.
+    r"""Perform runtime type checking for both simple and generic types.
 
     This function implements a sophisticated runtime type checker that validates
     values against Python type hints, including support for generic types like
-    list[int], dict[str, float], and tuple[int, str]. It recursively validates
+    ``list[int]``, ``dict[str, float]``, and ``tuple[int, str]``. It recursively validates
     nested structures and provides detailed error messages with the path to any
     type mismatches.
 
@@ -22,61 +38,70 @@ def check_type(
 
     The function handles three categories of types:
 
-    1. **Simple types** (int, str, MyClass, etc.): Uses isinstance() for validation
-    2. **Generic types** (list[int], dict[str, int], etc.): Recursively validates
+    1. **Simple types** (``int``, ``str``, ``MyClass``, etc.): Uses ``isinstance()`` for validation
+    2. **Generic types** (``list[int]``, ``dict[str, int]``, etc.): Recursively validates
        both the container type and the types of its elements
-    3. **Ellipsis type** (type(...)): Used in variable-length tuples like
-       tuple[int, ...]; these are treated as "any number of elements allowed"
+    3. **Ellipsis type** (``type(...)``): Used in variable-length tuples like
+       ``tuple[int, ...]``; these are treated as "any number of elements allowed"
 
     ### Sequence Handling
 
     For sequences (list, tuple, etc.), the function distinguishes between:
     - **Fixed-length tuples**: When the number of type arguments equals the
       sequence length, each element is checked against its corresponding type.
-      Example: tuple[int, str, float] expects exactly 3 elements with those types.
+      Example: ``tuple[int, str, float]`` expects exactly 3 elements with those types.
     - **Uniform sequences**: When there's a single type argument (optionally
       followed by ellipsis), all elements must match that type.
-      Example: list[int] or tuple[str, ...] expect all elements to be of one type.
+      Example: ``list[int]`` or ``tuple[str, ...]`` expect all elements to be of one type.
 
-    Args:
-        value: The value to type-check. Can be any Python object.
-        expected_type: The expected type, either a simple type (like int) or a
-            generic alias (like dict[str, float]). Supports nested generic types.
-        name: Optional name for the value being checked, used in error messages
-            to provide context. For nested structures, this builds up a path
-            like "config['users'][0]['age']".
+    Parameters
+    ----------
+    value : Any
+        The value to type-check. Can be any Python object.
+    expected_type : type or types.GenericAlias
+        The expected type, either a simple type (like ``int``) or a
+        generic alias (like ``dict[str, float]``). Supports nested generic types.
+    name : str, optional
+        Optional name for the value being checked, used in error messages
+        to provide context. For nested structures, this builds up a path
+        like ``"config['users'][0]['age']"``.
 
-    Raises:
-        TypeError: When the value doesn't match the expected type. The error
-            message includes the path to the mismatched value if name is provided.
-        ValueError: When the type checking logic encounters an unexpected
-            condition, such as an invalid number of type arguments.
-        NotImplementedError: When attempting to check a generic type that isn't
-            yet supported (currently only Sequence and dict are implemented).
+    Raises
+    ------
+    TypeError
+        When the value doesn't match the expected type. The error
+        message includes the path to the mismatched value if ``name`` is provided.
+    ValueError
+        When the type checking logic encounters an unexpected
+        condition, such as an invalid number of type arguments.
+    NotImplementedError
+        When attempting to check a generic type that isn't
+        yet supported (currently only ``Sequence`` and ``dict`` are implemented).
 
-    Examples:
-        >>> # Simple type checking
-        >>> check_type(42, int)  # Passes
-        >>> check_type("hello", int, "username")  # Raises TypeError
+    Examples
+    --------
+    >>> # Simple type checking
+    >>> check_type(42, int)  # Passes
+    >>> check_type("hello", int, "username")  # Raises TypeError
 
-        >>> # Generic list checking
-        >>> check_type([1, 2, 3], list[int])  # Passes
-        >>> check_type([1, "two", 3], list[int])  # Raises TypeError
+    >>> # Generic list checking
+    >>> check_type([1, 2, 3], list[int])  # Passes
+    >>> check_type([1, "two", 3], list[int])  # Raises TypeError
 
-        >>> # Fixed-length tuple checking
-        >>> check_type((1, "hello", 3.14), tuple[int, str, float])  # Passes
-        >>> check_type((1, 2, 3), tuple[int, str, float])  # Raises TypeError
+    >>> # Fixed-length tuple checking
+    >>> check_type((1, "hello", 3.14), tuple[int, str, float])  # Passes
+    >>> check_type((1, 2, 3), tuple[int, str, float])  # Raises TypeError
 
-        >>> # Variable-length tuple checking
-        >>> check_type((1, 2, 3, 4), tuple[int, ...])  # Passes
+    >>> # Variable-length tuple checking
+    >>> check_type((1, 2, 3, 4), tuple[int, ...])  # Passes
 
-        >>> # Nested dictionary checking
-        >>> data = {"users": [{"name": "Alice", "age": 30}]}
-        >>> check_type(data, dict[str, list[dict[str, str | int]]])  # Passes
+    >>> # Nested dictionary checking
+    >>> data = {"users": [{"name": "Alice", "age": 30}]}
+    >>> check_type(data, dict[str, list[dict[str, str | int]]])  # Passes
 
-        >>> # Error message with path
-        >>> check_type({"x": [1, "two"]}, dict[str, list[int]], "config")
-        # Raises: TypeError: Expected 'config['x'][1]' to be a <class 'int'>, got a <class 'str'>.
+    >>> # Error message with path
+    >>> check_type({"x": [1, "two"]}, dict[str, list[int]], "config")
+    # Raises: TypeError: Expected 'config['x'][1]' to be a <class 'int'>, got a <class 'str'>.
     """
     ### Handle ellipsis type (used in variable-length tuples)
     if expected_type is type(...):
@@ -158,7 +183,7 @@ def check_leaf_tensors(
     name: str = "",
     func_name: str | None = None,
 ) -> dict[Any, list[str]]:
-    """Recursively check that a function applied to all tensors returns the same value.
+    r"""Recursively check that a function applied to all tensors returns the same value.
 
     This allows checking any property of tensors in a nested structure. It
     traverses arbitrarily nested data structures to find all PyTorch tensors,
@@ -168,9 +193,9 @@ def check_leaf_tensors(
     ### Traversal Behavior
 
     The function performs a depth-first traversal of the data structure:
-    - **Tensors**: Treated as leaf nodes; func is applied and result is recorded
+    - **Tensors**: Treated as leaf nodes; ``func`` is applied and result is recorded
     - **Dictionaries**: Both keys and values are recursively checked
-    - **Sequences**: All elements are recursively checked (excluding strings, bytes, or np.ndarrays)
+    - **Sequences**: All elements are recursively checked (excluding strings, bytes, or ``np.ndarray``)
     - **Other types**: Treated as leaves with no tensors
 
     ### Validation
@@ -179,61 +204,71 @@ def check_leaf_tensors(
     is raised showing the distribution of values and which tensors produced each value.
     This helps quickly identify inconsistencies in tensor properties.
 
-    Args:
-        value: The data structure to check. Can be any Python object, including
-            nested combinations of dicts, lists, tuples containing torch tensors.
-        func: A callable that takes a torch.Tensor and returns a hashable value.
-            Common examples include lambda tensor: tensor.device, tensor.dtype,
-            tensor.shape, tensor.requires_grad, etc.
-        name: Optional name for the root structure, used to build descriptive
-            paths in error messages. For nested structures, paths are built like
-            "data['model'][0]['weights']" to precisely locate tensors.
-        func_name: Optional human-readable name for the function being applied,
-            used in error messages. If not provided, tries to use func.__name__
-            or falls back to repr(func).
+    Parameters
+    ----------
+    value : Any
+        The data structure to check. Can be any Python object, including
+        nested combinations of dicts, lists, tuples containing ``torch.Tensor`` objects.
+    func : Callable[[torch.Tensor], Any]
+        A callable that takes a ``torch.Tensor`` and returns a hashable value.
+        Common examples include ``lambda tensor: tensor.device``, ``tensor.dtype``,
+        ``tensor.shape``, ``tensor.requires_grad``, etc.
+    name : str, optional
+        Optional name for the root structure, used to build descriptive
+        paths in error messages. For nested structures, paths are built like
+        ``"data['model'][0]['weights']"`` to precisely locate tensors.
+    func_name : str or None, optional
+        Optional human-readable name for the function being applied,
+        used in error messages. If not provided, tries to use ``func.__name__``
+        or falls back to ``repr(func)``.
 
-    Returns:
+    Returns
+    -------
+    dict[Any, list[str]]
         A dictionary mapping function outputs to lists of tensor paths. If all
         tensors produce the same value, this dict will have a single key. Empty
         dict if no tensors are found. The paths help identify tensor locations.
 
-    Raises:
-        ValueError: When the function returns different values for different tensors.
-            The error message includes a breakdown showing the distribution of values
-            and which tensors produced each value.
+    Raises
+    ------
+    ValueError
+        When the function returns different values for different tensors.
+        The error message includes a breakdown showing the distribution of values
+        and which tensors produced each value.
 
-    Examples:
-        >>> import torch
-        >>> # Check all tensors have same device
-        >>> tensor1 = torch.randn(3, 4)
-        >>> tensor2 = torch.randn(2, 5)
-        >>> data = {"a": tensor1, "b": tensor2}
-        >>> check_leaf_tensors(data, lambda t: t.device, "model")
-        {device(type='cpu'): ['model[a]', 'model[b]']}
+    Examples
+    --------
+    >>> import torch
+    >>> # Check all tensors have same device
+    >>> tensor1 = torch.randn(3, 4)
+    >>> tensor2 = torch.randn(2, 5)
+    >>> data = {"a": tensor1, "b": tensor2}
+    >>> check_leaf_tensors(data, lambda t: t.device, "model")
+    {device(type='cpu'): ['model[a]', 'model[b]']}
 
-        >>> # Check all tensors have same shape - will fail
-        >>> try:
-        ...     check_leaf_tensors(data, lambda t: t.shape, "model", "shape")
-        ... except ValueError as e:
-        ...     print("Error:", e)
-        Error: Expected all leaf tensors of 'model' to have the same shape.
-        Found multiple different values:
-            2 with torch.Size([3, 4]): model[a]
-            1 with torch.Size([2, 5]): model[b]
+    >>> # Check all tensors have same shape - will fail
+    >>> try:
+    ...     check_leaf_tensors(data, lambda t: t.shape, "model", "shape")
+    ... except ValueError as e:
+    ...     print("Error:", e)
+    Error: Expected all leaf tensors of 'model' to have the same shape.
+    Found multiple different values:
+        2 with torch.Size([3, 4]): model[a]
+        1 with torch.Size([2, 5]): model[b]
 
-        >>> # Check all tensors have same dtype
-        >>> data = {
-        ...     "floats": [torch.randn(2, 3), torch.randn(3, 4)],
-        ...     "also_float": torch.zeros(5, 6)
-        ... }
-        >>> check_leaf_tensors(data, lambda t: t.dtype, "tensors", "dtype")
-        {torch.float32: ['tensors[floats][0]', 'tensors[floats][1]', 'tensors[also_float]']}
+    >>> # Check all tensors have same dtype
+    >>> data = {
+    ...     "floats": [torch.randn(2, 3), torch.randn(3, 4)],
+    ...     "also_float": torch.zeros(5, 6)
+    ... }
+    >>> check_leaf_tensors(data, lambda t: t.dtype, "tensors", "dtype")
+    {torch.float32: ['tensors[floats][0]', 'tensors[floats][1]', 'tensors[also_float]']}
 
-        >>> # Check gradient requirements
-        >>> x = torch.randn(2, 3, requires_grad=True)
-        >>> y = torch.randn(3, 4, requires_grad=False)
-        >>> check_leaf_tensors({"x": x, "y": y}, lambda t: t.requires_grad)
-        # Raises ValueError showing gradient requirement mismatch
+    >>> # Check gradient requirements
+    >>> x = torch.randn(2, 3, requires_grad=True)
+    >>> y = torch.randn(3, 4, requires_grad=False)
+    >>> check_leaf_tensors({"x": x, "y": y}, lambda t: t.requires_grad)
+    # Raises ValueError showing gradient requirement mismatch
     """
     ### Determine the function description for error messages
     if func_name is None:

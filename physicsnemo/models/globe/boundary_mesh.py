@@ -1,22 +1,41 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from dataclasses import dataclass, fields
-from pathlib import Path
 from textwrap import indent
-from typing import Any, Literal, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Sequence
 import warnings
 
 
 import numpy as np
-import pyvista as pv
 import torch
 import torch.nn.functional as F
+from jaxtyping import Float, Integer
 from tensordict import TensorDict
 
+from physicsnemo.core.version_check import require_version_spec
 from physicsnemo.models.globe.utilities.input_validation import check_leaf_tensors
+
+if TYPE_CHECKING:
+    import pyvista as pv
 
 
 @dataclass
 class BoundaryMesh:
-    """A representation of a boundary mesh for computational fluid dynamics simulations.
+    r"""A representation of a boundary mesh for computational fluid dynamics simulations.
 
     This class encapsulates the geometric and topological information of a boundary mesh,
     including points, connectivity (faces), and associated boundary condition types. It
@@ -28,45 +47,52 @@ class BoundaryMesh:
     using the addition operator, provided they have compatible dimensions and boundary
     condition types.
 
-    Attributes:
-        points: Tensor of shape (n_points, n_spatial_dimensions) containing vertex coordinates.
-            For 2D meshes, n_spatial_dimensions=2; for 3D meshes, n_spatial_dimensions=3.
-        faces: Tensor of shape (n_faces, n_vertices_per_face) containing vertex indices
-            that define the connectivity. For 2D meshes, each face is a line segment with
-            2 vertices. For 3D meshes, each face is a triangle with 3 vertices.
-        boundary_condition_type: String identifier for the boundary condition applied
-            to this mesh (e.g., "no_slip", "slip", "inflow", "outflow").
-        face_data: TensorDict of shape (n_faces, ...) containing per-face data.
+    Parameters
+    ----------
+    points : torch.Tensor
+        Tensor of shape :math:`(N_{points}, D)` containing vertex coordinates.
+        For 2D meshes, :math:`D=2`; for 3D meshes, :math:`D=3`.
+    faces : torch.Tensor
+        Tensor of shape :math:`(N_{faces}, V)` containing vertex indices
+        that define the connectivity. For 2D meshes, each face is a line segment with
+        2 vertices. For 3D meshes, each face is a triangle with 3 vertices.
+    boundary_condition_type : str
+        String identifier for the boundary condition applied
+        to this mesh (e.g., "no_slip", "slip", "inflow", "outflow").
+    face_data : TensorDict, optional
+        TensorDict of shape :math:`(N_{faces}, ...)` containing per-face data.
 
-    Examples:
-        Creating a 2D circular boundary:
+    Examples
+    --------
+    Creating a 2D circular boundary:
 
-        >>> theta = torch.linspace(0, 2*torch.pi, 101)
-        >>> points = torch.stack([torch.cos(theta), torch.sin(theta)], dim=1)
-        >>> faces = torch.stack([torch.arange(100), torch.arange(1, 101)], dim=1)
-        >>> boundary = BoundaryMesh(points, faces, "no_slip")
-        >>> print(boundary.n_spatial_dimensions)  # 2
-        >>> print(boundary.face_centers.shape)  # torch.Size([100, 2])
+    >>> theta = torch.linspace(0, 2*torch.pi, 101)
+    >>> points = torch.stack([torch.cos(theta), torch.sin(theta)], dim=1)
+    >>> faces = torch.stack([torch.arange(100), torch.arange(1, 101)], dim=1)
+    >>> boundary = BoundaryMesh(points, faces, "no_slip")
+    >>> print(boundary.n_spatial_dimensions)  # 2
+    >>> print(boundary.face_centers.shape)  # torch.Size([100, 2])
 
-        Loading from PyVista:
+    Loading from PyVista:
 
-        >>> import pyvista as pv
-        >>> mesh_data = pv.examples.load_airplane()
-        >>> boundary = BoundaryMesh.from_polydata(mesh_data, "no_slip")
-        >>> normals = boundary.face_normals  # Automatically computed
+    >>> import pyvista as pv
+    >>> mesh_data = pv.examples.load_airplane()
+    >>> boundary = BoundaryMesh.from_polydata(mesh_data, "no_slip")
+    >>> normals = boundary.face_normals  # Automatically computed
 
-        Combining boundaries:
+    Combining boundaries:
 
-        >>> wing_boundary = BoundaryMesh.from_polydata(wing_mesh, "no_slip")
-        >>> fuselage_boundary = BoundaryMesh.from_polydata(fuselage_mesh, "no_slip")
-        >>> aircraft_boundary = wing_boundary + fuselage_boundary
+    >>> wing_boundary = BoundaryMesh.from_polydata(wing_mesh, "no_slip")
+    >>> fuselage_boundary = BoundaryMesh.from_polydata(fuselage_mesh, "no_slip")
+    >>> aircraft_boundary = wing_boundary + fuselage_boundary
 
-    Note:
-        - The class is immutable (frozen dataclass) to ensure data integrity
-        - Geometric properties are cached for performance using @cached_property
-        - Face normals follow the right-hand rule convention
-        - For 2D meshes, normals point to the left of the face direction vector
-        - All tensors should be on the same device for proper operation
+    Notes
+    -----
+    - The class is immutable (frozen dataclass) to ensure data integrity
+    - Geometric properties are cached for performance using ``@cached_property``
+    - Face normals follow the right-hand rule convention
+    - For 2D meshes, normals point to the left of the face direction vector
+    - All tensors should be on the same device for proper operation
     """
 
     points: torch.Tensor  # shape: (n_points, n_spatial_dimensions)
@@ -78,12 +104,12 @@ class BoundaryMesh:
     face_areas: torch.Tensor = None  # ty: ignore[invalid-assignment]
 
     def __post_init__(self) -> None:
-        """Post-initialization processing to compute geometric properties and validate inputs.
+        r"""Post-initialization processing to compute geometric properties and validate inputs.
 
         This method is automatically called after dataclass initialization. It performs three
         main tasks:
 
-        1. **Initialize face_data**: If not provided, creates an empty TensorDict with the
+        1. **Initialize face_data**: If not provided, creates an empty ``TensorDict`` with the
            correct batch size and device.
 
         2. **Compute geometric properties**: Calculates face centers, normals, and areas if
@@ -96,20 +122,26 @@ class BoundaryMesh:
            - **Face areas** (2D): Length of the line segment
            - **Face areas** (3D): Half the magnitude of the cross product (standard triangle area)
 
-        3. **Validate inputs**: Calls validate() to check consistency of data types, devices,
-           and dimensions (skipped during torch.compile for performance).
+        3. **Validate inputs**: Calls ``validate()`` to check consistency of data types, devices,
+           and dimensions (skipped during ``torch.compile`` for performance).
 
         The method is idempotent - if geometric properties are already provided, they are
         not recomputed. This allows efficient construction from pre-computed data.
 
-        Raises:
-            NotImplementedError: If n_spatial_dims is not 2 or 3.
-            TypeError, ValueError: Various validation errors from validate() method.
+        Raises
+        ------
+        NotImplementedError
+            If ``n_spatial_dims`` is not 2 or 3.
+        TypeError
+            Various validation errors from ``validate()`` method.
+        ValueError
+            Various validation errors from ``validate()`` method.
 
-        Note:
-            For 2D meshes, normals point to the left of the face direction vector. This
-            convention ensures consistent orientation for closed curves (e.g., airfoil
-            boundaries) where the interior is to the left.
+        Notes
+        -----
+        For 2D meshes, normals point to the left of the face direction vector. This
+        convention ensures consistent orientation for closed curves (e.g., airfoil
+        boundaries) where the interior is to the left.
         """
         # Initialize face_data if it is not provided
         if self.face_data is None:
@@ -151,10 +183,14 @@ class BoundaryMesh:
             self.validate()
 
     def validate(self) -> None:
-        """
-        Performs a variety of validation checks on attributes of the BoundaryMesh instance.
+        r"""Perform validation checks on attributes of the BoundaryMesh instance.
 
-        Raises (ValueError, TypeError, NotImplementedError): If the inputs are invalid.
+        Raises
+        ------
+        TypeError
+            If ``faces`` does not have an int-like dtype.
+        ValueError
+            If tensors are not all on the same device.
         """
         ### Ensure that faces has an int-like dtype
         if torch.is_floating_point(self.faces):
@@ -170,16 +206,18 @@ class BoundaryMesh:
         )
 
     def __repr__(self) -> str:
-        """Returns a concise string representation of the BoundaryMesh.
+        r"""Return a concise string representation of the BoundaryMesh.
 
-        The representation includes key mesh properties and face data summary. Format:
+        The representation includes key mesh properties and ``face_data`` summary. Format:
         ```
         BoundaryMesh(n_points=..., n_faces=..., n_spatial_dims=..., boundary_condition_type='...')
             face_data=TensorDict(...)
         ```
 
-        Returns:
-            String representation showing mesh dimensions, BC type, and face data summary.
+        Returns
+        -------
+        str
+            String representation showing mesh dimensions, BC type, and ``face_data`` summary.
         """
         instance_fields = [
             f"n_points={self.n_points}",
@@ -193,7 +231,18 @@ class BoundaryMesh:
         )
 
     def __eq__(self, other: Any) -> bool:
-        """Check equality by comparing all dataclass fields."""
+        r"""Check equality by comparing all dataclass fields.
+
+        Parameters
+        ----------
+        other : Any
+            Object to compare with.
+
+        Returns
+        -------
+        bool
+            ``True`` if all dataclass fields are equal, ``False`` otherwise.
+        """
         if type(self) is not type(other):
             return False
 
@@ -212,16 +261,16 @@ class BoundaryMesh:
         return True
 
     @classmethod
+    @require_version_spec("pyvista")
     def from_polydata(
         cls,
-        polydata: pv.PolyData,
+        polydata: "pv.PolyData",
         boundary_condition_type: str,
         device: torch.device | str | None = None,
         include_cell_data: bool = True,
         make_2D_along_axis: Literal["x", "y", "z"] | None = None,
     ) -> "BoundaryMesh":
-        """
-        Construct a BoundaryMesh from a PyVista PolyData object.
+        r"""Construct a BoundaryMesh from a PyVista PolyData object.
 
         This method extracts mesh points, faces, and any associated cell data
         from a PyVista PolyData object and constructs a BoundaryMesh instance.
@@ -236,39 +285,48 @@ class BoundaryMesh:
         present, it assumes the mesh is 2D. If both are present, we follow the
         3D case and discard the lines, while emitting a warning.
 
-        Notably, if your mesh is 2D, you should provide the `make_2D_along_axis`
+        Notably, if your mesh is 2D, you should provide the ``make_2D_along_axis``
         argument, which is used to project the mesh points onto an axis-aligned
         plane.
 
-        Args:
-            polydata: pv.PolyData
-                The PyVista PolyData object representing the mesh. Must have
-                `.points` and `.regular_faces` attributes, and may have cell
-                data.
-            boundary_condition_type: str
-                The boundary condition type to assign to this mesh.
-            device: torch.device | str | None, default=None
-                The device on which to place the tensors. If None, defaults to
-                "cpu".
-            make_2D_along_axis: Literal["x", "y", "z"] | None, default=None
-                Only relevant if the mesh is in 2D, not 3D. In this case, this
-                argument is required, and the mesh points will be converted to
-                2D by projecting along the specified axis.
+        Parameters
+        ----------
+        polydata : pv.PolyData
+            The PyVista PolyData object representing the mesh. Must have
+            ``.points`` and ``.regular_faces`` attributes, and may have cell
+            data.
+        boundary_condition_type : str
+            The boundary condition type to assign to this mesh.
+        device : torch.device or str or None, default=None
+            The device on which to place the tensors. If ``None``, defaults to
+            "cpu".
+        include_cell_data : bool, default=True
+            Whether to include cell data from the PyVista mesh as ``face_data``.
+        make_2D_along_axis : {"x", "y", "z"} or None, default=None
+            Only relevant if the mesh is in 2D, not 3D. In this case, this
+            argument is required, and the mesh points will be converted to
+            2D by projecting along the specified axis.
 
-        Returns:
-            BoundaryMesh
-                The constructed BoundaryMesh instance.
+        Returns
+        -------
+        BoundaryMesh
+            The constructed BoundaryMesh instance.
 
-        Raises:
-            ValueError: If cell data arrays are not 1D or 2D.
+        Raises
+        ------
+        ValueError
+            If cell data arrays are not 1D or 2D.
 
-        Example:
-            >>> import pyvista as pv
-            >>> sphere = pv.Sphere()
-            >>> sphere.cell_data["pressure"] = np.random.rand(sphere.n_cells)
-            >>> sphere.cell_data["velocity"] = np.random.rand(sphere.n_cells, 3)
-            >>> bm = BoundaryMesh.from_polydata(sphere, boundary_condition_type="no_slip")
+        Examples
+        --------
+        >>> import pyvista as pv
+        >>> sphere = pv.Sphere()
+        >>> sphere.cell_data["pressure"] = np.random.rand(sphere.n_cells)
+        >>> sphere.cell_data["velocity"] = np.random.rand(sphere.n_cells, 3)
+        >>> bm = BoundaryMesh.from_polydata(sphere, boundary_condition_type="no_slip")
         """
+        import pyvista as pv
+
         if device is None:
             device = "cpu"
 
@@ -349,29 +407,39 @@ class BoundaryMesh:
             face_data=face_data.contiguous(),
         )
 
-    def to_polydata(self) -> pv.PolyData:
-        """Converts the BoundaryMesh to a PyVista PolyData object.
+    @require_version_spec("pyvista")
+    def to_polydata(self) -> "pv.PolyData":
+        r"""Convert the BoundaryMesh to a PyVista PolyData object.
 
         This method creates a PyVista PolyData representation of the mesh, which is useful
         for visualization, I/O operations, or interfacing with other tools in the PyVista
-        ecosystem. Face data from the TensorDict is transferred to PyVista's cell_data.
+        ecosystem. ``face_data`` from the ``TensorDict`` is transferred to PyVista's
+        ``cell_data``.
 
-        Returns:
-            pv.PolyData: PyVista mesh object with points, faces, and cell data.
+        Returns
+        -------
+        pv.PolyData
+            PyVista mesh object with points, faces, and cell data.
 
-        Raises:
-            ValueError: If the mesh is 2D (PyVista only supports 3D meshes).
+        Raises
+        ------
+        ValueError
+            If the mesh is 2D (PyVista only supports 3D meshes).
 
-        Note:
-            - Points and faces are converted to NumPy arrays and copied to CPU if needed
-            - All face_data entries are transferred as cell_data arrays
-            - The boundary_condition_type is not stored in the PolyData object
+        Notes
+        -----
+        - Points and faces are converted to NumPy arrays and copied to CPU if needed
+        - All ``face_data`` entries are transferred as ``cell_data`` arrays
+        - The ``boundary_condition_type`` is not stored in the PolyData object
 
-        Example:
-            >>> mesh_3d = BoundaryMesh.from_polydata(wing_surface, "no_slip")
-            >>> polydata = mesh_3d.to_polydata()
-            >>> polydata.plot(show_edges=True)  # Visualize with PyVista
+        Examples
+        --------
+        >>> mesh_3d = BoundaryMesh.from_polydata(wing_surface, "no_slip")
+        >>> polydata = mesh_3d.to_polydata()
+        >>> polydata.plot(show_edges=True)  # Visualize with PyVista
         """
+        import pyvista as pv
+
         if self.n_spatial_dims != 3:
             raise ValueError(
                 f"Only 3D meshes can be converted to PyVista meshes. Got {self.n_spatial_dims=}."
@@ -386,43 +454,52 @@ class BoundaryMesh:
 
     @classmethod
     def merge(cls, boundary_meshes: Sequence["BoundaryMesh"]) -> "BoundaryMesh":
-        """Merges multiple BoundaryMesh objects into a single unified mesh.
+        r"""Merge multiple BoundaryMesh objects into a single unified mesh.
 
         This class method combines several boundary meshes with the same boundary condition
         type and dimensionality into one mesh. Points and faces are concatenated, with face
         indices automatically adjusted to reference the correct points in the merged point array.
         All geometric properties (centers, normals, areas) are also concatenated.
 
-        Args:
-            boundary_meshes: Sequence of BoundaryMesh objects to merge. Must contain at
-                least one mesh. All meshes must have:
-                - The same n_spatial_dims (2 or 3)
-                - The same boundary_condition_type
-                - The same face_data keys (though values can differ)
+        Parameters
+        ----------
+        boundary_meshes : Sequence[BoundaryMesh]
+            Sequence of BoundaryMesh objects to merge. Must contain at
+            least one mesh. All meshes must have:
+            - The same ``n_spatial_dims`` (2 or 3)
+            - The same ``boundary_condition_type``
+            - The same ``face_data`` keys (though values can differ)
 
-        Returns:
-            BoundaryMesh: A new merged mesh containing all points and faces from the
-                input meshes. The boundary_condition_type is taken from the first mesh.
+        Returns
+        -------
+        BoundaryMesh
+            A new merged mesh containing all points and faces from the
+            input meshes. The ``boundary_condition_type`` is taken from the first mesh.
 
-        Raises:
-            ValueError: If boundary_meshes is empty, if spatial dimensions don't match
-                across meshes, if boundary condition types don't match, or if face_data
-                keys don't match.
-            TypeError: If any element of boundary_meshes is not a BoundaryMesh instance.
+        Raises
+        ------
+        ValueError
+            If ``boundary_meshes`` is empty, if spatial dimensions don't match
+            across meshes, if boundary condition types don't match, or if ``face_data``
+            keys don't match.
+        TypeError
+            If any element of ``boundary_meshes`` is not a BoundaryMesh instance.
 
-        Note:
-            - The merge is a lightweight operation - it doesn't copy geometric computations
-            - Face indices are automatically offset to account for concatenated point arrays
-            - If only one mesh is provided, it is returned directly without copying
-            - The implementation uses torch.cat for efficient tensor concatenation
+        Notes
+        -----
+        - The merge is a lightweight operation - it doesn't copy geometric computations
+        - Face indices are automatically offset to account for concatenated point arrays
+        - If only one mesh is provided, it is returned directly without copying
+        - The implementation uses ``torch.cat`` for efficient tensor concatenation
 
-        Example:
-            >>> # Merge multiple no-slip boundaries into one
-            >>> wing = BoundaryMesh.from_polydata(wing_surface, "no_slip")
-            >>> fuselage = BoundaryMesh.from_polydata(fuselage_surface, "no_slip")
-            >>> tail = BoundaryMesh.from_polydata(tail_surface, "no_slip")
-            >>> aircraft = BoundaryMesh.merge([wing, fuselage, tail])
-            >>> print(aircraft.n_faces)  # Sum of individual face counts
+        Examples
+        --------
+        >>> # Merge multiple no-slip boundaries into one
+        >>> wing = BoundaryMesh.from_polydata(wing_surface, "no_slip")
+        >>> fuselage = BoundaryMesh.from_polydata(fuselage_surface, "no_slip")
+        >>> tail = BoundaryMesh.from_polydata(tail_surface, "no_slip")
+        >>> aircraft = BoundaryMesh.merge([wing, fuselage, tail])
+        >>> print(aircraft.n_faces)  # Sum of individual face counts
         """
         ### Input validation
         if not torch.compiler.is_compiling():
@@ -484,43 +561,53 @@ class BoundaryMesh:
 
     @property
     def n_points(self) -> int:
-        """Number of vertices in the mesh.
+        r"""Number of vertices in the mesh.
 
-        Returns:
-            int: The total count of points, equal to len(self.points).
+        Returns
+        -------
+        int
+            The total count of points, equal to ``len(self.points)``.
         """
         return len(self.points)
 
     @property
     def n_faces(self) -> int:
-        """Number of faces in the mesh.
+        r"""Number of faces in the mesh.
 
-        Returns:
-            int: The total count of faces. In 2D, faces are line segments.
-                In 3D, faces are triangles.
+        Returns
+        -------
+        int
+            The total count of faces. In 2D, faces are line segments.
+            In 3D, faces are triangles.
         """
         return len(self.faces)
 
     @property
     def n_spatial_dims(self) -> Literal[2, 3]:
-        """Number of spatial dimensions of the mesh (2 or 3).
+        r"""Number of spatial dimensions of the mesh (2 or 3).
 
-        This property is inferred from the last dimension of the points tensor and
-        validated against the faces tensor shape. The validation ensures consistency:
-        - 2D meshes have points of shape (n_points, 2) and faces of shape (n_faces, 2)
-        - 3D meshes have points of shape (n_points, 3) and faces of shape (n_faces, 3)
+        This property is inferred from the last dimension of the ``points`` tensor and
+        validated against the ``faces`` tensor shape. The validation ensures consistency:
+        - 2D meshes have ``points`` of shape :math:`(N_{points}, 2)` and ``faces`` of shape :math:`(N_{faces}, 2)`
+        - 3D meshes have ``points`` of shape :math:`(N_{points}, 3)` and ``faces`` of shape :math:`(N_{faces}, 3)`
 
-        Returns:
-            Literal[2, 3]: The number of spatial dimensions.
+        Returns
+        -------
+        int
+            The number of spatial dimensions (2 or 3).
 
-        Raises:
-            ValueError: If points and faces tensors indicate different dimensionalities.
-            NotImplementedError: If dimensionality is neither 2 nor 3.
+        Raises
+        ------
+        ValueError
+            If ``points`` and ``faces`` tensors indicate different dimensionalities.
+        NotImplementedError
+            If dimensionality is neither 2 nor 3.
 
-        Note:
-            In 2D, faces represent line segments (edges) with 2 vertices each.
-            In 3D, faces represent triangles with 3 vertices each.
-            The validation is skipped during torch.compile for performance.
+        Notes
+        -----
+        In 2D, faces represent line segments (edges) with 2 vertices each.
+        In 3D, faces represent triangles with 3 vertices each.
+        The validation is skipped during ``torch.compile`` for performance.
         """
         dims_from_points = self.points.shape[-1]
 
@@ -544,29 +631,36 @@ class BoundaryMesh:
     def to(
         self, device: torch.device | str, dtype: torch.dtype | None = None
     ) -> "BoundaryMesh":
-        """Moves all tensors of this BoundaryMesh to the specified device in-place.
+        r"""Move all tensors of this BoundaryMesh to the specified device in-place.
 
         Despite BoundaryMesh being a frozen dataclass, this method modifies the instance
-        in-place by directly updating the __dict__. This design preserves cached properties
+        in-place by directly updating the ``__dict__``. This design preserves cached properties
         and avoids expensive recomputation of geometric quantities like face normals and
         areas when moving between devices.
 
-        Args:
-            device: Target device (e.g., 'cuda', 'cpu', torch.device('cuda:0'))
-            dtype: Target dtype (e.g., torch.float32, torch.float64)
+        Parameters
+        ----------
+        device : torch.device or str
+            Target device (e.g., ``'cuda'``, ``'cpu'``, ``torch.device('cuda:0')``).
+        dtype : torch.dtype or None, default=None
+            Target dtype (e.g., ``torch.float32``, ``torch.float64``).
 
-        Returns:
-            self: The same BoundaryMesh instance with all tensors moved to the target device.
+        Returns
+        -------
+        BoundaryMesh
+            The same BoundaryMesh instance with all tensors moved to the target device.
 
-        Example:
-            >>> boundary = BoundaryMesh(points, faces, "no_slip")
-            >>> boundary.to('cuda')  # Modifies boundary in-place
-            >>> boundary.points.device  # cuda:0
-            >>> boundary.face_normals.device  # cuda:0 (cached property preserved)
+        Examples
+        --------
+        >>> boundary = BoundaryMesh(points, faces, "no_slip")
+        >>> boundary.to('cuda')  # Modifies boundary in-place
+        >>> boundary.points.device  # cuda:0
+        >>> boundary.face_normals.device  # cuda:0 (cached property preserved)
 
-        Note:
-            This operation modifies the instance in-place, bypassing the frozen dataclass
-            restriction to avoid recomputing expensive cached geometric properties.
+        Notes
+        -----
+        This operation modifies the instance in-place, bypassing the frozen dataclass
+        restriction to avoid recomputing expensive cached geometric properties.
         """
 
         def transfer(data: Any) -> Any:
@@ -588,43 +682,51 @@ class BoundaryMesh:
 
         return self
 
-    def slice_faces(self, indices: int | slice | torch.Tensor) -> "BoundaryMesh":
-        """Returns a new BoundaryMesh with a subset of the faces.
+    def slice_faces(
+        self, indices: int | slice | Integer[torch.Tensor, "selected"]
+    ) -> "BoundaryMesh":
+        r"""Return a new BoundaryMesh with a subset of the faces.
 
-        Creates a view or copy of the mesh containing only the specified faces. The points
-        array is shared (not copied), but faces and all face-associated data (centers,
-        normals, areas, face_data) are sliced. This is useful for:
+        Creates a view or copy of the mesh containing only the specified faces. The ``points``
+        array is shared (not copied), but ``faces`` and all face-associated data (centers,
+        normals, areas, ``face_data``) are sliced. This is useful for:
         - Downsampling meshes for faster computation
         - Extracting regions of interest
         - Creating test subsets
         - Filtering faces based on some criterion
 
-        Args:
-            indices: Face selection specification, can be:
-                - int: Single face index
-                - slice: Python slice object (e.g., slice(0, 100, 2))
-                - torch.Tensor: Boolean mask of shape (n_faces,) or integer indices
+        Parameters
+        ----------
+        indices : int or slice or Integer[torch.Tensor, "selected"]
+            Face selection specification, can be:
+            - ``int``: Single face index
+            - ``slice``: Python slice object (e.g., ``slice(0, 100, 2)``)
+            - ``torch.Tensor``: Boolean mask of shape :math:`(N_{faces},)` or integer indices
 
-        Returns:
-            BoundaryMesh: New mesh with selected faces. Points array is shared with the
-                original mesh. Face indices reference the same point array.
+        Returns
+        -------
+        BoundaryMesh
+            New mesh with selected faces. ``points`` array is shared with the
+            original mesh. Face indices reference the same point array.
 
-        Note:
-            - The returned mesh shares the points tensor with the original, so modifications
-              to points will affect both meshes
-            - Face indices are not remapped - they still reference the original point indices
-            - This means some points in the shared array may be unreferenced in the sliced mesh
-            - If you need an independent mesh, explicitly copy the returned mesh's tensors
+        Notes
+        -----
+        - The returned mesh shares the ``points`` tensor with the original, so modifications
+          to ``points`` will affect both meshes
+        - Face indices are not remapped - they still reference the original point indices
+        - This means some points in the shared array may be unreferenced in the sliced mesh
+        - If you need an independent mesh, explicitly copy the returned mesh's tensors
 
-        Example:
-            >>> # Select every other face
-            >>> downsampled = mesh.slice_faces(slice(None, None, 2))
-            >>> # Select faces with high pressure
-            >>> pressure = mesh.face_data["pressure"]
-            >>> high_pressure_mask = pressure > threshold
-            >>> high_p_mesh = mesh.slice_faces(high_pressure_mask)
-            >>> # Select first 100 faces
-            >>> subset = mesh.slice_faces(torch.arange(100))
+        Examples
+        --------
+        >>> # Select every other face
+        >>> downsampled = mesh.slice_faces(slice(None, None, 2))
+        >>> # Select faces with high pressure
+        >>> pressure = mesh.face_data["pressure"]
+        >>> high_pressure_mask = pressure > threshold
+        >>> high_p_mesh = mesh.slice_faces(high_pressure_mask)
+        >>> # Select first 100 faces
+        >>> subset = mesh.slice_faces(torch.arange(100))
         """
         return BoundaryMesh(
             points=self.points,
@@ -636,30 +738,37 @@ class BoundaryMesh:
             face_areas=self.face_areas[indices],
         )
 
-    def sample_random_points_on_faces(self, alpha: float = 1.0) -> torch.Tensor:
-        """Sample random points uniformly distributed on each face of the mesh.
+    def sample_random_points_on_faces(
+        self, alpha: float = 1.0
+    ) -> Float[torch.Tensor, "n_faces n_dims"]:
+        r"""Sample random points uniformly distributed on each face of the mesh.
 
         Uses a Dirichlet distribution to generate barycentric coordinates, which are
         then used to compute random points as weighted combinations of face vertices.
-        The concentration parameter alpha controls the distribution of samples within
+        The concentration parameter ``alpha`` controls the distribution of samples within
         each face (simplex).
 
-        Args:
-            alpha: Concentration parameter for the Dirichlet distribution. Controls how
-                samples are distributed within each face:
-                - alpha = 1.0: Uniform distribution over the simplex (default)
-                - alpha > 1.0: Concentrates samples toward the center of each face
-                - alpha < 1.0: Concentrates samples toward vertices and edges
+        Parameters
+        ----------
+        alpha : float, default=1.0
+            Concentration parameter for the Dirichlet distribution. Controls how
+            samples are distributed within each face:
+            - ``alpha = 1.0``: Uniform distribution over the simplex (default)
+            - ``alpha > 1.0``: Concentrates samples toward the center of each face
+            - ``alpha < 1.0``: Concentrates samples toward vertices and edges
 
-        Returns:
-            Random points on faces, shape (n_faces, n_spatial_dims). Each point lies
+        Returns
+        -------
+        Float[torch.Tensor, "n_faces n_dims"]
+            Random points on faces, shape :math:`(N_{faces}, D)`. Each point lies
             within its corresponding face.
 
-        Example:
-            >>> # Generate random points uniformly distributed on faces
-            >>> random_centers = mesh.sample_random_points_on_faces(alpha=1.0)
-            >>> # Generate points concentrated toward face centers
-            >>> centered_points = mesh.sample_random_points_on_faces(alpha=3.0)
+        Examples
+        --------
+        >>> # Generate random points uniformly distributed on faces
+        >>> random_centers = mesh.sample_random_points_on_faces(alpha=1.0)
+        >>> # Generate points concentrated toward face centers
+        >>> centered_points = mesh.sample_random_points_on_faces(alpha=3.0)
         """
         if alpha != 1.0:
             raise NotImplementedError(
@@ -687,32 +796,40 @@ class BoundaryMesh:
         target_n_points: int | None = None,
         target_n_faces: int | None = None,
     ) -> "BoundaryMesh":
-        """Pad points and faces arrays to specified sizes.
+        r"""Pad points and faces arrays to specified sizes.
 
         This is the low-level padding method that performs the actual padding operation.
         Padding uses null/degenerate elements that don't affect computations:
         - Points: Additional points at the last existing point (preserves bounding box)
         - Faces: Degenerate faces with all vertices at the last existing point (zero area)
-        - Face data: Zero-valued padding for all face data fields
+        - Face data: Zero-valued padding for all ``face_data`` fields
 
-        Args:
-            target_n_points: Target number of points. If None, no point padding is applied.
-                Must be >= current n_points if specified.
-            target_n_faces: Target number of faces. If None, no face padding is applied.
-                Must be >= current n_faces if specified.
+        Parameters
+        ----------
+        target_n_points : int or None, default=None
+            Target number of points. If ``None``, no point padding is applied.
+            Must be >= current ``n_points`` if specified.
+        target_n_faces : int or None, default=None
+            Target number of faces. If ``None``, no face padding is applied.
+            Must be >= current ``n_faces`` if specified.
 
-        Returns:
-            A new BoundaryMesh with padded arrays. If both targets are None or equal to
-            current sizes, returns self unchanged.
+        Returns
+        -------
+        BoundaryMesh
+            A new BoundaryMesh with padded arrays. If both targets are ``None`` or equal to
+            current sizes, returns ``self`` unchanged.
 
-        Raises:
-            ValueError: If target sizes are less than current sizes.
+        Raises
+        ------
+        ValueError
+            If target sizes are less than current sizes.
 
-        Example:
-            >>> mesh = BoundaryMesh(points, faces, "no_slip")  # 100 points, 200 faces
-            >>> padded = mesh.pad(target_n_points=128, target_n_faces=256)
-            >>> padded.n_points  # 128
-            >>> padded.n_faces   # 256
+        Examples
+        --------
+        >>> mesh = BoundaryMesh(points, faces, "no_slip")  # 100 points, 200 faces
+        >>> padded = mesh.pad(target_n_points=128, target_n_faces=256)
+        >>> padded.n_points  # 128
+        >>> padded.n_faces   # 256
         """
 
         def _pad_by_tiling_last(tensor: torch.Tensor, size: int) -> torch.Tensor:
@@ -779,40 +896,48 @@ class BoundaryMesh:
         )
 
     def pad_to_next_power(self, power: float = 1.5) -> "BoundaryMesh":
-        """Pads points and faces arrays to their next power of `power` (integer-floored).
+        r"""Pad points and faces arrays to their next power of ``power`` (integer-floored).
 
-        This is useful for torch.compile with dynamic=False, where fixed tensor shapes
+        This is useful for ``torch.compile`` with ``dynamic=False``, where fixed tensor shapes
         are required. By padding to powers of a base (default 1.5), we can reuse compiled
         kernels across a reasonable range of mesh sizes while minimizing memory overhead.
 
-        This method computes the target sizes as floor(power^n) for the smallest n such that
-        the result is >= the current size, then calls .pad() to perform the actual padding.
+        This method computes the target sizes as ``floor(power^n)`` for the smallest ``n``
+        such that the result is >= the current size, then calls ``.pad()`` to perform the
+        actual padding.
 
-        Args:
-            power: Base for computing the next power. Must be > 1. Default is 1.5,
-                which provides a good balance between memory efficiency and compile
-                cache hits.
+        Parameters
+        ----------
+        power : float, default=1.5
+            Base for computing the next power. Must be > 1. Default is 1.5,
+            which provides a good balance between memory efficiency and compile
+            cache hits.
 
-        Returns:
+        Returns
+        -------
+        BoundaryMesh
             A new BoundaryMesh with padded points and faces arrays. The padding uses
             null elements that don't affect geometric computations.
 
-        Raises:
-            ValueError: If power <= 1.
+        Raises
+        ------
+        ValueError
+            If ``power`` <= 1.
 
-        Example:
-            >>> mesh = BoundaryMesh(points, faces, "no_slip")  # 100 points, 200 faces
-            >>> padded = mesh.pad_to_next_power(power=1.5)
-            >>> # Points padded to floor(1.5^n) >= 100, faces to floor(1.5^m) >= 200
-            >>> # For power=1.5: 100 points -> 129 points, 200 faces -> 216 faces
-            >>> # Padding faces have zero area and don't affect computations
+        Examples
+        --------
+        >>> mesh = BoundaryMesh(points, faces, "no_slip")  # 100 points, 200 faces
+        >>> padded = mesh.pad_to_next_power(power=1.5)
+        >>> # Points padded to floor(1.5^n) >= 100, faces to floor(1.5^m) >= 200
+        >>> # For power=1.5: 100 points -> 129 points, 200 faces -> 216 faces
+        >>> # Padding faces have zero area and don't affect computations
         """
         if not torch.compiler.is_compiling():
             if power <= 1:
                 raise ValueError(f"power must be > 1, got {power=}")
 
         def next_power_size(current_size: int, base: float) -> int:
-            """Calculate the next power of base (integer-floored) that is >= current_size."""
+            r"""Calculate the next power of base (integer-floored) that is >= current_size."""
             if not torch.compiler.is_compiling():
                 if current_size <= 1:
                     return 1
@@ -825,43 +950,3 @@ class BoundaryMesh:
         target_n_faces = next_power_size(self.n_faces, power)
 
         return self.pad(target_n_points=target_n_points, target_n_faces=target_n_faces)
-
-
-if __name__ == "__main__":
-    ### 3D Mesh
-    airplane_surface: pv.PolyData = pv.examples.load_airplane()
-    # airplane_surface.plot(show_edges=True, show_bounds=True)
-    b3 = BoundaryMesh.from_polydata(airplane_surface, boundary_condition_type="no_slip")
-    print(b3.face_centers)
-    print(b3.face_normals)
-    print(b3.face_areas)
-
-    ### 2D Mesh
-    theta = torch.linspace(0, 2 * torch.pi, 361)
-    points = torch.stack([torch.cos(theta), torch.sin(theta)], dim=1)
-    start_indices = torch.arange(len(theta))
-    end_indices = torch.roll(start_indices, shifts=-1)
-    faces = torch.stack(
-        [
-            start_indices,
-            end_indices,
-        ],
-        dim=1,
-    )
-    b2 = BoundaryMesh(
-        points=points,
-        faces=faces,
-        boundary_condition_type="no_slip",
-    )
-
-    demo_path = Path("demo_airplane.boundarymesh")
-
-    torch.save(b3, demo_path)
-
-    b3_loaded = torch.load(demo_path, weights_only=False)
-
-    print(
-        "Loaded mesh matches originals points: ",
-        torch.allclose(b3.points, b3_loaded.points),
-    )
-    print("Loaded mesh n_faces: ", b3_loaded.n_faces)
