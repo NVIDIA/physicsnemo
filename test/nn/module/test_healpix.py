@@ -18,13 +18,20 @@ import numpy as np
 import pytest
 import torch
 
-from physicsnemo.nn import (
+from physicsnemo.nn.module.hpx import (
     HEALPixAvgPool,
-    HEALPixFoldFaces,
     HEALPixLayer,
     HEALPixMaxPool,
     HEALPixPadding,
+    HEALPixPatchDetokenizer,
+    HEALPixPatchTokenizer,
+)
+from physicsnemo.nn.module.hpx.padding import (
+    HEALPixFoldFaces,
     HEALPixUnfoldFaces,
+)
+from physicsnemo.nn.module.hpx.tokenizer import (
+    CalendarEmbedding,
 )
 from test import common
 from test.conftest import requires_module
@@ -51,13 +58,13 @@ def test_data():
     return generate_test_data
 
 
-@requires_module("hydra")
+@requires_module("earth2grid")
 def test_HEALPixFoldFaces_initialization(device, pytestconfig):
     fold_func = HEALPixFoldFaces()
     assert isinstance(fold_func, HEALPixFoldFaces)
 
 
-@requires_module("hydra")
+@requires_module("earth2grid")
 def test_HEALPixFoldFaces_forward(device, pytestconfig):
     fold_func = HEALPixFoldFaces()
 
@@ -73,13 +80,13 @@ def test_HEALPixFoldFaces_forward(device, pytestconfig):
     assert fold_func(invar).stride() != outvar.stride()
 
 
-@requires_module("hydra")
+@requires_module("earth2grid")
 def test_HEALPixUnfoldFaces_initialization(device, pytestconfig):
     unfold_func = HEALPixUnfoldFaces()
     assert isinstance(unfold_func, HEALPixUnfoldFaces)
 
 
-@requires_module("hydra")
+@requires_module("earth2grid")
 def test_HEALPixUnfoldFaces_forward(device, pytestconfig):
     num_faces = 12
     unfold_func = HEALPixUnfoldFaces()
@@ -94,14 +101,14 @@ def test_HEALPixUnfoldFaces_forward(device, pytestconfig):
     assert outvar.shape == output_size
 
 
-@requires_module("hydra")
+@requires_module("earth2grid")
 @pytest.mark.parametrize("padding", [2, 3, 4])
 def test_HEALPixPadding_initialization(device, padding, pytestconfig):
     pad_func = HEALPixPadding(padding)
     assert isinstance(pad_func, HEALPixPadding)
 
 
-@requires_module("hydra")
+@requires_module("earth2grid")
 @pytest.mark.parametrize("padding", [2, 3, 4])
 def test_HEALPixPadding_forward(device, padding, pytestconfig):
     num_faces = 12
@@ -127,14 +134,14 @@ def test_HEALPixPadding_forward(device, padding, pytestconfig):
     assert outvar.shape == out_size
 
 
-@requires_module("hydra")
+@requires_module("earth2grid")
 @pytest.mark.parametrize("multiplier", [2, 3, 4])
 def test_HEALPixLayer_initialization(device, multiplier, pytestconfig):
     layer = HEALPixLayer(layer=MulX, multiplier=multiplier)
     assert isinstance(layer, HEALPixLayer)
 
 
-@requires_module("hydra")
+@requires_module("earth2grid")
 @pytest.mark.parametrize("multiplier", [2, 3, 4])
 def test_HEALPixLayer_forward(device, multiplier, pytestconfig):
     layer = HEALPixLayer(layer=MulX, multiplier=multiplier)
@@ -168,14 +175,14 @@ def test_HEALPixLayer_forward(device, multiplier, pytestconfig):
     assert expected_shape == layer(invar).shape
 
 
-@requires_module("hydra")
+@requires_module("earth2grid")
 def test_MaxPool_initialization(device, pytestconfig):
     pooling = 2
     maxpool_block = HEALPixMaxPool(pooling=pooling).to(device)
     assert isinstance(maxpool_block, HEALPixMaxPool)
 
 
-@requires_module("hydra")
+@requires_module("earth2grid")
 def test_MaxPool_forward(device, test_data, pytestconfig):
     pooling = 2
     size = 16
@@ -190,14 +197,14 @@ def test_MaxPool_forward(device, test_data, pytestconfig):
     assert common.compare_output(outvar, maxpool_block(invar))
 
 
-@requires_module("hydra")
+@requires_module("earth2grid")
 def test_AvgPool_initialization(device, pytestconfig):
     pooling = 2
     avgpool_block = HEALPixAvgPool(pooling=pooling).to(device)
     assert isinstance(avgpool_block, HEALPixAvgPool)
 
 
-@requires_module("hydra")
+@requires_module("earth2grid")
 def test_AvgPool_forward(device, test_data, pytestconfig):
     pooling = 2
     size = 32
@@ -212,3 +219,86 @@ def test_AvgPool_forward(device, test_data, pytestconfig):
     outvar = outvar * 0.5
 
     assert common.compare_output(outvar, avgpool_block(invar))
+
+
+@requires_module("earth2grid")
+def test_hpx_patch_tokenizer_forward(device):
+    """Test HEALPixPatchTokenizer forward pass."""
+    torch.manual_seed(0)
+
+    in_channels = 5
+    hidden_size = 8
+    level_fine = 2
+    level_coarse = 1
+
+    model = HEALPixPatchTokenizer(
+        in_channels=in_channels,
+        hidden_size=hidden_size,
+        level_fine=level_fine,
+        level_coarse=level_coarse,
+    ).to(device)
+    model.eval()
+
+    b, t = 2, 1
+    npix = 12 * 4**level_fine
+    x = torch.randn(b, in_channels, t, npix).to(device)
+    second_of_day = torch.tensor([[43200], [21600]], device=device)
+    day_of_year = torch.tensor([[100], [200]], device=device)
+    # Manually track device since not psn Module
+    model.device = device
+
+    assert common.validate_forward_accuracy(
+        model,
+        (x, second_of_day, day_of_year),
+        file_name="nn/module/data/hpx_tokenizer_output.pth",
+        atol=1e-3,  # Data on order of [1 to 0.1]
+    )
+
+
+@requires_module("earth2grid")
+def test_calendar_embedding_shape_mismatch():
+    """Test CalendarEmbedding raises on shape mismatch."""
+    lon = torch.linspace(-180, 180, 10)
+    model = CalendarEmbedding(lon=lon, embed_channels=4)
+
+    day_of_year = torch.tensor([[100, 101]])
+    second_of_day = torch.tensor([[43200]])
+
+    with pytest.raises(ValueError):
+        model(day_of_year=day_of_year, second_of_day=second_of_day)
+
+
+# HealDA tokenizers
+@requires_module("earth2grid")
+def test_hpx_patch_detokenizer_forward(device):
+    """Test HEALPixPatchDetokenizer forward pass."""
+    torch.manual_seed(0)
+
+    hidden_size = 8
+    out_channels = 2
+    level_coarse = 1
+    level_fine = 2
+    time_length = 1
+
+    model = HEALPixPatchDetokenizer(
+        hidden_size=hidden_size,
+        out_channels=out_channels,
+        level_coarse=level_coarse,
+        level_fine=level_fine,
+        time_length=time_length,
+    ).to(device)
+    model.eval()
+
+    b = 2
+    L = time_length * 12 * 4**level_coarse
+    x = torch.randn(b, L, hidden_size).to(device)
+    c = torch.randn(b, hidden_size).to(device)
+    # Manually track device since not psn Module
+    model.device = device
+
+    assert common.validate_forward_accuracy(
+        model,
+        (x, c),
+        file_name="nn/module/data/hpx_detokenizer_output.pth",
+        atol=1e-3,  # Data on order of [1 to 0.1]
+    )
