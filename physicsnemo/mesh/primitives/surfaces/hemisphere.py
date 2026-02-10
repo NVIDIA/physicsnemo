@@ -59,32 +59,27 @@ def load(
     theta = torch.linspace(0, 2 * torch.pi, theta_resolution + 1, device=device)[:-1]
     phi = torch.linspace(0, torch.pi / 2, phi_resolution, device=device)
 
-    points = []
-    for phi_val in phi:
-        for theta_val in theta:
-            x = radius * torch.sin(phi_val) * torch.cos(theta_val)
-            y = radius * torch.sin(phi_val) * torch.sin(theta_val)
-            z = radius * torch.cos(phi_val)
-            points.append([x.item(), y.item(), z.item()])
+    # Vectorized point generation
+    PHI, THETA = torch.meshgrid(phi, theta, indexing="ij")
+    x = radius * torch.sin(PHI) * torch.cos(THETA)
+    y = radius * torch.sin(PHI) * torch.sin(THETA)
+    z = radius * torch.cos(PHI)
+    points = torch.stack([x, y, z], dim=-1).reshape(-1, 3).to(dtype=torch.float32)
 
-    points = torch.tensor(points, dtype=torch.float32, device=device)
+    # Vectorized cell generation (periodic in theta, open in phi)
+    i_idx = torch.arange(phi_resolution - 1, device=device)
+    j_idx = torch.arange(theta_resolution, device=device)
+    ii, jj = torch.meshgrid(i_idx, j_idx, indexing="ij")
+    ii_flat = ii.reshape(-1)
+    jj_flat = jj.reshape(-1)
 
-    # Create cells
-    cells = []
-    for i in range(phi_resolution - 1):
-        for j in range(theta_resolution):
-            idx = i * theta_resolution + j
-            next_j = (j + 1) % theta_resolution
+    p00 = ii_flat * theta_resolution + jj_flat
+    p01 = ii_flat * theta_resolution + (jj_flat + 1) % theta_resolution
+    p10 = (ii_flat + 1) * theta_resolution + jj_flat
+    p11 = (ii_flat + 1) * theta_resolution + (jj_flat + 1) % theta_resolution
 
-            # Two triangles per quad
-            cells.append([idx, idx + next_j - j, idx + theta_resolution])
-            cells.append(
-                [
-                    idx + next_j - j,
-                    idx + theta_resolution + next_j - j,
-                    idx + theta_resolution,
-                ]
-            )
+    tri1 = torch.stack([p00, p01, p10], dim=1)
+    tri2 = torch.stack([p01, p11, p10], dim=1)
+    cells = torch.cat([tri1, tri2], dim=0)
 
-    cells = torch.tensor(cells, dtype=torch.int64, device=device)
     return Mesh(points=points, cells=cells)

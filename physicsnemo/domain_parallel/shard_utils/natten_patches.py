@@ -310,3 +310,11 @@ else:
         raise Exception(
             "na2d_wrapper not supported because module 'natten' not installed"
         )
+
+
+# Clean up OptionalImport references from module namespace.
+# inspect.unwrap (used by doctest collection) checks hasattr(obj, '__wrapped__')
+# on every module-level object; on OptionalImport this triggers __getattr__ which
+# raises RuntimeError (not AttributeError) when the package is missing, crashing
+# the doctest collector.  The references are no longer needed after the if/else.
+del wrapt, natten

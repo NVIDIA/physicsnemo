@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
+import types
 from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
 
 import torch
@@ -26,7 +28,11 @@ from physicsnemo.mesh.transformations.geometric import (
     transform,
     translate,
 )
-from physicsnemo.mesh.utilities._cache import get_cached, set_cached
+from physicsnemo.mesh.utilities._cache import (
+    CACHE_KEY,
+    get_cached,
+    set_cached,
+)
 from physicsnemo.mesh.utilities._padding import _pad_by_tiling_last, _pad_with_value
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
@@ -245,22 +251,28 @@ class Mesh:
         self.global_data = global_data
 
         ### Validate shapes and dtypes
-        if self.points.ndim != 2:
-            raise ValueError(
-                f"`points` must have shape (n_points, n_spatial_dimensions), but got {self.points.shape=}."
-            )
-        if self.cells.ndim != 2:
-            raise ValueError(
-                f"`cells` must have shape (n_cells, n_manifold_dimensions + 1), but got {self.cells.shape=}."
-            )
-        if self.n_manifold_dims > self.n_spatial_dims:
-            raise ValueError(
-                f"`n_manifold_dims` must be <= `n_spatial_dims`, but got {self.n_manifold_dims=} > {self.n_spatial_dims=}."
-            )
-        if torch.is_floating_point(self.cells):
-            raise TypeError(
-                f"`cells` must have an int-like dtype, but got {self.cells.dtype=}."
-            )
+        if not torch.compiler.is_compiling():
+            if self.points.ndim != 2:
+                raise ValueError(
+                    f"`points` must have shape (n_points, n_spatial_dimensions), but got {self.points.shape=}."
+                )
+            if self.cells.ndim != 2:
+                raise ValueError(
+                    f"`cells` must have shape (n_cells, n_manifold_dimensions + 1), but got {self.cells.shape=}."
+                )
+            if self.n_manifold_dims > self.n_spatial_dims:
+                raise ValueError(
+                    f"`n_manifold_dims` must be <= `n_spatial_dims`, but got {self.n_manifold_dims=} > {self.n_spatial_dims=}."
+                )
+            if torch.is_floating_point(self.cells):
+                raise TypeError(
+                    f"`cells` must have an int-like dtype, but got {self.cells.dtype=}."
+                )
+            if self.points.device != self.cells.device:
+                raise ValueError(
+                    f"`points` and `cells` must be on the same device, "
+                    f"but got {self.points.device=} and {self.cells.device=}."
+                )
 
     if TYPE_CHECKING:
         # Type stub for the `to` method dynamically added by @tensorclass.
@@ -302,6 +314,14 @@ class Mesh:
             >>> mesh_gpu = mesh.to("cuda")
             >>> mesh_cpu = mesh.to(device="cpu")
             >>> mesh_fp16 = mesh.to(torch.float16)
+            """
+            ...
+
+        def clone(self) -> Self:
+            """Return a shallow clone of this Mesh.
+
+            All tensor storage is shared with the original; metadata and
+            TensorDict structure are independent copies.
             """
             ...
 
@@ -398,10 +418,7 @@ class Mesh:
             )  # Result: (n_cells, n_manifold_dims, n_manifold_dims)
 
             ### Compute volume: sqrt(|det(G)|) / n!
-            # Compute factorial using torch for small integers
-            factorial = torch.arange(
-                1, self.n_manifold_dims + 1, device=gram_matrix.device
-            ).prod()
+            factorial = math.factorial(self.n_manifold_dims)
 
             cached = gram_matrix.det().abs().sqrt() / factorial
             set_cached(self.cell_data, "areas", cached)
@@ -551,7 +568,7 @@ class Mesh:
         Four weighting schemes are available (following industry conventions from
         Autodesk Maya and 3ds Max):
 
-        - **"area"** (default): Area-weighted averaging, where larger faces have more
+        - **"area"**: Area-weighted averaging, where larger faces have more
           influence on the vertex normal. The normal at vertex v is computed as:
           ``point_normal_v = normalize(sum(cell_normal * cell_area))``.
           This reduces the influence of small sliver triangles.
@@ -566,7 +583,7 @@ class Mesh:
           have more influence. This often provides the most geometrically accurate
           normals for curved surfaces.
 
-        - **"angle_area"**: Combined angle and area weighting, where each face's
+        - **"angle_area"** (default): Combined angle and area weighting, where each face's
           contribution is weighted by both its area and the angle at the vertex.
           This is the default in Maya and balances both geometric factors.
 
@@ -669,8 +686,10 @@ class Mesh:
         elif weighting in ("angle", "angle_area"):
             # Compute interior angles at each vertex of each cell
             # For a simplex, angle at vertex k is between edges to other vertices
-            vertex_angles = (
-                self._compute_vertex_angles()
+            from physicsnemo.mesh.geometry._angles import compute_vertex_angles
+
+            vertex_angles = compute_vertex_angles(
+                self
             )  # (n_cells, n_vertices_per_cell)
             weights = vertex_angles.flatten()
 
@@ -697,95 +716,126 @@ class Mesh:
         ### Normalize to get unit normals
         return F.normalize(accumulated_normals, dim=-1)
 
-    def _compute_vertex_angles(self) -> torch.Tensor:
-        """Compute generalized interior angles at each vertex of each cell.
+    @property
+    def gaussian_curvature_vertices(self) -> torch.Tensor:
+        """Compute intrinsic Gaussian curvature at mesh vertices.
 
-        For an n-simplex, the "angle" at a vertex is computed using the unified
-        formula that generalizes to arbitrary dimensions:
+        Uses the angle defect method from discrete differential geometry:
+            K = (full_angle - Σ angles) / voronoi_area
 
-            Ω = 2 × arctan(√det(C) / (1 + Σᵢ<ⱼ Cᵢⱼ))
+        This is an intrinsic measure of curvature (Theorema Egregium) that works
+        for any codimension, as it depends only on distances within the manifold.
 
-        where C is the correlation (normalized Gram) matrix of edge vectors:
-            Cᵢⱼ = (eᵢ · eⱼ) / (|eᵢ| |eⱼ|)
+        Signed curvature:
+        - Positive: Elliptic/convex (sphere-like)
+        - Zero: Flat/parabolic (plane-like)
+        - Negative: Hyperbolic/saddle (saddle-like)
 
-        This formula reduces to:
-        - For triangles (n=2): the planar interior angle θ
-        - For tetrahedra (n=3): the solid angle Ω (steradians)
-        - For higher n: the generalized solid angle
+        The result is cached in point_data["_cache"]["gaussian_curvature"] for efficiency.
 
         Returns
         -------
         torch.Tensor
-            Tensor of shape (n_cells, n_vertices_per_cell) containing the
-            generalized angle at each vertex.
+            Tensor of shape (n_points,) containing signed Gaussian curvature.
+            Isolated vertices have NaN curvature.
 
         Notes
         -----
-        This formula is derived by recognizing that both the planar angle formula
-        and the Van Oosterom & Strackee (1983) solid angle formula follow the
-        same pattern when expressed in terms of the correlation matrix.
+        Satisfies discrete Gauss-Bonnet theorem:
+            Σ_vertices (K_i * A_i) = 2π * χ(M)
 
-        The formula uses atan2 for numerical stability when the denominator
-        approaches zero (nearly degenerate simplices).
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+        >>> # Sphere of radius r has K = 1/r²
+        >>> sphere = sphere_icosahedral.load(radius=2.0, subdivisions=3)
+        >>> K = sphere.gaussian_curvature_vertices
+        >>> # K.mean() ≈ 0.25 (= 1/(2.0)²)
         """
-        n_edges = self.n_manifold_dims  # edges from each vertex
+        cached = get_cached(self.point_data, "gaussian_curvature")
+        if cached is None:
+            from physicsnemo.mesh.curvature import gaussian_curvature_vertices
 
-        # Get vertex positions: (n_cells, n_verts, n_spatial_dims)
-        cell_vertices = self.points[self.cells]
+            cached = gaussian_curvature_vertices(self)
+            set_cached(self.point_data, "gaussian_curvature", cached)
 
-        # For each vertex k, compute the edge vectors to the other n_edges vertices
-        # Use roll to get shifted vertex positions:
-        # rolled[:, :, i, :] = cell_vertices[:, (k + i + 1) % n_verts, :]
+        return cached
 
-        # Build edge vectors for all vertices simultaneously
-        # edges[k, i] = v_{(k+i+1) mod n_verts} - v_k
-        # Shape: (n_cells, n_verts, n_edges, n_spatial_dims)
-        edges = torch.stack(
-            [
-                torch.roll(cell_vertices, shifts=-(i + 1), dims=1) - cell_vertices
-                for i in range(n_edges)
-            ],
-            dim=2,
-        )
+    @property
+    def gaussian_curvature_cells(self) -> torch.Tensor:
+        """Compute Gaussian curvature at cell centers using dual mesh concept.
 
-        # Compute edge lengths: (n_cells, n_verts, n_edges)
-        edge_lengths = edges.norm(dim=-1)
+        Treats cell centroids as vertices of a dual mesh and computes curvature
+        based on angles between connections to adjacent cell centroids.
 
-        # Compute normalized edges: (n_cells, n_verts, n_edges, n_spatial_dims)
-        edges_normalized = edges / edge_lengths.unsqueeze(-1).clamp(min=1e-10)
+        The result is cached in cell_data["_cache"]["gaussian_curvature"] for efficiency.
 
-        # Compute correlation matrix C for each vertex of each cell
-        # C[i,j] = normalized_edge_i · normalized_edge_j
-        # Shape: (n_cells, n_verts, n_edges, n_edges)
-        # Using einsum: C_ij = sum_d (edges_normalized[:,:,i,d] * edges_normalized[:,:,j,d])
-        corr_matrix = torch.einsum(
-            "cvid,cvjd->cvij", edges_normalized, edges_normalized
-        )
+        Returns
+        -------
+        torch.Tensor
+            Tensor of shape (n_cells,) containing Gaussian curvature at cells.
 
-        # Compute det(C) for each vertex: (n_cells, n_verts)
-        det_C = torch.linalg.det(corr_matrix)
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+        >>> mesh = sphere_icosahedral.load(subdivisions=2)
+        >>> K_cells = mesh.gaussian_curvature_cells
+        """
+        cached = get_cached(self.cell_data, "gaussian_curvature")
+        if cached is None:
+            from physicsnemo.mesh.curvature import gaussian_curvature_cells
 
-        # Compute sum of off-diagonal elements: Σᵢ<ⱼ Cᵢⱼ
-        # For an n×n matrix, sum of upper triangle (excluding diagonal)
-        # Create upper triangle mask
-        triu_mask = torch.triu(
-            torch.ones(n_edges, n_edges, device=self.points.device, dtype=torch.bool),
-            diagonal=1,
-        )
-        # Sum off-diagonal: (n_cells, n_verts)
-        sum_off_diag = corr_matrix[:, :, triu_mask].sum(dim=-1)
+            cached = gaussian_curvature_cells(self)
+            set_cached(self.cell_data, "gaussian_curvature", cached)
 
-        # Denominator: 1 + Σᵢ<ⱼ Cᵢⱼ
-        denominator = 1.0 + sum_off_diag
+        return cached
 
-        # Numerator: √det(C) (use abs for numerical stability with near-degenerate cells)
-        numerator = det_C.abs().sqrt()
+    @property
+    def mean_curvature_vertices(self) -> torch.Tensor:
+        """Compute extrinsic mean curvature at mesh vertices.
 
-        # Compute angle: Ω = 2 × arctan(numerator / denominator)
-        # Use atan2 for numerical stability
-        angles = 2.0 * torch.atan2(numerator, denominator)
+        Uses the cotangent Laplace-Beltrami operator:
+            H = (1/2) * ||L @ points|| / voronoi_area
 
-        return angles
+        Mean curvature is an extrinsic measure (depends on embedding) and is
+        only defined for codimension-1 manifolds where normal vectors exist.
+
+        For 2D surfaces: H = (k1 + k2) / 2 where k1, k2 are principal curvatures
+
+        Signed curvature:
+        - Positive: Convex (sphere exterior with outward normals)
+        - Negative: Concave (sphere interior with outward normals)
+        - Zero: Minimal surface (soap film)
+
+        The result is cached in point_data["_cache"]["mean_curvature"] for efficiency.
+
+        Returns
+        -------
+        torch.Tensor
+            Tensor of shape (n_points,) containing signed mean curvature.
+            Isolated vertices have NaN curvature.
+
+        Raises
+        ------
+        ValueError
+            If mesh is not codimension-1.
+
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+        >>> # Sphere of radius r has H = 1/r
+        >>> sphere = sphere_icosahedral.load(radius=2.0, subdivisions=3)
+        >>> H = sphere.mean_curvature_vertices
+        >>> # H.mean() ≈ 0.5 (= 1/2.0)
+        """
+        cached = get_cached(self.point_data, "mean_curvature")
+        if cached is None:
+            from physicsnemo.mesh.curvature import mean_curvature_vertices
+
+            cached = mean_curvature_vertices(self)
+            set_cached(self.point_data, "mean_curvature", cached)
+
+        return cached
 
     @classmethod
     def merge(
@@ -821,8 +871,8 @@ class Mesh:
         if not torch.compiler.is_compiling():
             if len(meshes) == 0:
                 raise ValueError("At least one Mesh must be provided to merge.")
-            elif len(meshes) == 1:  # Short-circuit for speed in this case
-                return meshes[0]
+            elif len(meshes) == 1:  # Return a shallow copy to avoid aliasing
+                return meshes[0].clone()
             if not all(isinstance(m, Mesh) for m in meshes):
                 raise TypeError(
                     f"All objects must be Mesh types. Got:\n"
@@ -839,8 +889,20 @@ class Mesh:
                         f"All meshes must have the same {name}. Got:\n{values=}"
                     )
             # Check that all cell_data dicts have the same keys across all meshes
+            # (ignoring internal cache keys stored under CACHE_KEY)
+            ref_keys = set(
+                meshes[0]
+                .cell_data.exclude(CACHE_KEY)
+                .keys(include_nested=True, leaves_only=True)
+            )
             if not all(
-                m.cell_data.keys() == meshes[0].cell_data.keys() for m in meshes
+                set(
+                    m.cell_data.exclude(CACHE_KEY).keys(
+                        include_nested=True, leaves_only=True
+                    )
+                )
+                == ref_keys
+                for m in meshes
             ):
                 raise ValueError("All meshes must have the same cell_data keys.")
 
@@ -867,8 +929,13 @@ class Mesh:
                 [m.cells + offset for m, offset in zip(meshes, cell_index_offsets)],
                 dim=0,
             ),
-            point_data=TensorDict.cat([m.point_data for m in meshes], dim=0),
-            cell_data=TensorDict.cat([m.cell_data for m in meshes], dim=0),
+            # Strip cached values before concatenating (caches are mesh-specific)
+            point_data=TensorDict.cat(
+                [m.point_data.exclude(CACHE_KEY) for m in meshes], dim=0
+            ),
+            cell_data=TensorDict.cat(
+                [m.cell_data.exclude(CACHE_KEY) for m in meshes], dim=0
+            ),
             global_data=global_data,
         )
 
@@ -876,7 +943,7 @@ class Mesh:
         self,
         indices: int
         | slice
-        | type(Ellipsis)  # ty: ignore[invalid-type-form]
+        | types.EllipsisType
         | None
         | torch.Tensor
         | Sequence[int | bool],
@@ -970,7 +1037,7 @@ class Mesh:
         self,
         indices: int
         | slice
-        | type(Ellipsis)  # ty: ignore[invalid-type-form]
+        | types.EllipsisType
         | None
         | torch.Tensor
         | Sequence[int | bool | slice],
@@ -996,6 +1063,131 @@ class Mesh:
             point_data=self.point_data,
             cell_data=new_cell_data,
             global_data=self.global_data,
+        )
+
+    def sample_random_points_on_cells(
+        self,
+        cell_indices: Sequence[int] | torch.Tensor | None = None,
+        alpha: float = 1.0,
+    ) -> torch.Tensor:
+        """Sample random points on specified cells of the mesh.
+
+        Uses a Dirichlet distribution to generate barycentric coordinates, which are
+        then used to compute random points as weighted combinations of cell vertices.
+        The concentration parameter alpha controls the distribution of samples within
+        each cell (simplex).
+
+        This is a convenience method that delegates to physicsnemo.mesh.sampling.sample_random_points_on_cells.
+
+        Parameters
+        ----------
+        cell_indices : Sequence[int] or torch.Tensor or None, optional
+            Indices of cells to sample from. Can be a Sequence or tensor.
+            Allows repeated indices to sample multiple points from the same cell.
+            If None, samples one point from each cell (equivalent to arange(n_cells)).
+            Shape: (n_samples,) where n_samples is the number of points to sample.
+        alpha : float, optional
+            Concentration parameter for the Dirichlet distribution. Controls how
+            samples are distributed within each cell:
+            - alpha = 1.0: Uniform distribution over the simplex (default)
+            - alpha > 1.0: Concentrates samples toward the center of each cell
+            - alpha < 1.0: Concentrates samples toward vertices and edges
+
+        Returns
+        -------
+        torch.Tensor
+            Random points on cells, shape (n_samples, n_spatial_dims). Each point lies
+            within its corresponding cell. If cell_indices is None, n_samples = n_cells.
+
+        Raises
+        ------
+        NotImplementedError
+            If alpha != 1.0 and torch.compile is being used.
+            This is due to a PyTorch limitation with Gamma distributions under torch.compile.
+        IndexError
+            If any cell_indices are out of bounds.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> # Sample one point from each cell uniformly
+        >>> points = mesh.sample_random_points_on_cells()
+        >>> assert points.shape == (mesh.n_cells, mesh.n_spatial_dims)
+        """
+        from physicsnemo.mesh.sampling import sample_random_points_on_cells
+
+        return sample_random_points_on_cells(
+            mesh=self,
+            cell_indices=cell_indices,
+            alpha=alpha,
+        )
+
+    def sample_data_at_points(
+        self,
+        query_points: torch.Tensor,
+        data_source: Literal["cells", "points"] = "cells",
+        multiple_cells_strategy: Literal["mean", "nan"] = "mean",
+        project_onto_nearest_cell: bool = False,
+        tolerance: float = 1e-6,
+        bvh: Any = None,
+    ) -> "TensorDict":
+        """Extract or interpolate mesh data at specified query points.
+
+        This method retrieves mesh data at arbitrary spatial locations. Note that
+        "sample" here means "extract/query at specific points" - NOT random sampling.
+        For random point sampling, see :meth:`sample_random_points_on_cells`.
+
+        Containment queries are BVH-accelerated (O(n_queries * log(n_cells))).
+
+        Parameters
+        ----------
+        query_points : torch.Tensor
+            Query point locations, shape (n_queries, n_spatial_dims).
+        data_source : {"cells", "points"}, optional
+            How to retrieve data:
+            - "cells": Use cell data directly (no interpolation)
+            - "points": Interpolate point data using barycentric coordinates
+        multiple_cells_strategy : {"mean", "nan"}, optional
+            How to handle query points in multiple cells:
+            - "mean": Return arithmetic mean of values from all containing cells
+            - "nan": Return NaN for ambiguous points
+        project_onto_nearest_cell : bool, optional
+            If True, snaps each query point to the centroid of the nearest cell
+            before containment testing. Useful for codimension != 0 manifolds.
+        tolerance : float, optional
+            Tolerance for considering a point inside a cell.
+        bvh : BVH or None, optional
+            Pre-built Bounding Volume Hierarchy. If ``None`` (default), one is
+            built automatically. For repeated queries, pre-build with
+            ``BVH.from_mesh(mesh)`` and pass it here to avoid redundant work.
+
+        Returns
+        -------
+        TensorDict
+            Data for each query point. Values are NaN for query points outside
+            the mesh.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> mesh.cell_data["pressure"] = torch.tensor([1.0, 2.0])
+        >>> query_pts = torch.tensor([[0.3, 0.3], [0.8, 0.5]])
+        >>> data = mesh.sample_data_at_points(query_pts, data_source="cells")
+        """
+        from physicsnemo.mesh.sampling import sample_data_at_points
+
+        return sample_data_at_points(
+            mesh=self,
+            query_points=query_points,
+            data_source=data_source,
+            multiple_cells_strategy=multiple_cells_strategy,
+            project_onto_nearest_cell=project_onto_nearest_cell,
+            tolerance=tolerance,
+            bvh=bvh,
         )
 
     def cell_data_to_point_data(self, overwrite_keys: bool = False) -> "Mesh":
@@ -1029,14 +1221,20 @@ class Mesh:
         """
         ### Check for key conflicts
         if not overwrite_keys:
-            for key in self.cell_data.exclude("_cache").keys():
-                if key in self.point_data.keys():
-                    raise ValueError(
-                        f"Key {key!r} already exists in point_data. "
-                        f"Set overwrite_keys=True to overwrite."
-                    )
+            src_keys = set(
+                self.cell_data.exclude(CACHE_KEY).keys(
+                    include_nested=True, leaves_only=True
+                )
+            )
+            dst_keys = set(self.point_data.keys(include_nested=True, leaves_only=True))
+            conflicts = src_keys & dst_keys
+            if conflicts:
+                raise ValueError(
+                    f"Keys {conflicts} already exist in point_data. "
+                    f"Set overwrite_keys=True to overwrite."
+                )
 
-        ### Convert each cell data field to point data
+        ### Convert each cell data field to point data via scatter aggregation
         new_point_data = self.point_data.clone()
 
         # Get flat list of point indices and corresponding cell indices
@@ -1053,21 +1251,17 @@ class Mesh:
             self.n_cells, device=self.points.device
         ).repeat_interleave(n_vertices_per_cell)
 
-        for key, cell_values in self.cell_data.exclude("_cache").items():
-            ### Use scatter aggregation utility to average cell values to points
-            # Expand cell values to one entry per vertex
-            src_data = cell_values[cell_indices]
-
-            # Aggregate to points using mean
-            point_values = scatter_aggregate(
-                src_data=src_data,
+        converted = self.cell_data.exclude(CACHE_KEY).apply(
+            lambda cell_values: scatter_aggregate(
+                src_data=cell_values[cell_indices],
                 src_to_dst_mapping=point_indices,
                 n_dst=self.n_points,
                 weights=None,
                 aggregation="mean",
-            )
-
-            new_point_data[key] = point_values
+            ),
+            batch_size=torch.Size([self.n_points]),
+        )
+        new_point_data.update(converted)
 
         ### Return new mesh with updated point data
         return Mesh(
@@ -1109,25 +1303,27 @@ class Mesh:
         """
         ### Check for key conflicts
         if not overwrite_keys:
-            for key in self.point_data.exclude("_cache").keys():
-                if key in self.cell_data.keys():
-                    raise ValueError(
-                        f"Key {key!r} already exists in cell_data. "
-                        f"Set overwrite_keys=True to overwrite."
-                    )
+            src_keys = set(
+                self.point_data.exclude(CACHE_KEY).keys(
+                    include_nested=True, leaves_only=True
+                )
+            )
+            dst_keys = set(self.cell_data.keys(include_nested=True, leaves_only=True))
+            conflicts = src_keys & dst_keys
+            if conflicts:
+                raise ValueError(
+                    f"Keys {conflicts} already exist in cell_data. "
+                    f"Set overwrite_keys=True to overwrite."
+                )
 
-        ### Convert each point data field to cell data
+        ### Convert each point data field to cell data by averaging over cell vertices
         new_cell_data = self.cell_data.clone()
 
-        for key, point_values in self.point_data.exclude("_cache").items():
-            # Get point values for each cell and average
-            # cell_point_values shape: (n_cells, n_vertices_per_cell, ...)
-            cell_point_values = point_values[self.cells]
-
-            # Average over vertices dimension (dim=1)
-            cell_values = cell_point_values.mean(dim=1)
-
-            new_cell_data[key] = cell_values
+        converted = self.point_data.exclude(CACHE_KEY).apply(
+            lambda point_values: point_values[self.cells].mean(dim=1),
+            batch_size=torch.Size([self.n_cells]),
+        )
+        new_cell_data.update(converted)
 
         ### Return new mesh with updated cell data
         return Mesh(
@@ -1137,6 +1333,344 @@ class Mesh:
             cell_data=new_cell_data,
             global_data=self.global_data,
         )
+
+    def get_facet_mesh(
+        self,
+        manifold_codimension: int = 1,
+        data_source: Literal["points", "cells"] = "cells",
+        data_aggregation: Literal["mean", "area_weighted", "inverse_distance"] = "mean",
+        target_counts: "list[int] | Literal['boundary', 'shared', 'interior', 'all']" = "all",
+    ) -> "Mesh":
+        """Extract k-codimension facet mesh from this n-dimensional mesh.
+
+        Extracts all (n-k)-simplices from the current n-simplicial mesh. For example:
+        - Triangle mesh (2-simplices) → edge mesh (1-simplices) [codimension=1, default]
+        - Triangle mesh (2-simplices) → vertex mesh (0-simplices) [codimension=2]
+        - Tetrahedral mesh (3-simplices) → triangular facet mesh (2-simplices) [codimension=1, default]
+        - Tetrahedral mesh (3-simplices) → edge mesh (1-simplices) [codimension=2]
+
+        The resulting mesh shares the same vertex positions but has connectivity
+        representing the lower-dimensional simplices. Data can be inherited from
+        either the parent cells or the boundary points.
+
+        Parameters
+        ----------
+        manifold_codimension : int, optional
+            Codimension of extracted mesh relative to parent.
+            - 1: Extract (n-1)-facets (default, immediate boundaries of all cells)
+            - 2: Extract (n-2)-facets (e.g., edges from tets, vertices from triangles)
+            - k: Extract (n-k)-facets
+        data_source : {"points", "cells"}, optional
+            Source of data inheritance:
+            - "cells": Facets inherit from parent cells they bound. When multiple
+              cells share a facet, data is aggregated according to data_aggregation.
+            - "points": Facets inherit from their boundary vertices. Data from
+              multiple boundary points is averaged.
+        data_aggregation : {"mean", "area_weighted", "inverse_distance"}, optional
+            Strategy for aggregating data from multiple sources
+            (only applies when data_source="cells"):
+            - "mean": Simple arithmetic mean
+            - "area_weighted": Weighted by parent cell areas
+            - "inverse_distance": Weighted by inverse distance from facet centroid
+              to parent cell centroids
+        target_counts : list[int] | {"boundary", "shared", "interior", "all"}, optional
+            Which facets to keep based on how many parent cells share them:
+            - "all": Keep all unique facets (default)
+            - "boundary": Keep only boundary facets (appearing in exactly 1 cell)
+            - "shared": Keep only shared facets (appearing in 2+ cells)
+            - "interior": Keep only interior facets (appearing in exactly 2 cells)
+            - list[int]: Keep facets with counts matching any value in the list
+
+        Returns
+        -------
+        Mesh
+            New Mesh with n_manifold_dims = self.n_manifold_dims - manifold_codimension,
+            embedded in the same spatial dimension. The mesh shares the same points array
+            but has new cells connectivity and aggregated cell_data.
+
+        Raises
+        ------
+        ValueError
+            If manifold_codimension is too large for this mesh
+            (would result in negative manifold dimension).
+
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> # Extract edges from a triangle mesh (codimension 1)
+        >>> triangle_mesh = two_triangles_2d.load()
+        >>> edge_mesh = triangle_mesh.get_facet_mesh(manifold_codimension=1)
+        >>> assert edge_mesh.n_manifold_dims == 1  # edges
+        >>>
+        >>> # Extract vertices from a triangle mesh (codimension 2)
+        >>> vertex_mesh = triangle_mesh.get_facet_mesh(manifold_codimension=2)
+        >>> assert vertex_mesh.n_manifold_dims == 0  # vertices
+        >>> facet_mesh = triangle_mesh.get_facet_mesh(
+        ...     data_source="cells",
+        ...     data_aggregation="area_weighted"
+        ... )
+        """
+        ### Validate that extraction is possible
+        new_manifold_dims = self.n_manifold_dims - manifold_codimension
+        if new_manifold_dims < 0:
+            raise ValueError(
+                f"Cannot extract facet mesh with {manifold_codimension=} from mesh with {self.n_manifold_dims=}.\n"
+                f"Would result in negative manifold dimension ({new_manifold_dims=}).\n"
+                f"Maximum allowed codimension is {self.n_manifold_dims}."
+            )
+
+        ### Call kernel to extract facet mesh data
+        from physicsnemo.mesh.boundaries import extract_facet_mesh_data
+
+        facet_cells, facet_cell_data = extract_facet_mesh_data(
+            parent_mesh=self,
+            manifold_codimension=manifold_codimension,
+            data_source=data_source,
+            data_aggregation=data_aggregation,
+            target_counts=target_counts,
+        )
+
+        ### Create and return new Mesh
+        # Filter out cached properties from point_data
+        # Cached geometric properties depend on cell connectivity and would be invalid
+        filtered_point_data = self.point_data.exclude(CACHE_KEY)
+
+        return Mesh(
+            points=self.points,  # Share the same points
+            cells=facet_cells,  # New connectivity for sub-simplices
+            point_data=filtered_point_data,  # User data only, no cached properties
+            cell_data=facet_cell_data,  # Aggregated cell data
+            global_data=self.global_data,  # Share global data
+        )
+
+    def get_boundary_mesh(
+        self,
+        data_source: Literal["points", "cells"] = "cells",
+        data_aggregation: Literal["mean", "area_weighted", "inverse_distance"] = "mean",
+    ) -> "Mesh":
+        """Extract the boundary surface of this mesh.
+
+        Convenience wrapper around :meth:`get_facet_mesh` that extracts only
+        boundary facets (those appearing in exactly one parent cell).
+
+        See :meth:`get_facet_mesh` for full parameter documentation.
+
+        Parameters
+        ----------
+        data_source : {"points", "cells"}, optional
+            Source of data inheritance. Default: "cells".
+        data_aggregation : {"mean", "area_weighted", "inverse_distance"}, optional
+            Strategy for aggregating data. Default: "mean".
+
+        Returns
+        -------
+        Mesh
+            Boundary mesh containing only boundary facets.
+
+        Notes
+        -----
+        For meshes with internal cavities (like volume meshes with voids or
+        drivaerML-style automotive meshes), this returns BOTH the exterior
+        surface and any interior cavity surfaces. All facets that appear in
+        exactly one parent cell are included, regardless of whether they face
+        "outward" or "inward".
+
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.procedural import lumpy_ball
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+        >>> # Extract triangular surface of a volume mesh
+        >>> vol_mesh = lumpy_ball.load(n_shells=2, subdivisions=1)
+        >>> surface_mesh = vol_mesh.get_boundary_mesh()
+        >>> assert surface_mesh.n_manifold_dims == 2  # triangles
+        >>>
+        >>> # For a closed watertight sphere
+        >>> sphere = sphere_icosahedral.load(subdivisions=3)
+        >>> boundary = sphere.get_boundary_mesh()
+        >>> assert boundary.n_cells == 0  # no boundary
+        """
+        return self.get_facet_mesh(
+            manifold_codimension=1,
+            data_source=data_source,
+            data_aggregation=data_aggregation,
+            target_counts="boundary",
+        )
+
+    def is_watertight(self) -> bool:
+        """Check if mesh is watertight (has no boundary).
+
+        A mesh is watertight if every codimension-1 facet is shared by exactly 2 cells.
+        This means the mesh forms a closed surface/volume with no holes or gaps.
+
+        Returns
+        -------
+        bool
+            True if mesh is watertight (no boundary facets), False otherwise.
+
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral, cylinder_open
+        >>> # Closed sphere is watertight
+        >>> sphere = sphere_icosahedral.load(subdivisions=3)
+        >>> assert sphere.is_watertight() == True
+        >>>
+        >>> # Open cylinder with holes at ends
+        >>> cylinder = cylinder_open.load()
+        >>> assert cylinder.is_watertight() == False
+        """
+        from physicsnemo.mesh.boundaries import is_watertight
+
+        return is_watertight(self)
+
+    def is_manifold(
+        self,
+        check_level: Literal["facets", "edges", "full"] = "full",
+    ) -> bool:
+        """Check if mesh is a valid topological manifold.
+
+        A mesh is a manifold if it locally looks like Euclidean space at every point.
+        This function checks various topological constraints depending on the check level.
+
+        Parameters
+        ----------
+        check_level : {"facets", "edges", "full"}, optional
+            Level of checking to perform:
+            - "facets": Only check codimension-1 facets (each appears 1-2 times)
+            - "edges": Check facets + edge neighborhoods (for 2D/3D meshes)
+            - "full": Complete manifold validation (default)
+
+        Returns
+        -------
+        bool
+            True if mesh passes the specified manifold checks, False otherwise.
+
+        Notes
+        -----
+        This function checks topological constraints but does not check for
+        geometric self-intersections (which would require expensive spatial queries).
+
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral, cylinder_open
+        >>> # Valid manifold (sphere)
+        >>> sphere = sphere_icosahedral.load(subdivisions=3)
+        >>> assert sphere.is_manifold() == True
+        >>>
+        >>> # Manifold with boundary (open cylinder)
+        >>> cylinder = cylinder_open.load()
+        >>> assert cylinder.is_manifold() == True  # manifold with boundary is OK
+        """
+        from physicsnemo.mesh.boundaries import is_manifold
+
+        return is_manifold(self, check_level=check_level)
+
+    def get_point_to_cells_adjacency(self):
+        """Compute the star of each vertex (all cells containing each point).
+
+        For each point in the mesh, finds all cells that contain that point. This
+        is the graph-theoretic "star" operation on vertices.
+
+        Returns
+        -------
+        Adjacency
+            Adjacency where adjacency.to_list()[i] contains all cell indices that
+            contain point i. Isolated points (not in any cells) have empty lists.
+
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> adj = mesh.get_point_to_cells_adjacency()
+        >>> # Get cells containing point 0
+        >>> cells_of_point_0 = adj.to_list()[0]
+        """
+        from physicsnemo.mesh.neighbors import get_point_to_cells_adjacency
+
+        return get_point_to_cells_adjacency(self)
+
+    def get_point_to_points_adjacency(self):
+        """Compute point-to-point adjacency (graph edges of the mesh).
+
+        For each point, finds all other points that share a cell with it. In simplicial
+        meshes, this is equivalent to finding all points connected by an edge.
+
+        Returns
+        -------
+        Adjacency
+            Adjacency where adjacency.to_list()[i] contains all point indices that
+            share a cell (edge) with point i. Isolated points have empty lists.
+
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> adj = mesh.get_point_to_points_adjacency()
+        >>> # Get neighbors of point 0
+        >>> neighbors_of_point_0 = adj.to_list()[0]
+        """
+        from physicsnemo.mesh.neighbors import get_point_to_points_adjacency
+
+        return get_point_to_points_adjacency(self)
+
+    def get_cell_to_cells_adjacency(self, adjacency_codimension: int = 1):
+        """Compute cell-to-cells adjacency based on shared facets.
+
+        Two cells are considered adjacent if they share a k-codimension facet.
+
+        Parameters
+        ----------
+        adjacency_codimension : int, optional
+            Codimension of shared facets defining adjacency.
+            - 1 (default): Cells must share a codimension-1 facet (e.g., triangles
+              sharing an edge, tetrahedra sharing a triangular face)
+            - 2: Cells must share a codimension-2 facet (e.g., tetrahedra sharing
+              an edge)
+            - k: Cells must share a codimension-k facet
+
+        Returns
+        -------
+        Adjacency
+            Adjacency where adjacency.to_list()[i] contains all cell indices that
+            share a k-codimension facet with cell i.
+
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> adj = mesh.get_cell_to_cells_adjacency(adjacency_codimension=1)
+        >>> # Get cells sharing an edge with cell 0
+        >>> neighbors_of_cell_0 = adj.to_list()[0]
+        """
+        from physicsnemo.mesh.neighbors import get_cell_to_cells_adjacency
+
+        return get_cell_to_cells_adjacency(
+            self, adjacency_codimension=adjacency_codimension
+        )
+
+    def get_cell_to_points_adjacency(self):
+        """Get the vertices (points) that comprise each cell.
+
+        This is a simple wrapper around the cells array that returns it in the
+        standard Adjacency format for consistency with other neighbor queries.
+
+        Returns
+        -------
+        Adjacency
+            Adjacency where adjacency.to_list()[i] contains all point indices that
+            are vertices of cell i. For simplicial meshes, all cells have the same
+            number of vertices (n_manifold_dims + 1).
+
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> adj = mesh.get_cell_to_points_adjacency()
+        >>> # Get vertices of cell 0
+        >>> vertices_of_cell_0 = adj.to_list()[0]
+        """
+        from physicsnemo.mesh.neighbors import get_cell_to_points_adjacency
+
+        return get_cell_to_points_adjacency(self)
 
     def pad(
         self,
@@ -1201,11 +1735,11 @@ class Mesh:
         return self.__class__(
             points=_pad_by_tiling_last(self.points, target_n_points),
             cells=_pad_with_value(self.cells, target_n_cells, self.n_points - 1),
-            point_data=self.point_data.apply(  # type: ignore
+            point_data=self.point_data.apply(
                 lambda x: _pad_with_value(x, target_n_points, data_padding_value),
                 batch_size=torch.Size([target_n_points]),
             ),
-            cell_data=self.cell_data.apply(  # type: ignore
+            cell_data=self.cell_data.apply(
                 lambda x: _pad_with_value(x, target_n_cells, data_padding_value),
                 batch_size=torch.Size([target_n_cells]),
             ),
@@ -1264,8 +1798,8 @@ class Mesh:
 
             # Solve for n: floor(base^n) >= current_size
             # n >= log(current_size) / log(base)
-            n = (torch.tensor(safe_size).log() / torch.tensor(base).log()).ceil()
-            return int(torch.tensor(base) ** n)
+            n = math.ceil(math.log(safe_size) / math.log(base))
+            return int(base**n)
 
         target_n_points = next_power_size(self.n_points, power)
         target_n_cells = next_power_size(self.n_cells, power)
@@ -1290,7 +1824,7 @@ class Mesh:
         alpha_edges: float = 1.0,
         show_edges: bool = True,
         ax=None,
-        **kwargs,
+        backend_options: dict[str, Any] | None = None,
     ):
         """Draw the mesh using matplotlib or PyVista backend.
 
@@ -1339,8 +1873,9 @@ class Mesh:
         ax : matplotlib.axes.Axes, optional
             (matplotlib only) Existing matplotlib axes to plot on. If None,
             creates new figure and axes.
-        **kwargs : dict
-            Additional backend-specific keyword arguments.
+        backend_options : dict[str, Any], optional
+            Additional keyword arguments forwarded to the underlying
+            visualization backend (e.g. PyVista's ``plotter.add_mesh()``).
 
         Returns
         -------
@@ -1390,7 +1925,7 @@ class Mesh:
             alpha_edges=alpha_edges,
             show_edges=show_edges,
             ax=ax,
-            **kwargs,
+            backend_options=backend_options,
         )
 
     def translate(
@@ -1416,7 +1951,7 @@ class Mesh:
     def rotate(
         self,
         angle: float,
-        axis: torch.Tensor | list | tuple | None = None,
+        axis: torch.Tensor | list | tuple | Literal["x", "y", "z"] | None = None,
         center: torch.Tensor | list | tuple | None = None,
         transform_point_data: bool = False,
         transform_cell_data: bool = False,
@@ -1430,8 +1965,10 @@ class Mesh:
         ----------
         angle : float
             Rotation angle in radians.
-        axis : torch.Tensor or list or tuple, optional
+        axis : torch.Tensor or list or tuple or {"x", "y", "z"}, optional
             Rotation axis vector. None for 2D, shape (3,) for 3D.
+            String literals "x", "y", "z" are converted to unit vectors
+            (1,0,0), (0,1,0), (0,0,1) respectively.
         center : torch.Tensor or list or tuple, optional
             Center point for rotation.
         transform_point_data : bool
@@ -1542,6 +2079,405 @@ class Mesh:
             transform_cell_data,
             transform_global_data,
             assume_invertible,
+        )
+
+    def compute_point_derivatives(
+        self,
+        keys: str | tuple[str, ...] | list[str | tuple[str, ...]] | None = None,
+        method: Literal["lsq", "dec"] = "lsq",
+        gradient_type: Literal["intrinsic", "extrinsic", "both"] = "intrinsic",
+    ) -> "Mesh":
+        """Compute gradients of point_data fields.
+
+        This is a convenience method that delegates to physicsnemo.mesh.calculus.compute_point_derivatives.
+
+        Parameters
+        ----------
+        keys : str or tuple[str, ...] or list[str | tuple[str, ...]] or None, optional
+            Fields to compute gradients of. Options:
+            - None: All non-cached fields (excludes "_cache" subdictionary)
+            - str: Single field name (e.g., "pressure")
+            - tuple: Nested path (e.g., ("flow", "temperature"))
+            - list: Multiple fields (e.g., ["pressure", "velocity"])
+        method : {"lsq", "dec"}, optional
+            Discretization method:
+            - "lsq": Weighted least-squares reconstruction (default, CFD standard)
+            - "dec": Discrete Exterior Calculus (differential geometry)
+        gradient_type : {"intrinsic", "extrinsic", "both"}, optional
+            Type of gradient:
+            - "intrinsic": Project onto manifold tangent space (default)
+            - "extrinsic": Full ambient space gradient
+            - "both": Compute and store both
+
+        Returns
+        -------
+        Mesh
+            Self (mesh) with gradient fields added to point_data (modified in place).
+            Field naming: "{field}_gradient" or "{field}_gradient_intrinsic/extrinsic"
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> mesh.point_data["pressure"] = torch.randn(mesh.n_points)
+        >>> # Compute gradient of pressure
+        >>> mesh_grad = mesh.compute_point_derivatives(keys="pressure")
+        >>> grad_p = mesh_grad.point_data["pressure_gradient"]
+        """
+        from physicsnemo.mesh.calculus import compute_point_derivatives
+
+        return compute_point_derivatives(
+            mesh=self,
+            keys=keys,
+            method=method,
+            gradient_type=gradient_type,
+        )
+
+    def compute_cell_derivatives(
+        self,
+        keys: str | tuple[str, ...] | list[str | tuple[str, ...]] | None = None,
+        method: Literal["lsq", "dec"] = "lsq",
+        gradient_type: Literal["intrinsic", "extrinsic", "both"] = "intrinsic",
+    ) -> "Mesh":
+        """Compute gradients of cell_data fields.
+
+        This is a convenience method that delegates to
+        :func:`physicsnemo.mesh.calculus.compute_cell_derivatives`.
+
+        Parameters
+        ----------
+        keys : str or tuple[str, ...] or list[str | tuple[str, ...]] or None, optional
+            Fields to compute gradients of (same format as compute_point_derivatives).
+        method : {"lsq"}, optional
+            Discretization method for cell-centered data. Currently only
+            ``"lsq"`` (weighted least-squares) is implemented. DEC
+            gradients for cell-centered data are not available because the
+            standard DEC exterior derivative maps vertex 0-forms to edge
+            1-forms; there is no analogous cell-to-cell operator in the
+            primal DEC complex.
+        gradient_type : {"intrinsic", "extrinsic", "both"}, optional
+            Type of gradient to compute.
+
+        Returns
+        -------
+        Mesh
+            A new Mesh with gradient fields added to ``cell_data``.
+
+        Raises
+        ------
+        NotImplementedError
+            If ``method="dec"`` is requested.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> mesh.cell_data["pressure"] = torch.randn(mesh.n_cells)
+        >>> # Compute gradient of cell-centered pressure
+        >>> mesh_grad = mesh.compute_cell_derivatives(keys="pressure")
+        """
+        from physicsnemo.mesh.calculus import compute_cell_derivatives
+
+        return compute_cell_derivatives(
+            mesh=self,
+            keys=keys,
+            method=method,
+            gradient_type=gradient_type,
+        )
+
+    def validate(
+        self,
+        check_degenerate_cells: bool = True,
+        check_duplicate_vertices: bool = True,
+        check_inverted_cells: bool = False,
+        check_out_of_bounds: bool = True,
+        check_manifoldness: bool = False,
+        tolerance: float = 1e-10,
+        raise_on_error: bool = False,
+    ):
+        """Validate mesh integrity and detect common errors.
+
+        Convenience method that delegates to physicsnemo.mesh.validation.validate_mesh.
+
+        Parameters
+        ----------
+        check_degenerate_cells : bool, optional
+            Check for zero/negative area cells.
+        check_duplicate_vertices : bool, optional
+            Check for coincident vertices.
+        check_inverted_cells : bool, optional
+            Check for negative orientation.
+        check_out_of_bounds : bool, optional
+            Check cell indices are valid.
+        check_manifoldness : bool, optional
+            Check manifold topology (2D only).
+        tolerance : float, optional
+            Tolerance for geometric checks.
+        raise_on_error : bool, optional
+            Raise ValueError on first error vs return report.
+
+        Returns
+        -------
+        dict
+            Dictionary with validation results.
+
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> report = mesh.validate()
+        >>> assert report["valid"] == True
+        """
+        from physicsnemo.mesh.validation import validate_mesh
+
+        return validate_mesh(
+            mesh=self,
+            check_degenerate_cells=check_degenerate_cells,
+            check_duplicate_vertices=check_duplicate_vertices,
+            check_inverted_cells=check_inverted_cells,
+            check_out_of_bounds=check_out_of_bounds,
+            check_manifoldness=check_manifoldness,
+            tolerance=tolerance,
+            raise_on_error=raise_on_error,
+        )
+
+    @property
+    def quality_metrics(self):
+        """Compute geometric quality metrics for all cells.
+
+        Returns
+        -------
+        TensorDict
+            Per-cell quality metrics:
+            - aspect_ratio: max_edge / characteristic_length
+            - edge_length_ratio: max_edge / min_edge
+            - min_angle, max_angle: Interior angles (triangles only)
+            - quality_score: Combined metric in [0,1] (1.0 is perfect)
+
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> metrics = mesh.quality_metrics
+        >>> assert "quality_score" in metrics.keys()
+        """
+        from physicsnemo.mesh.validation import compute_quality_metrics
+
+        return compute_quality_metrics(self)
+
+    @property
+    def statistics(self):
+        """Compute summary statistics for mesh.
+
+        Returns
+        -------
+        dict
+            Mesh statistics including counts, edge length distributions,
+            area distributions, and quality metrics.
+
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> stats = mesh.statistics
+        >>> assert "n_points" in stats and "n_cells" in stats
+        """
+        from physicsnemo.mesh.validation import compute_mesh_statistics
+
+        return compute_mesh_statistics(self)
+
+    def subdivide(
+        self,
+        levels: int = 1,
+        filter: Literal["linear", "butterfly", "loop"] = "linear",
+    ) -> "Mesh":
+        """Subdivide the mesh using iterative application of subdivision schemes.
+
+        Subdivision refines the mesh by splitting each n-simplex into 2^n child
+        simplices. Multiple subdivision schemes are supported, each with different
+        geometric and smoothness properties.
+
+        This method applies the chosen subdivision scheme iteratively for the
+        specified number of levels. Each level independently subdivides the
+        current mesh.
+
+        Parameters
+        ----------
+        levels : int, optional
+            Number of subdivision iterations to perform. Each level
+            increases mesh resolution exponentially:
+            - 0: No subdivision (returns original mesh)
+            - 1: Each cell splits into 2^n children
+            - 2: Each cell splits into 4^n children
+            - k: Each cell splits into (2^k)^n children
+        filter : {"linear", "butterfly", "loop"}, optional
+            Subdivision scheme to use:
+            - "linear": Simple midpoint subdivision (interpolating).
+              New vertices at exact edge midpoints. Works for any dimension.
+              Preserves original vertices.
+            - "butterfly": Weighted stencil subdivision (interpolating).
+              New vertices use weighted neighbor stencils for smoother results.
+              Currently only supports 2D manifolds (triangular meshes).
+              Preserves original vertices.
+            - "loop": Valence-based subdivision (approximating).
+              Both old and new vertices are repositioned for C² smoothness.
+              Currently only supports 2D manifolds (triangular meshes).
+              Original vertices move to new positions.
+
+        Returns
+        -------
+        Mesh
+            Subdivided mesh with refined geometry and connectivity.
+            - Manifold and spatial dimensions are preserved
+            - Point data is interpolated to new vertices
+            - Cell data is propagated from parents to children
+            - Global data is preserved unchanged
+
+        Raises
+        ------
+        ValueError
+            If levels < 0 or if filter is not one of the supported schemes.
+        NotImplementedError
+            If butterfly/loop filter used with non-2D manifold.
+
+        Notes
+        -----
+        Multi-level subdivision is achieved by iterative application.
+        For levels=3, this is equivalent to calling subdivide(levels=1)
+        three times in sequence. This is the standard approach for all
+        subdivision schemes.
+
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> # Linear subdivision of triangular mesh
+        >>> mesh = two_triangles_2d.load()
+        >>> refined = mesh.subdivide(levels=2, filter="linear")
+        >>> # Each triangle splits into 4, twice: 2 -> 8 -> 32 triangles
+        >>> assert refined.n_cells == mesh.n_cells * 16
+        """
+        from physicsnemo.mesh.subdivision import (
+            subdivide_butterfly,
+            subdivide_linear,
+            subdivide_loop,
+        )
+
+        ### Validate inputs
+        if levels < 0:
+            raise ValueError(f"levels must be >= 0, got {levels=}")
+
+        ### Apply subdivision iteratively
+        mesh = self
+        for _ in range(levels):
+            if filter == "linear":
+                mesh = subdivide_linear(mesh)
+            elif filter == "butterfly":
+                mesh = subdivide_butterfly(mesh)
+            elif filter == "loop":
+                mesh = subdivide_loop(mesh)
+            else:
+                raise ValueError(
+                    f"Invalid {filter=}. Must be one of: 'linear', 'butterfly', 'loop'"
+                )
+
+        return mesh
+
+    def clean(
+        self,
+        tolerance: float = 1e-12,
+        merge_points: bool = True,
+        remove_duplicate_cells: bool = True,
+        remove_unused_points: bool = True,
+    ) -> "Mesh":
+        """Clean and repair this mesh.
+
+        Performs various cleaning operations to fix common mesh issues:
+        1. Merge duplicate points within tolerance
+        2. Remove duplicate cells
+        3. Remove unused points
+
+        This is useful after mesh operations that may introduce duplicate geometry
+        or after importing meshes from external sources that may have redundant data.
+
+        Parameters
+        ----------
+        tolerance : float, optional
+            Absolute L2 distance threshold for merging duplicate points.
+        merge_points : bool, optional
+            Whether to merge duplicate points (default True).
+        remove_duplicate_cells : bool, optional
+            Whether to remove duplicate cells (default True).
+        remove_unused_points : bool, optional
+            Whether to remove unused points (default True).
+
+        Returns
+        -------
+        Mesh
+            Cleaned mesh with same structure but repaired topology.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> # Mesh with duplicate points
+        >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 0.], [1., 1.]])
+        >>> cells = torch.tensor([[0, 1, 3], [2, 1, 3]])
+        >>> mesh = Mesh(points=points, cells=cells)
+        >>> cleaned = mesh.clean()
+        >>> assert cleaned.n_points == 3  # points 0 and 2 merged
+        >>>
+        >>> # Adjust tolerance for coarser merging
+        >>> mesh_loose = mesh.clean(tolerance=1e-6)
+        >>>
+        >>> # Only merge points, keep duplicate cells
+        >>> mesh_partial = mesh.clean(
+        ...     merge_points=True,
+        ...     remove_duplicate_cells=False
+        ... )
+        """
+        from physicsnemo.mesh.repair import clean_mesh
+
+        cleaned, _stats = clean_mesh(
+            mesh=self,
+            tolerance=tolerance,
+            merge_points=merge_points,
+            deduplicate_cells=remove_duplicate_cells,
+            drop_unused_points=remove_unused_points,
+        )
+        return cleaned
+
+    def strip_caches(self) -> "Mesh":
+        r"""Return a new mesh with all cached values removed.
+
+        Cached values (stored under the ``_cache`` key in data TensorDicts) are
+        computed lazily for expensive operations like normals, areas, and curvature.
+        This method creates a new mesh without these cached values, which is useful
+        for:
+
+        - Accurate benchmarking (prevents false performance benefits from caching)
+        - Reducing memory usage
+        - Forcing recomputation of cached values
+
+        Returns
+        -------
+        Mesh
+            A new mesh with the same geometry and data, but without cached values.
+
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+        >>> mesh = sphere_icosahedral.load(subdivisions=2)
+        >>> _ = mesh.cell_normals  # Triggers caching
+        >>> mesh_clean = mesh.strip_caches()  # Remove cached normals
+        """
+        return Mesh(
+            points=self.points,
+            cells=self.cells,
+            point_data=self.point_data.exclude(CACHE_KEY),
+            cell_data=self.cell_data.exclude(CACHE_KEY),
+            global_data=self.global_data.exclude(CACHE_KEY),
         )
 
 

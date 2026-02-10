@@ -19,6 +19,8 @@
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.mesh.utilities._cache import CACHE_KEY
+
 
 def format_mesh_repr(mesh, exclude_cache: bool = False) -> str:
     """Format a complete Mesh representation.
@@ -80,6 +82,8 @@ def format_mesh_repr(mesh, exclude_cache: bool = False) -> str:
 def _count_tensordict_fields(td: TensorDict, exclude_cache: bool = False) -> int:
     """Recursively count total number of fields in a TensorDict.
 
+    Counts both leaf tensors and intermediate (nested) TensorDict entries.
+
     Parameters
     ----------
     td : TensorDict
@@ -92,20 +96,8 @@ def _count_tensordict_fields(td: TensorDict, exclude_cache: bool = False) -> int
     int
         Total number of fields including nested fields.
     """
-    count = 0
-
-    for key, value in td.items():
-        # Skip _cache if requested
-        if exclude_cache and key == "_cache":
-            continue
-
-        count += 1
-
-        # If the value is a TensorDict, recursively count its fields
-        if isinstance(value, TensorDict):
-            count += _count_tensordict_fields(value, exclude_cache=exclude_cache)
-
-    return count
+    filtered = td.exclude(CACHE_KEY) if exclude_cache else td
+    return len(list(filtered.keys(include_nested=True)))
 
 
 def _get_trailing_shape(tensor: torch.Tensor, batch_dims: int) -> tuple:
@@ -149,15 +141,17 @@ def _format_tensordict_repr(
     str
         Formatted string representation.
     """
-    # Get all keys, excluding _cache if requested
-    all_keys = [k for k in td.keys() if not (exclude_cache and k == "_cache")]
+    # Get top-level keys, excluding _cache if requested
+    # (Intentionally top-level only: this function recurses for nested TensorDicts.)
+    filtered = td.exclude(CACHE_KEY) if exclude_cache else td
+    all_keys = list(filtered.keys())
 
     if len(all_keys) == 0:
         return "{}"
 
     # Sort alphabetically, but always put _cache at the end
-    regular_keys = sorted([k for k in all_keys if k != "_cache"])
-    cache_keys = [k for k in all_keys if k == "_cache"]
+    regular_keys = sorted([k for k in all_keys if k != CACHE_KEY])
+    cache_keys = [k for k in all_keys if k == CACHE_KEY]
     keys = regular_keys + cache_keys
 
     # Count total fields to decide on single-line vs multi-line
@@ -168,7 +162,7 @@ def _format_tensordict_repr(
         # Single-line format
         items = []
         for key in keys:
-            value = td[key]
+            value = filtered[key]
             if isinstance(value, TensorDict):
                 # Recursively format nested TensorDict
                 nested_repr = _format_tensordict_repr(
@@ -199,7 +193,7 @@ def _format_tensordict_repr(
     # Build field lines
     field_lines = []
     for i, key in enumerate(keys):
-        value = td[key]
+        value = filtered[key]
         padded_key = str(key).ljust(max_key_len)
         is_last = i == len(keys) - 1
 
