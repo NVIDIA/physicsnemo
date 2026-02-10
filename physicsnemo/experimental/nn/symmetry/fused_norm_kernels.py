@@ -600,3 +600,109 @@ def rmsnorm_grid_normalize_submean_bias(
                 val = val + affine_bias[c]
             val = val * grid_mask[l_idx, m, ri]
             output[batch_idx, l_idx, m, ri * num_channels + c] = val
+
+@wp.kernel
+def layernormsh_lgt0_reduce(
+    x_lgt0: wp.array4d(dtype=float),  # [batch, lmax, mmax+1, 2*channels]
+    norm_stats: wp.array(dtype=float),  # [batch], pre-zeroed
+    balance_weight_lgt0: wp.array2d(dtype=float),  # [lmax, mmax+1]
+    mmax: int,
+    num_channels: int,
+):
+    """Compute global norm statistics for l>0 with tile reduction over channels.
+
+    This kernel operates on the l>0 slice only (excluding l=0 scalar component).
+    Launched with wp.launch(dim=(batch, lmax, num_channels), block_dim=num_channels).
+    Multiple blocks (different l) accumulate into the same norm_stats[batch] via atomics.
+
+    Parameters
+    ----------
+    x_lgt0 : [batch, lmax, mmax+1, 2*channels]
+        Input features for l>0 degrees (l=1 to lmax).
+    norm_stats : [batch]
+        Output: accumulated sum-of-squares per batch. Pre-zeroed by caller.
+        Multiple l-blocks write to same batch slot via atomic add.
+    balance_weight_lgt0 : [lmax, mmax+1]
+        Degree balancing weights for l>0 per (l, m).
+    mmax : int
+        Maximum order.
+    num_channels : int
+        Number of channels (= block_dim).
+    """
+    batch_idx, l_idx, c = wp.tid()
+    # l_idx is 0-based within l>0 slice, so actual degree is l_idx + 1
+    l_actual = l_idx + 1
+    num_valid_m = wp.min(l_actual, mmax) + 1
+
+    # Each thread accumulates its per-channel contribution
+    local_norm = float(0.0)
+    for m in range(num_valid_m):
+        w = balance_weight_lgt0[l_idx, m]
+        for ri in range(2):
+            if m == 0 and ri == 1:
+                continue
+            val = x_lgt0[batch_idx, l_idx, m, ri * num_channels + c]
+            local_norm = local_norm + w * val * val
+
+    # Cooperative tile reduction across channels within the block
+    t = wp.tile(local_norm)
+    s = wp.tile_sum(t)
+
+    # Store raw sum-of-squares
+    # Multiple l-blocks atomically accumulate into the same batch slot
+    wp.tile_atomic_add(norm_stats, s, offset=batch_idx)
+
+
+@wp.kernel
+def layernormsh_lgt0_normalize(
+    x_lgt0: wp.array4d(dtype=float),  # [batch, lmax, mmax+1, 2*channels]
+    output_lgt0: wp.array4d(dtype=float),  # [batch, lmax, mmax+1, 2*channels]
+    norm_stats: wp.array(dtype=float),  # [batch]
+    affine_weight: wp.array2d(dtype=float),  # [lmax, channels]
+    grid_mask_lgt0: wp.array3d(dtype=float),  # [lmax, mmax+1, 2]
+    mmax: int,
+    num_channels: int,
+    inv_num_channels: float,
+    eps: float,
+):
+    """Normalize l>0 features using global statistics. Pure SIMT, one thread per channel.
+
+    This kernel operates on the l>0 slice only (excluding l=0 scalar component).
+    Launched with wp.launch(dim=(batch, lmax, num_channels)).
+    Computes inv_rms inline from raw norm_stats per-thread.
+
+    Parameters
+    ----------
+    x_lgt0 : [batch, lmax, mmax+1, 2*channels]
+        Input features for l>0 degrees (l=1 to lmax).
+    output_lgt0 : [batch, lmax, mmax+1, 2*channels]
+        Output features for l>0 degrees.
+    norm_stats : [batch]
+        Raw accumulated sum-of-squares from reduce kernel.
+    affine_weight : [lmax, channels]
+        Scale parameters for l>0 degrees.
+    grid_mask_lgt0 : [lmax, mmax+1, 2]
+        Validity mask for l>0 combining (l,m) validity and m=0 imaginary zeroing.
+        1.0 for valid positions, 0.0 for invalid.
+    mmax : int
+        Maximum order.
+    num_channels : int
+        Number of channels.
+    inv_num_channels : float
+        Pre-computed 1.0 / (2 * num_channels) for averaging.
+    eps : float
+        Epsilon for numerical stability.
+    """
+    batch_idx, l_idx, c = wp.tid()
+
+    # Compute inv_rms inline from raw norm_stats (redundant but cheap, value is L1-cached)
+    inv_rms_val = 1.0 / wp.sqrt(norm_stats[batch_idx] * inv_num_channels + eps)
+    aw = affine_weight[l_idx, c]
+
+    for m in range(mmax + 1):
+        for ri in range(2):
+            val = x_lgt0[batch_idx, l_idx, m, ri * num_channels + c]
+            val = val * inv_rms_val
+            val = val * aw
+            val = val * grid_mask_lgt0[l_idx, m, ri]
+            output_lgt0[batch_idx, l_idx, m, ri * num_channels + c] = val

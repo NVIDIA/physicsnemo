@@ -85,6 +85,8 @@ from physicsnemo.experimental.nn.symmetry.fused_norm_kernels import (
     layernorm_grid_normalize_submean_bias,
     layernorm_grid_reduce,
     layernorm_grid_reduce_submean,
+    layernormsh_lgt0_normalize,
+    layernormsh_lgt0_reduce,
     rmsnorm_grid_normalize,
     rmsnorm_grid_normalize_submean,
     rmsnorm_grid_normalize_submean_bias,
@@ -1512,7 +1514,134 @@ class FusedEquivariantLayerNormSH(EquivariantLayerNormSHGrid):
     FusedEquivariantLayerNorm : Fused per-degree normalization variant.
     """
 
-    _use_fused: bool = False  # Will become True when Warp kernels are integrated
+    _use_fused: bool = True
+
+    def __init__(
+        self,
+        lmax: int,
+        mmax: int,
+        num_channels: int,
+        std_balance_degrees: bool = True,
+        affine: bool = True,
+        eps: float = 1e-5,
+    ) -> None:
+        """Initialize FusedEquivariantLayerNormSH with additional buffers for Warp kernels."""
+        super().__init__(lmax, mmax, num_channels, std_balance_degrees, affine, eps)
+
+        # Register l>0 grid mask for Warp kernels: slice from grid_mask_3d
+        # grid_mask_3d: [lmax+1, mmax+1, 2] -> grid_mask_3d_lgt0: [lmax, mmax+1, 2]
+        grid_mask_3d_lgt0 = self.grid_mask_3d[1:, :, :].contiguous()
+        self.register_buffer("grid_mask_3d_lgt0", grid_mask_3d_lgt0, persistent=False)
+
+    @torch.autocast("cuda", enabled=False)
+    def forward(
+        self, x: Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
+    ) -> Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]:
+        r"""Apply equivariant layer normalization using fused Warp kernels.
+
+        Parameters
+        ----------
+        x : Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
+            Input features in grid layout.
+
+        Returns
+        -------
+        Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
+            Normalized features.
+        """
+        # Validate input shape (skip during torch.compile)
+        if not torch.compiler.is_compiling():
+            self._validate_input_shape(x)
+
+        # Fall back to unfused implementation if not on CUDA or requires grad
+        if not x.is_cuda or x.requires_grad:
+            return super().forward(x)
+
+        # Get compute dtype and prepare input
+        input_dtype = x.dtype
+        compute_dtype = self._get_compute_dtype(input_dtype)
+        x = self._prepare_input(x, compute_dtype)
+
+        batch_size = x.shape[0]
+
+        # Process l=0 with standard LayerNorm (PyTorch)
+        l0_feature = x[:, 0, 0, 0, :]  # [batch, channels]
+        l0_normed = self.norm_l0(l0_feature.to(input_dtype)).to(compute_dtype)
+
+        # Process l>0 with Warp kernels
+        # Extract l>0 slice and reshape to 4D
+        x_lgt0 = x[:, 1:, :, :, :]  # [batch, lmax, mmax+1, 2, channels]
+        x_lgt0_4d = x_lgt0.contiguous().view(
+            batch_size, self.lmax, self.mmax + 1, 2 * self.num_channels
+        )
+        output_lgt0_4d = torch.empty_like(x_lgt0_4d)
+
+        # Allocate norm_stats
+        norm_stats = torch.zeros(batch_size, dtype=compute_dtype, device=x.device)
+
+        # Get balance weight for l>0 (slice at launch time)
+        balance_weight = (
+            self.balance_degree_weight
+            if self.std_balance_degrees
+            else self._balance_degree_weight_buffer
+        )
+        balance_weight_lgt0 = balance_weight[1:, :].to(compute_dtype).detach()
+
+        # Get affine weight for l>0 (already correct shape [lmax, channels])
+        affine_weight = (
+            self.affine_weight if self.affine else self._affine_weight_buffer
+        )
+        affine_weight_warp = affine_weight.to(compute_dtype).detach()
+
+        # Get grid mask for l>0
+        grid_mask_lgt0_warp = self.grid_mask_3d_lgt0.to(compute_dtype).detach()
+
+        # Pre-compute inv_num_channels
+        inv_num_channels = 1.0 / (2.0 * self.num_channels)
+
+        # Launch Warp kernels within a single stream
+        with FunctionSpec.warp_launch_context(x):
+            # Reduce kernel
+            wp.launch(
+                kernel=layernormsh_lgt0_reduce,
+                dim=(batch_size, self.lmax, self.num_channels),
+                inputs=[
+                    x_lgt0_4d,
+                    norm_stats,
+                    balance_weight_lgt0,
+                    self.mmax,
+                    self.num_channels,
+                ],
+                block_dim=self.num_channels,
+            )
+
+            # Normalize kernel
+            wp.launch(
+                kernel=layernormsh_lgt0_normalize,
+                dim=(batch_size, self.lmax, self.num_channels),
+                inputs=[
+                    x_lgt0_4d,
+                    output_lgt0_4d,
+                    norm_stats,
+                    affine_weight_warp,
+                    grid_mask_lgt0_warp,
+                    self.mmax,
+                    self.num_channels,
+                    inv_num_channels,
+                    self.eps,
+                ],
+            )
+
+        # Assemble output
+        output = torch.zeros_like(x)
+        output[:, 0, 0, 0, :] = l0_normed
+        output_lgt0 = output_lgt0_4d.view(
+            batch_size, self.lmax, self.mmax + 1, 2, self.num_channels
+        )
+        output[:, 1:, :, :, :] = output_lgt0
+
+        # Finalize output
+        return self._finalize_output(output, compute_dtype, input_dtype)
 
 
 class FusedEquivariantLayerNorm(EquivariantLayerNormGrid):
