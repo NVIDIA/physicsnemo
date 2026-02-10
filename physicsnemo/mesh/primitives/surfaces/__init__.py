@@ -31,6 +31,7 @@ from physicsnemo.mesh.primitives.surfaces import (
     mobius_strip,
     octahedron_surface,
     plane,
+    sphere_icosahedral,
     sphere_uv,
     tetrahedron_surface,
     torus,

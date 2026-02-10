@@ -58,52 +58,62 @@ def load(
 
     ### Create cylindrical side
     theta = torch.linspace(0, 2 * torch.pi, n_circ + 1, device=device)[:-1]
-    z = torch.linspace(-height / 2, height / 2, n_height, device=device)
+    z_vals = torch.linspace(-height / 2, height / 2, n_height, device=device)
 
-    # Side points
-    points_side = []
-    for z_val in z:
-        for theta_val in theta:
-            x = radius * torch.cos(theta_val)
-            y = radius * torch.sin(theta_val)
-            points_side.append([x.item(), y.item(), z_val.item()])
+    # Vectorized side point generation
+    Z, THETA = torch.meshgrid(z_vals, theta, indexing="ij")
+    x = radius * torch.cos(THETA)
+    y = radius * torch.sin(THETA)
+    side_points = torch.stack([x, y, Z], dim=-1).reshape(-1, 3).to(dtype=torch.float32)
 
-    # Create cells for side
-    cells_side = []
-    for i in range(n_height - 1):
-        for j in range(n_circ):
-            idx = i * n_circ + j
-            next_j = (j + 1) % n_circ
+    # Vectorized side cell generation (periodic in theta, open in z)
+    i_idx = torch.arange(n_height - 1, device=device)
+    j_idx = torch.arange(n_circ, device=device)
+    ii, jj = torch.meshgrid(i_idx, j_idx, indexing="ij")
+    ii_flat = ii.reshape(-1)
+    jj_flat = jj.reshape(-1)
 
-            # Two triangles per quad
-            cells_side.append([idx, idx + next_j - j, idx + n_circ])
-            cells_side.append(
-                [idx + next_j - j, idx + n_circ + next_j - j, idx + n_circ]
-            )
+    p00 = ii_flat * n_circ + jj_flat
+    p01 = ii_flat * n_circ + (jj_flat + 1) % n_circ
+    p10 = (ii_flat + 1) * n_circ + jj_flat
+    p11 = (ii_flat + 1) * n_circ + (jj_flat + 1) % n_circ
+
+    tri1 = torch.stack([p00, p01, p10], dim=1)
+    tri2 = torch.stack([p01, p11, p10], dim=1)
 
     ### Add caps
-    # Bottom cap center
-    bottom_center_idx = len(points_side)
-    points_side.append([0.0, 0.0, -height / 2])
+    bottom_center_idx = n_height * n_circ
+    top_center_idx = n_height * n_circ + 1
+    cap_points = torch.tensor(
+        [[0.0, 0.0, -height / 2], [0.0, 0.0, height / 2]],
+        dtype=torch.float32,
+        device=device,
+    )
 
-    # Top cap center
-    top_center_idx = len(points_side)
-    points_side.append([0.0, 0.0, height / 2])
+    # Vectorized bottom cap triangles
+    j_cap = torch.arange(n_circ, device=device)
+    next_j_cap = (j_cap + 1) % n_circ
+    bottom_cells = torch.stack(
+        [
+            torch.full((n_circ,), bottom_center_idx, dtype=torch.int64, device=device),
+            next_j_cap,
+            j_cap,
+        ],
+        dim=1,
+    )
 
-    # Bottom cap triangles
-    for j in range(n_circ):
-        next_j = (j + 1) % n_circ
-        cells_side.append([bottom_center_idx, next_j, j])
-
-    # Top cap triangles
+    # Vectorized top cap triangles
     top_ring_offset = (n_height - 1) * n_circ
-    for j in range(n_circ):
-        next_j = (j + 1) % n_circ
-        cells_side.append(
-            [top_center_idx, top_ring_offset + j, top_ring_offset + next_j]
-        )
+    top_cells = torch.stack(
+        [
+            torch.full((n_circ,), top_center_idx, dtype=torch.int64, device=device),
+            top_ring_offset + j_cap,
+            top_ring_offset + next_j_cap,
+        ],
+        dim=1,
+    )
 
-    points = torch.tensor(points_side, dtype=torch.float32, device=device)
-    cells = torch.tensor(cells_side, dtype=torch.int64, device=device)
+    points = torch.cat([side_points, cap_points], dim=0)
+    cells = torch.cat([tri1, tri2, bottom_cells, top_cells], dim=0)
 
     return Mesh(points=points, cells=cells)
