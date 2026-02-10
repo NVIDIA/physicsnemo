@@ -245,8 +245,7 @@ def plot_speedup_chart(
         (key, label, color)
         for key, label, color in VARIANT_CONFIGS
         if any(
-            results.get(op_key, {}).get(key)
-            for op_key, _ in BENCHMARK_DISPLAY_CONFIGS
+            results.get(op_key, {}).get(key) for op_key, _ in BENCHMARK_DISPLAY_CONFIGS
         )
     ]
 
