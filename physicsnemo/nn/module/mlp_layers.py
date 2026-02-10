@@ -14,35 +14,113 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Multi-layer perceptron (MLP) module with optional Transformer Engine support."""
+
+import importlib
+
 import torch
 from torch import nn
 
+from physicsnemo.core.version_check import check_version_spec
+
 from .activations import get_activation
+
+# Check for Transformer Engine availability
+TE_AVAILABLE = check_version_spec("transformer_engine", hard_fail=False)
+if TE_AVAILABLE:
+    te = importlib.import_module("transformer_engine.pytorch")
+else:
+    te = None
 
 
 class Mlp(nn.Module):
+    """Multi-layer perceptron with configurable architecture and optional Transformer Engine support.
+
+    A flexible MLP that supports:
+    - Arbitrary number of hidden layers with configurable dimensions
+    - Optional Transformer Engine linear layers for optimized performance
+    - Configurable activation function
+    - Optional dropout
+
+    Parameters
+    ----------
+    in_features : int
+        Number of input features.
+    hidden_features : int | list[int] | None, optional
+        Hidden layer dimension(s). Can be:
+        - ``int``: Single hidden layer with this dimension
+        - ``list[int]``: Multiple hidden layers with specified dimensions
+        - ``None``: Single hidden layer with ``in_features`` dimension
+        Default is ``None``.
+    out_features : int | None, optional
+        Number of output features. If ``None``, defaults to ``in_features``.
+        Default is ``None``.
+    act_layer : nn.Module | str, optional
+        Activation function. Can be:
+        - ``str``: Name of activation (e.g., ``"gelu"``, ``"relu"``, ``"silu"``)
+        - ``type``: Activation class to instantiate (e.g., ``nn.GELU``)
+        - ``nn.Module``: Pre-instantiated activation module
+        Default is ``nn.GELU``.
+    drop : float, optional
+        Dropout rate applied after each layer. Default is ``0.0``.
+    use_te : bool, optional
+        Whether to use Transformer Engine linear layers for optimized performance.
+        Requires Transformer Engine to be installed. Default is ``False``.
+
+    Examples
+    --------
+    >>> import torch
+    >>> # Simple MLP with single hidden layer
+    >>> mlp = Mlp(in_features=64, hidden_features=128, out_features=32)
+    >>> x = torch.randn(2, 64)
+    >>> out = mlp(x)
+    >>> out.shape
+    torch.Size([2, 32])
+
+    >>> # MLP with multiple hidden layers
+    >>> mlp = Mlp(in_features=64, hidden_features=[128, 256, 128], out_features=32)
+    >>> x = torch.randn(2, 64)
+    >>> out = mlp(x)
+    >>> out.shape
+    torch.Size([2, 32])
+
+    >>> # MLP with Transformer Engine (if available)
+    >>> mlp = Mlp(in_features=64, hidden_features=128, out_features=32, use_te=True)
+    """
+
     def __init__(
         self,
         in_features: int,
         hidden_features: int | list[int] | None = None,
         out_features: int | None = None,
-        act_layer: nn.Module | str = nn.GELU,
+        act_layer: nn.Module | type[nn.Module] | str = nn.GELU,
         drop: float = 0.0,
+        use_te: bool = False,
     ):
         super().__init__()
-        out_features = out_features or in_features
-        if isinstance(hidden_features, int):
-            hidden_features = [
-                hidden_features,
-            ]
-        elif hidden_features is None:
-            hidden_features = [
-                in_features,
-            ]
 
-        # If the activation is a string, get it.
-        # If it's a type, instantiate it.
-        # If it's a module, leave it be.
+        # Validate Transformer Engine availability
+        if use_te and not TE_AVAILABLE:
+            raise RuntimeError(
+                "Transformer Engine is not available. "
+                "Install it with `pip install transformer-engine` or set use_te=False."
+            )
+
+        self.use_te = use_te
+
+        # Set default output features
+        out_features = out_features or in_features
+
+        # Normalize hidden_features to list
+        if isinstance(hidden_features, int):
+            hidden_features = [hidden_features]
+        elif hidden_features is None:
+            hidden_features = [in_features]
+
+        # Process activation layer
+        # If it's a string, get the activation by name
+        # If it's a type (class), instantiate it
+        # If it's already an instance, use it directly
         if isinstance(act_layer, str):
             act_layer = get_activation(act_layer)
         elif isinstance(act_layer, nn.Module):
@@ -54,21 +132,39 @@ class Mlp(nn.Module):
                     f"Activation layer must be a string or a module, got {type(act_layer)}"
                 )
 
-        layers = []
+        # Select linear layer type based on use_te
+        linear_layer = te.Linear if use_te else nn.Linear
+
+        # Build layers
+        layers: list[nn.Module] = []
         input_dim = in_features
+
         for hidden_dim in hidden_features:
-            layers.append(nn.Linear(input_dim, hidden_dim))
+            layers.append(linear_layer(input_dim, hidden_dim))
             layers.append(act_layer)
             if drop != 0:
                 layers.append(nn.Dropout(drop))
             input_dim = hidden_dim
 
-        # Add the last layers:
-        layers.append(nn.Linear(input_dim, out_features))
+        # Add the final output layer
+        layers.append(linear_layer(input_dim, out_features))
         if drop != 0:
             layers.append(nn.Dropout(drop))
 
         self.layers = nn.Sequential(*layers)
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass of the MLP.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input tensor of shape ``(*, in_features)`` where ``*`` denotes
+            any number of batch dimensions.
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor of shape ``(*, out_features)``.
+        """
         return self.layers(x)

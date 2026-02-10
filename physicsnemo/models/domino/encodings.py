@@ -14,36 +14,67 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-This code contains the DoMINO model architecture.
-The DoMINO class contains an architecture to model both surface and
-volume quantities together as well as separately (controlled using
-the config.yaml file)
+r"""
+DoMINO Encoding Modules.
+
+This module contains encoding layers for the DoMINO model architecture,
+including local and multi-scale geometry encodings.
 """
 
 import torch
 import torch.nn as nn
 from einops import rearrange
+from jaxtyping import Float
 
+from physicsnemo.core import Module
 from physicsnemo.nn import BQWarp
 
 from .mlps import LocalPointConv
 
 
-class LocalGeometryEncoding(nn.Module):
-    """
+class LocalGeometryEncoding(Module):
+    r"""
     A local geometry encoding module.
 
-    This will apply a ball query to the input features, mapping the point cloud
-    to the volume mesh, and then apply a local point convolution to the output.
+    This module applies a ball query to map point cloud features onto a volume mesh,
+    then applies a local point convolution to process the spatial relationships.
+    It is used to capture local geometric context around each point.
 
-    Args:
-        radius: The radius of the ball query.
-        neighbors_in_radius: The number of neighbors in the radius of the ball query.
-        total_neighbors_in_radius: The total number of neighbors in the radius of the ball query.
-        base_layer: The number of neurons in the hidden layer of the MLP.
-        activation: The activation function to use in the MLP.
-        grid_resolution: The resolution of the grid.
+    Parameters
+    ----------
+    radius : float
+        The radius of the ball query for neighbor searching.
+    neighbors_in_radius : int
+        The number of neighbors to consider within the ball query radius.
+    total_neighbors_in_radius : int
+        The total number of input features per neighbor (accounts for encoding type).
+    base_layer : int
+        The number of neurons in the hidden layer of the local point convolution MLP.
+    activation : nn.Module
+        The activation function to use in the MLP.
+    grid_resolution : tuple[int, int, int]
+        The resolution of the 3D grid as :math:`(N_x, N_y, N_z)`.
+
+    Forward
+    -------
+    encoding_g : torch.Tensor
+        Geometry encoding tensor of shape :math:`(B, C, N_x, N_y, N_z)` where
+        :math:`C` is the number of encoding channels.
+    volume_mesh_centers : torch.Tensor
+        Volume mesh center coordinates of shape :math:`(B, N_{vol}, 3)`.
+    p_grid : torch.Tensor
+        Grid points tensor of shape :math:`(B, N_x, N_y, N_z, 3)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Local geometry encoding of shape :math:`(B, N_{vol}, D_{out})` where
+        :math:`D_{out}` equals ``neighbors_in_radius``.
+
+    See Also
+    --------
+    :class:`~physicsnemo.nn.BQWarp` : Ball query warp module used for neighbor searching.
+    :class:`~physicsnemo.models.domino.mlps.LocalPointConv` : Local point convolution layer.
     """
 
     def __init__(
@@ -55,7 +86,7 @@ class LocalGeometryEncoding(nn.Module):
         activation: nn.Module,
         grid_resolution: tuple[int, int, int],
     ):
-        super().__init__()
+        super().__init__(meta=None)
         self.bq_warp = BQWarp(
             radius=radius,
             neighbors_in_radius=neighbors_in_radius,
@@ -70,14 +101,52 @@ class LocalGeometryEncoding(nn.Module):
 
     def forward(
         self,
-        encoding_g: torch.Tensor,
-        volume_mesh_centers: torch.Tensor,
-        p_grid: torch.Tensor,
-    ) -> torch.Tensor:
+        encoding_g: Float[torch.Tensor, " batch channels nx ny nz"],
+        volume_mesh_centers: Float[torch.Tensor, " batch num_points 3"],
+        p_grid: Float[torch.Tensor, " batch nx ny nz 3"],
+    ) -> Float[torch.Tensor, " batch num_points out_features"]:
+        r"""
+        Compute local geometry encoding.
+
+        Parameters
+        ----------
+        encoding_g : torch.Tensor
+            Geometry encoding tensor of shape :math:`(B, C, N_x, N_y, N_z)`.
+        volume_mesh_centers : torch.Tensor
+            Volume mesh center coordinates of shape :math:`(B, N_{vol}, 3)`.
+        p_grid : torch.Tensor
+            Grid points tensor of shape :math:`(B, N_x, N_y, N_z, 3)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Local geometry encoding of shape :math:`(B, N_{vol}, D_{out})`.
+        """
+        # Input validation
+        if not torch.compiler.is_compiling():
+            if encoding_g.ndim != 5:
+                raise ValueError(
+                    f"Expected encoding_g to be 5D (B, C, Nx, Ny, Nz), "
+                    f"got {encoding_g.ndim}D with shape {tuple(encoding_g.shape)}"
+                )
+            if volume_mesh_centers.ndim != 3 or volume_mesh_centers.shape[-1] != 3:
+                raise ValueError(
+                    f"Expected volume_mesh_centers of shape (B, N, 3), "
+                    f"got shape {tuple(volume_mesh_centers.shape)}"
+                )
+            if p_grid.ndim != 5 or p_grid.shape[-1] != 3:
+                raise ValueError(
+                    f"Expected p_grid of shape (B, Nx, Ny, Nz, 3), "
+                    f"got shape {tuple(p_grid.shape)}"
+                )
+
         batch_size = volume_mesh_centers.shape[0]
         nx, ny, nz = self.grid_resolution
 
+        # Reshape grid for ball query
         p_grid = torch.reshape(p_grid, (batch_size, nx * ny * nz, 3))
+
+        # Perform ball query to find neighbors
         mapping, outputs = self.bq_warp(
             volume_mesh_centers, p_grid, reverse_mapping=False
         )
@@ -85,6 +154,7 @@ class LocalGeometryEncoding(nn.Module):
         mapping = mapping.type(torch.int64)
         mask = mapping != 0
 
+        # Sample geometry encoding at neighbor locations
         encoding_g_inner = []
         for j in range(encoding_g.shape[1]):
             geo_encoding = rearrange(encoding_g[:, j], "b nx ny nz -> b 1 (nx ny nz)")
@@ -96,25 +166,57 @@ class LocalGeometryEncoding(nn.Module):
             geo_encoding_sampled = geo_encoding_sampled * mask
 
             encoding_g_inner.append(geo_encoding_sampled)
+
+        # Concatenate and apply local point convolution
         encoding_g_inner = torch.cat(encoding_g_inner, dim=2)
         encoding_g_inner = self.local_point_conv(encoding_g_inner)
 
         return encoding_g_inner
 
 
-class MultiGeometryEncoding(nn.Module):
-    """
-    Module to apply multiple local geometry encodings
+class MultiGeometryEncoding(Module):
+    r"""
+    Module to apply multiple local geometry encodings at different scales.
 
-    This will stack several local geometry encodings together, and concatenate the results.
+    This module stacks several :class:`LocalGeometryEncoding` modules with different
+    radii and neighbor counts, then concatenates their outputs to create a
+    multi-scale geometry representation.
 
-    Args:
-        radii: The list of radii of the local geometry encodings.
-        neighbors_in_radius: The list of number of neighbors in the radius of the local geometry encodings.
-        geo_encoding_type: The type of geometry encoding to use. Can be "both", "stl", or "sdf".
-        base_layer: The number of neurons in the hidden layer of the MLP.
-        activation: The activation function to use in the MLP.
-        grid_resolution: The resolution of the grid.
+    Parameters
+    ----------
+    radii : list[float]
+        List of radii for each local geometry encoding scale.
+    neighbors_in_radius : list[int]
+        List of neighbor counts for each scale, corresponding to ``radii``.
+    geo_encoding_type : str
+        The type of geometry encoding. Can be ``"both"``, ``"stl"``, or ``"sdf"``.
+    n_upstream_radii : int
+        Number of upstream radii used for computing total neighbors.
+    base_layer : int
+        The number of neurons in the hidden layer of each local point convolution MLP.
+    activation : nn.Module
+        The activation function to use in the MLPs.
+    grid_resolution : tuple[int, int, int]
+        The resolution of the 3D grid as :math:`(N_x, N_y, N_z)`.
+
+    Forward
+    -------
+    encoding_g : torch.Tensor
+        Geometry encoding tensor of shape :math:`(B, C, N_x, N_y, N_z)`.
+    volume_mesh_centers : torch.Tensor
+        Volume mesh center coordinates of shape :math:`(B, N_{vol}, 3)`.
+    p_grid : torch.Tensor
+        Grid points tensor of shape :math:`(B, N_x, N_y, N_z, 3)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Concatenated multi-scale geometry encoding of shape :math:`(B, N_{vol}, D_{total})`
+        where :math:`D_{total}` is the sum of all ``neighbors_in_radius`` values.
+
+    See Also
+    --------
+    :class:`LocalGeometryEncoding` : Single-scale local geometry encoding module.
     """
 
     def __init__(
@@ -127,7 +229,7 @@ class MultiGeometryEncoding(nn.Module):
         activation: nn.Module,
         grid_resolution: tuple[int, int, int],
     ):
-        super().__init__()
+        super().__init__(meta=None)
 
         self.local_geo_encodings = nn.ModuleList(
             [
@@ -148,21 +250,79 @@ class MultiGeometryEncoding(nn.Module):
     def calculate_total_neighbors_in_radius(
         self, geo_encoding_type: str, neighbors_in_radius: int, n_upstream_radii: int
     ) -> int:
+        r"""
+        Calculate total neighbors based on encoding type.
+
+        Parameters
+        ----------
+        geo_encoding_type : str
+            The type of geometry encoding (``"both"``, ``"stl"``, or ``"sdf"``).
+        neighbors_in_radius : int
+            Base number of neighbors in radius.
+        n_upstream_radii : int
+            Number of upstream radii.
+
+        Returns
+        -------
+        int
+            Total number of neighbors in radius for the encoding.
+        """
         if geo_encoding_type == "both":
             total_neighbors_in_radius = neighbors_in_radius * (n_upstream_radii + 1)
         elif geo_encoding_type == "stl":
             total_neighbors_in_radius = neighbors_in_radius * (n_upstream_radii)
         elif geo_encoding_type == "sdf":
             total_neighbors_in_radius = neighbors_in_radius
+        else:
+            raise ValueError(
+                f"Invalid geo_encoding_type: {geo_encoding_type}. "
+                f"Must be 'both', 'stl', or 'sdf'."
+            )
 
         return total_neighbors_in_radius
 
     def forward(
         self,
-        encoding_g: torch.Tensor,
-        volume_mesh_centers: torch.Tensor,
-        p_grid: torch.Tensor,
-    ) -> torch.Tensor:
+        encoding_g: Float[torch.Tensor, "batch channels nx ny nz"],
+        volume_mesh_centers: Float[torch.Tensor, "batch num_points 3"],
+        p_grid: Float[torch.Tensor, "batch nx ny nz 3"],
+    ) -> Float[torch.Tensor, "batch num_points total_features"]:
+        r"""
+        Compute multi-scale geometry encoding.
+
+        Parameters
+        ----------
+        encoding_g : torch.Tensor
+            Geometry encoding tensor of shape :math:`(B, C, N_x, N_y, N_z)`.
+        volume_mesh_centers : torch.Tensor
+            Volume mesh center coordinates of shape :math:`(B, N_{vol}, 3)`.
+        p_grid : torch.Tensor
+            Grid points tensor of shape :math:`(B, N_x, N_y, N_z, 3)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Concatenated multi-scale geometry encoding of shape :math:`(B, N_{vol}, D_{total})`.
+        """
+        # Input validation
+        if not torch.compiler.is_compiling():
+            if encoding_g.ndim != 5:
+                raise ValueError(
+                    f"Expected encoding_g to be 5D (B, C, Nx, Ny, Nz), "
+                    f"got {encoding_g.ndim}D with shape {tuple(encoding_g.shape)}"
+                )
+            if volume_mesh_centers.ndim != 3 or volume_mesh_centers.shape[-1] != 3:
+                raise ValueError(
+                    f"Expected volume_mesh_centers of shape (B, N, 3), "
+                    f"got shape {tuple(volume_mesh_centers.shape)}"
+                )
+            if p_grid.ndim != 5 or p_grid.shape[-1] != 3:
+                raise ValueError(
+                    f"Expected p_grid of shape (B, Nx, Ny, Nz, 3), "
+                    f"got shape {tuple(p_grid.shape)}"
+                )
+
+        # Apply each local geometry encoding and concatenate results
         return torch.cat(
             [
                 local_geo_encoding(encoding_g, volume_mesh_centers, p_grid)

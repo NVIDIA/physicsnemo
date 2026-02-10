@@ -34,7 +34,7 @@ import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import check_version_spec
-from physicsnemo.models.transolver.transolver import MLP
+from physicsnemo.models.transolver.transolver import _TransolverMlp
 
 from .context_projector import GlobalContextBuilder
 from .gale import GALE_block
@@ -370,13 +370,11 @@ class GeoTransolver(Module):
         # Input projection MLPs - one per input type
         self.preprocess = nn.ModuleList(
             [
-                MLP(
-                    f,
-                    n_hidden * 2,
-                    n_hidden,
-                    n_layers=0,
-                    res=False,
-                    act=act,
+                _TransolverMlp(
+                    in_features=f,
+                    hidden_features=n_hidden * 2,
+                    out_features=n_hidden,
+                    act_layer=act,
                     use_te=use_te,
                 )
                 for f in functional_dims

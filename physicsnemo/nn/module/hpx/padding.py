@@ -14,8 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Reusable HEALPix tensor utilities and padding layers."""
-
 import importlib
 
 import torch
@@ -32,141 +30,11 @@ else:
     def hpx_pad(*args, **kwargs):
         """Dummy symbol for missing earth2grid backend."""
         raise ImportError(
-            "earth2grid is not installed, cannot use it as a backend for HEALPix "
-            "padding. Install earth2grid from https://github.com/NVlabs/earth2grid.git "
-            "to enable the accelerated path."
-        )
-
-
-def _raise_shape_error(name: str, tensor: torch.Tensor, message: str) -> None:
-    raise ValueError(
-        f"{name}: expected {message}, received tensor with shape {tuple(tensor.shape)}"
-    )
-
-
-class HEALPixFoldFaces(torch.nn.Module):
-    r"""
-    Fold the face dimension of a HEALPix tensor into the batch dimension.
-
-    Parameters
-    ----------
-    enable_nhwc : bool, optional
-        If ``True``, store the folded tensor in channels-last memory format.
-
-    Forward
-    -------
-    tensor : torch.Tensor
-        Input tensor of shape :math:`(B, F, C, H, W)` where :math:`F=12`.
-
-    Outputs
-    -------
-    torch.Tensor
-        Folded tensor of shape :math:`(B \cdot F, C, H, W)`.
-
-    Examples
-    --------
-    >>> fold = HEALPixFoldFaces()
-    >>> x = torch.randn(2, 12, 3, 4, 4)
-    >>> fold(x).shape
-    torch.Size([24, 3, 4, 4])
-    """
-
-    def __init__(self, enable_nhwc: bool = False) -> None:
-        super().__init__()
-        self.enable_nhwc = enable_nhwc
-
-    def forward(
-        self, tensor: Float[torch.Tensor, "batch faces channels height width"]
-    ) -> Float[torch.Tensor, "batch_faces channels height width"]:
-        r"""
-        Fold the face dimension into the batch dimension.
-
-        Parameters
-        ----------
-        tensor : torch.Tensor
-            HEALPix data of shape :math:`(B, F, C, H, W)`.
-
-        Returns
-        -------
-        torch.Tensor
-            Folded tensor of shape :math:`(B \cdot F, C, H, W)`.
-        """
-        if not torch.compiler.is_compiling() and tensor.ndim != 5:
-            _raise_shape_error("HEALPixFoldFaces.forward", tensor, "a 5D tensor")
-
-        batch, faces, channels, height, width = tensor.shape
-        folded = torch.reshape(tensor, shape=(batch * faces, channels, height, width))
-
-        if self.enable_nhwc:
-            folded = folded.to(memory_format=torch.channels_last)
-
-        return folded
-
-
-class HEALPixUnfoldFaces(torch.nn.Module):
-    r"""
-    Unfold a folded HEALPix tensor back to a face-major representation.
-
-    Parameters
-    ----------
-    num_faces : int, optional
-        Number of faces in the mesh (defaults to 12 for HEALPix).
-    enable_nhwc : bool, optional
-        If ``True``, expect channels-last tensors during unfolding.
-
-    Forward
-    -------
-    tensor : torch.Tensor
-        Input tensor of shape :math:`(B \cdot F, C, H, W)`.
-
-    Outputs
-    -------
-    torch.Tensor
-        Unfolded tensor of shape :math:`(B, F, C, H, W)`.
-
-    Examples
-    --------
-    >>> unfold = HEALPixUnfoldFaces()
-    >>> x = torch.randn(24, 3, 4, 4)
-    >>> unfold(x).shape
-    torch.Size([2, 12, 3, 4, 4])
-    """
-
-    def __init__(self, num_faces: int = 12, enable_nhwc: bool = False) -> None:
-        super().__init__()
-        self.num_faces = num_faces
-        self.enable_nhwc = enable_nhwc
-
-    def forward(
-        self, tensor: Float[torch.Tensor, "batch_faces channels height width"]
-    ) -> Float[torch.Tensor, "batch faces channels height width"]:
-        r"""
-        Unfold a tensor by restoring its explicit face dimension.
-
-        Parameters
-        ----------
-        tensor : torch.Tensor
-            Folded tensor of shape :math:`(B \cdot F, C, H, W)`.
-
-        Returns
-        -------
-        torch.Tensor
-            Unfolded tensor of shape :math:`(B, F, C, H, W)`.
-        """
-        if not torch.compiler.is_compiling():
-            if tensor.ndim != 4:
-                _raise_shape_error("HEALPixUnfoldFaces.forward", tensor, "a 4D tensor")
-            if tensor.shape[0] % self.num_faces != 0:
-                _raise_shape_error(
-                    "HEALPixUnfoldFaces.forward",
-                    tensor,
-                    f"batch dimension divisible by num_faces={self.num_faces}",
-                )
-
-        batch_faces, channels, height, width = tensor.shape
-        batch = batch_faces // self.num_faces
-        return torch.reshape(
-            tensor, shape=(batch, self.num_faces, channels, height, width)
+            (
+                "earth2grid is not installed, cannot use it as a backend for HEALPix padding.\n"
+                "Install earth2grid from https://github.com/NVlabs/earth2grid.git to enable the accelerated path.\n"
+                "pip install --no-build-isolation https://github.com/NVlabs/earth2grid/archive/main.tar.gz"
+            )
         )
 
 
@@ -220,7 +88,9 @@ class HEALPixPadding(torch.nn.Module):
         r"""Pad each face consistently with its neighbors on the HEALPix grid."""
         if not torch.compiler.is_compiling():
             if data.ndim != 4:
-                _raise_shape_error("HEALPixPadding.forward", data, "a 4D tensor")
+                raise ValueError(
+                    f"HEALPixPadding.forward requires a 4D tensor, got {data.shape}"
+                )
 
         if torch.cuda.is_available():
             torch.cuda.nvtx.range_push("HEALPixPadding:forward")
@@ -472,172 +342,129 @@ class HEALPixPaddingv2(torch.nn.Module):
         return result
 
 
-class HEALPixLayer(torch.nn.Module):
+class HEALPixFoldFaces(torch.nn.Module):
     r"""
-    Wrapper that applies an arbitrary 2D layer to each HEALPix face independently.
+    Fold the face dimension of a HEALPix tensor into the batch dimension.
 
     Parameters
     ----------
-    layer : torch.nn.Module
-        A callable layer class such as ``torch.nn.Conv2d``.
-    **kwargs
-        Parameters forwarded to ``layer``. Recognized extras:
-
-        - ``enable_nhwc``: bool, optional
-            If ``True``, use channels-last memory format.
-        - ``enable_healpixpad``: bool, optional
-            If ``True`` and CUDA ``earth2grid`` is available, use accelerated padding.
+    enable_nhwc : bool, optional
+        If ``True``, store the folded tensor in channels-last memory format.
 
     Forward
     -------
-    x : torch.Tensor
-        Input tensor of shape :math:`(..., F=12, H, W)`.
+    tensor : torch.Tensor
+        Input tensor of shape :math:`(B, F, C, H, W)` where :math:`F=12`.
 
     Outputs
     -------
     torch.Tensor
-        Tensor with the same leading dimensions and transformed spatial dimensions.
+        Folded tensor of shape :math:`(B \cdot F, C, H, W)`.
 
     Examples
     --------
-    >>> conv = HEALPixLayer(torch.nn.Conv2d, in_channels=3, out_channels=8, kernel_size=3)
-    >>> x = torch.randn(24, 3, 16, 16)
-    >>> conv(x).shape
-    torch.Size([24, 8, 16, 16])
+    >>> fold = HEALPixFoldFaces()
+    >>> x = torch.randn(2, 12, 3, 4, 4)
+    >>> fold(x).shape
+    torch.Size([24, 3, 4, 4])
     """
 
-    def __init__(self, layer, **kwargs) -> None:
+    def __init__(self, enable_nhwc: bool = False) -> None:
         super().__init__()
-        layers = []
-
-        enable_nhwc = kwargs.pop("enable_nhwc", False)
-        enable_healpixpad = kwargs.pop("enable_healpixpad", False)
-
-        if (
-            layer.__bases__[0] is torch.nn.modules.conv._ConvNd
-            and kwargs.get("kernel_size", 3) > 1
-        ):
-            kwargs["padding"] = 0
-            kernel_size = kwargs.get("kernel_size", 3)
-            dilation = kwargs.get("dilation", 1)
-            padding = ((kernel_size - 1) // 2) * dilation
-            if (
-                enable_healpixpad
-                and HEALPIXPAD_AVAILABLE
-                and torch.cuda.is_available()
-                and not enable_nhwc
-            ):  # pragma: no cover
-                layers.append(HEALPixPaddingv2(padding=padding))
-            else:
-                layers.append(HEALPixPadding(padding=padding, enable_nhwc=enable_nhwc))
-
-        layers.append(layer(**kwargs))
-        self.layers = torch.nn.Sequential(*layers)
-
-        if enable_nhwc:
-            self.layers = self.layers.to(memory_format=torch.channels_last)
+        self.enable_nhwc = enable_nhwc
 
     def forward(
-        self, x: Float[torch.Tensor, "batch_faces channels height width"]
+        self, tensor: Float[torch.Tensor, "batch faces channels height width"]
     ) -> Float[torch.Tensor, "batch_faces channels height width"]:
-        r"""Forward pass for the HEALPix layer wrapper."""
-        return self.layers(x)
+        r"""
+        Fold the face dimension into the batch dimension.
+
+        Parameters
+        ----------
+        tensor : torch.Tensor
+            HEALPix data of shape :math:`(B, F, C, H, W)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Folded tensor of shape :math:`(B \cdot F, C, H, W)`.
+        """
+        if not torch.compiler.is_compiling() and tensor.ndim != 5:
+            ValueError(
+                f"HEALPixFoldFaces.forward requires 5D tensor, got {tensor.shape}"
+            )
+
+        batch, faces, channels, height, width = tensor.shape
+        folded = torch.reshape(tensor, shape=(batch * faces, channels, height, width))
+
+        if self.enable_nhwc:
+            folded = folded.to(memory_format=torch.channels_last)
+
+        return folded
 
 
-# TODO: the below are not actually geometry-aware; update or remove
-# Since the `HEALPixLayer` only applies padding if the wrapped layer is a convolution,
-# these do not actually apply healpix padding before pooling
-
-
-class HEALPixMaxPool(torch.nn.Module):
+class HEALPixUnfoldFaces(torch.nn.Module):
     r"""
-    HEALPix-aware max pooling wrapper around ``torch.nn.MaxPool2d``.
+    Unfold a folded HEALPix tensor back to a face-major representation.
 
     Parameters
     ----------
-    geometry_layer : torch.nn.Module, optional
-        Wrapper that applies pooling per HEALPix face. Defaults to :class:`HEALPixLayer`.
-    pooling : int, optional
-        Kernel size and stride for pooling. Defaults to ``2``.
+    num_faces : int, optional
+        Number of faces in the mesh (defaults to 12 for HEALPix).
     enable_nhwc : bool, optional
-        If ``True``, operate on channels-last tensors.
-    enable_healpixpad : bool, optional
-        Enable HEALPix padding when available.
+        If ``True``, expect channels-last tensors during unfolding.
 
     Forward
     -------
-    x : torch.Tensor
+    tensor : torch.Tensor
         Input tensor of shape :math:`(B \cdot F, C, H, W)`.
 
     Outputs
     -------
     torch.Tensor
-        Pooled tensor with spatial dimensions downsampled by ``pooling``.
+        Unfolded tensor of shape :math:`(B, F, C, H, W)`.
+
+    Examples
+    --------
+    >>> unfold = HEALPixUnfoldFaces()
+    >>> x = torch.randn(24, 3, 4, 4)
+    >>> unfold(x).shape
+    torch.Size([2, 12, 3, 4, 4])
     """
 
-    def __init__(
-        self,
-        geometry_layer: torch.nn.Module = HEALPixLayer,
-        pooling: int = 2,
-        enable_nhwc: bool = False,
-        enable_healpixpad: bool = False,
-    ) -> None:
+    def __init__(self, num_faces: int = 12, enable_nhwc: bool = False) -> None:
         super().__init__()
-        self.maxpool = geometry_layer(
-            layer=torch.nn.MaxPool2d,
-            kernel_size=pooling,
-            enable_nhwc=enable_nhwc,
-            enable_healpixpad=enable_healpixpad,
-        )
+        self.num_faces = num_faces
+        self.enable_nhwc = enable_nhwc
 
     def forward(
-        self, x: Float[torch.Tensor, "batch_faces channels height width"]
-    ) -> Float[torch.Tensor, "batch_faces channels pooled_height pooled_width"]:
-        return self.maxpool(x)
+        self, tensor: Float[torch.Tensor, "batch_faces channels height width"]
+    ) -> Float[torch.Tensor, "batch faces channels height width"]:
+        r"""
+        Unfold a tensor by restoring its explicit face dimension.
 
+        Parameters
+        ----------
+        tensor : torch.Tensor
+            Folded tensor of shape :math:`(B \cdot F, C, H, W)`.
 
-class HEALPixAvgPool(torch.nn.Module):
-    r"""
-    HEALPix-aware average pooling wrapper around ``torch.nn.AvgPool2d``.
+        Returns
+        -------
+        torch.Tensor
+            Unfolded tensor of shape :math:`(B, F, C, H, W)`.
+        """
+        if not torch.compiler.is_compiling():
+            if tensor.ndim != 4:
+                ValueError(
+                    f"HEALPixUnfoldFaces.forward requires 4D tensor, got {tensor.shape}"
+                )
+            if tensor.shape[0] % self.num_faces != 0:
+                ValueError(
+                    f"HEALPixUnfoldFaces.forward invalid batch size: {tensor.shape[0]}"
+                )
 
-    Parameters
-    ----------
-    geometry_layer : torch.nn.Module, optional
-        Wrapper that applies pooling per HEALPix face. Defaults to :class:`HEALPixLayer`.
-    pooling : int, optional
-        Kernel size and stride for pooling. Defaults to ``2``.
-    enable_nhwc : bool, optional
-        If ``True``, operate on channels-last tensors.
-    enable_healpixpad : bool, optional
-        Enable HEALPix padding when available.
-
-    Forward
-    -------
-    x : torch.Tensor
-        Input tensor of shape :math:`(B \cdot F, C, H, W)`.
-
-    Outputs
-    -------
-    torch.Tensor
-        Pooled tensor with spatial dimensions downsampled by ``pooling``.
-    """
-
-    def __init__(
-        self,
-        geometry_layer: torch.nn.Module = HEALPixLayer,
-        pooling: int = 2,
-        enable_nhwc: bool = False,
-        enable_healpixpad: bool = False,
-    ) -> None:
-        super().__init__()
-        self.avgpool = geometry_layer(
-            layer=torch.nn.AvgPool2d,
-            kernel_size=pooling,
-            enable_nhwc=enable_nhwc,
-            enable_healpixpad=enable_healpixpad,
+        batch_faces, channels, height, width = tensor.shape
+        batch = batch_faces // self.num_faces
+        return torch.reshape(
+            tensor, shape=(batch, self.num_faces, channels, height, width)
         )
-
-    def forward(
-        self, x: Float[torch.Tensor, "batch_faces channels height width"]
-    ) -> Float[torch.Tensor, "batch_faces channels pooled_height pooled_width"]:
-        return self.avgpool(x)
