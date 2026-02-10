@@ -1,9 +1,9 @@
 [importlinter]
 root_package = physicsnemo
 include_external_packages = True
+exclude_type_checking_imports = True
 contract_types =
     forbidden_import: test.ci_tests.prevent_untracked_imports.ForbiddenImportContract
-exclude_type_checking_imports = true
 
 [importlinter:contract:physicsnemo-modules]
 name = Prevent Upward Imports in the PhysicsNemo Structure

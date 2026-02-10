@@ -115,12 +115,7 @@ def test_require_version_spec_success():
 
 
 def test_require_version_spec_failure():
-    """Decorator prevents execution when requirement is not met.
-
-    require_version_spec always raises RuntimeError (not ImportError) for
-    consistency with OptionalImport's design — even when the underlying
-    check_version_spec raises ImportError for a version mismatch.
-    """
+    """Decorator prevents execution when requirement is not met."""
     with patch(
         "physicsnemo.core.version_check.check_version_spec",
         side_effect=ImportError("not satisfied"),
@@ -130,7 +125,7 @@ def test_require_version_spec_failure():
         def fn():
             return "ok"
 
-        with pytest.raises(RuntimeError) as excinfo:
+        with pytest.raises(ImportError) as excinfo:
             fn()
     assert "not satisfied" in str(excinfo.value)
 
@@ -435,11 +430,11 @@ class TestOptionalImport:
         _ = opt.canonicalize_version
         assert object.__getattribute__(opt, "_module") is module
 
-    def test_raises_runtime_error_when_unavailable(self):
-        """Raises RuntimeError with helpful message when package is missing."""
+    def test_raises_import_error_when_unavailable(self):
+        """Raises ImportError with helpful message when package is missing."""
         opt = OptionalImport("totally_fake_missing_package_abc123")
 
-        with pytest.raises(RuntimeError) as excinfo:
+        with pytest.raises(ImportError) as excinfo:
             _ = opt.some_attribute
 
         error_msg = str(excinfo.value)
@@ -452,10 +447,38 @@ class TestOptionalImport:
 
         opt = OptionalImport("another_fake_pkg_xyz789", package_hint=custom_hint)
 
-        with pytest.raises(RuntimeError) as excinfo:
+        with pytest.raises(ImportError) as excinfo:
             _ = opt.some_attribute
 
         assert custom_hint in str(excinfo.value)
+
+    def test_dunder_probe_raises_attribute_error_when_unavailable(self):
+        """Dunder attribute probes raise AttributeError (not ImportError) when missing.
+
+        Python's inspect, hasattr, and doctest machinery probe for dunders like
+        __wrapped__.  These must raise AttributeError so hasattr() returns False
+        and introspection doesn't crash.
+        """
+        opt = OptionalImport("fake_dunder_test_pkg_000")
+
+        # Dunder probe should raise AttributeError, not ImportError
+        with pytest.raises(AttributeError):
+            _ = opt.__wrapped__
+
+        # hasattr should return False without raising
+        assert not hasattr(opt, "__wrapped__")
+
+        # Non-dunder access should still raise ImportError with install hint
+        with pytest.raises(ImportError):
+            _ = opt.some_function
+
+    def test_dunder_works_when_available(self):
+        """Dunder attributes are accessible when the module is available."""
+        opt = OptionalImport("packaging")
+
+        # Should not raise - packaging is installed
+        result = opt.__name__
+        assert result == "packaging"
 
     def test_available_property_true(self):
         """available property returns True when package is installed."""
@@ -515,7 +538,7 @@ class TestOptionalImport:
         # Test with a known missing package
         opt = OptionalImport("nonexistent_test_pkg_12345.sub.module")
 
-        with pytest.raises(RuntimeError) as excinfo:
+        with pytest.raises(ImportError) as excinfo:
             _ = opt.attr
 
         # Error message should reference root package
@@ -546,14 +569,14 @@ class TestRequireVersionSpecAdditional:
 
         assert fn() == "executed"
 
-    def test_raises_runtime_error_when_package_missing(self):
-        """Raises RuntimeError (not ImportError) when package is missing."""
+    def test_raises_import_error_when_package_missing(self):
+        """Raises ImportError when package is missing."""
 
         @require_version_spec("nonexistent_test_pkg_67890", "1.0.0")
         def fn():
             return "executed"
 
-        with pytest.raises(RuntimeError) as excinfo:
+        with pytest.raises(ImportError) as excinfo:
             fn()
 
         assert "Missing optional dependency" in str(excinfo.value)

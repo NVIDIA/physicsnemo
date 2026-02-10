@@ -16,21 +16,15 @@
 
 """Multi-layer perceptron (MLP) module with optional Transformer Engine support."""
 
-import importlib
-
 import torch
 from torch import nn
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
 from .activations import get_activation
 
 # Check for Transformer Engine availability
-TE_AVAILABLE = check_version_spec("transformer_engine", hard_fail=False)
-if TE_AVAILABLE:
-    te = importlib.import_module("transformer_engine.pytorch")
-else:
-    te = None
+te = OptionalImport("transformer_engine.pytorch")
 
 
 class Mlp(nn.Module):
@@ -84,8 +78,6 @@ class Mlp(nn.Module):
     >>> out.shape
     torch.Size([2, 32])
 
-    >>> # MLP with Transformer Engine (if available)
-    >>> mlp = Mlp(in_features=64, hidden_features=128, out_features=32, use_te=True)
     """
 
     def __init__(
@@ -98,13 +90,6 @@ class Mlp(nn.Module):
         use_te: bool = False,
     ):
         super().__init__()
-
-        # Validate Transformer Engine availability
-        if use_te and not TE_AVAILABLE:
-            raise RuntimeError(
-                "Transformer Engine is not available. "
-                "Install it with `pip install transformer-engine` or set use_te=False."
-            )
 
         self.use_te = use_te
 
