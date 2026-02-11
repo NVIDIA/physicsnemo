@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import torch
@@ -22,10 +22,13 @@ import torch
 from physicsnemo.core.version_check import require_version_spec
 from physicsnemo.mesh.mesh import Mesh
 
+if TYPE_CHECKING:
+    import pyvista
+
 
 @require_version_spec("pyvista")
 def from_pyvista(
-    pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet",  # noqa: F821
+    pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet",
     manifold_dim: int | Literal["auto"] = "auto",
 ) -> Mesh:
     """Convert a PyVista mesh to a physicsnemo.mesh Mesh.
@@ -170,27 +173,59 @@ def from_pyvista(
         if lines_raw is None or len(lines_raw) == 0:
             cells = torch.empty((0, 2), dtype=torch.long)
         else:
-            # Parse the lines array and convert to line segments
-            cells_list = []
-            i = 0
-            while i < len(lines_raw):
-                n_points = lines_raw[i]
-                point_ids = lines_raw[i + 1 : i + 1 + n_points]
+            lines_array = np.asarray(lines_raw)
 
-                # Convert polyline to line segments (consecutive pairs)
-                cells_list.extend(
-                    [
-                        [point_ids[j], point_ids[j + 1]]
-                        for j in range(len(point_ids) - 1)
-                    ]
-                )
+            # Fast path: check if all line segments have uniform vertex count
+            # (common case — all edges have 2 vertices, stride = 3)
+            first_count = int(lines_array[0])
+            stride = first_count + 1
+            is_uniform = len(lines_array) % stride == 0 and len(lines_array) >= stride
+            if is_uniform:
+                n_segments = len(lines_array) // stride
+                reshaped = lines_array.reshape(n_segments, stride)
+                is_uniform = bool((reshaped[:, 0] == first_count).all())
 
-                i += n_points + 1
+            if is_uniform:
+                # Vectorized path: reshape and extract vertex columns
+                point_ids = reshaped[:, 1:]  # (n_segments, first_count)
 
-            if cells_list:
-                cells = torch.from_numpy(np.array(cells_list)).long()
+                # Convert polylines to consecutive line segments
+                if first_count == 2:
+                    # Already line segments — use directly
+                    cells = torch.from_numpy(point_ids.copy()).long()
+                else:
+                    # Polylines with >2 vertices: create consecutive pairs
+                    seg_starts = point_ids[:, :-1].reshape(-1)
+                    seg_ends = point_ids[:, 1:].reshape(-1)
+                    cells = torch.stack(
+                        [
+                            torch.from_numpy(seg_starts.copy()),
+                            torch.from_numpy(seg_ends.copy()),
+                        ],
+                        dim=1,
+                    ).long()
             else:
-                cells = torch.empty((0, 2), dtype=torch.long)
+                # Fallback: Python loop for non-uniform segment sizes
+                cells_list = []
+                i = 0
+                while i < len(lines_array):
+                    n_pts = int(lines_array[i])
+                    point_ids = lines_array[i + 1 : i + 1 + n_pts]
+
+                    # Convert polyline to line segments (consecutive pairs)
+                    cells_list.extend(
+                        [
+                            [point_ids[j], point_ids[j + 1]]
+                            for j in range(len(point_ids) - 1)
+                        ]
+                    )
+
+                    i += n_pts + 1
+
+                if cells_list:
+                    cells = torch.from_numpy(np.array(cells_list)).long()
+                else:
+                    cells = torch.empty((0, 2), dtype=torch.long)
 
     elif manifold_dim == 2:
         # Triangular cells - use regular_faces property
@@ -213,16 +248,16 @@ def from_pyvista(
     return Mesh(
         points=points,
         cells=cells,
-        point_data=pyvista_mesh.point_data,  # type: ignore[arg-type]
-        cell_data=pyvista_mesh.cell_data,  # type: ignore[arg-type]
-        global_data=pyvista_mesh.field_data,  # type: ignore[arg-type]
+        point_data=pyvista_mesh.point_data,
+        cell_data=pyvista_mesh.cell_data,
+        global_data=pyvista_mesh.field_data,
     )
 
 
 @require_version_spec("pyvista")
 def to_pyvista(
     mesh: Mesh,
-) -> "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet":  # noqa: F821
+) -> "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet":
     """Convert a physicsnemo.mesh Mesh to a PyVista mesh.
 
     Parameters
@@ -266,21 +301,16 @@ def to_pyvista(
 
     elif mesh.n_manifold_dims == 1:
         # Line mesh - create PolyData with lines
-        # Convert line segments to PyVista format: [n_points, id0, id1, ...]
         cells_np = mesh.cells.cpu().numpy()
 
         if mesh.n_cells == 0:
-            # Empty lines
             pv_mesh = pv.PolyData(points_np)
         else:
-            # Each line segment has 2 points
-            # PyVista format: [2, i0, i1, 2, j0, j1, ...]
-            lines_list = []
-            for cell in cells_np:
-                lines_list.append(2)  # Number of points in this line
-                lines_list.extend(cell)
-            lines_array = np.array(lines_list, dtype=np.int64)
-
+            # PyVista padded format: [n_pts, v0, v1, n_pts, v0, v1, ...]
+            # Vectorized: prepend vertex count to each cell row, then flatten
+            lines_array = np.column_stack(
+                [np.full(len(cells_np), cells_np.shape[1], dtype=np.int64), cells_np]
+            ).ravel()
             pv_mesh = pv.PolyData(points_np, lines=lines_array)
 
     elif mesh.n_manifold_dims == 2:
@@ -288,52 +318,51 @@ def to_pyvista(
         cells_np = mesh.cells.cpu().numpy()
 
         if mesh.n_cells == 0:
-            # Empty cells
             pv_mesh = pv.PolyData(points_np)
         else:
-            # PyVista format for cells: [3, i0, i1, i2, 3, j0, j1, j2, ...]
-            cells_list = []
-            for cell in cells_np:
-                cells_list.append(3)  # Number of points in this triangle
-                cells_list.extend(cell)
-            cells_array = np.array(cells_list, dtype=np.int64)
-
-            pv_mesh = pv.PolyData(points_np, faces=cells_array)
+            # PyVista padded format: [n_pts, v0, v1, v2, n_pts, v0, v1, v2, ...]
+            faces_array = np.column_stack(
+                [np.full(len(cells_np), cells_np.shape[1], dtype=np.int64), cells_np]
+            ).ravel()
+            pv_mesh = pv.PolyData(points_np, faces=faces_array)
 
     elif mesh.n_manifold_dims == 3:
         # Volume mesh - create UnstructuredGrid with tetrahedral cells
         cells_np = mesh.cells.cpu().numpy()
 
         if mesh.n_cells == 0:
-            # Empty cells - create UnstructuredGrid with no cells
             cells = np.array([], dtype=np.int64)
             celltypes = np.array([], dtype=np.uint8)
             pv_mesh = pv.UnstructuredGrid(cells, celltypes, points_np)
         else:
-            # PyVista format for cells: [4, i0, i1, i2, i3, 4, j0, j1, j2, j3, ...]
-            cells_list = []
-            for cell in cells_np:
-                cells_list.append(4)  # Number of points in this tetrahedron
-                cells_list.extend(cell)
-            cells_array = np.array(cells_list, dtype=np.int64)
-
-            # All cells are tetrahedra
+            # PyVista padded format: [n_pts, v0..v3, n_pts, v0..v3, ...]
+            cells_array = np.column_stack(
+                [np.full(len(cells_np), cells_np.shape[1], dtype=np.int64), cells_np]
+            ).ravel()
             celltypes = np.full(mesh.n_cells, pv.CellType.TETRA, dtype=np.uint8)
-
             pv_mesh = pv.UnstructuredGrid(cells_array, celltypes, points_np)
 
     else:
         raise ValueError(f"Unsupported {mesh.n_manifold_dims=}. Must be 0, 1, 2, or 3.")
 
-    ### Convert data dictionaries
+    ### Convert data dictionaries (flatten high-rank tensors for VTK compatibility)
     for k, v in mesh.point_data.items(include_nested=True, leaves_only=True):
-        pv_mesh.point_data[str(k)] = v.cpu().numpy()
+        arr = v.cpu().numpy()
+        pv_mesh.point_data[str(k)] = (
+            arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
+        )
 
     for k, v in mesh.cell_data.items(include_nested=True, leaves_only=True):
-        pv_mesh.cell_data[str(k)] = v.cpu().numpy()
+        arr = v.cpu().numpy()
+        pv_mesh.cell_data[str(k)] = (
+            arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
+        )
 
     for k, v in mesh.global_data.items(include_nested=True, leaves_only=True):
-        pv_mesh.field_data[str(k)] = v.cpu().numpy()
+        arr = v.cpu().numpy()
+        pv_mesh.field_data[str(k)] = (
+            arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
+        )
 
     return pv_mesh
 

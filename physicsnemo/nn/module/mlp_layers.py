@@ -16,21 +16,15 @@
 
 """Multi-layer perceptron (MLP) module with optional Transformer Engine support."""
 
-import importlib
-
 import torch
 from torch import nn
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
 from .activations import get_activation
 
 # Check for Transformer Engine availability
-TE_AVAILABLE = check_version_spec("transformer_engine", hard_fail=False)
-if TE_AVAILABLE:
-    te = importlib.import_module("transformer_engine.pytorch")
-else:
-    te = None
+te = OptionalImport("transformer_engine.pytorch")
 
 
 class Mlp(nn.Module):
@@ -63,6 +57,8 @@ class Mlp(nn.Module):
         Default is ``nn.GELU``.
     drop : float, optional
         Dropout rate applied after each layer. Default is ``0.0``.
+    final_dropout : bool, optional
+        Whether to apply dropout after the final linear layer. Default is ``True``.
     use_te : bool, optional
         Whether to use Transformer Engine linear layers for optimized performance.
         Requires Transformer Engine to be installed. Default is ``False``.
@@ -84,8 +80,6 @@ class Mlp(nn.Module):
     >>> out.shape
     torch.Size([2, 32])
 
-    >>> # MLP with Transformer Engine (if available)
-    >>> mlp = Mlp(in_features=64, hidden_features=128, out_features=32, use_te=True)
     """
 
     def __init__(
@@ -95,16 +89,10 @@ class Mlp(nn.Module):
         out_features: int | None = None,
         act_layer: nn.Module | type[nn.Module] | str = nn.GELU,
         drop: float = 0.0,
+        final_dropout: bool = True,
         use_te: bool = False,
     ):
         super().__init__()
-
-        # Validate Transformer Engine availability
-        if use_te and not TE_AVAILABLE:
-            raise RuntimeError(
-                "Transformer Engine is not available. "
-                "Install it with `pip install transformer-engine` or set use_te=False."
-            )
 
         self.use_te = use_te
 
@@ -148,7 +136,7 @@ class Mlp(nn.Module):
 
         # Add the final output layer
         layers.append(linear_layer(input_dim, out_features))
-        if drop != 0:
+        if drop != 0 and final_dropout:
             layers.append(nn.Dropout(drop))
 
         self.layers = nn.Sequential(*layers)
