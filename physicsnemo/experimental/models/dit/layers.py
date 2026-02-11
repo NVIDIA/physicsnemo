@@ -13,7 +13,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import math
 import warnings
+from functools import partial
 from typing import Any, Dict, Literal, Union, Optional, Tuple
 from abc import ABC, abstractmethod
 import torch
@@ -34,6 +36,7 @@ if timm_v1_0_16:
     from timm.layers.attention import Attention
 else:
     from timm.models.vision_transformer import Attention
+from timm.layers import RmsNorm
 
 try:
     from transformer_engine.pytorch import MultiheadAttention
@@ -55,11 +58,12 @@ except ImportError:
     NATTEN_AVAILABLE = False
 
 from physicsnemo.core import Module
-from physicsnemo.nn import Mlp
+from physicsnemo.nn import Mlp, PositionalEmbedding, Linear
 from physicsnemo.domain_parallel import ShardTensor
 from physicsnemo.domain_parallel.shard_utils.natten_patches import partial_na2d
-from physicsnemo.nn.module.utils import PatchEmbed2D
 
+from physicsnemo.nn import DropPath
+from physicsnemo.nn.module.utils import PatchEmbed2D
 
 def get_layer_norm(
     hidden_size: int,
@@ -175,6 +179,10 @@ class TimmSelfAttention(AttentionModuleBase):
         The dropout rate for the attention operation.
     proj_drop_rate: float
         The dropout rate for the projection operation.
+    qk_norm_type: str, optional
+        QK normalization type. Options: "RMSNorm", "LayerNorm", or None.
+    qk_norm_affine: bool, optional
+        Whether QK normalization layers should use learnable affine parameters.
     **kwargs: Any
         Additional keyword arguments for the timm attention module.
 
@@ -191,8 +199,26 @@ class TimmSelfAttention(AttentionModuleBase):
     torch.Tensor
         Output tensor of shape (B, L, D).
     """
-    def __init__(self, hidden_size: int, num_heads: int, attn_drop_rate: float = 0.0, proj_drop_rate: float = 0.0, **kwargs: Any):
+    def __init__(
+        self,
+        hidden_size: int,
+        num_heads: int,
+        attn_drop_rate: float = 0.0,
+        proj_drop_rate: float = 0.0,
+        qk_norm_type: Literal["RMSNorm", "LayerNorm"] | None = None,
+        qk_norm_affine: bool = True,
+        **kwargs: Any,
+    ):
         super().__init__()
+        
+        # Translate qk_norm_type to timm's qk_norm and norm_layer
+        if qk_norm_type == "RMSNorm":
+            kwargs["qk_norm"] = True
+            kwargs["norm_layer"] = partial(RmsNorm, affine=qk_norm_affine)
+        elif qk_norm_type == "LayerNorm":
+            kwargs["qk_norm"] = True
+            kwargs["norm_layer"] = partial(nn.LayerNorm, elementwise_affine=qk_norm_affine)
+        
         self.attn_op = Attention(dim=hidden_size, num_heads=num_heads, attn_drop=attn_drop_rate, proj_drop=proj_drop_rate, qkv_bias=True, **kwargs)
 
     def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -220,6 +246,9 @@ class TESelfAttention(AttentionModuleBase):
         The dropout rate for the attention operation.
     proj_drop_rate: float
         The dropout rate for the projection operation.
+    qkv_format: str, optional
+        Dimension format for Q/K/V tensors. Default ``"bshd"`` for batch-first layout.
+        Use ``"sbhd"`` for sequence-first layout.
     **kwargs: Any
         Additional keyword arguments for the transformer_engine attention module.
 
@@ -239,24 +268,46 @@ class TESelfAttention(AttentionModuleBase):
     torch.Tensor
         Output tensor of shape (B, L, D).
     """
-    def __init__(self, hidden_size: int, num_heads: int, attn_drop_rate: float = 0.0, proj_drop_rate: float = 0.0, **kwargs: Any):
+    def __init__(
+        self,
+        hidden_size: int,
+        num_heads: int,
+        attn_drop_rate: float = 0.0,
+        proj_drop_rate: float = 0.0,
+        qkv_format: str = "bshd",
+        **kwargs: Any,
+    ):
         super().__init__()
         if not TE_AVAILABLE:
             raise ImportError(
                 "Transformer Engine is not installed. Please install it with `pip install transformer-engine`."
             )
 
-        if proj_drop_rate > 0:
+        if "qk_norm_affine" in kwargs and not kwargs["qk_norm_affine"]:
             warnings.warn(
-                "Transformer Engine MultiheadAttention does not support projection dropout (proj_drop_rate > 0). "
-                "The specified proj_drop_rate will be ignored."
+                "Transformer Engine does not support disabling affine parameters for QK norm. "
+                "Ignoring qk_norm_affine=False and using affine parameters.",
+                UserWarning,
+                stacklevel=2,
             )
-        self.attn_op = MultiheadAttention(hidden_size=hidden_size, num_attention_heads=num_heads, attention_dropout=attn_drop_rate, **kwargs)
+        kwargs.pop("qk_norm_affine", None)
+        self.attn_op = MultiheadAttention(
+            hidden_size=hidden_size,
+            num_attention_heads=num_heads,
+            attention_dropout=attn_drop_rate,
+            qkv_format=qkv_format,
+            **kwargs,
+        )
+        # TE doesn't support proj_drop natively, so we add it manually after the attention output
+        self.proj_drop = nn.Dropout(proj_drop_rate)
 
     def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None, mask_type: Optional[str] = "no_mask") -> torch.Tensor:
         if attn_mask is not None:
             mask_type = "arbitrary"
-        return self.attn_op(x, attention_mask=attn_mask, attn_mask_type=mask_type)
+        out = self.attn_op(x, attention_mask=attn_mask, attn_mask_type=mask_type)
+        return self.proj_drop(out)
+
+
 
 
 class Natten2DSelfAttention(AttentionModuleBase):
@@ -474,6 +525,11 @@ class DiTBlock(nn.Module):
         The dropout rate for the projection operation. Default is 0.0.
     mlp_drop_rate (float):
         The dropout rate for the MLP operation. Default is 0.0.
+    drop_path (float):
+        DropPath (stochastic depth) rate. Default is 0.0.
+    condition_embed_dim (int, optional):
+        Input dimension of the adaptive layer norm (AdaLN) modulation. If None, defaults to hidden_size.
+        This should match the output dimension of the conditioning embedder.
     **attn_kwargs (Any):
         Additional keyword arguments for the attention module.
 
@@ -507,11 +563,15 @@ class DiTBlock(nn.Module):
         num_heads: int,
         attention_backend: Union[Literal["transformer_engine", "timm", "natten2d"], Module] = "timm",
         layernorm_backend: Literal["apex", "torch"] = "torch",
+        norm_eps: float = 1e-6,
         mlp_ratio: float = 4.0,
         intermediate_dropout: bool = False,
         attn_drop_rate: float = 0.0,
         proj_drop_rate: float = 0.0,
         mlp_drop_rate: float = 0.0,
+        final_mlp_dropout: bool = True,
+        drop_path: float = 0.0,
+        condition_embed_dim: Optional[int] = None,
         **attn_kwargs: Any,
     ):
         super().__init__()
@@ -529,10 +589,10 @@ class DiTBlock(nn.Module):
             )
 
         self.pre_attention_norm = get_layer_norm(
-            hidden_size, layernorm_backend, elementwise_affine=False, eps=1e-6
+            hidden_size, layernorm_backend, elementwise_affine=False, eps=norm_eps
         )
         self.pre_mlp_norm = get_layer_norm(
-            hidden_size, layernorm_backend, elementwise_affine=False, eps=1e-6
+            hidden_size, layernorm_backend, elementwise_affine=False, eps=norm_eps
         )
         
         # Optional dropout/per-sample dropout module applied before attention
@@ -546,14 +606,18 @@ class DiTBlock(nn.Module):
             in_features=hidden_size,
             hidden_features=mlp_hidden_dim,
             act_layer=lambda: nn.GELU(approximate="tanh"),
-            drop=0,
+            drop=mlp_drop_rate,
+            final_dropout=final_mlp_dropout,
         )
+        modulation_input_dim = hidden_size if condition_embed_dim is None else condition_embed_dim
         self.adaptive_modulation = nn.Sequential(
-            nn.SiLU(), nn.Linear(hidden_size, 6 * hidden_size, bias=True)
+            nn.SiLU(), nn.Linear(modulation_input_dim, 6 * hidden_size, bias=True)
         )
         self.modulation = lambda x, scale, shift: x * (
             1 + scale.unsqueeze(1)
         ) + shift.unsqueeze(1)
+
+        self.drop_path = DropPath(drop_path)
 
     def initialize_weights(self):
         # Zero out the adaptive modulation weights
@@ -564,7 +628,7 @@ class DiTBlock(nn.Module):
         self,
         x: torch.Tensor,
         c: torch.Tensor,
-        attn_kwargs: Optional[Dict[str, Any]] = None,
+        attn_kwargs: Dict[str, Any] = {},
         p_dropout: Optional[float | torch.Tensor] = None,
     ) -> torch.Tensor:
 
@@ -590,16 +654,16 @@ class DiTBlock(nn.Module):
         
         attention_output = self.attention(
             modulated_attn_input,
-            **(attn_kwargs or {}),
+            **attn_kwargs,
         )
-        x = x + attention_gate.unsqueeze(1) * attention_output
+        x = torch.addcmul(x, self.drop_path(attention_gate.unsqueeze(1)), attention_output)
 
         # Feed-forward block
         modulated_mlp_input = self.modulation(
             self.pre_mlp_norm(x), mlp_scale, mlp_shift
         )
         mlp_output = self.linear(modulated_mlp_input)
-        x = x + mlp_gate.unsqueeze(1) * mlp_output
+        x = torch.addcmul(x, self.drop_path(mlp_gate.unsqueeze(1)), mlp_output)
 
         return x
 
@@ -765,7 +829,8 @@ class PatchEmbed2DTokenizer(TokenizerModuleBase):
             nn.init.constant_(self.x_embedder.proj.bias, 0)
         
         # Initialize the learnable positional embedding with a normal distribution.
-        nn.init.normal_(self.pos_embed, std=0.02)
+        if isinstance(self.pos_embed, nn.Parameter):
+            nn.init.normal_(self.pos_embed, std=0.02)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # (B, D, Hp, Wp)
