@@ -23,6 +23,8 @@ in nested TensorDict structures under the "_cache" key.
 import torch
 from tensordict import TensorDict
 
+CACHE_KEY = "_cache"
+
 
 def get_cached(data: TensorDict, key: str) -> torch.Tensor | None:
     """Get a cached value from a TensorDict.
@@ -46,7 +48,7 @@ def get_cached(data: TensorDict, key: str) -> torch.Tensor | None:
     ...     # Compute areas
     ...     pass  # doctest: +SKIP
     """
-    return data.get(("_cache", key), None)
+    return data.get((CACHE_KEY, key), None)
 
 
 def set_cached(data: TensorDict, key: str, value: torch.Tensor) -> None:
@@ -68,6 +70,6 @@ def set_cached(data: TensorDict, key: str, value: torch.Tensor) -> None:
     --------
     >>> set_cached(mesh.cell_data, "areas", computed_areas)  # doctest: +SKIP
     """
-    if "_cache" not in data:
-        data["_cache"] = TensorDict({}, batch_size=data.batch_size, device=data.device)
-    data[("_cache", key)] = value
+    if CACHE_KEY not in data:
+        data[CACHE_KEY] = TensorDict({}, batch_size=data.batch_size, device=data.device)
+    data[(CACHE_KEY, key)] = value
