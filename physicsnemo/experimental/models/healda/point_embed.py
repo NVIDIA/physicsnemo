@@ -15,77 +15,64 @@
 # limitations under the License.
 """Multi-sensor observation embedding for HealDA."""
 
-import importlib
 import logging
 import math
-from typing import Any
 
 import torch
+from jaxtyping import Float, Int
 
 from physicsnemo.core.module import Module
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
 from .scatter_aggregator import ScatterAggregator
 
-HEALPIXPAD_AVAILABLE = check_version_spec("earth2grid", "0.1.0", hard_fail=False)
-
-if HEALPIXPAD_AVAILABLE:
-    _healpix_mod = importlib.import_module("earth2grid.healpix")
-    hpx_grid = _healpix_mod.Grid
-    HEALPIX_PAD_XY = _healpix_mod.HEALPIX_PAD_XY
-    HEALPIX_NEST = _healpix_mod.NEST
-else:
-    HEALPIX_PAD_XY = None
-    HEALPIX_NEST = None
-
-    def hpx_grid(*args, **kwargs):
-        """Dummy symbol for missing earth2grid backend."""
-        raise ImportError(
-            (
-                "earth2grid is not installed, cannot use it as a backend for HEALPix padding.\n"
-                "Install earth2grid from https://github.com/NVlabs/earth2grid.git to enable the accelerated path.\n"
-                "pip install --no-build-isolation https://github.com/NVlabs/earth2grid/archive/main.tar.gz"
-            )
-        )
+_earth2grid_healpix = OptionalImport("earth2grid.healpix")
 
 
-def _prod(shape):
-    out = 1
-    for s in shape:
-        out *= s
-    return out
+def _offsets_to_batch_idx(offsets: Int[torch.Tensor, "batch time"]) -> Int[torch.Tensor, "nobs"]:
+    r"""Map each observation to its flattened :math:`(B, T)` window index.
 
+    Given cumulative exclusive-end offsets of shape :math:`(B, T)`, return a
+    1-D tensor of length ``nobs`` where entry ``i`` is the flat window index
+    (in ``[0, B*T)``) that observation ``i`` belongs to.
 
-def _offsets_to_batch_idx(offsets: torch.Tensor) -> torch.Tensor:
-    r"""Convert 3D cumulative-end offsets to flattened :math:`(B, T)` batch indices."""
-    S, B, T = offsets.shape
-    bt_size = B * T
+    Examples
+    --------
+    >>> import torch
+    >>> offsets = torch.tensor([[3, 5], [7, 10]])  # (B=2, T=2)
+    >>> _offsets_to_batch_idx(offsets)
+    tensor([0, 0, 0, 1, 1, 2, 2, 3, 3, 3])
+    """
+    bt_size = offsets.numel()
 
+    # Convert cumulative ends offsets to per-window counts: [0, 3, 5, 7, 10] → [3, 2, 2, 3]
     offsets_flat = offsets.flatten()
     offsets_with_zero = torch.cat(
         [torch.tensor([0], device=offsets.device, dtype=offsets.dtype), offsets_flat]
     )
-    sizes = offsets_with_zero.diff()
+    counts = offsets_with_zero.diff()
 
-    window_indices = torch.arange(
-        sizes.shape[0], dtype=torch.long, device=offsets.device
-    )
-    bt_indices = window_indices % bt_size
-    return bt_indices.repeat_interleave(sizes)
+    # Repeat each window index by its count
+    window_indices = torch.arange(bt_size, dtype=torch.long, device=offsets.device)
+    return window_indices.repeat_interleave(counts)
 
 
 @torch.compiler.disable
 def _split_by_sensor(
-    obs: torch.Tensor,
-    float_metadata: torch.Tensor,
-    pix: torch.Tensor,
-    local_channel: torch.Tensor,
-    local_platform: torch.Tensor,
-    obs_type: torch.Tensor,
-    offsets: torch.Tensor,
-    expected_num_sensors: int,
+    obs: Float[torch.Tensor, "nobs"],
+    float_metadata: Float[torch.Tensor, "nobs meta_dim"],
+    pix: Int[torch.Tensor, "nobs"],
+    local_channel: Int[torch.Tensor, "nobs"],
+    local_platform: Int[torch.Tensor, "nobs"],
+    obs_type: Int[torch.Tensor, "nobs"],
+    offsets: Int[torch.Tensor, "sensors batch time"],
 ) -> list[tuple[torch.Tensor, ...]]:
-    """Split flattened observation tensors into per-sensor slices from ``offsets``."""
+    """Split flattened observation tensors into per-sensor slices using ``offsets``.
+
+    Returns a list of length ``S`` (number of sensors). Each element is a tuple
+    ``(obs, float_metadata, pix, local_channel, local_platform, obs_type, offsets)``
+    containing the sliced tensors and ``(B, T)`` offsets for that sensor.
+    """
     if offsets.ndim != 3:
         raise ValueError(f"offsets must have shape (S, B, T), got {offsets.shape}")
     nobs = obs.shape[0]
@@ -102,18 +89,18 @@ def _split_by_sensor(
             )
 
     nsensors = offsets.shape[0]
-    if nsensors != expected_num_sensors:
-        raise ValueError(
-            f"offsets first dim ({nsensors}) must match expected_num_sensors ({expected_num_sensors})"
-        )
-
     out: list[tuple[torch.Tensor, ...]] = []
     total_obs = obs.shape[0]
 
+    prev_end = 0
     for sensor_idx in range(nsensors):
+        start = prev_end
+        # This sensor ends at its last (batch, time) window
         end = offsets[sensor_idx, -1, -1].item()
-        start = 0 if sensor_idx == 0 else offsets[sensor_idx - 1, -1, -1].item()
-        sensor_offsets = offsets[sensor_idx : sensor_idx + 1] - start
+        prev_end = end
+
+        # Normalize per-sensor offsets so they start from 0
+        sensor_offsets = offsets[sensor_idx] - start
 
         if not (0 <= start <= total_obs and start <= end <= total_obs):
             raise ValueError(
@@ -201,10 +188,33 @@ class ObsTokenizer(Module):
 
     def forward(
         self,
-        obs: torch.Tensor,
-        float_metadata: torch.Tensor,
-        obs_type: torch.Tensor,
-    ) -> torch.Tensor:
+        obs: Float[torch.Tensor, "nobs"],
+        float_metadata: Float[torch.Tensor, "nobs meta_dim"],
+        obs_type: Int[torch.Tensor, "nobs"],
+    ) -> Float[torch.Tensor, "nobs out_dim"]:
+        if not torch.compiler.is_compiling():
+            if obs.ndim != 1:
+                raise ValueError(
+                    f"Expected obs of shape (nobs,), "
+                    f"got {obs.ndim}D tensor with shape {tuple(obs.shape)}"
+                )
+            nobs = obs.shape[0]
+            if float_metadata.ndim != 2:
+                raise ValueError(
+                    f"Expected float_metadata of shape (nobs, meta_dim), "
+                    f"got {float_metadata.ndim}D tensor with shape {tuple(float_metadata.shape)}"
+                )
+            if float_metadata.shape[0] != nobs:
+                raise ValueError(
+                    f"Expected float_metadata with {nobs} rows (matching obs), "
+                    f"got tensor with shape {tuple(float_metadata.shape)}"
+                )
+            if obs_type.ndim != 1 or obs_type.shape[0] != nobs:
+                raise ValueError(
+                    f"Expected obs_type of shape ({nobs},) matching obs, "
+                    f"got tensor with shape {tuple(obs_type.shape)}"
+                )
+
         embed_vec = self.embed_table(obs_type)
 
         x_in = torch.cat(
@@ -226,28 +236,41 @@ class UniformFusion(Module):
 
     Parameters
     ----------
-    fusion_dim : int, optional, default=256
-        Dimension of the fused embedding.
+    fusion_dim : int
+        Feature dimension of per-sensor embeddings and the fused output.
 
     Forward
     -------
     sensor_embeddings : torch.Tensor
-        Sensor embeddings of shape :math:`(N_{sensors}, *, D)`.
+        Sensor embeddings of shape :math:`(N_{sensors}, B, T, N_{pix}, D)`.
 
     Outputs
     -------
     torch.Tensor
-        Fused embedding of shape :math:`(*, D)`.
+        Fused embedding of shape :math:`(B, T, N_{pix}, D)`.
     """
 
-    def __init__(self, fusion_dim: int = 256):
+    def __init__(self, fusion_dim: int):
         super().__init__()
         self.fusion_dim = fusion_dim
         self.norm = torch.nn.LayerNorm(self.fusion_dim)
 
     def forward(
-        self, sensor_embeddings: torch.Tensor
-    ) -> torch.Tensor:
+        self,
+        sensor_embeddings: Float[torch.Tensor, "num_sensors batch time npix fusion_dim"],
+    ) -> Float[torch.Tensor, "batch time npix fusion_dim"]:
+        if not torch.compiler.is_compiling():
+            if sensor_embeddings.ndim != 5:
+                raise ValueError(
+                    f"Expected sensor_embeddings of shape (num_sensors, batch, time, npix, fusion_dim), "
+                    f"got {sensor_embeddings.ndim}D tensor with shape {tuple(sensor_embeddings.shape)}"
+                )
+            if sensor_embeddings.shape[-1] != self.fusion_dim:
+                raise ValueError(
+                    f"Expected fusion_dim={self.fusion_dim} in last dimension, "
+                    f"got {sensor_embeddings.shape[-1]} in tensor with shape {tuple(sensor_embeddings.shape)}"
+                )
+
         num_sensors = sensor_embeddings.shape[0]
         sensor_embeddings = self.norm(sensor_embeddings)
         return sensor_embeddings.sum(dim=0) / math.sqrt(num_sensors)
@@ -256,10 +279,9 @@ class UniformFusion(Module):
 class SensorEmbedder(Module):
     r"""Embeds observations from a single sensor onto the HEALPix spatial grid.
 
-    Pipeline:
-      1. Per-observation tokenization via :class:`ObsTokenizer`
-      2. Scatter aggregation onto HEALPix grid via :class:`ScatterAggregator`
-      3. Final projection to output dimension
+    Each observation is first tokenized into a feature vector by
+    :class:`ObsTokenizer`, then scatter-reduced onto the HEALPix grid
+    via :class:`ScatterAggregator` and projected to the output dimension.
 
     Parameters
     ----------
@@ -279,7 +301,7 @@ class SensorEmbedder(Module):
         Size of observation type embedding table.
     embed_dim : int, optional, default=4
         Dimension of observation type embeddings.
-    use_checkpoint : bool, optional, default=False
+    gradient_checkpointing : bool, optional, default=False
         If ``True``, applies gradient checkpointing to reduce memory usage.
 
     Forward
@@ -289,7 +311,7 @@ class SensorEmbedder(Module):
     float_metadata : torch.Tensor
         Float metadata with shape :math:`(N_{obs}, M_{float})`.
     pix : torch.Tensor
-        Pixel index tensor with shape :math:`(N_{obs},)`.
+        Pixel index tensor with shape :math:`(N_{obs},)` at ``hpx_level`` resolution.
     local_channel : torch.Tensor
         Local channel tensor with shape :math:`(N_{obs},)`.
     local_platform : torch.Tensor
@@ -297,9 +319,8 @@ class SensorEmbedder(Module):
     obs_type : torch.Tensor
         Observation type tensor with shape :math:`(N_{obs},)`.
     offsets : torch.Tensor
-        3D offsets with shape :math:`(1, B, T)` indicating end of each batch/time window.
-    hpx_level : int
-        HEALPix level used by ``pix``.
+        Cumulative exclusive-end offsets with shape :math:`(B, T)` for this sensor.
+        Indicate the end of each batch/time window.
 
     Outputs
     -------
@@ -319,7 +340,7 @@ class SensorEmbedder(Module):
         hpx_level: int = 6,
         n_embed: int = 1024,
         embed_dim: int = 4,
-        use_checkpoint: bool = False,
+        gradient_checkpointing: bool = False,
     ):
         super().__init__()
 
@@ -327,7 +348,7 @@ class SensorEmbedder(Module):
         self.output_dim = output_dim
         self.hpx_level = hpx_level
         self.npix = 12 * 4**hpx_level
-        self.use_checkpoint = use_checkpoint
+        self.gradient_checkpointing = gradient_checkpointing
         self.nchannel = nchannel
         self.nplatform = nplatform
 
@@ -348,42 +369,61 @@ class SensorEmbedder(Module):
 
     def aggregate(
         self,
-        embedded_obs: torch.Tensor,
-        pix: torch.Tensor,
-        local_channel: torch.Tensor,
-        local_platform: torch.Tensor,
-        hpx_level: int,
-        batch_idx: torch.Tensor,
+        embedded_obs: Float[torch.Tensor, "nobs embed_dim"],
+        pix: Int[torch.Tensor, "nobs"],
+        local_channel: Int[torch.Tensor, "nobs"],
+        local_platform: Int[torch.Tensor, "nobs"],
+        batch_idx: Int[torch.Tensor, "nobs"],
         nbatch: int,
-    ) -> torch.Tensor:
-        """Aggregate observations to spatial grid and project to output dimension."""
-        # Convert observation pixels to aggregator grid resolution
-        aggregation_pix = pix // int(4.0 ** (hpx_level - self.hpx_level))
+    ) -> Float[torch.Tensor, "nbatch npix out_dim"]:
+        """Aggregate tokenized observations to a spatial grid."""
+        if not torch.compiler.is_compiling():
+            if embedded_obs.ndim != 2:
+                raise ValueError(
+                    f"Expected embedded_obs of shape (nobs, embed_dim), "
+                    f"got {embedded_obs.ndim}D tensor with shape {tuple(embedded_obs.shape)}"
+                )
+            if embedded_obs.shape[1] != self.sensor_embed_dim:
+                raise ValueError(
+                    f"Expected embed_dim={self.sensor_embed_dim} in embedded_obs, "
+                    f"got {embedded_obs.shape[1]} in tensor with shape {tuple(embedded_obs.shape)}"
+                )
+            nobs = embedded_obs.shape[0]
+            for name, tensor in (
+                ("pix", pix),
+                ("local_channel", local_channel),
+                ("local_platform", local_platform),
+                ("batch_idx", batch_idx),
+            ):
+                if tensor.ndim != 1 or tensor.shape[0] != nobs:
+                    raise ValueError(
+                        f"Expected {name} of shape ({nobs},) matching embedded_obs, "
+                        f"got tensor with shape {tuple(tensor.shape)}"
+                    )
 
         # Build combined bucket ID
         bucket_id = local_platform * self.nchannel + local_channel
         return self.scatter_infill_aggregator(
             obs_features=embedded_obs,
             batch_idx=batch_idx,
-            pix=aggregation_pix,
+            pix=pix,
             bucket_id=bucket_id,
             nbatch=nbatch,
         )
 
     def _forward(
         self,
-        obs: torch.Tensor,
-        float_metadata: torch.Tensor,
-        pix: torch.Tensor,
-        local_channel: torch.Tensor,
-        local_platform: torch.Tensor,
-        obs_type: torch.Tensor,
-        offsets: torch.Tensor,
-        hpx_level: int,
-    ) -> torch.Tensor:
+        obs: Float[torch.Tensor, "nobs"],
+        float_metadata: Float[torch.Tensor, "nobs meta_dim"],
+        pix: Int[torch.Tensor, "nobs"],
+        local_channel: Int[torch.Tensor, "nobs"],
+        local_platform: Int[torch.Tensor, "nobs"],
+        obs_type: Int[torch.Tensor, "nobs"],
+        offsets: Int[torch.Tensor, "batch time"],
+    ) -> Float[torch.Tensor, "batch time npix out_dim"]:
         batch_idx = _offsets_to_batch_idx(offsets)
-        batch_dims = offsets.shape[-2:]  # (S, B, T) -> (B, T)
-        nbatch = _prod(batch_dims)
+        batch_dims = offsets.shape  # (B, T)
+        nbatch = offsets.numel()
 
         embedded_obs = self.obs_tokenizer(obs, float_metadata, obs_type)
 
@@ -393,7 +433,6 @@ class SensorEmbedder(Module):
             pix,
             local_channel,
             local_platform,
-            hpx_level,
             batch_idx,
             nbatch,
         )  # NEST (nbatch, npix, output_dim)
@@ -403,16 +442,49 @@ class SensorEmbedder(Module):
 
     def forward(
         self,
-        obs: torch.Tensor,
-        float_metadata: torch.Tensor,
-        pix: torch.Tensor,
-        local_channel: torch.Tensor,
-        local_platform: torch.Tensor,
-        obs_type: torch.Tensor,
-        offsets: torch.Tensor,
-        hpx_level: int,
-    ) -> torch.Tensor:
-        if self.use_checkpoint:
+        obs: Float[torch.Tensor, "nobs"],
+        float_metadata: Float[torch.Tensor, "nobs meta_dim"],
+        pix: Int[torch.Tensor, "nobs"],
+        local_channel: Int[torch.Tensor, "nobs"],
+        local_platform: Int[torch.Tensor, "nobs"],
+        obs_type: Int[torch.Tensor, "nobs"],
+        offsets: Int[torch.Tensor, "batch time"],
+    ) -> Float[torch.Tensor, "batch time npix out_dim"]:
+        if not torch.compiler.is_compiling():
+            if obs.ndim != 1:
+                raise ValueError(
+                    f"Expected obs of shape (nobs,), "
+                    f"got {obs.ndim}D tensor with shape {tuple(obs.shape)}"
+                )
+            nobs = obs.shape[0]
+            if float_metadata.ndim != 2:
+                raise ValueError(
+                    f"Expected float_metadata of shape (nobs, meta_dim), "
+                    f"got {float_metadata.ndim}D tensor with shape {tuple(float_metadata.shape)}"
+                )
+            if float_metadata.shape[0] != nobs:
+                raise ValueError(
+                    f"Expected float_metadata with {nobs} rows (matching obs), "
+                    f"got {float_metadata.shape[0]} in tensor with shape {tuple(float_metadata.shape)}"
+                )
+            for name, tensor in (
+                ("pix", pix),
+                ("local_channel", local_channel),
+                ("local_platform", local_platform),
+                ("obs_type", obs_type),
+            ):
+                if tensor.ndim != 1 or tensor.shape[0] != nobs:
+                    raise ValueError(
+                        f"Expected {name} of shape ({nobs},) matching obs, "
+                        f"got tensor with shape {tuple(tensor.shape)}"
+                    )
+            if offsets.ndim != 2:
+                raise ValueError(
+                    f"Expected offsets of shape (batch, time), "
+                    f"got {offsets.ndim}D tensor with shape {tuple(offsets.shape)}"
+                )
+
+        if self.gradient_checkpointing:
             return torch.utils.checkpoint.checkpoint(
                 self._forward,
                 obs,
@@ -422,7 +494,6 @@ class SensorEmbedder(Module):
                 local_platform,
                 obs_type,
                 offsets,
-                hpx_level,
                 use_reentrant=False,
             )
         else:
@@ -434,7 +505,6 @@ class SensorEmbedder(Module):
                 local_platform,
                 obs_type,
                 offsets,
-                hpx_level,
             )
 
 
@@ -446,18 +516,10 @@ class MultiSensorObsEmbedding(Module):
 
     Parameters
     ----------
-    sensor_configs : list[dict[str, Any]]
-        Ordered per-sensor configs, one dict per sensor. Required keys:
-
-        - ``name``: sensor name (bookkeeping, unused).
-        - ``nchannel``: number of sensor channels.
-        - ``nplatform``: number of sensor platforms.
-
-        The list order must match the loaded observations: row ``i`` in ``offsets`` must
-        correspond to ``sensor_configs[i]``.
-
-        Example:
-        ``[{"name": "atms", "nchannel": 22, "nplatform": 2}]``
+    nchannel_per_sensor : list[int]
+        Number of channels for each sensor, in sensor order.
+    nplatform_per_sensor : list[int]
+        Number of platforms for each sensor, in sensor order.
     hpx_level : int
         HEALPix grid level for all sensors.
     embed_dim : int, optional, default=32
@@ -466,8 +528,9 @@ class MultiSensorObsEmbedding(Module):
         Dimension of float point metadata features, consumed by :class:`ObsTokenizer`.
     fusion_dim : int, optional, default=512
         Output channel dimension after sensor fusion.
-    use_checkpoint : bool, optional, default=False
-        If ``True``, applies gradient checkpointing to reduce memory usage.
+    gradient_checkpointing : bool, optional, default=False
+        If ``True``, wraps each per-sensor forward pass with gradient
+        checkpointing to trade compute for memory during training.
     compile : bool, optional, default=False
         If ``True``, compiles the forward function for improved performance.
 
@@ -478,7 +541,8 @@ class MultiSensorObsEmbedding(Module):
     float_metadata : torch.Tensor
         Flattened float metadata with shape :math:`(N_{obs}, M_{float})`.
     pix : torch.Tensor
-        Flattened pixel indices of each observation with shape :math:`(N_{obs},)`.
+        Flattened pixel indices of each observation with shape :math:`(N_{obs},)`
+        at ``hpx_level`` resolution.
     local_channel : torch.Tensor
         Flattened local channel ids of each observation with shape :math:`(N_{obs},)`.
     local_platform : torch.Tensor
@@ -487,15 +551,13 @@ class MultiSensorObsEmbedding(Module):
         Flattened observation type ids with shape :math:`(N_{obs},)`.
     offsets : torch.Tensor
         Cumulative exclusive-end row offsets into flattened
-        observation tensors with shape :math:`(S, B, T)`, aligned to
-        ``sensor_configs``.
+        observation tensors with shape :math:`(S, B, T)`, where the
+        sensor order matches the initialization order.
 
         ``offsets[s, b, t]`` is the exclusive end row index for block ``(s, b, t)``
         under ``sensor -> batch -> time`` ordering (time changes fastest).
         So each sensor's rows are contiguous; within each sensor, each batch's
         rows are contiguous; and within each batch, each time window is contiguous.
-    hpx_level : int
-        HEALPix level used by input ``pix``.
 
     Outputs
     -------
@@ -507,27 +569,33 @@ class MultiSensorObsEmbedding(Module):
 
     def __init__(
         self,
-        sensor_configs: list[dict[str, Any]],
+        nchannel_per_sensor: list[int],
+        nplatform_per_sensor: list[int],
         hpx_level: int,
         embed_dim: int = 32,
         meta_dim: int = 28,
         fusion_dim: int = 512,
-        use_checkpoint: bool = False,
+        gradient_checkpointing: bool = False,
         compile: bool = False,
     ):
         super().__init__()
 
-        self._validate_sensor_configs(sensor_configs)
-        self.sensor_configs = sensor_configs
-        self.sensor_names = [config["name"] for config in self.sensor_configs]
+        if len(nchannel_per_sensor) != len(nplatform_per_sensor):
+            raise ValueError(
+                f"nchannel_per_sensor and nplatform_per_sensor must have the same "
+                f"length, got {len(nchannel_per_sensor)} and {len(nplatform_per_sensor)}"
+            )
+
+        self.nchannel_per_sensor = list(nchannel_per_sensor)
+        self.nplatform_per_sensor = list(nplatform_per_sensor)
         self.fusion_dim = fusion_dim
         self.hpx_level = hpx_level
         self.npix = 12 * 4**hpx_level
 
         # Aggregate onto NEST order grid
-        self.grid = hpx_grid(hpx_level, pixel_order=HEALPIX_NEST)
+        self.grid = _earth2grid_healpix.Grid(hpx_level, pixel_order=_earth2grid_healpix.NEST)
 
-        # Separate embedders for each sensor, in config order.
+        # Separate embedders for each sensor, in sensor order.
         self.embedders = torch.nn.ModuleList(
             [
                 SensorEmbedder(
@@ -535,11 +603,11 @@ class MultiSensorObsEmbedding(Module):
                     meta_dim=meta_dim,
                     output_dim=self.fusion_dim,
                     hpx_level=self.hpx_level,
-                    nchannel=config["nchannel"],
-                    nplatform=config["nplatform"],
-                    use_checkpoint=use_checkpoint,
+                    nchannel=nchannel,
+                    nplatform=nplatform,
+                    gradient_checkpointing=gradient_checkpointing,
                 )
-                for config in self.sensor_configs
+                for nchannel, nplatform in zip(nchannel_per_sensor, nplatform_per_sensor)
             ]
         )
 
@@ -547,28 +615,6 @@ class MultiSensorObsEmbedding(Module):
         self.output_norm = torch.nn.LayerNorm(self.fusion_dim)
         if compile:
             self.forward = torch.compile(self.forward, dynamic=True)
-
-    @staticmethod
-    def _validate_sensor_configs(
-        sensor_configs: list[dict[str, Any]],
-    ) -> None:
-        if len(sensor_configs) == 0:
-            raise ValueError("sensor_configs must contain at least one sensor config")
-        for idx, config in enumerate(sensor_configs):
-            if not isinstance(config, dict):
-                raise TypeError(
-                    f"sensor_configs[{idx}] must be a dict, got {type(config).__name__}"
-                )
-            missing = [
-                key
-                for key in ("name", "nchannel", "nplatform")
-                if key not in config
-            ]
-            if missing:
-                raise ValueError(
-                    f"sensor_configs[{idx}] is missing required key(s): {missing}"
-                )
-
 
     def _reorder(self, x: torch.Tensor) -> torch.Tensor:
         r"""Reorder from NEST to HEALPIX_PAD_XY.
@@ -584,21 +630,60 @@ class MultiSensorObsEmbedding(Module):
             Tensor with shape :math:`(..., N_{pix}, C)`.
         """
         x = self.grid.reorder(
-            HEALPIX_PAD_XY, x.transpose(-1, -2),
+            _earth2grid_healpix.HEALPIX_PAD_XY, x.transpose(-1, -2),
         ).transpose(-1, -2)
         return x
 
     def forward(
         self,
-        obs: torch.Tensor,
-        float_metadata: torch.Tensor,
-        pix: torch.Tensor,
-        local_channel: torch.Tensor,
-        local_platform: torch.Tensor,
-        obs_type: torch.Tensor,
-        offsets: torch.Tensor,
-        hpx_level: int,
-    ) -> torch.Tensor:
+        obs: Float[torch.Tensor, "nobs"],
+        float_metadata: Float[torch.Tensor, "nobs meta_dim"],
+        pix: Int[torch.Tensor, "nobs"],
+        local_channel: Int[torch.Tensor, "nobs"],
+        local_platform: Int[torch.Tensor, "nobs"],
+        obs_type: Int[torch.Tensor, "nobs"],
+        offsets: Int[torch.Tensor, "sensors batch time"],
+    ) -> Float[torch.Tensor, "batch fusion_dim time npix"]:
+        if not torch.compiler.is_compiling():
+            if obs.ndim != 1:
+                raise ValueError(
+                    f"Expected obs of shape (nobs,), "
+                    f"got {obs.ndim}D tensor with shape {tuple(obs.shape)}"
+                )
+            nobs = obs.shape[0]
+            if float_metadata.ndim != 2:
+                raise ValueError(
+                    f"Expected float_metadata of shape (nobs, meta_dim), "
+                    f"got {float_metadata.ndim}D tensor with shape {tuple(float_metadata.shape)}"
+                )
+            if float_metadata.shape[0] != nobs:
+                raise ValueError(
+                    f"Expected float_metadata with {nobs} rows (matching obs), "
+                    f"got {float_metadata.shape[0]} in tensor with shape {tuple(float_metadata.shape)}"
+                )
+            for name, tensor in (
+                ("pix", pix),
+                ("local_channel", local_channel),
+                ("local_platform", local_platform),
+                ("obs_type", obs_type),
+            ):
+                if tensor.ndim != 1 or tensor.shape[0] != nobs:
+                    raise ValueError(
+                        f"Expected {name} of shape ({nobs},) matching obs, "
+                        f"got tensor with shape {tuple(tensor.shape)}"
+                    )
+            num_sensors = len(self.embedders)
+            if offsets.ndim != 3:
+                raise ValueError(
+                    f"Expected offsets of shape (sensors, batch, time), "
+                    f"got {offsets.ndim}D tensor with shape {tuple(offsets.shape)}"
+                )
+            if offsets.shape[0] != num_sensors:
+                raise ValueError(
+                    f"Expected sensors={num_sensors} in offsets (matching nchannel_per_sensor), "
+                    f"got {offsets.shape[0]} in tensor with shape {tuple(offsets.shape)}"
+                )
+
         # Embed each sensor's observations separately
         obs_by_sensor = _split_by_sensor(
             obs=obs,
@@ -608,7 +693,6 @@ class MultiSensorObsEmbedding(Module):
             local_platform=local_platform,
             obs_type=obs_type,
             offsets=offsets,
-            expected_num_sensors=len(self.embedders),
         )
         sensor_embeddings = []
 
@@ -630,7 +714,6 @@ class MultiSensorObsEmbedding(Module):
                 local_platform=sensor_local_platform,
                 obs_type=sensor_obs_type,
                 offsets=sensor_offsets,
-                hpx_level=hpx_level,
             )  # (b, t, x, c)
             sensor_embeddings.append(output)
 
@@ -639,14 +722,10 @@ class MultiSensorObsEmbedding(Module):
         )
 
         # Fuse sensors
-        num_sensors, b, t, x, c = sensor_embeddings.shape
-        sensor_embeddings_flat = sensor_embeddings.view(num_sensors, b * t * x, c)
-        fused_flat = self.sensor_fusion(sensor_embeddings_flat)  # (b*t*x, fusion_dim)
-
-        out = fused_flat.view(b, t, x, self.fusion_dim)  # (b, t, x, fusion_dim)
+        out = self.sensor_fusion(sensor_embeddings)  # (batch, time, npix, fusion_dim)
 
         out = self._reorder(out)
         out = self.output_norm(out)
-        out = out.permute(0, 3, 1, 2).to(memory_format=torch.channels_last)
+        out = out.permute(0, 3, 1, 2)
 
         return out
