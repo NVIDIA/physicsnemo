@@ -57,6 +57,8 @@ class Mlp(nn.Module):
         Default is ``nn.GELU``.
     drop : float, optional
         Dropout rate applied after each layer. Default is ``0.0``.
+    final_dropout : bool, optional
+        Whether to apply dropout after the final linear layer. Default is ``True``.
     use_te : bool, optional
         Whether to use Transformer Engine linear layers for optimized performance.
         Requires Transformer Engine to be installed. Default is ``False``.
@@ -87,6 +89,7 @@ class Mlp(nn.Module):
         out_features: int | None = None,
         act_layer: nn.Module | type[nn.Module] | str = nn.GELU,
         drop: float = 0.0,
+        final_dropout: bool = True,
         use_te: bool = False,
     ):
         super().__init__()
@@ -133,7 +136,7 @@ class Mlp(nn.Module):
 
         # Add the final output layer
         layers.append(linear_layer(input_dim, out_features))
-        if drop != 0:
+        if drop != 0 and final_dropout:
             layers.append(nn.Dropout(drop))
 
         self.layers = nn.Sequential(*layers)
