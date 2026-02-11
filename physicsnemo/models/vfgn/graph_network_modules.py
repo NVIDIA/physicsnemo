@@ -2,10 +2,6 @@
 # ruff: noqa: E402
 
 # © Copyright 2023 HP Development Company, L.P.
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
-# SPDX-FileCopyrightText: All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -18,10 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 import random
-import warnings
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 import torch
@@ -32,9 +27,9 @@ from torch.utils.checkpoint import checkpoint
 
 from physicsnemo.core import Module
 from physicsnemo.core.meta import ModelMetaData
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport, require_version_spec
 
-TORCH_SCATTER_AVAILABLE = check_version_spec("torch_scatter", hard_fail=False)
+_torch_scatter = OptionalImport("torch_scatter")
 
 STD_EPSILON = 1e-8
 
@@ -58,33 +53,28 @@ class MetaData(ModelMetaData):
 
 
 class MLPNet(Module):
-    """
-    A Multilayer Perceptron (MLP) network implemented in PyTorch, configurable with
-    a variable number of hidden layers and layer normalization.
+    r"""Configurable multilayer perceptron (MLP).
 
     Parameters
     ----------
     mlp_hidden_size : int
-        Number of channels/ features in the hidden layers
+        Number of hidden features.
     mlp_num_hidden_layers : int
-        Number of hidden layers
+        Number of hidden layers.
     output_size : int
-        Number of output channels
-    layer_norm : boolean
-        If to apply layer normalization in the output layer, default True
+        Number of output features.
+    layer_norm : bool, optional, default=True
+        Apply layer normalization on the output.
 
-    Example
+    Forward
     -------
-    # # Use MLPNet to encode the features
-    # >>> model = physicsnemo.models.graph_network.MLPNet(
-    # ... mlp_hidden_size=128,
-    # ... mlp_num_hidden_layers=2,
-    # ... output_size=128)
-    # >>> input = torch.randn([5193, 128]) #(N, C)
-    # >>> output = model(input)
-    # >>> output.size()
-    # torch.Size([5193, 128])
-    ----
+    x : torch.Tensor
+        Input features of shape :math:`(N, C_{in})`.
+
+    Returns
+    -------
+    torch.Tensor
+        Output features of shape :math:`(N, C_{out})`.
     """
 
     def __init__(
@@ -120,6 +110,11 @@ class MLPNet(Module):
         return getattr(self, name)
 
     def forward(self, x):
+        if not torch.compiler.is_compiling():
+            if x.ndim != 2:
+                raise ValueError(
+                    f"Expected 2D input tensor (N, C_in) but got shape {tuple(x.shape)}"
+                )
         origin_device = x.device
         lin_s = self.dynamic("lin_s", Linear, x.shape[-1], self.mlp_hidden_size)
         lin_s = lin_s.to(origin_device)
@@ -138,17 +133,28 @@ class MLPNet(Module):
 
 
 class EncoderNet(Module):
-    """
-    Construct EncoderNet based on the NLPNet architecture.
+    r"""Feature encoders for nodes and edges using MLPs.
 
     Parameters
     ----------
     mlp_hidden_size : int
-        Number of channels/ features in the hidden layers
+        Number of hidden features.
     mlp_num_hidden_layers : int
-        Number of hidden layers
+        Number of hidden layers.
     latent_size : int
-        Number of latent channels
+        Latent feature size.
+
+    Forward
+    -------
+    node_attr : torch.Tensor
+        Node attributes of shape :math:`(N_{nodes}, D_{node})`.
+    edge_attr : torch.Tensor
+        Edge attributes of shape :math:`(N_{edges}, D_{edge})`.
+
+    Returns
+    -------
+    Tuple[torch.Tensor, torch.Tensor]
+        Encoded ``(node_attr, edge_attr)`` with last dimension mapped to ``latent_size``.
     """
 
     def __init__(
@@ -171,6 +177,12 @@ class EncoderNet(Module):
         self.node_mlp = MLPNet(mlp_hidden_size, mlp_num_hidden_layers, latent_size)
 
     def forward(self, node_attr, edge_attr):
+        if not torch.compiler.is_compiling():
+            if node_attr.ndim != 2 or edge_attr.ndim != 2:
+                raise ValueError(
+                    f"Expected 2D tensors for node_attr and edge_attr, got "
+                    f"{tuple(node_attr.shape)} and {tuple(edge_attr.shape)}"
+                )
         # encode node attributes
         node_attr = self.node_mlp(node_attr)
         # encode edge attributes
@@ -180,35 +192,38 @@ class EncoderNet(Module):
 
 
 class EdgeBlock(Module):
-    """
-    Update the edge attributes by collecting the sender and/or receiver-nodes'
-    edge attributes, pass through the edge-MLP network.
+    r"""Edge update block aggregating sender/receiver node features.
 
     Parameters
     ----------
     mlp_hidden_size : int
-        Number of channels/ features in the hidden layers
+        Number of hidden features.
     mlp_num_hidden_layers : int
-        Number of hidden layers
+        Number of hidden layers.
     latent_size : int
-        Number of latent channels
-    use_receiver_nodes : bool, optional, default = True
-        whether to take the receiver-node's edges atrributes into compute
-    use_sender_nodes : bool, optional, default = True
-        whether to take the sender-node's edges atrributes into compute
+        Latent feature size.
+    node_dim : int, optional, default=0
+        Feature dimension corresponding to nodes.
+    use_receiver_nodes : bool, optional, default=True
+        Include receiver node features in edge update.
+    use_sender_nodes : bool, optional, default=True
+        Include sender node features in edge update.
 
-    Example
+    Forward
     -------
-    # >>> #2D convolutional encoder decoder
-    # >>> model = physicsnemo.models.graph_network.EdgeBlock(
-    # ... mlp_hidden_size=128,
-    # ... mlp_num_hidden_layers=2,
-    # ... latent_size=128,
-    # ... node_dim=0)
-    # >>> input = (node_attr, edge_attr, receiver_list, sender_list)
-    # >>> output = node_attr, updated_edge_attr, receiver_list, sender_list
-    # >>> output.size()
+    node_attr : torch.Tensor
+        Node attributes :math:`(N_{nodes}, D)`.
+    edge_attr : torch.Tensor
+        Edge attributes :math:`(N_{edges}, D)`.
+    receivers : torch.Tensor
+        Receiver indices :math:`(N_{edges},)`.
+    senders : torch.Tensor
+        Sender indices :math:`(N_{edges},)`.
 
+    Returns
+    -------
+    Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+        ``(node_attr, updated_edge_attr, receivers, senders)``.
     """
 
     def __init__(
@@ -228,6 +243,17 @@ class EdgeBlock(Module):
         self.use_sender_nodes = use_sender_nodes
 
     def forward(self, node_attr, edge_attr, receivers, senders):
+        if not torch.compiler.is_compiling():
+            if node_attr.ndim != 2 or edge_attr.ndim != 2:
+                raise ValueError(
+                    f"Expected node_attr and edge_attr tensors to be 2D, got "
+                    f"{tuple(node_attr.shape)} and {tuple(edge_attr.shape)}"
+                )
+            if receivers.ndim != 1 or senders.ndim != 1:
+                raise ValueError(
+                    f"Expected 1D index tensors for receivers/senders, got "
+                    f"{tuple(receivers.shape)} and {tuple(senders.shape)}"
+                )
         edges_to_collect = []
         edges_to_collect.append(edge_attr)
 
@@ -246,126 +272,41 @@ class EdgeBlock(Module):
         return node_attr, updated_edges, receivers, senders
 
 
-if TORCH_SCATTER_AVAILABLE:
-    scatter = importlib.import_module("torch_scatter").scatter
-
-    class NodeBlock(Module):
-        """
-        Update the nodes attributes by collecting the sender and/or receiver-nodes'
-        edge attributes, pass through the node-MLP network.
-
-        Parameters
-        ----------
-        mlp_hidden_size : int
-            Number of channels/ features in the hidden layers
-        mlp_num_hidden_layers : int
-            Number of hidden layers
-        latent_size : int
-            Number of latent channels
-        aggr : str, optional, default = "add"
-            operation to collect the node attributes
-        use_receiver_nodes : bool, optional, default = True
-            whether to take the receiver-node's edges atrributes into compute
-        use_sender_nodes : bool, optional, default = True
-            whether to take the sender-node's edges atrributes into compute
-
-        # Example
-        # -------
-        # >>> #2D convolutional encoder decoder
-        # >>> model = physicsnemo.models.graph_network.NodeBlock(
-        # ... mlp_hidden_size=128,
-        # ... mlp_num_hidden_layers=2,
-        # ... latent_size=128,
-        # ... node_dim=0)
-        # >>> input = (node_attr, edge_attr, receiver_list, sender_list)
-        # >>> output = updated_node_attr, edge_attr, receiver_list, sender_list
-        # >>> output.size()
-
-        """
-
-        def __init__(
-            self,
-            mlp_hidden_size,
-            mlp_num_hidden_layers,
-            latent_size,
-            aggr="add",
-            node_dim=0,
-            use_received_edges=True,
-            use_sent_edges=False,
-        ):
-            super().__init__(meta=MetaData(name="vfgn_nodeblock"))
-            self.aggr = aggr
-            self.node_dim = node_dim
-
-            self.use_received_edges = use_received_edges
-            self.use_sent_edges = use_sent_edges
-
-            self._node_model = MLPNet(
-                mlp_hidden_size, mlp_num_hidden_layers, latent_size
-            )
-
-        def forward(self, x, edge_attr, receivers, senders):
-            nodes_to_collect = []
-            nodes_to_collect.append(x)
-
-            dim_size = x.shape[self.node_dim]
-
-            # aggregate received edges
-            if self.use_received_edges:
-                receivers_edge = scatter(
-                    dim=self.node_dim,
-                    dim_size=dim_size,
-                    index=receivers,
-                    src=edge_attr,
-                    reduce=self.aggr,
-                )
-                nodes_to_collect.append(receivers_edge)
-
-            # aggregate sent edges
-            if self.use_sent_edges:
-                senders_edge = scatter(
-                    dim=self.node_dim,
-                    dim_size=dim_size,
-                    index=senders,
-                    src=edge_attr,
-                    reduce=self.aggr,
-                )
-                nodes_to_collect.append(senders_edge)
-
-            collected_nodes = torch.cat(nodes_to_collect, axis=-1)
-
-            updated_nodes = self._node_model(collected_nodes)
-
-            return updated_nodes, edge_attr, receivers, senders
-
-else:
-
-    class NodeBlock(Module):
-        """
-        Dummy class for when torch_scatter is not available.
-        """
-
-        def __init__(self, *args, **kwargs):
-            raise ImportError(
-                "VFGN pipeline requires the PyTorch_Geometric library. Install the "
-                + "package at: https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html"
-            )
-
-
-class InteractionNet(torch.nn.Module):
-    """
-    Iterate to compute the edge attributes, then node attributes
+class NodeBlock(Module):
+    r"""Node update block aggregating incident edge features.
 
     Parameters
     ----------
     mlp_hidden_size : int
-        Number of channels/ features in the hidden layers
+        Number of hidden features.
     mlp_num_hidden_layers : int
-        Number of hidden layers
+        Number of hidden layers.
     latent_size : int
-        Number of latent channels
-    aggr : str, optional, default = "add"
-        operation to collect the node attributes
+        Latent feature size.
+    aggr : Literal["add", "sum", "mean", "min", "max", "mul"], optional, default="add"
+        Aggregation operation for edges per node.
+    node_dim : int, optional, default=0
+        Feature dimension corresponding to nodes.
+    use_received_edges : bool, optional, default=True
+        Include received edges in aggregation.
+    use_sent_edges : bool, optional, default=False
+        Include sent edges in aggregation.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Node features :math:`(N_{nodes}, D)`.
+    edge_attr : torch.Tensor
+        Edge features :math:`(N_{edges}, D)`.
+    receivers : torch.Tensor
+        Receiver indices :math:`(N_{edges},)`.
+    senders : torch.Tensor
+        Sender indices :math:`(N_{edges},)`.
+
+    Returns
+    -------
+    Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+        ``(updated_nodes, edge_attr, receivers, senders)``.
     """
 
     def __init__(
@@ -373,7 +314,106 @@ class InteractionNet(torch.nn.Module):
         mlp_hidden_size,
         mlp_num_hidden_layers,
         latent_size,
-        aggr="add",
+        aggr: Literal["add", "sum", "mean", "min", "max", "mul"] = "add",
+        node_dim=0,
+        use_received_edges=True,
+        use_sent_edges=False,
+    ):
+        super().__init__(meta=MetaData(name="vfgn_nodeblock"))
+        self.aggr = aggr
+        self.node_dim = node_dim
+
+        self.use_received_edges = use_received_edges
+        self.use_sent_edges = use_sent_edges
+
+        self._node_model = MLPNet(mlp_hidden_size, mlp_num_hidden_layers, latent_size)
+
+    @require_version_spec("torch_scatter")
+    def forward(self, x, edge_attr, receivers, senders):
+        if not torch.compiler.is_compiling():
+            if x.ndim != 2 or edge_attr.ndim != 2:
+                raise ValueError(
+                    f"Expected x and edge_attr as 2D tensors, got "
+                    f"{tuple(x.shape)} and {tuple(edge_attr.shape)}"
+                )
+            if receivers.ndim != 1 or senders.ndim != 1:
+                raise ValueError(
+                    f"Expected 1D index tensors for receivers/senders, got "
+                    f"{tuple(receivers.shape)} and {tuple(senders.shape)}"
+                )
+        nodes_to_collect = []
+        nodes_to_collect.append(x)
+
+        dim_size = x.shape[self.node_dim]
+
+        scatter_fn = _torch_scatter.scatter
+
+        # aggregate received edges
+        if self.use_received_edges:
+            receivers_edge = scatter_fn(
+                dim=self.node_dim,
+                dim_size=dim_size,
+                index=receivers,
+                src=edge_attr,
+                reduce=self.aggr,
+            )
+            nodes_to_collect.append(receivers_edge)
+
+        # aggregate sent edges
+        if self.use_sent_edges:
+            senders_edge = scatter_fn(
+                dim=self.node_dim,
+                dim_size=dim_size,
+                index=senders,
+                src=edge_attr,
+                reduce=self.aggr,
+            )
+            nodes_to_collect.append(senders_edge)
+
+        collected_nodes = torch.cat(nodes_to_collect, axis=-1)
+
+        updated_nodes = self._node_model(collected_nodes)
+
+        return updated_nodes, edge_attr, receivers, senders
+
+
+class InteractionNet(torch.nn.Module):
+    r"""Alternating edge and node updates (one interaction step).
+
+    Parameters
+    ----------
+    mlp_hidden_size : int
+        Number of hidden features.
+    mlp_num_hidden_layers : int
+        Number of hidden layers.
+    latent_size : int
+        Latent feature size.
+    aggr : Literal["add", "sum", "mean", "min", "max", "mul"], optional, default="add"
+        Aggregation operation for edges per node.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Node features :math:`(N_{nodes}, D)`.
+    edge_attr : torch.Tensor
+        Edge features :math:`(N_{edges}, D)`.
+    receivers : torch.Tensor
+        Receiver node indices :math:`(N_{edges},)`.
+    senders : torch.Tensor
+        Sender node indices :math:`(N_{edges},)`.
+
+    Returns
+    -------
+    Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+        Updated ``(x, edge_attr, receivers, senders)``.
+    """
+
+    def __init__(
+        self,
+        mlp_hidden_size,
+        mlp_num_hidden_layers,
+        latent_size,
+        aggr: Literal["add", "sum", "mean", "min", "max", "mul"] = "add",
         node_dim=0,
     ):
         super(InteractionNet, self).__init__()
@@ -385,6 +425,17 @@ class InteractionNet(torch.nn.Module):
         )
 
     def forward(self, x, edge_attr, receivers, senders):
+        if not torch.compiler.is_compiling():
+            if x.ndim != 2 or edge_attr.ndim != 2:
+                raise ValueError(
+                    f"Expected x and edge_attr as 2D tensors, got "
+                    f"{tuple(x.shape)} and {tuple(edge_attr.shape)}"
+                )
+            if receivers.ndim != 1 or senders.ndim != 1:
+                raise ValueError(
+                    f"Expected 1D index tensors for receivers/senders, got "
+                    f"{tuple(receivers.shape)} and {tuple(senders.shape)}"
+                )
         if not (x.shape[-1] == edge_attr.shape[-1]):
             raise ValueError("node feature size should equal to edge feature size")
 
@@ -392,19 +443,36 @@ class InteractionNet(torch.nn.Module):
 
 
 class ResInteractionNet(torch.nn.Module):
-    """
-    Update the edge attributes and node attributes
+    r"""Residual interaction block that wraps :class:`InteractionNet`.
 
     Parameters
     ----------
     mlp_hidden_size : int
-        Number of channels/ features in the hidden layers
+        Number of hidden features.
     mlp_num_hidden_layers : int
-        Number of hidden layers
+        Number of hidden layers.
     latent_size : int
-        Number of latent channels
-    aggr : str, optional, default = "add"
-        operation to collect the node attributes
+        Latent feature size.
+    aggr : Literal["add", "sum", "mean", "min", "max", "mul"], optional, default="add"
+        Aggregation operation for edges per node.
+    node_dim : int, optional, default=0
+        Feature dimension corresponding to nodes.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Node features :math:`(N_{nodes}, D)`.
+    edge_attr : torch.Tensor
+        Edge features :math:`(N_{edges}, D)`.
+    receivers : torch.Tensor
+        Receiver indices :math:`(N_{edges},)`.
+    senders : torch.Tensor
+        Sender indices :math:`(N_{edges},)`.
+
+    Returns
+    -------
+    Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+        ``(x_new, edge_attr_new, receivers, senders)`` after residual update.
     """
 
     def __init__(
@@ -412,7 +480,7 @@ class ResInteractionNet(torch.nn.Module):
         mlp_hidden_size,
         mlp_num_hidden_layers,
         latent_size,
-        aggr="add",
+        aggr: Literal["add", "sum", "mean", "min", "max", "mul"] = "add",
         node_dim=0,
     ):
         super(ResInteractionNet, self).__init__()
@@ -421,6 +489,17 @@ class ResInteractionNet(torch.nn.Module):
         )
 
     def forward(self, x, edge_attr, receivers, senders):
+        if not torch.compiler.is_compiling():
+            if x.ndim != 2 or edge_attr.ndim != 2:
+                raise ValueError(
+                    f"Expected x and edge_attr as 2D tensors, got "
+                    f"{tuple(x.shape)} and {tuple(edge_attr.shape)}"
+                )
+            if receivers.ndim != 1 or senders.ndim != 1:
+                raise ValueError(
+                    f"Expected 1D index tensors for receivers/senders, got "
+                    f"{tuple(receivers.shape)} and {tuple(senders.shape)}"
+                )
         x_res, edge_attr_res, receivers, senders = self.itn(
             x, edge_attr, receivers, senders
         )
@@ -432,18 +511,26 @@ class ResInteractionNet(torch.nn.Module):
 
 
 class DecoderNet(Module):
-    """
-    Construct DecoderNet based on the NLPNet architecture. Used for
-    decoding the predicted features with multi-layer perceptron network module
+    r"""MLP-based decoder for node features.
 
     Parameters
     ----------
     mlp_hidden_size : int
-        Number of channels/ features in the hidden layers
+        Number of hidden features.
     mlp_num_hidden_layers : int
-        Number of hidden layers
+        Number of hidden layers.
     output_size : int
-        Number of output channels
+        Number of output features.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Node features :math:`(N_{nodes}, D_{in})`.
+
+    Returns
+    -------
+    torch.Tensor
+        Decoded node features :math:`(N_{nodes}, D_{out})`.
     """
 
     def __init__(self, mlp_hidden_size, mlp_num_hidden_layers, output_size):
@@ -457,47 +544,49 @@ class DecoderNet(Module):
         )
 
     def forward(self, x):
+        if not torch.compiler.is_compiling():
+            if x.ndim != 2:
+                raise ValueError(
+                    f"Expected 2D input tensor (N, D) but got shape {tuple(x.shape)}"
+                )
         # number of layer is important, or the network will overfit
         x = self.mlp(x)
         return x
 
 
 class EncodeProcessDecode(Module):
-    """
-    Construct the network architecture that consists of Encoder - Processor - Decoder modules
+    r"""Encoder → Processor → Decoder architecture.
 
     Parameters
     ----------
     latent_size : int
-        Number of latent channels
+        Latent feature size.
     mlp_hidden_size : int
-        Number of channels/ features in the hidden layers
+        Number of hidden features.
     mlp_num_hidden_layers : int
-        Number of hidden layers
-    num_message_passing_steps : int, default = 10
-        Number of message passing steps
+        Number of hidden layers.
+    num_message_passing_steps : int
+        Number of interaction steps in the processor.
     output_size : int
-        Number of output channels
+        Number of output features.
     device_list : list[str], optional
-        device to execute the computation
+        Devices to execute message passing.
 
-    # Example
-    # -------
-    # >>> #Use EncodeProcessDecode to update the node, edge features
-    # >>> model = physicsnemo.models.graph_network.EncodeProcessDecode(
-    # ... latent_size=128,
-    # ... mlp_hidden_size=128,
-    # ... mlp_num_hidden_layers=2,
-    # ... num_message_passing_steps=10,
-    # ... output_size=3)
-    # >>> node_attr = torch.randn([1394, 61]) #(node_cnt, node_feat_sizes)
-    # >>> edge_attr = torch.randn([5193, 4]) #(edge_cnt, edge_feat_sizes)
-    # >>> invar_receivers = torch.Size([5193]) : int # node index list
-    # >>> invar_senders = torch.Size([5193]) : int # node index list
-    # >>> invar = (node_attr, edge_attr, invar_receivers, invar_senders)
-    # >>> output = model(*invar, )
-    # >>> output.size()
-    # torch.Size([1394, 3])    #(node_cnt, output_size)
+    Forward
+    -------
+    x : torch.Tensor
+        Node features :math:`(N_{nodes}, D_{in})`.
+    edge_attr : torch.Tensor
+        Edge features :math:`(N_{edges}, D_{in})`.
+    receivers : torch.Tensor
+        Receiver indices :math:`(N_{edges},)`.
+    senders : torch.Tensor
+        Sender indices :math:`(N_{edges},)`.
+
+    Returns
+    -------
+    torch.Tensor
+        Decoded node features :math:`(N_{nodes}, D_{out})`.
     """
 
     def __init__(
@@ -536,18 +625,21 @@ class EncodeProcessDecode(Module):
         )
 
     def set_device(self, device_list):
-        """device list"""
+        """Set devices for message passing execution."""
         self.device_list = device_list
 
     def forward(self, x, edge_attr, receivers, senders):
-        """
-        x:
-            Torch tensor of node attributes, shape: (batch_size, node_number, feature_size)
-        edge_attr:
-            Torch tensor of edge_attr attributes, shape: (batch_size, edge_number, feature_size)
-        receivers/ senders:
-            Torch tensor, list of node indexes, shape: (batch_size,  edge_list_size:[list of node indexes])
-        """
+        if not torch.compiler.is_compiling():
+            if x.ndim != 2 or edge_attr.ndim != 2:
+                raise ValueError(
+                    f"Expected x and edge_attr as 2D tensors, got "
+                    f"{tuple(x.shape)} and {tuple(edge_attr.shape)}"
+                )
+            if receivers.ndim != 1 or senders.ndim != 1:
+                raise ValueError(
+                    f"Expected 1D index tensors for receivers/senders, got "
+                    f"{tuple(receivers.shape)} and {tuple(senders.shape)}"
+                )
         # todo: uncomment
         # self.device_list = x.device.type  # decide the device type
         x, edge_attr = self._encoder_network(x, edge_attr)
@@ -591,42 +683,55 @@ class EncodeProcessDecode(Module):
 
 
 class VFGNLearnedSimulator(Module):
-    """
-    Construct the Simulator model architecture
+    r"""Simulator model using graph-based encode-process-decode.
 
     Parameters
     ----------
-    num_dimensions : int
-        Number of dimensions to make the prediction
-    num_seq : int
-        Number of sintering steps
-    boundaries : list[list[float]]
-        boundary value that the object is placed/ normalized in,
-        i.e.[[-5.0, 5.0], [-5.0, 5.0], [-5.0, 5.0]]
-    num_particle_types : int
-        Number of types to differentiate the different nodes, i.e. fixed/ moving nodes
-    particle_type_embedding_size: int
-        positional embedding dimension with different particle types,
-        in torch.nn.Embedding()
-    normalization_stats: dict{list[float]}
-        Stored in metadata.json
-        {'acceleration': acceleration_stats, 'velocity': velocity_stats, 'context': context_stats}
-    graph_mode : str, optional
-    connectivity_param: float
-        Distance to normalize the displacement between nodes
+    num_dimensions : int, optional, default=3
+        Output dimensions per node (e.g., coordinates).
+    num_seq : int, optional, default=5
+        Number of input time steps in the sequence.
+    boundaries : list[list[float]] or None, optional, default=None
+        Bounding box used for normalization ``[[x_min, x_max], ...]``.
+    num_particle_types : int, optional, default=3
+        Number of particle types.
+    particle_type_embedding_size : int, optional, default=16
+        Embedding size for particle types.
+    normalization_stats : dict or None, optional, default=None
+        Dict with keys ``'acceleration'``, ``'velocity'``, ``'context'`` each
+        containing objects with ``mean`` and ``std`` tensors.
+    graph_mode : str, optional, default="radius"
+        Connectivity construction mode.
+    connectivity_param : float, optional, default=0.015
+        Normalization distance for displacements.
 
-    Example
+    Forward
     -------
-    # >>> model = physicsnemo.models.graph_network.VFGNLearnedSimulator(
-    # ... num_dimensions=3*5, # metadata['dim'] * PREDICT_LENGTH
-    # ... num_seq=2,
-    # ... boundaries=128)
+    next_positions : torch.Tensor
+        Target next positions :math:`(N_{nodes}, D)`.
+    position_sequence_noise : torch.Tensor
+        Noise to apply to input positions :math:`(N_{nodes}, T, D)`.
+    position_sequence : torch.Tensor
+        Input position sequence :math:`(N_{nodes}, T, D)`.
+    n_particles_per_example : torch.Tensor
+        Number of particles per graph :math:`(B,)`.
+    n_edges_per_example : torch.Tensor
+        Number of edges per graph :math:`(B,)`.
+    senders : torch.Tensor
+        Sender indices :math:`(N_{edges},)`.
+    receivers : torch.Tensor
+        Receiver indices :math:`(N_{edges},)`.
+    predict_length : int
+        Number of future steps to predict.
+    global_context : torch.Tensor or None, optional
+        Global context per example.
+    particle_types : torch.Tensor or None, optional
+        Per-node particle type indices.
 
-    # >>> input = torch.randn([5193, 128]) #(N, C)
-    # >>> output = model(input)
-    # >>> output.size()
-    # torch.Size([5193, 128])
-    ----
+    Returns
+    -------
+    Tuple[torch.Tensor, torch.Tensor]
+        ``(predicted_normalized_accelerations, target_normalized_acceleration)``.
     """
 
     def __init__(
@@ -637,7 +742,7 @@ class VFGNLearnedSimulator(Module):
         num_particle_types: int = 3,
         particle_type_embedding_size: int = 16,
         normalization_stats: map = None,
-        graph_mode: str = "radius",
+        graph_mode: Literal["radius", "knn"] = "radius",
         connectivity_param: float = 0.015,
     ):
         if not (num_dimensions >= 0 and num_seq >= 3):
@@ -675,13 +780,11 @@ class VFGNLearnedSimulator(Module):
         self.message_passing_devices = []
 
     def setMessagePassingDevices(self, devices):
-        """
-        setts the devices to be used for message passing in the neural network model.
-        """
+        """Set devices to be used for message passing in the model."""
         self.message_passing_devices = devices
 
     def to(self, device):
-        """Device transfer"""
+        """Transfer model and relevant buffers to ``device``."""
         new_self = super(VFGNLearnedSimulator, self).to(device)
         new_self._boundaries = self._boundaries.to(device)
         for key in self._normalization_stats:
@@ -691,19 +794,24 @@ class VFGNLearnedSimulator(Module):
         return new_self
 
     def time_diff(self, input_seq):
-        """
-        Calculates the difference between consecutive elements in a sequence, effectively computing the discrete time derivative.
+        r"""Discrete time derivative along the sequence axis.
+
+        Parameters
+        ----------
+        input_seq : torch.Tensor
+            Sequence tensor :math:`(N, T, D)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Differences ``input_seq[:, 1:] - input_seq[:, :-1]`` of shape :math:`(N, T-1, D)`.
         """
         return input_seq[:, 1:] - input_seq[:, :-1]
 
     def _compute_connectivity_for_batch(
         self, senders_list, receivers_list, n_node, n_edge
     ):
-        """
-        Dynamically update the edge features with random dropout
-        For each graph, randomly select whether apply edge drop-out to this node
-        If applying random drop-out, a default drop_out_rate = 0.6 is applied to the edges
-        """
+        r"""Compute connectivity indices with optional random edge dropout per-graph."""
         senders_per_graph_list = np.split(senders_list, np.cumsum(n_edge[:-1]), axis=0)
         receivers_per_graph_list = np.split(
             receivers_list, np.cumsum(n_edge[:-1]), axis=0
@@ -758,7 +866,7 @@ class VFGNLearnedSimulator(Module):
     def get_random_walk_noise_for_position_sequence(
         self, position_sequence, noise_std_last_step
     ):
-        """Returns random-walk noise in the velocity applied to the position."""
+        r"""Generate random-walk velocity noise and integrate to position noise."""
 
         velocity_sequence = self.time_diff(position_sequence)
 
@@ -803,11 +911,12 @@ class VFGNLearnedSimulator(Module):
         global_context,
         particle_types,
     ):
-        """
-        Feature encoder contains 3 parts:
-            - Adding the node features that includes: position, velocity, sequence of accelerations
-            - Adding the edge features with random dropout applied
-            - Adding the global features to the node features, in this case, sintering temperature is includes
+        r"""Build encoded node and edge features.
+
+        Returns
+        -------
+        Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+            ``(x, edge_attr, senders, receivers)`` ready for processor.
         """
         # aggregate all features
         most_recent_position = position_sequence[:, -1]
@@ -905,7 +1014,7 @@ class VFGNLearnedSimulator(Module):
     def DecodingFeature(
         self, normalized_accelerations, position_sequence, predict_length
     ):
-        """Feature decoder"""
+        r"""Decode normalized accelerations back to predicted positions."""
         #  cast from float to double as the output of network
         normalized_accelerations = normalized_accelerations.double()
 
@@ -940,7 +1049,7 @@ class VFGNLearnedSimulator(Module):
         return new_positions
 
     def _inverse_decoder_postprocessor(self, next_positions, position_sequence):
-        """Inverse of `_decoder_postprocessor`."""
+        r"""Inverse of the decoder postprocessor (computes normalized accelerations)."""
         most_recent_positions = position_sequence[:, -2:]
         previous_positions = torch.cat(
             [most_recent_positions, next_positions[:, :-1]], axis=1
@@ -977,31 +1086,31 @@ class VFGNLearnedSimulator(Module):
         global_context=None,
         particle_types=None,
     ) -> Tensor:
-        """
-        Inference with the VFGNLearnedSimulator network
+        r"""Inference with the simulator.
 
-        Args:
-        position_sequence: Model inference input tensor
-            torch.Tensor([node_cnt, input_step, pred_dim] ,)
-            i.e. torch.Size([1394, 5, 3])
+        Parameters
+        ----------
+        position_sequence : torch.Tensor
+            Input position sequence :math:`(N_{nodes}, T, D)`.
+        n_particles_per_example : torch.Tensor
+            Number of nodes per graph :math:`(B,)`.
+        n_edges_per_example : torch.Tensor
+            Number of edges per graph :math:`(B,)`.
+        senders : torch.Tensor
+            Sender indices :math:`(N_{edges},)`.
+        receivers : torch.Tensor
+            Receiver indices :math:`(N_{edges},)`.
+        predict_length : int
+            Number of future steps to predict.
+        global_context : torch.Tensor, optional
+            Global context per example.
+        particle_types : torch.Tensor, optional
+            Per-node particle type indices.
 
-        n_particles_per_example: torch.Size([1]), [tf.shape(pos)[0]]
-            torch.Tensor([node_cnt], dtype=torch.int32)
-            i.e. tensor([1394])
-        n_edges_per_example: torch.Size([1]), [tf.shape(context['senders'])[0]]
-            torch.Tensor([edge_cnt], dtype=torch.int32)
-            i.e. tensor([8656])
-
-        senders: torch.Size([edge_cnt], dtype=torch.int32)
-            contains node index
-        receivers: torch.Size([edge_cnt], dtype=torch.int32)
-            contains node index
-        predict_length: prediction steps, int
-            i.e. 1
-        particle_types: torch.Tensor([node_cnt], dtype=torch.int32)
-            torch.Size([1394])
-        global_context: torch.Tensor([sim_step, feat_dim], dtype=torch.float)
-            i.e. torch.Size([34, 1])
+        Returns
+        -------
+        torch.Tensor
+            Predicted positions :math:`(N_{nodes}, \mathrm{predict\_length}, D)`.
         """
 
         input_graph = self.EncodingFeature(
@@ -1035,40 +1144,22 @@ class VFGNLearnedSimulator(Module):
         global_context=None,
         particle_types=None,
     ) -> Tensor:
-        """
-        Training step with the VFGNLearnedSimulator network,
-        Produces normalized and predicted nodal acceleration.
-
-        Args:
-        next_position: Model prediction target tensor
-            torch.Tensor([node_cnt, pred_dim] ,)
-            i.e. torch.Size([1394, 3])
-        position_sequence_noise: Tensor of the same shape as `position_sequence`
-            with the noise to apply to each particle.
-            torch.Tensor([node_cnt, input_step, pred_dim] ,)
-        position_sequence: Model inference input tensor
-            torch.Tensor([node_cnt, input_step, pred_dim] ,)
-            i.e. torch.Size([1394, 5, 3])
-
-        n_particles_per_example: torch.Size([1]), [tf.shape(pos)[0]]
-            i.e. tensor([1394])
-        n_edges_per_example: torch.Size([1]), [tf.shape(context['senders'])[0]]
-            i.e. tensor([8656])
-        senders: torch.Size([edge_cnt], dtype=torch.int32)
-            contains node index
-        receivers: torch.Size([edge_cnt], dtype=torch.int32)
-            contains node index
-        predict_length: prediction steps, int
-            i.e. 1
-        particle_types: torch.Tensor([node_cnt], dtype=torch.int32)
-            torch.Size([1394])
-        global_context: torch.Tensor([sim_step, feat_dim], dtype=torch.float)
-            i.e. torch.Size([34, 1])
-
-        Returns:
-            Tensors of shape [num_particles_in_batch, num_dimensions] with the
-            predicted and target normalized accelerations.
-        """
+        if not torch.compiler.is_compiling():
+            if position_sequence.ndim != 3 or position_sequence_noise.ndim != 3:
+                raise ValueError(
+                    "Expected position_sequence and position_sequence_noise to be 3D "
+                    f"(N_nodes, T, D), got {tuple(position_sequence.shape)} and "
+                    f"{tuple(position_sequence_noise.shape)}"
+                )
+            if next_positions.ndim != 2:
+                raise ValueError(
+                    f"Expected next_positions to be 2D (N_nodes, D), got {tuple(next_positions.shape)}"
+                )
+            if senders.ndim != 1 or receivers.ndim != 1:
+                raise ValueError(
+                    f"Expected 1D index tensors for receivers/senders, got "
+                    f"{tuple(receivers.shape)} and {tuple(senders.shape)}"
+                )
 
         # Add noise to the input position sequence.
         noisy_position_sequence = position_sequence + position_sequence_noise
@@ -1115,73 +1206,10 @@ class VFGNLearnedSimulator(Module):
         return predicted_normalized_accelerations, target_normalized_acceleration
 
     def get_normalized_acceleration(self, acceleration, predict_length):
-        """
-        Normalizes the acceleration data using predefined statistics and
-        replicates it across a specified prediction length.
-        """
+        r"""Normalize acceleration and tile across ``predict_length``."""
         acceleration_stats = self._normalization_stats["acceleration"]
         normalized_acceleration = (
             acceleration - acceleration_stats.mean
         ) / acceleration_stats.std
         normalized_acceleration = torch.tile(normalized_acceleration, [predict_length])
         return normalized_acceleration
-
-
-class LearnedSimulator(VFGNLearnedSimulator):
-    """
-    NOTE: This is a deprecated version of the VFGNLearnedSimulator model.
-    This is kept for backwards compatibility and to allow loading old models.
-    Please use the VFGNLearnedSimulator model instead.
-
-    Construct the Simulator model architecture
-
-    Parameters
-    ----------
-    num_dimensions : int
-        Number of dimensions to make the prediction
-    num_seq : int
-        Number of sintering steps
-    boundaries : list[list[float]]
-        boundary value that the object is placed/ normalized in,
-        i.e.[[-5.0, 5.0], [-5.0, 5.0], [-5.0, 5.0]]
-    num_particle_types : int
-        Number of types to differentiate the different nodes, i.e. fixed/ moving nodes
-    particle_type_embedding_size: int
-        positional embedding dimension with different particle types,
-        in torch.nn.Embedding()
-    normalization_stats: dict{list[float]}
-        Stored in metadata.json
-        {'acceleration': acceleration_stats, 'velocity': velocity_stats, 'context': context_stats}
-    graph_mode : str, optional
-    connectivity_param: float
-        Distance to normalize the displacement between nodes
-    """
-
-    def __init__(
-        self,
-        num_dimensions: int = 3,
-        num_seq: int = 5,
-        boundaries: list[list[float]] = None,
-        num_particle_types: int = 3,
-        particle_type_embedding_size: int = 16,
-        normalization_stats: map = None,
-        graph_mode: str = "radius",
-        connectivity_param: float = 0.015,
-    ):
-        warnings.warn(
-            "LearnedSimulator is deprecated and will be removed in a future version. "
-            "Please use VFGNLearnedSimulator instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-        super().__init__(
-            num_dimensions=num_dimensions,
-            num_seq=num_seq,
-            boundaries=boundaries,
-            num_particle_types=num_particle_types,
-            particle_type_embedding_size=particle_type_embedding_size,
-            normalization_stats=normalization_stats,
-            graph_mode=graph_mode,
-            connectivity_param=connectivity_param,
-        )
