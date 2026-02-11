@@ -40,11 +40,11 @@ import torch
 
 from physicsnemo.experimental.nn.symmetry.grid import make_grid_mask
 from physicsnemo.experimental.nn.symmetry.layer_norm import (
-    EquivariantLayerNormGrid,
-    EquivariantLayerNormSHGrid,
-    EquivariantRMSNormSHGrid,
+    EquivariantLayerNorm,
+    EquivariantLayerNormTied,
+    EquivariantRMSNorm,
     FusedEquivariantLayerNorm,
-    FusedEquivariantLayerNormSH,
+    FusedEquivariantLayerNormTied,
     FusedEquivariantRMSNorm,
     make_degree_balance_weight,
     make_m0_imag_mask,
@@ -76,9 +76,9 @@ def lmax_mmax(request: pytest.FixtureRequest) -> tuple[int, int]:
 
 @pytest.fixture(params=[(1, 0), (1, 1), (2, 1), (2, 2), (4, 2), (4, 4)])
 def lmax_mmax_layernorm_sh(request: pytest.FixtureRequest) -> tuple[int, int]:
-    """Parameterized fixture for lmax/mmax configurations for EquivariantLayerNormSHGrid.
+    """Parameterized fixture for lmax/mmax configurations for EquivariantLayerNormTied.
 
-    Note: EquivariantLayerNormSHGrid requires lmax >= 1.
+    Note: EquivariantLayerNormTied requires lmax >= 1.
 
     Parameters
     ----------
@@ -95,7 +95,7 @@ def lmax_mmax_layernorm_sh(request: pytest.FixtureRequest) -> tuple[int, int]:
 
 @pytest.fixture(params=[(0, 0), (1, 0), (1, 1), (2, 1)])
 def lmax_mmax_small(request: pytest.FixtureRequest) -> tuple[int, int]:
-    """Small lmax/mmax configurations for EquivariantLayerNormGrid tests.
+    """Small lmax/mmax configurations for EquivariantLayerNorm tests.
 
     Parameters
     ----------
@@ -112,7 +112,7 @@ def lmax_mmax_small(request: pytest.FixtureRequest) -> tuple[int, int]:
 
 @pytest.fixture(
     params=[
-        pytest.param(EquivariantRMSNormSHGrid, id="unfused"),
+        pytest.param(EquivariantRMSNorm, id="unfused"),
         pytest.param(FusedEquivariantRMSNorm, id="fused"),
     ]
 )
@@ -127,15 +127,15 @@ def rmsnorm_class(request: pytest.FixtureRequest):
     Returns
     -------
     type
-        Either EquivariantRMSNormSHGrid or FusedEquivariantRMSNorm.
+        Either EquivariantRMSNorm or FusedEquivariantRMSNorm.
     """
     return request.param
 
 
 @pytest.fixture(
     params=[
-        pytest.param(EquivariantLayerNormSHGrid, id="unfused"),
-        pytest.param(FusedEquivariantLayerNormSH, id="fused"),
+        pytest.param(EquivariantLayerNormTied, id="unfused"),
+        pytest.param(FusedEquivariantLayerNormTied, id="fused"),
     ]
 )
 def layernormsh_class(request: pytest.FixtureRequest):
@@ -149,14 +149,14 @@ def layernormsh_class(request: pytest.FixtureRequest):
     Returns
     -------
     type
-        Either EquivariantLayerNormSHGrid or FusedEquivariantLayerNormSH.
+        Either EquivariantLayerNormTied or FusedEquivariantLayerNormTied.
     """
     return request.param
 
 
 @pytest.fixture(
     params=[
-        pytest.param(EquivariantLayerNormGrid, id="unfused"),
+        pytest.param(EquivariantLayerNorm, id="unfused"),
         pytest.param(FusedEquivariantLayerNorm, id="fused"),
     ]
 )
@@ -171,7 +171,7 @@ def layernorm_class(request: pytest.FixtureRequest):
     Returns
     -------
     type
-        Either EquivariantLayerNormGrid or FusedEquivariantLayerNorm.
+        Either EquivariantLayerNorm or FusedEquivariantLayerNorm.
     """
     return request.param
 
@@ -396,12 +396,12 @@ class TestMakeM0ImagMask:
 
 
 # =============================================================================
-# Test EquivariantRMSNormSHGrid
+# Test EquivariantRMSNorm
 # =============================================================================
 
 
-class TestEquivariantRMSNormSHGrid:
-    """Comprehensive tests for EquivariantRMSNormSHGrid."""
+class TestEquivariantRMSNorm:
+    """Comprehensive tests for EquivariantRMSNorm."""
 
     def test_output_shape(
         self,
@@ -1074,12 +1074,12 @@ class TestEquivariantRMSNormSHGrid:
 
 
 # =============================================================================
-# Test EquivariantLayerNormSHGrid
+# Test EquivariantLayerNormTied
 # =============================================================================
 
 
-class TestEquivariantLayerNormSHGrid:
-    """Comprehensive tests for EquivariantLayerNormSHGrid."""
+class TestEquivariantLayerNormTied:
+    """Comprehensive tests for EquivariantLayerNormTied."""
 
     def test_output_shape(
         self,
@@ -1722,7 +1722,7 @@ class TestEquivariantLayerNormSHGrid:
         """
         lmax, mmax = lmax_mmax_layernorm_sh
         compare_fused_unfused(
-            FusedEquivariantLayerNormSH,
+            FusedEquivariantLayerNormTied,
             lmax,
             mmax,
             32,
@@ -1734,12 +1734,12 @@ class TestEquivariantLayerNormSHGrid:
 
 
 # =============================================================================
-# Test EquivariantLayerNormGrid
+# Test EquivariantLayerNorm
 # =============================================================================
 
 
-class TestEquivariantLayerNormGrid:
-    """Comprehensive tests for EquivariantLayerNormGrid."""
+class TestEquivariantLayerNorm:
+    """Comprehensive tests for EquivariantLayerNorm."""
 
     def test_output_shape(
         self,
