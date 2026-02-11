@@ -38,6 +38,7 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
 from physicsnemo.distributed import DistributedManager
+from physicsnemo.mesh.utilities._cache import set_cached
 from combined_optimizer import CombinedOptimizer
 from config import get_data_dir
 from dataset import AirFRANSDataSet
@@ -269,41 +270,41 @@ def main(
     def compute_max_mesh_sizes_distributed(
         training: bool,
     ) -> dict[str, dict[str, int]]:
-        """Compute max n_points and n_faces per BC type using distributed dataloader.
+        """Compute max n_points and n_cells per BC type using distributed dataloader.
 
         Each rank processes its subset of data on the (train/validation) split,
         then all_reduce to get global max.
         """
-        # Dictionary mapping BC type to max sizes: {bc_type: {n_points: int, n_faces: int}}
-        max_sizes = defaultdict(lambda: {"n_points": 0, "n_faces": 0})
+        # Dictionary mapping BC type to max sizes: {bc_type: {n_points: int, n_cells: int}}
+        max_sizes = defaultdict(lambda: {"n_points": 0, "n_cells": 0})
 
         for input_dict, _ in tqdm(
             train_dataloader if training else valid_dataloader,
             desc=f"Computing max mesh sizes on {'Train' if training else 'Valid'} data (rank {dist.rank})",
             disable=dist.rank != 0,
         ):
-            for bm in input_dict["boundary_meshes"]:
-                max_sizes[bm.boundary_condition_type]["n_points"] = max(
-                    max_sizes[bm.boundary_condition_type]["n_points"], bm.n_points
+            for bc_type, mesh in input_dict["boundary_meshes"].items():
+                max_sizes[bc_type]["n_points"] = max(
+                    max_sizes[bc_type]["n_points"], mesh.n_points
                 )
                 if training and train_face_downsampling_ratio != 1.0:
-                    n_faces = int(bm.n_faces * train_face_downsampling_ratio)
+                    n_cells = int(mesh.n_cells * train_face_downsampling_ratio)
                 else:
-                    n_faces = bm.n_faces
-                max_sizes[bm.boundary_condition_type]["n_faces"] = max(
-                    max_sizes[bm.boundary_condition_type]["n_faces"],
-                    n_faces,
+                    n_cells = mesh.n_cells
+                max_sizes[bc_type]["n_cells"] = max(
+                    max_sizes[bc_type]["n_cells"],
+                    n_cells,
                 )
 
         # Reduce across all ranks to get global max
         for bc_type in max_sizes.keys():
             size_tensor = torch.tensor(
-                [max_sizes[bc_type]["n_points"], max_sizes[bc_type]["n_faces"]],
+                [max_sizes[bc_type]["n_points"], max_sizes[bc_type]["n_cells"]],
                 device=device,
             )
             size_tensor = reduce_over_ranks(size_tensor, op="max")
             max_sizes[bc_type]["n_points"] = int(size_tensor[0])
-            max_sizes[bc_type]["n_faces"] = int(size_tensor[1])
+            max_sizes[bc_type]["n_cells"] = int(size_tensor[1])
 
         if dist.rank == 0:
             print(
@@ -441,7 +442,7 @@ def main(
         """Runs a single batch (always just one sample) through the model and computes the loss."""
         pred_results = model(
             prediction_points=input_dict["prediction_points"],
-            boundary_meshes=input_dict["boundary_meshes"],  # type: list[BoundaryMesh]
+            boundary_meshes=input_dict["boundary_meshes"],  # type: dict[str, Mesh]
             reference_lengths=input_dict["reference_lengths"],  # type: dict[str, torch.Tensor]
             global_scalars=input_dict["global_scalars"],  # type: TensorDict
             global_vectors=input_dict["global_vectors"],  # type: TensorDict
@@ -484,31 +485,38 @@ def main(
                 input_dict["prediction_points"] = prediction_points[mask]
                 true_results = true_results[mask]
 
-                ### Subsample boundary mesh faces during training
+                ### Subsample boundary mesh cells during training
                 if training:
-                    for i, bm in enumerate(input_dict["boundary_meshes"]):
+                    for bc_type, mesh in input_dict["boundary_meshes"].items():
                         if train_face_downsampling_ratio != 1.0:
-                            bm.face_areas = (
-                                bm.face_areas / train_face_downsampling_ratio
+                            set_cached(
+                                mesh.cell_data,
+                                "areas",
+                                mesh.cell_areas / train_face_downsampling_ratio,
                             )
-                            new_n_faces = int(
-                                bm.n_faces * train_face_downsampling_ratio
+                            new_n_cells = int(
+                                mesh.n_cells * train_face_downsampling_ratio
                             )
-                            bm = bm.slice_faces(
-                                torch.randperm(bm.n_faces, device=device)[:new_n_faces]
+                            mesh = mesh.slice_cells(
+                                torch.randperm(mesh.n_cells, device=device)[
+                                    :new_n_cells
+                                ]
                             )
-                            input_dict["boundary_meshes"][i] = bm
                         if train_randomize_face_centers:
-                            bm.face_centers = bm.sample_random_points_on_faces()
+                            set_cached(
+                                mesh.cell_data,
+                                "centroids",
+                                mesh.sample_random_points_on_cells(),
+                            )
+                        input_dict["boundary_meshes"][bc_type] = mesh
 
                 ### Pad boundary meshes to fixed size for static compilation
                 max_sizes = train_max_sizes if training else valid_max_sizes
-                for i, bm in enumerate(input_dict["boundary_meshes"]):
-                    input_dict["boundary_meshes"][i] = bm.pad(
-                        target_n_points=max_sizes[bm.boundary_condition_type][
-                            "n_points"
-                        ],
-                        target_n_faces=max_sizes[bm.boundary_condition_type]["n_faces"],
+                for bc_type, mesh in input_dict["boundary_meshes"].items():
+                    input_dict["boundary_meshes"][bc_type] = mesh.pad(
+                        target_n_points=max_sizes[bc_type]["n_points"],
+                        target_n_cells=max_sizes[bc_type]["n_cells"],
+                        data_padding_value=0.0,
                     )
 
             with (
