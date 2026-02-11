@@ -36,11 +36,11 @@ EdgeRotation
     call the module to apply rotations.
 SO3ConvolutionBlock
     SO(3) block-wise transformation using SO3Linear -> GateActivation -> SO3Linear.
-EquivariantRMSNormSHGrid
+EquivariantRMSNorm
     RMS normalization for spherical harmonic features with global scaling.
-EquivariantLayerNormSHGrid
+EquivariantLayerNormTied
     LayerNorm for l=0, shared global scaling for l>0 with degree balancing.
-EquivariantLayerNormGrid
+EquivariantLayerNorm
     Per-degree normalization with independent scaling for each l.
 
 Functions
@@ -56,11 +56,11 @@ make_m0_imag_mask
 from physicsnemo.experimental.nn.symmetry.activation import GateActivation
 from physicsnemo.experimental.nn.symmetry.grid import make_grid_mask
 from physicsnemo.experimental.nn.symmetry.layer_norm import (
-    EquivariantLayerNormGrid,
-    EquivariantLayerNormSHGrid,
-    EquivariantRMSNormSHGrid,
+    EquivariantLayerNorm,
+    EquivariantLayerNormTied,
+    EquivariantRMSNorm,
     FusedEquivariantLayerNorm,
-    FusedEquivariantLayerNormSH,
+    FusedEquivariantLayerNormTied,
     FusedEquivariantRMSNorm,
     make_degree_balance_weight,
     make_m0_imag_mask,
@@ -71,11 +71,11 @@ from physicsnemo.experimental.nn.symmetry.wigner import EdgeRotation
 
 __all__ = [
     "EdgeRotation",
-    "EquivariantLayerNormGrid",
-    "EquivariantLayerNormSHGrid",
-    "EquivariantRMSNormSHGrid",
+    "EquivariantLayerNorm",
+    "EquivariantLayerNormTied",
+    "EquivariantRMSNorm",
     "FusedEquivariantLayerNorm",
-    "FusedEquivariantLayerNormSH",
+    "FusedEquivariantLayerNormTied",
     "FusedEquivariantRMSNorm",
     "GateActivation",
     "SO2Convolution",

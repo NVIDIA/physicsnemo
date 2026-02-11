@@ -46,11 +46,11 @@ Key Equivariance Constraints
 
 Classes
 -------
-EquivariantRMSNormSHGrid
+EquivariantRMSNorm
     RMS normalization with global scaling and optional mean subtraction for l=0.
-EquivariantLayerNormSHGrid
+EquivariantLayerNormTied
     LayerNorm for l=0, shared global scaling for l>0 with degree balancing.
-EquivariantLayerNormGrid
+EquivariantLayerNorm
     Per-degree normalization with independent scaling for each l.
 
 Functions
@@ -98,11 +98,11 @@ from physicsnemo.experimental.nn.symmetry.fused_norm_kernels import (
 )
 
 __all__ = [
-    "EquivariantLayerNormGrid",
-    "EquivariantLayerNormSHGrid",
-    "EquivariantRMSNormSHGrid",
+    "EquivariantLayerNorm",
+    "EquivariantLayerNormTied",
+    "EquivariantRMSNorm",
     "FusedEquivariantLayerNorm",
-    "FusedEquivariantLayerNormSH",
+    "FusedEquivariantLayerNormTied",
     "FusedEquivariantRMSNorm",
     "make_degree_balance_weight",
     "make_m0_imag_mask",
@@ -284,7 +284,7 @@ class _EquivariantNormBase(Module):
                 raise ValueError(f"lmax must be non-negative, got {lmax}")
             else:
                 raise ValueError(
-                    f"lmax must be >= {min_lmax} for EquivariantLayerNormSHGrid "
+                    f"lmax must be >= {min_lmax} for EquivariantLayerNormTied "
                     f"(need l>0 components), got {lmax}"
                 )
         if mmax < 0:
@@ -444,7 +444,7 @@ class _EquivariantNormBase(Module):
             )
 
 
-class EquivariantRMSNormSHGrid(_EquivariantNormBase):
+class EquivariantRMSNorm(_EquivariantNormBase):
     r"""RMS normalization for spherical harmonic features in grid layout.
 
     This layer applies Root Mean Square (RMS) normalization with optional
@@ -520,8 +520,8 @@ class EquivariantRMSNormSHGrid(_EquivariantNormBase):
     Examples
     --------
     >>> import torch
-    >>> from physicsnemo.experimental.nn.symmetry.layer_norm import EquivariantRMSNormSHGrid
-    >>> norm = EquivariantRMSNormSHGrid(lmax=4, mmax=2, num_channels=64)
+    >>> from physicsnemo.experimental.nn.symmetry.layer_norm import EquivariantRMSNorm
+    >>> norm = EquivariantRMSNorm(lmax=4, mmax=2, num_channels=64)
     >>> x = torch.randn(100, 5, 3, 2, 64)  # [batch, lmax+1, mmax+1, 2, channels]
     >>> y = norm(x)
     >>> y.shape
@@ -529,8 +529,8 @@ class EquivariantRMSNormSHGrid(_EquivariantNormBase):
 
     See Also
     --------
-    EquivariantLayerNormSHGrid : LayerNorm variant with separate l=0 handling.
-    EquivariantLayerNormGrid : Per-degree normalization variant.
+    EquivariantLayerNormTied : LayerNorm variant with separate l=0 handling.
+    EquivariantLayerNorm : Per-degree normalization variant.
     """
 
     def __init__(
@@ -711,7 +711,7 @@ class EquivariantRMSNormSHGrid(_EquivariantNormBase):
         )
 
 
-class EquivariantLayerNormSHGrid(_EquivariantNormBase):
+class EquivariantLayerNormTied(_EquivariantNormBase):
     r"""Layer normalization for spherical harmonic features in grid layout.
 
     This layer applies standard LayerNorm to the l=0 (scalar) component and
@@ -782,8 +782,8 @@ class EquivariantLayerNormSHGrid(_EquivariantNormBase):
     Examples
     --------
     >>> import torch
-    >>> from physicsnemo.experimental.nn.symmetry.layer_norm import EquivariantLayerNormSHGrid
-    >>> norm = EquivariantLayerNormSHGrid(lmax=4, mmax=2, num_channels=64)
+    >>> from physicsnemo.experimental.nn.symmetry.layer_norm import EquivariantLayerNormTied
+    >>> norm = EquivariantLayerNormTied(lmax=4, mmax=2, num_channels=64)
     >>> x = torch.randn(100, 5, 3, 2, 64)
     >>> y = norm(x)
     >>> y.shape
@@ -791,8 +791,8 @@ class EquivariantLayerNormSHGrid(_EquivariantNormBase):
 
     See Also
     --------
-    EquivariantRMSNormSHGrid : Simpler RMS variant with global scaling.
-    EquivariantLayerNormGrid : Per-degree normalization variant.
+    EquivariantRMSNorm : Simpler RMS variant with global scaling.
+    EquivariantLayerNorm : Per-degree normalization variant.
     """
 
     def __init__(
@@ -951,7 +951,7 @@ class EquivariantLayerNormSHGrid(_EquivariantNormBase):
         )
 
 
-class EquivariantLayerNormGrid(_EquivariantNormBase):
+class EquivariantLayerNorm(_EquivariantNormBase):
     r"""Per-degree layer normalization for spherical harmonic features.
 
     This layer normalizes each spherical harmonic degree independently,
@@ -1014,8 +1014,8 @@ class EquivariantLayerNormGrid(_EquivariantNormBase):
     Examples
     --------
     >>> import torch
-    >>> from physicsnemo.experimental.nn.symmetry.layer_norm import EquivariantLayerNormGrid
-    >>> norm = EquivariantLayerNormGrid(lmax=4, mmax=2, num_channels=64)
+    >>> from physicsnemo.experimental.nn.symmetry.layer_norm import EquivariantLayerNorm
+    >>> norm = EquivariantLayerNorm(lmax=4, mmax=2, num_channels=64)
     >>> x = torch.randn(100, 5, 3, 2, 64)
     >>> y = norm(x)
     >>> y.shape
@@ -1023,8 +1023,8 @@ class EquivariantLayerNormGrid(_EquivariantNormBase):
 
     See Also
     --------
-    EquivariantRMSNormSHGrid : Global RMS normalization variant.
-    EquivariantLayerNormSHGrid : Hybrid LayerNorm/global scaling variant.
+    EquivariantRMSNorm : Global RMS normalization variant.
+    EquivariantLayerNormTied : Hybrid LayerNorm/global scaling variant.
     """
 
     def __init__(
@@ -1118,7 +1118,7 @@ class EquivariantLayerNormGrid(_EquivariantNormBase):
 
         # Precompute scaled bias mask: l0_only_mask * bias_scale
         # This eliminates one multiplication per forward pass
-        # Note: EquivariantLayerNormGrid uses l0_only_mask instead of l0_subtract_mean_mask
+        # Note: EquivariantLayerNorm uses l0_only_mask instead of l0_subtract_mean_mask
         scaled_bias_mask = l0_only_mask * self.bias_scale
         self.register_buffer("scaled_bias_mask", scaled_bias_mask, persistent=False)
 
@@ -1212,10 +1212,10 @@ class EquivariantLayerNormGrid(_EquivariantNormBase):
 # =============================================================================
 
 
-class FusedEquivariantRMSNorm(EquivariantRMSNormSHGrid):
+class FusedEquivariantRMSNorm(EquivariantRMSNorm):
     r"""Fused RMS normalization for spherical harmonic features using Warp GPU kernels.
 
-    This class is a performance-optimized variant of :class:`EquivariantRMSNormSHGrid`
+    This class is a performance-optimized variant of :class:`EquivariantRMSNorm`
     that uses custom Warp GPU kernels for accelerated computation. When Warp is not
     available or when running on CPU, it falls back to the standard PyTorch implementation
     by delegating to the parent class.
@@ -1251,7 +1251,7 @@ class FusedEquivariantRMSNorm(EquivariantRMSNormSHGrid):
     -----
     **Current Implementation:**
 
-    This class currently inherits all functionality from :class:`EquivariantRMSNormSHGrid`.
+    This class currently inherits all functionality from :class:`EquivariantRMSNorm`.
     In future steps, the forward pass will be replaced with Warp GPU kernel calls that
     fuse the normalization operations for improved performance.
 
@@ -1273,8 +1273,8 @@ class FusedEquivariantRMSNorm(EquivariantRMSNormSHGrid):
 
     See Also
     --------
-    EquivariantRMSNormSHGrid : Unfused PyTorch reference implementation.
-    FusedEquivariantLayerNormSH : Fused LayerNorm variant for l=0 + global scaling for l>0.
+    EquivariantRMSNorm : Unfused PyTorch reference implementation.
+    FusedEquivariantLayerNormTied : Fused LayerNorm variant for l=0 + global scaling for l>0.
     FusedEquivariantLayerNorm : Fused per-degree normalization variant.
     """
 
@@ -1352,10 +1352,10 @@ class FusedEquivariantRMSNorm(EquivariantRMSNormSHGrid):
         return output
 
 
-class FusedEquivariantLayerNormSH(EquivariantLayerNormSHGrid):
+class FusedEquivariantLayerNormTied(EquivariantLayerNormTied):
     r"""Fused layer normalization for spherical harmonic features using Warp GPU kernels.
 
-    This class is a performance-optimized variant of :class:`EquivariantLayerNormSHGrid`
+    This class is a performance-optimized variant of :class:`EquivariantLayerNormTied`
     that uses custom Warp GPU kernels for accelerated computation. When Warp is not
     available or when running on CPU, it falls back to the standard PyTorch implementation
     by delegating to the parent class.
@@ -1390,7 +1390,7 @@ class FusedEquivariantLayerNormSH(EquivariantLayerNormSHGrid):
     -----
     **Current Implementation:**
 
-    This class currently inherits all functionality from :class:`EquivariantLayerNormSHGrid`.
+    This class currently inherits all functionality from :class:`EquivariantLayerNormTied`.
     In future steps, the forward pass will be replaced with Warp GPU kernel calls that
     fuse the normalization operations for improved performance.
 
@@ -1403,8 +1403,8 @@ class FusedEquivariantLayerNormSH(EquivariantLayerNormSHGrid):
     Examples
     --------
     >>> import torch
-    >>> from physicsnemo.experimental.nn.symmetry import FusedEquivariantLayerNormSH
-    >>> norm = FusedEquivariantLayerNormSH(lmax=4, mmax=2, num_channels=64)
+    >>> from physicsnemo.experimental.nn.symmetry import FusedEquivariantLayerNormTied
+    >>> norm = FusedEquivariantLayerNormTied(lmax=4, mmax=2, num_channels=64)
     >>> x = torch.randn(100, 5, 3, 2, 64)
     >>> y = norm(x)  # Currently uses PyTorch implementation
     >>> y.shape
@@ -1412,7 +1412,7 @@ class FusedEquivariantLayerNormSH(EquivariantLayerNormSHGrid):
 
     See Also
     --------
-    EquivariantLayerNormSHGrid : Unfused PyTorch reference implementation.
+    EquivariantLayerNormTied : Unfused PyTorch reference implementation.
     FusedEquivariantRMSNorm : Fused RMS normalization variant.
     FusedEquivariantLayerNorm : Fused per-degree normalization variant.
     """
@@ -1428,7 +1428,7 @@ class FusedEquivariantLayerNormSH(EquivariantLayerNormSHGrid):
         affine: bool = True,
         eps: float = 1e-5,
     ) -> None:
-        """Initialize FusedEquivariantLayerNormSH with additional buffers for Warp kernels."""
+        """Initialize FusedEquivariantLayerNormTied with additional buffers for Warp kernels."""
         super().__init__(lmax, mmax, num_channels, std_balance_degrees, affine, eps)
 
         # Register l>0 grid mask for Warp kernels: slice from grid_mask_3d
@@ -1508,10 +1508,10 @@ class FusedEquivariantLayerNormSH(EquivariantLayerNormSHGrid):
         return self._finalize_output(output, compute_dtype, input_dtype)
 
 
-class FusedEquivariantLayerNorm(EquivariantLayerNormGrid):
+class FusedEquivariantLayerNorm(EquivariantLayerNorm):
     r"""Fused per-degree layer normalization for spherical harmonic features using Warp GPU kernels.
 
-    This class is a performance-optimized variant of :class:`EquivariantLayerNormGrid`
+    This class is a performance-optimized variant of :class:`EquivariantLayerNorm`
     that uses custom Warp GPU kernels for accelerated computation. When Warp is not
     available or when running on CPU, it falls back to the standard PyTorch implementation
     by delegating to the parent class.
@@ -1545,7 +1545,7 @@ class FusedEquivariantLayerNorm(EquivariantLayerNormGrid):
     -----
     **Current Implementation:**
 
-    This class currently inherits all functionality from :class:`EquivariantLayerNormGrid`.
+    This class currently inherits all functionality from :class:`EquivariantLayerNorm`.
     In future steps, the forward pass will be replaced with Warp GPU kernel calls that
     fuse the normalization operations for improved performance.
 
@@ -1567,9 +1567,9 @@ class FusedEquivariantLayerNorm(EquivariantLayerNormGrid):
 
     See Also
     --------
-    EquivariantLayerNormGrid : Unfused PyTorch reference implementation.
+    EquivariantLayerNorm : Unfused PyTorch reference implementation.
     FusedEquivariantRMSNorm : Fused RMS normalization variant.
-    FusedEquivariantLayerNormSH : Fused LayerNorm variant for l=0 + global scaling for l>0.
+    FusedEquivariantLayerNormTied : Fused LayerNorm variant for l=0 + global scaling for l>0.
     """
 
     _use_fused: bool = True  # Warp kernels are now integrated
