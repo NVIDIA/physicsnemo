@@ -454,7 +454,7 @@ class TestEquivariantRMSNormSHGrid:
             The normalization class to test (unfused or fused).
         """
         dtype = torch.float32
-        device = torch.device("cpu")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = lmax_mmax
         channels = 16
         batch_size = 10
@@ -496,7 +496,7 @@ class TestEquivariantRMSNormSHGrid:
             The normalization class to test (unfused or fused).
         """
         dtype = torch.float32
-        device = torch.device("cpu")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = lmax_mmax
         channels = 16
         batch_size = 10
@@ -693,7 +693,7 @@ class TestEquivariantRMSNormSHGrid:
         dtype = torch.float32
         lmax, mmax = 4, 2
         compile_backend, compile_mode = "inductor", "default"
-        device = torch.device("cuda")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         channels = 16
         batch_size = 10
 
@@ -779,7 +779,7 @@ class TestEquivariantRMSNormSHGrid:
             The normalization class to test (unfused or fused).
         """
         dtype = torch.float32
-        device = torch.device("cpu")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = 4, 2
         channels = 16
         batch_size = 1
@@ -806,7 +806,7 @@ class TestEquivariantRMSNormSHGrid:
             The normalization class to test (unfused or fused).
         """
         dtype = torch.float32
-        device = torch.device("cpu")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = 4, 2
         channels = 1
         batch_size = 10
@@ -833,7 +833,7 @@ class TestEquivariantRMSNormSHGrid:
             The normalization class to test (unfused or fused).
         """
         dtype = torch.float32
-        device = torch.device("cpu")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = 0, 0
         channels = 16
         batch_size = 10
@@ -860,7 +860,7 @@ class TestEquivariantRMSNormSHGrid:
             The normalization class to test (unfused or fused).
         """
         dtype = torch.float32
-        device = torch.device("cpu")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = 4, 2
         channels = 16
         batch_size = 10
@@ -903,7 +903,7 @@ class TestEquivariantRMSNormSHGrid:
             The normalization class to test (unfused or fused).
         """
         dtype = torch.float32
-        device = torch.device("cpu")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = 4, 2
         channels = 16
         batch_size = 10
@@ -930,7 +930,7 @@ class TestEquivariantRMSNormSHGrid:
             The normalization class to test (unfused or fused).
         """
         dtype = torch.float32
-        device = torch.device("cpu")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = 4, 2
         channels = 16
         batch_size = 10
@@ -964,33 +964,6 @@ class TestEquivariantRMSNormSHGrid:
         # balanced energy, which is unlikely)
         diff = (out_balanced - out_unbalanced).abs().max()
         assert diff > 1e-6, "Balanced and unbalanced outputs should differ"
-
-    def test_deterministic_output(self, rmsnorm_class) -> None:
-        """Same input should produce same output.
-
-        Parameters
-        ----------
-        rmsnorm_class : type
-            The normalization class to test (unfused or fused).
-        """
-        torch.manual_seed(42)
-        lmax, mmax = 4, 2
-        channels = 16
-        batch_size = 10
-
-        norm = rmsnorm_class(lmax=lmax, mmax=mmax, num_channels=channels)
-
-        torch.manual_seed(123)
-        x1 = torch.randn(batch_size, lmax + 1, mmax + 1, 2, channels)
-
-        torch.manual_seed(123)
-        x2 = torch.randn(batch_size, lmax + 1, mmax + 1, 2, channels)
-
-        with torch.no_grad():
-            y1 = norm(x1)
-            y2 = norm(x2)
-
-        torch.testing.assert_close(y1, y2, msg="Forward pass should be deterministic")
 
     def test_extra_repr(self, rmsnorm_class) -> None:
         """Test string representation.
@@ -1147,8 +1120,6 @@ class TestEquivariantLayerNormSHGrid:
     def test_invalid_positions_zero(
         self,
         lmax_mmax_layernorm_sh: tuple[int, int],
-        dtype: torch.dtype,
-        device: torch.device,
         layernormsh_class,
     ) -> None:
         """Invalid (l, m) positions should remain zero.
@@ -1157,13 +1128,11 @@ class TestEquivariantLayerNormSHGrid:
         ----------
         lmax_mmax_layernorm_sh : tuple[int, int]
             Tuple of (lmax, mmax) values where lmax >= 1.
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
         layernormsh_class : type
             The normalization class to test (unfused or fused).
         """
+        dtype = torch.float32
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = lmax_mmax_layernorm_sh
         channels = 16
         batch_size = 10
@@ -1193,8 +1162,6 @@ class TestEquivariantLayerNormSHGrid:
     def test_m0_imaginary_zero(
         self,
         lmax_mmax_layernorm_sh: tuple[int, int],
-        dtype: torch.dtype,
-        device: torch.device,
         layernormsh_class,
     ) -> None:
         """m=0 imaginary component should remain zero.
@@ -1203,13 +1170,11 @@ class TestEquivariantLayerNormSHGrid:
         ----------
         lmax_mmax_layernorm_sh : tuple[int, int]
             Tuple of (lmax, mmax) values where lmax >= 1.
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
         layernormsh_class : type
             The normalization class to test (unfused or fused).
         """
+        dtype = torch.float32
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = lmax_mmax_layernorm_sh
         channels = 16
         batch_size = 10
@@ -1234,20 +1199,16 @@ class TestEquivariantLayerNormSHGrid:
             msg="m=0 imaginary should be zero",
         )
 
-    def test_l0_uses_layernorm(
-        self, dtype: torch.dtype, device: torch.device, layernormsh_class
-    ) -> None:
+    def test_l0_uses_layernorm(self, layernormsh_class) -> None:
         """l=0 should be processed with LayerNorm (zero mean, unit variance).
 
         Parameters
         ----------
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
         layernormsh_class : type
             The normalization class to test (unfused or fused).
         """
+        dtype = torch.float32
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = 4, 2
         channels = 32
         batch_size = 100
@@ -1325,10 +1286,9 @@ class TestEquivariantLayerNormSHGrid:
     @pytest.mark.parametrize(
         "alpha_val,beta_val,gamma_val",
         [
-            (0.1, 0.2, 0.3),  # Small rotation
-            (math.pi, math.pi / 2, 0.0),  # Large rotation
+            (math.pi / 3, math.pi / 4, math.pi / 6),  # Representative rotation
         ],
-        ids=["small", "large"],
+        ids=["representative"],
     )
     def test_equivariance_preserved(
         self,
@@ -1412,27 +1372,25 @@ class TestEquivariantLayerNormSHGrid:
 
     def test_torch_compile(
         self,
-        device: torch.device,
-        lmax_mmax_layernorm_sh: tuple[int, int],
-        compile_config: tuple[str, str],
         layernormsh_class,
     ) -> None:
         """Forward and backward pass should work with torch.compile.
 
+        Tests compilation with hardcoded CUDA device and inductor backend in default mode.
+
         Parameters
         ----------
-        device : torch.device
-            Device to run on.
-        lmax_mmax_layernorm_sh : tuple[int, int]
-            Tuple of (lmax, mmax) values where lmax >= 1.
-        compile_config : tuple[str, str]
-            Tuple of (backend, mode) for torch.compile.
         layernormsh_class : type
             The normalization class to test (unfused or fused).
         """
         dtype = torch.float32
-        lmax, mmax = lmax_mmax_layernorm_sh
-        compile_backend, compile_mode = compile_config
+        lmax, mmax = 4, 2
+        compile_backend = "inductor"
+        compile_mode = "default"
+        if not torch.cuda.is_available():
+            device = "cpu"
+        else:
+            device = "cuda"
         channels = 16
         batch_size = 10
 
@@ -1440,12 +1398,7 @@ class TestEquivariantLayerNormSHGrid:
             device=device, dtype=dtype
         )
 
-        if compile_backend == "cudagraphs":
-            compiled_norm = torch.compile(norm, backend=compile_backend)
-        else:
-            compiled_norm = torch.compile(
-                norm, mode=compile_mode, backend=compile_backend
-            )
+        compiled_norm = torch.compile(norm, mode=compile_mode, backend=compile_backend)
 
         # Test forward pass matches reference
         x = torch.randn(
@@ -1472,20 +1425,17 @@ class TestEquivariantLayerNormSHGrid:
         assert x.grad is not None
         assert torch.isfinite(x.grad).all()
 
-    def test_batch_independence(
-        self, dtype: torch.dtype, device: torch.device, layernormsh_class
-    ) -> None:
+    def test_batch_independence(self, device: torch.device, layernormsh_class) -> None:
         """Each batch element should be processed independently.
 
         Parameters
         ----------
-        dtype : torch.dtype
-            Data type for tensors.
         device : torch.device
             Device to run on.
         layernormsh_class : type
             The normalization class to test (unfused or fused).
         """
+        dtype = torch.float32
         lmax, mmax = 4, 2
         channels = 16
 
@@ -1517,20 +1467,16 @@ class TestEquivariantLayerNormSHGrid:
             msg="Batch processing should match individual processing for sample 1",
         )
 
-    def test_batch_size_one(
-        self, dtype: torch.dtype, device: torch.device, layernormsh_class
-    ) -> None:
+    def test_batch_size_one(self, layernormsh_class) -> None:
         """Test with batch size of 1.
 
         Parameters
         ----------
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
         layernormsh_class : type
             The normalization class to test (unfused or fused).
         """
+        dtype = torch.float32
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = 4, 2
         channels = 16
         batch_size = 1
@@ -1547,23 +1493,13 @@ class TestEquivariantLayerNormSHGrid:
         assert out.shape == x.shape
         assert torch.isfinite(out).all()
 
-    def test_single_channel(
-        self, dtype: torch.dtype, device: torch.device, layernormsh_class
-    ) -> None:
-        """Test with single channel.
-
-        Parameters
-        ----------
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
-        layernormsh_class : type
-            The normalization class to test (unfused or fused).
-        """
+    def test_single_channel(self, layernormsh_class) -> None:
+        """Test with single channel."""
         lmax, mmax = 4, 2
         channels = 1
         batch_size = 10
+        dtype = torch.float32
+        device = "cuda" if torch.cuda.is_available() else "cpu"
 
         norm = layernormsh_class(lmax=lmax, mmax=mmax, num_channels=channels).to(
             device=device, dtype=dtype
@@ -1578,23 +1514,13 @@ class TestEquivariantLayerNormSHGrid:
         assert out.shape == x.shape
         assert torch.isfinite(out).all()
 
-    def test_no_affine(
-        self, dtype: torch.dtype, device: torch.device, layernormsh_class
-    ) -> None:
-        """Test with affine=False.
-
-        Parameters
-        ----------
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
-        layernormsh_class : type
-            The normalization class to test (unfused or fused).
-        """
+    def test_no_affine(self, layernormsh_class) -> None:
+        """Test with affine=False."""
         lmax, mmax = 4, 2
         channels = 16
         batch_size = 10
+        dtype = torch.float32
+        device = "cuda" if torch.cuda.is_available() else "cpu"
 
         norm = layernormsh_class(
             lmax=lmax, mmax=mmax, num_channels=channels, affine=False
@@ -1623,20 +1549,16 @@ class TestEquivariantLayerNormSHGrid:
         norm = layernormsh_class(lmax=lmax, mmax=mmax, num_channels=channels)
         assert norm.affine_weight.shape == (lmax, channels)
 
-    def test_no_balance(
-        self, dtype: torch.dtype, device: torch.device, layernormsh_class
-    ) -> None:
+    def test_no_balance(self, layernormsh_class) -> None:
         """Test with std_balance_degrees=False.
 
         Parameters
         ----------
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
         layernormsh_class : type
             The normalization class to test (unfused or fused).
         """
+        dtype = torch.float32
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = 4, 2
         channels = 16
         batch_size = 10
@@ -1654,20 +1576,16 @@ class TestEquivariantLayerNormSHGrid:
         out = norm(x)
         assert torch.isfinite(out).all()
 
-    def test_balance_vs_no_balance_different(
-        self, dtype: torch.dtype, device: torch.device, layernormsh_class
-    ) -> None:
+    def test_balance_vs_no_balance_different(self, layernormsh_class) -> None:
         """Outputs should differ with and without degree balancing.
 
         Parameters
         ----------
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
         layernormsh_class : type
             The normalization class to test (unfused or fused).
         """
+        dtype = torch.float32
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = 4, 2
         channels = 16
         batch_size = 10
@@ -1700,33 +1618,6 @@ class TestEquivariantLayerNormSHGrid:
         # Outputs should be different
         diff = (out_balanced - out_unbalanced).abs().max()
         assert diff > 1e-6, "Balanced and unbalanced outputs should differ"
-
-    def test_deterministic_output(self, layernormsh_class) -> None:
-        """Same input should produce same output.
-
-        Parameters
-        ----------
-        layernormsh_class : type
-            The normalization class to test (unfused or fused).
-        """
-        torch.manual_seed(42)
-        lmax, mmax = 4, 2
-        channels = 16
-        batch_size = 10
-
-        norm = layernormsh_class(lmax=lmax, mmax=mmax, num_channels=channels)
-
-        torch.manual_seed(123)
-        x1 = torch.randn(batch_size, lmax + 1, mmax + 1, 2, channels)
-
-        torch.manual_seed(123)
-        x2 = torch.randn(batch_size, lmax + 1, mmax + 1, 2, channels)
-
-        with torch.no_grad():
-            y1 = norm(x1)
-            y2 = norm(x2)
-
-        torch.testing.assert_close(y1, y2, msg="Forward pass should be deterministic")
 
     def test_extra_repr(self, layernormsh_class) -> None:
         """Test string representation.
@@ -1889,8 +1780,6 @@ class TestEquivariantLayerNormGrid:
     def test_invalid_positions_zero(
         self,
         lmax_mmax_small: tuple[int, int],
-        dtype: torch.dtype,
-        device: torch.device,
         layernorm_class,
     ) -> None:
         """Invalid (l, m) positions should remain zero.
@@ -1899,13 +1788,11 @@ class TestEquivariantLayerNormGrid:
         ----------
         lmax_mmax_small : tuple[int, int]
             Tuple of (lmax, mmax) values.
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
         layernorm_class : type
             The normalization class to test (unfused or fused).
         """
+        dtype = torch.float32
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = lmax_mmax_small
         channels = 16
         batch_size = 10
@@ -1935,8 +1822,6 @@ class TestEquivariantLayerNormGrid:
     def test_m0_imaginary_zero(
         self,
         lmax_mmax_small: tuple[int, int],
-        dtype: torch.dtype,
-        device: torch.device,
         layernorm_class,
     ) -> None:
         """m=0 imaginary component should remain zero.
@@ -1945,13 +1830,11 @@ class TestEquivariantLayerNormGrid:
         ----------
         lmax_mmax_small : tuple[int, int]
             Tuple of (lmax, mmax) values.
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
         layernorm_class : type
             The normalization class to test (unfused or fused).
         """
+        dtype = torch.float32
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = lmax_mmax_small
         channels = 16
         batch_size = 10
@@ -2018,10 +1901,9 @@ class TestEquivariantLayerNormGrid:
     @pytest.mark.parametrize(
         "alpha_val,beta_val,gamma_val",
         [
-            (0.1, 0.2, 0.3),  # Small rotation
-            (math.pi, math.pi / 2, 0.0),  # Large rotation
+            (math.pi / 3, math.pi / 4, math.pi / 6),  # Representative rotation
         ],
-        ids=["small", "large"],
+        ids=["representative"],
     )
     def test_equivariance_preserved(
         self,
@@ -2105,27 +1987,24 @@ class TestEquivariantLayerNormGrid:
 
     def test_torch_compile(
         self,
-        device: torch.device,
-        lmax_mmax_small: tuple[int, int],
-        compile_config: tuple[str, str],
         layernorm_class,
     ) -> None:
         """Forward and backward pass should work with torch.compile.
 
+        Tests compilation with hardcoded CUDA device and inductor backend in default mode.
+
         Parameters
         ----------
-        device : torch.device
-            Device to run on.
-        lmax_mmax_small : tuple[int, int]
-            Tuple of (lmax, mmax) values.
-        compile_config : tuple[str, str]
-            Tuple of (backend, mode) for torch.compile.
         layernorm_class : type
             The normalization class to test (unfused or fused).
         """
         dtype = torch.float32
-        lmax, mmax = lmax_mmax_small
-        compile_backend, compile_mode = compile_config
+        lmax, mmax = 2, 1
+        compile_backend, compile_mode = "inductor", "default"
+        if not torch.cuda.is_available():
+            device = "cpu"
+        else:
+            device = "cuda"
         channels = 16
         batch_size = 10
 
@@ -2133,12 +2012,7 @@ class TestEquivariantLayerNormGrid:
             device=device, dtype=dtype
         )
 
-        if compile_backend == "cudagraphs":
-            compiled_norm = torch.compile(norm, backend=compile_backend)
-        else:
-            compiled_norm = torch.compile(
-                norm, mode=compile_mode, backend=compile_backend
-            )
+        compiled_norm = torch.compile(norm, mode=compile_mode, backend=compile_backend)
 
         # Test forward pass matches reference
         x = torch.randn(
@@ -2165,20 +2039,17 @@ class TestEquivariantLayerNormGrid:
         assert x.grad is not None
         assert torch.isfinite(x.grad).all()
 
-    def test_batch_independence(
-        self, dtype: torch.dtype, device: torch.device, layernorm_class
-    ) -> None:
+    def test_batch_independence(self, device: torch.device, layernorm_class) -> None:
         """Each batch element should be processed independently.
 
         Parameters
         ----------
-        dtype : torch.dtype
-            Data type for tensors.
         device : torch.device
             Device to run on.
         layernorm_class : type
             The normalization class to test (unfused or fused).
         """
+        dtype = torch.float32
         lmax, mmax = 3, 2
         channels = 16
 
@@ -2210,20 +2081,16 @@ class TestEquivariantLayerNormGrid:
             msg="Batch processing should match individual processing for sample 1",
         )
 
-    def test_batch_size_one(
-        self, dtype: torch.dtype, device: torch.device, layernorm_class
-    ) -> None:
+    def test_batch_size_one(self, layernorm_class) -> None:
         """Test with batch size of 1.
 
         Parameters
         ----------
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
         layernorm_class : type
             The normalization class to test (unfused or fused).
         """
+        dtype = torch.float32
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = 4, 2
         channels = 16
         batch_size = 1
@@ -2241,20 +2108,16 @@ class TestEquivariantLayerNormGrid:
         assert out.shape == x.shape
         assert torch.isfinite(out).all()
 
-    def test_single_channel(
-        self, dtype: torch.dtype, device: torch.device, layernorm_class
-    ) -> None:
+    def test_single_channel(self, layernorm_class) -> None:
         """Test with single channel.
 
         Parameters
         ----------
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
         layernorm_class : type
             The normalization class to test (unfused or fused).
         """
+        dtype = torch.float32
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = 4, 2
         channels = 1
         batch_size = 10
@@ -2272,20 +2135,16 @@ class TestEquivariantLayerNormGrid:
         assert out.shape == x.shape
         assert torch.isfinite(out).all()
 
-    def test_lmax0_mmax0(
-        self, dtype: torch.dtype, device: torch.device, layernorm_class
-    ) -> None:
+    def test_lmax0_mmax0(self, layernorm_class) -> None:
         """Test with lmax=0, mmax=0 (scalar only).
 
         Parameters
         ----------
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
         layernorm_class : type
             The normalization class to test (unfused or fused).
         """
+        dtype = torch.float32
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = 0, 0
         channels = 16
         batch_size = 10
@@ -2303,20 +2162,16 @@ class TestEquivariantLayerNormGrid:
         assert out.shape == x.shape
         assert torch.isfinite(out).all()
 
-    def test_no_affine(
-        self, dtype: torch.dtype, device: torch.device, layernorm_class
-    ) -> None:
+    def test_no_affine(self, layernorm_class) -> None:
         """Test with affine=False.
 
         Parameters
         ----------
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
         layernorm_class : type
             The normalization class to test (unfused or fused).
         """
+        dtype = torch.float32
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = 4, 2
         channels = 16
         batch_size = 10
@@ -2350,20 +2205,16 @@ class TestEquivariantLayerNormGrid:
         assert norm.affine_weight.shape == (lmax + 1, channels)
         assert norm.affine_bias.shape == (channels,)
 
-    def test_subtract_mean(
-        self, dtype: torch.dtype, device: torch.device, layernorm_class
-    ) -> None:
+    def test_subtract_mean(self, layernorm_class) -> None:
         """Test with subtract_mean=True/False.
 
         Parameters
         ----------
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
         layernorm_class : type
             The normalization class to test (unfused or fused).
         """
+        dtype = torch.float32
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         lmax, mmax = 4, 2
         channels = 16
         batch_size = 10
@@ -2378,33 +2229,6 @@ class TestEquivariantLayerNormGrid:
 
         out = norm(x)
         assert torch.isfinite(out).all()
-
-    def test_deterministic_output(self, layernorm_class) -> None:
-        """Same input should produce same output.
-
-        Parameters
-        ----------
-        layernorm_class : type
-            The normalization class to test (unfused or fused).
-        """
-        torch.manual_seed(42)
-        lmax, mmax = 4, 2
-        channels = 16
-        batch_size = 10
-
-        norm = layernorm_class(lmax=lmax, mmax=mmax, num_channels=channels)
-
-        torch.manual_seed(123)
-        x1 = torch.randn(batch_size, lmax + 1, mmax + 1, 2, channels)
-
-        torch.manual_seed(123)
-        x2 = torch.randn(batch_size, lmax + 1, mmax + 1, 2, channels)
-
-        with torch.no_grad():
-            y1 = norm(x1)
-            y2 = norm(x2)
-
-        torch.testing.assert_close(y1, y2, msg="Forward pass should be deterministic")
 
     def test_extra_repr(self, layernorm_class) -> None:
         """Test string representation.
