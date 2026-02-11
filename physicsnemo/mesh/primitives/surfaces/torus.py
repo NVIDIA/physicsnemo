@@ -64,28 +64,27 @@ def load(
     u = torch.linspace(0, 2 * torch.pi, n_major + 1, device=device)[:-1]
     v = torch.linspace(0, 2 * torch.pi, n_minor + 1, device=device)[:-1]
 
-    points = []
-    for u_val in u:
-        for v_val in v:
-            x = (major_radius + minor_radius * torch.cos(v_val)) * torch.cos(u_val)
-            y = (major_radius + minor_radius * torch.cos(v_val)) * torch.sin(u_val)
-            z = minor_radius * torch.sin(v_val)
-            points.append([x.item(), y.item(), z.item()])
+    # Vectorized point generation
+    U, V = torch.meshgrid(u, v, indexing="ij")
+    x = (major_radius + minor_radius * torch.cos(V)) * torch.cos(U)
+    y = (major_radius + minor_radius * torch.cos(V)) * torch.sin(U)
+    z = minor_radius * torch.sin(V)
+    points = torch.stack([x, y, z], dim=-1).reshape(-1, 3).to(dtype=torch.float32)
 
-    points = torch.tensor(points, dtype=torch.float32, device=device)
+    # Vectorized cell generation (closed in both u and v)
+    i_idx = torch.arange(n_major, device=device)
+    j_idx = torch.arange(n_minor, device=device)
+    ii, jj = torch.meshgrid(i_idx, j_idx, indexing="ij")
+    ii_flat = ii.reshape(-1)
+    jj_flat = jj.reshape(-1)
 
-    # Create cells
-    cells = []
-    for i in range(n_major):
-        for j in range(n_minor):
-            idx = i * n_minor + j
-            next_i = ((i + 1) % n_major) * n_minor + j
-            next_j = i * n_minor + (j + 1) % n_minor
-            next_both = ((i + 1) % n_major) * n_minor + (j + 1) % n_minor
+    idx = ii_flat * n_minor + jj_flat
+    next_i = ((ii_flat + 1) % n_major) * n_minor + jj_flat
+    next_j = ii_flat * n_minor + (jj_flat + 1) % n_minor
+    next_both = ((ii_flat + 1) % n_major) * n_minor + (jj_flat + 1) % n_minor
 
-            # Two triangles per quad
-            cells.append([idx, next_j, next_i])
-            cells.append([next_j, next_both, next_i])
+    tri1 = torch.stack([idx, next_j, next_i], dim=1)
+    tri2 = torch.stack([next_j, next_both, next_i], dim=1)
+    cells = torch.cat([tri1, tri2], dim=0)
 
-    cells = torch.tensor(cells, dtype=torch.int64, device=device)
     return Mesh(points=points, cells=cells)
