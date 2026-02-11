@@ -234,7 +234,7 @@ class TestSO3ConvolutionBlock:
         assert layer.so3_linear_2.weight.grad is not None, (
             "so3_linear_2 weight gradients not computed"
         )
-        assert layer.scalar_mlp[0].weight.grad is not None, (
+        assert layer.scalar_mlp.layers[0].linear.weight.grad is not None, (
             "scalar_mlp weight gradients not computed"
         )
 
@@ -363,10 +363,11 @@ class TestSO3ConvolutionBlock:
         output = compiled(x)
         loss = ((torch.randn_like(output) - output) ** 2.0).mean()
         loss.backward()
-        assert compiled.scalar_mlp[0].weight.grad is not None, (
-            "No gradients attached after backward."
+        example_grad = getattr(
+            compiled.scalar_mlp.layers[0].linear.weight, "grad", None
         )
-        assert torch.isfinite(compiled.scalar_mlp[0].weight.grad).all()
+        assert example_grad is not None, "No gradients attached after backward."
+        assert torch.isfinite(example_grad).all()
 
 
 # =============================================================================
