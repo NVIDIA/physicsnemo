@@ -83,18 +83,6 @@ from physicsnemo.experimental.nn.symmetry.fused_norm_kernels import (
     fused_layernorm,
     fused_layernormsh_lgt0,
     fused_rmsnorm,
-    layernorm_grid_normalize,
-    layernorm_grid_normalize_submean,
-    layernorm_grid_normalize_submean_bias,
-    layernorm_grid_reduce,
-    layernorm_grid_reduce_submean,
-    layernormsh_lgt0_normalize,
-    layernormsh_lgt0_reduce,
-    rmsnorm_grid_normalize,
-    rmsnorm_grid_normalize_submean,
-    rmsnorm_grid_normalize_submean_bias,
-    rmsnorm_grid_reduce,
-    rmsnorm_grid_reduce_submean,
 )
 
 __all__ = [
@@ -1457,7 +1445,7 @@ class FusedEquivariantLayerNormTied(EquivariantLayerNormTied):
             self._validate_input_shape(x)
 
         # Fall back to PyTorch on CPU or explicitly requested
-        if not x.is_cuda or self._use_fused:
+        if not x.is_cuda or not self._use_fused:
             return super().forward(x)
 
         # Get compute dtype and prepare input
@@ -1466,7 +1454,8 @@ class FusedEquivariantLayerNormTied(EquivariantLayerNormTied):
         # Warp kernels only support float32
         if compute_dtype == torch.float64:
             compute_dtype = torch.float32
-        x = self._prepare_input(x, compute_dtype)
+        if input_dtype != compute_dtype:
+            x = x.to(compute_dtype)
 
         batch_size = x.shape[0]
 

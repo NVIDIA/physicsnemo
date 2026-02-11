@@ -135,12 +135,6 @@ Kernel Inventory
         ``fused_layernormsh_lgt0`` — Orchestrates all of the above with autograd.
         ``_fused_layernormsh_lgt0_backward`` — Private backward custom op for
             ``torch.compile`` compatibility.
-
-**Utility:**
-    ``inv_rms_transform`` —
-        Warp device function that converts a raw sum-of-squares to inverse RMS.
-        Currently unused (inv-RMS is computed inline in normalize kernels) but
-        retained for potential future use.
 """
 
 import warp as wp
