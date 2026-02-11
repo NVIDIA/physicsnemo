@@ -209,7 +209,7 @@ class SO3LinearGrid(Module):
 
         # Apply mask for invalid (l, m) positions where m > l
         # mask: [lmax+1, mmax+1] -> broadcast to [1, lmax+1, mmax+1, 1, 1]
-        mask: torch.Tensor = self.mask  # type: ignore[assignment]
+        mask: torch.Tensor = self.mask.to(dtype=x.dtype)  # type: ignore[assignment]
         out = out * mask[None, :, :, None, None]
 
         return out
