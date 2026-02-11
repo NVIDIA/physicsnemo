@@ -29,8 +29,7 @@ if ST_AVAILABLE:
         from .conv_patches import generic_conv_nd_wrapper
         from .index_ops import (
             index_select_wrapper,
-            sharded_select_backward_helper,
-            sharded_select_helper,
+            select_wrapper,
         )
         from .knn import knn_sharded_wrapper
         from .mesh_ops import sharded_signed_distance_field_wrapper
@@ -43,3 +42,4 @@ if ST_AVAILABLE:
         from .pooling_patches import generic_avg_pool_nd_wrapper
         from .unary_ops import unsqueeze_wrapper
         from .unpooling_patches import generic_interpolate_wrapper
+        from .view_ops import reshape_wrapper, view_wrapper

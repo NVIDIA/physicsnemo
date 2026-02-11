@@ -47,6 +47,8 @@ def run_shard_tensor_detach(mesh, uneven, verbose):
         shard_tensor.full_tensor(), shard_tensor_detached.full_tensor()
     )
 
+    assert shard_tensor_detached.is_leaf
+
 
 @pytest.mark.multigpu_static
 @pytest.mark.timeout(120)

@@ -47,6 +47,60 @@ from physicsnemo.utils.profiling import annotate, profile
 aten = torch.ops.aten
 
 
+def _shard_tensor_to_dtensor(st: "ShardTensor") -> DTensor:
+    r"""Convert a ShardTensor to a plain DTensor for dispatch.
+
+    Creates a DTensor with the same internal state as the ShardTensor,
+    which allows DTensor's dispatch to handle it correctly.
+
+    Parameters
+    ----------
+    st : ShardTensor
+        The ShardTensor to convert.
+
+    Returns
+    -------
+    DTensor
+        A DTensor sharing the same ``_local_tensor`` and ``_spec``.
+    """
+    dtensor = torch.Tensor._make_wrapper_subclass(
+        DTensor,
+        st._spec.tensor_meta.shape,
+        strides=st._spec.tensor_meta.stride,
+        dtype=st.dtype,
+        device=st.device,
+        layout=st.layout,
+        requires_grad=st.requires_grad,
+    )
+    dtensor._local_tensor = st._local_tensor
+    dtensor._spec = st._spec
+    return dtensor
+
+
+def _convert_args_to_dtensor(arg: object) -> object:
+    r"""Recursively convert ShardTensors in args to DTensors.
+
+    Parameters
+    ----------
+    arg : object
+        A single argument that may be a ShardTensor, a list/tuple of
+        arguments, or any other value.
+
+    Returns
+    -------
+    object
+        The argument with any ShardTensors replaced by DTensors.
+    """
+    # ShardTensor is defined later in this module; the isinstance check
+    # is safe because this function is only called at runtime.
+    if isinstance(arg, ShardTensor):
+        return _shard_tensor_to_dtensor(arg)
+    elif isinstance(arg, (list, tuple)):
+        converted = [_convert_args_to_dtensor(a) for a in arg]
+        return type(arg)(converted)
+    return arg
+
+
 class _ToTorchTensor(torch.autograd.Function):
     r"""Autograd function to convert a ShardTensor to a regular PyTorch tensor.
 
@@ -237,6 +291,73 @@ class _FromTorchTensor(torch.autograd.Function):
                 )
 
         return grad_output.to_local(), None, None, None
+
+
+class _PromoteDTensorToShardTensor(torch.autograd.Function):
+    r"""Autograd function to promote a DTensor to a ShardTensor while preserving ``grad_fn``.
+
+    When DTensor's ``__torch_function__`` returns a non-leaf DTensor (one that
+    has a ``grad_fn``), creating a new ShardTensor via ``_make_wrapper_subclass``
+    always produces a leaf — disconnecting it from the autograd graph.
+
+    This function bridges that gap: the forward creates the ShardTensor wrapper,
+    and ``apply`` attaches a ``grad_fn`` that connects it back to the original
+    DTensor's graph. The backward simply passes gradients through unchanged.
+
+    This is only used at the ``__torch_function__`` level where the DTensor
+    result already carries autograd state. At the ``__torch_dispatch__`` level,
+    promotion is safe without this because autograd wraps the result afterwards.
+    """
+
+    @staticmethod
+    def forward(
+        ctx: torch.autograd.function.FunctionCtx,
+        dtensor: DTensor,
+        spec: "ShardTensorSpec",
+    ) -> "ShardTensor":
+        r"""Create a ShardTensor from a DTensor, preserving autograd via ``apply``.
+
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context (unused — no state needed for backward).
+        dtensor : DTensor
+            The DTensor to promote.
+        spec : ShardTensorSpec
+            The ShardTensorSpec to use for the new ShardTensor.
+
+        Returns
+        -------
+        ShardTensor
+            A new ShardTensor wrapping the same local data.
+        """
+        return ShardTensor.__new__(
+            ShardTensor,
+            local_tensor=dtensor._local_tensor,
+            spec=spec,
+            requires_grad=False,  # autograd.Function.apply handles this
+        )
+
+    @staticmethod
+    def backward(
+        ctx: torch.autograd.function.FunctionCtx,
+        grad_output: "ShardTensor",
+    ) -> tuple[DTensor, None]:
+        r"""Pass gradient through unchanged.
+
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context (unused).
+        grad_output : ShardTensor
+            Gradient with respect to the ShardTensor output.
+
+        Returns
+        -------
+        Tuple[DTensor, None]
+            The gradient for the DTensor input, and ``None`` for the spec.
+        """
+        return grad_output, None
 
 
 class ShardTensor(DTensor):
@@ -431,6 +552,9 @@ class ShardTensor(DTensor):
         to sharding a tensor according to chunk format, the sharding sizes
         can be inferred with no communication.
 
+        If the DTensor is a non-leaf (has a ``grad_fn``), the autograd graph
+        is preserved via :class:`_PromoteDTensorToShardTensor`.
+
         Parameters
         ----------
         dtensor : DTensor
@@ -441,30 +565,114 @@ class ShardTensor(DTensor):
         ShardTensor
             Equivalent ShardTensor with the same local tensor and inferred spec.
         """
-        # Always ensure sharding is turned on:
-        cls._enable_shard_patches = True
+        return cls._maybe_promote_dtensor(dtensor, ())
 
-        # DTensor is locked to sharding a tensor according to chunk format.
-        # We can use that to infer sharding sizes with no communication.
+    @staticmethod
+    def _maybe_promote_dtensor(dtensor, input_args):
+        r"""Promote a single DTensor back to ShardTensor if it matches input criteria.
 
-        # Create the spec by inferring the sharding sizes from the DTensor:
-        spec = _infer_shard_tensor_spec_from_local_chunks(
-            dtensor._local_tensor,
-            dtensor._spec.mesh,
-            dtensor._spec.placements,
-            sharding_shapes="chunk",
-            global_shape=dtensor.shape,
-        )
+        If ``dtensor`` is already a ShardTensor, it is returned as-is. Otherwise,
+        determines a ``ShardTensorSpec`` (reusing an input's spec when possible,
+        otherwise inferring one) and creates a new ShardTensor.
 
+        When the DTensor is a non-leaf (has a ``grad_fn``), the promotion goes
+        through :class:`_PromoteDTensorToShardTensor` so that the autograd graph
+        is preserved. For leaf DTensors, direct construction is used since there
+        is no graph to preserve.
+
+        Parameters
+        ----------
+        dtensor : DTensor
+            The DTensor result to promote.
+        input_args : tuple
+            Original input arguments to search for matching ShardTensors.
+
+        Returns
+        -------
+        ShardTensor
+            Promoted ShardTensor (or the original if already a ShardTensor).
+        """
+        if isinstance(dtensor, ShardTensor):
+            return dtensor
+
+        # Determine the ShardTensorSpec — reuse an input's spec when the
+        # tensor_meta and placements match (avoids communication).
+        spec = None
+        for arg in input_args:
+            if (
+                isinstance(arg, ShardTensor)
+                and dtensor._spec.tensor_meta == arg._spec.tensor_meta
+                and dtensor._spec.placements == arg._spec.placements
+            ):
+                spec = arg._spec
+                break
+
+        if spec is None:
+            # Infer from DTensor (no communication for chunk-based sharding).
+            spec = _infer_shard_tensor_spec_from_local_chunks(
+                dtensor._local_tensor,
+                dtensor._spec.mesh,
+                dtensor._spec.placements,
+                sharding_shapes="chunk",
+                global_shape=dtensor.shape,
+            )
+
+        # Non-leaf DTensors carry a grad_fn from the operation that produced
+        # them.  Creating a new ShardTensor via _make_wrapper_subclass would
+        # discard that grad_fn (producing a leaf).  Go through the autograd
+        # function so that apply() connects the new ShardTensor back to the
+        # original graph.
+        if dtensor.grad_fn is not None:
+            return _PromoteDTensorToShardTensor.apply(dtensor, spec)
+
+        # Leaf DTensors (parameters, buffers, detached tensors) can be
+        # constructed directly — there is no autograd graph to preserve.
         return ShardTensor.__new__(
-            cls,
+            ShardTensor,
             local_tensor=dtensor._local_tensor,
             spec=spec,
             requires_grad=dtensor.requires_grad,
         )
 
+    @staticmethod
+    def _promote_dtensor_results(result, input_args):
+        r"""Promote DTensor(s) in a dispatch/function result back to ShardTensor.
+
+        Handles three cases:
+
+        1. Single DTensor — promoted via :meth:`_maybe_promote_dtensor`.
+        2. Iterable of results — each DTensor element is promoted individually.
+        3. Anything else — returned as-is.
+
+        Parameters
+        ----------
+        result : object
+            The result returned by DTensor dispatch or ``__torch_function__``.
+        input_args : tuple
+            Original input arguments used for matching specs.
+
+        Returns
+        -------
+        object
+            The result with any DTensors promoted to ShardTensors.
+        """
+        if isinstance(result, DTensor):
+            return ShardTensor._maybe_promote_dtensor(result, input_args)
+
+        if isinstance(result, Iterable):
+            return type(result)(
+                ShardTensor._maybe_promote_dtensor(d, input_args)
+                if isinstance(d, DTensor)
+                else d
+                for d in result
+            )
+
+        return result
+
     @classmethod
-    def __torch_function__(cls, func, types, args=(), kwargs={}):
+    def __torch_function__(cls, func, types, args=(), kwargs=None):
+        if kwargs is None:
+            kwargs = {}
         with annotate(f"__torch_function___{func.__name__}"):
             # Check for overrides:
             if func in cls._function_registry and cls._enable_shard_patches:
@@ -475,8 +683,10 @@ class ShardTensor(DTensor):
             ):
                 res = cls._named_function_registry[str(func)](func, types, args, kwargs)
                 return res
-            # Fall back to the default behavior:
-            return super().__torch_function__(func, types, args, kwargs)
+            # Fall back to the default behavior, but promote any DTensor
+            # results back to ShardTensor (matching dispatch behavior):
+            result = super().__torch_function__(func, types, args, kwargs)
+            return cls._promote_dtensor_results(result, args)
 
     @classmethod
     @torch._disable_dynamo
@@ -499,43 +709,8 @@ class ShardTensor(DTensor):
             # intercepted by a wrapper or in the registry.  So the DTensor
             # default behavior is likely to be correct.
 
-            if func == aten.view.default:
-                # For view, we need input tensors to be contiguous:
-                for arg in args:
-                    if isinstance(arg, ShardTensor) or isinstance(arg, DTensor):
-                        if not arg._local_tensor.is_contiguous():
-                            arg._local_tensor = arg._local_tensor.contiguous()
-
-            # In the latest pytorch, we have to make sure shard tensors
-            # go to the _python_dispatch.py utilities in dtensor as dtensors.
-
-            def _shard_tensor_to_dtensor(st: "ShardTensor") -> DTensor:
-                # Convert a ShardTensor to a plain DTensor for dispatch.
-                # This creates a DTensor with the same internal state as the
-                # ShardTensor, which allows DTensor's dispatch to handle it correctly.
-                dtensor = torch.Tensor._make_wrapper_subclass(
-                    DTensor,
-                    st._spec.tensor_meta.shape,
-                    strides=st._spec.tensor_meta.stride,
-                    dtype=st.dtype,
-                    device=st.device,
-                    layout=st.layout,
-                    requires_grad=st.requires_grad,
-                )
-                dtensor._local_tensor = st._local_tensor
-                dtensor._spec = st._spec
-                return dtensor
-
-            def _convert_args_to_dtensor(arg):
-                # Recursively convert ShardTensors in args to DTensors.
-                if isinstance(arg, ShardTensor):
-                    return _shard_tensor_to_dtensor(arg)
-                elif isinstance(arg, (list, tuple)):
-                    converted = [_convert_args_to_dtensor(a) for a in arg]
-                    return type(arg)(converted)
-                return arg
-
-            # Convert ShardTensors to DTensors for the dispatch call
+            # Convert ShardTensors to DTensors so DTensor's dispatcher
+            # receives the types it expects.
             converted_args = tuple(_convert_args_to_dtensor(arg) for arg in args)
             converted_kwargs = {
                 k: _convert_args_to_dtensor(v) for k, v in (kwargs or {}).items()
@@ -545,43 +720,8 @@ class ShardTensor(DTensor):
                 func, converted_args, converted_kwargs
             )
 
-            # Return a shard tensor instead of a dtensor.
-            def _convert_dtensor_with_input_check(dtensor, input_args):
-                # Search the input for ShardTensors that match output shapes.
-                # This prevents collectives since we can copy the sharding shapes
-                # for irregular shards. If the global shape is unchanged and the
-                # placements are unchanged, the sharding shapes should be unchanged.
-                # If no matches are found, fall back to inference based on DTensor.
-                # This is only used when we already went back through DTensor dispatch.
-                # Check if this matches any input ShardTensor
-                for arg in input_args:
-                    if (
-                        isinstance(arg, ShardTensor)
-                        and dtensor._spec.tensor_meta == arg._spec.tensor_meta
-                        and dtensor._spec.placements == arg._spec.placements
-                    ):
-                        return ShardTensor.__new__(
-                            ShardTensor,
-                            local_tensor=dtensor._local_tensor,
-                            spec=arg._spec,
-                            requires_grad=dtensor.requires_grad,
-                        )
-
-                # Fall back to default conversion
-                return ShardTensor.from_dtensor(dtensor)
-
-            if isinstance(dispatch_res, DTensor):
-                return _convert_dtensor_with_input_check(dispatch_res, args)
-
-            if isinstance(dispatch_res, Iterable):
-                return type(dispatch_res)(
-                    _convert_dtensor_with_input_check(d, args)
-                    if isinstance(d, DTensor)
-                    else d
-                    for d in dispatch_res
-                )
-
-            return dispatch_res
+            # Promote any DTensor results back to ShardTensor.
+            return cls._promote_dtensor_results(dispatch_res, args)
 
     @staticmethod
     def from_local(
@@ -622,9 +762,6 @@ class ShardTensor(DTensor):
         ShardTensor
             A new ShardTensor instance.
         """
-
-        # this turns on shard patches globally for this process.
-        ShardTensor._enable_shard_patches = True
 
         # This implementation follows the pytorch DTensor Implementation Closely.
         device_mesh = device_mesh or _mesh_resources.get_current_mesh()
@@ -790,16 +927,13 @@ class ShardTensor(DTensor):
 
         # Before calling backward, we need to resolve any partial placements.
         new_placements = []
-        # grad_placements = []
         needs_redistribute = False
-        for i, placement in enumerate(self._spec.placements):
+        for placement in self._spec.placements:
             if placement.is_partial():
                 new_placements.append(Replicate())
-                # grad_placements.append(Shard(i))
                 needs_redistribute = True
             else:
                 new_placements.append(placement)
-                # grad_placements.append(placement)
 
         if needs_redistribute:
             self = self.redistribute(placements=new_placements)
@@ -915,5 +1049,4 @@ def scatter_tensor(
     if requires_grad:
         st = st.detach()
         st.requires_grad = True
-
     return st

@@ -272,8 +272,12 @@ def index_select_wrapper(
 ShardTensor.register_function_handler(torch.index_select, index_select_wrapper)
 
 
-def sharded_select_helper(tensor: ShardTensor, dim: int, index: int) -> ShardTensor:
-    r"""Perform a select operation on a ShardTensor.
+def _sharded_select_forward(tensor: ShardTensor, dim: int, index: int) -> ShardTensor:
+    r"""Compute the forward pass of a select operation on a ShardTensor.
+
+    This is the shared implementation used by both the ``torch.autograd.Function``
+    (for explicit ``torch.select`` calls with autograd) and the dispatch handler
+    (for aten-level ``select`` triggered by indexing like ``tensor[:, :, p, :]``).
 
     Parameters
     ----------
@@ -294,12 +298,7 @@ def sharded_select_helper(tensor: ShardTensor, dim: int, index: int) -> ShardTen
     MissingShardPatch
         If selection is along a sharded axis or partial placement is used.
     """
-
-    # if the chunking dimension is along a dimension that is sharded, we have to handle that.
-    # If it's along an unsharded dimension, there is nearly nothing to do.
-
     input_spec = tensor._spec
-
     input_placements = input_spec.placements
 
     shards = [s for s in input_placements if isinstance(s, Shard)]
@@ -312,68 +311,70 @@ def sharded_select_helper(tensor: ShardTensor, dim: int, index: int) -> ShardTen
             "No implementation for aten.select.int along sharding axis yet."
         )
 
-    else:
-        # We are reducing tensor rank:
-        original_shape.pop(dim)
-        output_stride = _stride_from_contiguous_shape_C_style(original_shape)
+    # We are reducing tensor rank:
+    original_shape.pop(dim)
+    output_stride = _stride_from_contiguous_shape_C_style(original_shape)
 
-        # Need to create a new global meta:
-        new_meta = TensorMeta(
-            torch.Size(tuple(original_shape)),
-            stride=output_stride,
-            dtype=input_spec.tensor_meta.dtype,
-        )
-        # The placements get adjusted too
-        new_placements = []
-        for p in input_spec.placements:
-            if p.is_replicate():
+    # Need to create a new global meta:
+    new_meta = TensorMeta(
+        torch.Size(tuple(original_shape)),
+        stride=output_stride,
+        dtype=input_spec.tensor_meta.dtype,
+    )
+    # The placements get adjusted too
+    new_placements = []
+    for p in input_spec.placements:
+        if p.is_replicate():
+            new_placements.append(p)
+        elif p.is_shard():
+            if p.dim > dim:
+                new_placements.append(Shard(p.dim - 1))
+            else:
                 new_placements.append(p)
-            elif p.is_shard():
-                if p.dim > dim:
-                    new_placements.append(Shard(p.dim - 1))
-                else:
-                    new_placements.append(p)
-            elif p.is_partial():
-                raise MissingShardPatch(
-                    "Partial placement not supported yet for select"
-                )
+        elif p.is_partial():
+            raise MissingShardPatch("Partial placement not supported yet for select")
 
-        # We can directly compute the sizes from the input spec sharding sizes:
-        # Since the constraint above prevents selecting along a sharded dimension,
-        # we can be sure that none of these adjusted shapes will be sharded.
-        output_shard_sizes = {}
-        for mesh_dim, index_shard_sizes in input_spec.sharding_shapes().items():
-            output_shard_sizes[mesh_dim] = []
-            for local_chunk_size in index_shard_sizes:
-                local_chunk_size_list = list(local_chunk_size)
-                local_chunk_size_list.pop(dim)
-                output_shard_sizes[mesh_dim].append(
-                    torch.Size(tuple(local_chunk_size_list))
-                )
-            output_shard_sizes[mesh_dim] = tuple(output_shard_sizes[mesh_dim])
+    # We can directly compute the sizes from the input spec sharding sizes:
+    # Since the constraint above prevents selecting along a sharded dimension,
+    # we can be sure that none of these adjusted shapes will be sharded.
+    output_shard_sizes = {}
+    for mesh_dim, index_shard_sizes in input_spec.sharding_shapes().items():
+        output_shard_sizes[mesh_dim] = []
+        for local_chunk_size in index_shard_sizes:
+            local_chunk_size_list = list(local_chunk_size)
+            local_chunk_size_list.pop(dim)
+            output_shard_sizes[mesh_dim].append(
+                torch.Size(tuple(local_chunk_size_list))
+            )
+        output_shard_sizes[mesh_dim] = tuple(output_shard_sizes[mesh_dim])
 
-        output_spec = ShardTensorSpec(
-            mesh=input_spec.mesh,
-            placements=tuple(new_placements),
-            tensor_meta=new_meta,
-            _sharding_shapes=output_shard_sizes,
-        )
-        # Finally, actually perform the select:
-        local_result = aten.select.int(tensor._local_tensor, dim, index)
+    output_spec = ShardTensorSpec(
+        mesh=input_spec.mesh,
+        placements=tuple(new_placements),
+        tensor_meta=new_meta,
+        _sharding_shapes=output_shard_sizes,
+    )
+    # Finally, actually perform the select:
+    local_result = aten.select.int(tensor._local_tensor, dim, index)
 
-        return ShardTensor(
-            local_result,
-            output_spec,
-            requires_grad=False,  # This will get adjusted after the dispatcher
-        )
+    return ShardTensor(
+        local_result,
+        output_spec,
+        requires_grad=False,  # This will get adjusted after the dispatcher
+    )
 
 
-def sharded_select_backward_helper(
-    grad_output: ShardTensor, input_sizes: torch.Size, dim: int, index: int
+def _sharded_select_backward(
+    grad_output: ShardTensor,
+    input_sizes: torch.Size,
+    dim: int,
+    index: int,
 ) -> ShardTensor:
-    r"""Perform gradient computation for a select operation on a ShardTensor.
+    r"""Compute the backward pass of a select operation on a ShardTensor.
 
-    We shard the gradients analogously to the output gradients.
+    This is the shared implementation used by both the ``torch.autograd.Function``
+    (for explicit ``torch.select`` calls with autograd) and the dispatch handler
+    (for aten-level ``select_backward``).
 
     Parameters
     ----------
@@ -393,15 +394,9 @@ def sharded_select_backward_helper(
 
     Raises
     ------
-    Exception
+    MissingShardPatch
         If partial placement is used (not supported).
     """
-
-    # if the chunking dimension is along a dimension that is sharded, we have to handle that.
-    # If it's along an unsharded dimension, there is nearly nothing to do.
-
-    input_placements = grad_output._spec.placements
-
     output_stride = _stride_from_contiguous_shape_C_style(input_sizes)
 
     # Need to create a new global meta:
@@ -411,8 +406,7 @@ def sharded_select_backward_helper(
         dtype=grad_output._spec.tensor_meta.dtype,
     )
 
-    new_placements = input_placements
-    # The placements get adjusted too
+    # The placements get adjusted (inverse of forward adjustment)
     new_placements = []
     for p in grad_output._spec.placements:
         if p.is_replicate():
@@ -423,14 +417,16 @@ def sharded_select_backward_helper(
             else:
                 new_placements.append(p)
         elif p.is_partial():
-            raise Exception("Partial placement not supported yet for select_backward")
+            raise MissingShardPatch(
+                "Partial placement not supported yet for select_backward"
+            )
 
     # Next, calculate the sharding sizes for the output tensor:
     output_shard_sizes = {}
     for mesh_dim, index_shard_sizes in grad_output._spec.sharding_shapes().items():
         output_shard_sizes[mesh_dim] = []
         for local_chunk_size in index_shard_sizes:
-            # We need to insert input_sizes[dim] at index:
+            # We need to insert input_sizes[dim] at the select dim:
             local_chunk_size_list = list(local_chunk_size)
             local_chunk_size_list.insert(dim, input_sizes[dim])
             output_shard_sizes[mesh_dim].append(
@@ -465,7 +461,147 @@ def sharded_select_backward_helper(
     )
 
 
-ShardTensor.register_dispatch_handler(torch.ops.aten.select.int, sharded_select_helper)
+class ShardedSelect(torch.autograd.Function):
+    r"""Autograd function implementing a differentiable select operation for ShardTensors.
+
+    This class provides both forward and backward pass implementations to enable
+    gradient computation through the select operation when working with
+    distributed sharded tensors.
+
+    This is used by the ``__torch_function__`` handler for explicit
+    ``torch.select`` calls, giving full control over the autograd graph.
+    """
+
+    @staticmethod
+    def forward(
+        ctx: torch.autograd.function.FunctionCtx,
+        tensor: ShardTensor,
+        dim: int,
+        index: int,
+    ) -> ShardTensor:
+        r"""Implement a differentiable select operation on ShardTensors.
+
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Context object to store information for backward pass.
+        tensor : ShardTensor
+            Input tensor to select from.
+        dim : int
+            Dimension along which to select.
+        index : int
+            Index to select.
+
+        Returns
+        -------
+        ShardTensor
+            Output tensor with the selected slice.
+
+        Raises
+        ------
+        MissingShardPatch
+            If selection is along a sharded axis or partial placement is used.
+        """
+        ctx.input_sizes = tensor.shape
+        ctx.dim = dim
+        ctx.index = index
+
+        return _sharded_select_forward(tensor, dim, index)
+
+    @staticmethod
+    def backward(
+        ctx: torch.autograd.function.FunctionCtx, grad_output: ShardTensor
+    ) -> tuple[ShardTensor, None, None]:
+        r"""Backward pass for the select operation on ShardTensors.
+
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Context object containing saved attributes from forward pass.
+        grad_output : ShardTensor
+            Gradient of the loss with respect to the output of forward pass.
+
+        Returns
+        -------
+        Tuple[ShardTensor, None, None]
+            Tuple containing:
+
+            - Gradient with respect to input tensor
+            - ``None`` for dim parameter (not differentiable)
+            - ``None`` for index parameter (not differentiable)
+        """
+        grad_input = _sharded_select_backward(
+            grad_output, ctx.input_sizes, ctx.dim, ctx.index
+        )
+        return grad_input, None, None
+
+
+def sharded_select(
+    tensor: ShardTensor,
+    dim: int,
+    index: int,
+) -> ShardTensor:
+    r"""Perform a select operation on ShardTensors with autograd support.
+
+    This is a thin wrapper around the ShardedSelect autograd function
+    to make the operation differentiable.
+
+    Parameters
+    ----------
+    tensor : ShardTensor
+        Input tensor to select from.
+    dim : int
+        Dimension along which to select.
+    index : int
+        Index to select.
+
+    Returns
+    -------
+    ShardTensor
+        Output tensor with the selected slice.
+    """
+    return ShardedSelect.apply(tensor, dim, index)
+
+
+def select_wrapper(
+    func: Callable,
+    types: tuple[Any, ...],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> ShardTensor:
+    r"""Wrapper for select operation that handles ShardTensors.
+
+    Parameters
+    ----------
+    func : Callable
+        The original function being wrapped.
+    types : tuple[Any, ...]
+        Types of the input arguments (unused).
+    args : tuple[Any, ...]
+        Positional arguments containing (tensor, dim, index).
+    kwargs : dict[str, Any]
+        Keyword arguments (unused).
+
+    Returns
+    -------
+    ShardTensor
+        Output tensor with the selected slice.
+    """
+    tensor, dim, index = args
+
+    return sharded_select(tensor, dim, index)
+
+
+# Register at __torch_function__ level for explicit torch.select() calls.
+# This provides proper autograd support via ShardedSelect.
+ShardTensor.register_function_handler(torch.select, select_wrapper)
+
+# Register at __torch_dispatch__ level for aten.select.int and aten.select_backward.
+# These handle indexing operations like tensor[:, :, p, :] which decompose to
+# aten.select.int at the dispatch level (bypassing __torch_function__).
 ShardTensor.register_dispatch_handler(
-    torch.ops.aten.select_backward.default, sharded_select_backward_helper
+    torch.ops.aten.select.int, _sharded_select_forward
+)
+ShardTensor.register_dispatch_handler(
+    torch.ops.aten.select_backward.default, _sharded_select_backward
 )

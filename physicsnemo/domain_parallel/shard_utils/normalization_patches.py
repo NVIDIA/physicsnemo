@@ -44,25 +44,27 @@ __all__ = [
 ]
 
 
-aten = torch.ops.aten
-
-
 class PartialGroupNorm(torch.autograd.Function):
     r"""Custom autograd function for applying group normalization to sharded tensors.
 
-    This implementation extends group normalization functionality to work with
-    distributed ShardTensor inputs by:
+    Implements group normalization from first principles so that all
+    statistics are computed globally (across ranks) without relying on
+    ``aten.native_group_norm`` / ``aten.native_group_norm_backward``.
 
-    1. Computing local statistics on each shard
-    2. Synchronizing statistics across all shards
-    3. Applying the global statistics to normalize each local shard
+    The math is straightforward:
 
-    The implementation ensures that the result is mathematically equivalent to
-    running group normalization on the full, unsharded tensor, while maintaining
-    the distributed nature of the computation.
+    .. math::
 
-    This class is used by the ``group_norm_wrapper`` function to intercept and
-    handle ``torch.nn.functional.group_norm`` calls with ShardTensor inputs.
+        \mu_g      &= \frac{1}{D}\sum_{i \in g} x_i              \\
+        \sigma^2_g &= \frac{1}{D}\sum_{i \in g} (x_i - \mu_g)^2  \\
+        \hat{x}_i  &= (x_i - \mu_g) / \sqrt{\sigma^2_g + \varepsilon}  \\
+        y_i        &= \gamma_c \hat{x}_i + \beta_c
+
+    where :math:`D = \text{cpg} \times HxW_{\text{global}}` and the sums
+    are computed via **local partial sums + all-reduce**.
+
+    Forward: 1 all-reduce (sum and sum-of-squares, concatenated).
+    Backward: 2 all-reduces (grad correction terms; grad_weight/grad_bias).
     """
 
     @staticmethod
@@ -82,8 +84,7 @@ class PartialGroupNorm(torch.autograd.Function):
         ctx : torch.autograd.function.FunctionCtx
             Autograd context for saving tensors/variables for backward.
         input : torch.Tensor
-            Input tensor of shape :math:`(N, C, *)` where :math:`N` is batch size,
-            :math:`C` is number of channels.
+            Local input tensor of shape :math:`(N, C, *)`.
         spec : ShardTensorSpec
             Sharding specification for the input tensor.
         num_groups : int
@@ -100,118 +101,67 @@ class PartialGroupNorm(torch.autograd.Function):
         ShardTensor
             Normalized tensor of same shape as input.
         """
-        # Save for backward
-        ctx.num_groups = num_groups
-        ctx.eps = eps
-        ctx.spec = spec
-
-        # The syntax is:
-        # local_output, mean, rstd = torch.ops.aten.native_group_norm(
-        #     input: Tensor, # [N, C, *spatial]
-        #     weight: Optional[Tensor],
-        #     bias: Optional[Tensor],
-        #     N: int,
-        #     C: int,
-        #     HxW: int,
-        #     group: int,
-        #     eps: float
-        # )
-
         N, C = input.shape[0], input.shape[1]
+        channels_per_group = C // num_groups
+        HxW_local = input.numel() // (N * C)
 
-        HxW = input.numel() // (N * C)
+        group = DistributedManager().get_mesh_group(spec.mesh)
+        world_size = len(dist.get_process_group_ranks(group))
 
+        # TODO: handle uneven sharding (weighted reduction).
+        D_global = channels_per_group * HxW_local * world_size
+
+        # Cast weight/bias to input dtype once.
         if weight is not None:
             weight = weight.to(input.dtype)
         if bias is not None:
             bias = bias.to(input.dtype)
 
-        local_output, mean, rstd = aten.native_group_norm(
-            input, weight, bias, N, C, HxW, num_groups, eps
-        )
+        # -- Global statistics via a single all-reduce ----------------------
+        # Reshape: (N, C, *spatial) -> (N, G, cpg*HxW_local)
+        x = input.view(N, num_groups, -1)
 
-        # Sync the mean and rstd across all ranks
-        # Note that the variance has to be inverted to make it a linear sync:
+        # Local partial sums.
+        local_sum = x.sum(dim=2)  # (N, G)
+        local_sum_sq = x.pow(2).sum(dim=2)  # (N, G)
 
-        local_mean = mean.clone()
-        local_var = (1.0 / (rstd**2)) - eps
-        local_mean_sq = mean**2
+        # Fuse into one all-reduce for lower latency.
+        packed = torch.stack([local_sum, local_sum_sq], dim=0)  # (2, N, G)
+        dist.all_reduce(packed, group=group)
+        global_sum, global_sum_sq = packed[0], packed[1]
 
-        # If the mesh is 2D, we still want to reduce this over entire tensor.
-        # The DistributedManager provides a caching mechanism for getting a mesh-wide group:
-        group = DistributedManager().get_mesh_group(spec.mesh)
+        global_mean = (global_sum / D_global).unsqueeze(2)  # (N, G, 1)
+        global_var = (global_sum_sq / D_global) - global_mean.squeeze(2).pow(2)
+        global_rstd = torch.rsqrt(global_var.unsqueeze(2) + eps)  # (N, G, 1)
 
-        # TODO - unevenly sharded tensors need a *weighted* reduction here!!
-        count = len(dist.get_process_group_ranks(group))
+        # -- Normalize directly with global stats --------------------------
+        y = (x - global_mean) * global_rstd  # (N, G, cpg*HxW_local)
 
-        # Could merge these if needed.  They are probably small,
-        # so paying more for latency than bandwidth.
-        dist.all_reduce(local_mean, op=dist.ReduceOp.SUM, group=group)
-        dist.all_reduce(local_var, op=dist.ReduceOp.SUM, group=group)
-        dist.all_reduce(local_mean_sq, op=dist.ReduceOp.SUM, group=group)
-
-        # Compute final global statistics
-        avg_mean = local_mean / count
-        avg_var = local_var / count
-        avg_mean_sq = local_mean_sq / count
-
-        global_mean = avg_mean
-        global_var = avg_var + (avg_mean_sq - avg_mean**2)
-        global_rstd = torch.rsqrt(global_var + eps)
-
-        # Correct the output from global stats:
-
-        original_shape = input.shape
-        # (N, num_groups, -1) flattens (N, C, *spatial) so last dim is (C // num_groups) * HxW
-        output_view_shape = (N, num_groups, -1)
-        # Stats (mean, rstd, etc.) are (N, num_groups); view as (N, num_groups, 1) to broadcast
-        stats_view_shape = (N, num_groups, 1)
-
-        scale_factor = (global_rstd / rstd).view(stats_view_shape)
-
-        # weight/bias are (C,); broadcast to (1, num_groups, (C//num_groups)*HxW) to match output
-        w = weight if weight is not None else torch.ones(C, device=input.device, dtype=input.dtype)
-        b = bias if bias is not None else torch.zeros(C, device=input.device, dtype=input.dtype)
-        channels_per_group = C // num_groups
-        weight_view = (
-            w.view(1, num_groups, channels_per_group)
-            .unsqueeze(-1)
-            .expand(1, num_groups, channels_per_group, HxW)
-            .reshape(1, num_groups, -1)
-        )
-        bias_view = (
-            b.view(1, num_groups, channels_per_group)
-            .unsqueeze(-1)
-            .expand(1, num_groups, channels_per_group, HxW)
-            .reshape(1, num_groups, -1)
-        )
-
-        local_output = local_output.view(output_view_shape)
-        # Strip affine to get local normalized, then correct to globally normalized (no affine).
-        # Formula: global_norm = (local_output - bias)/weight * (global_rstd/rstd) + (mean - avg_mean)*global_rstd
-        weight_safe = weight_view.clamp(min=eps)
-        normalized_corrected = (
-            (local_output - bias_view) / weight_safe * scale_factor
-            + (mean.view(stats_view_shape) - avg_mean.view(stats_view_shape))
-            * global_rstd.view(stats_view_shape)
-        )
-        local_output = normalized_corrected.view(original_shape)
-
-        # Apply the affine (weight and bias) once.
+        # Apply per-channel affine: weight (C,) and bias (C,).
         if weight is not None:
-            local_output = local_output * weight.view(1, -1, *([1] * (input.dim() - 2)))
+            w = (
+                weight.view(1, num_groups, channels_per_group, 1)
+                .expand(1, num_groups, channels_per_group, HxW_local)
+                .reshape(1, num_groups, -1)
+            )
+            y = y * w
         if bias is not None:
-            local_output = local_output + bias.view(1, -1, *([1] * (input.dim() - 2)))
+            b = (
+                bias.view(1, num_groups, channels_per_group, 1)
+                .expand(1, num_groups, channels_per_group, HxW_local)
+                .reshape(1, num_groups, -1)
+            )
+            y = y + b
 
+        local_output = y.view(input.shape)
+
+        # -- Save for backward ----------------------------------------------
         ctx.save_for_backward(input, weight, bias)
-        ctx.global_mean = global_mean
-        ctx.global_invstd = global_rstd
-
-        ctx.grad_mask = (
-            input.requires_grad,
-            weight is not None and weight.requires_grad,
-            bias is not None and bias.requires_grad,
-        )
+        ctx.global_mean = global_mean.squeeze(2)  # (N, G)
+        ctx.global_rstd = global_rstd.squeeze(2)  # (N, G)
+        ctx.num_groups = num_groups
+        ctx.eps = eps
+        ctx.spec = spec
 
         return ShardTensor.from_local(
             local_output,
@@ -226,7 +176,14 @@ class PartialGroupNorm(torch.autograd.Function):
     ) -> tuple[
         torch.Tensor, None, None, torch.Tensor | None, torch.Tensor | None, None
     ]:
-        r"""Backward pass for group normalization.
+        r"""Backward pass for distributed group normalization.
+
+        Two all-reduces are needed:
+
+        1. ``sum(dx_hat)`` and ``sum(dx_hat * y)`` — for the ``grad_input``
+           correction terms (fused into one call).
+        2. ``grad_weight`` and ``grad_bias`` — simple per-channel sums
+           (fused into one call).
 
         Parameters
         ----------
@@ -241,34 +198,85 @@ class PartialGroupNorm(torch.autograd.Function):
             Tuple containing gradients for (input, spec, num_groups, weight, bias, eps).
             ``None`` values indicate non-differentiable parameters.
         """
-        input, weight, _ = ctx.saved_tensors
+        input, weight, bias = ctx.saved_tensors
         num_groups = ctx.num_groups
         N, C = input.shape[0], input.shape[1]
-        HxW = input.numel() // (N * C)
+        channels_per_group = C // num_groups
+        HxW_local = input.numel() // (N * C)
 
         local_grad_output = grad_output._local_tensor.contiguous()
 
-        grad_input, grad_weight, grad_bias = aten.native_group_norm_backward(
-            local_grad_output,
-            input=input,
-            mean=ctx.global_mean,
-            rstd=ctx.global_invstd,
-            weight=weight,
-            # bias,
-            N=N,
-            C=C,
-            HxW=HxW,
-            group=num_groups,
-            output_mask=ctx.grad_mask,
-        )
+        # Ensure grad dtype matches saved input dtype.
+        if local_grad_output.dtype != input.dtype:
+            local_grad_output = local_grad_output.to(input.dtype)
+
+        global_mean = ctx.global_mean  # (N, G)
+        global_rstd = ctx.global_rstd  # (N, G)
 
         spec = ctx.spec
         group = DistributedManager().get_mesh_group(spec.mesh)
+        world_size = len(dist.get_process_group_ranks(group))
 
-        # Only reduce if grad_weight or grad_bias is not None
-        if grad_weight is not None:
+        # TODO: handle uneven sharding (weighted reduction).
+        D_global = channels_per_group * HxW_local * world_size
+
+        # Reshape to (N, G, cpg * HxW_local) for per-group math.
+        x = input.view(N, num_groups, -1)
+        grad_out_g = local_grad_output.view(N, num_groups, -1)
+        mean_v = global_mean.view(N, num_groups, 1)
+        rstd_v = global_rstd.view(N, num_groups, 1)
+
+        # Normalised input: y = (x - mean) * rstd
+        y = (x - mean_v) * rstd_v
+
+        # dx_hat = grad_output * weight  (per-channel, broadcast over spatial)
+        if weight is not None:
+            w_expanded = (
+                weight.view(1, num_groups, channels_per_group, 1)
+                .expand(1, num_groups, channels_per_group, HxW_local)
+                .reshape(1, num_groups, -1)
+            )
+            dx_hat = grad_out_g * w_expanded
+        else:
+            dx_hat = grad_out_g
+
+        # -- All-reduce 1: correction terms for grad_input ------------------
+        sum_dx_hat = dx_hat.sum(dim=2, keepdim=True)  # (N, G, 1)
+        sum_dx_hat_y = (dx_hat * y).sum(dim=2, keepdim=True)  # (N, G, 1)
+
+        packed_sums = torch.cat([sum_dx_hat, sum_dx_hat_y], dim=2)  # (N, G, 2)
+        dist.all_reduce(packed_sums, group=group)
+        sum_dx_hat = packed_sums[:, :, :1]  # (N, G, 1)
+        sum_dx_hat_y = packed_sums[:, :, 1:]  # (N, G, 1)
+
+        # grad_input = rstd * (dx_hat - mean(dx_hat) - y * mean(dx_hat * y))
+        grad_input = rstd_v * (
+            dx_hat - sum_dx_hat / D_global - y * sum_dx_hat_y / D_global
+        )
+        grad_input = grad_input.view(input.shape)
+
+        # -- All-reduce 2: grad_weight and grad_bias ------------------------
+        grad_weight = None
+        grad_bias = None
+
+        if weight is not None and weight.requires_grad:
+            # grad_weight_c = sum_{n, spatial} grad_output * y  (per-channel)
+            y_c = y.view(N, C, HxW_local)
+            grad_out_c = local_grad_output.view(N, C, HxW_local)
+            grad_weight = (grad_out_c * y_c).sum(dim=(0, 2))  # (C,)
+
+        if bias is not None and bias.requires_grad:
+            grad_out_c = local_grad_output.view(N, C, HxW_local)
+            grad_bias = grad_out_c.sum(dim=(0, 2))  # (C,)
+
+        # Fuse the two small all-reduces when both are needed.
+        if grad_weight is not None and grad_bias is not None:
+            packed_wb = torch.stack([grad_weight, grad_bias], dim=0)  # (2, C)
+            dist.all_reduce(packed_wb, group=group)
+            grad_weight, grad_bias = packed_wb[0], packed_wb[1]
+        elif grad_weight is not None:
             dist.all_reduce(grad_weight, group=group)
-        if grad_bias is not None:
+        elif grad_bias is not None:
             dist.all_reduce(grad_bias, group=group)
 
         return grad_input, None, None, grad_weight, grad_bias, None

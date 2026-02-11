@@ -86,7 +86,7 @@ def test_select_operation(
         global_src=0,
         mesh=distributed_mesh,
         placements=placements,
-        requires_grad=True,
+        requires_grad=backward,
     )
 
     module = SelectWrapper(target_dim=target_dim, index=index)
@@ -131,7 +131,7 @@ def test_index_select_operation(
         global_src=0,
         mesh=distributed_mesh,
         placements=placements,
-        requires_grad=True,
+        requires_grad=backward,
     )
     sharded_index = scatter_tensor(
         index,
