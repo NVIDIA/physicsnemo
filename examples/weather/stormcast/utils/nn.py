@@ -32,7 +32,6 @@ def get_preconditioned_architecture(
     img_resolution: tuple = (512, 640),
     model_type: str | None = None,
     channel_mult: list = [1, 2, 2, 2, 2],
-    attn_resolutions: list = [],
     lead_time_steps: int = 0,
     lead_time_channels: int = 4,
     amp_mode: bool = False,
@@ -48,7 +47,6 @@ def get_preconditioned_architecture(
         img_resolution: resolution of the data (U-Net inputs/outputs)
         model_type: the model class to use, or None to select it automatically
         channel_mult: the channel multipliers for the different levels of the U-Net
-        attn_resolutions: resolution of internal U-Net stages to use self-attention
         lead_time_steps: the number of possible lead time steps, if 0 lead time embedding will be disabled
         lead_time_channels: the number of channels to use for each lead time embedding
     Returns:
@@ -63,7 +61,6 @@ def get_preconditioned_architecture(
         "img_out_channels": target_channels,
         "model_type": model_type,
         "channel_mult": channel_mult,
-        "attn_resolutions": attn_resolutions,
         "additive_pos_embed": spatial_embedding,
         "amp_mode": amp_mode,
     }
@@ -92,7 +89,7 @@ def get_preconditioned_architecture(
 
 def build_network_condition_and_target(
     background: torch.Tensor,
-    state: tuple[torch.Tensor, torch.Tensor],
+    state: tuple[torch.Tensor | None, torch.Tensor],
     invariant_tensor: torch.Tensor | None,
     lead_time_label: torch.Tensor | None = None,
     regression_net: Module | None = None,
@@ -103,7 +100,7 @@ def build_network_condition_and_target(
 
     Args:
         background: background tensor
-        state: tuple of previous state and target state
+        state: tuple of (previous state, target state); previous state may be None
         invariant_tensor: invariant tensor or None if no invariant is used
         lead_time_label: lead time label or None if lead time embedding is not used
         regression_net: regression model, can be None if 'regression' is not in condition_list
@@ -121,10 +118,15 @@ def build_network_condition_and_target(
         raise ValueError(
             "regression_net must be provided if 'regression' is in condition_list"
         )
-    target = state[1]
+    state_input, state_target = state
+
+    if "state" in condition_list and state_input is None:
+        raise ValueError("state input is required when 'state' is in condition_list")
+
+    target = state_target
 
     condition_tensors = {
-        "state": state[0],
+        "state": state_input,
         "background": background,
         "invariant": invariant_tensor,
         "regression": None,
@@ -135,7 +137,7 @@ def build_network_condition_and_target(
             # Inference regression model
             condition_tensors["regression"] = regression_model_forward(
                 regression_net,
-                state[0],
+                state_input,
                 background,
                 invariant_tensor,
                 lead_time_label=lead_time_label,
@@ -151,16 +153,52 @@ def build_network_condition_and_target(
     return (condition, target, condition_tensors["regression"])
 
 
-def unpack_batch(batch, device):
-    """Unpack a data batch into background, state and lead time label with the correct
+def unpack_batch(batch, device, memory_format=torch.preserve_format):
+    """Unpack a data batch into background, state, mask and lead time label with the correct
     device and data types.
+
+    Args:
+        batch: Dictionary containing batch data
+        device: Target device
+        memory_format: Optional memory format (e.g., torch.channels_last)
+
+    Returns:
+        Tuple of (background, state, mask, lead_time_label)
+        - mask is None if not present in batch, otherwise a list of mask tensors
     """
-    background = batch["background"].to(device=device, dtype=torch.float32)
-    state = [s.to(device=device, dtype=torch.float32) for s in batch["state"]]
+    background = batch["background"].to(
+        device=device,
+        dtype=torch.float32,
+        non_blocking=True,
+        memory_format=memory_format,
+    )
+    state = [
+        None
+        if s is None
+        else s.to(
+            device=device,
+            dtype=torch.float32,
+            non_blocking=True,
+            memory_format=memory_format,
+        )
+        for s in batch["state"]
+    ]
+
+    # Mask for weighting loss (e.g., ignore zero solar radiation pixels)
+    # Mask corresponds to the target state only
+    mask = batch.get("mask", None)
+    if mask is not None:
+        mask = mask.to(
+            device=device,
+            dtype=torch.float32,
+            non_blocking=True,
+            memory_format=memory_format,
+        )
+
     lead_time_label = batch.get("lead_time_label")
     if lead_time_label is not None:
         lead_time_label = lead_time_label.to(device=device, dtype=torch.int64)
-    return (background, state, lead_time_label)
+    return (background, state, mask, lead_time_label)
 
 
 def diffusion_model_forward(
@@ -191,7 +229,7 @@ def regression_model_forward(
 
     (x, _, _) = build_network_condition_and_target(
         background,
-        (state, None),
+        (state, state),
         invariant_tensor,
         lead_time_label=lead_time_label,
         condition_list=condition_list,

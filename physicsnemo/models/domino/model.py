@@ -14,19 +14,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-This code contains the DoMINO model architecture.
+r"""
+DoMINO Model Architecture.
+
 The DoMINO class contains an architecture to model both surface and
 volume quantities together as well as separately (controlled using
-the config.yaml file)
+the config.yaml file).
 """
+
+from typing import Any
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float
 
+from physicsnemo.core import Module
+from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.models.unet import UNet
 from physicsnemo.nn import FourierMLP, get_activation
 
+from .config import DEFAULT_MODEL_PARAMS, Config
 from .encodings import (
     MultiGeometryEncoding,
 )
@@ -34,37 +41,23 @@ from .geometry_rep import GeometryRep, scale_sdf
 from .mlps import AggregationModel
 from .solutions import SolutionCalculatorSurface, SolutionCalculatorVolume
 
-# @dataclass
-# class MetaData(ModelMetaData):
-#     name: str = "DoMINO"
-#     # Optimization
-#     jit: bool = False
-#     cuda_graphs: bool = True
-#     amp: bool = True
-#     # Inference
-#     onnx_cpu: bool = True
-#     onnx_gpu: bool = True
-#     onnx_runtime: bool = True
-#     # Physics informed
-#     var_dim: int = 1
-#     func_torch: bool = False
-#     auto_grad: bool = False
 
-
-class DoMINO(nn.Module):
-    """
+class DoMINO(Module):
+    r"""
     DoMINO model architecture for predicting both surface and volume quantities.
 
     The DoMINO (Deep Operational Modal Identification and Nonlinear Optimization) model
     is designed to model both surface and volume physical quantities in aerodynamic
     simulations. It can operate in three modes:
+
     1. Surface-only: Predicting only surface quantities
     2. Volume-only: Predicting only volume quantities
     3. Combined: Predicting both surface and volume quantities
 
     The model uses a combination of:
-    - Geometry representation modules
-    - Neural network basis functions
+
+    - Geometry representation modules via :class:`~physicsnemo.models.domino.geometry_rep.GeometryRep`
+    - Neural network basis functions via :class:`~physicsnemo.nn.FourierMLP`
     - Parameter encoding
     - Local and global geometry processing
     - Aggregation models for final prediction
@@ -72,36 +65,68 @@ class DoMINO(nn.Module):
     Parameters
     ----------
     input_features : int
-        Number of point input features
-    output_features_vol : int, optional
-        Number of output features in volume
-    output_features_surf : int, optional
-        Number of output features on surface
-    model_parameters
-        Model parameters controlled by config.yaml
+        Number of point input features (typically 3 for x, y, z coordinates).
+    output_features_vol : int, optional, default=None
+        Number of output features in volume. Set to ``None`` for surface-only mode.
+    output_features_surf : int, optional, default=None
+        Number of output features on surface. Set to ``None`` for volume-only mode.
+    global_features : int, optional, default=2
+        Number of global parameter features for conditioning.
+    model_parameters : Any, optional, default=None
+        Model parameters controlled by config.yaml. Contains nested configuration
+        for geometry representation, neural network basis functions, aggregation
+        model, position encoder, and geometry local settings.
+
+    Forward
+    -------
+    data_dict : dict[str, torch.Tensor]
+        Dictionary containing input tensors with the following keys:
+
+        - ``"geometry_coordinates"``: Geometry centers of shape :math:`(B, N_{geo}, 3)`
+        - ``"grid"``: Computational domain grid of shape :math:`(B, N_x, N_y, N_z, 3)`
+        - ``"surf_grid"``: Surface bounding box grid of shape :math:`(B, N_x, N_y, N_z, 3)`
+        - ``"sdf_grid"``: SDF on volume grid of shape :math:`(B, N_x, N_y, N_z)`
+        - ``"sdf_surf_grid"``: SDF on surface grid of shape :math:`(B, N_x, N_y, N_z)`
+        - ``"sdf_nodes"``: SDF at volume mesh nodes of shape :math:`(B, N_{vol}, 1)`
+        - ``"pos_volume_closest"``: Closest surface point to volume nodes of shape :math:`(B, N_{vol}, 3)`
+        - ``"pos_volume_center_of_mass"``: Center of mass to volume nodes of shape :math:`(B, N_{vol}, 3)`
+        - ``"pos_surface_center_of_mass"``: Center of mass to surface nodes of shape :math:`(B, N_{surf}, 3)`
+        - ``"surface_mesh_centers"``: Surface mesh center coordinates of shape :math:`(B, N_{surf}, 3)`
+        - ``"surface_mesh_neighbors"``: Surface mesh neighbor coordinates of shape :math:`(B, N_{surf}, K, 3)`
+        - ``"surface_normals"``: Surface normals of shape :math:`(B, N_{surf}, 3)`
+        - ``"surface_neighbors_normals"``: Surface neighbor normals of shape :math:`(B, N_{surf}, K, 3)`
+        - ``"surface_areas"``: Surface cell areas of shape :math:`(B, N_{surf})`
+        - ``"surface_neighbors_areas"``: Surface neighbor areas of shape :math:`(B, N_{surf}, K)`
+        - ``"volume_mesh_centers"``: Volume mesh center coordinates of shape :math:`(B, N_{vol}, 3)`
+        - ``"volume_min_max"``: Volume bounding box min/max of shape :math:`(B, 2, 3)`
+        - ``"surface_min_max"``: Surface bounding box min/max of shape :math:`(B, 2, 3)`
+        - ``"global_params_values"``: Global parameter values of shape :math:`(B, N_{params}, 1)`
+        - ``"global_params_reference"``: Global parameter reference values of shape :math:`(B, N_{params}, 1)`
+
+    Outputs
+    -------
+    tuple[torch.Tensor | None, torch.Tensor | None]
+        A tuple containing:
+
+        - Volume output tensor of shape :math:`(B, N_{vol}, D_{vol})` or ``None`` if volume-only mode is disabled
+        - Surface output tensor of shape :math:`(B, N_{surf}, D_{surf})` or ``None`` if surface-only mode is disabled
 
     Example
     -------
     >>> from physicsnemo.models.domino.model import DoMINO
-    >>> import torch, os
-    >>> from hydra import compose, initialize
-    >>> from omegaconf import OmegaConf
+    >>> from physicsnemo.models.domino.config import DEFAULT_MODEL_PARAMS
+    >>> import torch
     >>> device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    >>> cfg = OmegaConf.register_new_resolver("eval", eval)
-    >>> with initialize(version_base="1.3", config_path="examples/cfd/external_aerodynamics/domino/src/conf"):
-    ...    cfg = compose(config_name="config")
-    >>> cfg.model.model_type = "combined"
+    >>> cfg = DEFAULT_MODEL_PARAMS  # already has model_type "combined"
     >>> model = DoMINO(
     ...         input_features=3,
     ...         output_features_vol=5,
     ...         output_features_surf=4,
-    ...         model_parameters=cfg.model
+    ...         model_parameters=cfg
     ...     ).to(device)
-
-    Warp ...
     >>> bsize = 1
-    >>> nx, ny, nz = cfg.model.interp_res
-    >>> num_neigh = 7
+    >>> nx, ny, nz = cfg.interp_res
+    >>> num_neigh = cfg.num_neighbors_surface
     >>> global_features = 2
     >>> pos_normals_closest_vol = torch.randn(bsize, 100, 3).to(device)
     >>> pos_normals_com_vol = torch.randn(bsize, 100, 3).to(device)
@@ -148,6 +173,10 @@ class DoMINO(nn.Module):
     >>> output = model(input_dict)
     >>> print(f"{output[0].shape}, {output[1].shape}")
     torch.Size([1, 100, 5]), torch.Size([1, 100, 4])
+
+    Note
+    ----
+    At least one of ``output_features_vol`` or ``output_features_surf`` must be specified.
     """
 
     def __init__(
@@ -156,21 +185,15 @@ class DoMINO(nn.Module):
         output_features_vol: int | None = None,
         output_features_surf: int | None = None,
         global_features: int = 2,
-        model_parameters=None,
+        model_parameters: Any = None,
     ):
-        """
-        Initialize the DoMINO model.
+        super().__init__(meta=ModelMetaData(name="DoMINO"))
 
-        Args:
-            input_features: Number of input feature dimensions for point data
-            output_features_vol: Number of output features for volume quantities (None for surface-only mode)
-            output_features_surf: Number of output features for surface quantities (None for volume-only mode)
-            model_parameters: Configuration parameters for the model
-
-        Raises:
-            ValueError: If both output_features_vol and output_features_surf are None
-        """
-        super().__init__()
+        # Convert model_parameters to Config, using defaults if None
+        if model_parameters is None:
+            model_parameters = DEFAULT_MODEL_PARAMS
+        elif not isinstance(model_parameters, Config):
+            model_parameters = Config.from_hydra(model_parameters)
 
         self.output_features_vol = output_features_vol
         self.output_features_surf = output_features_surf
@@ -322,7 +345,6 @@ class DoMINO(nn.Module):
                         activation=get_activation(
                             model_parameters.nn_basis_functions.activation
                         ),
-                        # model_parameters=model_parameters.nn_basis_functions,
                     )
                 )
 
@@ -340,7 +362,6 @@ class DoMINO(nn.Module):
                         activation=get_activation(
                             model_parameters.nn_basis_functions.activation
                         ),
-                        # model_parameters=model_parameters.nn_basis_functions,
                     )
                 )
 
@@ -377,7 +398,7 @@ class DoMINO(nn.Module):
                 activation=get_activation(model_parameters.position_encoder.activation),
             )
 
-        # Create a set of local geometry encodings for the surface data:
+        # Create a set of local geometry encodings for the surface data
         self.surface_local_geo_encodings = MultiGeometryEncoding(
             radii=model_parameters.geometry_local.surface_radii,
             neighbors_in_radius=model_parameters.geometry_local.surface_neighbors_in_radius,
@@ -388,7 +409,7 @@ class DoMINO(nn.Module):
             grid_resolution=self.grid_resolution,
         )
 
-        # Create a set of local geometry encodings for the surface data:
+        # Create a set of local geometry encodings for the volume data
         self.volume_local_geo_encodings = MultiGeometryEncoding(
             radii=model_parameters.geometry_local.volume_radii,
             neighbors_in_radius=model_parameters.geometry_local.volume_neighbors_in_radius,
@@ -399,9 +420,8 @@ class DoMINO(nn.Module):
             grid_resolution=self.grid_resolution,
         )
 
-        # Aggregation model
+        # Aggregation model for surface
         if self.output_features_surf is not None:
-            # Surface
             base_layer_geo_surf = 0
             for j in model_parameters.geometry_local.surface_neighbors_in_radius:
                 base_layer_geo_surf += j
@@ -435,8 +455,8 @@ class DoMINO(nn.Module):
                 nn_basis=self.nn_basis_surf,
             )
 
+        # Aggregation model for volume
         if self.output_features_vol is not None:
-            # Volume
             base_layer_geo_vol = 0
             for j in model_parameters.geometry_local.volume_neighbors_in_radius:
                 base_layer_geo_vol += j
@@ -474,9 +494,65 @@ class DoMINO(nn.Module):
                 nn_basis=self.nn_basis_vol,
             )
 
-    def forward(self, data_dict):
-        # Loading STL inputs, bounding box grids, precomputed SDF and scaling factors
+    def forward(
+        self,
+        data_dict: dict[str, Float[torch.Tensor, "..."]],
+    ) -> tuple[
+        Float[torch.Tensor, "batch num_vol out_vol"] | None,
+        Float[torch.Tensor, "batch num_surf out_surf"] | None,
+    ]:
+        r"""
+        Perform forward pass of the DoMINO model.
 
+        Parameters
+        ----------
+        data_dict : dict[str, torch.Tensor]
+            Dictionary containing input tensors. See class docstring for required keys.
+
+        Returns
+        -------
+        tuple[torch.Tensor | None, torch.Tensor | None]
+            Tuple of (volume_output, surface_output). Either may be ``None`` if
+            the corresponding output mode is disabled.
+        """
+        # Input validation
+        if not torch.compiler.is_compiling():
+            required_keys = [
+                "geometry_coordinates",
+                "surf_grid",
+                "sdf_surf_grid",
+                "global_params_values",
+                "global_params_reference",
+            ]
+            if self.output_features_vol is not None:
+                required_keys.extend(
+                    [
+                        "grid",
+                        "sdf_grid",
+                        "sdf_nodes",
+                        "pos_volume_closest",
+                        "pos_volume_center_of_mass",
+                        "volume_mesh_centers",
+                    ]
+                )
+            if self.output_features_surf is not None:
+                required_keys.extend(
+                    [
+                        "pos_surface_center_of_mass",
+                        "surface_mesh_centers",
+                        "surface_mesh_neighbors",
+                        "surface_normals",
+                        "surface_neighbors_normals",
+                        "surface_areas",
+                        "surface_neighbors_areas",
+                    ]
+                )
+
+            missing_keys = [k for k in required_keys if k not in data_dict]
+            if missing_keys:
+                raise ValueError(f"Missing required keys in data_dict: {missing_keys}")
+
+        # Load STL inputs, bounding box grids, precomputed SDF and scaling factors
         # STL nodes
         geo_centers = data_dict["geometry_coordinates"]
 
@@ -493,25 +569,22 @@ class DoMINO(nn.Module):
             # Computational domain grid
             p_grid = data_dict["grid"]
             sdf_grid = data_dict["sdf_grid"]
-            # Scaling factors
+
+            # Normalize geometry coordinates based on computational domain
             if "volume_min_max" in data_dict.keys():
                 vol_max = data_dict["volume_min_max"][:, 1]
                 vol_min = data_dict["volume_min_max"][:, 0]
-
-                # Normalize based on computational domain
                 geo_centers_vol = (
                     2.0 * (geo_centers - vol_min) / (vol_max - vol_min) - 1
                 )
             else:
                 geo_centers_vol = geo_centers
 
+            # Compute geometry encoding for volume
             encoding_g_vol = self.geo_rep_volume(geo_centers_vol, p_grid, sdf_grid)
 
             # SDF on volume mesh nodes
             sdf_nodes = data_dict["sdf_nodes"]
-            # scaled_sdf_nodes = []
-            # for i in range(len(self.sdf_scaling_factor)):
-            # scaled_sdf_nodes.append(scale_sdf(sdf_nodes, self.sdf_scaling_factor[i]))
             scaled_sdf_nodes = [
                 scale_sdf(sdf_nodes, scaling) for scaling in self.sdf_scaling_factor
             ]
@@ -521,6 +594,8 @@ class DoMINO(nn.Module):
             pos_volume_closest = data_dict["pos_volume_closest"]
             # Positional encoding based on center of mass of geometry to volume node
             pos_volume_center_of_mass = data_dict["pos_volume_center_of_mass"]
+
+            # Build volume node encoding
             if self.use_sdf_in_basis_func:
                 encoding_node_vol = torch.cat(
                     (
@@ -539,7 +614,7 @@ class DoMINO(nn.Module):
 
         if self.output_features_surf is not None:
             # Represent geometry on bounding box
-            # Scaling factors
+            # Normalize geometry coordinates based on surface bounding box
             if "surface_min_max" in data_dict.keys():
                 surf_max = data_dict["surface_min_max"][:, 1]
                 surf_min = data_dict["surface_min_max"][:, 0]
@@ -549,6 +624,7 @@ class DoMINO(nn.Module):
             else:
                 geo_centers_surf = geo_centers
 
+            # Compute geometry encoding for surface
             encoding_g_surf = self.geo_rep_surface(
                 geo_centers_surf, s_grid, sdf_surf_grid
             )
@@ -560,6 +636,7 @@ class DoMINO(nn.Module):
             # Calculate positional encoding on surface centers
             encoding_node_surf = self.fc_p_surf(encoding_node_surf)
 
+        # Combine volume and surface geometry encodings if both are present
         if (
             self.output_features_surf is not None
             and self.output_features_vol is not None
@@ -571,7 +648,6 @@ class DoMINO(nn.Module):
 
         if self.output_features_vol is not None:
             # Calculate local geometry encoding for volume
-            # Sampled points on volume
             volume_mesh_centers = data_dict["volume_mesh_centers"]
             encoding_g_vol = self.volume_local_geo_encodings(
                 0.5 * encoding_g_vol,
@@ -579,7 +655,7 @@ class DoMINO(nn.Module):
                 p_grid,
             )
 
-            # Approximate solution on volume node
+            # Approximate solution on volume nodes
             output_vol = self.solution_calculator_vol(
                 volume_mesh_centers,
                 encoding_g_vol,
@@ -592,7 +668,7 @@ class DoMINO(nn.Module):
             output_vol = None
 
         if self.output_features_surf is not None:
-            # Sampled points on surface
+            # Load surface mesh data
             surface_mesh_centers = data_dict["surface_mesh_centers"]
             surface_normals = data_dict["surface_normals"]
             surface_areas = data_dict["surface_areas"]
@@ -603,12 +679,13 @@ class DoMINO(nn.Module):
             surface_neighbors_areas = data_dict["surface_neighbors_areas"]
             surface_areas = torch.unsqueeze(surface_areas, -1)
             surface_neighbors_areas = torch.unsqueeze(surface_neighbors_areas, -1)
+
             # Calculate local geometry encoding for surface
             encoding_g_surf = self.surface_local_geo_encodings(
                 0.5 * encoding_g_surf, surface_mesh_centers, s_grid
             )
 
-            # Approximate solution on surface cell center
+            # Approximate solution on surface cell centers
             output_surf = self.solution_calculator_surf(
                 surface_mesh_centers,
                 encoding_g_surf,

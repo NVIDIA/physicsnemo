@@ -25,7 +25,7 @@ import glob
 from omegaconf import DictConfig, OmegaConf
 from physicsnemo.distributed import DistributedManager
 
-from utils.trainer import training_loop
+from utils.trainer import Trainer
 
 
 @hydra.main(version_base=None, config_path="config", config_name="regression")
@@ -39,7 +39,8 @@ def main(cfg: DictConfig) -> None:
     # Random seed.
     if cfg.training.seed < 0:
         seed = torch.randint(1 << 31, size=[], device=torch.device("cuda"))
-        torch.distributed.broadcast(seed, src=0)
+        if dist.distributed:
+            torch.distributed.broadcast(seed, src=0)
         cfg.training.seed = int(seed)
 
     # Start from specified checkpoint, if provided
@@ -76,7 +77,8 @@ def main(cfg: DictConfig) -> None:
         )
 
     # Train.
-    training_loop(cfg)
+    trainer = Trainer(cfg)
+    trainer.train()
 
 
 # ----------------------------------------------------------------------------

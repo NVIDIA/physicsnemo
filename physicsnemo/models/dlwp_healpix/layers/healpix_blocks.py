@@ -18,7 +18,7 @@ from typing import Sequence, Tuple, Union
 
 import torch
 
-from physicsnemo.nn import HEALPixLayer
+from physicsnemo.nn.module.hpx import HEALPixLayer
 
 #
 # RECURRENT BLOCKS
