@@ -610,19 +610,6 @@ class EquivariantRMSNorm(_EquivariantNormBase):
     def forward(
         self, x: Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
     ) -> Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]:
-        r"""Apply equivariant RMS normalization.
-
-        Parameters
-        ----------
-        x : Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
-            Input features in grid layout with shape
-            ``(batch, lmax+1, mmax+1, 2, channels)``.
-
-        Returns
-        -------
-        Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
-            Normalized features with same shape as input.
-        """
         # Validate input shape (skip during torch.compile)
         if not torch.compiler.is_compiling():
             self._validate_input_shape(x)
@@ -854,18 +841,6 @@ class EquivariantLayerNormTied(_EquivariantNormBase):
     def forward(
         self, x: Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
     ) -> Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]:
-        r"""Apply equivariant layer normalization.
-
-        Parameters
-        ----------
-        x : Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
-            Input features in grid layout.
-
-        Returns
-        -------
-        Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
-            Normalized features.
-        """
         # Validate input shape (skip during torch.compile)
         if not torch.compiler.is_compiling():
             self._validate_input_shape(x)
@@ -1119,18 +1094,6 @@ class EquivariantLayerNorm(_EquivariantNormBase):
     def forward(
         self, x: Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
     ) -> Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]:
-        r"""Apply per-degree equivariant layer normalization.
-
-        Parameters
-        ----------
-        x : Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
-            Input features in grid layout.
-
-        Returns
-        -------
-        Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
-            Normalized features.
-        """
         # Validate input shape (skip during torch.compile)
         if not torch.compiler.is_compiling():
             self._validate_input_shape(x)
@@ -1276,18 +1239,6 @@ class FusedEquivariantRMSNorm(EquivariantRMSNorm):
     def forward(
         self, x: Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
     ) -> Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]:
-        r"""Apply equivariant RMS normalization using fused Warp kernels.
-
-        Parameters
-        ----------
-        x : Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
-            Input features in grid layout.
-
-        Returns
-        -------
-        Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
-            Normalized features.
-        """
         # Validate input shape (skip during torch.compile)
         if not torch.compiler.is_compiling():
             self._validate_input_shape(x)
@@ -1433,18 +1384,6 @@ class FusedEquivariantLayerNormTied(EquivariantLayerNormTied):
     def forward(
         self, x: Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
     ) -> Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]:
-        r"""Apply equivariant layer normalization using fused Warp kernels.
-
-        Parameters
-        ----------
-        x : Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
-            Input features in grid layout.
-
-        Returns
-        -------
-        Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
-            Normalized features.
-        """
         # Validate input shape (skip during torch.compile)
         if not torch.compiler.is_compiling():
             self._validate_input_shape(x)
@@ -1572,18 +1511,6 @@ class FusedEquivariantLayerNorm(EquivariantLayerNorm):
     def forward(
         self, x: Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
     ) -> Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]:
-        r"""Apply per-degree equivariant layer normalization using fused Warp kernels.
-
-        Parameters
-        ----------
-        x : Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
-            Input features in grid layout.
-
-        Returns
-        -------
-        Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
-            Normalized features.
-        """
         if not torch.compiler.is_compiling():
             self._validate_input_shape(x)
 
