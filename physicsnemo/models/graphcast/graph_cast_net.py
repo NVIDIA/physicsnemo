@@ -287,6 +287,11 @@ class GraphCastNet(Module):
         self.is_distributed = False
         if partition_size > 1:
             self.is_distributed = True
+            if graph_backend == "pyg":
+                raise NotImplementedError(
+                    "Distributed mode (partition_size > 1) is not supported with PyG backend. "
+                    "Distributed functionality was only available with the deprecated DGL/cugraphops backend."
+                )
         self.expect_partitioned_input = expect_partitioned_input
         self.global_features_on_rank_0 = global_features_on_rank_0
         self.produce_aggregated_output = produce_aggregated_output
@@ -317,6 +322,7 @@ class GraphCastNet(Module):
         self.mesh_graph, self.attn_mask = self.graph.create_mesh_graph(verbose=False)
         self.g2m_graph = self.graph.create_g2m_graph(verbose=False)
         self.m2g_graph = self.graph.create_m2g_graph(verbose=False)
+        self.graph_backend = graph_backend
 
         # Handle data access based on backend
 
@@ -952,6 +958,12 @@ class GraphCastNet(Module):
                 invar = invar[0].view(self.input_dim_grid_nodes, -1).permute(1, 0)
 
                 # scatter global features
+                if not hasattr(self.g2m_graph, "get_src_node_features_in_partition"):
+                    raise NotImplementedError(
+                        f"Distributed mode is not supported with {self.graph_backend} backend. "
+                        "The get_src_node_features_in_partition method is only available with "
+                        "DistributedGraph objects, which are not created with the PyG backend."
+                    )
                 invar = self.g2m_graph.get_src_node_features_in_partition(
                     invar,
                     scatter_features=global_features_on_rank_0,
@@ -991,6 +1003,12 @@ class GraphCastNet(Module):
         if produce_aggregated_output or not self.is_distributed:
             # default case: output of shape [N, C, H, W]
             if self.is_distributed:
+                if not hasattr(self.m2g_graph, "get_global_dst_node_features"):
+                    raise NotImplementedError(
+                        f"Distributed mode is not supported with {self.graph_backend} backend. "
+                        "The get_global_dst_node_features method is only available with "
+                        "DistributedGraph objects, which are not created with the PyG backend."
+                    )
                 outvar = self.m2g_graph.get_global_dst_node_features(
                     outvar,
                     get_on_all_ranks=produce_aggregated_output_on_all_ranks,
