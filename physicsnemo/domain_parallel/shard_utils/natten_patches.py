@@ -144,6 +144,7 @@ def partial_na2d(
     kernel_size: int,
     dilation: int,
     base_func: Callable,
+    **na2d_kwargs: Any,
 ) -> ShardTensor:
     r"""High-level, differentiable function to compute neighborhood attention on a sharded tensor.
 
@@ -168,7 +169,10 @@ def partial_na2d(
     dilation : int
         Dilation factor for attention kernel.
     base_func : Callable
-        The base neighborhood attention function to call with padded tensors.
+        The base neighborhood attention function to call with padded tensors. Called as
+        ``base_func(lq, lk, lv, kernel_size, dilation=dilation, **na2d_kwargs)``.
+    **na2d_kwargs : Any
+        Additional keyword arguments passed through to ``base_func`` (e.g. ``is_causal``, ``scale``, ``stride``).
 
     Returns
     -------
@@ -197,8 +201,8 @@ def partial_na2d(
         lk = halo_padding(lk, k._spec.mesh, halo_config)
         lv = halo_padding(lv, v._spec.mesh, halo_config)
 
-    # Apply native na2d operation
-    x = base_func(lq, lk, lv, kernel_size, dilation)
+    # Apply native na2d operation (dilation explicit; other options via na2d_kwargs)
+    x = base_func(lq, lk, lv, kernel_size, dilation=dilation, **na2d_kwargs)
 
     # Remove halos and convert back to ShardTensor
     # x = UnSliceHaloND.apply(x, halo, q._spec)
@@ -276,14 +280,19 @@ if natten.available and wrapt.available:
 
         q, k, v = fetch_qkv(*args)
 
-        # Get kernel parameters
+        # Get kernel parameters (keep explicit); pass remaining kwargs through to na2d
         dilation = kwargs.get("dilation", 1)
         kernel_size = kwargs["kernel_size"]
+        na2d_kwargs = {
+            k: v for k, v in kwargs.items() if k not in ("kernel_size", "dilation")
+        }
 
         if all([isinstance(_t, torch.Tensor) for _t in (q, k, v)]):
             return wrapped(*args, **kwargs)
         elif all([isinstance(_t, ShardTensor) for _t in (q, k, v)]):
-            return partial_na2d(q, k, v, kernel_size, dilation, base_func=wrapped)
+            return partial_na2d(
+                q, k, v, kernel_size, dilation, base_func=wrapped, **na2d_kwargs
+            )
 
         else:
             raise UndeterminedShardingError(
