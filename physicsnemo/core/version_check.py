@@ -40,6 +40,7 @@ Example usage::
 
 import functools
 import importlib
+import importlib.util
 import os
 import sys
 from importlib import metadata
@@ -448,6 +449,19 @@ def is_package_available(distribution_name: str) -> bool:
     return get_installed_version(distribution_name) is not None
 
 
+@functools.lru_cache(maxsize=None)
+def _is_module_findable(module_name: str) -> bool:
+    """Check if a module can be found by the import system without importing it.
+
+    This handles namespace packages (e.g., ``nvidia.dali``) where the root
+    package name doesn't correspond to a pip distribution.
+    """
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except (ModuleNotFoundError, ValueError):
+        return False
+
+
 def check_version_spec(
     distribution_name: str,
     spec: str = "0.0.0",
@@ -649,10 +663,15 @@ class OptionalImport:
         module_name = object.__getattribute__(self, "_module_name")
         root_pkg = module_name.split(".")[0]
 
-        # Check availability before attempting import
-        if not is_package_available(root_pkg):
+        # Check availability before attempting import.
+        # First try pip metadata (fast, cached), then fall back to
+        # importlib.util.find_spec which handles namespace packages
+        # (e.g. nvidia.dali where "nvidia" isn't a pip distribution).
+        if not is_package_available(root_pkg) and not _is_module_findable(module_name):
             package_hint = object.__getattribute__(self, "_package_hint")
-            hint = package_hint or get_package_hint(root_pkg)
+            # Try hints for full module name first (e.g. "nvidia.dali"),
+            # then fall back to root package name
+            hint = package_hint or get_package_hint(module_name)
             # ImportError is the standard exception for missing modules.
             # This is safe because OptionalImport is lazy — it only raises
             # on attribute access, not at import time, so
@@ -662,7 +681,7 @@ class OptionalImport:
             # doctests when optional deps are missing.
             c = _Colors
             raise ImportError(
-                f"\n{c.RED}{c.BOLD}Missing optional dependency: {root_pkg}{c.RESET}\n\n{hint}"
+                f"\n{c.RED}{c.BOLD}Missing optional dependency: {module_name}{c.RESET}\n\n{hint}"
             )
 
         # Package is available, import it
@@ -686,7 +705,9 @@ class OptionalImport:
             # Module not loaded yet — check availability without importing
             module_name = object.__getattribute__(self, "_module_name")
             root_pkg = module_name.split(".")[0]
-            if not is_package_available(root_pkg):
+            if not is_package_available(root_pkg) and not _is_module_findable(
+                module_name
+            ):
                 raise AttributeError(name)
             # Package is available but not yet loaded; import and look up
             module = self._get_module()
@@ -709,4 +730,4 @@ class OptionalImport:
         """Check if the module is available without importing it."""
         module_name = object.__getattribute__(self, "_module_name")
         root_pkg = module_name.split(".")[0]
-        return is_package_available(root_pkg)
+        return is_package_available(root_pkg) or _is_module_findable(module_name)

@@ -42,31 +42,47 @@ class ConditioningEmbedder(Protocol):
     **kwargs
         Additional conditioning inputs (e.g., condition, class_labels).
 
-    Returns
+    Outputs
     -------
     torch.Tensor
-        Conditioning embedding of shape :math:`(B, D)` where D is ``output_dim``.
+        Conditioning embedding of shape :math:`(B, D)` where :math:`D` is ``output_dim``.
     """
 
     @property
     def output_dim(self) -> int:
-        """Output dimension of conditioning embedding"""
+        r"""Output dimension of conditioning embedding."""
         ...
 
     def forward(self, t: torch.Tensor, **kwargs) -> torch.Tensor:
-        """Compute conditioning embedding from timestep and optional inputs."""
+        r"""Compute conditioning embedding from timestep and optional inputs."""
         ...
 
 
 class ZeroConditioningEmbedder(Module):
-    r"""Zero conditioning embedder for unconditional/deterministic models (condition_dim=0).
+    r"""Zero conditioning embedder for unconditional/deterministic models (``condition_dim=0``).
 
-    Returns empty tensors of shape (B, 0) for conditioning, allowing
-    AdaLN blocks to operate in bias-only mode (0 x D weight + D bias).
+    Returns empty tensors of shape :math:`(B, 0)` for conditioning, allowing
+    AdaLN blocks to operate in bias-only mode (0 × D weight + D bias).
+    This is useful when a deterministic model which uses constant timestep/condition values
+    is trained using the DiT-style adaptive layer norm mechanism. In this case, the MLP weight matrix
+    can be folded into a fixed bias parameter to reduce parameters at inference.
 
-   This is useful when a deterministic model which uses constant timestep/condition values
-   is trained using the DiT-style adaptive layer norm mechanism. In this case, the MLP weight matrix
-   can be folded into a fixed bias parameter to reduce parameters at inference.
+    Parameters
+    ----------
+    None
+        No constructor parameters.
+
+    Forward
+    -------
+    t : torch.Tensor
+        Timestep tensor of shape :math:`(B,)`. Unused; provided for interface compatibility.
+    **kwargs
+        Additional conditioning inputs. Ignored.
+
+    Outputs
+    -------
+    torch.Tensor
+        Empty conditioning tensor of shape :math:`(B, 0)`.
     """
 
     def __init__(self):
@@ -90,10 +106,10 @@ class DiTConditionEmbedder(Module):
     ----------
     hidden_size : int
         Output embedding dimension, matching DiT hidden_size.
-    condition_dim : int, optional
+    condition_dim : int, optional, default=0
         Input condition dimension. If 0, no condition embedding is used.
-    amp_mode : bool, optional
-        Whether mixed-precision (AMP) training is enabled. Default False.
+    amp_mode : bool, optional, default=False
+        Whether mixed-precision (AMP) training is enabled.
     **timestep_embed_kwargs
         Keyword arguments passed to :class:`physicsnemo.nn.PositionalEmbedding`
         for the timestep embedding.
@@ -103,12 +119,12 @@ class DiTConditionEmbedder(Module):
     t : torch.Tensor
         Timestep tensor of shape :math:`(B,)`.
     condition : torch.Tensor, optional
-        Condition tensor of shape :math:`(B, condition_dim)`.
+        Condition tensor of shape :math:`(B, \text{condition\_dim})`.
 
-    Returns
+    Outputs
     -------
     torch.Tensor
-        Conditioning embedding of shape :math:`(B, hidden_size)`.
+        Conditioning embedding of shape :math:`(B, \text{hidden\_size})`.
     """
 
     def __init__(
@@ -168,27 +184,26 @@ class EDMConditionEmbedder(Module):
         Output embedding dimension (typically 4 * hidden_size).
     noise_channels : int
         Dimension of positional embedding for the noise/timestep label.
-    condition_dim : int, optional
-        Input condition dimension. If 0, no condition embedding. Default 0.
-    condition_dropout : float, optional
-        Dropout probability for conditions during training. Default 0.0.
-    legacy_condition_bias : bool, optional
+    condition_dim : int, optional, default=0
+        Input condition dimension. If 0, no condition embedding.
+    condition_dropout : float, optional, default=0.0
+        Dropout probability for conditions during training.
+    legacy_condition_bias : bool, optional, default=False
         If ``True``, includes a bias term even when ``condition_dim`` is 0.
-        Default ``False``.
-    max_positions : int, optional
-        Maximum positions for positional embedding. Default 10000.
+    max_positions : int, optional, default=10000
+        Maximum positions for positional embedding.
 
     Forward
     -------
     t : torch.Tensor
         Timestep/noise_labels tensor of shape :math:`(B,)`.
     condition : torch.Tensor, optional
-        Condition tensor of shape :math:`(B, condition_dim)`.
+        Condition tensor of shape :math:`(B, \text{condition\_dim})`.
 
-    Returns
+    Outputs
     -------
     torch.Tensor
-        Conditioning embedding of shape :math:`(B, emb_channels)`.
+        Conditioning embedding of shape :math:`(B, \text{emb\_channels})`.
     """
 
     def __init__(
@@ -250,7 +265,11 @@ class EDMConditionEmbedder(Module):
 
 
 class ConditioningEmbedderType(Enum):
-    """Conditioning embedder types for DiT models."""
+    r"""Conditioning embedder types for DiT models.
+
+    Used by :func:`~physicsnemo.experimental.models.dit.conditioning_embedders.get_conditioning_embedder`
+    to select the conditioning embedder implementation.
+    """
 
     DIT = DiTConditionEmbedder
     EDM = EDMConditionEmbedder
@@ -273,7 +292,13 @@ def get_conditioning_embedder(
             - ZERO: Returns empty (B, 0) tensors for bias-only AdaLN (unconditional/ViT-style inference).
     **kwargs
         Keyword arguments passed to the embedder constructor.
-        See :class:`DiTConditionEmbedder` or :class:`EDMConditionEmbedder` for available options.
+        See :class:`~physicsnemo.experimental.models.dit.conditioning_embedders.DiTConditionEmbedder` or
+        :class:`~physicsnemo.experimental.models.dit.conditioning_embedders.EDMConditionEmbedder` for available options.
+
+    Returns
+    -------
+    ConditioningEmbedder
+        An instance implementing the :class:`~physicsnemo.experimental.models.dit.conditioning_embedders.ConditioningEmbedder` protocol.
     """
     if conditioning_embedder == ConditioningEmbedderType.ZERO:
         return conditioning_embedder.value()
