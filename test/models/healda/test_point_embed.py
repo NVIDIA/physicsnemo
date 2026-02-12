@@ -210,7 +210,7 @@ def test_multisensor_obs_embedding_forward_and_gradients(device, counts):
         embed_dim=16,
         meta_dim=meta_dim,
         fusion_dim=fusion_dim,
-        compile=False,
+        torch_compile=False,
     ).to(device)
     model.train()
     out = model(

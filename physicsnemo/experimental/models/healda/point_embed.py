@@ -528,8 +528,8 @@ class MultiSensorObsEmbedder(Module):
     gradient_checkpointing : bool, optional, default=False
         If ``True``, wraps each per-sensor forward pass with gradient
         checkpointing to trade compute for memory during training.
-    compile : bool, optional, default=False
-        If ``True``, compiles the forward function for improved performance.
+    torch_compile : bool, optional, default=False
+        If ``True``, applies ``torch.compile`` to the forward method.
 
     Forward
     -------
@@ -574,7 +574,7 @@ class MultiSensorObsEmbedder(Module):
         meta_dim: int = 28,
         fusion_dim: int = 512,
         gradient_checkpointing: bool = False,
-        compile: bool = False,
+        torch_compile: bool = False,
     ):
         super().__init__()
 
@@ -617,7 +617,8 @@ class MultiSensorObsEmbedder(Module):
 
         self.sensor_fusion = UniformFusion(fusion_dim=self.fusion_dim)
         self.output_norm = torch.nn.LayerNorm(self.fusion_dim)
-        if compile:
+        if torch_compile:
+            # use dynamic as each sample has variable observation count
             self.forward = torch.compile(self.forward, dynamic=True)
 
     def forward(
