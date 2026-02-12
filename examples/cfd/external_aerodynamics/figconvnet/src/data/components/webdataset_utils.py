@@ -39,7 +39,7 @@ def split_by_node_equal(
     worker = 0 if worker is None else worker
     num_workers = max(1, num_workers)
     g_worker = rank * num_workers + worker  # Global worker id.
-    g_world = world_size * num_workers      # Total number of global workers.
+    g_world = world_size * num_workers  # Total number of global workers.
 
     it = iter(src)
     for chunk in iter(lambda: list(itertools.islice(it, g_world)), []):
