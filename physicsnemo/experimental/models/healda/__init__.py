@@ -16,7 +16,7 @@
 
 from .scatter_aggregator import ScatterAggregator, scatter_mean
 from .point_embed import (
-    MultiSensorObsEmbedding,
+    MultiSensorObsEmbedder,
     ObsTokenizer,
     SensorEmbedder,
     UniformFusion,
