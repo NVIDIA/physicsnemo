@@ -432,17 +432,15 @@ class Natten2DSelfAttention(AttentionModuleBase):
             # Use automatic halo padding for sharded tensors
 
             # Pop out dilation from na2d_kwargs and pass explicitly to partial_na2d
-            if "dilation" in self.na2d_kwargs:
-                dilation = self.na2d_kwargs.pop("dilation")
-            else:
-                dilation = 1
+            dilation = self.na2d_kwargs.get("dilation", 1)
+            na2d_kwargs = {k: v for k, v in self.na2d_kwargs.items() if k != "dilation"}
             
             x = partial_na2d(
                 q, k, v,
                 kernel_size=self.attn_kernel,
                 dilation=dilation,
                 base_func=na2d,
-                **self.na2d_kwargs,
+                **na2d_kwargs,
             )
         else:
             x = na2d(q, k, v, kernel_size=self.attn_kernel, **self.na2d_kwargs)
