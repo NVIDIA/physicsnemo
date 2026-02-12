@@ -698,6 +698,25 @@ class ShardTensor(DTensor):
             ):
                 res = cls._named_function_registry[str(func)](func, types, args, kwargs)
                 return res
+            # Fallback: view/reshape must never be delegated to DTensor (it would
+            # apply global shape to local tensor). Handle by name or aten op in
+            # case the registry missed (e.g. different func reference from einops).
+            if (
+                cls._enable_shard_patches
+                and args
+                and isinstance(args[0], cls)
+                and (
+                    getattr(func, "__name__", None) in ("reshape", "view")
+                    or func in (aten.reshape.default, aten.view.default)
+                )
+            ):
+                from physicsnemo.domain_parallel.shard_utils.view_ops import (
+                    _extract_view_shape,
+                    sharded_view,
+                )
+
+                tensor, shape = _extract_view_shape(args)
+                return sharded_view(tensor, shape)
             # Fall back to the default behavior, but promote any DTensor
             # results back to ShardTensor (matching dispatch behavior):
             result = super().__torch_function__(func, types, args, kwargs)
