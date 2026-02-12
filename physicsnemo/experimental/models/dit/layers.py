@@ -311,44 +311,59 @@ class TESelfAttention(AttentionModuleBase):
 
 
 class Natten2DSelfAttention(AttentionModuleBase):
-    """Self-attention module that performs 2D neighborhood attention using NATTEN.
-    Expects an input tensor of shape (B, L, D) and 
-    returns a tensor of the same shape (reshapes sequence to 2D internally).
+    r"""
+    Self-attention module that performs 2D neighborhood attention using NATTEN.
+
+    Expects an input tensor of shape :math:`(B, L, D)` and returns a tensor of the same shape
+    (reshapes sequence to 2D internally for the attention operation).
 
     Parameters
     ----------
-    hidden_size: int
+    hidden_size : int
         The embedding dimension.
-    num_heads: int
+    num_heads : int
         Number of attention heads.
-    attn_kernel: int
+    attn_kernel : int, optional, default=3
         The kernel size for the NATTEN neighborhood attention.
-    qkv_bias: bool
-        Whether to use bias in the qkv projection.
-    qk_norm: bool
-        Whether to use layer normalization on the query and key.
-    proj_drop_rate: float
-        The dropout rate for the projection operation.
-    norm_layer: Literal["apex", "torch"]
-        The layer normalization to use.
+    qkv_bias : bool, optional, default=True
+        Whether to use bias in the QKV projection.
+    qk_norm : bool, optional, default=False
+        Whether to use layer normalization on the query and key. When ``True``, the ``norm_layer`` backend is used (e.g. ``"apex"`` or ``"torch"``).
+    attn_drop_rate : float, optional, default=0.0
+        The dropout rate for the attention operation.
+    proj_drop_rate : float, optional, default=0.0
+        The dropout rate for the output projection.
+    norm_layer : Literal["apex", "torch"], optional, default="torch"
+        The layer normalization backend for QK norm when ``qk_norm=True``. When used inside :class:`~physicsnemo.experimental.models.dit.layers.DiTBlock` with ``attention_backend="natten2d"``, this is set from the block's ``layernorm_backend``.
+    na2d_kwargs : Dict[str, Any], optional, default=None
+        Optional keyword arguments forwarded to :func:`natten.functional.na2d` for performance tuning (e.g. ``dilation``, ``is_causal``, ``scale``). If ``None``, an empty dict is used.
 
     References
     ----------
-    - https://arxiv.org/abs/2204.07143
-    - https://natten.org/
+    - `Neighborhood Attention Transformer <https://arxiv.org/abs/2204.07143>`_
+    - `NATTEN <https://natten.org/>`_
 
     Forward
     -------
-    x: torch.Tensor
-        Input tensor of shape (B, L, D).
-    latent_hw: Tuple[int, int]
-        The desired height and width of the 2D latent space, used for reshaping before applying attention.
-        The total token sequence length must be latent_hw[0] * latent_hw[1].
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, L, D)`.
+    latent_hw : Tuple[int, int]
+        The height and width of the 2D latent space for reshaping. Sequence length must equal ``latent_hw[0] * latent_hw[1]``.
 
     Returns
     -------
     torch.Tensor
-        Output tensor of shape (B, L, D).
+        Output tensor of shape :math:`(B, L, D)`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.experimental.models.dit.layers import Natten2DSelfAttention
+    >>> attn = Natten2DSelfAttention(hidden_size=64, num_heads=4, attn_kernel=3)
+    >>> x = torch.randn(2, 16, 64)
+    >>> out = attn(x, latent_hw=(4, 4))
+    >>> out.shape
+    torch.Size([2, 16, 64])
     """
     def __init__(
         self,
@@ -360,6 +375,7 @@ class Natten2DSelfAttention(AttentionModuleBase):
         attn_drop_rate: float = 0.0,
         proj_drop_rate: float = 0.0,
         norm_layer: Literal["apex", "torch"] = "torch",
+        na2d_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
         if not NATTEN_AVAILABLE:
@@ -377,6 +393,7 @@ class Natten2DSelfAttention(AttentionModuleBase):
         self.proj_drop_rate = proj_drop_rate
         self.norm_layer = norm_layer
         self.attn_kernel = attn_kernel
+        self.na2d_kwargs = na2d_kwargs if na2d_kwargs is not None else {}
 
         self.qkv = nn.Linear(hidden_size, hidden_size * 3, bias=qkv_bias)
         if qk_norm:
@@ -413,9 +430,22 @@ class Natten2DSelfAttention(AttentionModuleBase):
         )
         if isinstance(q, ShardTensor):
             # Use automatic halo padding for sharded tensors
-            x = partial_na2d(q, k, v, kernel_size=self.attn_kernel, base_func=na2d, dilation=1)
+
+            # Pop out dilation from na2d_kwargs and pass explicitly to partial_na2d
+            if "dilation" in self.na2d_kwargs:
+                dilation = self.na2d_kwargs.pop("dilation")
+            else:
+                dilation = 1
+            
+            x = partial_na2d(
+                q, k, v,
+                kernel_size=self.attn_kernel,
+                dilation=dilation,
+                base_func=na2d,
+                **self.na2d_kwargs,
+            )
         else:
-            x = na2d(q, k, v, kernel_size=self.attn_kernel)
+            x = na2d(q, k, v, kernel_size=self.attn_kernel, **self.na2d_kwargs)
         x = self.attn_drop(x)
         x = rearrange(x, "b h w head c -> b (h w) (head c)")
 
@@ -525,6 +555,8 @@ class DiTBlock(nn.Module):
         The dropout rate for the projection operation. Default is 0.0.
     mlp_drop_rate (float):
         The dropout rate for the MLP operation. Default is 0.0.
+    final_mlp_dropout (bool):
+        Whether to apply final MLP dropout. Default is True.
     drop_path (float):
         DropPath (stochastic depth) rate. Default is 0.0.
     condition_embed_dim (int, optional):
@@ -579,13 +611,17 @@ class DiTBlock(nn.Module):
         if isinstance(attention_backend, Module):
             self.attention = attention_backend
         else:
+            attn_kwargs_final = dict(attn_kwargs)
+            # Ensure Natten2DSelfAttention uses the same LayerNorm backend as the block when qk_norm is used
+            if attention_backend == "natten2d":
+                attn_kwargs_final.setdefault("norm_layer", layernorm_backend)
             self.attention = get_attention(
                 hidden_size=hidden_size,
                 num_heads=num_heads,
                 attention_backend=attention_backend,
                 attn_drop_rate=attn_drop_rate,
                 proj_drop_rate=proj_drop_rate,
-                **attn_kwargs,
+                **attn_kwargs_final,
             )
 
         self.pre_attention_norm = get_layer_norm(
