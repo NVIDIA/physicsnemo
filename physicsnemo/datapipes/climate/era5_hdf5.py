@@ -14,30 +14,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import h5py
-import numpy as np
-import torch
-
-try:
-    import nvidia.dali as dali
-    import nvidia.dali.plugin.pytorch as dali_pth
-except ImportError:
-    raise ImportError(
-        "DALI dataset requires NVIDIA DALI package to be installed. "
-        + "The package can be installed at:\n"
-        + "https://docs.nvidia.com/deeplearning/dali/user-guide/docs/installation.html"
-    )
-
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple, Union
 
+import h5py
+import numpy as np
+import torch
+
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.climate.utils.invariant import latlon_grid
 from physicsnemo.datapipes.climate.utils.zenith_angle import cos_zenith_angle
 
 from ..datapipe import Datapipe
 from ..meta import DatapipeMetaData
+
+# Lazy imports for optional dependencies
+dali = OptionalImport("nvidia.dali")
+dali_pth = OptionalImport("nvidia.dali.plugin.pytorch")
+
 
 Tensor = torch.Tensor
 
@@ -342,7 +338,7 @@ class ERA5HDF5Datapipe(Datapipe):
         if not self.mu.shape == self.sd.shape == (1, len(self.channels), 1, 1):
             raise AssertionError("Error, normalisation arrays have wrong shape")
 
-    def _create_pipeline(self) -> dali.Pipeline:
+    def _create_pipeline(self) -> "dali.Pipeline":
         """Create DALI pipeline
 
         Returns
@@ -552,7 +548,7 @@ class ERA5DaliExternalSource:
             self.start_year: int = cos_zenith_args.get("start_year")
 
     def __call__(
-        self, sample_info: dali.types.SampleInfo
+        self, sample_info: "dali.types.SampleInfo"
     ) -> Tuple[Tensor, Tensor, np.ndarray]:
         if sample_info.iteration >= self.num_batches:
             raise StopIteration()

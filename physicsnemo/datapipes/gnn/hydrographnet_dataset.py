@@ -46,10 +46,14 @@ from typing import Any, List, Optional, Union
 import numpy as np
 import requests
 import torch
-import torch_geometric as pyg
-from scipy.spatial import KDTree
 from torch.utils.data import Dataset
 from tqdm import tqdm
+
+from physicsnemo.core.version_check import OptionalImport
+
+# Lazy imports for optional dependencies
+pyg = OptionalImport("torch_geometric")
+scipy_spatial = OptionalImport("scipy.spatial")
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -379,7 +383,7 @@ class HydroGraphDataset(Dataset):
 
         # Build the graph connectivity using a k-d tree.
         num_nodes = xy_coords.shape[0]
-        kdtree = KDTree(xy_coords)
+        kdtree = scipy_spatial.KDTree(xy_coords)
         _, neighbors = kdtree.query(xy_coords, k=self.k + 1)
         edge_index = np.vstack(
             [(i, nbr) for i, nbrs in enumerate(neighbors) for nbr in nbrs if nbr != i]
