@@ -334,14 +334,38 @@ class DiT(Module):
         unexpected_keys,
         error_msgs,
     ):
-        """Remap legacy state_dict keys where timestep embedder was at root.
+        r"""Remap legacy state_dict keys where timestep embedder was at root.
 
         Previous versions stored the timestep embedder at root
         (e.g. ``t_embedder.mlp.0.weight``). The current model nests it under
         ``conditioning_embedder`` (e.g. ``conditioning_embedder.t_embedder.mlp.0.weight``).
         This pre-hook rewrites those keys in-place so loading succeeds. It also
-        drops the positional embedding "freqs" key, which is not part of the state_dict
-        anymore due to the usage of `persistent=False`. 
+        drops the positional embedding ``freqs`` key, which is not part of the state_dict
+        anymore due to the usage of ``persistent=False``.
+
+        Parameters
+        ----------
+        module : torch.nn.Module
+            The module being loaded (unused; required by ``register_load_state_dict_pre_hook``).
+        state_dict : dict
+            State dict being loaded; modified in-place.
+        prefix : str
+            Prefix for the module (unused).
+        local_metadata : dict, optional
+            Local metadata (unused).
+        strict : bool
+            Whether strict loading is requested (unused).
+        missing_keys : list of str
+            List of missing keys (unused).
+        unexpected_keys : list of str
+            List of unexpected keys (unused).
+        error_msgs : list of str
+            Error messages (unused).
+
+        Returns
+        -------
+        None
+            Modifies ``state_dict`` in-place; no return value.
         """
         legacy_prefix = "t_embedder."
         new_prefix = "conditioning_embedder.t_embedder."
@@ -357,6 +381,21 @@ class DiT(Module):
                 state_dict[new_key] = state_dict.pop(old_key)
 
     def initialize_weights(self):
+        r"""Apply DiT-specific weight initialization.
+
+        Applies Xavier uniform to linear layers, then delegates to tokenizer,
+        detokenizer, and each block's ``initialize_weights``.
+
+        Parameters
+        ----------
+        None
+            Uses ``self`` (module state).
+
+        Returns
+        -------
+        None
+            Modifies module parameters in-place.
+        """
         # Apply a basic Xavier uniform initialization to all linear layers.
         def _basic_init(module):
             if isinstance(module, nn.Linear):
