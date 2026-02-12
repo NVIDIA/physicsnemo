@@ -32,18 +32,23 @@ def split_by_node_equal(
     """Splits input iterable into equal-sized chunks according to multiprocessing configuration.
 
     Similar to `Webdataset.split_by_node`, but the resulting split is equal-sized.
+     Now supports multi-GPU execution.
     """
+    rank, world_size, worker, num_workers = wds.utils.pytorch_worker_info(group=group)
 
-    rank, world_size, *_ = wds.utils.pytorch_worker_info(group=group)
-    cur = iter(src)
-    while len(next_items := list(itertools.islice(cur, world_size))) == world_size:
-        yield next_items[rank]
+    worker = 0 if worker is None else worker
+    num_workers = max(1, num_workers)
+    g_worker = rank * num_workers + worker  # Global worker id.
+    g_world = world_size * num_workers  # Total number of global workers.
 
-    tail_size = len(next_items)
-    assert tail_size < world_size
-    # If drop_last is not set, handle the tail.
-    if not drop_last and tail_size > 0:
-        yield next_items[rank % tail_size]
+    it = iter(src)
+    for chunk in iter(lambda: list(itertools.islice(it, g_world)), []):
+        n = len(chunk)
+        if n < g_world:  # Tail chunk.
+            if not drop_last and g_worker < n:
+                yield chunk[g_worker]
+            return
+        yield chunk[g_worker]
 
 
 def from_numpy(sample: Mapping[str, Any], key: str):
