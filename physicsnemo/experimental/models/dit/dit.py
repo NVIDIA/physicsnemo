@@ -233,11 +233,11 @@ class DiT(Module):
         if layernorm_backend not in ["apex", "torch"]:
             raise ValueError("layernorm_backend must be one of 'apex', 'torch'")
 
-        if isinstance(tokenizer, str) and tokenizer not in ["patch_embed_2d"]:
-            raise ValueError("tokenizer must be 'patch_embed_2d'")
+        if isinstance(tokenizer, str) and tokenizer not in ["patch_embed_2d", "hpx_patch_embed"]:
+            raise ValueError("tokenizer must be 'patch_embed_2d' or 'hpx_patch_embed'")
 
-        if isinstance(detokenizer, str) and detokenizer not in ["proj_reshape_2d"]:
-            raise ValueError("detokenizer must be 'proj_reshape_2d'")
+        if isinstance(detokenizer, str) and detokenizer not in ["proj_reshape_2d", "hpx_patch_detokenizer"]:
+            raise ValueError("detokenizer must be 'proj_reshape_2d' or 'hpx_patch_detokenizer'")
 
         # Tokenizer module: accept string or pre-instantiated PhysicsNeMo Module
         if isinstance(tokenizer, str):

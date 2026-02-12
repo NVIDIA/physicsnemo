@@ -25,7 +25,7 @@ import torch.nn as nn
 
 from physicsnemo.core import Module
 
-from .layers import Linear, PositionalEmbedding
+from physicsnemo.nn import Linear, PositionalEmbedding
 
 
 @runtime_checkable
