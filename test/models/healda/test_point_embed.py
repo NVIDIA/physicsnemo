@@ -19,7 +19,7 @@ import pytest
 import torch
 
 from physicsnemo.experimental.models.healda import (
-    MultiSensorObsEmbedding,
+    MultiSensorObsEmbedder,
     SensorEmbedder,
 )
 from physicsnemo.experimental.models.healda.point_embed import _split_by_sensor
@@ -204,7 +204,7 @@ def test_multisensor_obs_embedding_forward_and_gradients(device, counts):
         )
     )
 
-    model = MultiSensorObsEmbedding(
+    model = MultiSensorObsEmbedder(
         nchannel_per_sensor=nchannel_per_sensor,
         nplatform_per_sensor=nplatform_per_sensor,
         embed_dim=16,
@@ -233,7 +233,7 @@ def test_multisensor_obs_embedding_forward_and_gradients(device, counts):
 
 
 def test_multisensor_obs_embedding_forward_accuracy(device):
-    """Regression test for MultiSensorObsEmbedding forward output."""
+    """Regression test for MultiSensorObsEmbedder forward output."""
     torch.manual_seed(0)
     npix = 12 * 4**5
     meta_dim = 4
@@ -252,7 +252,7 @@ def test_multisensor_obs_embedding_forward_accuracy(device):
         )
     )
 
-    model = MultiSensorObsEmbedding(
+    model = MultiSensorObsEmbedder(
         nchannel_per_sensor=nchannel_per_sensor,
         nplatform_per_sensor=nplatform_per_sensor,
         embed_dim=16,

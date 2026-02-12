@@ -515,6 +515,10 @@ class MultiSensorObsEmbedder(Module):
         Number of channels for each sensor, in sensor order.
     nplatform_per_sensor : list[int]
         Number of platforms for each sensor, in sensor order.
+    sensor_names : list[str], optional
+        Human-readable names for each sensor, in sensor order. Used as keys
+        in the internal embedders ``ModuleDict`` so the names appear in ``print(model)``.
+        Defaults to ``["sensor_0", "sensor_1", ...]``.
     embed_dim : int, optional, default=32
         Tokenization dimension used by :class:`ObsTokenizer` for each sensor.
     meta_dim : int, optional, default=28
@@ -565,6 +569,7 @@ class MultiSensorObsEmbedder(Module):
         self,
         nchannel_per_sensor: list[int],
         nplatform_per_sensor: list[int],
+        sensor_names: list[str] | None = None,
         embed_dim: int = 32,
         meta_dim: int = 28,
         fusion_dim: int = 512,
@@ -573,20 +578,30 @@ class MultiSensorObsEmbedder(Module):
     ):
         super().__init__()
 
-        if len(nchannel_per_sensor) != len(nplatform_per_sensor):
+        num_sensors = len(nchannel_per_sensor)
+        if len(nplatform_per_sensor) != num_sensors:
             raise ValueError(
                 f"nchannel_per_sensor and nplatform_per_sensor must have the same "
                 f"length, got {len(nchannel_per_sensor)} and {len(nplatform_per_sensor)}"
             )
 
+        if sensor_names is None:
+            sensor_names = [f"sensor_{i}" for i in range(num_sensors)]
+        elif len(sensor_names) != num_sensors:
+            raise ValueError(
+                f"sensor_names must have the same length as nchannel_per_sensor, "
+                f"got {len(sensor_names)} and {num_sensors}"
+            )
+
         self.nchannel_per_sensor = list(nchannel_per_sensor)
         self.nplatform_per_sensor = list(nplatform_per_sensor)
+        self.sensor_names = list(sensor_names)
         self.fusion_dim = fusion_dim
 
         # Separate embedders for each sensor, in sensor order.
-        self.embedders = torch.nn.ModuleList(
-            [
-                SensorEmbedder(
+        self.embedders = torch.nn.ModuleDict(
+            {
+                name: SensorEmbedder(
                     sensor_embed_dim=embed_dim,
                     meta_dim=meta_dim,
                     output_dim=self.fusion_dim,
@@ -594,8 +609,10 @@ class MultiSensorObsEmbedder(Module):
                     nplatform=nplatform,
                     gradient_checkpointing=gradient_checkpointing,
                 )
-                for nchannel, nplatform in zip(nchannel_per_sensor, nplatform_per_sensor)
-            ]
+                for name, nchannel, nplatform in zip(
+                    sensor_names, nchannel_per_sensor, nplatform_per_sensor
+                )
+            }
         )
 
         self.sensor_fusion = UniformFusion(fusion_dim=self.fusion_dim)
@@ -666,7 +683,7 @@ class MultiSensorObsEmbedder(Module):
         )
         sensor_embeddings = []
 
-        for sensor_obs, embedder in zip(obs_by_sensor, self.embedders):
+        for sensor_obs, embedder in zip(obs_by_sensor, self.embedders.values()):
             (
                 sensor_obs_values,
                 sensor_float_metadata,
