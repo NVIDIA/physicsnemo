@@ -156,8 +156,6 @@ utils-extras = [
     "line_profiler",
     "vtk",
     "stl",
-    "pylibraft-cu13", # Provides rmm
-    "cupy-cuda13x",
 ]
 mesh-extras = [
     "matplotlib>=3.10.7",
@@ -165,18 +163,16 @@ mesh-extras = [
     "pyvista>=0.46.4",
 ]
 nn-extras = [
-    "cuml-cu13",
     "scipy",
     "natten",
     "nvidia-physicsnemo[utils-extras]",
 ]
 model-extras = [
     "nvidia-physicsnemo[nn-extras]",
-    "pyvista",
+    "pyvista>=0.46.4",
     "vtk",
 ]
 datapipes-extras = [
-    "dask",
     "tfrecord",
     "netCDF4",
     "xarray>=2025.6.1",
@@ -192,6 +188,15 @@ gnns = [
     # "nvfuser",
     "nvidia-physicsnemo[model-extras]",
 ]
+
+perf = [
+    "transformer_engine[pytorch]",
+    "cuml-cu13",
+    "nvidia-dali-cuda130",
+    "pylibraft-cu13", # Provides rmm
+    "cupy-cuda13x",
+]
+
 
 #####################################################################
 # Linting configuration
