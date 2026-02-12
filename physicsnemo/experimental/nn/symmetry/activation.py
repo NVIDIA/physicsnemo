@@ -229,6 +229,9 @@ class GateActivation(Module):
         # Extract main features (i.e. not the gate channels)
         x_features = x[..., : self.channels]  # [batch, lmax+1, mmax+1, 2, channels]
 
+        # Zero out m=0 imaginary component before processing
+        x_features = x_features * self.m0_imag_mask
+
         # Process gates: [batch, lmax * channels] -> [batch, lmax, channels]
         gates = gates.view(batch, self.lmax, self.channels)
         gates = self.gate_act(gates)

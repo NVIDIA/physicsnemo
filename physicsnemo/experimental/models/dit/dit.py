@@ -17,14 +17,21 @@
 from typing import Tuple, Union, Optional, Literal, Dict, Any
 import torch
 import torch.nn as nn
-
-from physicsnemo.nn import PositionalEmbedding, Linear
 from dataclasses import dataclass
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.models.dit import DiTBlock
-from physicsnemo.experimental.models.dit.layers import get_tokenizer, get_detokenizer, TokenizerModuleBase, DetokenizerModuleBase
-
+from physicsnemo.experimental.models.dit.layers import (
+    DiTBlock,
+    get_tokenizer,
+    get_detokenizer,
+    TokenizerModuleBase,
+    DetokenizerModuleBase,
+)
+from physicsnemo.experimental.models.dit.conditioning_embedders import (
+    ConditioningEmbedder,
+    ConditioningEmbedderType,
+    get_conditioning_embedder,
+)
 
 @dataclass
 class MetaData(ModelMetaData):
@@ -44,110 +51,136 @@ class MetaData(ModelMetaData):
 
 
 class DiT(Module):
-    """
-    Warning
-    -----------
-    This model is experimental and there may be changes in the future.
-    
+    r"""
     The Diffusion Transformer (DiT) model.
 
+    .. warning::
+        This model is experimental and there may be changes in the future.
+
     Parameters
-    -----------
-    input_size (Union[int, Tuple[int]]):
+    ----------
+    input_size : Union[int, Tuple[int]]
         Spatial dimensions of the input. If an integer is provided, the input is assumed to be on a square 2D domain.
         If a tuple is provided, the input is assumed to be on a multi-dimensional domain.
-    in_channels (int):
-        The number of input channels..
-    patch_size (Union[int, Tuple[int]], optional):
-        The size of each image patch. Defaults to (8,8). If an integer is provided, the patch_size is assumed to be a square 2D patch.
-        If a tuple is provided, the patch_size is assumed to be a multi-dimensional patch.
-    tokenizer (Union[Literal["patch_embed_2d"], Module], optional):
-        The tokenizer to use. Defaults to 'patch_embed_2d'. You may provide:
-        - A string in {"patch_embed_2d"} to select a built-in tokenizer. Built-in tokenizers include:
-            - 'patch_embed_2d': Uses a standard PatchEmbed2D to project the input image to a sequence of tokens.
-        - An instantiated PhysicsNeMo `Module` implementing the tokenizer interface defined in :class:`physicsnemo.experimental.models.dit.layers.TokenizerModuleBase`.
-          The tokenizer module must be a subclass of :class:`physicsnemo.experimental.models.dit.layers.TokenizerModuleBase`, and
-          define a forward method and an initialize_weights method, with the forward method accepting an input Tensor of shape (B, C, *spatial_dims) and returning (B, L, D).
-    detokenizer (Union[Literal["proj_reshape_2d"], Module], optional):
-        The detokenizer to use. Defaults to 'proj_reshape_2d'. You may provide:
-        - A string in {"proj_reshape_2d"} to select a built-in detokenizer. Built-in tokenizers include:
-            - 'proj_reshape_2d': Uses a standard project and reshape operation to convert the token sequence back to an image.
-        - An instantiated PhysicsNeMo `Module` implementing the detokenizer interface defined in :class:`physicsnemo.experimental.models.dit.layers.DetokenizerModuleBase`.
-          The detokenizer module must be a subclass of :class:`physicsnemo.experimental.models.dit.layers.DetokenizerModuleBase`, and
-          define a forward method and an initialize_weights method, with the forward method accepting an input Tensor of shape (B, L, D) and (B, D) and returning (B, C, *spatial_dims).
-    out_channels (Union[None, int], optional):
-        The number of output channels. If None, it is `in_channels`. Defaults to None,
-        which means the output will have the same number of channels as the input.
-    hidden_size (int, optional):
-        The dimensionality of the transformer embeddings. Defaults to 384.
-    depth (int, optional):
-        The number of transformer blocks. Defaults to 12.
-    num_heads (int, optional):
-        The number of attention heads. Defaults to 8.
-    mlp_ratio (float, optional):
-        The ratio of the MLP hidden dimension to the embedding dimension. Defaults to 4.0.
-    attention_backend (Literal["timm", "transformer_engine", "natten2d"], optional):
-        The attention backend to use. Defaults to 'timm'. You may provide:
-        - A string in {"timm", "transformer_engine", "natten2d"} to select a built-in backend.
-          See :class:`physicsnemo.experimental.models.dit.layers.DiTBlock` for a description of each built-in backend.
-    layernorm_backend (Literal["apex", "torch"], optional):
-        If 'apex', uses FusedLayerNorm from apex. If 'torch', uses LayerNorm from torch.nn. Defaults to 'apex'.
-    condition_dim (int, optional):
-        Dimensionality of conditioning. If None, the model is unconditional. Defaults to None.
-    dit_initialization (bool, optional):
-        If True, applies the DiT specific initialization. Defaults to True.
-    tokenizer_kwargs (Dict[str, Any], optional):
+    in_channels : int
+        The number of input channels.
+    patch_size : Union[int, Tuple[int]], optional, default=(8, 8)
+        The size of each image patch. If an integer is provided, a square 2D patch is assumed.
+        If a tuple is provided, a multi-dimensional patch is assumed.
+    tokenizer : Union[Literal["patch_embed_2d"], Module], optional, default="patch_embed_2d"
+        The tokenizer to use. Either a string in ``{"patch_embed_2d"}`` or an instantiated PhysicsNeMo :class:`~physicsnemo.core.Module` implementing
+        :class:`~physicsnemo.experimental.models.dit.layers.TokenizerModuleBase`, with forward accepting input of shape :math:`(B, C, *\text{spatial\_dims})` and returning :math:`(B, L, D)`.
+    detokenizer : Union[Literal["proj_reshape_2d"], Module], optional, default="proj_reshape_2d"
+        The detokenizer to use. Either a string in ``{"proj_reshape_2d"}`` or an instantiated PhysicsNeMo :class:`~physicsnemo.core.Module` implementing
+        :class:`~physicsnemo.experimental.models.dit.layers.DetokenizerModuleBase`, with forward accepting :math:`(B, L, D)` and :math:`(B, D)` and returning :math:`(B, C, *\text{spatial\_dims})`.
+    out_channels : Union[None, int], optional, default=None
+        The number of output channels. If ``None``, set to ``in_channels``.
+    hidden_size : int, optional, default=384
+        The dimensionality of the transformer embeddings.
+    depth : int, optional, default=12
+        The number of transformer blocks.
+    num_heads : int, optional, default=8
+        The number of attention heads.
+    mlp_ratio : float, optional, default=4.0
+        The ratio of the MLP hidden dimension to the embedding dimension.
+    attention_backend : Literal["timm", "transformer_engine", "natten2d"], optional, default="timm"
+        The attention backend to use. See :class:`~physicsnemo.experimental.models.dit.layers.DiTBlock` for a description of each built-in backend.
+    layernorm_backend : Literal["apex", "torch"], optional, default="torch"
+        If ``"apex"``, uses FusedLayerNorm from apex. If ``"torch"``, uses :class:`torch.nn.LayerNorm`. Also passed to :class:`~physicsnemo.experimental.models.dit.layers.Natten2DSelfAttention` when ``qk_norm=True``.
+    condition_dim : int, optional, default=None
+        Dimensionality of conditioning. If ``None``, the model is unconditional.
+    dit_initialization : bool, optional, default=True
+        If ``True``, applies DiT-specific initialization.
+    conditioning_embedder : Literal["dit", "edm", "zero"] or ConditioningEmbedder, optional, default="dit"
+        The conditioning embedder type or an instantiated :class:`~physicsnemo.experimental.models.dit.conditioning_embedders.ConditioningEmbedder`.
+    conditioning_embedder_kwargs : Dict[str, Any], optional, default={}
+        Additional keyword arguments for the conditioning embedder.
+    tokenizer_kwargs : Dict[str, Any], optional, default={}
         Additional keyword arguments for the tokenizer module.
-    detokenizer_kwargs (Dict[str, Any], optional):
+    detokenizer_kwargs : Dict[str, Any], optional, default={}
         Additional keyword arguments for the detokenizer module.
-    block_kwargs (Dict[str, Any], optional):
+    block_kwargs : Dict[str, Any], optional, default={}
         Additional keyword arguments for the DiTBlock modules.
-    timestep_embed_kwargs (Dict[str, Any], optional):
-        Additional keyword arguments to be passed to :class:`physicsnemo.nn.PositionalEmbedding`.
-    attn_kwargs (Dict[str, Any], optional):
-        Additional keyword arguments for the attention module constructor, if using a custom attention backend.
-    force_tokenization_fp32 (bool, optional):
-        If True, forces the tokenization and de-tokenization operations to be run in fp32. Defaults to False.
-    
+    attn_kwargs : Dict[str, Any], optional, default={}
+        Additional keyword arguments for the attention module constructor (e.g. ``na2d_kwargs`` when using ``attention_backend="natten2d"``).
+    drop_path_rates : list[float], optional, default=None
+        DropPath (stochastic depth) rates, one per block. Must have length equal to ``depth``. If ``None``, no drop path is applied.
+    force_tokenization_fp32 : bool, optional, default=False
+        If ``True``, forces tokenization and de-tokenization to run in fp32.
+
     Forward
     -------
-    x (torch.Tensor):
-        (N, C, *spatial_dims) tensor of spatial inputs. `spatial_dims` is determined by the input_size/dimensionality.
-    t (torch.Tensor):
-        (N,) tensor of diffusion timesteps.
-    condition (Optional[torch.Tensor]):
-        (N, d) tensor of conditions.
-    p_dropout (Optional[float | torch.Tensor]):
-        The dropout probability for the intermediate dropout module (pre-attention) in the DiTBlock. If None, no dropout will be applied.
-        If a scalar, the same dropout probability will be applied to all samples in the batch.
-        Otherwise, it should be a tensor of shape (B,) to apply per-sample dropout to each sample in a batch.
+    x : torch.Tensor
+        Spatial inputs of shape :math:`(N, C, *\text{spatial\_dims})`. ``spatial_dims`` is determined by ``input_size``.
+    t : torch.Tensor
+        Diffusion timesteps of shape :math:`(N,)`.
+    condition : Optional[torch.Tensor]
+        Conditions of shape :math:`(N, d)`.
+    p_dropout : Optional[Union[float, torch.Tensor]], optional
+        Dropout probability for the intermediate dropout (pre-attention) in each DiTBlock. If ``None``, no dropout. If a scalar, same for all samples; if a tensor, shape :math:`(B,)` for per-sample dropout.
+    attn_kwargs : Dict[str, Any], optional
+        Additional keyword arguments passed to the attention module's forward method.
+    tokenizer_kwargs : Dict[str, Any], optional
+        Additional keyword arguments passed to the tokenizer's forward method.
 
-    Returns
+    Outputs
     -------
-    torch.Tensor:
-        The output tensor of shape (N, out_channels, *spatial_dims). `spatial_dims` is determined by the input_size/dimensionality.
-    
-    Note
+    torch.Tensor
+        Output tensor of shape :math:`(N, \text{out\_channels}, *\text{spatial\_dims})`.
+
+    Notes
     -----
     Reference: Peebles, W., & Xie, S. (2023). Scalable diffusion models with transformers.
-    In Proceedings of the IEEE/CVF international conference on computer vision (pp. 4195-4205).
+    In Proceedings of the IEEE/CVF International Conference on Computer Vision (pp. 4195-4205).
 
-    Example
+    Examples
     --------
     >>> model = DiT(
-    ...     input_size=(32,64),
+    ...     input_size=(32, 64),
     ...     patch_size=4,
     ...     in_channels=3,
     ...     out_channels=3,
     ...     condition_dim=8,
     ... )
-    >>> x = torch.randn(2, 3, 32, 64)     # [B, C, H, W]
-    >>> t = torch.randint(0, 1000, (2,))  # [B]
-    >>> condition = torch.randn(2, 8)    # [B, d]
+    >>> x = torch.randn(2, 3, 32, 64)
+    >>> t = torch.randint(0, 1000, (2,))
+    >>> condition = torch.randn(2, 8)
     >>> output = model(x, t, condition)
-    >>> output.size()
+    >>> output.shape
     torch.Size([2, 3, 32, 64])
     """
+
+    __model_checkpoint_version__ = "0.2.0"
+    __supported_model_checkpoint_version__ = {
+        "0.1.0": "Automatically converting legacy DiT checkpoint timestep / conditioning embedder arguments.",
+    }
+
+    @classmethod
+    def _backward_compat_arg_mapper(
+        cls, version: str, args: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        r"""
+        Map arguments from legacy checkpoints to the current format.
+
+        Parameters
+        ----------
+        version : str
+            Version of the checkpoint being loaded.
+        args : Dict[str, Any]
+            Arguments dictionary from the checkpoint.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Updated arguments dictionary compatible with the current version.
+        """
+        args = super()._backward_compat_arg_mapper(version, args)
+        if version != "0.1.0":
+            return args
+        
+        if "timestep_embed_kwargs" in args:
+            args["conditioning_embedder_kwargs"] = args.pop("timestep_embed_kwargs")
+        return args
 
     def __init__(
         self,
@@ -164,12 +197,14 @@ class DiT(Module):
         attention_backend: Literal["timm", "transformer_engine", "natten2d"] = "timm",
         layernorm_backend: Literal["apex", "torch"] = "torch",
         condition_dim: Optional[int] = None,
+        conditioning_embedder: Literal["dit","edm","zero"] | ConditioningEmbedder = "dit",
         dit_initialization: Optional[int] = True,
+        conditioning_embedder_kwargs: Dict[str, Any] = {},
         tokenizer_kwargs: Dict[str, Any] = {},
         detokenizer_kwargs: Dict[str, Any] = {},
         block_kwargs: Dict[str, Any] = {},
-        timestep_embed_kwargs: Dict[str, Any] = {},
         attn_kwargs: Dict[str, Any] = {},
+        drop_path_rates: list[float] | None = None,
         force_tokenization_fp32: bool = False,
     ):
         super().__init__(meta=MetaData())
@@ -219,20 +254,19 @@ class DiT(Module):
                 raise TypeError("tokenizer must be a string or a physicsnemo.core.Module instance subclassing physicsnemo.experimental.models.dit.layers.TokenizerModuleBase")
             self.tokenizer = tokenizer
 
-        self.t_embedder = PositionalEmbedding(hidden_size, amp_mode=self.meta.amp_gpu, learnable=True, **timestep_embed_kwargs)
-        self.cond_embedder = (
-            Linear(
-                in_features=condition_dim,
-                out_features=hidden_size,
-                bias=False,
+        # Conditioning embedder: accept enum or pre-instantiated Module
+        if isinstance(conditioning_embedder, str):
+            self.conditioning_embedder = get_conditioning_embedder(
+                ConditioningEmbedderType[conditioning_embedder.upper()],
+                hidden_size=hidden_size,
+                condition_dim=condition_dim or 0,
                 amp_mode=self.meta.amp_gpu,
-                init_mode="kaiming_uniform",
-                init_weight=0,
-                init_bias=0,
+                **conditioning_embedder_kwargs,
             )
-            if condition_dim
-            else None
-        )
+        else:
+            if not isinstance(conditioning_embedder, ConditioningEmbedder):
+                raise TypeError("conditioning_embedder must be a ConditioningEmbedderType or a Module implementing the ConditioningEmbedder protocol")
+            self.conditioning_embedder = conditioning_embedder
 
         # Detokenizer module: accept string or pre-instantiated PhysicsNeMo Module
         if isinstance(detokenizer, str):
@@ -251,8 +285,17 @@ class DiT(Module):
             self.detokenizer = detokenizer
 
 
+        # Validate drop_path_rates
+        if drop_path_rates is None:
+            drop_path_rates = [0.0] * depth
+        else:
+            if len(drop_path_rates) != depth:
+                raise ValueError(
+                    f"drop_path_rates length ({len(drop_path_rates)}) must match DiT depth ({depth})"
+                )
+
         blocks = []
-        for _ in range(depth):
+        for i in range(depth):
             if isinstance(attention_backend, str):
                 attn_module = attention_backend
             else:
@@ -266,6 +309,8 @@ class DiT(Module):
                     attention_backend=attn_module,
                     layernorm_backend=layernorm_backend,
                     mlp_ratio=mlp_ratio,
+                    drop_path=drop_path_rates[i],
+                    condition_embed_dim=self.conditioning_embedder.output_dim,
                     **block_kwargs,
                     **attn_kwargs,
                 )
@@ -276,8 +321,81 @@ class DiT(Module):
             self.initialize_weights()
 
         self.force_tokenization_fp32 = force_tokenization_fp32
+        self.register_load_state_dict_pre_hook(self._migrate_legacy_checkpoint)
+
+    @staticmethod
+    def _migrate_legacy_checkpoint(
+        module,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        r"""Remap legacy state_dict keys where timestep embedder was at root.
+
+        Previous versions stored the timestep embedder at root
+        (e.g. ``t_embedder.mlp.0.weight``). The current model nests it under
+        ``conditioning_embedder`` (e.g. ``conditioning_embedder.t_embedder.mlp.0.weight``).
+        This pre-hook rewrites those keys in-place so loading succeeds. It also
+        drops the positional embedding ``freqs`` key, which is not part of the state_dict
+        anymore due to the usage of ``persistent=False``.
+
+        Parameters
+        ----------
+        module : torch.nn.Module
+            The module being loaded (unused; required by ``register_load_state_dict_pre_hook``).
+        state_dict : dict
+            State dict being loaded; modified in-place.
+        prefix : str
+            Prefix for the module (unused).
+        local_metadata : dict, optional
+            Local metadata (unused).
+        strict : bool
+            Whether strict loading is requested (unused).
+        missing_keys : list of str
+            List of missing keys (unused).
+        unexpected_keys : list of str
+            List of unexpected keys (unused).
+        error_msgs : list of str
+            Error messages (unused).
+
+        Returns
+        -------
+        None
+            Modifies ``state_dict`` in-place; no return value.
+        """
+        legacy_prefix = "t_embedder."
+        new_prefix = "conditioning_embedder.t_embedder."
+
+        # Iterate over a snapshot of keys to avoid mutating dict while iterating
+        for old_key in list(state_dict.keys()):
+            if not old_key.startswith(legacy_prefix):
+                continue
+            new_key = new_prefix + old_key[len(legacy_prefix) :]
+            if old_key == legacy_prefix+"freqs":
+                del state_dict[old_key]
+            elif new_key not in state_dict:
+                state_dict[new_key] = state_dict.pop(old_key)
 
     def initialize_weights(self):
+        r"""Apply DiT-specific weight initialization.
+
+        Applies Xavier uniform to linear layers, then delegates to tokenizer,
+        detokenizer, and each block's ``initialize_weights``.
+
+        Parameters
+        ----------
+        None
+            Uses ``self`` (module state).
+
+        Returns
+        -------
+        None
+            Modifies module parameters in-place.
+        """
         # Apply a basic Xavier uniform initialization to all linear layers.
         def _basic_init(module):
             if isinstance(module, nn.Linear):
@@ -298,35 +416,24 @@ class DiT(Module):
         t: torch.Tensor,
         condition: Optional[torch.Tensor] = None,
         p_dropout: Optional[float | torch.Tensor] = None,
-        attn_kwargs: Optional[Dict[str, Any]] = None,
+        attn_kwargs: Dict[str, Any] = {},
+        tokenizer_kwargs: Dict[str, Any] = {},
     ) -> torch.Tensor:
         # Tokenize: (B, C, H, W) -> (B, L, D)
         if self.force_tokenization_fp32:
             dtype = x.dtype
             x = x.to(torch.float32)
             with torch.autocast(device_type="cuda", enabled=False):
-                x = self.tokenizer(x)
+                x = self.tokenizer(x, **tokenizer_kwargs)
             x = x.to(dtype)
         else:
-            x = self.tokenizer(x)
+            x = self.tokenizer(x, **tokenizer_kwargs)
 
-        t = self.t_embedder(t)  # (B, D)
-
-        # Handle conditioning
-        if self.cond_embedder is not None:
-            if condition is None:
-                # Fallback to using only timestep embedding if conditioning is not provided
-                c = t
-            else:
-                condition_embedding = self.cond_embedder(condition)  # (B, D)
-                c = t + condition_embedding  # (B, D)
-        else:
-            if condition is not None:
-                raise ValueError("Conditioning was provided but DiT has no conditioning embedding module.")
-            c = t  # (B, D)
+        # Compute conditioning embedding
+        c = self.conditioning_embedder(t, condition=condition)  # (B, D)
         
         for block in self.blocks:
-            x = block(x, c, p_dropout=p_dropout, attn_kwargs={**self.attn_kwargs_forward, **(attn_kwargs or {})})  # (B, L, D)
+            x = block(x, c, p_dropout=p_dropout, attn_kwargs={**self.attn_kwargs_forward, **attn_kwargs})  # (B, L, D)
 
         # De-tokenize: (B, L, D) -> (B, C, H, W)
         if self.force_tokenization_fp32:

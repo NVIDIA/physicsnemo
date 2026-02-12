@@ -42,6 +42,7 @@ from omegaconf import DictConfig, OmegaConf
 from physicsnemo.utils.memory import unified_gpu_memory
 
 import torchinfo
+import torch
 import torch.distributed as dist
 from torch.distributed.fsdp import fully_shard
 from torch.distributed.tensor import distribute_module

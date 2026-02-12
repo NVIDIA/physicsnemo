@@ -15,9 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BaseAffinePreconditioner` for preconditioning schemes using affine
   transformations. Existing preconditioners (`VPPrecond`, `VEPrecond`,
   `iDDPMPrecond`, `EDMPrecond`) reimplemented based on this new interface.
-- New `SO2Convolution` layer in `physicsnemo.experimental.nn.symmetry` using
-  grid-based layout for efficient GPU parallelization. The new implementation
-  uses a single vectorized einsum operation instead of per-m-order loops.
+- New `physicsnemo.experimental.nn.symmetry` module that implements building
+  blocks that preserve 2D and 3D rotational equivariance using a
+  grid-based layout for efficient GPU parallelization, and an emphasis on
+  compact `einsum` operations.
 
 ### Changed
 
@@ -29,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 ### Fixed
+
+- Shape mistmatch bug in the Lennard Jones example
 
 ### Security
 

@@ -590,9 +590,9 @@ class SongUNet(Module):
             if self.embedding_type != "zero":
                 # Mapping.
                 emb = self.map_noise(noise_labels)
-                emb = (
-                    emb.reshape(emb.shape[0], 2, -1).flip(1).reshape(*emb.shape)
-                )  # swap sin/cos
+                emb_shape = emb.shape
+                emb = emb.reshape(emb.shape[0], 2, -1)  # swap sin/cos
+                emb = torch.concat([emb[:, 1:], emb[:, :1]], dim=1).reshape(*emb_shape)
                 if self.map_label is not None:
                     tmp = class_labels
                     if self.training and self.label_dropout:
