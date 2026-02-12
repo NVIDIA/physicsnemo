@@ -283,7 +283,9 @@ if natten.available and wrapt.available:
         # Get kernel parameters (keep explicit); pass remaining kwargs through to na2d
         dilation = kwargs.get("dilation", 1)
         kernel_size = kwargs["kernel_size"]
-        na2d_kwargs = {k: v for k, v in kwargs.items() if k not in ("kernel_size", "dilation")}
+        na2d_kwargs = {
+            k: v for k, v in kwargs.items() if k not in ("kernel_size", "dilation")
+        }
 
         if all([isinstance(_t, torch.Tensor) for _t in (q, k, v)]):
             return wrapped(*args, **kwargs)
