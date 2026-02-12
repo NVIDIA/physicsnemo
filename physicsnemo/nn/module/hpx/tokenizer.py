@@ -168,6 +168,7 @@ class HEALPixPatchDetokenizer(nn.Module):
     HEALPix patch detokenizer for DiT integration.
 
     Upsamples HEALPix patch tokens back to the full-resolution grid using a transpose convolution.
+    Requires input tokens in HEALPIX_PAD_XY pixel order, and outputs in the same pixel order.
 
     Parameters
     ----------
@@ -349,4 +350,4 @@ class CalendarEmbedding(nn.Module):
         doy = day_of_year.unsqueeze(2)
         b = self.embed_day((doy / 365.25) % 1)
         a, b = torch.broadcast_tensors(a, b)
-        return torch.concat([a, b], dim=1)  # (b c x)
+        return torch.concat([a, b], dim=1)
