@@ -317,9 +317,11 @@ class TestSO2Convolution:
         for l in range(lmax + 1):  # noqa: E741
             for m in range(mmax + 1):
                 if not mask[l, m]:
-                    assert torch.allclose(
-                        y[:, l, m, :, :], torch.zeros_like(y[:, l, m, :, :])
-                    ), f"Invalid position (l={l}, m={m}) is not zero in output"
+                    torch.testing.assert_close(
+                        y[:, l, m, :, :],
+                        torch.zeros_like(y[:, l, m, :, :]),
+                        msg=f"Invalid position (l={l}, m={m}) is not zero in output",
+                    )
 
     def test_m0_imaginary_zero(
         self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
@@ -359,8 +361,10 @@ class TestSO2Convolution:
 
         # Check m=0 imaginary is zero for all l
         m0_imaginary = y[:, :, 0, 1, :]  # batch, l, imaginary, channels
-        assert torch.allclose(m0_imaginary, torch.zeros_like(m0_imaginary)), (
-            "m=0 imaginary component should be zero"
+        torch.testing.assert_close(
+            m0_imaginary,
+            torch.zeros_like(m0_imaginary),
+            msg="m=0 imaginary component should be zero",
         )
 
     def test_backward_pass(
@@ -440,7 +444,9 @@ class TestSO2Convolution:
             y1 = conv(x)
             y2 = conv(x)
 
-        assert torch.allclose(y1, y2, atol=1e-6), "Output should be deterministic"
+        torch.testing.assert_close(
+            y1, y2, atol=1e-6, rtol=0, msg="Output should be deterministic"
+        )
 
     def test_so2_equivariance(self, dtype: torch.dtype, device: str) -> None:
         """Key symmetry test: rotation around z commutes with conv.
@@ -514,9 +520,13 @@ class TestSO2Convolution:
             else:
                 rtol, atol = 1e-10, 1e-10
 
-            assert torch.allclose(y1, y2, rtol=rtol, atol=atol), (
-                f"SO(2) equivariance violated at phi={phi:.3f}: "
-                f"max diff={torch.abs(y1 - y2).max().item():.2e}"
+            torch.testing.assert_close(
+                y1,
+                y2,
+                rtol=rtol,
+                atol=atol,
+                msg=f"SO(2) equivariance violated at phi={phi:.3f}: "
+                f"max diff={torch.abs(y1 - y2).max().item():.2e}",
             )
 
     def test_edge_modulation(self, dtype: torch.dtype, device: str) -> None:
@@ -636,9 +646,11 @@ class TestSO2Convolution:
                         assert gate_slice.shape == (batch_size, expected_gate_channels)
                     else:
                         # All other positions should be zero
-                        assert torch.allclose(
-                            gate_slice, torch.zeros_like(gate_slice)
-                        ), f"Gate channels should be zero at (l={l}, m={m}, ri={ri})"
+                        torch.testing.assert_close(
+                            gate_slice,
+                            torch.zeros_like(gate_slice),
+                            msg=f"Gate channels should be zero at (l={l}, m={m}, ri={ri})",
+                        )
 
     def test_produce_gates_false(self, dtype: torch.dtype, device: str) -> None:
         """Verify produce_gates=False gives standard output without gate channels.
@@ -771,11 +783,19 @@ class TestSO2Convolution:
         rtol = 1e-3 if dtype == torch.float32 else 1e-10
         atol = 1e-3 if dtype == torch.float32 else 1e-10
 
-        assert torch.allclose(y_batch[0], y0[0], rtol=rtol, atol=atol), (
-            "Batch processing should match individual processing for sample 0"
+        torch.testing.assert_close(
+            y_batch[0],
+            y0[0],
+            rtol=rtol,
+            atol=atol,
+            msg="Batch processing should match individual processing for sample 0",
         )
-        assert torch.allclose(y_batch[1], y1[0], rtol=rtol, atol=atol), (
-            "Batch processing should match individual processing for sample 1"
+        torch.testing.assert_close(
+            y_batch[1],
+            y1[0],
+            rtol=rtol,
+            atol=atol,
+            msg="Batch processing should match individual processing for sample 1",
         )
 
     def test_edge_modulation_does_not_preserve_equivariance(
@@ -867,8 +887,10 @@ class TestSO2Convolution:
         assert torch.isfinite(y1).all(), "Output contains non-finite values"
 
         # m=0 imaginary should still be zero
-        assert torch.allclose(y1[:, :, 0, 1, :], torch.zeros_like(y1[:, :, 0, 1, :])), (
-            "m=0 imaginary should be zero"
+        torch.testing.assert_close(
+            y1[:, :, 0, 1, :],
+            torch.zeros_like(y1[:, :, 0, 1, :]),
+            msg="m=0 imaginary should be zero",
         )
 
     def test_edge_modulation_backward(self, dtype: torch.dtype, device: str) -> None:
@@ -1018,15 +1040,17 @@ class TestHardcodedRegression:
         with torch.no_grad():
             y2 = conv(x2)
 
-        assert torch.allclose(y, y2), "Forward pass should be deterministic"
+        torch.testing.assert_close(y, y2, msg="Forward pass should be deterministic")
 
         # Verify output properties
         assert y.shape == (batch_size, lmax + 1, mmax + 1, 2, out_channels)
         assert torch.isfinite(y).all(), "Output contains non-finite values"
 
         # Check m=0 imaginary is zero
-        assert torch.allclose(y[:, :, 0, 1, :], torch.zeros_like(y[:, :, 0, 1, :])), (
-            "m=0 imaginary should be zero"
+        torch.testing.assert_close(
+            y[:, :, 0, 1, :],
+            torch.zeros_like(y[:, :, 0, 1, :]),
+            msg="m=0 imaginary should be zero",
         )
 
     def test_regression_lmax4_mmax2_backward(self) -> None:
@@ -1095,7 +1119,9 @@ class TestHardcodedRegression:
         loss2 = y2.sum()
         loss2.backward()
 
-        assert torch.allclose(x.grad, x2.grad), "Backward pass should be deterministic"
+        torch.testing.assert_close(
+            x.grad, x2.grad, msg="Backward pass should be deterministic"
+        )
 
 
 # =============================================================================
@@ -1267,8 +1293,12 @@ class TestTorchCompile:
 
         rtol = 1e-4 if dtype == torch.float32 else 1e-8
         atol = 1e-5 if dtype == torch.float32 else 1e-10
-        assert torch.allclose(y_eager, y_compiled, rtol=rtol, atol=atol), (
-            "Compiled output should match eager output"
+        torch.testing.assert_close(
+            y_eager,
+            y_compiled,
+            rtol=rtol,
+            atol=atol,
+            msg="Compiled output should match eager output",
         )
 
 
@@ -1323,8 +1353,10 @@ class TestIntegration:
         assert y.shape == (batch_size, lmax + 1, mmax + 1, 2, out_channels)
 
         # Check m=0 imaginary is zero
-        assert torch.allclose(y[:, :, 0, 1, :], torch.zeros_like(y[:, :, 0, 1, :])), (
-            "Final m=0 imaginary should be zero"
+        torch.testing.assert_close(
+            y[:, :, 0, 1, :],
+            torch.zeros_like(y[:, :, 0, 1, :]),
+            msg="Final m=0 imaginary should be zero",
         )
 
     @pytest.mark.parametrize("batch_size", [1, 10, 100, 1000])
