@@ -42,20 +42,12 @@ def split_by_node_equal(
     g_world = world_size * num_workers      # Total number of global workers.
 
     it = iter(src)
-    while True:
-        chunk = list(itertools.islice(it, g_world))
+    for chunk in iter(lambda: list(itertools.islice(it, g_world)), []):
         n = len(chunk)
-
-        if n == 0:
-            break  # No more data.
-
         if n < g_world:  # Tail chunk.
-            if drop_last:
-                break
-            if g_worker < n:
+            if not drop_last and g_worker < n:
                 yield chunk[g_worker]
-            break  # Tail handled.
-
+            return
         yield chunk[g_worker]
 
 
