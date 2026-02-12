@@ -53,13 +53,12 @@ def prepare_data(
             arrays[k] = np.array(v)
 
         invar = arrays["u"][
-            input_nr_tsteps : input_nr_tsteps + predict_nr_tsteps,
+            0:input_nr_tsteps,
             ...,
             start_idx : start_idx + num_samples,
         ]
         outvar = arrays["u"][
-            input_nr_tsteps + predict_nr_tsteps : input_nr_tsteps
-            + 2 * predict_nr_tsteps,
+            input_nr_tsteps : input_nr_tsteps + predict_nr_tsteps,
             ...,
             start_idx : start_idx + num_samples,
         ]
