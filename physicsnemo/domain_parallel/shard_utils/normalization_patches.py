@@ -155,26 +155,22 @@ class PartialGroupNorm(torch.autograd.Function):
 
         broadcast_shape = (N, num_groups, -1)
 
-        scale_factor = (global_rstd / rstd).reshape(broadcast_shape)
+        scale_factor = (global_rstd / rstd).view(broadcast_shape)
 
         # Correct to the globally normalized output:
         local_output = (
-            local_output.reshape(broadcast_shape)
-            - global_mean.reshape(broadcast_shape)
-            + mean.reshape(broadcast_shape)
+            local_output.view(broadcast_shape)
+            - global_mean.view(broadcast_shape)
+            + mean.view(broadcast_shape)
         ) * scale_factor
 
-        local_output = local_output.reshape(original_shape)
+        local_output = local_output.view(original_shape)
 
         # Now, apply the weight and
         if weight is not None:
-            local_output = local_output * weight.reshape(
-                1, -1, *([1] * (input.dim() - 2))
-            )
+            local_output = local_output * weight.view(1, -1, *([1] * (input.dim() - 2)))
         if bias is not None:
-            local_output = local_output + bias.reshape(
-                1, -1, *([1] * (input.dim() - 2))
-            )
+            local_output = local_output + bias.view(1, -1, *([1] * (input.dim() - 2)))
 
         ctx.save_for_backward(input, weight, bias)
         ctx.global_mean = global_mean
