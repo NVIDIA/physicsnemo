@@ -14,9 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Model architectures used in the paper Diffusion models beat gans on image synthesis".
-"""
 
 from dataclasses import dataclass
 from typing import List
@@ -53,51 +50,54 @@ class MetaData(ModelMetaData):
 
 
 class TopoDiff(Module):
-    """
-    Reimplementation of the ADM architecture, a U-Net variant, with optional
-    self-attention.
+    r"""
+    Reimplementation of the ADM U-Net architecture with optional self-attention.
 
-    This model supports conditional and unconditional setups, as well as several
-    options for various internal architectural choices such as encoder and decoder
-    type, embedding type, etc., making it flexible and adaptable to different tasks
-    and configurations.
-
-    Parameters:
-    -----------
+    Parameters
+    ----------
     img_resolution : int
-        The resolution of the input/output image.
+        Resolution :math:`H=W` of input/output images.
     in_channels : int
-        Number of channels in the input image.
+        Number of input channels.
     out_channels : int
-        Number of channels in the output image.
-    label_dim : int, optional
-        Number of class labels; 0 indicates an unconditional model. By default 0.
-    augment_dim : int, optional
-        Dimensionality of augmentation labels; 0 means no augmentation. By default 0.
-    model_channels : int, optional
-        Base multiplier for the number of channels across the network, by default 192.
-    channel_mult : List[int], optional
-        Per-resolution multipliers for the number of channels. By default [1,2,3,4].
-    channel_mult_emb : int, optional
-        Multiplier for the dimensionality of the embedding vector. By default 4.
-    num_blocks : int, optional
-        Number of residual blocks per resolution. By default 3.
-    attn_resolutions : List[int], optional
-        Resolutions at which self-attention layers are applied. By default [32, 16, 8].
-    dropout : float, optional
-        Dropout probability applied to intermediate activations. By default 0.10.
-    label_dropout : float, optional
-       Dropout probability of class labels for classifier-free guidance. By default 0.0.
+        Number of output channels.
+    label_dim : int, optional, default=0
+        Number of class labels; ``0`` indicates an unconditional model.
+    augment_dim : int, optional, default=0
+        Dimensionality of augmentation labels; ``0`` means no augmentation.
+    model_channels : int, optional, default=128
+        Base channel multiplier across the network.
+    channel_mult : List[int], optional, default=[1, 1, 1, 1]
+        Per-resolution channel multipliers.
+    channel_mult_emb : int, optional, default=4
+        Multiplier for embedding dimensionality.
+    num_blocks : int, optional, default=2
+        Number of residual blocks per resolution.
+    attn_resolutions : List[int], optional, default=[16, 8]
+        Resolutions at which self-attention is applied.
+    dropout : float, optional, default=0.10
+        Dropout probability.
+    label_dropout : float, optional, default=0.0
+        Classifier-free guidance label dropout probability.
 
-    Note:
-    -----
-    Reference: Dhariwal, P. and Nichol, A., 2021. Diffusion models beat gans on image
-    synthesis. Advances in neural information processing systems, 34, pp.8780-8794.
+    Forward
+    -------
+    x : torch.Tensor
+        Input image tensor of shape :math:`(N, C_{in}, H, W)`.
+    cons : torch.Tensor
+        Constraint tensor concatenated along channels, shape :math:`(N, C_{cons}, H, W)`.
+    timesteps : torch.Tensor
+        1D tensor of timesteps of shape :math:`(N,)`.
 
-    Note:
+    Outputs
+    -------
+    torch.Tensor
+        Output image tensor of shape :math:`(N, C_{out}, H, W)`.
+
+    Notes
     -----
-    Equivalent to the original implementation by Dhariwal and Nichol, available at
-    https://github.com/openai/guided-diffusion
+    Reference: `Diffusion models beat GANs on image synthesis <https://arxiv.org/abs/2105.05233>`_.
+    Based on the original implementation in `openai/guided-diffusion <https://github.com/openai/guided-diffusion>`_.
     """
 
     def __init__(
@@ -218,6 +218,20 @@ class TopoDiff(Module):
         )
 
     def forward(self, x, cons, timesteps):
+        if not torch.compiler.is_compiling():
+            if x.ndim != 4 or cons.ndim != 4:
+                raise ValueError(
+                    f"Expected 4D tensors for x and cons, got {tuple(x.shape)} and {tuple(cons.shape)}"
+                )
+            if x.shape[0] != cons.shape[0] or x.shape[2:] != cons.shape[2:]:
+                raise ValueError(
+                    "x and cons must have matching batch and spatial dims "
+                    f"(got x{tuple(x.shape)}, cons{tuple(cons.shape)})"
+                )
+            if timesteps.ndim != 1 or timesteps.shape[0] != x.shape[0]:
+                raise ValueError(
+                    f"Expected timesteps of shape (N,), got {tuple(timesteps.shape)}"
+                )
         # Mapping.
         emb = self.map_noise(timesteps)
 
@@ -242,9 +256,7 @@ class TopoDiff(Module):
 
 
 class UNetEncoder(Module):
-    """
-    U-Net encoder for TopoDiff.
-    """
+    r"""U-Net encoder for TopoDiff."""
 
     def __init__(
         self,
@@ -324,11 +336,13 @@ class UNetEncoder(Module):
             self.out.append(nn.Sigmoid())
 
     def forward(self, x, time_steps):
-        """
-        param x: an [N x C x H x W] Tensor of inputs
-        param time_steps: a 1-D batch of timesteps
-        return: an [N x K] tensor of products
-        """
+        if not torch.compiler.is_compiling():
+            if x.ndim != 4:
+                raise ValueError(f"Expected 4D input tensor, got {tuple(x.shape)}")
+            if time_steps.ndim != 1 or time_steps.shape[0] != x.shape[0]:
+                raise ValueError(
+                    f"Expected time_steps of shape (N,), got {tuple(time_steps.shape)}"
+                )
         emb = self.time_embed(self.map_noise(time_steps))
 
         h = self.conv(x)
