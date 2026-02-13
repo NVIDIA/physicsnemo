@@ -32,7 +32,8 @@ def _setup_healda(
     """
     in_channels = 2
     out_channels = 8
-    level_in = 6
+    level_in = 4
+    level_model = 3
     npix = 12 * 4**level_in
     nsensors = 2
     nchannel_per_sensor = [4, 3]
@@ -48,6 +49,8 @@ def _setup_healda(
         hidden_size=64,
         num_layers=1,
         num_heads=2,
+        level_in=level_in,
+        level_model=level_model,
         time_length=time_length,
         embed_dim=16,
         fusion_dim=32,

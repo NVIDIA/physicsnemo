@@ -101,7 +101,7 @@ def test_split_by_sensor():
             counts,
             nchannel_per_sensor=[4, 3, 2],
             nplatform_per_sensor=[3, 2, 1],
-            npix=12 * 4**6,
+            npix=12 * 4**3,
             meta_dim=4,
         )
     )
@@ -133,7 +133,7 @@ def test_split_by_sensor():
 def test_sensor_embedder_forward_and_gradients(device, nobs):
     torch.manual_seed(0)
     b, t = 2, 1
-    npix = 12 * 4**5
+    npix = 12 * 4**3
     out_dim = 32
     meta_dim = 4
     nchannel = 8
@@ -187,7 +187,7 @@ def test_sensor_embedder_forward_and_gradients(device, nobs):
 @pytest.mark.parametrize("counts", [[[[3], [2]], [[1], [4]]], [[[0], [0]], [[0], [0]]]])
 def test_multisensor_obs_embedding_forward_and_gradients(device, counts):
     torch.manual_seed(0)
-    npix = 12 * 4**5
+    npix = 12 * 4**3
     meta_dim = 4
     fusion_dim = 32
     nchannel_per_sensor = [7, 5]
@@ -235,7 +235,7 @@ def test_multisensor_obs_embedding_forward_and_gradients(device, counts):
 def test_multisensor_obs_embedding_forward_accuracy(device):
     """Regression test for MultiSensorObsEmbedder forward output."""
     torch.manual_seed(0)
-    npix = 12 * 4**5
+    npix = 12 * 4**3
     meta_dim = 4
     fusion_dim = 32
     nchannel_per_sensor = [7, 5]
