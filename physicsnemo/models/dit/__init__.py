@@ -14,50 +14,52 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
+"""Diffusion Transformer (DiT) model and components."""
 
-from physicsnemo.core.warnings import LegacyFeatureWarning
-from physicsnemo.models.dit import (
+from .conditioning_embedders import (
     ConditioningEmbedder,
     ConditioningEmbedderType,
-    DiT,
-    DiTBlock,
     DiTConditionEmbedder,
     EDMConditionEmbedder,
+    ZeroConditioningEmbedder,
+    get_conditioning_embedder,
+)
+from .dit import DiT
+from .layers import (
+    AttentionModuleBase,
+    DetokenizerModuleBase,
+    DiTBlock,
     Natten2DSelfAttention,
     PatchEmbed2DTokenizer,
+    PerSampleDropout,
     ProjLayer,
     ProjReshape2DDetokenizer,
     TESelfAttention,
     TimmSelfAttention,
-    ZeroConditioningEmbedder,
+    TokenizerModuleBase,
     get_attention,
-    get_conditioning_embedder,
     get_detokenizer,
     get_layer_norm,
     get_tokenizer,
 )
 
-warnings.warn(
-    "Importing DiT from 'physicsnemo.experimental.models.dit' is deprecated. "
-    "Please import from 'physicsnemo.models.dit' instead.",
-    LegacyFeatureWarning,
-    stacklevel=2,
-)
-
 __all__ = [
+    "AttentionModuleBase",
     "ConditioningEmbedder",
     "ConditioningEmbedderType",
+    "DetokenizerModuleBase",
     "DiT",
     "DiTBlock",
     "DiTConditionEmbedder",
     "EDMConditionEmbedder",
     "Natten2DSelfAttention",
     "PatchEmbed2DTokenizer",
+    "PerSampleDropout",
     "ProjLayer",
     "ProjReshape2DDetokenizer",
     "TESelfAttention",
     "TimmSelfAttention",
+    "TokenizerModuleBase",
     "ZeroConditioningEmbedder",
     "get_attention",
     "get_conditioning_embedder",

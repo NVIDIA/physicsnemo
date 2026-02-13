@@ -281,12 +281,12 @@ class BaseAffinePreconditioner(Module, ABC):
 
     **Example: Wrapping DiT**
 
-    The :class:`~physicsnemo.experimental.models.dit.DiT` model has
+    The :class:`~physicsnemo.models.dit.DiT` model has
     the signature ``forward(x, t, condition, ...)``. We wrap it to support
     both image conditioning (via channel concatenation) and vector
     conditioning:
 
-    >>> from physicsnemo.experimental.models.dit import DiT
+    >>> from physicsnemo.models.dit import DiT
     >>> class DiTWrapper(Module):
     ...     def __init__(self, img_channels, cond_channels, cond_dim, **kwargs):
     ...         super().__init__()
@@ -346,7 +346,7 @@ class BaseAffinePreconditioner(Module, ABC):
     >>> out.shape
     torch.Size([1, 3, 8, 8])
 
-    The same wrapper can be used with :class:`~physicsnemo.experimental.models.dit.DiT`
+    The same wrapper can be used with :class:`~physicsnemo.models.dit.DiT`
     backbones as well, with ``cond_vec`` passed to the model's ``condition`` argument.
     """
 
