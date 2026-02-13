@@ -56,29 +56,27 @@ def _process_stl(path_str: str) -> tuple[str, np.ndarray | None, str | None]:
     
     try:
         # Load STL file using PyVista
+        # PyVista merges all solids in STL files into a single PolyData mesh
         pv_mesh = pv.read(str(path))
         
-        # Handle multi-block datasets (e.g., multiple meshes in one file)
+        # STL files should always return PolyData, not MultiBlock
+        # If we get MultiBlock, something unexpected happened
         if isinstance(pv_mesh, pv.MultiBlock):
-            # Extract first mesh from multi-block
-            if len(pv_mesh) == 0:
-                raise ValueError("Multi-block dataset is empty")
-            pv_mesh = pv_mesh[0]
+            raise ValueError(
+                f"Unexpected MultiBlock returned from STL file {path.name}. "
+                f"STL files should return PolyData. This may indicate a file format issue."
+            )
         
         # Check if mesh has any points before conversion
         if pv_mesh.n_points == 0:
             raise ValueError("Mesh has no points")
         
-        # Check if mesh has faces (for surface meshes)
-        # PyVista meshes loaded from STL should have faces
-        if hasattr(pv_mesh, 'n_faces') and pv_mesh.n_faces == 0:
-            # Try to extract faces from cells if available
-            if hasattr(pv_mesh, 'n_cells') and pv_mesh.n_cells == 0:
-                raise ValueError("Mesh has no faces or cells")
+        # Check if mesh has cells (faces)
+        if hasattr(pv_mesh, 'n_cells') and pv_mesh.n_cells == 0:
+            raise ValueError("Mesh has no cells")
         
         # Convert PyVista mesh to physicsnemo.mesh.Mesh
         # STL files are surface meshes (2D manifolds in 3D space)
-        # from_pyvista will automatically triangulate if needed
         mesh = from_pyvista(pv_mesh, manifold_dim=2)
         
         # Verify mesh has cells after conversion
@@ -97,8 +95,8 @@ def _process_stl(path_str: str) -> tuple[str, np.ndarray | None, str | None]:
         
         return path.name, feat, None
     except Exception as e:
-        # Include more context in error message for debugging
-        error_msg = f"{type(e).__name__}: {str(e)}"
+        # Include filename in error message for better debugging
+        error_msg = f"{path.name}: {type(e).__name__}: {str(e)}"
         return path.name, None, error_msg
 
 
@@ -106,7 +104,6 @@ def _process_stl(path_str: str) -> tuple[str, np.ndarray | None, str | None]:
 def load_features_from_dir(
     stl_dir: Path,
     n_workers: int | None = None,
-    chunksize: int = 8,
 ) -> tuple[list[np.ndarray], list[str]]:
     r"""
     Load and featurize all STL files in a directory using multiprocessing.
@@ -127,9 +124,6 @@ def load_features_from_dir(
     n_workers : int or None, optional
         Number of worker processes to use. If ``None``, defaults to
         ``cpu_count() - 1`` to leave one core available. Default is ``None``.
-    chunksize : int, optional
-        Number of files to process per worker task. Larger values reduce
-        communication overhead but may cause load imbalance. Default is 8.
 
     Returns
     -------
@@ -154,14 +148,14 @@ def load_features_from_dir(
     if n_workers is None:
         n_workers = max(1, mp.cpu_count() - 1)
 
-    # Prepare arguments for worker function (just paths, no device)
+    # Prepare arguments for worker function
     tasks = paths
 
     # Use spawn context for cross-platform compatibility
     ctx = mp.get_context("spawn")
     with ctx.Pool(processes=n_workers) as pool:
         # Process files in parallel with unordered results
-        for name, feat, err in pool.map(_process_stl, tasks, chunksize=chunksize):
+        for name, feat, err in pool.map(_process_stl, tasks):
             if err is None:
                 feats.append(feat)
                 names.append(name)
@@ -178,13 +172,10 @@ def load_features_from_dir(
     # Report skipped files if any
     if errors:
         print(f"[geometry guardrail] Skipped {len(errors)} invalid geometries")
-        # Print error summary for debugging
-        from collections import Counter
-        error_types = Counter(err.split(":")[0] for err in errors)
-        print(f"[geometry guardrail] Error breakdown: {dict(error_types)}")
-        # Print first few unique errors for debugging
-        unique_errors = list(dict.fromkeys(errors))[:5]
-        for i, err in enumerate(unique_errors, 1):
-            print(f"[geometry guardrail]   Example error {i}: {err}")
+        # Print first few errors with filenames for debugging
+        for err in errors[:5]:
+            print(f"[geometry guardrail]   {err}")
+        if len(errors) > 5:
+            print(f"[geometry guardrail]   ... and {len(errors) - 5} more")
 
     return feats, names

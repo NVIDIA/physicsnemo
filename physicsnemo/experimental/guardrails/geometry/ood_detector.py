@@ -78,8 +78,8 @@ class GeometryGuardrail:
         For PCE only: If True, only include interaction terms (no pure higher powers).
         Default is False.
     random_state : int or None, optional
-        Random seed for reproducible initialization. Use ``None`` for
-        non-deterministic behavior. Default is 0.
+        Random seed for reproducible initialization. If None, uses non-deterministic
+        behavior. Default is None.
     device : str or torch.device, optional
         Device to use for density model computations and feature tensors. Options:
         - ``"cpu"``: Use CPU (default)
@@ -117,14 +117,18 @@ class GeometryGuardrail:
     >>> 
     >>> # Create and fit guardrail from training meshes (CPU)
     >>> train_meshes = [from_pyvista(pv.Cube()) for _ in range(100)]
-    >>> guardrail = GeometryGuardrail(gmm_components=1, device="cpu")
+    >>> guardrail = GeometryGuardrail(gmm_components=1, device="cpu", random_state=42)
     >>> guardrail.fit(train_meshes)
     >>> 
     >>> # Query new geometries
     >>> test_meshes = [from_pyvista(pv.Sphere()), from_pyvista(pv.Cylinder())]
     >>> results = guardrail.query(test_meshes)
-    >>> for res in results:
-    ...     print(f"Status: {res['status']}, Percentile: {res['percentile']:.1f}")
+    >>> len(results)
+    2
+    >>> results[0]["status"] in ["OK", "WARN", "REJECT"]
+    True
+    >>> 0 <= results[0]["percentile"] <= 100
+    True
 
     Notes
     -----
@@ -285,7 +289,7 @@ class GeometryGuardrail:
             with ``.stl`` extension are processed.
         **loader_kwargs
             Additional keyword arguments passed to :func:`load_features_from_dir`.
-            Common options include ``n_workers`` and ``chunksize``.
+            Common options include ``n_workers``.
 
         Raises
         ------
@@ -410,7 +414,7 @@ class GeometryGuardrail:
             extension are processed.
         **loader_kwargs
             Additional keyword arguments passed to :func:`load_features_from_dir`.
-            Common options include ``n_workers`` and ``chunksize``.
+            Common options include ``n_workers``.
 
         Returns
         -------
@@ -528,20 +532,21 @@ class GeometryGuardrail:
         # Get density model state
         density_state = self.density.get_state()
 
+        # Filter out None values to avoid object arrays that require pickle
+        # None values will be restored as None during loading
+        density_state_clean = {k: v for k, v in density_state.items() if v is not None}
+
+        # Unpack density_state directly into npz to avoid nested dicts and pickle
+        # This saves each key-value pair as a separate array in the npz file
+        # Save feature_names as Unicode string array (not object array) to avoid pickle
         np.savez(
             path,
-            density_state=density_state,
+            **density_state_clean,  # Unpack all density state keys (None values excluded)
             warn_pct=self.warn_pct,
             reject_pct=self.reject_pct,
-            feature_names=np.array(self.feature_names, dtype=object),
+            feature_names=np.array(self.feature_names, dtype='U100'),  # Unicode string array, no pickle needed
             feature_version=self.feature_version,
             feature_hash=self.feature_hash,
-            method=self.method,
-            gmm_components=self.gmm_components,
-            pce_components=self.pce_components,
-            poly_degree=self.poly_degree,
-            interaction_only=self.interaction_only,
-            random_state=self.random_state,
         )
 
     @classmethod
@@ -602,7 +607,7 @@ class GeometryGuardrail:
         --------
         :meth:`save` : Save a fitted guardrail to disk.
         """
-        data = np.load(path, allow_pickle=True)
+        data = np.load(path, allow_pickle=False)
 
         # Check feature version compatibility
         if data["feature_version"] != FEATURE_VERSION:
@@ -626,23 +631,65 @@ class GeometryGuardrail:
                 f"uses a different feature extraction implementation"
             )
 
-        # Reconstruct guardrail
-        # Extract all parameters
-        method = str(data.get("method", "gmm"))
-        gmm_components = int(data.get("gmm_components", 1))
-        pce_components_raw = data.get("pce_components", None)
-        if pce_components_raw is not None:
-            try:
-                if hasattr(pce_components_raw, 'item'):
-                    pce_components_raw = pce_components_raw.item()
-            except (ValueError, AttributeError):
-                pass
-            pce_components = None if pce_components_raw is None else int(pce_components_raw)
-        else:
-            pce_components = None
-        poly_degree = int(data.get("poly_degree", 2))
-        interaction_only = bool(data.get("interaction_only", False))
-        random_state = data.get("random_state", 0)
+        # Reconstruct density state dict from flattened npz keys
+        # All density state keys are saved directly in the npz file
+        # Required base keys (must be present)
+        required_keys = ["method", "ref_scores"]
+        # Optional base keys (may be None and excluded during save)
+        optional_keys = ["gmm_components", "pce_components", "poly_degree", "interaction_only", "random_state"]
+        
+        # Extract method first (required)
+        if "method" not in data:
+            raise RuntimeError("Missing required key 'method' in saved file")
+        method = str(data["method"])
+        prefix = f"{method}_"
+        
+        # Reconstruct density_state dict
+        density_state = {}
+        # Add required keys (must be present)
+        for key in required_keys:
+            if key not in data:
+                raise RuntimeError(f"Missing required key '{key}' in saved file")
+            value = data[key]
+            # Handle scalar values that might be numpy scalars
+            if hasattr(value, 'item') and value.ndim == 0:
+                value = value.item()
+            density_state[key] = value
+        
+        # Add optional keys (missing keys were None and excluded during save)
+        for key in optional_keys:
+            if key in data:
+                value = data[key]
+                # Handle scalar values that might be numpy scalars
+                if hasattr(value, 'item') and value.ndim == 0:
+                    value = value.item()
+                density_state[key] = value
+            else:
+                # Key was missing, it was None and excluded during save
+                density_state[key] = None
+        
+        # Add method-prefixed keys (all keys starting with "gmm_" or "pce_")
+        # Missing keys in PCE state (like pce_poly_mean_ if None) are handled in set_state
+        for key in list(data.keys()):  # Convert to list to avoid modification during iteration
+            if key.startswith(prefix):
+                value = data[key]
+                # Handle scalar values that might be numpy scalars
+                if hasattr(value, 'item') and value.ndim == 0:
+                    value = value.item()
+                density_state[key] = value
+        
+        # Extract parameters for guardrail constructor
+        # Handle None values that were excluded during saving
+        method = str(density_state["method"])
+        gmm_components_raw = density_state.get("gmm_components", 1)
+        gmm_components = 1 if gmm_components_raw is None else int(gmm_components_raw)
+        pce_components_raw = density_state.get("pce_components", None)
+        pce_components = None if pce_components_raw is None else int(pce_components_raw)
+        poly_degree_raw = density_state.get("poly_degree", 2)
+        poly_degree = 2 if poly_degree_raw is None else int(poly_degree_raw)
+        interaction_only_raw = density_state.get("interaction_only", False)
+        interaction_only = False if interaction_only_raw is None else bool(interaction_only_raw)
+        random_state = density_state.get("random_state", 0)
         if random_state is not None:
             random_state = int(random_state)
         
@@ -658,8 +705,7 @@ class GeometryGuardrail:
             device=device,
         )
 
-        # Restore density model state
-        density_state = data["density_state"].item()
+        # Restore density model state (now flattened, no nested dicts)
         obj.density.set_state(density_state, device=obj.device)
 
         return obj

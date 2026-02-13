@@ -23,24 +23,49 @@ import torch
 from physicsnemo.experimental.guardrails.geometry import GeometryDensityModel
 
 
-def test_density_model_constructor():
-    """Test GeometryDensityModel constructor."""
-    model = GeometryDensityModel(
-        method="gmm",
-        gmm_components=2,
-        random_state=42,
-    )
+@pytest.mark.parametrize(
+    "method,components,expected_attr",
+    [
+        ("gmm", {"gmm_components": 2}, "gmm_components"),
+        ("pce", {"pce_components": 5}, "pce_components"),
+    ],
+)
+def test_density_model_constructor(method, components, expected_attr):
+    """Test GeometryDensityModel constructor with both methods."""
+    model = GeometryDensityModel(method=method, random_state=42, **components)
 
-    assert model.gmm_components == 2
+    assert getattr(model, expected_attr) == components[expected_attr]
     assert model.ref_scores is None
 
 
-def test_density_model_fit():
-    """Test fitting the density model."""
+@pytest.mark.parametrize(
+    "method,components",
+    [
+        ("gmm", {"gmm_components": 1}),
+        ("pce", {"pce_components": 5}),
+    ],
+)
+@pytest.mark.parametrize(
+    "device",
+    [
+        pytest.param("cpu", id="cpu"),
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA not available"
+            ),
+            id="cuda",
+        ),
+    ],
+)
+def test_density_model_fit(method, components, device):
+    """Test fitting the density model with both methods on CPU and GPU."""
     rng = np.random.RandomState(42)
     X = rng.randn(100, 22)
 
-    model = GeometryDensityModel(method="gmm", gmm_components=1, random_state=42)
+    model = GeometryDensityModel(
+        method=method, device=device, random_state=42, **components
+    )
     model.fit(X)
 
     # Check that model is fitted
@@ -55,13 +80,35 @@ def test_density_model_fit():
     assert np.isfinite(ref_scores_np).all()
 
 
-def test_density_model_score():
-    """Test anomaly scoring."""
+@pytest.mark.parametrize(
+    "method,components",
+    [
+        ("gmm", {"gmm_components": 1}),
+        ("pce", {"pce_components": 5}),
+    ],
+)
+@pytest.mark.parametrize(
+    "device",
+    [
+        pytest.param("cpu", id="cpu"),
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA not available"
+            ),
+            id="cuda",
+        ),
+    ],
+)
+def test_density_model_score(method, components, device):
+    """Test anomaly scoring with both methods on CPU and GPU."""
     rng = np.random.RandomState(42)
     X_train = rng.randn(100, 22)
     X_test = rng.randn(10, 22)
 
-    model = GeometryDensityModel(method="gmm", random_state=42)
+    model = GeometryDensityModel(
+        method=method, device=device, random_state=42, **components
+    )
     model.fit(X_train)
 
     scores = model.score(X_test)
@@ -70,15 +117,37 @@ def test_density_model_score():
     # Convert to numpy for assertions
     scores_np = scores.cpu().numpy() if hasattr(scores, "cpu") else scores
     assert np.isfinite(scores_np).all()
-    assert (scores_np >= 0).all()  # Negative log-likelihood should be non-negative
+    assert (scores_np >= 0).all()  # Scores should be non-negative
 
 
-def test_density_model_percentiles():
-    """Test percentile computation."""
+@pytest.mark.parametrize(
+    "method,components",
+    [
+        ("gmm", {"gmm_components": 1}),
+        ("pce", {"pce_components": 5}),
+    ],
+)
+@pytest.mark.parametrize(
+    "device",
+    [
+        pytest.param("cpu", id="cpu"),
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA not available"
+            ),
+            id="cuda",
+        ),
+    ],
+)
+def test_density_model_percentiles(method, components, device):
+    """Test percentile computation with both methods on CPU and GPU."""
     rng = np.random.RandomState(42)
     X_train = rng.randn(100, 22)
 
-    model = GeometryDensityModel(method="gmm", random_state=42)
+    model = GeometryDensityModel(
+        method=method, device=device, random_state=42, **components
+    )
     model.fit(X_train)
 
     # Score the training data itself
@@ -95,23 +164,52 @@ def test_density_model_percentiles():
     assert 40 < mean_pct < 60  # Should be around 50
 
 
-def test_density_model_percentiles_before_fit():
-    """Test that percentiles raises error before fitting."""
-    model = GeometryDensityModel(method="gmm")
+@pytest.mark.parametrize(
+    "method,components",
+    [
+        ("gmm", {"gmm_components": 1}),
+        ("pce", {"pce_components": 5}),
+    ],
+)
+def test_density_model_percentiles_before_fit(method, components):
+    """Test that percentiles raises error before fitting for both methods."""
+    model = GeometryDensityModel(method=method, **components)
     scores = np.array([1.0, 2.0, 3.0])
 
     with pytest.raises(RuntimeError, match="Density model not fitted"):
         model.percentiles(scores)
 
 
-def test_density_model_outlier_detection():
-    """Test that outliers get high percentiles."""
+@pytest.mark.parametrize(
+    "method,components",
+    [
+        ("gmm", {"gmm_components": 1}),
+        ("pce", {"pce_components": 5}),
+    ],
+)
+@pytest.mark.parametrize(
+    "device",
+    [
+        pytest.param("cpu", id="cpu"),
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA not available"
+            ),
+            id="cuda",
+        ),
+    ],
+)
+def test_density_model_outlier_detection(method, components, device):
+    """Test that outliers get high percentiles with both methods on CPU and GPU."""
     rng = np.random.RandomState(42)
 
     # Train on standard normal
     X_train = rng.randn(100, 22)
 
-    model = GeometryDensityModel(method="gmm", random_state=42)
+    model = GeometryDensityModel(
+        method=method, device=device, random_state=42, **components
+    )
     model.fit(X_train)
 
     # Test on inliers and outliers
@@ -129,14 +227,35 @@ def test_density_model_outlier_detection():
     assert pct_outlier[0] > 90  # Should be well above 90th percentile
 
 
-@pytest.mark.parametrize("gmm_components", [1, 2])
-def test_density_model_various_components(gmm_components):
-    """Test density model with various numbers of components."""
+@pytest.mark.parametrize(
+    "method,components",
+    [
+        ("gmm", {"gmm_components": 1}),
+        ("gmm", {"gmm_components": 2}),
+        ("pce", {"pce_components": 5}),
+        ("pce", {"pce_components": 10}),
+    ],
+)
+@pytest.mark.parametrize(
+    "device",
+    [
+        pytest.param("cpu", id="cpu"),
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA not available"
+            ),
+            id="cuda",
+        ),
+    ],
+)
+def test_density_model_various_configs(method, components, device):
+    """Test density model with various methods and component configurations on CPU and GPU."""
     rng = np.random.RandomState(42)
     X = rng.randn(100, 22)
 
     model = GeometryDensityModel(
-        method="gmm", gmm_components=gmm_components, random_state=42
+        method=method, device=device, random_state=42, **components
     )
     model.fit(X)
 
@@ -151,18 +270,38 @@ def test_density_model_various_components(gmm_components):
     assert np.all((pcts >= 0) & (pcts <= 100))
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-def test_density_model_gpu():
-    """Test GeometryDensityModel on GPU."""
+def test_density_model_get_set_state():
+    """Test state serialization for GeometryDensityModel."""
     rng = np.random.RandomState(42)
     X_train = rng.randn(100, 22)
     X_test = rng.randn(10, 22)
 
-    model = GeometryDensityModel(method="gmm", gmm_components=1, device="cuda")
-    model.fit(X_train)
-    scores = model.score(X_test)
-    pcts = model.percentiles(scores)
+    # Test GMM
+    model_gmm = GeometryDensityModel(method="gmm", gmm_components=1, random_state=42)
+    model_gmm.fit(X_train)
+    state_gmm = model_gmm.get_state()
 
-    assert scores.shape == (10,)
-    assert pcts.shape == (10,)
-    assert np.all((pcts >= 0) & (pcts <= 100))
+    new_model_gmm = GeometryDensityModel(
+        method="gmm", gmm_components=1, random_state=42
+    )
+    new_model_gmm.set_state(state_gmm, device="cpu")
+
+    scores1 = model_gmm.score(X_test)
+    scores2 = new_model_gmm.score(X_test)
+    np.testing.assert_allclose(scores1.cpu().numpy(), scores2.cpu().numpy(), rtol=1e-5)
+
+    # Test PCE
+    model_pce = GeometryDensityModel(
+        method="pce", pce_components=5, poly_degree=2, random_state=42
+    )
+    model_pce.fit(X_train)
+    state_pce = model_pce.get_state()
+
+    new_model_pce = GeometryDensityModel(
+        method="pce", pce_components=5, poly_degree=2, random_state=42
+    )
+    new_model_pce.set_state(state_pce, device="cpu")
+
+    scores1 = model_pce.score(X_test)
+    scores2 = new_model_pce.score(X_test)
+    np.testing.assert_allclose(scores1.cpu().numpy(), scores2.cpu().numpy(), rtol=1e-5)

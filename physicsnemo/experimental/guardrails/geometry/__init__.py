@@ -15,7 +15,7 @@
 # limitations under the License.
 
 from .density_model import GeometryDensityModel
-from .density_pce import PCEDensityModel
+from .density_pce import TorchPCEDensityModel
 from .feature_extraction import (
     FEATURE_NAMES,
     FEATURE_VERSION,
@@ -30,7 +30,7 @@ from .ood_detector import GeometryGuardrail
 __all__ = [
     "GeometryGuardrail",
     "GeometryDensityModel",
-    "PCEDensityModel",
+    "TorchPCEDensityModel",
     "FeatureSchema",
     "extract_features",
     "validate_mesh",

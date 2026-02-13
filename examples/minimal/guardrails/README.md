@@ -13,7 +13,7 @@ training data and flag out-of-distribuution shapes at inference time.
 This example uses two datasets:
 
 - **DrivAerML**: 500 parametrically morphed variants of the DrivAer notchback vehicle
-- **AhmedML**: 500 geometric variations of the Ahmed car body
+- **AhmedML**: 500 geometric variations of the Ahmed body
 
 ## Prerequisites
 
@@ -117,8 +117,10 @@ The script will:
 
 1. Verify that datasets are properly downloaded and organized
 2. Run three experiments on GPU:
-   - **Experiment 1**: GMM trained on DrivAerML train, tested on DrivAerML validation
-   - **Experiment 2**: PCE trained on DrivAerML train, tested on DrivAerML validation
+   - **Experiment 1**: GMM (Gaussian Mixture Model) trained on DrivAerML train,
+   tested on DrivAerML validation
+   - **Experiment 2**: PCE (Polynomial Chaos Expansion) trained on DrivAerML train,
+   tested on DrivAerML validation
    - **Experiment 3**: GMM trained on DrivAerML train, tested on AhmedML (cross-dataset)
 3. Report results with OK/WARN/REJECT classifications for each experiment
 
@@ -155,6 +157,12 @@ Results: 500 geometries validated
 - **OK**: Geometry is within the expected distribution (safe for inference)
 - **WARN**: Geometry is unusual but may be acceptable (investigate)
 - **REJECT**: Geometry is highly anomalous (likely invalid or OOD)
+
+**Note on Validation Counts**:
+
+In the example output above, Experiments 1 and 2 show 98 geometries validated
+instead of the expected 100. This is because 2 STL files in the DrivAerML
+validation set are corrupted and are automatically skipped during mesh validation.
 
 **Expected Behavior**:
 

@@ -119,11 +119,10 @@ For large datasets, use the directory-based API with automatic parallel processi
 guardrail.fit_from_dir(
     Path("/path/to/stl/files"),
     n_workers=16,            # Use 16 CPU cores for parallel processing
-    chunksize=8,             # Process 8 files per worker task
 )
 ```
 
-### Saving and Loading Models
+### Saving and Loading Guardrails
 
 ```python
 from pathlib import Path
@@ -275,9 +274,8 @@ modeling. Direct GPU feature extraction could further improve performance.
 Implement additional density estimation methods: Kernel Density Estimation,
 Variational Autoencoders, Normalizing Flows, and deep learning approaches.
 
-**How to Contribute:** Fork the repository, implement enhancements with tests
-and documentation following PhysicsNemo coding standards (`.cursor/rules/`),
-and submit a pull request. For questions, open an issue on GitHub.
+**How to Contribute:** For guidance on contributing to PhysicsNeMo, please refer to the
+[contributing guidelines](https://github.com/NVIDIA/physicsnemo/blob/main/CONTRIBUTING.md).
 
 ## Support
 

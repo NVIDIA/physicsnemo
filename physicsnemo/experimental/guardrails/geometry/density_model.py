@@ -55,11 +55,10 @@ class GeometryDensityModel:
 
     Attributes
     ----------
-    model : TorchGMM or PCEDensityModel
+    model : TorchGMM or TorchPCEDensityModel
         The underlying density estimation model (both use PyTorch).
     ref_scores : torch.Tensor or None
         Reference anomaly scores from training data for percentile computation.
-        Stored on the same device as the model (GPU-first resident).
     device : torch.device
         Device being used for computation.
     method : str
@@ -116,9 +115,9 @@ class GeometryDensityModel:
 
     def _init_pce(self):
         """Initialize PCE model."""
-        from .density_pce import PCEDensityModel
+        from .density_pce import TorchPCEDensityModel
 
-        self.model = PCEDensityModel(
+        self.model = TorchPCEDensityModel(
             n_components=self.pce_components,
             poly_degree=self.poly_degree,
             interaction_only=self.interaction_only,
@@ -152,7 +151,7 @@ class GeometryDensityModel:
         self.model.fit(X_torch)
         # Compute reference scores for training data (returns torch tensor)
         scores = self.model.score(X_torch)
-        # Store as tensor on device (GPU-first resident)
+        # Store as tensor on device
         self.ref_scores = scores  # Already a torch tensor on device
 
     def score(self, X: np.ndarray | torch.Tensor) -> torch.Tensor:
@@ -170,7 +169,7 @@ class GeometryDensityModel:
         -------
         torch.Tensor
             Anomaly scores of shape :math:`(N,)`. Higher scores indicate
-            more anomalous samples. Returns tensor on the same device as input (GPU-first resident).
+            more anomalous samples. Returns tensor on the same device as input.
         """
         # Convert to torch tensor if needed and move to device
         if isinstance(X, np.ndarray):
@@ -181,7 +180,7 @@ class GeometryDensityModel:
             raise TypeError(f"X must be np.ndarray or torch.Tensor, got {type(X)}")
         
         scores = self.model.score(X_torch)
-        # Keep as tensor on device (GPU-first resident)
+        # Keep as tensor on device
         return scores
 
     def percentiles(self, scores: np.ndarray | torch.Tensor) -> np.ndarray:
@@ -246,6 +245,7 @@ class GeometryDensityModel:
         -------
         dict
             Dictionary containing all necessary state for reconstruction.
+            Method-specific parameters are specified with method prefix (gmm_ or pce_).
         """
         state = {
             "method": self.method,
@@ -257,8 +257,11 @@ class GeometryDensityModel:
             "ref_scores": self.ref_scores.cpu().numpy(),
         }
 
-        # Serialize model-specific parameters
-        state["model_params"] = self.model.get_state()
+        # Flatten method-specific parameters with method prefix to avoid nested dicts
+        model_state = self.model.get_state()
+        prefix = f"{self.method}_"
+        for key, value in model_state.items():
+            state[f"{prefix}{key}"] = value
 
         return state
 
@@ -292,6 +295,15 @@ class GeometryDensityModel:
         self.ref_scores = torch.from_numpy(ref_scores_data).float().to(self.device)
 
         # Restore model based on method
+        # Extract model-specific parameters from flattened state
+        prefix = f"{self.method}_"
+        model_state = {}
+        for key, value in state.items():
+            if key.startswith(prefix):
+                # Remove prefix to get original key
+                model_key = key[len(prefix):]
+                model_state[model_key] = value
+        
         if self.method == "gmm":
             from .gmm_torch import TorchGMM
             
@@ -300,17 +312,17 @@ class GeometryDensityModel:
                 device=self.device,
                 random_state=self.random_state,
             )
-            self.model.set_state(state["model_params"], device=self.device)
+            self.model.set_state(model_state, device=self.device)
         elif self.method == "pce":
-            from .density_pce import PCEDensityModel
+            from .density_pce import TorchPCEDensityModel
             
-            self.model = PCEDensityModel(
+            self.model = TorchPCEDensityModel(
                 n_components=self.pce_components,
                 poly_degree=self.poly_degree,
                 interaction_only=self.interaction_only,
                 random_state=self.random_state,
                 device=self.device,
             )
-            self.model.set_state(state["model_params"], device=self.device)
+            self.model.set_state(model_state, device=self.device)
         else:
             raise RuntimeError(f"Unknown method: {self.method}")

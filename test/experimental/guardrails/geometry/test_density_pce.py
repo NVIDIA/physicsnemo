@@ -19,147 +19,60 @@
 import numpy as np
 import pytest
 
-from physicsnemo.experimental.guardrails.geometry import PCEDensityModel
+from physicsnemo.experimental.guardrails.geometry import TorchPCEDensityModel
 
 
-class TestPCEDensityModel:
-    """Test suite for Polynomial Chaos Expansion density model."""
+def test_pce_auto_components():
+    """Test automatic component selection (95% variance)."""
+    rng = np.random.RandomState(42)
+    # Use fewer features to avoid polynomial explosion
+    X_train = rng.randn(100, 10)
 
-    def test_initialization(self):
-        """Test PCE model can be initialized with various parameters."""
-        model = PCEDensityModel(n_components=10, poly_degree=2)
-        assert model.n_components == 10
-        assert model.poly_degree == 2
-        assert model.interaction_only is False
+    model = TorchPCEDensityModel(n_components=None, poly_degree=2)
+    model.fit(X_train)
 
-    def test_fit_and_score(self):
-        """Test PCE model can fit data and compute scores."""
-        rng = np.random.RandomState(42)
-        X_train = rng.randn(100, 22)
+    # Should have selected fewer than 10 components
+    assert model.n_pca_components_ <= 10
 
-        model = PCEDensityModel(n_components=10, poly_degree=2)
-        model.fit(X_train)
 
-        # Verify model is fitted
-        assert model.pca_components_ is not None
-        assert model.pca_mean_ is not None
-        assert model.pca_std_ is not None
-        assert model.poly_mean_ is not None
-        assert model.poly_cov_ is not None
-        assert model.training_scores_ is not None
+def test_pce_interaction_only():
+    """Test polynomial expansion with interaction_only."""
+    rng = np.random.RandomState(42)
+    X_train = rng.randn(100, 5)  # Smaller dimension for testing
 
-        # Test scoring
-        X_test = rng.randn(10, 22)
-        scores = model.score(X_test)
+    model = TorchPCEDensityModel(n_components=3, poly_degree=2, interaction_only=True)
+    model.fit(X_train)
 
-        assert scores.shape == (10,)
-        # Convert to numpy for assertion
-        scores_np = scores.cpu().numpy() if hasattr(scores, "cpu") else scores
-        assert np.all(scores_np >= 0)  # Mahalanobis distance is non-negative
+    # Should have fewer polynomial features with interaction_only
+    model_full = TorchPCEDensityModel(
+        n_components=3, poly_degree=2, interaction_only=False
+    )
+    model_full.fit(X_train)
 
-    def test_percentiles(self):
-        """Test percentile computation."""
-        rng = np.random.RandomState(42)
-        X_train = rng.randn(100, 22)
+    # With interaction_only, we only get cross-terms, not pure powers
+    # Both should work and produce valid scores
+    X_test = rng.randn(10, 5)
+    scores = model.score(X_test)
+    scores_full = model_full.score(X_test)
 
-        model = PCEDensityModel(n_components=10, poly_degree=2)
-        model.fit(X_train)
+    assert scores.shape == (10,)
+    assert scores_full.shape == (10,)
 
-        X_test = rng.randn(10, 22)
-        scores = model.score(X_test)
-        percentiles = model.percentiles(scores)
 
-        assert percentiles.shape == (10,)
-        assert np.all(percentiles >= 0)
-        assert np.all(percentiles <= 100)
+def test_pce_insufficient_samples():
+    """Test error handling for insufficient samples."""
+    model = TorchPCEDensityModel()
 
-    def test_auto_components(self):
-        """Test automatic component selection (95% variance)."""
-        rng = np.random.RandomState(42)
-        # Use fewer features to avoid polynomial explosion
-        X_train = rng.randn(100, 10)
+    with pytest.raises(ValueError, match="Need at least 10 samples"):
+        model.fit(np.random.randn(5, 22))
 
-        model = PCEDensityModel(n_components=None, poly_degree=2)
-        model.fit(X_train)
 
-        # Should have selected fewer than 10 components
-        assert model.n_pca_components_ <= 10
+def test_pce_invalid_shape():
+    """Test error handling for invalid input shape."""
+    model = TorchPCEDensityModel()
 
-    def test_interaction_only(self):
-        """Test polynomial expansion with interaction_only."""
-        rng = np.random.RandomState(42)
-        X_train = rng.randn(100, 5)  # Smaller dimension for testing
-
-        model = PCEDensityModel(n_components=3, poly_degree=2, interaction_only=True)
-        model.fit(X_train)
-
-        # Should have fewer polynomial features with interaction_only
-        model_full = PCEDensityModel(
-            n_components=3, poly_degree=2, interaction_only=False
-        )
-        model_full.fit(X_train)
-
-        # With interaction_only, we only get cross-terms, not pure powers
-        # Both should work and produce valid scores
-        X_test = rng.randn(10, 5)
-        scores = model.score(X_test)
-        scores_full = model_full.score(X_test)
-
-        assert scores.shape == (10,)
-        assert scores_full.shape == (10,)
-
-    def test_get_set_state(self):
-        """Test state serialization."""
-        rng = np.random.RandomState(42)
-        X_train = rng.randn(100, 22)
-
-        model = PCEDensityModel(n_components=10, poly_degree=2)
-        model.fit(X_train)
-
-        # Get state
-        state = model.get_state()
-        assert "n_components" in state
-        assert "hermite_degree_" in state
-        assert "pca_components_" in state
-
-        # Create new model and set state
-        new_model = PCEDensityModel()
-        new_model.set_state(state, device=model.device)
-
-        # Should produce same scores
-        X_test = rng.randn(10, 22)
-        scores1 = model.score(X_test)
-        scores2 = new_model.score(X_test)
-
-        np.testing.assert_allclose(scores1, scores2)
-
-    def test_insufficient_samples(self):
-        """Test error handling for insufficient samples."""
-        model = PCEDensityModel()
-
-        with pytest.raises(ValueError, match="Need at least 10 samples"):
-            model.fit(np.random.randn(5, 22))
-
-    def test_invalid_shape(self):
-        """Test error handling for invalid input shape."""
-        model = PCEDensityModel()
-
-        with pytest.raises(ValueError, match="must be 2D array"):
-            model.fit(np.random.randn(100))  # 1D array
-
-    def test_score_before_fit(self):
-        """Test error when scoring before fitting."""
-        model = PCEDensityModel()
-
-        with pytest.raises(RuntimeError, match="must be fitted"):
-            model.score(np.random.randn(10, 22))
-
-    def test_percentiles_before_fit(self):
-        """Test error when computing percentiles before fitting."""
-        model = PCEDensityModel()
-
-        with pytest.raises(RuntimeError, match="must be fitted"):
-            model.percentiles(np.array([1.0, 2.0, 3.0]))
+    with pytest.raises(ValueError, match="must be 2D array"):
+        model.fit(np.random.randn(100))  # 1D array
 
 
 @pytest.mark.parametrize("poly_degree", [1, 2, 3])
@@ -168,7 +81,7 @@ def test_polynomial_degrees(poly_degree):
     rng = np.random.RandomState(42)
     X_train = rng.randn(100, 10)
 
-    model = PCEDensityModel(n_components=5, poly_degree=poly_degree)
+    model = TorchPCEDensityModel(n_components=5, poly_degree=poly_degree)
     model.fit(X_train)
 
     X_test = rng.randn(10, 10)

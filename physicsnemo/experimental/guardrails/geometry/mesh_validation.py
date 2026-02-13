@@ -62,6 +62,17 @@ def validate_mesh(mesh: PhysicsNeMoMesh, min_verts: int = 4) -> None:
         raise ValueError("Non-finite vertex coordinates")
 
     # Check surface area
-    total_area = float(mesh.cell_areas.sum().item())
+    # Some meshes may have degenerate triangles (zero area), which is acceptable
+    # as long as there are some valid triangles with positive area
+    cell_areas = mesh.cell_areas
+    total_area = float(cell_areas.sum().item())
+    
     if total_area <= 0:
-        raise ValueError("Non-positive surface area")
+        # Provide more detailed error message
+        n_zero_area = int((cell_areas <= 0).sum().item())
+        n_valid = mesh.n_cells - n_zero_area
+        raise ValueError(
+            f"Non-positive surface area: {total_area:.2e}. "
+            f"Valid cells: {n_valid}/{mesh.n_cells}, "
+            f"Degenerate cells: {n_zero_area}/{mesh.n_cells}"
+        )

@@ -45,7 +45,7 @@ class TorchGMM(nn.Module):
         Default is ``"cuda"`` if available, else ``"cpu"``.
     random_state : int or None, optional
         Random seed for reproducible initialization. If provided, sets the
-        seed for PyTorch's random number generator. Default is None.
+        seed for PyTorch's random number generator. Default is 0.
 
     Attributes
     ----------
@@ -64,7 +64,7 @@ class TorchGMM(nn.Module):
         max_iter: int = 100,
         tol: float = 1e-3,
         device: str | torch.device | None = None,
-        random_state: int | None = None,
+        random_state: int | None = 0,
     ):
         super().__init__()
         
@@ -374,13 +374,13 @@ class TorchGMM(nn.Module):
         return -self.score_samples(X)
 
     def get_state(self) -> dict:
-        """
+        r"""
         Get model state for serialization.
 
         Returns
         -------
         dict
-            Dictionary containing GMM parameters for serialization.
+            Dictionary containing model hyperparameters and fitted attributes.
         """
         return {
             "weights_": self.weights_.cpu().numpy(),
@@ -391,19 +391,26 @@ class TorchGMM(nn.Module):
         }
 
     def set_state(self, state: dict, device: str | torch.device) -> None:
-        """
-        Restore model state from serialized data.
+        r"""
+        Set model state from dictionary (for deserialization).
 
         Parameters
         ----------
         state : dict
-            State dictionary as returned by :meth:`get_state`.
+            Dictionary of parameters from :meth:`get_state`.
         device : str or torch.device
-            Device to load the model on.
+            Device to load model on. Allows loading a model trained on one
+            device and using it on another device.
         """
-        self.weights_ = torch.from_numpy(state["weights_"]).float().to(device)
-        self.means_ = torch.from_numpy(state["means_"]).float().to(device)
-        self.covariances_ = torch.from_numpy(state["covariances_"]).float().to(device)
+        # Set device (runtime parameter, not part of model state)
+        if isinstance(device, str):
+            self.device = torch.device(device)
+        else:
+            self.device = device
+        
+        self.weights_ = torch.from_numpy(state["weights_"]).float().to(self.device)
+        self.means_ = torch.from_numpy(state["means_"]).float().to(self.device)
+        self.covariances_ = torch.from_numpy(state["covariances_"]).float().to(self.device)
         self.converged_ = state["converged_"]
         self.n_iter_ = state["n_iter_"]
         

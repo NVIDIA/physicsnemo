@@ -19,12 +19,12 @@ Geometry Guardrail Example with DrivAerML and AhmedML Datasets
 
 This example demonstrates geometry guardrails using real-world automotive datasets:
 - DrivAerML: 500 parametrically morphed DrivAer vehicle variants
-- AhmedML: 500 Ahmed car body variations
+- AhmedML: 500 Ahmed body variations
 
 The example runs three experiments:
 1. GMM: Train on DrivAerML, test on DrivAerML validation
 2. PCE: Train on DrivAerML, test on DrivAerML validation
-3. Cross-dataset: Train on DrivAerML, test on AhmedML
+3. GMM Cross-dataset: Train on DrivAerML, test on AhmedML
 """
 
 import multiprocessing as mp
@@ -47,18 +47,18 @@ def prepare_datasets(
         raise FileNotFoundError(f"AhmedML directory not found: {ahmedml_dir}")
 
 
-def train_and_evaluate(
+def fit_and_score(
     train_dir: Path,
     test_dir: Path,
     method: str,
-    method_name: str,
+    experiment_name: str,
     model_path: Path,
     device: str,
     gmm_components: int = 1,
     pce_components: int | None = None,
 ) -> dict:
     """Train a guardrail and evaluate on test data."""
-    print(f"\n{method_name} ({method.upper()})")
+    print(f"\n{experiment_name} ({method.upper()})")
 
     # Create guardrail
     if method == "gmm":
@@ -68,26 +68,22 @@ def train_and_evaluate(
             warn_pct=99.0,
             reject_pct=99.9,
             device=device,
-            random_state=42,
         )
     else:  # pce
         guardrail = GeometryGuardrail(
             method="pce",
-            pce_components=pce_components,
+            pce_components=3,
             warn_pct=99.0,
             reject_pct=99.9,
             device=device,
-            random_state=42,
         )
 
     # Train
-    guardrail.fit_from_dir(train_dir, n_workers=mp.cpu_count() - 1, chunksize=8)
+    guardrail.fit_from_dir(train_dir, n_workers=mp.cpu_count() - 1)
     guardrail.save(model_path)
 
     # Evaluate
-    results = guardrail.query_from_dir(
-        test_dir, n_workers=mp.cpu_count() - 1, chunksize=8
-    )
+    results = guardrail.query_from_dir(test_dir, n_workers=mp.cpu_count() - 1)
 
     # Compute statistics
     ok_count = sum(1 for r in results if r["status"] == "OK")
@@ -96,13 +92,13 @@ def train_and_evaluate(
     total = len(results)
 
     print(
-        f"  OK: {ok_count} ({100 * ok_count / total:.1f}%) | "
+        f"OK: {ok_count} ({100 * ok_count / total:.1f}%) | "
         f"WARN: {warn_count} ({100 * warn_count / total:.1f}%) | "
         f"REJECT: {reject_count} ({100 * reject_count / total:.1f}%)"
     )
 
     return {
-        "method": method_name,
+        "method": experiment_name,
         "total": total,
         "ok": ok_count,
         "warn": warn_count,
@@ -122,38 +118,38 @@ def main():
     prepare_datasets(train_dir, val_dir, ahmedml_dir)
 
     # Experiment 1: GMM - DrivAerML train → DrivAerML validation
-    stats1 = train_and_evaluate(
+    stats1 = fit_and_score(
         train_dir=train_dir,
         test_dir=val_dir,
         method="gmm",
-        method_name="GMM - DrivAerML Train → DrivAerML Validation",
+        experiment_name="GMM - DrivAerML Train → DrivAerML Validation",
         model_path=Path("drivaerml_gmm.npz"),
         device=device,
         gmm_components=1,
     )
 
     # Experiment 2: PCE - DrivAerML train → DrivAerML validation
-    stats2 = train_and_evaluate(
+    stats2 = fit_and_score(
         train_dir=train_dir,
         test_dir=val_dir,
         method="pce",
-        method_name="PCE - DrivAerML Train → DrivAerML Validation",
+        experiment_name="PCE - DrivAerML Train → DrivAerML Validation",
         model_path=Path("drivaerml_pce.npz"),
         device=device,
     )
 
     # Experiment 3: GMM - DrivAerML train → AhmedML (cross-dataset)
-    stats3 = train_and_evaluate(
+    stats3 = fit_and_score(
         train_dir=train_dir,
         test_dir=ahmedml_dir,
         method="gmm",
-        method_name="GMM - DrivAerML Train → AhmedML (Cross-Dataset)",
+        experiment_name="GMM - DrivAerML Train → AhmedML (Cross-Dataset)",
         model_path=Path("drivaerml_gmm.npz"),
         device=device,
         gmm_components=1,
     )
 
-    print("\n✓ All experiments completed")
+    print("All experiments completed")
 
 
 if __name__ == "__main__":
