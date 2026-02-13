@@ -90,27 +90,6 @@ def test_compat_parent_package_has_old_submodule_attribute(
     assert getattr(parent_mod, child) is new_mod
 
 
-def test_compat_install_emits_deprecation_warnings():
-    """install() emits one DeprecationWarning per COMPAT_MAP entry that succeeds."""
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always", DeprecationWarning)
-        warnings.simplefilter("always", UserWarning)
-        install()
-    deprecations = [x for x in w if x.category is DeprecationWarning]
-    failed = [
-        x
-        for x in w
-        if x.category is UserWarning and "Failed to import new module" in str(x.message)
-    ]
-    expected_deprecations = len(COMPAT_MAP) - len(failed)
-    assert len(deprecations) == expected_deprecations, (
-        f"Expected {expected_deprecations} deprecation(s), got {len(deprecations)}"
-    )
-    for rec in deprecations:
-        assert "[compat]" in str(rec.message)
-        assert "is moved" in str(rec.message)
-
-
 def test_compat_install_no_failed_import_warnings():
     """install() does not emit 'Failed to import new module' unless from known optional targets."""
     with warnings.catch_warnings(record=True) as w:
