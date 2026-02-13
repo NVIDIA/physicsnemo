@@ -21,7 +21,7 @@ from jaxtyping import Float, Int
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.models.dit import DiT
+from physicsnemo.models.dit import DiT
 from physicsnemo.experimental.models.healda.point_embed import MultiSensorObsEmbedder
 
 
