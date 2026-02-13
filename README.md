@@ -344,6 +344,21 @@ training recipes and use them as a starting point. These training recipes may
 require additional example-specific dependencies, as indicated through an
 associated `requirements.txt` file in such cases.
 
+### CUDA Backend Selection
+
+PhysicsNeMo supports both CUDA 12 and CUDA 13 backends. The CUDA backend is
+selected via an orthogonal extra (`cu12` or `cu13`) that controls which builds
+of PyTorch, cuML, pylibraft, and cupy are installed. This extra is independent
+of the feature extras described below, and the two are combined freely:
+
+| Extra | Description |
+| --- | --- |
+| `cu13` | CUDA 13 backend (PyTorch from the `cu130` index, RAPIDS `cu13` packages) |
+| `cu12` | CUDA 12 backend (PyTorch from the `cu128` index, RAPIDS `cu12` packages) |
+
+When neither `cu12` nor `cu13` is specified, PyTorch is installed from
+PyPI using its default build (currently CUDA 12.8 on Linux).
+
 ### PyPI
 
 The recommended method for installing the latest version of PhysicsNeMo is using PyPI:
@@ -353,11 +368,18 @@ pip install nvidia-physicsnemo
 python -c "import physicsnemo; print('PhysicsNeMo version:', physicsnemo.__version__)"
 ```
 
-To install with optional dependencies (e.g., `utils-extras`):
+To install with a specific CUDA backend and optional feature extras:
 
 ```Bash
-pip install "nvidia-physicsnemo[utils-extras]"
+# CUDA 13 backend with nn-extras
+pip install "nvidia-physicsnemo[cu13,nn-extras]"
+
+# CUDA 12 backend with nn-extras
+pip install "nvidia-physicsnemo[cu12,nn-extras]"
 ```
+
+Other feature extras (`utils-extras`, `mesh-extras`, `model-extras`,
+`datapipes-extras`, `gnns`) can be combined in the same way.
 
 The installation can also be verified by running the [Hello World](#hello-world) example.
 
@@ -369,14 +391,20 @@ to clone the repository and sync dependencies:
 ```Bash
 git clone https://github.com/NVIDIA/physicsnemo.git
 cd physicsnemo
-uv sync
+uv sync --extra cu13
 uv run python -c "import physicsnemo; print('PhysicsNeMo version:', physicsnemo.__version__)"
 ```
 
-To install with optional dependencies (e.g., `utils-extras`):
+To install with optional feature extras (e.g., `nn-extras`):
 
 ```Bash
-uv sync --extra utils-extras
+uv sync --extra cu13 --extra nn-extras
+```
+
+For a CUDA 12 environment, replace `cu13` with `cu12`:
+
+```Bash
+uv sync --extra cu12 --extra nn-extras
 ```
 
 ### NVCR Container
