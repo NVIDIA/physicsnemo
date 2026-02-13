@@ -40,7 +40,7 @@ def _make_songunet() -> SongUNet:
 
 
 def _make_dit():
-    from physicsnemo.experimental.models.dit import DiT
+    from physicsnemo.models.dit import DiT
 
     return DiT(
         input_size=8,
