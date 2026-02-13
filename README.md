@@ -346,18 +346,20 @@ associated `requirements.txt` file in such cases.
 
 ### CUDA Backend Selection
 
-PhysicsNeMo supports both CUDA 12 and CUDA 13 backends. The CUDA backend is
-selected via an orthogonal extra (`cu12` or `cu13`) that controls which builds
-of PyTorch, cuML, pylibraft, and cupy are installed. This extra is independent
-of the feature extras described below, and the two are combined freely:
+> **Important:** To get GPU-accelerated RAPIDS packages (cuML, pylibraft, cupy)
+> and a CUDA-matched PyTorch build, you **must** include either `cu13` or `cu12`
+> when installing. Feature extras like `nn-extras` and `utils-extras` provide
+> additional non-CUDA packages (scipy, natten, wandb, etc.) but do not include
+> RAPIDS dependencies on their own.
 
-| Extra | Description |
+PhysicsNeMo supports both CUDA 12 and CUDA 13 backends. The backend is selected
+via an extra that is orthogonal to the feature extras - combine them freely:
+
+| Extra | What it provides |
 | --- | --- |
-| `cu13` | CUDA 13 backend (PyTorch from the `cu130` index, RAPIDS `cu13` packages) |
-| `cu12` | CUDA 12 backend (PyTorch from the `cu128` index, RAPIDS `cu12` packages) |
-
-When neither `cu12` nor `cu13` is specified, PyTorch is installed from
-PyPI using its default build (currently CUDA 12.8 on Linux).
+| `cu13` | PyTorch (CUDA 13.0), cuML-cu13, pylibraft-cu13, cupy-cuda13x |
+| `cu12` | PyTorch (CUDA 12.8), cuML-cu12, pylibraft-cu12, cupy-cuda12x |
+| *(neither)* | PyTorch from PyPI (default build), **no RAPIDS packages** |
 
 ### PyPI
 
