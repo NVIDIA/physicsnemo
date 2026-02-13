@@ -20,12 +20,15 @@ import os
 
 import numpy as np
 import torch
-import torch_geometric as pyg
-from tfrecord.torch.dataset import TFRecordDataset
 from torch.nn import functional as F
 from torch.utils.data import Dataset
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.gnn.utils import load_json, save_json
+
+# Lazy imports for optional dependencies
+pyg = OptionalImport("torch_geometric")
+tfrecord_torch = OptionalImport("tfrecord.torch.dataset")
 
 
 class VortexSheddingDataset(Dataset):
@@ -294,7 +297,7 @@ class VortexSheddingDataset(Dataset):
         description = {k: "byte" for k in meta["field_names"]}
 
         # Create dataset with transform to decode records.
-        dataset = TFRecordDataset(
+        dataset = tfrecord_torch.TFRecordDataset(
             tfrecord_path,
             index_path,
             description,
