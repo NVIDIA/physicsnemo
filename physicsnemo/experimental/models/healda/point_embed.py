@@ -587,10 +587,10 @@ class MultiSensorObsEmbedder(Module):
 
         if sensor_names is None:
             sensor_names = [f"sensor_{i}" for i in range(num_sensors)]
-        elif len(sensor_names) != num_sensors:
+        elif len(set(sensor_names)) != num_sensors:
             raise ValueError(
-                f"sensor_names must have the same length as nchannel_per_sensor, "
-                f"got {len(sensor_names)} and {num_sensors}"
+                f"sensor_names must be unique and match length of nchannel_per_sensor, "
+                f"got {len(set(sensor_names))} unique names and {num_sensors} sensors"
             )
 
         self.nchannel_per_sensor = list(nchannel_per_sensor)

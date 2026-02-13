@@ -65,16 +65,16 @@ def scatter_mean(
 
     device = x.device
     dtype = x.dtype
-    C = x.shape[1]
+    c = x.shape[1]
 
     # Initialize grid with fill_value
     values_mean = torch.full(
-        (grid_size, C), fill_value, device=device, dtype=dtype
+        (grid_size, c), fill_value, device=device, dtype=dtype
     )
 
     # Use scatter_reduce with mean, expanding indices to match value dimensions
     grid_indices_flat_expanded = grid_indices_flat.unsqueeze(-1).expand(
-        -1, C
+        -1, c
     )
     values_mean.scatter_reduce_(
         0, grid_indices_flat_expanded, x, reduce="mean", include_self=False
@@ -87,7 +87,7 @@ def scatter_mean(
         present = values_mean[:, 0] != fill_value
 
     # Reshape
-    aggregated = values_mean.view(*shape, C)
+    aggregated = values_mean.view(*shape, c)
     present = present.view(shape)
 
     return aggregated, present
