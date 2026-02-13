@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -27,7 +27,7 @@ from test.models.graphcast.utils import fix_random_seeds
 @pytest.fixture
 def conv_next_block_dict(in_channels=3, out_channels=1):
     activation_block = {
-        "_target_": "physicsnemo.nn.activations.CappedGELU",
+        "_target_": "physicsnemo.nn.CappedGELU",
         "cap_value": 10,
     }
     conv_block = {
@@ -46,7 +46,7 @@ def conv_next_block_dict(in_channels=3, out_channels=1):
 @pytest.fixture
 def down_sampling_block_dict():
     down_sampling_block = {
-        "_target_": "physicsnemo.nn.healpix.HEALPixAvgPool",
+        "_target_": "physicsnemo.nn.module.hpx.HEALPixAvgPool",
         "pooling": 2,
     }
     return down_sampling_block
@@ -70,7 +70,7 @@ def encoder_dict(conv_next_block_dict, down_sampling_block_dict, recurrent_block
 def up_sampling_block_dict(in_channels=3, out_channels=1):
     """Block dict fixture."""
     activation_block = {
-        "_target_": "physicsnemo.nn.activations.CappedGELU",
+        "_target_": "physicsnemo.nn.CappedGELU",
         "cap_value": 10,
     }
     up_sampling_block = {

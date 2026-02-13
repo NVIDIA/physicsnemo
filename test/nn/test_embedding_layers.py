@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 import torch
 
-from physicsnemo.nn.embedding_layers import PositionalEmbedding
+from physicsnemo.nn import PositionalEmbedding
 from test.common import validate_forward_accuracy
 
 CONFIGS = [
@@ -73,7 +73,7 @@ def test_positional_embedding(device, config: dict[str, Any], batch_size):
         return "none" if value is None else str(value)
 
     file_name = (
-        "nn/data/"
+        "nn/module/data/"
         "positional_embedding_"
         f"c{config['num_channels']}_"
         f"max{config['max_positions']}_"

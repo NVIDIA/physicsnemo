@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,7 +17,7 @@
 import pytest
 import torch
 
-from physicsnemo.nn.conv_layers import (
+from physicsnemo.nn import (
     ConvLayer,
     ConvResidualBlock,
     TransposeConvLayer,

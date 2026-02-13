@@ -12,7 +12,7 @@ tasks while maintaining high performance and scalability.
 .. autosummary::
    :toctree: generated
 
-Optimization utils
+Optimization Utils
 ------------------
 
 The optimization utilities provide tools for capturing and managing training states, gradients, and optimization processes.
@@ -22,17 +22,17 @@ These are particularly useful when implementing custom training loops or special
     :members:
     :show-inheritance:
 
-Neighbor utils
---------------
+Neighbor Functionals
+--------------------
 
-Utilities for optimized layers for neighbor searches.
+Functional wrappers for neighbor searches live under ``physicsnemo.nn.functional``.
 
-.. automodule:: physicsnemo.utils.neighbors
+.. automodule:: physicsnemo.nn.functional.knn
     :members:
     :show-inheritance:
 
 
-GraphCast utils
+GraphCast Utils
 ---------------
 
 A collection of utilities specifically designed for working with the GraphCast model, including data processing,
@@ -55,7 +55,7 @@ training GraphCast-based weather prediction models.
     :members:
     :show-inheritance:
 
-Filesystem utils
+Filesystem Utils
 ----------------
 
 Utilities for handling file operations, caching, and data management across different storage systems.
@@ -68,8 +68,8 @@ consistent interfaces for data access.
 
 .. _diffusion_utils:
 
-Diffusion utils
-----------------
+Diffusion Utils
+---------------
 
 Tools for working with diffusion models and other generative approaches,
 including deterministic and stochastic sampling utilities.
@@ -86,21 +86,21 @@ including deterministic and stochastic sampling utilities.
     :members:
     :show-inheritance:
 
-Geometry utils
---------------
+Geometry Functionals
+--------------------
 
 Utilities for geometric operations, including neighbor search and signed distance field calculations.
 These are essential for physics simulations and geometric deep learning applications.
 
-.. automodule:: physicsnemo.utils.neighbors.radius_search
+.. automodule:: physicsnemo.nn.functional.radius_search
     :members:
     :show-inheritance:
 
-.. automodule:: physicsnemo.utils.sdf
+.. automodule:: physicsnemo.nn.functional.sdf
     :show-inheritance:
 
-Weather / Climate utils
-------------------------
+Weather / Climate Utils
+-----------------------
 
 Specialized utilities for weather and climate modeling, including calculations for solar radiation
 and atmospheric parameters. These utilities are used extensively in weather prediction models.
@@ -114,7 +114,7 @@ and atmospheric parameters. These utilities are used extensively in weather pred
 
 .. _patching_utils:
 
-Patching utils
+Patching Utils
 --------------
 
 Patching utilities are particularly useful for *patch-based* diffusion, also called
@@ -130,7 +130,7 @@ image from the individual predicted patches.
     :members:
     :show-inheritance:
 
-Domino utils
+Domino Utils
 ------------
 
 Utilities for working with the Domino model, including data processing and grid construction.
@@ -140,7 +140,7 @@ These utilities are essential for implementing and training Domino-based models.
     :members:
     :show-inheritance:
 
-CorrDiff utils
+CorrDiff Utils
 --------------
 
 Utilities for working with the CorrDiff model, particularly for the diffusion and regression steps.
@@ -149,7 +149,7 @@ Utilities for working with the CorrDiff model, particularly for the diffusion an
     :members:
     :show-inheritance:
 
-Profiling utils
+Profiling Utils
 ---------------
 
 Utilities for profiling the performance of a model.

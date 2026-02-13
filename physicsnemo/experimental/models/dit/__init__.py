@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,17 +14,54 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .layers import (
+import warnings
+
+from physicsnemo.core.warnings import LegacyFeatureWarning
+from physicsnemo.models.dit import (
+    ConditioningEmbedder,
+    ConditioningEmbedderType,
+    DiT,
     DiTBlock,
-    ProjLayer,
-    PatchEmbed2DTokenizer,
-    ProjReshape2DDetokenizer,
-    TimmSelfAttention,
-    TESelfAttention,
+    DiTConditionEmbedder,
+    EDMConditionEmbedder,
     Natten2DSelfAttention,
-    get_tokenizer,
-    get_detokenizer,
+    PatchEmbed2DTokenizer,
+    ProjLayer,
+    ProjReshape2DDetokenizer,
+    TESelfAttention,
+    TimmSelfAttention,
+    ZeroConditioningEmbedder,
     get_attention,
+    get_conditioning_embedder,
+    get_detokenizer,
     get_layer_norm,
+    get_tokenizer,
 )
-from .dit import DiT
+
+warnings.warn(
+    "Importing DiT from 'physicsnemo.experimental.models.dit' is deprecated. "
+    "Please import from 'physicsnemo.models.dit' instead.",
+    LegacyFeatureWarning,
+    stacklevel=2,
+)
+
+__all__ = [
+    "ConditioningEmbedder",
+    "ConditioningEmbedderType",
+    "DiT",
+    "DiTBlock",
+    "DiTConditionEmbedder",
+    "EDMConditionEmbedder",
+    "Natten2DSelfAttention",
+    "PatchEmbed2DTokenizer",
+    "ProjLayer",
+    "ProjReshape2DDetokenizer",
+    "TESelfAttention",
+    "TimmSelfAttention",
+    "ZeroConditioningEmbedder",
+    "get_attention",
+    "get_conditioning_embedder",
+    "get_detokenizer",
+    "get_layer_norm",
+    "get_tokenizer",
+]

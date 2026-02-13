@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -49,7 +49,10 @@ if TORCH_SCATTER_AVAILABLE:
         reduction: REDUCTION_TYPES,
         eps: float = 1e-6,
     ) -> Float[Tensor, "M F"]:  # noqa
-        assert reduction in REDUCTIONS
+        if reduction not in REDUCTIONS:
+            raise ValueError(
+                f"Invalid reduction '{reduction}'. Must be one of {REDUCTIONS}"
+            )
 
         if reduction in ["min", "max", "mean", "sum"]:
             out_feature = segment_csr(features, neighbors_row_splits, reduce=reduction)

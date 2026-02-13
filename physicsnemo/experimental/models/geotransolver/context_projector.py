@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -39,9 +39,9 @@ from einops import rearrange
 from jaxtyping import Float
 
 from physicsnemo.core.version_check import check_version_spec
-from physicsnemo.models.transolver.Physics_Attention import gumbel_softmax
-from physicsnemo.nn.ball_query import BQWarp
-from physicsnemo.nn.mlp_layers import Mlp
+from physicsnemo.nn import gumbel_softmax
+from physicsnemo.nn import BQWarp
+from physicsnemo.nn import Mlp
 
 # Check optional dependency availability
 TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
@@ -348,7 +348,7 @@ class GeometricFeatureProcessor(nn.Module):
     See Also
     --------
     :class:`MultiScaleFeatureExtractor` : Uses multiple GeometricFeatureProcessor instances.
-    :class:`~physicsnemo.nn.ball_query.BQWarp` : The ball query operation used internally.
+    :class:`~physicsnemo.nn.BQWarp` : The ball query operation used internally.
 
     Examples
     --------

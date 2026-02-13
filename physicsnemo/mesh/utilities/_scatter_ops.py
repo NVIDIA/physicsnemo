@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -22,6 +22,8 @@ mesh entities (points, cells, facets).
 """
 
 import torch
+
+from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 
 def scatter_aggregate(
@@ -125,7 +127,7 @@ def scatter_aggregate(
         )
 
         ### Normalize by total weight (avoid division by zero)
-        weight_sums = weight_sums.clamp(min=1e-30)
+        weight_sums = weight_sums.clamp(min=safe_eps(weight_sums.dtype))
         aggregated_data = aggregated_data / weight_sums.view(
             -1, *([1] * len(data_shape))
         )

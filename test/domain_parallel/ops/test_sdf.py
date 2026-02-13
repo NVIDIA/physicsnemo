@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -22,7 +22,7 @@ from torch.distributed.tensor.placement_types import Replicate, Shard
 from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
-from physicsnemo.nn.sdf import signed_distance_field
+from physicsnemo.nn.functional import signed_distance_field
 
 from .utils import numerical_shard_tensor_check
 

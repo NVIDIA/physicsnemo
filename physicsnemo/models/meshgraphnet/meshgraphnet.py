@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,7 +17,7 @@
 from contextlib import nullcontext
 from dataclasses import dataclass
 from itertools import chain
-from typing import Callable, Literal, Tuple, Union
+from typing import Callable, Literal, Tuple
 from warnings import warn
 
 import torch
@@ -29,10 +29,10 @@ import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.nn import get_activation
-from physicsnemo.nn.gnn_layers.mesh_edge_block import MeshEdgeBlock
-from physicsnemo.nn.gnn_layers.mesh_graph_mlp import MeshGraphMLP
-from physicsnemo.nn.gnn_layers.mesh_node_block import MeshNodeBlock
-from physicsnemo.nn.gnn_layers.utils import GraphType, set_checkpoint_fn
+from physicsnemo.nn.module.gnn_layers.mesh_edge_block import MeshEdgeBlock
+from physicsnemo.nn.module.gnn_layers.mesh_graph_mlp import MeshGraphMLP
+from physicsnemo.nn.module.gnn_layers.mesh_node_block import MeshNodeBlock
+from physicsnemo.nn.module.gnn_layers.utils import GraphType, set_checkpoint_fn
 from physicsnemo.utils.profiling import profile
 
 
@@ -74,19 +74,16 @@ class MeshGraphNet(Module):
         Hidden layer size for the message passing blocks.
     hidden_dim_node_encoder : int, optional, default=128
         Hidden layer size for the node feature encoder.
-    num_layers_node_encoder : Union[int, None], optional, default=2
-        Number of MLP layers for the node feature encoder. If ``None`` is provided,
-        the MLP collapses to an identity function, i.e. no node encoder.
+    num_layers_node_encoder : int, optional, default=2
+        Number of MLP layers for the node feature encoder.
     hidden_dim_edge_encoder : int, optional, default=128
         Hidden layer size for the edge feature encoder.
-    num_layers_edge_encoder : Union[int, None], optional, default=2
-        Number of MLP layers for the edge feature encoder. If ``None`` is provided,
-        the MLP collapses to an identity function, i.e. no edge encoder.
+    num_layers_edge_encoder : int, optional, default=2
+        Number of MLP layers for the edge feature encoder.
     hidden_dim_node_decoder : int, optional, default=128
         Hidden layer size for the node feature decoder.
-    num_layers_node_decoder : Union[int, None], optional, default=2
-        Number of MLP layers for the node feature decoder. If ``None`` is provided,
-        the MLP collapses to an identity function, i.e. no decoder.
+    num_layers_node_decoder : int, optional, default=2
+        Number of MLP layers for the node feature decoder.
     aggregation : Literal["sum", "mean"], optional, default="sum"
         Message aggregation type. Allowed values are ``"sum"`` and ``"mean"``.
     do_concat_trick : bool, optional, default=False
@@ -106,16 +103,16 @@ class MeshGraphNet(Module):
         Input node features of shape :math:`(N_{nodes}, D_{in}^{node})`.
     edge_features : torch.Tensor
         Input edge features of shape :math:`(N_{edges}, D_{in}^{edge})`.
-    graph : :class:`~physicsnemo.nn.gnn_layers.utils.GraphType`
+    graph : :class:`~physicsnemo.nn.module.gnn_layers.utils.GraphType`
         Graph connectivity/topology container (PyG).
         Connectivity/topology only. Do not duplicate node or edge features on the graph;
         pass them via ``node_features`` and ``edge_features``. If present on
         the graph, they will be ignored by the model.
         ``node_features.shape[0]`` must equal the number of nodes in the graph ``graph.num_nodes``.
         ``edge_features.shape[0]`` must equal the number of edges in the graph ``graph.num_edges``.
-        The current :class:`~physicsnemo.nn.gnn_layers.graph_types.GraphType` resolves to
+        The current :class:`~physicsnemo.nn.module.gnn_layers.graph_types.GraphType` resolves to
         PyTorch Geometric objects (``torch_geometric.data.Data`` or ``torch_geometric.data.HeteroData``). See
-        :mod:`physicsnemo.nn.gnn_layers.graph_types` for the exact alias and requirements.
+        :mod:`physicsnemo.nn.module.gnn_layers.graph_types` for the exact alias and requirements.
 
     Outputs
     -------
@@ -149,9 +146,9 @@ class MeshGraphNet(Module):
     ----
     Reference: `Learning Mesh-Based Simulation with Graph Networks <https://arxiv.org/pdf/2010.03409>`.
 
-    See also :class:`~physicsnemo.nn.gnn_layers.mesh_graph_mlp.MeshGraphMLP`,
-    :class:`~physicsnemo.nn.gnn_layers.mesh_edge_block.MeshEdgeBlock`,
-    and :class:`~physicsnemo.nn.gnn_layers.mesh_node_block.MeshNodeBlock`.
+    See also :class:`~physicsnemo.nn.module.gnn_layers.mesh_graph_mlp.MeshGraphMLP`,
+    :class:`~physicsnemo.nn.module.gnn_layers.mesh_edge_block.MeshEdgeBlock`,
+    and :class:`~physicsnemo.nn.module.gnn_layers.mesh_node_block.MeshNodeBlock`.
     """
 
     def __init__(
@@ -165,11 +162,11 @@ class MeshGraphNet(Module):
         num_layers_edge_processor: int = 2,
         hidden_dim_processor: int = 128,
         hidden_dim_node_encoder: int = 128,
-        num_layers_node_encoder: Union[int, None] = 2,
+        num_layers_node_encoder: int = 2,
         hidden_dim_edge_encoder: int = 128,
-        num_layers_edge_encoder: Union[int, None] = 2,
+        num_layers_edge_encoder: int = 2,
         hidden_dim_node_decoder: int = 128,
-        num_layers_node_decoder: Union[int, None] = 2,
+        num_layers_node_decoder: int = 2,
         aggregation: Literal["sum", "mean"] = "sum",
         do_concat_trick: bool = False,
         num_processor_checkpoint_segments: int = 0,
@@ -185,6 +182,13 @@ class MeshGraphNet(Module):
         self.output_dim = output_dim
 
         activation_fn = get_activation(mlp_activation_fn)
+
+        if num_layers_node_encoder is None:
+            raise ValueError("num_layers_node_encoder cannot be None")
+        if num_layers_edge_encoder is None:
+            raise ValueError("num_layers_edge_encoder cannot be None")
+        if num_layers_node_decoder is None:
+            raise ValueError("num_layers_node_decoder cannot be None")
 
         if norm_type not in ["LayerNorm", "TELayerNorm"]:
             raise ValueError("Norm type should be either 'LayerNorm' or 'TELayerNorm'")
@@ -303,16 +307,16 @@ class MeshGraphNetProcessor(Module):
         Node features of shape :math:`(N_{nodes}, D_{node})`.
     edge_features : torch.Tensor
         Edge features of shape :math:`(N_{edges}, D_{edge})`.
-    graph : :class:`~physicsnemo.nn.gnn_layers.utils.GraphType`
+    graph : :class:`~physicsnemo.nn.module.gnn_layers.utils.GraphType`
         Graph connectivity/topology container (PyG).
         Connectivity/topology only. Do not duplicate node or edge features on the graph;
         pass them via ``node_features`` and ``edge_features``. If present on
         the graph, they will be ignored by the model.
         ``node_features.shape[0]`` must equal the number of nodes in the graph ``graph.num_nodes``.
         ``edge_features.shape[0]`` must equal the number of edges in the graph ``graph.num_edges``.
-        The current :class:`~physicsnemo.nn.gnn_layers.graph_types.GraphType` resolves to
+        The current :class:`~physicsnemo.nn.module.gnn_layers.graph_types.GraphType` resolves to
         PyTorch Geometric objects (``torch_geometric.data.Data`` or ``torch_geometric.data.HeteroData``). See
-        :mod:`physicsnemo.nn.gnn_layers.graph_types` for the exact alias and requirements.
+        :mod:`physicsnemo.nn.module.gnn_layers.graph_types` for the exact alias and requirements.
 
     Outputs
     -------

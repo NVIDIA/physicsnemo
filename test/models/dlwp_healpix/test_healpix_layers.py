@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -44,7 +44,7 @@ HEALPixLayer_testdata = [
 
 @pytest.mark.parametrize("multiplier", [2, 3, 4])
 def test_HEALPixLayer_initialization(device, multiplier, pytestconfig):
-    from physicsnemo.nn import (
+    from physicsnemo.nn.module.hpx import (
         HEALPixLayer,
     )
 
@@ -54,7 +54,7 @@ def test_HEALPixLayer_initialization(device, multiplier, pytestconfig):
 
 @pytest.mark.parametrize("multiplier", [2, 3, 4])
 def test_HEALPixLayer_forward(device, multiplier, pytestconfig):
-    from physicsnemo.nn import (
+    from physicsnemo.nn.module.hpx import (
         HEALPixLayer,
     )
 

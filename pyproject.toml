@@ -45,6 +45,7 @@ dependencies = [
     "hydra-core>=1.3.2",
     "tensordict>=0.10.0",
     "omegaconf>=2.3.0",
+    "importlib-metadata>=8.7.1",
 ]
 
 [project.urls]
@@ -138,6 +139,7 @@ dev = [
     "ruff>=0.14.8",
     "pytest-testmon>=2.2.0",
     "ipykernel>=7.1.0",
+    "import-linter>=2.10",
 ]
 
 #####################################################################
@@ -161,26 +163,24 @@ utils-extras = [
 ]
 mesh-extras = [
     "matplotlib>=3.10.7",
+    "pyacvd>=0.3.2",
     "pyvista>=0.46.4",
 ]
 nn-extras = [
     "cuml-cu13",
-    "transformer_engine[pytorch]",
     "scipy",
     "natten",
     "nvidia-physicsnemo[utils-extras]",
 ]
 model-extras = [
     "nvidia-physicsnemo[nn-extras]",
-    "transformer_engine[pytorch]",
-    "netCDF4",
     "pyvista",
     "vtk",
 ]
 datapipes-extras = [
     "dask",
     "tfrecord",
-    "nvidia-physicsnemo[model-extras]",
+    "netCDF4",
 ]
 
 # Use case specific dependency groups.

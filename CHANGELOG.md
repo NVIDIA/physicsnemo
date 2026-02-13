@@ -10,16 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Refactored diffusion preconditioners in
+  `physicsnemo.diffusion.preconditioners` relying on a new abstract base class
+  `BaseAffinePreconditioner` for preconditioning schemes using affine
+  transformations. Existing preconditioners (`VPPrecond`, `VEPrecond`,
+  `iDDPMPrecond`, `EDMPrecond`) reimplemented based on this new interface.
+- New `physicsnemo.experimental.nn.symmetry` module that implements building
+  blocks that preserve 2D and 3D rotational equivariance using a
+  grid-based layout for efficient GPU parallelization, and an emphasis on
+  compact `einsum` operations.
+
 ### Changed
 
 - PhysicsNemo v2.0 contains significant reorganization of tools.  Please see
   the v2.0-MIGRATION-GUIDE.md to understand what has changed and why.
+- DiT (Diffusion Transformer) has been moved from `physicsnemo.experimental.models.dit`
+  to `physicsnemo.models.dit`.
 
 ### Deprecated
 
 ### Removed
 
 ### Fixed
+
+- Shape mistmatch bug in the Lennard Jones example
 
 ### Security
 

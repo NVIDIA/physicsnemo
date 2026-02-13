@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,7 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Tuple, Union
+from __future__ import annotations
+
+from typing import Any, Callable
 
 import torch
 import torch.distributed as dist
@@ -32,7 +34,7 @@ from physicsnemo.domain_parallel.shard_utils.ring import (
     RingPassingConfig,
     perform_ring_iteration,
 )
-from physicsnemo.nn.neighbors._radius_search._warp_impl import radius_search_impl
+from physicsnemo.nn.functional.radius_search._warp_impl import radius_search_impl
 
 wp.config.quiet = True
 
@@ -41,17 +43,22 @@ def ring_ball_query(
     points: ShardTensor,
     queries: ShardTensor,
     bq_kwargs: dict,
-) -> Tuple[ShardTensor, ShardTensor, ShardTensor]:
-    """
-    Performs ball query operation on points distributed across ranks in a ring configuration.
+) -> tuple[ShardTensor, ShardTensor, ShardTensor]:
+    r"""Perform ball query operation on points distributed across ranks in a ring configuration.
 
-    Args:
-        points: First set of points as a ShardTensor
-        queries: Second set of points as a ShardTensor
-        bq_kwargs: Keyword arguments for the ball query operation
+    Parameters
+    ----------
+    points : ShardTensor
+        First set of points as a ShardTensor.
+    queries : ShardTensor
+        Second set of points as a ShardTensor.
+    bq_kwargs : dict
+        Keyword arguments for the ball query operation.
 
-    Returns:
-        Tuple of (mapping, num_neighbors, outputs) as ShardTensors
+    Returns
+    -------
+    Tuple[ShardTensor, ShardTensor, ShardTensor]
+        Tuple of (mapping, num_neighbors, outputs) as ShardTensors.
     """
     mesh = points._spec.mesh
     # We can be confident of this because 1D meshes are enforced
@@ -145,20 +152,25 @@ def ringless_ball_query(
     points: ShardTensor,
     queries: ShardTensor,
     bq_kwargs: dict,
-) -> Tuple[ShardTensor, ShardTensor, ShardTensor]:
-    """
-    Performs ball query operation on queries distributed across ranks, without a ring.
-    Used when points is replicated (not sharded).
+) -> tuple[ShardTensor, ShardTensor, ShardTensor]:
+    r"""Perform ball query operation on queries distributed across ranks, without a ring.
 
-    queries may or may not be sharded.  Outputs will match queries for sharding.
+    Used when points is replicated (not sharded). Queries may or may not be sharded.
+    Outputs will match queries for sharding.
 
-    Args:
-        points: First set of points as a ShardTensor
-        queries: Second set of points as a ShardTensor
-        bq_kwargs: Keyword arguments for the ball query operation
+    Parameters
+    ----------
+    points : ShardTensor
+        First set of points as a ShardTensor.
+    queries : ShardTensor
+        Second set of points as a ShardTensor.
+    bq_kwargs : dict
+        Keyword arguments for the ball query operation.
 
-    Returns:
-        Tuple of (mapping, num_neighbors, outputs) as ShardTensors
+    Returns
+    -------
+    Tuple[ShardTensor, ShardTensor, ShardTensor]
+        Tuple of (mapping, num_neighbors, outputs) as ShardTensors.
     """
 
     local_points = points.to_local()
@@ -217,27 +229,36 @@ def ringless_ball_query(
 
 
 def merge_outputs(
-    current_indices: Union[torch.Tensor, None],
-    current_num_neighbors: Union[torch.Tensor, None],
-    current_points: Union[torch.Tensor, None],
+    current_indices: torch.Tensor | None,
+    current_num_neighbors: torch.Tensor | None,
+    current_points: torch.Tensor | None,
     incoming_indices: torch.Tensor,
     incoming_num_neighbors: torch.Tensor,
     incoming_points: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Perform a gather/scatter operation on the mapping and outputs tensors.
-    This is an _inplace_ operation on the current tensors, assuming they are not None
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    r"""Perform a gather/scatter operation on the mapping and outputs tensors.
 
-    Args:
-        current_indices: Current mapping tensor or None
-        current_num_neighbors: Current number of neighbors tensor or None
-        current_points: Current outputs tensor or None
-        incoming_indices: Incoming mapping tensor to merge
-        incoming_num_neighbors: Incoming number of neighbors tensor to merge
-        incoming_points: Incoming outputs tensor to merge
+    This is an inplace operation on the current tensors, assuming they are not ``None``.
 
-    Returns:
-        Tuple of merged (mapping, num_neighbors, outputs) tensors
+    Parameters
+    ----------
+    current_indices : Union[torch.Tensor, None]
+        Current mapping tensor or ``None``.
+    current_num_neighbors : Union[torch.Tensor, None]
+        Current number of neighbors tensor or ``None``.
+    current_points : Union[torch.Tensor, None]
+        Current outputs tensor or ``None``.
+    incoming_indices : torch.Tensor
+        Incoming mapping tensor to merge.
+    incoming_num_neighbors : torch.Tensor
+        Incoming number of neighbors tensor to merge.
+    incoming_points : torch.Tensor
+        Incoming outputs tensor to merge.
+
+    Returns
+    -------
+    Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        Tuple of merged (mapping, num_neighbors, outputs) tensors.
     """
 
     @wp.kernel
@@ -317,8 +338,7 @@ def merge_outputs(
 
 
 class RingBallQuery(torch.autograd.Function):
-    """
-    Custom autograd function for performing ball query operations in a distributed ring configuration.
+    r"""Custom autograd function for performing ball query operations in a distributed ring configuration.
 
     Handles the forward pass of ball queries across multiple ranks, enabling distributed computation
     of nearest neighbors for point clouds.
@@ -333,25 +353,30 @@ class RingBallQuery(torch.autograd.Function):
         ring_config: RingPassingConfig,
         shard_sizes: list,
         bq_kwargs: Any,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Forward pass for distributed ball query computation.
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        r"""Forward pass for distributed ball query computation.
 
-        Args:
-            ctx: Context for saving variables for backward pass
-            points: First set of points
-            queries: Second set of points
-            lengths1: Lengths of each batch in points
-            lengths2: Lengths of each batch in queries
-            mesh: Distribution mesh specification
-            ring_config: Configuration for ring passing
-            shard_sizes: Sizes of each shard across ranks
-            wrapped: The original ball query function
-            *args: Additional positional arguments for the wrapped function
-            **kwargs: Additional keyword arguments for the wrapped function
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Context for saving variables for backward pass.
+        points : torch.Tensor
+            First set of points.
+        queries : torch.Tensor
+            Second set of points.
+        mesh : Any
+            Distribution mesh specification.
+        ring_config : RingPassingConfig
+            Configuration for ring passing.
+        shard_sizes : list
+            Sizes of each shard across ranks.
+        bq_kwargs : Any
+            Keyword arguments for the ball query operation.
 
-        Returns:
-            Tuple of (mapping, num_neighbors, outputs) tensors
+        Returns
+        -------
+        Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+            Tuple of (mapping, outputs, None, num_neighbors) tensors.
         """
         ctx.mesh = mesh
         ctx.ring_config = ring_config
@@ -445,25 +470,36 @@ class RingBallQuery(torch.autograd.Function):
         mapping_grad: torch.Tensor,
         num_neighbors_grad: torch.Tensor,
         outputs_grad: torch.Tensor,
-    ) -> Tuple[None, ...]:
-        """
-        Backward pass for distributed ring ball query computation.
+    ) -> tuple[None, ...]:
+        r"""Backward pass for distributed ring ball query computation.
 
-        Args:
-            ctx: Context containing saved variables from forward pass
-            grad_output: Gradients from subsequent layers
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Context containing saved variables from forward pass.
+        mapping_grad : torch.Tensor
+            Gradient for mapping tensor.
+        num_neighbors_grad : torch.Tensor
+            Gradient for num_neighbors tensor.
+        outputs_grad : torch.Tensor
+            Gradient for outputs tensor.
 
-        Returns:
-            Gradients for inputs (currently not implemented)
+        Returns
+        -------
+        Tuple[None, ...]
+            Gradients for inputs (currently not implemented).
+
+        Raises
+        ------
+        MissingShardPatch
+            Always raised as backward pass is not implemented.
         """
 
         raise MissingShardPatch("Backward pass for ring ball query not implemented.")
 
 
 class GradReducer(torch.autograd.Function):
-    """
-    A custom autograd function that performs an allreduce on the gradients if they are replicated
-    """
+    r"""Custom autograd function that performs an allreduce on gradients if they are replicated."""
 
     @staticmethod
     def forward(
@@ -471,6 +507,22 @@ class GradReducer(torch.autograd.Function):
         input: torch.Tensor,
         spec: ShardTensorSpec,
     ) -> torch.Tensor:
+        r"""Forward pass that saves the spec for backward.
+
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context for saving variables for backward.
+        input : torch.Tensor
+            Input tensor to pass through.
+        spec : ShardTensorSpec
+            Shard specification for determining reduction behavior.
+
+        Returns
+        -------
+        torch.Tensor
+            The input tensor unchanged.
+        """
         ctx.spec = spec
         return input
 
@@ -478,7 +530,21 @@ class GradReducer(torch.autograd.Function):
     def backward(
         ctx: torch.autograd.function.FunctionCtx,
         grad_output: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, None]:
+        r"""Backward pass that performs allreduce on gradients if replicated.
+
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context containing saved variables from forward.
+        grad_output : torch.Tensor
+            Gradient of the loss with respect to the output.
+
+        Returns
+        -------
+        Tuple[torch.Tensor, None]
+            Tuple of (reduced gradient, ``None`` for spec).
+        """
         spec = ctx.spec
         placement = spec.placements[0]
         # Perform an allreduce on the gradient
@@ -490,12 +556,15 @@ class GradReducer(torch.autograd.Function):
 
 
 def radius_search_wrapper(
-    func: Any, type: Any, args: tuple, kwargs: dict
-) -> tuple[ShardTensor, ShardTensor, ShardTensor]:
-    """
-    Wrapper for radius_search to support sharded tensors.
+    func: Callable,
+    types: tuple[Any, ...],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> tuple[ShardTensor, ShardTensor, None, ShardTensor]:
+    r"""Wrapper for ``radius_search`` to support sharded tensors.
 
     Handles 4 situations, based on the sharding of points and queries:
+
     - Points is sharded: a ring computation is performed.
         - queries is sharded: each rank contains a partial output,
           which is returned sharded like queries.
@@ -505,23 +574,36 @@ def radius_search_wrapper(
         - queries is sharded: each rank contains a partial output,
           which is returned sharded like queries.
         - queries is replicated: each rank returns the full output,
-          even though the input points 2 is sharded.
+          even though the input points is sharded.
 
-    All input sharding has to be over a 1D mesh.  2D Point cloud sharding
+    All input sharding has to be over a 1D mesh. 2D Point cloud sharding
     is not supported at this time.
 
     Regardless of the input sharding, the output will always be sharded like
     queries, and the output points will always have queried every input point
     like in the non-sharded case.
 
-    Args:
-        func: Original forward method
-        type: Types of the inputs
-        args: Positional arguments (points, queries)
-        kwargs: Keyword arguments
+    Parameters
+    ----------
+    func : Any
+        Original forward method.
+    type : Any
+        Types of the inputs.
+    args : tuple
+        Positional arguments (points, queries).
+    kwargs : dict
+        Keyword arguments.
 
-    Returns:
-        Tuple of (mapping, num_neighbors, outputs) as ShardTensor
+    Returns
+    -------
+    tuple[ShardTensor, ShardTensor, ShardTensor]
+        Tuple of (mapping, outputs, None, num_neighbors) as ShardTensors.
+
+    Raises
+    ------
+    MissingShardPatch
+        If ``max_points`` is ``None``, ``return_dists`` is ``True``,
+        meshes don't match, or meshes are not 1D.
     """
 
     points, queries, bq_kwargs = repackage_radius_search_wrapper_args(*args, **kwargs)
@@ -573,25 +655,35 @@ def repackage_radius_search_wrapper_args(
     *args,
     **kwargs,
 ) -> tuple[ShardTensor, ShardTensor, dict]:
-    """Repackages ball query arguments into a standard format.
+    r"""Repackage radius search arguments into a standard format.
 
-    Takes the arguments that could be passed to a ball query operation
-    and separates them into core tensor inputs (points, queries, lengths1, lengths2)
+    Takes the arguments that could be passed to a radius search operation
+    and separates them into core tensor inputs (points, queries)
     and configuration parameters packaged as a kwargs dict.
 
-    Args:
-        points: First set of points
-        queries: Second set of points
-        lengths1: Lengths of each batch in points
-        lengths2: Lengths of each batch in queries
-        *args: Additional positional args
-        **kwargs: Additional keyword args
+    Parameters
+    ----------
+    points : ShardTensor
+        First set of points.
+    queries : ShardTensor
+        Second set of points.
+    radius : float
+        Search radius for ball query.
+    max_points : int | None, optional
+        Maximum number of points to return per query.
+    return_dists : bool, default=False
+        Whether to return distances.
+    return_points : bool, default=False
+        Whether to return points.
+    *args : Any
+        Additional positional arguments.
+    **kwargs : Any
+        Additional keyword arguments.
 
-    Returns:
-        Tuple containing:
-        - points tensor
-        - queries tensor
-        - Dict of ball query configuration parameters
+    Returns
+    -------
+    tuple[ShardTensor, ShardTensor, dict]
+        Tuple containing (points tensor, queries tensor, dict of configuration parameters).
     """
     # Extract any additional parameters that might be in kwargs
     # or use defaults if not provided

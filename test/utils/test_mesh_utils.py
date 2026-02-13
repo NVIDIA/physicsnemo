@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -187,7 +187,7 @@ def test_mesh_utils(tmp_path, pytestconfig):
 def test_stl_gen(pytestconfig, backend, sphere_stl, tmp_path):
     from stl import mesh
 
-    from physicsnemo.nn.sdf import signed_distance_field
+    from physicsnemo.nn.functional import signed_distance_field
     from physicsnemo.utils.mesh import (
         sdf_to_stl,
     )

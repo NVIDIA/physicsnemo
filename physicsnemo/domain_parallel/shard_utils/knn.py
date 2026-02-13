@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 from typing import Any, Callable
 
 import numpy as np
@@ -28,14 +30,13 @@ from physicsnemo.domain_parallel.shard_utils.ring import (
     RingPassingConfig,
     perform_ring_iteration,
 )
-from physicsnemo.nn.neighbors._knn._cuml_impl import knn_impl
+from physicsnemo.nn.functional.knn._cuml_impl import knn_impl
 
 
 def ring_knn(
     points: ShardTensor, queries: ShardTensor, k: int
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Ring based kNN implementation where points travel around a ring and queries stay local.
+    r"""Ring-based kNN implementation where points travel around a ring and queries stay local.
 
     This function performs k-nearest neighbor search using a distributed ring-based
     algorithm. The points are passed around different devices in a ring topology while
@@ -56,10 +57,9 @@ def ring_knn(
     -------
     tuple[torch.Tensor, torch.Tensor]
         A tuple containing:
-        - shard_idx : torch.Tensor
-            Indices of the k nearest neighbors for each query point
-        - shard_distances : torch.Tensor
-            Distances to the k nearest neighbors for each query point
+
+        - ``shard_idx`` : Indices of the k nearest neighbors for each query point
+        - ``shard_distances`` : Distances to the k nearest neighbors for each query point
 
     Raises
     ------
@@ -168,19 +168,38 @@ def ring_knn(
 def extract_knn_args(
     points: torch.Tensor, queries: torch.Tensor, k: int, *args, **kwargs
 ):
-    """
-    Minimal function to use python's argument unpacking to extract the points, queries, and k values.
+    r"""Extract the points, queries, and k values using Python's argument unpacking.
+
+    Parameters
+    ----------
+    points : torch.Tensor
+        The point cloud data tensor.
+    queries : torch.Tensor
+        The query points tensor.
+    k : int
+        Number of nearest neighbors to find.
+    *args : Any
+        Additional positional arguments (unused).
+    **kwargs : Any
+        Additional keyword arguments (unused).
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor, int]
+        Tuple of (points, queries, k).
     """
     return points, queries, k
 
 
 def knn_sharded_wrapper(
-    func: Callable, types: Any, args: tuple, kwargs: dict
+    func: Callable,
+    types: tuple[Any, ...],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
 ) -> tuple[ShardTensor, ShardTensor]:
-    """
-    Dispatch the proper kNN tools based on the input sharding.
+    r"""Dispatch the proper kNN tools based on the input sharding.
 
-    `args` and `kwargs` are passed to `extract_knn_args` to extract
+    ``args`` and ``kwargs`` are passed to ``extract_knn_args`` to extract
     the points, queries, and k values needed for the kNN operation.
 
     Parameters
@@ -197,12 +216,13 @@ def knn_sharded_wrapper(
     Returns
     -------
     tuple[ShardTensor, ShardTensor]
-        A tuple containing the shard_idx and shard_distances.
+        A tuple containing the ``shard_idx`` and ``shard_distances``.
 
     Raises
     ------
     MissingShardPatch
-        If the points and queries tensors are not sharded on the same mesh.
+        If the points and queries tensors are not sharded on the same mesh,
+        or if the meshes are not 1D.
     """
 
     points, queries, k = extract_knn_args(*args, **kwargs)

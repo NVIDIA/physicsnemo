@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -24,7 +24,7 @@ from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
 import numpy as np
 
-from loss.utils import normalized_grid_cell_area
+from train_utils import normalized_grid_cell_area
 
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
