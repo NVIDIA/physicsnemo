@@ -21,13 +21,15 @@ import json
 import numpy as np
 import pytest
 import torch
-from tensordict import TensorDict
+
+from test.conftest import requires_module
 
 # ============================================================================
 # TensorStoreZarrReader Tests
 # ============================================================================
 
 
+@requires_module("tensorstore")
 class TestTensorStoreZarrReader:
     """Tests for TensorStoreZarrReader."""
 
@@ -124,7 +126,7 @@ class TestTensorStoreZarrReader:
 
         data, metadata = reader[0]
 
-        assert isinstance(data, TensorDict)
+        assert isinstance(data, "TensorDict")
         assert data["positions"].shape == (100, 3)
         assert data["features"].shape == (100, 8)
 
@@ -350,6 +352,7 @@ class TestTensorStoreZarrReader:
 # ============================================================================
 
 
+@requires_module("pyvista")
 class TestVTKReader:
     """Tests for VTKReader."""
 
@@ -418,7 +421,7 @@ class TestVTKReader:
 
         data, metadata = reader[0]
 
-        assert isinstance(data, TensorDict)
+        assert isinstance(data, "TensorDict")
         assert "stl_coordinates" in data
         assert "stl_faces" in data
         assert "stl_centers" in data
