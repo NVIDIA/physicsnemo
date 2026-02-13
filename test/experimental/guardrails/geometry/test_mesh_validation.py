@@ -20,10 +20,14 @@
 import numpy as np
 import pytest
 
-pv = pytest.importorskip("pyvista")
+pytest.importorskip("pyvista")
+
+
+import pyvista as pv
 
 from physicsnemo.experimental.guardrails.geometry import validate_mesh
 from physicsnemo.mesh.io.io_pyvista import from_pyvista
+
 
 def test_validate_mesh_valid():
     """Test validation of a valid mesh."""

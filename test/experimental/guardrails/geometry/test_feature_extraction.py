@@ -20,7 +20,9 @@
 import numpy as np
 import pytest
 
-pv = pytest.importorskip("pyvista")
+pytest.importorskip("pyvista")
+
+import pyvista as pv
 
 from physicsnemo.experimental.guardrails.geometry import (
     FEATURE_NAMES,
@@ -29,6 +31,7 @@ from physicsnemo.experimental.guardrails.geometry import (
     feature_hash,
 )
 from physicsnemo.mesh.io.io_pyvista import from_pyvista
+
 
 def test_extract_features_basic():
     """Test basic feature extraction from a simple mesh."""

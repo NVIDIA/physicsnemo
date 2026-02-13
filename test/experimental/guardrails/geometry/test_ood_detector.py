@@ -24,11 +24,14 @@ import numpy as np
 import pytest
 import torch
 
-pv = pytest.importorskip("pyvista")
+pytest.importorskip("pyvista")
+
+import pyvista as pv
 
 from physicsnemo.experimental.guardrails import GeometryGuardrail
 from physicsnemo.experimental.guardrails.geometry import FEATURE_NAMES, FEATURE_VERSION
 from physicsnemo.mesh.io.io_pyvista import from_pyvista
+
 
 def test_guardrail_constructor():
     """Test GuardRail constructor with various parameters."""
