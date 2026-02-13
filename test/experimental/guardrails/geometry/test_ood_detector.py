@@ -13,6 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# ruff: noqa: E402
 
 """Tests for GeometryGuardrail OOD detector main API."""
 
@@ -23,12 +24,11 @@ import numpy as np
 import pytest
 import torch
 
+pv = pytest.importorskip("pyvista")
+
 from physicsnemo.experimental.guardrails import GeometryGuardrail
 from physicsnemo.experimental.guardrails.geometry import FEATURE_NAMES, FEATURE_VERSION
 from physicsnemo.mesh.io.io_pyvista import from_pyvista
-
-pv = pytest.importorskip("pyvista")
-
 
 def test_guardrail_constructor():
     """Test GuardRail constructor with various parameters."""

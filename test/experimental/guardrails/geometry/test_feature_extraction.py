@@ -13,11 +13,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# ruff: noqa: E402
 
 """Tests for geometry guardrail feature extraction."""
 
 import numpy as np
 import pytest
+
+pv = pytest.importorskip("pyvista")
 
 from physicsnemo.experimental.guardrails.geometry import (
     FEATURE_NAMES,
@@ -26,9 +29,6 @@ from physicsnemo.experimental.guardrails.geometry import (
     feature_hash,
 )
 from physicsnemo.mesh.io.io_pyvista import from_pyvista
-
-pv = pytest.importorskip("pyvista")
-
 
 def test_extract_features_basic():
     """Test basic feature extraction from a simple mesh."""
