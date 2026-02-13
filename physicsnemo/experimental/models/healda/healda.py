@@ -272,9 +272,9 @@ class HealDA(Module):
 
         patch_size = 2 ** (level_in - level_model)
         self.dit = DiT(
-            input_size=(npix_coarse * time_length,), # disregarded
+            input_size=(npix_coarse * time_length,),  # ignored by hpx tokenizer
             in_channels=tokenizer_in_channels,
-            patch_size=(patch_size, patch_size), # disregarded
+            patch_size=(patch_size, patch_size), # ignored by hpx tokenizer
             tokenizer="hpx_patch_embed",
             detokenizer="hpx_patch_detokenizer",
             out_channels=out_channels,
