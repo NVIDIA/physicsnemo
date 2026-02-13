@@ -16,73 +16,63 @@
 
 from typing import Type
 
-import torch
+from jaxtyping import Float
 from torch import Tensor, nn
 
+from physicsnemo.core.module import Module
+from physicsnemo.nn.module.embedding_layers import (
+    OneHotEmbedding,
+    SinusoidalTimestepEmbedding,
+)
 
-class PositionalEmbedding(nn.Module):
-    """
-    A module for generating positional embeddings based on timesteps.
-
-    Parameters:
-    -----------
-    num_channels : int
-        Number of channels for the embedding.
-    """
-
-    def __init__(self, num_channels: int):
-        super().__init__()
-        self.num_channels = num_channels
-
-        freqs = torch.pi * torch.arange(
-            start=1, end=self.num_channels // 2 + 1, dtype=torch.float32
-        )
-        self.register_buffer("freqs", freqs)
-
-    def forward(self, x: Tensor) -> Tensor:
-        x = x.view(-1).outer(self.freqs.to(x.dtype))
-        x = torch.cat([x.cos(), x.sin()], dim=1)
-        return x
+# Backward compatibility: modembed used "PositionalEmbedding" for the sinusoidal
+# timestep embedding (distinct from nn.embedding_layers.PositionalEmbedding).
+PositionalEmbedding = SinusoidalTimestepEmbedding
 
 
-class OneHotEmbedding(nn.Module):
-    """
-    A module for generating one-hot embeddings based on timesteps.
+class ModEmbedNet(Module):
+    r"""Network that generates a timestep embedding and processes it with an MLP.
 
-    Parameters:
-    -----------
-    num_channels : int
-        Number of channels for the embedding.
-    """
-
-    def __init__(self, num_channels: int):
-        super().__init__()
-        self.num_channels = num_channels
-        ind = torch.arange(num_channels)
-        ind = ind.view(1, len(ind))
-        self.register_buffer("indices", ind)
-
-    def forward(self, t: Tensor) -> Tensor:
-        ind = t * (self.num_channels - 1)
-        return torch.clamp(1 - torch.abs(ind - self.indices), min=0)
-
-
-class ModEmbedNet(nn.Module):
-    """
-    A network that generates a timestep embedding and processes it with an MLP.
-
-    Parameters:
-    -----------
-    max_time : float, optional
-        Maximum input time. The inputs to `forward` is should be in the range [0, max_time].
-    dim : int, optional
+    Parameters
+    ----------
+    max_time : float, optional, default=1.0
+        Maximum input time. The inputs to ``forward`` should be in the range
+        ``[0, max_time]``.
+    dim : int, optional, default=64
         The dimensionality of the time embedding.
-    depth : int, optional
+    depth : int, optional, default=1
         The number of layers in the MLP.
-    activation_fn:
-        The activation function, default GELU.
-    method : str, optional
-        The embedding method. Either "sinusoidal" (default) or "onehot".
+    activation_fn : Type[nn.Module], optional, default=nn.GELU
+        The activation function class.
+    method : str, optional, default="sinusoidal"
+        The embedding method. Either ``"sinusoidal"`` or ``"onehot"``.
+
+    Forward
+    -------
+    t : torch.Tensor
+        Input tensor, shape ``B ...`` (e.g. :math:`(B,)` or :math:`(B, 1)`),
+        containing timesteps in range ``[0, max_time]``.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor, shape ``B D``, where :math:`D` is ``dim``.
+
+    Examples
+    --------
+    >>> import torch
+    >>> embed_net = ModEmbedNet(max_time=1.0, dim=64, depth=2)
+    >>> t = torch.tensor([0.0, 0.5, 1.0])
+    >>> embedding = embed_net(t)
+    >>> embedding.shape
+    torch.Size([3, 64])
+
+    See Also
+    --------
+    :mod:`~physicsnemo.nn.module.embedding_layers` :
+        Embedding layers; this module uses
+        :class:`~physicsnemo.nn.module.embedding_layers.SinusoidalTimestepEmbedding`
+        and :class:`~physicsnemo.nn.module.embedding_layers.OneHotEmbedding`.
     """
 
     def __init__(
@@ -99,7 +89,7 @@ class ModEmbedNet(nn.Module):
         if method == "onehot":
             self.onehot_embed = OneHotEmbedding(dim)
         elif method == "sinusoidal":
-            self.sinusoid_embed = PositionalEmbedding(dim)
+            self.sinusoid_embed = SinusoidalTimestepEmbedding(dim)
         else:
             raise ValueError(f"Embedding '{method}' not supported")
 
@@ -110,11 +100,16 @@ class ModEmbedNet(nn.Module):
             blocks.extend([nn.Linear(dim, dim), activation_fn()])
         self.mlp = nn.Sequential(*blocks)
 
-    def forward(self, t: Tensor) -> Tensor:
+    def forward(self, t: Float[Tensor, "B ..."]) -> Float[Tensor, "B D"]:
+        r"""Forward pass computing the modulation embedding."""
+        # Normalize time to [0, 1]
         t = t / self.max_time
+
+        # Compute base embedding
         if self.method == "onehot":
             emb = self.onehot_embed(t)
         elif self.method == "sinusoidal":
             emb = self.sinusoid_embed(t)
 
+        # Process through MLP
         return self.mlp(emb)
