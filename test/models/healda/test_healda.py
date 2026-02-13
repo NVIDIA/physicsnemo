@@ -18,6 +18,7 @@ import torch
 
 from physicsnemo.experimental.models.healda import HealDA
 from test import common
+from test.conftest import requires_module
 
 from .test_point_embed import _build_flattened_obs
 
@@ -95,6 +96,7 @@ def _setup_healda(
     return model, in_args
 
 
+@requires_module("earth2grid")
 @pytest.mark.parametrize(
     "diffusion_conditioning, condition_dim, ref_file",
     [
@@ -108,7 +110,7 @@ def test_healda_forward_accuracy(
     ref_file,
     device,
 ):
-    """Non-regression test across conditioning modes."""
+    """Test HealDA forward pass against a saved reference output."""
     torch.manual_seed(0)
     model, in_args = _setup_healda(
         diffusion_conditioning=diffusion_conditioning,
@@ -124,6 +126,7 @@ def test_healda_forward_accuracy(
     )
 
 
+@requires_module("earth2grid")
 def test_healda_checkpoint(device):
     """Test that checkpoint save/load reproduces identical outputs."""
     torch.manual_seed(0)
@@ -145,6 +148,7 @@ def test_healda_checkpoint(device):
     assert common.validate_checkpoint(model_1, model_2, in_args)
 
 
+@requires_module("earth2grid")
 @pytest.mark.parametrize("t", [1, 2])
 def test_healda_time_length(t, device):
     """Test HealDA with different time lengths."""
