@@ -14,14 +14,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# import warnings
+from .density_model import GeometryDensityModel
+from .density_pce import TorchPCEDensityModel
+from .feature_extraction import (
+    FEATURE_NAMES,
+    FEATURE_VERSION,
+    extract_features,
+    feature_hash,
+)
+from .feature_schema import FeatureSchema
+from .mesh_io import load_features_from_dir
+from .mesh_validation import validate_mesh
+from .ood_detector import GeometryGuardrail
 
-# from physicsnemo.core.warnings import ExperimentalFeatureWarning
-
-
-# warnings.warn(
-#     "You are importing from 'physicsnemo.experimental'. The APIs in this namespace are experimental, under active development, "
-#     "and may change without notice. Expect possible back-compatibility breaking changes and only partial test coverage.",
-#     ExperimentalFeatureWarning,
-#     stacklevel=2,
-# )
+__all__ = [
+    "GeometryGuardrail",
+    "GeometryDensityModel",
+    "TorchPCEDensityModel",
+    "FeatureSchema",
+    "extract_features",
+    "validate_mesh",
+    "load_features_from_dir",
+    "feature_hash",
+    "FEATURE_NAMES",
+    "FEATURE_VERSION",
+]
