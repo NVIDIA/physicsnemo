@@ -21,6 +21,7 @@ import json
 import numpy as np
 import pytest
 import torch
+from tensordict import TensorDict
 
 from test.conftest import requires_module
 
@@ -35,13 +36,8 @@ class TestTensorStoreZarrReader:
 
     @pytest.fixture
     def tensorstore_available(self):
-        """Check if tensorstore is available."""
-        try:
-            import tensorstore  # noqa: F401
-
-            return True
-        except ImportError:
-            pytest.skip("TensorStore not installed")
+        """Require tensorstore; skip test if not installed."""
+        pytest.importorskip("tensorstore")
 
     @pytest.fixture
     def zarr_v2_data_dir(self, tmp_path):
@@ -126,7 +122,7 @@ class TestTensorStoreZarrReader:
 
         data, metadata = reader[0]
 
-        assert isinstance(data, "TensorDict")
+        assert isinstance(data, TensorDict)
         assert data["positions"].shape == (100, 3)
         assert data["features"].shape == (100, 8)
 
@@ -358,13 +354,8 @@ class TestVTKReader:
 
     @pytest.fixture
     def pyvista_available(self):
-        """Check if pyvista is available."""
-        try:
-            import pyvista  # noqa: F401
-
-            return True
-        except ImportError:
-            pytest.skip("PyVista not installed")
+        """Require pyvista; skip test if not installed."""
+        pytest.importorskip("pyvista")
 
     @pytest.fixture
     def stl_data_dir(self, tmp_path, pyvista_available):
@@ -421,7 +412,7 @@ class TestVTKReader:
 
         data, metadata = reader[0]
 
-        assert isinstance(data, "TensorDict")
+        assert isinstance(data, TensorDict)
         assert "stl_coordinates" in data
         assert "stl_faces" in data
         assert "stl_centers" in data
