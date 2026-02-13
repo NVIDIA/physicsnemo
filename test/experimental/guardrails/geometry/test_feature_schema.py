@@ -13,11 +13,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# ruff: noqa: E402
 
 """Tests for geometry guardrail feature schema validation."""
 
 import numpy as np
 import pytest
+
+pytest.importorskip("pyvista")
 
 from physicsnemo.experimental.guardrails.geometry import (
     FEATURE_NAMES,
