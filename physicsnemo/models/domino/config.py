@@ -25,6 +25,8 @@ from Hydra objects as well.
 from dataclasses import fields, is_dataclass
 from typing import Any
 
+from omegaconf import OmegaConf
+
 
 class Config(dict):
     r"""
@@ -105,9 +107,11 @@ class Config(dict):
         if hydra_cfg is None:
             return cls()
 
-        # OmegaConf DictConfig
-        if hasattr(hydra_cfg, "to_container"):
-            return cls(hydra_cfg.to_container(resolve=True))
+        # OmegaConf DictConfig/ListConfig: use OmegaConf API so sub-configs convert correctly.
+        # (Sub-configs may not expose keys via .to_container(); __dict__ would only see
+        # internal keys like _content and we filter those out, giving an empty dict.)
+        if OmegaConf.is_config(hydra_cfg):
+            return cls(OmegaConf.to_container(hydra_cfg, resolve=True))
 
         # Dataclass
         if hasattr(hydra_cfg, "__dataclass_fields__"):
@@ -117,7 +121,7 @@ class Config(dict):
         if isinstance(hydra_cfg, dict):
             return cls(hydra_cfg)
 
-        # Object with __dict__
+        # Object with __dict__ (plain Python objects; OmegaConf configs handled above)
         if hasattr(hydra_cfg, "__dict__"):
             return cls(
                 {k: v for k, v in hydra_cfg.__dict__.items() if not k.startswith("_")}
