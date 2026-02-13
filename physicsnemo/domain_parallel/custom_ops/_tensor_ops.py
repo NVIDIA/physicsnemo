@@ -39,7 +39,7 @@ from physicsnemo.domain_parallel._shard_tensor_spec import (
     _stride_from_contiguous_shape_C_style,
 )
 
-if check_version_spec("torch", "2.10.0"):
+if check_version_spec("torch", "2.10.0a"):
     from torch.distributed.tensor._ops.registration import (
         register_prop_rule,
     )

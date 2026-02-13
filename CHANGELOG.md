@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - PhysicsNemo v2.0 contains significant reorganization of tools.  Please see
   the v2.0-MIGRATION-GUIDE.md to understand what has changed and why.
+- DiT (Diffusion Transformer) has been moved from `physicsnemo.experimental.models.dit`
+  to `physicsnemo.models.dit`.
 
 ### Deprecated
 
