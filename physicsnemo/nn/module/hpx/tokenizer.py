@@ -86,6 +86,7 @@ class HEALPixPatchTokenizer(nn.Module):
         hidden_size: int,
         level_fine: int,
         level_coarse: int,
+        **kwargs,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -211,6 +212,7 @@ class HEALPixPatchDetokenizer(nn.Module):
         level_fine: int,
         time_length: int = 1,
         condition_dim: Optional[int] = None,
+        **kwargs,
     ):
         super().__init__()
         self.hidden_size = hidden_size
