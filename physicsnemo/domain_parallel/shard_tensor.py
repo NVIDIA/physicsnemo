@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Callable, Sequence, cast
 from warnings import warn
 
@@ -83,8 +83,9 @@ def _convert_args_to_dtensor(arg: object) -> object:
     Parameters
     ----------
     arg : object
-        A single argument that may be a ShardTensor, a list/tuple of
-        arguments, or any other value.
+        A single argument that may be a ShardTensor, an iterable of
+        arguments (e.g. list, tuple), a mapping (e.g. dict) whose
+        values are converted, or any other value.
 
     Returns
     -------
@@ -95,7 +96,9 @@ def _convert_args_to_dtensor(arg: object) -> object:
     # is safe because this function is only called at runtime.
     if isinstance(arg, ShardTensor):
         return _shard_tensor_to_dtensor(arg)
-    elif isinstance(arg, (list, tuple)):
+    elif isinstance(arg, Mapping):
+        return type(arg)({k: _convert_args_to_dtensor(v) for k, v in arg.items()})
+    elif isinstance(arg, Iterable) and not isinstance(arg, (str, bytes)):
         converted = [_convert_args_to_dtensor(a) for a in arg]
         return type(arg)(converted)
     return arg
@@ -638,11 +641,12 @@ class ShardTensor(DTensor):
     def _promote_dtensor_results(result, input_args):
         r"""Promote DTensor(s) in a dispatch/function result back to ShardTensor.
 
-        Handles three cases:
+        Handles four cases:
 
         1. Single DTensor — promoted via :meth:`_maybe_promote_dtensor`.
-        2. Iterable of results — each DTensor element is promoted individually.
-        3. Anything else — returned as-is.
+        2. Mapping (e.g. dict) — each value is promoted if it is a DTensor.
+        3. Iterable of results — each DTensor element is promoted individually.
+        4. Anything else — returned as-is.
 
         Parameters
         ----------
@@ -658,6 +662,16 @@ class ShardTensor(DTensor):
         """
         if isinstance(result, DTensor):
             return ShardTensor._maybe_promote_dtensor(result, input_args)
+
+        if isinstance(result, Mapping):
+            return type(result)(
+                {
+                    k: ShardTensor._maybe_promote_dtensor(v, input_args)
+                    if isinstance(v, DTensor)
+                    else v
+                    for k, v in result.items()
+                }
+            )
 
         # Exclude str/bytes so we don't iterate over characters.
         if isinstance(result, Iterable) and not isinstance(result, (str, bytes)):
@@ -901,7 +915,7 @@ class ShardTensor(DTensor):
         if not torch.is_grad_enabled():
             return self._local_tensor
 
-        if grad_placements is not None and not isinstance(grad_placements, tuple):
+        if grad_placements is not None:
             grad_placements = tuple(grad_placements)
 
         return _ToTorchTensor.apply(self, grad_placements)
@@ -929,6 +943,8 @@ class ShardTensor(DTensor):
         redist_res = self.redistribute(
             placements=[Replicate()] * self.device_mesh.ndim, async_op=False
         )
+        if grad_placements is not None:
+            grad_placements = tuple(grad_placements)
         return _ToTorchTensor.apply(redist_res, grad_placements)
 
     def backward(self, *args, **kwargs):
