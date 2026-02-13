@@ -387,3 +387,59 @@ def test_view_round_trip(
         {},
         check_grads=backward,
     )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("backward", [False, True])
+def test_view_trailing_dims_1d_to_3d(
+    distributed_mesh,
+    backward,
+):
+    """Test view (6,) -> (2, 3, 1) with Shard(0): trailing dim must stay in group.
+
+    With the shard on dim 0, each rank has a contiguous chunk of the 1D tensor.
+    The target shape has a trailing singleton (2, 3, 1). The trailing dimension
+    must be included in the same dimension group so that the local element
+    count is correct (product of local shape equals chunk_size). Without that,
+    the old code produced wrong local shapes (e.g. product 4 instead of 2 or 3).
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    shape = (6,)
+    target_shape = (2, 3, 1)
+
+    original_tensor = torch.rand(shape, device=dm.device, requires_grad=backward)
+
+    placements = (Shard(0),)
+
+    sharded_tensor = scatter_tensor(
+        original_tensor,
+        global_src=0,
+        mesh=distributed_mesh,
+        placements=placements,
+        requires_grad=backward,
+    )
+
+    expected_local_numel = sharded_tensor._local_tensor.numel()
+
+    viewed = sharded_tensor.view(target_shape)
+
+    assert viewed.shape == target_shape, (
+        f"expected global shape {target_shape}, got {viewed.shape}"
+    )
+    assert viewed._local_tensor.numel() == expected_local_numel, (
+        f"local numel mismatch: viewed has {viewed._local_tensor.numel()}, "
+        f"expected {expected_local_numel} (original local had {expected_local_numel} elements)"
+    )
+
+    if backward:
+        module = ViewWrapper(target_shape=target_shape)
+        numerical_shard_tensor_check(
+            distributed_mesh,
+            module,
+            [sharded_tensor],
+            {},
+            check_grads=True,
+        )

@@ -63,6 +63,9 @@ aten = torch.ops.aten
 def _resolve_target_shape(target_shape: Sequence[int], numel: int) -> list[int]:
     r"""Resolve ``-1`` in a target view/reshape shape.
 
+    At most one ``-1`` is allowed (matches PyTorch behavior). The inferred
+    dimension is chosen so that the total number of elements is preserved.
+
     Parameters
     ----------
     target_shape : Sequence[int]
@@ -74,11 +77,32 @@ def _resolve_target_shape(target_shape: Sequence[int], numel: int) -> list[int]:
     -------
     list[int]
         Fully-resolved shape with ``-1`` replaced by the inferred size.
+
+    Raises
+    ------
+    ValueError
+        If more than one ``-1`` is present, if any non-inferred dimension
+        is 0 (would cause division by zero), or if ``numel`` is not divisible
+        by the product of known dimensions.
     """
     result = list(target_shape)
+    neg_indices = [i for i, s in enumerate(result) if s == -1]
+    if len(neg_indices) > 1:
+        raise ValueError(
+            f"Only one dimension can be inferred (-1). Got {len(neg_indices)}."
+        )
     if -1 in result:
         neg_idx = result.index(-1)
         known = math.prod(s for i, s in enumerate(result) if i != neg_idx)
+        if known == 0:
+            raise ValueError(
+                "Cannot infer dimension when other dimensions have product 0."
+            )
+        if numel % known != 0:
+            raise ValueError(
+                f"Shape {tuple(target_shape)} is invalid for tensor with "
+                f"{numel} elements (not divisible by product of known dims)."
+            )
         result[neg_idx] = numel // known
     return result
 
@@ -313,13 +337,14 @@ def _compute_view_placements(
     new_placements = list(placements)
 
     for old_dims, new_dims in groups:
-        for d in old_dims:
-            if d in shard_to_mesh:
-                mesh_dim = shard_to_mesh[d]
-                new_shard_dim, _ = _find_shard_in_new_dims(
-                    old_dims, new_dims, global_old, local_old, global_new
-                )
-                new_placements[mesh_dim] = Shard(new_shard_dim)
+        sharded_in_group = [d for d in old_dims if d in shard_to_mesh]
+        if not sharded_in_group:
+            continue
+        new_shard_dim, _ = _find_shard_in_new_dims(
+            old_dims, new_dims, global_old, local_old, global_new
+        )
+        for d in sharded_in_group:
+            new_placements[shard_to_mesh[d]] = Shard(new_shard_dim)
 
     return tuple(new_placements)
 
@@ -511,17 +536,26 @@ class ShardedView(torch.autograd.Function):
 def sharded_view(tensor: ShardTensor, target_shape: Sequence[int]) -> ShardTensor:
     r"""Differentiable view/reshape for :class:`ShardTensor`.
 
+    Implements a view when possible (no copy); the output is made contiguous
+    for downstream ops. At most one ``-1`` is allowed in ``target_shape``
+    (inferred so that the total number of elements is preserved).
+
     Parameters
     ----------
     tensor : ShardTensor
         Input tensor.
     target_shape : Sequence[int]
-        Target global shape (may contain ``-1``).
+        Target global shape (may contain a single ``-1`` for inference).
 
     Returns
     -------
     ShardTensor
         Viewed/reshaped ShardTensor.
+
+    Examples
+    --------
+    1D sharded on dim 0, view to 2D: ``st.view(2, -1)`` or
+    ``sharded_view(st, (2, -1))``; the shard flows to the first new dimension.
     """
     return ShardedView.apply(tensor, tuple(target_shape))
 
@@ -593,7 +627,9 @@ def torch_reshape_wrapper(
 # ---------------------------------------------------------------------------
 
 
-def _sharded_view_dispatch(tensor: ShardTensor, target_shape: list[int]) -> ShardTensor:
+def _sharded_view_dispatch(
+    tensor: ShardTensor, target_shape: Sequence[int]
+) -> ShardTensor:
     r"""Dispatch handler for ``aten.view.default`` on :class:`ShardTensor`.
 
     Called at the ``__torch_dispatch__`` level.  Autograd wraps above this
@@ -603,7 +639,7 @@ def _sharded_view_dispatch(tensor: ShardTensor, target_shape: list[int]) -> Shar
     ----------
     tensor : ShardTensor
         Input sharded tensor.
-    target_shape : list[int]
+    target_shape : Sequence[int]
         Global target shape.
 
     Returns
@@ -657,7 +693,6 @@ def aten_view_wrapper(
 ShardTensor.register_function_handler(torch.Tensor.view, view_wrapper)
 ShardTensor.register_function_handler(torch.Tensor.reshape, reshape_wrapper)
 ShardTensor.register_function_handler(torch.reshape, torch_reshape_wrapper)
-ShardTensor.register_function_handler(torch.Tensor.reshape, torch_reshape_wrapper)
 
 # ATen ops can also arrive at __torch_function__ (not just __torch_dispatch__)
 # when internal PyTorch code calls them directly on a tensor subclass.
