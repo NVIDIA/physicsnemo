@@ -21,12 +21,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import pyvista as pv
 import torch
 
 from physicsnemo.experimental.guardrails import GeometryGuardrail
 from physicsnemo.experimental.guardrails.geometry import FEATURE_NAMES, FEATURE_VERSION
 from physicsnemo.mesh.io.io_pyvista import from_pyvista
+
+pv = pytest.importorskip("pyvista")
 
 
 def test_guardrail_constructor():
