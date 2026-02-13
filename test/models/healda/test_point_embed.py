@@ -19,12 +19,11 @@ import pytest
 import torch
 
 from physicsnemo.experimental.models.healda import (
-    MultiSensorObsEmbedding,
+    MultiSensorObsEmbedder,
     SensorEmbedder,
 )
 from physicsnemo.experimental.models.healda.point_embed import _split_by_sensor
 from test import common
-from test.conftest import requires_module
 
 
 def check_all_params_have_gradients(model: torch.nn.Module) -> tuple[bool, list[str]]:
@@ -41,7 +40,7 @@ def _build_flattened_obs(
     *,
     nchannel_per_sensor: list[int],
     nplatform_per_sensor: list[int],
-    obs_hpx_level: int,
+    npix: int,
     meta_dim: int = 4,
     device: str | None = None,
 ):
@@ -55,10 +54,9 @@ def _build_flattened_obs(
     s, b, t = counts_t.shape
     offsets = torch.cumsum(counts_t.reshape(-1), dim=0).reshape(s, b, t)
     nobs = int(offsets[-1, -1, -1].item()) if offsets.numel() > 0 else 0
-    npix_in = 12 * 4**obs_hpx_level
     obs = torch.arange(nobs, dtype=torch.float32)
     float_metadata = torch.randn((nobs, meta_dim), dtype=torch.float32)
-    pix = torch.randint(0, npix_in, (nobs,), dtype=torch.long)
+    pix = torch.randint(0, npix, (nobs,), dtype=torch.long)
     local_channel = torch.zeros((nobs,), dtype=torch.long)
     local_platform = torch.zeros((nobs,), dtype=torch.long)
     obs_type = torch.randint(0, 256, (nobs,), dtype=torch.long)
@@ -103,7 +101,7 @@ def test_split_by_sensor():
             counts,
             nchannel_per_sensor=[4, 3, 2],
             nplatform_per_sensor=[3, 2, 1],
-            obs_hpx_level=6,
+            npix=12 * 4**3,
             meta_dim=4,
         )
     )
@@ -135,7 +133,7 @@ def test_split_by_sensor():
 def test_sensor_embedder_forward_and_gradients(device, nobs):
     torch.manual_seed(0)
     b, t = 2, 1
-    hpx_model = 5
+    npix = 12 * 4**3
     out_dim = 32
     meta_dim = 4
     nchannel = 8
@@ -151,7 +149,7 @@ def test_sensor_embedder_forward_and_gradients(device, nobs):
             counts,
             nchannel_per_sensor=[nchannel],
             nplatform_per_sensor=[nplatform],
-            obs_hpx_level=hpx_model,
+            npix=npix,
             meta_dim=meta_dim,
             device=device,
         )
@@ -164,7 +162,6 @@ def test_sensor_embedder_forward_and_gradients(device, nobs):
         output_dim=out_dim,
         meta_dim=meta_dim,
         n_embed=256,
-        hpx_level=hpx_model,
     ).to(device)
     embedder.train()
     # SensorEmbedder expects 2D offsets (B, T); squeeze the single-sensor dim
@@ -176,8 +173,8 @@ def test_sensor_embedder_forward_and_gradients(device, nobs):
         local_platform=local_platform,
         obs_type=obs_type,
         offsets=offsets.squeeze(0),
+        npix=npix,
     )
-    npix = 12 * 4**hpx_model
     assert out.shape == (b, t, npix, out_dim)
     assert torch.isfinite(out).all()
 
@@ -187,11 +184,10 @@ def test_sensor_embedder_forward_and_gradients(device, nobs):
     assert all_have_grads, f"Parameters without gradients (nobs={nobs}): {missing}"
 
 
-@requires_module("earth2grid")
 @pytest.mark.parametrize("counts", [[[[3], [2]], [[1], [4]]], [[[0], [0]], [[0], [0]]]])
 def test_multisensor_obs_embedding_forward_and_gradients(device, counts):
     torch.manual_seed(0)
-    hpx_model = 5
+    npix = 12 * 4**3
     meta_dim = 4
     fusion_dim = 32
     nchannel_per_sensor = [7, 5]
@@ -202,20 +198,19 @@ def test_multisensor_obs_embedding_forward_and_gradients(device, counts):
             counts,
             nchannel_per_sensor=nchannel_per_sensor,
             nplatform_per_sensor=nplatform_per_sensor,
-            obs_hpx_level=hpx_model,
+            npix=npix,
             meta_dim=meta_dim,
             device=device,
         )
     )
 
-    model = MultiSensorObsEmbedding(
+    model = MultiSensorObsEmbedder(
         nchannel_per_sensor=nchannel_per_sensor,
         nplatform_per_sensor=nplatform_per_sensor,
-        hpx_level=hpx_model,
         embed_dim=16,
         meta_dim=meta_dim,
         fusion_dim=fusion_dim,
-        compile=False,
+        torch_compile=False,
     ).to(device)
     model.train()
     out = model(
@@ -226,8 +221,8 @@ def test_multisensor_obs_embedding_forward_and_gradients(device, counts):
         local_platform=local_platform,
         obs_type=obs_type,
         offsets=offsets,
+        npix=npix,
     )
-    npix = 12 * 4**hpx_model
     assert out.shape == (2, fusion_dim, 1, npix)
     assert torch.isfinite(out).all()  # verify no NaNs
 
@@ -237,11 +232,10 @@ def test_multisensor_obs_embedding_forward_and_gradients(device, counts):
     assert all_have_grads, f"Parameters without gradients: {missing}"
 
 
-@requires_module("earth2grid")
 def test_multisensor_obs_embedding_forward_accuracy(device):
-    """Regression test for MultiSensorObsEmbedding forward output."""
+    """Regression test for MultiSensorObsEmbedder forward output."""
     torch.manual_seed(0)
-    hpx_model = 5
+    npix = 12 * 4**3
     meta_dim = 4
     fusion_dim = 32
     nchannel_per_sensor = [7, 5]
@@ -252,16 +246,15 @@ def test_multisensor_obs_embedding_forward_accuracy(device):
             counts,
             nchannel_per_sensor=nchannel_per_sensor,
             nplatform_per_sensor=nplatform_per_sensor,
-            obs_hpx_level=hpx_model,
+            npix=npix,
             meta_dim=meta_dim,
             device=device,
         )
     )
 
-    model = MultiSensorObsEmbedding(
+    model = MultiSensorObsEmbedder(
         nchannel_per_sensor=nchannel_per_sensor,
         nplatform_per_sensor=nplatform_per_sensor,
-        hpx_level=hpx_model,
         embed_dim=16,
         meta_dim=meta_dim,
         fusion_dim=fusion_dim,
@@ -278,6 +271,7 @@ def test_multisensor_obs_embedding_forward_accuracy(device):
             local_platform,
             obs_type,
             offsets,
+            npix,
         ),
         file_name="models/healda/data/point_embed_multisensor_output.pth",
     )

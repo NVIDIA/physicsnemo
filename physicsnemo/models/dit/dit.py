@@ -68,11 +68,11 @@ class DiT(Module):
     patch_size : Union[int, Tuple[int]], optional, default=(8, 8)
         The size of each image patch. If an integer is provided, a square 2D patch is assumed.
         If a tuple is provided, a multi-dimensional patch is assumed.
-    tokenizer : Union[Literal["patch_embed_2d"], Module], optional, default="patch_embed_2d"
-        The tokenizer to use. Either a string in ``{"patch_embed_2d"}`` or an instantiated PhysicsNeMo :class:`~physicsnemo.core.Module` implementing
+    tokenizer : Union[Literal["patch_embed_2d", "hpx_patch_embed"], Module], optional, default="patch_embed_2d"
+        The tokenizer to use. Either a string in ``{"patch_embed_2d", "hpx_patch_embed"}`` or an instantiated PhysicsNeMo :class:`~physicsnemo.core.Module` implementing
         :class:`~physicsnemo.models.dit.layers.TokenizerModuleBase`, with forward accepting input of shape :math:`(B, C, *\text{spatial\_dims})` and returning :math:`(B, L, D)`.
-    detokenizer : Union[Literal["proj_reshape_2d"], Module], optional, default="proj_reshape_2d"
-        The detokenizer to use. Either a string in ``{"proj_reshape_2d"}`` or an instantiated PhysicsNeMo :class:`~physicsnemo.core.Module` implementing
+    detokenizer : Union[Literal["proj_reshape_2d", "hpx_patch_detokenizer"], Module], optional, default="proj_reshape_2d"
+        The detokenizer to use. Either a string in ``{"proj_reshape_2d", "hpx_patch_detokenizer"}`` or an instantiated PhysicsNeMo :class:`~physicsnemo.core.Module` implementing
         :class:`~physicsnemo.models.dit.layers.DetokenizerModuleBase`, with forward accepting :math:`(B, L, D)` and :math:`(B, D)` and returning :math:`(B, C, *\text{spatial\_dims})`.
     out_channels : Union[None, int], optional, default=None
         The number of output channels. If ``None``, set to ``in_channels``.
@@ -188,8 +188,12 @@ class DiT(Module):
         input_size: Union[int, Tuple[int]],
         in_channels: int,
         patch_size: Union[int, Tuple[int]] = (8, 8),
-        tokenizer: Union[Literal["patch_embed_2d"], Module] = "patch_embed_2d",
-        detokenizer: Union[Literal["proj_reshape_2d"], Module] = "proj_reshape_2d",
+        tokenizer: Union[
+            Literal["patch_embed_2d", "hpx_patch_embed"], Module
+        ] = "patch_embed_2d",
+        detokenizer: Union[
+            Literal["proj_reshape_2d", "hpx_patch_detokenizer"], Module
+        ] = "proj_reshape_2d",
         out_channels: Optional[int] = None,
         hidden_size: int = 384,
         depth: int = 12,
@@ -245,11 +249,19 @@ class DiT(Module):
         if layernorm_backend not in ["apex", "torch"]:
             raise ValueError("layernorm_backend must be one of 'apex', 'torch'")
 
-        if isinstance(tokenizer, str) and tokenizer not in ["patch_embed_2d"]:
-            raise ValueError("tokenizer must be 'patch_embed_2d'")
+        if isinstance(tokenizer, str) and tokenizer not in [
+            "patch_embed_2d",
+            "hpx_patch_embed",
+        ]:
+            raise ValueError("tokenizer must be 'patch_embed_2d' or 'hpx_patch_embed'")
 
-        if isinstance(detokenizer, str) and detokenizer not in ["proj_reshape_2d"]:
-            raise ValueError("detokenizer must be 'proj_reshape_2d'")
+        if isinstance(detokenizer, str) and detokenizer not in [
+            "proj_reshape_2d",
+            "hpx_patch_detokenizer",
+        ]:
+            raise ValueError(
+                "detokenizer must be 'proj_reshape_2d' or 'hpx_patch_detokenizer'"
+            )
 
         # Tokenizer module: accept string or pre-instantiated PhysicsNeMo Module
         if isinstance(tokenizer, str):
