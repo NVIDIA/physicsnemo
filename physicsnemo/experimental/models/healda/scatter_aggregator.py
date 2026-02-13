@@ -56,6 +56,34 @@ def scatter_mean(
     tuple[torch.Tensor, torch.Tensor]
         - ``aggregated``: mean-aggregated values of shape :math:`(*shape, C)`.
         - ``present``: boolean mask of shape :math:`(*shape)` indicating which cells received data.
+
+    Examples
+    --------
+    Scatter 4 feature vectors of dimension 2 onto a ``(batch=2, pixel=3)`` grid.
+
+    >>> import torch
+    >>> x = torch.tensor([[1.0, 10.0],
+    ...                    [3.0, 30.0],
+    ...                    [5.0, 50.0],
+    ...                    [7.0, 70.0]])           # (N=4, C=2)
+    >>> index = torch.tensor([[0, 1],
+    ...                        [0, 1],
+    ...                        [1, 0],
+    ...                        [1, 2]])            # (N=4, D=2) -> (batch, pixel)
+    >>> agg, present = scatter_mean(x, index, shape=(2, 3))
+    >>> agg.shape                                  # (*shape, C) = (2, 3, 2)
+    torch.Size([2, 3, 2])
+    >>> agg[0]                                     # batch 0: only pixel 1 has data
+    tensor([[nan, nan],
+            [ 2., 20.],                            # pixel 1 is average of rows 0 & 1
+            [nan, nan]])
+    >>> agg[1]                                     # batch 1: pixels 0 and 2 have data
+    tensor([[ 5., 50.],
+            [nan, nan],
+            [ 7., 70.]])
+    >>> present                                    # (*shape) = (2, 3)
+    tensor([[False,  True, False],                 # pixel 1 is present in batch 0
+            [ True, False,  True]])                # pixels 0 and 2 are present in batch 1
     """
     strides = _compute_row_major_strides(shape)
     # manually implement the dot product since matmul doesn't support long tensors on cuda
