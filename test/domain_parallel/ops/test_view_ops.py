@@ -31,8 +31,38 @@ from torch.distributed.tensor.placement_types import Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
+from physicsnemo.domain_parallel.shard_tensor import ShardTensor
+from physicsnemo.domain_parallel.shard_utils.view_ops import _match_view_dim_groups
 
 from .utils import numerical_shard_tensor_check
+
+
+@pytest.mark.parametrize(
+    "old_shape,new_shape,expected",
+    [
+        ((6,), (2, 3), [([0], [0, 1])]),
+        ((4, 8), (32,), [([0, 1], [0])]),
+        ((2, 0), (1, 0), [([0, 1], [0, 1])]),
+        ((2, 0, 3), (1, 0, 3), [([0, 1], [0, 1]), ([2], [2])]),
+        ((4, 5), (4, 5), [([0], [0]), ([1], [1])]),
+    ],
+)
+def test_match_view_dim_groups_compatible(old_shape, new_shape, expected):
+    """Unit test: compatible view shapes produce the expected dimension groups."""
+    assert _match_view_dim_groups(old_shape, new_shape) == expected
+
+
+@pytest.mark.parametrize(
+    "old_shape,new_shape",
+    [
+        ((2, 3), (5,)),
+        ((2, 0), (1, 10)),
+    ],
+)
+def test_match_view_dim_groups_incompatible(old_shape, new_shape):
+    """Unit test: incompatible view shapes raise ValueError."""
+    with pytest.raises(ValueError, match="are not compatible"):
+        _match_view_dim_groups(old_shape, new_shape)
 
 
 class ViewWrapper(torch.nn.Module):
@@ -443,3 +473,110 @@ def test_view_trailing_dims_1d_to_3d(
             {},
             check_grads=True,
         )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize(
+    "input_dtype,output_dtype,shape",
+    [
+        (torch.int32, torch.float32, (8,)),  # same element count
+        (
+            torch.int64,
+            torch.float32,
+            (4,),
+        ),  # 4 int64 -> 4 float32 (shape same, bytes 32)
+        (torch.float32, torch.int32, (8,)),  # same element count
+    ],
+    ids=["int32_to_float32", "int64_to_float32", "float32_to_int32"],
+)
+def test_view_dtype(distributed_mesh, input_dtype, output_dtype, shape):
+    """Test view(dtype) on ShardTensor returns 1D ShardTensor with expected dtype.
+
+    .view(torch.dtype) reinterprets storage; PyTorch returns 1D. We assert
+    the call succeeds and the result has the correct dtype and 1D shape
+    consistent with the same op on a plain tensor.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    if input_dtype in (torch.int32, torch.int64):
+        original_tensor = torch.randint(
+            0, 100, shape, device=dm.device, dtype=input_dtype
+        )
+    else:
+        original_tensor = torch.randn(shape, device=dm.device, dtype=input_dtype)
+
+    sharded_tensor = scatter_tensor(
+        original_tensor,
+        global_src=0,
+        mesh=distributed_mesh,
+        placements=(Shard(0),),
+        requires_grad=False,
+    )
+
+    result = sharded_tensor.view(output_dtype)
+
+    assert isinstance(result, ShardTensor), "view(dtype) should return a ShardTensor"
+    assert result.dtype == output_dtype, f"expected {output_dtype}, got {result.dtype}"
+    assert result.ndim == 1, f"view(dtype) returns 1D; got ndim={result.ndim}"
+    expected_size = (
+        original_tensor.numel() * input_dtype.itemsize // output_dtype.itemsize
+    )
+    assert result.shape[0] == expected_size, (
+        f"expected size {expected_size}, got {result.shape[0]}"
+    )
+    plain_viewed = original_tensor.view(output_dtype)
+    assert result.shape == plain_viewed.shape, (
+        f"ShardTensor view(dtype) shape {result.shape} should match plain {plain_viewed.shape}"
+    )
+
+
+@pytest.mark.multigpu_static
+def test_view_dtype_invalid_byte_size(distributed_mesh):
+    """Test view(dtype) raises RuntimeError when byte size not divisible by target dtype."""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    # 3 float32 = 12 bytes; float64.itemsize = 8, 12 % 8 != 0
+    shape = (3,)
+    original_tensor = torch.randn(shape, device=dm.device, dtype=torch.float32)
+    sharded_tensor = scatter_tensor(
+        original_tensor,
+        global_src=0,
+        mesh=distributed_mesh,
+        placements=(Shard(0),),
+        requires_grad=False,
+    )
+
+    with pytest.raises(RuntimeError, match="byte size.*divisible"):
+        sharded_tensor.view(torch.float64)
+
+
+@pytest.mark.multigpu_static
+def test_view_dtype_nd_input(distributed_mesh):
+    """Test view(dtype) on a multi-dimensional ShardTensor preserves shape when itemsizes match."""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    shape = (4, 4)
+    original_tensor = torch.randint(0, 100, shape, device=dm.device, dtype=torch.int32)
+    sharded_tensor = scatter_tensor(
+        original_tensor,
+        global_src=0,
+        mesh=distributed_mesh,
+        placements=(Shard(0),),
+        requires_grad=False,
+    )
+
+    result = sharded_tensor.view(torch.float32)
+
+    assert isinstance(result, ShardTensor), "view(dtype) should return a ShardTensor"
+    assert result.dtype == torch.float32
+    assert result.shape == shape, (
+        f"int32 and float32 have same itemsize; shape should be preserved {shape}, got {result.shape}"
+    )
+    plain_viewed = original_tensor.view(torch.float32)
+    assert result.shape == plain_viewed.shape

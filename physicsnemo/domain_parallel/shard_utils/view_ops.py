@@ -20,9 +20,16 @@ This module provides a proper implementation of ``view`` / ``reshape`` for
 :class:`ShardTensor`, replacing the inline contiguity hack that previously
 lived in :meth:`ShardTensor.__torch_dispatch__`.
 
-The core challenge is that ``view`` / ``reshape`` change the tensor's
-dimensionality, so we must track how sharded dimensions flow through the
-dimension-group matching to compute:
+Supported overloads:
+
+- **view(*shape)** / **reshape(*shape)** — change shape; shard dimensions
+  flow through dimension-group matching.
+- **view(dtype)** — reinterpret storage as another dtype (e.g. ``.view(torch.float32)``).
+  Same shape when dtypes have the same ``itemsize``, otherwise 1D; matches PyTorch.
+
+The core challenge for shape-changing view/reshape is that they change the
+tensor's dimensionality, so we must track how sharded dimensions flow through
+the dimension-group matching to compute:
 
 1. The **local target shape** (global target shape with shard dims adjusted).
 2. The **new placements** (shard dim index may change after merge/split).
@@ -44,7 +51,7 @@ from typing import Any, Callable
 
 import torch
 from torch.distributed.tensor._dtensor_spec import TensorMeta
-from torch.distributed.tensor.placement_types import Placement, Shard
+from torch.distributed.tensor.placement_types import Placement, Replicate, Shard
 
 from physicsnemo.domain_parallel._shard_tensor_spec import (
     ShardTensorSpec,
@@ -120,9 +127,12 @@ def _match_view_dim_groups(
     Parameters
     ----------
     old_shape : Sequence[int]
-        Original tensor shape (all positive, no ``-1``).
+        Original tensor shape (all positive, no ``-1``). Zero-size dimensions
+        are allowed and match when products align (e.g. ``(2, 0)`` and
+        ``(1, 0)``).
     new_shape : Sequence[int]
-        Target tensor shape (all positive, no ``-1``).
+        Target tensor shape (all positive, no ``-1``). Zero-size dimensions
+        are allowed.
 
     Returns
     -------
@@ -146,7 +156,26 @@ def _match_view_dim_groups(
         new_prod = new_shape[new_i]
 
         while old_prod != new_prod:
-            if old_prod < new_prod:
+            # When one side has product 0 and the other does not, extend the
+            # non-zero side until it becomes 0 so both groups can match
+            # (zero-size dims are view-compatible, e.g. (2, 0) <-> (1, 0)).
+            if new_prod == 0 and old_prod != 0:
+                old_i += 1
+                if old_i >= len(old_shape):
+                    raise ValueError(
+                        f"View shapes {tuple(old_shape)} and {tuple(new_shape)} "
+                        f"are not compatible"
+                    )
+                old_prod *= old_shape[old_i]
+            elif old_prod == 0 and new_prod != 0:
+                new_i += 1
+                if new_i >= len(new_shape):
+                    raise ValueError(
+                        f"View shapes {tuple(old_shape)} and {tuple(new_shape)} "
+                        f"are not compatible"
+                    )
+                new_prod *= new_shape[new_i]
+            elif old_prod < new_prod:
                 old_i += 1
                 if old_i >= len(old_shape):
                     raise ValueError(
@@ -214,6 +243,10 @@ def _find_shard_in_new_dims(
         If no valid new shard dimension can be found.
     """
     chunk_size = math.prod(local_old[d] for d in old_dims)
+
+    # Zero-size group: shard maps to first new dim with local size 0.
+    if chunk_size == 0:
+        return new_dims[0], 0
 
     # Walk new dims left-to-right, tracking the suffix product.
     suffix_prods: list[int] = [0] * len(new_dims)
@@ -465,6 +498,80 @@ def _sharded_view_forward(
     return ShardTensor(local_result, output_spec, requires_grad=False)
 
 
+def _sharded_view_dtype(tensor: ShardTensor, dtype: torch.dtype) -> ShardTensor:
+    r"""Reinterpret sharded tensor storage as a different dtype (view(dtype)).
+
+    Applies ``view(dtype)`` locally on each shard. When the old and new dtypes
+    have the same ``itemsize``, the shape and placements are preserved (matches
+    PyTorch). When they differ, the result is 1D with size equal to
+    ``total_bytes // dtype.itemsize``.
+
+    Parameters
+    ----------
+    tensor : ShardTensor
+        Input sharded tensor.
+    dtype : torch.dtype
+        Target dtype to reinterpret the storage as.
+
+    Returns
+    -------
+    ShardTensor
+        ShardTensor with the given dtype (view of the same storage); same
+        shape as input when itemsizes match, otherwise 1D.
+
+    Raises
+    ------
+    RuntimeError
+        If the tensor's byte size is not divisible by ``dtype.itemsize``
+        (same condition as PyTorch's view(dtype)).
+    """
+    spec = tensor._spec
+    local_tensor = tensor._local_tensor
+    old_dtype = spec.tensor_meta.dtype
+    old_global_shape = spec.tensor_meta.shape
+    old_global_numel = math.prod(old_global_shape)
+    total_bytes = old_global_numel * old_dtype.itemsize
+    if total_bytes % dtype.itemsize != 0:
+        raise RuntimeError(
+            f"view(dtype) requires tensor byte size ({total_bytes}) to be "
+            f"divisible by {dtype.itemsize} (dtype {dtype})"
+        )
+    new_global_numel = total_bytes // dtype.itemsize
+
+    if not local_tensor.is_contiguous():
+        local_tensor = local_tensor.contiguous()
+    local_result = local_tensor.view(dtype)
+
+    if old_dtype.itemsize == dtype.itemsize:
+        # Same itemsize: preserve shape and placements (PyTorch behavior).
+        new_global_shape = old_global_shape
+        new_stride = _stride_from_contiguous_shape_C_style(tuple(old_global_shape))
+        new_placements = spec.placements
+        new_sharding = spec._sharding_shapes
+    else:
+        # Different itemsize: result is 1D.
+        new_global_shape = (new_global_numel,)
+        new_stride = (1,)
+        new_placements = tuple(
+            Shard(0) if p.is_shard() else Replicate() for p in spec.placements
+        )
+        new_sharding = None
+
+    new_meta = TensorMeta(
+        shape=torch.Size(new_global_shape),
+        stride=new_stride,
+        dtype=dtype,
+    )
+    output_spec = ShardTensorSpec(
+        mesh=spec.mesh,
+        placements=new_placements,
+        tensor_meta=new_meta,
+        _local_shape=local_result.shape,
+        _sharding_shapes=new_sharding,
+    )
+    return ShardTensor(local_result, output_spec, requires_grad=False)
+
+
 # ---------------------------------------------------------------------------
 # Autograd function (for __torch_function__ path)
 # ---------------------------------------------------------------------------
@@ -596,6 +703,8 @@ def view_wrapper(
     kwargs: dict[str, Any],
 ) -> ShardTensor:
     r"""``__torch_function__`` handler for ``torch.Tensor.view``."""
+    if len(args) == 2 and isinstance(args[1], torch.dtype):
+        return _sharded_view_dtype(args[0], args[1])
     tensor, shape = _extract_view_shape(args)
     return sharded_view(tensor, shape)
 
