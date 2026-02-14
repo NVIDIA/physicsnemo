@@ -15,6 +15,8 @@
 # limitations under the License.
 # ruff: noqa: E402
 
+import importlib
+import sys
 from typing import Tuple
 
 import pytest
@@ -22,8 +24,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from physicsnemo.experimental.models.dit import DiT
-from physicsnemo.experimental.models.dit.layers import (
+from physicsnemo.core.warnings import LegacyFeatureWarning
+from physicsnemo.models.dit import DiT
+from physicsnemo.models.dit.layers import (
     DetokenizerModuleBase,
     DiTBlock,
     TokenizerModuleBase,
@@ -32,6 +35,13 @@ from test import common
 from test.conftest import requires_module
 
 # --- Tests ---
+
+
+def test_experimental_dit_import_warns():
+    """Legacy experimental DiT import should emit a deprecation warning."""
+    sys.modules.pop("physicsnemo.experimental.models.dit", None)
+    with pytest.warns(LegacyFeatureWarning):
+        importlib.import_module("physicsnemo.experimental.models.dit")
 
 
 def test_dit_forward_accuracy(device):

@@ -35,13 +35,11 @@ dependencies = [
     "s3fs>=2023.5.0",
     "packaging>=24.2",
     "timm>=1.0.22",
-    "xarray>=2025.6.1",
     "einops>=0.8.1",
     "h5py>=3.15.1",
     "cftime>=1.6.5",
     "jaxtyping>=0.3.3",
     "termcolor>=3.2.0",
-    "zarr>=3.0.0",
     "hydra-core>=1.3.2",
     "tensordict>=0.10.0",
     "omegaconf>=2.3.0",
@@ -158,8 +156,6 @@ utils-extras = [
     "line_profiler",
     "vtk",
     "stl",
-    "pylibraft-cu13", # Provides rmm
-    "cupy-cuda13x",
 ]
 mesh-extras = [
     "matplotlib>=3.10.7",
@@ -167,20 +163,21 @@ mesh-extras = [
     "pyvista>=0.46.4",
 ]
 nn-extras = [
-    "cuml-cu13",
     "scipy",
     "natten",
     "nvidia-physicsnemo[utils-extras]",
 ]
 model-extras = [
     "nvidia-physicsnemo[nn-extras]",
-    "pyvista",
+    "pyvista>=0.46.4",
     "vtk",
 ]
 datapipes-extras = [
-    "dask",
     "tfrecord",
     "netCDF4",
+    "xarray>=2025.6.1",
+    "zarr>=3.0.0",
+    "tensordict>=0.11.0",
 ]
 
 # Use case specific dependency groups.
@@ -192,6 +189,15 @@ gnns = [
     # "nvfuser",
     "nvidia-physicsnemo[model-extras]",
 ]
+
+perf = [
+    "transformer_engine[pytorch]",
+    "cuml-cu13",
+    "nvidia-dali-cuda130",
+    "pylibraft-cu13", # Provides rmm
+    "cupy-cuda13x",
+]
+
 
 #####################################################################
 # Linting configuration

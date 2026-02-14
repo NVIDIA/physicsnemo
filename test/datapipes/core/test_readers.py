@@ -22,6 +22,7 @@ import torch
 from tensordict import TensorDict
 
 import physicsnemo.datapipes as dp
+from test.conftest import requires_module
 
 # ============================================================================
 # NumpyReader - Directory mode
@@ -180,6 +181,7 @@ def test_hdf5_close(hdf5_single_file):
 # ============================================================================
 
 
+@requires_module("zarr>=3.0.0")
 def test_zarr_load_from_directory(zarr_data_dir):
     reader = dp.ZarrReader(zarr_data_dir, group_pattern="sample_*.zarr")
 
@@ -188,6 +190,7 @@ def test_zarr_load_from_directory(zarr_data_dir):
     assert "field_b" in reader.field_names
 
 
+@requires_module("zarr>=3.0.0")
 def test_zarr_get_sample(zarr_data_dir):
     reader = dp.ZarrReader(zarr_data_dir)
     data, metadata = reader[0]
@@ -196,12 +199,14 @@ def test_zarr_get_sample(zarr_data_dir):
     assert data["field_b"].shape == (50,)
 
 
+@requires_module("zarr>=3.0.0")
 def test_zarr_single_group_mode(zarr_single_group):
     reader = dp.ZarrReader(zarr_single_group)
 
     assert len(reader) == 30
 
 
+@requires_module("zarr>=3.0.0")
 def test_zarr_get_sample_single_group(zarr_single_group):
     reader = dp.ZarrReader(zarr_single_group)
     data, metadata = reader[5]

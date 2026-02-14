@@ -208,7 +208,7 @@ _PACKAGE_HINTS: Dict[str, str] = {
     ),
     "h5py": _format_install_hint(
         "h5py",
-        direct_install="h5py",
+        group="datapipes-extras",
     ),
     "netCDF4": _format_install_hint(
         "netCDF4",

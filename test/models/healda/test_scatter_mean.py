@@ -26,7 +26,7 @@ def test_scatter_mean_basic():
     # - Some cells will have multiple values (need averaging)
     # - Some cells will be empty (should get fill_value)
 
-    tensor = torch.tensor(
+    x = torch.tensor(
         [
             [1.0, 10.0],  # goes to cell (0, 0)
             [2.0, 20.0],  # goes to cell (0, 1)
@@ -48,7 +48,7 @@ def test_scatter_mean_basic():
 
     shape = (3, 2)  # 3 rows, 2 columns
 
-    aggregated, present = scatter_mean(tensor, index, shape)
+    aggregated, present = scatter_mean(x, index, shape)
 
     # Check shape
     assert aggregated.shape == (3, 2, 2)  # (3, 2) grid with 2 features
@@ -80,12 +80,12 @@ def test_scatter_mean_basic():
 
 def test_scatter_mean_custom_fill_value():
     """Test scatter_mean with a custom fill value"""
-    tensor = torch.tensor([[1.0, 2.0]])
+    x = torch.tensor([[1.0, 2.0]])
     index = torch.tensor([[0, 0]])
     shape = (2, 2)
     fill_value = -999.0
 
-    aggregated, present = scatter_mean(tensor, index, shape, fill_value=fill_value)
+    aggregated, present = scatter_mean(x, index, shape, fill_value=fill_value)
 
     # Cell (0, 0) should have the value
     assert torch.allclose(aggregated[0, 0], torch.tensor([1.0, 2.0]))

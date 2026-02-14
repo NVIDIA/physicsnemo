@@ -20,8 +20,144 @@ from pathlib import Path
 import pytest
 import torch
 
+from physicsnemo.core.module import Module
 from physicsnemo.models.diffusion_unets import CorrDiffRegressionUNet, StormCastUNet
 from test import common
+
+
+@pytest.mark.parametrize(
+    "config",
+    ["default", "custom"],
+    ids=["with_defaults", "with_custom_args"],
+)
+def test_corrdiff_regression_unet_constructor(device, config):
+    """Test CorrDiffRegressionUNet model constructor and attributes (MOD-008a).
+
+    This test verifies:
+    1. Model can be instantiated with default arguments
+    2. Model can be instantiated with custom arguments
+    3. All public attributes have expected values
+    """
+    if config == "default":
+        model = CorrDiffRegressionUNet(
+            img_resolution=16,
+            img_in_channels=2,
+            img_out_channels=3,
+            model_type="SongUNet",
+        ).to(device)
+
+        # Verify default attribute values
+        assert model.img_shape_y == 16
+        assert model.img_shape_x == 16
+        assert model.img_in_channels == 2
+        assert model.img_out_channels == 3
+        assert model.use_fp16 is False
+        assert model.amp_mode is False
+        assert model.profile_mode is False
+
+        # Verify forward pass shape
+        x = torch.zeros(1, 2, 16, 16).to(device)
+        img_lr = torch.randn(1, 3, 16, 16).to(device)
+        output = model(x, img_lr)
+        assert output.shape == (1, 3, 16, 16)
+    else:
+        model = CorrDiffRegressionUNet(
+            img_resolution=[16, 32],
+            img_in_channels=4,
+            img_out_channels=2,
+            model_type="SongUNet",
+            use_fp16=False,
+            model_channels=64,
+            channel_mult=[1, 2, 2],
+            num_blocks=2,
+        ).to(device)
+
+        # Verify custom attribute values
+        assert model.img_shape_y == 16
+        assert model.img_shape_x == 32
+        assert model.img_in_channels == 4
+        assert model.img_out_channels == 2
+        assert model.use_fp16 is False
+
+        # Verify forward pass shape
+        x = torch.zeros(1, 4, 16, 32).to(device)
+        img_lr = torch.randn(1, 2, 16, 32).to(device)
+        output = model(x, img_lr)
+        assert output.shape == (1, 2, 16, 32)
+
+    # Common assertions
+    assert isinstance(model, Module)
+    assert hasattr(model, "model")
+    assert hasattr(model, "meta")
+
+
+@pytest.mark.parametrize(
+    "config",
+    ["default", "custom"],
+    ids=["with_defaults", "with_custom_args"],
+)
+def test_stormcast_unet_constructor(device, config):
+    """Test StormCastUNet model constructor and attributes (MOD-008a).
+
+    This test verifies:
+    1. Model can be instantiated with default arguments
+    2. Model can be instantiated with custom arguments
+    3. All public attributes have expected values
+    """
+    if config == "default":
+        model = StormCastUNet(
+            img_resolution=16,
+            img_in_channels=2,
+            img_out_channels=3,
+        ).to(device)
+
+        # Verify default attribute values
+        assert model.img_shape_y == 16
+        assert model.img_shape_x == 16
+        assert model.img_in_channels == 2
+        assert model.img_out_channels == 3
+        assert model.use_fp16 is False
+        assert model.sigma_min == 0
+        assert model.sigma_max == float("inf")
+        assert model.sigma_data == 0.5
+        assert model.amp_mode is False
+        assert model.profile_mode is False
+
+        # Verify forward pass shape
+        x = torch.randn(1, 2, 16, 16).to(device)
+        output = model(x)
+        assert output.shape == (1, 3, 16, 16)
+    else:
+        model = StormCastUNet(
+            img_resolution=[16, 32],
+            img_in_channels=4,
+            img_out_channels=2,
+            sigma_min=0.01,
+            sigma_max=80.0,
+            sigma_data=1.0,
+            model_channels=64,
+            channel_mult=[1, 2, 2],
+            num_blocks=2,
+        ).to(device)
+
+        # Verify custom attribute values
+        assert model.img_shape_x == 16
+        assert model.img_shape_y == 32
+        assert model.img_in_channels == 4
+        assert model.img_out_channels == 2
+        assert model.sigma_min == 0.01
+        assert model.sigma_max == 80.0
+        assert model.sigma_data == 1.0
+
+        # Verify forward pass shape
+        x = torch.randn(1, 4, 16, 32).to(device)
+        output = model(x)
+        assert output.shape == (1, 2, 16, 32)
+
+    # Common assertions
+    assert isinstance(model, Module)
+    assert hasattr(model, "model")
+    assert hasattr(model, "meta")
 
 
 def test_unet_forwards(device):

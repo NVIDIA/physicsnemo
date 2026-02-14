@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Set, Tuple, Union
 
 import torch
+from jaxtyping import Float
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
@@ -101,6 +102,21 @@ class CorrDiffRegressionUNet(Module):  # TODO a lot of redundancy, need to clean
         Output tensor of shape :math:`(B, C_{out}, H_{in}, W_{in})` (same
         spatial dimensions as the input).
 
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.models.diffusion_unets import CorrDiffRegressionUNet
+    >>> model = CorrDiffRegressionUNet(
+    ...     img_resolution=16,
+    ...     img_in_channels=2,
+    ...     img_out_channels=3,
+    ...     model_type="SongUNet",
+    ... )
+    >>> x = torch.zeros(1, 2, 16, 16)
+    >>> img_lr = torch.randn(1, 3, 16, 16)
+    >>> output = model(x, img_lr)
+    >>> output.shape
+    torch.Size([1, 3, 16, 16])
     """
 
     __model_checkpoint_version__ = "0.2.0"
@@ -254,12 +270,32 @@ class CorrDiffRegressionUNet(Module):  # TODO a lot of redundancy, need to clean
 
     def forward(
         self,
-        x: torch.Tensor,
-        img_lr: torch.Tensor,
+        x: Float[torch.Tensor, "B C_in H_in W_in"],
+        img_lr: Float[torch.Tensor, "B C_lr H_in W_in"] | None = None,
         force_fp32: bool = False,
         **model_kwargs: dict,
-    ) -> torch.Tensor:
-        # SR: concatenate input channels
+    ) -> Float[torch.Tensor, "B C_out H_in W_in"]:
+        # Input validation
+        if not torch.compiler.is_compiling():
+            if x.ndim != 4:
+                raise ValueError(
+                    f"Expected 'x' to be a 4D tensor (B, C, H, W), "
+                    f"got {x.ndim}D tensor with shape {tuple(x.shape)}"
+                )
+            if img_lr is not None:
+                if img_lr.ndim != 4:
+                    raise ValueError(
+                        f"Expected 'img_lr' to be a 4D tensor (B, C, H, W), "
+                        f"got {img_lr.ndim}D tensor with shape {tuple(img_lr.shape)}"
+                    )
+                if img_lr.shape[0] != x.shape[0] or img_lr.shape[2:] != x.shape[2:]:
+                    raise ValueError(
+                        f"Expected 'img_lr' spatial dimensions to match 'x': "
+                        f"x has shape {tuple(x.shape)}, "
+                        f"but img_lr has shape {tuple(img_lr.shape)}"
+                    )
+
+        # Concatenate conditioning image to input
         if img_lr is not None:
             x = torch.cat((x, img_lr), dim=1)
 
@@ -270,8 +306,8 @@ class CorrDiffRegressionUNet(Module):  # TODO a lot of redundancy, need to clean
         )
 
         F_x = self.model(
-            x.to(dtype),  # (c_in * x).to(dtype),
-            torch.zeros(x.shape[0], dtype=dtype, device=x.device),  # c_noise.flatten()
+            x.to(dtype),
+            torch.zeros(x.shape[0], dtype=dtype, device=x.device),
             class_labels=None,
             **model_kwargs,
         )
@@ -281,7 +317,6 @@ class CorrDiffRegressionUNet(Module):  # TODO a lot of redundancy, need to clean
                 f"Expected the dtype to be {dtype}, but got {F_x.dtype} instead."
             )
 
-        # skip connection
         D_x = F_x.to(torch.float32)
         return D_x
 
@@ -393,32 +428,60 @@ class UNet(CorrDiffRegressionUNet):
 # TODO: implement amp_mode and profile_mode properties for StormCastUNet (same
 # as UNet)
 class StormCastUNet(Module):
-    """
-    U-Net wrapper for StormCast; used so the same Song U-Net network can be re-used for this model.
+    r"""
+    U-Net wrapper for StormCast; used so the same Song U-Net network can be
+    re-used for this model.
 
     Parameters
     -----------
-    img_resolution : int or List[int]
-        The resolution of the input/output image.
-    img_channels : int
-         Number of color channels.
+    img_resolution : Union[int, List[int]]
+        The resolution of the input/output image. If a single int is provided,
+        the image is assumed to be square.
     img_in_channels : int
-        Number of input color channels.
+        Number of input channels :math:`C_{in}` in the input image.
     img_out_channels : int
-        Number of output color channels.
-    use_fp16: bool, optional
-        Execute the underlying model at FP16 precision?, by default False.
-    sigma_min: float, optional
-        Minimum supported noise level, by default 0.
-    sigma_max: float, optional
-        Maximum supported noise level, by default float('inf').
-    sigma_data: float, optional
-        Expected standard deviation of the training data, by default 0.5.
-    model_type: str, optional
-        Class name of the underlying model, by default 'SongUNet'.
+        Number of output channels :math:`C_{out}` in the output image.
+    use_fp16 : bool, optional, default=False
+        Execute the underlying model at FP16 precision.
+    sigma_min : float, optional, default=0
+        Minimum supported noise level.
+    sigma_max : float, optional, default=float('inf')
+        Maximum supported noise level.
+    sigma_data : float, optional, default=0.5
+        Expected standard deviation of the training data.
+    model_type : str, optional, default='SongUNet'
+        Class name of the underlying model.
     **model_kwargs : dict
         Keyword arguments for the underlying model.
 
+    Forward
+    -------
+    x : torch.Tensor
+        The input tensor of shape :math:`(B, C_{in}, H_{in}, W_{in})`.
+    force_fp32 : bool, optional, default=False
+        Force casting to FP32 if ``True``.
+    **model_kwargs : dict
+        Additional keyword arguments to pass to the underlying architecture
+        forward method.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(B, C_{out}, H_{in}, W_{in})`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.models.diffusion_unets import StormCastUNet
+    >>> model = StormCastUNet(
+    ...     img_resolution=16,
+    ...     img_in_channels=2,
+    ...     img_out_channels=3,
+    ... )
+    >>> x = torch.randn(1, 2, 16, 16)
+    >>> output = model(x)
+    >>> output.shape
+    torch.Size([1, 3, 16, 16])
     """
 
     def __init__(
@@ -468,19 +531,20 @@ class StormCastUNet(Module):
         "Set to ``True`` to enable profiling of the wrapped model.",
     )
 
-    def forward(self, x, force_fp32=False, **model_kwargs):
-        """Run a forward pass of the StormCast regression U-Net.
-
-        Args:
-            x (torch.Tensor): input to the U-Net
-            force_fp32 (bool, optional): force casting to fp_32 if True. Defaults to False.
-
-        Raises:
-            ValueError: If input data type is a mismatch with provided options
-
-        Returns:
-            D_x (torch.Tensor): Output (prediction) of the U-Net
-        """
+    def forward(
+        self,
+        x: Float[torch.Tensor, "B C_in H_in W_in"],
+        force_fp32: bool = False,
+        **model_kwargs: dict,
+    ) -> Float[torch.Tensor, "B C_out H_in W_in"]:
+        r"""Run a forward pass of the StormCast regression U-Net."""
+        # Input validation
+        if not torch.compiler.is_compiling():
+            if x.ndim != 4:
+                raise ValueError(
+                    f"Expected 'x' to be a 4D tensor (B, C, H, W), "
+                    f"got {x.ndim}D tensor with shape {tuple(x.shape)}"
+                )
 
         x = x.to(torch.float32)
         dtype = (
