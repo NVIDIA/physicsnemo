@@ -19,6 +19,7 @@ import random
 import pytest
 import torch
 
+import physicsnemo
 from physicsnemo.models.fno import FNO
 from test import common
 
@@ -206,6 +207,22 @@ def test_fno_checkpoint(device, dimension):
         invar = torch.randn(bsize, 2, 8, 8, 8, 8).to(device)
 
     assert common.validate_checkpoint(model_1, model_2, (invar,))
+
+
+@pytest.mark.parametrize("dimension", [1, 2, 3, 4])
+def test_fno_load_checkpoint(device, dimension):
+    """Test loading FNO from pre-saved checkpoint file."""
+    from pathlib import Path
+
+    test_dir = Path(__file__).parent.resolve()
+    checkpoint_path = test_dir / f"data/fno_{dimension}d_checkpoint.mdlus"
+
+    model = physicsnemo.Module.from_checkpoint(str(checkpoint_path)).to(device)
+
+    # Verify model attributes match expected (minimal config from create_checkpoints)
+    assert model.in_channels == 1
+    assert model.dimension == dimension
+    assert model.num_fno_layers == 1
 
 
 @common.check_ort_version()

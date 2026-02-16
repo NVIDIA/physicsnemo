@@ -49,7 +49,7 @@ class ConcatConditionWrapper(Module):
      - :class:`~physicsnemo.models.diffusion_unets.SongUNetPosEmbd`,
      - :class:`~physicsnemo.models.diffusion_unets.SongUNetPosLtEmbd`,
      - :class:`~physicsnemo.models.diffusion_unets.DhariwalUNet`,
-     - :class:`~physicsnemo.experimental.models.dit.DiT`.
+     - :class:`~physicsnemo.models.dit.DiT`.
      - Any backbone with an forward signatude matching that of the `DiT` model:
        ``model(x, t, condition=None, **model_kwargs)`` where ``condition`` is a
        tensor of shape :math:`(B, d)` and ``**model_kwargs`` are additional
@@ -126,9 +126,9 @@ class ConcatConditionWrapper(Module):
     >>> out.shape
     torch.Size([2, 3, 8, 8])
 
-    Wrap :class:`~physicsnemo.experimental.models.dit.DiT` similarly:
+    Wrap :class:`~physicsnemo.models.dit.DiT` similarly:
 
-    >>> from physicsnemo.experimental.models.dit import DiT
+    >>> from physicsnemo.models.dit import DiT
     >>> dit = DiT(in_channels=4, out_channels=3, condition_dim=4, input_size=8, patch_size=4)
     >>> dit_wrapper = ConcatConditionWrapper(dit)
     >>> out = dit_wrapper(x, t, condition)

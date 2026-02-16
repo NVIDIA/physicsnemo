@@ -18,6 +18,7 @@ import random
 
 import torch
 
+import physicsnemo
 from physicsnemo.models.afno import ModAFNO
 from test import common
 
@@ -168,6 +169,22 @@ def test_modafno_checkpoint(device):
     invar = torch.randn(bsize, 2, 32, 32).to(device)
     time = torch.full((bsize, 1), 0.5).to(device)
     assert common.validate_checkpoint(model_1, model_2, (invar, time))
+
+
+def test_modafno_load_checkpoint(device):
+    """Test loading ModAFNO from pre-saved checkpoint file."""
+    from pathlib import Path
+
+    test_dir = Path(__file__).parent.resolve()
+    checkpoint_path = test_dir / "data/modafno_checkpoint.mdlus"
+
+    model = physicsnemo.Module.from_checkpoint(str(checkpoint_path)).to(device)
+
+    # Verify model attributes match expected (minimal config from create_checkpoints)
+    assert model.in_chans == 1
+    assert model.out_chans == 1
+    assert model.embed_dim == 4
+    assert model.num_blocks == 1
 
 
 @common.check_ort_version()

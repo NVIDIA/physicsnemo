@@ -25,22 +25,18 @@ def test_scatter_aggregator_forward(device):
 
     in_dim = 8
     out_dim = 16
-    nchannel = 3
-    nplatform = 2
+    nbuckets = 6
     npix = 50
 
     model = ScatterAggregator(
         in_dim=in_dim,
         out_dim=out_dim,
-        nchannel=nchannel,
-        nplatform=nplatform,
-        npix=npix,
+        nbuckets=nbuckets,
     ).to(device)
     model.eval()
 
     n_obs = 100
     nbatch = 2
-    nbuckets = nchannel * nplatform
     obs_features = torch.randn(n_obs, in_dim).to(device)
     batch_idx = torch.randint(0, nbatch, (n_obs,)).to(device)
     pix = torch.randint(0, npix, (n_obs,)).to(device)
@@ -48,19 +44,18 @@ def test_scatter_aggregator_forward(device):
 
     assert common.validate_forward_accuracy(
         model,
-        (obs_features, batch_idx, pix, bucket_id, nbatch),
+        (obs_features, batch_idx, pix, bucket_id, nbatch, npix),
         file_name="models/healda/data/scatter_aggregator_output.pth",
         atol=1e-3,
     )
 
 
 def test_scatter_aggregator_empty_cells(device):
-    """Test ScatterAggregator handles sparse observations."""
+    """Test ScatterAggregator handles sparse data with mostly empty cells."""
     torch.manual_seed(0)
+    nbuckets = 4
 
-    model = ScatterAggregator(in_dim=4, out_dim=8, nchannel=2, nplatform=2, npix=10).to(
-        device
-    )
+    model = ScatterAggregator(in_dim=4, out_dim=8, nbuckets=nbuckets).to(device)
 
     n_obs = 1
     obs_features = torch.randn(n_obs, 4, device=device)
@@ -68,7 +63,7 @@ def test_scatter_aggregator_empty_cells(device):
     pix = torch.arange(n_obs, device=device)
     bucket_id = torch.zeros(n_obs, dtype=torch.long, device=device)
 
-    output = model(obs_features, batch_idx, pix, bucket_id, nbatch=1)
+    output = model(obs_features, batch_idx, pix, bucket_id, nbatch=1, npix=10)
 
     assert output.shape == (1, 10, 8)
     assert torch.isfinite(output).all()
