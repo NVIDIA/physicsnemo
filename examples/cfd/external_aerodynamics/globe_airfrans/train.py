@@ -513,6 +513,11 @@ def main(
                 ### Pad boundary meshes to fixed size for static compilation
                 max_sizes = train_max_sizes if training else valid_max_sizes
                 for bc_type, mesh in input_dict["boundary_meshes"].items():
+                    ### Pre-cache normals before entering torch.compile.
+                    # Areas and centroids are already cached above; normals must also
+                    # be cached here so the computation+cache-write path is never
+                    # traced by Dynamo (avoiding graph breaks and recompilations).
+                    _ = mesh.cell_normals
                     input_dict["boundary_meshes"][bc_type] = mesh.pad(
                         target_n_points=max_sizes[bc_type]["n_points"],
                         target_n_cells=max_sizes[bc_type]["n_cells"],
