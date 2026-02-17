@@ -36,7 +36,6 @@ import torch
 import torch.distributed as dist
 from torch.distributed.tensor import DTensor
 
-from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.domain_parallel import ShardTensor, ShardTensorSpec
 from physicsnemo.domain_parallel.shard_utils.patch_core import MissingShardPatch
 
@@ -102,7 +101,7 @@ class PartialGroupNorm(torch.autograd.Function):
         ShardTensor
             Normalized tensor of same shape as input.
         """
-        # These are _global_ shapes:
+        # These are local shapes:
         N, C = input.shape[0], input.shape[1]
         channels_per_group = C // num_groups
         HxW_local = input.numel() // (N * C)
@@ -233,7 +232,7 @@ class PartialGroupNorm(torch.autograd.Function):
         global_rstd = ctx.global_rstd  # (N, G)
 
         spec = ctx.spec
-        group = DistributedManager().get_mesh_group(spec.mesh)
+        group = spec.mesh.get_group(mesh_dim=0)
 
         # Total elements in reduction dimension (correct for uneven sharding).
         global_spatial = spec.tensor_meta.shape[2:]
