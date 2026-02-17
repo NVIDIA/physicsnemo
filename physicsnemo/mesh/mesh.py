@@ -486,15 +486,12 @@ class Mesh:
 
             for i in range(self.n_spatial_dims):
                 ### Select all columns except the i-th to form (n-1)×(n-1) submatrix
-                cols_mask = torch.ones(
-                    self.n_spatial_dims,
-                    dtype=torch.bool,
-                    device=relative_vectors.device,
-                )
-                cols_mask[i] = False
-                submatrix = relative_vectors[
-                    :, :, cols_mask
-                ]  # (n_cells, n_manifold_dims, n_manifold_dims)
+                # Uses slice concatenation instead of boolean mask indexing to avoid
+                # aten.nonzero (a dynamic shape op that causes torch.compile graph breaks).
+                submatrix = torch.cat(
+                    [relative_vectors[:, :, :i], relative_vectors[:, :, i + 1 :]],
+                    dim=-1,
+                )  # (n_cells, n_manifold_dims, n_manifold_dims)
 
                 ### Compute signed minor: (-1)^(n_manifold_dims + i) * det(submatrix)
                 det = submatrix.det()  # (n_cells,)
