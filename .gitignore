@@ -166,6 +166,7 @@ nsight-systems*
 build/
 mlruns/
 checkpoints/
+cache/
 
 # Hydra
 outputs/
