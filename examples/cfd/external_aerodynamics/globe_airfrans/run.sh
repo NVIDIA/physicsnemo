@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH -A coreai_modulus_cae
-#SBATCH -J coreai_modulus_cae-psharpe.train_globe_run_1
+#SBATCH -J coreai_modulus_cae-psharpe.train_globe_run_1_scarce
 #SBATCH --time=4:00:00
 #SBATCH -p batch
 #SBATCH -N 10
@@ -12,8 +12,8 @@
 
 TRAIN_ARGS=(
     --output-name ${SLURM_JOB_NAME#coreai_modulus_cae-psharpe.train_globe_}
-    --airfrans-task "full"
-    --train-face-downsampling-ratio 0.5
+    --airfrans-task "scarce"
+
 )
 
 ### [Run Information]
