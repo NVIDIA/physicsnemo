@@ -18,7 +18,10 @@ from typing import Literal
 
 import numpy as np
 import torch
+from jaxtyping import Float
+from torch import Tensor
 
+from physicsnemo.core.module import Module
 from physicsnemo.nn.module.utils.utils import _validate_amp
 
 
@@ -137,3 +140,111 @@ class PositionalEmbedding(torch.nn.Module):
         if self.learnable:
             x = self.mlp(x)
         return x
+
+
+class SinusoidalTimestepEmbedding(Module):
+    r"""Sinusoidal embedding for timesteps (e.g. for modulation / diffusion).
+
+    For input :math:`x` (timestep) and :math:`D =` ``num_channels`` (even), the
+    frequencies are :math:`\omega_k = k\pi` for :math:`k = 1, \ldots, D/2`, and
+    the output is the concatenation of cosines and sines:
+
+    .. math::
+
+        \mathrm{embed}(x) = \big[ \cos(x \omega_1), \ldots, \cos(x \omega_{D/2}),
+        \sin(x \omega_1), \ldots, \sin(x \omega_{D/2}) \big] \in \mathbb{R}^D.
+
+    This is a simpler scheme than :class:`PositionalEmbedding` (which uses
+    geometric frequencies and optional learnable MLP) which works well for timestep
+    conditioning in ModAFNO model.
+
+    Parameters
+    ----------
+    num_channels : int
+        Number of output channels. Must be even.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor, shape ``B ...`` (e.g. :math:`(B,)` or :math:`(B, 1)`),
+        containing timesteps.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor, shape ``B D`` with :math:`D =` ``num_channels``.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.nn.module.embedding_layers import SinusoidalTimestepEmbedding
+    >>> emb = SinusoidalTimestepEmbedding(num_channels=64)
+    >>> t = torch.tensor([0.0, 0.5, 1.0])
+    >>> out = emb(t)
+    >>> out.shape
+    torch.Size([3, 64])
+
+    See Also
+    --------
+    :class:`PositionalEmbedding` :
+        DDPM/ADM-style positional embedding (geometric frequencies, optional MLP).
+    """
+
+    def __init__(self, num_channels: int):
+        super().__init__()
+        self.num_channels = num_channels
+        freqs = torch.pi * torch.arange(
+            start=1, end=self.num_channels // 2 + 1, dtype=torch.float32
+        )
+        self.register_buffer("freqs", freqs)
+
+    def forward(self, x: Float[Tensor, "B ..."]) -> Float[Tensor, "B D"]:
+        r"""Forward pass computing sinusoidal embeddings."""
+        x = x.view(-1).outer(self.freqs.to(x.dtype))
+        x = torch.cat([x.cos(), x.sin()], dim=1)
+        return x
+
+
+class OneHotEmbedding(Module):
+    r"""Soft one-hot embedding for normalized timesteps in :math:`[0, 1]`.
+
+    The :math:`i`-th channel is :math:`\max(0, 1 - |t(D-1) - i|)`, giving
+    a soft one-hot vector of dimension :math:`D`. Used for timestep conditioning
+    in ModAFNO when ``method="onehot"``.
+
+    Parameters
+    ----------
+    num_channels : int
+        Number of channels (embedding dimension).
+
+    Forward
+    -------
+    t : torch.Tensor
+        Input tensor, shape ``B ...``, with normalized timesteps in ``[0, 1]``.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor, shape ``B D``.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.nn.module.embedding_layers import OneHotEmbedding
+    >>> emb = OneHotEmbedding(num_channels=64)
+    >>> t = torch.tensor([[0.0], [0.5], [1.0]])
+    >>> out = emb(t)
+    >>> out.shape
+    torch.Size([3, 64])
+    """
+
+    def __init__(self, num_channels: int):
+        super().__init__()
+        self.num_channels = num_channels
+        ind = torch.arange(num_channels, dtype=torch.float32)
+        self.register_buffer("indices", ind.view(1, -1))
+
+    def forward(self, t: Float[Tensor, "B ..."]) -> Float[Tensor, "B D"]:
+        r"""Forward pass computing soft one-hot embeddings."""
+        ind = (t.view(-1, 1) * (self.num_channels - 1)).to(self.indices.dtype)
+        return torch.clamp(1 - torch.abs(ind - self.indices), min=0)

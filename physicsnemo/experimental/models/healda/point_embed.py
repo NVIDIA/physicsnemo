@@ -15,18 +15,14 @@
 # limitations under the License.
 """Multi-sensor observation embedding for HealDA."""
 
-import logging
 import math
 
 import torch
 from jaxtyping import Float, Int
 
 from physicsnemo.core.module import Module
-from physicsnemo.core.version_check import OptionalImport
 
 from .scatter_aggregator import ScatterAggregator
-
-_earth2grid_healpix = OptionalImport("earth2grid.healpix")
 
 
 def _offsets_to_batch_idx(offsets: Int[torch.Tensor, "batch time"]) -> Int[torch.Tensor, "nobs"]:
@@ -45,7 +41,7 @@ def _offsets_to_batch_idx(offsets: Int[torch.Tensor, "batch time"]) -> Int[torch
     """
     bt_size = offsets.numel()
 
-    # Convert cumulative ends offsets to per-window counts: [0, 3, 5, 7, 10] → [3, 2, 2, 3]
+    # Convert cumulative-end offsets to per-window counts: [3, 5, 7, 10] -> [3, 2, 2, 3]
     offsets_flat = offsets.flatten()
     offsets_with_zero = torch.cat(
         [torch.tensor([0], device=offsets.device, dtype=offsets.dtype), offsets_flat]
@@ -126,8 +122,6 @@ def _split_by_sensor(
 
     return out
 
-
-logger = logging.getLogger(__name__)
 
 
 class ObsTokenizer(Module):
@@ -277,10 +271,10 @@ class UniformFusion(Module):
 
 
 class SensorEmbedder(Module):
-    r"""Embeds observations from a single sensor onto the HEALPix spatial grid.
+    r"""Embeds observations from a single sensor onto a spatial grid.
 
     Each observation is first tokenized into a feature vector by
-    :class:`ObsTokenizer`, then scatter-reduced onto the HEALPix grid
+    :class:`ObsTokenizer`, then scatter-aggregated onto the spatial grid
     via :class:`ScatterAggregator` and projected to the output dimension.
 
     Parameters
@@ -295,8 +289,6 @@ class SensorEmbedder(Module):
         Final output dimension per pixel.
     meta_dim : int, optional, default=28
         Dimension of float metadata features, consumed by :class:`ObsTokenizer`.
-    hpx_level : int, optional, default=6
-        Model HEALPix grid level to aggregate features to.
     n_embed : int, optional, default=1024
         Size of observation type embedding table.
     embed_dim : int, optional, default=4
@@ -311,7 +303,7 @@ class SensorEmbedder(Module):
     float_metadata : torch.Tensor
         Float metadata with shape :math:`(N_{obs}, M_{float})`.
     pix : torch.Tensor
-        Pixel index tensor with shape :math:`(N_{obs},)` at ``hpx_level`` resolution.
+        Pixel index tensor with shape :math:`(N_{obs},)`.
     local_channel : torch.Tensor
         Local channel tensor with shape :math:`(N_{obs},)`.
     local_platform : torch.Tensor
@@ -321,12 +313,13 @@ class SensorEmbedder(Module):
     offsets : torch.Tensor
         Cumulative exclusive-end offsets with shape :math:`(B, T)` for this sensor.
         Indicate the end of each batch/time window.
+    npix : int
+        Number of pixels in the spatial grid.
 
     Outputs
     -------
     torch.Tensor
-        Sensor embedding grid with shape :math:`(B, T, N_{pix}, D_{out})`
-        in NEST order.
+        Sensor embedding grid with shape :math:`(B, T, N_{pix}, D_{out})`.
     """
 
     def __init__(
@@ -337,7 +330,6 @@ class SensorEmbedder(Module):
         sensor_embed_dim: int = 32,
         output_dim: int = 512,
         meta_dim: int = 28,
-        hpx_level: int = 6,
         n_embed: int = 1024,
         embed_dim: int = 4,
         gradient_checkpointing: bool = False,
@@ -346,8 +338,6 @@ class SensorEmbedder(Module):
 
         self.sensor_embed_dim = sensor_embed_dim
         self.output_dim = output_dim
-        self.hpx_level = hpx_level
-        self.npix = 12 * 4**hpx_level
         self.gradient_checkpointing = gradient_checkpointing
         self.nchannel = nchannel
         self.nplatform = nplatform
@@ -362,9 +352,7 @@ class SensorEmbedder(Module):
         self.scatter_infill_aggregator = ScatterAggregator(
             in_dim=sensor_embed_dim,
             out_dim=output_dim,
-            nchannel=nchannel,
-            nplatform=nplatform,
-            npix=self.npix,
+            nbuckets=nchannel * nplatform,
         )
 
     def aggregate(
@@ -375,6 +363,7 @@ class SensorEmbedder(Module):
         local_platform: Int[torch.Tensor, "nobs"],
         batch_idx: Int[torch.Tensor, "nobs"],
         nbatch: int,
+        npix: int,
     ) -> Float[torch.Tensor, "nbatch npix out_dim"]:
         """Aggregate tokenized observations to a spatial grid."""
         if not torch.compiler.is_compiling():
@@ -404,11 +393,12 @@ class SensorEmbedder(Module):
         # Build combined bucket ID
         bucket_id = local_platform * self.nchannel + local_channel
         return self.scatter_infill_aggregator(
-            obs_features=embedded_obs,
+            x=embedded_obs,
             batch_idx=batch_idx,
             pix=pix,
             bucket_id=bucket_id,
             nbatch=nbatch,
+            npix=npix,
         )
 
     def _forward(
@@ -420,6 +410,7 @@ class SensorEmbedder(Module):
         local_platform: Int[torch.Tensor, "nobs"],
         obs_type: Int[torch.Tensor, "nobs"],
         offsets: Int[torch.Tensor, "batch time"],
+        npix: int,
     ) -> Float[torch.Tensor, "batch time npix out_dim"]:
         batch_idx = _offsets_to_batch_idx(offsets)
         batch_dims = offsets.shape  # (B, T)
@@ -435,8 +426,9 @@ class SensorEmbedder(Module):
             local_platform,
             batch_idx,
             nbatch,
-        )  # NEST (nbatch, npix, output_dim)
-        output = output.view(*batch_dims, self.npix, self.output_dim)
+            npix,
+        )  # (nbatch, npix, output_dim)
+        output = output.view(*batch_dims, npix, self.output_dim)
 
         return output
 
@@ -449,6 +441,7 @@ class SensorEmbedder(Module):
         local_platform: Int[torch.Tensor, "nobs"],
         obs_type: Int[torch.Tensor, "nobs"],
         offsets: Int[torch.Tensor, "batch time"],
+        npix: int,
     ) -> Float[torch.Tensor, "batch time npix out_dim"]:
         if not torch.compiler.is_compiling():
             if obs.ndim != 1:
@@ -494,6 +487,7 @@ class SensorEmbedder(Module):
                 local_platform,
                 obs_type,
                 offsets,
+                npix,
                 use_reentrant=False,
             )
         else:
@@ -505,14 +499,15 @@ class SensorEmbedder(Module):
                 local_platform,
                 obs_type,
                 offsets,
+                npix,
             )
 
 
-class MultiSensorObsEmbedding(Module):
-    r"""Multi-sensor observation embedding onto a HEALPix grid.
+class MultiSensorObsEmbedder(Module):
+    r"""Multi-sensor observation embedding onto a spatial grid.
 
     Embeds observations from multiple sensor types into a unified representation
-    by applying per-sensor embedders and fusing the results.
+    on a spatial grid by applying per-sensor embedders and fusing the results.
 
     Parameters
     ----------
@@ -520,8 +515,10 @@ class MultiSensorObsEmbedding(Module):
         Number of channels for each sensor, in sensor order.
     nplatform_per_sensor : list[int]
         Number of platforms for each sensor, in sensor order.
-    hpx_level : int
-        HEALPix grid level for all sensors.
+    sensor_names : list[str], optional
+        Human-readable names for each sensor, in sensor order. Used as keys
+        in the internal embedders ``ModuleDict`` so the names appear in ``print(model)``.
+        Defaults to ``["sensor_0", "sensor_1", ...]``.
     embed_dim : int, optional, default=32
         Tokenization dimension used by :class:`ObsTokenizer` for each sensor.
     meta_dim : int, optional, default=28
@@ -531,8 +528,8 @@ class MultiSensorObsEmbedding(Module):
     gradient_checkpointing : bool, optional, default=False
         If ``True``, wraps each per-sensor forward pass with gradient
         checkpointing to trade compute for memory during training.
-    compile : bool, optional, default=False
-        If ``True``, compiles the forward function for improved performance.
+    torch_compile : bool, optional, default=False
+        If ``True``, applies ``torch.compile`` to the forward method.
 
     Forward
     -------
@@ -541,8 +538,7 @@ class MultiSensorObsEmbedding(Module):
     float_metadata : torch.Tensor
         Flattened float metadata with shape :math:`(N_{obs}, M_{float})`.
     pix : torch.Tensor
-        Flattened pixel indices of each observation with shape :math:`(N_{obs},)`
-        at ``hpx_level`` resolution.
+        Flattened pixel indices of each observation with shape :math:`(N_{obs},)`.
     local_channel : torch.Tensor
         Flattened local channel ids of each observation with shape :math:`(N_{obs},)`.
     local_platform : torch.Tensor
@@ -558,81 +554,72 @@ class MultiSensorObsEmbedding(Module):
         under ``sensor -> batch -> time`` ordering (time changes fastest).
         So each sensor's rows are contiguous; within each sensor, each batch's
         rows are contiguous; and within each batch, each time window is contiguous.
+    npix : int
+        Number of pixels in the spatial grid.
 
     Outputs
     -------
     torch.Tensor
-        Embedded observations of shape :math:`(B, D, T, N_{pix})` in HEALPIX_PAD_XY
-        pixel order, where :math:`B` is batch size, :math:`D` is fusion dimension,
-        :math:`T` is time steps, and :math:`N_{pix}` is number of HEALPix pixels.
+        Embedded observations of shape :math:`(B, D, T, N_{pix})`,
+        where :math:`B` is batch size, :math:`D` is fusion dimension,
+        :math:`T` is time windows, and :math:`N_{pix}` is number of grid pixels.
     """
 
     def __init__(
         self,
         nchannel_per_sensor: list[int],
         nplatform_per_sensor: list[int],
-        hpx_level: int,
+        sensor_names: list[str] | None = None,
         embed_dim: int = 32,
         meta_dim: int = 28,
         fusion_dim: int = 512,
         gradient_checkpointing: bool = False,
-        compile: bool = False,
+        torch_compile: bool = False,
     ):
         super().__init__()
 
-        if len(nchannel_per_sensor) != len(nplatform_per_sensor):
+        num_sensors = len(nchannel_per_sensor)
+        if len(nplatform_per_sensor) != num_sensors:
             raise ValueError(
                 f"nchannel_per_sensor and nplatform_per_sensor must have the same "
                 f"length, got {len(nchannel_per_sensor)} and {len(nplatform_per_sensor)}"
             )
 
+        if sensor_names is None:
+            sensor_names = [f"sensor_{i}" for i in range(num_sensors)]
+        elif len(set(sensor_names)) != num_sensors:
+            raise ValueError(
+                f"sensor_names must be unique and match length of nchannel_per_sensor, "
+                f"got {len(set(sensor_names))} unique names and {num_sensors} sensors"
+            )
+
         self.nchannel_per_sensor = list(nchannel_per_sensor)
         self.nplatform_per_sensor = list(nplatform_per_sensor)
+        self.sensor_names = list(sensor_names)
         self.fusion_dim = fusion_dim
-        self.hpx_level = hpx_level
-        self.npix = 12 * 4**hpx_level
-
-        # Aggregate onto NEST order grid
-        self.grid = _earth2grid_healpix.Grid(hpx_level, pixel_order=_earth2grid_healpix.NEST)
 
         # Separate embedders for each sensor, in sensor order.
-        self.embedders = torch.nn.ModuleList(
-            [
-                SensorEmbedder(
+        self.embedders = torch.nn.ModuleDict(
+            {
+                name: SensorEmbedder(
                     sensor_embed_dim=embed_dim,
                     meta_dim=meta_dim,
                     output_dim=self.fusion_dim,
-                    hpx_level=self.hpx_level,
                     nchannel=nchannel,
                     nplatform=nplatform,
                     gradient_checkpointing=gradient_checkpointing,
                 )
-                for nchannel, nplatform in zip(nchannel_per_sensor, nplatform_per_sensor)
-            ]
+                for name, nchannel, nplatform in zip(
+                    sensor_names, nchannel_per_sensor, nplatform_per_sensor
+                )
+            }
         )
 
         self.sensor_fusion = UniformFusion(fusion_dim=self.fusion_dim)
         self.output_norm = torch.nn.LayerNorm(self.fusion_dim)
-        if compile:
+        if torch_compile:
+            # use dynamic as each sample has variable observation count
             self.forward = torch.compile(self.forward, dynamic=True)
-
-    def _reorder(self, x: torch.Tensor) -> torch.Tensor:
-        r"""Reorder from NEST to HEALPIX_PAD_XY.
-
-        Parameters
-        ----------
-        x : torch.Tensor
-            Tensor with shape :math:`(..., N_{pix}, C)`.
-
-        Returns
-        -------
-        torch.Tensor
-            Tensor with shape :math:`(..., N_{pix}, C)`.
-        """
-        x = self.grid.reorder(
-            _earth2grid_healpix.HEALPIX_PAD_XY, x.transpose(-1, -2),
-        ).transpose(-1, -2)
-        return x
 
     def forward(
         self,
@@ -643,6 +630,7 @@ class MultiSensorObsEmbedding(Module):
         local_platform: Int[torch.Tensor, "nobs"],
         obs_type: Int[torch.Tensor, "nobs"],
         offsets: Int[torch.Tensor, "sensors batch time"],
+        npix: int,
     ) -> Float[torch.Tensor, "batch fusion_dim time npix"]:
         if not torch.compiler.is_compiling():
             if obs.ndim != 1:
@@ -696,7 +684,7 @@ class MultiSensorObsEmbedding(Module):
         )
         sensor_embeddings = []
 
-        for sensor_obs, embedder in zip(obs_by_sensor, self.embedders):
+        for sensor_obs, embedder in zip(obs_by_sensor, self.embedders.values()):
             (
                 sensor_obs_values,
                 sensor_float_metadata,
@@ -714,7 +702,8 @@ class MultiSensorObsEmbedding(Module):
                 local_platform=sensor_local_platform,
                 obs_type=sensor_obs_type,
                 offsets=sensor_offsets,
-            )  # (b, t, x, c)
+                npix=npix,
+            )  # (b, t, npix, c)
             sensor_embeddings.append(output)
 
         sensor_embeddings = torch.stack(
@@ -722,9 +711,8 @@ class MultiSensorObsEmbedding(Module):
         )
 
         # Fuse sensors
-        out = self.sensor_fusion(sensor_embeddings)  # (batch, time, npix, fusion_dim)
+        out = self.sensor_fusion(sensor_embeddings)  # (b, t, npix, c)
 
-        out = self._reorder(out)
         out = self.output_norm(out)
         out = out.permute(0, 3, 1, 2)
 

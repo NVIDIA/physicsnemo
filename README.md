@@ -344,6 +344,23 @@ training recipes and use them as a starting point. These training recipes may
 require additional example-specific dependencies, as indicated through an
 associated `requirements.txt` file in such cases.
 
+### CUDA Backend Selection
+
+> **Important:** To get GPU-accelerated RAPIDS packages (cuML, pylibraft, cupy)
+> and a CUDA-matched PyTorch build, you **must** include either `cu13` or `cu12`
+> when installing. Feature extras like `nn-extras` and `utils-extras` provide
+> additional non-CUDA packages (scipy, natten, wandb, etc.) but do not include
+> RAPIDS dependencies on their own.
+
+PhysicsNeMo supports both CUDA 12 and CUDA 13 backends. The backend is selected
+via an extra that is orthogonal to the feature extras - combine them freely:
+
+| Extra | What it provides |
+| --- | --- |
+| `cu13` | PyTorch (CUDA 13.0), cuML-cu13, pylibraft-cu13, cupy-cuda13x |
+| `cu12` | PyTorch (CUDA 12.8), cuML-cu12, pylibraft-cu12, cupy-cuda12x |
+| *(neither)* | PyTorch from PyPI (default build), **no RAPIDS packages** |
+
 ### PyPI
 
 The recommended method for installing the latest version of PhysicsNeMo is using PyPI:
@@ -353,11 +370,18 @@ pip install nvidia-physicsnemo
 python -c "import physicsnemo; print('PhysicsNeMo version:', physicsnemo.__version__)"
 ```
 
-To install with optional dependencies (e.g., `utils-extras`):
+To install with a specific CUDA backend and optional feature extras:
 
 ```Bash
-pip install "nvidia-physicsnemo[utils-extras]"
+# CUDA 13 backend with nn-extras
+pip install "nvidia-physicsnemo[cu13,nn-extras]"
+
+# CUDA 12 backend with nn-extras
+pip install "nvidia-physicsnemo[cu12,nn-extras]"
 ```
+
+Other feature extras (`utils-extras`, `mesh-extras`, `model-extras`,
+`datapipes-extras`, `gnns`) can be combined in the same way.
 
 The installation can also be verified by running the [Hello World](#hello-world) example.
 
@@ -369,14 +393,20 @@ to clone the repository and sync dependencies:
 ```Bash
 git clone https://github.com/NVIDIA/physicsnemo.git
 cd physicsnemo
-uv sync
+uv sync --extra cu13
 uv run python -c "import physicsnemo; print('PhysicsNeMo version:', physicsnemo.__version__)"
 ```
 
-To install with optional dependencies (e.g., `utils-extras`):
+To install with optional feature extras (e.g., `nn-extras`):
 
 ```Bash
-uv sync --extra utils-extras
+uv sync --extra cu13 --extra nn-extras
+```
+
+For a CUDA 12 environment, replace `cu13` with `cu12`:
+
+```Bash
+uv sync --extra cu12 --extra nn-extras
 ```
 
 ### NVCR Container

@@ -73,7 +73,7 @@ datapipe_kwargs = dict(
 
 
 # Skip CPU tests because too slow
-@requires_module("netCDF4")
+@requires_module(["netCDF4", "xarray"])
 @pytest.mark.parametrize("device", ["cuda:0"])
 def test_climate_hdf5_constructor(
     data_dir,
@@ -183,7 +183,7 @@ def test_climate_hdf5_constructor(
         pass
 
 
-@requires_module("netCDF4")
+@requires_module(["netCDF4", "xarray"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_climate_hdf5_device(
     data_dir,
@@ -225,7 +225,7 @@ def test_climate_hdf5_device(
 
 
 # Skip CPU tests because too slow
-@requires_module("netCDF4")
+@requires_module(["netCDF4", "xarray"])
 @pytest.mark.parametrize("data_channels", [[0, 1]])
 @pytest.mark.parametrize("num_steps", [2])
 @pytest.mark.parametrize("batch_size", [2, 3])
@@ -316,7 +316,7 @@ def test_climate_hdf5_shape(
 
 
 # Skip CPU tests because too slow
-@requires_module("netCDF4")
+@requires_module(["netCDF4", "xarray"])
 @pytest.mark.parametrize("num_steps", [1, 2])
 @pytest.mark.parametrize("stride", [1, 3])
 @pytest.mark.parametrize("device", ["cuda:0"])
@@ -368,7 +368,7 @@ def test_era5_hdf5_sequence(
 
 
 # Skip CPU tests because too slow
-@requires_module("netCDF4")
+@requires_module(["netCDF4", "xarray"])
 @pytest.mark.parametrize("shuffle", [True, False])
 @pytest.mark.parametrize("stride", [1, 3])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
@@ -423,7 +423,7 @@ def test_era5_hdf5_shuffle(
     assert common.check_shuffle(tensors, shuffle, stride, 8)
 
 
-@requires_module("netCDF4")
+@requires_module(["netCDF4", "xarray"])
 @pytest.mark.parametrize("device", ["cuda:0"])
 def test_era5_hdf5_cudagraphs(
     data_dir,
