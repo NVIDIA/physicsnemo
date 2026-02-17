@@ -150,7 +150,7 @@ class PartialGroupNorm(torch.autograd.Function):
 
         global_mean = (global_sum / D_global).unsqueeze(2)  # (N, G, 1)
         global_var = (global_sum_sq / D_global) - global_mean.squeeze(2).pow(2)
-        global_rstd = torch.rsqrt(global_var.unsqueeze(2) + eps)  # (N, G, 1)
+        global_rstd = torch.rsqrt(global_var.unsqueeze(2).clamp(min=0.0) + eps)  # (N, G, 1)
 
         # -- Normalize directly with global stats --------------------------
         y = (x - global_mean) * global_rstd  # (N, G, cpg*HxW_local)
