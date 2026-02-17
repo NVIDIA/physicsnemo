@@ -1,0 +1,14 @@
+tyro
+pyyaml
+polars
+torchinfo
+pyvista
+gitpython
+ipykernel
+ipython
+mlflow
+pytest
+warp-lang
+jaxtyping
+einops
+matplotlib
