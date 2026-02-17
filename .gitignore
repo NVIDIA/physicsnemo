@@ -165,6 +165,7 @@ cython_debug/
 nsight-systems*
 build/
 mlruns/
+mlflow.db
 checkpoints/
 cache/
 output/
