@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -714,10 +714,10 @@ def apply_halo_tensors(
         padded_output.append(halo_from_left)
     else:
         if halo_config.edge_padding_size > 0:
-            shape = list(halo_from_right.shape)
+            shape = list(local_tensor.shape)
             shape[halo_config.tensor_dim] = halo_config.edge_padding_size
             zeros = torch.zeros(
-                shape, device=halo_from_right.device, dtype=halo_from_right.dtype
+                shape, device=local_tensor.device, dtype=local_tensor.dtype
             )
             padded_output.append(zeros)
 
@@ -729,10 +729,10 @@ def apply_halo_tensors(
         padded_output.append(halo_from_right)
     else:
         if halo_config.edge_padding_size > 0:
-            shape = list(halo_from_left.shape)
+            shape = list(local_tensor.shape)
             shape[halo_config.tensor_dim] = halo_config.edge_padding_size
             zeros = torch.zeros(
-                shape, device=halo_from_left.device, dtype=halo_from_left.dtype
+                shape, device=local_tensor.device, dtype=local_tensor.dtype
             )
             padded_output.append(zeros)
 

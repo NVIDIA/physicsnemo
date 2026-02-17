@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import inspect
 import io
 import json
@@ -35,7 +36,7 @@ import torch
 
 from physicsnemo.core.filesystem import _download_cached, _get_fs
 from physicsnemo.core.meta import ModelMetaData
-from physicsnemo.core.registry import ModelRegistry
+from physicsnemo.core.registry import _ENTRYPOINT_TYPES, ModelRegistry
 
 # Used for saving checkpoints of nested modules
 _BASE_CKPT_PREFIX = "__physicsnemo.Module__"
@@ -369,11 +370,8 @@ class Module(torch.nn.Module):
                 # Cross fingers and hope for the best (maybe the class name changed)
                 _cls = cls
 
-        # This works with the importlib.metadata.EntryPoint
-        # if isinstance(_cls, importlib.metadata.EntryPoint):
-        if "EntryPoint" in str(type(_cls)):
-            # I hate myself for this.  Somehow, we've got crossvoer pollution from
-            # importlib_metadata.EntryPoint.
+        # This works with both importlib.metadata.EntryPoint and importlib_metadata.EntryPoint
+        if isinstance(_cls, _ENTRYPOINT_TYPES):
             _cls = _cls.load()
 
         return _cls
@@ -401,6 +399,8 @@ class Module(torch.nn.Module):
 
         Examples
         --------
+        >>> import warnings
+        >>> warnings.filterwarnings("ignore")
         >>> from physicsnemo.core.module import Module
         >>> # Define the argument dictionary with the three required keys
         >>> arg_dict = {
@@ -1275,29 +1275,10 @@ class Module(torch.nn.Module):
             def forward(self, x):
                 return self.inner_model(x)
 
-        # Get the argument names and default values of the PyTorch model's init
-        # method
-        init_argspec = inspect.getfullargspec(torch_model_class.__init__)
-        model_argnames = init_argspec.args[1:]  # Exclude 'self'
-        model_defaults = init_argspec.defaults or []
-        defaults_dict = dict(
-            zip(model_argnames[-len(model_defaults) :], model_defaults)
+        # Get the signature of the PyTorch model's init method
+        PhysicsNeMoModel.__init__.__signature__ = inspect.signature(
+            torch_model_class.__init__
         )
-
-        # Define the signature of new init
-        params = [inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
-        params += [
-            inspect.Parameter(
-                argname,
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                default=defaults_dict.get(argname, inspect.Parameter.empty),
-            )
-            for argname in model_argnames
-        ]
-        init_signature = inspect.Signature(params)
-
-        # Replace PhysicsNeMoModel.__init__ signature with new init signature
-        PhysicsNeMoModel.__init__.__signature__ = init_signature
 
         # Generate a unique name for the created class
         new_class_name = f"{torch_model_class.__name__}" if name is None else name

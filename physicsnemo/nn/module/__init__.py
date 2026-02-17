@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -28,7 +28,13 @@ from .activations import (
 from .ball_query import BQWarp
 from .conv_layers import ConvBlock, CubeEmbedding
 from .dgm_layers import DGMLayer
-from .embedding_layers import FourierEmbedding, PositionalEmbedding
+from .drop import DropPath
+from .embedding_layers import (
+    FourierEmbedding,
+    OneHotEmbedding,
+    PositionalEmbedding,
+    SinusoidalTimestepEmbedding,
+)
 from .fourier_layers import (
     FourierFilter,
     FourierLayer,

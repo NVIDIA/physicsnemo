@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,15 +17,11 @@
 from typing import List
 
 import numpy as np
-import pytest
 import torch
-
-dgl = pytest.importorskip("dgl")
 
 
 def fix_random_seeds(seed=0):
     """Fix random seeds for reproducibility"""
-    dgl.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)

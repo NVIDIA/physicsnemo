@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -46,7 +46,8 @@ repos:
       name: license
       entry: python test/ci_tests/header_check.py
       language: python
-      pass_filenames: false
+      files: \.(py|yaml|ci|release)$|Dockerfile$
+      exclude: ^(physicsnemo/internal/|docs/)
 
 -   repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v3.4.0
@@ -58,3 +59,4 @@ repos:
     rev: v2.5.2
     hooks:
     - id: import-linter
+      args: [--verbose]
