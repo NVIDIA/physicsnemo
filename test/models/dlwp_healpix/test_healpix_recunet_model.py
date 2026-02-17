@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -46,7 +46,7 @@ def conv_next_block_dict(in_channels=3, out_channels=1):
 @pytest.fixture
 def down_sampling_block_dict():
     down_sampling_block = {
-        "_target_": "physicsnemo.nn.healpix.HEALPixAvgPool",
+        "_target_": "physicsnemo.nn.module.hpx.HEALPixAvgPool",
         "pooling": 2,
     }
     return down_sampling_block

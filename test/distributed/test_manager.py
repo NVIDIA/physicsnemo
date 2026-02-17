@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -38,6 +38,7 @@ def skip_on_cpu(device):
         pytest.skip("Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu")
 
 
+@pytest.mark.skip("Not working in 2025 CI container")
 def test_manager(monkeypatch):
     monkeypatch.setenv("RANK", "0")
     monkeypatch.setenv("WORLD_SIZE", "1")
