@@ -67,7 +67,7 @@ def mul_wrapper(func, types, args, kwargs):
 def add_wrapper(a, b, alpha=1):
     r"""Test wrapper for addition - TESTING PURPOSES ONLY.
 
-    This wrapper intercepts ``aten.add.Tensor`` dispatch calls when ShardTensor
+    This wrapper intercepts add (dispatch or function) when ShardTensor
     inputs are detected. It performs local addition on the underlying tensors.
 
     Warning
@@ -101,6 +101,8 @@ def setup_registry():
 
     # Register our test handlers
     ShardTensor.register_function_handler(torch.mul, mul_wrapper)
+    # a + b can dispatch to aten.add.default or aten.add.Tensor depending on PyTorch version
+    ShardTensor.register_dispatch_handler(torch.ops.aten.add.default, add_wrapper)
     ShardTensor.register_dispatch_handler(torch.ops.aten.add.Tensor, add_wrapper)
 
     # Enable ShardTensor patches
@@ -199,7 +201,7 @@ def test_dispatch_registration_with_shard_tensors(setup_registry, device_mesh):
     assert isinstance(result, ShardTensor)
     assert torch.all(result.to_local() == 3)
     assert torch_dispatch_paths == ["add_wrapper"], (
-        "ShardTensors should trigger our wrapper"
+        f"ShardTensors should trigger our wrapper, got: {torch_dispatch_paths}"
     )
     assert len(torch_function_paths) == 0, (
         "torch_dispatch intercepts should not trigger torch_function intercepts"

@@ -39,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies
 
+- CUDA backend is now selected via orthogonal `cu12` / `cu13` extras rather
+  than being hardcoded to CUDA 13. Feature extras (`nn-extras`, `utils-extras`,
+  etc.) are now CUDA-agnostic and can be combined with either backend, e.g.
+  `pip install "nvidia-physicsnemo[cu13,nn-extras]"`. When neither `cu12` nor
+  `cu13` is specified, PyTorch is installed from PyPI using its default build
+  (currently CUDA 12.8 on Linux). For development with `uv`, use
+  `uv sync --extra cu13` (or `--extra cu12`) to select the backend.
+
 ## [1.3.0] - 2025-11-17
 
 ### Added
