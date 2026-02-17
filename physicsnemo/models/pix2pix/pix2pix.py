@@ -54,6 +54,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """
 
+import warnings
 from dataclasses import dataclass
 from typing import Union
 
@@ -86,6 +87,12 @@ class MetaData(ModelMetaData):
 
 class Pix2Pix(Module):
     r"""Convolutional encoder-decoder based on pix2pix generator models.
+
+    .. deprecated::
+        ``Pix2Pix`` is deprecated and will be removed in a future release.
+        Consider using a custom encoder-decoder architecture built with
+        :class:`~physicsnemo.nn.ConvResidualBlock` or other building blocks
+        from :mod:`physicsnemo.nn`.
 
     Note
     ----
@@ -169,6 +176,14 @@ class Pix2Pix(Module):
         batch_norm: bool = False,
         padding_type: str = "reflect",
     ):
+        warnings.warn(
+            "Pix2Pix is deprecated and will be removed in a future release. "
+            "Consider using a custom encoder-decoder architecture built with "
+            "physicsnemo.nn.ConvResidualBlock or other building blocks from "
+            "physicsnemo.nn.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if not (n_blocks >= 0 and n_downsampling >= 0 and n_upsampling >= 0):
             raise ValueError("Invalid arch params")
         if padding_type not in ["reflect", "zero", "replicate"]:
@@ -320,6 +335,11 @@ class Pix2Pix(Module):
 class ResnetBlock(Module):
     r"""A simple ResNet block with skip connection.
 
+    .. deprecated::
+        ``ResnetBlock`` is deprecated and will be removed in a future release.
+        Use :class:`~physicsnemo.nn.ConvResidualBlock` instead, which provides
+        similar functionality with additional features.
+
     Parameters
     ----------
     dimension : int
@@ -356,6 +376,13 @@ class ResnetBlock(Module):
         use_batch_norm: bool = False,
         use_dropout: bool = False,
     ):
+        warnings.warn(
+            "ResnetBlock is deprecated and will be removed in a future release. "
+            "Use physicsnemo.nn.ConvResidualBlock instead, which provides similar "
+            "functionality with additional features.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(meta=None)
         if padding_type not in [
             "reflect",

@@ -74,6 +74,11 @@ def init_weights(
 ) -> None:
     r"""Initialize network weights.
 
+    .. deprecated::
+        ``init_weights``, as part of pix2pix, is deprecated and will be removed in a future release.
+        Use PyTorch's built-in initialization functions from :mod:`torch.nn.init`
+        directly instead.
+
     Parameters
     ----------
     net : nn.Module
@@ -94,6 +99,13 @@ def init_weights(
     We use ``'normal'`` in the original pix2pix and CycleGAN paper. But xavier
     and kaiming might work better for some applications.
     """
+    warnings.warn(
+        "init_weights is deprecated and will be removed in a future release. "
+        "Use PyTorch's built-in initialization functions from torch.nn.init "
+        "directly instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
     def init_func(m):  # define the initialization function
         classname = m.__class__.__name__
@@ -127,7 +139,6 @@ def init_weights(
 @dataclass
 class MetaData(ModelMetaData):
     # Optimization
-    jit: bool = True
     cuda_graphs: bool = True
     amp_cpu: bool = False  # Reflect padding not supported in bfloat16
     amp_gpu: bool = True
@@ -141,6 +152,11 @@ class MetaData(ModelMetaData):
 
 class Pix2PixUnet(Module):
     r"""Convolutional encoder-decoder based on pix2pix generator models using UNet.
+
+    .. deprecated::
+        ``Pix2PixUnet`` is deprecated and will be removed in a future release.
+        Consider using a custom UNet architecture built with building blocks
+        from :mod:`physicsnemo.nn`.
 
     Note
     ----
@@ -217,6 +233,13 @@ class Pix2PixUnet(Module):
         use_dropout: bool = False,
         gpu_ids: Optional[List[int]] = None,
     ):
+        warnings.warn(
+            "Pix2PixUnet is deprecated and will be removed in a future release. "
+            "Consider using a custom UNet architecture built with building blocks "
+            "from physicsnemo.nn.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if not (filter_size > 0 and n_downsampling >= 0):
             raise ValueError("Invalid arch params")
         super().__init__(meta=MetaData())
@@ -392,6 +415,11 @@ class Pix2PixUnet(Module):
 class UnetGenerator(Module):
     r"""Create a UNet-based generator.
 
+    .. deprecated::
+        ``UnetGenerator`` is deprecated and will be removed in a future release.
+        Consider using a custom UNet architecture built with building blocks
+        from :mod:`physicsnemo.nn`.
+
     Parameters
     ----------
     in_channels : int
@@ -427,6 +455,13 @@ class UnetGenerator(Module):
         norm_layer=nn.BatchNorm2d,
         use_dropout: bool = False,
     ):
+        warnings.warn(
+            "UnetGenerator is deprecated and will be removed in a future release. "
+            "Consider using a custom UNet architecture built with building blocks "
+            "from physicsnemo.nn.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(meta=None)
 
         # construct unet structure
@@ -503,6 +538,11 @@ class UnetGenerator(Module):
 class UnetSkipConnectionBlock(Module):
     r"""A UNet submodule with skip connections.
 
+    .. deprecated::
+        ``UnetSkipConnectionBlock`` is deprecated and will be removed in a future
+        release. Consider using building blocks from :mod:`physicsnemo.nn` to
+        construct custom UNet architectures.
+
     Parameters
     ----------
     outer_nc : int
@@ -545,6 +585,13 @@ class UnetSkipConnectionBlock(Module):
         norm_layer=nn.BatchNorm2d,
         use_dropout: bool = False,
     ):
+        warnings.warn(
+            "UnetSkipConnectionBlock is deprecated and will be removed in a future "
+            "release. Consider using building blocks from physicsnemo.nn to "
+            "construct custom UNet architectures.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(meta=None)
         self.outermost = outermost
         if isinstance(norm_layer, functools.partial):
