@@ -48,7 +48,7 @@ class HEALPixPatchTokenizer(nn.Module):
     ViT-style tokenizer for HEALPix data.
 
     Tokenizes each HEALPix face into a patch sequence with a learnable positional
-    embedding and a calendar embedding. Requires input to have HEALPIX_PAD_XY pixel order.
+    embedding and a calendar embedding.
 
     Parameters
     ----------
@@ -65,7 +65,8 @@ class HEALPixPatchTokenizer(nn.Module):
     -------
     x : torch.Tensor
         Input tensor of shape :math:`(B, C, T, N_{pix})` where
-        :math:`N_{pix} = 12 \\times 4^{\\mathrm{level}_{fine}}`.
+        :math:`N_{pix} = 12 \\times 4^{\\mathrm{level}_{fine}}`. Must have
+        HEALPIX_PAD_XY pixel order.
     second_of_day : torch.Tensor
         Second-of-day tensor of shape :math:`(B, T)` for calendar embedding.
     day_of_year : torch.Tensor
@@ -76,7 +77,7 @@ class HEALPixPatchTokenizer(nn.Module):
     torch.Tensor
         Token tensor of shape :math:`(B, L, D)` where
         :math:`L = T \\times 12 \\times 4^{\\mathrm{level}_{coarse}}` and
-        :math:`D=\\mathrm{hidden\\_size}`.
+        :math:`D=\\mathrm{hidden\\_size}`. In HEALPIX_PAD_XY pixel order.
     """
 
     def __init__(
@@ -86,6 +87,7 @@ class HEALPixPatchTokenizer(nn.Module):
         hidden_size: int,
         level_fine: int,
         level_coarse: int,
+        **kwargs,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -188,7 +190,8 @@ class HEALPixPatchDetokenizer(nn.Module):
     -------
     x : torch.Tensor
         Input tensor of shape :math:`(B, L, D)` where
-        :math:`L = T \\times 12 \\times 4^{\\mathrm{level}_{coarse}}`.
+        :math:`L = T \\times 12 \\times 4^{\\mathrm{level}_{coarse}}`. Must have
+        HEALPIX_PAD_XY pixel order.
     c : torch.Tensor
         Conditioning tensor of shape :math:`(B, D_c)` where :math:`D_c` is
         ``condition_dim`` if provided, otherwise ``hidden_size``.
@@ -198,7 +201,7 @@ class HEALPixPatchDetokenizer(nn.Module):
     torch.Tensor
         Output tensor of shape :math:`(B, C_{out}, T, N_{pix})` where
         :math:`N_{pix} = 12 \\times 4^{\\mathrm{level}_{fine}}`.
-
+        In HEALPIX_PAD_XY pixel order.
     """
 
     def __init__(
@@ -210,6 +213,7 @@ class HEALPixPatchDetokenizer(nn.Module):
         level_fine: int,
         time_length: int = 1,
         condition_dim: Optional[int] = None,
+        **kwargs,
     ):
         super().__init__()
         self.hidden_size = hidden_size
@@ -349,4 +353,4 @@ class CalendarEmbedding(nn.Module):
         doy = day_of_year.unsqueeze(2)
         b = self.embed_day((doy / 365.25) % 1)
         a, b = torch.broadcast_tensors(a, b)
-        return torch.concat([a, b], dim=1)  # (b c x)
+        return torch.concat([a, b], dim=1)

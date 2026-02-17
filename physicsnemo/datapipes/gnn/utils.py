@@ -20,10 +20,10 @@ from typing import Any, Dict
 
 import torch
 
-try:
-    import vtk
-except ImportError:
-    raise ImportError("vtk package is required. Install with pip install vtk.")
+from physicsnemo.core.version_check import OptionalImport
+
+# Lazy import for optional dependency
+vtk = OptionalImport("vtk")
 
 
 def read_vtp_file(file_path: str) -> Any:
@@ -40,6 +40,7 @@ def read_vtp_file(file_path: str) -> Any:
     vtkPolyData
         The polydata read from the VTP file.
     """
+
     # Check if file exists
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"{file_path} does not exist.")

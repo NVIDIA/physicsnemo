@@ -139,38 +139,80 @@ def test_song_unet_embedding_selector(device):
     assert torch.equal(selected_embeds, expected_embeds)
 
 
-def test_song_unet_constructor(device):
-    """Test the Song UNet constructor options"""
+@pytest.mark.parametrize(
+    "config",
+    ["default", "custom"],
+    ids=["with_defaults", "with_custom_args"],
+)
+def test_song_unet_constructor(device, config):
+    """Test SongUNetPosEmbd model constructor and attributes (MOD-008a).
 
-    # DDM++
-    img_resolution = 16
-    in_channels = 2
-    out_channels = 2
-    N_pos = 4
-    model = UNet(
-        img_resolution=img_resolution,
-        in_channels=in_channels + N_pos,
-        out_channels=out_channels,
-    ).to(device)
-    noise_labels = torch.randn([1]).to(device)
-    class_labels = torch.randint(0, 1, (1, 1)).to(device)
-    input_image = torch.ones([1, 2, 16, 16]).to(device)
-    output_image = model(input_image, noise_labels, class_labels)
-    assert output_image.shape == (1, out_channels, img_resolution, img_resolution)
+    This test verifies:
+    1. Model can be instantiated with default arguments
+    2. Model can be instantiated with custom arguments
+    3. All public attributes have expected values
+    """
+    if config == "default":
+        N_pos = 4
+        model = UNet(
+            img_resolution=16,
+            in_channels=2 + N_pos,
+            out_channels=2,
+        ).to(device)
 
-    # test rectangular shape
-    model = UNet(
-        img_resolution=[img_resolution, img_resolution * 2],
-        in_channels=in_channels + N_pos,
-        out_channels=out_channels,
-    ).to(device)
-    noise_labels = torch.randn([1]).to(device)
-    class_labels = torch.randint(0, 1, (1, 1)).to(device)
-    input_image = torch.ones([1, out_channels, img_resolution, img_resolution * 2]).to(
-        device
-    )
-    output_image = model(input_image, noise_labels, class_labels)
-    assert output_image.shape == (1, out_channels, img_resolution, img_resolution * 2)
+        # Verify default attribute values
+        assert model.img_shape_y == 16
+        assert model.img_shape_x == 16
+        assert model.gridtype == "sinusoidal"
+        assert model.N_grid_channels == 4
+        assert model.lead_time_mode is False
+        assert model.pos_embd is not None
+        assert model.pos_embd.shape == (N_pos, 16, 16)
+        assert model.lt_embd is None
+        assert model.profile_mode is False
+        assert model.amp_mode is False
+
+        # Verify forward pass shape
+        noise_labels = torch.randn([1]).to(device)
+        class_labels = torch.randint(0, 1, (1, 1)).to(device)
+        input_image = torch.ones([1, 2, 16, 16]).to(device)
+        output_image = model(input_image, noise_labels, class_labels)
+        assert output_image.shape == (1, 2, 16, 16)
+    else:
+        N_pos = 8
+        model = UNet(
+            img_resolution=[16, 32],
+            in_channels=2 + N_pos,
+            out_channels=2,
+            gridtype="learnable",
+            N_grid_channels=N_pos,
+            model_channels=64,
+            channel_mult=[1, 2, 2],
+            num_blocks=2,
+        ).to(device)
+
+        # Verify custom attribute values
+        assert model.img_shape_y == 16
+        assert model.img_shape_x == 32
+        assert model.gridtype == "learnable"
+        assert model.N_grid_channels == 8
+        assert model.lead_time_mode is False
+        assert model.pos_embd is not None
+        assert model.pos_embd.shape == (N_pos, 16, 32)
+        assert model.lt_embd is None
+
+        # Verify forward pass shape
+        noise_labels = torch.randn([1]).to(device)
+        class_labels = torch.randint(0, 1, (1, 1)).to(device)
+        input_image = torch.ones([1, 2, 16, 32]).to(device)
+        output_image = model(input_image, noise_labels, class_labels)
+        assert output_image.shape == (1, 2, 16, 32)
+
+    # Common assertions
+    assert isinstance(model, UNet)
+    assert hasattr(model, "enc")
+    assert hasattr(model, "dec")
+    assert hasattr(model, "meta")
 
 
 def test_song_unet_position_embedding(device):
