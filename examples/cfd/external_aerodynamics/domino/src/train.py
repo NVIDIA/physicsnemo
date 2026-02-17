@@ -65,7 +65,7 @@ from physicsnemo.datapipes.cae.domino_datapipe import (
     create_domino_dataset,
 )
 from physicsnemo.models.domino.model import DoMINO
-from physicsnemo.models.domino.utils import *
+from physicsnemo.models.domino.utils import create_directory
 
 from utils import ScalingFactors, get_keys_to_read, coordinate_distributed_environment
 
