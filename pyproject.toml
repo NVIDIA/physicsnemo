@@ -60,6 +60,12 @@ Changelog = "https://github.com/NVIDIA/physicsnemo/blob/main/CHANGELOG.md"
 
 [tool.uv]
 managed = true
+conflicts = [
+    [
+        { extra = "cu12" },
+        { extra = "cu13" },
+    ],
+]
 
 [tool.uv.extra-build-dependencies]
 torch-sparse = ["torch"]
@@ -81,17 +87,34 @@ name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
+# PyTorch CUDA 12.8 index - used when the cu12 extra is active.
+# On PyPI, torch 2.10+ ships CUDA 12.8 builds by default, but pulling from
+# this explicit index keeps resolution symmetric with the cu130 path and
+# avoids implicit fallback differences between uv sync and pip install.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
 [tool.uv.sources]
+# When cu12 is active, torch/torchvision come from the CUDA 12.8 index.
+# When cu13 is active, they come from the CUDA 13.0 index.
+# When neither extra is active (bare install), they come from PyPI.
+# On macOS, CUDA extras should not be used (no GPU builds available).
 torch = [
-    { index = "pytorch-cu130", marker = "sys_platform != 'darwin'" },
+    { index = "pytorch-cu128", extra = "cu12" },
+    { index = "pytorch-cu130", extra = "cu13" },
 ]
 torchvision = [
-    { index = "pytorch-cu130", marker = "sys_platform != 'darwin'" },
+    { index = "pytorch-cu128", extra = "cu12" },
+    { index = "pytorch-cu130", extra = "cu13" },
 ]
 cuml-cu13 = { index = "nvidia" }
+cuml-cu12 = { index = "nvidia" }
 pylibraft-cu13 = { index = "nvidia" }
-cuml-cu12 = { index = "nvidia" } # TODO setup optional install groups for CUDA 12 installations
 pylibraft-cu12 = { index = "nvidia" }
+nvidia-dali-cuda130 = { index = "nvidia" }
+nvidia-dali-cuda120 = { index = "nvidia" }
 
 #####################################################################
 # Flags Controlling the local build of physicsnemo
@@ -150,6 +173,26 @@ dev = [
 # direction.
 
 [project.optional-dependencies]
+# CUDA backend extras (mutually exclusive via [tool.uv] conflicts).
+# Combine with feature extras, e.g. nvidia-physicsnemo[nn-extras,cu13].
+# When neither is specified, torch comes from PyPI and no RAPIDS
+# packages are installed.
+cu13 = [
+    "torch>=2.4.0",
+    "torchvision>=0.19.0",
+    "cuml-cu13",
+    "pylibraft-cu13",
+    "cupy-cuda13x",
+    "nvidia-dali-cuda130",
+]
+cu12 = [
+    "torch>=2.4.0",
+    "torchvision>=0.19.0",
+    "cuml-cu12",
+    "pylibraft-cu12",
+    "cupy-cuda12x",
+    "nvidia-dali-cuda120",
+]
 utils-extras = [
     "wandb",
     "mlflow",
@@ -192,10 +235,6 @@ gnns = [
 
 perf = [
     "transformer_engine[pytorch]",
-    "cuml-cu13",
-    "nvidia-dali-cuda130",
-    "pylibraft-cu13", # Provides rmm
-    "cupy-cuda13x",
 ]
 
 

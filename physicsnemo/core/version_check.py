@@ -242,19 +242,19 @@ _PACKAGE_HINTS: Dict[str, str] = {
     ),
     "nvidia.dali": _format_install_hint(
         "nvidia-dali",
-        group="perf",
+        direct_hint='pip install "nvidia-physicsnemo[cu13]"  # or "nvidia-physicsnemo[cu12]"',
     ),
     "cuml": _format_install_hint(
         "cuml",
-        group="perf",
+        direct_hint='pip install "nvidia-physicsnemo[cu13]"  # or "nvidia-physicsnemo[cu12]"',
     ),
     "cupy": _format_install_hint(
         "cupy",
-        group="perf",
+        direct_hint='pip install "nvidia-physicsnemo[cu13]"  # or "nvidia-physicsnemo[cu12]"',
     ),
     "rmm": _format_install_hint(
         "rmm",
-        group="perf",
+        direct_hint='pip install "nvidia-physicsnemo[cu13]"  # or "nvidia-physicsnemo[cu12]"',
     ),
     "nvfuser": _format_install_hint(
         "nvfuser",
