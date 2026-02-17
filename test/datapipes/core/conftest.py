@@ -142,7 +142,7 @@ def hdf5_single_file(temp_dir):
 @pytest.fixture
 def zarr_data_dir(temp_dir):
     """Create a directory with .zarr groups for ZarrReader tests."""
-    zarr = pytest.importorskip("zarr")
+    zarr = pytest.importorskip("zarr", minversion="3.0")
 
     for i in range(10):
         group_path = temp_dir / f"sample_{i:03d}.zarr"
@@ -156,7 +156,7 @@ def zarr_data_dir(temp_dir):
 @pytest.fixture
 def zarr_single_group(temp_dir):
     """Create a single .zarr group with samples indexed along first dim."""
-    zarr = pytest.importorskip("zarr")
+    zarr = pytest.importorskip("zarr", minversion="3.0")
 
     path = temp_dir / "data.zarr"
     root = zarr.open(path, mode="w")

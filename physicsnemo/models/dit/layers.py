@@ -30,6 +30,10 @@ from physicsnemo.core.version_check import OptionalImport, check_version_spec
 from physicsnemo.domain_parallel import ShardTensor
 from physicsnemo.domain_parallel.shard_utils.natten_patches import partial_na2d
 from physicsnemo.nn import DropPath, Mlp
+from physicsnemo.nn.module.hpx.tokenizer import (
+    HEALPixPatchDetokenizer,
+    HEALPixPatchTokenizer,
+)
 from physicsnemo.nn.module.utils import PatchEmbed2D
 
 timm_v1_0_16 = check_version_spec("timm", "1.0.16", hard_fail=False)
@@ -941,9 +945,9 @@ def get_tokenizer(
     patch_size: Tuple[int],
     in_channels: int,
     hidden_size: int,
-    tokenizer: Literal["patch_embed_2d"] = "patch_embed_2d",
+    tokenizer: Literal["patch_embed_2d", "hpx_patch_embed"] = "patch_embed_2d",
     **tokenizer_kwargs: Any,
-) -> TokenizerModuleBase:
+) -> Union[TokenizerModuleBase, nn.Module]:
     r"""Construct a tokenizer module.
 
     Returns a module whose forward accepts :math:`(B, C, *\text{spatial\_dims})` and returns :math:`(B, L, D)`.
@@ -953,21 +957,28 @@ def get_tokenizer(
     ----------
     input_size : Tuple[int]
         The size of the input image (or tuple for multi-dimensional domain).
+        Ignored by ``"hpx_patch_embed"``.
     patch_size : Tuple[int]
         The size of the patch (or tuple for multi-dimensional patch).
+        Ignored by ``"hpx_patch_embed"``.
     in_channels : int
         The number of input channels.
     hidden_size : int
         The size of the transformer latent space to project to.
-    tokenizer : Literal["patch_embed_2d"], optional, default="patch_embed_2d"
-        The tokenizer to use. Must match the dimensionality of ``input_size`` and ``patch_size``.
-        ``"patch_embed_2d"`` uses a standard PatchEmbed2D to project the input image to a sequence of tokens.
+    tokenizer : Literal["patch_embed_2d", "hpx_patch_embed"], optional, default="patch_embed_2d"
+        The tokenizer to use.
+        - ``"patch_embed_2d"`` -- Uses a standard PatchEmbed2D to project the input image to a
+          sequence of tokens based on ``input_size`` and ``patch_size``.
+        - ``"hpx_patch_embed"`` -- Uses the HEALPix patch tokenizer from ``physicsnemo.nn.module.hpx.tokenizer``.
+          Requires ``earth2grid`` and determines the patch size from ``level_fine`` and ``level_coarse`` in
+          ``tokenizer_kwargs``.
+
     **tokenizer_kwargs : Any
         Additional keyword arguments for the tokenizer module.
 
     Returns
     -------
-    TokenizerModuleBase
+    TokenizerModuleBase or nn.Module
         The tokenizer module.
     """
     if tokenizer == "patch_embed_2d":
@@ -978,9 +989,13 @@ def get_tokenizer(
             hidden_size=hidden_size,
             **tokenizer_kwargs,
         )
-    raise ValueError(
-        "tokenizer must be 'patch_embed_2d', no other supported tokenizers are available yet."
-    )
+    if tokenizer == "hpx_patch_embed":
+        return HEALPixPatchTokenizer(
+            in_channels=in_channels,
+            hidden_size=hidden_size,
+            **tokenizer_kwargs,
+        )
+    raise ValueError("tokenizer must be 'patch_embed_2d' or 'hpx_patch_embed'.")
 
 
 class DetokenizerModuleBase(Module, ABC):
@@ -1111,9 +1126,11 @@ def get_detokenizer(
     patch_size: Union[int, Tuple[int]],
     out_channels: int,
     hidden_size: int,
-    detokenizer: Literal["proj_reshape_2d"] = "proj_reshape_2d",
+    detokenizer: Literal[
+        "proj_reshape_2d", "hpx_patch_detokenizer"
+    ] = "proj_reshape_2d",
     **detokenizer_kwargs: Any,
-) -> DetokenizerModuleBase:
+) -> Union[DetokenizerModuleBase, nn.Module]:
     r"""Construct a detokenizer module.
 
     Returns a module whose forward accepts :math:`(B, L, D)` and :math:`(B, D)` and returns
@@ -1123,21 +1140,28 @@ def get_detokenizer(
     ----------
     input_size : Union[int, Tuple[int]]
         The size of the input image (int for square 2D, tuple for multi-dimensional).
+        Ignored by ``"hpx_patch_detokenizer"``.
     patch_size : Union[int, Tuple[int]]
         The size of the patch (int for square 2D, tuple for multi-dimensional).
+        Ignored by ``"hpx_patch_detokenizer"``.
     out_channels : int
         The number of output channels.
     hidden_size : int
         The size of the transformer latent space to project from.
-    detokenizer : Literal["proj_reshape_2d"], optional, default="proj_reshape_2d"
-        The detokenizer to use. Must match the dimensionality of ``input_size`` and ``patch_size``.
-        ``"proj_reshape_2d"`` uses a standard DiT ProjLayer and reshapes the sequence back to an image.
+    detokenizer : Literal["proj_reshape_2d", "hpx_patch_detokenizer"], optional, default="proj_reshape_2d"
+        The detokenizer to use.
+        - ``"proj_reshape_2d"`` -- Uses a standard DiT ProjLayer and reshapes the sequence back to an
+        image based on ``input_size`` and ``patch_size``.
+        - ``"hpx_patch_detokenizer"`` -- HEALPix patch detokenizer from
+            ``physicsnemo.nn.module.hpx.tokenizer``. Requires ``earth2grid`` and determines the patch size from
+            ``level_coarse`` and ``level_fine`` in ``detokenizer_kwargs``.
+
     **detokenizer_kwargs : Any
         Additional keyword arguments for the detokenizer module.
 
     Returns
     -------
-    DetokenizerModuleBase
+    DetokenizerModuleBase or nn.Module
         The detokenizer module.
     """
     if detokenizer == "proj_reshape_2d":
@@ -1148,6 +1172,12 @@ def get_detokenizer(
             hidden_size=hidden_size,
             **detokenizer_kwargs,
         )
+    if detokenizer == "hpx_patch_detokenizer":
+        return HEALPixPatchDetokenizer(
+            hidden_size=hidden_size,
+            out_channels=out_channels,
+            **detokenizer_kwargs,
+        )
     raise ValueError(
-        "detokenizer must be 'proj_reshape_2d', no other supported detokenizers are available yet."
+        "detokenizer must be 'proj_reshape_2d' or 'hpx_patch_detokenizer'."
     )

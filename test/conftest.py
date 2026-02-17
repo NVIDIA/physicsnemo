@@ -15,14 +15,18 @@
 # limitations under the License.
 
 import importlib
+import importlib.util
 import os
 import pathlib
 import random
 from collections import defaultdict
+from importlib import metadata
 
 import numpy as np
 import pytest
 import torch
+from packaging.requirements import Requirement
+from packaging.version import Version
 
 NFS_DATA_PATH = "/data/nfs/modulus-data"
 
@@ -151,22 +155,42 @@ def pytest_collection_modifyitems(config, items):
                 item.add_marker(skip_all)
 
 
+def _check_requirement(spec):
+    """
+    Return True if the requirement is satisfied, False otherwise.
+
+    Spec may be a plain module name (e.g. "zarr") or a name with version
+    specifier (e.g. "zarr>=3.0.0"). Uses packaging.requirements.Requirement
+    for parsing and importlib.metadata for the installed version.
+    """
+    req = Requirement(spec)
+    module_name = req.name
+    if importlib.util.find_spec(module_name) is None:
+        return False
+    if req.specifier:
+        try:
+            installed = metadata.version(module_name)
+        except Exception:
+            return False
+        if Version(installed) not in req.specifier:
+            return False
+    return True
+
+
 def requires_module(names):
     """
-    Decorator to skip a test if *any* of the given modules are missing.
-    Accepts a single module name or a list/tuple of names.
+    Decorator to skip a test if *any* of the given modules are missing
+    or do not satisfy the requested version.
+
+    Accepts a single spec or a list/tuple of specs. Each spec may be a
+    module name (e.g. ``"zarr"``) or a name with version specifier
+    (e.g. ``"zarr>=3.0.0"``).
     """
     if isinstance(names, str):
         names = [names]
 
-    missing = [n for n in names if importlib.util.find_spec(n) is None]
-
-    if missing:
-        reason = f"Missing dependencies: {', '.join(missing)}"
-        return pytest.mark.skipif(True, reason=reason)
-    else:
-        # No missing dependencies → no skip mark
-        return pytest.mark.skipif(False, reason="")
+    skip = not all(_check_requirement(spec) for spec in names)
+    return pytest.mark.skipif(skip, reason="")
 
 
 @pytest.fixture(params=["cpu"] + (["cuda:0"] if torch.cuda.is_available() else []))
