@@ -208,6 +208,7 @@ class Normalizer(Module):
                     new_ln_running_mean_if_uninitialized,
                 )
             )
+            self._initialized.fill_(True)
 
         # Divide by running mean via exp(-ln_running_mean)
         x = x * torch.exp(-self.ln_running_mean)
