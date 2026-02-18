@@ -15,43 +15,36 @@ from physicsnemo.models.globe.utilities.field_kernel import vector_project
 
 
 class CachedPreprocessingDataset(Dataset, ABC):
+    """Dataset that lazily preprocesses samples and caches results to disk/RAM.
+
+    Subclasses implement the ``preprocess`` static method to define how raw
+    samples are transformed. On first access the result is computed and
+    (optionally) saved to *cache_dir* as a ``.pt`` file keyed by the sample
+    directory name. Subsequent accesses load the cached result directly.
+
+    Args:
+        sample_paths: Paths to individual samples in the dataset.
+        cache_dir: Directory for disk caching. ``None`` disables disk caching.
+        use_ram_caching: If True, wraps ``__getitem__`` with
+            ``functools.cache`` for in-memory caching (increases memory usage).
+
+    Raises:
+        FileNotFoundError: If any *sample_paths* entry does not exist on disk.
+    """
+
     def __init__(
         self,
         sample_paths: Sequence[Path | str],
         cache_dir: Path | str | None = None,
         use_ram_caching: bool = False,
     ):
-        """Abstract base class for datasets with cached preprocessing capabilities.
-
-        This class provides a framework for datasets that perform expensive preprocessing
-        operations on samples and can cache the results to disk and/or RAM for faster
-        subsequent access. The preprocessing is performed lazily on first access to each
-        sample.
-
-        Args:
-            sample_paths: Sequence of paths to individual samples in the dataset.
-            cache_dir: Directory where preprocessed samples will be cached to disk.
-                If None, disk caching is disabled.
-            use_ram_caching: If True, enables in-memory caching of preprocessed samples
-                using functools.cache. This can significantly speed up repeated access
-                to the same samples but increases memory usage.
-
-        Raises:
-            FileNotFoundError: If any of the provided sample_paths do not exist.
-
-        Note:
-            Subclasses must implement the `preprocess` static method to define how
-            raw samples are transformed into the desired format.
-        """
         self.sample_paths = [Path(path) for path in sample_paths]
         self.cache_dir = Path(cache_dir) if cache_dir is not None else None
         self.use_ram_caching = use_ram_caching
 
-        # Make the cache directory if it doesn't exist
         if self.cache_dir is not None:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Check that the sample paths exist
         nonexistent_sample_paths = [
             path for path in self.sample_paths if not path.exists()
         ]
@@ -70,16 +63,13 @@ class CachedPreprocessingDataset(Dataset, ABC):
     def __getitem__(self, idx) -> Any:
         sample_path = self.sample_paths[idx]
 
-        # Check cache first if caching is enabled
         if self.cache_dir is not None:
             cache_path = (self.cache_dir / sample_path.name).with_suffix(".pt")
             if cache_path.exists():
                 return torch.load(cache_path, weights_only=False)
 
-        # Preprocess the sample
         sample = self.preprocess(sample_path=sample_path)
 
-        # Save to cache if caching is enabled
         if self.cache_dir is not None:
             torch.save(sample, cache_path)
 
@@ -88,7 +78,7 @@ class CachedPreprocessingDataset(Dataset, ABC):
     @staticmethod
     @abstractmethod
     def preprocess(sample_path: Path) -> Any:
-        pass
+        """Transform a raw sample at *sample_path* into the desired format."""
 
 
 # --- AirFRANS constants ---

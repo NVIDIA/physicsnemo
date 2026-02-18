@@ -16,6 +16,7 @@
 
 import contextlib
 import json
+import os
 import signal
 from collections import defaultdict
 from datetime import datetime
@@ -39,17 +40,16 @@ from tqdm import tqdm
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.mesh.utilities._cache import set_cached
-from combined_optimizer import CombinedOptimizer
-from config import get_data_dir
+from physicsnemo.optim import CombinedOptimizer
 from dataset import AirFRANSDataSet
 from utilities import (
+    disable_autotune_printing,
     get_latest_checkpoint_path,
     get_physicsnemo_pkg_info,
     log_hyperparameters,
     reduce_over_ranks,
     sanitize_metric_name,
     to,
-    disable_autotune_printing,
 )
 from physicsnemo.models.globe.model import GLOBE
 
@@ -58,6 +58,7 @@ disable_autotune_printing()  # Silences the verbose output of `torch.compile(...
 
 
 def main(
+    data_dir: Path | None = None,
     output_name: str | None = None,
     amp: bool = False,
     compile: bool = True,
@@ -81,10 +82,16 @@ def main(
     airfrans_task: Literal["full", "scarce", "reynolds", "aoa"] = "full",
     profile: bool = True,
     make_images: bool = True,
+    use_mlflow: bool = True,
+    mlflow_experiment: str = "GLOBE_AirFRANS",
 ):
     """Train the GLOBE model on AirFRANS dataset.
 
     Args:
+        data_dir: Path to the AirFRANS dataset directory. Resolution order:
+            1. This argument (if provided)
+            2. AIRFRANS_DATA_DIR environment variable
+            3. Hostname-based lookup via config.get_data_dir()
         output_name: Name for output directory. If None, uses current timestamp.
         amp: Enable automatic mixed precision (AMP) training for faster computation.
         compile: Enable torch.compile for model optimization and performance.
@@ -93,27 +100,36 @@ def main(
         learning_rate: Initial learning rate for the Adam optimizer.
         weight_decay: Weight decay (L2 regularization) factor for the optimizer.
         train_face_downsampling_ratio: Ratio of faces to keep when downsampling boundary meshes.
-        train_random_face_centers: Whether to use random points inside faces instead of centroids.
-        train_random_face_centers_alpha: Concentration parameter for Dirichlet distribution used to
-            generate random face centers. Alpha=1 gives uniform distribution over the simplex.
-            Larger values (e.g., alpha=3) concentrate samples toward the center of each face.
+        train_randomize_face_centers: Whether to use random points inside faces instead of centroids.
         seed: Random seed for reproducibility across runs.
         error_scales: Dictionary specifying error scales for loss components. If None, uses default scales.
-        hidden_layer_sizes: List of hidden layer sizes for the MLP architecture.
-        bc_encoding_n_scalars: Number of scalar features in boundary condition encoding.
-        bc_encoding_n_vectors: Number of vector features in boundary condition encoding.
+        n_communication_hyperlayers: Number of boundary-to-boundary communication layers.
+        hidden_layer_sizes: Hidden layer sizes for the kernel MLP architecture.
+        n_latent_scalars: Number of scalar latent channels propagated between hyperlayers.
+        n_latent_vectors: Number of vector latent channels propagated between hyperlayers.
+        n_spherical_harmonics: Number of Legendre polynomial terms for angle features.
         airfrans_task: Which AirFRANS dataset task to train on.
         profile: Enable PyTorch profiler for performance analysis.
         make_images: Whether to make images for visualization.
+        use_mlflow: Enable MLflow experiment tracking. Requires MLFLOW_TRACKING_URI to be set
+            in the environment (see run.sh). When False, training still logs to console and
+            saves hyperparameters to YAML, but skips all MLflow calls.
+        mlflow_experiment: MLflow experiment name. Ignored when use_mlflow is False.
 
     Note:
-        Data directory is automatically determined based on hostname (local vs. EOS cluster).
         Output directory is created under the script's parent directory in an 'output' folder.
         Error scales control the relative weighting of different physical fields in the loss.
         When profiling is enabled, results are saved to output_dir/profiling/ as Chrome trace files.
     """
     ### [Config Processing]
-    data_dir = get_data_dir()
+    if data_dir is None:
+        env_dir = os.environ.get("AIRFRANS_DATA_DIR")
+        if env_dir:
+            data_dir = Path(env_dir)
+        else:
+            from config import get_data_dir
+
+            data_dir = get_data_dir()
 
     if output_name is None:
         output_name = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -151,7 +167,6 @@ def main(
     models_dir = output_dir / "models"
     best_model_dir = models_dir / "best_model"
     profiling_dir = output_dir / "profiling"
-    shared_mlflow_dir = Path(__file__).parent / "output" / "mlruns"
 
     if dist.rank == 0:
         for directory in (
@@ -159,20 +174,8 @@ def main(
             best_model_dir,
             torch_compile_cache_dir,
             profiling_dir,
-            shared_mlflow_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
-
-        ### [MLflow Setup]
-        mlflow.set_tracking_uri(f"file://{shared_mlflow_dir.absolute()}")
-        mlflow.set_experiment(experiment_name="GLOBE_AirFRANS")
-        mlflow.start_run(
-            run_name=f"{output_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-            tags={
-                "airfrans_task": airfrans_task,
-                "output_name": output_name,
-            },
-        )
 
     ### [Signal Handling]
     shutdown_received = False
@@ -357,6 +360,7 @@ def main(
     ### [Checkpoint Save/Load]
     def save_checkpoint(save_dir: Path, keep_only_latest: bool = False) -> None:
         checkpoint_path = save_dir / f"{base_model.__class__.__name__}.{epoch:d}.pt"
+        active_run = mlflow.active_run() if use_mlflow else None
         torch.save(
             {
                 "epoch": epoch,
@@ -367,6 +371,7 @@ def main(
                 "best_loss": best_loss,
                 "last_image_epoch": last_image_epoch,
                 "last_image_loss": last_image_loss,
+                "mlflow_run_id": active_run.info.run_id if active_run else None,
             },
             checkpoint_path,
         )
@@ -376,6 +381,7 @@ def main(
                     old_checkpoint.unlink()
 
     # Try to load a pre-existing checkpoint
+    mlflow_run_id: str | None = None
     previous_checkpoint: Path | None = get_latest_checkpoint_path(output_dir=output_dir)
     if previous_checkpoint:
         if dist.rank == 0:
@@ -389,6 +395,7 @@ def main(
         best_loss = checkpoint.get("best_loss", float("inf"))
         last_image_epoch = checkpoint.get("last_image_epoch", -float("inf"))
         last_image_loss = checkpoint.get("last_image_loss", float("inf"))
+        mlflow_run_id = checkpoint.get("mlflow_run_id")
     else:
         if dist.rank == 0:
             print("Starting training from scratch.")
@@ -396,6 +403,26 @@ def main(
         best_loss = float("inf")
         last_image_epoch = -float("inf")
         last_image_loss = float("inf")
+
+    ### [MLflow Setup]
+    mlflow_run_ctx: contextlib.AbstractContextManager = contextlib.nullcontext()
+    if dist.rank == 0 and use_mlflow:
+        mlflow.set_experiment(experiment_name=mlflow_experiment)
+        if mlflow_run_id:
+            try:
+                mlflow_run_ctx = mlflow.start_run(run_id=mlflow_run_id)
+                print(f"Resumed MLflow run {mlflow_run_id}")
+            except Exception:
+                warnings.warn(f"Could not resume MLflow run {mlflow_run_id!r}, creating new run")
+                mlflow_run_id = None
+        if not mlflow_run_id:
+            mlflow_run_ctx = mlflow.start_run(
+                run_name=f"{output_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                tags={
+                    "airfrans_task": airfrans_task,
+                    "output_name": output_name,
+                },
+            )
 
     ### [Hyperparameter Logging]
     if dist.rank == 0:
@@ -417,20 +444,6 @@ def main(
         )
 
     ### [Training and Validation]
-    def field_loss_fn(
-        pred: torch.Tensor, true: torch.Tensor, error_scale: torch.Tensor
-    ) -> torch.Tensor:
-        error = torch.where(
-            torch.isnan(true),
-            torch.zeros_like(true),
-            (pred - true) / error_scale,
-        )
-        if error.ndim > 1:
-            error = error.norm(dim=-1)
-        return 2 * F.huber_loss(
-            error, torch.zeros_like(error), reduction="none", delta=1.0
-        )
-
     @torch.compile(
         dynamic=False,
         mode=compile_mode,
@@ -565,12 +578,16 @@ def main(
                     ]
                 )
             )
-            split = "train" if training else "valid"
-            mlflow.log_metric(f"{split}_loss", epoch_loss.item(), step=epoch)
-            for field_name, loss_value in epoch_loss_components.items():
-                mlflow.log_metric(
-                    f"{split}_loss_components/{sanitize_metric_name(field_name)}",
-                    loss_value.item(),
+            if use_mlflow:
+                split = "train" if training else "valid"
+                mlflow.log_metrics(
+                    {
+                        f"{split}_loss": epoch_loss.item(),
+                        **{
+                            f"{split}_loss_components/{sanitize_metric_name(k)}": v.item()
+                            for k, v in epoch_loss_components.items()
+                        },
+                    },
                     step=epoch,
                 )
 
@@ -579,16 +596,19 @@ def main(
     ### [Profiler Setup]
     profile = profile and dist.rank == 0 and (not any(profiling_dir.iterdir()))
     with (
-        torch.profiler.profile(
-            schedule=torch.profiler.schedule(wait=4, warmup=1, active=1, repeat=1),
-            on_trace_ready=torch.profiler.tensorboard_trace_handler(
-                str(profiling_dir), worker_name=f"worker_{dist.rank}"
-            ),
-            with_stack=True,
-        )
-        if profile
-        else contextlib.nullcontext()
-    ) as profiler:
+        mlflow_run_ctx,
+        (
+            torch.profiler.profile(
+                schedule=torch.profiler.schedule(wait=4, warmup=1, active=1, repeat=1),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                    str(profiling_dir), worker_name=f"worker_{dist.rank}"
+                ),
+                with_stack=True,
+            )
+            if profile
+            else contextlib.nullcontext()
+        ) as profiler,
+    ):
         ### [Training Loop]
 
         if dist.rank == 0:
@@ -616,19 +636,17 @@ def main(
                     save_checkpoint(save_dir=best_model_dir, keep_only_latest=True)
 
                 ### [MLflow Scalars Logging]
-                mlflow.log_metric("lr", optimizer.param_groups[0]["lr"], step=epoch)
-                mlflow.log_metric(
-                    "system/vram_gb",
-                    torch.cuda.memory_stats()["reserved_bytes.all.peak"] / 1024**3,
-                    step=epoch,
-                )
-                time_now = perf_counter()
-                mlflow.log_metric(
-                    "system/seconds_per_epoch",
-                    (time_now - time_last_epoch),
-                    step=epoch,
-                )
-                time_last_epoch = time_now
+                if use_mlflow:
+                    time_now = perf_counter()
+                    mlflow.log_metrics(
+                        {
+                            "lr": optimizer.param_groups[0]["lr"],
+                            "system/vram_gb": torch.cuda.memory_stats()["reserved_bytes.all.peak"] / 1024**3,
+                            "system/seconds_per_epoch": time_now - time_last_epoch,
+                        },
+                        step=epoch,
+                    )
+                    time_last_epoch = time_now
 
             ### [MLflow Image Logging]
             if (
@@ -670,7 +688,7 @@ def main(
                     plt.gcf().set_dpi(300)
 
                     # Log figure to MLflow (only on rank 0 where MLflow is initialized)
-                    if dist.rank == 0:
+                    if dist.rank == 0 and use_mlflow:
                         split = "train" if training else "valid"
                         mlflow.log_figure(
                             plt.gcf(),
@@ -694,9 +712,35 @@ def main(
                 if dist.rank == 0:
                     print("Quitting due to shutdown request.")
                     save_checkpoint(save_dir=models_dir, keep_only_latest=False)
-                    mlflow.end_run()
                 break
 
+def field_loss_fn(
+    pred: torch.Tensor, true: torch.Tensor, error_scale: torch.Tensor
+) -> torch.Tensor:
+    """Per-point Huber loss for GLOBE field predictions, with NaN masking.
+
+    Computes the scaled error ``(pred - true) / error_scale``, masks out
+    points where ``true`` is NaN, takes the vector norm for multi-component
+    fields, and applies a Huber loss (delta=1) with a factor of 2.
+
+    Args:
+        pred: Predicted field values, shape ``(n_points,)`` or ``(n_points, n_dims)``.
+        true: Ground-truth field values (same shape). NaN entries are masked.
+        error_scale: Per-field scaling factor broadcastable to *pred*.
+
+    Returns:
+        Per-point loss tensor of shape ``(n_points,)``.
+    """
+    error = torch.where(
+        torch.isnan(true),
+        torch.zeros_like(true),
+        (pred - true) / error_scale,
+    )
+    if error.ndim > 1:
+        error = error.norm(dim=-1)
+    return 2 * F.huber_loss(
+        error, torch.zeros_like(error), reduction="none", delta=1.0
+    )
 
 if __name__ == "__main__":
     import tyro

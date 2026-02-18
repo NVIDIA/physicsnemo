@@ -1,3 +1,9 @@
+"""Training utilities for the GLOBE AirFRANS example.
+
+Contains helpers for device transfer, distributed reduction, checkpointing,
+hyperparameter logging, and MLflow metric sanitization.
+"""
+
 import inspect
 import re
 from functools import cache
@@ -16,27 +22,31 @@ from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.mesh import Mesh
 
 
+### [torch.compile helpers] ###############################################
+
+
 def disable_autotune_printing() -> None:
-    """
-    Disables the (extremely verbose) command-line output of `torch.compile(..., mode="max-autotune")`.
-    """
+    """Silence the verbose command-line output of ``torch.compile(..., mode="max-autotune")``."""
     from torch._inductor import config, select_algorithm
 
     config.max_autotune_report_choices_stats = False
     select_algorithm.PRINT_AUTOTUNE = False
 
 
-def sanitize_metric_name(name: str) -> str:
-    """Sanitize a metric name so it contains only allowed characters for MLflow:
+### [MLflow helpers] ######################################################
 
-    This replaces any character not in the set [A-Za-z0-9_.- :/] with a space.
-    Leading or trailing whitespace is removed after replacement.
+
+def sanitize_metric_name(name: str) -> str:
+    """Replace characters not in ``[A-Za-z0-9_.- :/]`` with underscores.
+
+    Leading/trailing whitespace is stripped after replacement. Consecutive
+    whitespace is collapsed to a single underscore.
 
     Args:
         name: Original metric name that may contain special characters.
 
     Returns:
-        Sanitized metric name with disallowed characters replaced by space, and whitespace trimmed.
+        Sanitized name safe for MLflow metric keys.
 
     Examples:
         >>> sanitize_metric_name("ln(1+nut/nu)")
@@ -55,14 +65,16 @@ def sanitize_metric_name(name: str) -> str:
     return sanitized.strip().replace(" ", "_")
 
 
+### [Package metadata] ####################################################
+
+
 @cache
 def get_physicsnemo_pkg_info() -> dict[str, str | None]:
-    """Get the git hash and version of the physicsnemo package.
+    """Return the PhysicsNeMo package version and current git commit hash.
 
     Returns:
-        Dictionary with keys:
-            - "version": Package version string (None if not available)
-            - "git_hash": Git commit hash string (None if not in a git repository)
+        Dictionary with ``"version"`` (package version or ``None``) and
+        ``"git_hash"`` (hex SHA or ``None`` if not in a git repository).
     """
     try:
         git_hash = git.Repo(search_parent_directories=True).head.commit.hexsha
@@ -75,17 +87,17 @@ def get_physicsnemo_pkg_info() -> dict[str, str | None]:
     }
 
 
-def extract_epoch(path: Path) -> int | None:
-    """Extract epoch number from a checkpoint filename.
+### [Checkpoint management] ###############################################
 
-    Expects filenames matching the pattern 'ClassName.<epoch>.pt' where
-    <epoch> is an integer.
+
+def extract_epoch(path: Path) -> int | None:
+    """Extract epoch number from a checkpoint filename ``ClassName.<epoch>.pt``.
 
     Args:
-        path: Path to checkpoint file.
+        path: Checkpoint file path.
 
     Returns:
-        Epoch number as integer, or None if filename doesn't match expected pattern.
+        Epoch integer, or ``None`` if the filename doesn't match.
 
     Examples:
         >>> extract_epoch(Path("Model.100.pt"))
@@ -93,7 +105,6 @@ def extract_epoch(path: Path) -> int | None:
         >>> extract_epoch(Path("dir/MyModel.42.pt"))
         42
         >>> extract_epoch(Path("invalid_name.pt"))
-        None
     """
     match = re.match(r".*\.(\d+)\.pt$", path.name)
     return int(match.group(1)) if match else None
@@ -102,19 +113,18 @@ def extract_epoch(path: Path) -> int | None:
 def get_latest_checkpoint_path(
     output_dir: Path, only_use_best: bool = False
 ) -> Path | None:
-    """Find the checkpoint with the highest epoch number in an output directory.
+    """Find the checkpoint with the highest epoch number in *output_dir*.
 
-    Searches for checkpoint files (*.pt) in both the 'models' and 'models/best_model'
-    subdirectories of the given output directory. Determines recency by extracting
-    epoch numbers from filenames.
+    Searches ``models/`` and ``models/best_model/`` subdirectories for
+    ``*.pt`` files and returns the one with the highest epoch number
+    (extracted from the filename).
 
     Args:
-        output_dir: Root directory containing model checkpoints.
-        only_use_best: Whether to only consider the best model checkpoint.
+        output_dir: Root output directory containing model checkpoints.
+        only_use_best: Only consider checkpoints in ``models/best_model/``.
 
     Returns:
-        Path to the checkpoint with highest epoch number, or None if no checkpoints
-        are found.
+        Path to the latest checkpoint, or ``None`` if none are found.
     """
     models_dir = output_dir / "models"
     best_model_dir = models_dir / "best_model"
@@ -135,83 +145,58 @@ def get_latest_checkpoint_path(
         epoch = extract_epoch(p)
         return -1 if epoch is None else epoch
 
-    return max(
-        checkpoint_paths,
-        key=sort_key,
-    )
+    return max(checkpoint_paths, key=sort_key)
+
+
+### [Hyperparameter logging] ##############################################
 
 
 def log_hyperparameters(
     log_dir: Path, model: torch.nn.Module, other_hyperparameters: dict[str, Any]
 ) -> None:
-    """Log model and training hyperparameters to a YAML file.
+    """Log model and training hyperparameters to YAML (and MLflow if active).
 
-    Extracts model constructor parameters by introspecting the model's __init__
-    signature and matching against instance attributes. Converts complex objects
-    (tensors, devices, etc.) to serializable representations.
+    Extracts model constructor parameters by introspecting ``__init__`` and
+    matching against instance attributes. Complex objects (tensors, devices,
+    etc.) are converted to YAML-safe representations.
 
     Args:
-        log_dir: Directory where the hyperparameters.yaml file will be saved.
-            Directory will be created if it doesn't exist.
-        model: PyTorch model whose hyperparameters should be logged.
-        other_hyperparameters: Additional hyperparameters to log (e.g., training
-            configuration, optimizer settings, etc.).
-
-    Side Effects:
-        Creates log_dir if it doesn't exist and writes hyperparameters.yaml file.
+        log_dir: Directory for ``hyperparameters.yaml``. Created if needed.
+        model: PyTorch model whose constructor params are logged.
+        other_hyperparameters: Additional key-value pairs to log (training
+            config, optimizer settings, etc.).
     """
 
     def to_serializable(obj: Any) -> Any:
-        """Recursively convert *obj* into a structure that can be handled by ``yaml.safe_dump``.
-
-        This strips out complex Torch and distributed objects (``ProcessGroup``, devices, tensors, etc.)
-        that cannot be pickled by the YAML representer. When an object cannot be converted in a loss-free
-        manner, it is coerced to ``str(obj)`` so that at least a human-readable representation is kept.
-
-        The implementation purposefully avoids importing heavy optional dependencies at the module level
-        to keep import time negligible.
-        """
-        # Primitive types that YAML already knows how to handle
+        """Recursively convert *obj* to a YAML-safe representation."""
         if isinstance(obj, (str, int, float, bool, type(None))):
             return obj
-
-        # Handle common container types recursively
         if isinstance(obj, (list, tuple, set)):
             return [to_serializable(item) for item in obj]
         if isinstance(obj, dict):
             return {str(to_serializable(k)): to_serializable(v) for k, v in obj.items()}
-
-        # pathlib.Path ➔ string
         if isinstance(obj, Path):
             return str(obj)
 
         try:
             if isinstance(obj, torch.Tensor):
-                # For tensors, a nested list works well up to a reasonable size. For very large tensors, a
-                # string representation is safer to avoid bloating the YAML file.
                 return (
                     obj.tolist()
                     if obj.numel() <= 32
                     else f"Tensor(shape={tuple(obj.shape)})"
                 )
-
             if isinstance(obj, torch.device):
                 return str(obj)
-
-            # torch.dtype has a nice string representation; anything else falls through
             if isinstance(obj, torch.dtype):
                 return str(obj)
-
             if isinstance(obj, np.ndarray):
                 return obj.tolist() if obj.size <= 32 else f"ndarray(shape={obj.shape})"
-
         except Exception as e:
             import warnings
 
             warnings.warn(f"Failed to serialize {obj} with error {e}")
             return str(obj)
 
-        # Fallback – stringify the object
         return str(obj)
 
     log_dir = Path(log_dir)
@@ -242,13 +227,16 @@ def log_hyperparameters(
             sort_keys=False,
         )
 
-    mlflow.log_params(
-        {
-            **model_hyperparameters,
-            **other_hyperparameters,
-        }
-    )
+    if mlflow.active_run():
+        mlflow.log_params(
+            {
+                **model_hyperparameters,
+                **other_hyperparameters,
+            }
+        )
 
+
+### [Device transfer] #####################################################
 
 TransferrableType = (
     torch.Tensor
@@ -268,31 +256,22 @@ TransferrableType = (
 def to(
     data: TransferrableType, device: torch.device, dtype: torch.dtype | None = None
 ) -> TransferrableType:
-    """Recursively transfer data structures to a PyTorch device.
+    """Recursively transfer nested data structures to a PyTorch device.
 
-    Supports nested data structures containing tensors and TensorDict-based
-    objects (including Mesh). Preserves the structure of the input.
+    Walks dicts, lists, tuples, and sets, calling ``.to()`` on Tensor,
+    TensorDict, and Mesh leaves. Python numeric scalars are converted to
+    tensors via ``torch.as_tensor``.
 
     Args:
-        data: Data to transfer. Can be:
-            - torch.Tensor or TensorDict (including Mesh, which is a tensorclass)
-            - list/tuple/dict/set containing supported types (recursive)
-        device: Target PyTorch device (e.g., torch.device('cuda:0')).
-        dtype: Target dtype (e.g., torch.float32, torch.float64) or None (keep original dtype)
+        data: Nested structure of tensors, TensorDicts, Meshes, and containers.
+        device: Target device.
+        dtype: Optional target dtype (applied only to Tensor/TensorDict/Mesh).
 
     Returns:
-        Same structure as input with all tensors/transferrable objects moved
-        to the specified device.
+        Same structure with all tensor-like leaves on *device*.
 
     Raises:
-        NotImplementedError: If data contains unsupported types.
-
-    Examples:
-        >>> tensor = torch.randn(3, 4)
-        >>> device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        >>> moved = to(tensor, device)
-        >>> nested = {'a': [tensor, tensor], 'b': tensor}
-        >>> moved_nested = to(nested, device)
+        NotImplementedError: If *data* contains an unsupported leaf type.
     """
     if isinstance(data, (torch.Tensor, Mesh, TensorDict)):
         return data.to(device=device, dtype=dtype)
@@ -308,22 +287,27 @@ def to(
         return {to(item, device=device) for item in data}
     else:
         raise NotImplementedError(
-            f"`to_device` doesn't have a device-transfer recipe registered for {type(data)=!r}."
+            f"`to` doesn't have a device-transfer recipe registered for {type(data)=!r}."
         )
+
+
+### [Distributed reduction] ###############################################
 
 
 def reduce_over_ranks(
     x: torch.Tensor,
     op: Literal["mean", "sum", "max", "min"] = "mean",
 ) -> torch.Tensor:
-    """Reduce a tensor across all ranks using the specified operation.
+    """All-reduce *x* across ranks using the specified operation.
+
+    No-op when ``world_size == 1``. Modifies *x* in-place.
 
     Args:
-        x: Tensor to reduce. Modified in-place.
-        op: Reduction operation. One of "mean", "sum", "max", "min".
+        x: Tensor to reduce.
+        op: Reduction operation.
 
     Returns:
-        The reduced tensor (same object as x, modified in-place).
+        The same tensor object, now holding the reduced values.
     """
     if not DistributedManager.is_initialized():
         raise RuntimeError(
@@ -338,9 +322,7 @@ def reduce_over_ranks(
             "max": torch.distributed.ReduceOp.MAX,
             "min": torch.distributed.ReduceOp.MIN,
         }
-        torch.distributed.barrier()
         torch.distributed.all_reduce(x, op=op_map[op])
-        torch.distributed.barrier()
 
     return x
 

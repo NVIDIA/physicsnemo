@@ -31,6 +31,9 @@ set -euxo pipefail
 # uv sync --extra [cu12 or cu13] --extra mesh-extras
 uv pip install -r requirements.txt
 
+### [MLflow Configuration]
+export MLFLOW_TRACKING_URI="sqlite:///${SLURM_SUBMIT_DIR:-$(pwd)}/output/mlflow.db"
+
 ### [Launch Training]
 if [ "${SLURM_NNODES:-1}" -gt 1 ]; then
     echo "Running multi-node training..."
