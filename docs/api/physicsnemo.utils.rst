@@ -22,15 +22,6 @@ These are particularly useful when implementing custom training loops or special
     :members:
     :show-inheritance:
 
-Neighbor Functionals
---------------------
-
-Functional wrappers for neighbor searches live under ``physicsnemo.nn.functional``.
-
-.. automodule:: physicsnemo.nn.functional.knn
-    :members:
-    :show-inheritance:
-
 
 GraphCast Utils
 ---------------
@@ -84,19 +75,6 @@ including deterministic and stochastic sampling utilities.
 
 .. automodule:: physicsnemo.diffusion.utils
     :members:
-    :show-inheritance:
-
-Geometry Functionals
---------------------
-
-Utilities for geometric operations, including neighbor search and signed distance field calculations.
-These are essential for physics simulations and geometric deep learning applications.
-
-.. automodule:: physicsnemo.nn.functional.radius_search
-    :members:
-    :show-inheritance:
-
-.. automodule:: physicsnemo.nn.functional.sdf
     :show-inheritance:
 
 Weather / Climate Utils

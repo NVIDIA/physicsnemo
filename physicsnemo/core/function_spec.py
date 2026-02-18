@@ -18,10 +18,11 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import inspect
 import re
 import warnings
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, Sequence, Tuple
 
 import torch
 from packaging.requirements import Requirement
@@ -88,11 +89,13 @@ class FunctionSpec:
        wins). Optionally set ``baseline=True`` for the reference implementation
        used in benchmarking. The decorator must be used inside the class body.
     3. Implement :meth:`make_inputs` and :meth:`compare` for benchmarking and
-       correctness checks. These are optional for basic usage, but they are
-       highly encouraged and required for benchmarking and validation
-       workflows. ``make_inputs`` should be a generator that yields
-       representative input tuples for the function, and ``compare`` should
-       validate that outputs from two implementations match.
+       correctness checks. These are optional for basic usage, but highly
+       encouraged and required for benchmarking/validation workflows.
+       ``make_inputs`` should yield ``(label, args, kwargs)`` items in roughly
+       increasing workload order (for example from smaller to larger cases).
+       Labels use a descriptive naming scheme that will be used for benchmarking
+       and plotting. ``compare`` should validate
+       that outputs from two implementations match.
     4. Expose a functional entry point with :meth:`make_function`.
 
     Dispatch rules
@@ -179,8 +182,9 @@ class FunctionSpec:
             @classmethod
             def make_inputs(cls, device: torch.device | str = "cpu"):
                 device = torch.device(device)
-                for size in (1024, 4096):
-                    yield (torch.randn(size, device=device),)
+                yield ("small", (torch.randn(1024, device=device),), {})
+                yield ("medium", (torch.randn(4096, device=device),), {})
+                yield ("large", (torch.randn(16384, device=device),), {})
 
             @classmethod
             def compare(
@@ -279,12 +283,17 @@ class FunctionSpec:
         return decorator
 
     @classmethod
-    def make_inputs(cls, device: torch.device) -> Iterable[Tuple[torch.Tensor, ...]]:
-        """Generator for example inputs to the function.
-        This is used for benchmarking and testing.
-        Generated inputs should be representative of the function's
-        expected input and reasonable for code coverage as well
-        as benchmarking.
+    def make_inputs(
+        cls, device: torch.device
+    ) -> Iterable[tuple[str, tuple[Any, ...], dict[str, Any]]]:
+        """Generator for labeled inputs to the function.
+        This method is used for benchmarking and testing. Generated inputs
+        should be representative of expected usage and suitable for both code
+        coverage and performance measurement.
+
+        Yield each case as ``(label, args, kwargs)`` in roughly increasing
+        workload order (for example from smaller to larger inputs). Labels should
+        use a descriptive naming scheme.
 
         Parameters
         ----------
@@ -293,8 +302,8 @@ class FunctionSpec:
 
         Returns
         -------
-        Iterable[Tuple[torch.Tensor, ...]]
-            Iterable of input tuples.
+        Iterable[tuple[str, tuple[Any, ...], dict[str, Any]]]
+            Iterable of labeled input cases.
         """
         raise NotImplementedError(f"{cls.__name__}.make_inputs must be implemented")
 
@@ -347,6 +356,17 @@ class FunctionSpec:
         # Define the function
         def _function(*args, **kwargs):
             return cls.dispatch(*args, **kwargs)
+
+        # Resolve a representative implementation signature for docs/introspection.
+        # Prefer the lowest-rank registered implementation to reflect default dispatch.
+        impls = cls._get_impls()
+        if impls:
+            preferred_impl = min(impls.values(), key=lambda impl: impl.rank)
+            _function.__signature__ = inspect.signature(preferred_impl.func)
+            _function.__annotations__ = dict(
+                getattr(preferred_impl.func, "__annotations__", {})
+            )
+            _function.__wrapped__ = preferred_impl.func
 
         # Set the function attributes
         # This keeps things like docstrings for API documentation.

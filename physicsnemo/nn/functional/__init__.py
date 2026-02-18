@@ -14,12 +14,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .drop_path import drop_path
+from .fft import imag, irfft, irfft2, real, rfft, rfft2, view_as_complex
+from .interpolation import interpolation
 from .knn import knn
 from .radius_search import radius_search
 from .sdf import signed_distance_field
+from .weight_fact import weight_fact
 
 __all__ = [
+    "irfft",
+    "irfft2",
+    "drop_path",
+    "imag",
+    "interpolation",
     "knn",
     "radius_search",
+    "real",
+    "rfft",
+    "rfft2",
     "signed_distance_field",
+    "view_as_complex",
+    "weight_fact",
 ]

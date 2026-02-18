@@ -18,7 +18,10 @@ from typing import Sequence
 
 import numpy as np
 import torch as th
-import xarray as xr
+
+from physicsnemo.core.version_check import OptionalImport
+
+xr = OptionalImport("xarray")
 
 """
 Custom dlwp compatible loss classes that allow for more sophisticated training optimization.

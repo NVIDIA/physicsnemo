@@ -1275,29 +1275,10 @@ class Module(torch.nn.Module):
             def forward(self, x):
                 return self.inner_model(x)
 
-        # Get the argument names and default values of the PyTorch model's init
-        # method
-        init_argspec = inspect.getfullargspec(torch_model_class.__init__)
-        model_argnames = init_argspec.args[1:]  # Exclude 'self'
-        model_defaults = init_argspec.defaults or []
-        defaults_dict = dict(
-            zip(model_argnames[-len(model_defaults) :], model_defaults)
+        # Get the signature of the PyTorch model's init method
+        PhysicsNeMoModel.__init__.__signature__ = inspect.signature(
+            torch_model_class.__init__
         )
-
-        # Define the signature of new init
-        params = [inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
-        params += [
-            inspect.Parameter(
-                argname,
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                default=defaults_dict.get(argname, inspect.Parameter.empty),
-            )
-            for argname in model_argnames
-        ]
-        init_signature = inspect.Signature(params)
-
-        # Replace PhysicsNeMoModel.__init__ signature with new init signature
-        PhysicsNeMoModel.__init__.__signature__ = init_signature
 
         # Generate a unique name for the created class
         new_class_name = f"{torch_model_class.__name__}" if name is None else name

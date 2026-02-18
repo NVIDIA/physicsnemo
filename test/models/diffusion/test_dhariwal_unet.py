@@ -37,22 +37,76 @@ def test_dhariwal_unet_forward(device):
     )
 
 
-def test_dhariwal_unet_constructor(device):
-    """Test the Dhariwal UNet constructor options"""
+@pytest.mark.parametrize(
+    "config",
+    ["default", "custom"],
+    ids=["with_defaults", "with_custom_args"],
+)
+def test_dhariwal_unet_constructor(device, config):
+    """Test DhariwalUNet model constructor and attributes (MOD-008a).
 
-    img_resolution = 16
-    in_channels = 2
-    out_channels = 2
-    model = UNet(
-        img_resolution=img_resolution,
-        in_channels=in_channels,
-        out_channels=out_channels,
-    ).to(device)
-    noise_labels = torch.randn([1]).to(device)
-    class_labels = torch.randint(0, 1, (1, 1)).to(device)
-    input_image = torch.ones([1, 2, 16, 16]).to(device)
-    output_image = model(input_image, noise_labels, class_labels)
-    assert output_image.shape == (1, out_channels, img_resolution, img_resolution)
+    This test verifies:
+    1. Model can be instantiated with default arguments
+    2. Model can be instantiated with custom arguments
+    3. All public attributes have expected values
+    """
+    if config == "default":
+        model = UNet(
+            img_resolution=16,
+            in_channels=2,
+            out_channels=2,
+        ).to(device)
+
+        # Verify default attribute values
+        assert model.label_dim == 0
+        assert model.augment_dim == 0
+        assert model.label_dropout == 0.0
+        assert model.profile_mode is False
+        assert model.amp_mode is False
+
+        # Verify forward pass shape
+        noise_labels = torch.randn([1]).to(device)
+        class_labels = torch.randint(0, 1, (1, 1)).to(device)
+        input_image = torch.ones([1, 2, 16, 16]).to(device)
+        output_image = model(input_image, noise_labels, class_labels)
+        assert output_image.shape == (1, 2, 16, 16)
+    else:
+        model = UNet(
+            img_resolution=16,
+            in_channels=2,
+            out_channels=2,
+            label_dim=10,
+            augment_dim=5,
+            model_channels=64,
+            channel_mult=[1, 2],
+            channel_mult_emb=2,
+            num_blocks=2,
+            attn_resolutions=[8],
+            dropout=0.05,
+            label_dropout=0.2,
+        ).to(device)
+
+        # Verify custom attribute values
+        assert model.label_dim == 10
+        assert model.augment_dim == 5
+        assert model.label_dropout == 0.2
+        assert model.profile_mode is False
+        assert model.amp_mode is False
+
+        # Verify forward pass shape
+        noise_labels = torch.randn([1]).to(device)
+        class_labels = torch.randn(1, 10).to(device)
+        input_image = torch.ones([1, 2, 16, 16]).to(device)
+        output_image = model(input_image, noise_labels, class_labels)
+        assert output_image.shape == (1, 2, 16, 16)
+
+    # Common assertions
+    assert isinstance(model, UNet)
+    assert hasattr(model, "enc")
+    assert hasattr(model, "dec")
+    assert hasattr(model, "out_norm")
+    assert hasattr(model, "out_conv")
+    assert hasattr(model, "meta")
 
 
 # Skip CPU tests because too slow

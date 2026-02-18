@@ -14,5 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .dit import DiT
 from .domino import DoMINO
 from .mlp import FullyConnected

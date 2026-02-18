@@ -19,6 +19,7 @@ from typing import List
 
 import numpy as np
 import torch
+from jaxtyping import Float
 from torch.nn.functional import silu
 
 from physicsnemo.core.meta import ModelMetaData
@@ -169,6 +170,8 @@ class DhariwalUNet(Module):
         label_dropout: float = 0.0,
     ):
         super().__init__(meta=MetaData())
+        self.label_dim = label_dim
+        self.augment_dim = augment_dim
         self.label_dropout = label_dropout
         emb_channels = model_channels * channel_mult_emb
         init = dict(
@@ -270,6 +273,10 @@ class DhariwalUNet(Module):
             in_channels=cout, out_channels=out_channels, kernel=3, **init_zero
         )
 
+        # Set properties recursively on submodules
+        self.profile_mode = False
+        self.amp_mode = False
+
     # Properties that are recursively set on submodules
     profile_mode = _recursive_property(
         "profile_mode", bool, "Should be set to ``True`` to enable profiling."
@@ -280,8 +287,52 @@ class DhariwalUNet(Module):
         "Should be set to ``True`` to enable automatic mixed precision.",
     )
 
-    def forward(self, x, noise_labels, class_labels, augment_labels=None):
-        # Mapping.
+    def forward(
+        self,
+        x: Float[torch.Tensor, "B C_in H_in W_in"],
+        noise_labels: Float[torch.Tensor, " B_or_1"],
+        class_labels: Float[torch.Tensor, "B label_dim"] | None = None,
+        augment_labels: Float[torch.Tensor, "B augment_dim"] | None = None,
+    ) -> Float[torch.Tensor, "B C_out H_in W_in"]:
+        # Input validation
+        if not torch.compiler.is_compiling():
+            batch_size = x.shape[0]
+
+            if x.ndim != 4:
+                raise ValueError(
+                    f"Expected 'x' to be a 4D tensor (B, C_in, H, W), "
+                    f"got {x.ndim}D tensor with shape {tuple(x.shape)}"
+                )
+
+            if noise_labels.ndim != 1 or noise_labels.shape[0] not in (
+                batch_size,
+                1,
+            ):
+                raise ValueError(
+                    f"Expected 'noise_labels' shape ({batch_size},) or (1,), "
+                    f"got {tuple(noise_labels.shape)}"
+                )
+            if (
+                self.label_dim > 0
+                and class_labels is not None
+                and class_labels.shape != (batch_size, self.label_dim)
+            ):
+                raise ValueError(
+                    f"Expected 'class_labels' shape ({batch_size}, {self.label_dim}), "
+                    f"got {tuple(class_labels.shape)}"
+                )
+
+            if (
+                self.augment_dim > 0
+                and augment_labels is not None
+                and augment_labels.shape != (batch_size, self.augment_dim)
+            ):
+                raise ValueError(
+                    f"Expected 'augment_labels' shape ({batch_size}, {self.augment_dim}), "
+                    f"got {tuple(augment_labels.shape)}"
+                )
+
+        # Compute conditioning embeddings from noise, class, and augment labels
         emb = self.map_noise(noise_labels)
         if self.map_augment is not None and augment_labels is not None:
             emb = emb + self.map_augment(augment_labels)
@@ -296,16 +347,18 @@ class DhariwalUNet(Module):
             emb = emb + self.map_label(tmp)
         emb = silu(emb)
 
-        # Encoder.
+        # Encoder: progressively downsample and cache skip connections
         skips = []
         for block in self.enc.values():
             x = block(x, emb) if isinstance(block, UNetBlock) else block(x)
             skips.append(x)
 
-        # Decoder.
+        # Decoder: progressively upsample and merge skip connections
         for block in self.dec.values():
             if x.shape[1] != block.in_channels:
                 x = torch.cat([x, skips.pop()], dim=1)
             x = block(x, emb)
+
+        # Final normalization and projection to output channels
         x = self.out_conv(silu(self.out_norm(x)))
         return x
