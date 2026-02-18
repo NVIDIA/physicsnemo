@@ -22,8 +22,6 @@ computations using both DEC and LSQ methods.
 
 from typing import TYPE_CHECKING, Literal, Sequence
 
-from physicsnemo.mesh.utilities._cache import CACHE_KEY
-
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -114,7 +112,7 @@ def compute_point_derivatives(
     ### Parse keys: normalize to list of key paths
     if keys is None:
         key_list = list(
-            mesh.point_data.exclude(CACHE_KEY).keys(
+            mesh.point_data.keys(
                 include_nested=True, leaves_only=True
             )
         )
@@ -239,7 +237,7 @@ def compute_cell_derivatives(
     ### Parse keys: normalize to list of key paths
     if keys is None:
         key_list = list(
-            mesh.cell_data.exclude(CACHE_KEY).keys(
+            mesh.cell_data.keys(
                 include_nested=True, leaves_only=True
             )
         )

@@ -19,8 +19,6 @@
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.mesh.utilities._cache import CACHE_KEY
-
 
 def format_mesh_repr(mesh, exclude_cache: bool = False) -> str:
     """Format a complete Mesh representation.
@@ -96,7 +94,7 @@ def _count_tensordict_fields(td: TensorDict, exclude_cache: bool = False) -> int
     int
         Total number of fields including nested fields.
     """
-    filtered = td.exclude(CACHE_KEY) if exclude_cache else td
+    filtered = td if exclude_cache else td
     return len(list(filtered.keys(include_nested=True)))
 
 
@@ -143,16 +141,14 @@ def _format_tensordict_repr(
     """
     # Get top-level keys, excluding _cache if requested
     # (Intentionally top-level only: this function recurses for nested TensorDicts.)
-    filtered = td.exclude(CACHE_KEY) if exclude_cache else td
+    filtered = td if exclude_cache else td
     all_keys = list(filtered.keys())
 
     if len(all_keys) == 0:
         return "{}"
 
     # Sort alphabetically, but always put _cache at the end
-    regular_keys = sorted([k for k in all_keys if k != CACHE_KEY])
-    cache_keys = [k for k in all_keys if k == CACHE_KEY]
-    keys = regular_keys + cache_keys
+    keys = sorted(all_keys)
 
     # Count total fields to decide on single-line vs multi-line
     total_fields = _count_tensordict_fields(td, exclude_cache=exclude_cache)

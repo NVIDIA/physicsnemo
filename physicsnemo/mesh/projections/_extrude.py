@@ -21,7 +21,6 @@ from tensordict import TensorDict
 
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.projections._embed import embed
-from physicsnemo.mesh.utilities._cache import CACHE_KEY
 
 
 def extrude(
@@ -266,9 +265,8 @@ def extrude(
             extruded_cells[start_idx:end_idx] = child_cells
 
     ### Propagate data (excluding cached properties, which depend on geometry)
-    filtered_point_data = mesh.point_data.exclude(CACHE_KEY)
-    filtered_cell_data = mesh.cell_data.exclude(CACHE_KEY)
-
+    filtered_point_data = mesh.point_data
+    filtered_cell_data = mesh.cell_data
     # Point data: concatenate original and copy for extruded points
     if len(filtered_point_data.keys()) > 0:
         extruded_point_data = TensorDict.cat(

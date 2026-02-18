@@ -67,7 +67,7 @@ class TestPyVistaExampleDatasets:
         pv_mesh = pv.examples.load_frog_tissues()
 
         # Extract the outer surface of the volume data
-        surface = pv_mesh.extract_surface()
+        surface = pv_mesh.extract_surface(algorithm="dataset_surface")
 
         # Now test the surface conversion
         mesh = from_pyvista(surface, manifold_dim="auto")

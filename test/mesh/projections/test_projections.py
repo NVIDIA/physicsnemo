@@ -432,16 +432,13 @@ class TestExtrude:
         _ = mesh.cell_areas
 
         # Verify cache exists
-        assert "_cache" in mesh.cell_data
+        assert len(mesh._cache["cell"].keys()) > 0
 
         ### Extrude
         extruded = extrude(mesh)
 
         ### Verify cache is not in extruded mesh
-        # The exclude("_cache") should prevent propagation
-        assert (
-            "_cache" not in extruded.cell_data or len(extruded.cell_data["_cache"]) == 0
-        )
+        assert len(extruded._cache["cell"].keys()) == 0
 
     def test_extrude_vector_as_list(self):
         """Test that vector can be provided as a list or tuple."""
@@ -724,16 +721,13 @@ class TestEmbed:
         _ = mesh.cell_normals
 
         # Verify cache exists
-        assert "_cache" in mesh.cell_data
-        assert len(mesh.cell_data["_cache"]) > 0
+        assert len(mesh._cache["cell"].keys()) > 0
 
         ### Embed in 4D
         embedded = embed(mesh, target_n_spatial_dims=4)
 
         ### Verify cache is cleared
-        # Cache should either not exist or be empty
-        if "_cache" in embedded.cell_data:
-            assert len(embedded.cell_data["_cache"]) == 0
+        assert len(embedded._cache["cell"].keys()) == 0
 
     def test_embed_multiple_steps(self):
         """Test embedding through multiple dimension changes."""
@@ -1043,14 +1037,13 @@ class TestProject:
         # Populate cache
         _ = mesh.cell_centroids
         _ = mesh.cell_areas
-        assert "_cache" in mesh.cell_data
+        assert len(mesh._cache["cell"].keys()) > 0
 
         ### Project to 2D
         result = project(mesh, target_n_spatial_dims=2)
 
         ### Verify cache is cleared
-        if "_cache" in result.cell_data:
-            assert len(result.cell_data["_cache"]) == 0
+        assert len(result._cache["cell"].keys()) == 0
 
     @pytest.mark.parametrize(
         "start_dims,target_dims",

@@ -401,12 +401,9 @@ class TestEdgeCases:
         ### Extract edge mesh
         facet_mesh = mesh.get_facet_mesh()
 
-        ### Cached properties should not be in edge mesh cell_data
-        # With new cache syntax, caches are stored under ("_cache", key)
-        assert ("_cache", "centroids") not in facet_mesh.cell_data.keys(
-            include_nested=True
-        )
-        assert ("_cache", "areas") not in facet_mesh.cell_data.keys(include_nested=True)
+        ### Cached properties should not be inherited by facet mesh
+        assert facet_mesh._cache.get(("cell", "centroids"), None) is None
+        assert facet_mesh._cache.get(("cell", "areas"), None) is None
 
 
 class TestRigorousAggregation:
