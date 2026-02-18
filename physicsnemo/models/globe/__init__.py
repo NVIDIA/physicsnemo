@@ -13,3 +13,21 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from physicsnemo.models.globe.field_kernel import (
+    ChunkedKernel,
+    Kernel,
+    MultiscaleKernel,
+)
+from physicsnemo.models.globe.mlp import MLP
+from physicsnemo.models.globe.model import GLOBE
+from physicsnemo.models.globe.pade import Pade
+
+__all__ = [
+    "GLOBE",
+    "Kernel",
+    "ChunkedKernel",
+    "MultiscaleKernel",
+    "MLP",
+    "Pade",
+]

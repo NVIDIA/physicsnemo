@@ -144,7 +144,7 @@ class GLOBE(Module):
         Controls memory usage during kernel evaluation. ``None`` evaluates all target
         points at once, an ``int`` processes in chunks of that size, and ``"auto"``
         automatically determines chunk size targeting ~1GB per chunk.
-    verbose : bool, optional, default=True
+    verbose : bool, optional, default=False
         If ``True``, prints progress information during evaluation.
 
     Outputs
@@ -237,7 +237,7 @@ class GLOBE(Module):
         self.boundary_condition_n_source_scalars = boundary_condition_n_source_scalars
         self.boundary_condition_n_source_vectors = boundary_condition_n_source_vectors
         self.reference_length_names = reference_length_names
-        self.reference_area = reference_area
+        self.register_buffer("reference_area", reference_area)
         self.n_global_scalars = n_global_scalars
         self.n_global_vectors = n_global_vectors
         self.n_communication_hyperlayers = n_communication_hyperlayers
@@ -315,7 +315,7 @@ class GLOBE(Module):
         global_scalars: TensorDict | None = None,
         global_vectors: TensorDict | None = None,
         chunk_size: None | int | Literal["auto"] = None,
-        verbose: bool = True,
+        verbose: bool = False,
     ) -> TensorDict:
         r"""Evaluate GLOBE model to predict fields at target points.
 
@@ -338,7 +338,7 @@ class GLOBE(Module):
             Problem-level vector features.
         chunk_size : None | int | Literal["auto"], optional, default=None
             Controls memory usage during kernel evaluation.
-        verbose : bool, optional, default=True
+        verbose : bool, optional, default=False
             If ``True``, prints progress information.
 
         Returns

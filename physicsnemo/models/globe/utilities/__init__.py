@@ -13,3 +13,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from physicsnemo.models.globe.utilities.field_kernel import (
+    legendre_polynomials,
+    polar_and_dipole_basis,
+    smooth_log,
+    spherical_basis,
+    vector_project,
+)
+
+__all__ = [
+    "legendre_polynomials",
+    "polar_and_dipole_basis",
+    "smooth_log",
+    "spherical_basis",
+    "vector_project",
+]

@@ -113,7 +113,7 @@ class Kernel(Module):
         Global physically-meaningful vectors with batch_size :math:`(D,)`. All
         vectors should be dimensionless.
     verbose : bool, optional
-        Whether to print progress information during evaluation. Default is True.
+        Whether to print progress information during evaluation. Default is False.
 
     Outputs
     -------
@@ -345,7 +345,7 @@ class Kernel(Module):
         source_vectors: TensorDict | None = None,
         global_scalars: TensorDict | None = None,
         global_vectors: TensorDict | None = None,
-        verbose: bool = True,
+        verbose: bool = False,
     ) -> TensorDict:
         r"""Evaluates a field kernel at target points based on source point influences.
 
@@ -386,7 +386,7 @@ class Kernel(Module):
             Defaults to empty TensorDict if ``None``.
         verbose : bool, optional
             Whether to print progress information during evaluation.
-            Default is True.
+            Default is False.
 
         Returns
         -------
@@ -816,7 +816,7 @@ class ChunkedKernel(Kernel):
         source_vectors: TensorDict | None = None,
         global_scalars: TensorDict | None = None,
         global_vectors: TensorDict | None = None,
-        verbose: bool = True,
+        verbose: bool = False,
         chunk_size: None | int | Literal["auto"] = "auto",
     ) -> TensorDict:
         r"""Evaluates the kernel with optional chunking for memory efficiency.
@@ -852,7 +852,7 @@ class ChunkedKernel(Kernel):
             # Automatically determine chunk size based on memory constraints
             # Assumes the network is dominating the memory cost
             approx_n_floats = n_interactions * sum(self.network_layer_sizes)
-            approx_n_bytes = approx_n_floats * 8
+            approx_n_bytes = approx_n_floats * 4  # float32; conservative enough for bfloat16 too
             approx_memory_gb = approx_n_bytes / (1024**3)
             target_memory_gb = 1.0
 
@@ -991,9 +991,8 @@ class MultiscaleKernel(Module):
 
     Forward
     -------
-    reference_lengths : TensorDict
-        TensorDict containing the reference length scales, keyed by
-        ``reference_length_names``.
+    reference_lengths : dict[str, torch.Tensor]
+        Mapping of reference length names to scalar tensors.
     source_points : Float[torch.Tensor, "n_sources n_dims"]
         Physical coordinates of the source points. Shape :math:`(N_{sources}, D)`.
     target_points : Float[torch.Tensor, "n_targets n_dims"]
@@ -1010,7 +1009,7 @@ class MultiscaleKernel(Module):
     global_vectors : TensorDict or None, optional
         Global vector features with batch_size :math:`(D,)`.
     verbose : bool, optional
-        Whether to print progress. Default is True.
+        Whether to print progress. Default is False.
     chunk_size : None or int or {"auto"}, optional
         Chunking behavior. Default is ``"auto"``.
 
@@ -1108,7 +1107,7 @@ class MultiscaleKernel(Module):
         source_vectors: TensorDict | None = None,
         global_scalars: TensorDict | None = None,
         global_vectors: TensorDict | None = None,
-        verbose: bool = True,
+        verbose: bool = False,
         chunk_size: None | int | Literal["auto"] = "auto",
     ) -> TensorDict:
         r"""Evaluates the multiscale kernel by combining results from multiple scales.
@@ -1141,7 +1140,7 @@ class MultiscaleKernel(Module):
         global_vectors : TensorDict or None, optional
             TensorDict with batch_size :math:`(D,)`.
         verbose : bool, optional
-            Whether to print progress information. Default is True.
+            Whether to print progress information. Default is False.
         chunk_size : None or int or {"auto"}, optional
             Chunking behavior passed to :meth:`ChunkedKernel.forward`.
             Default is ``"auto"``.
