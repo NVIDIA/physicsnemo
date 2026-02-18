@@ -255,10 +255,18 @@ class Mesh:
         self.global_data = global_data
 
         if _cache is None:
-            _cache = TensorDict({
-                "cell": TensorDict({}, batch_size=[self.n_cells], device=self.points.device),
-                "point": TensorDict({}, batch_size=[self.n_points], device=self.points.device),
-            }, batch_size=[], device=self.points.device)
+            _cache = TensorDict(
+                {
+                    "cell": TensorDict(
+                        {}, batch_size=[self.n_cells], device=self.points.device
+                    ),
+                    "point": TensorDict(
+                        {}, batch_size=[self.n_points], device=self.points.device
+                    ),
+                },
+                batch_size=[],
+                device=self.points.device,
+            )
         self._cache = _cache
 
         ### Validate shapes and dtypes
@@ -900,17 +908,10 @@ class Mesh:
                         f"All meshes must have the same {name}. Got:\n{values=}"
                     )
             ref_keys = set(
-                meshes[0]
-                .cell_data
-                .keys(include_nested=True, leaves_only=True)
+                meshes[0].cell_data.keys(include_nested=True, leaves_only=True)
             )
             if not all(
-                set(
-                    m.cell_data.keys(
-                        include_nested=True, leaves_only=True
-                    )
-                )
-                == ref_keys
+                set(m.cell_data.keys(include_nested=True, leaves_only=True)) == ref_keys
                 for m in meshes
             ):
                 raise ValueError("All meshes must have the same cell_data keys.")
@@ -938,12 +939,8 @@ class Mesh:
                 [m.cells + offset for m, offset in zip(meshes, cell_index_offsets)],
                 dim=0,
             ),
-            point_data=TensorDict.cat(
-                [m.point_data for m in meshes], dim=0
-            ),
-            cell_data=TensorDict.cat(
-                [m.cell_data for m in meshes], dim=0
-            ),
+            point_data=TensorDict.cat([m.point_data for m in meshes], dim=0),
+            cell_data=TensorDict.cat([m.cell_data for m in meshes], dim=0),
             global_data=global_data,
         )
 
@@ -1065,10 +1062,14 @@ class Mesh:
         if isinstance(indices, int):
             indices = torch.tensor([indices], device=self.cells.device)
         new_cell_data: TensorDict = self.cell_data[indices]  # type: ignore
-        new_cache = TensorDict({
-            "cell": self._cache["cell"][indices],
-            "point": self._cache["point"],
-        }, batch_size=[], device=self.points.device)
+        new_cache = TensorDict(
+            {
+                "cell": self._cache["cell"][indices],
+                "point": self._cache["point"],
+            },
+            batch_size=[],
+            device=self.points.device,
+        )
         return Mesh(
             points=self.points,
             cells=self.cells[indices],
@@ -1234,11 +1235,7 @@ class Mesh:
         """
         ### Check for key conflicts
         if not overwrite_keys:
-            src_keys = set(
-                self.cell_data.keys(
-                    include_nested=True, leaves_only=True
-                )
-            )
+            src_keys = set(self.cell_data.keys(include_nested=True, leaves_only=True))
             dst_keys = set(self.point_data.keys(include_nested=True, leaves_only=True))
             conflicts = src_keys & dst_keys
             if conflicts:
@@ -1316,11 +1313,7 @@ class Mesh:
         """
         ### Check for key conflicts
         if not overwrite_keys:
-            src_keys = set(
-                self.point_data.keys(
-                    include_nested=True, leaves_only=True
-                )
-            )
+            src_keys = set(self.point_data.keys(include_nested=True, leaves_only=True))
             dst_keys = set(self.cell_data.keys(include_nested=True, leaves_only=True))
             conflicts = src_keys & dst_keys
             if conflicts:

@@ -348,9 +348,9 @@ class TestRotation:
         )
 
         # Areas should be preserved (rotation has det=1)
-        assert torch.allclose(rotated._cache.get(("cell", "areas"), None), original_areas), (
-            "Areas should be preserved by rotation"
-        )
+        assert torch.allclose(
+            rotated._cache.get(("cell", "areas"), None), original_areas
+        ), "Areas should be preserved by rotation"
 
         # Centroids and normals should be different (rotated)
         assert not torch.allclose(
@@ -442,9 +442,9 @@ class TestScale:
 
         # Areas should scale by factor^n_manifold_dims
         expected_areas = original_areas * (factor**n_manifold_dims)
-        assert torch.allclose(scaled._cache.get(("cell", "areas"), None), expected_areas), (
-            "Areas should scale by factor^n_manifold_dims"
-        )
+        assert torch.allclose(
+            scaled._cache.get(("cell", "areas"), None), expected_areas
+        ), "Areas should scale by factor^n_manifold_dims"
 
         # Centroids should be scaled
         expected_centroids = original_centroids * factor
@@ -656,7 +656,9 @@ class TestNonIsotropicAreaScaling:
 
         assert torch.allclose(
             scaled._cache.get(("cell", "areas"), None), expected_areas, atol=1e-5
-        ), f"Expected {expected_areas}, got {scaled._cache.get(('cell', 'areas'), None)}"
+        ), (
+            f"Expected {expected_areas}, got {scaled._cache.get(('cell', 'areas'), None)}"
+        )
 
 
 class TestTransform:

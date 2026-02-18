@@ -32,7 +32,6 @@ import torch
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -124,9 +123,7 @@ def _transform_tensordict(
             f"Expected all spatial dimensions to be {n_spatial_dims}, but got {shape}"
         )
 
-    transformed = data.named_apply(
-        transform_field, batch_size=batch_size
-    )
+    transformed = data.named_apply(transform_field, batch_size=batch_size)
     data.update(transformed)
     return data
 
@@ -246,10 +243,14 @@ def transform(
 
     new_points = mesh.points @ matrix.T
     device = mesh.points.device
-    new_cache = TensorDict({
-        "cell": TensorDict({}, batch_size=[mesh.n_cells], device=device),
-        "point": TensorDict({}, batch_size=[mesh.n_points], device=device),
-    }, batch_size=[], device=device)
+    new_cache = TensorDict(
+        {
+            "cell": TensorDict({}, batch_size=[mesh.n_cells], device=device),
+            "point": TensorDict({}, batch_size=[mesh.n_points], device=device),
+        },
+        batch_size=[],
+        device=device,
+    )
 
     ### Opt-in: areas and normals (only for square invertible matrices)
     if matrix.shape[0] == matrix.shape[1]:
@@ -279,14 +280,18 @@ def transform(
                     norm_scale = transformed.norm(dim=-1)
                     if (areas := mesh._cache.get(("point", "areas"), None)) is not None:
                         new_cache["point", "areas"] = areas * det_abs * norm_scale
-                    new_cache["point", "normals"] = det_sign * F.normalize(transformed, dim=-1)
+                    new_cache["point", "normals"] = det_sign * F.normalize(
+                        transformed, dim=-1
+                    )
 
                 if (v := mesh._cache.get(("cell", "normals"), None)) is not None:
                     transformed = torch.linalg.solve(matrix.T, v.T).T
                     norm_scale = transformed.norm(dim=-1)
                     if (areas := mesh._cache.get(("cell", "areas"), None)) is not None:
                         new_cache["cell", "areas"] = areas * det_abs * norm_scale
-                    new_cache["cell", "normals"] = det_sign * F.normalize(transformed, dim=-1)
+                    new_cache["cell", "normals"] = det_sign * F.normalize(
+                        transformed, dim=-1
+                    )
 
     ### Opt-in: centroids
     if (v := mesh._cache.get(("cell", "centroids"), None)) is not None:
@@ -358,10 +363,14 @@ def translate(
 
     new_points = mesh.points + offset
     device = mesh.points.device
-    new_cache = TensorDict({
-        "cell": TensorDict({}, batch_size=[mesh.n_cells], device=device),
-        "point": TensorDict({}, batch_size=[mesh.n_points], device=device),
-    }, batch_size=[], device=device)
+    new_cache = TensorDict(
+        {
+            "cell": TensorDict({}, batch_size=[mesh.n_cells], device=device),
+            "point": TensorDict({}, batch_size=[mesh.n_points], device=device),
+        },
+        batch_size=[],
+        device=device,
+    )
 
     ### Areas and normals are unchanged by translation
     for category in ("cell", "point"):

@@ -285,6 +285,4 @@ class TestCacheConsistency:
 
         # Parent mesh should still have its cached normals
         assert parent_mesh._cache.get(("point", "normals"), None) is not None
-        assert torch.equal(
-            parent_mesh._cache["point", "normals"], parent_normals
-        )
+        assert torch.equal(parent_mesh._cache["point", "normals"], parent_normals)
