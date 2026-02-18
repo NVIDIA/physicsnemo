@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -24,6 +24,9 @@ from .histogram import cdf as cdf_function
 Tensor = torch.Tensor
 
 
+# Note: Use @torch.jit.script (not @torch.compile) because the sorted() call and
+# subsequent operations depend on input shapes. torch.compile recompiles for each
+# unique shape, causing massive CI slowdowns when tests use varying ensemble sizes.
 @torch.jit.script
 def _kernel_crps_implementation(pred: Tensor, obs: Tensor, biased: bool) -> Tensor:
     """An O(m log m) implementation of the kernel CRPS formulas"""
@@ -53,12 +56,14 @@ def kcrps(pred: Tensor, obs: Tensor, dim: int = 0, biased: bool = True):
 
     Creates a map of CRPS and does not accumulate over lat/lon regions.
     Approximates:
+
     .. math::
-        CRPS(X, y) = E[X - y] - 0.5 E[X-X']
+       CRPS(X, y) = E[X - y] - 0.5 E[X-X']
 
     with
+
     .. math::
-        sum_i=1^m |X_i - y| / m - 1/(2m^2) sum_i,j=1^m |x_i - x_j|
+       \sum_{i=1}^m \|X_i - y\| / m - 1/(2m^2) \sum_{i,j=1}^m \|x_i - x_j\|
 
     Parameters
     ----------
@@ -71,12 +76,13 @@ def kcrps(pred: Tensor, obs: Tensor, dim: int = 0, biased: bool = True):
     dim : int, optional
         The dimension over which to compute the CRPS, assumed to be 0.
     biased :
-        When False, uses the unbiased estimators described in (Zamo and Naveau, 2018)::
+        When False, uses the unbiased estimators described in (Zamo and Naveau, 2018):
 
-            E|X-y|/m - 1/(2m(m-1)) sum_(i,j=1)|x_i - x_j|
+        .. math::
+            E|X-y|/m - 1/(2m(m-1)) \sum_{i,j=1}\|x_i - x_j\|
 
         Unlike ``crps`` this is fair for finite ensembles. Non-fair ``crps`` favors less
-        dispersive ensembles since it is biased high by E|X- X'|/ m where m is the
+        dispersive ensembles since it is biased high by E\|X- X'\|/ m where m is the
         ensemble size.
 
     Returns
@@ -98,8 +104,7 @@ def _crps_gaussian(mean: Tensor, std: Tensor, obs: Union[Tensor, np.ndarray]) ->
     Computes:
 
     .. math::
-
-        CRPS(mean, std, y) = std * [ \\frac{1}{\\sqrt{\\pi}}} - 2 \\phi ( \\frac{x-mean}{std} ) -
+       CRPS(mean, std, y) = std * [ \\frac{1}{\\sqrt{\\pi}}} - 2 \\phi ( \\frac{x-mean}{std} ) -
                 ( \\frac{x-mean}{std} ) * (2 \\Phi(\\frac{x-mean}{std}) - 1) ]
 
     where \\phi and \\Phi are the normal gaussian pdf/cdf respectively.
@@ -162,8 +167,7 @@ def _crps_from_cdf(
     Computes:
 
     .. math::
-
-        CRPS(X, y) = \\int[ (F(x) - 1[x - y])^2 ] dx
+       CRPS(X, y) = \\int[ (F(x) - 1[x - y])^2 ] dx
 
     where F is the empirical cdf of X.
 
@@ -228,8 +232,7 @@ def _crps_from_counts(
     Computes:
 
     .. math::
-
-        CRPS(X, y) = int[ (F(x) - 1[x - y])^2 ] dx
+       CRPS(X, y) = int[ (F(x) - 1[x - y])^2 ] dx
 
     where F is the empirical cdf of X.
 
@@ -303,16 +306,18 @@ def crps(
         The method to calculate the crps. Can either be "kernel", "sort" or "histogram".
 
         The "kernel" method implements
+
         .. math::
-            CRPS(x, y) = E[X-y] - 0.5*E[X-X']
+           CRPS(x, y) = E[X-y] - 0.5*E[X-X']
 
         This method scales as O(n^2) where n is the number of ensemble members and
         can potentially induce large memory consumption as the algorithm attempts
         to vectorize over this O(n^2) operation.
 
         The "sort" method compute the exact CRPS using the CDF method
+
         .. math::
-            CRPS(x, y) = int [F(x) - 1(x-y)]^2 dx
+           CRPS(x, y) = int [F(x) - 1(x-y)]^2 dx
 
         where F is the empirical CDF and 1(x-y) = 1 if x > y.
 
@@ -320,8 +325,9 @@ def crps(
         log n) compute instead of O(n^2), where n is the number of ensemble members.
 
         The "histogram" method computes an approximate CRPS using the CDF method
+
         .. math::
-            CRPS(x, y) = int [F(x) - 1(x-y)]^2 dx
+           CRPS(x, y) = int [F(x) - 1(x-y)]^2 dx
 
         where F is the empirical CDF, estimated via a histogram of the samples. The
         number of bins used is the lesser of the square root of the number of samples

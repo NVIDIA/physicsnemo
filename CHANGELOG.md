@@ -6,16 +6,139 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.0a0] - 2025-08-XX
+## [2.0.0a0] - 2026-XX-YY
 
 ### Added
 
+- Refactored diffusion preconditioners in
+  `physicsnemo.diffusion.preconditioners` relying on a new abstract base class
+  `BaseAffinePreconditioner` for preconditioning schemes using affine
+  transformations. Existing preconditioners (`VPPrecond`, `VEPrecond`,
+  `iDDPMPrecond`, `EDMPrecond`) reimplemented based on this new interface.
+- New `physicsnemo.experimental.nn.symmetry` module that implements building
+  blocks that preserve 2D and 3D rotational equivariance using a
+  grid-based layout for efficient GPU parallelization, and an emphasis on
+  compact `einsum` operations.
+
+### Changed
+
+- PhysicsNemo v2.0 contains significant reorganization of tools.  Please see
+  the v2.0-MIGRATION-GUIDE.md to understand what has changed and why.
+- DiT (Diffusion Transformer) has been moved from `physicsnemo.experimental.models.dit`
+  to `physicsnemo.models.dit`.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+- Shape mistmatch bug in the Lennard Jones example
+
+### Security
+
+### Dependencies
+
+- CUDA backend is now selected via orthogonal `cu12` / `cu13` extras rather
+  than being hardcoded to CUDA 13. Feature extras (`nn-extras`, `utils-extras`,
+  etc.) are now CUDA-agnostic and can be combined with either backend, e.g.
+  `pip install "nvidia-physicsnemo[cu13,nn-extras]"`. When neither `cu12` nor
+  `cu13` is specified, PyTorch is installed from PyPI using its default build
+  (currently CUDA 12.8 on Linux). For development with `uv`, use
+  `uv sync --extra cu13` (or `--extra cu12`) to select the backend.
+
+## [1.3.0] - 2025-11-17
+
+### Added
+
+- Added mixture_of_experts for weather example in physicsnemo.examples.weather.
+  **⚠️Warning:** - It uses experimental DiT model subject to future API changes.
+  Added some modifications to DiT architecture in physicsnemo.experimental.models.dit.
+  Added learnable option to PositionalEmbedding in physicsnemo.models.diffusion.layers.
+- Added lead-time aware training support to the StormCast example.
+- Add a device aware kNN method to physicsnemo.utils.neighbors. Works with CPU or GPU
+  by dispatching to the proper optimized library, and torch.compile compatible.
+- Added additional testing of the DoMINO datapipe.
+- Examples: added a new example for full-waveform inversion using diffusion
+  models. Accessible in `examples/geophysics/diffusion_fwi`.
+- Domain Parallelism: Domain Parallelism is now available for kNN, radius_search,
+  and torch.nn.functional.pad.
+- Unified recipe for crash modeling, supporting Transolver and MeshGraphNet,
+  and three transient schemes.
+- Added a check to `stochastic_sampler` that helps handle the `EDMPrecond` model,
+  which has a specific `.forward()` signature
+- Examples: added a new example for reservoir simulation using X-MeshGraphNet.
+  Accessible in `examples/reservoir_simulation`
+- Added abstract interfaces for constructing active learning workflows, contained
+  under the `physicsnemo.active_learning` namespace. A preliminary example of how
+  to compose and define an active learning workflow is provided in `examples/active_learning`.
+  The `moons` example provides a minimal (pedagogical) composition that is meant to
+  illustrate how to define the necessary parts of the workflow.
+- Added a new example for temporal interpolation of weather forecasts using ModAFNO.
+  Accessible in `examples/weather/temporal_interpolation`.
+
+### Changed
+
+- Migrated Stokes MGN example to PyTorch Geometric.
+- Migrated Lennard Jones example to PyTorch Geometric.
+- Migrated physicsnemo.utils.sdf.signed_distance_field to a static return,
+  torch-only interface.  It also now works on distributed meshes and input fields.
+- Refactored DiTBlock to be more modular
+- Added NATTEN 2D neighborhood attention backend for DiTBlock
+- Migrated blood flow example to PyTorch Geometric.
+- Refactored DoMINO model code and examples for performance optimizations and improved readability.
+- Migrated HydroGraphNet example to PyTorch Geometric.
+- Support for saving and loading nested `physicsnemo.Module`s. It is now
+  possible to create nested modules with `m = Module(submodule, ...)`, and save
+  and load them with `Module.save` and `Module.from_checkpoint`.
+  **⚠️Warning:** - The modules have to be `physicsnemo.Module`s, and not
+  `torch.nn.Module`s.
+- Support passing custom tokenizer, detokenizer, and attention `Module`s in
+  experimental DiT architecture
+- Improved Transolver training recipe's configuration for checkpointing and normalization.
+- Bumped `multi-storage-client` version to 0.33.0 with rust client.
+- Improved configuration for DLWP Healpix (checkpoint directory) and GraphCast (W&B settings).
+
+### Fixed
+
+- Set `skip_scale` to Python float in U-Net to ensure compilation works.
+- Ensure stream dependencies are handled correctly in physicsnemo.utils.neighbors
+- Fixed the issue with incorrect handling of files with consecutive runs of
+  `combine_stl_solids.py` in the X-MGN recipe.
+- Fixed the `RuntimeError: Worker data receiving interrupted` error in the datacenter example.
+
+## [1.2.0] - 2025-08-26
+
+### Added
+
+- Diffusion Transformer (DiT) model. The DiT model can be accessed in
+ `physicsnemo.experimental.models.dit.DiT`. **⚠️Warning:** - Experimental feature
+  subject to future API changes.
 - Improved documentation for diffusion models and diffusion utils.
 - Safe API to override `__init__`'s arguments saved in checkpoint file with
   `Module.from_checkpoint("chkpt.mdlus", override_args=set(...))`.
 - PyTorch Geometric MeshGraphNet backend.
 - Functionality in DoMINO to take arbitrary number of `scalar` or `vector`
   global parameters and encode them using `class ParameterModel`
+- TopoDiff model and example.
+- Added ability for DoMINO model to return volume neighbors.
+- Added functionality in DoMINO recipe to introduce physics residual losses.
+- Diffusion models, metrics, and utils: implementation of Student-t
+  distribution for EDM-based diffusion models (t-EDM). This feature is adapted
+  from the paper [Heavy-Tailed Diffusion Models, Pandey et al.](https://arxiv.org/abs/2410.14171>).
+  This includes a new EDM preconditioner (`tEDMPrecondSuperRes`), a loss
+  function (`tEDMResidualLoss`), and a new option in corrdiff `diffusion_step`.
+  &#9888;&#65039; This is an experimental feature that can be accessed through the
+  `physicsnemo.experimental` module; it might also be subjected to API changes
+  without notice.
+- Bumped Ruff version from 0.0.290 to 0.12.5. Replaced Black with `ruff-format`.
+- Domino improvements with Unet attention module and user configs
+- Hybrid MeshGraphNet for modeling structural deformation
+- Enabled TransformerEngine backend in the `transolver` model.
+- Inference code for x-meshgraphnet example for external aerodynamics.
+- Added a new example for external_aerodynamics: training `transolver` on
+  irregular mesh data for DrivaerML surface data.
+- Added a new example for external aerodynamics for finetuning pretrained models.
 
 ### Changed
 
@@ -39,11 +162,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of custom attention logic. This will update the model architecture
   for `SongUNet`-based diffusion models. Changes are not BC-breaking and are
   transparent to the user.
-- :warning: **BC-breaking:** refactored the automatic mixed precision (AMP) API in layers
-  and models defined in `physicsnemo/models/diffusion/` for improved usability.
-  Note: it is now, not only possible, but *required* to explicitly set
-  `model.amp_mode = True` in order to use the model in a `torch.autocast`
-  clause. This applies to all `SongUNet`-based models.
+- &#9888;&#65039; **BC-breaking:** refactored the automatic mixed precision
+  (AMP) API in layers and models defined in `physicsnemo/models/diffusion/` for
+  improved usability. Note: it is now, not only possible, but *required* to
+  explicitly set `model.amp_mode = True` in order to use the model in a
+  `torch.autocast` clause. This applies to all `SongUNet`-based models.
 - Diffusion models: fixed and improved API to enable fp16 forward pass in
   `UNet` and `EDMPrecondSuperResolution` model wrappers; fp16 forward pass can
   now be toggled/untoggled by setting `model.use_fp16 = True`.
@@ -53,22 +176,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warnings are raised when attempting to use Apex group norm on CPU.
 - Diffusion utils: systematic compilation of patching operations in `stochastic_sampler`
   for improved performance.
-
-### Deprecated
-
-### Removed
+- CorrDiff example: added option for Student-t EDM (t-EDM) in `train.py` and
+  `generate.py`. When training a CorrDiff diffusion model, this feature can be
+  enabled with the hydra overrides `++training.hp.distribution=student_t` and
+  `++training.hp.nu_student_t=<nu_value>`. For generation, this feature can be
+  enabled with similar overrides: `++generation.distribution=student_t` and
+  `++generation.nu_student_t=<nu_value>`.
+- CorrDiff example: the parameters `P_mean` and `P_std` (used to compute the
+  noise level `sigma`) are now configurable. They can be set with the hydra
+  overrides `++training.hp.P_mean=<P_mean_value>` and
+  `++training.hp.P_std=<P_std_value>` for training (and similar ones with
+  `training.hp` replaced by `generation` for generation).
+- Diffusion utils: patch-based inference and lead time support with
+  deterministic sampler.
+- Existing DGL-based XAeroNet example has been renamed to `xaeronet_dgl`.
+  Added new `xaeronet` example that uses PyTorch Geometric instead.
+- Updated the deforming plate example to use the Hybrid MeshGraphNet model.
+- &#9888;&#65039; **BC-breaking:** Refactored the `transolver` model to improve
+  readability and performance, and extend to more use cases.
+- Diffusion models: improved lead time support for `SongUNetPosLtEmbd` and
+  `EDMLoss`. Lead-time embeddings can now be used with/without positional
+  embeddings.
+- Diffusion models: consolidate `ApexGroupNorm` and `GroupNorm` in
+  `models/diffusion/layers.py` with a factory `get_group_norm` that can
+  be used to instantiate either one of them. `get_group_norm` is now the
+  recommended way to instantiate a GroupNorm layer in `SongUNet`-based and
+  other diffusion models.
+- Physicsnemo models: improved checkpoint loading API in
+  `Module.from_checkpoint` that now exposes a `strict` parameter to raise error
+  on missing/unexpected keys, similar to that used in
+  `torch.nn.Module.load_state_dict`.
+- Migrated Hybrid MGN and deforming plate example to PyTorch Geometric.
 
 ### Fixed
 
-### Security
-
-### Dependencies
+- Bug fixes in DoMINO model in sphere sampling and tensor reshaping
+- Bug fixes in DoMINO utils random sampling and test.py
+- Optimized DoMINO config params based on DrivAer ML
 
 ## [1.1.1] - 2025-06-16
 
 ### Fixed
 
 - Fixed an inadvertent change to the deterministic sampler 2nd order correction
+- Bug Fix in Domino model ball query layer
+- Fixed bug models/unet/unet.py: setting num_conv_layers=1 gives errors
 
 ## [1.1.0] - 2025-06-05
 

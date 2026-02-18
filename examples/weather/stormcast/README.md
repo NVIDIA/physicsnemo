@@ -163,7 +163,11 @@ A custom dataset object is defined in `datasets/data_loader_hrrr_era5.py`, which
 
 ### Adding custom datasets
 
-While it is possible to train StormCast on custom datasets by formatting them indentically to the Zarr datasets used in the ERA5-HRRR example, a more flexible option is to define a custom dataset object. These datasets must follow the `StormCastDataset` interface defined in `datasets/base.py`; see the docstrings in that file for a specification of what the functions must accept and return. You can use the `datasets/data_loader_hrrr_era5.py` implementation as an example. 
+While it is possible to train StormCast on custom datasets by formatting them indentically to the Zarr datasets used in the ERA5-HRRR example, a more flexible option is to define a custom dataset object. These datasets must follow the `StormCastDataset` interface defined in `datasets/dataset.py`; see the docstrings in that file for a specification of what the functions must accept and return. You can use the `datasets/data_loader_hrrr_era5.py` implementation as an example.
+
+While not used in the original StormCast, the `StormCastDataset` interface also supports lead-time aware training. To enable this:
+- Set the `self.lead_time_steps` attribute of the dataset to an integer larger than 1.
+- Include a key `"lead_time_label"` with a corresponding integer value (range `0 <= lead_time_label < self.lead_time_steps`) in the dict returned by `__getitem__`.
 
 Once you have implemented the custom dataset, create a configuration file in `config/dataset`. This configuration file must have one special attribute, `name`. This indicates a module in the `datasets` directory and a class to be used for the dataset. For instance, specifying `name: data_loader_hrrr_era5.HrrrEra5Dataset` will use the default ERA5-HRRR dataset, found in `datasets/data_loader_hrrr_era5.py`. The other parameters in the dataset configuration file will be passed to the `params` object used to initialize the dataset and can be used to specify e.g. the file system path from which the dataset is loaded.
 

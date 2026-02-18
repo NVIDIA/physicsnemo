@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -40,11 +40,11 @@ except:
 from collections import OrderedDict
 from typing import Dict
 
-from physicsnemo.launch.logging import (
+from physicsnemo.utils.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from physicsnemo.launch.logging.wandb import initialize_wandb
+from physicsnemo.utils.logging.wandb import initialize_wandb
 from physicsnemo.models.mlp.fully_connected import FullyConnected
 from physicsnemo.sym.eq.pde import PDE
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer

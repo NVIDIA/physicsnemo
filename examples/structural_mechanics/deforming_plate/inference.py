@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -19,21 +19,20 @@ import os
 import hydra
 from hydra.utils import to_absolute_path
 
-from dgl.dataloading import GraphDataLoader
 import matplotlib.pyplot as plt
 from matplotlib import animation
-from matplotlib import tri as mtri
-from matplotlib.patches import Rectangle
 import numpy as np
 from omegaconf import DictConfig
 import torch
+from torch.utils.data import DataLoader
+# from torch_geometric.loader import DataLoader as PyGDataLoader
 
-from physicsnemo.models.meshgraphnet import MeshGraphNet
-from physicsnemo.datapipes.gnn.deforming_plate_dataset import DeformingPlateDataset
-from physicsnemo.launch.logging import PythonLogger
-from physicsnemo.launch.utils import load_checkpoint
+from physicsnemo.models.meshgraphnet import HybridMeshGraphNet
+from deforming_plate_dataset import DeformingPlateDataset
+from physicsnemo.utils.logging import PythonLogger
+from physicsnemo.utils import load_checkpoint
 
-import numpy as np
+from helpers import add_world_edges
 
 
 def extract_surface_triangles(tets):
@@ -81,15 +80,16 @@ class MGNRollout:
         )
 
         # instantiate dataloader
-        self.dataloader = GraphDataLoader(
+        self.dataloader = DataLoader(
             self.dataset,
             batch_size=1,
             shuffle=False,
             drop_last=False,
+            collate_fn=lambda batch: batch[0],
         )
 
         # instantiate the model
-        self.model = MeshGraphNet(
+        self.model = HybridMeshGraphNet(
             cfg.num_input_features,
             cfg.num_edge_features,
             cfg.num_output_features,
@@ -99,7 +99,7 @@ class MGNRollout:
             recompute_activation=cfg.recompute_activation,
         )
         if cfg.jit:
-            self.model = torch.jit.script(self.model).to(self.device)
+            self.model = torch.compile(self.model).to(self.device)
         else:
             self.model = self.model.to(self.device)
 
@@ -113,80 +113,80 @@ class MGNRollout:
             device=self.device,
         )
 
-        self.var_identifier = {"ux": 0, "uy": 1, "uz": 2, "stress": 3, "disp_mag": -1}
-
+    @torch.inference_mode()
     def predict(self):
         self.pred, self.exact, self.faces, self.graphs = [], [], [], []
         stats = {
             key: value.to(self.device) for key, value in self.dataset.node_stats.items()
         }
-        for i, (graph, cells, mask) in enumerate(self.dataloader):
+        for i, (
+            graph,
+            cells,
+            moving_points_mask,
+            object_points_mask,
+            clamped_points_mask,
+        ) in enumerate(self.dataloader):
             graph = graph.to(self.device)
+            moving_points_mask = moving_points_mask.to(self.device)
+            object_points_mask = object_points_mask.to(self.device)
+            clamped_points_mask = clamped_points_mask.to(self.device)
             # denormalize data
-            graph.ndata["x"][:, 0:3] = self.dataset.denormalize(
-                graph.ndata["x"][:, 0:3],
-                stats["world_pos_mean"],
-                stats["world_pos_std"],
+            exact_velocity_denormalized = self.dataset.denormalize(
+                graph.y[:, 0:3],
+                stats["velocity_mean"],
+                stats["velocity_std"],
             )
-            graph.ndata["y"][:, 0:3] = self.dataset.denormalize(
-                graph.ndata["y"][:, 0:3],
-                stats["world_pos_diff_mean"],
-                stats["world_pos_diff_std"],
-            )
-            graph.ndata["y"][:, [3]] = self.dataset.denormalize(
-                graph.ndata["y"][:, [3]],
-                stats["stress_mean"],
-                stats["stress_std"],
-            )
+            exact_next_world_pos = exact_velocity_denormalized + graph.world_pos[:, 0:3]
 
             # inference step
-            invar = graph.ndata["x"].clone()
-
             if i % (self.num_test_time_steps - 1) != 0:
-                invar[:, 0:3] = self.pred[i - 1][:, 0:3].clone()
-                i += 1
-            invar[:, 0:3] = self.dataset.normalize_node(
-                invar[:, 0:3], stats["world_pos_mean"], stats["world_pos_std"]
-            )
-            pred_i = self.model(invar, graph.edata["x"], graph).detach()  # predict
+                graph.world_pos = self.pred[i - 1][:, 0:3]
+            graph, mesh_edge_features, world_edge_features = add_world_edges(graph)
+            pred_i = self.model(
+                graph.x, mesh_edge_features, world_edge_features, graph
+            )  # predict
 
             # denormalize prediction
-            pred_i[:, 0:3] = self.dataset.denormalize(
+            pred_velocity_denormalized = self.dataset.denormalize(
                 pred_i[:, 0:3],
-                stats["world_pos_diff_mean"],
-                stats["world_pos_diff_std"],
-            )
-            pred_i[:, 3] = self.dataset.denormalize(
-                pred_i[:, 3], stats["stress_mean"], stats["stress_std"]
-            )
-            invar[:, 0:3] = self.dataset.denormalize(
-                invar[:, 0:3], stats["world_pos_mean"], stats["world_pos_std"]
+                stats["velocity_mean"],
+                stats["velocity_std"],
             )
 
             # do not update the "wall_boundary" & "outflow" nodes
-            mask = torch.cat((mask, mask, mask), dim=-1).to(self.device)
-            pred_i[:, 0:3] = torch.where(
-                mask, pred_i[:, 0:3], torch.zeros_like(pred_i[:, 0:3])
+            moving_points_mask = torch.cat(
+                (moving_points_mask, moving_points_mask, moving_points_mask), dim=-1
+            ).to(self.device)
+            pred_velocity_denormalized = torch.where(
+                moving_points_mask,
+                pred_velocity_denormalized,
+                torch.zeros_like(pred_velocity_denormalized),
             )
 
             # integration
-            self.pred.append(
-                torch.cat(
-                    ((pred_i[:, 0:3] + invar[:, 0:3]), pred_i[:, [3]]), dim=-1
-                ).cpu()
+            pred_world_pos_denormalized = (
+                pred_velocity_denormalized.squeeze(0) + graph.world_pos[:, 0:3]
+            )  # Note that the world_pos is not normalized
+            # assign boundary conditions to the object points
+            pred_world_pos_denormalized = torch.where(
+                object_points_mask, exact_next_world_pos, pred_world_pos_denormalized
             )
-            self.exact.append(
-                torch.cat(
-                    (
-                        (graph.ndata["y"][:, 0:3] + graph.ndata["x"][:, 0:3]),
-                        graph.ndata["y"][:, [3]],
-                    ),
-                    dim=-1,
-                ).cpu()
+            pred_world_pos_denormalized = torch.where(
+                clamped_points_mask, exact_next_world_pos, pred_world_pos_denormalized
             )
+            self.pred.append(pred_world_pos_denormalized.squeeze(0))
+            self.exact.append(exact_next_world_pos.squeeze(0))
 
-            self.faces.append(torch.squeeze(cells).numpy())
-            self.graphs.append(graph.cpu())
+            self.faces.append(torch.squeeze(cells))
+            self.graphs.append(graph)
+
+        self.pred = [pred.cpu() for pred in self.pred]
+        self.exact = [exact.cpu() for exact in self.exact]
+        self.graphs = [graph.cpu() for graph in self.graphs]
+        self.faces = [face.cpu().numpy() for face in self.faces]
+
+    # var_identifier = {"ux": 0, "uy": 1, "uz": 2, "stress": 3, "disp_mag": -1}
+    var_identifier = {"ux": 0, "uy": 1, "uz": 2, "disp_mag": -1}
 
     def get_raw_data(self, idx):
         # Support for displacement magnitude
@@ -229,15 +229,12 @@ class MGNRollout:
         surface_tris = extract_surface_triangles(cells)
 
         # For predicted mesh
-        mesh_pos_pred = (graph.ndata["x"][:, 0:3] + self.pred[num][:, 0:3]).numpy()
-        stress_pred = self.pred[num][:, 3].numpy()
+        mesh_pos_pred = self.pred[num][:, 0:3].numpy()
+        # stress_pred = self.pred[num][:, 3].numpy()
 
         # For ground truth mesh
-        mesh_pos_exact = (graph.ndata["x"][:, 0:3] + self.exact[num][:, 0:3]).numpy()
-        stress_exact = self.exact[num][:, 3].numpy()
-
-        disp_pred = np.linalg.norm(self.pred[num][:, 0:3].numpy(), axis=1)
-        disp_exact = np.linalg.norm(self.exact[num][:, 0:3].numpy(), axis=1)
+        mesh_pos_exact = self.exact[num][:, 0:3].numpy()
+        # stress_exact = self.exact[num][:, 3].numpy()
 
         # Now plot using PolyCollection or trisurf (for 3D)
         from mpl_toolkits.mplot3d.art3d import Poly3DCollection
@@ -269,8 +266,22 @@ class MGNRollout:
         self.ax[0].autoscale(enable=True, tight=True)
         self.ax[1].autoscale(enable=True, tight=True)
         self.fig.subplots_adjust(
-            left=0.05, bottom=0.05, right=0.95, top=0.95, wspace=0.2, hspace=0.05
+            left=0.01, bottom=0.01, right=0.99, top=0.99, wspace=0.2, hspace=0.05
         )
+
+        # After plotting both meshes, set axis limits for predicted to match exact from the first frame
+        if not hasattr(self, "xlim"):
+            # Only set these once, from the first frame
+            self.xlim = self.ax[1].get_xlim()
+            self.ylim = self.ax[1].get_ylim()
+            self.zlim = self.ax[1].get_zlim()
+        self.ax[0].set_xlim(self.xlim)
+        self.ax[0].set_ylim(self.ylim)
+        self.ax[0].set_zlim(self.zlim)
+        self.ax[1].set_xlim(self.xlim)
+        self.ax[1].set_ylim(self.ylim)
+        self.ax[1].set_zlim(self.zlim)
+
         return self.fig
 
 
@@ -291,8 +302,8 @@ def main(cfg: DictConfig) -> None:
             frames=len(rollout.graphs) // cfg.frame_skip,
             interval=cfg.frame_interval,
         )
-        ani.save(f"animations/animation_{k}.gif")
-        logger.info(f"Created animation for {k}")
+        ani.save(f"animations/animation.gif")
+        logger.info(f"Created animation")
 
 
 if __name__ == "__main__":

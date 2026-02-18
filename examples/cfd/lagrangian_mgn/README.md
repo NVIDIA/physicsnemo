@@ -80,11 +80,13 @@ command line or in the config file.
 
 ## Getting Started
 
-This example requires the `tensorflow` library to load the data in the `.tfrecord`
-format. Install with:
+This example uses the lightweight `tfrecord` package to load the data in the `.tfrecord`
+format.
+
+Install the requirements using:
 
 ```bash
-pip install "tensorflow<=2.17.1"
+pip install -r requirements.txt
 ```
 
 To download the data from DeepMind's repo, run:
@@ -165,6 +167,6 @@ material selected for training the model:
 
 ## References
 
-- [Learning to simulate complex physicswith graph networks](arxiv.org/abs/2002.09405)
+- [Learning to simulate complex physicswith graph networks](https://arxiv.org/abs/2002.09405)
 - [Dataset](https://sites.google.com/view/learning-to-simulate)
 - [Learning Mesh-Based Simulation with Graph Networks](https://arxiv.org/abs/2010.03409)

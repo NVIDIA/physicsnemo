@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -26,8 +26,8 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 
 from physicsnemo.models.fno import FNO
-from physicsnemo.launch.logging import LaunchLogger
-from physicsnemo.launch.utils.checkpoint import save_checkpoint
+from physicsnemo.utils.logging import LaunchLogger
+from physicsnemo.utils.checkpoint import save_checkpoint
 
 from train_utils.datasets import DataLoader2D_swe
 from swe_nl_pde import SWE_NL
@@ -156,7 +156,6 @@ def test_step(model, dataloader, log, cfg, swe_nl_node, device, option):
 
 @hydra.main(version_base="1.3", config_path=".", config_name="config_pino.yaml")
 def main(cfg: DictConfig):
-
     # CUDA support
     if torch.cuda.is_available():
         device = torch.device("cuda")

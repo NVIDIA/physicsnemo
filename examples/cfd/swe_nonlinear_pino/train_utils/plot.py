@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -31,7 +31,6 @@ def plot_predictions(
     save_path=None,
     font_size=None,
 ):
-
     """Plot PINO predictions on dataset"""
     if font_size is not None:
         plt.rcParams.update({"font.size": font_size})
@@ -67,7 +66,7 @@ def plot_predictions(
     plt.colorbar()
     # plt.xlabel('$x$')
     # plt.ylabel('$y$')
-    plt.title("Intial Condition $\eta(x,y)$")
+    plt.title("Initial Condition $\eta(x,y)$")
     plt.tight_layout()
     plt.axis("square")
 
@@ -107,7 +106,7 @@ def plot_predictions(
     plt.colorbar()
     # plt.xlabel('$x$')
     # plt.ylabel('$y$')
-    plt.title("Intial Condition $u(x,y)$")
+    plt.title("Initial Condition $u(x,y)$")
     plt.tight_layout()
     plt.axis("square")
 
@@ -146,7 +145,7 @@ def plot_predictions(
     plt.colorbar()
     # plt.xlabel('$x$')
     # plt.ylabel('$y$')
-    plt.title("Intial Condition $v(x,y)$")
+    plt.title("Initial Condition $v(x,y)$")
     plt.tight_layout()
     plt.axis("square")
 

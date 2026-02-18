@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -15,38 +15,27 @@
 # limitations under the License.
 
 # ruff: noqa: S101
-import functools
 import json
 import logging
 import os
 from collections.abc import Sequence
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
+import numpy as np
 import torch
 from torch import Tensor
 from torch.nn import functional as F
+from torch.utils.data import Dataset
 
-try:
-    import tensorflow.compat.v1 as tf
-except ImportError:
-    raise ImportError(
-        "Mesh Graph Net Datapipe requires the Tensorflow library. "
-        'Install: pip install "tensorflow<=2.17.1"'
-    )
+from physicsnemo.core.version_check import OptionalImport
 
-try:
-    import dgl
-    from dgl.data import DGLDataset
-except ImportError:
-    raise ImportError(
-        "Mesh Graph Net Datapipe requires the DGL library. Install the "
-        + "desired CUDA version at: https://www.dgl.ai/pages/start.html"
-    )
+if TYPE_CHECKING:
+    from torch_geometric.data import Data as PyGData
 
-from .lagrangian_reading_utils import parse_serialized_simulation_example
+# Lazy imports for optional dependencies
+pyg_data = OptionalImport("torch_geometric.data")
+tfrecord_torch = OptionalImport("tfrecord.torch.dataset")
 
-# Hide GPU from visible devices for TF
-tf.config.set_visible_devices([], "GPU")
 
 logger = logging.getLogger("lmgn")
 
@@ -72,56 +61,49 @@ def compute_edge_index(pos, radius):
     return edge_index
 
 
-def compute_edge_attr(graph, radius=0.015):
+def compute_edge_attr(graph: "PyGData", radius: float = 0.015) -> "PyGData":
     """Computes edge attributes (displacement and distance).
 
     Parameters
     ----------
-    graph : DGLGraph
+    graph : PyGData
         Input graph
     radius : float, optional
         Radius for distance calculation, by default 0.015
     """
-    edge_index = graph.edges()
-    displacement = graph.ndata["pos"][edge_index[1]] - graph.ndata["pos"][edge_index[0]]
+    edge_index = graph.edge_index
+    displacement = graph.pos[edge_index[1]] - graph.pos[edge_index[0]]
     distance = torch.pairwise_distance(
-        graph.ndata["pos"][edge_index[0]],
-        graph.ndata["pos"][edge_index[1]],
+        graph.pos[edge_index[0]],
+        graph.pos[edge_index[1]],
         keepdim=True,
     )
     # direction = displacement / distance
     distance = torch.exp(-(distance**2) / radius**2)
-    graph.edata["x"] = torch.cat((displacement, distance), dim=-1)
-    return
+    graph.edge_attr = torch.cat((displacement, distance), dim=-1)
+    return graph
 
 
-def graph_update(graph, radius):
+def graph_update(graph: "PyGData", radius) -> "PyGData":
     """Updates graph structure by reconstructing edges based on positions.
 
     Parameters
     ----------
-    graph : DGLGraph
+    graph : PyGData
         Input graph
     radius : float
         Connectivity radius
 
     Returns
     -------
-    DGLGraph
+    PyGData
         Updated graph
     """
-    # TODO: use more efficient graph construction method
-    num_edges = graph.num_edges()
-    if num_edges > 0:
-        graph.remove_edges(torch.arange(num_edges, device=graph.device))
-    pos = graph.ndata["pos"]
-    edge_index = compute_edge_index(pos, radius)
-    graph.add_edges(edge_index[0], edge_index[1])
-    compute_edge_attr(graph)
-    return graph
+    graph.edge_index = compute_edge_index(graph.pos, radius)
+    return compute_edge_attr(graph)
 
 
-class LagrangianDataset(DGLDataset):
+class LagrangianDataset(Dataset):
     """In-memory MeshGraphNet Dataset for Lagrangian mesh.
     Notes:
         - This dataset prepares and processes the data available in MeshGraphNet's repo:
@@ -142,17 +124,15 @@ class LagrangianDataset(DGLDataset):
     num_steps : int, optional
         Number of time steps in each sequence, by default is set from the dataset metadata.
     noise_std : float, optional
-        The standard deviation of the noise added to the "train" split, by default 0.0003
+        The standard deviation of the noise added to the "train" split, by default 0.0003.
     radius : float, optional
         Connectivity radius, by default is set from the dataset metadata.
     dt : float, optional
         Time step increment, by default is set from the dataset metadata.
     bounds :
         Domain bounds, by default is set from the dataset metadata.
-    force_reload : bool, optional
-        force reload, by default False
-    verbose : bool, optional
-        verbose, by default False
+    num_node_types : int, optional
+        Number of node types, by default 6.
     """
 
     KINEMATIC_PARTICLE_ID = 3  # See train.py in DeepMind code.
@@ -170,14 +150,8 @@ class LagrangianDataset(DGLDataset):
         dt: Optional[float] = None,
         bounds: Optional[Sequence[tuple[float, float]]] = None,
         num_node_types: int = 6,
-        force_reload: bool = False,
-        verbose: bool = False,
     ):
-        super().__init__(
-            name=name,
-            force_reload=force_reload,
-            verbose=verbose,
-        )
+        self.name = name
         self.data_dir = data_dir
         self.split = split
         self.num_sequences = num_sequences
@@ -207,21 +181,20 @@ class LagrangianDataset(DGLDataset):
 
         # Create the node features.
         logger.info(f"Preparing the {split} dataset...")
-        dataset_iterator = self._load_tf_data(self.data_dir, self.split)
+        tfrecord_dataset = self._load_tfrecord_dataset(self.data_dir, self.split)
         self.node_type = []
         self.rollout_mask = []
         self.node_features = []
-        for i in range(self.num_sequences):
-            data_np = dataset_iterator.get_next()
+        for i, data_np in enumerate(tfrecord_dataset):
+            if i >= self.num_sequences:
+                break
 
             position = torch.from_numpy(
-                data_np[1]["position"][: self.num_steps].numpy()
-            )  # (num_steps, num_particles, 2)
+                data_np["position"][: self.num_steps]
+            )  # (num_steps, num_particles, dim)
             assert position.shape[0] == self.num_steps, f"{self.num_steps=}, {i=}"
 
-            node_type = torch.from_numpy(
-                data_np[0]["particle_type"].numpy()
-            )  # (num_particles,)
+            node_type = torch.from_numpy(data_np["particle_type"])  # (num_particles,)
             assert node_type.shape[0] == position.shape[1], f"{i=}"
 
             features = {}
@@ -283,12 +256,12 @@ class LagrangianDataset(DGLDataset):
 
         node_targets = torch.cat((target_pos, target_vel, target_acc), dim=-1)
 
-        graph = dgl.graph(([], []), num_nodes=node_features.shape[0])
-        graph.ndata["x"] = node_features
-        graph.ndata["y"] = node_targets
-        graph.ndata["pos"] = pos_t
-        graph.ndata["mask"] = mask
-        graph.ndata["t"] = torch.tensor([tidx]).repeat(
+        graph = pyg_data.Data(num_nodes=node_features.shape[0])
+        graph.x = node_features
+        graph.y = node_targets
+        graph.pos = pos_t
+        graph.mask = mask
+        graph.t = torch.tensor([tidx]).repeat(
             node_features.shape[0]
         )  # just to track the start
         graph_update(graph, radius=self.radius)
@@ -413,7 +386,7 @@ class LagrangianDataset(DGLDataset):
 
         return torch.cat((position, vel_history, boundary_features, node_type), dim=-1)
 
-    def unpack_inputs(self, graph: dgl.DGLGraph):
+    def unpack_inputs(self, graph: "PyGData"):
         """Unpacks the graph inputs into position, velocity and node type.
 
         Returns:
@@ -421,7 +394,7 @@ class LagrangianDataset(DGLDataset):
         Tuple
             position, velocity and node type inputs. Velocity is normalized.
         """
-        ndata = graph.ndata["x"]
+        ndata = graph.x
         pos = ndata[..., : self.dim]
         vel = ndata[..., self.dim : self.dim + self.dim * self.num_history]
         # (num_particles, t * dimension) -> (t, num_particles, dimension)
@@ -430,7 +403,7 @@ class LagrangianDataset(DGLDataset):
         node_type = ndata[..., -self.num_node_types :]
         return pos, vel, node_type
 
-    def unpack_targets(self, graph: dgl.DGLGraph):
+    def unpack_targets(self, graph: "PyGData"):
         """Unpacks the graph targets into position, velocity and acceleration.
 
         Returns:
@@ -438,7 +411,7 @@ class LagrangianDataset(DGLDataset):
         Tuple
             position, velocity, acceleration targets. Velocity and acceleration are normalized.
         """
-        ndata = graph.ndata["y"]
+        ndata = graph.y
         pos = ndata[..., : self.dim]
         vel = ndata[..., self.dim : 2 * self.dim]
         acc = ndata[..., 2 * self.dim : 3 * self.dim]
@@ -539,47 +512,113 @@ class LagrangianDataset(DGLDataset):
         """
         return torch.clamp(position, min=bounds[0] + eps, max=bounds[1] - eps)
 
-    def _load_tf_data(self, path, split):
-        """Loads TensorFlow dataset from path.
+    def _load_tfrecord_dataset(self, path, split):
+        """Load TFRecord dataset using the tfrecord package.
+
+        Utility for loading the .tfrecord dataset from DeepMind's Learning to Simulate:
+        https://github.com/google-deepmind/deepmind-research/tree/master/learning_to_simulate
 
         Parameters
         ----------
         path : str
-            Dataset path
+            Path to the directory containing TFRecord files and metadata.json.
         split : str
-            Dataset split
+            Dataset split name (e.g., "train", "valid", "test").
 
         Returns
         -------
-        tf.data.Iterator
-            Dataset iterator
-        """
-        dataset = self._load_dataset(path, split)
-        dataset_iterator = tf.data.make_one_shot_iterator(dataset)
-        return dataset_iterator
-
-    def _load_dataset(self, path, split):
-        """Creates TensorFlow dataset from TFRecord files.
-
-        Parameters
-        ----------
-        path : str
-            Dataset path
-        split : str
-            Dataset split
-
-        Returns
-        -------
-        tf.data.Dataset
-            Processed dataset
+        TFRecordDataset
+            An iterable dataset that yields decoded records.
         """
         with open(os.path.join(path, "metadata.json"), "r") as fp:
             meta = json.loads(fp.read())
-        dataset = tf.data.TFRecordDataset(os.path.join(path, split + ".tfrecord"))
-        return dataset.map(
-            functools.partial(parse_serialized_simulation_example, metadata=meta),
-            num_parallel_calls=8,
-        ).prefetch(tf.data.AUTOTUNE)
+
+        tfrecord_path = os.path.join(path, split + ".tfrecord")
+        # Check for index file (enables multi-worker DataLoader).
+        index_path = os.path.join(path, split + ".tfindex")
+        if not os.path.exists(index_path):
+            index_path = None
+
+        # Define context (static) feature description.
+        description = {
+            "key": "int",
+            "particle_type": "byte",
+        }
+
+        # Define sequence feature description for SequenceExample format.
+        sequence_description = {
+            "position": "byte",
+        }
+        if "context_mean" in meta:
+            sequence_description["step_context"] = "byte"
+
+        # Create dataset with transform to decode records.
+        dataset = tfrecord_torch.TFRecordDataset(
+            tfrecord_path,
+            index_path,
+            description,
+            transform=lambda rec: self._decode_record(rec, meta),
+            sequence_description=sequence_description,
+        )
+        return dataset
+
+    @staticmethod
+    def _decode_record(rec: tuple, meta: dict) -> dict:
+        """Decode raw bytes from TFRecord SequenceExample into numpy arrays.
+
+        The tfrecord package parses the TFRecord and provides raw bytes
+        for each feature, which are decoded using numpy.
+
+        Parameters
+        ----------
+        rec : tuple
+            Tuple of (context_dict, sequence_dict) from tfrecord package.
+        meta : dict
+            Metadata dictionary containing sequence_length and dim.
+
+        Returns
+        -------
+        dict
+            Dictionary with 'position' and 'particle_type' arrays.
+        """
+        context, sequence = rec
+
+        # Decode particle_type from context (int64 encoded as bytes).
+        # Use .copy() to make array writable (np.frombuffer returns read-only view).
+        particle_type = np.frombuffer(context["particle_type"], dtype=np.int64).copy()
+
+        # Decode position from sequence features.
+        # Each element in sequence["position"] is bytes for one timestep.
+        position_list = []
+        for pos_bytes in sequence["position"]:
+            pos = np.frombuffer(pos_bytes, dtype=np.float32)
+            position_list.append(pos)
+
+        # Stack positions: shape (num_steps, num_particles * dim).
+        # np.stack creates a new writable array from the read-only views.
+        position = np.stack(position_list, axis=0)
+        # Reshape to (num_steps, num_particles, dim).
+        num_steps = position.shape[0]
+        dim = meta["dim"]
+        num_particles = position.shape[1] // dim
+        position = position.reshape(num_steps, num_particles, dim)
+
+        result = {
+            "position": np.ascontiguousarray(position),
+            "particle_type": particle_type,
+        }
+
+        # Handle optional step_context.
+        if "step_context" in sequence:
+            context_list = []
+            for ctx_bytes in sequence["step_context"]:
+                ctx = np.frombuffer(ctx_bytes, dtype=np.float32)
+                context_list.append(ctx)
+            result["step_context"] = np.ascontiguousarray(
+                np.stack(context_list, axis=0)
+            )
+
+        return result
 
     def get_kinematic_mask(self, graph_idx: int) -> Tensor:
         """Returns mask for kinematic particles in a graph.

@@ -14,4 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .graph_network_modules import LearnedSimulator
+"""VFGN (Virtual Foundry Graph Net) model."""
+
+from .graph_network_modules import VFGNLearnedSimulator
+
+__all__ = ["VFGNLearnedSimulator"]

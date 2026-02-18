@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -45,12 +45,10 @@ class MockProfilerConfig:
 
 # Mock profiler class for testing
 class MockProfiler(PhysicsNeMoProfilerWrapper, metaclass=_Profiler_Singleton):
-
     _is_context = True
     _is_decorator = True
 
     def __init__(self, config: Optional[MockProfilerConfig] = None, **config_overrides):
-
         default_config = MockProfilerConfig()
 
         # Replace any overrides right into the config:

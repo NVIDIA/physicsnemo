@@ -195,3 +195,7 @@ CAE datapipes
 The MeshDataPipe handles mesh data for physics simulations,
 supporting various mesh formats and providing utilities for mesh preprocessing
 and feature extraction.
+
+.. automodule:: physicsnemo.datapipes.cae.domino_datapipe
+    :members:
+    :show-inheritance:

@@ -74,11 +74,8 @@ GPUs, leveraging data parallelism for 25 epochs.
 
 ## Prerequisites
 
-This example requires the `tensorflow` library to load the data in the `.tfrecord`
+This example uses the lightweight `tfrecord` package to load the data in the `.tfrecord`
 format.
-
-Note: If installing tensorflow inside the PhysicsNeMo docker container, it's recommended
-to use `pip install "tensorflow<=2.17.1"`
 
 Install the requirements using:
 

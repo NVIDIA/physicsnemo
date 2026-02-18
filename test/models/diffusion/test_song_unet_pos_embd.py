@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,21 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ruff: noqa: E402
-import os
-import sys
 
 import pytest
 import torch
 
-script_path = os.path.abspath(__file__)
-sys.path.append(os.path.join(os.path.dirname(script_path), ".."))
-
-import common
-
-from physicsnemo.models.diffusion import SongUNetPosEmbd as UNet
+from physicsnemo.models.diffusion_unets import SongUNetPosEmbd as UNet
+from test import common
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_song_unet_forward(device):
     torch.manual_seed(0)
     N_pos = 4
@@ -41,7 +34,7 @@ def test_song_unet_forward(device):
     assert common.validate_forward_accuracy(
         model,
         (input_image, noise_labels, class_labels),
-        file_name="ddmpp_unet_output.pth",
+        file_name="models/diffusion/data/ddmpp_unet_output.pth",
         atol=1e-3,
     )
 
@@ -60,12 +53,11 @@ def test_song_unet_forward(device):
     assert common.validate_forward_accuracy(
         model,
         (input_image, noise_labels, class_labels),
-        file_name="ncsnpp_unet_output.pth",
+        file_name="models/diffusion/data/ncsnpp_unet_output.pth",
         atol=1e-3,
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_song_unet_global_indexing(device):
     torch.manual_seed(0)
     N_pos = 2
@@ -97,7 +89,6 @@ def test_song_unet_global_indexing(device):
     assert torch.equal(pos_embed, global_index)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_song_unet_embedding_selector(device):
     torch.manual_seed(0)
     N_pos = 2
@@ -127,8 +118,8 @@ def test_song_unet_embedding_selector(device):
 
     # Function to select embeddings
     def embedding_selector(emb):
-        return emb[
-            None,
+        return emb.expand(1, -1, -1, -1)[
+            :,
             :,
             offset_y : offset_y + patch_shape_y,
             offset_x : offset_x + patch_shape_x,
@@ -148,42 +139,82 @@ def test_song_unet_embedding_selector(device):
     assert torch.equal(selected_embeds, expected_embeds)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_song_unet_constructor(device):
-    """Test the Song UNet constructor options"""
+@pytest.mark.parametrize(
+    "config",
+    ["default", "custom"],
+    ids=["with_defaults", "with_custom_args"],
+)
+def test_song_unet_constructor(device, config):
+    """Test SongUNetPosEmbd model constructor and attributes (MOD-008a).
 
-    # DDM++
-    img_resolution = 16
-    in_channels = 2
-    out_channels = 2
-    N_pos = 4
-    model = UNet(
-        img_resolution=img_resolution,
-        in_channels=in_channels + N_pos,
-        out_channels=out_channels,
-    ).to(device)
-    noise_labels = torch.randn([1]).to(device)
-    class_labels = torch.randint(0, 1, (1, 1)).to(device)
-    input_image = torch.ones([1, 2, 16, 16]).to(device)
-    output_image = model(input_image, noise_labels, class_labels)
-    assert output_image.shape == (1, out_channels, img_resolution, img_resolution)
+    This test verifies:
+    1. Model can be instantiated with default arguments
+    2. Model can be instantiated with custom arguments
+    3. All public attributes have expected values
+    """
+    if config == "default":
+        N_pos = 4
+        model = UNet(
+            img_resolution=16,
+            in_channels=2 + N_pos,
+            out_channels=2,
+        ).to(device)
 
-    # test rectangular shape
-    model = UNet(
-        img_resolution=[img_resolution, img_resolution * 2],
-        in_channels=in_channels + N_pos,
-        out_channels=out_channels,
-    ).to(device)
-    noise_labels = torch.randn([1]).to(device)
-    class_labels = torch.randint(0, 1, (1, 1)).to(device)
-    input_image = torch.ones([1, out_channels, img_resolution, img_resolution * 2]).to(
-        device
-    )
-    output_image = model(input_image, noise_labels, class_labels)
-    assert output_image.shape == (1, out_channels, img_resolution, img_resolution * 2)
+        # Verify default attribute values
+        assert model.img_shape_y == 16
+        assert model.img_shape_x == 16
+        assert model.gridtype == "sinusoidal"
+        assert model.N_grid_channels == 4
+        assert model.lead_time_mode is False
+        assert model.pos_embd is not None
+        assert model.pos_embd.shape == (N_pos, 16, 16)
+        assert model.lt_embd is None
+        assert model.profile_mode is False
+        assert model.amp_mode is False
+
+        # Verify forward pass shape
+        noise_labels = torch.randn([1]).to(device)
+        class_labels = torch.randint(0, 1, (1, 1)).to(device)
+        input_image = torch.ones([1, 2, 16, 16]).to(device)
+        output_image = model(input_image, noise_labels, class_labels)
+        assert output_image.shape == (1, 2, 16, 16)
+    else:
+        N_pos = 8
+        model = UNet(
+            img_resolution=[16, 32],
+            in_channels=2 + N_pos,
+            out_channels=2,
+            gridtype="learnable",
+            N_grid_channels=N_pos,
+            model_channels=64,
+            channel_mult=[1, 2, 2],
+            num_blocks=2,
+        ).to(device)
+
+        # Verify custom attribute values
+        assert model.img_shape_y == 16
+        assert model.img_shape_x == 32
+        assert model.gridtype == "learnable"
+        assert model.N_grid_channels == 8
+        assert model.lead_time_mode is False
+        assert model.pos_embd is not None
+        assert model.pos_embd.shape == (N_pos, 16, 32)
+        assert model.lt_embd is None
+
+        # Verify forward pass shape
+        noise_labels = torch.randn([1]).to(device)
+        class_labels = torch.randint(0, 1, (1, 1)).to(device)
+        input_image = torch.ones([1, 2, 16, 32]).to(device)
+        output_image = model(input_image, noise_labels, class_labels)
+        assert output_image.shape == (1, 2, 16, 32)
+
+    # Common assertions
+    assert isinstance(model, UNet)
+    assert hasattr(model, "enc")
+    assert hasattr(model, "dec")
+    assert hasattr(model, "meta")
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_song_unet_position_embedding(device):
     # build unet
     img_resolution = 16
@@ -244,9 +275,11 @@ def test_fails_if_grid_is_invalid():
 
 
 # Skip CPU tests because too slow
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_optims(device):
     """Test Song UNet optimizations"""
+
+    if device == "cpu":
+        pytest.skip("Skip SongUNetPosEmbd on cpu")
 
     def setup_model():
         model = UNet(
@@ -296,9 +329,12 @@ def test_song_unet_optims(device):
 
 
 # Skip CPU tests because too slow
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_checkpoint(device):
     """Test Song UNet checkpoint save/load"""
+
+    if device == "cpu":
+        pytest.skip("Skip SongUNetPosEmbd on cpu")
+
     # Construct FNO models
     model_1 = UNet(
         img_resolution=16,
@@ -321,7 +357,6 @@ def test_song_unet_checkpoint(device):
 
 
 @common.check_ort_version()
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_son_unet_deploy(device):
     """Test Song UNet deployment support"""
     model = UNet(

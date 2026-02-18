@@ -6,13 +6,13 @@ PhysicsNeMo Utils
 
 The PhysicsNeMo Utils module provides a comprehensive set of utilities that support various aspects of scientific computing,
 machine learning, and physics simulations. These utilities range from optimization helpers and distributed computing tools
-to specialized functions for weather/climate modeling and geometry processing. The module is designed to simplify common
+to specialized functions for weather and climate modeling, and geometry processing. The module is designed to simplify common
 tasks while maintaining high performance and scalability.
 
 .. autosummary::
    :toctree: generated
 
-Optimization utils
+Optimization Utils
 ------------------
 
 The optimization utilities provide tools for capturing and managing training states, gradients, and optimization processes.
@@ -22,7 +22,8 @@ These are particularly useful when implementing custom training loops or special
     :members:
     :show-inheritance:
 
-GraphCast utils
+
+GraphCast Utils
 ---------------
 
 A collection of utilities specifically designed for working with the GraphCast model, including data processing,
@@ -45,7 +46,7 @@ training GraphCast-based weather prediction models.
     :members:
     :show-inheritance:
 
-Filesystem utils
+Filesystem Utils
 ----------------
 
 Utilities for handling file operations, caching, and data management across different storage systems.
@@ -58,39 +59,26 @@ consistent interfaces for data access.
 
 .. _diffusion_utils:
 
-Diffusion utils
-----------------
+Diffusion Utils
+---------------
 
 Tools for working with diffusion models and other generative approaches,
 including deterministic and stochastic sampling utilities.
 
-.. automodule:: physicsnemo.utils.diffusion.deterministic_sampler
+.. automodule:: physicsnemo.diffusion.samplers.deterministic_sampler
     :members:
     :show-inheritance:
 
-.. automodule:: physicsnemo.utils.diffusion.stochastic_sampler
+.. automodule:: physicsnemo.diffusion.samplers.stochastic_sampler
     :members:
     :show-inheritance:
 
-.. automodule:: physicsnemo.utils.diffusion.utils
+.. automodule:: physicsnemo.diffusion.utils
     :members:
     :show-inheritance:
 
-Geometry utils
---------------
-
-Utilities for geometric operations, including neighbor search and signed distance field calculations.
-These are essential for physics simulations and geometric deep learning applications.
-
-.. automodule:: physicsnemo.utils.neighbor_list
-    :members:
-    :show-inheritance:
-
-.. automodule:: physicsnemo.utils.sdf
-    :show-inheritance:
-
-Weather / Climate utils
-------------------------
+Weather / Climate Utils
+-----------------------
 
 Specialized utilities for weather and climate modeling, including calculations for solar radiation
 and atmospheric parameters. These utilities are used extensively in weather prediction models.
@@ -104,23 +92,23 @@ and atmospheric parameters. These utilities are used extensively in weather pred
 
 .. _patching_utils:
 
-Patching utils
+Patching Utils
 --------------
 
 Patching utilities are particularly useful for *patch-based* diffusion, also called
 *multi-diffusion*. This approach is used to scale diffusion to very large images.
 The following patching utilities extract patches from 2D images, and typically gather
 them in the batch dimension. A batch of patches is therefore composed of multiple
-smaller patches extracted from each sample in the original batch of larger
+smaller patches that are extracted from each sample in the original batch of larger
 images. Diffusion models can then process these patches independently. These
 utilities also support fusing operations to reconstruct the entire predicted
 image from the individual predicted patches.
 
-.. automodule:: physicsnemo.utils.patching
+.. automodule:: physicsnemo.diffusion.multi_diffusion
     :members:
     :show-inheritance:
 
-Domino utils
+Domino Utils
 ------------
 
 Utilities for working with the Domino model, including data processing and grid construction.
@@ -130,16 +118,16 @@ These utilities are essential for implementing and training Domino-based models.
     :members:
     :show-inheritance:
 
-CorrDiff utils
+CorrDiff Utils
 --------------
 
 Utilities for working with the CorrDiff model, particularly for the diffusion and regression steps.
 
-.. automodule:: physicsnemo.utils.corrdiff.utils
+.. automodule:: physicsnemo.diffusion.samplers
     :members:
     :show-inheritance:
 
-Profiling utils
+Profiling Utils
 ---------------
 
 Utilities for profiling the performance of a model.

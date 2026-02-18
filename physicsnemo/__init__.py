@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,9 +14,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .datapipes.datapipe import Datapipe
-from .datapipes.meta import DatapipeMetaData
-from .models.meta import ModelMetaData
-from .models.module import Module
+import os
 
-__version__ = "1.2.0a0"
+# This is to ensure warp is quiet at startup:
+import warp as wp
+
+from .core.meta import ModelMetaData  # noqa E402
+from .core.module import Module  # noqa E402
+
+wp.config.quiet = True
+
+__version__ = "1.4.0a0"
+
+
+# Backwards-compatibility is opt-in. Enable with env var or via enable_compat().
+if os.getenv("PHYSICSNEMO_ENABLE_COMPAT") in {
+    "1",
+    "true",
+    "True",
+    "YES",
+    "yes",
+    "on",
+    "ON",
+}:
+    from .compat import install as _compat_install
+
+    _compat_install()

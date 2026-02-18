@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -58,7 +58,7 @@ class ProcessGroupNode:
         str
             String representation of the process group node
         """
-        return "ProcessGroupNode(" f"name={self.name}, " f"size={self.size}, "
+        return f"ProcessGroupNode(name={self.name}, size={self.size}, "
 
     def __repr__(self):
         """

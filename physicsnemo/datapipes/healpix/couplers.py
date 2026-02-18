@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,13 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import logging
 from typing import Sequence
 
 import numpy as np
 import pandas as pd
 import torch as th
-import xarray as xr
+
+from physicsnemo.core.version_check import OptionalImport
+
+xr = OptionalImport("xarray")
 
 logger = logging.getLogger(__name__)
 
@@ -107,15 +112,12 @@ class ConstantCoupler:
         raise NotImplementedError("Data preparation not yet implemented")
 
     def _compute_coupled_integration_dim(self):
-
         return self.presteps + max(self.output_time_dim // self.input_time_dim, 1)
 
     def _compute_timevar_dim(self):
-
         return len(self.input_times) * len(self.variables)
 
     def compute_coupled_indices(self, interval, data_time_step):
-
         """
         Called by CoupledDataset to compute static indices for training
         samples
@@ -133,7 +135,6 @@ class ConstantCoupler:
         )
         for b in range(self.batch_size):
             for i in range(self.coupled_integration_dim):
-
                 self._coupled_offsets[b, i, :] = b + np.array(
                     [ts / data_time_step for ts in self.input_times]
                 )
@@ -141,7 +142,6 @@ class ConstantCoupler:
         self._coupled_offsets = self._coupled_offsets.astype(int)
 
     def set_scaling(self, scaling_da):
-
         """
         Called by CoupledDataset to compute static indices for training
         samples
@@ -179,7 +179,6 @@ class ConstantCoupler:
         self.coupled_channel_indices = channel_indices
 
     def reset_coupler(self):
-
         self.coupled_mode = False
         self.integrated_couplings = None
         self.preset_coupled_fields = None
@@ -265,10 +264,10 @@ class ConstantCoupler:
                     coupling_temp = ds_index_range.isel(
                         time=self._coupled_offsets[b, i, :]
                     )
-                    self.integrated_couplings[
-                        b, i, :, :, :
-                    ] = coupling_temp.to_numpy().reshape(
-                        (self.timevar_dim,) + coupling_temp.shape[2:]
+                    self.integrated_couplings[b, i, :, :, :] = (
+                        coupling_temp.to_numpy().reshape(
+                            (self.timevar_dim,) + coupling_temp.shape[2:]
+                        )
                     )
 
             return self.integrated_couplings.transpose((1, 0, 2, 3, 4, 5)).astype(
@@ -360,7 +359,6 @@ class TrailingAverageCoupler:
             )
 
     def compute_coupled_indices(self, interval, data_time_step):
-
         """
         Called by CoupledDataset to compute static indices for training
         samples
@@ -375,7 +373,6 @@ class TrailingAverageCoupler:
         )
         for b in range(self.batch_size):
             for i in range(self.coupled_integration_dim):
-
                 self._coupled_offsets[b, i, :] = (
                     b
                     + (self.input_time_dim * i + 1) * interval
@@ -385,12 +382,10 @@ class TrailingAverageCoupler:
         self._coupled_offsets = self._coupled_offsets.astype(int)
 
     def _prepare_coupled_data(self):
-
         # TODO: write function to lazily compute average as spcified in time scheme
         raise NotImplementedError("Data preparation not yet implemented")
 
     def set_scaling(self, scaling_da):
-
         coupled_scaling = scaling_da.sel(index=self.variables).rename(
             {"index": "channel_in"}
         )
@@ -400,7 +395,6 @@ class TrailingAverageCoupler:
         }
 
     def _set_time_increments(self):
-
         # get the dt of the dataset
         dt = pd.Timedelta(
             self.ds.time[1].values - self.ds.time[0].values
@@ -414,15 +408,12 @@ class TrailingAverageCoupler:
         self.time_increments = [t.total_seconds() / dt for t in self.input_times]
 
     def _compute_timevar_dim(self):
-
         return len(self.input_times) * len(self.variables)
 
     def _compute_coupled_integration_dim(self):
-
         return self.presteps + max(self.output_time_dim // self.input_time_dim, 1)
 
     def setup_coupling(self, coupled_module):
-
         # To expediate the coupling process the coupled_forecast
         # get proper channels from coupled component output
         output_channels = coupled_module.output_variables
@@ -460,7 +451,6 @@ class TrailingAverageCoupler:
         self.averaging_slices = averaging_slices
 
     def reset_coupler(self):
-
         self.coupled_mode = False
         self.integrated_couplings = None
         self.preset_coupled_fields = None
@@ -503,7 +493,6 @@ class TrailingAverageCoupler:
         batch=None,
         bsize=None,
     ):
-
         """
         Construct array of coupled inputs that includes values required for
         model integration steps.
@@ -548,10 +537,10 @@ class TrailingAverageCoupler:
                     coupling_temp = ds_index_range.isel(
                         time=self._coupled_offsets[b, i, :]
                     )
-                    self.integrated_couplings[
-                        b, i, :, :, :
-                    ] = coupling_temp.to_numpy().reshape(
-                        (self.timevar_dim,) + coupling_temp.shape[2:]
+                    self.integrated_couplings[b, i, :, :, :] = (
+                        coupling_temp.to_numpy().reshape(
+                            (self.timevar_dim,) + coupling_temp.shape[2:]
+                        )
                     )
 
             return self.integrated_couplings.transpose((1, 0, 2, 3, 4, 5)).astype(

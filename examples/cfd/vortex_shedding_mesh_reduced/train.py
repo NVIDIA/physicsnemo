@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -33,12 +33,12 @@ from physicsnemo.datapipes.gnn.vortex_shedding_re300_1000_dataset import (
     VortexSheddingRe300To1000Dataset,
 )
 from physicsnemo.distributed.manager import DistributedManager
-from physicsnemo.launch.logging import (
+from physicsnemo.utils.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from physicsnemo.launch.logging.wandb import initialize_wandb
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging.wandb import initialize_wandb
+from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.models.mesh_reduced.mesh_reduced import Mesh_Reduced
 
 C = Constants()
@@ -85,7 +85,7 @@ class Mesh_ReducedTrainer:
         )
 
         if C.jit:
-            self.model = torch.jit.script(self.model).to(dist.device)
+            self.model = torch.compile(self.model.to(dist.device))
         else:
             self.model = self.model.to(dist.device)
         if C.watch_model and not C.jit and dist.rank == 0:
@@ -209,7 +209,7 @@ if __name__ == "__main__":
         for graph in tqdm(trainer.dataloader):
             loss = trainer.train(graph, position_mesh, position_pivotal)
         rank_zero_logger.info(
-            f"epoch: {epoch}, loss: {loss:10.3e}, time per epoch: {(time.time()-start):10.3e}"
+            f"epoch: {epoch}, loss: {loss:10.3e}, time per epoch: {(time.time() - start):10.3e}"
         )
         wb.log({"loss": loss.detach().cpu()})
 

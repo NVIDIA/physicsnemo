@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -28,13 +28,13 @@ from torch.utils.data.distributed import DistributedSampler
 from physicsnemo.models.fno import FNO
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-from physicsnemo.launch.logging import (
+from physicsnemo.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
     LaunchLogger,
 )
-from physicsnemo.launch.logging.mlflow import initialize_mlflow
+from physicsnemo.utils.logging.mlflow import initialize_mlflow
 from utils import NestedDarcyDataset, GridValidator
 
 
@@ -302,7 +302,7 @@ def nested_darcy_trainer(cfg: DictConfig) -> None:
     if loaded_epoch == 0:
         logger.success("Training started...")
     else:
-        logger.warning(f"Resuming training from epoch {loaded_epoch+1}.")
+        logger.warning(f"Resuming training from epoch {loaded_epoch + 1}.")
 
     # train model
     TrainModel(cfg, base, loaded_epoch)

@@ -1,4 +1,4 @@
-# Fourier Neural Operater for Darcy Flow
+# Fourier Neural Operator for Darcy Flow
 
 This example demonstrates how to set up a data-driven model for a 2D Darcy flow using
 the Fourier Neural Operator (FNO) architecture inside of PhysicsNeMo.

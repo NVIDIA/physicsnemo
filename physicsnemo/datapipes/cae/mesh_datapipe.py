@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -15,30 +15,24 @@
 # limitations under the License.
 
 
-import numpy as np
-import torch
-import vtk
-
-try:
-    import nvidia.dali as dali
-    import nvidia.dali.plugin.pytorch as dali_pth
-except ImportError:
-    raise ImportError(
-        "DALI dataset requires NVIDIA DALI package to be installed. "
-        + "The package can be installed at:\n"
-        + "https://docs.nvidia.com/deeplearning/dali/user-guide/docs/installation.html"
-    )
-
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Tuple, Union
 
+import numpy as np
+import torch
 from torch import Tensor
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
 
 from .readers import read_cgns, read_vtp, read_vtu
+
+# Lazy imports for optional dependencies
+dali = OptionalImport("nvidia.dali")
+dali_pth = OptionalImport("nvidia.dali.plugin.pytorch")
+vtk = OptionalImport("vtk")
 
 
 @dataclass
@@ -84,6 +78,8 @@ class MeshDatapipe(Datapipe):
         Number of training processes, by default 1
     cache_data : False, optional
         Whether to cache the data in memory for faster access in subsequent epochs, by default False
+    Parallel: True, optional
+        Setting parallel=True for an external_source node indicates to the pipeline to run the source in Python worker processes started by DALI.
     """
 
     def __init__(
@@ -101,6 +97,7 @@ class MeshDatapipe(Datapipe):
         process_rank: int = 0,
         world_size: int = 1,
         cache_data: bool = False,
+        parallel: bool = True,
     ):
         super().__init__(meta=MetaData())
         self.file_format = file_format
@@ -115,6 +112,7 @@ class MeshDatapipe(Datapipe):
         self.process_rank = process_rank
         self.world_size = world_size
         self.cache_data = cache_data
+        self.parallel = parallel
 
         # if self.batch_size > 1:
         #     raise NotImplementedError("Batch size greater than 1 is not supported yet")
@@ -243,7 +241,7 @@ class MeshDatapipe(Datapipe):
             vertices, attributes, edges = dali.fn.external_source(
                 source,
                 num_outputs=3,
-                parallel=True,
+                parallel=self.parallel,
                 batch=False,
             )
 
@@ -345,7 +343,6 @@ class MeshDaliExternalSource:
 
         # Shuffle before the next epoch starts.
         if self.shuffle and sample_info.epoch_idx != self.last_epoch:
-
             # All workers use the same rng seed so the resulting
             # indices are the same across workers.
             np.random.default_rng(seed=sample_info.epoch_idx).shuffle(self.indices)

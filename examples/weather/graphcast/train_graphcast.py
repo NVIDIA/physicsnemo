@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -33,24 +33,23 @@ torch._dynamo.config.suppress_errors = True  # TODO check if this can be removed
 import os
 
 from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
-from physicsnemo.utils.graphcast.loss import (
+from physicsnemo.metrics.climate.graphcast_loss import (
     CellAreaWeightedLossFunction,
     GraphCastLossFunction,
 )
-from physicsnemo.launch.logging import (
+from physicsnemo.utils.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from physicsnemo.launch.logging.wandb import initialize_wandb
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging.wandb import initialize_wandb
+from physicsnemo.utils import load_checkpoint, save_checkpoint
 
-from train_utils import count_trainable_params, prepare_input
-from loss.utils import normalized_grid_cell_area
+from train_utils import count_trainable_params, prepare_input, normalized_grid_cell_area
 from train_base import BaseTrainer
 from validation_base import Validation
 from physicsnemo.datapipes.climate import ERA5HDF5Datapipe, SyntheticWeatherDataLoader
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.utils.graphcast.data_utils import StaticData
+from data_utils import StaticData
 
 import hydra
 from hydra.utils import to_absolute_path
@@ -139,10 +138,12 @@ class GraphCastTrainer(BaseTrainer):
         if cfg.checkpoint_decoder:
             self.model.set_checkpoint_decoder(True)
 
-        # JIT compile the model, and specify the device and dtype
+        # Compile the model, and specify the device and dtype
         if cfg.jit:
-            torch.jit.script(self.model).to(dtype=self.dtype).to(device=dist.device)
-            rank_zero_logger.success("JIT compiled the model")
+            self.model = (
+                torch.compile(self.model).to(dtype=self.dtype).to(device=dist.device)
+            )
+            rank_zero_logger.success("Compiled the model")
         else:
             self.model = self.model.to(dtype=self.dtype).to(device=dist.device)
         if cfg.watch_model and not cfg.jit and dist.rank == 0:
@@ -228,19 +229,13 @@ class GraphCastTrainer(BaseTrainer):
                 cfg.dataset_metadata_path,
                 cfg.time_diff_std_path,
             )
-        try:
-            self.optimizer = apex.optimizers.FusedAdam(
-                self.model.parameters(),
-                lr=cfg.lr,
-                betas=(0.9, 0.95),
-                adam_w_mode=True,
-                weight_decay=0.1,
-            )
-            rank_zero_logger.info("Using FusedAdam optimizer")
-        except:
-            self.optimizer = torch.optim.AdamW(
-                self.model.parameters(), lr=cfg.lr, betas=(0.9, 0.95), weight_decay=0.1
-            )
+        self.optimizer = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=cfg.lr,
+            betas=(0.9, 0.95),
+            weight_decay=0.1,
+            fused=True,
+        )
         scheduler1 = LinearLR(
             self.optimizer,
             start_factor=1e-3,
@@ -307,14 +302,6 @@ class GraphCastTrainer(BaseTrainer):
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-
-    # Optionally import apex
-    if cfg.use_apex:
-        try:
-            import apex
-        except:
-            raise ImportError("Apex is not installed.")
-
     if cfg.cugraphops_encoder or cfg.cugraphops_processor or cfg.cugraphops_decoder:
         try:
             import pylibcugraphops
@@ -331,8 +318,8 @@ def main(cfg: DictConfig) -> None:
     # initialize loggers
     if dist.rank == 0:
         initialize_wandb(
-            project="GraphCast",
-            entity="PhysicsNeMo",
+            project=cfg.get("wb_project", "GraphCast"),
+            entity=cfg.get("wb_entity", "PhysicsNeMo"),
             name=f"GraphCast-{HydraConfig.get().job.name}",
             group="group",
             mode=cfg.wb_mode,
@@ -373,7 +360,6 @@ def main(cfg: DictConfig) -> None:
                 iter < cfg.num_iters_step1 + cfg.num_iters_step2 + cfg.num_iters_step3
             ), "Training is already finished!"
             for _, data in enumerate(trainer.datapipe):
-
                 # profiling
                 if cfg.profile and iter == cfg.profile_range[0]:
                     rank_zero_logger.info("Starting profile", "green")
@@ -468,8 +454,9 @@ def main(cfg: DictConfig) -> None:
                     num_samples_per_year=cfg.num_samples_per_year_train,
                     device=dist.device,
                 )
-                invar_cat, outvar = invar_cat.to(dtype=trainer.dtype), outvar.to(
-                    dtype=trainer.dtype
+                invar_cat, outvar = (
+                    invar_cat.to(dtype=trainer.dtype),
+                    outvar.to(dtype=trainer.dtype),
                 )
 
                 # training step
@@ -508,8 +495,8 @@ def main(cfg: DictConfig) -> None:
                     )
                     logger.info(f"Saved model on rank {dist.rank}")
                     logger.log(
-                        f"iteration: {iter}, loss: {loss_agg/cfg.save_freq:10.3e}, \
-                            time per iter: {(time.time()-start)/cfg.save_freq:10.3e}"
+                        f"iteration: {iter}, loss: {loss_agg / cfg.save_freq:10.3e}, \
+                            time per iter: {(time.time() - start) / cfg.save_freq:10.3e}"
                     )
                     loss_all = loss_agg / cfg.save_freq
                     if dist.rank == 0:
@@ -532,7 +519,7 @@ def main(cfg: DictConfig) -> None:
                     >= cfg.num_iters_step1 + cfg.num_iters_step2 + cfg.num_iters_step3
                 ):
                     if dist.rank == 0:
-                        del data_x, y
+                        del invar, invar_cat, outvar
                         torch.cuda.empty_cache()
                         error = trainer.validation.step(
                             channels=list(np.arange(cfg.num_channels_val)), iter=iter
@@ -549,8 +536,8 @@ def main(cfg: DictConfig) -> None:
                         )
                         logger.info(f"Saved model on rank {dist.rank}")
                         logger.log(
-                            f"iteration: {iter}, loss: {loss_agg/cfg.save_freq:10.3e}, \
-                                time per iter: {(time.time()-start)/cfg.save_freq:10.3e}"
+                            f"iteration: {iter}, loss: {loss_agg / cfg.save_freq:10.3e}, \
+                                time per iter: {(time.time() - start) / cfg.save_freq:10.3e}"
                         )
                     terminate_training = True
                     break

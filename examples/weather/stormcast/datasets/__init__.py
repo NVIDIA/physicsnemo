@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -13,7 +13,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 import importlib
 import pkgutil
 
@@ -27,7 +26,7 @@ dataset_modules = [mod.name for mod in dataset_modules if mod.name != "dataset"]
 dataset_classes = {}
 for mod_name in dataset_modules:
     module = importlib.import_module(f"datasets.{mod_name}")
-    for (name, member) in module.__dict__.items():
+    for name, member in module.__dict__.items():
         if (
             name != "StormCastDataset"
             and isinstance(member, type)

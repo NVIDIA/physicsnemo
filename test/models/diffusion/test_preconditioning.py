@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -16,16 +16,16 @@
 
 import pytest
 import torch
-from pytest_utils import import_or_fail
 
-from physicsnemo.models.diffusion.preconditioning import (
+from physicsnemo.core.module import Module
+from physicsnemo.diffusion.preconditioners import (
     EDMPrecond,
     EDMPrecondSR,
     EDMPrecondSuperResolution,
     VEPrecond_dfsr,
     VEPrecond_dfsr_cond,
 )
-from physicsnemo.models.module import Module
+from test.conftest import requires_module
 
 
 def test_EDMPrecondSuperResolution_forward():
@@ -98,15 +98,14 @@ def test_EDMPrecondSuperResolution_fp16_forward():
     assert output_fp16.shape == (b, c_target, x, y)
 
     # Assert the fp16 output and fp32 output are close
-    assert torch.allclose(
-        output_fp16, output_fp32, rtol=1e-3, atol=1e-3
-    ), "FP16 and FP32 outputs differ more than allowed"
+    assert torch.allclose(output_fp16, output_fp32, rtol=1e-3, atol=1e-3), (
+        "FP16 and FP32 outputs differ more than allowed"
+    )
 
 
-@import_or_fail("termcolor")
+@requires_module("termcolor")
 def test_EDMPrecondSuperResolution_serialization(tmp_path, pytestconfig):
-
-    from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+    from physicsnemo.utils.checkpoint import load_checkpoint, save_checkpoint
 
     module = EDMPrecondSuperResolution(8, 1, 1)
     model_path = tmp_path / "output.mdlus"
@@ -156,7 +155,6 @@ def test_EDMPrecond_forward(channels):
 
 
 def test_VEPrecond_dfsr():
-
     b, c, x, y = 1, 3, 256, 256
     img_resolution = 256
     img_channels = 3
@@ -181,7 +179,7 @@ def test_VEPrecond_dfsr():
         dataset_mean=5.85e-05,
         dataset_scale=4.79,
         model_type="SongUNet",
-        **model_kwargs
+        **model_kwargs,
     )
 
     xt = torch.randn(b, c, x, y)
@@ -191,7 +189,6 @@ def test_VEPrecond_dfsr():
 
 
 def test_voriticity_residual_method():
-
     b, c, x, y = 1, 3, 256, 256
     img_resolution = 256
     img_channels = 3
@@ -218,7 +215,7 @@ def test_voriticity_residual_method():
         dataset_mean=dataset_mean,
         dataset_scale=dataset_scale,
         model_type="SongUNet",
-        **model_kwargs
+        **model_kwargs,
     )
 
     xt = torch.randn(b, c, x, y)
@@ -310,9 +307,9 @@ def test_EDMPrecondSR_forward():
     assert output.shape == (b, c_target, x, y)
 
 
-@import_or_fail("termcolor")
+@requires_module("termcolor")
 def test_EDMPrecondSR_serialization(tmp_path, pytestconfig):
-    from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+    from physicsnemo.utils.checkpoint import load_checkpoint, save_checkpoint
 
     module = EDMPrecondSR(
         8, 1, 1, 1

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -27,8 +27,8 @@ except ImportError:
 
 from physicsnemo import Module
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.logging import LaunchLogger, PythonLogger
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging import LaunchLogger, PythonLogger
+from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
 
 
@@ -156,7 +156,7 @@ class Trainer:
 
         try:
             model.eval()
-            for (i, batch) in enumerate(self.valid_datapipe):
+            for i, batch in enumerate(self.valid_datapipe):
                 (invar, outvar_true) = self.input_output_from_batch_data(batch)
                 invar = invar.detach()
                 outvar_true = outvar_true.detach()

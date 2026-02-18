@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -129,7 +129,7 @@ def wasserstein_from_cdf(bin_edges: Tensor, cdf_x: Tensor, cdf_y: Tensor) -> Ten
 
     .. math::
 
-        W(F_X, F_Y) = int[ |F_X(x) - F_Y(x)| ] dx
+       W(F_X, F_Y) = int[ |F_X(x) - F_Y(x)| ] dx
 
     where F_X is the empirical cdf of X and F_Y is the empirical cdf of Y.
 

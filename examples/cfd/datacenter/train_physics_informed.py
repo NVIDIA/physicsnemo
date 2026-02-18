@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -24,8 +24,8 @@ import torch
 import hydra
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-from physicsnemo.launch.logging import PythonLogger, LaunchLogger
+from physicsnemo.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging import PythonLogger, LaunchLogger
 from hydra.utils import to_absolute_path
 from torch.nn.parallel import DistributedDataParallel
 from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
@@ -92,9 +92,10 @@ def validation_step(
             if i == 0:
                 for chan in range(outvar.size(1)):
                     fig, ax = plt.subplots(1, 3)
-                    vmin, vmax = np.min(
-                        outvar[i, chan, :, :, nz // 2].detach().cpu().numpy()
-                    ), np.max(outvar[i, chan, :, :, nz // 2].detach().cpu().numpy())
+                    vmin, vmax = (
+                        np.min(outvar[i, chan, :, :, nz // 2].detach().cpu().numpy()),
+                        np.max(outvar[i, chan, :, :, nz // 2].detach().cpu().numpy()),
+                    )
                     # plot z slices
                     im = ax[0].imshow(
                         outvar[i, chan, :, :, nz // 2].detach().cpu().numpy(),
@@ -137,7 +138,6 @@ def validation_step(
     version_base="1.2", config_path="conf", config_name="config_physics_informed"
 )
 def main(cfg: DictConfig) -> None:
-
     logger = PythonLogger("main")  # General python logger
     LaunchLogger.initialize()
 

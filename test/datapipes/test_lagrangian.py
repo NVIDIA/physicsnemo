@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -16,12 +16,10 @@
 
 import pytest
 import torch
-from pytest_utils import import_or_fail
+
+from test.conftest import requires_module
 
 from . import common
-
-dgl = pytest.importorskip("dgl")
-
 
 Tensor = torch.Tensor
 
@@ -31,9 +29,10 @@ def data_dir(nfs_data_dir):
     return nfs_data_dir.joinpath("datasets/water")
 
 
-@import_or_fail(["tensorflow", "dgl"])
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@requires_module(["torch_geometric", "torch_scatter", "tfrecord"])
 def test_lagrangian_dataset_constructor(data_dir, device, pytestconfig):
+    from torch_geometric.data import Data as PyGData
+
     from physicsnemo.datapipes.gnn.lagrangian_dataset import LagrangianDataset
 
     # Test successful construction
@@ -49,19 +48,14 @@ def test_lagrangian_dataset_constructor(data_dir, device, pytestconfig):
 
     # Test getting an item
     graph = dataset[0]
-    # new DGL (2.4+) uses dgl.heterograph.DGLGraph, previous DGL is dgl.DGLGraph
-    assert isinstance(graph, dgl.DGLGraph) or isinstance(
-        graph, dgl.heterograph.DGLGraph
-    )
+    assert isinstance(graph, PyGData)
 
     # Test graph properties
-    assert "x" in graph.ndata
-    assert "y" in graph.ndata
-    assert graph.ndata["x"].shape[-1] > 0  # node features
-    assert graph.ndata["y"].shape[-1] > 0  # node targets
+    assert graph.x.shape[-1] > 0  # node features
+    assert graph.y.shape[-1] > 0  # node targets
 
 
-@import_or_fail(["tensorflow", "dgl"])
+@requires_module(["torch_geometric", "torch_scatter", "tfrecord"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_graph_construction(device, pytestconfig):
     from physicsnemo.datapipes.gnn.lagrangian_dataset import compute_edge_index

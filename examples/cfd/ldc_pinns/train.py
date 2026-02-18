@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.logging import PythonLogger
+from physicsnemo.utils.logging import PythonLogger
 from physicsnemo.models.fno import FNO
 from physicsnemo.models.mlp.fully_connected import FullyConnected
 from physicsnemo.sym.eq.pdes.navier_stokes import NavierStokes
@@ -68,9 +68,10 @@ def ldc_trainer(cfg: DictConfig) -> None:
     x = np.linspace(-0.05, 0.05, 512)
     y = np.linspace(-0.05, 0.05, 512)
     xx, yy = np.meshgrid(x, y, indexing="xy")
-    xx, yy = torch.from_numpy(xx).to(torch.float).to(dist.device), torch.from_numpy(
-        yy
-    ).to(torch.float).to(dist.device)
+    xx, yy = (
+        torch.from_numpy(xx).to(torch.float).to(dist.device),
+        torch.from_numpy(yy).to(torch.float).to(dist.device),
+    )
 
     # bc dataloader
     bc_dataloader = GeometryDatapipe(
@@ -96,7 +97,6 @@ def ldc_trainer(cfg: DictConfig) -> None:
 
     for i in range(10000):
         for bc_data, int_data in zip(bc_dataloader, interior_dataloader):
-
             optimizer.zero_grad()
 
             # subsample points:

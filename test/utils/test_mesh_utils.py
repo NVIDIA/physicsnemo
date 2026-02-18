@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -16,33 +16,39 @@
 
 import os
 import random
-import urllib
 
 import numpy as np
 import pytest
-from pytest_utils import import_or_fail
+import torch
+
+# from pytest_utils import import_or_fail
+from test.conftest import requires_module
 
 stl = pytest.importorskip("stl")
 
 
 @pytest.fixture
-def download_stl(tmp_path):
-    url = "https://upload.wikimedia.org/wikipedia/commons/4/43/Stanford_Bunny.stl"
+def sphere_stl(tmp_path):
+    try:
+        import pyvista as pv
+    except ImportError:
+        pytest.skip("pyvista not available")
 
-    parsed_url = urllib.parse.urlparse(url)
-    if parsed_url.scheme not in ("http", "https"):
-        raise ValueError(f"URL scheme '{parsed_url.scheme}' is not permitted.")
+    # Create a sphere using PyVista
+    sphere = pv.Sphere(
+        radius=1.0, center=(0, 0, 0), phi_resolution=30, theta_resolution=30
+    )
 
-    file_path = tmp_path / "Stanford_Bunny.stl"
+    file_path = tmp_path / "sphere.stl"
 
-    # Download the STL file
-    urllib.request.urlretrieve(url, file_path)  # noqa: S310
+    # Save the sphere as STL file
+    sphere.save(str(file_path))
 
-    # Return the path to the downloaded file
+    # Return the path to the created STL file
     return file_path
 
 
-@import_or_fail(["vtk", "warp"])
+@requires_module(["vtk", "warp", "stl"])
 def test_mesh_utils(tmp_path, pytestconfig):
     """Tests the utility for combining VTP files and converting tesselated files."""
 
@@ -176,20 +182,19 @@ def test_mesh_utils(tmp_path, pytestconfig):
     assert os.path.exists(tmp_path / "converted/random.vtp")
 
 
-@import_or_fail(["warp", "skimage", "stl"])
+@requires_module(["warp", "skimage", "stl", "pyvista"])
 @pytest.mark.parametrize("backend", ["warp", "skimage"])
-def test_stl_gen(pytestconfig, backend, download_stl, tmp_path):
-
+def test_stl_gen(pytestconfig, backend, sphere_stl, tmp_path):
     from stl import mesh
 
+    from physicsnemo.nn.functional import signed_distance_field
     from physicsnemo.utils.mesh import (
         sdf_to_stl,
     )
-    from physicsnemo.utils.sdf import signed_distance_field
 
-    bunny_mesh = mesh.Mesh.from_file(str(download_stl))
+    sphere_mesh = mesh.Mesh.from_file(str(sphere_stl))
 
-    vertices = np.array(bunny_mesh.vectors, dtype=np.float64)
+    vertices = np.array(sphere_mesh.vectors, dtype=np.float64)
     vertices_3d = vertices.reshape(-1, 3)
     vert_indices = np.arange((vertices_3d.shape[0]))
 
@@ -200,7 +205,7 @@ def test_stl_gen(pytestconfig, backend, download_stl, tmp_path):
     }
 
     res = {k: v[1] - v[0] for k, v in bounds.items()}
-    min_res = min(res.values()) / 100
+    min_res = min(res.values()) / 10
     n = [int((bounds[k][1] - bounds[k][0] + 2) // min_res) for k in bounds.keys()]
     x = np.linspace(bounds["x"][0] - 1, bounds["x"][1] + 1, n[0], dtype=np.float64)
     y = np.linspace(bounds["y"][0] - 1, bounds["y"][1] + 1, n[1], dtype=np.float64)
@@ -211,7 +216,14 @@ def test_stl_gen(pytestconfig, backend, download_stl, tmp_path):
         [xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], axis=1
     )
 
-    sdf_test = signed_distance_field(vertices_3d, vert_indices, coords.flatten())
+    # SDF only accepts torch tensors:
+    sdf_test, _ = signed_distance_field(
+        torch.from_numpy(vertices_3d),
+        torch.from_numpy(vert_indices),
+        torch.from_numpy(coords),
+    )
+    sdf_test = sdf_test.numpy()
+
     output_filename = tmp_path / "output_stl.stl"
     sdf_to_stl(
         sdf_test.reshape(n[0], n[1], n[2]),

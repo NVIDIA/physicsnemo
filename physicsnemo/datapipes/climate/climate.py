@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,36 +17,32 @@
 
 import json
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from itertools import chain
+from pathlib import Path
+from typing import TYPE_CHECKING, Callable, Iterable, List, Mapping, Tuple, Union
 
 import h5py
-import netCDF4 as nc
 import numpy as np
-import pytz
 import torch
 
-try:
-    import nvidia.dali as dali
-    import nvidia.dali.plugin.pytorch as dali_pth
-except ImportError:
-    raise ImportError(
-        "DALI dataset requires NVIDIA DALI package to be installed. "
-        + "The package can be installed at:\n"
-        + "https://docs.nvidia.com/deeplearning/dali/user-guide/docs/installation.html"
-    )
-
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, Iterable, List, Mapping, Tuple, Union
-
-from scipy.io import netcdf_file
-
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.climate.utils.invariant import latlon_grid
 from physicsnemo.datapipes.climate.utils.zenith_angle import cos_zenith_angle
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
-from physicsnemo.launch.logging import PythonLogger
+from physicsnemo.utils.logging import PythonLogger
+
+if TYPE_CHECKING:
+    from scipy.io import netcdf_file
+
+# Lazy imports for optional dependencies
+dali = OptionalImport("nvidia.dali")
+dali_pth = OptionalImport("nvidia.dali.plugin.pytorch")
+nc = OptionalImport("netCDF4")
+scipy_io = OptionalImport("scipy.io")
+
 
 Tensor = torch.Tensor
 
@@ -327,18 +323,18 @@ class ClimateDatapipe(Datapipe):
     with the following structure, where {name} indicates the name of the data
     source provided:
 
-    - `state_seq-{name}`: Tensors of shape
+    - ``state_seq-{name}``: Tensors of shape
         (batch_size, num_steps, num_channels, height, width).
         This sequence is drawn from the data file and normalized if a
         statistics file is provided.
-    - `timestamps-{name}`: Tensors of shape (batch_size, num_steps), containing
+    - ``timestamps-{name}``: Tensors of shape (batch_size, num_steps), containing
         timestamps for each timestep in the sequence.
-    - `{aux_variable}-{name}`: Tensors of shape
+    - ``{aux_variable}-{name}``: Tensors of shape
         (batch_size, num_steps, aux_channels, height, width),
         containing the auxiliary variables returned by each data source
-    - `cos_zenith-{name}`: Tensors of shape (batch_size, num_steps, 1, height, width),
+    - ``cos_zenith-{name}``: Tensors of shape (batch_size, num_steps, 1, height, width),
         containing the cosine of the solar zenith angle if specified.
-    - `{invariant_name}: Tensors of shape (batch_size, invariant_channels, height, width),
+    - ``{invariant_name}``: Tensors of shape (batch_size, invariant_channels, height, width),
         containing the time-invariant data (depending only on spatial coordinates)
         returned by the datapipe. These can include e.g.
         land-sea mask and geopotential/surface elevation.
@@ -362,7 +358,7 @@ class ClimateDatapipe(Datapipe):
 
     Parameters
     ----------
-    sources: Iterable[ClimateDataSpec]
+    sources: Iterable[ClimateDataSourceSpec]
         A list of data specifications defining the sources for the climate variables
     batch_size : int, optional
         Batch size, by default 1
@@ -441,7 +437,7 @@ class ClimateDatapipe(Datapipe):
 
         # Determine outputs of pipeline
         self.pipe_outputs = []
-        for (i, spec) in enumerate(self.sources):
+        for i, spec in enumerate(self.sources):
             name = spec.name if spec.name is not None else i
             self.pipe_outputs += [f"state_seq-{name}", f"timestamps-{name}"]
             self.pipe_outputs.extend(
@@ -463,7 +459,7 @@ class ClimateDatapipe(Datapipe):
         # Load all data files and statistics
         for spec in sources:
             spec.parse_dataset_files(num_samples_per_year=num_samples_per_year)
-        for (i, spec_i) in enumerate(sources):
+        for i, spec_i in enumerate(sources):
             for spec_j in sources[i + 1 :]:
                 if not spec_i.dimensions_compatible(spec_j):
                     raise ValueError("Incompatible data sources")
@@ -570,7 +566,7 @@ class ClimateDatapipe(Datapipe):
                 inv = self._crop_to_window(inv)
             yield dali.types.Constant(inv)
 
-    def _create_pipeline(self) -> dali.Pipeline:
+    def _create_pipeline(self) -> "dali.Pipeline":
         """Create DALI pipeline
 
         Returns
@@ -709,7 +705,9 @@ class ClimateDaliExternalSource(ABC):
         """Write data from year index `year_idx` and sample index `idx` to output"""
         pass
 
-    def __call__(self, sample_info: dali.types.SampleInfo) -> Tuple[Tensor, np.ndarray]:
+    def __call__(
+        self, sample_info: "dali.types.SampleInfo"
+    ) -> Tuple[Tensor, np.ndarray]:
         if sample_info.iteration >= self.num_batches:
             raise StopIteration()
 
@@ -730,7 +728,7 @@ class ClimateDaliExternalSource(ABC):
 
         # Load sequence of timestamps
         year = self.start_year + year_idx
-        start_time = datetime(year, 1, 1, tzinfo=pytz.utc) + timedelta(
+        start_time = datetime(year, 1, 1, tzinfo=UTC) + timedelta(
             hours=int(in_idx) * self.dt
         )
         timestamps = np.array(
@@ -777,7 +775,7 @@ class ClimateHDF5DaliExternalSource(ClimateDaliExternalSource):
 class ClimateNetCDF4DaliExternalSource(ClimateDaliExternalSource):
     """DALI source for reading NetCDF4 formatted climate data files."""
 
-    def _get_data_file(self, year_idx: int) -> netcdf_file:
+    def _get_data_file(self, year_idx: int) -> "netcdf_file":
         """Return the opened file for year `year_idx`."""
         if self.data_files[year_idx] is None:
             # This will be called once per worker. Workers are persistent,
@@ -788,7 +786,9 @@ class ClimateNetCDF4DaliExternalSource(ClimateDaliExternalSource):
             # causes crashes.
             reader = self.backend_kwargs.get("reader", "netcdf4")
             if reader == "scipy":
-                self.data_files[year_idx] = netcdf_file(self.data_paths[year_idx])
+                self.data_files[year_idx] = scipy_io.netcdf_file(
+                    self.data_paths[year_idx]
+                )
             elif reader == "netcdf4":
                 self.data_files[year_idx] = nc.Dataset(self.data_paths[year_idx], "r")
                 self.data_files[year_idx].set_auto_maskandscale(False)
@@ -801,7 +801,7 @@ class ClimateNetCDF4DaliExternalSource(ClimateDaliExternalSource):
         shape = (self.num_steps, len(self.variables)) + shape[1:]
         # TODO: this can be optimized to do the NetCDF scale/offset on GPU
         output = np.empty(shape, dtype=np.float32)
-        for (i, var) in enumerate(self.variables):
+        for i, var in enumerate(self.variables):
             v = data_file.variables[var]
             output[:, i] = v[
                 idx : idx + self.num_steps * self.stride : self.stride

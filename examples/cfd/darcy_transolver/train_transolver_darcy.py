@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -26,11 +26,12 @@ from physicsnemo.models.transolver import Transolver
 from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-from physicsnemo.launch.logging import PythonLogger, LaunchLogger
-from physicsnemo.launch.logging.mlflow import initialize_mlflow
+from physicsnemo.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging import PythonLogger, LaunchLogger
+from physicsnemo.utils.logging.mlflow import initialize_mlflow
 
 from validator import GridValidator
+from einops import rearrange
 
 
 @hydra.main(version_base="1.3", config_path=".", config_name="config.yaml")
@@ -54,22 +55,23 @@ def darcy_trainer(cfg: DictConfig) -> None:
 
     # define model, loss, optimiser, scheduler, data loader
     model = Transolver(
-        space_dim=cfg.model.space_dim,
+        out_dim=cfg.model.out_dim,
+        embedding_dim=cfg.model.embedding_dim,
         n_layers=cfg.model.n_layers,
         n_hidden=cfg.model.n_hidden,
         dropout=cfg.model.dropout,
         n_head=cfg.model.n_head,
-        Time_Input=cfg.model.Time_Input,
         act=cfg.model.act,
         mlp_ratio=cfg.model.mlp_ratio,
-        fun_dim=cfg.model.fun_dim,
-        out_dim=cfg.model.out_dim,
+        functional_dim=cfg.model.functional_dim,
         slice_num=cfg.model.slice_num,
+        unified_pos=True,
         ref=cfg.model.ref,
-        unified_pos=cfg.model.unified_pos,
-        H=cfg.training.resolution,
-        W=cfg.training.resolution,
+        structured_shape=[cfg.data.resolution, cfg.data.resolution],
+        use_te=cfg.model.use_te,
+        time_input=cfg.model.time_input,
     ).to(dist.device)
+
     loss_fun = TestLoss(size_average=False)
     optimizer = Adam(model.parameters(), lr=cfg.scheduler.initial_lr)
     scheduler = lr_scheduler.LambdaLR(
@@ -108,12 +110,12 @@ def darcy_trainer(cfg: DictConfig) -> None:
     if cfg.training.pseudo_epoch_sample_size % cfg.training.batch_size != 0:
         log.warning(
             f"increased pseudo_epoch_sample_size to multiple of \
-                      batch size: {steps_per_pseudo_epoch*cfg.training.batch_size}"
+                      batch size: {steps_per_pseudo_epoch * cfg.training.batch_size}"
         )
     if cfg.validation.sample_size % cfg.training.batch_size != 0:
         log.warning(
             f"increased validation sample size to multiple of \
-                      batch size: {validation_iters*cfg.training.batch_size}"
+                      batch size: {validation_iters * cfg.training.batch_size}"
         )
 
     # define forward passes for training and inference
@@ -121,6 +123,8 @@ def darcy_trainer(cfg: DictConfig) -> None:
         model=model, optim=optimizer, logger=log, use_amp=False, use_graphs=False
     )
     def forward_train(invars, target):
+        invars_shape = invars.shape
+        invars = rearrange(invars, "b c h w -> b (h w) c")
         pred = model(invars)
         loss = loss_fun(pred, target)
         return loss
@@ -134,7 +138,7 @@ def darcy_trainer(cfg: DictConfig) -> None:
     if loaded_pseudo_epoch == 0:
         log.success("Training started...")
     else:
-        log.warning(f"Resuming training from pseudo epoch {loaded_pseudo_epoch+1}.")
+        log.warning(f"Resuming training from pseudo epoch {loaded_pseudo_epoch + 1}.")
 
     for pseudo_epoch in range(
         max(1, loaded_pseudo_epoch + 1), cfg.training.max_pseudo_epochs + 1

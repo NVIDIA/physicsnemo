@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -26,8 +26,8 @@ from physicsnemo.models.mlp import FullyConnected
 from physicsnemo.models.fno import FNO
 from physicsnemo.utils import StaticCaptureEvaluateNoGrad
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.logging import PythonLogger
-from physicsnemo.launch.utils import load_checkpoint
+from physicsnemo.utils.logging import PythonLogger
+from physicsnemo.utils import load_checkpoint
 
 from utils import NestedDarcyDataset, PlotNestedDarcy
 
@@ -170,12 +170,12 @@ def AssembleToSingleField(cfg: DictConfig, dat: dict):
         # overwrite refined regions
         for __, inset in field["ref1"].items():
             pos = inset["pos"] * ref_fac + min_offset
-            perm[
-                ii, pos[0] : pos[0] + inset_size, pos[1] : pos[1] + inset_size
-            ] = inset["permeability"]
-            darc[
-                ii, pos[0] : pos[0] + inset_size, pos[1] : pos[1] + inset_size
-            ] = inset["darcy"]
+            perm[ii, pos[0] : pos[0] + inset_size, pos[1] : pos[1] + inset_size] = (
+                inset["permeability"]
+            )
+            darc[ii, pos[0] : pos[0] + inset_size, pos[1] : pos[1] + inset_size] = (
+                inset["darcy"]
+            )
 
     return {"permeability": perm, "darcy": darc}, ref_fac
 
@@ -199,9 +199,9 @@ def ComputeErrorNorm(cfg: DictConfig, pred_dict: dict, log: PythonLogger, ref0_p
     pred, ref_fac = AssembleToSingleField(cfg, pred_dict)
     tar = AssembleToSingleField(cfg, tar_dict)[0]
 
-    assert np.all(
-        tar["permeability"] == pred["permeability"]
-    ), "Permeability from file is not equal to analysed permeability"
+    assert np.all(tar["permeability"] == pred["permeability"]), (
+        "Permeability from file is not equal to analysed permeability"
+    )
 
     # compute l2 norm of error
     rel_l2_err = GetRelativeL2(pred, tar)

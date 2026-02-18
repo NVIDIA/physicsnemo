@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -132,7 +132,6 @@ class TorchProfileWrapper(PhysicsNeMoProfilerWrapper, metaclass=_Profiler_Single
         # Get the output directory:
         out_top = self.output_dir(output_top)
         if self._profiler is not None and self._profiler.profiler is not None:
-
             try:
                 averages = self._profiler.key_averages()
             except AssertionError:

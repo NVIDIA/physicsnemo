@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,3 +17,4 @@
 from .meshgraphnet import MeshGraphNet  # noqa: I001
 from .bsms_mgn import BiStrideMeshGraphNet  # noqa: I001
 from .meshgraphkan import MeshGraphKAN
+from .hybrid_meshgraphnet import HybridMeshGraphNet  # noqa: I001

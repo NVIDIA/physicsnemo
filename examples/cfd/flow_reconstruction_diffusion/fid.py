@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -29,9 +29,9 @@ from dataset import ImageFolderDataset
 from omegaconf import DictConfig
 from misc import open_url
 
-from physicsnemo.metrics.diffusion import calculate_fid_from_inception_stats
+from physicsnemo.diffusion.metrics import calculate_fid_from_inception_stats
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 
 def calculate_inception_stats(
@@ -165,7 +165,6 @@ def ref(dataset_path, dest_path, batch, dist, logger0):
 
 @hydra.main(version_base="1.2", config_path="conf", config_name="config_fid")
 def main(cfg: DictConfig) -> None:
-
     """Calculate Frechet Inception Distance (FID)."""
 
     # Initialize distributed manager.

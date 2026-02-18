@@ -1,7 +1,5 @@
 # MeshGraphNet for Modeling Deforming Plate
 
-**Note:** This example is a work in progress and will be updated soon.
-
 This example is a re-implementation of the DeepMind's deforming plate example
 <https://github.com/deepmind/deepmind-research/tree/master/meshgraphnets> in PyTorch.
 It demonstrates how to train a Graph Neural Network (GNN) for structural
@@ -38,15 +36,13 @@ nodes on average. Note that the model can handle different meshes with different
 of nodes and edges as the input.
 
 The datapipe from the vortex shedding example has been adapted to load this dataset.
-Currently, we assume that the deformations are small. This limitation will
-be addressed in future updates.
 
 ## Model overview and architecture
 
 The model is free-running and auto-regressive. It takes the prediction at
 the previous time step to predict the solution at the next step.
 
-The model uses the input mesh to construct a bi-directional DGL graph for each sample.
+The model uses the input mesh to construct a bi-directional graph for each sample.
 
 The output of the model is the mesh deformation between two consecutive steps.
 
@@ -69,20 +65,9 @@ Install the requirements using:
 
 ```bash
 pip install -r requirements.txt
-pip install dgl -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html --no-deps
 ```
 
 ## Getting Started
-
-This example requires the `tensorflow` library to load the data in the `.tfrecord`
-format. Install with
-
-```bash
-pip install tensorflow
-```
-
-Note: If installing tensorflow inside the PhysicsNeMo docker container, it's recommended
-to use `pip install "tensorflow<=2.17.1"`
 
 To download the data from DeepMind's repo, run
 
@@ -90,6 +75,21 @@ To download the data from DeepMind's repo, run
 cd raw_dataset
 sh download_dataset.sh deforming_plate
 ```
+
+Next, run preprocessing to process the data and prepare and save graphs
+
+```bash
+python preprocessor.py
+```
+
+Preprocessing can be also performed in parallel
+
+```bash
+mpirun -np <num_GPUs> python preprocessor.py
+```
+
+If running in a docker container, you may need to include the `--allow-run-as-root` in
+the multi-GPU run command.
 
 To train the model, run
 
@@ -104,21 +104,6 @@ run
 mpirun -np <num_GPUs> python train.py
 ```
 
-If running in a docker container, you may need to include the `--allow-run-as-root` in
-the multi-GPU run command.
-
-Progress and loss logs can be monitored using Weights & Biases. To activate that,
-set `wandb_mode` to `online` in the `constants.py`. This requires to have an active
-Weights & Biases account. You also need to provide your API key. There are multiple ways
-for providing the API key but you can simply export it as an environment variable
-
-```bash
-export WANDB_API_KEY=<your_api_key>
-```
-
-The URL to the dashboard will be displayed in the terminal after the run is launched.
-Alternatively, the logging utility in `train.py` can be switched to MLFlow.
-
 Once the model is trained, run
 
 ```bash
@@ -127,6 +112,39 @@ python inference.py
 
 This will save the predictions for the test dataset in `.gif` format in the `animations`
 directory.
+
+## Logging
+
+We use TensorBoard for logging training and validation losses, as well as
+the learning rate during training. To visualize TensorBoard running in a
+Docker container on a remote server from your local desktop, follow these steps:
+
+1. **Expose the Port in Docker:**
+     Expose port 6006 in the Docker container by including
+     `-p 6006:6006` in your docker run command.
+
+2. **Launch TensorBoard:**
+   Start TensorBoard within the Docker container:
+
+     ```bash
+     tensorboard --logdir=/path/to/logdir --port=6006
+     ```
+
+3. **Set Up SSH Tunneling:**
+   Create an SSH tunnel to forward port 6006 from the remote server to your local machine:
+
+     ```bash
+     ssh -L 6006:localhost:6006 <user>@<remote-server-ip>
+     ```
+
+    Replace `<user>` with your SSH username and `<remote-server-ip>` with the IP address
+    of your remote server. You can use a different port if necessary.
+
+4. **Access TensorBoard:**
+   Open your web browser and navigate to `http://localhost:6006` to view TensorBoard.
+
+**Note:** Ensure the remote server’s firewall allows connections on port `6006`
+and that your local machine’s firewall allows outgoing connections.
 
 ## References
 

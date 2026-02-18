@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -51,6 +51,7 @@ test_size = all_files_count - train_size - valid_size  # Ensure all files are us
 train_files = all_files[:train_size]
 valid_files = all_files[train_size : train_size + valid_size]
 test_files = all_files[train_size + valid_size :]
+
 
 # Function to copy files
 def copy_files(files, dest_dir):

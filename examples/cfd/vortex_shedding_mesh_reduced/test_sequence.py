@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -24,12 +24,12 @@ from torch.amp import GradScaler
 
 from constants import Constants
 from physicsnemo.distributed.manager import DistributedManager
-from physicsnemo.launch.logging import (
+from physicsnemo.utils.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from physicsnemo.launch.logging.wandb import initialize_wandb
-from physicsnemo.launch.utils import load_checkpoint
+from physicsnemo.utils.logging.wandb import initialize_wandb
+from physicsnemo.utils import load_checkpoint
 from physicsnemo.models.mesh_reduced.mesh_reduced import Mesh_Reduced
 from train_sequence import Sequence_Trainer
 
@@ -106,7 +106,7 @@ if __name__ == "__main__":
     # avg_loss = loss_total/n_batch
     rank_zero_logger.info(
         f"relative_error_mean_u: {relative_error_mean_u:10.3e},relative_error_mean_v: {relative_error_mean_v:10.3e},relative_error_mean_p: {relative_error_mean_p:10.3e},\\\
-            time cost: {(time.time()-start):10.3e}"
+            time cost: {(time.time() - start):10.3e}"
     )
     # wb.log({"loss": loss.detach().cpu()})
 

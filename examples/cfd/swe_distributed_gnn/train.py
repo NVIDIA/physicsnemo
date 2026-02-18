@@ -147,12 +147,11 @@ def autoregressive_inference(
                 and (nskip > 0)
                 and (i % nskip == 0)
             ):
-
                 # do plotting, as we aggregated output only on rank0, only use
                 # data from rank 0
                 fig = plt.figure(figsize=(7.5, 6))
                 dataset.solver.plot_griddata(prd[0, plot_channel], fig, vmax=4, vmin=-4)
-                plt.savefig(os.path.join(path_root, f"pred_{i//nskip}.png"))
+                plt.savefig(os.path.join(path_root, f"pred_{i // nskip}.png"))
                 plt.clf()
 
         torch.cuda.synchronize()
@@ -163,7 +162,6 @@ def autoregressive_inference(
             torch.cuda.synchronize()
             start_time = time.time()
             for i in range(1, cfg.data.autoreg_steps + 1):
-
                 # advance classical model
                 uspec = dataset.solver.timestep(uspec, nsteps)
 
@@ -176,7 +174,7 @@ def autoregressive_inference(
                     dataset.solver.plot_griddata(
                         ref[plot_channel], fig, vmax=4, vmin=-4
                     )
-                    plt.savefig(os.path.join(path_root, f"truth_{i//nskip}.png"))
+                    plt.savefig(os.path.join(path_root, f"truth_{i // nskip}.png"))
                     plt.clf()
 
             torch.cuda.synchronize()
@@ -317,13 +315,11 @@ def train_model_on_dummy_data(
     torch.cuda.synchronize()
     train_start = time.time()
 
-    dist_manager = DistributedManager()
     try:
         dp_group_size = dist_manager.group_size("data_parallel")
     except:
         dp_group_size = 1
-    print(dp_group_size)
-    raise ValueError
+
     # count iterations
     iters = 0
 
@@ -354,7 +350,7 @@ def train_model_on_dummy_data(
 
             acc_loss += loss.item() * inp.size(0)
             optimizer.zero_grad(set_to_none=True)
-            scaler.scale(loss).backward()
+            gscaler.scale(loss).backward()
             gscaler.step(optimizer)
             gscaler.update()
 
@@ -461,8 +457,17 @@ def main(cfg: DictConfig):
     if dist_manager.rank == 0:
         logger.info(f"starting to run ...")
 
+    # Check if distributed mode is requested with PyG backend
+    if graph_partition_size > 1:
+        # GraphCastNet defaults to graph_backend="pyg"
+        # Distributed mode is not yet supported with PyG backend
+        raise NotImplementedError(
+            "Distributed mode (partition_size > 1) is not supported with PyG backend. "
+            "Support for distributed message passing using PyG backend will likely be included in a future release."
+        )
+
     model = GraphCastNet(
-        multimesh_level=cfg.data.multimesh_level,
+        mesh_level=cfg.data.mesh_level,
         input_res=input_res,
         input_dim_grid_nodes=3,
         input_dim_mesh_nodes=3,
@@ -515,7 +520,7 @@ def main(cfg: DictConfig):
                 "load_checkpoint=True but cfg.checkpoint_dir is not set, abort."
             )
         file_name = os.path.join(cfg.checkpoint_dir, "checkpoints", "model.mdlus")
-        model.load(file_name, map_location=manager.device)
+        model.load(file_name, map_location=dist_manager.device)
 
     nsteps = cfg.data.dt // cfg.data.dt_solver
     mp_rank = (

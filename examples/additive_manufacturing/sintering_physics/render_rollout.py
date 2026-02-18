@@ -2,7 +2,7 @@
 # ruff: noqa: E402
 
 # © Copyright 2023 HP Development Company, L.P.
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -42,7 +42,7 @@ from matplotlib import animation
 from omegaconf import DictConfig
 
 from physicsnemo.distributed.manager import DistributedManager
-from physicsnemo.launch.logging import (
+from physicsnemo.utils.logging import (
     LaunchLogger,
     PythonLogger,
     RankZeroLoggingWrapper,
@@ -207,7 +207,6 @@ def plot_3Danime(rollout_data, pred_denorm, save_name):
     def update_graph(num):
         outputs = []
         for _, label, points, graph in plot_info:
-
             data = points[num, ...]
             graph.set_data(data[:, 0], data[:, 1])
             graph.set_3d_properties(data[:, 2])

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -15,23 +15,19 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Union
-
-from dgl import DGLGraph
 
 import torch
 from torch import Tensor
 
 import physicsnemo.models.meshgraphnet.meshgraphnet as mgn
 
-from physicsnemo.models.layers.activations import get_activation
-from physicsnemo.models.meta import ModelMetaData
+from physicsnemo.core import ModelMetaData
+from physicsnemo.nn.module.gnn_layers.utils import GraphType
+from physicsnemo.nn import get_activation
 
 
 @dataclass
 class MetaData(ModelMetaData):
-    name: str = "AeroGraphNet"
-    # Optimization, no JIT as DGLGraph causes trouble
     jit: bool = False
     cuda_graphs: bool = False
     amp_cpu: bool = False
@@ -87,7 +83,7 @@ class AeroGraphNet(mgn.MeshGraphNet):
         self,
         node_features: Tensor,
         edge_features: Tensor,
-        graph: Union[DGLGraph, list[DGLGraph], "CuGraphCSC"],
+        graph: GraphType,
         **kwargs,
     ) -> Tensor:
         edge_features = self.edge_encoder(edge_features)

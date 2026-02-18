@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,9 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+
 import pytest
 import torch
-from distributed_utils_for_testing import modify_environment
 
 from physicsnemo.distributed import (
     DistributedManager,
@@ -24,6 +25,12 @@ from physicsnemo.distributed import (
     ProcessGroupNode,
 )
 from physicsnemo.distributed.mappings import reduce_from_parallel_region
+
+
+@pytest.fixture(autouse=True)
+def skip_on_cpu(device):
+    if device == "cpu":
+        pytest.skip("Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu")
 
 
 def test_config():
@@ -53,9 +60,9 @@ def test_config():
     group_sizes = {"channel_parallel": 3, "spatial_parallel": 2, "data_parallel": 4}
     config.set_leaf_group_sizes(group_sizes)  # Update all parent group sizes too
 
-    assert (
-        config.get_node("model_parallel").size == 6
-    ), "Incorrect size for 'model_parallel' parent node"
+    assert config.get_node("model_parallel").size == 6, (
+        "Incorrect size for 'model_parallel' parent node"
+    )
 
     assert config.get_node("world").size == 24, "Incorrect size for 'world' parent node"
 
@@ -83,75 +90,69 @@ class MockDistributedModel(torch.nn.Module):
 
 
 def run_distributed_model_config(rank, model_parallel_size, verbose):
-    print(f"Entered function with rank {rank}")
-    with modify_environment(
-        RANK=f"{rank}",
-        WORLD_SIZE=f"{model_parallel_size}",
-        MASTER_ADDR="localhost",
-        MASTER_PORT=str(12355),
-        LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
-    ):
+    os.environ["RANK"] = f"{rank}"
 
-        DistributedManager._shared_state = {}
+    os.environ["LOCAL_RANK"] = f"{rank % torch.cuda.device_count()}"
 
-        DistributedManager.initialize()
-        print(f"Initialized DistributedManager with rank {DistributedManager().rank}")
+    DistributedManager._shared_state = {}
 
-        # Query model for the process group config
-        config = MockDistributedModel.get_process_group_config()
+    DistributedManager.initialize()
 
-        # Set leaf group sizes
-        group_sizes = {"model_parallel": 2, "data_parallel": 1}
-        config.set_leaf_group_sizes(group_sizes)  # Updates all parent group sizes too
+    # Query model for the process group config
+    config = MockDistributedModel.get_process_group_config()
 
-        assert (
-            config.get_node("model_parallel").size == 2
-        ), "Incorrect size for 'model_parallel' parent node"
+    # Set leaf group sizes
+    group_sizes = {"model_parallel": 2, "data_parallel": 1}
+    config.set_leaf_group_sizes(group_sizes)  # Updates all parent group sizes too
 
-        assert (
-            config.get_node("world").size == 2
-        ), "Incorrect size for 'world' parent node"
+    assert config.get_node("model_parallel").size == 2, (
+        "Incorrect size for 'model_parallel' parent node"
+    )
 
-        # Create model parallel process group
-        DistributedManager.create_groups_from_config(config, verbose=verbose)
+    assert config.get_node("world").size == 2, "Incorrect size for 'world' parent node"
 
-        manager = DistributedManager()
+    # Create model parallel process group
+    DistributedManager.create_groups_from_config(config, verbose=verbose)
 
-        assert manager.rank == rank
-        assert manager.rank == manager.group_rank(name="model_parallel")
-        assert 0 == manager.group_rank(name="data_parallel")
+    manager = DistributedManager()
 
-        # Now actually instantiate the model
-        model = MockDistributedModel().to(manager.device)
-        x = torch.randn(1, device=manager.device)
-        y = model(x)
-        loss = y.sum()
-        loss.backward()
+    assert manager.rank == rank
+    assert manager.rank == manager.group_rank(name="model_parallel")
+    assert 0 == manager.group_rank(name="data_parallel")
 
-        if verbose:
-            print(
-                f"{manager.group_rank('model_parallel')}: {[p.grad for p in model.parameters()]}, x: {x}, y: {y}"
-            )
-        # Test that the output of the model is correct
-        y_true = 0.5 * torch.clone(x)
-        torch.distributed.all_reduce(y_true)
-        assert torch.allclose(y, y_true, rtol=1e-05, atol=1e-08)
+    # Now actually instantiate the model
+    model = MockDistributedModel().to(manager.device)
+    x = torch.randn(1, device=manager.device)
+    y = model(x)
+    loss = y.sum()
+    loss.backward()
 
-        # Check that the backward pass produces the right result
-        for p in model.parameters():
-            assert torch.allclose(p.grad, x, rtol=1e-05, atol=1e-08)
+    if verbose:
+        print(
+            f"{manager.group_rank('model_parallel')}: {[p.grad for p in model.parameters()]}, x: {x}, y: {y}"
+        )
+    # Test that the output of the model is correct
+    y_true = 0.5 * torch.clone(x)
+    torch.distributed.all_reduce(y_true)
+    assert torch.allclose(y, y_true, rtol=1e-05, atol=1e-08)
 
-        # Cleanup process groups
-        DistributedManager.cleanup()
+    # Check that the backward pass produces the right result
+    for p in model.parameters():
+        assert torch.allclose(p.grad, x, rtol=1e-05, atol=1e-08)
+
+    # Cleanup process groups
+    DistributedManager.cleanup()
 
 
-@pytest.mark.multigpu
-def test_distributed_model_config():
+@pytest.mark.multigpu_dynamic
+def test_distributed_model_config(monkeypatch):
     num_gpus = torch.cuda.device_count()
     assert num_gpus >= 2, "Not enough GPUs available for test"
     model_parallel_size = 2
     verbose = False  # Change to True for debug
-
+    monkeypatch.setenv("WORLD_SIZE", f"{model_parallel_size}")
+    monkeypatch.setenv("MASTER_ADDR", "localhost")
+    monkeypatch.setenv("MASTER_PORT", str(12355))
     torch.multiprocessing.set_start_method("spawn", force=True)
 
     torch.multiprocessing.spawn(

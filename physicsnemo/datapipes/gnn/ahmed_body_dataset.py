@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,40 +14,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import concurrent.futures as cf
 import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Iterable, Optional
 
 import numpy as np
 import torch
 import yaml
 from torch import Tensor
+from torch.utils.data import Dataset
 
-from physicsnemo.datapipes.datapipe import Datapipe
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.meta import DatapipeMetaData
 
 from .utils import load_json, read_vtp_file, save_json
 
-try:
-    import dgl
-    from dgl.data import DGLDataset
-except ImportError:
-    raise ImportError(
-        "Ahmed Body Dataset requires the DGL library. Install the "
-        + "desired CUDA version at: \n https://www.dgl.ai/pages/start.html"
-    )
+if TYPE_CHECKING:
+    from torch_geometric.data import Data as PyGData
 
-try:
-    import pyvista as pv
-    import vtk
-except ImportError:
-    raise ImportError(
-        "Ahmed Body Dataset requires the vtk and pyvista libraries. Install with "
-        + "pip install vtk pyvista"
-    )
+# Lazy imports for optional dependencies
+pyg = OptionalImport("torch_geometric")
+pyg_data = OptionalImport("torch_geometric.data")
+pv = OptionalImport("pyvista")
+vtk = OptionalImport("vtk")
+
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +71,7 @@ class MetaData(DatapipeMetaData):
     ddp_sharding: bool = True
 
 
-class AhmedBodyDataset(DGLDataset, Datapipe):
+class AhmedBodyDataset(Dataset):
     """
     In-memory Ahmed body Dataset
 
@@ -94,14 +89,10 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
         The output features to consider. Default includes 'p' and 'wallShearStress'.
     normalize_keys Iterable[str], optional
         The features to normalize. Default includes 'p', 'wallShearStress', 'velocity', 'length', 'width', 'height', 'ground_clearance', 'slant_angle', and 'fillet_radius'.
-    normalization_bound: Tuple[float, float], optional
+    normalization_bound: tuple[float, float], optional
         The lower and upper bounds for normalization. Default is (-1, 1).
-    force_reload: bool, optional
-        If True, forces a reload of the data, by default False.
     name: str, optional
         The name of the dataset, by default 'dataset'.
-    verbose: bool, optional
-        If True, enables verbose mode, by default False.
     compute_drag: bool, optional
         If True, also returns the coefficient and mesh area and normals that are required for computing the drag coefficient.
     num_workers: int, optional
@@ -109,6 +100,15 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
     """
 
     def __init__(
+        self,
+        data_dir: str,
+        split: str = "train",
+        *args,
+        **kwargs,
+    ):
+        self._init_impl(data_dir, split, *args, **kwargs)
+
+    def _init_impl(
         self,
         data_dir: str,
         split: str = "train",
@@ -137,23 +137,12 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
             "slant_angle",
             "fillet_radius",
         ),
-        normalization_bound: Tuple[float, float] = (-1.0, 1.0),
-        force_reload: bool = False,
+        normalization_bound: tuple[float, float] = (-1.0, 1.0),
         name: str = "dataset",
-        verbose: bool = False,
         compute_drag: bool = False,
         num_workers: Optional[int] = None,
     ):
-        DGLDataset.__init__(
-            self,
-            name=name,
-            force_reload=force_reload,
-            verbose=verbose,
-        )
-        Datapipe.__init__(
-            self,
-            meta=MetaData(),
-        )
+        self.name = name
         self.split = split
         self.num_samples = num_samples
         data_dir = Path(data_dir)
@@ -216,7 +205,7 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
             max_workers=num_workers,
             mp_context=torch.multiprocessing.get_context("spawn"),
         ) as executor:
-            for (i, graph, coeff, normal, area) in executor.map(
+            for i, graph, coeff, normal, area in executor.map(
                 self.create_graph,
                 range(self.length),
                 case_files[: self.length],
@@ -251,7 +240,7 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
         self.graphs = self.normalize_node()
         self.graphs = self.normalize_edge()
 
-    def create_graph(self, index: int, file_path: str, info_path: str) -> None:
+    def create_graph(self, index: int, file_path: str, info_path: str):
         """Creates a graph from VTP file.
 
         This method is used in parallel loading of graphs.
@@ -261,14 +250,12 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
             Tuple that contains graph index, graph, and optionally coeff, normal and area values.
         """
         polydata = read_vtp_file(file_path)
-        graph = self._create_dgl_graph(polydata, self.output_keys, dtype=torch.int32)
+        graph = self._create_graph(polydata, self.output_keys, dtype=torch.int32)
         info = self._read_info_file(info_path)
         for v in vars(info):
             if v not in self.input_keys:
                 continue
-            graph.ndata[v] = getattr(info, v) * torch.ones_like(
-                graph.ndata["pos"][:, [0]]
-            )
+            graph[v] = getattr(info, v) * torch.ones_like(graph.pos[:, [0]])
 
         coeff = None
         normal = None
@@ -277,7 +264,7 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
             mesh = pv.read(file_path)
             mesh.compute_normals(cell_normals=True, point_normals=False, inplace=True)
             if "normals" in self.input_keys:
-                graph.ndata["normals"] = torch.from_numpy(
+                graph.normals = torch.from_numpy(
                     mesh.cell_data_to_point_data()["Normals"]
                 )
             if self.compute_drag:
@@ -299,7 +286,7 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
     def __len__(self):
         return self.length
 
-    def add_edge_features(self) -> List[dgl.DGLGraph]:
+    def add_edge_features(self) -> list[PyGData]:
         """
         Add relative displacement and displacement norm as edge features for each graph
         in the list of graphs. The calculations are done using the 'pos' attribute in the
@@ -310,36 +297,31 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
 
         Returns
         -------
-        List[dgl.DGLGraph]
+        list[PyGData]
             The list of graphs with updated edge features.
         """
         if not hasattr(self, "graphs") or not self.graphs:
             raise ValueError("The list 'graphs' is empty.")
 
         for graph in self.graphs:
-            pos = graph.ndata.get("pos")
-            if pos is None:
-                raise ValueError(
-                    "'pos' does not exist in the node data of one or more graphs."
-                )
-
-            row, col = graph.edges()
+            pos = graph.pos
+            row, col = graph.edge_index
             row = row.long()
             col = col.long()
 
             disp = pos[row] - pos[col]
             disp_norm = torch.linalg.norm(disp, dim=-1, keepdim=True)
-            graph.edata["x"] = torch.cat((disp, disp_norm), dim=-1)
+            graph.edge_attr = torch.cat((disp, disp_norm), dim=-1)
 
         return self.graphs
 
-    def normalize_node(self) -> List[dgl.DGLGraph]:
+    def normalize_node(self) -> list[PyGData]:
         """
         Normalize node data in each graph in the list of graphs.
 
         Returns
         -------
-        List[dgl.DGLGraph]
+        list[PyGData]
             The list of graphs with normalized and concatenated node data.
         """
         if not hasattr(self, "graphs") or not self.graphs:
@@ -358,25 +340,25 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
         )
         for i in range(len(self.graphs)):
             for key in invar_keys:
-                self.graphs[i].ndata[key] = (
-                    self.graphs[i].ndata[key] - self.node_stats[key + "_mean"]
+                self.graphs[i][key] = (
+                    self.graphs[i][key] - self.node_stats[key + "_mean"]
                 ) / self.node_stats[key + "_std"]
 
-            self.graphs[i].ndata["x"] = torch.cat(
-                [self.graphs[i].ndata[key] for key in self.input_keys], dim=-1
+            self.graphs[i].x = torch.cat(
+                [self.graphs[i][key] for key in self.input_keys], dim=-1
             )
-            self.graphs[i].ndata["y"] = torch.cat(
-                [self.graphs[i].ndata[key] for key in self.output_keys], dim=-1
+            self.graphs[i].y = torch.cat(
+                [self.graphs[i][key] for key in self.output_keys], dim=-1
             )
         return self.graphs
 
-    def normalize_edge(self) -> List[dgl.DGLGraph]:
+    def normalize_edge(self) -> list[PyGData]:
         """
         Normalize edge data 'x' in each graph in the list of graphs.
 
         Returns
         -------
-        List[dgl.DGLGraph]
+        list[PyGData]
             The list of graphs with normalized edge data 'x'.
         """
         if not hasattr(self, "graphs") or not self.graphs:
@@ -388,12 +370,12 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
             )
 
         for i in range(len(self.graphs)):
-            self.graphs[i].edata["x"] = (
-                self.graphs[i].edata["x"] - self.edge_stats["edge_mean"]
+            self.graphs[i].edge_attr = (
+                self.graphs[i].edge_attr - self.edge_stats["edge_mean"]
             ) / self.edge_stats["edge_std"]
         return self.graphs
 
-    def denormalize(self, pred, gt, device) -> Tuple[Tensor, Tensor]:
+    def denormalize(self, pred, gt, device) -> tuple[Tensor, Tensor]:
         """
         Denormalize the graph node data.
 
@@ -426,7 +408,7 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
         gt = torch.cat((p_gt, s_gt), dim=-1)
         return pred, gt
 
-    def _get_edge_stats(self) -> Dict[str, Any]:
+    def _get_edge_stats(self) -> dict[str, Any]:
         """
         Computes the mean and standard deviation of each edge attribute 'x' in the
         graphs, and saves to a JSON file.
@@ -446,10 +428,10 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
         }
         for i in range(self.length):
             stats["edge_mean"] += (
-                torch.mean(self.graphs[i].edata["x"], dim=0) / self.length
+                torch.mean(self.graphs[i].edge_attr, dim=0) / self.length
             )
             stats["edge_meansqr"] += (
-                torch.mean(torch.square(self.graphs[i].edata["x"]), dim=0) / self.length
+                torch.mean(torch.square(self.graphs[i].edge_attr), dim=0) / self.length
             )
         stats["edge_std"] = torch.sqrt(
             stats["edge_meansqr"] - torch.square(stats["edge_mean"])
@@ -460,7 +442,7 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
         save_json(stats, "edge_stats.json")
         return stats
 
-    def _get_node_stats(self, keys: List[str]) -> Dict[str, Any]:
+    def _get_node_stats(self, keys: list[str]) -> dict[str, Any]:
         """
         Computes the mean and standard deviation values of each node attribute
         for the list of keys in the graphs, and saves to a JSON file.
@@ -488,11 +470,10 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
         for i in range(self.length):
             for key in keys:
                 stats[key + "_mean"] += (
-                    torch.mean(self.graphs[i].ndata[key], dim=0) / self.length
+                    torch.mean(self.graphs[i][key], dim=0) / self.length
                 )
                 stats[key + "_meansqr"] += (
-                    torch.mean(torch.square(self.graphs[i].ndata[key]), dim=0)
-                    / self.length
+                    torch.mean(torch.square(self.graphs[i][key]), dim=0) / self.length
                 )
 
         for key in keys:
@@ -534,20 +515,20 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
             )
 
     @staticmethod
-    def _create_dgl_graph(
+    def _create_graph(
         polydata: Any,
-        outvar_keys: List[str],
+        outvar_keys: list[str],
         to_bidirected: bool = True,
         add_self_loop: bool = False,
-        dtype: Union[torch.dtype, str] = torch.int32,
-    ) -> dgl.DGLGraph:
+        dtype: torch.dtype | str = torch.int32,
+    ) -> PyGData:
         """
-        Create a DGL graph from vtkPolyData.
+        Create a PyG graph from vtkPolyData.
 
         Parameters
         ----------
         polydata : vtkPolyData
-            vtkPolyData from which the DGL graph is created.
+            vtkPolyData from which the PyG graph is created.
         outvar_keys : list of str
             List of keys for the node attributes to be extracted from the vtkPolyData.
         to_bidirected : bool, optional
@@ -559,8 +540,8 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
 
         Returns
         -------
-        dgl.DGLGraph
-            The DGL graph created from the vtkPolyData.
+        PyGData
+            The PyG graph created from the vtkPolyData.
         """
         # Extract point data and connectivity information from the vtkPolyData
         points = polydata.GetPoints()
@@ -586,15 +567,16 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
                     (id_list.GetId(j), id_list.GetId(j + 1))
                 )
 
-        # Create DGL graph using the connectivity information
-        graph = dgl.graph(edge_list, idtype=dtype)
+        # Create PyG graph using the connectivity information
+        edges = torch.tensor(edge_list, dtype=dtype).t()
         if to_bidirected:
-            graph = dgl.to_bidirected(graph)
+            edges = pyg.utils.to_undirected(edges)
         if add_self_loop:
-            graph = dgl.add_self_loop(graph)
+            edges, _ = pyg.utils.add_self_loops(edges)
+        graph = pyg_data.Data(edge_index=edges)
 
         # Assign node features using the vertex data
-        graph.ndata["pos"] = torch.tensor(vertices, dtype=torch.float32)
+        graph.pos = torch.tensor(vertices, dtype=torch.float32)
 
         # Extract node attributes from the vtkPolyData
         point_data = polydata.GetPointData()
@@ -611,7 +593,7 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
                 for j in range(points.GetNumberOfPoints()):
                     array.GetTuple(j, array_data[j])
 
-                # Assign node attributes to the DGL graph
-                graph.ndata[array_name] = torch.tensor(array_data, dtype=torch.float32)
+                # Assign node attributes to the PyG graph
+                graph[array_name] = torch.tensor(array_data, dtype=torch.float32)
 
         return graph

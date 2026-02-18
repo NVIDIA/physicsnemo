@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -23,7 +23,7 @@ from tqdm import tqdm
 
 from constants import Constants
 from physicsnemo.distributed.manager import DistributedManager
-from physicsnemo.launch.logging import (
+from physicsnemo.utils.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )
@@ -58,7 +58,7 @@ if __name__ == "__main__":
     avg_relative_error = relative_error_total / n
     avg_loss = loss_total / n
     rank_zero_logger.info(
-        f"avg_loss: {avg_loss:10.3e}, avg_relative_error: {avg_relative_error:10.3e},time per epoch: {(time.time()-start):10.3e}"
+        f"avg_loss: {avg_loss:10.3e}, avg_relative_error: {avg_relative_error:10.3e},time per epoch: {(time.time() - start):10.3e}"
     )
     print(relative_error_s)
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,38 +14,48 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
+import importlib
 from typing import List
 
-from vtk import (
-    vtkAppendPolyData,
-    vtkPolyData,
-    vtkXMLPolyDataReader,
-    vtkXMLPolyDataWriter,
-)
+from physicsnemo.core.version_check import check_version_spec
 
+VTK_AVAILABLE = check_version_spec("vtk", hard_fail=False)
 
-def combine_vtp_files(input_files: List[str], output_file: str) -> None:
-    """
-    Combine multiple VTP files into a single VTP file.
+if VTK_AVAILABLE:
+    vtk = importlib.import_module("vtk")
+    vtkAppendPolyData = vtk.vtkAppendPolyData
+    vtkPolyData = vtk.vtkPolyData
+    vtkXMLPolyDataReader = vtk.vtkXMLPolyDataReader
+    vtkXMLPolyDataWriter = vtk.vtkXMLPolyDataWriter
 
-    Args:
-    - input_files (list[str]): List of paths to the input VTP files to be combined.
-    - output_file (str): Path to save the combined VTP file.
-    """
-    reader = vtkXMLPolyDataReader()
-    append = vtkAppendPolyData()
+    def combine_vtp_files(input_files: List[str], output_file: str) -> None:
+        """
+        Combine multiple VTP files into a single VTP file.
 
-    for file in input_files:
-        reader.SetFileName(file)
-        reader.Update()
-        polydata = vtkPolyData()
-        polydata.ShallowCopy(reader.GetOutput())
-        append.AddInputData(polydata)
+        Args:
+        - input_files (list[str]): List of paths to the input VTP files to be combined.
+        - output_file (str): Path to save the combined VTP file.
+        """
+        reader = vtkXMLPolyDataReader()
+        append = vtkAppendPolyData()
 
-    append.Update()
+        for file in input_files:
+            reader.SetFileName(file)
+            reader.Update()
+            polydata = vtkPolyData()
+            polydata.ShallowCopy(reader.GetOutput())
+            append.AddInputData(polydata)
 
-    writer = vtkXMLPolyDataWriter()
-    writer.SetFileName(output_file)
-    writer.SetInputData(append.GetOutput())
-    writer.Write()
+        append.Update()
+
+        writer = vtkXMLPolyDataWriter()
+        writer.SetFileName(output_file)
+        writer.SetInputData(append.GetOutput())
+        writer.Write()
+
+else:
+
+    def combine_vtp_files(*args, **kwargs):
+        raise RuntimeError(
+            "combine_vtp_files: VTK is not available, please install vtk with `pip install vtk`"
+        )

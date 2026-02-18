@@ -1,5 +1,5 @@
 # © Copyright 2023 HP Development Company, L.P.
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -51,12 +51,12 @@ from utils import (
 )
 
 from physicsnemo.distributed.manager import DistributedManager
-from physicsnemo.launch.logging import (
+from physicsnemo.utils.logging import (
     LaunchLogger,
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from physicsnemo.models.vfgn.graph_network_modules import LearnedSimulator
+from physicsnemo.models.vfgn.graph_network_modules import VFGNLearnedSimulator
 
 physical_devices = tf.config.list_physical_devices("GPU")
 try:
@@ -119,7 +119,7 @@ def Train(rank_zero_logger, dist, cfg: DictConfig):
         "velocity": velocity_stats,
         "context": context_stats,
     }
-    model = LearnedSimulator(
+    model = VFGNLearnedSimulator(
         num_dimensions=metadata["dim"] * cfg.train_options.pred_len,
         num_seq=cfg.train_options.input_seq_len,
         boundaries=torch.DoubleTensor(metadata["bounds"]),
@@ -140,7 +140,6 @@ def Train(rank_zero_logger, dist, cfg: DictConfig):
     rank_zero_logger.info("Training started...")
 
     for features, targets in tqdm(dataset):
-
         inputs = features["position"]
         particle_types = features["particle_type"]
 
@@ -524,7 +523,7 @@ def Test(rank_zero_logger, dist, cfg):
         "context": context_stats,
     }
 
-    model = LearnedSimulator(
+    model = VFGNLearnedSimulator(
         num_dimensions=metadata["dim"] * cfg.train_options.pred_len,
         num_seq=cfg.train_options.input_seq_len,
         boundaries=torch.DoubleTensor(metadata["bounds"]),
@@ -694,7 +693,7 @@ def Test(rank_zero_logger, dist, cfg):
                 json.dump(rollout_op, file_object)
 
             example_index += 1
-            rank_zero_logger.info(f"Prediction time: {time.time()-start_time}\n")
+            rank_zero_logger.info(f"Prediction time: {time.time() - start_time}\n")
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -31,7 +31,7 @@ from tqdm import tqdm
 # custom
 from utils import write_checkpoint
 
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 
 class Trainer:
@@ -53,6 +53,7 @@ class Trainer:
         device: torch.device = torch.device("cpu"),
         output_dir: str = "/outputs/",
         max_norm: float = None,
+        checkpoint_dir: str = None,
     ):
         """
         Constructor.
@@ -105,6 +106,10 @@ class Trainer:
             num_shards=self.dist.world_size, shard_id=self.dist.rank
         )
         self.output_dir_tb = os.path.join(output_dir, "tensorboard")
+        if checkpoint_dir is None:
+            self.checkpoint_dir = os.path.join(self.output_dir_tb, "checkpoints")
+        else:
+            self.checkpoint_dir = checkpoint_dir
 
         # set the other parameters
         self.optimizer = optimizer
@@ -360,9 +365,7 @@ class Trainer:
                         if self.lr_scheduler is None
                         else self.lr_scheduler.get_last_lr()[0]
                     )
-                except (
-                    AttributeError
-                ):  # try loop required since LearnOnPlateau has no "get_last_lr" attribute
+                except AttributeError:  # try loop required since LearnOnPlateau has no "get_last_lr" attribute
                     curr_lr = (
                         self.optimizer.param_groups[-1]["lr"]
                         if self.lr_scheduler is None
@@ -526,7 +529,7 @@ class Trainer:
                         iteration,
                         validation_error,
                         epochs_since_improved,
-                        self.output_dir_tb,
+                        self.checkpoint_dir,
                     ),
                 )
                 thread.start()

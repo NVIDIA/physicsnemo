@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -23,8 +23,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from hydra.utils import to_absolute_path
-from physicsnemo.launch.logging import LaunchLogger
-from physicsnemo.launch.utils.checkpoint import save_checkpoint
+from physicsnemo.utils.logging import LaunchLogger
+from physicsnemo.utils.checkpoint import save_checkpoint
 from physicsnemo.models.fno import FNO
 from physicsnemo.models.mlp import FullyConnected
 from physicsnemo.sym.eq.pdes.diffusion import Diffusion
@@ -150,7 +150,6 @@ class MdlsSymWrapper(Arch):
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config_deeponet.yaml")
 def main(cfg: DictConfig):
-
     # CUDA support
     if torch.cuda.is_available():
         device = torch.device("cuda")

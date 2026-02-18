@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -28,20 +28,23 @@ import numpy as np
 import nvtx
 import netCDF4 as nc
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
-from physicsnemo.utils.patching import GridPatching2D
-from physicsnemo import Module
-from physicsnemo.utils.diffusion import deterministic_sampler, stochastic_sampler
-from physicsnemo.utils.corrdiff import (
-    NetCDFWriter,
-    get_time_from_range,
-    regression_step,
-    diffusion_step,
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.experimental.models.diffusion.preconditioning import (
+    tEDMPrecondSuperRes,
 )
+from physicsnemo.diffusion.multi_diffusion import GridPatching2D
+from physicsnemo import Module
+from physicsnemo.diffusion.samplers import (
+    deterministic_sampler,
+    stochastic_sampler,
+)
+from physicsnemo.diffusion.generate import regression_step, diffusion_step
 
 from helpers.generate_helpers import (
     get_dataset_and_sampler,
     save_images,
+    NetCDFWriter,
+    get_time_from_range,
 )
 from helpers.train_helpers import set_patch_shape
 from datasets.dataset import register_dataset
@@ -181,24 +184,68 @@ def main(cfg: DictConfig) -> None:
 
     # Partially instantiate the sampler based on the configs
     if cfg.sampler.type == "deterministic":
-        if cfg.generation.hr_mean_conditioning:
-            raise NotImplementedError(
-                "High-res mean conditioning is not yet implemented for the deterministic sampler"
-            )
         sampler_fn = partial(
             deterministic_sampler,
             num_steps=cfg.sampler.num_steps,
             # num_ensembles=cfg.generation.num_ensembles,
             solver=cfg.sampler.solver,
+            patching=patching,
         )
     elif cfg.sampler.type == "stochastic":
-        sampler_fn = partial(stochastic_sampler, patching=patching)
+        sampler_fn = partial(
+            stochastic_sampler, patching=patching, num_steps=cfg.sampler.num_steps
+        )
     else:
         raise ValueError(f"Unknown sampling method {cfg.sampling.type}")
+
+    # Parse the distribution type
+    distribution = getattr(cfg.generation, "distribution", None)
+    student_t_nu = getattr(cfg.generation, "student_t_nu", None)
+    if distribution is not None and not cfg.generation.inference_mode in [
+        "diffusion",
+        "all",
+    ]:
+        raise ValueError(
+            f"cfg.generation.distribution should only be specified for "
+            f"inference mode 'diffusion' or 'all', but got {cfg.generation.inference_mode}."
+        )
+    if distribution not in ["normal", "student_t", None]:
+        raise ValueError(f"Invalid distribution: {distribution}.")
+    if distribution == "student_t":
+        if student_t_nu is None:
+            raise ValueError(
+                "student_t_nu must be provided in cfg.generation.student_t_nu for student_t distribution"
+            )
+        elif student_t_nu <= 2:
+            raise ValueError(f"Expected nu > 2, but got {student_t_nu}.")
+        if net_res and not isinstance(net_res, tEDMPrecondSuperRes):
+            logger0.warning(
+                f"Student-t distribution sampling is supposed to be used with "
+                f"tEDMPrecondSuperRes model, but got {type(net_res)}."
+            )
+    elif isinstance(net_res, tEDMPrecondSuperRes):
+        logger0.warning(
+            f"tEDMPrecondSuperRes model is supposed to be used with student-t "
+            f"distribution, but got {distribution}."
+        )
+
+    # Parse P_mean and P_std
+    P_mean = getattr(cfg.generation, "P_mean", None)
+    P_std = getattr(cfg.generation, "P_std", None)
 
     # Main generation definition
     def generate_fn():
         with nvtx.annotate("generate_fn", color="green"):
+            diffusion_step_kwargs = {}
+            if distribution is not None:
+                diffusion_step_kwargs["distribution"] = distribution
+            if student_t_nu is not None:
+                diffusion_step_kwargs["nu"] = student_t_nu
+            if P_mean is not None:
+                diffusion_step_kwargs["P_mean"] = P_mean
+            if P_std is not None:
+                diffusion_step_kwargs["P_std"] = P_std
+
             # (1, C, H, W)
             img_lr = image_lr.to(memory_format=torch.channels_last)
 
@@ -208,7 +255,7 @@ def main(cfg: DictConfig) -> None:
                         net=net_reg,
                         img_lr=img_lr,
                         latents_shape=(
-                            cfg.generation.seed_batch_size,
+                            sum(map(len, rank_batches)),
                             img_out_channels,
                             img_shape[0],
                             img_shape[1],
@@ -234,6 +281,7 @@ def main(cfg: DictConfig) -> None:
                         device=device,
                         mean_hr=mean_hr,
                         lead_time_label=lead_time_label,
+                        **diffusion_step_kwargs,
                     )
             if cfg.generation.inference_mode == "regression":
                 image_out = image_reg
@@ -267,6 +315,7 @@ def main(cfg: DictConfig) -> None:
                     return None
             else:
                 return image_out
+        return
 
     # generate images
     output_path = getattr(cfg.generation.io, "output_filename", "corrdiff_output.nc")
@@ -294,7 +343,6 @@ def main(cfg: DictConfig) -> None:
     )
     with torch_cuda_profiler:
         with torch_nvtx_profiler:
-
             data_loader = torch.utils.data.DataLoader(
                 dataset=dataset, sampler=sampler, batch_size=1, pin_memory=True
             )
@@ -309,7 +357,7 @@ def main(cfg: DictConfig) -> None:
                     has_lead_time=has_lead_time,
                 )
 
-                if cfg.generation.perf.io_syncronous:
+                if cfg.generation.perf.io_synchronous:
                     writer_executor = ThreadPoolExecutor(
                         max_workers=cfg.generation.perf.num_writer_workers
                     )
@@ -335,8 +383,9 @@ def main(cfg: DictConfig) -> None:
                 start = end = DummyEvent()
 
             times = dataset.time()
-            for index, (image_tar, image_lr, *lead_time_label) in enumerate(
-                iter(data_loader)
+            for dataset_index, (image_tar, image_lr, *lead_time_label) in zip(
+                sampler,
+                iter(data_loader),
             ):
                 time_index += 1
                 if dist.rank == 0:
@@ -359,7 +408,7 @@ def main(cfg: DictConfig) -> None:
                 image_out = generate_fn()
                 if dist.rank == 0:
                     batch_size = image_out.shape[0]
-                    if cfg.generation.perf.io_syncronous:
+                    if cfg.generation.perf.io_synchronous:
                         # write out data in a seperate thread so we don't hold up inferencing
                         writer_threads.append(
                             writer_executor.submit(
@@ -371,8 +420,7 @@ def main(cfg: DictConfig) -> None:
                                 image_tar.cpu(),
                                 image_lr.cpu(),
                                 time_index,
-                                index,
-                                has_lead_time,
+                                dataset_index,
                             )
                         )
                     else:
@@ -384,8 +432,7 @@ def main(cfg: DictConfig) -> None:
                             image_tar.cpu(),
                             image_lr.cpu(),
                             time_index,
-                            index,
-                            has_lead_time,
+                            dataset_index,
                         )
             end.record()
             end.synchronize()
@@ -403,7 +450,7 @@ def main(cfg: DictConfig) -> None:
                 )
 
             # make sure all the workers are done writing
-            if dist.rank == 0 and cfg.generation.perf.io_syncronous:
+            if dist.rank == 0 and cfg.generation.perf.io_synchronous:
                 for thread in list(writer_threads):
                     thread.result()
                     writer_threads.remove(thread)

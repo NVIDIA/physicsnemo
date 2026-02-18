@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -24,8 +24,8 @@ import torch
 import hydra
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-from physicsnemo.launch.logging import PythonLogger, LaunchLogger
+from physicsnemo.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging import PythonLogger, LaunchLogger
 from hydra.utils import to_absolute_path
 from torch.nn.parallel import DistributedDataParallel
 from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
@@ -71,9 +71,10 @@ def validation_step(
             if i == 0:
                 for chan in range(outvar.size(1)):
                     fig, ax = plt.subplots(1, 3)
-                    vmin, vmax = np.min(
-                        outvar[i, chan, :, :, nz // 2].detach().cpu().numpy()
-                    ), np.max(outvar[i, chan, :, :, nz // 2].detach().cpu().numpy())
+                    vmin, vmax = (
+                        np.min(outvar[i, chan, :, :, nz // 2].detach().cpu().numpy()),
+                        np.max(outvar[i, chan, :, :, nz // 2].detach().cpu().numpy()),
+                    )
                     # plot z slices
                     im = ax[0].imshow(
                         outvar[i, chan, :, :, nz // 2].detach().cpu().numpy(),
@@ -114,7 +115,6 @@ def validation_step(
 
 @hydra.main(version_base="1.2", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-
     logger = PythonLogger("main")  # General python logger
     LaunchLogger.initialize()
 
@@ -188,6 +188,7 @@ def main(cfg: DictConfig) -> None:
         process_rank=dist.rank,
         world_size=dist.world_size,
         shuffle=True,
+        parallel=False,
     )
 
     # Initialize the validation dataset
@@ -211,6 +212,7 @@ def main(cfg: DictConfig) -> None:
             process_rank=dist.rank,
             world_size=dist.world_size,
             shuffle=False,
+            parallel=False,
         )
 
         train_dataset_plotting = MeshDatapipe(
@@ -220,11 +222,12 @@ def main(cfg: DictConfig) -> None:
             num_variables=7,
             num_samples=16,
             batch_size=cfg.val_batch_size,
-            num_workers=1,
+            num_workers=0,
             device=dist.device,
             process_rank=dist.rank,
             world_size=dist.world_size,
             shuffle=False,
+            parallel=False,
         )
 
     optimizer = optimizers.FusedAdam(

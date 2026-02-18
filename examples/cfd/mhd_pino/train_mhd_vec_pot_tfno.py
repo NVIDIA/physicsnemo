@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -27,12 +27,12 @@ from omegaconf import OmegaConf
 
 from tfno import TFNO
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-from physicsnemo.launch.logging import (
+from physicsnemo.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging import (
     PythonLogger,
     LaunchLogger,
 )
-from physicsnemo.launch.logging.wandb import initialize_wandb
+from physicsnemo.utils.logging.wandb import initialize_wandb
 from physicsnemo.sym.hydra import to_absolute_path
 
 from losses import LossMHDVecPot, LossMHDVecPot_PhysicsNeMo
@@ -229,7 +229,6 @@ def main(cfg: DictConfig) -> None:
             num_mini_batch=len(dataloader_train),
             epoch_alert_freq=1,
         ) as log:
-
             if dist.distributed:
                 sampler_train.set_epoch(epoch)
 

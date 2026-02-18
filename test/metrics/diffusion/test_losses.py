@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,11 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import numpy as np
 import pytest
 import torch
 
-from physicsnemo.metrics.diffusion import (
+from physicsnemo.diffusion.metrics import (
     EDMLoss,
+    EDMLossLogUniform,
     RegressionLoss,
     RegressionLossCE,
     ResidualLoss,
@@ -26,8 +28,9 @@ from physicsnemo.metrics.diffusion import (
     VELoss_dfsr,
     VPLoss,
 )
-from physicsnemo.models.diffusion import EDMPrecondSuperResolution, UNet
-from physicsnemo.utils.patching import RandomPatching2D
+from physicsnemo.diffusion.multi_diffusion import RandomPatching2D
+from physicsnemo.diffusion.preconditioners import EDMPrecondSuperResolution
+from physicsnemo.models.diffusion_unets import CorrDiffRegressionUNet
 
 # VPLoss tests
 
@@ -131,15 +134,46 @@ def test_edmloss_initialization():
     assert loss_func.P_std == 2.0
     assert loss_func.sigma_data == 0.3
 
+    sigma_data = torch.as_tensor([0.3, 0.4, 0.5], dtype=torch.float32)[
+        None, :, None, None
+    ]
+    loss_func = EDMLossLogUniform(
+        sigma_min=0.1,
+        sigma_max=200,
+        sigma_data=sigma_data,
+    )
+    assert (loss_func.sigma_data == sigma_data).all()
+    assert loss_func.log_sigma_min == pytest.approx(np.log(0.1))
+    assert loss_func.log_sigma_diff == pytest.approx(np.log(200) - np.log(0.1))
 
-def test_call_method_edm():
+
+@pytest.mark.parametrize("loss", ["lognormal", "loguniform"])
+@pytest.mark.parametrize(
+    "sigma_data",
+    [0.5, torch.as_tensor([0.3, 0.4, 0.5], dtype=torch.float32)[None, :, None, None]],
+)
+def test_call_method_edm(loss, sigma_data):
     def fake_condition_net(y, sigma, condition, class_labels=None, augment_labels=None):
         return torch.tensor([1.0])
 
     def fake_net(y, sigma, labels, augment_labels=None):
         return torch.tensor([1.0])
 
-    loss_func = EDMLoss()
+    def fake_condition_net_lt(
+        y,
+        sigma,
+        condition,
+        class_labels=None,
+        augment_labels=None,
+        lead_time_label=None,
+    ):
+        assert lead_time_label is not None  # test that this is properly passed through
+        return torch.tensor([1.0])
+
+    if loss == "lognormal":
+        loss_func = EDMLoss(sigma_data=sigma_data)
+    elif loss == "loguniform":
+        loss_func = EDMLossLogUniform(sigma_data=sigma_data)
 
     img = torch.tensor([[[[1.0]]]])
     labels = None
@@ -160,12 +194,21 @@ def test_call_method_edm():
     loss_value_with_augmentation = loss_func(fake_net, img, labels, mock_augment_pipe)
     assert isinstance(loss_value_with_augmentation, torch.Tensor)
 
+    lead_time_label = torch.tensor([1])
+    loss_value = loss_func(
+        fake_condition_net_lt,
+        img,
+        condition=condition,
+        labels=labels,
+        lead_time_label=lead_time_label,
+    )
+    assert isinstance(loss_value, torch.Tensor)
+
 
 # RegressionLoss tests
 
 
 def test_call_method_regressionloss():
-
     # With a fake network
 
     def fake_net(input, y_lr, augment_labels=None, force_fp32=False):
@@ -191,11 +234,9 @@ def test_call_method_regressionloss():
 
 
 # More realistic test with a UNet model
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_call_method_regressionloss_with_unet(device):
-
     res, inc, outc = 64, 2, 3
-    model = UNet(
+    model = CorrDiffRegressionUNet(
         img_resolution=res,
         img_in_channels=inc,
         img_out_channels=outc,
@@ -210,11 +251,10 @@ def test_call_method_regressionloss_with_unet(device):
 
 
 # More realistic test with a UNet model and lead-time conditioning
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_call_method_regressionloss_with_lead_time_unet(device):
     res, inc, outc = 64, 3, 4
     N_pos, lead_time_channels = 2, 4
-    model = UNet(
+    model = CorrDiffRegressionUNet(
         img_resolution=res,
         img_in_channels=inc + N_pos + lead_time_channels,
         img_out_channels=outc,
@@ -274,12 +314,11 @@ def test_call_method_regressionlossce():
 
 
 # More realistic test with a UNet model and lead-time conditioning
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_call_method_regressionlossce_with_unet(device):
     res, inc, outc = 64, 3, 4
     N_pos, lead_time_channels = 2, 4
     prob_channels = [0, 2]
-    model = UNet(
+    model = CorrDiffRegressionUNet(
         img_resolution=res,
         img_in_channels=inc + N_pos + lead_time_channels,
         img_out_channels=outc,
@@ -420,12 +459,10 @@ def test_residualloss_call_method():
 
 
 # More realistic test with a UNet model
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_call_method_residualloss_with_unet(device):
-
     res, inc, outc = 64, 2, 3
     N_pos = 2
-    regression_model = UNet(
+    regression_model = CorrDiffRegressionUNet(
         img_resolution=res,
         img_in_channels=inc + N_pos,
         img_out_channels=outc,
@@ -455,11 +492,10 @@ def test_call_method_residualloss_with_unet(device):
 
 
 # Test with UNets and hr_mean_conditioning
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_call_method_residualloss_with_unet_hr_mean_conditioning(device):
     res, inc, outc = 64, 2, 3
     N_pos = 2
-    regression_model = UNet(
+    regression_model = CorrDiffRegressionUNet(
         img_resolution=res,
         img_in_channels=inc + N_pos,
         img_out_channels=outc,
@@ -487,12 +523,11 @@ def test_call_method_residualloss_with_unet_hr_mean_conditioning(device):
 
 
 # Test with UNets, hr_mean_conditioning, and lead-time aware embedding
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_call_method_residualloss_with_lt_unet_hr_mean_conditioning(device):
     res, inc, outc = 64, 2, 3
     N_pos, lead_time_channels = 2, 4
     prob_channels = [0, 2]
-    regression_model = UNet(
+    regression_model = CorrDiffRegressionUNet(
         img_resolution=res,
         img_in_channels=inc + N_pos + lead_time_channels,
         img_out_channels=outc,

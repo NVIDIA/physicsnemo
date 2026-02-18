@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,32 +14,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Dict, Iterable, List, Tuple, Union
+
 import h5py
 import numpy as np
 import torch
 
-try:
-    import nvidia.dali as dali
-    import nvidia.dali.plugin.pytorch as dali_pth
-except ImportError:
-    raise ImportError(
-        "DALI dataset requires NVIDIA DALI package to be installed. "
-        + "The package can be installed at:\n"
-        + "https://docs.nvidia.com/deeplearning/dali/user-guide/docs/installation.html"
-    )
-
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Dict, Iterable, List, Tuple, Union
-
-import pytz
-
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.climate.utils.invariant import latlon_grid
 from physicsnemo.datapipes.climate.utils.zenith_angle import cos_zenith_angle
 
 from ..datapipe import Datapipe
 from ..meta import DatapipeMetaData
+
+# Lazy imports for optional dependencies
+dali = OptionalImport("nvidia.dali")
+dali_pth = OptionalImport("nvidia.dali.plugin.pytorch")
+
 
 Tensor = torch.Tensor
 
@@ -87,23 +81,27 @@ class ERA5HDF5Datapipe(Datapipe):
         If specified, crops input and output variables so image dimensions are
         divisible by patch_size, by default None
     num_samples_per_year : int, optional
-        Number of samples randomly taken from each year. If None, all will be use, by default None
+        Number of samples randomly taken from each year. If None, all will be used, by default None
     use_cos_zenith: bool, optional
         If True, the cosine zenith angles corresponding to the coordinates will be produced,
         by default False
     cos_zenith_args: Dict, optional
-        Dictionary containing the following
+        Dictionary containing the following:
+
         dt: float, optional
             Time in hours between each timestep in the dataset, by default 6 hr
+
         start_year: int, optional
             Start year of dataset, by default 1980
+
         latlon_bounds : Tuple[Tuple[float, float], Tuple[float, float]], optional
             Bounds of latitude and longitude in the data, in the format
             ((lat_start, lat_end,), (lon_start, lon_end)).
             By default ((90, -90), (0, 360)).
+
         Defaults are only applicable if use_cos_zenith is True. Otherwise, defaults to {}.
     use_time_of_year_index: bool
-        If true, also returns the index that can be sued to determine the time of the year
+        If true, also returns the index that can be used to determine the time of the year
         corresponding to each sample. By default False.
     shuffle : bool, optional
         Shuffle dataset, by default True
@@ -340,7 +338,7 @@ class ERA5HDF5Datapipe(Datapipe):
         if not self.mu.shape == self.sd.shape == (1, len(self.channels), 1, 1):
             raise AssertionError("Error, normalisation arrays have wrong shape")
 
-    def _create_pipeline(self) -> dali.Pipeline:
+    def _create_pipeline(self) -> "dali.Pipeline":
         """Create DALI pipeline
 
         Returns
@@ -481,12 +479,14 @@ class ERA5DaliExternalSource:
     batch_size : int, optional
         Batch size, by default 1
     use_cos_zenith: bool
-        If True, the cosine zenith angles corresponding to the coordinates will be produced,
+        If True, the cosine zenith angles corresponding to the coordinates will be produced
     cos_zenith_args: Dict
-        Dictionary containing the following
+        Dictionary containing the following:
+
         dt: float
             Time in hours between each timestep in the dataset
-        start_year
+
+        start_year: int
             Start year of dataset
     shuffle : bool, optional
         Shuffle dataset, by default True
@@ -548,7 +548,7 @@ class ERA5DaliExternalSource:
             self.start_year: int = cos_zenith_args.get("start_year")
 
     def __call__(
-        self, sample_info: dali.types.SampleInfo
+        self, sample_info: "dali.types.SampleInfo"
     ) -> Tuple[Tensor, Tensor, np.ndarray]:
         if sample_info.iteration >= self.num_batches:
             raise StopIteration()
@@ -574,7 +574,7 @@ class ERA5DaliExternalSource:
         # Load sequence of timestamps
         if self.use_cos_zenith:
             year = self.start_year + year_idx
-            start_time = datetime(year, 1, 1, tzinfo=pytz.utc) + timedelta(
+            start_time = datetime(year, 1, 1, tzinfo=UTC) + timedelta(
                 hours=int(in_idx) * self.dt
             )
             timestamps = np.array(

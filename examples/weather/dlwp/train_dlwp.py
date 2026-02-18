@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -32,9 +32,9 @@ from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
 from physicsnemo.models.dlwp import DLWP
 
 from cube_sphere_plotter_no_subplots import cube_sphere_plotter
-from physicsnemo.launch.logging import LaunchLogger, PythonLogger
-from physicsnemo.launch.logging.mlflow import initialize_mlflow
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging import LaunchLogger, PythonLogger
+from physicsnemo.utils.logging.mlflow import initialize_mlflow
+from physicsnemo.utils import load_checkpoint, save_checkpoint
 import physicsnemo.utils.zenith_angle as zenith_angle
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from hydra.utils import to_absolute_path
@@ -219,8 +219,9 @@ def validation_and_plotting_step(
                     3, pred_outvar.shape[1], figsize=(4 * outvar.shape[1], 8)
                 )
                 for t in range(outvar.shape[1]):
-                    vmin, vmax = np.min(pred_outvar[0, t, chan]), np.max(
-                        pred_outvar[0, t, chan]
+                    vmin, vmax = (
+                        np.min(pred_outvar[0, t, chan]),
+                        np.max(pred_outvar[0, t, chan]),
                     )
                     im = ax[0, t].imshow(
                         cube_sphere_plotter(pred_outvar[0, t, chan]),

@@ -63,9 +63,8 @@ import torch.nn as nn
 from torch.nn import init
 
 import physicsnemo  # noqa: F401 for docs
-
-from ..meta import ModelMetaData
-from ..module import Module
+from physicsnemo.core.meta import ModelMetaData
+from physicsnemo.core.module import Module
 
 Tensor = torch.Tensor
 
@@ -113,7 +112,6 @@ def init_weights(net, init_type="normal", init_gain=0.02):
 
 @dataclass
 class MetaData(ModelMetaData):
-    name: str = "Pix2PixUnet"
     # Optimization
     jit: bool = True
     cuda_graphs: bool = True
@@ -365,7 +363,7 @@ class UnetSkipConnectionBlock(nn.Module):
     ):
         super().__init__()
         self.outermost = outermost
-        if type(norm_layer) == functools.partial:
+        if isinstance(norm_layer, functools.partial):
             use_bias = norm_layer.func == nn.InstanceNorm2d
         else:
             use_bias = norm_layer == nn.InstanceNorm2d

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -23,7 +23,8 @@ from pathlib import Path
 
 import pytest
 import torch
-from pytest_utils import import_or_fail
+
+from test.conftest import requires_module
 
 from . import common
 
@@ -42,7 +43,7 @@ def hydrograph_data_dir(nfs_data_dir, tmp_path_factory):
     return Path(dst)
 
 
-@import_or_fail(["dgl", "scipy", "tqdm"])
+@requires_module(["torch_geometric", "torch_scatter", "scipy", "tqdm"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_hydrograph_constructor(hydrograph_data_dir, device, pytestconfig):
     """Constructor & basic iteration checks."""
@@ -57,7 +58,6 @@ def test_hydrograph_constructor(hydrograph_data_dir, device, pytestconfig):
         n_time_steps=2,
         k=2,
         noise_type="none",
-        verbose=False,
     )
 
     common.check_datapipe_iterable(dataset)
@@ -69,8 +69,8 @@ def test_hydrograph_constructor(hydrograph_data_dir, device, pytestconfig):
         assert isinstance(physics, dict)
     else:
         g = sample
-    assert g.ndata["x"].shape[0] == g.num_nodes()
-    assert g.edata["x"].shape[0] == g.num_edges()
+    assert g.x.shape[0] == g.num_nodes
+    assert g.edge_attr.shape[0] == g.num_edges
 
     # -- invalid split --------------------------------------------------------
     with pytest.raises(ValueError):
@@ -92,4 +92,4 @@ def test_hydrograph_constructor(hydrograph_data_dir, device, pytestconfig):
     g_test, rollout = test_ds[0]
     for key in ["inflow", "precipitation", "water_depth_gt", "volume_gt"]:
         assert rollout[key].shape[0] == rollout_len
-    assert g_test.num_nodes() > 0
+    assert g_test.num_nodes > 0

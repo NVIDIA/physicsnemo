@@ -1,6 +1,7 @@
 # ignore_header_test
 # ruff: noqa: E402
 """"""
+
 """
 Pix2Pix model. This code was modified from, https://github.com/NVIDIA/pix2pixHD
 
@@ -59,17 +60,15 @@ import torch
 import torch.nn as nn
 
 import physicsnemo  # noqa: F401 for docs
-from physicsnemo.models.layers import get_activation
-
-from ..meta import ModelMetaData
-from ..module import Module
+from physicsnemo.core.meta import ModelMetaData
+from physicsnemo.core.module import Module
+from physicsnemo.nn import get_activation
 
 Tensor = torch.Tensor
 
 
 @dataclass
 class MetaData(ModelMetaData):
-    name: str = "Pix2Pix"
     # Optimization
     jit: bool = True
     cuda_graphs: bool = True

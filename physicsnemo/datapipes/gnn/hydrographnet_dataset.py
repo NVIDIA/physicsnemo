@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -19,7 +19,7 @@
 """
 HydroGraphDataset module
 
-This module defines a DGLDataset for hydrograph-based graphs. It includes utility functions
+This module defines a Dataset for hydrograph-based graphs. It includes utility functions
 for downloading data, computing normalization statistics, and processing both static and dynamic
 data required to build a graph for each hydrograph sample.
 
@@ -43,13 +43,17 @@ import zipfile
 from pathlib import Path
 from typing import Any, List, Optional, Union
 
-import dgl
 import numpy as np
 import requests
 import torch
-from dgl.data import DGLDataset
-from scipy.spatial import KDTree
+from torch.utils.data import Dataset
 from tqdm import tqdm
+
+from physicsnemo.core.version_check import OptionalImport
+
+# Lazy imports for optional dependencies
+pyg = OptionalImport("torch_geometric")
+scipy_spatial = OptionalImport("scipy.spatial")
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -152,13 +156,16 @@ def download_from_url(
         with requests.get(url, stream=True, timeout=120) as r:
             r.raise_for_status()
             total_size = int(r.headers.get("content-length", 0))
-            with open(fpath, "wb") as f, tqdm(
-                desc=str(fpath),
-                total=total_size,
-                unit="iB",
-                unit_scale=True,
-                unit_divisor=1024,
-            ) as bar:
+            with (
+                open(fpath, "wb") as f,
+                tqdm(
+                    desc=str(fpath),
+                    total=total_size,
+                    unit="iB",
+                    unit_scale=True,
+                    unit_divisor=1024,
+                ) as bar,
+            ):
                 for chunk in r.iter_content(chunk_size=chunk_size):
                     if chunk:
                         f.write(chunk)
@@ -175,13 +182,29 @@ def download_from_url(
         if fpath.suffix in [".tar", ".gz", ".tgz"]:
             logger.info(f"Extracting tar archive {fpath}...")
             with tarfile.open(fpath, "r:*") as archive:
-                archive.extractall(path=root)
+                # Safely extract while supporting Python versions < 3.12 that lack the
+                # ``filter`` keyword.  Starting with 3.12, ``filter="data"`` is the
+                # recommended way to avoid unsafe members;
+                extract_kwargs = dict(
+                    path=root,
+                )
+                if "filter" in archive.extractall.__code__.co_varnames:
+                    extract_kwargs["filter"] = "data"
+                archive.extractall(**extract_kwargs)  # noqa: S202
                 names = ", ".join(archive.getnames())
             logger.info(f"Extracted files: {names}")
         elif fpath.suffix == ".zip":
             logger.info(f"Extracting zip archive {fpath}...")
             with zipfile.ZipFile(fpath, "r") as z:
-                z.extractall(path=root)
+                # Safely extract while supporting Python versions < 3.12 that lack the
+                # ``filter`` keyword.  Starting with 3.12, ``filter="data"`` is the
+                # recommended way to avoid unsafe members;
+                extract_kwargs = dict(
+                    path=root,
+                )
+                if "filter" in z.extractall.__code__.co_varnames:
+                    extract_kwargs["filter"] = "data"
+                z.extractall(**extract_kwargs)  # noqa: S202
                 names = ", ".join(z.namelist())
             logger.info(f"Extracted files: {names}")
 
@@ -251,9 +274,9 @@ DYNAMIC_NORM_STATS_FILE = "dynamic_norm_stats.json"
 # ---------------------------
 # HydroGraphDataset Class
 # ---------------------------
-class HydroGraphDataset(DGLDataset):
+class HydroGraphDataset(Dataset):
     """
-    DGL Dataset for hydrograph-based graphs.
+    Dataset for hydrograph-based graphs.
 
     This dataset processes both static and dynamic data to construct graphs for each hydrograph.
     It supports two modes:
@@ -287,11 +310,8 @@ class HydroGraphDataset(DGLDataset):
         hydrograph_ids_file: Optional[str] = None,
         split: str = "train",
         rollout_length: Optional[int] = None,
-        force_reload: bool = False,
-        verbose: bool = False,
         return_physics: bool = False,
     ):
-
         if split not in {"train", "test"}:
             raise ValueError(f"Invalid split '{split}'. Expected 'train' or 'test'.")
 
@@ -318,8 +338,7 @@ class HydroGraphDataset(DGLDataset):
         self.static_stats = {}
         self.dynamic_stats = {}
 
-        # Call the parent class constructor.
-        super().__init__(name=name, force_reload=force_reload, verbose=verbose)
+        self.process()
 
     def process(self) -> None:
         """
@@ -364,7 +383,7 @@ class HydroGraphDataset(DGLDataset):
 
         # Build the graph connectivity using a k-d tree.
         num_nodes = xy_coords.shape[0]
-        kdtree = KDTree(xy_coords)
+        kdtree = scipy_spatial.KDTree(xy_coords)
         _, neighbors = kdtree.query(xy_coords, k=self.k + 1)
         edge_index = np.vstack(
             [(i, nbr) for i, nbrs in enumerate(neighbors) for nbr in nbrs if nbr != i]
@@ -521,7 +540,7 @@ class HydroGraphDataset(DGLDataset):
 
         Returns:
             Depending on the split:
-                - Training: A DGL graph with node features, edge features, and target values, optionally
+                - Training: A graph with node features, edge features, and target values, optionally
                   along with a dictionary of physics data.
                 - Testing: A tuple (graph, rollout_data) where rollout_data contains future hydrograph data.
         """
@@ -565,12 +584,13 @@ class HydroGraphDataset(DGLDataset):
             target_volume = dyn["volume"][target_time, :] - dyn["volume"][prev_time, :]
             target = np.stack([target_depth, target_volume], axis=1)
 
-            # Create the graph with DGL.
+            # Create the graph with PyG.
             src, dst = sd["edge_index"]
-            g = dgl.graph((src, dst))
-            g.edata["x"] = torch.tensor(sd["edge_features"], dtype=torch.float)
-            g.ndata["x"] = torch.tensor(node_features, dtype=torch.float)
-            g.ndata["y"] = torch.tensor(target, dtype=torch.float)
+            edges = torch.stack([torch.tensor(src), torch.tensor(dst)], dim=0).long()
+            g = pyg.data.Data(edge_index=edges)
+            g.edge_attr = torch.tensor(sd["edge_features"], dtype=torch.float)
+            g.x = torch.tensor(node_features, dtype=torch.float)
+            g.y = torch.tensor(target, dtype=torch.float)
 
             # Determine if physics data should be returned.
             need_physics = self.return_physics or (self.noise_type == "pushforward")
@@ -693,9 +713,10 @@ class HydroGraphDataset(DGLDataset):
                 dyn["inflow_hydrograph"],
             )
             src, dst = sd["edge_index"]
-            g = dgl.graph((src, dst))
-            g.edata["x"] = torch.tensor(sd["edge_features"], dtype=torch.float)
-            g.ndata["x"] = torch.tensor(node_features, dtype=torch.float)
+            edges = torch.stack([torch.tensor(src), torch.tensor(dst)], dim=0).long()
+            g = pyg.data.Data(edge_index=edges)
+            g.edge_attr = torch.tensor(sd["edge_features"], dtype=torch.float)
+            g.x = torch.tensor(node_features, dtype=torch.float)
             rollout_data = {
                 "inflow": torch.tensor(
                     dyn["inflow_hydrograph"][

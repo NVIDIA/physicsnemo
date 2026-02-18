@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -23,7 +23,7 @@ import re
 
 import numpy as np
 import torch
-from physicsnemo.utils.diffusion.utils import EasyDict, profiled_function
+from misc import EasyDict, profiled_function
 
 # ----------------------------------------------------------------------------
 
@@ -35,9 +35,7 @@ _sync_device = (
     None  # Device to use for multiprocess communication. None = single-process.
 )
 _sync_called = False  # Has _sync() been called yet?
-_counters = (
-    dict()
-)  # Running counters on each device, updated by report(): name => device => torch.Tensor
+_counters = dict()  # Running counters on each device, updated by report(): name => device => torch.Tensor
 _cumulative = (
     dict()
 )  # Cumulative counters on the CPU, updated by _sync(): name => torch.Tensor

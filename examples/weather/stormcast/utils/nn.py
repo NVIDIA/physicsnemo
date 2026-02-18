@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,9 +17,11 @@
 from collections.abc import Iterable
 
 import torch
-from physicsnemo.models import Module
-from physicsnemo.models.diffusion import EDMPrecond, StormCastUNet
-from physicsnemo.utils.diffusion import deterministic_sampler
+
+from physicsnemo.core import Module
+from physicsnemo.models.diffusion_unets import StormCastUNet
+from physicsnemo.diffusion.preconditioners import EDMPrecond
+from physicsnemo.diffusion.samplers import deterministic_sampler
 
 
 def get_preconditioned_architecture(
@@ -28,7 +30,12 @@ def get_preconditioned_architecture(
     conditional_channels: int = 0,
     spatial_embedding: bool = True,
     img_resolution: tuple = (512, 640),
-    attn_resolutions: list = [],
+    model_type: str | None = None,
+    channel_mult: list = [1, 2, 2, 2, 2],
+    lead_time_steps: int = 0,
+    lead_time_channels: int = 4,
+    amp_mode: bool = False,
+    **model_kwargs,
 ) -> EDMPrecond | StormCastUNet:
     """
 
@@ -38,38 +45,53 @@ def get_preconditioned_architecture(
         conditional_channels: The number of channels in the conditioning
         spatial_embedding: whether or not to use the additive spatial embedding in the U-Net
         img_resolution: resolution of the data (U-Net inputs/outputs)
-        attn_resolutions: resolution of internal U-Net stages to use self-attention
+        model_type: the model class to use, or None to select it automatically
+        channel_mult: the channel multipliers for the different levels of the U-Net
+        lead_time_steps: the number of possible lead time steps, if 0 lead time embedding will be disabled
+        lead_time_channels: the number of channels to use for each lead time embedding
     Returns:
         EDMPrecond or StormCastUNet: a wrapped torch module net(x+n, sigma, condition, class_labels) -> x
     """
+
+    if model_type is None:
+        model_type = "SongUNetPosLtEmbd" if lead_time_steps else "SongUNet"
+
+    model_params = {
+        "img_resolution": img_resolution,
+        "img_out_channels": target_channels,
+        "model_type": model_type,
+        "channel_mult": channel_mult,
+        "additive_pos_embed": spatial_embedding,
+        "amp_mode": amp_mode,
+    }
+    model_params.update(model_kwargs)
+
+    if lead_time_steps:
+        model_params["N_grid_channels"] = 0
+        model_params["lead_time_channels"] = lead_time_channels
+        model_params["lead_time_steps"] = lead_time_steps
+    else:
+        lead_time_channels = 0
+
     if name == "diffusion":
         return EDMPrecond(
-            img_resolution=img_resolution,
-            img_channels=target_channels + conditional_channels,
-            img_out_channels=target_channels,
-            model_type="SongUNet",
-            channel_mult=[1, 2, 2, 2, 2],
-            attn_resolutions=attn_resolutions,
-            additive_pos_embed=spatial_embedding,
+            img_channels=target_channels + conditional_channels + lead_time_channels,
+            **model_params,
         )
 
     elif name == "regression":
         return StormCastUNet(
-            img_resolution=img_resolution,
-            img_in_channels=conditional_channels,
-            img_out_channels=target_channels,
-            model_type="SongUNet",
+            img_in_channels=conditional_channels + lead_time_channels,
             embedding_type="zero",
-            channel_mult=[1, 2, 2, 2, 2],
-            attn_resolutions=attn_resolutions,
-            additive_pos_embed=spatial_embedding,
+            **model_params,
         )
 
 
 def build_network_condition_and_target(
     background: torch.Tensor,
-    state: tuple[torch.Tensor, torch.Tensor],
+    state: tuple[torch.Tensor | None, torch.Tensor],
     invariant_tensor: torch.Tensor | None,
+    lead_time_label: torch.Tensor | None = None,
     regression_net: Module | None = None,
     condition_list: Iterable[str] = ("state", "background"),
     regression_condition_list: Iterable[str] = ("state", "background"),
@@ -78,8 +100,9 @@ def build_network_condition_and_target(
 
     Args:
         background: background tensor
-        state: tuple of previous state and target state
+        state: tuple of (previous state, target state); previous state may be None
         invariant_tensor: invariant tensor or None if no invariant is used
+        lead_time_label: lead time label or None if lead time embedding is not used
         regression_net: regression model, can be None if 'regression' is not in condition_list
         condition_list: list of conditions to include, may include 'state', 'background', 'regression' and 'invariant'
         regression_condition_list: list of conditions for the regression network, may include 'state', 'background', and 'invariant'
@@ -95,10 +118,15 @@ def build_network_condition_and_target(
         raise ValueError(
             "regression_net must be provided if 'regression' is in condition_list"
         )
-    target = state[1]
+    state_input, state_target = state
+
+    if "state" in condition_list and state_input is None:
+        raise ValueError("state input is required when 'state' is in condition_list")
+
+    target = state_target
 
     condition_tensors = {
-        "state": state[0],
+        "state": state_input,
         "background": background,
         "invariant": invariant_tensor,
         "regression": None,
@@ -109,9 +137,10 @@ def build_network_condition_and_target(
             # Inference regression model
             condition_tensors["regression"] = regression_model_forward(
                 regression_net,
-                state[0],
+                state_input,
                 background,
                 invariant_tensor,
+                lead_time_label=lead_time_label,
                 condition_list=regression_condition_list,
             )
             target = target - condition_tensors["regression"]
@@ -124,26 +153,90 @@ def build_network_condition_and_target(
     return (condition, target, condition_tensors["regression"])
 
 
-def diffusion_model_forward(model, condition, shape, sampler_args={}):
+def unpack_batch(batch, device, memory_format=torch.preserve_format):
+    """Unpack a data batch into background, state, mask and lead time label with the correct
+    device and data types.
+
+    Args:
+        batch: Dictionary containing batch data
+        device: Target device
+        memory_format: Optional memory format (e.g., torch.channels_last)
+
+    Returns:
+        Tuple of (background, state, mask, lead_time_label)
+        - mask is None if not present in batch, otherwise a list of mask tensors
+    """
+    background = batch["background"].to(
+        device=device,
+        dtype=torch.float32,
+        non_blocking=True,
+        memory_format=memory_format,
+    )
+    state = [
+        None
+        if s is None
+        else s.to(
+            device=device,
+            dtype=torch.float32,
+            non_blocking=True,
+            memory_format=memory_format,
+        )
+        for s in batch["state"]
+    ]
+
+    # Mask for weighting loss (e.g., ignore zero solar radiation pixels)
+    # Mask corresponds to the target state only
+    mask = batch.get("mask", None)
+    if mask is not None:
+        mask = mask.to(
+            device=device,
+            dtype=torch.float32,
+            non_blocking=True,
+            memory_format=memory_format,
+        )
+
+    lead_time_label = batch.get("lead_time_label")
+    if lead_time_label is not None:
+        lead_time_label = lead_time_label.to(device=device, dtype=torch.int64)
+    return (background, state, mask, lead_time_label)
+
+
+def diffusion_model_forward(
+    model, condition, shape, lead_time_label=None, sampler_args={}
+):
     """Helper function to run diffusion model sampling"""
 
     latents = torch.randn(*shape, device=condition.device, dtype=condition.dtype)
 
     return deterministic_sampler(
-        model, latents=latents, img_lr=condition, **sampler_args
+        model,
+        latents=latents,
+        img_lr=condition,
+        lead_time_label=lead_time_label,
+        **sampler_args,
     )
 
 
 def regression_model_forward(
-    model, state, background, invariant_tensor, condition_list=("state", "background")
+    model,
+    state,
+    background,
+    invariant_tensor,
+    lead_time_label=None,
+    condition_list=("state", "background"),
 ):
     """Helper function to run regression model forward pass in inference"""
 
     (x, _, _) = build_network_condition_and_target(
-        background, (state, None), invariant_tensor, condition_list=condition_list
+        background,
+        (state, state),
+        invariant_tensor,
+        lead_time_label=lead_time_label,
+        condition_list=condition_list,
     )
 
-    return model(x)
+    labels = {} if lead_time_label is None else {"lead_time_label": lead_time_label}
+    return model(x, **labels)
 
 
 def regression_loss_fn(
@@ -151,6 +244,7 @@ def regression_loss_fn(
     images,
     condition,
     class_labels=None,
+    lead_time_label=None,
     augment_pipe=None,
     return_model_outputs=False,
 ):
@@ -158,10 +252,11 @@ def regression_loss_fn(
     the EDMLoss and the same training loop can be used to train both regression and diffusion models
 
     Args:
-        net: physicsnemo.models.diffusion.StormCastUNet
+        net: physicsnemo.models.diffusion_unets.StormCastUNet
         images: Target data, shape [batch_size, target_channels, w, h]
         condition: input to the model, shape=[batch_size, condition_channel, w, h]
         class_labels: unused (applied to match EDMLoss signature)
+        lead_time_label: lead time label or None if lead time embedding is not used
         augment_pipe: optional data augmentation pipe
         return_model_outputs: If True, will return the generated outputs
     Returns:
@@ -173,7 +268,8 @@ def regression_loss_fn(
         augment_pipe(images) if augment_pipe is not None else (images, None)
     )
 
-    D_yn = net(x=condition)
+    labels = {} if lead_time_label is None else {"lead_time_label": lead_time_label}
+    D_yn = net(x=condition, **labels)
     loss = (D_yn - y) ** 2
     if return_model_outputs:
         return loss, D_yn
