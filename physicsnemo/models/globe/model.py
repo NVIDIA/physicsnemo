@@ -307,6 +307,63 @@ class GLOBE(Module):
             }
         )
 
+    def _evaluate_hyperlayer(
+        self,
+        layer_idx: int,
+        target_points: torch.Tensor,
+        latent_data: dict[str, TensorDict],
+        boundary_meshes: dict[str, "Mesh"],
+        reference_lengths: dict[str, torch.Tensor],
+        global_scalars: TensorDict | None,
+        global_vectors: TensorDict | None,
+        verbose: bool,
+        chunk_size: None | int | Literal["auto"],
+    ) -> TensorDict:
+        """Evaluate one hyperlayer: sum kernel contributions from all BC types."""
+        result_pieces: list[TensorDict] = []
+
+        for source_bc_type, source_bc_mesh in boundary_meshes.items():
+            source_latent_data: TensorDict = latent_data[source_bc_type]
+            source_strengths: TensorDict = source_latent_data["strengths"]  # ty: ignore[invalid-assignment]
+            source_strengths = source_strengths.apply(
+                lambda x: x
+                * (source_bc_mesh.cell_areas / self.reference_area)
+            )
+
+            # Exclude internal cache entries from cell_data
+            source_data_by_rank: dict[int, TensorDict] = split_by_leaf_rank(
+                source_bc_mesh.cell_data.exclude("_cache")
+            )
+            source_scalars = combine_tensordicts(
+                source_data_by_rank[0],
+                source_latent_data["latent_scalars"],  # ty: ignore[invalid-argument-type]
+            )
+            source_vectors = combine_tensordicts(
+                source_data_by_rank[1],
+                source_latent_data["latent_vectors"],  # ty: ignore[invalid-argument-type]
+            )
+            source_vectors["normals"] = source_bc_mesh.cell_normals
+            source_vectors.batch_size = torch.Size(
+                [source_bc_mesh.n_cells, self.n_spatial_dims]
+            )
+
+            kernel: MultiscaleKernel = self.kernel_layers[layer_idx][source_bc_type]
+            result_from_kernel: TensorDict = kernel(
+                source_points=source_bc_mesh.cell_centroids,
+                source_scalars=source_scalars,
+                source_vectors=source_vectors,
+                source_strengths=source_strengths,
+                target_points=target_points,
+                reference_lengths=reference_lengths,
+                global_scalars=global_scalars,
+                global_vectors=global_vectors,
+                verbose=verbose,
+                chunk_size=chunk_size,
+            )
+            result_pieces.append(result_from_kernel.unflatten_keys())
+
+        return reduce(operator.add, result_pieces)
+
     def forward(
         self,
         prediction_points: Float[torch.Tensor, "n_points n_dims"],
