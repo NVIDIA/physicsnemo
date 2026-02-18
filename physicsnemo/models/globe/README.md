@@ -19,8 +19,8 @@ properties:
 - The PDE is either linear or can be roughly-approximated as linear for
   significant portions of the domain.
 
-A GLOBE model represents the solution of a PDE as a linear combination of kernel
-functions. These kernel functions are TODO
+A GLOBE model represents the solution of a PDE as a linear combination of
+learnable kernel functions evaluated from boundary source faces to target points.
 
 ## Mathematical Properties
 
