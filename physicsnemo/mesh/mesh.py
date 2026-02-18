@@ -2487,7 +2487,7 @@ class Mesh:
 # Note: Must be done after class definition because @tensorclass overrides __repr__
 # even when defined inside the class body
 def _mesh_repr(self) -> str:
-    return format_mesh_repr(self, exclude_cache=False)
+    return format_mesh_repr(self)
 
 
 Mesh.__repr__ = _mesh_repr  # type: ignore
