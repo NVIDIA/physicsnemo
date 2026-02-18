@@ -24,7 +24,7 @@ echo "Node list: $SLURM_NODELIST"
 
 ### [Detect GPUs]
 NUM_GPUS_PER_NODE=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
-echo "Number of GPUs detected: $NUM_GPUS_PER_NODE"
+echo "Number of GPUs per node detected: $NUM_GPUS_PER_NODE"
 
 set -euxo pipefail
 
