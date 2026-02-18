@@ -429,67 +429,26 @@ class GLOBE(Module):
 
         ### Kernel evaluations
         for i in range(self.n_communication_hyperlayers + 1):
-            is_last_hyperlayer = i == self.n_communication_hyperlayers
-
             if verbose:
                 print(f"Evaluating hypernetwork layer {i}...")
 
-            def evaluate_hyperlayer(target_points: torch.Tensor) -> TensorDict:
-                result_pieces: list[TensorDict] = []
+            is_last_hyperlayer = (i == self.n_communication_hyperlayers)
 
-                for source_bc_type, source_bc_mesh in boundary_meshes.items():
-                    source_latent_data: TensorDict = latent_data[source_bc_type]
-                    source_strengths: TensorDict = source_latent_data["strengths"]  # ty: ignore[invalid-assignment]
-                    source_strengths = source_strengths.apply(
-                        lambda x: x
-                        * (source_bc_mesh.cell_areas / self.reference_area)
-                    )
-
-                    # Exclude _cache from cell_data before splitting by rank
-                    user_cell_data = source_bc_mesh.cell_data.exclude("_cache")
-                    source_data_by_rank: dict[int, TensorDict] = split_by_leaf_rank(
-                        user_cell_data
-                    )
-                    source_scalars = combine_tensordicts(
-                        source_data_by_rank[0],
-                        source_latent_data["latent_scalars"],  # ty: ignore[invalid-argument-type]
-                    )
-                    source_vectors = combine_tensordicts(
-                        source_data_by_rank[1],
-                        source_latent_data["latent_vectors"],  # ty: ignore[invalid-argument-type]
-                    )
-                    source_vectors["normals"] = source_bc_mesh.cell_normals
-                    source_vectors.batch_size = torch.Size(
-                        [source_bc_mesh.n_cells, self.n_spatial_dims]
-                    )
-
-                    kernel: MultiscaleKernel = self.kernel_layers[i][source_bc_type]
-                    result_from_kernel: TensorDict = kernel(
-                        source_points=source_bc_mesh.cell_centroids,
-                        source_scalars=source_scalars,
-                        source_vectors=source_vectors,
-                        source_strengths=source_strengths,
-                        target_points=target_points,
-                        reference_lengths=reference_lengths,
-                        global_scalars=global_scalars,
-                        global_vectors=global_vectors,
-                        verbose=verbose,
-                        chunk_size=chunk_size,
-                    )
-                    result_pieces.append(result_from_kernel.unflatten_keys())
-
-                result: TensorDict = reduce(operator.add, result_pieces)
-                return result
-
-            if is_last_hyperlayer:
-                result: TensorDict = evaluate_hyperlayer(prediction_points)
-            else:
-                latent_data = {
-                    target_bc_type: evaluate_hyperlayer(
-                        target_bc_mesh.cell_centroids
+            if not is_last_hyperlayer:
+                latent_data: TensorDict = {
+                    target_bc_type: self._evaluate_hyperlayer(
+                        i, target_bc_mesh.cell_centroids, latent_data,
+                        boundary_meshes, reference_lengths, global_scalars,
+                        global_vectors, verbose, chunk_size,
                     )
                     for target_bc_type, target_bc_mesh in boundary_meshes.items()
                 }
+            else:
+                result: TensorDict = self._evaluate_hyperlayer(
+                    i, prediction_points, latent_data, boundary_meshes,
+                    reference_lengths, global_scalars, global_vectors,
+                    verbose, chunk_size,
+                )
 
         for field_name, field_tensor in result.items():
             original_shape = field_tensor.shape
