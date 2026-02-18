@@ -43,6 +43,7 @@ from utilities import (
     log_hyperparameters,
     reduce_over_ranks,
     sanitize_metric_name,
+    save_training_checkpoint,
     to,
 )
 
@@ -59,7 +60,7 @@ def main(
     data_dir: Path | None = None,
     output_name: str | None = None,
     amp: bool = False,
-    compile: bool = True,
+    use_compile: bool = True,
     compile_mode: Literal[
         "default", "max-autotune-no-cudagraphs", "reduce-overhead", "max-autotune"
     ] = "max-autotune",
@@ -92,7 +93,7 @@ def main(
             3. Hostname-based lookup via config.get_data_dir()
         output_name: Name for output directory. If None, uses current timestamp.
         amp: Enable automatic mixed precision (AMP) training for faster computation.
-        compile: Enable torch.compile for model optimization and performance.
+        use_compile: Enable torch.compile for model optimization and performance.
         compile_mode: Mode for torch.compile.
         points_per_iter: Number of points to sample per training iteration.
         learning_rate: Initial learning rate for the Adam optimizer.
@@ -176,7 +177,7 @@ def main(
             directory.mkdir(parents=True, exist_ok=True)
 
     ### [Signal Handling]
-    shutdown_requested: Callable[[], bool] = install_graceful_shutdown(rank=dist.rank)
+    shutdown_requested = install_graceful_shutdown(rank=dist.rank)
 
     ### [PyTorch Configuration]
     autocast_ctx = torch.autocast(
@@ -227,7 +228,7 @@ def main(
 
     base_model = model
 
-    if compile and torch_compile_cache.exists():
+    if use_compile and torch_compile_cache.exists():
         torch.compiler.load_cache_artifacts(torch_compile_cache.read_bytes())
 
     ### [Distribute the model across GPUs]
@@ -288,44 +289,19 @@ def main(
     scaler = torch.amp.GradScaler(device=device.type)
 
     ### [Checkpoint Save/Load]
-    def save_checkpoint(save_dir: Path, keep_only_latest: bool = False) -> None:
-        checkpoint_path = save_dir / f"{base_model.__class__.__name__}.{epoch:d}.pt"
-        active_run = mlflow.active_run() if use_mlflow else None
-        torch.save(
-            {
-                "epoch": epoch,
-                "model_state_dict": base_model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "scheduler_state_dict": scheduler.state_dict(),
-                "scaler_state_dict": scaler.state_dict(),
-                "best_loss": best_loss,
-                "last_image_epoch": last_image_epoch,
-                "last_image_loss": last_image_loss,
-                "mlflow_run_id": active_run.info.run_id if active_run else None,
-            },
-            checkpoint_path,
-        )
-        if keep_only_latest:
-            for old_checkpoint in save_dir.glob("*.pt"):
-                if old_checkpoint != checkpoint_path:
-                    old_checkpoint.unlink()
-
-    # Try to load a pre-existing checkpoint
     mlflow_run_id: str | None = None
     previous_checkpoint: Path | None = get_latest_checkpoint_path(output_dir=output_dir)
     if previous_checkpoint:
         if dist.rank == 0:
             print(f"Resuming training from checkpoint: {previous_checkpoint.name!r}")
-        checkpoint = torch.load(previous_checkpoint, map_location=device)
-        epoch: int = checkpoint["epoch"]
-        base_model.load_state_dict(checkpoint["model_state_dict"])
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-        scaler.load_state_dict(checkpoint["scaler_state_dict"])
-        best_loss = checkpoint.get("best_loss", float("inf"))
-        last_image_epoch = checkpoint.get("last_image_epoch", -float("inf"))
-        last_image_loss = checkpoint.get("last_image_loss", float("inf"))
-        mlflow_run_id = checkpoint.get("mlflow_run_id")
+        ckpt = load_training_checkpoint(
+            previous_checkpoint, base_model, optimizer, scheduler, scaler, device,
+        )
+        epoch: int = ckpt["epoch"]
+        best_loss = ckpt.get("best_loss", float("inf"))
+        last_image_epoch = ckpt.get("last_image_epoch", -float("inf"))
+        last_image_loss = ckpt.get("last_image_loss", float("inf"))
+        mlflow_run_id = ckpt.get("mlflow_run_id")
     else:
         if dist.rank == 0:
             print("Starting training from scratch.")
@@ -379,7 +355,7 @@ def main(
     @torch.compile(
         dynamic=False,
         mode=compile_mode,
-        disable=not compile,
+        disable=not use_compile,
     )
     def run_batch(
         input_dict: TensorDict, true_results: TensorDict
@@ -561,11 +537,31 @@ def main(
             ### [Logging and Checkpointing]
             if dist.rank == 0:
                 ### [Checkpointing]
+                _ckpt_extra = {
+                    "best_loss": best_loss,
+                    "last_image_epoch": last_image_epoch,
+                    "last_image_loss": last_image_loss,
+                }
+                _ckpt_run_id = (
+                    mlflow.active_run().info.run_id
+                    if use_mlflow and mlflow.active_run() else None
+                )
                 if epoch % (25 * dist.world_size) == 0:
-                    save_checkpoint(save_dir=models_dir, keep_only_latest=True)
+                    save_training_checkpoint(
+                        models_dir, epoch, base_model, optimizer, scheduler, scaler,
+                        extra_state=_ckpt_extra, mlflow_run_id=_ckpt_run_id,
+                        keep_only_latest=True,
+                    )
                 if valid_loss < best_loss:
                     best_loss = valid_loss
-                    save_checkpoint(save_dir=best_model_dir, keep_only_latest=True)
+                    _ckpt_extra["best_loss"] = best_loss
+                    ckpt_path = save_training_checkpoint(
+                        best_model_dir, epoch, base_model, optimizer, scheduler, scaler,
+                        extra_state=_ckpt_extra, mlflow_run_id=_ckpt_run_id,
+                        keep_only_latest=True,
+                    )
+                    if use_mlflow:
+                        mlflow.log_artifact(str(ckpt_path), artifact_path="best_model")
 
                 ### [MLflow Scalars Logging]
                 if use_mlflow:
@@ -586,56 +582,38 @@ def main(
                 and (train_loss / last_image_loss < 0.9)
                 and (epoch > last_image_epoch + 200)
             ):
-
-                def log_images(training: bool) -> None:
-                    sample_path = (
-                        train_sample_paths if training else valid_sample_paths
-                    )[0]
-                    input_dict, _ = AirFRANSDataSet.preprocess(sample_path)
-                    input_dict = to(input_dict, device=device)
-
-                    with torch.no_grad(), autocast_ctx:
-                        base_model.eval()
-                        pred_results = base_model(
-                            prediction_points=input_dict["prediction_points"],
-                            boundary_meshes=input_dict["boundary_meshes"],
-                            reference_lengths=input_dict["reference_lengths"],
-                            global_scalars=input_dict["global_scalars"],
-                            global_vectors=input_dict["global_vectors"],
-                            chunk_size=points_per_iter,
-                            verbose=False,
-                        )
-
-                    AirFRANSDataSet.postprocess(
-                        to(
-                            pred_results,
-                            device=torch.device("cpu"),
-                            dtype=torch.float64,
-                        ),
-                        sample_path,
-                        fields_to_plot="pred",
-                        show=False,
-                    )
-                    plt.tight_layout(h_pad=0.1, w_pad=0)
-                    plt.gcf().set_dpi(300)
-
-                    # Log figure to MLflow (only on rank 0 where MLflow is initialized)
-                    if dist.rank == 0 and use_mlflow:
-                        split = "train" if training else "valid"
-                        mlflow.log_figure(
-                            plt.gcf(),
-                            f"visualization/{split}_sample_epoch_{epoch}.png",
-                        )
-                    plt.close()
-
                 if dist.rank == 0:
                     print("Generating visualization images...")
-                    log_images(training=True)
-                    log_images(training=False)
+                    for split, paths in [("train", train_sample_paths), ("valid", valid_sample_paths)]:
+                        sample_path = paths[0]
+                        input_dict, _ = AirFRANSDataSet.preprocess(sample_path)
+                        input_dict = to(input_dict, device=device)
+                        with torch.no_grad(), autocast_ctx:
+                            base_model.eval()
+                            pred_results = base_model(
+                                prediction_points=input_dict["prediction_points"],
+                                boundary_meshes=input_dict["boundary_meshes"],
+                                reference_lengths=input_dict["reference_lengths"],
+                                global_scalars=input_dict["global_scalars"],
+                                global_vectors=input_dict["global_vectors"],
+                                chunk_size=points_per_iter,
+                                verbose=False,
+                            )
+                        AirFRANSDataSet.postprocess(
+                            to(pred_results, device=torch.device("cpu"), dtype=torch.float64),
+                            sample_path,
+                            fields_to_plot="pred",
+                            show=False,
+                        )
+                        plt.tight_layout(h_pad=0.1, w_pad=0)
+                        plt.gcf().set_dpi(300)
+                        if use_mlflow:
+                            mlflow.log_figure(plt.gcf(), f"visualization/{split}_sample_epoch_{epoch}.png")
+                        plt.close()
                 last_image_epoch, last_image_loss = epoch, train_loss
 
             ### [torch.compile Caching]
-            if compile and not torch_compile_cache.exists():
+            if use_compile and not torch_compile_cache.exists():
                 artifacts_bytes, cache_info = torch.compiler.save_cache_artifacts()  # ty: ignore[not-iterable]
                 torch_compile_cache.write_bytes(artifacts_bytes)
                 print(f"Saved torch.compile cache to {torch_compile_cache}.")
@@ -643,7 +621,18 @@ def main(
             if shutdown_requested():
                 if dist.rank == 0:
                     print("Quitting due to shutdown request.")
-                    save_checkpoint(save_dir=models_dir, keep_only_latest=False)
+                    save_training_checkpoint(
+                        models_dir, epoch, base_model, optimizer, scheduler, scaler,
+                        extra_state={
+                            "best_loss": best_loss,
+                            "last_image_epoch": last_image_epoch,
+                            "last_image_loss": last_image_loss,
+                        },
+                        mlflow_run_id=(
+                            mlflow.active_run().info.run_id
+                            if use_mlflow and mlflow.active_run() else None
+                        ),
+                    )
                 break
 
 def field_loss_fn(
