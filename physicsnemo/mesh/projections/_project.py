@@ -19,7 +19,6 @@
 from collections.abc import Sequence
 
 from physicsnemo.mesh.mesh import Mesh
-from physicsnemo.mesh.transformations.geometric import _transform_tensordict
 
 
 def project(
