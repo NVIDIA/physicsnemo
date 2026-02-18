@@ -114,6 +114,8 @@ class Pade(Module):
 
         super().__init__()
 
+        self.register_buffer("_one", torch.tensor(1.0))
+
         ### Store constructor arguments
         self.layer_sizes = layer_sizes
         self.activation_function = activation_function
@@ -221,12 +223,12 @@ class Pade(Module):
 
         if self.use_separate_mlps:
             raw_numerator: torch.Tensor | float = (
-                torch.tensor(1.0, device=x.device)
+                self._one
                 if self.numerator_order == 0
                 else self.numerator_mlp(x)
             )
             raw_denominator: torch.Tensor | float = (
-                torch.tensor(1.0, device=x.device)
+                self._one
                 if self.denominator_order == 0
                 else self.denominator_mlp(x)
             )
