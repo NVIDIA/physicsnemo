@@ -15,16 +15,14 @@
 # limitations under the License.
 
 import contextlib
-import json
 import os
-import signal
+import warnings
 from collections import defaultdict
 from datetime import datetime
 from itertools import count
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Literal
-import warnings
+from typing import Any, Callable, Literal
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -32,26 +30,26 @@ import mlflow
 import torch
 import torch.nn.functional as F
 import torchinfo
+from dataset import AirFRANSDataSet, compute_max_mesh_sizes
 from tensordict import TensorDict
 from torch.profiler import record_function
-from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
-
-from physicsnemo.distributed import DistributedManager
-from physicsnemo.mesh.utilities._cache import set_cached
-from physicsnemo.optim import CombinedOptimizer
-from dataset import AirFRANSDataSet
 from utilities import (
     disable_autotune_printing,
     get_latest_checkpoint_path,
     get_physicsnemo_pkg_info,
+    install_graceful_shutdown,
+    load_training_checkpoint,
     log_hyperparameters,
     reduce_over_ranks,
     sanitize_metric_name,
     to,
 )
+
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.mesh.utilities._cache import set_cached
 from physicsnemo.models.globe.model import GLOBE
+from physicsnemo.optim import CombinedOptimizer
 
 mpl.use("agg")  # Allows headless plotting
 disable_autotune_printing()  # Silences the verbose output of `torch.compile(..., mode="max-autotune")`.
@@ -178,17 +176,7 @@ def main(
             directory.mkdir(parents=True, exist_ok=True)
 
     ### [Signal Handling]
-    shutdown_received = False
-
-    def _handle_signal(signum: int, frame) -> None:
-        nonlocal shutdown_received
-        if dist.rank == 0:
-            print(f"{signal.Signals(signum).name} received; quitting after this epoch.")
-        shutdown_received = True
-
-    signal.signal(signal.SIGTERM, _handle_signal)
-    signal.signal(signal.SIGINT, _handle_signal)
-    signal.signal(signal.SIGQUIT, _handle_signal)
+    shutdown_requested: Callable[[], bool] = install_graceful_shutdown(rank=dist.rank)
 
     ### [PyTorch Configuration]
     autocast_ctx = torch.autocast(
@@ -199,32 +187,15 @@ def main(
     torch.manual_seed(seed)
 
     ### [Dataset Preparation]
-    manifest = json.loads((data_dir / "manifest.json").read_text())
-    train_sample_paths = [data_dir / f for f in manifest[f"{airfrans_task}_train"]]
-    valid_taskname = "full" if airfrans_task == "scarce" else airfrans_task
-    valid_sample_paths = [data_dir / f for f in manifest[f"{valid_taskname}_test"]]
+    train_sample_paths = AirFRANSDataSet.get_split_paths(data_dir, airfrans_task, "train")
+    valid_sample_paths = AirFRANSDataSet.get_split_paths(data_dir, airfrans_task, "test")
 
-    ### [DataLoader Creation]
-    def make_dataloader(sample_paths: list[Path], num_workers: int) -> DataLoader:
-        dataset = AirFRANSDataSet(
-            sample_paths=sample_paths,
-            cache_dir=cache_dir,
-        )
-        return DataLoader(
-            dataset,
-            sampler=DistributedSampler(
-                dataset=dataset, num_replicas=dist.world_size, rank=dist.rank
-            ),
-            batch_size=None,
-            collate_fn=lambda x: x,
-            num_workers=num_workers,
-            prefetch_factor=32 if num_workers > 0 else None,
-            persistent_workers=num_workers > 0,
-            pin_memory=True,
-        )
-
-    train_dataloader = make_dataloader(train_sample_paths, num_workers=8)
-    valid_dataloader = make_dataloader(valid_sample_paths, num_workers=8)
+    train_dataloader = AirFRANSDataSet.make_dataloader(
+        train_sample_paths, cache_dir, world_size=dist.world_size, rank=dist.rank,
+    )
+    valid_dataloader = AirFRANSDataSet.make_dataloader(
+        valid_sample_paths, cache_dir, world_size=dist.world_size, rank=dist.rank,
+    )
 
     ### [Model]
     model = GLOBE(
@@ -270,54 +241,13 @@ def main(
         )
 
     ### [Compute Maximum Mesh Sizes Per BC Type and Split]
-    def compute_max_mesh_sizes_distributed(
-        training: bool,
-    ) -> dict[str, dict[str, int]]:
-        """Compute max n_points and n_cells per BC type using distributed dataloader.
-
-        Each rank processes its subset of data on the (train/validation) split,
-        then all_reduce to get global max.
-        """
-        # Dictionary mapping BC type to max sizes: {bc_type: {n_points: int, n_cells: int}}
-        max_sizes = defaultdict(lambda: {"n_points": 0, "n_cells": 0})
-
-        for input_dict, _ in tqdm(
-            train_dataloader if training else valid_dataloader,
-            desc=f"Computing max mesh sizes on {'Train' if training else 'Valid'} data (rank {dist.rank})",
-            disable=dist.rank != 0,
-        ):
-            for bc_type, mesh in input_dict["boundary_meshes"].items():
-                max_sizes[bc_type]["n_points"] = max(
-                    max_sizes[bc_type]["n_points"], mesh.n_points
-                )
-                if training and train_face_downsampling_ratio != 1.0:
-                    n_cells = int(mesh.n_cells * train_face_downsampling_ratio)
-                else:
-                    n_cells = mesh.n_cells
-                max_sizes[bc_type]["n_cells"] = max(
-                    max_sizes[bc_type]["n_cells"],
-                    n_cells,
-                )
-
-        # Reduce across all ranks to get global max
-        for bc_type in max_sizes.keys():
-            size_tensor = torch.tensor(
-                [max_sizes[bc_type]["n_points"], max_sizes[bc_type]["n_cells"]],
-                device=device,
-            )
-            size_tensor = reduce_over_ranks(size_tensor, op="max")
-            max_sizes[bc_type]["n_points"] = int(size_tensor[0])
-            max_sizes[bc_type]["n_cells"] = int(size_tensor[1])
-
-        if dist.rank == 0:
-            print(
-                f"Max mesh sizes on {'Train' if training else 'Valid'} data (rank {dist.rank}): {dict(max_sizes)}"
-            )
-
-        return dict(max_sizes)
-
-    train_max_sizes = compute_max_mesh_sizes_distributed(training=True)
-    valid_max_sizes = compute_max_mesh_sizes_distributed(training=False)
+    train_max_sizes = compute_max_mesh_sizes(
+        train_dataloader, device,
+        face_downsampling_ratio=train_face_downsampling_ratio, rank=dist.rank,
+    )
+    valid_max_sizes = compute_max_mesh_sizes(
+        valid_dataloader, device, rank=dist.rank,
+    )
 
     ### [Optimizer and Scheduler Setup]
     learning_rate *= (dist.world_size * points_per_iter / 2048) ** 0.5
@@ -442,6 +372,8 @@ def main(
                 "valid_sample_paths": valid_sample_paths,
             },
         )
+        if use_mlflow:
+            mlflow.log_artifact(str(output_dir / "hyperparameters.yaml"))
 
     ### [Training and Validation]
     @torch.compile(
@@ -708,7 +640,7 @@ def main(
                 torch_compile_cache.write_bytes(artifacts_bytes)
                 print(f"Saved torch.compile cache to {torch_compile_cache}.")
 
-            if shutdown_received:
+            if shutdown_requested():
                 if dist.rank == 0:
                     print("Quitting due to shutdown request.")
                     save_checkpoint(save_dir=models_dir, keep_only_latest=False)

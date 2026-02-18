@@ -14,7 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from functools import cache
 from pathlib import Path
 from typing import Any, Literal, Sequence
@@ -22,7 +24,9 @@ from typing import Any, Literal, Sequence
 import pyvista as pv
 import torch
 from tensordict import TensorDict
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset
+from torch.utils.data.distributed import DistributedSampler
+from tqdm import tqdm
 
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.io import from_pyvista
@@ -109,6 +113,73 @@ NU = 1.56e-5  # m^2/s
 
 
 class AirFRANSDataSet(CachedPreprocessingDataset):
+
+    @classmethod
+    def get_split_paths(
+        cls,
+        data_dir: Path,
+        task: Literal["full", "scarce", "reynolds", "aoa"],
+        split: Literal["train", "test"],
+    ) -> list[Path]:
+        """Read ``manifest.json`` and return sample paths for a task/split.
+
+        For the ``"scarce"`` task, the test split uses the ``"full"`` test set
+        (``"scarce"`` only defines a reduced training set).
+
+        Args:
+            data_dir: Root directory containing ``manifest.json`` and sample
+                subdirectories.
+            task: AirFRANS task name (``"full"``, ``"scarce"``, ``"reynolds"``,
+                ``"aoa"``).
+            split: ``"train"`` or ``"test"``.
+
+        Returns:
+            List of absolute paths to individual sample directories.
+        """
+        manifest = json.loads((data_dir / "manifest.json").read_text())
+        effective_task = "full" if (task == "scarce" and split == "test") else task
+        return [data_dir / f for f in manifest[f"{effective_task}_{split}"]]
+
+    @classmethod
+    def make_dataloader(
+        cls,
+        sample_paths: Sequence[Path],
+        cache_dir: Path,
+        *,
+        world_size: int = 1,
+        rank: int = 0,
+        num_workers: int = 8,
+    ) -> DataLoader:
+        """Create a distributed DataLoader for this dataset.
+
+        Each item is a single sample (``batch_size=None``) with identity
+        collation, suitable for variable-size mesh data that cannot be
+        stacked into uniform batches.
+
+        Args:
+            sample_paths: Paths to individual sample directories.
+            cache_dir: Directory for disk caching of preprocessed samples.
+            world_size: Total number of distributed ranks.
+            rank: This process's distributed rank.
+            num_workers: Number of DataLoader worker processes.
+
+        Returns:
+            Configured DataLoader with distributed sampling.
+        """
+        dataset = cls(sample_paths=sample_paths, cache_dir=cache_dir)
+        return DataLoader(
+            dataset,
+            sampler=DistributedSampler(
+                dataset=dataset, num_replicas=world_size, rank=rank,
+            ),
+            batch_size=None,
+            collate_fn=lambda x: x,
+            num_workers=num_workers,
+            prefetch_factor=32 if num_workers > 0 else None,
+            persistent_workers=num_workers > 0,
+            pin_memory=True,
+        )
+
     @staticmethod
     def preprocess(
         sample_path: Path,
@@ -702,6 +773,71 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         # Replace NaN values with nulls so Polars handles them properly
         df = df.fill_nan(None)
         print(df.describe())
+
+
+def compute_max_mesh_sizes(
+    dataloader: DataLoader,
+    device: torch.device,
+    *,
+    face_downsampling_ratio: float = 1.0,
+    rank: int = 0,
+) -> dict[str, dict[str, int]]:
+    """Compute the maximum n_points and n_cells per boundary-condition type.
+
+    Scans all samples in *dataloader*, tracking the largest boundary mesh
+    dimensions for each BC type. Uses distributed all-reduce to find the
+    global maximum across all ranks. The results are used to pad meshes to
+    uniform sizes for ``torch.compile`` with static shapes.
+
+    Args:
+        dataloader: DataLoader yielding ``(input_dict, output_dict)`` tuples
+            where ``input_dict["boundary_meshes"]`` maps BC names to Mesh.
+        device: Device for the all-reduce tensors.
+        face_downsampling_ratio: Scale factor applied to cell counts. Use
+            a value < 1.0 for training (downsampled meshes) and 1.0 for
+            validation (full meshes).
+        rank: Distributed rank (progress bar shown only on rank 0).
+
+    Returns:
+        Mapping ``{bc_type: {"n_points": int, "n_cells": int}}``.
+    """
+    from utilities import reduce_over_ranks
+
+    max_sizes: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"n_points": 0, "n_cells": 0}
+    )
+
+    for input_dict, _ in tqdm(
+        dataloader,
+        desc=f"Computing max mesh sizes (rank {rank})",
+        disable=rank != 0,
+    ):
+        for bc_type, mesh in input_dict["boundary_meshes"].items():
+            max_sizes[bc_type]["n_points"] = max(
+                max_sizes[bc_type]["n_points"], mesh.n_points
+            )
+            n_cells = (
+                int(mesh.n_cells * face_downsampling_ratio)
+                if face_downsampling_ratio != 1.0
+                else mesh.n_cells
+            )
+            max_sizes[bc_type]["n_cells"] = max(
+                max_sizes[bc_type]["n_cells"], n_cells,
+            )
+
+    for bc_type in max_sizes:
+        size_tensor = torch.tensor(
+            [max_sizes[bc_type]["n_points"], max_sizes[bc_type]["n_cells"]],
+            device=device,
+        )
+        size_tensor = reduce_over_ranks(size_tensor, op="max")
+        max_sizes[bc_type]["n_points"] = int(size_tensor[0])
+        max_sizes[bc_type]["n_cells"] = int(size_tensor[1])
+
+    if rank == 0:
+        print(f"Max mesh sizes: {dict(max_sizes)}")
+
+    return dict(max_sizes)
 
 
 if __name__ == "__main__":

@@ -17,11 +17,13 @@
 """Training utilities for the GLOBE AirFRANS example.
 
 Contains helpers for device transfer, distributed reduction, checkpointing,
-hyperparameter logging, and MLflow metric sanitization.
+hyperparameter logging, MLflow metric sanitization, and signal handling.
 """
 
 import inspect
 import re
+import signal
+from collections.abc import Callable
 from functools import cache
 from pathlib import Path
 from typing import Any, Literal
@@ -292,15 +294,15 @@ def to(
     if isinstance(data, (torch.Tensor, Mesh, TensorDict)):
         return data.to(device=device, dtype=dtype)
     elif isinstance(data, (float, int, bool, complex)):
-        return torch.as_tensor(data, device=device)
+        return torch.as_tensor(data, device=device, dtype=dtype)
     elif isinstance(data, list):
-        return [to(item, device=device) for item in data]
+        return [to(item, device=device, dtype=dtype) for item in data]
     elif isinstance(data, tuple):
-        return tuple(to(item, device=device) for item in data)
+        return tuple(to(item, device=device, dtype=dtype) for item in data)
     elif isinstance(data, dict):
-        return {k: to(v, device=device) for k, v in data.items()}
+        return {k: to(v, device=device, dtype=dtype) for k, v in data.items()}
     elif isinstance(data, set):
-        return {to(item, device=device) for item in data}
+        return {to(item, device=device, dtype=dtype) for item in data}
     else:
         raise NotImplementedError(
             f"`to` doesn't have a device-transfer recipe registered for {type(data)=!r}."
@@ -341,6 +343,36 @@ def reduce_over_ranks(
         torch.distributed.all_reduce(x, op=op_map[op])
 
     return x
+
+
+### [Signal handling] #####################################################
+
+
+def install_graceful_shutdown(rank: int = 0) -> Callable[[], bool]:
+    """Install signal handlers for graceful training shutdown.
+
+    Catches SIGTERM, SIGINT, and SIGQUIT. On the first signal a message is
+    printed (on rank 0) and an internal flag is set. The training loop can
+    poll the returned callable each epoch to decide whether to break.
+
+    Args:
+        rank: Distributed rank. Only rank 0 prints the signal message.
+
+    Returns:
+        A zero-argument callable that returns ``True`` once a shutdown
+        signal has been received.
+    """
+    received = [False]
+
+    def _handler(signum: int, _frame: Any) -> None:
+        if rank == 0:
+            print(f"{signal.Signals(signum).name} received; quitting after this epoch.")
+        received[0] = True
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGQUIT):
+        signal.signal(sig, _handler)
+
+    return lambda: received[0]
 
 
 if __name__ == "__main__":
