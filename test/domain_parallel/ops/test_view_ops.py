@@ -76,8 +76,19 @@ class ViewWrapper(torch.nn.Module):
         return tensor.view(self.target_shape)
 
 
+class ViewVariadicWrapper(torch.nn.Module):
+    """Wrapper for testing tensor.view(*shape) with variadic int arguments."""
+
+    def __init__(self, target_shape: tuple[int, ...]):
+        super().__init__()
+        self.target_shape = target_shape
+
+    def forward(self, tensor: torch.Tensor):
+        return tensor.view(*self.target_shape)
+
+
 class ReshapeWrapper(torch.nn.Module):
-    """Wrapper class for testing tensor.reshape operation."""
+    """Wrapper class for testing tensor.reshape(shape) with shape as a single tuple."""
 
     def __init__(self, target_shape: tuple[int, ...]):
         super().__init__()
@@ -87,8 +98,19 @@ class ReshapeWrapper(torch.nn.Module):
         return tensor.reshape(self.target_shape)
 
 
+class ReshapeVariadicWrapper(torch.nn.Module):
+    """Wrapper for testing tensor.reshape(*shape) with variadic int arguments."""
+
+    def __init__(self, target_shape: tuple[int, ...]):
+        super().__init__()
+        self.target_shape = target_shape
+
+    def forward(self, tensor: torch.Tensor):
+        return tensor.reshape(*self.target_shape)
+
+
 class TorchReshapeWrapper(torch.nn.Module):
-    """Wrapper class for testing torch.reshape operation."""
+    """Wrapper class for testing torch.reshape(tensor, shape) with shape as tuple."""
 
     def __init__(self, target_shape: tuple[int, ...]):
         super().__init__()
@@ -96,6 +118,28 @@ class TorchReshapeWrapper(torch.nn.Module):
 
     def forward(self, tensor: torch.Tensor):
         return torch.reshape(tensor, self.target_shape)
+
+
+class TorchReshapeListWrapper(torch.nn.Module):
+    """Wrapper for testing torch.reshape(tensor, shape) with shape as list."""
+
+    def __init__(self, target_shape: tuple[int, ...]):
+        super().__init__()
+        self.target_shape = target_shape
+
+    def forward(self, tensor: torch.Tensor):
+        return torch.reshape(tensor, list(self.target_shape))
+
+
+class TorchReshapeKwargWrapper(torch.nn.Module):
+    """Wrapper for testing torch.reshape(tensor, shape=...) with shape as kwarg."""
+
+    def __init__(self, target_shape: tuple[int, ...]):
+        super().__init__()
+        self.target_shape = target_shape
+
+    def forward(self, tensor: torch.Tensor):
+        return torch.reshape(tensor, shape=self.target_shape)
 
 
 class ViewRoundTrip(torch.nn.Module):
@@ -333,6 +377,71 @@ def test_torch_reshape_operation(
     )
 
     module = TorchReshapeWrapper(target_shape=target_shape)
+
+    numerical_shard_tensor_check(
+        distributed_mesh,
+        module,
+        [sharded_tensor],
+        {},
+        check_grads=backward,
+    )
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize(
+    "wrapper_cls,arg_style",
+    [
+        (ViewWrapper, "tuple"),
+        (ViewVariadicWrapper, "variadic"),
+        (ReshapeWrapper, "tuple"),
+        (ReshapeVariadicWrapper, "variadic"),
+        (TorchReshapeWrapper, "tuple"),
+        (TorchReshapeListWrapper, "list"),
+        (TorchReshapeKwargWrapper, "kwarg"),
+    ],
+    ids=[
+        "view_tuple",
+        "view_variadic",
+        "reshape_tuple",
+        "reshape_variadic",
+        "torch_reshape_tuple",
+        "torch_reshape_list",
+        "torch_reshape_kwarg",
+    ],
+)
+@pytest.mark.parametrize("backward", [False, True])
+def test_view_reshape_argument_permutations(
+    distributed_mesh,
+    wrapper_cls,
+    arg_style,
+    backward,
+):
+    """Test all argument permutations: view/reshape with shape as tuple, variadic, list, or kwarg.
+
+    Covers tensor.view(shape), tensor.view(*shape), tensor.reshape(shape),
+    tensor.reshape(*shape), torch.reshape(tensor, shape),
+    torch.reshape(tensor, list(shape)), and torch.reshape(tensor, shape=...).
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+
+    dm = DistributedManager()
+    shape = (4, 128, 8, 4)
+    target_shape = (4, 128, 32)
+
+    original_tensor = torch.rand(shape, device=dm.device, requires_grad=backward)
+
+    placements = (Shard(1),)
+
+    sharded_tensor = scatter_tensor(
+        original_tensor,
+        global_src=0,
+        mesh=distributed_mesh,
+        placements=placements,
+        requires_grad=backward,
+    )
+
+    module = wrapper_cls(target_shape=target_shape)
 
     numerical_shard_tensor_check(
         distributed_mesh,
