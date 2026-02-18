@@ -59,13 +59,13 @@ def run_shard_tensor_unsqueeze(mesh, verbose=False):
         i_sharded_unsqueeze = shard_tensor.unsqueeze(i)
         i_unsharded_unsqueeze = full_original_tensor.unsqueeze(i)
 
-        assert i_sharded_unsqueeze.shape == i_sharded_unsqueeze.shape
+        assert i_sharded_unsqueeze.shape == i_unsharded_unsqueeze.shape
         assert torch.allclose(i_sharded_unsqueeze.full_tensor(), i_unsharded_unsqueeze)
 
         ni_sharded_unsqueeze = shard_tensor.unsqueeze(-i)
         ni_unsharded_unsqueeze = full_original_tensor.unsqueeze(-i)
 
-        assert ni_sharded_unsqueeze.shape == ni_sharded_unsqueeze.shape
+        assert ni_sharded_unsqueeze.shape == ni_unsharded_unsqueeze.shape
         assert torch.allclose(
             ni_sharded_unsqueeze.full_tensor(), ni_unsharded_unsqueeze
         )

@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
+from jaxtyping import Float
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
@@ -46,29 +47,59 @@ class MetaData(ModelMetaData):
 
 
 class Fengwu(Module):
-    """
-    FengWu PyTorch impl of: `FengWu: Pushing the Skillful Global Medium-range Weather Forecast beyond 10 Days Lead`
-    - https://arxiv.org/pdf/2304.02948.pdf
+    r"""
+    FengWu weather forecasting model.
 
-    Args:
-        img_size: Image size(Lat, Lon). Default: (721,1440)
-        pressure_level: Number of pressure_level. Default: 37
-        embed_dim (int): Patch embedding dimension. Default: 192
-        patch_size (tuple[int]): Patch token size. Default: (4,4)
-        num_heads (tuple[int]): Number of attention heads in different layers.
-        window_size (tuple[int]): Window size.
+    This implementation follows `FengWu: Pushing the Skillful Global Medium-range
+    Weather Forecast beyond 10 Days Lead <https://arxiv.org/pdf/2304.02948.pdf>`_.
+
+    Parameters
+    ----------
+    img_size : tuple[int, int], optional, default=(721, 1440)
+        Spatial resolution :math:`(H, W)` of all input and output fields.
+    pressure_level : int, optional, default=37
+        Number of pressure levels :math:`L`.
+    embed_dim : int, optional, default=192
+        Embedding channel size used in encoder/decoder/fuser blocks.
+    patch_size : tuple[int, int], optional, default=(4, 4)
+        Patch size :math:`(p_h, p_w)` used by the hierarchical encoder/decoder.
+    num_heads : tuple[int, int, int, int], optional, default=(6, 12, 12, 6)
+        Number of attention heads used at each stage.
+    window_size : tuple[int, int, int], optional, default=(2, 6, 12)
+        Window size used by the transformer blocks.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, C_{in}, H, W)` with
+        :math:`C_{in} = 4 + 5L`.
+
+    Outputs
+    -------
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+        Tuple ``(surface, z, r, u, v, t)`` where:
+
+        - ``surface`` has shape :math:`(B, 4, H, W)`.
+        - ``z, r, u, v, t`` each have shape :math:`(B, L, H, W)`.
     """
 
     def __init__(
         self,
-        img_size=(721, 1440),
-        pressure_level=37,
-        embed_dim=192,
-        patch_size=(4, 4),
-        num_heads=(6, 12, 12, 6),
-        window_size=(2, 6, 12),
-    ):
+        img_size: tuple[int, int] = (721, 1440),
+        pressure_level: int = 37,
+        embed_dim: int = 192,
+        patch_size: tuple[int, int] = (4, 4),
+        num_heads: tuple[int, int, int, int] = (6, 12, 12, 6),
+        window_size: tuple[int, int, int] = (2, 6, 12),
+    ) -> None:
         super().__init__(meta=MetaData())
+        self.img_size = tuple(img_size)
+        self.pressure_level = pressure_level
+        self.patch_size = tuple(patch_size)
+        self.embed_dim = embed_dim
+        self.surface_channels = 4
+        self.in_channels = self.surface_channels + 5 * self.pressure_level
+
         drop_path = np.linspace(0, 0.2, 8).tolist()
         drop_path_fuser = [0.2] * 6
         resolution_down1 = (
@@ -247,34 +278,132 @@ class Fengwu(Module):
             drop_path=drop_path,
         )
 
-    def prepare_input(self, surface, z, r, u, v, t):
-        """Prepares the input to the model in the required shape.
-        Args:
-            surface (torch.Tensor): 2D n_lat=721, n_lon=1440, chans=4.
-            z (torch.Tensor): 2D n_lat=721, n_lon=1440, chans=37.
-            r (torch.Tensor): 2D n_lat=721, n_lon=1440, chans=37.
-            u (torch.Tensor): 2D n_lat=721, n_lon=1440, chans=37.
-            v (torch.Tensor): 2D n_lat=721, n_lon=1440, chans=37.
-            t (torch.Tensor): 2D n_lat=721, n_lon=1440, chans=37.
+    def prepare_input(
+        self,
+        surface: Float[torch.Tensor, "batch c_surface lat lon"],
+        z: Float[torch.Tensor, "batch c_pressure lat lon"],
+        r: Float[torch.Tensor, "batch c_pressure lat lon"],
+        u: Float[torch.Tensor, "batch c_pressure lat lon"],
+        v: Float[torch.Tensor, "batch c_pressure lat lon"],
+        t: Float[torch.Tensor, "batch c_pressure lat lon"],
+    ) -> Float[torch.Tensor, "batch channels lat lon"]:
+        r"""
+        Prepare input fields by concatenating all variables along channels.
+
+        Parameters
+        ----------
+        surface : torch.Tensor
+            Surface tensor of shape :math:`(B, 4, H, W)`.
+        z : torch.Tensor
+            Geopotential tensor of shape :math:`(B, L, H, W)`.
+        r : torch.Tensor
+            Relative humidity tensor of shape :math:`(B, L, H, W)`.
+        u : torch.Tensor
+            U-wind tensor of shape :math:`(B, L, H, W)`.
+        v : torch.Tensor
+            V-wind tensor of shape :math:`(B, L, H, W)`.
+        t : torch.Tensor
+            Temperature tensor of shape :math:`(B, L, H, W)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Concatenated tensor of shape :math:`(B, 4 + 5L, H, W)`.
         """
+        if not torch.compiler.is_compiling():
+            if surface.ndim != 4:
+                raise ValueError(
+                    f"Expected 'surface' to be a 4D tensor, got {surface.ndim}D tensor with shape {tuple(surface.shape)}"
+                )
+            if surface.shape[1] != self.surface_channels:
+                raise ValueError(
+                    f"Expected 'surface' to have {self.surface_channels} channels, got tensor with shape {tuple(surface.shape)}"
+                )
+            if surface.shape[2:] != self.img_size:
+                raise ValueError(
+                    f"Expected 'surface' spatial shape {self.img_size}, got tensor with shape {tuple(surface.shape)}"
+                )
+
+            batch_size = surface.shape[0]
+            expected_spatial = surface.shape[2:]
+            for name, tensor in (
+                ("z", z),
+                ("r", r),
+                ("u", u),
+                ("v", v),
+                ("t", t),
+            ):
+                if tensor.ndim != 4:
+                    raise ValueError(
+                        f"Expected '{name}' to be a 4D tensor, got {tensor.ndim}D tensor with shape {tuple(tensor.shape)}"
+                    )
+                if tensor.shape[0] != batch_size:
+                    raise ValueError(
+                        f"Expected '{name}' batch size {batch_size}, got tensor with shape {tuple(tensor.shape)}"
+                    )
+                if tensor.shape[1] != self.pressure_level:
+                    raise ValueError(
+                        f"Expected '{name}' to have {self.pressure_level} channels, got tensor with shape {tuple(tensor.shape)}"
+                    )
+                if tensor.shape[2:] != expected_spatial:
+                    raise ValueError(
+                        f"Expected '{name}' spatial shape {expected_spatial}, got tensor with shape {tuple(tensor.shape)}"
+                    )
+
         return torch.concat([surface, z, r, u, v, t], dim=1)
 
-    def forward(self, x):
+    def forward(
+        self,
+        x: Float[torch.Tensor, "batch channels lat lon"],
+    ) -> tuple[
+        Float[torch.Tensor, "batch c_surface lat lon"],
+        Float[torch.Tensor, "batch c_pressure lat lon"],
+        Float[torch.Tensor, "batch c_pressure lat lon"],
+        Float[torch.Tensor, "batch c_pressure lat lon"],
+        Float[torch.Tensor, "batch c_pressure lat lon"],
+        Float[torch.Tensor, "batch c_pressure lat lon"],
+    ]:
+        r"""
+        Run Fengwu forward prediction.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Concatenated input tensor of shape :math:`(B, 4 + 5L, H, W)`.
+
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+            Output tuple ``(surface, z, r, u, v, t)`` where ``surface`` has
+            shape :math:`(B, 4, H, W)` and the other outputs have shape
+            :math:`(B, L, H, W)`.
         """
-        Args:
-            surface (torch.Tensor): 2D n_lat=721, n_lon=1440, chans=4.
-            z (torch.Tensor): 2D n_lat=721, n_lon=1440, chans=37.
-            r (torch.Tensor): 2D n_lat=721, n_lon=1440, chans=37.
-            u (torch.Tensor): 2D n_lat=721, n_lon=1440, chans=37.
-            v (torch.Tensor): 2D n_lat=721, n_lon=1440, chans=37.
-            t (torch.Tensor): 2D n_lat=721, n_lon=1440, chans=37.
-        """
-        surface = x[:, :4, :, :]
-        z = x[:, 4:41, :, :]
-        r = x[:, 41:78, :, :]
-        u = x[:, 78:115, :, :]
-        v = x[:, 115:152, :, :]
-        t = x[:, 152:189, :, :]
+        if not torch.compiler.is_compiling():
+            if x.ndim != 4:
+                raise ValueError(
+                    f"Expected 'x' to be a 4D tensor, got {x.ndim}D tensor with shape {tuple(x.shape)}"
+                )
+            if x.shape[1] != self.in_channels:
+                raise ValueError(
+                    f"Expected 'x' to have {self.in_channels} channels, got tensor with shape {tuple(x.shape)}"
+                )
+            if x.shape[2:] != self.img_size:
+                raise ValueError(
+                    f"Expected 'x' spatial shape {self.img_size}, got tensor with shape {tuple(x.shape)}"
+                )
+
+        pressure_level = self.pressure_level
+        start = self.surface_channels
+        surface = x[:, :start, :, :]
+        z = x[:, start : start + pressure_level, :, :]
+        start += pressure_level
+        r = x[:, start : start + pressure_level, :, :]
+        start += pressure_level
+        u = x[:, start : start + pressure_level, :, :]
+        start += pressure_level
+        v = x[:, start : start + pressure_level, :, :]
+        start += pressure_level
+        t = x[:, start : start + pressure_level, :, :]
         surface, skip_surface = self.encoder_surface(surface)
         z, skip_z = self.encoder_z(z)
         r, skip_r = self.encoder_r(r)
@@ -293,11 +422,11 @@ class Fengwu(Module):
             ],
             dim=1,
         )
-        B, PL, L_SIZE, C = x.shape
-        x = x.reshape(B, -1, C)
+        batch_size, pressure_levels, latent_size, channels = x.shape
+        x = x.reshape(batch_size, -1, channels)
         x = self.fuser(x)
 
-        x = x.reshape(B, PL, L_SIZE, C)
+        x = x.reshape(batch_size, pressure_levels, latent_size, channels)
         surface, z, r, u, v, t = (
             x[:, 0, :, :],
             x[:, 1, :, :],
