@@ -14,13 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
-
-from physicsnemo.core.warnings import FutureFeatureWarning
-
-warnings.warn(
-    "The 'physicsnemo.diffusion.noise_schedulers' module is a placeholder for "
-    "future functionality that will be implemented in an upcoming release.",
-    FutureFeatureWarning,
-    stacklevel=2,
+from .noise_schedulers import (  # noqa: F401
+    EDMNoiseScheduler,
+    IDDPMNoiseScheduler,
+    LinearGaussianNoiseScheduler,
+    NoiseScheduler,
+    StudentTEDMNoiseScheduler,
+    VENoiseScheduler,
+    VPNoiseScheduler,
 )

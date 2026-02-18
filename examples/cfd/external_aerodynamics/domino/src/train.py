@@ -65,7 +65,7 @@ from physicsnemo.datapipes.cae.domino_datapipe import (
     create_domino_dataset,
 )
 from physicsnemo.models.domino.model import DoMINO
-from physicsnemo.models.domino.utils import *
+from physicsnemo.models.domino.utils import create_directory
 
 from utils import ScalingFactors, get_keys_to_read, coordinate_distributed_environment
 
@@ -110,9 +110,7 @@ def validation_step(
     with torch.no_grad():
         metrics = None
 
-        for i_batch, sample_batched in enumerate(dataloader):
-            sampled_batched = dict_to_device(sample_batched, device)
-
+        for i_batch, sampled_batched in enumerate(dataloader):
             with autocast("cuda", enabled=autocast_enabled, cache_enabled=False):
                 if add_physics_loss:
                     prediction_vol, prediction_surf = model(

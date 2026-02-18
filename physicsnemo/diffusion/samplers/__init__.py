@@ -16,3 +16,11 @@
 
 from .legacy_deterministic_sampler import deterministic_sampler  # noqa: F401
 from .legacy_stochastic_sampler import stochastic_sampler  # noqa: F401
+from .samplers import sample  # noqa: F401
+from .solvers import (  # noqa: F401
+    EDMStochasticEulerSolver,
+    EDMStochasticHeunSolver,
+    EulerSolver,
+    HeunSolver,
+    Solver,
+)

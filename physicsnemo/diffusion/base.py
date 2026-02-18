@@ -58,11 +58,11 @@ class DiffusionModel(Protocol):
     >>> import torch.nn.functional as F
     >>> from physicsnemo.diffusion import DiffusionModel
     >>>
-    >>> class Denoiser:
+    >>> class Model:
     ...     def __call__(self, x, t, condition=None, **kwargs):
     ...         return F.relu(x)
     ...
-    >>> isinstance(Denoiser(), DiffusionModel)
+    >>> isinstance(Model(), DiffusionModel)
     True
     """
 
@@ -96,5 +96,211 @@ class DiffusionModel(Protocol):
         -------
         torch.Tensor
             Model output with the same shape as ``x``.
+        """
+        ...
+
+
+@runtime_checkable
+class Predictor(Protocol):
+    r"""
+    Protocol defining a predictor interface for diffusion models.
+
+    A predictor is any callable that takes a noisy state ``x``
+    and diffusion time ``t``, and returns a prediction about the clean data or
+    the noise. Common types of predictors include x0-predictor (predicts the
+    clean data :math:`\mathbf{x}_0`), score-predictor, noise-predictor
+    (predicts the noise :math:`\boldsymbol{\epsilon}`), velocity-predictor etc.
+
+    This protocol is **generic** and does not assume any specific type of
+    prediction. A predictor can be a trained neural network, a guidance
+    function (e.g., classifier-free guidance, DPS-style guidance), or any
+    combination thereof.  The exact meaning of the output depends on the
+    predictor type and how it is used. Any callable that implements this
+    interface can be used as a predictor in sampling utilities.
+
+    This protocol is typically used during inference. For training, which
+    often requires additional inputs like conditioning, use the more general
+    :class:`DiffusionModel` protocol instead. A :class:`Predictor` can be
+    obtained from a :class:`DiffusionModel` by partially applying the
+    ``condition`` and any other keyword arguments using
+    ``functools.partial``.
+
+    **Relationship to Denoiser:**
+
+    A :class:`Denoiser` is the update function used during sampling (e.g.,
+    the right-hand side of an ODE/SDE). It is obtained from a
+    :class:`Predictor` via the
+    :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.get_denoiser`
+    factory. A typical case is ODE/SDE-based sampling, where one solves:
+
+    .. math::
+        \frac{d\mathbf{x}}{dt} = D(\mathbf{x}, t;\, P(\mathbf{x}, t))
+
+    where :math:`P` is the **predictor** and :math:`D` is the **denoiser**
+    that wraps it. This equation captures the essence of how these two
+    concepts are related in the framework.
+
+    See Also
+    --------
+    :class:`Denoiser` : The interface for sampling update functions.
+    :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.get_denoiser` :
+        Factory to convert a predictor into a denoiser.
+
+    Examples
+    --------
+    **Example 1:** Convert a trained conditional model into a predictor using
+    ``functools.partial``:
+
+    >>> import torch
+    >>> from functools import partial
+    >>> from tensordict import TensorDict
+    >>> from physicsnemo.diffusion import Predictor
+    >>>
+    >>> class MyModel:
+    ...     def __call__(self, x, t, condition=None):
+    ...         # x0-predictor: returns estimate of clean data
+    ...         # (here assumes conditional normal distribution N(x|y))
+    ...         t_bc = t.view(-1, *([1] * (x.ndim - 1)))
+    ...         return x / (1 + t_bc**2) + condition["y"]
+    ...
+    >>> model = MyModel()
+    >>> cond = TensorDict({"y": torch.randn(2, 4)}, batch_size=[2])
+    >>> x0_predictor = partial(model, condition=cond)
+    >>> isinstance(x0_predictor, Predictor)
+    True
+
+    **Example 2:** Convert the x0-predictor above into a score-predictor
+    (using a simple EDM-like schedule where :math:`\sigma(t) = t` and
+    :math:`\alpha(t) = 1`):
+
+    >>> def x0_to_score(x0, x_t, t):
+    ...     sigma_sq = t.view(-1, 1) ** 2
+    ...     return (x0 - x_t) / sigma_sq
+    >>>
+    >>> def score_predictor(x, t):
+    ...     x0_pred = x0_predictor(x, t)
+    ...     return x0_to_score(x0_pred, x, t)
+    >>>
+    >>> isinstance(score_predictor, Predictor)
+    True
+    """
+
+    def __call__(
+        self,
+        x: Float[torch.Tensor, " B *dims"],
+        t: Float[torch.Tensor, " B"],
+    ) -> Float[torch.Tensor, " B *dims"]:
+        r"""
+        Forward pass of the predictor.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Noisy latent state of shape :math:`(B, *)` where :math:`B` is the
+            batch size and :math:`*` denotes any number of additional
+            dimensions (e.g., channels and spatial dimensions).
+        t : torch.Tensor
+            Batched diffusion time tensor of shape :math:`(B,)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Prediction output with the same shape as ``x``. The exact meaning
+            depends on the predictor type (x0, score, noise, velocity, etc.).
+        """
+        ...
+
+
+@runtime_checkable
+class Denoiser(Protocol):
+    r"""
+    Protocol defining a denoiser interface for diffusion model sampling.
+
+    A denoiser is the **update function** used during sampling. It takes a
+    noisy state ``x`` and diffusion time ``t``, and returns the update term
+    consumed by a :class:`~physicsnemo.diffusion.samplers.solvers.Solver`.
+    For continuous-time methods this is typically the right-hand side of the
+    ODE/SDE, but the interface is generic and can support other sampling
+    methods as well.
+
+    This is the interface used by
+    :class:`~physicsnemo.diffusion.samplers.solvers.Solver` classes and the
+    :func:`~physicsnemo.diffusion.samplers.sample` function. Any callable
+    that implements this interface can be used as a denoiser.
+
+    **Important distinction from Predictor:**
+
+    - A :class:`Predictor` is any callable that outputs a raw prediction
+      (e.g., clean data :math:`\mathbf{x}_0`, score, guidance signal, etc.).
+    - A :class:`Denoiser` is the update function derived from one or more
+      predictors, used directly by the solver during sampling.
+
+    **Typical workflow:**
+
+    1. Start with one or more :class:`Predictor` instances (e.g. trained model)
+    2. Optionally combine predictors (e.g., conditional + guidance scores)
+    3. Convert to a :class:`Denoiser` using
+       :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.get_denoiser`
+    4. Pass the denoiser to
+       :func:`~physicsnemo.diffusion.samplers.sample` together with a
+       :class:`~physicsnemo.diffusion.samplers.solvers.Solver`
+
+    See Also
+    --------
+    :class:`Predictor` : The interface for raw predictions.
+    :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.get_denoiser` :
+        Factory to convert a predictor into a denoiser.
+    :func:`~physicsnemo.diffusion.samplers.sample` : The sampling function
+        that uses this denoiser interface.
+
+    Examples
+    --------
+    Manually creating a denoiser from an x0-predictor using a simple EDM-like
+    schedule (:math:`\sigma(t)=t`, :math:`\alpha(t)=1`):
+
+    >>> import torch
+    >>> from physicsnemo.diffusion import Denoiser
+    >>>
+    >>> # Start from a predictor (x0-predictor)
+    >>> def x0_predictor(x, t):
+    ...     t_bc = t.view(-1, *([1] * (x.ndim - 1)))
+    ...     return x / (1 + t_bc**2)
+    >>>
+    >>> # Build a denoiser (ODE RHS) from scratch:
+    >>> # score = (x0 - x) / sigma^2,  ODE RHS = -0.5 * g^2 * score
+    >>> # For EDM: sigma = t, g^2 = 2*t, so RHS = (x0 - x) / t
+    >>> def my_denoiser(x, t):
+    ...     x0 = x0_predictor(x, t)
+    ...     t_bc = t.view(-1, *([1] * (x.ndim - 1)))
+    ...     return (x0 - x) / t_bc
+    ...
+    >>> isinstance(my_denoiser, Denoiser)
+    True
+    """
+
+    def __call__(
+        self,
+        x: Float[torch.Tensor, " B *dims"],
+        t: Float[torch.Tensor, " B"],
+    ) -> Float[torch.Tensor, " B *dims"]:
+        r"""
+        Compute the denoising update at the given state and time.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Noisy latent state of shape :math:`(B, *)` where :math:`B` is the
+            batch size and :math:`*` denotes any number of additional
+            dimensions (e.g., channels and spatial dimensions).
+        t : torch.Tensor
+            Batched diffusion time tensor of shape :math:`(B,)`.
+            All batch elements in the latent state ``x`` typically share the
+            same diffusion time values, but ``t`` is still required to be a
+            batched tensor.
+
+        Returns
+        -------
+        torch.Tensor
+            Denoising update term with the same shape as ``x``.
         """
         ...
