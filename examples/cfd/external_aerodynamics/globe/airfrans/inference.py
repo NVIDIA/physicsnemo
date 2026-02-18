@@ -16,6 +16,7 @@
 
 # %%
 import json
+import os
 from pathlib import Path
 
 import torch
@@ -30,13 +31,22 @@ from utilities import (
 )
 from physicsnemo.models.globe.model import GLOBE
 
-disable_autotune_printing()  # Silences the verbose output of `torch.compile(..., mode="max-autotune")`.
+disable_autotune_printing()
 torch._logging.set_logs(graph_breaks=True, recompiles=True)
 
 # %%
-output_dir = (
-    Path(__file__).parent / "output" / "run_35_full"
-)
+# Resolve output directory: GLOBE_OUTPUT_DIR env var, or the most-recently-modified
+# subdirectory under output/.
+_output_root = Path(__file__).parent / "output"
+if _env_dir := os.environ.get("GLOBE_OUTPUT_DIR"):
+    output_dir = Path(_env_dir)
+else:
+    output_subdirs = [d for d in _output_root.iterdir() if d.is_dir()]
+    if not output_subdirs:
+        raise FileNotFoundError(f"No output directories found in {_output_root}")
+    output_dir = max(output_subdirs, key=lambda d: d.stat().st_mtime)
+print(f"Using output directory: {output_dir}")
+
 data_dir = get_data_dir()
 manifest = json.loads((data_dir / "manifest.json").read_text())
 train_sample_paths = [data_dir / f for f in manifest["full_train"]]

@@ -841,7 +841,12 @@ def compute_max_mesh_sizes(
 
 
 if __name__ == "__main__":
-    data_dir = Path("/home/psharpe/gh/aerodynamics_datasets/airfrans/Dataset")
+    import os
+
+    from config import get_data_dir
+
+    env_dir = os.environ.get("AIRFRANS_DATA_DIR")
+    data_dir = Path(env_dir) if env_dir else get_data_dir()
     sample_paths = list(data_dir.iterdir())
 
     # Preprocess a sample

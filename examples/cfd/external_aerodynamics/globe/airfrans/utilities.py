@@ -44,11 +44,18 @@ from physicsnemo.mesh import Mesh
 
 
 def disable_autotune_printing() -> None:
-    """Silence the verbose command-line output of ``torch.compile(..., mode="max-autotune")``."""
-    from torch._inductor import config, select_algorithm
+    """Silence the verbose command-line output of ``torch.compile(..., mode="max-autotune")``.
 
-    config.max_autotune_report_choices_stats = False
-    select_algorithm.PRINT_AUTOTUNE = False
+    Uses private ``torch._inductor`` APIs that may change across PyTorch
+    versions, so failures are silently ignored.
+    """
+    try:
+        from torch._inductor import config, select_algorithm
+
+        config.max_autotune_report_choices_stats = False
+        select_algorithm.PRINT_AUTOTUNE = False
+    except (ImportError, AttributeError):
+        pass
 
 
 ### [MLflow helpers] ######################################################
@@ -344,7 +351,7 @@ def log_hyperparameters(
 
 ### [Device transfer] #####################################################
 
-TransferrableType = (
+TransferableType = (
     torch.Tensor
     | Mesh
     | TensorDict
@@ -360,8 +367,8 @@ TransferrableType = (
 
 
 def to(
-    data: TransferrableType, device: torch.device, dtype: torch.dtype | None = None
-) -> TransferrableType:
+    data: TransferableType, device: torch.device, dtype: torch.dtype | None = None
+) -> TransferableType:
     """Recursively transfer nested data structures to a PyTorch device.
 
     Walks dicts, lists, tuples, and sets, calling ``.to()`` on Tensor,
