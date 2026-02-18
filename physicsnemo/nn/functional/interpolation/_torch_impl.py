@@ -267,7 +267,8 @@ def _gather_nd(params: Tensor, indices: Tensor) -> Tensor:
         out_shape = orig_shape[:-1] + list(params.shape)[m:]
     else:
         raise ValueError(
-            f"the last dimension of indices must less or equal to the rank of params. Got indices:{indices.shape}, params:{params.shape}. {m} > {n}"
+            "the last dimension of indices must less or equal to the rank of params. "
+            f"Got indices:{indices.shape}, params:{params.shape}. {m} > {n}"
         )
 
     indices = indices.reshape((num_samples, m)).transpose(0, 1).tolist()
@@ -397,7 +398,7 @@ def _grid_knn_idx(
 
 # TODO currently the `tolist` operation is not supported by torch script and when fixed torch script will be used
 # @torch.compile
-def interpolation(
+def interpolation_torch(
     query_points: Tensor,
     context_grid: Tensor,
     grid: List[Tuple[float, float, int]],
@@ -457,7 +458,7 @@ def interpolation(
         torch.linspace(x[0] - k * dx_i, x[1] + k * dx_i, x[2] + 2 * k)
         for x, dx_i in zip(grid, dx)
     ]
-    meshgrid = torch.meshgrid(linspace)
+    meshgrid = torch.meshgrid(linspace, indexing="ij")
     meshgrid = torch.stack(meshgrid, dim=-1).to(device)
 
     # pad context grid by k to avoid cuts on corners
