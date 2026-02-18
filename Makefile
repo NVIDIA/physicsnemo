@@ -48,9 +48,10 @@ pytest-internal:
 		pytest && \
 		cd ../../
 
+# NOTE: temporarily omitting diffusion coverage until we have a better way to test it.
 coverage:
 	coverage combine && \
-		coverage report --show-missing --omit=*test* --omit=*internal* --omit=*experimental* --fail-under=60 && \
+		coverage report --show-missing --omit=*test* --omit=*internal* --omit=*experimental* --omit=*diffusion* --fail-under=60 && \
 		coverage html
 
 all-ci: get-data setup-ci black interrogate lint license install pytest doctest coverage

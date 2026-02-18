@@ -14,8 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
-from typing import Sequence
+import copy
 
 import pytest
 import torch
@@ -25,115 +24,31 @@ from torch.distributed.tensor.placement_types import Replicate, Shard
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel import scatter_tensor
 from physicsnemo.models.domino import DoMINO
+from physicsnemo.models.domino.config import DEFAULT_MODEL_PARAMS
+
+# Conv processor for faster tests; same shapes as DEFAULT_MODEL_PARAMS.
+_DOMINO_TEST_CONFIG = copy.deepcopy(DEFAULT_MODEL_PARAMS)
+_DOMINO_TEST_CONFIG.geometry_rep.geo_processor.processor_type = "conv"
 
 
-@dataclass
-class model_params:
-    @dataclass
-    class geometry_rep:
-        @dataclass
-        class geo_conv:
-            base_neurons: int = 32
-            base_neurons_in: int = 1
-            base_neurons_out: int = 1
-            surface_hops: int = 1
-            volume_hops: int = 1
-            volume_radii: Sequence = (0.1, 0.5, 1.0, 2.5)
-            volume_neighbors_in_radius: Sequence = (32, 64, 128, 256)
-            surface_radii: Sequence = (0.01, 0.05, 1.0)
-            surface_neighbors_in_radius: Sequence = (8, 16, 128)
-            activation: str = "gelu"
-            fourier_features: bool = False
-            num_modes: int = 5
-
-        @dataclass
-        class geo_processor:
-            base_filters: int = 8
-            activation: str = "gelu"
-            processor_type: str = "conv"
-            self_attention: bool = False
-            cross_attention: bool = False
-            volume_sdf_scaling_factor: Sequence = (0.04,)
-            surface_sdf_scaling_factor: Sequence = (0.01, 0.02, 0.04)
-
-        base_filters: int = 8
-        geo_conv = geo_conv
-        geo_processor = geo_processor
-
-    @dataclass
-    class geometry_local:
-        base_layer: int = 512
-        volume_neighbors_in_radius: Sequence = (64, 128)
-        surface_neighbors_in_radius: Sequence = (32, 128)
-        volume_radii: Sequence = (0.1, 0.25)
-        surface_radii: Sequence = (0.05, 0.25)
-
-    @dataclass
-    class nn_basis_functions:
-        base_layer: int = 512
-        fourier_features: bool = True
-        num_modes: int = 5
-        activation: str = "gelu"
-
-    @dataclass
-    class local_point_conv:
-        activation: str = "gelu"
-
-    @dataclass
-    class aggregation_model:
-        base_layer: int = 512
-        activation: str = "gelu"
-
-    @dataclass
-    class position_encoder:
-        base_neurons: int = 512
-        activation: str = "gelu"
-        fourier_features: bool = True
-        num_modes: int = 5
-
-    @dataclass
-    class parameter_model:
-        base_layer: int = 512
-        fourier_features: bool = False
-        num_modes: int = 5
-        activation: str = "gelu"
-
-    model_type: str = "combined"
-    activation: str = "gelu"
-    interp_res: Sequence = (128, 64, 64)
-    use_sdf_in_basis_func: bool = True
-    positional_encoding: bool = False
-    surface_neighbors: bool = True
-    num_neighbors_surface: int = 7
-    num_neighbors_volume: int = 10
-    use_surface_normals: bool = True
-    use_surface_area: bool = True
-    encode_parameters: bool = False
-    combine_volume_surface: bool = False
-    geometry_encoding_type: str = "both"
-    solution_calculation_mode: str = "two-loop"
-    geometry_rep = geometry_rep
-    nn_basis_functions = nn_basis_functions
-    aggregation_model = aggregation_model
-    position_encoder = position_encoder
-    geometry_local = geometry_local
-
-
-def generate_synthetic_data(shard_grid, shard_points, npoints=100):
+def generate_synthetic_data(shard_grid, shard_points, npoints=100, config=None):
     """
     Generate synthetic data for the DoMINO model.
     Args:
         shard_grid: Whether to shard the grid.
         shard_points: Whether to shard the points.
         npoints: Number of points.
+        config: DoMINO config for grid size and neighbor counts. Defaults to DEFAULT_MODEL_PARAMS.
     Returns:
         input_dict: Dictionary of input tensors.
     """
+    if config is None:
+        config = DEFAULT_MODEL_PARAMS
     dm = DistributedManager()
 
     bsize = 1
-    nx, ny, nz = 128, 64, 64
-    num_neigh = 7
+    nx, ny, nz = config.interp_res
+    num_neigh = config.num_neighbors_surface
     global_features = 2
 
     device = dm.device
@@ -265,18 +180,20 @@ def test_domino_distributed(
 
     dm = DistributedManager()
 
-    # Construct DoMINO model
+    # Construct DoMINO model (conv processor for faster tests)
     model = DoMINO(
         input_features=3,
         output_features_vol=5,
         output_features_surf=4,
-        model_parameters=model_params(),
+        model_parameters=_DOMINO_TEST_CONFIG,
     ).to(dm.device)
 
     npoints = 500
 
     # Create data:
-    input_dict = generate_synthetic_data(shard_grid, shard_points, npoints)
+    input_dict = generate_synthetic_data(
+        shard_grid, shard_points, npoints, config=_DOMINO_TEST_CONFIG
+    )
 
     # Scatter the data
     point_placements = (Shard(1),) if shard_points else (Replicate(),)
