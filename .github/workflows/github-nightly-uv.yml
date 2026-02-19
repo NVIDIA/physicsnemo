@@ -24,7 +24,7 @@
 # THE DATA-DRIVEN TESTS.  RAISE THIS UP AGAIN EVENTUALLY.
 
 
-name: Nightly Github Workflow
+name: Nightly Github UV Workflow
 on:
   schedule:
     # Run nightly at 2 AM UTC
@@ -32,91 +32,128 @@ on:
   workflow_dispatch:
     # Allow manual triggering
 
+env:
+  PYTHON_VERSION: "3.12"
+  UV_CACHE_KEY_PREFIX: uv-cache-nightly-cuda13.1.1-cudnn-devel-ubuntu24.04-py3.12
+  VENV_CACHE_KEY_PREFIX: uv-env-nightly-cuda13.1.1-cudnn-devel-ubuntu24.04-py3.12
+
 jobs:
   # Stage 1: Build and cache the environment
   build-environment:
     name: Build Environment
     runs-on: linux-amd64-cpu8
+    container:
+      image: nvidia/cuda:13.1.1-cudnn-devel-ubuntu24.04
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - name: Bootstrap cuDNN CI container
+      uses: ./.github/actions/bootstrap-cudnn-ci
       with:
-        python-version: '3.12'
+        python-version: ${{ env.PYTHON_VERSION }}
 
-    - name: Install uv
-      uses: nick-fields/retry@v3
+    - name: Restore uv package cache
+      id: cache-uv-package-restore
+      uses: actions/cache/restore@v4
       with:
-        timeout_minutes: 5
-        max_attempts: 3
-        command: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        path: ~/.cache/uv
+        key: ${{ env.UV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
+        restore-keys: |
+          ${{ env.UV_CACHE_KEY_PREFIX }}-
 
-    - name: Restore uv cache
-      id: cache-uv-restore
+    - name: Restore venv cache
+      id: cache-venv-restore
       uses: actions/cache/restore@v4
       with:
         path: .venv
-        key: uv-env-nightly-latest
+        key: ${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
+        restore-keys: |
+          ${{ env.VENV_CACHE_KEY_PREFIX }}-
 
-    - name: Install package with uv
-      if: steps.cache-uv-restore.outputs.cache-hit != 'true'
+    - name: Install base dependencies with uv (dev + cu13)
+      if: steps.cache-venv-restore.outputs.cache-hit != 'true'
       run: |
-        # Install core dependencies and development group
-        uv sync --group dev --preview-features extra-build-dependencies
+        # Install core dependencies and development group from pyproject/lock.
+        uv sync \
+          --group dev \
+          --extra cu13 \
+          --preview-features extra-build-dependencies
+
+    - name: Install GNN dependencies from pyproject extras
+      if: steps.cache-venv-restore.outputs.cache-hit != 'true'
+      run: |
+        # Extend the environment to include the gnns extra.
+        uv sync \
+          --group dev \
+          --extra cu13 \
+          --extra gnns \
+          --preview-features extra-build-dependencies
+
+    - name: Install perf dependencies from pyproject extras
+      if: steps.cache-venv-restore.outputs.cache-hit != 'true'
+      run: |
+        # Extend the environment to include performance extra deps.
+        uv sync \
+          --group dev \
+          --extra cu13 \
+          --extra gnns \
+          --extra perf \
+          --preview-features extra-build-dependencies
+
+    - name: Save uv package cache
+      if: steps.cache-uv-package-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.cache/uv
+        key: ${{ env.UV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
 
     - name: Free disk space before caching
-      if: steps.cache-uv-restore.outputs.cache-hit != 'true'
+      if: steps.cache-venv-restore.outputs.cache-hit != 'true'
       run: |
         rm -rf ~/.cache/uv
         df -h
 
-    - name: Delete old environment cache
-      if: steps.cache-uv-restore.outputs.cache-hit != 'true'
-      run: |
-        gh cache delete "uv-env-nightly-latest" || true
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
     - name: Save environment to cache
-      if: steps.cache-uv-restore.outputs.cache-hit != 'true'
+      if: steps.cache-venv-restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: .venv
-        key: uv-env-nightly-latest
+        key: ${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
+
+    - name: Upload venv artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: nightly-uv-venv
+        path: .venv
+        retention-days: 2
 
   # Stage 2: Run testmon tests and cache the database
   testmon:
     name: Testmon
     needs: build-environment
     runs-on: linux-amd64-gpu-h100-latest-1
+    container:
+      image: nvidia/cuda:13.1.1-cudnn-devel-ubuntu24.04
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - name: Bootstrap cuDNN CI container
+      uses: ./.github/actions/bootstrap-cudnn-ci
       with:
-        python-version: '3.12'
+        python-version: ${{ env.PYTHON_VERSION }}
 
-    - name: Install uv
-      uses: nick-fields/retry@v3
+    - name: Download venv artifact
+      uses: actions/download-artifact@v4
       with:
-        timeout_minutes: 5
-        max_attempts: 3
-        command: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-    - name: Restore environment from cache
-      uses: actions/cache/restore@v4
-      with:
+        name: nightly-uv-venv
         path: .venv
-        key: uv-env-nightly-latest
-        fail-on-cache-miss: true
+
+    - name: Validate environment
+      run: |
+        .venv/bin/python --version
+        uv run python -c "import torch; print(torch.__version__)"
 
     - name: Run core tests (collect all for testmon)
       run: |
@@ -143,30 +180,27 @@ jobs:
     name: Coverage
     needs: build-environment
     runs-on: linux-amd64-gpu-h100-latest-1
+    container:
+      image: nvidia/cuda:13.1.1-cudnn-devel-ubuntu24.04
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - name: Bootstrap cuDNN CI container
+      uses: ./.github/actions/bootstrap-cudnn-ci
       with:
-        python-version: '3.12'
+        python-version: ${{ env.PYTHON_VERSION }}
 
-    - name: Install uv
-      uses: nick-fields/retry@v3
+    - name: Download venv artifact
+      uses: actions/download-artifact@v4
       with:
-        timeout_minutes: 5
-        max_attempts: 3
-        command: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-    - name: Restore environment from cache
-      uses: actions/cache/restore@v4
-      with:
+        name: nightly-uv-venv
         path: .venv
-        key: uv-env-nightly-latest
-        fail-on-cache-miss: true
+
+    - name: Validate environment
+      run: |
+        .venv/bin/python --version
+        uv run python -c "import torch; print(torch.__version__)"
 
     - name: Run core tests for coverage report
       run: |
