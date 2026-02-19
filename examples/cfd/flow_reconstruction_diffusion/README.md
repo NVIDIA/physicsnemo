@@ -51,12 +51,29 @@ In directory ``physicsnemo/examples/cfd/flow_reconstruction_diffusion/``, run:
 python train.py --config-name=config_dfsr_train
 ``
 
-or 
+or
 
 (with physics-informed conditioning)
 
 ``
 python train.py --config-name=config_dfsr_cond_train
+``
+
+You can also use the helper script:
+
+``
+bash setup_and_train.sh
+``
+
+Optional environment variables:
+
+- `CONFIG_NAME` (default: `config_dfsr_train`)
+- `TRAIN_EXTRA_ARGS` (default: empty; appended to `train.py`)
+
+Example for conditional training:
+
+``
+CONFIG_NAME=config_dfsr_cond_train bash setup_and_train.sh
 ``
 
 <b>Step 2 - Super-resolution</b>
@@ -81,4 +98,3 @@ This implementation is based on / inspired by:
 
 - [https://github.com/ermongroup/SDEdit](https://github.com/ermongroup/SDEdit) (SDEdit: Guided Image Synthesis and Editing with Stochastic Differential Equations)
 - [https://github.com/ermongroup/ddim](https://github.com/ermongroup/ddim) (Denoising Diffusion Implicit Models)
-

@@ -27,7 +27,7 @@ import re
 
 import hydra
 import torch
-from omegaconf import DictConfig
+from omegaconf import DictConfig, ListConfig
 from training_loop import training_loop
 from misc import EasyDict
 
@@ -44,6 +44,21 @@ except ImportError:
 
 from omegaconf import OmegaConf
 import argparse
+
+
+def _to_json_serializable(obj):
+    """Recursively convert OmegaConf/EasyDict-style objects to JSON-safe types."""
+    if isinstance(obj, (DictConfig, ListConfig)):
+        obj = OmegaConf.to_container(obj, resolve=True)
+
+    if isinstance(obj, dict):
+        return {str(k): _to_json_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_json_serializable(v) for v in obj]
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+
+    return str(obj)
 
 
 @hydra.main(version_base="1.2", config_path="conf", config_name="config")
@@ -285,8 +300,9 @@ def main(cfg: DictConfig) -> None:
     # c.task = cfg.task
 
     # Print options.  # TODO replace prints with PhysicsNeMo logger
+    serialized_config = _to_json_serializable(c)
     logger0.info("Training options:")
-    logger0.info(json.dumps(c, indent=2))
+    logger0.info(json.dumps(serialized_config, indent=2))
     logger0.info(f"Output directory:        {c.run_dir}")
     logger0.info(f"Dataset path:            {c.dataset_kwargs.path}")
     logger0.info(f"Class-conditional:       {c.dataset_kwargs.use_labels}")
@@ -306,7 +322,7 @@ def main(cfg: DictConfig) -> None:
     if dist.rank == 0:
         os.makedirs(c.run_dir, exist_ok=True)
         with open(os.path.join(c.run_dir, "training_options.json"), "wt") as f:
-            json.dump(c, f, indent=2)
+            json.dump(serialized_config, f, indent=2)
         # utils.Logger(file_name=os.path.join(c.run_dir, 'log.txt'), file_mode='a', should_flush=True)
 
     # Train.
