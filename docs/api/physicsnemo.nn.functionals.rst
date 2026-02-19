@@ -23,3 +23,4 @@ in the documentation for performance comparisons.
    nn/functionals/fourier_spectral
    nn/functionals/regularization_parameterization
    nn/functionals/resampling_interpolation
+   nn/functionals/electromagnetics
