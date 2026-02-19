@@ -25,7 +25,6 @@ import torch
 
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.primitives.procedural import lumpy_sphere
-from physicsnemo.mesh.utilities._cache import get_cached
 
 ### Helper Functions
 
@@ -252,7 +251,7 @@ class TestPointNormalsEdgeCases:
         normals1 = mesh.point_normals
 
         # Check cached
-        assert get_cached(mesh.point_data, "normals") is not None
+        assert mesh._cache.get(("point", "normals"), None) is not None
 
         # Second access should return cached value
         normals2 = mesh.point_normals

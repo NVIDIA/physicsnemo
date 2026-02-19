@@ -50,12 +50,14 @@ from collections.abc import Sequence
 from typing import Any, Callable
 
 import torch
+from torch.distributed.tensor import DTensor
 from torch.distributed.tensor._dtensor_spec import TensorMeta
 from torch.distributed.tensor.placement_types import Placement, Replicate, Shard
 
 from physicsnemo.domain_parallel._shard_tensor_spec import (
     ShardTensorSpec,
     _stride_from_contiguous_shape_C_style,
+    compute_sharding_shapes_from_chunking_global_shape,
 )
 from physicsnemo.domain_parallel.shard_tensor import ShardTensor
 
@@ -452,6 +454,9 @@ def _sharded_view_forward(
     ShardTensor
         Viewed/reshaped ShardTensor.
     """
+    is_plain_dtensor = isinstance(tensor, DTensor) and not isinstance(
+        tensor, ShardTensor
+    )
     spec = tensor._spec
     local_tensor = tensor._local_tensor
 
@@ -476,8 +481,20 @@ def _sharded_view_forward(
     new_placements = _compute_view_placements(
         global_old, local_old, global_new, spec.placements
     )
+    if is_plain_dtensor:
+        # DTensorSpec does not carry ShardTensorSpec._sharding_shapes. Reconstruct
+        # per-rank shapes from mesh/placements/global shape using chunk semantics.
+        old_sharding = compute_sharding_shapes_from_chunking_global_shape(
+            spec.mesh, spec.placements, global_old
+        )
+        old_sharding = {
+            mesh_dim: tuple(rank_shapes)
+            for mesh_dim, rank_shapes in old_sharding.items()
+        }
+    else:
+        old_sharding = spec._sharding_shapes
     new_sharding = _compute_view_sharding_shapes(
-        spec._sharding_shapes, global_old, global_new, spec.placements
+        old_sharding, global_old, global_new, spec.placements
     )
 
     # Build new spec — no communication required.

@@ -26,7 +26,6 @@ import torch.nn.functional as F
 
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.primitives.surfaces import icosahedron_surface
-from physicsnemo.mesh.utilities._cache import get_cached
 
 ### Mesh Generators
 
@@ -465,8 +464,8 @@ class TestCurvatureEdgeCases:
         H1 = mesh.mean_curvature_vertices
 
         # Check cached
-        assert get_cached(mesh.point_data, "gaussian_curvature") is not None
-        assert get_cached(mesh.point_data, "mean_curvature") is not None
+        assert mesh._cache.get(("point", "gaussian_curvature"), None) is not None
+        assert mesh._cache.get(("point", "mean_curvature"), None) is not None
 
         # Second access should return same values
         K2 = mesh.gaussian_curvature_vertices

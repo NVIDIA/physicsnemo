@@ -71,10 +71,10 @@ else
     $(error Unknown CPU architecture ${ARCH} detected)
 endif
 
-MODULUS_GIT_HASH = $(shell git rev-parse --short HEAD)
+PHYSICSNEMO_GIT_HASH = $(shell git rev-parse --short HEAD)
 
 container-deploy:
-	docker build -t physicsnemo:deploy --build-arg TARGETPLATFORM=${TARGETPLATFORM} --build-arg MODULUS_GIT_HASH=${MODULUS_GIT_HASH} --target deploy -f Dockerfile .
+	docker build -t physicsnemo:deploy --build-arg TARGETPLATFORM=${TARGETPLATFORM} --build-arg PHYSICSNEMO_GIT_HASH=${PHYSICSNEMO_GIT_HASH} --target deploy -f Dockerfile .
 
 container-ci:
 	docker build -t physicsnemo:ci --build-arg TARGETPLATFORM=${TARGETPLATFORM} --target ci -f Dockerfile .

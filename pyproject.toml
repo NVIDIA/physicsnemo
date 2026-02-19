@@ -182,7 +182,7 @@ cu13 = [
     "torchvision>=0.19.0",
     "cuml-cu13",
     "pylibraft-cu13",
-    "cupy-cuda13x",
+    "cupy-cuda13x==13.6.0",
     "nvidia-dali-cuda130",
 ]
 cu12 = [

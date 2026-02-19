@@ -1800,15 +1800,11 @@ class TestKeyParsing:
     """Test various key input formats."""
 
     def test_none_keys_all_fields(self, simple_tet_mesh):
-        """Test keys=None computes all non-cached fields (excludes "_cache" sub-dict)."""
-        from physicsnemo.mesh.utilities._cache import set_cached
-
+        """Test keys=None computes all non-cached fields (excludes cache)."""
         mesh = simple_tet_mesh
         mesh.point_data["field1"] = torch.ones(mesh.n_points)
         mesh.point_data["field2"] = torch.ones(mesh.n_points)
-        set_cached(
-            mesh.point_data, "test_value", torch.ones(mesh.n_points)
-        )  # Should skip
+        mesh._cache["point", "test_value"] = torch.ones(mesh.n_points)
 
         mesh_grad = mesh.compute_point_derivatives(keys=None)
 
