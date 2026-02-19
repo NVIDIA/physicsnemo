@@ -1099,7 +1099,7 @@ class MultiscaleKernel(Module):
     def forward(
         self,
         *,
-        reference_lengths: TensorDict,
+        reference_lengths: dict[str, torch.Tensor],
         source_points: Float[torch.Tensor, "n_sources n_dims"],
         target_points: Float[torch.Tensor, "n_targets n_dims"],
         source_strengths: TensorDict | None = None,
@@ -1118,9 +1118,8 @@ class MultiscaleKernel(Module):
 
         Parameters
         ----------
-        reference_lengths : TensorDict
-            TensorDict containing the reference length scales, keyed by
-            ``reference_length_names``.
+        reference_lengths : dict[str, torch.Tensor]
+            Mapping of reference length names to scalar tensors.
         source_points : Float[torch.Tensor, "n_sources n_dims"]
             Tensor of shape :math:`(N_{sources}, D)`. Physical coordinates of
             the source points.

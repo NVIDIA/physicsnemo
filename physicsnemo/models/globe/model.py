@@ -130,7 +130,7 @@ class GLOBE(Module):
         (one Mesh per BC type); use :meth:`~physicsnemo.mesh.Mesh.merge` to
         combine multiple meshes of the same BC type before passing them here.
         Cell data (``mesh.cell_data``) should contain only the source features
-        expected by the model; the ``_cache`` key is automatically excluded.
+        expected by the model.
     reference_lengths : dict[str, torch.Tensor]
         Dictionary mapping reference length names to scalar tensors. Keys must match
         the model's ``reference_length_names``.
@@ -330,9 +330,8 @@ class GLOBE(Module):
                 * (source_bc_mesh.cell_areas / self.reference_area)
             )
 
-            # Exclude internal cache entries from cell_data
             source_data_by_rank: dict[int, TensorDict] = split_by_leaf_rank(
-                source_bc_mesh.cell_data.exclude("_cache")
+                source_bc_mesh.cell_data
             )
             source_scalars = combine_tensordicts(
                 source_data_by_rank[0],

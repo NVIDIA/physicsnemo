@@ -22,7 +22,7 @@ from datetime import datetime
 from itertools import count
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -48,7 +48,6 @@ from utilities import (
 )
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.mesh.utilities._cache import set_cached
 from physicsnemo.models.globe.model import GLOBE
 from physicsnemo.optim import CombinedOptimizer
 
@@ -410,10 +409,8 @@ def main(
                 if training:
                     for bc_type, mesh in input_dict["boundary_meshes"].items():
                         if train_face_downsampling_ratio != 1.0:
-                            set_cached(
-                                mesh.cell_data,
-                                "areas",
-                                mesh.cell_areas / train_face_downsampling_ratio,
+                            mesh._cache["cell", "areas"] = (
+                                mesh.cell_areas / train_face_downsampling_ratio
                             )
                             new_n_cells = int(
                                 mesh.n_cells * train_face_downsampling_ratio
@@ -424,10 +421,8 @@ def main(
                                 ]
                             )
                         if train_randomize_face_centers:
-                            set_cached(
-                                mesh.cell_data,
-                                "centroids",
-                                mesh.sample_random_points_on_cells(),
+                            mesh._cache["cell", "centroids"] = (
+                                mesh.sample_random_points_on_cells()
                             )
                         input_dict["boundary_meshes"][bc_type] = mesh
 
