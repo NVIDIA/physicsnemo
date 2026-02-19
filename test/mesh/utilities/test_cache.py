@@ -14,291 +14,204 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for cache utility functions.
+"""Tests for Mesh caching behavior.
 
-Tests validate the get_cached and set_cached functions used for storing
-and retrieving cached computed values in TensorDict structures.
+Tests validate that mesh._cache (nested TensorDict with "cell" and "point"
+sub-TensorDicts) correctly stores and retrieves cached computed values.
 """
 
 import pytest
 import torch
-from tensordict import TensorDict
 
-from physicsnemo.mesh.utilities._cache import get_cached, set_cached
+from physicsnemo.mesh import Mesh
 
 
-class TestGetCached:
-    """Tests for get_cached function."""
+class TestFreshMeshEmptyCache:
+    """Tests that a freshly constructed Mesh has empty caches."""
 
-    def test_get_cached_returns_none_when_not_set(self):
-        """Test that get_cached returns None when cache is empty."""
-        data = TensorDict({}, batch_size=[10])
+    def test_fresh_mesh_cell_cache_empty(self):
+        """Test that a freshly constructed Mesh has empty cell cache."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
 
-        result = get_cached(data, "areas")
+        assert len(mesh._cache["cell"].keys()) == 0
 
+    def test_fresh_mesh_point_cache_empty(self):
+        """Test that a freshly constructed Mesh has empty point cache."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        assert len(mesh._cache["point"].keys()) == 0
+
+
+class TestAccessPopulatesCache:
+    """Tests that accessing computed properties populates mesh._cache."""
+
+    def test_cell_centroids_populates_cache(self):
+        """Test that accessing mesh.cell_centroids populates mesh._cache['cell', 'centroids']."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        assert mesh._cache.get(("cell", "centroids"), None) is None
+
+        _ = mesh.cell_centroids
+
+        assert "centroids" in mesh._cache["cell"].keys()
+        assert mesh._cache["cell", "centroids"] is not None
+        assert mesh._cache["cell", "centroids"].shape == (1, 2)
+
+    def test_cell_areas_populates_cache(self):
+        """Test that accessing mesh.cell_areas populates mesh._cache['cell', 'areas']."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        assert mesh._cache.get(("cell", "areas"), None) is None
+
+        _ = mesh.cell_areas
+
+        assert "areas" in mesh._cache["cell"].keys()
+        assert mesh._cache["cell", "areas"] is not None
+        assert mesh._cache["cell", "areas"].shape == (1,)
+
+
+class TestCustomValueOverride:
+    """Tests that writing to mesh._cache overrides property return values."""
+
+    def test_custom_centroids_returned(self):
+        """Test that writing mesh._cache['cell', 'centroids'] = custom_value makes mesh.cell_centroids return it."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        custom_value = torch.tensor([[99.0, 99.0]], dtype=torch.float32)
+        mesh._cache["cell", "centroids"] = custom_value
+
+        result = mesh.cell_centroids
+        assert torch.equal(result, custom_value)
+
+
+class TestCacheGet:
+    """Tests for mesh._cache.get(('cell', key), None) and ('point', key)."""
+
+    def test_get_returns_none_when_not_set(self):
+        """Test that _cache.get returns None when key is not in cache."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        result = mesh._cache.get(("cell", "areas"), None)
         assert result is None
 
-    def test_get_cached_returns_none_for_missing_key(self):
-        """Test that get_cached returns None for missing key in existing cache."""
-        data = TensorDict({}, batch_size=[10])
-        data["_cache"] = TensorDict({"centroids": torch.randn(10, 3)}, batch_size=[10])
+    def test_get_returns_value_when_set(self):
+        """Test that _cache.get returns the cached value when present."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
 
-        result = get_cached(data, "areas")
+        custom_value = torch.tensor([42.0], dtype=torch.float32)
+        mesh._cache["cell", "areas"] = custom_value
 
-        assert result is None
-
-    def test_get_cached_returns_value_when_set(self):
-        """Test that get_cached returns the cached value when present."""
-        data = TensorDict({}, batch_size=[10])
-        cached_value = torch.randn(10, 3)
-        data["_cache"] = TensorDict({"centroids": cached_value}, batch_size=[10])
-
-        result = get_cached(data, "centroids")
-
+        result = mesh._cache.get(("cell", "areas"), None)
         assert result is not None
-        assert torch.equal(result, cached_value)
-
-    def test_get_cached_empty_tensordict(self):
-        """Test get_cached on completely empty TensorDict."""
-        data = TensorDict({}, batch_size=[])
-
-        result = get_cached(data, "any_key")
-
-        assert result is None
+        assert torch.equal(result, custom_value)
 
 
-class TestSetCached:
-    """Tests for set_cached function."""
+class TestCacheStore:
+    """Tests for storing values in mesh._cache."""
 
-    def test_set_cached_creates_cache_if_missing(self):
-        """Test that set_cached creates _cache TensorDict if not present."""
-        data = TensorDict({}, batch_size=[10])
-        value = torch.randn(10, 3)
+    def test_store_creates_entry(self):
+        """Test that assigning to _cache creates the entry."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
 
-        set_cached(data, "centroids", value)
+        value = torch.randn(1, 2)
+        mesh._cache["cell", "centroids"] = value
 
-        assert "_cache" in data
-        assert "centroids" in data["_cache"].keys()
+        assert "centroids" in mesh._cache["cell"].keys()
+        assert torch.equal(mesh._cache["cell", "centroids"], value)
 
-    def test_set_cached_stores_value(self):
-        """Test that set_cached stores the value correctly."""
-        data = TensorDict({}, batch_size=[10])
-        value = torch.randn(10, 3)
+    def test_store_overwrites_existing(self):
+        """Test that assigning overwrites existing cached value."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
 
-        set_cached(data, "areas", value)
+        old_value = torch.randn(1, 2)
+        new_value = torch.randn(1, 2)
+        mesh._cache["cell", "centroids"] = old_value
+        mesh._cache["cell", "centroids"] = new_value
 
-        stored = data[("_cache", "areas")]
-        assert torch.equal(stored, value)
-
-    def test_set_cached_overwrites_existing(self):
-        """Test that set_cached overwrites existing cached value."""
-        data = TensorDict({}, batch_size=[10])
-        old_value = torch.randn(10, 3)
-        new_value = torch.randn(10, 3)
-
-        set_cached(data, "centroids", old_value)
-        set_cached(data, "centroids", new_value)
-
-        stored = data[("_cache", "centroids")]
+        stored = mesh._cache["cell", "centroids"]
         assert torch.equal(stored, new_value)
         assert not torch.equal(stored, old_value)
 
-    def test_set_cached_multiple_keys(self):
-        """Test that set_cached can store multiple keys."""
-        data = TensorDict({}, batch_size=[10])
-        centroids = torch.randn(10, 3)
-        areas = torch.randn(10)
-        normals = torch.randn(10, 3)
+    def test_store_multiple_keys(self):
+        """Test that multiple keys can be stored in cell cache."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
 
-        set_cached(data, "centroids", centroids)
-        set_cached(data, "areas", areas)
-        set_cached(data, "normals", normals)
+        centroids = torch.randn(1, 2)
+        areas = torch.randn(1)
+        normals = torch.randn(1, 2)
+        mesh._cache["cell", "centroids"] = centroids
+        mesh._cache["cell", "areas"] = areas
+        mesh._cache["cell", "normals"] = normals
 
-        assert torch.equal(data[("_cache", "centroids")], centroids)
-        assert torch.equal(data[("_cache", "areas")], areas)
-        assert torch.equal(data[("_cache", "normals")], normals)
-
-
-class TestCacheRoundTrip:
-    """Tests for set_cached followed by get_cached."""
-
-    def test_roundtrip_scalar(self):
-        """Test round-trip with scalar tensor."""
-        data = TensorDict({}, batch_size=[])
-        value = torch.tensor(42.0)
-
-        set_cached(data, "time", value)
-        retrieved = get_cached(data, "time")
-
-        assert retrieved is not None
-        assert torch.equal(retrieved, value)
-
-    def test_roundtrip_1d(self):
-        """Test round-trip with 1D tensor."""
-        data = TensorDict({}, batch_size=[10])
-        value = torch.randn(10)
-
-        set_cached(data, "areas", value)
-        retrieved = get_cached(data, "areas")
-
-        assert retrieved is not None
-        assert torch.equal(retrieved, value)
-
-    def test_roundtrip_2d(self):
-        """Test round-trip with 2D tensor."""
-        data = TensorDict({}, batch_size=[10])
-        value = torch.randn(10, 3)
-
-        set_cached(data, "centroids", value)
-        retrieved = get_cached(data, "centroids")
-
-        assert retrieved is not None
-        assert torch.equal(retrieved, value)
-
-    def test_roundtrip_3d(self):
-        """Test round-trip with 3D tensor."""
-        data = TensorDict({}, batch_size=[10])
-        value = torch.randn(10, 3, 3)
-
-        set_cached(data, "stress", value)
-        retrieved = get_cached(data, "stress")
-
-        assert retrieved is not None
-        assert torch.equal(retrieved, value)
+        assert torch.equal(mesh._cache["cell", "centroids"], centroids)
+        assert torch.equal(mesh._cache["cell", "areas"], areas)
+        assert torch.equal(mesh._cache["cell", "normals"], normals)
 
 
-class TestCacheWithExistingData:
-    """Tests for cache operations with pre-existing data."""
+class TestCacheCellPointSeparation:
+    """Tests that cell and point caches are separate."""
 
-    def test_cache_does_not_affect_existing_data(self):
-        """Test that caching doesn't affect existing non-cache data."""
-        data = TensorDict({"temperature": torch.randn(10)}, batch_size=[10])
-        original_temp = data["temperature"].clone()
+    def test_cell_and_point_caches_independent(self):
+        """Test that cell and point caches are independent sub-TensorDicts."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
 
-        set_cached(data, "areas", torch.randn(10))
+        mesh._cache["cell", "centroids"] = torch.randn(1, 2)
+        mesh._cache["point", "normals"] = torch.randn(3, 2)
 
-        assert torch.equal(data["temperature"], original_temp)
-
-    def test_get_cached_ignores_non_cache_keys(self):
-        """Test that get_cached only looks in _cache namespace."""
-        data = TensorDict({"areas": torch.randn(10)}, batch_size=[10])
-
-        # Even though "areas" exists at top level, get_cached looks in _cache
-        result = get_cached(data, "areas")
-
-        assert result is None
-
-    def test_cache_coexists_with_data(self):
-        """Test that cache and regular data coexist."""
-        data = TensorDict(
-            {
-                "temperature": torch.randn(10),
-                "pressure": torch.randn(10),
-            },
-            batch_size=[10],
-        )
-
-        set_cached(data, "centroids", torch.randn(10, 3))
-
-        assert "temperature" in data.keys()
-        assert "pressure" in data.keys()
-        assert "_cache" in data.keys()
-        assert get_cached(data, "centroids") is not None
+        assert "centroids" in mesh._cache["cell"].keys()
+        assert "normals" in mesh._cache["point"].keys()
+        assert "centroids" not in mesh._cache["point"].keys()
+        assert "normals" not in mesh._cache["cell"].keys()
 
 
 class TestCacheDevices:
     """Tests for device handling in cache operations."""
 
     def test_cache_cpu(self):
-        """Test caching on CPU TensorDict."""
-        data = TensorDict({}, batch_size=[10], device="cpu")
-        value = torch.randn(10, 3, device="cpu")
+        """Test caching on CPU mesh."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
 
-        set_cached(data, "centroids", value)
-        retrieved = get_cached(data, "centroids")
+        _ = mesh.cell_centroids
+        cached = mesh._cache["cell", "centroids"]
 
-        assert retrieved is not None
-        assert retrieved.device.type == "cpu"
+        assert cached is not None
+        assert cached.device.type == "cpu"
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
     def test_cache_cuda(self):
-        """Test caching on CUDA TensorDict."""
-        data = TensorDict({}, batch_size=[10], device="cuda")
-        value = torch.randn(10, 3, device="cuda")
+        """Test caching on CUDA mesh."""
+        points = torch.tensor(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32, device="cuda"
+        )
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64, device="cuda")
+        mesh = Mesh(points=points, cells=cells)
 
-        set_cached(data, "centroids", value)
-        retrieved = get_cached(data, "centroids")
+        _ = mesh.cell_centroids
+        cached = mesh._cache["cell", "centroids"]
 
-        assert retrieved is not None
-        assert retrieved.device.type == "cuda"
-
-
-class TestCacheDtypes:
-    """Tests for dtype handling in cache operations."""
-
-    @pytest.mark.parametrize(
-        "dtype", [torch.float32, torch.float64, torch.int64, torch.int32]
-    )
-    def test_cache_various_dtypes(self, dtype):
-        """Test caching with various dtypes."""
-        data = TensorDict({}, batch_size=[10])
-        if dtype in [torch.float32, torch.float64]:
-            value = torch.randn(10, dtype=dtype)
-        else:
-            value = torch.randint(0, 100, (10,), dtype=dtype)
-
-        set_cached(data, "values", value)
-        retrieved = get_cached(data, "values")
-
-        assert retrieved is not None
-        assert retrieved.dtype == dtype
-
-
-class TestCacheIntegrationWithMesh:
-    """Tests for cache usage patterns similar to Mesh class."""
-
-    def test_cell_data_cache_pattern(self):
-        """Test typical cell_data cache pattern used in Mesh."""
-        # Simulate cell_data TensorDict
-        cell_data = TensorDict({}, batch_size=[100])
-
-        # First access - cache miss
-        cached_areas = get_cached(cell_data, "areas")
-        assert cached_areas is None
-
-        # Compute and cache
-        computed_areas = torch.randn(100)
-        set_cached(cell_data, "areas", computed_areas)
-
-        # Second access - cache hit
-        cached_areas = get_cached(cell_data, "areas")
-        assert cached_areas is not None
-        assert torch.equal(cached_areas, computed_areas)
-
-    def test_point_data_cache_pattern(self):
-        """Test typical point_data cache pattern used in Mesh."""
-        # Simulate point_data TensorDict
-        point_data = TensorDict({}, batch_size=[500])
-
-        # Cache point normals
-        normals = torch.randn(500, 3)
-        set_cached(point_data, "normals", normals)
-
-        # Retrieve
-        cached_normals = get_cached(point_data, "normals")
-        assert cached_normals is not None
-        assert cached_normals.shape == (500, 3)
-
-    def test_multiple_caches_pattern(self):
-        """Test multiple cached properties pattern."""
-        cell_data = TensorDict({}, batch_size=[100])
-
-        # Cache multiple properties
-        set_cached(cell_data, "centroids", torch.randn(100, 3))
-        set_cached(cell_data, "areas", torch.randn(100))
-        set_cached(cell_data, "normals", torch.randn(100, 3))
-
-        # All should be retrievable
-        assert get_cached(cell_data, "centroids") is not None
-        assert get_cached(cell_data, "areas") is not None
-        assert get_cached(cell_data, "normals") is not None
+        assert cached is not None
+        assert cached.device.type == "cuda"

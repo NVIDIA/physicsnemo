@@ -404,7 +404,7 @@ class TestSampleAtPoints:
         mesh = Mesh(points=points, cells=cells)
 
         ### Access a cached property to populate it
-        _ = mesh.cell_centroids  # This creates ("_cache", "centroids") in cell_data
+        _ = mesh.cell_centroids  # This populates mesh._cache["cell", "centroids"]
 
         ### Query point
         queries = torch.tensor([[0.25, 0.25]])
@@ -412,7 +412,7 @@ class TestSampleAtPoints:
         ### Sample should not include cached properties
         result = sample_data_at_points(mesh, queries, data_source="cells")
 
-        ### Result should not contain the _cache nested dict
+        ### Result should not contain cached data
         assert "_cache" not in result.keys()
 
     def test_3d_tetrahedral_mesh(self):

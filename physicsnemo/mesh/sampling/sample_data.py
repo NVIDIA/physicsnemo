@@ -28,7 +28,6 @@ from tensordict import TensorDict
 
 from physicsnemo.mesh.neighbors._adjacency import Adjacency, build_adjacency_from_pairs
 from physicsnemo.mesh.spatial import BVH
-from physicsnemo.mesh.utilities._cache import CACHE_KEY
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -712,7 +711,7 @@ def _accumulate_sampled_data(
 
     # apply() always returns a TensorDict here (our fn never returns None),
     # but the generic return type is TensorDict | None.
-    result = source_data.exclude(CACHE_KEY).apply(
+    result = source_data.apply(
         _accumulate_field,
         batch_size=torch.Size([n_queries]),
     )
