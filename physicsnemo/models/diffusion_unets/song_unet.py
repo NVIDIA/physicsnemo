@@ -28,6 +28,7 @@ from torch.utils.checkpoint import checkpoint
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
+from physicsnemo.domain_parallel.shard_tensor import ShardTensor
 from physicsnemo.nn import (
     Conv2d,
     FourierEmbedding,
@@ -630,6 +631,8 @@ class SongUNet(Module):
                     device=x.device,
                     dtype=x.dtype,
                 )
+                if isinstance(x, ShardTensor):
+                    emb = ShardTensor.from_local(emb, device_mesh=x.device_mesh)
 
             # Encoder: progressively downsample and cache skip connections
             skips = []
