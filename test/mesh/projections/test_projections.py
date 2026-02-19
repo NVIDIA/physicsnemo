@@ -1237,9 +1237,7 @@ class TestProject:
 
     def test_project_transform_cell_data_vectors(self):
         """Test that 3D vector cell data is projected to 2D with transform_cell_data."""
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32
-        )
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
         cell_data = TensorDict(
             {"velocity": torch.tensor([[3.0, 4.0, 5.0]])},
@@ -1251,15 +1249,11 @@ class TestProject:
 
         ### Vector should be projected: keep x and y, drop z
         assert result.cell_data["velocity"].shape == (1, 2)
-        assert torch.allclose(
-            result.cell_data["velocity"], torch.tensor([[3.0, 4.0]])
-        )
+        assert torch.allclose(result.cell_data["velocity"], torch.tensor([[3.0, 4.0]]))
 
     def test_project_transform_point_data_vectors(self):
         """Test that 3D vector point data is projected to 2D with transform_point_data."""
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32
-        )
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
         point_data = TensorDict(
             {"displacement": torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])},
@@ -1276,9 +1270,7 @@ class TestProject:
 
     def test_project_transform_scalars_invariant(self):
         """Test that scalar fields are unchanged even when transform flags are True."""
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32
-        )
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
         cell_data = TensorDict(
             {
@@ -1298,14 +1290,10 @@ class TestProject:
 
     def test_project_transform_rank2_tensors(self):
         """Test that rank-2 tensor fields (e.g., stress) are correctly projected."""
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32
-        )
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
         # A symmetric 3x3 "stress" tensor
-        stress = torch.tensor(
-            [[[1.0, 2.0, 3.0], [2.0, 4.0, 5.0], [3.0, 5.0, 6.0]]]
-        )
+        stress = torch.tensor([[[1.0, 2.0, 3.0], [2.0, 4.0, 5.0], [3.0, 5.0, 6.0]]])
         cell_data = TensorDict({"stress": stress}, batch_size=[1])
         mesh = Mesh(points=points, cells=cells, cell_data=cell_data)
 
@@ -1319,9 +1307,7 @@ class TestProject:
 
     def test_project_no_transform_by_default(self):
         """Test that vector data is NOT projected when flags are False (default)."""
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32
-        )
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
         cell_data = TensorDict(
             {"velocity": torch.tensor([[1.0, 2.0, 3.0]])},
@@ -1339,9 +1325,7 @@ class TestProject:
 
     def test_project_transform_global_data(self):
         """Test that global vector data is projected with transform_global_data."""
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32
-        )
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
         global_data = TensorDict(
             {"freestream_dir": torch.tensor([0.6, 0.8, 0.0])},
@@ -1362,9 +1346,7 @@ class TestProject:
 
     def test_project_transform_with_keep_dims_reorder(self):
         """Test that data transformation respects keep_dims ordering."""
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32
-        )
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
         cell_data = TensorDict(
             {"velocity": torch.tensor([[10.0, 20.0, 30.0]])},

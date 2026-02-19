@@ -113,7 +113,6 @@ NU = 1.56e-5  # m^2/s
 
 
 class AirFRANSDataSet(CachedPreprocessingDataset):
-
     @classmethod
     def get_split_paths(
         cls,
@@ -170,7 +169,9 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         return DataLoader(
             dataset,
             sampler=DistributedSampler(
-                dataset=dataset, num_replicas=world_size, rank=rank,
+                dataset=dataset,
+                num_replicas=world_size,
+                rank=rank,
             ),
             batch_size=None,
             collate_fn=lambda x: x,
@@ -431,8 +432,8 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
             )
 
         ### Compute integrated forces TODO: implement this; requires voronoi areas...
-        # net_force = 
-        
+        # net_force =
+
         ### Add fields to the internal volume mesh
         for k, v in true_output.items():
             meshes["internal"].point_data[k] = v.detach().cpu().numpy()
@@ -822,7 +823,8 @@ def compute_max_mesh_sizes(
                 else mesh.n_cells
             )
             max_sizes[bc_type]["n_cells"] = max(
-                max_sizes[bc_type]["n_cells"], n_cells,
+                max_sizes[bc_type]["n_cells"],
+                n_cells,
             )
 
     for bc_type in max_sizes:

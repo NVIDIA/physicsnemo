@@ -852,7 +852,9 @@ class ChunkedKernel(Kernel):
             # Automatically determine chunk size based on memory constraints
             # Assumes the network is dominating the memory cost
             approx_n_floats = n_interactions * sum(self.network_layer_sizes)
-            approx_n_bytes = approx_n_floats * 4  # float32; conservative enough for bfloat16 too
+            approx_n_bytes = (
+                approx_n_floats * 4
+            )  # float32; conservative enough for bfloat16 too
             approx_memory_gb = approx_n_bytes / (1024**3)
             target_memory_gb = 1.0
 
@@ -1234,5 +1236,3 @@ class MultiscaleKernel(Module):
         result: TensorDict = reduce(operator.add, results_pieces)
 
         return result
-
-

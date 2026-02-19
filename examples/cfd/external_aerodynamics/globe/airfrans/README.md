@@ -1,6 +1,6 @@
 # GLOBE on AirFRANS (2D External Aerodynamics)
 
-This example trains a [GLOBE](../../../../../physicsnemo/models/globe/) model to
+This example trains a [GLOBE](/physicsnemo/physicsnemo/models/globe/model.py) model to
 predict aerodynamic flow fields around 2D airfoils using the
 [AirFRANS](https://airfrans.readthedocs.io/) dataset.
 

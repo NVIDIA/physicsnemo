@@ -190,9 +190,7 @@ class Normalizer(Module):
             elif self.initialization_behavior == "no_op":
                 new_ln_running_mean_if_uninitialized = self.ln_running_mean
             else:
-                raise ValueError(
-                    f"Invalid {self.initialization_behavior=!r}"
-                )
+                raise ValueError(f"Invalid {self.initialization_behavior=!r}")
 
             # Initialized case
             new_ln_running_mean_if_initialized = (

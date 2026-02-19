@@ -223,14 +223,10 @@ class Pade(Module):
 
         if self.use_separate_mlps:
             raw_numerator: torch.Tensor | float = (
-                self._one
-                if self.numerator_order == 0
-                else self.numerator_mlp(x)
+                self._one if self.numerator_order == 0 else self.numerator_mlp(x)
             )
             raw_denominator: torch.Tensor | float = (
-                self._one
-                if self.denominator_order == 0
-                else self.denominator_mlp(x)
+                self._one if self.denominator_order == 0 else self.denominator_mlp(x)
             )
         else:
             raw_numerator, raw_denominator = self.combined_mlp(x).split(

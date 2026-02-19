@@ -150,8 +150,7 @@ class MLP(Module):
                 )
             if x.shape[-1] != self.layer_sizes[0]:
                 raise ValueError(
-                    f"Expected input dim {self.layer_sizes[0]}, "
-                    f"got {x.shape[-1]}"
+                    f"Expected input dim {self.layer_sizes[0]}, got {x.shape[-1]}"
                 )
 
         return self.layers(x)

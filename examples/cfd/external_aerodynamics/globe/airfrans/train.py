@@ -187,14 +187,24 @@ def main(
     torch.manual_seed(seed)
 
     ### [Dataset Preparation]
-    train_sample_paths = AirFRANSDataSet.get_split_paths(data_dir, airfrans_task, "train")
-    valid_sample_paths = AirFRANSDataSet.get_split_paths(data_dir, airfrans_task, "test")
+    train_sample_paths = AirFRANSDataSet.get_split_paths(
+        data_dir, airfrans_task, "train"
+    )
+    valid_sample_paths = AirFRANSDataSet.get_split_paths(
+        data_dir, airfrans_task, "test"
+    )
 
     train_dataloader = AirFRANSDataSet.make_dataloader(
-        train_sample_paths, cache_dir, world_size=dist.world_size, rank=dist.rank,
+        train_sample_paths,
+        cache_dir,
+        world_size=dist.world_size,
+        rank=dist.rank,
     )
     valid_dataloader = AirFRANSDataSet.make_dataloader(
-        valid_sample_paths, cache_dir, world_size=dist.world_size, rank=dist.rank,
+        valid_sample_paths,
+        cache_dir,
+        world_size=dist.world_size,
+        rank=dist.rank,
     )
 
     ### [Model]
@@ -242,11 +252,15 @@ def main(
 
     ### [Compute Maximum Mesh Sizes Per BC Type and Split]
     train_max_sizes = compute_max_mesh_sizes(
-        train_dataloader, device,
-        face_downsampling_ratio=train_face_downsampling_ratio, rank=dist.rank,
+        train_dataloader,
+        device,
+        face_downsampling_ratio=train_face_downsampling_ratio,
+        rank=dist.rank,
     )
     valid_max_sizes = compute_max_mesh_sizes(
-        valid_dataloader, device, rank=dist.rank,
+        valid_dataloader,
+        device,
+        rank=dist.rank,
     )
 
     ### [Optimizer and Scheduler Setup]
@@ -294,7 +308,12 @@ def main(
         if dist.rank == 0:
             print(f"Resuming training from checkpoint: {previous_checkpoint.name!r}")
         ckpt = load_training_checkpoint(
-            previous_checkpoint, base_model, optimizer, scheduler, scaler, device,
+            previous_checkpoint,
+            base_model,
+            optimizer,
+            scheduler,
+            scaler,
+            device,
         )
         epoch: int = ckpt["epoch"]
         best_loss = ckpt.get("best_loss", float("inf"))
@@ -318,7 +337,9 @@ def main(
                 mlflow_run_ctx = mlflow.start_run(run_id=mlflow_run_id)
                 print(f"Resumed MLflow run {mlflow_run_id}")
             except Exception:
-                warnings.warn(f"Could not resume MLflow run {mlflow_run_id!r}, creating new run")
+                warnings.warn(
+                    f"Could not resume MLflow run {mlflow_run_id!r}, creating new run"
+                )
                 mlflow_run_id = None
         if not mlflow_run_id:
             mlflow_run_ctx = mlflow.start_run(
@@ -539,20 +560,33 @@ def main(
                 }
                 _ckpt_run_id = (
                     mlflow.active_run().info.run_id
-                    if use_mlflow and mlflow.active_run() else None
+                    if use_mlflow and mlflow.active_run()
+                    else None
                 )
                 if epoch % (25 * dist.world_size) == 0:
                     save_training_checkpoint(
-                        models_dir, epoch, base_model, optimizer, scheduler, scaler,
-                        extra_state=_ckpt_extra, mlflow_run_id=_ckpt_run_id,
+                        models_dir,
+                        epoch,
+                        base_model,
+                        optimizer,
+                        scheduler,
+                        scaler,
+                        extra_state=_ckpt_extra,
+                        mlflow_run_id=_ckpt_run_id,
                         keep_only_latest=True,
                     )
                 if valid_loss < best_loss:
                     best_loss = valid_loss
                     _ckpt_extra["best_loss"] = best_loss
                     ckpt_path = save_training_checkpoint(
-                        best_model_dir, epoch, base_model, optimizer, scheduler, scaler,
-                        extra_state=_ckpt_extra, mlflow_run_id=_ckpt_run_id,
+                        best_model_dir,
+                        epoch,
+                        base_model,
+                        optimizer,
+                        scheduler,
+                        scaler,
+                        extra_state=_ckpt_extra,
+                        mlflow_run_id=_ckpt_run_id,
                         keep_only_latest=True,
                     )
                     if use_mlflow:
@@ -564,7 +598,10 @@ def main(
                     mlflow.log_metrics(
                         {
                             "lr": optimizer.param_groups[0]["lr"],
-                            "system/vram_gb": torch.cuda.memory_stats()["reserved_bytes.all.peak"] / 1024**3,
+                            "system/vram_gb": torch.cuda.memory_stats()[
+                                "reserved_bytes.all.peak"
+                            ]
+                            / 1024**3,
                             "system/seconds_per_epoch": time_now - time_last_epoch,
                         },
                         step=epoch,
@@ -579,7 +616,10 @@ def main(
             ):
                 if dist.rank == 0:
                     print("Generating visualization images...")
-                    for split, paths in [("train", train_sample_paths), ("valid", valid_sample_paths)]:
+                    for split, paths in [
+                        ("train", train_sample_paths),
+                        ("valid", valid_sample_paths),
+                    ]:
                         sample_path = paths[0]
                         input_dict, _ = AirFRANSDataSet.preprocess(sample_path)
                         input_dict = to(input_dict, device=device)
@@ -595,7 +635,11 @@ def main(
                                 verbose=False,
                             )
                         AirFRANSDataSet.postprocess(
-                            to(pred_results, device=torch.device("cpu"), dtype=torch.float64),
+                            to(
+                                pred_results,
+                                device=torch.device("cpu"),
+                                dtype=torch.float64,
+                            ),
                             sample_path,
                             fields_to_plot="pred",
                             show=False,
@@ -603,7 +647,10 @@ def main(
                         plt.tight_layout(h_pad=0.1, w_pad=0)
                         plt.gcf().set_dpi(300)
                         if use_mlflow:
-                            mlflow.log_figure(plt.gcf(), f"visualization/{split}_sample_epoch_{epoch}.png")
+                            mlflow.log_figure(
+                                plt.gcf(),
+                                f"visualization/{split}_sample_epoch_{epoch}.png",
+                            )
                         plt.close()
                 last_image_epoch, last_image_loss = epoch, train_loss
 
@@ -617,7 +664,12 @@ def main(
                 if dist.rank == 0:
                     print("Quitting due to shutdown request.")
                     save_training_checkpoint(
-                        models_dir, epoch, base_model, optimizer, scheduler, scaler,
+                        models_dir,
+                        epoch,
+                        base_model,
+                        optimizer,
+                        scheduler,
+                        scaler,
                         extra_state={
                             "best_loss": best_loss,
                             "last_image_epoch": last_image_epoch,
@@ -625,10 +677,12 @@ def main(
                         },
                         mlflow_run_id=(
                             mlflow.active_run().info.run_id
-                            if use_mlflow and mlflow.active_run() else None
+                            if use_mlflow and mlflow.active_run()
+                            else None
                         ),
                     )
                 break
+
 
 def field_loss_fn(
     pred: torch.Tensor, true: torch.Tensor, error_scale: torch.Tensor
@@ -654,9 +708,8 @@ def field_loss_fn(
     )
     if error.ndim > 1:
         error = error.norm(dim=-1)
-    return 2 * F.huber_loss(
-        error, torch.zeros_like(error), reduction="none", delta=1.0
-    )
+    return 2 * F.huber_loss(error, torch.zeros_like(error), reduction="none", delta=1.0)
+
 
 if __name__ == "__main__":
     import tyro

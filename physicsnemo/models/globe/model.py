@@ -326,8 +326,7 @@ class GLOBE(Module):
             source_latent_data: TensorDict = latent_data[source_bc_type]
             source_strengths: TensorDict = source_latent_data["strengths"]  # ty: ignore[invalid-assignment]
             source_strengths = source_strengths.apply(
-                lambda x: x
-                * (source_bc_mesh.cell_areas / self.reference_area)
+                lambda x: x * (source_bc_mesh.cell_areas / self.reference_area)
             )
 
             source_data_by_rank: dict[int, TensorDict] = split_by_leaf_rank(
@@ -488,22 +487,34 @@ class GLOBE(Module):
             if verbose:
                 print(f"Evaluating hypernetwork layer {i}...")
 
-            is_last_hyperlayer = (i == self.n_communication_hyperlayers)
+            is_last_hyperlayer = i == self.n_communication_hyperlayers
 
             if not is_last_hyperlayer:
                 latent_data: TensorDict = {
                     target_bc_type: self._evaluate_hyperlayer(
-                        i, target_bc_mesh.cell_centroids, latent_data,
-                        boundary_meshes, reference_lengths, global_scalars,
-                        global_vectors, verbose, chunk_size,
+                        i,
+                        target_bc_mesh.cell_centroids,
+                        latent_data,
+                        boundary_meshes,
+                        reference_lengths,
+                        global_scalars,
+                        global_vectors,
+                        verbose,
+                        chunk_size,
                     )
                     for target_bc_type, target_bc_mesh in boundary_meshes.items()
                 }
             else:
                 result: TensorDict = self._evaluate_hyperlayer(
-                    i, prediction_points, latent_data, boundary_meshes,
-                    reference_lengths, global_scalars, global_vectors,
-                    verbose, chunk_size,
+                    i,
+                    prediction_points,
+                    latent_data,
+                    boundary_meshes,
+                    reference_lengths,
+                    global_scalars,
+                    global_vectors,
+                    verbose,
+                    chunk_size,
                 )
 
         for field_name, field_tensor in result.items():
