@@ -90,16 +90,17 @@ jobs:
           --extra gnns \
           --preview-features extra-build-dependencies
 
-    - name: Install perf dependencies from pyproject extras
-      if: steps.cache-venv-restore.outputs.cache-hit != 'true'
-      run: |
-        # Extend the environment to include performance extra deps.
-        uv sync \
-          --group dev \
-          --extra cu13 \
-          --extra gnns \
-          --extra perf \
-          --preview-features extra-build-dependencies
+    # This is currently removed due to issues with Transformer Engine on CUDA 13
+    # - name: Install perf dependencies from pyproject extras
+    #   if: steps.cache-venv-restore.outputs.cache-hit != 'true'
+    #   run: |
+    #     # Extend the environment to include performance extra deps.
+    #     uv sync \
+    #       --group dev \
+    #       --extra cu13 \
+    #       --extra gnns \
+    #       --extra perf \
+    #       --preview-features extra-build-dependencies
 
     - name: Save uv package cache
       if: steps.cache-uv-package-restore.outputs.cache-hit != 'true'
