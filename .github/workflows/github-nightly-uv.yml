@@ -127,6 +127,7 @@ jobs:
       with:
         name: nightly-uv-venv
         path: .venv
+        include-hidden-files: true
         retention-days: 2
 
   # Stage 2: Run testmon tests and cache the database
