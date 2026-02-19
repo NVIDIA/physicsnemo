@@ -32,8 +32,6 @@ import torch
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from physicsnemo.mesh.utilities._cache import CACHE_KEY, get_cached, set_cached
-
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -125,9 +123,7 @@ def _transform_tensordict(
             f"Expected all spatial dimensions to be {n_spatial_dims}, but got {shape}"
         )
 
-    transformed = data.exclude(CACHE_KEY).named_apply(
-        transform_field, batch_size=batch_size
-    )
+    transformed = data.named_apply(transform_field, batch_size=batch_size)
     data.update(transformed)
     return data
 
@@ -246,18 +242,23 @@ def transform(
             )
 
     new_points = mesh.points @ matrix.T
-    new_point_data = mesh.point_data.exclude(CACHE_KEY)
-    new_cell_data = mesh.cell_data.exclude(CACHE_KEY)
+    device = mesh.points.device
+    new_cache = TensorDict(
+        {
+            "cell": TensorDict({}, batch_size=[mesh.n_cells], device=device),
+            "point": TensorDict({}, batch_size=[mesh.n_points], device=device),
+        },
+        batch_size=[],
+        device=device,
+    )
 
     ### Opt-in: areas and normals (only for square invertible matrices)
     if matrix.shape[0] == matrix.shape[1]:
         det = matrix.det()
 
-        # Determine invertibility: explicit flag avoids data-dependent branches for torch.compile
         if assume_invertible is not None:
             is_invertible = assume_invertible
         else:
-            # Runtime check (may cause graph break under torch.compile)
             is_invertible = det.abs() > 1e-10
 
         if is_invertible:
@@ -266,57 +267,45 @@ def transform(
 
             ### Full-dimensional meshes: global area scaling
             if mesh.n_manifold_dims == mesh.n_spatial_dims:
-                # Areas scale by |det| (since k/n = 1 for full-dimensional)
-                if (v := get_cached(mesh.point_data, "areas")) is not None:
-                    set_cached(new_point_data, "areas", v * det_abs)
-                if (v := get_cached(mesh.cell_data, "areas")) is not None:
-                    set_cached(new_cell_data, "areas", v * det_abs)
+                if (v := mesh._cache.get(("point", "areas"), None)) is not None:
+                    new_cache["point", "areas"] = v * det_abs
+                if (v := mesh._cache.get(("cell", "areas"), None)) is not None:
+                    new_cache["cell", "areas"] = v * det_abs
 
             ### Codimension-1 manifolds: per-element area scaling via normals
-            # Formula: area' = area × |det(M)| × ||M^{-T} n||
-            # This generalizes the global formula and handles both isotropic and
-            # non-isotropic transforms correctly. For isotropic M = λR (orthogonal R),
-            # ||M^{-T} n|| = |λ|^{-1}, giving area' = area × |λ|^{n-1} as expected.
+            # Formula: area' = area * |det(M)| * ||M^{-T} n||
             elif mesh.codimension == 1:
-                # Normals transform by inverse-transpose: n' = sign(det) * normalize(M^{-T} n)
-                # Using linear solve: solve M.T @ x.T = n.T to get x = n @ M^{-1} = (M^{-T} n)^T
-                if (v := get_cached(mesh.point_data, "normals")) is not None:
-                    transformed = torch.linalg.solve(matrix.T, v.T).T  # M^{-T} n
-                    norm_scale = transformed.norm(dim=-1)  # [n_points]
-                    if (areas := get_cached(mesh.point_data, "areas")) is not None:
-                        set_cached(
-                            new_point_data, "areas", areas * det_abs * norm_scale
-                        )
-                    set_cached(
-                        new_point_data,
-                        "normals",
-                        det_sign * F.normalize(transformed, dim=-1),
+                if (v := mesh._cache.get(("point", "normals"), None)) is not None:
+                    transformed = torch.linalg.solve(matrix.T, v.T).T
+                    norm_scale = transformed.norm(dim=-1)
+                    if (areas := mesh._cache.get(("point", "areas"), None)) is not None:
+                        new_cache["point", "areas"] = areas * det_abs * norm_scale
+                    new_cache["point", "normals"] = det_sign * F.normalize(
+                        transformed, dim=-1
                     )
 
-                if (v := get_cached(mesh.cell_data, "normals")) is not None:
-                    transformed = torch.linalg.solve(matrix.T, v.T).T  # M^{-T} n
-                    norm_scale = transformed.norm(dim=-1)  # [n_cells]
-                    if (areas := get_cached(mesh.cell_data, "areas")) is not None:
-                        set_cached(new_cell_data, "areas", areas * det_abs * norm_scale)
-                    set_cached(
-                        new_cell_data,
-                        "normals",
-                        det_sign * F.normalize(transformed, dim=-1),
+                if (v := mesh._cache.get(("cell", "normals"), None)) is not None:
+                    transformed = torch.linalg.solve(matrix.T, v.T).T
+                    norm_scale = transformed.norm(dim=-1)
+                    if (areas := mesh._cache.get(("cell", "areas"), None)) is not None:
+                        new_cache["cell", "areas"] = areas * det_abs * norm_scale
+                    new_cache["cell", "normals"] = det_sign * F.normalize(
+                        transformed, dim=-1
                     )
-
-            # Higher codimension: areas invalidated (would need full tangent basis)
-            # Normals for higher codimension are not well-defined as single vectors
 
     ### Opt-in: centroids
-    if (v := get_cached(mesh.cell_data, "centroids")) is not None:
-        set_cached(new_cell_data, "centroids", v @ matrix.T)
+    if (v := mesh._cache.get(("cell", "centroids"), None)) is not None:
+        new_cache["cell", "centroids"] = v @ matrix.T
 
     ### Transform user data if requested
+    new_point_data = mesh.point_data
+    new_cell_data = mesh.cell_data
     if transform_point_data:
+        new_point_data = mesh.point_data.clone()
         _transform_tensordict(new_point_data, matrix, mesh.n_spatial_dims, "point_data")
     if transform_cell_data:
+        new_cell_data = mesh.cell_data.clone()
         _transform_tensordict(new_cell_data, matrix, mesh.n_spatial_dims, "cell_data")
-    # Transform global_data if requested (note: global_data never has cache)
     new_global_data = mesh.global_data
     if transform_global_data:
         new_global_data = mesh.global_data.clone()
@@ -332,6 +321,7 @@ def transform(
         point_data=new_point_data,
         cell_data=new_cell_data,
         global_data=new_global_data,
+        _cache=new_cache,
     )
 
 
@@ -372,33 +362,35 @@ def translate(
             )
 
     new_points = mesh.points + offset
-    new_point_data = mesh.point_data.exclude(CACHE_KEY)
-    new_cell_data = mesh.cell_data.exclude(CACHE_KEY)
+    device = mesh.points.device
+    new_cache = TensorDict(
+        {
+            "cell": TensorDict({}, batch_size=[mesh.n_cells], device=device),
+            "point": TensorDict({}, batch_size=[mesh.n_points], device=device),
+        },
+        batch_size=[],
+        device=device,
+    )
 
-    ### Opt-in: areas (unchanged)
-    if (v := get_cached(mesh.point_data, "areas")) is not None:
-        set_cached(new_point_data, "areas", v)
-    if (v := get_cached(mesh.cell_data, "areas")) is not None:
-        set_cached(new_cell_data, "areas", v)
+    ### Areas and normals are unchanged by translation
+    for category in ("cell", "point"):
+        for key in ("areas", "normals"):
+            if (v := mesh._cache.get((category, key), None)) is not None:
+                new_cache[category, key] = v
 
-    ### Opt-in: normals (unchanged)
-    if (v := get_cached(mesh.point_data, "normals")) is not None:
-        set_cached(new_point_data, "normals", v)
-    if (v := get_cached(mesh.cell_data, "normals")) is not None:
-        set_cached(new_cell_data, "normals", v)
-
-    ### Opt-in: centroids (translate)
-    if (v := get_cached(mesh.cell_data, "centroids")) is not None:
-        set_cached(new_cell_data, "centroids", v + offset)
+    ### Centroids are translated
+    if (v := mesh._cache.get(("cell", "centroids"), None)) is not None:
+        new_cache["cell", "centroids"] = v + offset
 
     from physicsnemo.mesh.mesh import Mesh
 
     return Mesh(
         points=new_points,
         cells=mesh.cells,
-        point_data=new_point_data,
-        cell_data=new_cell_data,
+        point_data=mesh.point_data,
+        cell_data=mesh.cell_data,
         global_data=mesh.global_data,
+        _cache=new_cache,
     )
 
 

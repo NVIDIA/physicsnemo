@@ -22,7 +22,6 @@ import torch
 
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.transformations.geometric import _transform_tensordict
-from physicsnemo.mesh.utilities._cache import CACHE_KEY
 
 
 def project(
@@ -224,8 +223,8 @@ def project(
 
     ### Preserve user data, but clear cached properties
     # Cached properties depend on spatial embedding and must be recomputed
-    new_point_data = mesh.point_data.exclude(CACHE_KEY)
-    new_cell_data = mesh.cell_data.exclude(CACHE_KEY)
+    new_point_data = mesh.point_data
+    new_cell_data = mesh.cell_data
     new_global_data = mesh.global_data
 
     ### Optionally transform vector/tensor data fields via projection matrix

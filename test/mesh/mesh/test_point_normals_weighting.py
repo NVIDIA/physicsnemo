@@ -402,9 +402,7 @@ class TestCaching:
         normals1 = mesh.point_normals
 
         # Check cache exists
-        from physicsnemo.mesh.utilities._cache import get_cached
-
-        cached = get_cached(mesh.point_data, "normals")
+        cached = mesh._cache.get(("point", "normals"), None)
         assert cached is not None
         assert torch.equal(cached, normals1)
 
