@@ -116,7 +116,7 @@ def open_time_series_dataset_classic_on_the_fly(
         file_name = _get_file_name(directory, prefix, variable, suffix)
         logger.debug("open nc dataset %s", file_name)
 
-        ds = xr.open_dataset(file_name, autoclose=True)
+        ds = xr.open_dataset(file_name, autoclose=True, cache=False)
 
         if "LL" in prefix:
             ds = ds.rename({"lat": "height", "lon": "width"})
@@ -168,7 +168,9 @@ def open_time_series_dataset_classic_on_the_fly(
         for name, var in constants.items():
             constants_ds.append(
                 xr.open_dataset(
-                    _get_file_name(directory, prefix, name, suffix), autoclose=True
+                    _get_file_name(directory, prefix, name, suffix),
+                    autoclose=True,
+                    cache=False,
                 ).set_coords(["lat", "lon"])[var]
             )
         constants_ds = xr.merge(constants_ds, compat="override")
@@ -282,10 +284,11 @@ def create_time_series_dataset_classic(
     for variable in all_variables:
         file_name = _get_file_name(src_directory, prefix, variable, suffix)
         logger.debug("open nc dataset %s", file_name)
-        if "sample" in list(xr.open_dataset(file_name).sizes.keys()):
-            ds = xr.open_dataset(file_name).rename({"sample": "time"})
+        _ds = xr.open_dataset(file_name, cache=False)
+        if "sample" in list(_ds.sizes.keys()):
+            ds = _ds.rename({"sample": "time"})
         else:
-            ds = xr.open_dataset(file_name)
+            ds = _ds
         if "varlev" in ds.dims:
             ds = ds.isel(varlev=0)
 
@@ -336,7 +339,9 @@ def create_time_series_dataset_classic(
         constants_ds = []
         for name, var in constants.items():
             constants_ds.append(
-                xr.open_dataset(_get_file_name(src_directory, prefix, name, suffix))
+                xr.open_dataset(
+                    _get_file_name(src_directory, prefix, name, suffix), cache=False
+                )
                 .set_coords(["lat", "lon"])[var]
                 .astype(np.float32)
             )

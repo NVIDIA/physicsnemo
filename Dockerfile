@@ -229,7 +229,7 @@ RUN cd /physicsnemo && uv pip install ".[cu13,utils-extras,mesh-extras,datapipes
 RUN rm -rf /physicsnemo/
 
 #######################################################################
-# CI image: builder + dev group + netcdf4 hack + FigNet/Makani + CI-only packages
+# CI image: builder + dev group + FigNet/Makani + CI-only packages
 #######################################################################
 FROM builder AS ci
 
@@ -240,8 +240,7 @@ ENV UV_SYSTEM_PYTHON=1
 ENV UV_BREAK_SYSTEM_PACKAGES=1
 ENV UV_CONSTRAINT=/etc/pip/constraint.txt
 
-# TODO: Remove hacky downgrade of netCDF4. netCDF4 v1.7.1 issue: https://github.com/Unidata/netcdf4-python/issues/1343
-RUN uv pip install "netcdf4>=1.6.3,<1.7.1"
+RUN uv pip install "netcdf4>1.7.3" dask
 
 COPY . /physicsnemo/
 
