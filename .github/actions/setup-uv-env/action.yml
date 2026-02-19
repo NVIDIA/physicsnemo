@@ -1,0 +1,60 @@
+name: Setup uv environment
+description: Restore uv and venv caches, and run uv sync on cache miss
+inputs:
+  uv-cache-key-prefix:
+    description: Prefix for uv package cache key
+    required: true
+  venv-cache-key-prefix:
+    description: Prefix for virtual environment cache key
+    required: true
+  cache-key-suffix:
+    description: Deterministic suffix appended to cache key prefixes
+    required: true
+outputs:
+  uv_cache_hit:
+    description: Whether uv package cache had an exact key hit
+    value: ${{ steps.restore-uv-cache.outputs.cache-hit }}
+  venv_cache_hit:
+    description: Whether venv cache had an exact key hit
+    value: ${{ steps.restore-venv-cache.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - name: Restore uv package cache
+      id: restore-uv-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.cache/uv
+        key: ${{ inputs.uv-cache-key-prefix }}-${{ inputs.cache-key-suffix }}
+        restore-keys: |
+          ${{ inputs.uv-cache-key-prefix }}-
+
+    - name: Restore venv cache
+      id: restore-venv-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: .venv
+        key: ${{ inputs.venv-cache-key-prefix }}-${{ inputs.cache-key-suffix }}
+        restore-keys: |
+          ${{ inputs.venv-cache-key-prefix }}-
+
+    - name: Install base dependencies with uv (dev + cu13)
+      if: steps.restore-venv-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        uv sync \
+          --group dev \
+          --extra cu13 \
+          --preview-features extra-build-dependencies
+
+    - name: Install GNN dependencies from pyproject extras
+      if: steps.restore-venv-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        uv sync \
+          --group dev \
+          --extra cu13 \
+          --extra gnns \
+          --preview-features extra-build-dependencies

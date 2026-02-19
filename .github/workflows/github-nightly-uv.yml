@@ -53,82 +53,43 @@ jobs:
       with:
         python-version: ${{ env.PYTHON_VERSION }}
 
-    - name: Restore uv package cache
-      id: cache-uv-package-restore
-      uses: actions/cache/restore@v4
+    - name: Setup uv environment from cache
+      id: setup-uv-env
+      uses: ./.github/actions/setup-uv-env
       with:
-        path: ~/.cache/uv
-        key: ${{ env.UV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
-        restore-keys: |
-          ${{ env.UV_CACHE_KEY_PREFIX }}-
+        uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
+        venv-cache-key-prefix: ${{ env.VENV_CACHE_KEY_PREFIX }}
+        cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
 
-    - name: Restore venv cache
-      id: cache-venv-restore
-      uses: actions/cache/restore@v4
-      with:
-        path: .venv
-        key: ${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
-        restore-keys: |
-          ${{ env.VENV_CACHE_KEY_PREFIX }}-
-
-    - name: Install base dependencies with uv (dev + cu13)
-      if: steps.cache-venv-restore.outputs.cache-hit != 'true'
+    - name: Delete existing uv package cache key
       run: |
-        # Install core dependencies and development group from pyproject/lock.
-        uv sync \
-          --group dev \
-          --extra cu13 \
-          --preview-features extra-build-dependencies
-
-    - name: Install GNN dependencies from pyproject extras
-      if: steps.cache-venv-restore.outputs.cache-hit != 'true'
-      run: |
-        # Extend the environment to include the gnns extra.
-        uv sync \
-          --group dev \
-          --extra cu13 \
-          --extra gnns \
-          --preview-features extra-build-dependencies
-
-    # This is currently removed due to issues with Transformer Engine on CUDA 13
-    # - name: Install perf dependencies from pyproject extras
-    #   if: steps.cache-venv-restore.outputs.cache-hit != 'true'
-    #   run: |
-    #     # Extend the environment to include performance extra deps.
-    #     uv sync \
-    #       --group dev \
-    #       --extra cu13 \
-    #       --extra gnns \
-    #       --extra perf \
-    #       --preview-features extra-build-dependencies
+        gh cache delete "${{ env.UV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}" || true
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Save uv package cache
-      if: steps.cache-uv-package-restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: ~/.cache/uv
         key: ${{ env.UV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
 
     - name: Free disk space before caching
-      if: steps.cache-venv-restore.outputs.cache-hit != 'true'
+      if: steps.setup-uv-env.outputs.venv_cache_hit != 'true'
       run: |
         rm -rf ~/.cache/uv
         df -h
 
+    - name: Delete existing venv cache key
+      run: |
+        gh cache delete "${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}" || true
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Save environment to cache
-      if: steps.cache-venv-restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: .venv
         key: ${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
-
-    - name: Upload venv artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: nightly-uv-venv
-        path: .venv
-        include-hidden-files: true
-        retention-days: 2
 
   # Stage 2: Run testmon tests and cache the database
   testmon:
@@ -146,11 +107,13 @@ jobs:
       with:
         python-version: ${{ env.PYTHON_VERSION }}
 
-    - name: Download venv artifact
-      uses: actions/download-artifact@v4
+    - name: Setup uv environment from cache
+      id: setup-uv-env
+      uses: ./.github/actions/setup-uv-env
       with:
-        name: nightly-uv-venv
-        path: .venv
+        uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
+        venv-cache-key-prefix: ${{ env.VENV_CACHE_KEY_PREFIX }}
+        cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
 
     - name: Validate environment
       run: |
@@ -193,11 +156,13 @@ jobs:
       with:
         python-version: ${{ env.PYTHON_VERSION }}
 
-    - name: Download venv artifact
-      uses: actions/download-artifact@v4
+    - name: Setup uv environment from cache
+      id: setup-uv-env
+      uses: ./.github/actions/setup-uv-env
       with:
-        name: nightly-uv-venv
-        path: .venv
+        uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
+        venv-cache-key-prefix: ${{ env.VENV_CACHE_KEY_PREFIX }}
+        cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
 
     - name: Validate environment
       run: |
