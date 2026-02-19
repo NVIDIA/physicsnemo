@@ -28,7 +28,6 @@ from torch.utils.checkpoint import checkpoint
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.domain_parallel.shard_tensor import ShardTensor
 from physicsnemo.nn import (
     Conv2d,
     FourierEmbedding,
@@ -403,6 +402,12 @@ class SongUNet(Module):
                 amp_mode=amp_mode,
                 **init,
             )
+        else:
+            # Register a zero embedding tensor so it can get distributed properly if using FSDP/domain parallelism
+            # persistent=False so we don't pollute the state_dict
+            self.register_buffer(
+                "zero_emb", torch.zeros(1, emb_channels), persistent=False
+            )
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
@@ -626,13 +631,7 @@ class SongUNet(Module):
                 emb = silu(self.map_layer0(emb))
                 emb = silu(self.map_layer1(emb))
             else:
-                emb = torch.zeros(
-                    (noise_labels.shape[0], self.emb_channels),
-                    device=x.device,
-                    dtype=x.dtype,
-                )
-                if isinstance(x, ShardTensor):
-                    emb = ShardTensor.from_local(emb, device_mesh=x.device_mesh)
+                emb = self.zero_emb.repeat(noise_labels.shape[0], 1)
 
             # Encoder: progressively downsample and cache skip connections
             skips = []
