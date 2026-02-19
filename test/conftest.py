@@ -41,7 +41,7 @@ import torch
 from packaging.requirements import Requirement
 from packaging.version import Version
 
-NFS_DATA_PATH = "/workspace/modulus-data"
+NFS_DATA_PATH = "/data/nfs/modulus-data"
 
 # Total time per file
 file_timings = defaultdict(float)
