@@ -199,7 +199,7 @@ class GLOBE(Module):
         boundary_condition_n_source_scalars: dict[str, int],
         boundary_condition_n_source_vectors: dict[str, int],
         reference_length_names: Sequence[str],
-        reference_area: torch.Tensor,
+        reference_area: Float[torch.Tensor, ""],
         n_global_scalars: int,
         n_global_vectors: int,
         n_communication_hyperlayers: int = 2,
@@ -310,16 +310,48 @@ class GLOBE(Module):
     def _evaluate_hyperlayer(
         self,
         layer_idx: int,
-        target_points: torch.Tensor,
+        target_points: Float[torch.Tensor, "n_targets n_dims"],
         latent_data: dict[str, TensorDict],
         boundary_meshes: dict[str, "Mesh"],
-        reference_lengths: dict[str, torch.Tensor],
+        reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_scalars: TensorDict | None,
         global_vectors: TensorDict | None,
         verbose: bool,
         chunk_size: None | int | Literal["auto"],
     ) -> TensorDict:
-        """Evaluate one hyperlayer: sum kernel contributions from all BC types."""
+        r"""Evaluate one hyperlayer by summing kernel contributions from all BC types.
+
+        For each boundary condition type, extracts source data (scalars, vectors,
+        strengths, normals) from the latent data and boundary mesh, evaluates the
+        corresponding :class:`MultiscaleKernel`, and sums the results.
+
+        Parameters
+        ----------
+        layer_idx : int
+            Index into ``self.kernel_layers`` selecting which hyperlayer to evaluate.
+        target_points : Float[torch.Tensor, "n_targets n_dims"]
+            Target points of shape :math:`(N_{targets}, D)`.
+        latent_data : dict[str, TensorDict]
+            Mapping of BC type names to TensorDicts containing per-source latent
+            state (``"strengths"``, ``"latent_scalars"``, ``"latent_vectors"``).
+        boundary_meshes : dict[str, Mesh]
+            Mapping of BC type names to :class:`~physicsnemo.mesh.Mesh` objects.
+        reference_lengths : dict[str, Float[torch.Tensor, ""]]
+            Mapping of reference length names to scalar tensors.
+        global_scalars : TensorDict or None
+            Problem-level scalar features.
+        global_vectors : TensorDict or None
+            Problem-level vector features.
+        verbose : bool
+            Whether to print progress information.
+        chunk_size : None or int or {"auto"}
+            Controls memory usage during kernel evaluation.
+
+        Returns
+        -------
+        TensorDict
+            Summed kernel outputs across all boundary condition types.
+        """
         result_pieces: list[TensorDict] = []
 
         for source_bc_type, source_bc_mesh in boundary_meshes.items():

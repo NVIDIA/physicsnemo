@@ -66,25 +66,26 @@ class Kernel(Module):
         Dictionary mapping field names to their types. Each field type must be
         either ``"scalar"`` or ``"vector"``. Vector fields have dimension equal
         to ``n_spatial_dims``.
-    n_source_scalars : int, optional
-        Number of scalar properties expected per source point. Default is 0.
-    n_source_vectors : int, optional
-        Number of vector properties expected per source point. Default is 0.
-    n_global_scalars : int, optional
-        Number of global scalar properties. Default is 0.
-    n_global_vectors : int, optional
-        Number of global vector properties. Default is 0.
-    smoothing_radius : float, optional
+    n_source_scalars : int, optional, default=0
+        Number of scalar properties expected per source point.
+    n_source_vectors : int, optional, default=0
+        Number of vector properties expected per source point.
+    n_global_scalars : int, optional, default=0
+        Number of global scalar properties.
+    n_global_vectors : int, optional, default=0
+        Number of global vector properties.
+    smoothing_radius : float, optional, default=1e-8
         Small value used to smooth power functions near zero to avoid numerical
-        instabilities. Default is 1e-8.
-    hidden_layer_sizes : Sequence[int] or None, optional
-        Sequence of hidden layer sizes for the neural network. Default is ``[64]``.
-    n_spherical_harmonics : int, optional
-        Number of spherical harmonic terms to use as features. Default is 4.
-    network_type : {"pade", "mlp"}, optional
-        Type of neural network to use for the kernel function. Default is ``"pade"``.
-    spectral_norm : bool, optional
-        Whether to apply spectral normalization to network weights. Default is False.
+        instabilities.
+    hidden_layer_sizes : Sequence[int] or None, optional, default=None
+        Sequence of hidden layer sizes for the neural network. When ``None``,
+        defaults to ``[64]``.
+    n_spherical_harmonics : int, optional, default=4
+        Number of spherical harmonic terms to use as features.
+    network_type : {"pade", "mlp"}, optional, default="pade"
+        Type of neural network to use for the kernel function.
+    spectral_norm : bool, optional, default=False
+        Whether to apply spectral normalization to network weights.
 
     Forward
     -------
@@ -97,23 +98,23 @@ class Kernel(Module):
     target_points : Float[torch.Tensor, "n_targets n_dims"]
         Physical coordinates of the target points where the field is evaluated.
         Shape :math:`(N_{targets}, D)`.
-    source_strengths : Float[torch.Tensor, "n_sources"] or None, optional
+    source_strengths : Float[torch.Tensor, "n_sources"] or None, optional, default=None
         Scalar strength values associated with each source point. Shape
         :math:`(N_{sources},)`. Defaults to all ones if ``None``.
-    source_scalars : TensorDict or None, optional
+    source_scalars : TensorDict or None, optional, default=None
         Physically-meaningful scalars associated with each source point with
         batch_size :math:`(N_{sources},)`. All scalars should be dimensionless.
-    source_vectors : TensorDict or None, optional
+    source_vectors : TensorDict or None, optional, default=None
         Physically-meaningful vectors associated with each source point with
         batch_size :math:`(N_{sources}, D)`. All vectors should be dimensionless.
-    global_scalars : TensorDict or None, optional
+    global_scalars : TensorDict or None, optional, default=None
         Global physically-meaningful scalars with batch_size :math:`()`. All
         scalars should be dimensionless.
-    global_vectors : TensorDict or None, optional
+    global_vectors : TensorDict or None, optional, default=None
         Global physically-meaningful vectors with batch_size :math:`(D,)`. All
         vectors should be dimensionless.
-    verbose : bool, optional
-        Whether to print progress information during evaluation. Default is False.
+    verbose : bool, optional, default=False
+        Whether to print progress information during evaluation.
 
     Outputs
     -------
@@ -768,10 +769,10 @@ class ChunkedKernel(Kernel):
     -------
     Same parameters as :class:`Kernel`, with the addition of:
 
-    chunk_size : None or int or {"auto"}, optional
+    chunk_size : None or int or {"auto"}, optional, default="auto"
         Controls chunking behavior. ``"auto"`` determines chunk size targeting
         ~1GB per chunk. An integer processes in exact chunk sizes. ``None``
-        evaluates all at once. Default is ``"auto"``.
+        evaluates all at once.
 
     Outputs
     -------
@@ -970,26 +971,24 @@ class MultiscaleKernel(Module):
     reference_length_names : Sequence[str]
         Sequence of identifiers for reference length scales. Each creates an
         independent kernel branch. Examples: ``["viscous", "geometric"]``.
-    n_source_scalars : int, optional
-        Number of scalar features per source face. Default is 0.
-    n_source_vectors : int, optional
-        Number of vector features per source face. Default is 0.
-    n_global_scalars : int, optional
+    n_source_scalars : int, optional, default=0
+        Number of scalar features per source face.
+    n_source_vectors : int, optional, default=0
+        Number of vector features per source face.
+    n_global_scalars : int, optional, default=0
         Number of global scalar features (excluding auto-added length ratios).
-        Default is 0.
-    n_global_vectors : int, optional
-        Number of global vector features. Default is 0.
-    smoothing_radius : float, optional
+    n_global_vectors : int, optional, default=0
+        Number of global vector features.
+    smoothing_radius : float, optional, default=1e-8
         Small value for numerical stability in magnitude computations.
-        Default is 1e-8.
-    hidden_layer_sizes : Sequence[int] or None, optional
-        Hidden layer sizes for kernel networks. Default is ``None``.
-    n_spherical_harmonics : int, optional
-        Number of Legendre polynomial terms for angle features. Default is 4.
-    network_type : {"pade", "mlp"}, optional
-        Type of network to use. Default is ``"pade"``.
-    spectral_norm : bool, optional
-        Whether to apply spectral normalization to network weights. Default is False.
+    hidden_layer_sizes : Sequence[int] or None, optional, default=None
+        Hidden layer sizes for kernel networks.
+    n_spherical_harmonics : int, optional, default=4
+        Number of Legendre polynomial terms for angle features.
+    network_type : {"pade", "mlp"}, optional, default="pade"
+        Type of network to use.
+    spectral_norm : bool, optional, default=False
+        Whether to apply spectral normalization to network weights.
 
     Forward
     -------
@@ -999,21 +998,21 @@ class MultiscaleKernel(Module):
         Physical coordinates of the source points. Shape :math:`(N_{sources}, D)`.
     target_points : Float[torch.Tensor, "n_targets n_dims"]
         Physical coordinates of the target points. Shape :math:`(N_{targets}, D)`.
-    source_strengths : TensorDict or None, optional
+    source_strengths : TensorDict or None, optional, default=None
         Per-source, per-branch strength values. TensorDict keyed by
         ``reference_length_names``. Defaults to all ones.
-    source_scalars : TensorDict or None, optional
+    source_scalars : TensorDict or None, optional, default=None
         Scalars per source point with batch_size :math:`(N_{sources},)`.
-    source_vectors : TensorDict or None, optional
+    source_vectors : TensorDict or None, optional, default=None
         Vectors per source point with batch_size :math:`(N_{sources}, D)`.
-    global_scalars : TensorDict or None, optional
+    global_scalars : TensorDict or None, optional, default=None
         Global scalar features (auto-augmented with log length ratios).
-    global_vectors : TensorDict or None, optional
+    global_vectors : TensorDict or None, optional, default=None
         Global vector features with batch_size :math:`(D,)`.
-    verbose : bool, optional
-        Whether to print progress. Default is False.
-    chunk_size : None or int or {"auto"}, optional
-        Chunking behavior. Default is ``"auto"``.
+    verbose : bool, optional, default=False
+        Whether to print progress.
+    chunk_size : None or int or {"auto"}, optional, default="auto"
+        Chunking behavior.
 
     Outputs
     -------

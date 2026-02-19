@@ -22,14 +22,16 @@ from tensordict import TensorDict
 
 
 @overload
-def smooth_log(x: torch.Tensor) -> torch.Tensor: ...
+def smooth_log(x: Float[torch.Tensor, "..."]) -> Float[torch.Tensor, "..."]: ...
 
 
 @overload
 def smooth_log(x: TensorDict) -> TensorDict: ...
 
 
-def smooth_log(x: torch.Tensor | TensorDict) -> torch.Tensor | TensorDict:
+def smooth_log(
+    x: Float[torch.Tensor, "..."] | TensorDict,
+) -> Float[torch.Tensor, "..."] | TensorDict:
     r"""Performs an elementwise operation on ``x`` with the following properties:
 
     - ``f(x) -> 0`` as ``x -> 0``
@@ -43,19 +45,21 @@ def smooth_log(x: torch.Tensor | TensorDict) -> torch.Tensor | TensorDict:
 
     Parameters
     ----------
-    x : torch.Tensor or TensorDict
+    x : Float[torch.Tensor, "..."] or TensorDict
         Input tensor or TensorDict with non-negative values.
 
     Returns
     -------
-    torch.Tensor or TensorDict
+    Float[torch.Tensor, "..."] or TensorDict
         Result of the smooth log operation, same type and shape as ``x``.
     """
     return (-x).expm1().neg() * x.log1p()
 
 
 @overload
-def legendre_polynomials(x: torch.Tensor, n: int) -> list[torch.Tensor]: ...
+def legendre_polynomials(
+    x: Float[torch.Tensor, "..."], n: int
+) -> list[Float[torch.Tensor, "..."]]: ...
 
 
 @overload
@@ -63,8 +67,8 @@ def legendre_polynomials(x: TensorDict, n: int) -> list[TensorDict]: ...
 
 
 def legendre_polynomials(
-    x: torch.Tensor | TensorDict, n: int
-) -> list[torch.Tensor | TensorDict]:
+    x: Float[torch.Tensor, "..."] | TensorDict, n: int
+) -> list[Float[torch.Tensor, "..."] | TensorDict]:
     r"""Computes the first n Legendre polynomials evaluated at x.
 
     Acts elementwise on all entries of ``x``.
@@ -77,19 +81,19 @@ def legendre_polynomials(
 
     Parameters
     ----------
-    x : torch.Tensor or TensorDict
+    x : Float[torch.Tensor, "..."] or TensorDict
         Input tensor of any shape.
     n : int
         Number of Legendre polynomials to compute (will return ``P_0`` through ``P_{n-1}``).
 
     Returns
     -------
-    list[torch.Tensor or TensorDict]
+    list[Float[torch.Tensor, "..."] or TensorDict]
         List of ``n`` tensors, where the i-th tensor is ``P_i(x)`` with the same
         shape as ``x``.
 
-    Example
-    -------
+    Examples
+    --------
     >>> x = torch.tensor([0.0, 0.5, 1.0])
     >>> polys = legendre_polynomials(x, 4)
     >>> # polys[0] is P_0(x) = 1
@@ -122,7 +126,7 @@ def legendre_polynomials(
 def vector_project(
     v: Float[torch.Tensor, "... n_dims"],
     n_hat: Float[torch.Tensor, "... n_dims"],
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "... n_dims"]:
     r"""Projects vector ``v`` onto the plane orthogonal to unit vector ``n_hat``.
 
     Uses the Gram-Schmidt orthogonalization:
@@ -140,7 +144,7 @@ def vector_project(
 
     Returns
     -------
-    torch.Tensor
+    Float[torch.Tensor, "... n_dims"]
         Projected vectors with shape :math:`(*, D)`.
     """
     # Below are two equivalent implementations; on my machine the second is faster, but
@@ -153,7 +157,11 @@ def polar_and_dipole_basis(
     r_hat: Float[torch.Tensor, "... 2"],
     n_hat: Float[torch.Tensor, "... 2"],
     normalize_basis_vectors: bool = True,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[
+    Float[torch.Tensor, "... 2"],
+    Float[torch.Tensor, "... 2"],
+    Float[torch.Tensor, "... 2"],
+]:
     r"""Computes a local vector basis for 2D vectors that is rotation-invariant
     w.r.t. ``n_hat``.
 
@@ -169,7 +177,7 @@ def polar_and_dipole_basis(
         normalized.
     n_hat : Float[torch.Tensor, "... 2"]
         Axis vectors with shape :math:`(*, 2)`, assumed to be unit vectors.
-    normalize_basis_vectors : bool, optional
+    normalize_basis_vectors : bool, optional, default=True
         Whether to normalize ``e_kappa`` to be unit length
         (``e_r`` and ``e_theta`` are always unit). If ``False``, ``e_kappa`` is essentially
         multiplied by ``sin(theta)``. This gives the sometimes-useful property that
@@ -177,7 +185,7 @@ def polar_and_dipole_basis(
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+    tuple[Float[torch.Tensor, "... 2"], Float[torch.Tensor, "... 2"], Float[torch.Tensor, "... 2"]]
         A tuple of 3 vectors, each of shape :math:`(*, 2)`:
 
         - ``e_r``: The radial direction, aligned with ``r_hat``. This corresponds to the
@@ -233,7 +241,11 @@ def spherical_basis(
     r_hat: Float[torch.Tensor, "... 3"],
     n_hat: Float[torch.Tensor, "... 3"],
     normalize_basis_vectors: bool = True,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[
+    Float[torch.Tensor, "... 3"],
+    Float[torch.Tensor, "... 3"],
+    Float[torch.Tensor, "... 3"],
+]:
     r"""Computes a local vector basis for 3D vectors that is rotation-invariant
     w.r.t. ``n_hat``.
 
@@ -247,7 +259,7 @@ def spherical_basis(
         normalized.
     n_hat : Float[torch.Tensor, "... 3"]
         Axis vectors with shape :math:`(*, 3)`, assumed to be unit vectors.
-    normalize_basis_vectors : bool, optional
+    normalize_basis_vectors : bool, optional, default=True
         Whether to normalize ``e_theta`` and ``e_phi`` to unit
         length (``e_r`` is always unit). If ``False``, ``e_theta`` and ``e_phi`` are
         essentially multiplied by ``sin(theta)``. This gives the
@@ -258,7 +270,7 @@ def spherical_basis(
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+    tuple[Float[torch.Tensor, "... 3"], Float[torch.Tensor, "... 3"], Float[torch.Tensor, "... 3"]]
         A tuple of 3 vectors, each of shape :math:`(*, 3)`:
 
         - ``e_r``: The radial direction, pointing outward from the origin. This

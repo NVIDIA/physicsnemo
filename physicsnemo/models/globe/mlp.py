@@ -38,21 +38,21 @@ class MLP(Module):
         For example, ``[8, 32, 16, 4]`` creates an MLP with input
         dimension 8, two hidden layers of sizes 32 and 16, and output
         dimension 4.
-    activation_function : Callable[[torch.Tensor], torch.Tensor] | None
+    activation_function : Callable[[torch.Tensor], torch.Tensor] | None, optional, default=None
         Activation applied after each hidden layer. Can be any
-        ``torch.nn`` module or callable. Defaults to ``nn.SiLU()``.
-    bias : bool
+        ``torch.nn`` module or callable. When ``None``, defaults to
+        ``nn.SiLU()``.
+    bias : bool, optional, default=True
         Whether to include a bias term in the linear layers.
-        Default ``True``.
-    dropout : float
+    dropout : float, optional, default=0.0
         Dropout probability after each activation (except the last layer).
-        Set to ``0.0`` to disable. Default ``0.0``.
-    use_batchnorm : bool
+        Set to ``0.0`` to disable.
+    use_batchnorm : bool, optional, default=False
         If ``True``, applies ``BatchNorm1d`` after each linear layer
-        (except the last). Default ``False``.
-    spectral_norm : bool
+        (except the last).
+    spectral_norm : bool, optional, default=False
         If ``True``, applies spectral normalization to all linear layer
-        weights, constraining the spectral norm to 1. Default ``False``.
+        weights, constraining the spectral norm to 1.
 
     Forward
     -------

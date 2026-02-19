@@ -47,28 +47,28 @@ class Pade(Module):
         Number of units in each layer, including input and output.
         For example, ``[8, 32, 16, 4]`` creates a network with input
         dimension 8, two hidden layers, and output dimension 4.
-    activation_function : Callable[[torch.Tensor], torch.Tensor] | None
+    activation_function : Callable[[torch.Tensor], torch.Tensor] | None, optional, default=None
         Activation applied after each hidden layer. Should satisfy
         ``f(x) -> 0`` as ``x -> -inf`` and ``f(x) -> x`` as
         ``x -> +inf`` for proper asymptotic behavior (e.g.,
-        ``nn.SiLU()``, ``nn.Mish()``). Defaults to ``nn.SiLU()``.
-    dropout : float
-        Dropout probability. Default ``0.0``.
-    use_batchnorm : bool
-        Whether to apply ``BatchNorm1d``. Default ``False``.
-    spectral_norm : bool
-        Whether to apply spectral normalization. Default ``False``.
-    numerator_order : int
-        Power to raise the numerator to. Default ``1``.
-    denominator_order : int
-        Power to raise the denominator to. Default ``2``.
-    share_denominator_across_channels : bool
+        ``nn.SiLU()``, ``nn.Mish()``). When ``None``, defaults to
+        ``nn.SiLU()``.
+    dropout : float, optional, default=0.0
+        Dropout probability.
+    use_batchnorm : bool, optional, default=False
+        Whether to apply ``BatchNorm1d``.
+    spectral_norm : bool, optional, default=False
+        Whether to apply spectral normalization.
+    numerator_order : int, optional, default=1
+        Power to raise the numerator to.
+    denominator_order : int, optional, default=2
+        Power to raise the denominator to.
+    share_denominator_across_channels : bool, optional, default=True
         If ``True``, uses a single scalar denominator for all output
-        channels. Default ``True``.
-    use_separate_mlps : bool
+        channels.
+    use_separate_mlps : bool, optional, default=True
         If ``True``, uses separate MLPs for numerator and denominator.
         If ``False``, uses a single MLP with split outputs.
-        Default ``True``.
 
     Forward
     -------

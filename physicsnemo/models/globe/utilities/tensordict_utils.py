@@ -46,8 +46,8 @@ def concatenated_length(td: TensorDict) -> int:
         The total number of elements across all leaf tensors when their
         non-batch dimensions are flattened. Returns 0 for empty TensorDicts.
 
-    Example
-    -------
+    Examples
+    --------
     >>> td = TensorDict({
     ...     "scalars": torch.randn(10, 3),      # 3 elements per batch
     ...     "vectors": torch.randn(10, 5, 2),   # 5*2=10 elements per batch
@@ -82,8 +82,8 @@ def concatenate_leaves(td: TensorDict) -> torch.Tensor:
         For empty TensorDicts, returns an empty tensor with shape :math:`(*, 0)`
         on the same device as the TensorDict.
 
-    Example
-    -------
+    Examples
+    --------
     >>> td = TensorDict({
     ...     "a": torch.ones(2, 3, 4),      # Will contribute 3*4=12 features
     ...     "b": torch.ones(2, 5),         # Will contribute 5 features
@@ -136,8 +136,8 @@ class RankDict(dict):
     device : torch.device or None
         Stored device.
 
-    Example
-    -------
+    Examples
+    --------
     >>> rd = RankDict(batch_size=torch.Size([10]), device="cpu")
     >>> # Accessing rank 0 (scalars) auto-creates empty TensorDict
     >>> td0 = rd[0]  # TensorDict with batch_size=(10,)
@@ -215,8 +215,8 @@ def split_by_leaf_rank(
         only the tensors with the corresponding rank. Empty TensorDicts are created
         for ranks that have tensors.
 
-    Example
-    -------
+    Examples
+    --------
     >>> td = TensorDict({
     ...     "scalar1": torch.randn(10),         # rank 0 (only batch dim)
     ...     "scalar2": torch.randn(10),         # rank 0
@@ -269,8 +269,8 @@ def combine_tensordicts(*tds: TensorDict) -> TensorDict:
     ValueError
         If TensorDicts have different batch sizes or devices.
 
-    Example
-    -------
+    Examples
+    --------
     >>> td1 = TensorDict({"a": torch.tensor([1, 2])}, batch_size=[2])
     >>> td2 = TensorDict({"b": torch.tensor([3, 4])}, batch_size=[2])
     >>> combined = combine_tensordicts(td1, td2)

@@ -18,6 +18,7 @@ from typing import Literal, Sequence
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float
 
 from physicsnemo.core.module import Module
 
@@ -43,24 +44,23 @@ class Normalizer(Module):
 
     Parameters
     ----------
-    shape : torch.Size | Sequence[int]
+    shape : torch.Size | Sequence[int], optional, default=()
         Target shape of the running statistic. Must have the same number
-        of dimensions as the input. Default ``()``.
-    momentum : float
+        of dimensions as the input.
+    momentum : float, optional, default=0.99
         EWMA momentum in :math:`[0, 1)`. Higher values emphasize
-        historical estimates. Default ``0.99``.
-    learnable_weight_shape : torch.Size | Sequence[int] | None
+        historical estimates.
+    learnable_weight_shape : torch.Size | Sequence[int] | None, optional, default=None
         If provided, creates a learnable multiplicative ``weight``
-        parameter with the given shape. Default ``None``.
-    learnable_bias_shape : torch.Size | Sequence[int] | None
+        parameter with the given shape.
+    learnable_bias_shape : torch.Size | Sequence[int] | None, optional, default=None
         If provided, creates a learnable additive ``bias`` parameter
-        with the given shape. Default ``None``.
-    initialization_behavior : ``"no_op"`` | ``"first_batch"``
+        with the given shape.
+    initialization_behavior : Literal["no_op", "first_batch"], optional, default="no_op"
         Controls how the running mean is initialized on the first
-        forward call. Default ``"no_op"``.
-    disable : bool
+        forward call.
+    disable : bool, optional, default=False
         If ``True``, the normalizer is a no-op pass-through.
-        Default ``False``.
 
     Forward
     -------
@@ -133,7 +133,7 @@ class Normalizer(Module):
         """
         return f"Normalizer(ln_running_mean={self.ln_running_mean!r})"
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Float[torch.Tensor, "..."]) -> Float[torch.Tensor, "..."]:
         r"""Normalize by a log-space EWMA of ``mean(abs(x))``.
 
         In train mode, updates ``ln_running_mean`` from the current batch
@@ -142,12 +142,12 @@ class Normalizer(Module):
 
         Parameters
         ----------
-        x : torch.Tensor
+        x : Float[torch.Tensor, "..."]
             Input tensor whose rank must match ``len(self.shape)``.
 
         Returns
         -------
-        torch.Tensor
+        Float[torch.Tensor, "..."]
             Normalized tensor, same shape as ``x``.
         """
         if self.disable:
