@@ -147,7 +147,7 @@ physicsnemo/models/vfgn @mnabian
 # EXAMPLE SPECIFIC OWNERSHIP
 
 # GLOBE
-examples/cfd/external_aerodynamics/globe_airfrans @peterdsharpe
+examples/cfd/external_aerodynamics/globe @peterdsharpe
 
 # corrdiff
 examples/weather/corrdiff @CharlelieLrt
