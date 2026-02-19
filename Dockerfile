@@ -252,7 +252,7 @@ RUN cd /physicsnemo && uv pip install --group dev
 RUN FORCE_CUDA_EXTENSION=1 uv pip install --no-build-isolation "torch-harmonics==0.8.0"
 RUN uv pip install "tensorly>=0.8.1" "tensorly-torch>=0.4.0" "torchinfo>=1.8" "webdataset>=0.2"
 # Install Makani via direct URL
-RUN uv pip install --no-deps "git+https://github.com/NVIDIA/makani.git@v0.2.1#egg=makani"
+# RUN uv pip install --no-deps "git+https://github.com/NVIDIA/makani.git@v0.2.1#egg=makani"
 
 # Other CI-only specs (moto, scikit-image, etc.)
 RUN uv pip install "moto[s3]>=5.0.28"
@@ -260,7 +260,7 @@ RUN uv pip install "numpy-stl" "scikit-image>=0.24.0" "sparse-dot-mkl" "shapely"
 RUN uv pip install "multi-storage-client[boto3]>=0.33.0"
 
 # E2Grid install
-RUN uv pip install --no-deps --no-build-isolation "git+https://github.com/NVlabs/earth2grid.git@11dcf1b0787a7eb6a8497a3a5a5e1fdcc31232d3"
+# RUN uv pip install --no-deps --no-build-isolation "git+https://github.com/NVlabs/earth2grid.git@11dcf1b0787a7eb6a8497a3a5a5e1fdcc31232d3"
 
 # Uninstall the non-editable physicsnemo from builder
 RUN uv pip uninstall nvidia-physicsnemo
