@@ -36,6 +36,7 @@ env:
   PYTHON_VERSION: "3.12"
   UV_CACHE_KEY_PREFIX: uv-cache-nightly-cuda13.1.1-cudnn-devel-ubuntu24.04-py3.12
   VENV_CACHE_KEY_PREFIX: uv-env-nightly-cuda13.1.1-cudnn-devel-ubuntu24.04-py3.12
+  PYVISTA_OFF_SCREEN: "true"
 
 jobs:
   # Stage 1: Build and cache the environment
