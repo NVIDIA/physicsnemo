@@ -17,6 +17,10 @@ inputs:
     description: Docker build target stage
     required: false
     default: ci
+  platform:
+    description: Docker target platform
+    required: false
+    default: linux/amd64
 outputs:
   image-tag:
     description: The built image tag
@@ -38,8 +42,10 @@ runs:
         echo "dockerfile=${{ inputs.dockerfile }}"
         echo "context=${{ inputs.context }}"
         echo "target=${{ inputs.target }}"
+        echo "platform=${{ inputs.platform }}"
         echo "tag=${{ inputs.image-tag }}"
         docker build \
+          --platform "${{ inputs.platform }}" \
           --file "${{ inputs.dockerfile }}" \
           --target "${{ inputs.target }}" \
           --tag "${{ inputs.image-tag }}" \
