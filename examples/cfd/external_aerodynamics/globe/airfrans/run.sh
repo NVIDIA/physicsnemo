@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH -A <your_account>
-#SBATCH -J globe_airfrans_scarce
+#SBATCH -A accountname
+#SBATCH -J accountname-%u.train_globe_airfrans_scarce
 #SBATCH --time=4:00:00
 #SBATCH -p batch
 #SBATCH -N 4
