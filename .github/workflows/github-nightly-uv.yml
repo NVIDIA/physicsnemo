@@ -62,6 +62,11 @@ jobs:
         venv-cache-key-prefix: ${{ env.VENV_CACHE_KEY_PREFIX }}
         cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}
 
+    - name: Report setup action outputs
+      run: |
+        echo "setup-uv-env.uv_cache_hit=${{ steps.setup-uv-env.outputs.uv_cache_hit }}"
+        echo "setup-uv-env.venv_cache_hit=${{ steps.setup-uv-env.outputs.venv_cache_hit }}"
+
     - name: Delete existing uv package cache key
       run: |
         gh cache delete "${{ env.UV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}" || true
@@ -116,6 +121,11 @@ jobs:
         venv-cache-key-prefix: ${{ env.VENV_CACHE_KEY_PREFIX }}
         cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}
 
+    - name: Report setup action outputs
+      run: |
+        echo "setup-uv-env.uv_cache_hit=${{ steps.setup-uv-env.outputs.uv_cache_hit }}"
+        echo "setup-uv-env.venv_cache_hit=${{ steps.setup-uv-env.outputs.venv_cache_hit }}"
+
     - name: Validate environment
       run: |
         .venv/bin/python --version
@@ -164,6 +174,11 @@ jobs:
         uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
         venv-cache-key-prefix: ${{ env.VENV_CACHE_KEY_PREFIX }}
         cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}
+
+    - name: Report setup action outputs
+      run: |
+        echo "setup-uv-env.uv_cache_hit=${{ steps.setup-uv-env.outputs.uv_cache_hit }}"
+        echo "setup-uv-env.venv_cache_hit=${{ steps.setup-uv-env.outputs.venv_cache_hit }}"
 
     - name: Validate environment
       run: |

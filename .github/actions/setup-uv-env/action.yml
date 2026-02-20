@@ -38,26 +38,52 @@ runs:
         restore-keys: |
           ${{ inputs.venv-cache-key-prefix }}-
 
+    - name: Debug cache and environment context
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "::group::setup-uv-env debug context"
+        echo "uv cache key: ${{ inputs.uv-cache-key-prefix }}-${{ inputs.cache-key-suffix }}"
+        echo "venv cache key: ${{ inputs.venv-cache-key-prefix }}-${{ inputs.cache-key-suffix }}"
+        echo "uv cache exact hit: ${{ steps.restore-uv-cache.outputs.cache-hit }}"
+        echo "venv cache exact hit: ${{ steps.restore-venv-cache.outputs.cache-hit }}"
+        echo "workspace: $GITHUB_WORKSPACE"
+        df -h
+        echo "::endgroup::"
+
     - name: Install base dependencies with uv (dev + cu13)
       if: steps.restore-venv-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set -euo pipefail
+        echo "::group::uv sync (dev + cu13)"
         uv sync \
           --group dev \
           --extra cu13 \
           --preview-features extra-build-dependencies
+        echo "::endgroup::"
+        uv run python -c "import torch; print(f'post-base torch={torch.__version__} torch_cuda={torch.version.cuda}')"
 
     - name: Install GNN dependencies from pyproject extras
       if: steps.restore-venv-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set -euo pipefail
+        echo "::group::uv sync (dev + cu13 + gnns)"
         uv sync \
           --group dev \
           --extra cu13 \
           --extra gnns \
           --preview-features extra-build-dependencies
+        echo "::endgroup::"
+        uv run python - <<'PY'
+        import importlib.metadata as md
+        for pkg in ("torch-geometric", "torch-scatter", "torch-sparse", "torch-cluster"):
+            try:
+                print(f"post-gnns {pkg}={md.version(pkg)}")
+            except md.PackageNotFoundError:
+                print(f"post-gnns {pkg}=<not-installed>")
+        PY
 
     - name: Force Hopper CUDA source builds for PyG extensions
       if: steps.restore-venv-cache.outputs.cache-hit != 'true'
@@ -81,3 +107,11 @@ runs:
         uv pip install --reinstall --no-deps --no-build-isolation --no-binary=torch_cluster torch_cluster
 
         uv pip install --reinstall --no-deps --no-build-isolation "git+https://github.com/pyg-team/pyg-lib.git@0.5.0"
+        uv run python - <<'PY'
+        import importlib.metadata as md
+        for pkg in ("torch", "torch-geometric", "torch-scatter", "torch-sparse", "torch-cluster", "pyg-lib"):
+            try:
+                print(f"post-force-build {pkg}={md.version(pkg)}")
+            except md.PackageNotFoundError:
+                print(f"post-force-build {pkg}=<not-installed>")
+        PY

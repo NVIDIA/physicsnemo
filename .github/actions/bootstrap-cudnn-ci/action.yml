@@ -43,3 +43,10 @@ runs:
         set -euo pipefail
         python3 --version
         uv --version
+        gcc --version | head -n 1
+        cmake --version | head -n 1
+        if command -v nvcc >/dev/null 2>&1; then
+          nvcc --version
+        else
+          echo "nvcc not found on PATH"
+        fi
