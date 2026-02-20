@@ -41,7 +41,6 @@ from utilities import (
     install_graceful_shutdown,
     load_training_checkpoint,
     log_hyperparameters,
-    reduce_over_ranks,
     sanitize_metric_name,
     save_training_checkpoint,
     to,

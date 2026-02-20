@@ -844,10 +844,9 @@ def compute_max_mesh_sizes(
 if __name__ == "__main__":
     import os
 
-    from config import get_data_dir
-
-    env_dir = os.environ.get("AIRFRANS_DATA_DIR")
-    data_dir = Path(env_dir) if env_dir else get_data_dir()
+    if not (_data_env := os.environ.get("AIRFRANS_DATA_DIR")):
+        raise ValueError("AIRFRANS_DATA_DIR environment variable is not set.")
+    data_dir = Path(_data_env)
     sample_paths = list(data_dir.iterdir())
 
     # Preprocess a sample
