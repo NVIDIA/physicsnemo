@@ -53,20 +53,7 @@ runs:
         df -h
         echo "::endgroup::"
 
-    - name: Install base dependencies with uv (dev + cu12)
-      if: steps.restore-venv-cache.outputs.cache-hit != 'true'
-      shell: bash
-      run: |
-        set -euo pipefail
-        echo "::group::uv sync (dev + cu12)"
-        uv sync \
-          --group dev \
-          --extra cu12 \
-          --preview-features extra-build-dependencies
-        echo "::endgroup::"
-        uv run python -c "import torch; print(f'post-base torch={torch.__version__} torch_cuda={torch.version.cuda}')"
-
-    - name: Install GNN dependencies from pyproject extras
+    - name: Install dependencies with uv (dev + cu12 + gnns)
       if: steps.restore-venv-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
@@ -83,6 +70,7 @@ runs:
           --extra gnns \
           --preview-features extra-build-dependencies
         echo "::endgroup::"
+        uv run python -c "import torch; print(f'post-base torch={torch.__version__} torch_cuda={torch.version.cuda}')"
         uv run python - <<'PY'
         import importlib.metadata as md
         for pkg in ("torch-geometric", "torch-scatter", "torch-sparse", "torch-cluster"):
