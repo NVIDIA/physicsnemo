@@ -69,9 +69,15 @@ runs:
         export MAX_JOBS="$(nproc)"
         export UV_LINK_MODE=copy
         uv pip install "ninja" "wheel" "setuptools"
+        uv run python -c "import torch; print(f'torch={torch.__version__} torch_cuda={torch.version.cuda}')"
+        if command -v nvcc >/dev/null 2>&1; then
+          nvcc --version
+        else
+          echo "nvcc not found on PATH"
+        fi
 
         uv pip install --reinstall --no-deps --no-build-isolation --no-binary=torch_scatter torch_scatter
         uv pip install --reinstall --no-deps --no-build-isolation --no-binary=torch_sparse torch_sparse
         uv pip install --reinstall --no-deps --no-build-isolation --no-binary=torch_cluster torch_cluster
 
-        uv pip install --reinstall --no-build-isolation "git+https://github.com/pyg-team/pyg-lib.git@0.5.0"
+        uv pip install --reinstall --no-deps --no-build-isolation "git+https://github.com/pyg-team/pyg-lib.git@0.5.0"

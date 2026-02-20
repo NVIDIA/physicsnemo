@@ -60,6 +60,11 @@ Changelog = "https://github.com/NVIDIA/physicsnemo/blob/main/CHANGELOG.md"
 
 [tool.uv]
 managed = true
+no-build-isolation-package = [
+    "torch-scatter",
+    "torch-sparse",
+    "torch-cluster",
+]
 conflicts = [
     [
         { extra = "cu12" },
