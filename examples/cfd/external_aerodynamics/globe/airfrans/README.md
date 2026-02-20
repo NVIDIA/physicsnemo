@@ -22,8 +22,7 @@ AirFRANS provides Reynolds-Averaged Navier-Stokes (RANS) simulation data for
 
 2. Set the dataset location via one of:
    - The `--data-dir` CLI argument
-   - The `AIRFRANS_DATA_DIR` environment variable
-   - Hostname-based lookup in `config.py` (fallback)
+   - The `AIRFRANS_DATA_DIR` environment variable (set automatically by `run.sh`)
 
 The dataset root should contain `manifest.json` and the individual sample
 directories.
@@ -76,7 +75,6 @@ automatically selects the most recent output directory.
 | `train.py` | Training loop, loss function, model construction |
 | `dataset.py` | AirFRANS preprocessing, caching, DataLoader creation |
 | `utilities.py` | Checkpointing, device transfer, distributed helpers |
-| `config.py` | Hostname-based dataset path resolution (fallback) |
 | `inference.py` | Single-sample inference and visualization |
 | `run.sh` | SLURM launch script for multi-node training |
 | `mlflow_launch.sh` | Launches the MLflow UI |

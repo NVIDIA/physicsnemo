@@ -22,7 +22,6 @@ from pathlib import Path
 import torch
 import yaml
 
-from config import get_data_dir
 from dataset import AirFRANSDataSet
 from utilities import (
     get_latest_checkpoint_path,
@@ -47,7 +46,12 @@ else:
     output_dir = max(output_subdirs, key=lambda d: d.stat().st_mtime)
 print(f"Using output directory: {output_dir}")
 
-data_dir = get_data_dir()
+if not (_data_env := os.environ.get("AIRFRANS_DATA_DIR")):
+    raise ValueError(
+        "AIRFRANS_DATA_DIR environment variable is not set. "
+        "Pass it explicitly or use run.sh which sets it automatically."
+    )
+data_dir = Path(_data_env)
 manifest = json.loads((data_dir / "manifest.json").read_text())
 train_sample_paths = [data_dir / f for f in manifest["full_train"]]
 valid_sample_paths = [data_dir / f for f in manifest["full_test"]]
