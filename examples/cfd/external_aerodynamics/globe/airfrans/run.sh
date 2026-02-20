@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH -A coreai_modulus_cae
-#SBATCH -J coreai_modulus_cae-psharpe.train_globe_run_1_scarce
+#SBATCH -A <your_account>
+#SBATCH -J globe_airfrans_scarce
 #SBATCH --time=4:00:00
 #SBATCH -p batch
 #SBATCH -N 4
@@ -13,7 +13,7 @@
 set -euo pipefail
 
 TRAIN_ARGS=(
-    --output-name ${SLURM_JOB_NAME#coreai_modulus_cae-psharpe.train_globe_}
+    --output-name ${SLURM_JOB_NAME}
     --airfrans-task "scarce"
 
 )
@@ -46,6 +46,25 @@ fi
 echo "Detected CUDA major version ${CUDA_MAJOR} -> syncing with extra '${CUDA_EXTRA}'"
 uv sync --extra "${CUDA_EXTRA}" --extra mesh-extras
 uv pip install -r requirements.txt
+
+### [Dataset Path]
+# Auto-detect AirFRANS dataset location by hostname if not already set.
+if [ -z "${AIRFRANS_DATA_DIR:-}" ]; then
+    HOSTNAME=$(hostname)
+    if [[ "$HOSTNAME" == "NV-pds" ]]; then  # Local workstation
+        export AIRFRANS_DATA_DIR="${HOME}/gh/aerodynamics_datasets/airfrans/Dataset"
+    elif [[ "$HOSTNAME" == *"eos.clusters.nvidia.com" ]]; then  # EOS cluster
+        export AIRFRANS_DATA_DIR="${HOME}/coreai_modulus_cae/datasets/airfrans/Dataset"
+    elif [[ "$HOSTNAME" == "nvl72"* ]]; then  # HSG cluster
+        export AIRFRANS_DATA_DIR="${HOME}/coreai_modulus_cae/datasets/airfrans/Dataset"
+    else
+        echo "WARNING: AIRFRANS_DATA_DIR is not set and hostname '$HOSTNAME' is not recognized." >&2
+        echo "Continuing anyway -- train.py will fail unless --data-dir is in TRAIN_ARGS." >&2
+    fi
+    if [ -n "${AIRFRANS_DATA_DIR:-}" ]; then
+        echo "Auto-detected AIRFRANS_DATA_DIR=$AIRFRANS_DATA_DIR"
+    fi
+fi
 
 ### [MLflow Configuration]
 export MLFLOW_TRACKING_URI="sqlite:///${SLURM_SUBMIT_DIR:-$(pwd)}/output/mlflow.db"

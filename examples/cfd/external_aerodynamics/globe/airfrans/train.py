@@ -30,7 +30,6 @@ import mlflow
 import torch
 import torch.nn.functional as F
 import torchinfo
-from config import default_airfrans_data_dir
 from dataset import AirFRANSDataSet, compute_max_mesh_sizes
 from tensordict import TensorDict
 from torch.profiler import record_function
@@ -89,8 +88,7 @@ def main(
     Args:
         data_dir: Path to the AirFRANS dataset directory. Resolution order:
             1. This argument (if provided)
-            2. AIRFRANS_DATA_DIR environment variable
-            3. Hostname-based lookup via config.get_data_dir()
+            2. AIRFRANS_DATA_DIR environment variable (set automatically by run.sh)
         output_name: Name for output directory. If None, uses current timestamp.
         amp: Enable automatic mixed precision (AMP) training for faster computation.
         use_compile: Enable torch.compile for model optimization and performance.
@@ -123,13 +121,9 @@ def main(
     ### [Config Processing]
     if data_dir is None:
         if data_dir := os.environ.get("AIRFRANS_DATA_DIR"):
-            pass
-        elif data_dir := default_airfrans_data_dir():
-            pass
+            data_dir = Path(data_dir)
         else:
-            raise ValueError(
-                "Could not determine the AirFRANS data directory from the `data_dir` argument, the `AIRFRANS_DATA_DIR` environment variable, or the hostname-based lookup in `config.py`."
-            )
+            raise ValueError("AirFRANS data directory not specified. Pass `data_dir` or set the AIRFRANS_DATA_DIR environment variable.")
     data_dir = Path(data_dir)
 
     if output_name is None:
