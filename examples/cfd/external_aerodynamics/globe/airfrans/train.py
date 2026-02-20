@@ -155,8 +155,7 @@ def main(
     device = dist.device
     torch.cuda.set_device(device)
     if dist.rank == 0:
-        print(f"{dist.world_size=} 🌎")
-    print(f"Howdy from {dist.rank=}! 🤠")
+        print(f"{dist.world_size = }")
 
     error_scales: TensorDict = TensorDict(error_scales, device=device)
     if dist.rank == 0:
@@ -185,7 +184,6 @@ def main(
     autocast_ctx = torch.autocast(
         device_type=device.type, dtype=torch.bfloat16, enabled=amp
     )
-    torch.cuda.set_per_process_memory_fraction(0.99)
     torch.set_float32_matmul_precision("high")  # Allows use of Tensor Cores in matmuls
     torch.manual_seed(seed)
 
