@@ -36,6 +36,8 @@ env:
   PYTHON_VERSION: "3.12"
   UV_CACHE_KEY_PREFIX: uv-cache-nightly-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12
   VENV_CACHE_KEY_PREFIX: uv-env-nightly-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12
+  TESTMON_CACHE_KEY_PREFIX: testmon-nightly
+  COVERAGE_CACHE_KEY_PREFIX: coverage-nightly
   PYVISTA_OFF_SCREEN: "true"
 
 jobs:
@@ -55,6 +57,7 @@ jobs:
         python-version: ${{ env.PYTHON_VERSION }}
 
     - name: Setup uv environment from cache
+      # Nightly build-env is fail-open on cache miss by design; it can rebuild from lockfile.
       id: setup-uv-env
       uses: ./.github/actions/setup-uv-env
       with:
@@ -67,13 +70,8 @@ jobs:
         echo "setup-uv-env.uv_cache_hit=${{ steps.setup-uv-env.outputs.uv_cache_hit }}"
         echo "setup-uv-env.venv_cache_hit=${{ steps.setup-uv-env.outputs.venv_cache_hit }}"
 
-    - name: Delete existing uv package cache key
-      run: |
-        gh cache delete "${{ env.UV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}" || true
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
     - name: Save uv package cache
+      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: ~/.cache/uv
@@ -85,13 +83,8 @@ jobs:
         rm -rf ~/.cache/uv
         df -h
 
-    - name: Delete existing venv cache key
-      run: |
-        gh cache delete "${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}" || true
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
     - name: Save environment to cache
+      if: steps.setup-uv-env.outputs.venv_cache_hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: .venv
@@ -113,18 +106,13 @@ jobs:
       with:
         python-version: ${{ env.PYTHON_VERSION }}
 
-    - name: Setup uv environment from cache
-      id: setup-uv-env
-      uses: ./.github/actions/setup-uv-env
+    - name: Restore prebuilt environment cache
+      # Downstream jobs are fail-closed on env cache miss: build-environment must publish .venv first.
+      uses: actions/cache/restore@v4
       with:
-        uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
-        venv-cache-key-prefix: ${{ env.VENV_CACHE_KEY_PREFIX }}
-        cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}
-
-    - name: Report setup action outputs
-      run: |
-        echo "setup-uv-env.uv_cache_hit=${{ steps.setup-uv-env.outputs.uv_cache_hit }}"
-        echo "setup-uv-env.venv_cache_hit=${{ steps.setup-uv-env.outputs.venv_cache_hit }}"
+        path: .venv
+        key: ${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}
+        fail-on-cache-miss: true
 
     - name: Validate environment
       run: |
@@ -136,12 +124,6 @@ jobs:
         # This populates the testmon database for PR workflows
         uv run python -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*"
 
-    - name: Delete old testmon cache
-      run: |
-        gh cache delete "testmon-nightly-latest" || true
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
     - name: Save testmon database to cache
       uses: actions/cache/save@v4
       with:
@@ -149,7 +131,7 @@ jobs:
           .testmondata
           .testmondata-shm
           .testmondata-wal
-        key: testmon-nightly-latest
+        key: ${{ env.TESTMON_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
 
   # Stage 3: Run coverage tests and upload artifacts
   coverage:
@@ -167,18 +149,13 @@ jobs:
       with:
         python-version: ${{ env.PYTHON_VERSION }}
 
-    - name: Setup uv environment from cache
-      id: setup-uv-env
-      uses: ./.github/actions/setup-uv-env
+    - name: Restore prebuilt environment cache
+      # Downstream jobs are fail-closed on env cache miss: build-environment must publish .venv first.
+      uses: actions/cache/restore@v4
       with:
-        uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
-        venv-cache-key-prefix: ${{ env.VENV_CACHE_KEY_PREFIX }}
-        cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}
-
-    - name: Report setup action outputs
-      run: |
-        echo "setup-uv-env.uv_cache_hit=${{ steps.setup-uv-env.outputs.uv_cache_hit }}"
-        echo "setup-uv-env.venv_cache_hit=${{ steps.setup-uv-env.outputs.venv_cache_hit }}"
+        path: .venv
+        key: ${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}
+        fail-on-cache-miss: true
 
     - name: Validate environment
       run: |
@@ -193,17 +170,11 @@ jobs:
       run: |
         uv run coverage run --rcfile='test/coverage.docstring.rc' -m pytest --doctest-modules physicsnemo/ --ignore-glob="*internal*" --ignore-glob="*experimental*"
 
-    - name: Delete old coverage cache
-      run: |
-        gh cache delete "coverage-nightly-latest" || true
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
     - name: Save coverage files to cache
       uses: actions/cache/save@v4
       with:
         path: .coverage*
-        key: coverage-nightly-latest
+        key: ${{ env.COVERAGE_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'test/coverage.pytest.rc', 'test/coverage.docstring.rc', '.github/workflows/github-nightly-uv.yml') }}
 
     - name: Merge coverage reports
       run: |

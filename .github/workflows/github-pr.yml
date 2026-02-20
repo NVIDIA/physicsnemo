@@ -105,6 +105,7 @@ jobs:
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
     - name: Restore environment from cache
+      # PR jobs are fail-closed: nightly build-environment should have published this cache.
       uses: actions/cache/restore@v4
       with:
         path: .venv
@@ -118,7 +119,9 @@ jobs:
           .testmondata
           .testmondata-shm
           .testmondata-wal
-        key: testmon-nightly-latest
+        key: testmon-nightly-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
+        restore-keys: |
+          testmon-nightly-
 
     - name: Run core tests (with testmon)
       run: |
@@ -145,6 +148,7 @@ jobs:
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
     - name: Restore environment from cache
+      # PR jobs are fail-closed: nightly build-environment should have published this cache.
       uses: actions/cache/restore@v4
       with:
         path: .venv
@@ -158,14 +162,18 @@ jobs:
           .testmondata
           .testmondata-shm
           .testmondata-wal
-        key: testmon-nightly-latest
+        key: testmon-nightly-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
+        restore-keys: |
+          testmon-nightly-
 
     - name: Restore nightly coverage baseline from cache
       id: cache-coverage-restore
       uses: actions/cache/restore@v4
       with:
         path: .coverage*
-        key: coverage-nightly-latest
+        key: coverage-nightly-${{ hashFiles('uv.lock', 'pyproject.toml', 'test/coverage.pytest.rc', 'test/coverage.docstring.rc', '.github/workflows/github-nightly-uv.yml') }}
+        restore-keys: |
+          coverage-nightly-
 
     - name: Run core tests for coverage report (testmon-selected)
       run: |
