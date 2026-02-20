@@ -10,6 +10,8 @@
 #SBATCH -e ./sbatch_logs/%x.log
 #SBATCH --open-mode=append
 
+set -euo pipefail
+
 TRAIN_ARGS=(
     --output-name ${SLURM_JOB_NAME#coreai_modulus_cae-psharpe.train_globe_}
     --airfrans-task "scarce"
@@ -22,13 +24,27 @@ echo "SLURM Job name: $SLURM_JOB_NAME"
 echo "Number of nodes: $SLURM_NNODES"
 echo "Node list: $SLURM_NODELIST"
 
-### [Detect GPUs]
-NUM_GPUS_PER_NODE=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
+### [Detect GPUs and CUDA version]
+NVIDIA_SMI_OUTPUT=$(nvidia-smi)
+NUM_GPUS_PER_NODE=$(grep -cE '^\|[[:space:]]+[0-9]+[[:space:]]' <<< "$NVIDIA_SMI_OUTPUT")
+CUDA_MAJOR=$(sed -n 's/.*CUDA Version: \([0-9]*\).*/\1/p' <<< "$NVIDIA_SMI_OUTPUT")
 echo "Number of GPUs per node detected: $NUM_GPUS_PER_NODE"
 
-set -euxo pipefail
 
-# uv sync --extra [cu12 or cu13] --extra mesh-extras
+### [Sync dependencies]
+if [ -z "$CUDA_MAJOR" ]; then
+    echo "ERROR: Could not detect CUDA version from nvidia-smi." >&2
+    exit 1
+elif [ "$CUDA_MAJOR" -ge 13 ]; then
+    CUDA_EXTRA="cu13"
+elif [ "$CUDA_MAJOR" -ge 12 ]; then
+    CUDA_EXTRA="cu12"
+else
+    echo "ERROR: Unsupported CUDA major version ${CUDA_MAJOR} (need >= 12)." >&2
+    exit 1
+fi
+echo "Detected CUDA major version ${CUDA_MAJOR} -> syncing with extra '${CUDA_EXTRA}'"
+uv sync --extra "${CUDA_EXTRA}" --extra mesh-extras
 uv pip install -r requirements.txt
 
 ### [MLflow Configuration]
