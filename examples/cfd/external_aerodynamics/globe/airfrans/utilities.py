@@ -26,7 +26,7 @@ import signal
 from collections.abc import Callable
 from functools import cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import git
 import mlflow
@@ -36,9 +36,7 @@ import yaml
 from tensordict import TensorDict
 
 import physicsnemo
-from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.mesh import Mesh
-
 
 ### [torch.compile helpers] ###############################################
 
