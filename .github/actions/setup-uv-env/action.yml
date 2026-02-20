@@ -62,6 +62,7 @@ runs:
         export FORCE_CUDA=1
         export MAX_JOBS="$(nproc)"
         export UV_LINK_MODE=copy
+        uv venv .venv
         uv pip install "ninja" "wheel" "setuptools"
         echo "::group::uv sync (dev + cu12 + gnns)"
         uv sync \
