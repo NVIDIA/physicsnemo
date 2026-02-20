@@ -39,10 +39,9 @@ doctest:
 		--doctest-modules physicsnemo/ --ignore-glob=*internal* --ignore-glob=*experimental* --ignore-glob=*deploy/onnx*
 
 pytest: 
-	# coverage run \
-	# 	--rcfile='test/coverage.pytest.rc' \
-	# 	-m pytest --ignore-glob=*docs* --ignore-glob=*examples*
-	echo "Pytest CI stage not currently implemented"
+	coverage run \
+		--rcfile='test/coverage.pytest.rc' \
+		-m pytest --ignore-glob=*docs* --ignore-glob=*examples*
 
 pytest-internal:
 	cd test/internal && \
