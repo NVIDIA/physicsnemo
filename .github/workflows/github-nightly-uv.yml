@@ -60,11 +60,11 @@ jobs:
       with:
         uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
         venv-cache-key-prefix: ${{ env.VENV_CACHE_KEY_PREFIX }}
-        cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
+        cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}
 
     - name: Delete existing uv package cache key
       run: |
-        gh cache delete "${{ env.UV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}" || true
+        gh cache delete "${{ env.UV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}" || true
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -72,7 +72,7 @@ jobs:
       uses: actions/cache/save@v4
       with:
         path: ~/.cache/uv
-        key: ${{ env.UV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
+        key: ${{ env.UV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}
 
     - name: Free disk space before caching
       if: steps.setup-uv-env.outputs.venv_cache_hit != 'true'
@@ -82,7 +82,7 @@ jobs:
 
     - name: Delete existing venv cache key
       run: |
-        gh cache delete "${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}" || true
+        gh cache delete "${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}" || true
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -90,7 +90,7 @@ jobs:
       uses: actions/cache/save@v4
       with:
         path: .venv
-        key: ${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
+        key: ${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}
 
   # Stage 2: Run testmon tests and cache the database
   testmon:
@@ -114,7 +114,7 @@ jobs:
       with:
         uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
         venv-cache-key-prefix: ${{ env.VENV_CACHE_KEY_PREFIX }}
-        cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
+        cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}
 
     - name: Validate environment
       run: |
@@ -163,7 +163,7 @@ jobs:
       with:
         uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
         venv-cache-key-prefix: ${{ env.VENV_CACHE_KEY_PREFIX }}
-        cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
+        cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}
 
     - name: Validate environment
       run: |

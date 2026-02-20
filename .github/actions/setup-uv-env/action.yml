@@ -58,3 +58,19 @@ runs:
           --extra cu13 \
           --extra gnns \
           --preview-features extra-build-dependencies
+
+    - name: Force CUDA PyG extension wheels for cu13
+      if: steps.restore-venv-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        TORCH_SERIES="$(uv run python -c 'import torch; print(".".join(torch.__version__.split("+")[0].split(".")[:2]))')"
+        uv pip install \
+          --reinstall \
+          --no-deps \
+          --no-index \
+          --find-links "https://data.pyg.org/whl/torch-${TORCH_SERIES}+cu130.html" \
+          torch_scatter \
+          torch_sparse \
+          torch_cluster \
+          pyg_lib
