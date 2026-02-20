@@ -404,42 +404,6 @@ def to(
         )
 
 
-### [Distributed reduction] ###############################################
-
-
-def reduce_over_ranks(
-    x: torch.Tensor,
-    op: Literal["mean", "sum", "max", "min"] = "mean",
-) -> torch.Tensor:
-    """All-reduce *x* across ranks using the specified operation.
-
-    No-op when ``world_size == 1``. Modifies *x* in-place.
-
-    Args:
-        x: Tensor to reduce.
-        op: Reduction operation.
-
-    Returns:
-        The same tensor object, now holding the reduced values.
-    """
-    if not DistributedManager.is_initialized():
-        raise RuntimeError(
-            "Distributed manager should be initialized when using reduce_over_ranks"
-        )
-    dist = DistributedManager()
-
-    if dist.world_size != 1:
-        op_map = {
-            "mean": torch.distributed.ReduceOp.AVG,
-            "sum": torch.distributed.ReduceOp.SUM,
-            "max": torch.distributed.ReduceOp.MAX,
-            "min": torch.distributed.ReduceOp.MIN,
-        }
-        torch.distributed.all_reduce(x, op=op_map[op])
-
-    return x
-
-
 ### [Signal handling] #####################################################
 
 

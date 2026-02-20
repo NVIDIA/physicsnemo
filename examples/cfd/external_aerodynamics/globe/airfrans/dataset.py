@@ -802,8 +802,6 @@ def compute_max_mesh_sizes(
     Returns:
         Mapping ``{bc_type: {"n_points": int, "n_cells": int}}``.
     """
-    from utilities import reduce_over_ranks
-
     max_sizes: dict[str, dict[str, int]] = defaultdict(
         lambda: {"n_points": 0, "n_cells": 0}
     )
@@ -832,7 +830,8 @@ def compute_max_mesh_sizes(
             [max_sizes[bc_type]["n_points"], max_sizes[bc_type]["n_cells"]],
             device=device,
         )
-        size_tensor = reduce_over_ranks(size_tensor, op="max")
+        if torch.distributed.is_initialized():
+            torch.distributed.all_reduce(size_tensor, op=torch.distributed.ReduceOp.MAX)
         max_sizes[bc_type]["n_points"] = int(size_tensor[0])
         max_sizes[bc_type]["n_cells"] = int(size_tensor[1])
 

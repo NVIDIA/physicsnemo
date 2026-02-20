@@ -478,13 +478,19 @@ def main(
                 for k, v in batch_loss_components.items():
                     all_batch_loss_components[k].append(v.detach().clone())
 
-        epoch_loss = reduce_over_ranks(
-            torch.nanmean(torch.stack(all_batch_losses)), op="mean"
-        )
-        epoch_loss_components = {
-            k: reduce_over_ranks(torch.nanmean(torch.stack(v)), op="mean")
-            for k, v in all_batch_loss_components.items()
-        }
+        # [Distributed comms]
+        keys = ["loss", *all_batch_loss_components.keys()]
+        all_values = torch.stack([
+            torch.nanmean(torch.stack(all_batch_losses)),
+            *(
+                torch.nanmean(torch.stack(all_batch_loss_components[k]))
+                for k in keys[1:]
+            ),
+        ])
+        if dist.world_size > 1:
+            torch.distributed.all_reduce(all_values, op=torch.distributed.ReduceOp.AVG)
+        epoch_loss = all_values[0]
+        epoch_loss_components = dict(zip(keys[1:], all_values[1:]))
 
         if dist.rank == 0:  # Logging on rank 0 only
             print(
