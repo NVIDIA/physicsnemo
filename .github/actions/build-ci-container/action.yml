@@ -1,0 +1,53 @@
+name: Build CI container image
+description: Build the repository CI container image from Dockerfile
+inputs:
+  image-tag:
+    description: Fully qualified local image tag to build
+    required: false
+    default: physicsnemo-ci:nightly
+  dockerfile:
+    description: Dockerfile path
+    required: false
+    default: Dockerfile
+  context:
+    description: Docker build context path
+    required: false
+    default: .
+  target:
+    description: Docker build target stage
+    required: false
+    default: ci
+outputs:
+  image-tag:
+    description: The built image tag
+    value: ${{ inputs.image-tag }}
+runs:
+  using: composite
+  steps:
+    - name: Verify Docker CLI availability
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker version
+
+    - name: Build CI container image
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "::group::docker build"
+        echo "dockerfile=${{ inputs.dockerfile }}"
+        echo "context=${{ inputs.context }}"
+        echo "target=${{ inputs.target }}"
+        echo "tag=${{ inputs.image-tag }}"
+        docker build \
+          --file "${{ inputs.dockerfile }}" \
+          --target "${{ inputs.target }}" \
+          --tag "${{ inputs.image-tag }}" \
+          "${{ inputs.context }}"
+        echo "::endgroup::"
+
+    - name: Show built image details
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker image inspect "${{ inputs.image-tag }}" --format='id={{.Id}} size={{.Size}}'

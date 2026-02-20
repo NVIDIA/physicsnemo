@@ -51,15 +51,15 @@ runs:
         df -h
         echo "::endgroup::"
 
-    - name: Install base dependencies with uv (dev + cu13)
+    - name: Install base dependencies with uv (dev + cu12)
       if: steps.restore-venv-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set -euo pipefail
-        echo "::group::uv sync (dev + cu13)"
+        echo "::group::uv sync (dev + cu12)"
         uv sync \
           --group dev \
-          --extra cu13 \
+          --extra cu12 \
           --preview-features extra-build-dependencies
         echo "::endgroup::"
         uv run python -c "import torch; print(f'post-base torch={torch.__version__} torch_cuda={torch.version.cuda}')"
@@ -69,10 +69,10 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        echo "::group::uv sync (dev + cu13 + gnns)"
+        echo "::group::uv sync (dev + cu12 + gnns)"
         uv sync \
           --group dev \
-          --extra cu13 \
+          --extra cu12 \
           --extra gnns \
           --preview-features extra-build-dependencies
         echo "::endgroup::"
