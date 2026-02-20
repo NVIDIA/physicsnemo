@@ -22,19 +22,23 @@ runs:
   steps:
     - name: Restore uv package cache
       id: restore-uv-cache
+      continue-on-error: true
       uses: actions/cache/restore@v4
       with:
         path: ~/.cache/uv
         key: ${{ inputs.uv-cache-key-prefix }}-${{ inputs.cache-key-suffix }}
+        fail-on-cache-miss: false
         restore-keys: |
           ${{ inputs.uv-cache-key-prefix }}-
 
     - name: Restore venv cache
       id: restore-venv-cache
+      continue-on-error: true
       uses: actions/cache/restore@v4
       with:
         path: .venv
         key: ${{ inputs.venv-cache-key-prefix }}-${{ inputs.cache-key-suffix }}
+        fail-on-cache-miss: false
         restore-keys: |
           ${{ inputs.venv-cache-key-prefix }}-
 
