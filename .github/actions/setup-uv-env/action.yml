@@ -67,14 +67,11 @@ runs:
         export TORCH_CUDA_ARCH_LIST="9.0"
         export FORCE_CUDA=1
         export MAX_JOBS="$(nproc)"
+        export UV_LINK_MODE=copy
         uv pip install "ninja" "wheel" "setuptools"
 
-        uv pip install \
-          --reinstall \
-          --no-build-isolation \
-          --no-binary=:all: \
-          torch_scatter \
-          torch_sparse \
-          torch_cluster
+        uv pip install --reinstall --no-build-isolation --no-binary=torch_scatter torch_scatter
+        uv pip install --reinstall --no-build-isolation --no-binary=torch_sparse torch_sparse
+        uv pip install --reinstall --no-build-isolation --no-binary=torch_cluster torch_cluster
 
         uv pip install --reinstall --no-build-isolation "git+https://github.com/pyg-team/pyg-lib.git@0.5.0"
