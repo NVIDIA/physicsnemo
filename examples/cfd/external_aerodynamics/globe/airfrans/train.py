@@ -30,6 +30,7 @@ import mlflow
 import torch
 import torch.nn.functional as F
 import torchinfo
+from config import default_airfrans_data_dir
 from dataset import AirFRANSDataSet, compute_max_mesh_sizes
 from tensordict import TensorDict
 from torch.profiler import record_function
@@ -121,13 +122,15 @@ def main(
     """
     ### [Config Processing]
     if data_dir is None:
-        env_dir = os.environ.get("AIRFRANS_DATA_DIR")
-        if env_dir:
-            data_dir = Path(env_dir)
+        if data_dir := os.environ.get("AIRFRANS_DATA_DIR"):
+            pass
+        elif data_dir := default_airfrans_data_dir():
+            pass
         else:
-            from config import get_data_dir
-
-            data_dir = get_data_dir()
+            raise ValueError(
+                "Could not determine the AirFRANS data directory from the `data_dir` argument, the `AIRFRANS_DATA_DIR` environment variable, or the hostname-based lookup in `config.py`."
+            )
+    data_dir = Path(data_dir)
 
     if output_name is None:
         output_name = datetime.now().strftime("%Y%m%d_%H%M%S")
