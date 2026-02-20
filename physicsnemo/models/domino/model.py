@@ -194,6 +194,8 @@ class DoMINO(Module):
             model_parameters = DEFAULT_MODEL_PARAMS
         elif not isinstance(model_parameters, Config):
             model_parameters = Config.from_hydra(model_parameters)
+        # Update stored __init__ args so checkpoint JSON serialization uses the Config
+        self._args["__args__"]["model_parameters"] = model_parameters
 
         self.output_features_vol = output_features_vol
         self.output_features_surf = output_features_surf

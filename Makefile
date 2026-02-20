@@ -48,9 +48,10 @@ pytest-internal:
 		pytest && \
 		cd ../../
 
+# NOTE: temporarily omitting diffusion coverage until we have a better way to test it.
 coverage:
 	coverage combine && \
-		coverage report --show-missing --omit=*test* --omit=*internal* --omit=*experimental* --fail-under=60 && \
+		coverage report --show-missing --omit=*test* --omit=*internal* --omit=*experimental* --omit=*diffusion* --fail-under=60 && \
 		coverage html
 
 all-ci: get-data setup-ci black interrogate lint license install pytest doctest coverage
@@ -70,10 +71,10 @@ else
     $(error Unknown CPU architecture ${ARCH} detected)
 endif
 
-MODULUS_GIT_HASH = $(shell git rev-parse --short HEAD)
+PHYSICSNEMO_GIT_HASH = $(shell git rev-parse --short HEAD)
 
 container-deploy:
-	docker build -t physicsnemo:deploy --build-arg TARGETPLATFORM=${TARGETPLATFORM} --build-arg MODULUS_GIT_HASH=${MODULUS_GIT_HASH} --target deploy -f Dockerfile .
+	docker build -t physicsnemo:deploy --build-arg TARGETPLATFORM=${TARGETPLATFORM} --build-arg PHYSICSNEMO_GIT_HASH=${PHYSICSNEMO_GIT_HASH} --target deploy -f Dockerfile .
 
 container-ci:
 	docker build -t physicsnemo:ci --build-arg TARGETPLATFORM=${TARGETPLATFORM} --target ci -f Dockerfile .

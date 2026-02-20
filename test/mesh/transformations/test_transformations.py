@@ -37,7 +37,6 @@ from physicsnemo.mesh.transformations.geometric import (
     transform,
     translate,
 )
-from physicsnemo.mesh.utilities._cache import get_cached
 
 pv = pytest.importorskip("pyvista", minversion="0.46.4")
 
@@ -108,21 +107,19 @@ def validate_caches(
     """Validate that caches exist and are correct."""
     for cache_name, should_exist in expected_caches.items():
         if should_exist:
-            cached_value = get_cached(mesh.cell_data, cache_name)
+            cached_value = mesh._cache.get(("cell", cache_name), None)
             assert cached_value is not None, (
                 f"Cache {cache_name} should exist but is missing"
             )
 
-            # Verify cache is correct by creating a fresh mesh without cache
             mesh_no_cache = Mesh(
                 points=mesh.points,
                 cells=mesh.cells,
                 point_data=mesh.point_data,
-                cell_data=mesh.cell_data.exclude("_cache"),
+                cell_data=mesh.cell_data,
                 global_data=mesh.global_data,
             )
 
-            # Recompute by accessing property
             if cache_name == "areas":
                 recomputed = mesh_no_cache.cell_areas
             elif cache_name == "centroids":
@@ -137,7 +134,7 @@ def validate_caches(
                 f"Max diff: {(cached_value - recomputed).abs().max()}"
             )
         else:
-            assert get_cached(mesh.cell_data, cache_name) is None, (
+            assert mesh._cache.get(("cell", cache_name), None) is None, (
                 f"Cache {cache_name} should not exist but is present"
             )
 
@@ -208,8 +205,8 @@ class TestTranslation:
         """Verify translation correctly updates caches across dimensions."""
         mesh = create_mesh_with_caches(n_spatial_dims, n_manifold_dims, device=device)
 
-        original_areas = get_cached(mesh.cell_data, "areas").clone()
-        original_centroids = get_cached(mesh.cell_data, "centroids").clone()
+        original_areas = mesh._cache.get(("cell", "areas"), None).clone()
+        original_centroids = mesh._cache.get(("cell", "centroids"), None).clone()
 
         offset = torch.ones(n_spatial_dims, device=device)
         translated = translate(mesh, offset)
@@ -220,23 +217,23 @@ class TestTranslation:
             "centroids": True,  # Should exist and be translated
         }
         if mesh.codimension == 1:
-            original_normals = get_cached(mesh.cell_data, "normals").clone()
+            original_normals = mesh._cache.get(("cell", "normals"), None).clone()
             expected_caches["normals"] = True  # Should exist and be unchanged
 
         validate_caches(translated, expected_caches)
 
         # Verify specific values
         assert torch.allclose(
-            get_cached(translated.cell_data, "areas"), original_areas
+            translated._cache.get(("cell", "areas"), None), original_areas
         ), "Areas should be unchanged by translation"
         assert torch.allclose(
-            get_cached(translated.cell_data, "centroids"),
+            translated._cache.get(("cell", "centroids"), None),
             original_centroids + offset,
         ), "Centroids should be translated"
 
         if mesh.codimension == 1:
             assert torch.allclose(
-                get_cached(translated.cell_data, "normals"), original_normals
+                translated._cache.get(("cell", "normals"), None), original_normals
             ), "Normals should be unchanged by translation"
 
     def test_translate_preserves_data(self):
@@ -335,9 +332,9 @@ class TestRotation:
         """Verify rotation preserves areas but transforms centroids and normals."""
         mesh = create_mesh_with_caches(n_spatial_dims, n_manifold_dims, device=device)
 
-        original_areas = get_cached(mesh.cell_data, "areas").clone()
-        original_centroids = get_cached(mesh.cell_data, "centroids").clone()
-        original_normals = get_cached(mesh.cell_data, "normals").clone()
+        original_areas = mesh._cache.get(("cell", "areas"), None).clone()
+        original_centroids = mesh._cache.get(("cell", "centroids"), None).clone()
+        original_normals = mesh._cache.get(("cell", "normals"), None).clone()
 
         # Rotate by 45 degrees
         if n_spatial_dims == 2:
@@ -351,16 +348,16 @@ class TestRotation:
         )
 
         # Areas should be preserved (rotation has det=1)
-        assert torch.allclose(get_cached(rotated.cell_data, "areas"), original_areas), (
-            "Areas should be preserved by rotation"
-        )
+        assert torch.allclose(
+            rotated._cache.get(("cell", "areas"), None), original_areas
+        ), "Areas should be preserved by rotation"
 
         # Centroids and normals should be different (rotated)
         assert not torch.allclose(
-            get_cached(rotated.cell_data, "centroids"), original_centroids
+            rotated._cache.get(("cell", "centroids"), None), original_centroids
         ), "Centroids should be rotated"
         assert not torch.allclose(
-            get_cached(rotated.cell_data, "normals"), original_normals
+            rotated._cache.get(("cell", "normals"), None), original_normals
         ), "Normals should be rotated"
 
     def test_rotate_with_vector_data(self):
@@ -435,8 +432,8 @@ class TestScale:
         """Verify uniform scaling correctly updates all caches."""
         mesh = create_mesh_with_caches(n_spatial_dims, n_manifold_dims, device=device)
 
-        original_areas = get_cached(mesh.cell_data, "areas").clone()
-        original_centroids = get_cached(mesh.cell_data, "centroids").clone()
+        original_areas = mesh._cache.get(("cell", "areas"), None).clone()
+        original_centroids = mesh._cache.get(("cell", "centroids"), None).clone()
 
         factor = 2.0
         scaled = scale(mesh, factor)
@@ -445,22 +442,22 @@ class TestScale:
 
         # Areas should scale by factor^n_manifold_dims
         expected_areas = original_areas * (factor**n_manifold_dims)
-        assert torch.allclose(get_cached(scaled.cell_data, "areas"), expected_areas), (
-            "Areas should scale by factor^n_manifold_dims"
-        )
+        assert torch.allclose(
+            scaled._cache.get(("cell", "areas"), None), expected_areas
+        ), "Areas should scale by factor^n_manifold_dims"
 
         # Centroids should be scaled
         expected_centroids = original_centroids * factor
         assert torch.allclose(
-            get_cached(scaled.cell_data, "centroids"), expected_centroids
+            scaled._cache.get(("cell", "centroids"), None), expected_centroids
         )
 
         # For codim-1 and positive uniform scaling, normals should be unchanged
         if mesh.codimension == 1:
-            original_normals = get_cached(mesh.cell_data, "normals").clone()
+            original_normals = mesh._cache.get(("cell", "normals"), None).clone()
             validate_caches(scaled, {"normals": True})
             assert torch.allclose(
-                get_cached(scaled.cell_data, "normals"), original_normals
+                scaled._cache.get(("cell", "normals"), None), original_normals
             )
 
     @pytest.mark.parametrize("n_spatial_dims,n_manifold_dims", [(2, 1), (3, 2)])
@@ -559,9 +556,9 @@ class TestNonIsotropicAreaScaling:
         # Area should scale by 2 × 3 = 6 (xy-plane is stretched by x and y factors)
         expected_area = original_area * 6.0
         assert torch.allclose(
-            get_cached(scaled.cell_data, "areas"), expected_area, atol=1e-5
+            scaled._cache.get(("cell", "areas"), None), expected_area, atol=1e-5
         ), (
-            f"Expected area {expected_area.item()}, got {get_cached(scaled.cell_data, 'areas').item()}"
+            f"Expected area {expected_area.item()}, got {scaled._cache.get(('cell', 'areas'), None).item()}"
         )
 
     def test_anisotropic_scale_vertical_surface_3d(self, device):
@@ -583,7 +580,7 @@ class TestNonIsotropicAreaScaling:
         # Area should scale by 2 × 5 = 10 (xz-plane is stretched by x and z factors)
         expected_area = original_area * 10.0
         assert torch.allclose(
-            get_cached(scaled.cell_data, "areas"), expected_area, atol=1e-5
+            scaled._cache.get(("cell", "areas"), None), expected_area, atol=1e-5
         )
 
     def test_anisotropic_scale_diagonal_surface_3d(self, device):
@@ -658,8 +655,10 @@ class TestNonIsotropicAreaScaling:
         expected_areas = original_areas * torch.tensor([6.0, 10.0], device=device)
 
         assert torch.allclose(
-            get_cached(scaled.cell_data, "areas"), expected_areas, atol=1e-5
-        ), f"Expected {expected_areas}, got {get_cached(scaled.cell_data, 'areas')}"
+            scaled._cache.get(("cell", "areas"), None), expected_areas, atol=1e-5
+        ), (
+            f"Expected {expected_areas}, got {scaled._cache.get(('cell', 'areas'), None)}"
+        )
 
 
 class TestTransform:
@@ -1301,24 +1300,20 @@ class TestRotateDataTransformEdgeCases:
 
     def test_rotate_cell_data_skips_cached(self):
         """Test that rotate skips cached cell_data fields (under "_cache")."""
-        from physicsnemo.mesh.utilities._cache import set_cached
-
         points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0]])
         cells = torch.tensor([[0, 1, 2]])
         mesh = Mesh(points=points, cells=cells)
 
-        # Cached field
-        set_cached(mesh.cell_data, "test_vector", torch.ones(mesh.n_cells, 3))
+        # Cached field (mesh._cache is separate from cell_data; transformations build
+        # fresh _cache with only propagated entries, so custom entries are not propagated)
+        mesh._cache[("cell", "test_vector")] = torch.ones(mesh.n_cells, 3)
 
         rotated = rotate(
             mesh, angle=np.pi / 2, axis=[0, 0, 1], transform_cell_data=True
         )
 
-        # Cache should not be transformed
-        assert (
-            "_cache" not in rotated.cell_data
-            or get_cached(rotated.cell_data, "test_vector") is None
-        )
+        # Custom cache entry should not be propagated to rotated mesh
+        assert rotated._cache.get(("cell", "test_vector"), None) is None
 
     def test_rotate_cell_data_wrong_shape_raises(self):
         """Test rotate raises for cell_data with wrong shape."""
@@ -1354,21 +1349,18 @@ class TestScaleDataTransformEdgeCases:
 
     def test_scale_data_skips_cached(self):
         """Test scale skips cached fields (under "_cache")."""
-        from physicsnemo.mesh.utilities._cache import set_cached
-
         points = torch.tensor([[1.0, 0.0]])
         cells = torch.tensor([[0]])
         mesh = Mesh(points=points, cells=cells)
 
-        set_cached(mesh.point_data, "test_vector", torch.tensor([[1.0, 2.0]]))
+        # Cached field (mesh._cache is separate from point_data; transformations build
+        # fresh _cache with only propagated entries, so custom entries are not propagated)
+        mesh._cache[("point", "test_vector")] = torch.tensor([[1.0, 2.0]])
 
         scaled = scale(mesh, factor=2.0, transform_point_data=True)
 
-        # Cache should not be transformed
-        assert (
-            "_cache" not in scaled.point_data
-            or get_cached(scaled.point_data, "test_vector") is None
-        )
+        # Custom cache entry should not be propagated to scaled mesh
+        assert scaled._cache.get(("point", "test_vector"), None) is None
 
     def test_scale_data_wrong_shape_raises(self):
         """Test scale raises for fields with wrong shape."""
@@ -1540,8 +1532,8 @@ class TestEdgeCases:
         # Final result should have correctly maintained caches
         # Areas should be scaled by 2^2 = 4
         assert torch.allclose(
-            get_cached(result.cell_data, "areas"),
-            get_cached(mesh.cell_data, "areas") * 4.0,
+            result._cache.get(("cell", "areas"), None),
+            mesh._cache.get(("cell", "areas"), None) * 4.0,
             atol=1e-6,
         )
 

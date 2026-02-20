@@ -28,7 +28,6 @@ from typing import TYPE_CHECKING
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.mesh.utilities._cache import CACHE_KEY
 from physicsnemo.mesh.utilities._duplicate_detection import compute_canonical_indices
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 
@@ -405,8 +404,8 @@ def clean_mesh(
     """
     points = mesh.points
     cells = mesh.cells
-    point_data = mesh.point_data.exclude(CACHE_KEY)
-    cell_data = mesh.cell_data.exclude(CACHE_KEY)
+    point_data = mesh.point_data
+    cell_data = mesh.cell_data
     global_data = mesh.global_data
     stats: dict = {}
 
@@ -491,7 +490,7 @@ def remove_isolated_points(
     new_points, new_cells, new_point_data, _ = remove_unused_points(
         points=mesh.points,
         cells=mesh.cells,
-        point_data=mesh.point_data.exclude(CACHE_KEY),
+        point_data=mesh.point_data,
     )
 
     n_final = new_points.shape[0]
@@ -512,7 +511,7 @@ def remove_isolated_points(
         points=new_points,
         cells=new_cells,
         point_data=new_point_data,
-        cell_data=mesh.cell_data.exclude(CACHE_KEY).clone(),
+        cell_data=mesh.cell_data.clone(),
         global_data=mesh.global_data.clone(),
     )
 

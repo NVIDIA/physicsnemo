@@ -48,7 +48,7 @@ COMPAT_MAP = {
     "physicsnemo.models.layers.fourier_layers": "physicsnemo.nn.module.fourier_layers",
     "physicsnemo.models.layers.fully_connected_layers": "physicsnemo.nn.module.fully_connected_layers",
     "physicsnemo.models.layers.fused_silu": "physicsnemo.nn.module.fused_silu",
-    "physicsnemo.models.layers.interpolation": "physicsnemo.nn.module.interpolation",
+    "physicsnemo.models.layers.interpolation": "physicsnemo.nn.functional.interpolation",
     "physicsnemo.models.layers.kan_layers": "physicsnemo.nn.module.kan_layers",
     "physicsnemo.models.layers.mlp_layers": "physicsnemo.nn.module.mlp_layers",
     "physicsnemo.models.layers.resample_layers": "physicsnemo.nn.module.resample_layers",
@@ -129,6 +129,12 @@ def _ensure_parent_packages(module_name: str) -> None:
         parent_name = ".".join(parts[: i + 1])
         if parent_name in sys.modules:
             continue
+        # Prefer loading the real parent module/package when it exists.
+        try:
+            importlib.import_module(parent_name)
+            continue
+        except ImportError:
+            pass
         placeholder = types.ModuleType(parts[i])
         sys.modules[parent_name] = placeholder
         grandparent_name = ".".join(parts[:i])
