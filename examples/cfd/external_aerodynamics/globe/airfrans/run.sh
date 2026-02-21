@@ -30,6 +30,11 @@ NUM_GPUS_PER_NODE=$(grep -cE '^\|[[:space:]]+[0-9]+[[:space:]]' <<< "$NVIDIA_SMI
 CUDA_MAJOR=$(sed -n 's/.*CUDA Version: \([0-9]*\).*/\1/p' <<< "$NVIDIA_SMI_OUTPUT")
 echo "Number of GPUs per node detected: $NUM_GPUS_PER_NODE"
 
+### [Thread Configuration]
+CPUS_PER_NODE=${SLURM_CPUS_ON_NODE:-$(nproc)}
+export OMP_NUM_THREADS=$((CPUS_PER_NODE / NUM_GPUS_PER_NODE))
+OMP_NUM_THREADS=$((OMP_NUM_THREADS > 0 ? OMP_NUM_THREADS : 1))
+echo "OMP_NUM_THREADS=$OMP_NUM_THREADS (${CPUS_PER_NODE} CPUs / ${NUM_GPUS_PER_NODE} GPUs)"
 
 ### [Sync dependencies]
 if [ -z "$CUDA_MAJOR" ]; then
