@@ -13,16 +13,16 @@
 set -euo pipefail
 
 TRAIN_ARGS=(
-    --output-name ${SLURM_JOB_NAME}
+    --output-name ${SLURM_JOB_NAME:-globe_airfrans_local}
     --airfrans-task "scarce"
 
 )
 
 ### [Run Information]
-echo "SLURM Job ID: $SLURM_JOB_ID"
-echo "SLURM Job name: $SLURM_JOB_NAME"
-echo "Number of nodes: $SLURM_NNODES"
-echo "Node list: $SLURM_NODELIST"
+echo "SLURM Job ID: ${SLURM_JOB_ID:-n/a}"
+echo "SLURM Job name: ${SLURM_JOB_NAME:-n/a}"
+echo "Number of nodes: ${SLURM_NNODES:-1}"
+echo "Node list: ${SLURM_NODELIST:-$(hostname)}"
 
 ### [Detect GPUs and CUDA version]
 NVIDIA_SMI_OUTPUT=$(nvidia-smi)
