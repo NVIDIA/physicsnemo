@@ -30,7 +30,7 @@ import mlflow
 import torch
 import torch.nn.functional as F
 import torchinfo
-from dataset import AirFRANSDataSet, compute_max_mesh_sizes
+from dataset import AirFRANSDataSet, AirFRANSSample, compute_max_mesh_sizes
 from tensordict import TensorDict
 from torch.profiler import record_function
 from tqdm import tqdm
@@ -43,7 +43,6 @@ from utilities import (
     log_hyperparameters,
     sanitize_metric_name,
     save_training_checkpoint,
-    to,
 )
 
 from physicsnemo.distributed import DistributedManager
@@ -371,22 +370,20 @@ def main(
         mode=compile_mode,
         disable=not use_compile,
     )
-    def run_batch(
-        input_dict: TensorDict, true_results: TensorDict
-    ) -> tuple[torch.Tensor, TensorDict]:
+    def run_batch(sample: AirFRANSSample) -> tuple[torch.Tensor, TensorDict]:
         """Runs a single batch (always just one sample) through the model and computes the loss."""
         pred_results = model(
-            prediction_points=input_dict["prediction_points"],
-            boundary_meshes=input_dict["boundary_meshes"],  # type: dict[str, Mesh]
-            reference_lengths=input_dict["reference_lengths"],  # type: dict[str, torch.Tensor]
-            global_scalars=input_dict["global_scalars"],  # type: TensorDict
-            global_vectors=input_dict["global_vectors"],  # type: TensorDict
+            prediction_points=sample.interior_mesh.points,
+            boundary_meshes=sample.boundary_meshes,
+            reference_lengths=sample.reference_lengths,
+            global_scalars=sample.global_scalars,
+            global_vectors=sample.global_vectors,
             chunk_size=None,
             verbose=False,
         )
         batch_loss_components = pred_results.apply(
             field_loss_fn,
-            true_results,
+            sample.interior_mesh.point_data,  # ground truth
             error_scales.expand_as(pred_results),
         ).mean(dim=0)  # Mean over points
         batch_loss = batch_loss_components.stack_from_tensordict().sum()
@@ -401,28 +398,22 @@ def main(
         all_batch_losses: list[torch.Tensor] = []
         all_batch_loss_components: dict[str, list[torch.Tensor]] = defaultdict(list)
 
-        for input_dict, true_results in tqdm(
+        for sample in tqdm(
             dataloader,
             desc=f"{epoch:d} {'Train' if training else 'Valid'}",
             unit=" samples",
             disable=dist.rank != 0 or epoch > 10,
         ):
             torch.compiler.cudagraph_mark_step_begin()
-            with record_function("data_transfer"):
-                input_dict: dict[str, Any] = to(input_dict, device=device)
-                true_results: TensorDict = to(true_results, device=device)
-
             with record_function("data_subsampling"):
-                # Subsample points for this iteration
-                prediction_points = input_dict["prediction_points"]
-                n_points = min(points_per_iter, len(prediction_points))
-                mask = torch.randperm(len(prediction_points), device=device)[:n_points]
-                input_dict["prediction_points"] = prediction_points[mask]
-                true_results = true_results[mask]
+                ### Subsample interior points (on CPU to reduce GPU transfer)
+                n_points = min(points_per_iter, sample.interior_mesh.n_points)
+                mask = torch.randperm(sample.interior_mesh.n_points)[:n_points]
+                sample.interior_mesh = sample.interior_mesh.slice_points(mask)
 
                 ### Subsample boundary mesh cells during training
                 if training:
-                    for bc_type, mesh in input_dict["boundary_meshes"].items():
+                    for bc_type, mesh in sample.boundary_meshes.items():
                         if train_face_downsampling_ratio != 1.0:
                             mesh._cache["cell", "areas"] = (
                                 mesh.cell_areas / train_face_downsampling_ratio
@@ -431,29 +422,30 @@ def main(
                                 mesh.n_cells * train_face_downsampling_ratio
                             )
                             mesh = mesh.slice_cells(
-                                torch.randperm(mesh.n_cells, device=device)[
-                                    :new_n_cells
-                                ]
+                                torch.randperm(mesh.n_cells)[:new_n_cells]
                             )
                         if train_randomize_face_centers:
                             mesh._cache["cell", "centroids"] = (
                                 mesh.sample_random_points_on_cells()
                             )
-                        input_dict["boundary_meshes"][bc_type] = mesh
+                        sample.boundary_meshes[bc_type] = mesh
 
                 ### Pad boundary meshes to fixed size for static compilation
                 max_sizes = train_max_sizes if training else valid_max_sizes
-                for bc_type, mesh in input_dict["boundary_meshes"].items():
+                for bc_type, mesh in sample.boundary_meshes.items():
                     ### Pre-cache normals before entering torch.compile.
                     # Areas and centroids are already cached above; normals must also
                     # be cached here so the computation+cache-write path is never
                     # traced by Dynamo (avoiding graph breaks and recompilations).
                     _ = mesh.cell_normals
-                    input_dict["boundary_meshes"][bc_type] = mesh.pad(
+                    sample.boundary_meshes[bc_type] = mesh.pad(
                         target_n_points=max_sizes[bc_type]["n_points"],
                         target_n_cells=max_sizes[bc_type]["n_cells"],
                         data_padding_value=0.0,
                     )
+
+            with record_function("data_transfer"):
+                sample = sample.to(device)
 
             with (
                 autocast_ctx,
@@ -462,9 +454,7 @@ def main(
             ):
                 if training:
                     optimizer.zero_grad()
-                batch_loss, batch_loss_components = run_batch(
-                    input_dict=input_dict, true_results=true_results
-                )
+                batch_loss, batch_loss_components = run_batch(sample)
                 if training:
                     if torch.isnan(batch_loss):
                         warnings.warn(
@@ -619,25 +609,20 @@ def main(
                         ("valid", valid_sample_paths),
                     ]:
                         sample_path = paths[0]
-                        input_dict, _ = AirFRANSDataSet.preprocess(sample_path)
-                        input_dict = to(input_dict, device=device)
+                        viz_sample = AirFRANSDataSet.preprocess(sample_path).to(device)
                         with torch.no_grad(), autocast_ctx:
                             base_model.eval()
                             pred_results = base_model(
-                                prediction_points=input_dict["prediction_points"],
-                                boundary_meshes=input_dict["boundary_meshes"],
-                                reference_lengths=input_dict["reference_lengths"],
-                                global_scalars=input_dict["global_scalars"],
-                                global_vectors=input_dict["global_vectors"],
+                                prediction_points=viz_sample.interior_mesh.points,
+                                boundary_meshes=viz_sample.boundary_meshes,
+                                reference_lengths=viz_sample.reference_lengths,
+                                global_scalars=viz_sample.global_scalars,
+                                global_vectors=viz_sample.global_vectors,
                                 chunk_size=points_per_iter,
                                 verbose=False,
                             )
                         AirFRANSDataSet.postprocess(
-                            to(
-                                pred_results,
-                                device=torch.device("cpu"),
-                                dtype=torch.float64,
-                            ),
+                            pred_results.to(device="cpu", dtype=torch.float64),
                             sample_path,
                             fields_to_plot="pred",
                             show=False,

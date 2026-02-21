@@ -24,9 +24,8 @@ import yaml
 
 from dataset import AirFRANSDataSet
 from utilities import (
-    get_latest_checkpoint_path,
-    to,
     disable_autotune_printing,
+    get_latest_checkpoint_path,
 )
 from physicsnemo.models.globe.model import GLOBE
 
@@ -63,8 +62,7 @@ torch.cuda.set_per_process_memory_fraction(0.99)
 torch.set_float32_matmul_precision("high")
 
 ### [Datasets with cached preprocessing]
-input_dict, _ = AirFRANSDataSet.preprocess(sample_path)
-input_dict = to(input_dict, device=device)
+sample = AirFRANSDataSet.preprocess(sample_path).to(device)
 
 ### [Model]
 hyperparameters = yaml.safe_load((output_dir / "hyperparameters.yaml").read_text())
@@ -87,18 +85,18 @@ else:
 with torch.no_grad():
     model.eval()
     pred_results = model(
-        prediction_points=input_dict["prediction_points"],
-        boundary_meshes=input_dict["boundary_meshes"],
-        reference_lengths=input_dict["reference_lengths"],
-        global_scalars=input_dict["global_scalars"],
-        global_vectors=input_dict["global_vectors"],
+        prediction_points=sample.interior_mesh.points,
+        boundary_meshes=sample.boundary_meshes,
+        reference_lengths=sample.reference_lengths,
+        global_scalars=sample.global_scalars,
+        global_vectors=sample.global_vectors,
         chunk_size=128,
         verbose=False,
     )
 
 # %%
 AirFRANSDataSet.postprocess(
-    to(pred_results, device=torch.device("cpu"), dtype=torch.float64),
+    pred_results.to(device="cpu", dtype=torch.float64),
     sample_path,
     fields_to_plot="true",
 )

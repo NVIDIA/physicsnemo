@@ -23,7 +23,7 @@ from typing import Any, Literal, Sequence
 
 import pyvista as pv
 import torch
-from tensordict import TensorDict
+from tensordict import TensorDict, tensorclass
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
@@ -112,6 +112,16 @@ RHO = 1  # kg/m^3
 NU = 1.56e-5  # m^2/s
 
 
+@tensorclass
+class AirFRANSSample:
+    interior_mesh: Mesh  # Point cloud of the volume mesh
+    boundary_meshes: dict[str, Mesh]  # dict of boundary mesh names to Mesh objects
+    reference_lengths: TensorDict  # dict of reference length names to scalar tensors
+    global_scalars: TensorDict  # dict of global scalar names to scalar tensors
+    global_vectors: TensorDict  # dict of global vector names to vector tensors
+
+
+
 class AirFRANSDataSet(CachedPreprocessingDataset):
     @classmethod
     def get_split_paths(
@@ -185,7 +195,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
     def preprocess(
         sample_path: Path,
         patch_out_nonphysical_values: bool = True,
-    ) -> tuple[dict, TensorDict]:
+    ) -> "AirFRANSSample":
         pv_meshes = AirFRANSDataSet.load_pyvista_meshes(sample_path)
 
         # Project 3D boundary meshes to 2D (drop z axis, keep x and y).
@@ -233,23 +243,9 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         nut = get("nut")
         chord = 1.0
 
-        ### [Assemble the input and output dictionaries]
-        # Construct a clean mesh without cell data for the model (the model
-        # expects 0 source scalars and 0 source vectors for the no_slip BC)
+        ### [Assemble the AirFRANSSample]
         airfoil_for_model = Mesh(points=airfoil.points, cells=airfoil.cells)
-        input_dict = {
-            "prediction_points": get("points"),
-            "boundary_meshes": {"no_slip": airfoil_for_model},
-            "reference_lengths": {
-                "chord": torch.as_tensor(chord),
-                "delta_FS": torch.as_tensor((NU / U_inf_magnitude * chord) ** 0.5),
-            },
-            "global_scalars": TensorDict(),
-            "global_vectors": TensorDict(
-                {"U_inf / U_inf_magnitude": U_inf / U_inf_magnitude},
-                batch_size=torch.Size([2]),
-            ),
-        }
+        prediction_points = get("points")
         output_dict = TensorDict(
             {
                 "U/|U_inf|": U_over_U_inf,
@@ -258,7 +254,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 "C_pt": C_pt,
                 "ln(1+nut/nu)": torch.log1p(nut / NU),
             },
-            batch_size=torch.Size([len(get("points"))]),
+            batch_size=torch.Size([len(prediction_points)]),
         )
 
         ### [Adds the pressure gradient vector field]
@@ -302,7 +298,6 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         output_dict["C_F,pressure"] = pressure_force / q_inf
         output_dict["C_F"] = net_force / q_inf
 
-        ### Everything below only modifies output_dict, not input_dict
         if patch_out_nonphysical_values:
             non_physical_C_pt = C_pt > 1.02
             if non_physical_C_pt.sum() / len(C_pt) > 0.0001:
@@ -311,7 +306,27 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 )
             output_dict[non_physical_C_pt] = torch.nan
 
-        return input_dict, output_dict
+        return AirFRANSSample(
+            interior_mesh=Mesh(
+                points=prediction_points,
+                cells=torch.zeros(0, 1, dtype=torch.long),
+                point_data=output_dict,
+            ),
+            boundary_meshes={"no_slip": airfoil_for_model},
+            reference_lengths=TensorDict(
+                {
+                    "chord": torch.as_tensor(chord),
+                    "delta_FS": torch.as_tensor((NU / U_inf_magnitude * chord) ** 0.5),
+                },
+                batch_size=torch.Size([]),
+            ),
+            global_scalars=TensorDict(),
+            global_vectors=TensorDict(
+                {"U_inf / U_inf_magnitude": U_inf / U_inf_magnitude},
+                batch_size=torch.Size([2]),
+            ),
+            batch_size=torch.Size([]),
+        )
 
     @staticmethod
     def compute_airfoil_point_normals(
@@ -385,7 +400,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
     ) -> dict[str, pv.PolyData]:
         meshes = AirFRANSDataSet.load_pyvista_meshes(sample_path)
         if true_output is None:
-            _, true_output = AirFRANSDataSet.preprocess(sample_path)
+            true_output = AirFRANSDataSet.preprocess(sample_path).interior_mesh.point_data
 
         raw_pred_keys = set(pred_output.keys())
         raw_true_keys = set(true_output.keys())
@@ -791,8 +806,7 @@ def compute_max_mesh_sizes(
     uniform sizes for ``torch.compile`` with static shapes.
 
     Args:
-        dataloader: DataLoader yielding ``(input_dict, output_dict)`` tuples
-            where ``input_dict["boundary_meshes"]`` maps BC names to Mesh.
+        dataloader: DataLoader yielding ``AirFRANSSample`` objects.
         device: Device for the all-reduce tensors.
         face_downsampling_ratio: Scale factor applied to cell counts. Use
             a value < 1.0 for training (downsampled meshes) and 1.0 for
@@ -806,12 +820,12 @@ def compute_max_mesh_sizes(
         lambda: {"n_points": 0, "n_cells": 0}
     )
 
-    for input_dict, _ in tqdm(
+    for sample in tqdm(
         dataloader,
         desc=f"Computing max mesh sizes (rank {rank})",
         disable=rank != 0,
     ):
-        for bc_type, mesh in input_dict["boundary_meshes"].items():
+        for bc_type, mesh in sample.boundary_meshes.items():
             max_sizes[bc_type]["n_points"] = max(
                 max_sizes[bc_type]["n_points"], mesh.n_points
             )
@@ -850,13 +864,15 @@ if __name__ == "__main__":
     sample_paths = list(data_dir.iterdir())
 
     # Preprocess a sample
-    input_dict, output_dict = AirFRANSDataSet.preprocess(sample_paths[0])
+    sample = AirFRANSDataSet.preprocess(sample_paths[0])
 
     print(f"Sample path: {sample_paths[0]}")
-    print(f"Input keys: {list(input_dict.keys())}")
-    print(f"Output keys: {list(output_dict.keys())}")
+    print(f"Interior mesh points: {sample.interior_mesh.points.shape}")
+    print(f"Output keys: {list(sample.interior_mesh.point_data.keys())}")
+    print(f"Boundary meshes: {list(sample.boundary_meshes.keys())}")
 
     # Visualize the output distributions
+    output_dict = sample.interior_mesh.point_data
     AirFRANSDataSet.visualize_output_distributions(output_dict, show=True)
 
     meshes = AirFRANSDataSet.postprocess(

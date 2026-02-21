@@ -33,10 +33,8 @@ import mlflow
 import numpy as np
 import torch
 import yaml
-from tensordict import TensorDict
 
 import physicsnemo
-from physicsnemo.mesh import Mesh
 
 ### [torch.compile helpers] ###############################################
 
@@ -344,61 +342,6 @@ def log_hyperparameters(
                 **model_hyperparameters,
                 **other_hyperparameters,
             }
-        )
-
-
-### [Device transfer] #####################################################
-
-TransferableType = (
-    torch.Tensor
-    | Mesh
-    | TensorDict
-    | list
-    | tuple
-    | dict
-    | set
-    | float
-    | int
-    | bool
-    | complex
-)
-
-
-def to(
-    data: TransferableType, device: torch.device, dtype: torch.dtype | None = None
-) -> TransferableType:
-    """Recursively transfer nested data structures to a PyTorch device.
-
-    Walks dicts, lists, tuples, and sets, calling ``.to()`` on Tensor,
-    TensorDict, and Mesh leaves. Python numeric scalars are converted to
-    tensors via ``torch.as_tensor``.
-
-    Args:
-        data: Nested structure of tensors, TensorDicts, Meshes, and containers.
-        device: Target device.
-        dtype: Optional target dtype (applied only to Tensor/TensorDict/Mesh).
-
-    Returns:
-        Same structure with all tensor-like leaves on *device*.
-
-    Raises:
-        NotImplementedError: If *data* contains an unsupported leaf type.
-    """
-    if isinstance(data, (torch.Tensor, Mesh, TensorDict)):
-        return data.to(device=device, dtype=dtype)
-    elif isinstance(data, (float, int, bool, complex)):
-        return torch.as_tensor(data, device=device, dtype=dtype)
-    elif isinstance(data, list):
-        return [to(item, device=device, dtype=dtype) for item in data]
-    elif isinstance(data, tuple):
-        return tuple(to(item, device=device, dtype=dtype) for item in data)
-    elif isinstance(data, dict):
-        return {k: to(v, device=device, dtype=dtype) for k, v in data.items()}
-    elif isinstance(data, set):
-        return {to(item, device=device, dtype=dtype) for item in data}
-    else:
-        raise NotImplementedError(
-            f"`to` doesn't have a device-transfer recipe registered for {type(data)=!r}."
         )
 
 
