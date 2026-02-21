@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import json
+import logging
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from functools import cache
@@ -32,6 +33,9 @@ from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.projections import project
 from physicsnemo.nn.functional.equivariant_ops import vector_project
+from physicsnemo.utils.logging import PythonLogger
+
+logger = PythonLogger("globe.airfrans.dataset")
 
 
 class CachedPreprocessingDataset(Dataset, ABC):
@@ -312,7 +316,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         if patch_out_nonphysical_values:
             non_physical_C_pt = C_pt > 1.02
             if non_physical_C_pt.sum() / len(C_pt) > 0.0001:
-                print(
+                logger.warning(
                     f"In {sample_path.name}, {non_physical_C_pt.sum() / len(C_pt):.2%} of points had non-physical total pressures and were patched out."
                 )
             output_dict[non_physical_C_pt] = torch.nan
@@ -793,7 +797,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
             plt.show()
 
         ### Print summary statistics using Polars
-        print("\n### Summary Statistics ###")
+        logger.info("\n### Summary Statistics ###")
         stats_data = {
             f"{key}{get_plot_values(values)[1]}": get_plot_values(values)[0]
             for key, values in output_dict.items()
@@ -801,7 +805,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         df = pl.DataFrame(stats_data)
         # Replace NaN values with nulls so Polars handles them properly
         df = df.fill_nan(None)
-        print(df.describe())
+        logger.info(f"\n{df.describe()}")
 
 
 def compute_max_mesh_sizes(
@@ -863,7 +867,7 @@ def compute_max_mesh_sizes(
         max_sizes[bc_type]["n_cells"] = int(size_tensor[1])
 
     if rank == 0:
-        print(f"Max mesh sizes: {dict(max_sizes)}")
+        logger.info(f"Max mesh sizes: {dict(max_sizes)}")
 
     return dict(max_sizes)
 
@@ -879,10 +883,10 @@ if __name__ == "__main__":
     # Preprocess a sample
     sample = AirFRANSDataSet.preprocess(sample_paths[0])
 
-    print(f"Sample path: {sample_paths[0]}")
-    print(f"Interior mesh points: {sample.interior_mesh.points.shape}")
-    print(f"Output keys: {list(sample.interior_mesh.point_data.keys())}")
-    print(f"Boundary meshes: {list(sample.boundary_meshes.keys())}")
+    logger.info(f"Sample path: {sample_paths[0]}")
+    logger.info(f"Interior mesh points: {sample.interior_mesh.points.shape}")
+    logger.info(f"Output keys: {list(sample.interior_mesh.point_data.keys())}")
+    logger.info(f"Boundary meshes: {list(sample.boundary_meshes.keys())}")
 
     # Visualize the output distributions
     output_dict = sample.interior_mesh.point_data

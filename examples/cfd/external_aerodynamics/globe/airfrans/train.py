@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import contextlib
+import logging
 import os
 import warnings
 from collections import defaultdict
@@ -46,6 +47,7 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.optim import CombinedOptimizer
 from physicsnemo.utils.checkpoint import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 mpl.use("agg")  # Allows headless plotting
 disable_autotune_printing()  # Silences the verbose output of `torch.compile(..., mode="max-autotune")`.
@@ -144,8 +146,11 @@ def main(
     dist = DistributedManager()
     device = dist.device
     torch.cuda.set_device(device)
-    if dist.rank == 0:
-        print(f"{dist.world_size = }")
+
+    logging.basicConfig(level=logging.INFO)
+    logger = PythonLogger("globe.airfrans.train")
+    logger0 = RankZeroLoggingWrapper(logger, dist)
+    logger0.info(f"{dist.world_size = }")
 
     error_scales: TensorDict = TensorDict(error_scales, device=device)
     if dist.rank == 0:
@@ -223,7 +228,7 @@ def main(
 
     if dist.rank == 0:
         torchinfo.summary(model, depth=20)
-        print(f"{output_dir.name=!r}")
+    logger0.info(f"{output_dir.name=!r}")
 
     base_model = model
 
@@ -306,15 +311,13 @@ def main(
         device=dist.device,
     )
     if epoch > 0:
-        if dist.rank == 0:
-            print(f"Resuming training from epoch {epoch}")
+        logger0.info(f"Resuming training from epoch {epoch}")
         best_loss = metadata_dict.get("best_loss", float("inf"))
         last_image_epoch = metadata_dict.get("last_image_epoch", -float("inf"))
         last_image_loss = metadata_dict.get("last_image_loss", float("inf"))
         mlflow_run_id = metadata_dict.get("mlflow_run_id")
     else:
-        if dist.rank == 0:
-            print("Starting training from scratch.")
+        logger0.info("Starting training from scratch.")
         best_loss = float("inf")
         last_image_epoch = -float("inf")
         last_image_loss = float("inf")
@@ -326,7 +329,7 @@ def main(
         if mlflow_run_id:
             try:
                 mlflow_run_ctx = mlflow.start_run(run_id=mlflow_run_id)
-                print(f"Resumed MLflow run {mlflow_run_id}")
+                logger0.info(f"Resumed MLflow run {mlflow_run_id}")
             except Exception:
                 warnings.warn(
                     f"Could not resume MLflow run {mlflow_run_id!r}, creating new run"
@@ -471,17 +474,17 @@ def main(
         epoch_loss = all_values[0]
         epoch_loss_components = dict(zip(keys[1:], all_values[1:]))
 
-        if dist.rank == 0:  # Logging on rank 0 only
-            print(
-                " | ".join(
-                    [
-                        f"{epoch:d=} {'Train' if training else 'Valid'}",
-                        f"Loss: {epoch_loss:7.3g}",
-                        *[f"{k}: {v:7.3g}" for k, v in epoch_loss_components.items()],
-                        f"LR: {optimizer.param_groups[0]['lr']:.2e}",
-                    ]
-                )
+        logger0.info(
+            " | ".join(
+                [
+                    f"{epoch:d=} {'Train' if training else 'Valid'}",
+                    f"Loss: {epoch_loss:7.3g}",
+                    *[f"{k}: {v:7.3g}" for k, v in epoch_loss_components.items()],
+                    f"LR: {optimizer.param_groups[0]['lr']:.2e}",
+                ]
             )
+        )
+        if dist.rank == 0:
             if use_mlflow:
                 split = "train" if training else "valid"
                 mlflow.log_metrics(
@@ -581,7 +584,7 @@ def main(
                 and (epoch > last_image_epoch + 200)
             ):
                 if dist.rank == 0:
-                    print("Generating visualization images...")
+                    logger0.info("Generating visualization images...")
                     for split, paths in [
                         ("train", train_sample_paths),
                         ("valid", valid_sample_paths),
@@ -614,11 +617,11 @@ def main(
             if use_compile and not torch_compile_cache.exists():
                 artifacts_bytes, cache_info = torch.compiler.save_cache_artifacts()  # ty: ignore[not-iterable]
                 torch_compile_cache.write_bytes(artifacts_bytes)
-                print(f"Saved torch.compile cache to {torch_compile_cache}.")
+                logger.info(f"Saved torch.compile cache to {torch_compile_cache}.")
 
             if shutdown_requested():
+                logger0.info("Quitting due to shutdown request.")
                 if dist.rank == 0:
-                    print("Quitting due to shutdown request.")
                     save_checkpoint(
                         checkpoint_dir,
                         models=base_model,

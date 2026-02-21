@@ -21,6 +21,7 @@ and signal handling.
 """
 
 import inspect
+import logging
 import signal
 from collections.abc import Callable
 from functools import cache
@@ -34,6 +35,9 @@ import torch
 import yaml
 
 import physicsnemo
+from physicsnemo.utils.logging import PythonLogger
+
+logger = PythonLogger("globe.airfrans.utilities")
 
 ### [torch.compile helpers] ###############################################
 
@@ -201,12 +205,12 @@ def log_hyperparameters(
 def install_graceful_shutdown(rank: int = 0) -> Callable[[], bool]:
     """Install signal handlers for graceful training shutdown.
 
-    Catches SIGTERM, SIGINT, and SIGQUIT. On the first signal a message is
-    printed (on rank 0) and an internal flag is set. The training loop can
+    Catches SIGTERM, SIGINT, and SIGQUIT. On the first signal a warning is
+    logged (on rank 0) and an internal flag is set. The training loop can
     poll the returned callable each epoch to decide whether to break.
 
     Args:
-        rank: Distributed rank. Only rank 0 prints the signal message.
+        rank: Distributed rank. Only rank 0 logs the signal message.
 
     Returns:
         A zero-argument callable that returns ``True`` once a shutdown
@@ -216,7 +220,7 @@ def install_graceful_shutdown(rank: int = 0) -> Callable[[], bool]:
 
     def _handler(signum: int, _frame: Any) -> None:
         if rank == 0:
-            print(f"{signal.Signals(signum).name} received; quitting after this epoch.")
+            logger.warning(f"{signal.Signals(signum).name} received; quitting after this epoch.")
         received[0] = True
 
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGQUIT):
@@ -226,4 +230,5 @@ def install_graceful_shutdown(rank: int = 0) -> Callable[[], bool]:
 
 
 if __name__ == "__main__":
-    print(get_physicsnemo_pkg_info())
+    logging.basicConfig(level=logging.INFO)
+    logger.info(str(get_physicsnemo_pkg_info()))

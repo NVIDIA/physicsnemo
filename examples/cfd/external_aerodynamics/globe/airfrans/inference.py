@@ -16,6 +16,7 @@
 
 # %%
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -26,9 +27,12 @@ from dataset import AirFRANSDataSet
 from utilities import disable_autotune_printing
 
 from physicsnemo.experimental.models.globe.model import GLOBE
+from physicsnemo.utils.logging import PythonLogger
 
 disable_autotune_printing()
 torch._logging.set_logs(graph_breaks=True, recompiles=True)
+logging.basicConfig(level=logging.INFO)
+logger = PythonLogger("globe.airfrans.inference")
 
 # %%
 # Resolve output directory: GLOBE_OUTPUT_DIR env var, or the most-recently-modified
@@ -41,7 +45,7 @@ else:
     if not output_subdirs:
         raise FileNotFoundError(f"No output directories found in {_output_root}")
     output_dir = max(output_subdirs, key=lambda d: d.stat().st_mtime)
-print(f"Using output directory: {output_dir}")
+logger.info(f"Using output directory: {output_dir}")
 
 if not (_data_env := os.environ.get("AIRFRANS_DATA_DIR")):
     raise ValueError(
@@ -71,7 +75,7 @@ model = GLOBE(  # ty: ignore[missing-argument]
 best_model_path = output_dir / "best_model.mdlus"
 if not best_model_path.exists():
     raise RuntimeError(f"No best model found at {best_model_path}")
-print(f"Loading best model from {best_model_path.name!r}...")
+logger.info(f"Loading best model from {best_model_path.name!r}...")
 model.load(best_model_path)
 
 # model = torch.compile(model)
