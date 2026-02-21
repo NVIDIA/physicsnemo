@@ -324,7 +324,6 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         return AirFRANSSample(
             interior_mesh=Mesh(
                 points=prediction_points,
-                cells=torch.zeros(0, 1, dtype=torch.long),
                 point_data=output_dict,
             ),
             boundary_meshes=TensorDict(
