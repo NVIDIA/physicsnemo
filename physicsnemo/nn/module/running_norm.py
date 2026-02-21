@@ -23,7 +23,7 @@ from jaxtyping import Float
 from physicsnemo.core.module import Module
 
 
-class Normalizer(Module):
+class RunningNorm(Module):
     r"""Shape-aware EWMA normalization in log-space based on ``mean(abs(x))``.
 
     Maintains a running estimate of ``mean(abs(x))`` in log-space and
@@ -81,9 +81,9 @@ class Normalizer(Module):
 
     Examples
     --------
-    >>> norm = Normalizer(shape=(1,), momentum=0.99)
+    >>> norm = RunningNorm(shape=(1,), momentum=0.99)
     >>> norm.train()
-    Normalizer(ln_running_mean=tensor([0.]))
+    RunningNorm(ln_running_mean=tensor([0.]))
     >>> x = torch.randn(32)
     >>> y = norm(x)  # updates running mean, returns normalized x
     """
@@ -129,9 +129,9 @@ class Normalizer(Module):
         Returns
         -------
         str
-            Format: ``Normalizer(ln_running_mean=<tensor>)``.
+            Format: ``RunningNorm(ln_running_mean=<tensor>)``.
         """
-        return f"Normalizer(ln_running_mean={self.ln_running_mean!r})"
+        return f"RunningNorm(ln_running_mean={self.ln_running_mean!r})"
 
     def forward(self, x: Float[torch.Tensor, "..."]) -> Float[torch.Tensor, "..."]:
         r"""Normalize by a log-space EWMA of ``mean(abs(x))``.

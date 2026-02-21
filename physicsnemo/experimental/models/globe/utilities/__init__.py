@@ -14,18 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from physicsnemo.models.globe.utilities.field_kernel import (
-    legendre_polynomials,
-    polar_and_dipole_basis,
-    smooth_log,
-    spherical_basis,
-    vector_project,
+from physicsnemo.experimental.models.globe.utilities.tensordict_utils import (
+    combine_tensordicts,
+    concatenate_leaves,
+    concatenated_length,
+    split_by_leaf_rank,
 )
 
 __all__ = [
-    "legendre_polynomials",
-    "polar_and_dipole_basis",
-    "smooth_log",
-    "spherical_basis",
-    "vector_project",
+    "combine_tensordicts",
+    "concatenate_leaves",
+    "concatenated_length",
+    "split_by_leaf_rank",
 ]

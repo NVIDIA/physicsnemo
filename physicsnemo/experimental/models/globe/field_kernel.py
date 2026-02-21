@@ -28,15 +28,15 @@ from tensordict import TensorDict
 from torch.utils.checkpoint import checkpoint
 
 from physicsnemo.core.module import Module
-from physicsnemo.models.globe.mlp import MLP
-from physicsnemo.models.globe.pade import Pade
-from physicsnemo.models.globe.utilities.field_kernel import (
+from physicsnemo.experimental.models.globe.mlp import MLP
+from physicsnemo.experimental.models.globe.pade import Pade
+from physicsnemo.nn.functional.equivariant_ops import (
     legendre_polynomials,
     polar_and_dipole_basis,
     smooth_log,
     spherical_basis,
 )
-from physicsnemo.models.globe.utilities.tensordict_utils import (
+from physicsnemo.experimental.models.globe.utilities.tensordict_utils import (
     combine_tensordicts,
     concatenate_leaves,
     concatenated_length,
@@ -86,6 +86,10 @@ class Kernel(Module):
         Type of neural network to use for the kernel function.
     spectral_norm : bool, optional, default=False
         Whether to apply spectral normalization to network weights.
+    use_gradient_checkpointing : bool, optional, default=True
+        If ``True``, applies ``torch.utils.checkpoint.checkpoint`` during
+        training to trade compute for memory. Disable for small models or
+        when profiling.
 
     Forward
     -------
@@ -138,6 +142,7 @@ class Kernel(Module):
         n_spherical_harmonics: int = 4,
         network_type: Literal["pade", "mlp"] = "pade",
         spectral_norm: bool = False,
+        use_gradient_checkpointing: bool = True,
     ):
         if hidden_layer_sizes is None:
             hidden_layer_sizes = [64]
@@ -153,6 +158,7 @@ class Kernel(Module):
         self.smoothing_radius = smoothing_radius
         self.hidden_layer_sizes = hidden_layer_sizes
         self.n_spherical_harmonics = n_spherical_harmonics
+        self.use_gradient_checkpointing = use_gradient_checkpointing
 
         if network_type == "pade":
             self.network = Pade(
@@ -565,7 +571,7 @@ class Kernel(Module):
             n_targets * n_sources, self.network_layer_sizes[0]
         )
 
-        if self.training:
+        if self.training and self.use_gradient_checkpointing:
             flattened_output = checkpoint(
                 self.network, flattened_input, use_reentrant=False
             )  # shape (n_targets * n_sources, last_layer_size)
@@ -989,6 +995,9 @@ class MultiscaleKernel(Module):
         Type of network to use.
     spectral_norm : bool, optional, default=False
         Whether to apply spectral normalization to network weights.
+    use_gradient_checkpointing : bool, optional, default=True
+        Forwarded to each :class:`Kernel` branch. See
+        :class:`Kernel` for details.
 
     Forward
     -------
@@ -1057,6 +1066,7 @@ class MultiscaleKernel(Module):
         n_spherical_harmonics: int = 4,
         network_type: Literal["pade", "mlp"] = "pade",
         spectral_norm: bool = False,
+        use_gradient_checkpointing: bool = True,
     ):
         super().__init__()
 
@@ -1072,6 +1082,7 @@ class MultiscaleKernel(Module):
         self.n_spherical_harmonics = n_spherical_harmonics
         self.network_type = network_type
         self.spectral_norm = spectral_norm
+        self.use_gradient_checkpointing = use_gradient_checkpointing
 
         self.kernels = nn.ModuleDict(
             {
@@ -1088,6 +1099,7 @@ class MultiscaleKernel(Module):
                     n_spherical_harmonics=n_spherical_harmonics,
                     network_type=network_type,
                     spectral_norm=spectral_norm,
+                    use_gradient_checkpointing=use_gradient_checkpointing,
                 )
                 for name in reference_length_names
             }

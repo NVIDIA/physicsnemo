@@ -17,7 +17,7 @@
 import pytest
 import torch
 
-from physicsnemo.models.globe.pade import Pade
+from physicsnemo.experimental.models.globe.pade import Pade
 
 
 @pytest.mark.parametrize(

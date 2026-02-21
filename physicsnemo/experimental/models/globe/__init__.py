@@ -14,24 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
-
-from physicsnemo.core.warnings import LegacyFeatureWarning
-from physicsnemo.experimental.models.globe import (
-    GLOBE,
+from physicsnemo.experimental.models.globe.field_kernel import (
     ChunkedKernel,
     Kernel,
-    MLP,
     MultiscaleKernel,
-    Pade,
 )
-
-warnings.warn(
-    "Importing from 'physicsnemo.models.globe' is deprecated. "
-    "Please import from 'physicsnemo.experimental.models.globe' instead.",
-    LegacyFeatureWarning,
-    stacklevel=2,
-)
+from physicsnemo.experimental.models.globe.mlp import MLP
+from physicsnemo.experimental.models.globe.model import GLOBE
+from physicsnemo.experimental.models.globe.pade import Pade
 
 __all__ = [
     "GLOBE",

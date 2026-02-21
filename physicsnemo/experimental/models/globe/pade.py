@@ -21,10 +21,14 @@ import torch.nn as nn
 from jaxtyping import Float
 
 from physicsnemo.core.module import Module
-from physicsnemo.models.globe.mlp import MLP
+from physicsnemo.experimental.models.globe.mlp import MLP
 
 
 class Pade(Module):
+    # TODO: upstream to physicsnemo.nn once GLOBE's MLP is consolidated with
+    # physicsnemo.nn.Mlp. Currently blocked by the hard dependency on
+    # physicsnemo.experimental.models.globe.mlp.MLP for sub-network construction
+    # and Module.from_checkpoint() serialization.
     r"""Padé-approximant neural network for rational function learning.
 
     Implements a rational neural network of the form

@@ -27,7 +27,7 @@ from utilities import (
     disable_autotune_printing,
     get_latest_checkpoint_path,
 )
-from physicsnemo.models.globe.model import GLOBE
+from physicsnemo.experimental.models.globe.model import GLOBE
 
 disable_autotune_printing()
 torch._logging.set_logs(graph_breaks=True, recompiles=True)

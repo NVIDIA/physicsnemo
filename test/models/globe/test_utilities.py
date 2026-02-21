@@ -17,7 +17,7 @@
 import pytest
 import torch
 
-from physicsnemo.models.globe.utilities.field_kernel import legendre_polynomials
+from physicsnemo.nn.functional.equivariant_ops import legendre_polynomials
 
 
 @pytest.mark.parametrize(

@@ -21,7 +21,7 @@ import torch
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from physicsnemo.models.globe.field_kernel import ChunkedKernel
+from physicsnemo.experimental.models.globe.field_kernel import ChunkedKernel
 
 DEFAULT_RTOL = 1e-5  # Default relative tolerance for comparisons
 DEFAULT_ATOL = 1e-5  # Default absolute tolerance for comparisons

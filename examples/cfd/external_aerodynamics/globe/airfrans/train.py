@@ -46,7 +46,7 @@ from utilities import (
 )
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.models.globe.model import GLOBE
+from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.optim import CombinedOptimizer
 
 mpl.use("agg")  # Allows headless plotting
@@ -230,6 +230,8 @@ def main(
 
     base_model = model
 
+    # TODO: candidate for upstreaming to physicsnemo once torch.compiler
+    # cache APIs stabilize (currently experimental in PyTorch).
     if use_compile and torch_compile_cache.exists():
         torch.compiler.load_cache_artifacts(torch_compile_cache.read_bytes())
 

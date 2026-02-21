@@ -31,7 +31,7 @@ from tqdm import tqdm
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.projections import project
-from physicsnemo.models.globe.utilities.field_kernel import vector_project
+from physicsnemo.nn.functional.equivariant_ops import vector_project
 
 
 class CachedPreprocessingDataset(Dataset, ABC):

@@ -71,6 +71,20 @@ class MLP(Module):
     No activation, dropout, or batch normalization is applied after the
     final output layer.
 
+    This MLP differs from :class:`physicsnemo.nn.Mlp` in several ways:
+
+    - Inherits from :class:`~physicsnemo.core.Module` (serialization and
+      versioning), whereas ``physicsnemo.nn.Mlp`` inherits from
+      ``nn.Module``.
+    - Accepts a ``layer_sizes`` sequence (explicit per-layer widths), whereas
+      ``physicsnemo.nn.Mlp`` uses ``in_features / hidden_features /
+      out_features``.
+    - Supports batch normalization and spectral normalization, which
+      ``physicsnemo.nn.Mlp`` does not.
+
+    For applications that do not need ``Module``-based checkpointing or
+    these extra regularizations, prefer :class:`physicsnemo.nn.Mlp`.
+
     Examples
     --------
     >>> mlp = MLP([10, 64, 32, 3], activation_function=nn.ReLU(), dropout=0.1)

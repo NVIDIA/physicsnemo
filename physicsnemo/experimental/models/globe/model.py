@@ -27,8 +27,8 @@ from tensordict import TensorDict
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.mesh import Mesh
-from physicsnemo.models.globe.field_kernel import MultiscaleKernel
-from physicsnemo.models.globe.utilities.tensordict_utils import (
+from physicsnemo.experimental.models.globe.field_kernel import MultiscaleKernel
+from physicsnemo.experimental.models.globe.utilities.tensordict_utils import (
     combine_tensordicts,
     concatenated_length,
     split_by_leaf_rank,
@@ -159,7 +159,7 @@ class GLOBE(Module):
     -----
     - ``kernel_layers`` is a :class:`~torch.nn.ModuleList` of communication
       hyperlayers, each containing a :class:`~torch.nn.ModuleDict` mapping BC type
-      names to :class:`~physicsnemo.models.globe.field_kernel.MultiscaleKernel`
+      names to :class:`~physicsnemo.experimental.models.globe.field_kernel.MultiscaleKernel`
       instances.
     - ``final_field_transforms`` is a :class:`~torch.nn.ModuleDict` of per-field
       linear calibration layers.
@@ -247,65 +247,62 @@ class GLOBE(Module):
         self.hidden_layer_sizes = hidden_layer_sizes
         self.n_spherical_harmonics = n_spherical_harmonics
 
+        ### Build the intermediate output-field spec for communication hyperlayers.
+        # These latent fields carry information between hyperlayers; only the
+        # final hyperlayer emits the user-requested output_fields.
+        intermediate_fields: dict[str, Literal["scalar", "vector"]] = {
+            f"strengths.{name}": "scalar" for name in reference_length_names
+        } | {
+            f"latent_scalars.{i}": "scalar" for i in range(n_latent_scalars)
+        } | {
+            f"latent_vectors.{i}": "vector" for i in range(n_latent_vectors)
+        }
+
         kernel_layers = []
 
-        for i in range(self.n_communication_hyperlayers + 1):
-            is_first_hyperlayer = i == 0
-            is_last_hyperlayer = i == self.n_communication_hyperlayers
+        for layer_idx in range(self.n_communication_hyperlayers + 1):
+            is_first_hyperlayer = layer_idx == 0
+            is_last_hyperlayer = layer_idx == self.n_communication_hyperlayers
 
-            kernel_layers.append(
-                nn.ModuleDict(
-                    {
-                        source_bc_type: MultiscaleKernel(
-                            n_spatial_dims=n_spatial_dims,
-                            output_fields=output_fields
-                            if is_last_hyperlayer
-                            else {
-                                **{
-                                    f"strengths.{name}": "scalar"
-                                    for name in reference_length_names
-                                },
-                                **{
-                                    f"latent_scalars.{i}": "scalar"
-                                    for i in range(n_latent_scalars)
-                                },
-                                **{
-                                    f"latent_vectors.{i}": "vector"
-                                    for i in range(n_latent_vectors)
-                                },
-                            },
-                            reference_length_names=reference_length_names,
-                            n_source_scalars=(
-                                boundary_condition_n_source_scalars[source_bc_type]
-                                + (0 if is_first_hyperlayer else n_latent_scalars)
-                            ),
-                            n_source_vectors=(
-                                boundary_condition_n_source_vectors[source_bc_type]
-                                + (0 if is_first_hyperlayer else n_latent_vectors)
-                                + 1  # +1 for the normal vector
-                            ),
-                            n_global_scalars=n_global_scalars,
-                            n_global_vectors=n_global_vectors,
-                            smoothing_radius=smoothing_radius,
-                            hidden_layer_sizes=hidden_layer_sizes,
-                            n_spherical_harmonics=n_spherical_harmonics,
-                        )
-                        for source_bc_type in boundary_condition_names
-                    }
+            layer = nn.ModuleDict({
+                bc_type: MultiscaleKernel(
+                    n_spatial_dims=n_spatial_dims,
+                    output_fields=(
+                        output_fields if is_last_hyperlayer else intermediate_fields
+                    ),
+                    reference_length_names=reference_length_names,
+                    n_source_scalars=(
+                        boundary_condition_n_source_scalars[bc_type]
+                        + (0 if is_first_hyperlayer else n_latent_scalars)
+                    ),
+                    n_source_vectors=(
+                        boundary_condition_n_source_vectors[bc_type]
+                        + (0 if is_first_hyperlayer else n_latent_vectors)
+                        + 1  # +1 for the normal vector
+                    ),
+                    n_global_scalars=n_global_scalars,
+                    n_global_vectors=n_global_vectors,
+                    smoothing_radius=smoothing_radius,
+                    hidden_layer_sizes=hidden_layer_sizes,
+                    n_spherical_harmonics=n_spherical_harmonics,
                 )
-            )
+                for bc_type in boundary_condition_names
+            })
+            kernel_layers.append(layer)
 
         self.kernel_layers = nn.ModuleList(kernel_layers)
-        self.final_field_transforms = nn.ModuleDict(
-            {
-                field_name: nn.Linear(
-                    in_features=1,
-                    out_features=1,
-                    bias=(output_fields[field_name] == "scalar"),
-                )
-                for field_name in output_fields.keys()
-            }
-        )
+
+        # Per-field learnable affine calibration (y = a*x + b). Bias is only
+        # applied to scalar fields; adding bias to vector fields would break
+        # rotational equivariance.
+        self.final_field_transforms = nn.ModuleDict({
+            field_name: nn.Linear(
+                in_features=1,
+                out_features=1,
+                bias=(output_fields[field_name] == "scalar"),
+            )
+            for field_name in output_fields
+        })
 
     def _evaluate_hyperlayer(
         self,

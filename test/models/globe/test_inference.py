@@ -18,7 +18,7 @@ import pytest
 import torch
 
 from physicsnemo.mesh.primitives.procedural import lumpy_sphere
-from physicsnemo.models.globe.model import GLOBE
+from physicsnemo.experimental.models.globe.model import GLOBE
 
 # Number of prediction points to evaluate at
 N_PREDICTION_POINTS = 5
