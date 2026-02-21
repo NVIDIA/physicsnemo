@@ -609,14 +609,15 @@ class GLOBE(Module):
             chunk_size=chunk_size,
         )
 
-        ### Per-field calibration transforms
-        for field_name, field_tensor in result.items():
-            original_shape = field_tensor.shape
-            result[field_name] = self.final_field_transforms[field_name](
-                field_tensor.view(-1, 1)
-            ).view(original_shape)
-
-        return Mesh(
+        ### Wrap as point-cloud Mesh and apply per-field calibration.
+        output_mesh = Mesh(
             points=prediction_points,
             point_data=result,
         )
+        output_mesh.point_data.named_apply(
+            lambda name, tensor: self.final_field_transforms[name](
+                tensor.view(-1, 1)
+            ).view(tensor.shape),
+            inplace=True,
+        )
+        return output_mesh
