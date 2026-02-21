@@ -124,7 +124,6 @@ def make_kernel_and_input_data(
             device=device,
         ),
         "chunk_size": None,
-        "verbose": False,
     }
 
     return kernel, input_data

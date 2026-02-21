@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import itertools
+import logging
 import operator
 from functools import cached_property, reduce
 from math import ceil, comb, prod
@@ -35,11 +36,15 @@ from physicsnemo.nn.functional.equivariant_ops import (
     smooth_log,
     spherical_basis,
 )
+from physicsnemo.utils.logging import PythonLogger
+
 from physicsnemo.experimental.models.globe.utilities.tensordict_utils import (
     combine_tensordicts,
     concatenate_leaves,
     concatenated_length,
 )
+
+logger = PythonLogger("globe.field_kernel")
 
 
 class Kernel(Module):
@@ -116,8 +121,6 @@ class Kernel(Module):
     global_vectors : TensorDict or None, optional, default=None
         Global physically-meaningful vectors with batch_size :math:`(D,)`. All
         vectors should be dimensionless.
-    verbose : bool, optional, default=False
-        Whether to print progress information during evaluation.
 
     Outputs
     -------
@@ -324,7 +327,6 @@ class Kernel(Module):
         source_vectors: TensorDict | None = None,
         global_scalars: TensorDict | None = None,
         global_vectors: TensorDict | None = None,
-        verbose: bool = False,
     ) -> TensorDict:
         r"""Evaluates a field kernel at target points based on source point influences.
 
@@ -363,9 +365,6 @@ class Kernel(Module):
             Global physically-meaningful vectors. All vectors should be
             dimensionless. The total concatenated length must match ``n_global_vectors``.
             Defaults to empty TensorDict if ``None``.
-        verbose : bool, optional
-            Whether to print progress information during evaluation.
-            Default is False.
 
         Returns
         -------
@@ -795,7 +794,6 @@ class ChunkedKernel(Kernel):
         source_vectors: TensorDict | None = None,
         global_scalars: TensorDict | None = None,
         global_vectors: TensorDict | None = None,
-        verbose: bool = False,
         chunk_size: None | int | Literal["auto"] = "auto",
     ) -> TensorDict:
         r"""Evaluates the kernel with optional chunking for memory efficiency.
@@ -814,7 +812,7 @@ class ChunkedKernel(Kernel):
             All arguments accepted by :meth:`Kernel.forward`, including:
             ``reference_length``, ``source_points``, ``target_points``,
             ``source_strengths``, ``source_scalars``, ``source_vectors``,
-            ``global_scalars``, ``global_vectors``, ``verbose``.
+            ``global_scalars``, ``global_vectors``.
 
         Returns
         -------
@@ -844,8 +842,8 @@ class ChunkedKernel(Kernel):
             n_chunks_needed = max(1, ceil(approx_memory_gb / target_memory_gb))
             chunk_size: int = max(1, ceil(n_targets / n_chunks_needed))
 
-            if verbose:
-                print(f"Auto-chunking: {chunk_size=!r}, {n_chunks_needed=!r}")
+            if not torch.compiler.is_compiling():
+                logger.debug(f"Auto-chunking: {chunk_size=!r}, {n_chunks_needed=!r}")
 
             return self.forward(
                 reference_length=reference_length,
@@ -856,7 +854,6 @@ class ChunkedKernel(Kernel):
                 source_vectors=source_vectors,
                 global_scalars=global_scalars,
                 global_vectors=global_vectors,
-                verbose=verbose,
                 chunk_size=chunk_size,
             )
 
@@ -865,7 +862,7 @@ class ChunkedKernel(Kernel):
 
             start_indices = range(0, n_targets, chunk_size)
 
-            if not torch.compiler.is_compiling() and verbose:
+            if not torch.compiler.is_compiling() and logger.isEnabledFor(logging.DEBUG):
                 start_indices = tqdm.tqdm(
                     start_indices,
                     desc="Evaluating kernel in chunks",
@@ -886,7 +883,6 @@ class ChunkedKernel(Kernel):
                     source_vectors=source_vectors,
                     global_scalars=global_scalars,
                     global_vectors=global_vectors,
-                    verbose=verbose,
                     chunk_size=None,
                 )
 
@@ -906,7 +902,6 @@ class ChunkedKernel(Kernel):
                 source_vectors=source_vectors,
                 global_scalars=global_scalars,
                 global_vectors=global_vectors,
-                verbose=verbose,
             )
 
         else:
@@ -994,8 +989,6 @@ class MultiscaleKernel(Module):
         Global scalar features (auto-augmented with log length ratios).
     global_vectors : TensorDict or None, optional, default=None
         Global vector features with batch_size :math:`(D,)`.
-    verbose : bool, optional, default=False
-        Whether to print progress.
     chunk_size : None or int or {"auto"}, optional, default="auto"
         Chunking behavior.
 
@@ -1096,7 +1089,6 @@ class MultiscaleKernel(Module):
         source_vectors: TensorDict | None = None,
         global_scalars: TensorDict | None = None,
         global_vectors: TensorDict | None = None,
-        verbose: bool = False,
         chunk_size: None | int | Literal["auto"] = "auto",
     ) -> TensorDict:
         r"""Evaluates the multiscale kernel by combining results from multiple scales.
@@ -1127,8 +1119,6 @@ class MultiscaleKernel(Module):
             reference length ratios.
         global_vectors : TensorDict or None, optional
             TensorDict with batch_size :math:`(D,)`.
-        verbose : bool, optional
-            Whether to print progress information. Default is False.
         chunk_size : None or int or {"auto"}, optional
             Chunking behavior passed to :meth:`ChunkedKernel.forward`.
             Default is ``"auto"``.
@@ -1214,7 +1204,6 @@ class MultiscaleKernel(Module):
                 source_vectors=source_vectors,
                 global_scalars=global_scalars,
                 global_vectors=global_vectors,
-                verbose=verbose,
                 chunk_size=chunk_size,
             )
             for name in self.reference_length_names

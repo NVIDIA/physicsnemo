@@ -27,12 +27,16 @@ from tensordict import TensorDict
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.mesh import Mesh
+from physicsnemo.utils.logging import PythonLogger
+
 from physicsnemo.experimental.models.globe.field_kernel import MultiscaleKernel
 from physicsnemo.experimental.models.globe.utilities.tensordict_utils import (
     combine_tensordicts,
     concatenated_length,
     split_by_leaf_rank,
 )
+
+logger = PythonLogger("globe.model")
 
 
 @dataclass
@@ -144,8 +148,6 @@ class GLOBE(Module):
         Controls memory usage during kernel evaluation. ``None`` evaluates all target
         points at once, an ``int`` processes in chunks of that size, and ``"auto"``
         automatically determines chunk size targeting ~1GB per chunk.
-    verbose : bool, optional, default=False
-        If ``True``, prints progress information during evaluation.
 
     Outputs
     -------
@@ -313,7 +315,6 @@ class GLOBE(Module):
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_scalars: TensorDict | None,
         global_vectors: TensorDict | None,
-        verbose: bool,
         chunk_size: None | int | Literal["auto"],
     ) -> TensorDict:
         r"""Evaluate one hyperlayer by summing kernel contributions from all BC types.
@@ -339,8 +340,6 @@ class GLOBE(Module):
             Problem-level scalar features.
         global_vectors : TensorDict or None
             Problem-level vector features.
-        verbose : bool
-            Whether to print progress information.
         chunk_size : None or int or {"auto"}
             Controls memory usage during kernel evaluation.
 
@@ -384,7 +383,6 @@ class GLOBE(Module):
                 reference_lengths=reference_lengths,
                 global_scalars=global_scalars,
                 global_vectors=global_vectors,
-                verbose=verbose,
                 chunk_size=chunk_size,
             )
             result_pieces.append(result_from_kernel.unflatten_keys())
@@ -399,7 +397,6 @@ class GLOBE(Module):
         global_scalars: TensorDict | None = None,
         global_vectors: TensorDict | None = None,
         chunk_size: None | int | Literal["auto"] = None,
-        verbose: bool = False,
     ) -> TensorDict:
         r"""Evaluate GLOBE model to predict fields at target points.
 
@@ -422,8 +419,6 @@ class GLOBE(Module):
             Problem-level vector features.
         chunk_size : None | int | Literal["auto"], optional, default=None
             Controls memory usage during kernel evaluation.
-        verbose : bool, optional, default=False
-            If ``True``, prints progress information.
 
         Returns
         -------
@@ -513,8 +508,8 @@ class GLOBE(Module):
 
         ### Kernel evaluations
         for i in range(self.n_communication_hyperlayers + 1):
-            if verbose:
-                print(f"Evaluating hypernetwork layer {i}...")
+            if not torch.compiler.is_compiling():
+                logger.debug(f"Evaluating hypernetwork layer {i}...")
 
             is_last_hyperlayer = i == self.n_communication_hyperlayers
 
@@ -528,7 +523,6 @@ class GLOBE(Module):
                         reference_lengths,
                         global_scalars,
                         global_vectors,
-                        verbose,
                         chunk_size,
                     )
                     for target_bc_type, target_bc_mesh in boundary_meshes.items()
@@ -542,7 +536,6 @@ class GLOBE(Module):
                     reference_lengths,
                     global_scalars,
                     global_vectors,
-                    verbose,
                     chunk_size,
                 )
 

@@ -67,7 +67,6 @@ def test_globe_inference(device: str) -> None:
             boundary_meshes={"no_slip": mesh},
             reference_lengths=reference_lengths,
             chunk_size=None,
-            verbose=False,
         )
 
     ### Validate output structure and shapes
