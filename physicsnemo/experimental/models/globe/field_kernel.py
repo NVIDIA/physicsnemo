@@ -159,23 +159,25 @@ class Kernel(Module):
         self.n_spherical_harmonics = n_spherical_harmonics
         self.use_gradient_checkpointing = use_gradient_checkpointing
 
+        sizes = self.network_layer_sizes
+        shared_kwargs = dict(
+            in_features=sizes[0],
+            hidden_features=list(sizes[1:-1]),
+            out_features=sizes[-1],
+            spectral_norm=spectral_norm,
+        )
+
         if network_type == "pade":
             self.network = Pade(
-                layer_sizes=self.network_layer_sizes,
+                **shared_kwargs,
                 numerator_order=2,
                 denominator_order=2,
                 use_separate_mlps=False,
                 share_denominator_across_channels=False,
-                spectral_norm=spectral_norm,
             )
         elif network_type == "mlp":
             self.network = nn.Sequential(
-                Mlp.from_layer_sizes(
-                    self.network_layer_sizes,
-                    act_layer=nn.SiLU(),
-                    final_dropout=False,
-                    spectral_norm=spectral_norm,
-                ),
+                Mlp(**shared_kwargs, act_layer=nn.SiLU(), final_dropout=False),
                 nn.Tanh(),
             )
         else:
