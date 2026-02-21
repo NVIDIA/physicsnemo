@@ -191,11 +191,10 @@ def log_hyperparameters(
         )
 
     if mlflow.active_run():
+        _MLFLOW_MAX_PARAM_LENGTH = 6000
+        all_params = {**model_hyperparameters, **other_hyperparameters}
         mlflow.log_params(
-            {
-                **model_hyperparameters,
-                **other_hyperparameters,
-            }
+            {k: v for k, v in all_params.items() if len(str(v)) <= _MLFLOW_MAX_PARAM_LENGTH}
         )
 
 
