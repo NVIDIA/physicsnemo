@@ -21,9 +21,7 @@ from physicsnemo.experimental.models.globe import (
     GLOBE,
     ChunkedKernel,
     Kernel,
-    MLP,
     MultiscaleKernel,
-    Pade,
 )
 
 warnings.warn(
@@ -38,6 +36,4 @@ __all__ = [
     "Kernel",
     "ChunkedKernel",
     "MultiscaleKernel",
-    "MLP",
-    "Pade",
 ]

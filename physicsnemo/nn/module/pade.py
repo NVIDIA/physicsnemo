@@ -14,21 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Callable, Sequence
+from typing import Callable
 
 import torch
 import torch.nn as nn
 from jaxtyping import Float
 
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.models.globe.mlp import MLP
+from physicsnemo.nn.module.mlp_layers import Mlp
 
 
 class Pade(Module):
-    # TODO: upstream to physicsnemo.nn once GLOBE's MLP is consolidated with
-    # physicsnemo.nn.Mlp. Currently blocked by the hard dependency on
-    # physicsnemo.experimental.models.globe.mlp.MLP for sub-network construction
-    # and Module.from_checkpoint() serialization.
     r"""Padé-approximant neural network for rational function learning.
 
     Implements a rational neural network of the form
@@ -47,10 +43,16 @@ class Pade(Module):
 
     Parameters
     ----------
-    layer_sizes : Sequence[int]
-        Number of units in each layer, including input and output.
-        For example, ``[8, 32, 16, 4]`` creates a network with input
-        dimension 8, two hidden layers, and output dimension 4.
+    in_features : int
+        Number of input features.
+    hidden_features : list[int]
+        Hidden layer dimensions shared by the numerator and denominator
+        sub-networks. For example, ``[64, 64]`` creates two hidden
+        layers of size 64 in each sub-network.
+    out_features : int
+        Number of output features (numerator channels). The denominator
+        output size is either 1 or ``out_features`` depending on
+        ``share_denominator_across_channels``.
     activation_function : Callable[[torch.Tensor], torch.Tensor] | None, optional, default=None
         Activation applied after each hidden layer. Should satisfy
         ``f(x) -> 0`` as ``x -> -inf`` and ``f(x) -> x`` as
@@ -83,7 +85,7 @@ class Pade(Module):
     -------
     Float[torch.Tensor, "batch output_dim"]
         Padé-approximant output of shape :math:`(B, D_{out})` where
-        :math:`D_{out}` is ``layer_sizes[-1]``.
+        :math:`D_{out}` is ``out_features``.
 
     Notes
     -----
@@ -94,7 +96,10 @@ class Pade(Module):
 
     Examples
     --------
-    >>> pade = Pade([10, 64, 64, 3], numerator_order=2, denominator_order=2)
+    >>> pade = Pade(
+    ...     in_features=10, hidden_features=[64, 64], out_features=3,
+    ...     numerator_order=2, denominator_order=2,
+    ... )
     >>> x = torch.randn(32, 10)
     >>> y = pade(x)
     >>> y.shape
@@ -103,7 +108,9 @@ class Pade(Module):
 
     def __init__(
         self,
-        layer_sizes: Sequence[int],
+        in_features: int,
+        hidden_features: list[int],
+        out_features: int,
         activation_function: Callable[[torch.Tensor], torch.Tensor] | None = None,
         dropout: float = 0.0,
         use_batchnorm: bool = False,
@@ -120,8 +127,9 @@ class Pade(Module):
 
         self.register_buffer("_one", torch.tensor(1.0))
 
-        ### Store constructor arguments
-        self.layer_sizes = layer_sizes
+        self.in_features = in_features
+        self.hidden_features = hidden_features
+        self.out_features = out_features
         self.activation_function = activation_function
         self.dropout = dropout
         self.use_batchnorm = use_batchnorm
@@ -132,67 +140,27 @@ class Pade(Module):
         self.use_separate_mlps = use_separate_mlps
 
         ### Create the MLPs
-        if use_separate_mlps:
-            numerator_layer_sizes = list(layer_sizes)[:-1] + [
-                self.numerator_output_size
-            ]
-            denominator_layer_sizes = list(layer_sizes)[:-1] + [
-                self.denominator_output_size
-            ]
+        mlp_kwargs = dict(
+            in_features=in_features,
+            hidden_features=hidden_features,
+            act_layer=activation_function,
+            drop=dropout,
+            final_dropout=False,
+            use_batchnorm=use_batchnorm,
+            spectral_norm=spectral_norm,
+        )
 
-            self.numerator_mlp = MLP(
-                layer_sizes=numerator_layer_sizes,
-                activation_function=activation_function,
-                dropout=dropout,
-                use_batchnorm=use_batchnorm,
-                spectral_norm=spectral_norm,
-            )
-            self.denominator_mlp = MLP(
-                layer_sizes=denominator_layer_sizes,
-                activation_function=activation_function,
-                bias=False,
-                dropout=dropout,
-                use_batchnorm=use_batchnorm,
-                spectral_norm=spectral_norm,
+        denom_out = 1 if share_denominator_across_channels else out_features
+
+        if use_separate_mlps:
+            self.numerator_mlp = Mlp(out_features=out_features, **mlp_kwargs)
+            self.denominator_mlp = Mlp(
+                out_features=denom_out, bias=False, **mlp_kwargs
             )
         else:
-            combined_output_size = (
-                self.numerator_output_size + self.denominator_output_size
+            self.combined_mlp = Mlp(
+                out_features=out_features + denom_out, **mlp_kwargs
             )
-            combined_layer_sizes = list(layer_sizes)[:-1] + [combined_output_size]
-
-            self.combined_mlp = MLP(
-                layer_sizes=combined_layer_sizes,
-                activation_function=activation_function,
-                dropout=dropout,
-                use_batchnorm=use_batchnorm,
-                spectral_norm=spectral_norm,
-            )
-
-    @property
-    def numerator_output_size(self) -> int:
-        r"""Number of numerator output channels (equals ``layer_sizes[-1]``).
-
-        Returns
-        -------
-        int
-            Output dimension of the numerator MLP.
-        """
-        return self.layer_sizes[-1]
-
-    @property
-    def denominator_output_size(self) -> int:
-        r"""Number of denominator output channels.
-
-        Returns ``1`` if ``share_denominator_across_channels`` is ``True``,
-        otherwise ``layer_sizes[-1]``.
-
-        Returns
-        -------
-        int
-            Output dimension of the denominator MLP.
-        """
-        return 1 if self.share_denominator_across_channels else self.layer_sizes[-1]
 
     def forward(
         self, x: Float[torch.Tensor, "batch input_dim"]
@@ -216,8 +184,6 @@ class Pade(Module):
         Float[torch.Tensor, "batch output_dim"]
             Rational-function output of shape :math:`(B, D_{out})`.
         """
-        ### Input validation
-        # Skip validation when running under torch.compile for performance
         if not torch.compiler.is_compiling():
             if x.ndim != 2:
                 raise ValueError(
@@ -234,7 +200,7 @@ class Pade(Module):
             )
         else:
             raw_numerator, raw_denominator = self.combined_mlp(x).split(
-                self.numerator_output_size, dim=-1
+                self.out_features, dim=-1
             )
 
         def apply_power(x: torch.Tensor, order: int, even: bool) -> torch.Tensor:
@@ -246,5 +212,4 @@ class Pade(Module):
         numerator = apply_power(raw_numerator, self.numerator_order, even=False)
         denominator = apply_power(raw_denominator, self.denominator_order, even=True)
 
-        # Compute Padé approximant: numerator / (1 + denominator)
         return numerator / (1 + denominator)

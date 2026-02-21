@@ -28,8 +28,7 @@ from tensordict import TensorDict
 from torch.utils.checkpoint import checkpoint
 
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.models.globe.mlp import MLP
-from physicsnemo.experimental.models.globe.pade import Pade
+from physicsnemo.nn import Mlp, Pade
 from physicsnemo.nn.functional.equivariant_ops import (
     legendre_polynomials,
     polar_and_dipole_basis,
@@ -171,9 +170,10 @@ class Kernel(Module):
             )
         elif network_type == "mlp":
             self.network = nn.Sequential(
-                MLP(
-                    layer_sizes=self.network_layer_sizes,
-                    activation_function=nn.SiLU(),
+                Mlp.from_layer_sizes(
+                    self.network_layer_sizes,
+                    act_layer=nn.SiLU(),
+                    final_dropout=False,
                     spectral_norm=spectral_norm,
                 ),
                 nn.Tanh(),

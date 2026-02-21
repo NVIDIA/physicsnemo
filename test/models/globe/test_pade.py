@@ -17,7 +17,7 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.models.globe.pade import Pade
+from physicsnemo.nn import Pade
 
 
 @pytest.mark.parametrize(
@@ -73,7 +73,9 @@ def test_pade_asymptotic_behavior(
 
     # Create a simple Pade network with specified orders
     pade = Pade(
-        layer_sizes=[1, 4, 4, 1],  # Single input (distance), single output
+        in_features=1,
+        hidden_features=[4, 4],
+        out_features=1,
         numerator_order=numerator_order,
         denominator_order=denominator_order,
         use_separate_mlps=use_separate_mlps,
