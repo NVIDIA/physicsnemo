@@ -372,15 +372,7 @@ def main(
     )
     def run_batch(sample: AirFRANSSample) -> tuple[torch.Tensor, TensorDict]:
         """Runs a single batch (always just one sample) through the model and computes the loss."""
-        pred_results = model(
-            prediction_points=sample.interior_mesh.points,
-            boundary_meshes=sample.boundary_meshes,
-            reference_lengths=sample.reference_lengths,
-            global_scalars=sample.global_scalars,
-            global_vectors=sample.global_vectors,
-            chunk_size=None,
-            verbose=False,
-        )
+        pred_results = model(**sample.model_input_kwargs)
         batch_loss_components = pred_results.apply(
             field_loss_fn,
             sample.interior_mesh.point_data,  # ground truth
@@ -613,13 +605,8 @@ def main(
                         with torch.no_grad(), autocast_ctx:
                             base_model.eval()
                             pred_results = base_model(
-                                prediction_points=viz_sample.interior_mesh.points,
-                                boundary_meshes=viz_sample.boundary_meshes,
-                                reference_lengths=viz_sample.reference_lengths,
-                                global_scalars=viz_sample.global_scalars,
-                                global_vectors=viz_sample.global_vectors,
+                                **viz_sample.model_input_kwargs,
                                 chunk_size=points_per_iter,
-                                verbose=False,
                             )
                         AirFRANSDataSet.postprocess(
                             pred_results.to(device="cpu", dtype=torch.float64),
