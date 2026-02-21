@@ -31,7 +31,6 @@ from physicsnemo.utils.logging import PythonLogger
 
 from physicsnemo.experimental.models.globe.field_kernel import MultiscaleKernel
 from physicsnemo.experimental.models.globe.utilities.tensordict_utils import (
-    combine_tensordicts,
     concatenated_length,
     split_by_leaf_rank,
 )
@@ -151,11 +150,12 @@ class GLOBE(Module):
 
     Outputs
     -------
-    TensorDict
-        TensorDict with ``batch_size=(n_points,)`` containing the predicted fields.
-        Keys are the field names from ``output_fields``. Scalar fields have shape
-        :math:`(N_{points},)`, vector fields have shape
-        :math:`(N_{points}, D)`.
+    Mesh
+        A point-cloud :class:`~physicsnemo.mesh.Mesh` (0-dimensional manifold)
+        with ``points`` equal to the input ``prediction_points``. The predicted
+        fields are in ``point_data``, keyed by the names from ``output_fields``.
+        Scalar fields have shape :math:`(N_{points},)`, vector fields have shape
+        :math:`(N_{points}, D)`. Cells are empty (shape ``(0, 1)``).
 
     Notes
     -----
@@ -255,9 +255,9 @@ class GLOBE(Module):
         intermediate_fields: dict[str, Literal["scalar", "vector"]] = {
             f"strengths.{name}": "scalar" for name in reference_length_names
         } | {
-            f"latent_scalars.{i}": "scalar" for i in range(n_latent_scalars)
+            f"latent.scalars.{i}": "scalar" for i in range(n_latent_scalars)
         } | {
-            f"latent_vectors.{i}": "vector" for i in range(n_latent_vectors)
+            f"latent.vectors.{i}": "vector" for i in range(n_latent_vectors)
         }
 
         kernel_layers = []
@@ -310,8 +310,7 @@ class GLOBE(Module):
         self,
         layer_idx: int,
         target_points: Float[torch.Tensor, "n_targets n_dims"],
-        latent_data: dict[str, TensorDict],
-        boundary_meshes: dict[str, "Mesh"],
+        source_meshes: dict[str, Mesh],
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_scalars: TensorDict | None,
         global_vectors: TensorDict | None,
@@ -319,9 +318,19 @@ class GLOBE(Module):
     ) -> TensorDict:
         r"""Evaluate one hyperlayer by summing kernel contributions from all BC types.
 
-        For each boundary condition type, extracts source data (scalars, vectors,
-        strengths, normals) from the latent data and boundary mesh, evaluates the
-        corresponding :class:`MultiscaleKernel`, and sums the results.
+        For each boundary condition type, extracts source data from the mesh's
+        enriched ``cell_data``, evaluates the corresponding
+        :class:`MultiscaleKernel`, and sums the results.
+
+        Each mesh's ``cell_data`` carries a namespaced structure:
+
+        - ``"physical"``: original boundary condition features
+        - ``"strengths"``: per-reference-length kernel strengths
+        - ``"latent"``: (after first layer) learned scalar and vector features
+
+        Strengths are extracted and area-normalized separately. All remaining
+        features are flattened and split by tensor rank into scalars and vectors
+        for the kernel.
 
         Parameters
         ----------
@@ -329,11 +338,10 @@ class GLOBE(Module):
             Index into ``self.kernel_layers`` selecting which hyperlayer to evaluate.
         target_points : Float[torch.Tensor, "n_targets n_dims"]
             Target points of shape :math:`(N_{targets}, D)`.
-        latent_data : dict[str, TensorDict]
-            Mapping of BC type names to TensorDicts containing per-source latent
-            state (``"strengths"``, ``"latent_scalars"``, ``"latent_vectors"``).
-        boundary_meshes : dict[str, Mesh]
-            Mapping of BC type names to :class:`~physicsnemo.mesh.Mesh` objects.
+        source_meshes : dict[str, Mesh]
+            Mapping of BC type names to enriched :class:`~physicsnemo.mesh.Mesh`
+            objects whose ``cell_data`` carries both physical features and latent
+            state.
         reference_lengths : dict[str, Float[torch.Tensor, ""]]
             Mapping of reference length names to scalar tensors.
         global_scalars : TensorDict or None
@@ -350,44 +358,100 @@ class GLOBE(Module):
         """
         result_pieces: list[TensorDict] = []
 
-        for source_bc_type, source_bc_mesh in boundary_meshes.items():
-            source_latent_data: TensorDict = latent_data[source_bc_type]
-            source_strengths: TensorDict = source_latent_data["strengths"]  # ty: ignore[invalid-assignment]
-            source_strengths = source_strengths.apply(
-                lambda x: x * (source_bc_mesh.cell_areas / self.reference_area)
+        for bc_type, mesh in source_meshes.items():
+            strengths: TensorDict = mesh.cell_data["strengths"]  # ty: ignore[invalid-assignment]
+            strengths = strengths.apply(
+                lambda x: x * (mesh.cell_areas / self.reference_area)
             )
 
-            source_data_by_rank: dict[int, TensorDict] = split_by_leaf_rank(
-                source_bc_mesh.cell_data
-            )
-            source_scalars = combine_tensordicts(
-                source_data_by_rank[0],
-                source_latent_data["latent_scalars"],  # ty: ignore[invalid-argument-type]
-            )
-            source_vectors = combine_tensordicts(
-                source_data_by_rank[1],
-                source_latent_data["latent_vectors"],  # ty: ignore[invalid-argument-type]
-            )
-            source_vectors["normals"] = source_bc_mesh.cell_normals
-            source_vectors.batch_size = torch.Size(
-                [source_bc_mesh.n_cells, self.n_spatial_dims]
-            )
+            ### Split non-strength features by tensor rank (scalars vs vectors).
+            # flatten_keys ensures split_by_leaf_rank produces flat TensorDicts.
+            features = mesh.cell_data.exclude("strengths").flatten_keys(".")
+            data_by_rank = split_by_leaf_rank(features)
+            scalars = data_by_rank[0]
+            vectors = data_by_rank[1]
+            vectors["normals"] = mesh.cell_normals
+            vectors.batch_size = torch.Size([mesh.n_cells, self.n_spatial_dims])
 
-            kernel: MultiscaleKernel = self.kernel_layers[layer_idx][source_bc_type]
-            result_from_kernel: TensorDict = kernel(
-                source_points=source_bc_mesh.cell_centroids,
-                source_scalars=source_scalars,
-                source_vectors=source_vectors,
-                source_strengths=source_strengths,
+            kernel: MultiscaleKernel = self.kernel_layers[layer_idx][bc_type]
+            kernel_result: TensorDict = kernel(
+                source_points=mesh.cell_centroids,
+                source_scalars=scalars,
+                source_vectors=vectors,
+                source_strengths=strengths,
                 target_points=target_points,
                 reference_lengths=reference_lengths,
                 global_scalars=global_scalars,
                 global_vectors=global_vectors,
                 chunk_size=chunk_size,
             )
-            result_pieces.append(result_from_kernel.unflatten_keys())
+            result_pieces.append(kernel_result.unflatten_keys())
 
         return reduce(operator.add, result_pieces)
+
+    def _evaluate_communication_hyperlayer(
+        self,
+        layer_idx: int,
+        boundary_meshes: dict[str, Mesh],
+        reference_lengths: dict[str, Float[torch.Tensor, ""]],
+        global_scalars: TensorDict | None,
+        global_vectors: TensorDict | None,
+        chunk_size: None | int | Literal["auto"],
+    ) -> dict[str, Mesh]:
+        r"""Run one boundary-to-boundary communication step.
+
+        For each BC type, evaluates :meth:`_evaluate_hyperlayer` at the mesh's
+        cell centroids and wraps the result into an enriched Mesh that carries
+        both the original physical ``cell_data`` (under ``"physical"``) and the
+        new latent state (``"strengths"``, ``"latent"``).
+
+        Geometry tensors and cached properties (centroids, areas, normals) are
+        shared by reference across layers - no copies are made.
+
+        Parameters
+        ----------
+        layer_idx : int
+            Index into ``self.kernel_layers`` for this communication layer.
+        boundary_meshes : dict[str, Mesh]
+            Current enriched boundary meshes (from the previous layer or init).
+        reference_lengths : dict[str, Float[torch.Tensor, ""]]
+            Mapping of reference length names to scalar tensors.
+        global_scalars : TensorDict or None
+            Problem-level scalar features.
+        global_vectors : TensorDict or None
+            Problem-level vector features.
+        chunk_size : None or int or {"auto"}
+            Controls memory usage during kernel evaluation.
+
+        Returns
+        -------
+        dict[str, Mesh]
+            New enriched boundary meshes for the next layer.
+        """
+        new_meshes: dict[str, Mesh] = {}
+        for bc_type, mesh in boundary_meshes.items():
+            result_td = self._evaluate_hyperlayer(
+                layer_idx=layer_idx,
+                target_points=mesh.cell_centroids,
+                source_meshes=boundary_meshes,
+                reference_lengths=reference_lengths,
+                global_scalars=global_scalars,
+                global_vectors=global_vectors,
+                chunk_size=chunk_size,
+            )
+            new_cell_data = TensorDict(
+                {"physical": mesh.cell_data["physical"]},
+                batch_size=torch.Size([mesh.n_cells]),
+                device=mesh.points.device,
+            )
+            new_cell_data.update(result_td)
+            new_meshes[bc_type] = Mesh(
+                points=mesh.points,
+                cells=mesh.cells,
+                cell_data=new_cell_data,
+                _cache=mesh._cache,
+            )
+        return new_meshes
 
     def forward(
         self,
@@ -397,12 +461,18 @@ class GLOBE(Module):
         global_scalars: TensorDict | None = None,
         global_vectors: TensorDict | None = None,
         chunk_size: None | int | Literal["auto"] = None,
-    ) -> TensorDict:
+    ) -> Mesh:
         r"""Evaluate GLOBE model to predict fields at target points.
 
-        Runs the full GLOBE forward pass: communication hyperlayers, final
-        evaluation, and per-field calibration. See the class docstring for full
-        input/output documentation.
+        Runs the full GLOBE forward pass in three phases:
+
+        1. **Init**: Enrich boundary meshes with initial (all-ones) strengths,
+           wrapping original ``cell_data`` under a ``"physical"`` namespace.
+        2. **Communication**: Run ``n_communication_hyperlayers`` boundary-to-
+           boundary communication steps via
+           :meth:`_evaluate_communication_layer`.
+        3. **Final evaluation**: Evaluate the last hyperlayer at
+           ``prediction_points`` and apply per-field calibration transforms.
 
         Parameters
         ----------
@@ -422,8 +492,14 @@ class GLOBE(Module):
 
         Returns
         -------
-        TensorDict
-            Predicted fields at target points. See class docstring for details.
+        Mesh
+            A point-cloud Mesh (0-dimensional manifold) with:
+
+            - ``points``: the input ``prediction_points``
+            - ``point_data``: calibrated output fields (keys from
+              ``output_fields``)
+            - ``cells``: empty (shape ``(0, 1)``)
+            - ``cell_data``: empty
         """
         device = prediction_points.device
 
@@ -448,7 +524,6 @@ class GLOBE(Module):
                     f"Expected prediction_points with {self.n_spatial_dims} spatial dims, "
                     f"got {prediction_points.shape[-1]}"
                 )
-            # Check that input lengths are consistent with the model
             for name, (actual, expected) in {
                 "reference lengths": (
                     set(reference_lengths.keys()),
@@ -468,8 +543,6 @@ class GLOBE(Module):
                         f"This model was instantiated to expect {expected} {name},\n"
                         f"but the forward-method input gives {actual} {name}."
                     )
-
-            # Check that dimensionality of all boundary meshes is consistent
             for bc_type, mesh in boundary_meshes.items():
                 if mesh.n_spatial_dims != self.n_spatial_dims:
                     raise ValueError(
@@ -477,8 +550,6 @@ class GLOBE(Module):
                         f"{mesh.n_spatial_dims} spatial dims, but the model expects "
                         f"{self.n_spatial_dims}"
                     )
-
-            # Check that all boundary condition types are in the model
             bc_types_from_input = set(boundary_meshes.keys())
             if not bc_types_from_input.issubset(self.boundary_condition_names):
                 raise ValueError(
@@ -489,60 +560,63 @@ class GLOBE(Module):
                     f"Please ensure that the input boundary meshes are a subset of the model's boundary condition types."
                 )
 
-        ### Initialize the latent data that's passed between hyperlayers
-        latent_data: dict[str, TensorDict] = {
-            source_bc_type: TensorDict(
-                {
-                    "strengths": {
-                        name: torch.ones(source_bc_mesh.n_cells, device=device)
-                        for name in self.reference_length_names
+        ### Phase 1: Enrich boundary meshes with initial (all-ones) strengths.
+        # Wraps original cell_data under "physical" and adds "strengths".
+        # Geometry tensors are shared by reference - no copies.
+        boundary_meshes = {
+            bc_type: Mesh(
+                points=mesh.points,
+                cells=mesh.cells,
+                cell_data=TensorDict(
+                    {
+                        "physical": mesh.cell_data,
+                        "strengths": TensorDict(
+                            {
+                                name: torch.ones(mesh.n_cells, device=device)
+                                for name in self.reference_length_names
+                            },
+                            batch_size=torch.Size([mesh.n_cells]),
+                            device=device,
+                        ),
                     },
-                    "latent_scalars": {},
-                    "latent_vectors": {},
-                },
-                batch_size=torch.Size([source_bc_mesh.n_cells]),
-                device=device,
+                    batch_size=torch.Size([mesh.n_cells]),
+                    device=device,
+                ),
+                _cache=mesh._cache,
             )
-            for source_bc_type, source_bc_mesh in boundary_meshes.items()
+            for bc_type, mesh in boundary_meshes.items()
         }
 
-        ### Kernel evaluations
-        for i in range(self.n_communication_hyperlayers + 1):
-            if not torch.compiler.is_compiling():
-                logger.debug(f"Evaluating hypernetwork layer {i}...")
+        ### Phase 2: Communication hyperlayers (boundary-to-boundary).
+        for i in range(self.n_communication_hyperlayers):
+            boundary_meshes = self._evaluate_communication_hyperlayer(
+                layer_idx=i,
+                boundary_meshes=boundary_meshes,
+                reference_lengths=reference_lengths,
+                global_scalars=global_scalars,
+                global_vectors=global_vectors,
+                chunk_size=chunk_size,
+            )
 
-            is_last_hyperlayer = i == self.n_communication_hyperlayers
+        ### Phase 3: Final evaluation at prediction points.
+        result: TensorDict = self._evaluate_hyperlayer(
+            layer_idx=self.n_communication_hyperlayers,
+            target_points=prediction_points,
+            source_meshes=boundary_meshes,
+            reference_lengths=reference_lengths,
+            global_scalars=global_scalars,
+            global_vectors=global_vectors,
+            chunk_size=chunk_size,
+        )
 
-            if not is_last_hyperlayer:
-                latent_data: TensorDict = {
-                    target_bc_type: self._evaluate_hyperlayer(
-                        i,
-                        target_bc_mesh.cell_centroids,
-                        latent_data,
-                        boundary_meshes,
-                        reference_lengths,
-                        global_scalars,
-                        global_vectors,
-                        chunk_size,
-                    )
-                    for target_bc_type, target_bc_mesh in boundary_meshes.items()
-                }
-            else:
-                result: TensorDict = self._evaluate_hyperlayer(
-                    i,
-                    prediction_points,
-                    latent_data,
-                    boundary_meshes,
-                    reference_lengths,
-                    global_scalars,
-                    global_vectors,
-                    chunk_size,
-                )
-
+        ### Per-field calibration transforms
         for field_name, field_tensor in result.items():
             original_shape = field_tensor.shape
             result[field_name] = self.final_field_transforms[field_name](
                 field_tensor.view(-1, 1)
             ).view(original_shape)
 
-        return result
+        return Mesh(
+            points=prediction_points,
+            point_data=result,
+        )

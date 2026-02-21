@@ -110,9 +110,10 @@ class Mesh:
     ----------
     points : torch.Tensor
         Vertex coordinates with shape :math:`(N_p, D_s)`. Must be floating-point.
-    cells : torch.Tensor
+    cells : torch.Tensor, optional
         Cell connectivity with shape :math:`(N_c, D_m + 1)`. Each row contains
         indices into ``points`` defining one simplex. Must be integer dtype.
+        Defaults to an empty 0-simplex tensor for point-cloud meshes.
     point_data : TensorDict or dict[str, torch.Tensor], optional
         Per-vertex data. Dicts are automatically converted to TensorDict.
     cell_data : TensorDict or dict[str, torch.Tensor], optional
@@ -169,6 +170,13 @@ class Mesh:
     >>> graph.n_manifold_dims, graph.n_spatial_dims
     (1, 3)
 
+    Create a point cloud (no connectivity):
+
+    >>> points = torch.randn(50, 3)
+    >>> cloud = Mesh(points=points)
+    >>> cloud.n_points, cloud.n_cells, cloud.n_manifold_dims
+    (50, 0, 0)
+
     Notes
     -----
     **Mixed Manifold Dimensions**
@@ -210,7 +218,7 @@ class Mesh:
     def __init__(
         self,
         points: torch.Tensor,
-        cells: torch.Tensor,
+        cells: torch.Tensor | None = None,
         point_data: TensorDict | dict[str, torch.Tensor] | None = None,
         cell_data: TensorDict | dict[str, torch.Tensor] | None = None,
         global_data: TensorDict | dict[str, torch.Tensor] | None = None,
@@ -218,6 +226,8 @@ class Mesh:
         _cache: TensorDict | None = None,
     ) -> None:
         ### Assign tensorclass fields
+        if cells is None:
+            cells = torch.zeros(0, 1, dtype=torch.long, device=points.device)
         self.points = points
         self.cells = cells
 
