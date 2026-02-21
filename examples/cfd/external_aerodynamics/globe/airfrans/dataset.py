@@ -120,6 +120,17 @@ class AirFRANSSample:
     global_scalars: TensorDict  # dict of global scalar names to scalar tensors
     global_vectors: TensorDict  # dict of global vector names to vector tensors
 
+    @property
+    def model_input_kwargs(self) -> dict:
+        """Kwargs for :meth:`GLOBE.forward`, minus control-flow args like ``chunk_size``."""
+        return {
+            "prediction_points": self.interior_mesh.points,
+            "boundary_meshes": self.boundary_meshes,
+            "reference_lengths": self.reference_lengths,
+            "global_scalars": self.global_scalars,
+            "global_vectors": self.global_vectors,
+        }
+
 
 
 class AirFRANSDataSet(CachedPreprocessingDataset):

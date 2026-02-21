@@ -84,15 +84,7 @@ else:
 # %%
 with torch.no_grad():
     model.eval()
-    pred_results = model(
-        prediction_points=sample.interior_mesh.points,
-        boundary_meshes=sample.boundary_meshes,
-        reference_lengths=sample.reference_lengths,
-        global_scalars=sample.global_scalars,
-        global_vectors=sample.global_vectors,
-        chunk_size=128,
-        verbose=False,
-    )
+    pred_results = model(**sample.model_input_kwargs, chunk_size=128)
 
 # %%
 AirFRANSDataSet.postprocess(
