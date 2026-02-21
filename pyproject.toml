@@ -60,11 +60,6 @@ Changelog = "https://github.com/NVIDIA/physicsnemo/blob/main/CHANGELOG.md"
 
 [tool.uv]
 managed = true
-no-build-isolation-package = [
-    "torch-scatter",
-    "torch-sparse",
-    "torch-cluster",
-]
 conflicts = [
     [
         { extra = "cu12" },
@@ -75,11 +70,6 @@ conflicts = [
         { extra = "natten-cu13" },
     ],
 ]
-
-[tool.uv.extra-build-dependencies]
-torch-sparse = ["torch", "setuptools", "wheel"]
-torch-cluster = ["torch", "setuptools", "wheel"]
-torch-scatter = ["torch", "setuptools", "wheel"]
 
 [[tool.uv.index]]
 name = "nvidia"

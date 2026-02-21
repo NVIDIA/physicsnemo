@@ -53,31 +53,16 @@ runs:
         df -h
         echo "::endgroup::"
 
-    - name: Install dependencies with uv (dev + cu12 + gnns)
+    - name: Install dependencies with uv (dev + cu12)
       if: steps.restore-venv-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set -euo pipefail
-        export TORCH_CUDA_ARCH_LIST="9.0"
-        export FORCE_CUDA=1
-        export MAX_JOBS="$(nproc)"
         export UV_LINK_MODE=copy
-        uv venv .venv
-        uv pip install "ninja" "wheel" "setuptools"
-        echo "::group::uv sync (dev + cu12 + gnns)"
+        echo "::group::uv sync (dev + cu12)"
         uv sync \
           --group dev \
-          --extra cu12 \
-          --extra gnns \
-          --preview-features extra-build-dependencies
+          --extra cu12
         echo "::endgroup::"
-        uv run python -c "import torch; print(f'post-base torch={torch.__version__} torch_cuda={torch.version.cuda}')"
-        uv run python - <<'PY'
-        import importlib.metadata as md
-        for pkg in ("torch-geometric", "torch-scatter", "torch-sparse", "torch-cluster"):
-            try:
-                print(f"post-gnns {pkg}={md.version(pkg)}")
-            except md.PackageNotFoundError:
-                print(f"post-gnns {pkg}=<not-installed>")
-        PY
+        uv run python -c "import torch; print(f'torch={torch.__version__} cuda={torch.version.cuda}')"
 

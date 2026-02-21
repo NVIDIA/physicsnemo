@@ -63,7 +63,7 @@ jobs:
       with:
         uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
         venv-cache-key-prefix: ${{ env.VENV_CACHE_KEY_PREFIX }}
-        cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}
+        cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml') }}
 
     - name: Report setup action outputs
       run: |
@@ -75,7 +75,7 @@ jobs:
       uses: actions/cache/save@v4
       with:
         path: ~/.cache/uv
-        key: ${{ env.UV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}
+        key: ${{ env.UV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
 
     - name: Free disk space before caching
       if: steps.setup-uv-env.outputs.venv_cache_hit != 'true'
@@ -88,7 +88,7 @@ jobs:
       uses: actions/cache/save@v4
       with:
         path: .venv
-        key: ${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}
+        key: ${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
 
   # Stage 2: Run testmon tests and cache the database
   testmon:
@@ -111,7 +111,7 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: .venv
-        key: ${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}
+        key: ${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
         fail-on-cache-miss: true
 
     - name: Validate environment
@@ -131,7 +131,7 @@ jobs:
           .testmondata
           .testmondata-shm
           .testmondata-wal
-        key: ${{ env.TESTMON_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml') }}
+        key: ${{ env.TESTMON_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
 
   # Stage 3: Run coverage tests and upload artifacts
   coverage:
@@ -154,7 +154,7 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: .venv
-        key: ${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', '.github/workflows/github-nightly-uv.yml', '.github/actions/setup-uv-env/action.yml') }}
+        key: ${{ env.VENV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
         fail-on-cache-miss: true
 
     - name: Validate environment
@@ -174,7 +174,7 @@ jobs:
       uses: actions/cache/save@v4
       with:
         path: .coverage*
-        key: ${{ env.COVERAGE_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'test/coverage.pytest.rc', 'test/coverage.docstring.rc', '.github/workflows/github-nightly-uv.yml') }}
+        key: ${{ env.COVERAGE_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
 
     - name: Merge coverage reports
       run: |
