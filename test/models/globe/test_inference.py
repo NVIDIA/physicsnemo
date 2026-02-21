@@ -62,20 +62,27 @@ def test_globe_inference(device: str) -> None:
 
     ### Run inference
     with torch.no_grad():
-        outputs = model(
+        output_mesh = model(
             prediction_points=prediction_points,
             boundary_meshes={"no_slip": mesh},
             reference_lengths=reference_lengths,
             chunk_size=None,
         )
 
-    ### Validate output structure and shapes
-    assert set(outputs.keys()) == {"pressure", "velocity"}
-    assert outputs["pressure"].shape == (N_PREDICTION_POINTS,)
-    assert outputs["velocity"].shape == (N_PREDICTION_POINTS, 3)
-    assert outputs["pressure"].device.type == device
-    assert outputs["velocity"].device.type == device
+    ### Validate Mesh structure
+    from physicsnemo.mesh import Mesh
+
+    assert isinstance(output_mesh, Mesh)
+    assert output_mesh.points.shape == (N_PREDICTION_POINTS, 3)
+
+    ### Validate output fields and shapes
+    fields = output_mesh.point_data
+    assert set(fields.keys()) == {"pressure", "velocity"}
+    assert fields["pressure"].shape == (N_PREDICTION_POINTS,)
+    assert fields["velocity"].shape == (N_PREDICTION_POINTS, 3)
+    assert fields["pressure"].device.type == device
+    assert fields["velocity"].device.type == device
 
     ### Validate outputs are finite (no NaN or Inf from the forward pass)
-    assert torch.all(torch.isfinite(outputs["pressure"]))
-    assert torch.all(torch.isfinite(outputs["velocity"]))
+    assert torch.all(torch.isfinite(fields["pressure"]))
+    assert torch.all(torch.isfinite(fields["velocity"]))
