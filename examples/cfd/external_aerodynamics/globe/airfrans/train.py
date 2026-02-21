@@ -34,6 +34,7 @@ import torchinfo
 from dataset import AirFRANSDataSet, AirFRANSSample, compute_max_mesh_sizes
 from tensordict import TensorDict
 from torch.profiler import record_function
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 from utilities import (
     disable_autotune_printing,
@@ -51,6 +52,9 @@ from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 mpl.use("agg")  # Allows headless plotting
 disable_autotune_printing()  # Silences the verbose output of `torch.compile(..., mode="max-autotune")`.
+
+Split = Literal["train", "test"]
+splits: list[Split] = ["train", "test"]
 
 
 def main(
@@ -182,25 +186,19 @@ def main(
     torch.manual_seed(seed)
 
     ### [Dataset Preparation]
-    train_sample_paths = AirFRANSDataSet.get_split_paths(
-        data_dir, airfrans_task, "train"
-    )
-    valid_sample_paths = AirFRANSDataSet.get_split_paths(
-        data_dir, airfrans_task, "test"
-    )
-
-    train_dataloader = AirFRANSDataSet.make_dataloader(
-        train_sample_paths,
-        cache_dir,
-        world_size=dist.world_size,
-        rank=dist.rank,
-    )
-    valid_dataloader = AirFRANSDataSet.make_dataloader(
-        valid_sample_paths,
-        cache_dir,
-        world_size=dist.world_size,
-        rank=dist.rank,
-    )
+    sample_paths: dict[Split, list[Path]] = {
+        split: AirFRANSDataSet.get_split_paths(data_dir, airfrans_task, split)
+        for split in splits
+    }
+    dataloaders: dict[Split, DataLoader] = {
+        split: AirFRANSDataSet.make_dataloader(
+            sample_paths[split],
+            cache_dir,
+            world_size=dist.world_size,
+            rank=dist.rank,
+        )
+        for split in splits
+    }
 
     ### [Model]
     model = GLOBE(
@@ -248,17 +246,17 @@ def main(
         )
 
     ### [Compute Maximum Mesh Sizes Per BC Type and Split]
-    train_max_sizes = compute_max_mesh_sizes(
-        train_dataloader,
-        device,
-        face_downsampling_ratio=train_face_downsampling_ratio,
-        rank=dist.rank,
-    )
-    valid_max_sizes = compute_max_mesh_sizes(
-        valid_dataloader,
-        device,
-        rank=dist.rank,
-    )
+    max_sizes: dict[Split, dict[str, dict[str, int]]] = {
+        split: compute_max_mesh_sizes(
+            dataloaders[split],
+            device,
+            face_downsampling_ratio=(
+                train_face_downsampling_ratio if split == "train" else 1.0
+            ),
+            rank=dist.rank,
+        )
+        for split in splits
+    }
 
     ### [Optimizer and Scheduler Setup]
     learning_rate *= (dist.world_size * points_per_iter / 2048) ** 0.5
@@ -356,16 +354,14 @@ def main(
                 "scaler": scaler.__class__.__name__,
                 "physicsnemo_pkg_info": get_physicsnemo_pkg_info(),
                 "world_size": dist.world_size,
-                "n_train_samples": len(train_sample_paths),
-                "n_valid_samples": len(valid_sample_paths),
-                "train_sample_paths": train_sample_paths,
-                "valid_sample_paths": valid_sample_paths,
+                **{f"n_{split}_samples": len(sample_paths[split]) for split in splits},
+                **{f"{split}_sample_paths": sample_paths[split] for split in splits},
             },
         )
         if use_mlflow:
             mlflow.log_artifact(str(output_dir / "hyperparameters.yaml"))
 
-    ### [Training and Validation]
+    ### [Training and Testing]
     @torch.compile(
         dynamic=False,
         mode=compile_mode,
@@ -382,18 +378,18 @@ def main(
         batch_loss = batch_loss_components.stack_from_tensordict().sum()
         return batch_loss, batch_loss_components
 
-    def run_epoch(training: bool) -> torch.Tensor:
-        """Run one epoch of training or validation. Returns the average total loss across all batches."""
-        dataloader = train_dataloader if training else valid_dataloader
-        dataloader.sampler.set_epoch(epoch=epoch)  # ty: ignore[unresolved-attribute]
+    def run_epoch(split: Split) -> torch.Tensor:
+        """Run one epoch of training or testing. Returns the average total loss across all batches."""
+        training = split == "train"
+        dataloaders[split].sampler.set_epoch(epoch=epoch)  # ty: ignore[unresolved-attribute]
         model.train(training)
 
         all_batch_losses: list[torch.Tensor] = []
         all_batch_loss_components: dict[str, list[torch.Tensor]] = defaultdict(list)
 
         for sample in tqdm(
-            dataloader,
-            desc=f"{epoch:d} {'Train' if training else 'Valid'}",
+            dataloaders[split],
+            desc=f"{epoch:d} {split.title()}",
             unit=" samples",
             disable=dist.rank != 0 or epoch > 10,
         ):
@@ -424,7 +420,7 @@ def main(
                         sample.boundary_meshes[bc_type] = mesh
 
                 ### Pad boundary meshes to fixed size for static compilation
-                max_sizes = train_max_sizes if training else valid_max_sizes
+                split_max_sizes = max_sizes[split]
                 for bc_type, mesh in sample.boundary_meshes.items():
                     ### Pre-cache normals before entering torch.compile.
                     # Areas and centroids are already cached above; normals must also
@@ -432,8 +428,8 @@ def main(
                     # traced by Dynamo (avoiding graph breaks and recompilations).
                     _ = mesh.cell_normals
                     sample.boundary_meshes[bc_type] = mesh.pad(
-                        target_n_points=max_sizes[bc_type]["n_points"],
-                        target_n_cells=max_sizes[bc_type]["n_cells"],
+                        target_n_points=split_max_sizes[bc_type]["n_points"],
+                        target_n_cells=split_max_sizes[bc_type]["n_cells"],
                         data_padding_value=0.0,
                     )
 
@@ -477,7 +473,7 @@ def main(
         logger0.info(
             " | ".join(
                 [
-                    f"{epoch:d=} {'Train' if training else 'Valid'}",
+                    f"{epoch:d=} {split.title()}",
                     f"Loss: {epoch_loss:7.3g}",
                     *[f"{k}: {v:7.3g}" for k, v in epoch_loss_components.items()],
                     f"LR: {optimizer.param_groups[0]['lr']:.2e}",
@@ -486,7 +482,6 @@ def main(
         )
         if dist.rank == 0:
             if use_mlflow:
-                split = "train" if training else "valid"
                 mlflow.log_metrics(
                     {
                         f"{split}_loss": epoch_loss.item(),
@@ -520,13 +515,12 @@ def main(
             time_last_epoch = perf_counter()
 
         for epoch in count(start=epoch + 1):
-            with record_function(f"epoch_{epoch}_train"):
-                train_loss = run_epoch(training=True)
-
-            with record_function(f"epoch_{epoch}_valid"):
-                valid_loss = run_epoch(training=False)
-
-            scheduler.step(train_loss)
+            loss = {}
+            for split in splits:
+                with record_function(f"epoch_{epoch}_{split}"):
+                    loss[split] = run_epoch(split)
+            
+            scheduler.step(loss["train"])
 
             if profile:
                 profiler.step()  # ty: ignore[possibly-missing-attribute]
@@ -553,8 +547,8 @@ def main(
                             ),
                         },
                     )
-                if valid_loss < best_loss:
-                    best_loss = valid_loss
+                if loss["test"] < best_loss:
+                    best_loss = loss["test"]
                     base_model.save(best_model_path)
                     if use_mlflow:
                         mlflow.log_artifact(
@@ -580,16 +574,13 @@ def main(
             ### [MLflow Image Logging]
             if (
                 make_images
-                and (train_loss / last_image_loss < 0.9)
+                and (loss["train"] / last_image_loss < 0.9)
                 and (epoch > last_image_epoch + 200)
             ):
                 if dist.rank == 0:
                     logger0.info("Generating visualization images...")
-                    for split, paths in [
-                        ("train", train_sample_paths),
-                        ("valid", valid_sample_paths),
-                    ]:
-                        sample_path = paths[0]
+                    for split in splits:
+                        sample_path = sample_paths[split][0]
                         viz_sample = AirFRANSDataSet.preprocess(sample_path).to(device)
                         with torch.no_grad(), autocast_ctx:
                             base_model.eval()
@@ -609,7 +600,7 @@ def main(
                                 f"visualization/{split}_sample_epoch_{epoch}.png",
                             )
                         plt.close()
-                last_image_epoch, last_image_loss = epoch, train_loss
+                last_image_epoch, last_image_loss = epoch, loss["train"]
 
             ### [torch.compile Caching]
             if use_compile and not torch_compile_cache.exists():

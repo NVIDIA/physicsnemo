@@ -54,9 +54,11 @@ if not (_data_env := os.environ.get("AIRFRANS_DATA_DIR")):
     )
 data_dir = Path(_data_env)
 manifest = json.loads((data_dir / "manifest.json").read_text())
-train_sample_paths = [data_dir / f for f in manifest["full_train"]]
-valid_sample_paths = [data_dir / f for f in manifest["full_test"]]
-sample_path = valid_sample_paths[0]
+sample_paths: dict[str, list[Path]] = {
+    "train": [data_dir / f for f in manifest["full_train"]],
+    "test": [data_dir / f for f in manifest["full_test"]],
+}
+sample_path = sample_paths["test"][0]
 
 # %%
 device = torch.device("cuda")
