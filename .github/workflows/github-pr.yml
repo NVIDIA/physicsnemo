@@ -62,7 +62,7 @@ jobs:
       if: steps.cache-uv-restore.outputs.cache-hit != 'true'
       run: |
         # Install core dependencies and development group
-        uv sync --group dev --preview-features extra-build-dependencies
+        uv sync --frozen --group dev
 
     - name: Free disk space before caching
       if: steps.cache-uv-restore.outputs.cache-hit != 'true'

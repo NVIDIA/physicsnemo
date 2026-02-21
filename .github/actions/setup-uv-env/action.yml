@@ -61,6 +61,7 @@ runs:
         export UV_LINK_MODE=copy
         echo "::group::uv sync (dev + cu12)"
         uv sync \
+          --frozen \
           --group dev \
           --extra cu12
         echo "::endgroup::"
