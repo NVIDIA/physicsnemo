@@ -159,11 +159,10 @@ class Kernel(Module):
         self.n_spherical_harmonics = n_spherical_harmonics
         self.use_gradient_checkpointing = use_gradient_checkpointing
 
-        sizes = self.network_layer_sizes
         shared_kwargs = dict(
-            in_features=sizes[0],
-            hidden_features=list(sizes[1:-1]),
-            out_features=sizes[-1],
+            in_features=self.network_in_features,
+            hidden_features=list(self.hidden_layer_sizes),
+            out_features=self.network_out_features,
             spectral_norm=spectral_norm,
         )
 
@@ -186,51 +185,17 @@ class Kernel(Module):
             )
 
     @cached_property
-    def network_layer_sizes(self) -> tuple[int, ...]:
-        r"""Computes the neural network layer sizes for the kernel function.
+    def network_in_features(self) -> int:
+        r"""Number of input features for the kernel's internal network.
 
-        This cached property determines the input and output dimensions of the kernel's
-        internal neural network based on the number of scalar/vector inputs and output
-        fields. The calculation follows the invariant feature engineering pipeline
-        described in paper Section 3.2.2.
+        Derived from the invariant feature engineering pipeline (Section 3.2.2):
 
-        Input features (first layer):
-
-        1. Raw source and global scalars (``n_source_scalars`` + ``n_global_scalars``)
-        2. Smoothed log-magnitudes of all vectors (``n_vectors_in``), where vectors include:
-
-           - The relative position vector ``r = (x_target - x_source) / reference_length``
-           - Source-associated vectors (e.g., face normals, boundary condition values)
-           - Global vectors (e.g., freestream velocity direction)
-
-        3. Pairwise spherical harmonic features for all vector pairs: for each of the
-           ``C(n_vectors_in, 2)`` pairs, we compute ``n_spherical_harmonics`` Legendre
-           polynomial terms weighted by the product of the pair's smoothed log-magnitudes
-
-        Output features (last layer):
-
-        1. Direct scalar outputs (one channel per scalar field)
-        2. Vector reprojection coefficients for each vector field: for each vector output,
-           we generate coefficients for projection onto a local basis consisting of:
-
-           - The radial direction ``r_hat`` (1 basis vector)
-           - For each non-r input vector: axis direction + dipole/polar direction
-             (2 basis vectors per non-r vector)
-
-        Returns
-        -------
-        tuple[int, ...]
-            Tuple of layer sizes:
-            ``(first_layer_size, *hidden_layer_sizes, last_layer_size)``.
-            The hidden layer sizes are those provided during initialization.
-
-        Notes
-        -----
-        This property is cached, so it's only computed once per kernel instance.
-        The calculation ensures rotation-invariance by working with invariant scalar
-        features in the MLP and restoring directionality through basis reprojection.
+        1. Raw source and global scalars
+        2. Smoothed log-magnitudes of all input vectors (relative position ``r``,
+           source vectors, global vectors)
+        3. Pairwise spherical harmonic features for all :math:`\binom{n}{2}` vector
+           pairs, each producing ``n_spherical_harmonics`` Legendre polynomial terms
         """
-        ### Inputs
         n_vectors_in: int = (
             1  # r
             + self.n_source_vectors
@@ -239,24 +204,29 @@ class Kernel(Module):
         n_scalars_in: int = self.n_source_scalars + self.n_global_scalars
         n_vector_pairs_in: int = comb(n_vectors_in, 2)
 
-        first_layer_size = (
-            n_scalars_in  # Scalars
-            + n_vectors_in  # Smoothed magnitudes of all vectors
+        return (
+            n_scalars_in
+            + n_vectors_in
             + n_vector_pairs_in * self.n_spherical_harmonics
         )
 
-        ### Outputs
+    @cached_property
+    def network_out_features(self) -> int:
+        r"""Number of output features for the kernel's internal network.
+
+        One channel per scalar output field, plus vector reprojection coefficients
+        for each vector output field (1 radial + 2 per non-radial input vector).
+        """
+        n_vectors_in: int = (
+            1  # r
+            + self.n_source_vectors
+            + self.n_global_vectors
+        )
         n_scalars_out = sum(v == "scalar" for v in self.output_fields.values())
         n_vectors_out = sum(v == "vector" for v in self.output_fields.values())
-        last_layer_size = n_scalars_out + n_vectors_out * (
+        return n_scalars_out + n_vectors_out * (
             1  # r_hat
             + 2 * (n_vectors_in - 1)  # All non-r vectors
-        )
-
-        return (
-            first_layer_size,
-            *self.hidden_layer_sizes,
-            last_layer_size,
         )
 
     def add_semantics(
@@ -559,18 +529,18 @@ class Kernel(Module):
             )
 
         cat_input_tensors: torch.Tensor = concatenate_leaves(scalars)
-        # shape (n_targets, n_sources, self.network_layer_sizes[0])
+        # shape (n_targets, n_sources, self.network_in_features)
 
         ### Evaluate the neural-network-based field kernel function
         if not torch.compiler.is_compiling():
-            if not cat_input_tensors.shape[-1] == self.network_layer_sizes[0]:
+            if not cat_input_tensors.shape[-1] == self.network_in_features:
                 raise RuntimeError(
-                    f"The input tensor has {cat_input_tensors.shape[-1]=!r} features, but the network expects {self.network_layer_sizes[0]=!r} input features.\n"
-                    f"This is due to a shape inconsistency between the `network_layer_sizes` and `forward` methods of the {self.__class__.__name__!r} class."
+                    f"The input tensor has {cat_input_tensors.shape[-1]=!r} features, but the network expects {self.network_in_features=!r} input features.\n"
+                    f"This is due to a shape inconsistency between the `network_in_features` and `forward` methods of the {self.__class__.__name__!r} class."
                 )
 
         flattened_input = cat_input_tensors.view(
-            n_targets * n_sources, self.network_layer_sizes[0]
+            n_targets * n_sources, self.network_in_features
         )
 
         if self.training and self.use_gradient_checkpointing:
@@ -581,7 +551,7 @@ class Kernel(Module):
             flattened_output = self.network(flattened_input)
 
         output = flattened_output.view(
-            n_targets, n_sources, self.network_layer_sizes[-1]
+            n_targets, n_sources, self.network_out_features
         )
 
         ### Enforces correct far-field decay rate
@@ -860,7 +830,11 @@ class ChunkedKernel(Kernel):
         if chunk_size == "auto":
             # Automatically determine chunk size based on memory constraints
             # Assumes the network is dominating the memory cost
-            approx_n_floats = n_interactions * sum(self.network_layer_sizes)
+            approx_n_floats = n_interactions * (
+                self.network_in_features
+                + sum(self.hidden_layer_sizes)
+                + self.network_out_features
+            )
             approx_n_bytes = (
                 approx_n_floats * 4
             )  # float32; conservative enough for bfloat16 too
