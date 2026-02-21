@@ -30,6 +30,7 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
 from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.calculus import compute_gradient_points_lsq
 from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.projections import project
 from physicsnemo.utils.logging import PythonLogger
@@ -210,56 +211,48 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         sample_path: Path,
         patch_out_nonphysical_values: bool = True,
     ) -> "AirFRANSSample":
-        pv_meshes = AirFRANSDataSet.load_pyvista_meshes(sample_path)
+        ### Load meshes and convert to Mesh immediately
+        sample_dir = Path(sample_path)
+        base = sample_dir.name
+        mesh_paths = {
+            "freestream": sample_dir / f"{base}_freestream.vtp",
+            "airfoil": sample_dir / f"{base}_aerofoil.vtp",
+            "internal": sample_dir / f"{base}_internal.vtu",
+        }
+        for path in mesh_paths.values():
+            if not path.exists():
+                raise FileNotFoundError(f"Missing required file: {path}")
 
-        # Project 3D boundary meshes to 2D (drop z axis, keep x and y).
-        # transform_cell_data=True projects vector cell data (e.g., velocity
-        # "U") from 3D to 2D alongside the geometry.
         freestream = project(
-            from_pyvista(pv_meshes["freestream"], manifold_dim=1),
+            from_pyvista(pv.read(mesh_paths["freestream"]), manifold_dim=1),
             keep_dims=[0, 1],
             transform_cell_data=True,
         )
         airfoil = project(
-            from_pyvista(pv_meshes["airfoil"], manifold_dim=1),
+            from_pyvista(pv.read(mesh_paths["airfoil"]), manifold_dim=1),
             keep_dims=[0, 1],
         )
-        internal = pv_meshes["internal"]
+        internal = project(
+            from_pyvista(pv.read(mesh_paths["internal"])),
+            keep_dims=[0, 1],
+            transform_point_data=True,
+        )
 
-        def get(
-            fieldname: str, preference: Literal["point", "cell"] = "point"
-        ) -> torch.Tensor:
-            if fieldname == "points":
-                array = internal.points
-            else:
-                if preference == "point":
-                    array = internal.point_data[fieldname]
-                elif preference == "cell":
-                    array = internal.cell_data[fieldname]
-                else:
-                    raise ValueError(f"Invalid preference: {preference}")
-            tensor = torch.tensor(array, dtype=torch.float32)
-            indices = tuple([slice(None)] + [slice(None, 2)] * (tensor.ndim - 1))
-            return tensor[indices]
-
-        # Compute freestream scaling from the (already-projected) 2D velocity
+        ### Freestream scaling
         U_inf = freestream.cell_data["U"].mean(dim=0)
         U_inf_magnitude = torch.norm(U_inf)
         q_inf = 0.5 * RHO * U_inf_magnitude**2
 
-        # Targets from internal volume mesh
-        U = get("U")
+        ### Nondimensional fields from the internal volume mesh
+        U = internal.point_data["U"]
+        p = internal.point_data["p"]
+        nut = internal.point_data["nut"]
         U_over_U_inf = U / U_inf_magnitude
         q = q_inf * torch.sum(U_over_U_inf**2, dim=-1)
-        p = get("p")
         C_p = p / q_inf
         C_pt = (p + q) / q_inf
-        nut = get("nut")
         chord = 1.0
 
-        ### [Assemble the AirFRANSSample]
-        airfoil_for_model = Mesh(points=airfoil.points, cells=airfoil.cells)
-        prediction_points = get("points")
         output_dict = TensorDict(
             {
                 "U/|U_inf|": U_over_U_inf,
@@ -268,36 +261,26 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 "C_pt": C_pt,
                 "ln(1+nut/nu)": torch.log1p(nut / NU),
             },
-            batch_size=torch.Size([len(prediction_points)]),
+            batch_size=torch.Size([internal.n_points]),
         )
 
-        ### [Adds the pressure gradient vector field]
-        # Compute gradient on cells (more stable than on points)
-        internal.cell_data["C_p"] = internal.cell_data["p"] / q_inf.item()
-        mesh_with_grad = internal.compute_derivative(
-            scalars="C_p", gradient=True, preference="cell"
-        ).cell_data_to_point_data()
-        grad_C_p = (
-            torch.tensor(
-                mesh_with_grad.point_data["gradient"][:, :2], dtype=torch.float32
-            )
-            * chord  # Nondimensionalizes
-        )
-
-        ### Remove non-physical pressure gradients, which come from extremely fine wall-normal resolution and floating-point error.
+        ### Pressure gradient via Mesh calculus
+        grad_C_p = compute_gradient_points_lsq(mesh=internal, point_values=C_p) * chord
         grad_C_p_mag = torch.norm(grad_C_p, dim=-1)
         grad_C_p[grad_C_p_mag > 20] = torch.nan
         output_dict["∇C_p*chord"] = grad_C_p
 
-        ### [Adds local forces]
-        airfoil_point_normals = AirFRANSDataSet.compute_airfoil_point_normals(
-            internal=internal, airfoil=pv_meshes["airfoil"]
-        )
-        velocity_gradient_tensor = torch.tensor(
-            internal.compute_derivative(scalars="U", gradient="jacobian")
-            .point_data["jacobian"]
-            .reshape(-1, 3, 3)[:, :2, :2],
-            dtype=torch.float32,
+        ### Airfoil surface normals via Mesh.point_normals + nearest-vertex lookup
+        point_is_on_airfoil = internal.point_data["implicit_distance"] == 0
+        nearest_airfoil_idx = torch.cdist(
+            internal.points, airfoil.points
+        ).argmin(dim=1)
+        airfoil_point_normals = -1 * airfoil.point_normals[nearest_airfoil_idx]
+        airfoil_point_normals[~point_is_on_airfoil] = torch.nan
+
+        ### Local forces from velocity gradient (Jacobian) via Mesh calculus
+        velocity_gradient_tensor = compute_gradient_points_lsq(
+            mesh=internal, point_values=U,
         )
         strain_rate_tensor = 0.5 * (
             velocity_gradient_tensor + velocity_gradient_tensor.transpose(1, 2)
@@ -320,14 +303,11 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 )
             output_dict[non_physical_C_pt] = torch.nan
 
-        ### Triangulate internal mesh to preserve cell connectivity for visualization
-        pv_trimesh = internal.triangulate()
-        interior_cells = torch.tensor(pv_trimesh.cells_dict[5], dtype=torch.long)
-
+        airfoil_for_model = Mesh(points=airfoil.points, cells=airfoil.cells)
         return AirFRANSSample(
             interior_mesh=Mesh(
-                points=prediction_points,
-                cells=interior_cells,
+                points=internal.points,
+                cells=internal.cells,
                 point_data=output_dict,
                 global_data=TensorDict({
                     "U_inf": U_inf,
@@ -351,65 +331,6 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
             ),
             batch_size=torch.Size([]),
         )
-
-    @staticmethod
-    def compute_airfoil_point_normals(
-        internal: pv.UnstructuredGrid | pv.PolyData, airfoil: pv.PolyData
-    ) -> torch.Tensor:
-        point_is_on_airfoil = internal.point_data["implicit_distance"] == 0
-        airfoil_point_normals = torch.tensor(
-            internal.sample(
-                target=airfoil,
-                snap_to_closest_point=True,
-            )["Normals"][:, :2]
-            * -1,  # Oriented so that they point outwards (i.e., into the fluid domain)
-            dtype=torch.float32,
-        )
-        airfoil_point_normals[~point_is_on_airfoil] = torch.nan
-        return airfoil_point_normals
-
-    @staticmethod
-    def load_pyvista_meshes(sample_path: Path) -> dict[str, pv.PolyData]:
-        """Load PyVista meshes for a given AirFRANS sample.
-
-        Loads the three required mesh files for an AirFRANS sample: freestream boundary,
-        airfoil boundary, and internal volume mesh. The meshes are expected to follow
-        the standard AirFRANS naming convention.
-
-        Args:
-            sample_path: Path to the sample directory containing the mesh files.
-                Expected files are:
-                - {sample_name}_freestream.vtp: Freestream boundary mesh
-                - {sample_name}_aerofoil.vtp: Airfoil boundary mesh
-                - {sample_name}_internal.vtu: Internal volume mesh
-
-        Returns:
-            Dictionary mapping mesh names to loaded PyVista mesh objects:
-            - "freestream": Freestream boundary mesh (PolyData)
-            - "airfoil": Airfoil boundary mesh (PolyData)
-            - "internal": Internal volume mesh (UnstructuredGrid)
-
-        Raises:
-            FileNotFoundError: If any of the required mesh files are missing.
-
-        Note:
-            The sample directory name is used as the base name for constructing
-            the expected mesh file names.
-        """
-        sample_dir = Path(sample_path)
-        base = sample_dir.name
-
-        mesh_paths = {
-            "freestream": sample_dir / f"{base}_freestream.vtp",
-            "airfoil": sample_dir / f"{base}_aerofoil.vtp",
-            "internal": sample_dir / f"{base}_internal.vtu",
-        }
-
-        for f in mesh_paths.values():
-            if not f.exists():
-                raise FileNotFoundError(f"Missing required file: {f}")
-
-        return {k: pv.read(v) for k, v in mesh_paths.items()}
 
     @staticmethod
     def postprocess(
