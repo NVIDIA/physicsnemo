@@ -16,12 +16,11 @@
 
 """Training utilities for the GLOBE AirFRANS example.
 
-Contains helpers for device transfer, distributed reduction, checkpointing,
-hyperparameter logging, MLflow metric sanitization, and signal handling.
+Contains helpers for hyperparameter logging, MLflow metric sanitization,
+and signal handling.
 """
 
 import inspect
-import re
 import signal
 from collections.abc import Callable
 from functools import cache
@@ -106,155 +105,6 @@ def get_physicsnemo_pkg_info() -> dict[str, str | None]:
         "version": getattr(physicsnemo, "__version__", None),
         "git_hash": git_hash,
     }
-
-
-### [Checkpoint management] ###############################################
-
-
-def extract_epoch(path: Path) -> int | None:
-    """Extract epoch number from a checkpoint filename ``ClassName.<epoch>.pt``.
-
-    Args:
-        path: Checkpoint file path.
-
-    Returns:
-        Epoch integer, or ``None`` if the filename doesn't match.
-
-    Examples:
-        >>> extract_epoch(Path("Model.100.pt"))
-        100
-        >>> extract_epoch(Path("dir/MyModel.42.pt"))
-        42
-        >>> extract_epoch(Path("invalid_name.pt"))
-    """
-    match = re.match(r".*\.(\d+)\.pt$", path.name)
-    return int(match.group(1)) if match else None
-
-
-def get_latest_checkpoint_path(
-    output_dir: Path, only_use_best: bool = False
-) -> Path | None:
-    """Find the checkpoint with the highest epoch number in *output_dir*.
-
-    Searches ``models/`` and ``models/best_model/`` subdirectories for
-    ``*.pt`` files and returns the one with the highest epoch number
-    (extracted from the filename).
-
-    Args:
-        output_dir: Root output directory containing model checkpoints.
-        only_use_best: Only consider checkpoints in ``models/best_model/``.
-
-    Returns:
-        Path to the latest checkpoint, or ``None`` if none are found.
-    """
-    models_dir = output_dir / "models"
-    best_model_dir = models_dir / "best_model"
-
-    checkpoint_dirs = [best_model_dir]
-    if not only_use_best:
-        checkpoint_dirs.append(models_dir)
-
-    checkpoint_paths: list[Path] = []
-    for directory in checkpoint_dirs:
-        if directory.is_dir():
-            checkpoint_paths.extend(directory.glob("*.pt"))
-
-    if not checkpoint_paths:
-        return None
-
-    def sort_key(p: Path) -> int:
-        epoch = extract_epoch(p)
-        return -1 if epoch is None else epoch
-
-    return max(checkpoint_paths, key=sort_key)
-
-
-def save_training_checkpoint(
-    save_dir: Path,
-    epoch: int,
-    model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer,
-    scheduler: torch.optim.lr_scheduler.LRScheduler,
-    scaler: torch.amp.GradScaler,
-    *,
-    extra_state: dict[str, Any] | None = None,
-    mlflow_run_id: str | None = None,
-    keep_only_latest: bool = False,
-) -> Path:
-    """Save a training checkpoint to disk.
-
-    The checkpoint file is named ``{ModelClass}.{epoch}.pt`` and contains
-    model, optimizer, scheduler, and scaler state dicts, plus any caller-
-    provided extra state (e.g. ``best_loss``, ``mlflow_run_id``).
-
-    Args:
-        save_dir: Directory to write the checkpoint into.
-        epoch: Current epoch number (used in the filename).
-        model: The unwrapped (non-DDP) model.
-        optimizer: Optimizer whose state is saved.
-        scheduler: Learning-rate scheduler whose state is saved.
-        scaler: AMP gradient scaler whose state is saved.
-        extra_state: Additional key-value pairs to include in the
-            checkpoint dict (e.g. ``{"best_loss": 0.5}``).
-        mlflow_run_id: Active MLflow run ID, persisted so a resumed
-            job can reopen the same run.
-        keep_only_latest: If True, delete all other ``.pt`` files in
-            *save_dir* after saving.
-
-    Returns:
-        Path to the saved checkpoint file.
-    """
-    checkpoint_path = save_dir / f"{model.__class__.__name__}.{epoch:d}.pt"
-    state: dict[str, Any] = {
-        "epoch": epoch,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "scheduler_state_dict": scheduler.state_dict(),
-        "scaler_state_dict": scaler.state_dict(),
-        "mlflow_run_id": mlflow_run_id,
-    }
-    if extra_state:
-        state.update(extra_state)
-    torch.save(state, checkpoint_path)
-    if keep_only_latest:
-        for old in save_dir.glob("*.pt"):
-            if old != checkpoint_path:
-                old.unlink()
-    return checkpoint_path
-
-
-def load_training_checkpoint(
-    checkpoint_path: Path,
-    model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer,
-    scheduler: torch.optim.lr_scheduler.LRScheduler,
-    scaler: torch.amp.GradScaler,
-    device: torch.device,
-) -> dict[str, Any]:
-    """Load a training checkpoint and restore stateful objects in-place.
-
-    Restores the model, optimizer, scheduler, and scaler state dicts from
-    the checkpoint. Returns the full checkpoint dict so the caller can
-    extract extra fields (``epoch``, ``mlflow_run_id``, ``best_loss``, etc.).
-
-    Args:
-        checkpoint_path: Path to the ``.pt`` checkpoint file.
-        model: Model to load weights into (should be the unwrapped model).
-        optimizer: Optimizer to restore.
-        scheduler: Scheduler to restore.
-        scaler: AMP scaler to restore.
-        device: Device to map tensors to.
-
-    Returns:
-        The raw checkpoint dict. Standard keys include ``"epoch"`` and
-        ``"mlflow_run_id"``; extra keys depend on what the saver stored.
-    """
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-    scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-    scaler.load_state_dict(checkpoint["scaler_state_dict"])
-    return checkpoint
 
 
 ### [Hyperparameter logging] ##############################################

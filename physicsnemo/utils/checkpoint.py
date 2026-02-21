@@ -195,7 +195,7 @@ def _unique_model_names(
 
 
 def save_checkpoint(
-    path: str,
+    path: Path | str,
     models: Union[torch.nn.Module, List[torch.nn.Module], None] = None,
     optimizer: Union[optimizer, None] = None,
     scheduler: Union[scheduler, None] = None,
@@ -229,7 +229,7 @@ def save_checkpoint(
 
     Parameters
     ----------
-    path : str
+    path : Path | str
         Path to save the training checkpoint
     models : Union[torch.nn.Module, List[torch.nn.Module], None], optional
         A single or list of PyTorch models, by default None
@@ -246,6 +246,7 @@ def save_checkpoint(
     metadata : Optional[Dict[str, Any]], optional
         Additional metadata to save, by default None
     """
+    path = str(path)
     protocol = fsspec.utils.get_protocol(path)
     fs = fsspec.filesystem(protocol)
     # Create checkpoint directory if it does not exist.
@@ -322,7 +323,7 @@ def save_checkpoint(
 
 
 def load_checkpoint(
-    path: str,
+    path: Path | str,
     models: Union[torch.nn.Module, List[torch.nn.Module], None] = None,
     optimizer: Union[optimizer, None] = None,
     scheduler: Union[scheduler, None] = None,
@@ -339,7 +340,7 @@ def load_checkpoint(
 
     Parameters
     ----------
-    path : str
+    path : Path | str
         Path to training checkpoint
     models : Union[torch.nn.Module, List[torch.nn.Module], None], optional
         A single or list of PyTorch models, by default None
@@ -362,6 +363,7 @@ def load_checkpoint(
     int
         Loaded epoch
     """
+    path = str(path)
     fs = fsspec.filesystem(fsspec.utils.get_protocol(path))
     # Check if checkpoint directory exists
     if fs.exists(path):
@@ -459,12 +461,12 @@ def load_checkpoint(
     return epoch
 
 
-def get_checkpoint_dir(base_dir: str, model_name: str) -> str:
+def get_checkpoint_dir(base_dir: Path | str, model_name: str) -> str:
     """Get a checkpoint directory based on a given base directory and model name
 
     Parameters
     ----------
-    base_dir : str
+    base_dir : Path | str
         Path to the base directory where checkpoints are stored
     model_name: str, optional
         Name of the model which is generating the checkpoint
@@ -474,6 +476,7 @@ def get_checkpoint_dir(base_dir: str, model_name: str) -> str:
     str
         Checkpoint directory
     """
+    base_dir = str(base_dir)
     top_level_dir = f"checkpoints_{model_name}"
     protocol = fsspec.utils.get_protocol(base_dir)
     if protocol == "msc":

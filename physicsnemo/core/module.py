@@ -435,7 +435,7 @@ class Module(torch.nn.Module):
 
     def save(
         self,
-        file_name: Union[str, None] = None,
+        file_name: Path | str | None = None,
         verbose: bool = False,
         legacy_format: bool = False,
     ) -> None:
@@ -444,7 +444,7 @@ class Module(torch.nn.Module):
 
         Parameters
         ----------
-        file_name : Union[str,None], optional, default=None
+        file_name : Path | str | None, optional, default=None
             File name to save the model checkpoint to. When ``None`` is provided it will default to
             the model's class name.
         verbose : bool, optional, default=False
@@ -537,10 +537,12 @@ class Module(torch.nn.Module):
 
             return
 
-        if file_name is not None and not file_name.endswith(self._file_extension):
-            raise ValueError(
-                f"File name must end with {self._file_extension} extension"
-            )
+        if file_name is not None:
+            file_name = str(file_name)
+            if not file_name.endswith(self._file_extension):
+                raise ValueError(
+                    f"File name must end with {self._file_extension} extension"
+                )
 
         # Strip out torch dynamo wrapper
         if isinstance(self, torch._dynamo.eval_frame.OptimizedModule):
@@ -673,7 +675,7 @@ class Module(torch.nn.Module):
 
     def load(
         self,
-        file_name: str,
+        file_name: Path | str,
         map_location: Union[None, str, torch.device] = None,
         strict: bool = True,
     ) -> None:
@@ -686,7 +688,7 @@ class Module(torch.nn.Module):
 
         Parameters
         ----------
-        file_name : str
+        file_name : Path | str
             Checkpoint file name. Must be a valid '.mdlus' checkpoint file.
         map_location : Union[None, str, torch.device], optional, default=None
             Map location for loading the model weights, ``None`` will use the model's device.
@@ -727,6 +729,7 @@ class Module(torch.nn.Module):
             # Or load to a specific GPU
             model.load("FullyConnected.mdlus", map_location=torch.device("cuda:0"))
         """
+        file_name = str(file_name)
 
         # Download and cache the checkpoint file if needed
         cached_file_name = _download_cached(file_name)
@@ -785,7 +788,7 @@ class Module(torch.nn.Module):
     @classmethod
     def from_checkpoint(
         cls,
-        file_name: str,
+        file_name: Path | str,
         override_args: Optional[Dict[str, Any]] = None,
         strict: bool = True,
     ) -> "Module":
@@ -795,7 +798,7 @@ class Module(torch.nn.Module):
 
         Parameters
         ----------
-        file_name : str
+        file_name : Path | str
             Checkpoint file name. Must be a valid '.mdlus' checkpoint file.
         override_args : Optional[Dict[str, Any]], optional, default=None
             Dictionary of arguments to override the ``__init__`` method's
@@ -1018,6 +1021,8 @@ class Module(torch.nn.Module):
             # Instantiate the module
             model = cls_in.instantiate(args_ptr)
             return model
+
+        file_name = str(file_name)
 
         # Download and cache the checkpoint file if needed
         cached_file_name = _download_cached(file_name)

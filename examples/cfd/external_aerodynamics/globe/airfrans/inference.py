@@ -23,10 +23,8 @@ import torch
 import yaml
 
 from dataset import AirFRANSDataSet
-from utilities import (
-    disable_autotune_printing,
-    get_latest_checkpoint_path,
-)
+from utilities import disable_autotune_printing
+
 from physicsnemo.experimental.models.globe.model import GLOBE
 
 disable_autotune_printing()
@@ -70,14 +68,11 @@ model = GLOBE(  # ty: ignore[missing-argument]
     **hyperparameters["model"],
 ).to(device)
 
-previous_checkpoint: Path | None = get_latest_checkpoint_path(output_dir=output_dir)
-if previous_checkpoint:
-    print(f"Loading checkpoint {previous_checkpoint.name!r}...")
-    model.load_state_dict(
-        torch.load(previous_checkpoint, map_location=device)["model_state_dict"]
-    )
-else:
-    raise RuntimeError("No checkpoint found in output directory!")
+best_model_path = output_dir / "best_model.mdlus"
+if not best_model_path.exists():
+    raise RuntimeError(f"No best model found at {best_model_path}")
+print(f"Loading best model from {best_model_path.name!r}...")
+model.load(best_model_path)
 
 # model = torch.compile(model)
 

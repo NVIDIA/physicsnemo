@@ -22,7 +22,7 @@ from datetime import datetime
 from itertools import count
 from pathlib import Path
 from time import perf_counter
-from typing import Literal
+from typing import Any, Literal
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -36,18 +36,16 @@ from torch.profiler import record_function
 from tqdm import tqdm
 from utilities import (
     disable_autotune_printing,
-    get_latest_checkpoint_path,
     get_physicsnemo_pkg_info,
     install_graceful_shutdown,
-    load_training_checkpoint,
     log_hyperparameters,
     sanitize_metric_name,
-    save_training_checkpoint,
 )
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.optim import CombinedOptimizer
+from physicsnemo.utils.checkpoint import load_checkpoint, save_checkpoint
 
 mpl.use("agg")  # Allows headless plotting
 disable_autotune_printing()  # Silences the verbose output of `torch.compile(..., mode="max-autotune")`.
@@ -156,14 +154,13 @@ def main(
     ### [Output Directory Setup]
     torch_compile_cache_dir = output_dir / "torch_compile_cache"
     torch_compile_cache = torch_compile_cache_dir / f"rank_{dist.rank}.compile_cache"
-    models_dir = output_dir / "models"
-    best_model_dir = models_dir / "best_model"
+    checkpoint_dir = output_dir / "checkpoints"
+    best_model_path = output_dir / "best_model.mdlus"
     profiling_dir = output_dir / "profiling"
 
     if dist.rank == 0:
         for directory in (
-            models_dir,
-            best_model_dir,
+            checkpoint_dir,
             torch_compile_cache_dir,
             profiling_dir,
         ):
@@ -298,27 +295,26 @@ def main(
 
     ### [Checkpoint Save/Load]
     mlflow_run_id: str | None = None
-    previous_checkpoint: Path | None = get_latest_checkpoint_path(output_dir=output_dir)
-    if previous_checkpoint:
+    metadata_dict: dict[str, Any] = {}
+    epoch = load_checkpoint(
+        checkpoint_dir,
+        models=base_model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        scaler=scaler,
+        metadata_dict=metadata_dict,
+        device=dist.device,
+    )
+    if epoch > 0:
         if dist.rank == 0:
-            print(f"Resuming training from checkpoint: {previous_checkpoint.name!r}")
-        ckpt = load_training_checkpoint(
-            previous_checkpoint,
-            base_model,
-            optimizer,
-            scheduler,
-            scaler,
-            device,
-        )
-        epoch: int = ckpt["epoch"]
-        best_loss = ckpt.get("best_loss", float("inf"))
-        last_image_epoch = ckpt.get("last_image_epoch", -float("inf"))
-        last_image_loss = ckpt.get("last_image_loss", float("inf"))
-        mlflow_run_id = ckpt.get("mlflow_run_id")
+            print(f"Resuming training from epoch {epoch}")
+        best_loss = metadata_dict.get("best_loss", float("inf"))
+        last_image_epoch = metadata_dict.get("last_image_epoch", -float("inf"))
+        last_image_loss = metadata_dict.get("last_image_loss", float("inf"))
+        mlflow_run_id = metadata_dict.get("mlflow_run_id")
     else:
         if dist.rank == 0:
             print("Starting training from scratch.")
-        epoch = 0
         best_loss = float("inf")
         last_image_epoch = -float("inf")
         last_image_loss = float("inf")
@@ -535,44 +531,32 @@ def main(
             ### [Logging and Checkpointing]
             if dist.rank == 0:
                 ### [Checkpointing]
-                _ckpt_extra = {
-                    "best_loss": best_loss,
-                    "last_image_epoch": last_image_epoch,
-                    "last_image_loss": last_image_loss,
-                }
-                _ckpt_run_id = (
-                    mlflow.active_run().info.run_id
-                    if use_mlflow and mlflow.active_run()
-                    else None
-                )
                 if epoch % (25 * dist.world_size) == 0:
-                    save_training_checkpoint(
-                        models_dir,
-                        epoch,
-                        base_model,
-                        optimizer,
-                        scheduler,
-                        scaler,
-                        extra_state=_ckpt_extra,
-                        mlflow_run_id=_ckpt_run_id,
-                        keep_only_latest=True,
+                    save_checkpoint(
+                        checkpoint_dir,
+                        models=base_model,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        scaler=scaler,
+                        epoch=epoch,
+                        metadata={
+                            "best_loss": best_loss,
+                            "last_image_epoch": last_image_epoch,
+                            "last_image_loss": last_image_loss,
+                            "mlflow_run_id": (
+                                mlflow.active_run().info.run_id
+                                if use_mlflow and mlflow.active_run()
+                                else None
+                            ),
+                        },
                     )
                 if valid_loss < best_loss:
                     best_loss = valid_loss
-                    _ckpt_extra["best_loss"] = best_loss
-                    ckpt_path = save_training_checkpoint(
-                        best_model_dir,
-                        epoch,
-                        base_model,
-                        optimizer,
-                        scheduler,
-                        scaler,
-                        extra_state=_ckpt_extra,
-                        mlflow_run_id=_ckpt_run_id,
-                        keep_only_latest=True,
-                    )
+                    base_model.save(best_model_path)
                     if use_mlflow:
-                        mlflow.log_artifact(str(ckpt_path), artifact_path="best_model")
+                        mlflow.log_artifact(
+                            str(best_model_path), artifact_path="best_model"
+                        )
 
                 ### [MLflow Scalars Logging]
                 if use_mlflow:
@@ -635,23 +619,23 @@ def main(
             if shutdown_requested():
                 if dist.rank == 0:
                     print("Quitting due to shutdown request.")
-                    save_training_checkpoint(
-                        models_dir,
-                        epoch,
-                        base_model,
-                        optimizer,
-                        scheduler,
-                        scaler,
-                        extra_state={
+                    save_checkpoint(
+                        checkpoint_dir,
+                        models=base_model,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        scaler=scaler,
+                        epoch=epoch,
+                        metadata={
                             "best_loss": best_loss,
                             "last_image_epoch": last_image_epoch,
                             "last_image_loss": last_image_loss,
+                            "mlflow_run_id": (
+                                mlflow.active_run().info.run_id
+                                if use_mlflow and mlflow.active_run()
+                                else None
+                            ),
                         },
-                        mlflow_run_id=(
-                            mlflow.active_run().info.run_id
-                            if use_mlflow and mlflow.active_run()
-                            else None
-                        ),
                     )
                 break
 
