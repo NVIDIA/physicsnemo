@@ -97,8 +97,8 @@ class GLOBE(Module):
         Sequence of identifiers for reference length scales
         (e.g., ``["viscous_length", "chord_length"]``). Each creates a separate
         kernel branch in the multiscale composition.
-    reference_area : torch.Tensor
-        Scalar tensor used to nondimensionalize face areas. Typically a characteristic
+    reference_area : float
+        Scalar used to nondimensionalize face areas. Typically a characteristic
         area of the problem (e.g., chord^2 for airfoils).
     n_global_scalars : int
         Number of global scalar features (e.g., Reynolds number, Mach number). These
@@ -182,7 +182,7 @@ class GLOBE(Module):
     ...     boundary_condition_n_source_scalars={"no_slip": 0, "freestream": 0},
     ...     boundary_condition_n_source_vectors={"no_slip": 0, "freestream": 0},
     ...     reference_length_names=["delta_FS", "chord"],
-    ...     reference_area=torch.tensor(1.0),
+    ...     reference_area=1.0,
     ...     n_global_scalars=0,
     ...     n_global_vectors=0,
     ... )
@@ -201,7 +201,7 @@ class GLOBE(Module):
         boundary_condition_n_source_scalars: dict[str, int],
         boundary_condition_n_source_vectors: dict[str, int],
         reference_length_names: Sequence[str],
-        reference_area: Float[torch.Tensor, ""],
+        reference_area: float,
         n_global_scalars: int,
         n_global_vectors: int,
         n_communication_hyperlayers: int = 2,
@@ -239,7 +239,7 @@ class GLOBE(Module):
         self.boundary_condition_n_source_scalars = boundary_condition_n_source_scalars
         self.boundary_condition_n_source_vectors = boundary_condition_n_source_vectors
         self.reference_length_names = reference_length_names
-        self.register_buffer("reference_area", reference_area)
+        self.register_buffer("reference_area", torch.tensor(reference_area))
         self.n_global_scalars = n_global_scalars
         self.n_global_vectors = n_global_vectors
         self.n_communication_hyperlayers = n_communication_hyperlayers

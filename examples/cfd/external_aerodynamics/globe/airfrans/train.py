@@ -216,7 +216,7 @@ def main(
         boundary_condition_n_source_scalars={"no_slip": 0},
         boundary_condition_n_source_vectors={"no_slip": 0},
         reference_length_names=["chord", "delta_FS"],
-        reference_area=torch.tensor(1.0, device=device),
+        reference_area=1.0,
         n_global_scalars=0,
         n_global_vectors=1,
         n_communication_hyperlayers=n_communication_hyperlayers,
