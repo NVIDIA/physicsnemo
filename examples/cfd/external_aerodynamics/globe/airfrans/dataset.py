@@ -115,7 +115,7 @@ NU = 1.56e-5  # m^2/s
 @tensorclass
 class AirFRANSSample:
     interior_mesh: Mesh  # Point cloud of the volume mesh
-    boundary_meshes: dict[str, Mesh]  # dict of boundary mesh names to Mesh objects
+    boundary_meshes: TensorDict  # BC name -> Mesh; TensorDict so .to(device) transfers them
     reference_lengths: TensorDict  # dict of reference length names to scalar tensors
     global_scalars: TensorDict  # dict of global scalar names to scalar tensors
     global_vectors: TensorDict  # dict of global vector names to vector tensors
@@ -312,7 +312,9 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 cells=torch.zeros(0, 1, dtype=torch.long),
                 point_data=output_dict,
             ),
-            boundary_meshes={"no_slip": airfoil_for_model},
+            boundary_meshes=TensorDict(
+                {"no_slip": airfoil_for_model}, batch_size=[]
+            ),
             reference_lengths=TensorDict(
                 {
                     "chord": torch.as_tensor(chord),
