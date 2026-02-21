@@ -30,7 +30,7 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.calculus import compute_gradient_points_lsq
+from physicsnemo.mesh.calculus import compute_point_derivatives
 from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.projections import project
 from physicsnemo.utils.logging import PythonLogger
@@ -211,7 +211,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         sample_path: Path,
         patch_out_nonphysical_values: bool = True,
     ) -> "AirFRANSSample":
-        ### Load meshes and convert to Mesh immediately
+        ### Load meshes and convert to 2D Mesh objects
         sample_dir = Path(sample_path)
         base = sample_dir.name
         mesh_paths = {
@@ -238,62 +238,59 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
             transform_point_data=True,
         )
 
-        ### Freestream scaling
-        U_inf = freestream.cell_data["U"].mean(dim=0)
+        ### Reference quantities from freestream boundary
+        U_inf = freestream.cell_data["U"].mean(dim=0)  # (2,)
         U_inf_magnitude = torch.norm(U_inf)
         q_inf = 0.5 * RHO * U_inf_magnitude**2
-
-        ### Nondimensional fields from the internal volume mesh
-        U = internal.point_data["U"]
-        p = internal.point_data["p"]
-        nut = internal.point_data["nut"]
-        U_over_U_inf = U / U_inf_magnitude
-        q = q_inf * torch.sum(U_over_U_inf**2, dim=-1)
-        C_p = p / q_inf
-        C_pt = (p + q) / q_inf
         chord = 1.0
 
-        output_dict = TensorDict(
+        ### Nondimensional volume fields (from raw simulation data on internal mesh)
+        U = internal.point_data["U"]  # (n_points, 2)
+        p = internal.point_data["p"]  # (n_points,)
+        nut = internal.point_data["nut"]  # (n_points,)
+
+        U_over_U_inf = U / U_inf_magnitude
+        C_p = p / q_inf
+        q = q_inf * U_over_U_inf.square().sum(dim=-1)
+        C_pt = (p + q) / q_inf
+
+        ### Gradient fields via Mesh calculus
+        mesh_with_grads = compute_point_derivatives(mesh=internal, keys=["p", "U"])
+        grad_C_p = mesh_with_grads.point_data["p_gradient"] * (chord / q_inf)
+        grad_C_p[grad_C_p.norm(dim=-1) > 20] = torch.nan
+
+        velocity_jacobian = mesh_with_grads.point_data["U_gradient"]  # (n_points, 2, 2)
+
+        ### Surface force fields
+        point_is_on_airfoil = internal.point_data["implicit_distance"] == 0
+        nearest_airfoil_idx = torch.cdist(
+            internal.points, airfoil.points,
+        ).argmin(dim=1)
+        airfoil_normals = -1 * airfoil.point_normals[nearest_airfoil_idx]
+        airfoil_normals[~point_is_on_airfoil] = torch.nan
+
+        strain_rate = 0.5 * (velocity_jacobian + velocity_jacobian.transpose(1, 2))
+        wall_shear_stress = 2 * NU * strain_rate
+        wall_shear_force = torch.einsum(
+            "pij,pj->pi", wall_shear_stress, airfoil_normals,
+        )
+        pressure_force = -p[:, None] * airfoil_normals
+
+        ### Assemble output fields
+        output_fields = TensorDict(
             {
                 "U/|U_inf|": U_over_U_inf,
                 "ΔU/|U_inf|": (U - U_inf[None, :]) / U_inf_magnitude,
                 "C_p": C_p,
                 "C_pt": C_pt,
                 "ln(1+nut/nu)": torch.log1p(nut / NU),
+                "∇C_p*chord": grad_C_p,
+                "C_F,shear": wall_shear_force / q_inf,
+                "C_F,pressure": pressure_force / q_inf,
+                "C_F": (wall_shear_force + pressure_force) / q_inf,
             },
-            batch_size=torch.Size([internal.n_points]),
+            batch_size=[internal.n_points],
         )
-
-        ### Pressure gradient via Mesh calculus
-        grad_C_p = compute_gradient_points_lsq(mesh=internal, point_values=C_p) * chord
-        grad_C_p_mag = torch.norm(grad_C_p, dim=-1)
-        grad_C_p[grad_C_p_mag > 20] = torch.nan
-        output_dict["∇C_p*chord"] = grad_C_p
-
-        ### Airfoil surface normals via Mesh.point_normals + nearest-vertex lookup
-        point_is_on_airfoil = internal.point_data["implicit_distance"] == 0
-        nearest_airfoil_idx = torch.cdist(
-            internal.points, airfoil.points
-        ).argmin(dim=1)
-        airfoil_point_normals = -1 * airfoil.point_normals[nearest_airfoil_idx]
-        airfoil_point_normals[~point_is_on_airfoil] = torch.nan
-
-        ### Local forces from velocity gradient (Jacobian) via Mesh calculus
-        velocity_gradient_tensor = compute_gradient_points_lsq(
-            mesh=internal, point_values=U,
-        )
-        strain_rate_tensor = 0.5 * (
-            velocity_gradient_tensor + velocity_gradient_tensor.transpose(1, 2)
-        )
-        wall_shear_stress_tensor = 2 * NU * strain_rate_tensor
-        wall_shear_force = torch.einsum(
-            "pij,pj->pi", wall_shear_stress_tensor, airfoil_point_normals
-        )
-        pressure_force = -1 * p[:, None] * airfoil_point_normals
-        net_force = wall_shear_force + pressure_force
-        output_dict["C_F,shear"] = wall_shear_force / q_inf
-        output_dict["C_F,pressure"] = pressure_force / q_inf
-        output_dict["C_F"] = net_force / q_inf
 
         if patch_out_nonphysical_values:
             non_physical_C_pt = C_pt > 1.02
@@ -301,21 +298,21 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 logger.warning(
                     f"In {sample_path.name}, {non_physical_C_pt.sum() / len(C_pt):.2%} of points had non-physical total pressures and were patched out."
                 )
-            output_dict[non_physical_C_pt] = torch.nan
+            output_fields[non_physical_C_pt] = torch.nan
 
-        airfoil_for_model = Mesh(points=airfoil.points, cells=airfoil.cells)
         return AirFRANSSample(
             interior_mesh=Mesh(
                 points=internal.points,
                 cells=internal.cells,
-                point_data=output_dict,
+                point_data=output_fields,
                 global_data=TensorDict({
                     "U_inf": U_inf,
                     "q_inf": q_inf,
                 }),
             ),
             boundary_meshes=TensorDict(
-                {"no_slip": airfoil_for_model}, batch_size=[]
+                {"no_slip": Mesh(points=airfoil.points, cells=airfoil.cells)},
+                batch_size=[],
             ),
             reference_lengths=TensorDict(
                 {
