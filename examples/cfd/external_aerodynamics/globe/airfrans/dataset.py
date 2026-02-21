@@ -32,7 +32,6 @@ from tqdm import tqdm
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.projections import project
-from physicsnemo.nn.functional.equivariant_ops import vector_project
 from physicsnemo.utils.logging import PythonLogger
 
 logger = PythonLogger("globe.airfrans.dataset")
@@ -321,10 +320,19 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 )
             output_dict[non_physical_C_pt] = torch.nan
 
+        ### Triangulate internal mesh to preserve cell connectivity for visualization
+        pv_trimesh = internal.triangulate()
+        interior_cells = torch.tensor(pv_trimesh.cells_dict[5], dtype=torch.long)
+
         return AirFRANSSample(
             interior_mesh=Mesh(
                 points=prediction_points,
+                cells=interior_cells,
                 point_data=output_dict,
+                global_data=TensorDict({
+                    "U_inf": U_inf,
+                    "q_inf": q_inf,
+                }),
             ),
             boundary_meshes=TensorDict(
                 {"no_slip": airfoil_for_model}, batch_size=[]
@@ -405,331 +413,165 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
 
     @staticmethod
     def postprocess(
-        pred_output: TensorDict,
-        sample_path: Path,
-        true_output: TensorDict | None = None,
-        plot: bool = True,
-        plot_with_ground_truth: bool = True,
+        pred_mesh: Mesh,
+        true_mesh: Mesh,
+        *,
+        fields: Sequence[str] | None = None,
         show: bool = True,
-        fields_to_plot: Literal["all", "pred", "true"] | Sequence[str] = "all",
-        linelabels: bool = False,
-    ) -> dict[str, pv.PolyData]:
-        meshes = AirFRANSDataSet.load_pyvista_meshes(sample_path)
-        if true_output is None:
-            true_output = AirFRANSDataSet.preprocess(sample_path).interior_mesh.point_data
+        show_error: bool = True,
+    ) -> Mesh:
+        """Visualize and compare predicted vs. true fields on a combined Mesh.
 
-        raw_pred_keys = set(pred_output.keys())
-        raw_true_keys = set(true_output.keys())
+        Builds a combined Mesh whose ``point_data`` contains nested ``"true"``,
+        ``"pred"``, and ``"error"`` TensorDicts, then renders a subplot grid
+        using :meth:`Mesh.draw`.
 
-        ### Compute freestream quantities
-        U_inf = torch.tensor(
-            meshes["freestream"].point_data["U"][:, :2], dtype=torch.float32
-        ).mean(dim=0)
-        U_inf_magnitude = U_inf.norm(dim=0)
-        q_inf = 0.5 * RHO * U_inf_magnitude.square()
+        Args:
+            pred_mesh: Point-cloud Mesh with predicted field values in
+                ``point_data``.
+            true_mesh: Mesh with ground-truth field values in ``point_data``.
+                Should have cell connectivity (from preprocessing) for
+                filled-polygon rendering.
+            fields: Which field names to compare. If ``None``, uses the sorted
+                intersection of pred and true ``point_data`` keys.
+            show: Whether to display the plot via ``plt.show()``.
+            show_error: Whether to include an error row in the subplot grid.
 
-        ### Add in any engineered fields
-        pred_output["U/|U_inf|"] = (
-            pred_output["ΔU/|U_inf|"] + U_inf[None, :] / U_inf_magnitude
+        Returns:
+            Combined Mesh with ``point_data["true"]``, ``point_data["pred"]``,
+            and ``point_data["error"]`` containing the selected fields.
+
+        Raises:
+            ValueError: If pred_mesh and true_mesh have different numbers of
+                points.
+        """
+        import matplotlib as mpl
+        import matplotlib.pyplot as plt
+
+        if pred_mesh.n_points != true_mesh.n_points:
+            raise ValueError(
+                f"Point count mismatch: {pred_mesh.n_points=} != {true_mesh.n_points=}"
+            )
+
+        ### Determine fields to compare
+        if fields is None:
+            fields = sorted(
+                set(pred_mesh.point_data.keys()) & set(true_mesh.point_data.keys())
+            )
+
+        ### Build combined Mesh with nested point_data
+        pred_selected = pred_mesh.point_data.select(*fields)
+        true_selected = true_mesh.point_data.select(*fields)
+        error_data = pred_selected.apply(lambda p, t: p - t, true_selected)
+
+        combined = Mesh(
+            points=true_mesh.points,
+            cells=true_mesh.cells,
+            point_data=TensorDict(
+                {
+                    "true": true_selected,
+                    "pred": pred_selected,
+                    "error": error_data,
+                },
+                batch_size=[true_mesh.n_points],
+            ),
         )
-        pred_output["U"] = pred_output["ΔU/|U_inf|"] * U_inf_magnitude + U_inf[None, :]
-        pred_output["q"] = pred_output["U/|U_inf|"].square().sum(dim=-1) * q_inf
-        if "C_p" not in pred_output:  # Engineers C_p and/or C_pt if needed
-            pred_output["C_p"] = pred_output["C_pt"] - pred_output["q"]
-        elif "C_pt" not in pred_output:
-            pred_output["C_pt"] = pred_output["C_p"] + pred_output["q"]
-        pred_output["p"] = pred_output["C_p"] * q_inf
-        pred_output["pt"] = pred_output["C_pt"] * q_inf
-        pred_output["nut"] = pred_output["ln(1+nut/nu)"].expm1() * NU
 
-        ### Compute surface quantities
-        airfoil_point_normals = AirFRANSDataSet.compute_airfoil_point_normals(
-            internal=meshes["internal"], airfoil=meshes["airfoil"]
+        ### Create subplot grid
+        kind_labels = ["Truth", "Prediction"]
+        kind_keys = ["true", "pred"]
+        if show_error:
+            kind_labels.append("Error")
+            kind_keys.append("error")
+        n_rows, n_cols = len(kind_labels), len(fields)
+
+        fig, axes = plt.subplots(
+            nrows=n_rows,
+            ncols=n_cols,
+            figsize=(4 * n_cols, 3.4 * n_rows),
+            squeeze=False,
         )
-        if "C_F,shear" in pred_output:
-            wall_shear_force_coeff = vector_project(
-                v=pred_output["C_F,shear"],  # ty: ignore[invalid-argument-type]
-                n_hat=airfoil_point_normals,
-            )
-            pressure_force_coeff = (
-                pred_output["C_p"][:, None].neg() * airfoil_point_normals
-            )
-            net_force_coeff = wall_shear_force_coeff + pressure_force_coeff
-            meshes["internal"].point_data["C_F,shear_pred"] = (
-                wall_shear_force_coeff.detach().cpu().numpy()
-            )
-            meshes["internal"].point_data["C_F_pred"] = (
-                net_force_coeff.detach().cpu().numpy()
-            )
 
-        ### Compute integrated forces TODO: implement this; requires voronoi areas...
-        # net_force =
+        for col, field_name in enumerate(fields):
+            ### Compute shared vmin/vmax across truth and prediction
+            true_vals = true_selected[field_name]
+            pred_vals = pred_selected[field_name]
+            is_vector = true_vals.ndim > 1 and true_vals.shape[-1] > 1
+            true_scalars = true_vals.norm(dim=-1) if is_vector else true_vals.reshape(-1)
+            pred_scalars = pred_vals.norm(dim=-1) if is_vector else pred_vals.reshape(-1)
 
-        ### Add fields to the internal volume mesh
-        for k, v in true_output.items():
-            meshes["internal"].point_data[k] = v.detach().cpu().numpy()
-        for k, v in pred_output.items():
-            meshes["internal"].point_data[f"{k}_pred"] = v.detach().cpu().numpy()
+            all_finite = torch.cat([
+                true_scalars[torch.isfinite(true_scalars)],
+                pred_scalars[torch.isfinite(pred_scalars)],
+            ])
+            shared_vmin = all_finite.min().item() if len(all_finite) > 0 else 0.0
+            shared_vmax = all_finite.max().item() if len(all_finite) > 0 else 1.0
+            if shared_vmin == shared_vmax:
+                shared_vmin -= 1e-6
+                shared_vmax += 1e-6
 
-        ### Ensure all vector fields are exactly 2D
-        for k, v in meshes["internal"].point_data.items():
-            if v.ndim == 2 and v.shape[1] == 3:
-                meshes["internal"].point_data[k] = v[:, :2]
+            for row, (label, key) in enumerate(zip(kind_labels, kind_keys)):
+                ax = axes[row, col]
 
-        if plot:
-            import matplotlib as mpl
-            import matplotlib.pyplot as plt
-            import numpy as np
+                if key == "error":
+                    err_vals = error_data[field_name]
+                    if is_vector:
+                        finite_err = err_vals.norm(dim=-1)
+                        finite_err = finite_err[torch.isfinite(finite_err)]
+                        emax = finite_err.max().item() if len(finite_err) > 0 else 1.0
+                        cmap, vmin, vmax = "Reds", 0.0, emax
+                    else:
+                        finite_err = err_vals.reshape(-1)
+                        finite_err = finite_err[torch.isfinite(finite_err)]
+                        emax = finite_err.abs().max().item() if len(finite_err) > 0 else 1.0
+                        cmap, vmin, vmax = "RdBu_r", -emax, emax
+                else:
+                    cmap, vmin, vmax = "turbo", shared_vmin, shared_vmax
 
-            ### Configure matplotlib for better contour visualization
-            mpl.rcParams["contour.negative_linestyle"] = "solid"
-
-            ### Convert the internal volume mesh to a triangulation
-            pv_trimesh = meshes["internal"].triangulate()
-            if not all(pv_trimesh.celltypes == 5):
-                raise ValueError("All cells must be triangles")
-            tri = mpl.tri.Triangulation(  # ty: ignore[unresolved-attribute]
-                np.array(pv_trimesh.points[:, 0], dtype=float),
-                np.array(pv_trimesh.points[:, 1], dtype=float),
-                triangles=np.asarray(pv_trimesh.cells_dict[5], dtype=int),
-            )
-
-            ### Setup plot configuration
-            if fields_to_plot == "all":
-                fields = sorted(list(raw_pred_keys & raw_true_keys))
-            elif fields_to_plot == "pred":
-                fields = sorted(list(raw_pred_keys))
-            elif fields_to_plot == "true":
-                fields = ["U", "p", "nut"]
-            else:
-                fields = fields_to_plot
-            n_cols = len(fields)
-            kinds = (
-                ["Truth", "Prediction", "Error"]
-                if plot_with_ground_truth
-                else ["Prediction"]
-            )
-            n_rows = len(kinds)
-
-            fig, axes = plt.subplots(
-                nrows=n_rows,
-                ncols=n_cols,
-                figsize=(4 * n_cols, 3.4 * n_rows),
-                dpi=600,
-            )
-
-            ### Plot each field
-            for col, field_name in enumerate(fields):
-                truth_values = pv_trimesh.point_data[field_name].astype("float64")
-                pred_values = pv_trimesh.point_data[f"{field_name}_pred"].astype(
-                    "float64"
+                combined.draw(
+                    point_scalars=(key, field_name),
+                    ax=ax,
+                    show=False,
+                    cmap=cmap,
+                    vmin=vmin,
+                    vmax=vmax,
+                    show_edges=False,
                 )
-                error_values = pred_values - truth_values
 
-                def make_scalars(values: np.ndarray) -> np.ndarray:
-                    if values.ndim == 2 and values.shape[-1] > 1:
-                        return np.linalg.norm(values, axis=-1)
-                    else:
-                        return values.reshape(-1)
-
-                truth_scalars = make_scalars(truth_values)
-                pred_scalars = make_scalars(pred_values)
-                error_scalars = make_scalars(error_values)
-
-                for row, kind in enumerate(kinds):
-                    # plt.sca(axes[row, col])  # ty: ignore[invalid-argument-type]
-                    if n_rows * n_cols > 1:
-                        plt.sca(axes.flatten()[row * n_cols + col])  # ty: ignore[invalid-argument-type]
-
-                    values = {
-                        "Truth": truth_values,
-                        "Prediction": pred_values,
-                        "Error": error_values,
-                    }[kind]
-                    scalars = {
-                        "Truth": truth_scalars,
-                        "Prediction": pred_scalars,
-                        "Error": error_scalars,
-                    }[kind]
-
-                    # Determine color limits and colormap
-                    if kind == "Error":
-                        vmax = np.nanmax(np.abs(scalars))
-                        if truth_values.ndim == 1:
-                            vmin = -1 * vmax
-                            cmap = plt.get_cmap("RdBu_r")
-                        else:
-                            vmin = 0
-                            cmap = plt.get_cmap("Reds")
-                    else:
-                        if plot_with_ground_truth:
-                            vmin = min(
-                                np.nanmin(truth_scalars), np.nanmin(pred_scalars)
-                            )
-                            vmax = max(
-                                np.nanmax(truth_scalars), np.nanmax(pred_scalars)
-                            )
-                        else:
-                            vmin, vmax = np.nanmin(scalars), np.nanmax(scalars)
-                        cmap = plt.get_cmap("turbo")
-
-                    if vmin == vmax:
-                        vmin -= 1e-6
-                        vmax += 1e-6
-
-                    if np.all(
-                        np.logical_or(
-                            np.any(np.isnan(truth_scalars[tri.triangles]), axis=1),
-                            np.any(np.isnan(pred_scalars[tri.triangles]), axis=1),
-                        )
-                    ):
-                        ### Interpret this as a surface-only field and plot it as such
-                        indices = np.argwhere(
-                            ~np.logical_or(
-                                np.isnan(truth_scalars),
-                                np.isnan(pred_scalars),
-                            )
-                        )
-                        max_magnitude = max(
-                            np.nanmax(truth_scalars), np.nanmax(pred_scalars)
-                        )
-                        scale = 0.6 / max_magnitude
-
-                        # Create colormap for arrow magnitudes
-                        norm = mpl.colors.Normalize(vmin=0, vmax=max_magnitude)  # ty: ignore[unresolved-attribute]
-
-                        for i in indices[::8]:
-                            magnitude = scalars[i]
-                            color = cmap(norm(magnitude))
-                            plt.annotate(
-                                "",
-                                xytext=(
-                                    tri.x[i].item(),
-                                    tri.y[i].item(),
-                                ),
-                                xy=(
-                                    tri.x[i].item() + values[i, 0].item() * scale,
-                                    tri.y[i].item() + values[i, 1].item() * scale,
-                                ),
-                                arrowprops=dict(
-                                    arrowstyle="-",
-                                    color=color,
-                                    alpha=0.7,
-                                    shrinkA=0,
-                                    shrinkB=0,
-                                    lw=2,
-                                ),
-                                annotation_clip=False,
-                            )
-                        plt.plot(
-                            tri.x[indices],
-                            tri.y[indices],
-                            "k.",
-                            ms=0.2,
-                            alpha=1,
-                            zorder=1.5,
-                        )
-
-                        # Add colorbar for arrow magnitudes
-                        plt.colorbar(
-                            ax=plt.gca(),
-                            mappable=mpl.cm.ScalarMappable(norm=norm, cmap=cmap),  # ty: ignore[unresolved-attribute]
-                            orientation="horizontal",
-                            shrink=0.8,
-                            fraction=0.03,
-                            aspect=50,
-                            pad=0.01,
-                        )
-                    else:
-                        ### Interpret this as a volume field
-                        tri.set_mask(np.any(np.isnan(scalars[tri.triangles]), axis=1))
-                        shared_kwargs = {
-                            "vmin": vmin,
-                            "vmax": vmax,
-                            "extend": "both",
-                        }
-                        contour_kwargs = {
-                            "levels": np.linspace(vmin, vmax, 26),
-                            "colors": "k",
-                            "linewidths": 0.2,
-                            "zorder": 1,
-                            **shared_kwargs,
-                        }
-                        contourf_kwargs = {
-                            "levels": np.linspace(vmin, vmax, 101),
-                            "cmap": cmap,
-                            "zorder": -1,
-                            **shared_kwargs,
-                        }
-                        cont = plt.tricontour(tri, scalars, **contour_kwargs)
-                        contf = plt.tricontourf(tri, scalars, **contourf_kwargs)
-                        plt.gca().set_rasterization_zorder(0)
-                        plt.colorbar(
-                            ax=contf.axes,
-                            mappable=mpl.cm.ScalarMappable(  # ty: ignore[unresolved-attribute]
-                                norm=contf.norm,
-                                cmap=contf.cmap,
-                            ),
-                            orientation="horizontal",
-                            extendrect="both",
-                            shrink=0.8,
-                            fraction=0.03,
-                            aspect=50,
-                            pad=0.01,
-                        )
-                        if linelabels:
-                            cont.axes.clabel(
-                                cont,
-                                inline=1,
-                                fontsize=8,
-                                fmt="%.1g",
-                            )
-                        plt.gca().set_facecolor("lightgray")
-
-                    # Formatting
-                    plt.gca().set_aspect("equal", adjustable="box")
-                    plt.xlim(-0.6, 1.6)
-                    plt.ylim(-0.8, 0.8)
-                    plt.tick_params(
-                        axis="both",
-                        which="both",
-                        length=0,
-                        bottom=False,
-                        left=False,
-                        labelbottom=False,
-                        labelleft=False,
-                    )
-
-                    if row == 0:
-                        official_name_mappings = {
-                            "U": r"Velocity $\vec{U}$ [m/s]",
-                            "p": r"Pressure $p$ [Pa]",
-                            "nut": r"Turbulent viscosity $\nu_t$ [m$^2$/s]",
-                            "C_p": r"Pressure coefficient $C_p$",
-                            "C_pt": r"Total pressure coefficient $C_{pt}$",
-                            "ln(1+nut/nu)": r"Log of turbulent viscosity ratio $\ln(1+\nu_t/\nu)$",
-                            "U/|U_inf|": r"Nondimensional velocity $\vec{U}/|\vec{U}_\infty|$",
-                            "ΔU/|U_inf|": r"Nondimensional velocity difference $\Delta \vec{U}/|\vec{U}_\infty|$",
-                            "C_F,shear": r"Shear force coefficient $C_{F,\text{shear}}$",
-                            "C_F": r"Net force coefficient $C_F$",
-                        }
-
-                        official_name = official_name_mappings.get(
-                            field_name, field_name
-                        )
-
-                        plt.title(official_name, fontsize=12, fontweight="bold")
-                    if col == 0:
-                        plt.ylabel(kind, fontsize=12, fontweight="bold")
-
-            if show:
-                plt.tight_layout(
-                    h_pad=0.1,
-                    w_pad=0,
+                sm = mpl.cm.ScalarMappable(  # ty: ignore[unresolved-attribute]
+                    norm=mpl.colors.Normalize(vmin=vmin, vmax=vmax),  # ty: ignore[unresolved-attribute]
+                    cmap=plt.get_cmap(cmap),
                 )
-                plt.show()
+                fig.colorbar(
+                    sm,
+                    ax=ax,
+                    orientation="horizontal",
+                    shrink=0.8,
+                    fraction=0.03,
+                    aspect=50,
+                    pad=0.01,
+                )
 
-        return meshes
+                ax.set_aspect("equal", adjustable="box")
+                ax.tick_params(
+                    axis="both",
+                    which="both",
+                    length=0,
+                    bottom=False,
+                    left=False,
+                    labelbottom=False,
+                    labelleft=False,
+                )
+                if row == 0:
+                    ax.set_title(field_name, fontsize=12, fontweight="bold")
+                if col == 0:
+                    ax.set_ylabel(label, fontsize=12, fontweight="bold")
+
+        plt.tight_layout(h_pad=0.1, w_pad=0)
+        if show:
+            plt.show()
+
+        return combined
 
     @staticmethod
     def visualize_output_distributions(
@@ -891,8 +733,7 @@ if __name__ == "__main__":
     output_dict = sample.interior_mesh.point_data
     AirFRANSDataSet.visualize_output_distributions(output_dict, show=True)
 
-    meshes = AirFRANSDataSet.postprocess(
-        pred_output=output_dict,
-        sample_path=sample_paths[0],
-        true_output=output_dict,
+    AirFRANSDataSet.postprocess(
+        pred_mesh=sample.interior_mesh,
+        true_mesh=sample.interior_mesh,
     )

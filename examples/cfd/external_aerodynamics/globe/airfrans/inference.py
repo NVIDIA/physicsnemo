@@ -83,11 +83,10 @@ model.load(best_model_path)
 # %%
 with torch.no_grad():
     model.eval()
-    pred_results = model(**sample.model_input_kwargs, chunk_size=128)
+    pred_mesh = model(**sample.model_input_kwargs, chunk_size=128)
 
 # %%
 AirFRANSDataSet.postprocess(
-    pred_results.to(device="cpu", dtype=torch.float64),
-    sample_path,
-    fields_to_plot="true",
+    pred_mesh=pred_mesh.to(device="cpu"),
+    true_mesh=sample.interior_mesh.to(device="cpu"),
 )

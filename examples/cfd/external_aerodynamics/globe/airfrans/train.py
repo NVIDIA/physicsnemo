@@ -373,11 +373,11 @@ def main(
     )
     def run_batch(sample: AirFRANSSample) -> tuple[torch.Tensor, TensorDict]:
         """Runs a single batch (always just one sample) through the model and computes the loss."""
-        pred_results = model(**sample.model_input_kwargs)
-        batch_loss_components = pred_results.apply(
+        pred_mesh = model(**sample.model_input_kwargs)
+        batch_loss_components = pred_mesh.point_data.apply(
             field_loss_fn,
-            sample.interior_mesh.point_data,  # ground truth
-            error_scales.expand_as(pred_results),
+            sample.interior_mesh.point_data,
+            error_scales.expand_as(pred_mesh.point_data),
         ).mean(dim=0)  # Mean over points
         batch_loss = batch_loss_components.stack_from_tensordict().sum()
         return batch_loss, batch_loss_components
@@ -593,17 +593,15 @@ def main(
                         viz_sample = AirFRANSDataSet.preprocess(sample_path).to(device)
                         with torch.no_grad(), autocast_ctx:
                             base_model.eval()
-                            pred_results = base_model(
+                            pred_mesh = base_model(
                                 **viz_sample.model_input_kwargs,
                                 chunk_size=points_per_iter,
                             )
                         AirFRANSDataSet.postprocess(
-                            pred_results.to(device="cpu", dtype=torch.float64),
-                            sample_path,
-                            fields_to_plot="pred",
+                            pred_mesh=pred_mesh.to(device="cpu"),
+                            true_mesh=viz_sample.interior_mesh.to(device="cpu"),
                             show=False,
                         )
-                        plt.tight_layout(h_pad=0.1, w_pad=0)
                         plt.gcf().set_dpi(300)
                         if use_mlflow:
                             mlflow.log_figure(
