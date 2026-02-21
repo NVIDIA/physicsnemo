@@ -22,7 +22,7 @@ from datetime import datetime
 from itertools import count
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Literal
+from typing import Literal
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
