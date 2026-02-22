@@ -121,8 +121,12 @@ NU = 1.56e-5  # m^2/s
 class AirFRANSSample:
     interior_mesh: Mesh  # Point cloud with nondimensional point_data and global_data
     boundary_meshes: TensorDict[str, Mesh]  # BC name -> Mesh
-    reference_lengths: TensorDict[str, Float[torch.Tensor, ""]]  # reference length names to scalar tensors
-    dimensional_constants: TensorDict  # U_inf, q_inf - only for postprocessing / redimensionalization
+    reference_lengths: TensorDict[
+        str, Float[torch.Tensor, ""]
+    ]  # reference length names to scalar tensors
+    dimensional_constants: (
+        TensorDict  # U_inf, q_inf - only for postprocessing / redimensionalization
+    )
 
     @property
     def model_input_kwargs(self) -> dict:
@@ -133,7 +137,6 @@ class AirFRANSSample:
             "reference_lengths": self.reference_lengths,
             "global_data": self.interior_mesh.global_data,
         }
-
 
 
 class AirFRANSDataSet(CachedPreprocessingDataset):
@@ -263,7 +266,8 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         ### Surface force fields
         point_is_on_airfoil = internal.point_data["implicit_distance"] == 0
         nearest_airfoil_idx = torch.cdist(
-            internal.points, airfoil.points,
+            internal.points,
+            airfoil.points,
         ).argmin(dim=1)
         airfoil_normals = -1 * airfoil.point_normals[nearest_airfoil_idx]
         airfoil_normals[~point_is_on_airfoil] = torch.nan
@@ -271,7 +275,9 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         strain_rate = 0.5 * (velocity_jacobian + velocity_jacobian.transpose(1, 2))
         wall_shear_stress = 2 * NU * strain_rate
         wall_shear_force = torch.einsum(
-            "pij,pj->pi", wall_shear_stress, airfoil_normals,
+            "pij,pj->pi",
+            wall_shear_stress,
+            airfoil_normals,
         )
         pressure_force = -p[:, None] * airfoil_normals
 
@@ -304,9 +310,11 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 points=internal.points,
                 cells=internal.cells,
                 point_data=output_fields,
-                global_data=TensorDict({
-                    "U_inf / U_inf_magnitude": U_inf / U_inf_magnitude,
-                }),
+                global_data=TensorDict(
+                    {
+                        "U_inf / U_inf_magnitude": U_inf / U_inf_magnitude,
+                    }
+                ),
             ),
             boundary_meshes=TensorDict(
                 {"no_slip": Mesh(points=airfoil.points, cells=airfoil.cells)},
@@ -319,10 +327,12 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 },
                 batch_size=torch.Size([]),
             ),
-            dimensional_constants=TensorDict({
-                "U_inf": U_inf,
-                "q_inf": q_inf,
-            }),
+            dimensional_constants=TensorDict(
+                {
+                    "U_inf": U_inf,
+                    "q_inf": q_inf,
+                }
+            ),
             batch_size=torch.Size([]),
         )
 
@@ -412,13 +422,19 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
             true_vals = true_selected[field_name]
             pred_vals = pred_selected[field_name]
             is_vector = true_vals.ndim > 1 and true_vals.shape[-1] > 1
-            true_scalars = true_vals.norm(dim=-1) if is_vector else true_vals.reshape(-1)
-            pred_scalars = pred_vals.norm(dim=-1) if is_vector else pred_vals.reshape(-1)
+            true_scalars = (
+                true_vals.norm(dim=-1) if is_vector else true_vals.reshape(-1)
+            )
+            pred_scalars = (
+                pred_vals.norm(dim=-1) if is_vector else pred_vals.reshape(-1)
+            )
 
-            all_finite = torch.cat([
-                true_scalars[torch.isfinite(true_scalars)],
-                pred_scalars[torch.isfinite(pred_scalars)],
-            ])
+            all_finite = torch.cat(
+                [
+                    true_scalars[torch.isfinite(true_scalars)],
+                    pred_scalars[torch.isfinite(pred_scalars)],
+                ]
+            )
             shared_vmin = all_finite.min().item() if len(all_finite) > 0 else 0.0
             shared_vmax = all_finite.max().item() if len(all_finite) > 0 else 1.0
             if shared_vmin == shared_vmax:
@@ -438,7 +454,11 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                     else:
                         finite_err = err_vals.reshape(-1)
                         finite_err = finite_err[torch.isfinite(finite_err)]
-                        emax = finite_err.abs().max().item() if len(finite_err) > 0 else 1.0
+                        emax = (
+                            finite_err.abs().max().item()
+                            if len(finite_err) > 0
+                            else 1.0
+                        )
                         cmap, vmin, vmax = "RdBu_r", -emax, emax
                 else:
                     cmap, vmin, vmax = "turbo", shared_vmin, shared_vmax

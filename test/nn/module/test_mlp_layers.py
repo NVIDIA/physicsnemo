@@ -167,9 +167,7 @@ def test_mlp_batchnorm(device):
         in_features=10, hidden_features=20, out_features=5, use_batchnorm=True
     ).to(target_device)
 
-    bn_count = sum(
-        1 for m in model.modules() if isinstance(m, torch.nn.BatchNorm1d)
-    )
+    bn_count = sum(1 for m in model.modules() if isinstance(m, torch.nn.BatchNorm1d))
     # One BN per hidden layer + one for the output layer = 2
     assert bn_count == 2
 

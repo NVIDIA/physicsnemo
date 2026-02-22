@@ -194,7 +194,11 @@ def log_hyperparameters(
         _MLFLOW_MAX_PARAM_LENGTH = 6000
         all_params = {**model_hyperparameters, **other_hyperparameters}
         mlflow.log_params(
-            {k: v for k, v in all_params.items() if len(str(v)) <= _MLFLOW_MAX_PARAM_LENGTH}
+            {
+                k: v
+                for k, v in all_params.items()
+                if len(str(v)) <= _MLFLOW_MAX_PARAM_LENGTH
+            }
         )
 
 
@@ -219,7 +223,9 @@ def install_graceful_shutdown(rank: int = 0) -> Callable[[], bool]:
 
     def _handler(signum: int, _frame: Any) -> None:
         if rank == 0:
-            logger.warning(f"{signal.Signals(signum).name} received; quitting after this epoch.")
+            logger.warning(
+                f"{signal.Signals(signum).name} received; quitting after this epoch."
+            )
         received[0] = True
 
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGQUIT):

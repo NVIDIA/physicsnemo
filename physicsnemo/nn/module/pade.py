@@ -154,13 +154,9 @@ class Pade(Module):
 
         if use_separate_mlps:
             self.numerator_mlp = Mlp(out_features=out_features, **mlp_kwargs)
-            self.denominator_mlp = Mlp(
-                out_features=denom_out, bias=False, **mlp_kwargs
-            )
+            self.denominator_mlp = Mlp(out_features=denom_out, bias=False, **mlp_kwargs)
         else:
-            self.combined_mlp = Mlp(
-                out_features=out_features + denom_out, **mlp_kwargs
-            )
+            self.combined_mlp = Mlp(out_features=out_features + denom_out, **mlp_kwargs)
 
     def forward(
         self, x: Float[torch.Tensor, "batch input_dim"]

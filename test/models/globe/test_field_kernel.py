@@ -104,21 +104,25 @@ def make_kernel_and_input_data(
     source_data_dict: dict[str, torch.Tensor] = {}
     for i in range(n_source_scalars):
         source_data_dict[f"source_scalar_{i}"] = torch.randn(
-            n_source_points, device=device,
+            n_source_points,
+            device=device,
         )
     for i in range(n_source_vectors):
         source_data_dict[f"source_vector_{i}"] = F.normalize(
-            torch.randn(n_source_points, n_spatial_dims, device=device), dim=-1,
+            torch.randn(n_source_points, n_spatial_dims, device=device),
+            dim=-1,
         )
 
     global_data_dict: dict[str, torch.Tensor] = {}
     for i in range(n_global_scalars):
         global_data_dict[f"global_scalar_{i}"] = torch.randn(
-            1, device=device,
+            1,
+            device=device,
         ).squeeze()
     for i in range(n_global_vectors):
         global_data_dict[f"global_vector_{i}"] = F.normalize(
-            torch.randn(n_spatial_dims, device=device), dim=0,
+            torch.randn(n_spatial_dims, device=device),
+            dim=0,
         )
 
     input_data = {

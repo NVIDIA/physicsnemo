@@ -126,7 +126,9 @@ def main(
         if data_dir := os.environ.get("AIRFRANS_DATA_DIR"):
             data_dir = Path(data_dir)
         else:
-            raise ValueError("AirFRANS data directory not specified. Pass `data_dir` or set the AIRFRANS_DATA_DIR environment variable.")
+            raise ValueError(
+                "AirFRANS data directory not specified. Pass `data_dir` or set the AIRFRANS_DATA_DIR environment variable."
+            )
     data_dir = Path(data_dir)
 
     if output_name is None:
@@ -157,7 +159,9 @@ def main(
     logger0 = RankZeroLoggingWrapper(logger, dist)
     logger0.info(f"{dist.world_size = }")
 
-    error_scales: TensorDict[str, Float[torch.Tensor, ""]] = TensorDict(error_scales, device=device)
+    error_scales: TensorDict[str, Float[torch.Tensor, ""]] = TensorDict(
+        error_scales, device=device
+    )
     if dist.rank == 0:
         torch._logging.set_logs(graph_breaks=True, recompiles=True)
 
@@ -204,13 +208,15 @@ def main(
     ### [Model]
     model = GLOBE(
         n_spatial_dims=2,
-        output_field_ranks=TensorDict({
-            "ΔU/|U_inf|": 1,
-            "C_p": 0,
-            "C_pt": 0,
-            "ln(1+nut/nu)": 0,
-            "C_F,shear": 1,
-        }),
+        output_field_ranks=TensorDict(
+            {
+                "ΔU/|U_inf|": 1,
+                "C_p": 0,
+                "C_pt": 0,
+                "ln(1+nut/nu)": 0,
+                "C_F,shear": 1,
+            }
+        ),
         boundary_source_data_ranks={"no_slip": TensorDict({})},
         reference_length_names=["chord", "delta_FS"],
         reference_area=1.0,
@@ -365,7 +371,9 @@ def main(
         mode=compile_mode,
         disable=not use_compile,
     )
-    def run_batch(sample: AirFRANSSample) -> tuple[torch.Tensor, TensorDict[str, Float[torch.Tensor, ""]]]:
+    def run_batch(
+        sample: AirFRANSSample,
+    ) -> tuple[torch.Tensor, TensorDict[str, Float[torch.Tensor, ""]]]:
         """Runs a single batch (always just one sample) through the model and computes the loss."""
         pred_mesh = model(**sample.model_input_kwargs)
         batch_loss_components = pred_mesh.point_data.apply(
@@ -456,13 +464,15 @@ def main(
 
         # [Distributed comms]
         keys = ["loss", *all_batch_loss_components.keys()]
-        all_values = torch.stack([
-            torch.nanmean(torch.stack(all_batch_losses)),
-            *(
-                torch.nanmean(torch.stack(all_batch_loss_components[k]))
-                for k in keys[1:]
-            ),
-        ])
+        all_values = torch.stack(
+            [
+                torch.nanmean(torch.stack(all_batch_losses)),
+                *(
+                    torch.nanmean(torch.stack(all_batch_loss_components[k]))
+                    for k in keys[1:]
+                ),
+            ]
+        )
         if dist.world_size > 1:
             torch.distributed.all_reduce(all_values, op=torch.distributed.ReduceOp.AVG)
         epoch_loss = all_values[0]
@@ -517,7 +527,7 @@ def main(
             for split in splits:
                 with record_function(f"epoch_{epoch}_{split}"):
                     loss[split] = run_epoch(split)
-            
+
             scheduler.step(loss["train"])
 
             if profile:
