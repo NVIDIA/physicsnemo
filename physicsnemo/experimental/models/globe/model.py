@@ -100,11 +100,13 @@ class GLOBE(Module):
         Scalar used to nondimensionalize face areas. Typically a characteristic
         area of the problem (e.g., chord^2 for airfoils).
     n_global_scalars : int
-        Number of global scalar features (e.g., Reynolds number, Mach number). These
-        are shared across all source faces.
+        Number of global scalar conditioning features expected in
+        ``global_data`` (rank-0 tensors). These are shared across all
+        source faces and must be nondimensional.
     n_global_vectors : int
-        Number of global vector features (e.g., freestream velocity direction). These
-        are shared across all source faces.
+        Number of global vector conditioning features expected in
+        ``global_data`` (rank-1 tensors). These are shared across all
+        source faces and must be nondimensional.
     n_communication_hyperlayers : int, optional, default=2
         Number of boundary-to-boundary communication layers before final evaluation.
         Higher values enable more information exchange between boundary partitions.
@@ -137,19 +139,15 @@ class GLOBE(Module):
     reference_lengths : dict[str, torch.Tensor]
         Dictionary mapping reference length names to scalar tensors. Keys must match
         the model's ``reference_length_names``.
-    global_scalars : TensorDict[str, Float[torch.Tensor, ""]] | None, optional, default=None
-        TensorDict with ``batch_size=()`` containing problem-level scalar features.
-        The total concatenated length must match ``n_global_scalars``.
-    global_vectors : TensorDict[str, Float[torch.Tensor, " n_dims"]] | None, optional, default=None
-        TensorDict with ``batch_size=(n_spatial_dims,)`` containing problem-level
-        vector features. The total concatenated length must match ``n_global_vectors``.
+    global_data : TensorDict or None, optional, default=None
+        Nondimensional conditioning features, split by tensor rank: rank-0
+        tensors become global scalars, rank-1 tensors become global vectors.
+        Counts must match ``n_global_scalars`` and ``n_global_vectors``.
+        Passed through to the output Mesh's ``global_data``.
     chunk_size : None | int | Literal["auto"], optional, default=None
         Controls memory usage during kernel evaluation. ``None`` evaluates all target
         points at once, an ``int`` processes in chunks of that size, and ``"auto"``
         automatically determines chunk size targeting ~1GB per chunk.
-    global_data : TensorDict[str, Float[torch.Tensor, "..."]] | None, optional, default=None
-        Mesh-level metadata (e.g. normalization constants) to attach to the
-        output Mesh unchanged. Not used by the model itself.
 
     Outputs
     -------
@@ -462,10 +460,8 @@ class GLOBE(Module):
         prediction_points: Float[torch.Tensor, "n_points n_dims"],
         boundary_meshes: dict[str, Mesh],
         reference_lengths: dict[str, torch.Tensor],
-        global_scalars: TensorDict[str, Float[torch.Tensor, ""]] | None = None,
-        global_vectors: TensorDict[str, Float[torch.Tensor, " n_dims"]] | None = None,
+        global_data: TensorDict | None = None,
         chunk_size: None | int | Literal["auto"] = None,
-        global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None = None,
     ) -> Mesh:
         r"""Evaluate GLOBE model to predict fields at target points.
 
@@ -488,15 +484,13 @@ class GLOBE(Module):
             :class:`~physicsnemo.mesh.Mesh` objects.
         reference_lengths : dict[str, torch.Tensor]
             Mapping of reference length names to scalar tensors.
-        global_scalars : TensorDict[str, Float[torch.Tensor, ""]] | None, optional, default=None
-            Problem-level scalar features.
-        global_vectors : TensorDict[str, Float[torch.Tensor, " n_dims"]] | None, optional, default=None
-            Problem-level vector features.
+        global_data : TensorDict or None, optional, default=None
+            Nondimensional conditioning features for the kernel. Split by
+            tensor rank: rank-0 tensors become global scalars, rank-1 tensors
+            become global vectors. The counts must match ``n_global_scalars``
+            and ``n_global_vectors``. Passed through to the output Mesh.
         chunk_size : None | int | Literal["auto"], optional, default=None
             Controls memory usage during kernel evaluation.
-        global_data : TensorDict[str, Float[torch.Tensor, "..."]] | None, optional, default=None
-            Mesh-level metadata (e.g. normalization constants) to attach
-            to the output Mesh unchanged. Not used by the model itself.
 
         Returns
         -------
@@ -512,13 +506,18 @@ class GLOBE(Module):
         """
         device = prediction_points.device
 
-        ### Set defaults
-        if global_scalars is None:
-            global_scalars = TensorDict({}, batch_size=torch.Size([]), device=device)
-        if global_vectors is None:
-            global_vectors = TensorDict(
-                {}, batch_size=torch.Size([self.n_spatial_dims]), device=device
-            )
+        ### Extract conditioning from global_data, split by tensor rank
+        if global_data is None:
+            global_data = TensorDict({}, batch_size=[], device=device)
+        by_rank = split_by_leaf_rank(global_data)
+        global_scalars = by_rank.get(
+            0, TensorDict({}, batch_size=[], device=device),
+        )
+        global_vectors = by_rank.get(
+            1, TensorDict({}, batch_size=torch.Size([self.n_spatial_dims]), device=device),
+        )
+        if 1 in by_rank:
+            global_vectors.batch_size = torch.Size([self.n_spatial_dims])
 
         ### Input validation
         # Skip validation when running under torch.compile for performance

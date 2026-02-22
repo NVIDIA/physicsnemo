@@ -119,28 +119,18 @@ NU = 1.56e-5  # m^2/s
 
 @tensorclass
 class AirFRANSSample:
-    interior_mesh: Mesh  # Point cloud with global_data (U_inf, q_inf) and point_data
+    interior_mesh: Mesh  # Point cloud with nondimensional point_data and global_data
     boundary_meshes: TensorDict[str, Mesh]  # BC name -> Mesh
     reference_lengths: TensorDict[str, Float[torch.Tensor, ""]]  # reference length names to scalar tensors
+    dimensional_constants: TensorDict  # U_inf, q_inf - only for postprocessing / redimensionalization
 
     @property
     def model_input_kwargs(self) -> dict:
-        """Kwargs for :meth:`GLOBE.forward`, minus control-flow args like ``chunk_size``.
-
-        Model conditioning inputs (``global_scalars``, ``global_vectors``) are
-        derived from ``interior_mesh.global_data`` so that all global quantities
-        have a single source of truth on the Mesh.
-        """
-        U_inf = self.interior_mesh.global_data["U_inf"]
+        """Kwargs for :meth:`GLOBE.forward`, minus control-flow args like ``chunk_size``."""
         return {
             "prediction_points": self.interior_mesh.points,
             "boundary_meshes": self.boundary_meshes,
             "reference_lengths": self.reference_lengths,
-            "global_scalars": TensorDict({}, batch_size=[]),
-            "global_vectors": TensorDict(
-                {"U_inf / U_inf_magnitude": U_inf / torch.norm(U_inf)},
-                batch_size=torch.Size([U_inf.shape[0]]),
-            ),
             "global_data": self.interior_mesh.global_data,
         }
 
@@ -315,8 +305,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 cells=internal.cells,
                 point_data=output_fields,
                 global_data=TensorDict({
-                    "U_inf": U_inf,
-                    "q_inf": q_inf,
+                    "U_inf / U_inf_magnitude": U_inf / U_inf_magnitude,
                 }),
             ),
             boundary_meshes=TensorDict(
@@ -330,6 +319,10 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 },
                 batch_size=torch.Size([]),
             ),
+            dimensional_constants=TensorDict({
+                "U_inf": U_inf,
+                "q_inf": q_inf,
+            }),
             batch_size=torch.Size([]),
         )
 
