@@ -247,7 +247,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
     def preprocess(
         sample_path: Path,
         patch_out_nonphysical_values: bool = True,
-    ) -> "AirFRANSSample":
+    ) -> AirFRANSSample:
         ### Load meshes and convert to 2D Mesh objects
         sample_dir = Path(sample_path)
         base = sample_dir.name
@@ -444,12 +444,10 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         )
 
         ### Create subplot grid
-        kind_labels = ["Truth", "Prediction"]
-        kind_keys = ["true", "pred"]
+        kinds: dict[str, str] = {"true": "Truth", "pred": "Prediction"}
         if show_error:
-            kind_labels.append("Error")
-            kind_keys.append("error")
-        n_rows, n_cols = len(kind_labels), len(fields)
+            kinds["error"] = "Error"
+        n_rows, n_cols = len(kinds), len(fields)
 
         fig, axes = plt.subplots(
             nrows=n_rows,
@@ -482,7 +480,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 shared_vmin -= 1e-6
                 shared_vmax += 1e-6
 
-            for row, (label, key) in enumerate(zip(kind_labels, kind_keys)):
+            for row, (key, label) in enumerate(kinds.items()):
                 ax = axes[row, col]
 
                 if key == "error":
