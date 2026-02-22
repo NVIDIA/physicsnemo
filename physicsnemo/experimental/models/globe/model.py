@@ -73,21 +73,15 @@ class GLOBE(Module):
     ----------
     n_spatial_dims : int
         Number of spatial dimensions (2 or 3).
-    output_fields : dict[str, Literal["scalar", "vector"]]
-        Dictionary mapping field names to types (``"scalar"`` or ``"vector"``).
-        These are the physical fields predicted at query points in the final
-        hyperlayer.
-    boundary_condition_names : Sequence[str]
-        Sequence of boundary condition type identifiers
-        (e.g., ``["no_slip", "freestream", "slip"]``). Each BC type gets its own
-        set of kernels. Names must not contain ``"."`` for TensorDict compatibility.
-    boundary_condition_n_source_scalars : dict[str, int]
-        Dictionary mapping each BC type name to the number of scalar features per
-        boundary face for that BC type.
-    boundary_condition_n_source_vectors : dict[str, int]
-        Dictionary mapping each BC type name to the number of vector features per
-        boundary face for that BC type. The face normal vector is automatically
-        added, so don't include it in the count.
+    output_field_ranks : TensorDict
+        Rank-spec TensorDict with ``batch_size=[]`` and integer leaves
+        (0 = scalar, 1 = vector) describing the output fields. Derive from
+        data via :func:`ranks_from_tensordict`.
+    boundary_source_data_ranks : dict[str, TensorDict]
+        Mapping of boundary condition type names to rank-spec TensorDicts
+        describing the per-face source features for each BC type. The keys
+        implicitly define the set of boundary condition names. The face
+        normal vector is automatically added, so don't include it.
     reference_length_names : Sequence[str]
         Sequence of identifiers for reference length scales
         (e.g., ``["viscous_length", "chord_length"]``). Each creates a separate
@@ -95,17 +89,11 @@ class GLOBE(Module):
     reference_area : float
         Scalar used to nondimensionalize face areas. Typically a characteristic
         area of the problem (e.g., chord^2 for airfoils).
-    n_global_scalars : int
-        Number of global scalar conditioning features expected in
-        ``global_data`` (rank-0 tensors). These are shared across all
-        source faces and must be nondimensional.
-    n_global_vectors : int
-        Number of global vector conditioning features expected in
-        ``global_data`` (rank-1 tensors). These are shared across all
-        source faces and must be nondimensional.
+    global_data_ranks : TensorDict or None, optional
+        Rank-spec TensorDict for global conditioning features. Defaults to
+        empty (no global conditioning).
     n_communication_hyperlayers : int, optional, default=2
         Number of boundary-to-boundary communication layers before final evaluation.
-        Higher values enable more information exchange between boundary partitions.
     n_latent_scalars : int, optional, default=12
         Number of scalar latent channels propagated between hyperlayers.
     n_latent_vectors : int, optional, default=6
@@ -122,36 +110,25 @@ class GLOBE(Module):
     Forward
     -------
     prediction_points : Float[torch.Tensor, "n_points n_dims"]
-        Target points for field evaluation of shape :math:`(N_{points}, D)`. These
-        are typically interior domain points where the solution is predicted.
+        Target points for field evaluation of shape :math:`(N_{points}, D)`.
     boundary_meshes : dict[str, Mesh]
         Dictionary mapping boundary condition type names to
-        :class:`~physicsnemo.mesh.Mesh` objects. Each key must match one of the
-        model's ``boundary_condition_names``. Each Mesh should be pre-merged
-        (one Mesh per BC type); use :meth:`~physicsnemo.mesh.Mesh.merge` to
-        combine multiple meshes of the same BC type before passing them here.
-        Cell data (``mesh.cell_data``) should contain only the source features
-        expected by the model.
+        :class:`~physicsnemo.mesh.Mesh` objects. Keys must be a subset of the
+        model's boundary condition names (from ``boundary_source_data_ranks``).
     reference_lengths : dict[str, torch.Tensor]
-        Dictionary mapping reference length names to scalar tensors. Keys must match
-        the model's ``reference_length_names``.
+        Dictionary mapping reference length names to scalar tensors.
     global_data : TensorDict or None, optional, default=None
-        Nondimensional conditioning features. Contains a mix of scalar
-        (rank-0) and vector (rank-1) tensors that are split by tensor rank
-        inside :class:`Kernel`. Scalar count must match ``n_global_scalars``;
-        vector count must match ``n_global_vectors``.
-        Passed through to the output Mesh's ``global_data``.
+        Nondimensional conditioning features. Leaf keys and ranks must match
+        ``global_data_ranks``. Passed through to the output Mesh.
     chunk_size : None | int | Literal["auto"], optional, default=None
-        Controls memory usage during kernel evaluation. ``None`` evaluates all target
-        points at once, an ``int`` processes in chunks of that size, and ``"auto"``
-        automatically determines chunk size targeting ~1GB per chunk.
+        Controls memory usage during kernel evaluation.
 
     Outputs
     -------
     Mesh
         A point-cloud :class:`~physicsnemo.mesh.Mesh` (0-dimensional manifold)
         with ``points`` equal to the input ``prediction_points``. The predicted
-        fields are in ``point_data``, keyed by the names from ``output_fields``.
+        fields are in ``point_data``, keyed by the names from ``output_field_ranks``.
         Scalar fields have shape :math:`(N_{points},)`, vector fields have shape
         :math:`(N_{points}, D)`. Cells are empty (shape ``(0, 1)``).
         ``global_data`` is passed through from the input.
@@ -162,28 +139,23 @@ class GLOBE(Module):
       hyperlayers, each containing a :class:`~torch.nn.ModuleDict` mapping BC type
       names to :class:`~physicsnemo.experimental.models.globe.field_kernel.MultiscaleKernel`
       instances.
-    - ``final_field_transforms`` is a :class:`~torch.nn.ModuleDict` of per-field
-      linear calibration layers.
+    - ``final_field_transforms`` is a :class:`~torch.nn.ModuleList` of per-field
+      linear calibration layers, ordered alphabetically by field name.
     - Cell areas are automatically normalized by ``reference_area`` to preserve
       discretization-invariance.
-    - The cell normal vector is automatically added to ``source_vectors`` for each
-      mesh.
-    - Hyperlayer communication enables long-range coupling between boundary
-      partitions, analogous to the influence coefficient matrix solve in traditional
-      boundary-element methods (but learned rather than explicitly computed).
+    - The cell normal vector is automatically added to source data for each mesh.
 
     Examples
     --------
     >>> model = GLOBE(
     ...     n_spatial_dims=3,
-    ...     output_fields={"pressure": "scalar", "velocity": "vector"},
-    ...     boundary_condition_names=["no_slip", "freestream"],
-    ...     boundary_condition_n_source_scalars={"no_slip": 0, "freestream": 0},
-    ...     boundary_condition_n_source_vectors={"no_slip": 0, "freestream": 0},
+    ...     output_field_ranks=TensorDict({"pressure": 0, "velocity": 1}),
+    ...     boundary_source_data_ranks={
+    ...         "no_slip": TensorDict({}),
+    ...         "freestream": TensorDict({}),
+    ...     },
     ...     reference_length_names=["delta_FS", "chord"],
     ...     reference_area=1.0,
-    ...     n_global_scalars=0,
-    ...     n_global_vectors=0,
     ... )
     >>> result = model(
     ...     prediction_points=torch.randn(100, 3),
@@ -195,14 +167,11 @@ class GLOBE(Module):
     def __init__(
         self,
         n_spatial_dims: int,
-        output_fields: dict[str, Literal["scalar", "vector"]],
-        boundary_condition_names: Sequence[str],
-        boundary_condition_n_source_scalars: dict[str, int],
-        boundary_condition_n_source_vectors: dict[str, int],
+        output_field_ranks: TensorDict[str, Int[torch.Tensor, ""]],
+        boundary_source_data_ranks: dict[str, TensorDict[str, Int[torch.Tensor, ""]]],
         reference_length_names: Sequence[str],
         reference_area: float,
-        n_global_scalars: int,
-        n_global_vectors: int,
+        global_data_ranks: TensorDict[str, Int[torch.Tensor, ""]] | None = None,
         n_communication_hyperlayers: int = 2,
         n_latent_scalars: int = 12,
         n_latent_vectors: int = 6,
@@ -210,37 +179,38 @@ class GLOBE(Module):
         hidden_layer_sizes: Sequence[int] | None = None,
         n_spherical_harmonics: int = 4,
     ):
-        ### Sets defaults
         if hidden_layer_sizes is None:
             hidden_layer_sizes = [64, 64, 64]
+        if global_data_ranks is None:
+            global_data_ranks = TensorDict({})
 
-        # Validate inputs
+        boundary_condition_names = list(boundary_source_data_ranks.keys())
+
         if not torch.compiler.is_compiling():
-            for field_name, field_type in output_fields.items():
-                if field_type not in ["scalar", "vector"]:
+            for rank in output_field_ranks.values(
+                include_nested=True, leaves_only=True,
+            ):
+                if rank not in (0, 1):
                     raise ValueError(
-                        f"In `output_fields`, for {field_name=!r}, got {field_type=!r};\n"
-                        "This must be one of ['scalar', 'vector']"
+                        f"All leaves of output_field_ranks must be 0 (scalar) or 1 (vector), "
+                        f"got {rank!r}"
                     )
             for bc_name in boundary_condition_names:
                 if "." in bc_name:
                     raise ValueError(
-                        f"In `boundary_condition_names`, got {bc_name=!r};\n"
-                        "This must not contain any `.` characters, for nested-TensorDict compatibility."
+                        f"In `boundary_source_data_ranks`, got {bc_name=!r};\n"
+                        "BC names must not contain `.` for TensorDict compatibility."
                     )
 
         super().__init__(meta=MetaData())
 
-        # Store arguments
         self.n_spatial_dims = n_spatial_dims
-        self.output_fields = output_fields
+        self.output_field_ranks = output_field_ranks
         self.boundary_condition_names = boundary_condition_names
-        self.boundary_condition_n_source_scalars = boundary_condition_n_source_scalars
-        self.boundary_condition_n_source_vectors = boundary_condition_n_source_vectors
+        self.boundary_source_data_ranks = boundary_source_data_ranks
         self.reference_length_names = reference_length_names
         self.register_buffer("reference_area", torch.tensor(reference_area))
-        self.n_global_scalars = n_global_scalars
-        self.n_global_vectors = n_global_vectors
+        self.global_data_ranks = global_data_ranks
         self.n_communication_hyperlayers = n_communication_hyperlayers
         self.n_latent_scalars = n_latent_scalars
         self.n_latent_vectors = n_latent_vectors
@@ -248,16 +218,16 @@ class GLOBE(Module):
         self.hidden_layer_sizes = hidden_layer_sizes
         self.n_spherical_harmonics = n_spherical_harmonics
 
-        ### Build the intermediate output-field spec for communication hyperlayers.
-        # These latent fields carry information between hyperlayers; only the
-        # final hyperlayer emits the user-requested output_fields.
-        intermediate_fields: dict[str, Literal["scalar", "vector"]] = {
-            f"strengths.{name}": "scalar" for name in reference_length_names
-        } | {
-            f"latent.scalars.{i}": "scalar" for i in range(n_latent_scalars)
-        } | {
-            f"latent.vectors.{i}": "vector" for i in range(n_latent_vectors)
-        }
+        ### Build the intermediate output-field rank spec for communication
+        # hyperlayers. Only the final hyperlayer emits output_field_ranks.
+        intermediate_field_ranks = TensorDict(
+            {
+                **{f"strengths.{name}": 0 for name in reference_length_names},
+                **{f"latent.scalars.{i}": 0 for i in range(n_latent_scalars)},
+                **{f"latent.vectors.{i}": 1 for i in range(n_latent_vectors)},
+            },
+            batch_size=[],
+        )
 
         kernel_layers = []
 
@@ -268,21 +238,16 @@ class GLOBE(Module):
             layer = nn.ModuleDict({
                 bc_type: MultiscaleKernel(
                     n_spatial_dims=n_spatial_dims,
-                    output_fields=(
-                        output_fields if is_last_hyperlayer else intermediate_fields
+                    output_field_ranks=(
+                        output_field_ranks if is_last_hyperlayer
+                        else intermediate_field_ranks
                     ),
                     reference_length_names=reference_length_names,
-                    n_source_scalars=(
-                        boundary_condition_n_source_scalars[bc_type]
-                        + (0 if is_first_hyperlayer else n_latent_scalars)
+                    source_data_ranks=self._build_source_data_ranks(
+                        bc_source_ranks=boundary_source_data_ranks[bc_type],
+                        include_latents=not is_first_hyperlayer,
                     ),
-                    n_source_vectors=(
-                        boundary_condition_n_source_vectors[bc_type]
-                        + (0 if is_first_hyperlayer else n_latent_vectors)
-                        + 1  # +1 for the normal vector
-                    ),
-                    n_global_scalars=n_global_scalars,
-                    n_global_vectors=n_global_vectors,
+                    global_data_ranks=global_data_ranks,
                     smoothing_radius=smoothing_radius,
                     hidden_layer_sizes=hidden_layer_sizes,
                     n_spherical_harmonics=n_spherical_harmonics,
@@ -293,17 +258,60 @@ class GLOBE(Module):
 
         self.kernel_layers = nn.ModuleList(kernel_layers)
 
-        # Per-field learnable affine calibration (y = a*x + b). Bias is only
+        ### Per-field learnable affine calibration (y = a*x + b). Bias is only
         # applied to scalar fields; adding bias to vector fields would break
-        # rotational equivariance.
-        self.final_field_transforms = nn.ModuleDict({
-            field_name: nn.Linear(
+        # rotational equivariance. Uses ModuleList (not ModuleDict) to support
+        # output field names containing dots from nested rank specs.
+        self._output_field_order = sorted(
+            str(k) for k, _ in output_field_ranks.items(
+                include_nested=True, leaves_only=True,
+            )
+        )
+        flat_output_ranks = {
+            str(k): v for k, v in output_field_ranks.items(
+                include_nested=True, leaves_only=True,
+            )
+        }
+        self.final_field_transforms = nn.ModuleList([
+            nn.Linear(
                 in_features=1,
                 out_features=1,
-                bias=(output_fields[field_name] == "scalar"),
+                bias=(flat_output_ranks[name] == 0),
             )
-            for field_name in output_fields
-        })
+            for name in self._output_field_order
+        ])
+
+    def _build_source_data_ranks(
+        self,
+        bc_source_ranks: TensorDict,
+        include_latents: bool,
+    ) -> TensorDict:
+        """Build the full source_data_ranks for a specific (layer, bc_type) kernel.
+
+        Combines the BC's physical features (under ``"physical"``), cell
+        normals, and optionally latent features into a single rank spec
+        that mirrors the ``source_data`` structure produced by
+        :meth:`_evaluate_hyperlayer`.
+        """
+        result = TensorDict(
+            {"physical": bc_source_ranks, "normals": 1},
+            batch_size=[],
+        )
+        if include_latents:
+            result["latent"] = TensorDict(
+                {
+                    "scalars": TensorDict(
+                        {str(i): 0 for i in range(self.n_latent_scalars)},
+                        batch_size=[],
+                    ),
+                    "vectors": TensorDict(
+                        {str(i): 1 for i in range(self.n_latent_vectors)},
+                        batch_size=[],
+                    ),
+                },
+                batch_size=[],
+            )
+        return result
 
     def _evaluate_hyperlayer(
         self,
@@ -470,12 +478,9 @@ class GLOBE(Module):
             :class:`~physicsnemo.mesh.Mesh` objects.
         reference_lengths : dict[str, torch.Tensor]
             Mapping of reference length names to scalar tensors.
-        global_data : TensorDict[str, Float[torch.Tensor, "..."]] or None, optional, default=None
-            Nondimensional conditioning features. Contains a mix of scalar
-            (rank-0) and vector (rank-1) tensors that are split by rank
-            inside :class:`Kernel`. The scalar count must match
-            ``n_global_scalars`` and the vector count must match
-            ``n_global_vectors``. Passed through to the output Mesh.
+        global_data : TensorDict or None, optional, default=None
+            Nondimensional conditioning features. Leaf keys and ranks must
+            match ``global_data_ranks``. Passed through to the output Mesh.
         chunk_size : None | int | Literal["auto"], optional, default=None
             Controls memory usage during kernel evaluation.
 
@@ -494,7 +499,7 @@ class GLOBE(Module):
         device = prediction_points.device
 
         if global_data is None:
-            global_data = TensorDict({}, batch_size=[], device=device)
+            global_data = TensorDict({}, device=device)
 
         ### Input validation
         # Skip validation when running under torch.compile for performance
@@ -585,10 +590,11 @@ class GLOBE(Module):
             point_data=result,
             global_data=global_data,
         )
-        output_mesh.point_data.named_apply(
-            lambda name, tensor: self.final_field_transforms[name](
-                tensor.view(-1, 1)
-            ).view(tensor.shape),
-            inplace=True,
-        )
+        flat_data = output_mesh.point_data.flatten_keys(".")
+        for idx, name in enumerate(self._output_field_order):
+            t = flat_data[name]
+            flat_data[name] = self.final_field_transforms[idx](
+                t.view(-1, 1)
+            ).view(t.shape)
+        output_mesh.point_data = flat_data.unflatten_keys(".")
         return output_mesh

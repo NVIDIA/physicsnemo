@@ -39,6 +39,7 @@ from physicsnemo.nn.functional.equivariant_ops import (
 from physicsnemo.utils.logging import PythonLogger
 
 from physicsnemo.experimental.models.globe.utilities.tensordict_utils import (
+    _count_by_rank,
     combine_tensordicts,
     concatenate_leaves,
     concatenated_length,
@@ -67,18 +68,18 @@ class Kernel(Module):
     ----------
     n_spatial_dims : int
         Number of spatial dimensions (2 or 3).
-    output_fields : dict[str, Literal["scalar", "vector"]]
-        Dictionary mapping field names to their types. Each field type must be
-        either ``"scalar"`` or ``"vector"``. Vector fields have dimension equal
-        to ``n_spatial_dims``.
-    n_source_scalars : int, optional, default=0
-        Number of scalar properties expected per source point.
-    n_source_vectors : int, optional, default=0
-        Number of vector properties expected per source point.
-    n_global_scalars : int, optional, default=0
-        Number of global scalar properties.
-    n_global_vectors : int, optional, default=0
-        Number of global vector properties.
+    output_field_ranks : TensorDict
+        Rank-spec TensorDict with ``batch_size=[]`` and integer leaves
+        (0 = scalar, 1 = vector) describing the output fields. Nesting is
+        supported and mirrors the desired output structure. Derive from
+        data via :func:`ranks_from_tensordict`.
+    source_data_ranks : TensorDict
+        Rank-spec TensorDict with ``batch_size=[]`` describing per-source
+        features. The number of rank-0 leaves determines scalar input
+        width; rank-1 leaves determine vector input width.
+    global_data_ranks : TensorDict
+        Rank-spec TensorDict with ``batch_size=[]`` describing global
+        conditioning features.
     smoothing_radius : float, optional, default=1e-8
         Small value used to smooth power functions near zero to avoid numerical
         instabilities.
@@ -113,15 +114,13 @@ class Kernel(Module):
     source_data : TensorDict or None, optional, default=None
         Per-source features with ``batch_size=(N_sources,)``. Contains a mix
         of scalar (rank-0) and vector (rank-1) tensors; the kernel splits
-        them internally via :func:`split_by_leaf_rank`. The total scalar
-        count must match ``n_source_scalars`` and the total vector count
-        must match ``n_source_vectors``. All values must be dimensionless.
+        them internally via :func:`split_by_leaf_rank`. Leaf keys and ranks
+        must match ``source_data_ranks``. All values must be dimensionless.
     global_data : TensorDict or None, optional, default=None
         Problem-level features with ``batch_size=()``. Contains a mix of
-        scalar (rank-0) and vector (rank-1) tensors; split internally like
-        ``source_data``. The total scalar count must match
-        ``n_global_scalars`` and the total vector count must match
-        ``n_global_vectors``. All values must be dimensionless.
+        scalar (rank-0) and vector (rank-1) tensors; split internally.
+        Leaf keys and ranks must match ``global_data_ranks``. All values
+        must be dimensionless.
 
     Outputs
     -------
@@ -135,11 +134,9 @@ class Kernel(Module):
         self,
         *,
         n_spatial_dims: int,
-        output_fields: dict[str, Literal["scalar", "vector"]],
-        n_source_scalars: int = 0,
-        n_source_vectors: int = 0,
-        n_global_scalars: int = 0,
-        n_global_vectors: int = 0,
+        output_field_ranks: TensorDict[str, Int[torch.Tensor, ""]],
+        source_data_ranks: TensorDict[str, Int[torch.Tensor, ""]] | None = None,
+        global_data_ranks: TensorDict[str, Int[torch.Tensor, ""]] | None = None,
         smoothing_radius: float = 1e-8,
         hidden_layer_sizes: Sequence[int] | None = None,
         n_spherical_harmonics: int = 4,
@@ -149,15 +146,17 @@ class Kernel(Module):
     ):
         if hidden_layer_sizes is None:
             hidden_layer_sizes = [64]
+        if source_data_ranks is None:
+            source_data_ranks = TensorDict({})
+        if global_data_ranks is None:
+            global_data_ranks = TensorDict({})
 
         super().__init__()
 
         self.n_spatial_dims = n_spatial_dims
-        self.output_fields = output_fields
-        self.n_source_scalars = n_source_scalars
-        self.n_source_vectors = n_source_vectors
-        self.n_global_scalars = n_global_scalars
-        self.n_global_vectors = n_global_vectors
+        self.output_field_ranks = output_field_ranks
+        self.source_data_ranks = source_data_ranks
+        self.global_data_ranks = global_data_ranks
         self.smoothing_radius = smoothing_radius
         self.hidden_layer_sizes = hidden_layer_sizes
         self.n_spherical_harmonics = n_spherical_harmonics
@@ -200,12 +199,13 @@ class Kernel(Module):
         3. Pairwise spherical harmonic features for all :math:`\binom{n}{2}` vector
            pairs, each producing ``n_spherical_harmonics`` Legendre polynomial terms
         """
-        n_vectors_in: int = (
-            1  # r
-            + self.n_source_vectors
-            + self.n_global_vectors
-        )
-        n_scalars_in: int = self.n_source_scalars + self.n_global_scalars
+        n_source_vectors = _count_by_rank(self.source_data_ranks, target_rank=1)
+        n_global_vectors = _count_by_rank(self.global_data_ranks, target_rank=1)
+        n_source_scalars = _count_by_rank(self.source_data_ranks, target_rank=0)
+        n_global_scalars = _count_by_rank(self.global_data_ranks, target_rank=0)
+
+        n_vectors_in: int = 1 + n_source_vectors + n_global_vectors  # +1 for r
+        n_scalars_in: int = n_source_scalars + n_global_scalars
         n_vector_pairs_in: int = comb(n_vectors_in, 2)
 
         return (
@@ -221,13 +221,12 @@ class Kernel(Module):
         One channel per scalar output field, plus vector reprojection coefficients
         for each vector output field (1 radial + 2 per non-radial input vector).
         """
-        n_vectors_in: int = (
-            1  # r
-            + self.n_source_vectors
-            + self.n_global_vectors
-        )
-        n_scalars_out = sum(v == "scalar" for v in self.output_fields.values())
-        n_vectors_out = sum(v == "vector" for v in self.output_fields.values())
+        n_source_vectors = _count_by_rank(self.source_data_ranks, target_rank=1)
+        n_global_vectors = _count_by_rank(self.global_data_ranks, target_rank=1)
+        n_vectors_in: int = 1 + n_source_vectors + n_global_vectors  # +1 for r
+
+        n_scalars_out = _count_by_rank(self.output_field_ranks, target_rank=0)
+        n_vectors_out = _count_by_rank(self.output_field_ranks, target_rank=1)
         return n_scalars_out + n_vectors_out * (
             1  # r_hat
             + 2 * (n_vectors_in - 1)  # All non-r vectors
@@ -277,19 +276,16 @@ class Kernel(Module):
         if shape_for_vectors is None:
             shape_for_vectors = torch.Size([self.n_spatial_dims])
 
-        def get_shape(field_type: Literal["scalar", "vector"]) -> torch.Size:
-            if field_type == "scalar":
-                return shape_for_scalars  # type: ignore[return-value]
-            elif field_type == "vector":
-                return shape_for_vectors  # type: ignore[return-value]
-            else:
-                raise ValueError(
-                    f"Got {field_type=!r}; this must be one of ['scalar', 'vector']"
-                )
+        shapes_by_rank: dict[int, torch.Size] = {
+            0: shape_for_scalars,
+            1: shape_for_vectors,
+        }
 
         output_field_shapes: dict[str, torch.Size] = {
-            field_name: get_shape(field_type)
-            for field_name, field_type in self.output_fields.items()
+            field_name: shapes_by_rank[int(rank)]
+            for field_name, rank in self.output_field_ranks.items(
+                include_nested=True, leaves_only=True
+            )
         }
 
         # Skip validation when running under torch.compile for performance
@@ -372,7 +368,7 @@ class Kernel(Module):
         if source_data is None:
             source_data = TensorDict({}, batch_size=[n_sources], device=device)
         if global_data is None:
-            global_data = TensorDict({}, batch_size=[], device=device)
+            global_data = TensorDict({}, device=device)
 
         ### Split by tensor rank for equivariant feature engineering
         source_by_rank = split_by_leaf_rank(source_data)
@@ -408,22 +404,26 @@ class Kernel(Module):
                     f"Expected target_points last dimension to be {self.n_spatial_dims}, "
                     f"got {target_points.shape[-1]}"
                 )
+            n_source_scalars_expected = _count_by_rank(self.source_data_ranks, target_rank=0)
+            n_source_vectors_expected = _count_by_rank(self.source_data_ranks, target_rank=1)
+            n_global_scalars_expected = _count_by_rank(self.global_data_ranks, target_rank=0)
+            n_global_vectors_expected = _count_by_rank(self.global_data_ranks, target_rank=1)
             for name, (actual, expected) in {
-                "source_scalars": (
+                "source scalars": (
                     concatenated_length(source_scalars),
-                    self.n_source_scalars,
+                    n_source_scalars_expected,
                 ),
-                "source_vectors": (
+                "source vectors": (
                     concatenated_length(source_vectors),
-                    self.n_source_vectors,
+                    n_source_vectors_expected,
                 ),
-                "global_scalars": (
+                "global scalars": (
                     concatenated_length(global_scalars),
-                    self.n_global_scalars,
+                    n_global_scalars_expected,
                 ),
-                "global_vectors": (
+                "global vectors": (
                     concatenated_length(global_vectors),
-                    self.n_global_vectors,
+                    n_global_vectors_expected,
                 ),
             }.items():
                 if actual != expected:
@@ -573,7 +573,10 @@ class Kernel(Module):
         # preserves rotational invariance.
 
         vector_reprojection_needed = any(
-            field_type == "vector" for field_type in self.output_fields.values()
+            rank == 1
+            for rank in self.output_field_ranks.values(
+                include_nested=True, leaves_only=True
+            )
         )
 
         if vector_reprojection_needed:
@@ -651,8 +654,10 @@ class Kernel(Module):
             # shape (n_targets, n_sources, n_spatial_dims, 4 * n_vectors)
 
             ### Now, reproject each vector field onto the basis vectors
-            for field_name in self.output_fields:
-                if self.output_fields[field_name] == "vector":
+            for field_name, rank in self.output_field_ranks.items(
+                include_nested=True, leaves_only=True
+            ):
+                if rank == 1:
                     # # ORIGINAL (SLOW) - keeping for reference, as this is the most readable version
                     # # Axes: t = target, s = source, d = dim, b = basis vector id
                     # result[field_name] = torch.einsum(
@@ -919,19 +924,17 @@ class MultiscaleKernel(Module):
     ----------
     n_spatial_dims : int
         Number of spatial dimensions (2 or 3).
-    output_fields : dict[str, Literal["scalar", "vector"]]
-        Dictionary mapping field names to types (``"scalar"`` or ``"vector"``).
+    output_field_ranks : TensorDict
+        Rank-spec TensorDict (see :class:`Kernel`).
     reference_length_names : Sequence[str]
         Sequence of identifiers for reference length scales. Each creates an
         independent kernel branch. Examples: ``["viscous", "geometric"]``.
-    n_source_scalars : int, optional, default=0
-        Number of scalar features per source face.
-    n_source_vectors : int, optional, default=0
-        Number of vector features per source face.
-    n_global_scalars : int, optional, default=0
-        Number of global scalar features (excluding auto-added length ratios).
-    n_global_vectors : int, optional, default=0
-        Number of global vector features.
+    source_data_ranks : TensorDict or None, optional
+        Rank-spec TensorDict for per-source features (see :class:`Kernel`).
+    global_data_ranks : TensorDict or None, optional
+        Rank-spec TensorDict for global features (see :class:`Kernel`).
+        Log-ratios of reference lengths are automatically added as scalar
+        entries before passing to each kernel branch.
     smoothing_radius : float, optional, default=1e-8
         Small value for numerical stability in magnitude computations.
     hidden_layer_sizes : Sequence[int] or None, optional, default=None
@@ -978,9 +981,9 @@ class MultiscaleKernel(Module):
     --------
     >>> kernel = MultiscaleKernel(
     ...     n_spatial_dims=2,
-    ...     output_fields={"phi": "scalar", "u": "vector"},
+    ...     output_field_ranks=TensorDict({"phi": 0, "u": 1}),
     ...     reference_length_names=["viscous_length", "chord_length"],
-    ...     n_source_vectors=1,  # e.g., normal vector
+    ...     source_data_ranks=TensorDict({"normal": 1}),
     ...     hidden_layer_sizes=[64, 64],
     ... )
     >>> result = kernel(
@@ -998,12 +1001,10 @@ class MultiscaleKernel(Module):
         self,
         *,
         n_spatial_dims: int,
-        output_fields: dict[str, Literal["scalar", "vector"]],
+        output_field_ranks: TensorDict[str, Int[torch.Tensor, ""]],
         reference_length_names: Sequence[str],
-        n_source_scalars: int = 0,
-        n_source_vectors: int = 0,
-        n_global_scalars: int = 0,
-        n_global_vectors: int = 0,
+        source_data_ranks: TensorDict[str, Int[torch.Tensor, ""]] | None = None,
+        global_data_ranks: TensorDict[str, Int[torch.Tensor, ""]] | None = None,
         smoothing_radius: float = 1e-8,
         hidden_layer_sizes: Sequence[int] | None = None,
         n_spherical_harmonics: int = 4,
@@ -1013,13 +1014,16 @@ class MultiscaleKernel(Module):
     ):
         super().__init__()
 
+        if source_data_ranks is None:
+            source_data_ranks = TensorDict({})
+        if global_data_ranks is None:
+            global_data_ranks = TensorDict({})
+
         self.n_spatial_dims = n_spatial_dims
-        self.output_fields = output_fields
+        self.output_field_ranks = output_field_ranks
         self.reference_length_names = reference_length_names
-        self.n_source_scalars = n_source_scalars
-        self.n_source_vectors = n_source_vectors
-        self.n_global_scalars = n_global_scalars
-        self.n_global_vectors = n_global_vectors
+        self.source_data_ranks = source_data_ranks
+        self.global_data_ranks = global_data_ranks
         self.smoothing_radius = smoothing_radius
         self.hidden_layer_sizes = hidden_layer_sizes
         self.n_spherical_harmonics = n_spherical_harmonics
@@ -1027,16 +1031,19 @@ class MultiscaleKernel(Module):
         self.spectral_norm = spectral_norm
         self.use_gradient_checkpointing = use_gradient_checkpointing
 
+        ### Augment global_data_ranks with log-ratio entries for each
+        # pair of reference lengths. These are rank-0 (scalar) features.
+        augmented_global = global_data_ranks.clone()
+        for k1, k2 in itertools.combinations(reference_length_names, 2):
+            augmented_global[f"log_reference_length_ratio_{k1}_{k2}"] = 0
+
         self.kernels = nn.ModuleDict(
             {
                 name: ChunkedKernel(
                     n_spatial_dims=n_spatial_dims,
-                    output_fields=output_fields,
-                    n_source_scalars=n_source_scalars,
-                    n_source_vectors=n_source_vectors,
-                    n_global_scalars=n_global_scalars
-                    + comb(len(reference_length_names), 2),
-                    n_global_vectors=n_global_vectors,
+                    output_field_ranks=output_field_ranks,
+                    source_data_ranks=source_data_ranks,
+                    global_data_ranks=augmented_global,
                     smoothing_radius=smoothing_radius,
                     hidden_layer_sizes=hidden_layer_sizes,
                     n_spherical_harmonics=n_spherical_harmonics,
@@ -1117,7 +1124,7 @@ class MultiscaleKernel(Module):
         if source_data is None:
             source_data = TensorDict({}, batch_size=[n_sources], device=device)
         if global_data is None:
-            global_data = TensorDict({}, batch_size=[], device=device)
+            global_data = TensorDict({}, device=device)
 
         # Skip validation when running under torch.compile for performance
         if not torch.compiler.is_compiling():

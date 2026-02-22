@@ -408,7 +408,7 @@ class TestExtrude:
         ### Create mesh with global data
         points = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
-        global_data = TensorDict({"timestamp": torch.tensor(12345)}, batch_size=[])
+        global_data = TensorDict({"timestamp": torch.tensor(12345)})
         mesh = Mesh(points=points, cells=cells, global_data=global_data)
 
         ### Extrude
@@ -694,7 +694,7 @@ class TestEmbed:
         ### Create mesh with global data
         points = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
-        global_data = TensorDict({"simulation_time": torch.tensor(1.5)}, batch_size=[])
+        global_data = TensorDict({"simulation_time": torch.tensor(1.5)})
         mesh = Mesh(points=points, cells=cells, global_data=global_data)
 
         ### Embed in 3D
@@ -1007,7 +1007,7 @@ class TestProject:
             {"temperature": torch.tensor([300.0, 400.0])}, batch_size=[2]
         )
         cell_data = TensorDict({"region_id": torch.tensor([42])}, batch_size=[1])
-        global_data = TensorDict({"time": torch.tensor(1.5)}, batch_size=[])
+        global_data = TensorDict({"time": torch.tensor(1.5)})
         mesh = Mesh(
             points=points,
             cells=cells,

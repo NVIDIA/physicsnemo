@@ -244,6 +244,66 @@ def split_by_leaf_rank(
     return result
 
 
+def ranks_from_tensordict(td: TensorDict) -> TensorDict:
+    r"""Derives a rank-spec TensorDict from a data TensorDict.
+
+    Each leaf tensor is replaced by its rank (number of non-batch dimensions),
+    producing a TensorDict with ``batch_size=[]`` whose leaves are plain
+    integers. The resulting TensorDict preserves the nesting structure of
+    the input and serves as a structural descriptor - for example, as the
+    ``output_field_ranks`` argument to :class:`Kernel`.
+
+    Parameters
+    ----------
+    td : TensorDict
+        Data TensorDict whose leaf ranks should be extracted.
+
+    Returns
+    -------
+    TensorDict
+        Rank-spec TensorDict with ``batch_size=[]`` and integer leaves.
+
+    Examples
+    --------
+    >>> td = TensorDict({
+    ...     "pressure": torch.randn(10),       # rank 0 (scalar)
+    ...     "velocity": torch.randn(10, 3),    # rank 1 (vector)
+    ... }, batch_size=[10])
+    >>> ranks_from_tensordict(td)
+    TensorDict({"pressure": 0, "velocity": 1})
+    """
+    return td.apply(lambda x: x.ndim - td.batch_dims)
+
+
+def _count_by_rank(rank_spec: TensorDict, target_rank: int) -> int:
+    r"""Counts leaves in a rank-spec TensorDict that match a target rank.
+
+    Parameters
+    ----------
+    rank_spec : TensorDict
+        Rank-spec TensorDict with ``batch_size=[]`` and integer leaves.
+    target_rank : int
+        The rank to count (e.g., 0 for scalars, 1 for vectors).
+
+    Returns
+    -------
+    int
+        Number of leaves whose value equals ``target_rank``.
+
+    Examples
+    --------
+    >>> spec = TensorDict({"a": 0, "b": 0, "c": 1})
+    >>> _count_by_rank(spec, target_rank=0)
+    2
+    >>> _count_by_rank(spec, target_rank=1)
+    1
+    """
+    return sum(
+        1 for v in rank_spec.values(include_nested=True, leaves_only=True)
+        if v == target_rank
+    )
+
+
 def combine_tensordicts(*tds: TensorDict[str, torch.Tensor]) -> TensorDict[str, torch.Tensor]:
     r"""Combines multiple TensorDicts into a single TensorDict by merging their keys.
 

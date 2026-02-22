@@ -65,21 +65,40 @@ def make_kernel_and_input_data(
 
     torch.manual_seed(seed)
 
-    # Create kernel
+    ### Build rank specs from output_fields
+    output_field_ranks = TensorDict(
+        {k: (0 if v == "scalar" else 1) for k, v in output_fields.items()},
+        batch_size=[],
+    )
+
+    ### Build source and global rank specs from counts
+    source_data_ranks = TensorDict(
+        {
+            **{f"source_scalar_{i}": 0 for i in range(n_source_scalars)},
+            **{f"source_vector_{i}": 1 for i in range(n_source_vectors)},
+        },
+        batch_size=[],
+    )
+    global_data_ranks = TensorDict(
+        {
+            **{f"global_scalar_{i}": 0 for i in range(n_global_scalars)},
+            **{f"global_vector_{i}": 1 for i in range(n_global_vectors)},
+        },
+        batch_size=[],
+    )
+
     kernel = ChunkedKernel(
         n_spatial_dims=n_spatial_dims,
-        n_source_scalars=n_source_scalars,
-        n_source_vectors=n_source_vectors,
-        output_fields=output_fields,
-        n_global_scalars=n_global_scalars,
-        n_global_vectors=n_global_vectors,
+        output_field_ranks=output_field_ranks,
+        source_data_ranks=source_data_ranks,
+        global_data_ranks=global_data_ranks,
         n_spherical_harmonics=n_spherical_harmonics,
         hidden_layer_sizes=hidden_layer_sizes,
         smoothing_radius=smoothing_radius,
     ).to(device)
     kernel.eval()
 
-    # Create compatible input data
+    ### Build compatible input data tensors
     torch.manual_seed(seed)
 
     source_data_dict: dict[str, torch.Tensor] = {}
