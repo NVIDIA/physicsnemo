@@ -276,6 +276,8 @@ def ranks_from_tensordict(td: TensorDict) -> TensorDict:
 def _rank_counts(rank_spec: TensorDict) -> Counter[int]:
     r"""Counts leaves by rank value in a rank-spec TensorDict.
 
+    Essentially gives an object to answer: "How many tensors in rank_spec have rank X?"
+
     Parameters
     ----------
     rank_spec : TensorDict
