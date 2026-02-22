@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
 
 import pyvista as pv
 import torch
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from tensordict import TensorDict, tensorclass
 from torch.distributed import ReduceOp, all_reduce, is_initialized
 from torch.utils.data import DataLoader, Dataset

@@ -653,8 +653,8 @@ def main(
 
 
 def field_loss_fn(
-    pred: torch.Tensor, true: torch.Tensor, error_scale: torch.Tensor
-) -> torch.Tensor:
+    pred: Float[torch.Tensor, "n_points ..."], true: Float[torch.Tensor, "n_points ..."], error_scale: Float[torch.Tensor, ""]
+) -> Float[torch.Tensor, "n_points ..."]:
     """Per-point Huber loss for GLOBE field predictions, with NaN masking.
 
     Computes the scaled error ``(pred - true) / error_scale``, masks out
