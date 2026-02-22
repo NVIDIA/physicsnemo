@@ -15,7 +15,6 @@
 # limitations under the License.
 
 import json
-import logging
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from functools import cache
@@ -241,15 +240,15 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         )
 
         ### Reference quantities from freestream boundary
-        U_inf = freestream.cell_data["U"].mean(dim=0)  # (2,)
+        U_inf: torch.Tensor = freestream.cell_data["U"].mean(dim=0)  # ty: ignore[invalid-assignment]  # (2,)
         U_inf_magnitude = torch.norm(U_inf)
         q_inf = 0.5 * RHO * U_inf_magnitude**2
         chord = 1.0
 
         ### Nondimensional volume fields (from raw simulation data on internal mesh)
-        U = internal.point_data["U"]  # (n_points, 2)
-        p = internal.point_data["p"]  # (n_points,)
-        nut = internal.point_data["nut"]  # (n_points,)
+        U: torch.Tensor = internal.point_data["U"]  # ty: ignore[invalid-assignment]  # (n_points, 2)
+        p: torch.Tensor = internal.point_data["p"]  # ty: ignore[invalid-assignment]  # (n_points,)
+        nut: torch.Tensor = internal.point_data["nut"]  # ty: ignore[invalid-assignment]  # (n_points,)
 
         U_over_U_inf = U / U_inf_magnitude
         C_p = p / q_inf
@@ -258,13 +257,19 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
 
         ### Gradient fields via Mesh calculus
         mesh_with_grads = compute_point_derivatives(mesh=internal, keys=["p", "U"])
-        grad_C_p = mesh_with_grads.point_data["p_gradient"] * (chord / q_inf)
+        grad_C_p: torch.Tensor = mesh_with_grads.point_data["p_gradient"] * (  # ty: ignore[invalid-assignment]
+            chord / q_inf
+        )
         grad_C_p[grad_C_p.norm(dim=-1) > 20] = torch.nan
 
-        velocity_jacobian = mesh_with_grads.point_data["U_gradient"]  # (n_points, 2, 2)
+        velocity_jacobian: torch.Tensor = mesh_with_grads.point_data[  # ty: ignore[invalid-assignment]
+            "U_gradient"
+        ]  # (n_points, 2, 2)
 
         ### Surface force fields
-        point_is_on_airfoil = internal.point_data["implicit_distance"] == 0
+        point_is_on_airfoil: torch.Tensor = (  # ty: ignore[invalid-assignment]
+            internal.point_data["implicit_distance"] == 0
+        )
         nearest_airfoil_idx = torch.cdist(
             internal.points,
             airfoil.points,
@@ -317,15 +322,13 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 ),
             ),
             boundary_meshes=TensorDict(
-                {"no_slip": Mesh(points=airfoil.points, cells=airfoil.cells)},
-                batch_size=[],
+                {"no_slip": Mesh(points=airfoil.points, cells=airfoil.cells)},  # ty: ignore[invalid-argument-type]
             ),
             reference_lengths=TensorDict(
                 {
                     "chord": torch.as_tensor(chord),
                     "delta_FS": torch.as_tensor((NU / U_inf_magnitude * chord) ** 0.5),
                 },
-                batch_size=torch.Size([]),
             ),
             dimensional_constants=TensorDict(
                 {
@@ -333,7 +336,6 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                     "q_inf": q_inf,
                 }
             ),
-            batch_size=torch.Size([]),
         )
 
     @staticmethod
@@ -341,7 +343,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         pred_mesh: Mesh,
         true_mesh: Mesh,
         *,
-        fields: Sequence[str] | None = None,
+        fields: Sequence[str | tuple[str, ...]] | None = None,
         show: bool = True,
         show_error: bool = True,
     ) -> Mesh:
@@ -380,8 +382,9 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
 
         ### Determine fields to compare
         if fields is None:
-            fields = sorted(
-                set(pred_mesh.point_data.keys()) & set(true_mesh.point_data.keys())
+            fields: list[str | tuple[str, ...]] = sorted(
+                set(pred_mesh.point_data.keys(include_nested=True, leaves_only=True))
+                & set(true_mesh.point_data.keys(include_nested=True, leaves_only=True))
             )
 
         ### Build combined Mesh with nested point_data
@@ -419,8 +422,8 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
 
         for col, field_name in enumerate(fields):
             ### Compute shared vmin/vmax across truth and prediction
-            true_vals = true_selected[field_name]
-            pred_vals = pred_selected[field_name]
+            true_vals: torch.Tensor = true_selected[field_name]  # ty: ignore[invalid-assignment]
+            pred_vals: torch.Tensor = pred_selected[field_name]  # ty: ignore[invalid-assignment]
             is_vector = true_vals.ndim > 1 and true_vals.shape[-1] > 1
             true_scalars = (
                 true_vals.norm(dim=-1) if is_vector else true_vals.reshape(-1)
@@ -473,8 +476,8 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                     show_edges=False,
                 )
 
-                sm = mpl.cm.ScalarMappable(  # ty: ignore[unresolved-attribute]
-                    norm=mpl.colors.Normalize(vmin=vmin, vmax=vmax),  # ty: ignore[unresolved-attribute]
+                sm = mpl.cm.ScalarMappable(
+                    norm=mpl.colors.Normalize(vmin=vmin, vmax=vmax),
                     cmap=plt.get_cmap(cmap),
                 )
                 fig.colorbar(

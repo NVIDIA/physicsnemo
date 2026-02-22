@@ -123,8 +123,8 @@ def main(
     """
     ### [Config Processing]
     if data_dir is None:
-        if data_dir := os.environ.get("AIRFRANS_DATA_DIR"):
-            data_dir = Path(data_dir)
+        if _data_dir_str := os.environ.get("AIRFRANS_DATA_DIR"):
+            data_dir = Path(_data_dir_str)
         else:
             raise ValueError(
                 "AirFRANS data directory not specified. Pass `data_dir` or set the AIRFRANS_DATA_DIR environment variable."
@@ -160,7 +160,8 @@ def main(
     logger0.info(f"{dist.world_size = }")
 
     error_scales: TensorDict[str, Float[torch.Tensor, ""]] = TensorDict(
-        error_scales, device=device
+        error_scales,  # ty: ignore[invalid-argument-type]
+        device=device,
     )
     if dist.rank == 0:
         torch._logging.set_logs(graph_breaks=True, recompiles=True)
@@ -210,17 +211,17 @@ def main(
         n_spatial_dims=2,
         output_field_ranks=TensorDict(
             {
-                "ΔU/|U_inf|": 1,
-                "C_p": 0,
-                "C_pt": 0,
-                "ln(1+nut/nu)": 0,
-                "C_F,shear": 1,
+                "ΔU/|U_inf|": torch.tensor(1),
+                "C_p": torch.tensor(0),
+                "C_pt": torch.tensor(0),
+                "ln(1+nut/nu)": torch.tensor(0),
+                "C_F,shear": torch.tensor(1),
             }
         ),
         boundary_source_data_ranks={"no_slip": TensorDict({})},
         reference_length_names=["chord", "delta_FS"],
         reference_area=1.0,
-        global_data_ranks=TensorDict({"U_inf / U_inf_magnitude": 1}),
+        global_data_ranks=TensorDict({"U_inf / U_inf_magnitude": torch.tensor(1)}),
         n_communication_hyperlayers=n_communication_hyperlayers,
         hidden_layer_sizes=hidden_layer_sizes,
         n_latent_scalars=n_latent_scalars,
@@ -284,7 +285,7 @@ def main(
         )
     else:
         optimizer = torch.optim.RAdam(
-            model.parameters(),  # ty: ignore[unresolved-attribute]
+            model.parameters(),
             lr=learning_rate,
             weight_decay=weight_decay,
             decoupled_weight_decay=True,
