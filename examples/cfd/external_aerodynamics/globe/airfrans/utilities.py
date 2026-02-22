@@ -52,7 +52,7 @@ def disable_autotune_printing() -> None:
         from torch._inductor import config, select_algorithm
 
         config.max_autotune_report_choices_stats = False
-        select_algorithm.PRINT_AUTOTUNE = False
+        select_algorithm.PRINT_AUTOTUNE = False  # ty: ignore[invalid-assignment]
     except (ImportError, AttributeError):
         pass
 

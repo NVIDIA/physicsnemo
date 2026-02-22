@@ -22,7 +22,6 @@ from pathlib import Path
 
 import torch
 import yaml
-
 from dataset import AirFRANSDataSet
 from utilities import disable_autotune_printing
 
@@ -70,7 +69,7 @@ sample = AirFRANSDataSet.preprocess(sample_path).to(device)
 
 ### [Model]
 hyperparameters = yaml.safe_load((output_dir / "hyperparameters.yaml").read_text())
-model = GLOBE(  # ty: ignore[missing-argument]
+model = GLOBE(
     **hyperparameters["model"],
 ).to(device)
 
