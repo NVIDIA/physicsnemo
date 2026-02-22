@@ -30,7 +30,7 @@ from torch.utils.checkpoint import checkpoint
 
 from physicsnemo.core.module import Module
 from physicsnemo.experimental.models.globe.utilities.tensordict_utils import (
-    _count_by_rank,
+    _rank_counts,
     concatenate_leaves,
     concatenated_length,
     split_by_leaf_rank,
@@ -204,13 +204,11 @@ class Kernel(Module):
         3. Pairwise spherical harmonic features for all :math:`\binom{n}{2}` vector
            pairs, each producing ``n_spherical_harmonics`` Legendre polynomial terms
         """
-        n_source_vectors = _count_by_rank(self.source_data_ranks, target_rank=1)
-        n_global_vectors = _count_by_rank(self.global_data_ranks, target_rank=1)
-        n_source_scalars = _count_by_rank(self.source_data_ranks, target_rank=0)
-        n_global_scalars = _count_by_rank(self.global_data_ranks, target_rank=0)
+        source_rank_counts = _rank_counts(self.source_data_ranks)
+        global_rank_counts = _rank_counts(self.global_data_ranks)
 
-        n_vectors_in: int = 1 + n_source_vectors + n_global_vectors  # +1 for r
-        n_scalars_in: int = n_source_scalars + n_global_scalars
+        n_vectors_in: int = 1 + source_rank_counts[1] + global_rank_counts[1]  # +1 for r
+        n_scalars_in: int = source_rank_counts[0] + global_rank_counts[0]
         n_vector_pairs_in: int = comb(n_vectors_in, 2)
 
         return (
@@ -224,13 +222,12 @@ class Kernel(Module):
         One channel per scalar output field, plus vector reprojection coefficients
         for each vector output field (1 radial + 2 per non-radial input vector).
         """
-        n_source_vectors = _count_by_rank(self.source_data_ranks, target_rank=1)
-        n_global_vectors = _count_by_rank(self.global_data_ranks, target_rank=1)
-        n_vectors_in: int = 1 + n_source_vectors + n_global_vectors  # +1 for r
+        source_rank_counts = _rank_counts(self.source_data_ranks)
+        global_rank_counts = _rank_counts(self.global_data_ranks)
+        output_rank_counts = _rank_counts(self.output_field_ranks)
+        n_vectors_in: int = 1 + source_rank_counts[1] + global_rank_counts[1]  # +1 for r
 
-        n_scalars_out = _count_by_rank(self.output_field_ranks, target_rank=0)
-        n_vectors_out = _count_by_rank(self.output_field_ranks, target_rank=1)
-        return n_scalars_out + n_vectors_out * (
+        return output_rank_counts[0] + output_rank_counts[1] * (
             1  # r_hat
             + 2 * (n_vectors_in - 1)  # All non-r vectors
         )
@@ -407,26 +404,24 @@ class Kernel(Module):
                     f"Expected target_points last dimension to be {self.n_spatial_dims}, "
                     f"got {target_points.shape[-1]}"
                 )
-            n_source_scalars_expected = _count_by_rank(self.source_data_ranks, target_rank=0)
-            n_source_vectors_expected = _count_by_rank(self.source_data_ranks, target_rank=1)
-            n_global_scalars_expected = _count_by_rank(self.global_data_ranks, target_rank=0)
-            n_global_vectors_expected = _count_by_rank(self.global_data_ranks, target_rank=1)
+            source_rank_counts = _rank_counts(self.source_data_ranks)
+            global_rank_counts = _rank_counts(self.global_data_ranks)
             for name, (actual, expected) in {
                 "source scalars": (
                     concatenated_length(source_scalars),
-                    n_source_scalars_expected,
+                    source_rank_counts[0],
                 ),
                 "source vectors": (
                     concatenated_length(source_vectors),
-                    n_source_vectors_expected,
+                    source_rank_counts[1],
                 ),
                 "global scalars": (
                     concatenated_length(global_scalars),
-                    n_global_scalars_expected,
+                    global_rank_counts[0],
                 ),
                 "global vectors": (
                     concatenated_length(global_vectors),
-                    n_global_vectors_expected,
+                    global_rank_counts[1],
                 ),
             }.items():
                 if actual != expected:
@@ -607,7 +602,7 @@ class Kernel(Module):
                 if k == "r":
                     continue
 
-                scale = vectors_log_mag[k][..., None]
+                scale: torch.Tensor = vectors_log_mag[k][..., None]  # ty: ignore[invalid-assignment]
 
                 basis_vector_components.append(scale * vectors_hat[k])
 

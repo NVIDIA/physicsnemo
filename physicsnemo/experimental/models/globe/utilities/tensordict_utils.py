@@ -21,6 +21,7 @@ including concatenation of leaf tensors, computing total lengths, and
 splitting by tensor rank.
 """
 
+from collections import Counter
 from math import prod
 
 import torch
@@ -272,33 +273,30 @@ def ranks_from_tensordict(td: TensorDict) -> TensorDict:
     return td.apply(lambda x: x.ndim - td.batch_dims)  # ty: ignore[invalid-return-type]
 
 
-def _count_by_rank(rank_spec: TensorDict, target_rank: int) -> int:
-    r"""Counts leaves in a rank-spec TensorDict that match a target rank.
+def _rank_counts(rank_spec: TensorDict) -> Counter[int]:
+    r"""Counts leaves by rank value in a rank-spec TensorDict.
 
     Parameters
     ----------
     rank_spec : TensorDict
-        Rank-spec TensorDict with ``batch_size=[]`` and integer leaves.
-    target_rank : int
-        The rank to count (e.g., 0 for scalars, 1 for vectors).
+        Rank-spec TensorDict with ``batch_size=[]`` and integer tensor leaves.
 
     Returns
     -------
-    int
-        Number of leaves whose value equals ``target_rank``.
+    Counter[int]
+        Mapping from rank value to the number of leaves with that rank.
+        Missing ranks default to 0.
 
     Examples
     --------
-    >>> spec = TensorDict({"a": 0, "b": 0, "c": 1})
-    >>> _count_by_rank(spec, target_rank=0)
-    2
-    >>> _count_by_rank(spec, target_rank=1)
-    1
+    >>> spec = TensorDict({"a": torch.tensor(0), "b": torch.tensor(0), "c": torch.tensor(1)})
+    >>> counts = _rank_counts(spec)
+    >>> counts[0], counts[1]
+    (2, 1)
     """
-    return sum(
-        1
+    return Counter(
+        int(v.item())  # ty: ignore[unresolved-attribute]
         for v in rank_spec.values(include_nested=True, leaves_only=True)
-        if v == target_rank
     )
 
 
