@@ -629,7 +629,7 @@ def compute_max_mesh_sizes(
     *,
     face_downsampling_ratio: float = 1.0,
     rank: int = 0,
-) -> dict[str, dict[str, int]]:
+) -> TensorDict[str, TensorDict[Literal["n_points", "n_cells"], Int[torch.Tensor, ""]]]:
     """Compute the maximum n_points and n_cells per boundary-condition type.
 
     Scans all samples in *dataloader*, tracking the largest boundary mesh
@@ -646,9 +646,11 @@ def compute_max_mesh_sizes(
         rank: Distributed rank (progress bar shown only on rank 0).
 
     Returns:
-        Mapping ``{bc_type: {"n_points": int, "n_cells": int}}``.
+        TensorDict ``{bc_type: {"n_points": Tensor, "n_cells": Tensor}}``
+        where each leaf is a scalar integer tensor on *device*.
     """
-    max_sizes: dict[str, dict[str, int]] = defaultdict(
+    ### Accumulate max sizes per BC type using plain ints (fast comparisons)
+    raw_maxes: dict[str, dict[str, int]] = defaultdict(
         lambda: {"n_points": 0, "n_cells": 0}
     )
 
@@ -658,33 +660,41 @@ def compute_max_mesh_sizes(
         disable=rank != 0,
     ):
         for bc_type, mesh in sample.boundary_meshes.items():
-            max_sizes[bc_type]["n_points"] = max(
-                max_sizes[bc_type]["n_points"], mesh.n_points
+            raw_maxes[bc_type]["n_points"] = max(
+                raw_maxes[bc_type]["n_points"], mesh.n_points
             )
             n_cells = (
                 int(mesh.n_cells * face_downsampling_ratio)
                 if face_downsampling_ratio != 1.0
                 else mesh.n_cells
             )
-            max_sizes[bc_type]["n_cells"] = max(
-                max_sizes[bc_type]["n_cells"],
+            raw_maxes[bc_type]["n_cells"] = max(
+                raw_maxes[bc_type]["n_cells"],
                 n_cells,
             )
 
-    for bc_type in max_sizes:
-        size_tensor = torch.tensor(
-            [max_sizes[bc_type]["n_points"], max_sizes[bc_type]["n_cells"]],
-            device=device,
-        )
-        if is_initialized():
-            all_reduce(size_tensor, op=ReduceOp.MAX)
-        max_sizes[bc_type]["n_points"] = int(size_tensor[0])
-        max_sizes[bc_type]["n_cells"] = int(size_tensor[1])
+    ### Convert to TensorDict and all-reduce across ranks
+    result = TensorDict(
+        {
+            bc_type: TensorDict(
+                {
+                    "n_points": torch.tensor(sizes["n_points"], device=device),
+                    "n_cells": torch.tensor(sizes["n_cells"], device=device),
+                }
+            )
+            for bc_type, sizes in raw_maxes.items()
+        },
+    )
+
+    if is_initialized():
+        for bc_type in result.keys(include_nested=False):
+            all_reduce(result[bc_type, "n_points"], op=ReduceOp.MAX)
+            all_reduce(result[bc_type, "n_cells"], op=ReduceOp.MAX)
 
     if rank == 0:
-        logger.info(f"Max mesh sizes: {dict(max_sizes)}")
+        logger.info(f"Max mesh sizes: {result}")
 
-    return dict(max_sizes)
+    return result
 
 
 if __name__ == "__main__":

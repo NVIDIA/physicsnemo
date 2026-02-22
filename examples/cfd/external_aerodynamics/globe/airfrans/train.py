@@ -31,7 +31,7 @@ import torch
 import torch.nn.functional as F
 import torchinfo
 from dataset import AirFRANSDataSet, AirFRANSSample, compute_max_mesh_sizes
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from mlflow.tracking.fluent import (
     active_run,
     log_artifact,
@@ -259,7 +259,12 @@ def main(
         )
 
     ### [Compute Maximum Mesh Sizes Per BC Type and Split]
-    max_sizes: dict[Split, dict[str, dict[str, int]]] = {
+    max_sizes: dict[
+        Split,
+        TensorDict[
+            str, TensorDict[Literal["n_points", "n_cells"], Int[torch.Tensor, ""]]
+        ],
+    ] = {
         split: compute_max_mesh_sizes(
             dataloaders[split],
             device,
@@ -443,8 +448,8 @@ def main(
                     # traced by Dynamo (avoiding graph breaks and recompilations).
                     _ = mesh.cell_normals
                     sample.boundary_meshes[bc_type] = mesh.pad(
-                        target_n_points=split_max_sizes[bc_type]["n_points"],
-                        target_n_cells=split_max_sizes[bc_type]["n_cells"],
+                        target_n_points=int(split_max_sizes[bc_type, "n_points"]),
+                        target_n_cells=int(split_max_sizes[bc_type, "n_cells"]),
                         data_padding_value=0.0,
                     )
 
