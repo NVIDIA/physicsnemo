@@ -56,7 +56,7 @@ def concatenated_length(td: TensorDict[str, torch.Tensor]) -> int:
     13
     """
     return sum(
-        prod(t.shape[td.batch_dims :])  # ty: ignore[unresolved-attribute]
+        prod(t.shape[td.batch_dims :])
         for t in td.values(include_nested=True, leaves_only=True)
     )
 
@@ -97,10 +97,7 @@ def concatenate_leaves(td: TensorDict[str, torch.Tensor]) -> torch.Tensor:
         return torch.empty(td.batch_size + torch.Size([0]), device=td.device)
     else:
         return torch.cat(
-            [
-                t.reshape(td.batch_size + torch.Size([-1]))  # ty: ignore[unresolved-attribute]
-                for t in tensors
-            ],
+            [t.reshape(td.batch_size + torch.Size([-1])) for t in tensors],
             dim=-1,
         )
 
@@ -272,7 +269,7 @@ def ranks_from_tensordict(td: TensorDict) -> TensorDict:
     >>> ranks_from_tensordict(td)
     TensorDict({"pressure": 0, "velocity": 1})
     """
-    return td.apply(lambda x: x.ndim - td.batch_dims)
+    return td.apply(lambda x: x.ndim - td.batch_dims)  # ty: ignore[invalid-return-type]
 
 
 def _count_by_rank(rank_spec: TensorDict, target_rank: int) -> int:
@@ -299,12 +296,15 @@ def _count_by_rank(rank_spec: TensorDict, target_rank: int) -> int:
     1
     """
     return sum(
-        1 for v in rank_spec.values(include_nested=True, leaves_only=True)
+        1
+        for v in rank_spec.values(include_nested=True, leaves_only=True)
         if v == target_rank
     )
 
 
-def combine_tensordicts(*tds: TensorDict[str, torch.Tensor]) -> TensorDict[str, torch.Tensor]:
+def combine_tensordicts(
+    *tds: TensorDict[str, torch.Tensor],
+) -> TensorDict[str, torch.Tensor]:
     r"""Combines multiple TensorDicts into a single TensorDict by merging their keys.
 
     This function creates a new TensorDict containing all key-value pairs from the
