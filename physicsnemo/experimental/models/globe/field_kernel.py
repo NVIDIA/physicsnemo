@@ -24,11 +24,17 @@ from typing import Literal, Sequence
 import torch
 import torch.nn as nn
 import tqdm
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from tensordict import TensorDict
 from torch.utils.checkpoint import checkpoint
 
 from physicsnemo.core.module import Module
+from physicsnemo.experimental.models.globe.utilities.tensordict_utils import (
+    _count_by_rank,
+    concatenate_leaves,
+    concatenated_length,
+    split_by_leaf_rank,
+)
 from physicsnemo.nn import Mlp, Pade
 from physicsnemo.nn.functional.equivariant_ops import (
     legendre_polynomials,
@@ -37,14 +43,6 @@ from physicsnemo.nn.functional.equivariant_ops import (
     spherical_basis,
 )
 from physicsnemo.utils.logging import PythonLogger
-
-from physicsnemo.experimental.models.globe.utilities.tensordict_utils import (
-    _count_by_rank,
-    combine_tensordicts,
-    concatenate_leaves,
-    concatenated_length,
-    split_by_leaf_rank,
-)
 
 logger = PythonLogger("globe.field_kernel")
 
@@ -162,16 +160,16 @@ class Kernel(Module):
         self.n_spherical_harmonics = n_spherical_harmonics
         self.use_gradient_checkpointing = use_gradient_checkpointing
 
-        shared_kwargs = dict(
-            in_features=self.network_in_features,
-            hidden_features=list(self.hidden_layer_sizes),
-            out_features=self.network_out_features,
-            spectral_norm=spectral_norm,
-        )
+        in_features = self.network_in_features
+        hidden_features = list(self.hidden_layer_sizes)
+        out_features = self.network_out_features
 
         if network_type == "pade":
             self.network = Pade(
-                **shared_kwargs,
+                in_features=in_features,
+                hidden_features=hidden_features,
+                out_features=out_features,
+                spectral_norm=spectral_norm,
                 numerator_order=2,
                 denominator_order=2,
                 use_separate_mlps=False,
@@ -179,7 +177,14 @@ class Kernel(Module):
             )
         elif network_type == "mlp":
             self.network = nn.Sequential(
-                Mlp(**shared_kwargs, act_layer=nn.SiLU(), final_dropout=False),
+                Mlp(
+                    in_features=in_features,
+                    hidden_features=hidden_features,
+                    out_features=out_features,
+                    spectral_norm=spectral_norm,
+                    act_layer=nn.SiLU(),
+                    final_dropout=False,
+                ),
                 nn.Tanh(),
             )
         else:
@@ -209,9 +214,7 @@ class Kernel(Module):
         n_vector_pairs_in: int = comb(n_vectors_in, 2)
 
         return (
-            n_scalars_in
-            + n_vectors_in
-            + n_vector_pairs_in * self.n_spherical_harmonics
+            n_scalars_in + n_vectors_in + n_vector_pairs_in * self.n_spherical_harmonics
         )
 
     @cached_property
@@ -479,7 +482,7 @@ class Kernel(Module):
         smoothing_radius = torch.tensor(
             self.smoothing_radius, device=device, dtype=dtype
         )
-        vectors_mag_squared = (
+        vectors_mag_squared: TensorDict = (  # ty: ignore[invalid-assignment]
             (vectors * vectors).sum(dim=-1).apply(lambda x: x + smoothing_radius**2)
         )
         vectors_mag = vectors_mag_squared.sqrt()
@@ -537,20 +540,19 @@ class Kernel(Module):
         else:
             flattened_output = self.network(flattened_input)
 
-        output = flattened_output.view(
-            n_targets, n_sources, self.network_out_features
-        )
+        output = flattened_output.view(n_targets, n_sources, self.network_out_features)
 
         ### Enforces correct far-field decay rate
+        r_mag_sq: torch.Tensor = vectors_mag_squared["r"]  # ty: ignore[invalid-assignment]
         output = output * (
-            -torch.expm1(-vectors_mag_squared["r"][..., None])
+            -torch.expm1(-r_mag_sq[..., None])
         )  # Lamb-Oseen vortex kernel, numerically stable using expm1
         if self.n_spatial_dims == 2:
-            output = output / (vectors_mag_squared["r"][..., None] + 1).sqrt()
+            output = output / (r_mag_sq[..., None] + 1).sqrt()
         elif self.n_spatial_dims == 3:
-            output = output / (vectors_mag_squared["r"][..., None] + 1)
+            output = output / (r_mag_sq[..., None] + 1)
         else:
-            output = output / (vectors_mag_squared["r"][..., None] + 1) ** (
+            output = output / (r_mag_sq[..., None] + 1) ** (
                 (self.n_spatial_dims - 1) / 2
             )
 
@@ -559,10 +561,12 @@ class Kernel(Module):
         result: TensorDict[str, Float[torch.Tensor, "..."]] = self.add_semantics(
             output,
             shape_for_scalars=torch.Size([]),
-            shape_for_vectors=torch.Size([
-                1  # r_hat
-                + 2 * (n_vectors_in - 1),  # All non-r vectors
-            ]),
+            shape_for_vectors=torch.Size(
+                [
+                    1  # r_hat
+                    + 2 * (n_vectors_in - 1),  # All non-r vectors
+                ]
+            ),
         )
         # Values are tensors of shape (n_targets, n_sources, field_dim), where
         # field_dim is taken from the `size_for_` arguments above.
@@ -599,7 +603,7 @@ class Kernel(Module):
 
             basis_vector_components.append(vectors_hat["r"])
 
-            for k in vectors.keys(include_nested=True, leaves_only=True):  # ty: ignore[not-iterable]
+            for k in vectors.keys(include_nested=True, leaves_only=True):
                 if k == "r":
                     continue
 
@@ -783,7 +787,8 @@ class ChunkedKernel(Kernel):
         source_points: Float[torch.Tensor, "n_sources n_dims"],
         target_points: Float[torch.Tensor, "n_targets n_dims"],
         source_strengths: Float[torch.Tensor, " n_sources"] | None = None,
-        source_data: TensorDict[str, Float[torch.Tensor, "n_sources ..."]] | None = None,
+        source_data: TensorDict[str, Float[torch.Tensor, "n_sources ..."]]
+        | None = None,
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None = None,
         chunk_size: None | int | Literal["auto"] = "auto",
     ) -> TensorDict[str, Float[torch.Tensor, "..."]]:
@@ -1065,8 +1070,10 @@ class MultiscaleKernel(Module):
         reference_lengths: dict[str, torch.Tensor],
         source_points: Float[torch.Tensor, "n_sources n_dims"],
         target_points: Float[torch.Tensor, "n_targets n_dims"],
-        source_strengths: TensorDict[str, Float[torch.Tensor, " n_sources"]] | None = None,
-        source_data: TensorDict[str, Float[torch.Tensor, "n_sources ..."]] | None = None,
+        source_strengths: TensorDict[str, Float[torch.Tensor, " n_sources"]]
+        | None = None,
+        source_data: TensorDict[str, Float[torch.Tensor, "n_sources ..."]]
+        | None = None,
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None = None,
         chunk_size: None | int | Literal["auto"] = "auto",
     ) -> TensorDict[str, Float[torch.Tensor, "..."]]:
@@ -1167,6 +1174,8 @@ class MultiscaleKernel(Module):
             for name in self.reference_length_names
         ]
 
-        result: TensorDict[str, Float[torch.Tensor, "..."]] = reduce(operator.add, results_pieces)
+        result: TensorDict[str, Float[torch.Tensor, "..."]] = reduce(
+            operator.add, results_pieces
+        )
 
         return result

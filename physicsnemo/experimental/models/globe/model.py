@@ -21,15 +21,14 @@ from typing import Literal, Sequence
 
 import torch
 import torch.nn as nn
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from tensordict import TensorDict
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
+from physicsnemo.experimental.models.globe.field_kernel import MultiscaleKernel
 from physicsnemo.mesh import Mesh
 from physicsnemo.utils.logging import PythonLogger
-
-from physicsnemo.experimental.models.globe.field_kernel import MultiscaleKernel
 
 logger = PythonLogger("globe.model")
 
@@ -188,7 +187,8 @@ class GLOBE(Module):
 
         if not torch.compiler.is_compiling():
             for rank in output_field_ranks.values(
-                include_nested=True, leaves_only=True,
+                include_nested=True,
+                leaves_only=True,
             ):
                 if rank not in (0, 1):
                     raise ValueError(
@@ -222,9 +222,18 @@ class GLOBE(Module):
         # hyperlayers. Only the final hyperlayer emits output_field_ranks.
         intermediate_field_ranks = TensorDict(
             {
-                **{f"strengths.{name}": 0 for name in reference_length_names},
-                **{f"latent.scalars.{i}": 0 for i in range(n_latent_scalars)},
-                **{f"latent.vectors.{i}": 1 for i in range(n_latent_vectors)},
+                **{
+                    f"strengths.{name}": torch.tensor(0)
+                    for name in reference_length_names
+                },
+                **{
+                    f"latent.scalars.{i}": torch.tensor(0)
+                    for i in range(n_latent_scalars)
+                },
+                **{
+                    f"latent.vectors.{i}": torch.tensor(1)
+                    for i in range(n_latent_vectors)
+                },
             },
             batch_size=[],
         )
@@ -235,25 +244,28 @@ class GLOBE(Module):
             is_first_hyperlayer = layer_idx == 0
             is_last_hyperlayer = layer_idx == self.n_communication_hyperlayers
 
-            layer = nn.ModuleDict({
-                bc_type: MultiscaleKernel(
-                    n_spatial_dims=n_spatial_dims,
-                    output_field_ranks=(
-                        output_field_ranks if is_last_hyperlayer
-                        else intermediate_field_ranks
-                    ),
-                    reference_length_names=reference_length_names,
-                    source_data_ranks=self._build_source_data_ranks(
-                        bc_source_ranks=boundary_source_data_ranks[bc_type],
-                        include_latents=not is_first_hyperlayer,
-                    ),
-                    global_data_ranks=global_data_ranks,
-                    smoothing_radius=smoothing_radius,
-                    hidden_layer_sizes=hidden_layer_sizes,
-                    n_spherical_harmonics=n_spherical_harmonics,
-                )
-                for bc_type in boundary_condition_names
-            })
+            layer = nn.ModuleDict(
+                {
+                    bc_type: MultiscaleKernel(
+                        n_spatial_dims=n_spatial_dims,
+                        output_field_ranks=(
+                            output_field_ranks
+                            if is_last_hyperlayer
+                            else intermediate_field_ranks
+                        ),
+                        reference_length_names=reference_length_names,
+                        source_data_ranks=self._build_source_data_ranks(
+                            bc_source_ranks=boundary_source_data_ranks[bc_type],
+                            include_latents=not is_first_hyperlayer,
+                        ),
+                        global_data_ranks=global_data_ranks,
+                        smoothing_radius=smoothing_radius,
+                        hidden_layer_sizes=hidden_layer_sizes,
+                        n_spherical_harmonics=n_spherical_harmonics,
+                    )
+                    for bc_type in boundary_condition_names
+                }
+            )
             kernel_layers.append(layer)
 
         self.kernel_layers = nn.ModuleList(kernel_layers)
@@ -263,23 +275,29 @@ class GLOBE(Module):
         # rotational equivariance. Uses ModuleList (not ModuleDict) to support
         # output field names containing dots from nested rank specs.
         self._output_field_order = sorted(
-            str(k) for k, _ in output_field_ranks.items(
-                include_nested=True, leaves_only=True,
+            str(k)
+            for k, _ in output_field_ranks.items(
+                include_nested=True,
+                leaves_only=True,
             )
         )
         flat_output_ranks = {
-            str(k): v for k, v in output_field_ranks.items(
-                include_nested=True, leaves_only=True,
+            str(k): v
+            for k, v in output_field_ranks.items(
+                include_nested=True,
+                leaves_only=True,
             )
         }
-        self.final_field_transforms = nn.ModuleList([
-            nn.Linear(
-                in_features=1,
-                out_features=1,
-                bias=(flat_output_ranks[name] == 0),
-            )
-            for name in self._output_field_order
-        ])
+        self.final_field_transforms = nn.ModuleList(
+            [
+                nn.Linear(
+                    in_features=1,
+                    out_features=1,
+                    bias=(flat_output_ranks[name] == 0),
+                )
+                for name in self._output_field_order
+            ]
+        )
 
     def _build_source_data_ranks(
         self,
@@ -294,18 +312,18 @@ class GLOBE(Module):
         :meth:`_evaluate_hyperlayer`.
         """
         result = TensorDict(
-            {"physical": bc_source_ranks, "normals": 1},
+            {"physical": bc_source_ranks, "normals": torch.tensor(1)},
             batch_size=[],
         )
         if include_latents:
             result["latent"] = TensorDict(
                 {
                     "scalars": TensorDict(
-                        {str(i): 0 for i in range(self.n_latent_scalars)},
+                        {str(i): torch.tensor(0) for i in range(self.n_latent_scalars)},
                         batch_size=[],
                     ),
                     "vectors": TensorDict(
-                        {str(i): 1 for i in range(self.n_latent_vectors)},
+                        {str(i): torch.tensor(1) for i in range(self.n_latent_vectors)},
                         batch_size=[],
                     ),
                 },
@@ -364,8 +382,7 @@ class GLOBE(Module):
         result_pieces: list[TensorDict[str, Float[torch.Tensor, "..."]]] = []
 
         for bc_type, mesh in source_meshes.items():
-            strengths: TensorDict[str, Float[torch.Tensor, " n_cells"]] = mesh.cell_data["strengths"]  # ty: ignore[invalid-assignment]
-            strengths = strengths.apply(
+            strengths: TensorDict[str, Float[torch.Tensor, " n_cells"]] = mesh.cell_data["strengths"].apply(  # ty: ignore[invalid-assignment]
                 lambda x: x * (mesh.cell_areas / self.reference_area)
             )
 
@@ -593,8 +610,8 @@ class GLOBE(Module):
         flat_data = output_mesh.point_data.flatten_keys(".")
         for idx, name in enumerate(self._output_field_order):
             t = flat_data[name]
-            flat_data[name] = self.final_field_transforms[idx](
-                t.view(-1, 1)
-            ).view(t.shape)
+            flat_data[name] = self.final_field_transforms[idx](t.view(-1, 1)).view(
+                t.shape
+            )
         output_mesh.point_data = flat_data.unflatten_keys(".")
         return output_mesh
