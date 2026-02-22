@@ -15,7 +15,6 @@
 # limitations under the License.
 
 from .drop_path import drop_path
-from .fft import imag, irfft, irfft2, real, rfft, rfft2, view_as_complex
 from .equivariant_ops import (
     legendre_polynomials,
     polar_and_dipole_basis,
@@ -23,6 +22,7 @@ from .equivariant_ops import (
     spherical_basis,
     vector_project,
 )
+from .fft import imag, irfft, irfft2, real, rfft, rfft2, view_as_complex
 from .interpolation import interpolation
 from .knn import knn
 from .radius_search import radius_search

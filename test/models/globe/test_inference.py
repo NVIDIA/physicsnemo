@@ -18,8 +18,8 @@ import pytest
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.mesh.primitives.procedural import lumpy_sphere
 from physicsnemo.experimental.models.globe.model import GLOBE
+from physicsnemo.mesh.primitives.procedural import lumpy_sphere
 
 # Number of prediction points to evaluate at
 N_PREDICTION_POINTS = 5
