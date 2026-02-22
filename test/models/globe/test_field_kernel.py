@@ -82,45 +82,39 @@ def make_kernel_and_input_data(
     # Create compatible input data
     torch.manual_seed(seed)
 
+    source_data_dict: dict[str, torch.Tensor] = {}
+    for i in range(n_source_scalars):
+        source_data_dict[f"source_scalar_{i}"] = torch.randn(
+            n_source_points, device=device,
+        )
+    for i in range(n_source_vectors):
+        source_data_dict[f"source_vector_{i}"] = F.normalize(
+            torch.randn(n_source_points, n_spatial_dims, device=device), dim=-1,
+        )
+
+    global_data_dict: dict[str, torch.Tensor] = {}
+    for i in range(n_global_scalars):
+        global_data_dict[f"global_scalar_{i}"] = torch.randn(
+            1, device=device,
+        ).squeeze()
+    for i in range(n_global_vectors):
+        global_data_dict[f"global_vector_{i}"] = F.normalize(
+            torch.randn(n_spatial_dims, device=device), dim=0,
+        )
+
     input_data = {
         "source_points": torch.randn(n_source_points, n_spatial_dims, device=device),
         "target_points": torch.randn(n_target_points, n_spatial_dims, device=device),
         "source_strengths": torch.randn(n_source_points, device=device),
         "reference_length": torch.ones(tuple(), device=device),
-        "source_scalars": TensorDict(
-            {
-                f"source_scalar_{i}": torch.randn(n_source_points, device=device)
-                for i in range(n_source_scalars)
-            },
-            batch_size=torch.Size([n_source_points]),
+        "source_data": TensorDict(
+            source_data_dict,
+            batch_size=[n_source_points],
             device=device,
         ),
-        "source_vectors": TensorDict(
-            {
-                f"source_vector_{i}": F.normalize(
-                    torch.randn(n_source_points, n_spatial_dims, device=device), dim=-1
-                )
-                for i in range(n_source_vectors)
-            },
-            batch_size=torch.Size([n_source_points, n_spatial_dims]),
-            device=device,
-        ),
-        "global_scalars": TensorDict(
-            {
-                f"global_scalar_{i}": torch.randn(1, device=device).squeeze()
-                for i in range(n_global_scalars)
-            },
-            batch_size=torch.Size([]),
-            device=device,
-        ),
-        "global_vectors": TensorDict(
-            {
-                f"global_vector_{i}": F.normalize(
-                    torch.randn(n_spatial_dims, device=device), dim=0
-                )
-                for i in range(n_global_vectors)
-            },
-            batch_size=torch.Size([n_spatial_dims]),
+        "global_data": TensorDict(
+            global_data_dict,
+            batch_size=[],
             device=device,
         ),
         "chunk_size": None,
@@ -319,9 +313,7 @@ def test_kernel_gradient_flow(
     input_data["source_points"] = torch.zeros(
         1, n_dims, device=device, requires_grad=True
     )
-    # Update source_vectors to use TensorDict semantics
-    # Set every source vector leaf to ones and enable gradient tracking in-place
-    input_data["source_vectors"].apply_(
+    input_data["source_data"].apply_(
         lambda v: torch.ones_like(v, device=device, requires_grad=True)
     )
     input_data["target_points"] = torch.ones(1, n_dims, device=device)
@@ -416,13 +408,17 @@ def test_rotational_equivariance(
             + (1 - torch.cos(angle)) * (K @ K)
         )
 
-    # Define rotation transformation
+    def _rotate_vectors(td: TensorDict) -> TensorDict:
+        """Rotate rank-1 (vector) leaves of a TensorDict, leave scalars unchanged."""
+        return td.apply(
+            lambda v: v @ R.T if v.ndim > td.batch_dims else v,
+        )
+
     def apply_rotation(data: dict[str, Any]) -> dict[str, Any]:
         data["source_points"] = data["source_points"] @ R.T
         data["target_points"] = data["target_points"] @ R.T
-        data["source_vectors"] = data["source_vectors"].apply(lambda v: v @ R.T)
-        if "global_vectors" in data:
-            data["global_vectors"] = data["global_vectors"].apply(lambda v: v @ R.T)
+        data["source_data"] = _rotate_vectors(data["source_data"])
+        data["global_data"] = _rotate_vectors(data["global_data"])
         return data
 
     # Evaluate
@@ -472,11 +468,16 @@ def test_parity_equivariance(
     normal = F.normalize(torch.randn(n_dims, device=device), dim=0)
     P = torch.eye(len(normal), device=normal.device) - 2 * torch.outer(normal, normal)
 
-    # Define reflection transformation
+    def _reflect_vectors(td: TensorDict) -> TensorDict:
+        """Reflect rank-1 (vector) leaves of a TensorDict, leave scalars unchanged."""
+        return td.apply(
+            lambda v: v @ P.T if v.ndim > td.batch_dims else v,
+        )
+
     def apply_reflection(data: dict[str, Any]) -> dict[str, Any]:
         data["source_points"] = data["source_points"] @ P.T
         data["target_points"] = data["target_points"] @ P.T
-        data["source_vectors"] = data["source_vectors"].apply(lambda v: v @ P.T)
+        data["source_data"] = _reflect_vectors(data["source_data"])
         return data
 
     # Evaluate
@@ -597,18 +598,16 @@ def test_discretization_invariance(
     # Configure single source at origin with unit strength
     single_source_data["source_points"] = torch.zeros(1, n_dims, device=device)
     single_source_data["source_strengths"] = torch.ones(1, device=device)
-    # Create unit vectors pointing in x-direction
     x_direction = torch.zeros(1, n_dims, device=device)
     x_direction[:, 0] = 1.0
-    single_source_data["source_vectors"] = TensorDict(
+    single_source_data["source_data"] = TensorDict(
         {"source_vector_0": x_direction},
-        batch_size=torch.Size([1, n_dims]),
+        batch_size=[1],
         device=device,
     )
     single_source_data["target_points"] = target_points
 
     # Configure split sources: two sources separated by small distance
-    # Each has half the strength to maintain total strength
     _, split_source_data = make_kernel_and_input_data(
         n_spatial_dims=n_dims,
         output_fields=output_fields,
@@ -618,21 +617,18 @@ def test_discretization_invariance(
         n_target_points=20,
     )
 
-    separation = DISCRETIZATION_SEPARATION  # Small compared to far-field test distance
+    separation = DISCRETIZATION_SEPARATION
     split_points = torch.zeros(2, n_dims, device=device)
     split_points[0, 0] = -separation / 2
     split_points[1, 0] = separation / 2
 
     split_source_data["source_points"] = split_points
-    split_source_data["source_strengths"] = (
-        torch.ones(2, device=device) * 0.5
-    )  # Half strength each
-    # Create unit vectors pointing in x-direction
+    split_source_data["source_strengths"] = torch.ones(2, device=device) * 0.5
     x_direction_split = torch.zeros(2, n_dims, device=device)
     x_direction_split[:, 0] = 1.0
-    split_source_data["source_vectors"] = TensorDict(
+    split_source_data["source_data"] = TensorDict(
         {"source_vector_0": x_direction_split},
-        batch_size=torch.Size([2, n_dims]),
+        batch_size=[2],
         device=device,
     )
     split_source_data["target_points"] = target_points
@@ -763,12 +759,10 @@ def test_order_equivariance(
     source_perm = torch.randperm(n_source, device=device)
     target_perm = torch.randperm(n_target, device=device)
 
-    # Test source permutation
     def apply_source_permutation(data: dict[str, Any]) -> dict[str, Any]:
         data["source_points"] = data["source_points"][source_perm]
         data["source_strengths"] = data["source_strengths"][source_perm]
-        data["source_vectors"] = data["source_vectors"][source_perm]
-        data["source_scalars"] = data["source_scalars"][source_perm]
+        data["source_data"] = data["source_data"][source_perm]
         return data
 
     result1, result2 = evaluate_kernel_with_transform(

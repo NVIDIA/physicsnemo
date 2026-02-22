@@ -30,10 +30,6 @@ from physicsnemo.mesh import Mesh
 from physicsnemo.utils.logging import PythonLogger
 
 from physicsnemo.experimental.models.globe.field_kernel import MultiscaleKernel
-from physicsnemo.experimental.models.globe.utilities.tensordict_utils import (
-    concatenated_length,
-    split_by_leaf_rank,
-)
 
 logger = PythonLogger("globe.model")
 
@@ -140,9 +136,10 @@ class GLOBE(Module):
         Dictionary mapping reference length names to scalar tensors. Keys must match
         the model's ``reference_length_names``.
     global_data : TensorDict or None, optional, default=None
-        Nondimensional conditioning features, split by tensor rank: rank-0
-        tensors become global scalars, rank-1 tensors become global vectors.
-        Counts must match ``n_global_scalars`` and ``n_global_vectors``.
+        Nondimensional conditioning features. Contains a mix of scalar
+        (rank-0) and vector (rank-1) tensors that are split by tensor rank
+        inside :class:`Kernel`. Scalar count must match ``n_global_scalars``;
+        vector count must match ``n_global_vectors``.
         Passed through to the output Mesh's ``global_data``.
     chunk_size : None | int | Literal["auto"], optional, default=None
         Controls memory usage during kernel evaluation. ``None`` evaluates all target
@@ -314,8 +311,7 @@ class GLOBE(Module):
         target_points: Float[torch.Tensor, "n_targets n_dims"],
         source_meshes: dict[str, Mesh],
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
-        global_scalars: TensorDict[str, Float[torch.Tensor, ""]] | None,
-        global_vectors: TensorDict[str, Float[torch.Tensor, " n_dims"]] | None,
+        global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None,
         chunk_size: None | int | Literal["auto"],
     ) -> TensorDict[str, Float[torch.Tensor, "..."]]:
         r"""Evaluate one hyperlayer by summing kernel contributions from all BC types.
@@ -331,8 +327,9 @@ class GLOBE(Module):
         - ``"latent"``: (after first layer) learned scalar and vector features
 
         Strengths are extracted and area-normalized separately. All remaining
-        features are flattened and split by tensor rank into scalars and vectors
-        for the kernel.
+        features (plus cell normals) are combined into a unified
+        ``source_data`` TensorDict and passed to the kernel, which splits
+        them by tensor rank internally.
 
         Parameters
         ----------
@@ -346,10 +343,8 @@ class GLOBE(Module):
             state.
         reference_lengths : dict[str, Float[torch.Tensor, ""]]
             Mapping of reference length names to scalar tensors.
-        global_scalars : TensorDict[str, Float[torch.Tensor, ""]] or None
-            Problem-level scalar features.
-        global_vectors : TensorDict[str, Float[torch.Tensor, " n_dims"]] or None
-            Problem-level vector features.
+        global_data : TensorDict or None
+            Problem-level features (mixed scalar/vector ranks).
         chunk_size : None or int or {"auto"}
             Controls memory usage during kernel evaluation.
 
@@ -366,25 +361,20 @@ class GLOBE(Module):
                 lambda x: x * (mesh.cell_areas / self.reference_area)
             )
 
-            ### Split non-strength features by tensor rank (scalars vs vectors).
-            # flatten_keys ensures split_by_leaf_rank produces flat TensorDicts.
-            features = mesh.cell_data.exclude("strengths").flatten_keys(".")
-            data_by_rank = split_by_leaf_rank(features)
-            scalars = data_by_rank[0]
-            vectors = data_by_rank[1]
-            vectors["normals"] = mesh.cell_normals
-            vectors.batch_size = torch.Size([mesh.n_cells, self.n_spatial_dims])
+            ### Combine non-strength features with cell normals into source_data.
+            # flatten_keys produces a flat namespace so the kernel's
+            # split_by_leaf_rank can separate scalars from vectors by rank.
+            source_data = mesh.cell_data.exclude("strengths").flatten_keys(".")
+            source_data["normals"] = mesh.cell_normals
 
             kernel: MultiscaleKernel = self.kernel_layers[layer_idx][bc_type]
             kernel_result: TensorDict[str, Float[torch.Tensor, "..."]] = kernel(
                 source_points=mesh.cell_centroids,
-                source_scalars=scalars,
-                source_vectors=vectors,
+                source_data=source_data,
                 source_strengths=strengths,
                 target_points=target_points,
                 reference_lengths=reference_lengths,
-                global_scalars=global_scalars,
-                global_vectors=global_vectors,
+                global_data=global_data,
                 chunk_size=chunk_size,
             )
             result_pieces.append(kernel_result.unflatten_keys())
@@ -396,8 +386,7 @@ class GLOBE(Module):
         layer_idx: int,
         boundary_meshes: dict[str, Mesh],
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
-        global_scalars: TensorDict[str, Float[torch.Tensor, ""]] | None,
-        global_vectors: TensorDict[str, Float[torch.Tensor, " n_dims"]] | None,
+        global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None,
         chunk_size: None | int | Literal["auto"],
     ) -> dict[str, Mesh]:
         r"""Run one boundary-to-boundary communication step.
@@ -418,10 +407,8 @@ class GLOBE(Module):
             Current enriched boundary meshes (from the previous layer or init).
         reference_lengths : dict[str, Float[torch.Tensor, ""]]
             Mapping of reference length names to scalar tensors.
-        global_scalars : TensorDict[str, Float[torch.Tensor, ""]] or None
-            Problem-level scalar features.
-        global_vectors : TensorDict[str, Float[torch.Tensor, " n_dims"]] or None
-            Problem-level vector features.
+        global_data : TensorDict[str, Float[torch.Tensor, "..."]] or None
+            Problem-level features (mixed scalar/vector ranks).
         chunk_size : None or int or {"auto"}
             Controls memory usage during kernel evaluation.
 
@@ -437,8 +424,7 @@ class GLOBE(Module):
                 target_points=mesh.cell_centroids,
                 source_meshes=boundary_meshes,
                 reference_lengths=reference_lengths,
-                global_scalars=global_scalars,
-                global_vectors=global_vectors,
+                global_data=global_data,
                 chunk_size=chunk_size,
             )
             new_cell_data = TensorDict(
@@ -460,7 +446,7 @@ class GLOBE(Module):
         prediction_points: Float[torch.Tensor, "n_points n_dims"],
         boundary_meshes: dict[str, Mesh],
         reference_lengths: dict[str, torch.Tensor],
-        global_data: TensorDict | None = None,
+        global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None = None,
         chunk_size: None | int | Literal["auto"] = None,
     ) -> Mesh:
         r"""Evaluate GLOBE model to predict fields at target points.
@@ -471,7 +457,7 @@ class GLOBE(Module):
            wrapping original ``cell_data`` under a ``"physical"`` namespace.
         2. **Communication**: Run ``n_communication_hyperlayers`` boundary-to-
            boundary communication steps via
-           :meth:`_evaluate_communication_layer`.
+           :meth:`_evaluate_communication_hyperlayer`.
         3. **Final evaluation**: Evaluate the last hyperlayer at
            ``prediction_points`` and apply per-field calibration transforms.
 
@@ -484,11 +470,12 @@ class GLOBE(Module):
             :class:`~physicsnemo.mesh.Mesh` objects.
         reference_lengths : dict[str, torch.Tensor]
             Mapping of reference length names to scalar tensors.
-        global_data : TensorDict or None, optional, default=None
-            Nondimensional conditioning features for the kernel. Split by
-            tensor rank: rank-0 tensors become global scalars, rank-1 tensors
-            become global vectors. The counts must match ``n_global_scalars``
-            and ``n_global_vectors``. Passed through to the output Mesh.
+        global_data : TensorDict[str, Float[torch.Tensor, "..."]] or None, optional, default=None
+            Nondimensional conditioning features. Contains a mix of scalar
+            (rank-0) and vector (rank-1) tensors that are split by rank
+            inside :class:`Kernel`. The scalar count must match
+            ``n_global_scalars`` and the vector count must match
+            ``n_global_vectors``. Passed through to the output Mesh.
         chunk_size : None | int | Literal["auto"], optional, default=None
             Controls memory usage during kernel evaluation.
 
@@ -506,18 +493,8 @@ class GLOBE(Module):
         """
         device = prediction_points.device
 
-        ### Extract conditioning from global_data, split by tensor rank
         if global_data is None:
             global_data = TensorDict({}, batch_size=[], device=device)
-        by_rank = split_by_leaf_rank(global_data)
-        global_scalars = by_rank.get(
-            0, TensorDict({}, batch_size=[], device=device),
-        )
-        global_vectors = by_rank.get(
-            1, TensorDict({}, batch_size=torch.Size([self.n_spatial_dims]), device=device),
-        )
-        if 1 in by_rank:
-            global_vectors.batch_size = torch.Size([self.n_spatial_dims])
 
         ### Input validation
         # Skip validation when running under torch.compile for performance
@@ -532,25 +509,12 @@ class GLOBE(Module):
                     f"Expected prediction_points with {self.n_spatial_dims} spatial dims, "
                     f"got {prediction_points.shape[-1]}"
                 )
-            for name, (actual, expected) in {
-                "reference lengths": (
-                    set(reference_lengths.keys()),
-                    set(self.reference_length_names),
-                ),
-                "global scalars": (
-                    concatenated_length(global_scalars),
-                    self.n_global_scalars,
-                ),
-                "global vectors": (
-                    concatenated_length(global_vectors),
-                    self.n_global_vectors,
-                ),
-            }.items():
-                if actual != expected:
-                    raise ValueError(
-                        f"This model was instantiated to expect {expected} {name},\n"
-                        f"but the forward-method input gives {actual} {name}."
-                    )
+            if set(reference_lengths.keys()) != set(self.reference_length_names):
+                raise ValueError(
+                    f"This model was instantiated to expect reference lengths "
+                    f"{set(self.reference_length_names)!r},\n"
+                    f"but the forward-method input gives {set(reference_lengths.keys())!r}."
+                )
             for bc_type, mesh in boundary_meshes.items():
                 if mesh.n_spatial_dims != self.n_spatial_dims:
                     raise ValueError(
@@ -601,8 +565,7 @@ class GLOBE(Module):
                 layer_idx=i,
                 boundary_meshes=boundary_meshes,
                 reference_lengths=reference_lengths,
-                global_scalars=global_scalars,
-                global_vectors=global_vectors,
+                global_data=global_data,
                 chunk_size=chunk_size,
             )
 
@@ -612,8 +575,7 @@ class GLOBE(Module):
             target_points=prediction_points,
             source_meshes=boundary_meshes,
             reference_lengths=reference_lengths,
-            global_scalars=global_scalars,
-            global_vectors=global_vectors,
+            global_data=global_data,
             chunk_size=chunk_size,
         )
 
