@@ -29,10 +29,10 @@ from pathlib import Path
 from typing import Any
 
 import git
-import mlflow
 import numpy as np
 import torch
 import yaml
+from mlflow.tracking.fluent import active_run, log_params
 
 import physicsnemo
 from physicsnemo.utils.logging import PythonLogger
@@ -190,10 +190,10 @@ def log_hyperparameters(
             sort_keys=False,
         )
 
-    if mlflow.active_run():
+    if active_run():
         _MLFLOW_MAX_PARAM_LENGTH = 6000
         all_params = {**model_hyperparameters, **other_hyperparameters}
-        mlflow.log_params(
+        log_params(
             {
                 k: v
                 for k, v in all_params.items()

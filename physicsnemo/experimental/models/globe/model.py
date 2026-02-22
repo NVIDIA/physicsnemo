@@ -163,6 +163,8 @@ class GLOBE(Module):
     ... )
     """
 
+    reference_area: torch.Tensor
+
     def __init__(
         self,
         n_spatial_dims: int,
@@ -382,8 +384,10 @@ class GLOBE(Module):
         result_pieces: list[TensorDict[str, Float[torch.Tensor, "..."]]] = []
 
         for bc_type, mesh in source_meshes.items():
-            strengths: TensorDict[str, Float[torch.Tensor, " n_cells"]] = mesh.cell_data["strengths"].apply(  # ty: ignore[invalid-assignment]
-                lambda x: x * (mesh.cell_areas / self.reference_area)
+            strengths: TensorDict[str, Float[torch.Tensor, " n_cells"]] = (
+                mesh.cell_data["strengths"].apply(  # ty: ignore[unresolved-attribute]
+                    lambda x: x * (mesh.cell_areas / self.reference_area)
+                )
             )
 
             ### Combine non-strength features with cell normals into source_data.
@@ -392,7 +396,7 @@ class GLOBE(Module):
             source_data = mesh.cell_data.exclude("strengths").flatten_keys(".")
             source_data["normals"] = mesh.cell_normals
 
-            kernel: MultiscaleKernel = self.kernel_layers[layer_idx][bc_type]
+            kernel: MultiscaleKernel = self.kernel_layers[layer_idx][bc_type]  # ty: ignore[not-subscriptable]
             kernel_result: TensorDict[str, Float[torch.Tensor, "..."]] = kernel(
                 source_points=mesh.cell_centroids,
                 source_data=source_data,

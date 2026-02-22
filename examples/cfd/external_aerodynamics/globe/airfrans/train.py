@@ -27,13 +27,21 @@ from typing import Any, Literal
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-import mlflow
 import torch
 import torch.nn.functional as F
 import torchinfo
 from dataset import AirFRANSDataSet, AirFRANSSample, compute_max_mesh_sizes
 from jaxtyping import Float
+from mlflow.tracking.fluent import (
+    active_run,
+    log_artifact,
+    log_figure,
+    log_metrics,
+    set_experiment,
+    start_run,
+)
 from tensordict import TensorDict
+from torch.distributed import ReduceOp, all_reduce
 from torch.profiler import record_function
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -328,10 +336,10 @@ def main(
     ### [MLflow Setup]
     mlflow_run_ctx: contextlib.AbstractContextManager = contextlib.nullcontext()
     if dist.rank == 0 and use_mlflow:
-        mlflow.set_experiment(experiment_name=mlflow_experiment)
+        set_experiment(experiment_name=mlflow_experiment)
         if mlflow_run_id:
             try:
-                mlflow_run_ctx = mlflow.start_run(run_id=mlflow_run_id)
+                mlflow_run_ctx = start_run(run_id=mlflow_run_id)
                 logger0.info(f"Resumed MLflow run {mlflow_run_id}")
             except Exception:
                 warnings.warn(
@@ -339,7 +347,7 @@ def main(
                 )
                 mlflow_run_id = None
         if not mlflow_run_id:
-            mlflow_run_ctx = mlflow.start_run(
+            mlflow_run_ctx = start_run(
                 run_name=f"{output_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
                 tags={
                     "airfrans_task": airfrans_task,
@@ -364,7 +372,7 @@ def main(
             },
         )
         if use_mlflow:
-            mlflow.log_artifact(str(output_dir / "hyperparameters.yaml"))
+            log_artifact(str(output_dir / "hyperparameters.yaml"))
 
     ### [Training and Testing]
     @torch.compile(
@@ -475,7 +483,7 @@ def main(
             ]
         )
         if dist.world_size > 1:
-            torch.distributed.all_reduce(all_values, op=torch.distributed.ReduceOp.AVG)
+            all_reduce(all_values, op=ReduceOp.AVG)
         epoch_loss = all_values[0]
         epoch_loss_components = dict(zip(keys[1:], all_values[1:]))
 
@@ -491,7 +499,7 @@ def main(
         )
         if dist.rank == 0:
             if use_mlflow:
-                mlflow.log_metrics(
+                log_metrics(
                     {
                         f"{split}_loss": epoch_loss.item(),
                         **{
@@ -531,8 +539,8 @@ def main(
 
             scheduler.step(loss["train"])
 
-            if profile:
-                profiler.step()  # ty: ignore[possibly-missing-attribute]
+            if profiler is not None:
+                profiler.step()
 
             ### [Logging and Checkpointing]
             if dist.rank == 0:
@@ -550,8 +558,8 @@ def main(
                             "last_image_epoch": last_image_epoch,
                             "last_image_loss": last_image_loss,
                             "mlflow_run_id": (
-                                mlflow.active_run().info.run_id
-                                if use_mlflow and mlflow.active_run()
+                                _run.info.run_id
+                                if use_mlflow and (_run := active_run())
                                 else None
                             ),
                         },
@@ -560,14 +568,12 @@ def main(
                     best_loss = loss["test"]
                     base_model.save(best_model_path)
                     if use_mlflow:
-                        mlflow.log_artifact(
-                            str(best_model_path), artifact_path="best_model"
-                        )
+                        log_artifact(str(best_model_path), artifact_path="best_model")
 
                 ### [MLflow Scalars Logging]
                 if use_mlflow:
                     time_now = perf_counter()
-                    mlflow.log_metrics(
+                    log_metrics(
                         {
                             "lr": optimizer.param_groups[0]["lr"],
                             "system/vram_gb": torch.cuda.memory_stats()[
@@ -604,7 +610,7 @@ def main(
                         )
                         plt.gcf().set_dpi(300)
                         if use_mlflow:
-                            mlflow.log_figure(
+                            log_figure(
                                 plt.gcf(),
                                 f"visualization/{split}_sample_epoch_{epoch}.png",
                             )
@@ -632,8 +638,8 @@ def main(
                             "last_image_epoch": last_image_epoch,
                             "last_image_loss": last_image_loss,
                             "mlflow_run_id": (
-                                mlflow.active_run().info.run_id
-                                if use_mlflow and mlflow.active_run()
+                                _run.info.run_id
+                                if use_mlflow and (_run := active_run())
                                 else None
                             ),
                         },

@@ -29,8 +29,8 @@ from typing import Any
 import fsspec
 import fsspec.utils
 import torch
-from torch.cuda.amp import GradScaler
-from torch.optim.lr_scheduler import _LRScheduler
+from torch.amp import GradScaler
+from torch.optim.lr_scheduler import LRScheduler
 
 import physicsnemo
 from physicsnemo.core.filesystem import LOCAL_CACHE, _download_cached
@@ -214,7 +214,7 @@ def save_checkpoint(
     path: Path | str,
     models: torch.nn.Module | list[torch.nn.Module] | None = None,
     optimizer: torch.optim.Optimizer | None = None,
-    scheduler: _LRScheduler | None = None,
+    scheduler: LRScheduler | None = None,
     scaler: GradScaler | None = None,
     epoch: int | None = None,
     metadata: dict[str, Any] | None = None,
@@ -247,7 +247,7 @@ def save_checkpoint(
         Model(s) whose weights should be saved.
     optimizer : torch.optim.Optimizer | None, optional
         Optimizer whose ``state_dict`` should be saved.
-    scheduler : _LRScheduler | None, optional
+    scheduler : LRScheduler | None, optional
         Learning-rate scheduler whose ``state_dict`` should be saved.
     scaler : GradScaler | None, optional
         AMP gradient scaler whose ``state_dict`` should be saved.
@@ -341,7 +341,7 @@ def load_checkpoint(
     path: Path | str,
     models: torch.nn.Module | list[torch.nn.Module] | None = None,
     optimizer: torch.optim.Optimizer | None = None,
-    scheduler: _LRScheduler | None = None,
+    scheduler: LRScheduler | None = None,
     scaler: GradScaler | None = None,
     epoch: int | None = None,
     metadata_dict: dict[str, Any] | None = None,
@@ -364,7 +364,7 @@ def load_checkpoint(
         ``torch.compile`` wrappers are stripped automatically.
     optimizer : torch.optim.Optimizer | None, optional
         Optimizer whose ``state_dict`` should be restored.
-    scheduler : _LRScheduler | None, optional
+    scheduler : LRScheduler | None, optional
         Learning-rate scheduler whose ``state_dict`` should be restored.
     scaler : GradScaler | None, optional
         AMP gradient scaler whose ``state_dict`` should be restored.

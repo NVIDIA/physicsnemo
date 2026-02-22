@@ -19,12 +19,13 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from functools import cache
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
 
 import pyvista as pv
 import torch
 from jaxtyping import Float
 from tensordict import TensorDict, tensorclass
+from torch.distributed import ReduceOp, all_reduce, is_initialized
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
@@ -79,13 +80,13 @@ class CachedPreprocessingDataset(Dataset, ABC):
             )
 
         if self.use_ram_caching:
-            self.__getitem__ = cache(self.__getitem__)
+            self.__getitem__ = cache(self.__getitem__)  # ty: ignore[invalid-assignment]
 
     def __len__(self) -> int:
         return len(self.sample_paths)
 
-    def __getitem__(self, idx) -> Any:
-        sample_path = self.sample_paths[idx]
+    def __getitem__(self, index) -> Any:  # ty: ignore[invalid-method-override]
+        sample_path = self.sample_paths[index]
 
         if self.cache_dir is not None:
             cache_path = (self.cache_dir / sample_path.name).with_suffix(".pt")
@@ -136,6 +137,41 @@ class AirFRANSSample:
             "reference_lengths": self.reference_lengths,
             "global_data": self.interior_mesh.global_data,
         }
+
+    if TYPE_CHECKING:
+
+        def to(self, *args: Any, **kwargs: Any) -> Self:
+            """Move sample and all nested data to the specified device/dtype.
+
+            All tensors in ``interior_mesh``, ``boundary_meshes``,
+            ``reference_lengths``, and ``dimensional_constants`` are moved
+            together.
+
+            Parameters
+            ----------
+            *args : Any
+                Positional arguments forwarded to the underlying tensorclass
+                ``to`` method.  Common usage: ``sample.to("cuda")`` or
+                ``sample.to(torch.float32)``.
+            **kwargs : Any
+                Keyword arguments forwarded to the underlying tensorclass
+                ``to`` method.
+
+            Keyword Arguments
+            -----------------
+            device : torch.device, optional
+                Target device.
+            dtype : torch.dtype, optional
+                Target floating-point or complex dtype.
+            non_blocking : bool, optional
+                Whether the transfer should be non-blocking.
+
+            Returns
+            -------
+            AirFRANSSample
+                A new sample on the target device/dtype.
+            """
+            ...
 
 
 class AirFRANSDataSet(CachedPreprocessingDataset):
@@ -257,7 +293,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
 
         ### Gradient fields via Mesh calculus
         mesh_with_grads = compute_point_derivatives(mesh=internal, keys=["p", "U"])
-        grad_C_p: torch.Tensor = mesh_with_grads.point_data["p_gradient"] * (  # ty: ignore[invalid-assignment]
+        grad_C_p: torch.Tensor = mesh_with_grads.point_data["p_gradient"] * (
             chord / q_inf
         )
         grad_C_p[grad_C_p.norm(dim=-1) > 20] = torch.nan
@@ -390,7 +426,9 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         ### Build combined Mesh with nested point_data
         pred_selected = pred_mesh.point_data.select(*fields)
         true_selected = true_mesh.point_data.select(*fields)
-        error_data = pred_selected.apply(lambda p, t: p - t, true_selected)
+        error_data: TensorDict = pred_selected.apply(  # ty: ignore[invalid-assignment]
+            lambda p, t: p - t, true_selected
+        )
 
         combined = Mesh(
             points=true_mesh.points,
@@ -448,7 +486,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 ax = axes[row, col]
 
                 if key == "error":
-                    err_vals = error_data[field_name]
+                    err_vals: torch.Tensor = error_data[field_name]  # ty: ignore[invalid-assignment]
                     if is_vector:
                         finite_err = err_vals.norm(dim=-1)
                         finite_err = finite_err[torch.isfinite(finite_err)]
@@ -640,8 +678,8 @@ def compute_max_mesh_sizes(
             [max_sizes[bc_type]["n_points"], max_sizes[bc_type]["n_cells"]],
             device=device,
         )
-        if torch.distributed.is_initialized():
-            torch.distributed.all_reduce(size_tensor, op=torch.distributed.ReduceOp.MAX)
+        if is_initialized():
+            all_reduce(size_tensor, op=ReduceOp.MAX)
         max_sizes[bc_type]["n_points"] = int(size_tensor[0])
         max_sizes[bc_type]["n_cells"] = int(size_tensor[1])
 

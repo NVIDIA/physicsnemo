@@ -207,7 +207,9 @@ class Kernel(Module):
         source_rank_counts = _rank_counts(self.source_data_ranks)
         global_rank_counts = _rank_counts(self.global_data_ranks)
 
-        n_vectors_in: int = 1 + source_rank_counts[1] + global_rank_counts[1]  # +1 for r
+        n_vectors_in: int = (
+            1 + source_rank_counts[1] + global_rank_counts[1]
+        )  # +1 for r
         n_scalars_in: int = source_rank_counts[0] + global_rank_counts[0]
         n_vector_pairs_in: int = comb(n_vectors_in, 2)
 
@@ -225,7 +227,9 @@ class Kernel(Module):
         source_rank_counts = _rank_counts(self.source_data_ranks)
         global_rank_counts = _rank_counts(self.global_data_ranks)
         output_rank_counts = _rank_counts(self.output_field_ranks)
-        n_vectors_in: int = 1 + source_rank_counts[1] + global_rank_counts[1]  # +1 for r
+        n_vectors_in: int = (
+            1 + source_rank_counts[1] + global_rank_counts[1]
+        )  # +1 for r
 
         return output_rank_counts[0] + output_rank_counts[1] * (
             1  # r_hat
