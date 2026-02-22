@@ -67,17 +67,15 @@ class Kernel(Module):
     n_spatial_dims : int
         Number of spatial dimensions (2 or 3).
     output_field_ranks : TensorDict
-        Rank-spec TensorDict with ``batch_size=[]`` and integer leaves
-        (0 = scalar, 1 = vector) describing the output fields. Nesting is
-        supported and mirrors the desired output structure. Derive from
-        data via :func:`ranks_from_tensordict`.
+        Rank-spec TensorDict with integer leaves (0 = scalar, 1 = vector)
+        describing the output fields. Nesting is supported and mirrors the
+        desired output structure. Derive from data via
+        :func:`ranks_from_tensordict`.
     source_data_ranks : TensorDict
-        Rank-spec TensorDict with ``batch_size=[]`` describing per-source
-        features. The number of rank-0 leaves determines scalar input
+        Rank-spec TensorDict describing per-source features. The number of rank-0 leaves determines scalar input
         width; rank-1 leaves determine vector input width.
     global_data_ranks : TensorDict
-        Rank-spec TensorDict with ``batch_size=[]`` describing global
-        conditioning features.
+        Rank-spec TensorDict describing global conditioning features.
     smoothing_radius : float, optional, default=1e-8
         Small value used to smooth power functions near zero to avoid numerical
         instabilities.

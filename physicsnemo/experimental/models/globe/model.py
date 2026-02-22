@@ -73,9 +73,9 @@ class GLOBE(Module):
     n_spatial_dims : int
         Number of spatial dimensions (2 or 3).
     output_field_ranks : TensorDict
-        Rank-spec TensorDict with ``batch_size=[]`` and integer leaves
-        (0 = scalar, 1 = vector) describing the output fields. Derive from
-        data via :func:`ranks_from_tensordict`.
+        Rank-spec TensorDict with integer leaves (0 = scalar, 1 = vector)
+        describing the output fields. Derive from data via
+        :func:`ranks_from_tensordict`.
     boundary_source_data_ranks : dict[str, TensorDict]
         Mapping of boundary condition type names to rank-spec TensorDicts
         describing the per-face source features for each BC type. The keys
@@ -237,7 +237,6 @@ class GLOBE(Module):
                     for i in range(n_latent_vectors)
                 },
             },
-            batch_size=[],
         )
 
         kernel_layers = []
@@ -315,21 +314,17 @@ class GLOBE(Module):
         """
         result = TensorDict(
             {"physical": bc_source_ranks, "normals": torch.tensor(1)},
-            batch_size=[],
         )
         if include_latents:
             result["latent"] = TensorDict(
                 {
                     "scalars": TensorDict(
                         {str(i): torch.tensor(0) for i in range(self.n_latent_scalars)},
-                        batch_size=[],
                     ),
                     "vectors": TensorDict(
                         {str(i): torch.tensor(1) for i in range(self.n_latent_vectors)},
-                        batch_size=[],
                     ),
                 },
-                batch_size=[],
             )
         return result
 

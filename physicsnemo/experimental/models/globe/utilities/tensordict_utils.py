@@ -246,7 +246,7 @@ def ranks_from_tensordict(td: TensorDict) -> TensorDict:
     r"""Derives a rank-spec TensorDict from a data TensorDict.
 
     Each leaf tensor is replaced by its rank (number of non-batch dimensions),
-    producing a TensorDict with ``batch_size=[]`` whose leaves are plain
+    producing a TensorDict whose leaves are plain
     integers. The resulting TensorDict preserves the nesting structure of
     the input and serves as a structural descriptor - for example, as the
     ``output_field_ranks`` argument to :class:`Kernel`.
@@ -259,7 +259,7 @@ def ranks_from_tensordict(td: TensorDict) -> TensorDict:
     Returns
     -------
     TensorDict
-        Rank-spec TensorDict with ``batch_size=[]`` and integer leaves.
+        Rank-spec TensorDict with integer leaves.
 
     Examples
     --------
@@ -281,7 +281,7 @@ def _rank_counts(rank_spec: TensorDict) -> Counter[int]:
     Parameters
     ----------
     rank_spec : TensorDict
-        Rank-spec TensorDict with ``batch_size=[]`` and integer tensor leaves.
+        Rank-spec TensorDict with integer tensor leaves.
 
     Returns
     -------
