@@ -27,7 +27,7 @@ import torch
 from tensordict import TensorDict
 
 
-def concatenated_length(td: TensorDict) -> int:
+def concatenated_length(td: TensorDict[str, torch.Tensor]) -> int:
     r"""Computes the total flattened length of all leaf tensors in a TensorDict.
 
     This function calculates the sum of the number of elements in each leaf tensor,
@@ -36,7 +36,7 @@ def concatenated_length(td: TensorDict) -> int:
 
     Parameters
     ----------
-    td : TensorDict
+    td : TensorDict[str, torch.Tensor]
         TensorDict containing tensors with shared batch dimensions. The batch
         dimensions are determined by ``td.batch_size``.
 
@@ -61,7 +61,7 @@ def concatenated_length(td: TensorDict) -> int:
     )
 
 
-def concatenate_leaves(td: TensorDict) -> torch.Tensor:
+def concatenate_leaves(td: TensorDict[str, torch.Tensor]) -> torch.Tensor:
     r"""Concatenates all leaf tensors in a TensorDict along the last dimension.
 
     This function flattens all non-batch dimensions of each leaf tensor and
@@ -71,7 +71,7 @@ def concatenate_leaves(td: TensorDict) -> torch.Tensor:
 
     Parameters
     ----------
-    td : TensorDict
+    td : TensorDict[str, torch.Tensor]
         TensorDict containing tensors to concatenate. All leaf tensors must
         share the same batch dimensions as specified by ``td.batch_size``.
 
@@ -162,7 +162,7 @@ class RankDict(dict):
         self.new_batch_dim = new_batch_dim
         self.device = device
 
-    def __missing__(self, key: int) -> TensorDict:
+    def __missing__(self, key: int) -> TensorDict[str, torch.Tensor]:
         r"""Auto-creates an empty TensorDict when accessing a missing rank key.
 
         Parameters
@@ -172,7 +172,7 @@ class RankDict(dict):
 
         Returns
         -------
-        TensorDict
+        TensorDict[str, torch.Tensor]
             Empty TensorDict with ``batch_size`` appropriate for this rank.
 
         Raises
@@ -191,8 +191,8 @@ class RankDict(dict):
 
 
 def split_by_leaf_rank(
-    td: TensorDict, new_batch_dim: int | None = None
-) -> RankDict[int, TensorDict]:
+    td: TensorDict[str, torch.Tensor], new_batch_dim: int | None = None
+) -> RankDict[int, TensorDict[str, torch.Tensor]]:
     r"""Splits a TensorDict into multiple TensorDicts grouped by tensor rank.
 
     This function groups leaf tensors by their rank (number of dimensions excluding
@@ -202,14 +202,14 @@ def split_by_leaf_rank(
 
     Parameters
     ----------
-    td : TensorDict
+    td : TensorDict[str, torch.Tensor]
         TensorDict to split. The batch dimensions are determined by ``td.batch_size``.
     new_batch_dim : int or None, optional
         Optional dimension to append per rank level in the output TensorDicts.
 
     Returns
     -------
-    RankDict[int, TensorDict]
+    RankDict[int, TensorDict[str, torch.Tensor]]
         Dictionary mapping rank (int) to TensorDict. Each
         TensorDict has the same ``batch_size`` and device as the input, and contains
         only the tensors with the corresponding rank. Empty TensorDicts are created
@@ -244,7 +244,7 @@ def split_by_leaf_rank(
     return result
 
 
-def combine_tensordicts(*tds: TensorDict) -> TensorDict:
+def combine_tensordicts(*tds: TensorDict[str, torch.Tensor]) -> TensorDict[str, torch.Tensor]:
     r"""Combines multiple TensorDicts into a single TensorDict by merging their keys.
 
     This function creates a new TensorDict containing all key-value pairs from the
@@ -253,13 +253,13 @@ def combine_tensordicts(*tds: TensorDict) -> TensorDict:
 
     Parameters
     ----------
-    *tds : TensorDict
+    *tds : TensorDict[str, torch.Tensor]
         Variable number of TensorDict objects to combine. Must all have the
         same ``batch_size`` and device.
 
     Returns
     -------
-    TensorDict
+    TensorDict[str, torch.Tensor]
         New TensorDict with ``batch_size`` and device matching the inputs,
         containing the union of all keys. For duplicate keys, the value from the
         last TensorDict containing that key is used.

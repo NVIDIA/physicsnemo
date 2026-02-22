@@ -32,6 +32,7 @@ import torch
 import torch.nn.functional as F
 import torchinfo
 from dataset import AirFRANSDataSet, AirFRANSSample, compute_max_mesh_sizes
+from jaxtyping import Float
 from tensordict import TensorDict
 from torch.profiler import record_function
 from torch.utils.data import DataLoader
@@ -156,7 +157,7 @@ def main(
     logger0 = RankZeroLoggingWrapper(logger, dist)
     logger0.info(f"{dist.world_size = }")
 
-    error_scales: TensorDict = TensorDict(error_scales, device=device)
+    error_scales: TensorDict[str, Float[torch.Tensor, ""]] = TensorDict(error_scales, device=device)
     if dist.rank == 0:
         torch._logging.set_logs(graph_breaks=True, recompiles=True)
 
@@ -367,7 +368,7 @@ def main(
         mode=compile_mode,
         disable=not use_compile,
     )
-    def run_batch(sample: AirFRANSSample) -> tuple[torch.Tensor, TensorDict]:
+    def run_batch(sample: AirFRANSSample) -> tuple[torch.Tensor, TensorDict[str, Float[torch.Tensor, ""]]]:
         """Runs a single batch (always just one sample) through the model and computes the loss."""
         pred_mesh = model(**sample.model_input_kwargs)
         batch_loss_components = pred_mesh.point_data.apply(

@@ -109,22 +109,22 @@ class Kernel(Module):
     source_strengths : Float[torch.Tensor, "n_sources"] or None, optional, default=None
         Scalar strength values associated with each source point. Shape
         :math:`(N_{sources},)`. Defaults to all ones if ``None``.
-    source_scalars : TensorDict or None, optional, default=None
+    source_scalars : TensorDict[str, Float[torch.Tensor, " n_sources"]] or None, optional, default=None
         Physically-meaningful scalars associated with each source point with
         batch_size :math:`(N_{sources},)`. All scalars should be dimensionless.
-    source_vectors : TensorDict or None, optional, default=None
+    source_vectors : TensorDict[str, Float[torch.Tensor, "n_sources n_dims"]] or None, optional, default=None
         Physically-meaningful vectors associated with each source point with
         batch_size :math:`(N_{sources}, D)`. All vectors should be dimensionless.
-    global_scalars : TensorDict or None, optional, default=None
+    global_scalars : TensorDict[str, Float[torch.Tensor, ""]] or None, optional, default=None
         Global physically-meaningful scalars with batch_size :math:`()`. All
         scalars should be dimensionless.
-    global_vectors : TensorDict or None, optional, default=None
+    global_vectors : TensorDict[str, Float[torch.Tensor, " n_dims"]] or None, optional, default=None
         Global physically-meaningful vectors with batch_size :math:`(D,)`. All
         vectors should be dimensionless.
 
     Outputs
     -------
-    TensorDict
+    TensorDict[str, Float[torch.Tensor, "..."]]
         TensorDict with batch_size :math:`(N_{targets},)` containing the computed
         fields. Each scalar field has shape :math:`(N_{targets},)` and each vector
         field has shape :math:`(N_{targets}, D)`.
@@ -237,7 +237,7 @@ class Kernel(Module):
         tensor: Float[torch.Tensor, "... total_dims"],
         shape_for_scalars: torch.Size | None = None,
         shape_for_vectors: torch.Size | None = None,
-    ) -> TensorDict:
+    ) -> TensorDict[str, Float[torch.Tensor, "..."]]:
         r"""Adds semantics to a tensor by splitting it into named fields.
 
         The input tensor is assumed to have its last dimension of size equal to the sum
@@ -258,7 +258,7 @@ class Kernel(Module):
 
         Returns
         -------
-        TensorDict
+        TensorDict[str, Float[torch.Tensor, "..."]]
             TensorDict with ``batch_size`` matching ``tensor.shape[:-1]``,
             containing the separated fields with proper shapes. Each scalar field
             has shape :math:`(\ldots, S)` and each vector field has shape
@@ -323,11 +323,11 @@ class Kernel(Module):
         source_points: Float[torch.Tensor, "n_sources n_dims"],
         target_points: Float[torch.Tensor, "n_targets n_dims"],
         source_strengths: Float[torch.Tensor, " n_sources"] | None = None,
-        source_scalars: TensorDict | None = None,
-        source_vectors: TensorDict | None = None,
-        global_scalars: TensorDict | None = None,
-        global_vectors: TensorDict | None = None,
-    ) -> TensorDict:
+        source_scalars: TensorDict[str, Float[torch.Tensor, " n_sources"]] | None = None,
+        source_vectors: TensorDict[str, Float[torch.Tensor, "n_sources n_dims"]] | None = None,
+        global_scalars: TensorDict[str, Float[torch.Tensor, ""]] | None = None,
+        global_vectors: TensorDict[str, Float[torch.Tensor, " n_dims"]] | None = None,
+    ) -> TensorDict[str, Float[torch.Tensor, "..."]]:
         r"""Evaluates a field kernel at target points based on source point influences.
 
         Parameters
@@ -344,23 +344,23 @@ class Kernel(Module):
         source_strengths : Float[torch.Tensor, "n_sources"] or None, optional
             Tensor of shape :math:`(N_{sources},)`. Scalar strength values
             associated with each source point. Defaults to all ones if ``None``.
-        source_scalars : TensorDict or None, optional
+        source_scalars : TensorDict[str, Float[torch.Tensor, " n_sources"]] or None, optional
             TensorDict with batch_size :math:`(N_{sources},)`.
             Physically-meaningful scalars associated with each source point. All
             scalars should be dimensionless. The total concatenated length must
             match ``n_source_scalars``. Defaults to empty TensorDict if ``None``.
-        source_vectors : TensorDict or None, optional
+        source_vectors : TensorDict[str, Float[torch.Tensor, "n_sources n_dims"]] or None, optional
             TensorDict with batch_size :math:`(N_{sources}, D)`.
             Physically-meaningful vectors associated with each source point. All
             vectors should be dimensionless. Common examples include normal vectors
             and direction vectors. The total concatenated length must match
             ``n_source_vectors``. Defaults to empty TensorDict if ``None``.
-        global_scalars : TensorDict or None, optional
+        global_scalars : TensorDict[str, Float[torch.Tensor, ""]] or None, optional
             TensorDict with batch_size :math:`()`. Global
             physically-meaningful scalars. All scalars should be dimensionless.
             The total concatenated length must match ``n_global_scalars``. Defaults
             to empty TensorDict if ``None``.
-        global_vectors : TensorDict or None, optional
+        global_vectors : TensorDict[str, Float[torch.Tensor, " n_dims"]] or None, optional
             TensorDict with batch_size :math:`(D,)`.
             Global physically-meaningful vectors. All vectors should be
             dimensionless. The total concatenated length must match ``n_global_vectors``.
@@ -368,7 +368,7 @@ class Kernel(Module):
 
         Returns
         -------
-        TensorDict
+        TensorDict[str, Float[torch.Tensor, "..."]]
             TensorDict with batch_size :math:`(N_{targets},)` containing the computed
             fields. Each scalar field has shape :math:`(N_{targets},)` and each vector
             field has shape :math:`(N_{targets}, D)`.
@@ -568,13 +568,13 @@ class Kernel(Module):
 
         ### Add semantics to the output
         n_vectors_in = len(vectors.keys(include_nested=True, leaves_only=True))
-        result: TensorDict = self.add_semantics(
+        result: TensorDict[str, Float[torch.Tensor, "..."]] = self.add_semantics(
             output,
-            shape_for_scalars=(),
-            shape_for_vectors=(
+            shape_for_scalars=torch.Size([]),
+            shape_for_vectors=torch.Size([
                 1  # r_hat
                 + 2 * (n_vectors_in - 1),  # All non-r vectors
-            ),
+            ]),
         )
         # Values are tensors of shape (n_targets, n_sources, field_dim), where
         # field_dim is taken from the `size_for_` arguments above.
@@ -753,7 +753,7 @@ class ChunkedKernel(Kernel):
 
     Outputs
     -------
-    TensorDict
+    TensorDict[str, Float[torch.Tensor, "..."]]
         TensorDict with batch_size :math:`(N_{targets},)` containing the computed
         fields. Numerically identical to non-chunked :class:`Kernel` evaluation.
 
@@ -790,12 +790,12 @@ class ChunkedKernel(Kernel):
         source_points: Float[torch.Tensor, "n_sources n_dims"],
         target_points: Float[torch.Tensor, "n_targets n_dims"],
         source_strengths: Float[torch.Tensor, " n_sources"] | None = None,
-        source_scalars: TensorDict | None = None,
-        source_vectors: TensorDict | None = None,
-        global_scalars: TensorDict | None = None,
-        global_vectors: TensorDict | None = None,
+        source_scalars: TensorDict[str, Float[torch.Tensor, " n_sources"]] | None = None,
+        source_vectors: TensorDict[str, Float[torch.Tensor, "n_sources n_dims"]] | None = None,
+        global_scalars: TensorDict[str, Float[torch.Tensor, ""]] | None = None,
+        global_vectors: TensorDict[str, Float[torch.Tensor, " n_dims"]] | None = None,
         chunk_size: None | int | Literal["auto"] = "auto",
-    ) -> TensorDict:
+    ) -> TensorDict[str, Float[torch.Tensor, "..."]]:
         r"""Evaluates the kernel with optional chunking for memory efficiency.
 
         Parameters
@@ -816,7 +816,7 @@ class ChunkedKernel(Kernel):
 
         Returns
         -------
-        TensorDict
+        TensorDict[str, Float[torch.Tensor, "..."]]
             TensorDict mapping field names to computed tensors.
             Each scalar field has shape :math:`(N_{targets},)` and each vector field
             has shape :math:`(N_{targets}, D)`.
@@ -858,7 +858,7 @@ class ChunkedKernel(Kernel):
             )
 
         elif isinstance(chunk_size, int):
-            result_pieces: list[TensorDict] = []
+            result_pieces: list[TensorDict[str, Float[torch.Tensor, "..."]]] = []
 
             start_indices = range(0, n_targets, chunk_size)
 
@@ -978,23 +978,23 @@ class MultiscaleKernel(Module):
         Physical coordinates of the source points. Shape :math:`(N_{sources}, D)`.
     target_points : Float[torch.Tensor, "n_targets n_dims"]
         Physical coordinates of the target points. Shape :math:`(N_{targets}, D)`.
-    source_strengths : TensorDict or None, optional, default=None
+    source_strengths : TensorDict[str, Float[torch.Tensor, " n_sources"]] or None, optional, default=None
         Per-source, per-branch strength values. TensorDict keyed by
         ``reference_length_names``. Defaults to all ones.
-    source_scalars : TensorDict or None, optional, default=None
+    source_scalars : TensorDict[str, Float[torch.Tensor, " n_sources"]] or None, optional, default=None
         Scalars per source point with batch_size :math:`(N_{sources},)`.
-    source_vectors : TensorDict or None, optional, default=None
+    source_vectors : TensorDict[str, Float[torch.Tensor, "n_sources n_dims"]] or None, optional, default=None
         Vectors per source point with batch_size :math:`(N_{sources}, D)`.
-    global_scalars : TensorDict or None, optional, default=None
+    global_scalars : TensorDict[str, Float[torch.Tensor, ""]] or None, optional, default=None
         Global scalar features (auto-augmented with log length ratios).
-    global_vectors : TensorDict or None, optional, default=None
+    global_vectors : TensorDict[str, Float[torch.Tensor, " n_dims"]] or None, optional, default=None
         Global vector features with batch_size :math:`(D,)`.
     chunk_size : None or int or {"auto"}, optional, default="auto"
         Chunking behavior.
 
     Outputs
     -------
-    TensorDict
+    TensorDict[str, Float[torch.Tensor, "..."]]
         TensorDict with the summed results from all kernel branches. Each scalar
         field has shape :math:`(N_{targets},)` and each vector field has shape
         :math:`(N_{targets}, D)`.
@@ -1084,13 +1084,13 @@ class MultiscaleKernel(Module):
         reference_lengths: dict[str, torch.Tensor],
         source_points: Float[torch.Tensor, "n_sources n_dims"],
         target_points: Float[torch.Tensor, "n_targets n_dims"],
-        source_strengths: TensorDict | None = None,
-        source_scalars: TensorDict | None = None,
-        source_vectors: TensorDict | None = None,
-        global_scalars: TensorDict | None = None,
-        global_vectors: TensorDict | None = None,
+        source_strengths: TensorDict[str, Float[torch.Tensor, " n_sources"]] | None = None,
+        source_scalars: TensorDict[str, Float[torch.Tensor, " n_sources"]] | None = None,
+        source_vectors: TensorDict[str, Float[torch.Tensor, "n_sources n_dims"]] | None = None,
+        global_scalars: TensorDict[str, Float[torch.Tensor, ""]] | None = None,
+        global_vectors: TensorDict[str, Float[torch.Tensor, " n_dims"]] | None = None,
         chunk_size: None | int | Literal["auto"] = "auto",
-    ) -> TensorDict:
+    ) -> TensorDict[str, Float[torch.Tensor, "..."]]:
         r"""Evaluates the multiscale kernel by combining results from multiple scales.
 
         This method evaluates each constituent kernel at its respective reference length
@@ -1107,17 +1107,17 @@ class MultiscaleKernel(Module):
         target_points : Float[torch.Tensor, "n_targets n_dims"]
             Tensor of shape :math:`(N_{targets}, D)`. Physical coordinates of
             the target points.
-        source_strengths : TensorDict or None, optional
+        source_strengths : TensorDict[str, Float[torch.Tensor, " n_sources"]] or None, optional
             Per-source, per-branch strength values, keyed by
             ``reference_length_names``. Defaults to all ones.
-        source_scalars : TensorDict or None, optional
+        source_scalars : TensorDict[str, Float[torch.Tensor, " n_sources"]] or None, optional
             TensorDict with batch_size :math:`(N_{sources},)`.
-        source_vectors : TensorDict or None, optional
+        source_vectors : TensorDict[str, Float[torch.Tensor, "n_sources n_dims"]] or None, optional
             TensorDict with batch_size :math:`(N_{sources}, D)`.
-        global_scalars : TensorDict or None, optional
+        global_scalars : TensorDict[str, Float[torch.Tensor, ""]] or None, optional
             TensorDict with batch_size :math:`()`. Will be augmented with log
             reference length ratios.
-        global_vectors : TensorDict or None, optional
+        global_vectors : TensorDict[str, Float[torch.Tensor, " n_dims"]] or None, optional
             TensorDict with batch_size :math:`(D,)`.
         chunk_size : None or int or {"auto"}, optional
             Chunking behavior passed to :meth:`ChunkedKernel.forward`.
@@ -1125,7 +1125,7 @@ class MultiscaleKernel(Module):
 
         Returns
         -------
-        TensorDict
+        TensorDict[str, Float[torch.Tensor, "..."]]
             Dictionary mapping field names to the summed results from all kernels.
             Each scalar field has shape :math:`(N_{targets},)` and each vector field
             has shape :math:`(N_{targets}, D)`.
@@ -1193,7 +1193,7 @@ class MultiscaleKernel(Module):
             ),
         )
 
-        results_pieces: list[TensorDict] = [
+        results_pieces: list[TensorDict[str, Float[torch.Tensor, "..."]]] = [
             self.kernels[name](
                 reference_length=reference_lengths[name]
                 * torch.exp(self.log_scalefactors[name]),
@@ -1209,6 +1209,6 @@ class MultiscaleKernel(Module):
             for name in self.reference_length_names
         ]
 
-        result: TensorDict = reduce(operator.add, results_pieces)
+        result: TensorDict[str, Float[torch.Tensor, "..."]] = reduce(operator.add, results_pieces)
 
         return result

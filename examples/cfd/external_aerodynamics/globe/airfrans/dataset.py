@@ -24,6 +24,7 @@ from typing import Any, Literal, Sequence
 
 import pyvista as pv
 import torch
+from jaxtyping import Float
 from tensordict import TensorDict, tensorclass
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
@@ -118,21 +119,29 @@ NU = 1.56e-5  # m^2/s
 
 @tensorclass
 class AirFRANSSample:
-    interior_mesh: Mesh  # Point cloud of the volume mesh
-    boundary_meshes: TensorDict  # BC name -> Mesh; TensorDict so .to(device) transfers them
-    reference_lengths: TensorDict  # dict of reference length names to scalar tensors
-    global_scalars: TensorDict  # dict of global scalar names to scalar tensors
-    global_vectors: TensorDict  # dict of global vector names to vector tensors
+    interior_mesh: Mesh  # Point cloud with global_data (U_inf, q_inf) and point_data
+    boundary_meshes: TensorDict[str, Mesh]  # BC name -> Mesh
+    reference_lengths: TensorDict[str, Float[torch.Tensor, ""]]  # reference length names to scalar tensors
 
     @property
     def model_input_kwargs(self) -> dict:
-        """Kwargs for :meth:`GLOBE.forward`, minus control-flow args like ``chunk_size``."""
+        """Kwargs for :meth:`GLOBE.forward`, minus control-flow args like ``chunk_size``.
+
+        Model conditioning inputs (``global_scalars``, ``global_vectors``) are
+        derived from ``interior_mesh.global_data`` so that all global quantities
+        have a single source of truth on the Mesh.
+        """
+        U_inf = self.interior_mesh.global_data["U_inf"]
         return {
             "prediction_points": self.interior_mesh.points,
             "boundary_meshes": self.boundary_meshes,
             "reference_lengths": self.reference_lengths,
-            "global_scalars": self.global_scalars,
-            "global_vectors": self.global_vectors,
+            "global_scalars": TensorDict({}, batch_size=[]),
+            "global_vectors": TensorDict(
+                {"U_inf / U_inf_magnitude": U_inf / torch.norm(U_inf)},
+                batch_size=torch.Size([U_inf.shape[0]]),
+            ),
+            "global_data": self.interior_mesh.global_data,
         }
 
 
@@ -321,11 +330,6 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 },
                 batch_size=torch.Size([]),
             ),
-            global_scalars=TensorDict(),
-            global_vectors=TensorDict(
-                {"U_inf / U_inf_magnitude": U_inf / U_inf_magnitude},
-                batch_size=torch.Size([2]),
-            ),
             batch_size=torch.Size([]),
         )
 
@@ -493,7 +497,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
 
     @staticmethod
     def visualize_output_distributions(
-        output_dict: TensorDict,
+        output_dict: TensorDict[str, Float[torch.Tensor, "..."]],
         show: bool = True,
     ) -> None:
         """Visualize distributions of output quantities with histograms.
