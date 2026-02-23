@@ -66,26 +66,19 @@ def make_kernel_and_input_data(
     torch.manual_seed(seed)
 
     ### Build rank specs from output_fields
-    output_field_ranks = TensorDict(
-        {k: (0 if v == "scalar" else 1) for k, v in output_fields.items()},
-        batch_size=[],
-    )
+    output_field_ranks = {
+        k: (0 if v == "scalar" else 1) for k, v in output_fields.items()
+    }
 
     ### Build source and global rank specs from counts
-    source_data_ranks = TensorDict(
-        {
-            **{f"source_scalar_{i}": 0 for i in range(n_source_scalars)},
-            **{f"source_vector_{i}": 1 for i in range(n_source_vectors)},
-        },
-        batch_size=[],
-    )
-    global_data_ranks = TensorDict(
-        {
-            **{f"global_scalar_{i}": 0 for i in range(n_global_scalars)},
-            **{f"global_vector_{i}": 1 for i in range(n_global_vectors)},
-        },
-        batch_size=[],
-    )
+    source_data_ranks = {
+        **{f"source_scalar_{i}": 0 for i in range(n_source_scalars)},
+        **{f"source_vector_{i}": 1 for i in range(n_source_vectors)},
+    }
+    global_data_ranks = {
+        **{f"global_scalar_{i}": 0 for i in range(n_global_scalars)},
+        **{f"global_vector_{i}": 1 for i in range(n_global_vectors)},
+    }
 
     kernel = ChunkedKernel(
         n_spatial_dims=n_spatial_dims,

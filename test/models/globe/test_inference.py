@@ -16,7 +16,6 @@
 
 import pytest
 import torch
-from tensordict import TensorDict
 
 from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.mesh.primitives.procedural import lumpy_sphere
@@ -34,8 +33,8 @@ def test_globe_inference(device: str) -> None:
     ### Create model
     model = GLOBE(
         n_spatial_dims=3,
-        output_field_ranks=TensorDict({"pressure": 0, "velocity": 1}),
-        boundary_source_data_ranks={"no_slip": TensorDict({})},
+        output_field_ranks={"pressure": 0, "velocity": 1},
+        boundary_source_data_ranks={"no_slip": {}},
         reference_length_names=["test_length"],
         reference_area=1.0,
         hidden_layer_sizes=[8],

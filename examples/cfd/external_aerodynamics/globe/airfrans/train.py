@@ -217,19 +217,17 @@ def main(
     ### [Model]
     model = GLOBE(
         n_spatial_dims=2,
-        output_field_ranks=TensorDict(
-            {
-                "ΔU/|U_inf|": torch.tensor(1),
-                "C_p": torch.tensor(0),
-                "C_pt": torch.tensor(0),
-                "ln(1+nut/nu)": torch.tensor(0),
-                "C_F,shear": torch.tensor(1),
-            }
-        ),
-        boundary_source_data_ranks={"no_slip": TensorDict({})},
+        output_field_ranks={
+            "ΔU/|U_inf|": 1,
+            "C_p": 0,
+            "C_pt": 0,
+            "ln(1+nut/nu)": 0,
+            "C_F,shear": 1,
+        },
+        boundary_source_data_ranks={"no_slip": {}},
         reference_length_names=["chord", "delta_FS"],
         reference_area=1.0,
-        global_data_ranks=TensorDict({"U_inf / U_inf_magnitude": torch.tensor(1)}),
+        global_data_ranks={"U_inf / U_inf_magnitude": 1},
         n_communication_hyperlayers=n_communication_hyperlayers,
         hidden_layer_sizes=hidden_layer_sizes,
         n_latent_scalars=n_latent_scalars,

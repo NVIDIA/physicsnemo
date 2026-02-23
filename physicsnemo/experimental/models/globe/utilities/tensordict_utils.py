@@ -21,7 +21,6 @@ including concatenation of leaf tensors, computing total lengths, and
 splitting by tensor rank.
 """
 
-from collections import Counter
 from math import prod
 
 import torch
@@ -240,66 +239,6 @@ def split_by_leaf_rank(
         result[rank][k] = v
 
     return result
-
-
-def ranks_from_tensordict(td: TensorDict) -> TensorDict:
-    r"""Derives a rank-spec TensorDict from a data TensorDict.
-
-    Each leaf tensor is replaced by its rank (number of non-batch dimensions),
-    producing a TensorDict whose leaves are plain
-    integers. The resulting TensorDict preserves the nesting structure of
-    the input and serves as a structural descriptor - for example, as the
-    ``output_field_ranks`` argument to :class:`Kernel`.
-
-    Parameters
-    ----------
-    td : TensorDict
-        Data TensorDict whose leaf ranks should be extracted.
-
-    Returns
-    -------
-    TensorDict
-        Rank-spec TensorDict with integer leaves.
-
-    Examples
-    --------
-    >>> td = TensorDict({
-    ...     "pressure": torch.randn(10),       # rank 0 (scalar)
-    ...     "velocity": torch.randn(10, 3),    # rank 1 (vector)
-    ... }, batch_size=[10])
-    >>> ranks_from_tensordict(td)
-    TensorDict({"pressure": 0, "velocity": 1})
-    """
-    return td.apply(lambda x: x.ndim - td.batch_dims)  # ty: ignore[invalid-return-type]
-
-
-def _rank_counts(rank_spec: TensorDict) -> Counter[int]:
-    r"""Counts leaves by rank value in a rank-spec TensorDict.
-
-    Essentially gives an object to answer: "How many tensors in rank_spec have rank X?"
-
-    Parameters
-    ----------
-    rank_spec : TensorDict
-        Rank-spec TensorDict with integer tensor leaves.
-
-    Returns
-    -------
-    Counter[int]
-        Mapping from rank value to the number of leaves with that rank.
-        Missing ranks default to 0.
-
-    Examples
-    --------
-    >>> spec = TensorDict({"a": torch.tensor(0), "b": torch.tensor(0), "c": torch.tensor(1)})
-    >>> counts = _rank_counts(spec)
-    >>> counts[0], counts[1]
-    (2, 1)
-    """
-    return Counter(
-        int(v.item())  # ty: ignore[unresolved-attribute]
-        for v in rank_spec.values(include_nested=True, leaves_only=True)
-    )
 
 
 def combine_tensordicts(

@@ -24,13 +24,17 @@ from typing import Literal, Sequence
 import torch
 import torch.nn as nn
 import tqdm
-from jaxtyping import Float, Int
+from jaxtyping import Float
 from tensordict import TensorDict
 from torch.utils.checkpoint import checkpoint
 
 from physicsnemo.core.module import Module
+from physicsnemo.experimental.models.globe.utilities.rank_spec import (
+    RankSpecDict,
+    flatten_rank_spec,
+    rank_counts,
+)
 from physicsnemo.experimental.models.globe.utilities.tensordict_utils import (
-    _rank_counts,
     concatenate_leaves,
     concatenated_length,
     split_by_leaf_rank,
@@ -130,9 +134,9 @@ class Kernel(Module):
         self,
         *,
         n_spatial_dims: int,
-        output_field_ranks: TensorDict[str, Int[torch.Tensor, ""]],
-        source_data_ranks: TensorDict[str, Int[torch.Tensor, ""]] | None = None,
-        global_data_ranks: TensorDict[str, Int[torch.Tensor, ""]] | None = None,
+        output_field_ranks: RankSpecDict,
+        source_data_ranks: RankSpecDict | None = None,
+        global_data_ranks: RankSpecDict | None = None,
         smoothing_radius: float = 1e-8,
         hidden_layer_sizes: Sequence[int] | None = None,
         n_spherical_harmonics: int = 4,
@@ -143,9 +147,9 @@ class Kernel(Module):
         if hidden_layer_sizes is None:
             hidden_layer_sizes = [64]
         if source_data_ranks is None:
-            source_data_ranks = TensorDict({})
+            source_data_ranks = {}
         if global_data_ranks is None:
-            global_data_ranks = TensorDict({})
+            global_data_ranks = {}
 
         super().__init__()
 
@@ -202,8 +206,8 @@ class Kernel(Module):
         3. Pairwise spherical harmonic features for all :math:`\binom{n}{2}` vector
            pairs, each producing ``n_spherical_harmonics`` Legendre polynomial terms
         """
-        source_rank_counts = _rank_counts(self.source_data_ranks)
-        global_rank_counts = _rank_counts(self.global_data_ranks)
+        source_rank_counts = rank_counts(self.source_data_ranks)
+        global_rank_counts = rank_counts(self.global_data_ranks)
 
         n_vectors_in: int = (
             1 + source_rank_counts[1] + global_rank_counts[1]
@@ -222,9 +226,9 @@ class Kernel(Module):
         One channel per scalar output field, plus vector reprojection coefficients
         for each vector output field (1 radial + 2 per non-radial input vector).
         """
-        source_rank_counts = _rank_counts(self.source_data_ranks)
-        global_rank_counts = _rank_counts(self.global_data_ranks)
-        output_rank_counts = _rank_counts(self.output_field_ranks)
+        source_rank_counts = rank_counts(self.source_data_ranks)
+        global_rank_counts = rank_counts(self.global_data_ranks)
+        output_rank_counts = rank_counts(self.output_field_ranks)
         n_vectors_in: int = (
             1 + source_rank_counts[1] + global_rank_counts[1]
         )  # +1 for r
@@ -283,14 +287,12 @@ class Kernel(Module):
             1: shape_for_vectors,
         }
 
+        ranks_dict = flatten_rank_spec(self.output_field_ranks)
         output_field_shapes: dict[str, torch.Size] = {
-            field_name: shapes_by_rank[int(rank)]
-            for field_name, rank in self.output_field_ranks.items(
-                include_nested=True, leaves_only=True
-            )
+            field_name: shapes_by_rank[rank]
+            for field_name, rank in ranks_dict.items()
         }
 
-        # Skip validation when running under torch.compile for performance
         if not torch.compiler.is_compiling():
             if not tensor.shape[-1] == sum(
                 prod(shape) for shape in output_field_shapes.values()
@@ -301,19 +303,16 @@ class Kernel(Module):
                 )
 
         batch_size = tensor.shape[:-1]
-        result = TensorDict(
-            {},
-            batch_size=batch_size,
-        )
 
+        ### Split the flat tensor into per-field views
+        fields: dict[str, torch.Tensor] = {}
         i: int = 0
         for field_name, shape in sorted(output_field_shapes.items()):
             field_width = prod(shape)
-            # Use slice to get a view, not a copy
             slc = [slice(None)] * (tensor.ndim - 1) + [slice(i, i + field_width)]
-            result[field_name] = tensor[tuple(slc)].reshape(batch_size + shape)
+            fields[field_name] = tensor[tuple(slc)].reshape(batch_size + shape)
             i += field_width
-        return result
+        return TensorDict(fields, batch_size=batch_size)
 
     def forward(
         self,
@@ -406,8 +405,8 @@ class Kernel(Module):
                     f"Expected target_points last dimension to be {self.n_spatial_dims}, "
                     f"got {target_points.shape[-1]}"
                 )
-            source_rank_counts = _rank_counts(self.source_data_ranks)
-            global_rank_counts = _rank_counts(self.global_data_ranks)
+            source_rank_counts = rank_counts(self.source_data_ranks)
+            global_rank_counts = rank_counts(self.global_data_ranks)
             for name, (actual, expected) in {
                 "source scalars": (
                     concatenated_length(source_scalars),
@@ -573,11 +572,9 @@ class Kernel(Module):
         # field on a local basis defined by the vectors we already have - this
         # preserves rotational invariance.
 
+        ranks_dict = flatten_rank_spec(self.output_field_ranks)
         vector_reprojection_needed = any(
-            rank == 1
-            for rank in self.output_field_ranks.values(
-                include_nested=True, leaves_only=True
-            )
+            rank == 1 for rank in ranks_dict.values()
         )
 
         if vector_reprojection_needed:
@@ -655,9 +652,7 @@ class Kernel(Module):
             # shape (n_targets, n_sources, n_spatial_dims, 4 * n_vectors)
 
             ### Now, reproject each vector field onto the basis vectors
-            for field_name, rank in self.output_field_ranks.items(
-                include_nested=True, leaves_only=True
-            ):
+            for field_name, rank in ranks_dict.items():
                 if rank == 1:
                     # # ORIGINAL (SLOW) - keeping for reference, as this is the most readable version
                     # # Axes: t = target, s = source, d = dim, b = basis vector id
@@ -1003,10 +998,10 @@ class MultiscaleKernel(Module):
         self,
         *,
         n_spatial_dims: int,
-        output_field_ranks: TensorDict[str, Int[torch.Tensor, ""]],
+        output_field_ranks: RankSpecDict,
         reference_length_names: Sequence[str],
-        source_data_ranks: TensorDict[str, Int[torch.Tensor, ""]] | None = None,
-        global_data_ranks: TensorDict[str, Int[torch.Tensor, ""]] | None = None,
+        source_data_ranks: RankSpecDict | None = None,
+        global_data_ranks: RankSpecDict | None = None,
         smoothing_radius: float = 1e-8,
         hidden_layer_sizes: Sequence[int] | None = None,
         n_spherical_harmonics: int = 4,
@@ -1017,9 +1012,9 @@ class MultiscaleKernel(Module):
         super().__init__()
 
         if source_data_ranks is None:
-            source_data_ranks = TensorDict({})
+            source_data_ranks = {}
         if global_data_ranks is None:
-            global_data_ranks = TensorDict({})
+            global_data_ranks = {}
 
         self.n_spatial_dims = n_spatial_dims
         self.output_field_ranks = output_field_ranks
@@ -1035,9 +1030,13 @@ class MultiscaleKernel(Module):
 
         ### Augment global_data_ranks with log-ratio entries for each
         # pair of reference lengths. These are rank-0 (scalar) features.
-        augmented_global = global_data_ranks.clone()
-        for k1, k2 in itertools.combinations(reference_length_names, 2):
-            augmented_global[f"log_reference_length_ratio_{k1}_{k2}"] = 0
+        augmented_global = {
+            **global_data_ranks,
+            **{
+                f"log_reference_length_ratio_{k1}_{k2}": 0
+                for k1, k2 in itertools.combinations(reference_length_names, 2)
+            },
+        }
 
         self.kernels = nn.ModuleDict(
             {

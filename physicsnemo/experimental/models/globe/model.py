@@ -21,12 +21,16 @@ from typing import Literal, Sequence
 
 import torch
 import torch.nn as nn
-from jaxtyping import Float, Int
+from jaxtyping import Float
 from tensordict import TensorDict
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.experimental.models.globe.field_kernel import MultiscaleKernel
+from physicsnemo.experimental.models.globe.utilities.rank_spec import (
+    RankSpecDict,
+    flatten_rank_spec,
+)
 from physicsnemo.mesh import Mesh
 from physicsnemo.utils.logging import PythonLogger
 
@@ -168,11 +172,11 @@ class GLOBE(Module):
     def __init__(
         self,
         n_spatial_dims: int,
-        output_field_ranks: TensorDict[str, Int[torch.Tensor, ""]],
-        boundary_source_data_ranks: dict[str, TensorDict[str, Int[torch.Tensor, ""]]],
+        output_field_ranks: RankSpecDict,
+        boundary_source_data_ranks: dict[str, RankSpecDict],
         reference_length_names: Sequence[str],
         reference_area: float,
-        global_data_ranks: TensorDict[str, Int[torch.Tensor, ""]] | None = None,
+        global_data_ranks: RankSpecDict | None = None,
         n_communication_hyperlayers: int = 2,
         n_latent_scalars: int = 12,
         n_latent_vectors: int = 6,
@@ -183,26 +187,23 @@ class GLOBE(Module):
         if hidden_layer_sizes is None:
             hidden_layer_sizes = [64, 64, 64]
         if global_data_ranks is None:
-            global_data_ranks = TensorDict({})
+            global_data_ranks = {}
 
         boundary_condition_names = list(boundary_source_data_ranks.keys())
 
-        if not torch.compiler.is_compiling():
-            for rank in output_field_ranks.values(
-                include_nested=True,
-                leaves_only=True,
-            ):
-                if rank not in (0, 1):
-                    raise ValueError(
-                        f"All leaves of output_field_ranks must be 0 (scalar) or 1 (vector), "
-                        f"got {rank!r}"
-                    )
-            for bc_name in boundary_condition_names:
-                if "." in bc_name:
-                    raise ValueError(
-                        f"In `boundary_source_data_ranks`, got {bc_name=!r};\n"
-                        "BC names must not contain `.` for TensorDict compatibility."
-                    )
+        ### Input validation (eager mode only)
+        for rank in flatten_rank_spec(output_field_ranks).values():
+            if rank not in (0, 1):
+                raise ValueError(
+                    f"All leaves of output_field_ranks must be 0 (scalar) or 1 (vector), "
+                    f"got {rank!r}"
+                )
+        for bc_name in boundary_condition_names:
+            if "." in bc_name:
+                raise ValueError(
+                    f"In `boundary_source_data_ranks`, got {bc_name=!r};\n"
+                    "BC names must not contain `.` for TensorDict compatibility."
+                )
 
         super().__init__(meta=MetaData())
 
@@ -222,22 +223,11 @@ class GLOBE(Module):
 
         ### Build the intermediate output-field rank spec for communication
         # hyperlayers. Only the final hyperlayer emits output_field_ranks.
-        intermediate_field_ranks = TensorDict(
-            {
-                **{
-                    f"strengths.{name}": torch.tensor(0)
-                    for name in reference_length_names
-                },
-                **{
-                    f"latent.scalars.{i}": torch.tensor(0)
-                    for i in range(n_latent_scalars)
-                },
-                **{
-                    f"latent.vectors.{i}": torch.tensor(1)
-                    for i in range(n_latent_vectors)
-                },
-            },
-        )
+        intermediate_field_ranks: RankSpecDict = {
+            **{f"strengths.{name}": 0 for name in reference_length_names},
+            **{f"latent.scalars.{i}": 0 for i in range(n_latent_scalars)},
+            **{f"latent.vectors.{i}": 1 for i in range(n_latent_vectors)},
+        }
 
         kernel_layers = []
 
@@ -275,20 +265,8 @@ class GLOBE(Module):
         # applied to scalar fields; adding bias to vector fields would break
         # rotational equivariance. Uses ModuleList (not ModuleDict) to support
         # output field names containing dots from nested rank specs.
-        self._output_field_order = sorted(
-            str(k)
-            for k, _ in output_field_ranks.items(
-                include_nested=True,
-                leaves_only=True,
-            )
-        )
-        flat_output_ranks = {
-            str(k): v
-            for k, v in output_field_ranks.items(
-                include_nested=True,
-                leaves_only=True,
-            )
-        }
+        flat_output_ranks = flatten_rank_spec(output_field_ranks)
+        self._output_field_order = sorted(flat_output_ranks.keys())
         self.final_field_transforms = nn.ModuleList(
             [
                 nn.Linear(
@@ -302,9 +280,9 @@ class GLOBE(Module):
 
     def _build_source_data_ranks(
         self,
-        bc_source_ranks: TensorDict,
+        bc_source_ranks: RankSpecDict,
         include_latents: bool,
-    ) -> TensorDict:
+    ) -> RankSpecDict:
         """Build the full source_data_ranks for a specific (layer, bc_type) kernel.
 
         Combines the BC's physical features (under ``"physical"``), cell
@@ -312,20 +290,12 @@ class GLOBE(Module):
         that mirrors the ``source_data`` structure produced by
         :meth:`_evaluate_hyperlayer`.
         """
-        result = TensorDict(
-            {"physical": bc_source_ranks, "normals": torch.tensor(1)},
-        )
+        result: RankSpecDict = {"physical": bc_source_ranks, "normals": 1}
         if include_latents:
-            result["latent"] = TensorDict(
-                {
-                    "scalars": TensorDict(
-                        {str(i): torch.tensor(0) for i in range(self.n_latent_scalars)},
-                    ),
-                    "vectors": TensorDict(
-                        {str(i): torch.tensor(1) for i in range(self.n_latent_vectors)},
-                    ),
-                },
-            )
+            result["latent"] = {
+                "scalars": {str(i): 0 for i in range(self.n_latent_scalars)},
+                "vectors": {str(i): 1 for i in range(self.n_latent_vectors)},
+            }
         return result
 
     def _evaluate_hyperlayer(
