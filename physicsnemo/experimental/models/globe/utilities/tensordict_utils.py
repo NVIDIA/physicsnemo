@@ -19,6 +19,10 @@ r"""Utility functions for working with TensorDict objects.
 This module provides helper functions for manipulating TensorDict objects,
 including concatenation of leaf tensors, computing total lengths, and
 splitting by tensor rank.
+
+For field-to-rank *schema metadata* (e.g. ``{"pressure": 0, "velocity": 1}``),
+see :mod:`~physicsnemo.experimental.models.globe.utilities.rank_spec` and its
+:class:`RankSpecDict` type.
 """
 
 from math import prod
@@ -102,7 +106,7 @@ def concatenate_leaves(td: TensorDict[str, torch.Tensor]) -> torch.Tensor:
         )
 
 
-class RankDict(dict):
+class TensorsByRank(dict):
     r"""Dictionary that auto-creates TensorDict values based on integer rank keys.
 
     This specialized dictionary behaves like ``collections.defaultdict``, but the default
@@ -135,7 +139,7 @@ class RankDict(dict):
 
     Examples
     --------
-    >>> rd = RankDict(batch_size=torch.Size([10]), device="cpu")
+    >>> rd = TensorsByRank(batch_size=torch.Size([10]), device="cpu")
     >>> # Accessing rank 0 (scalars) auto-creates empty TensorDict
     >>> td0 = rd[0]  # TensorDict with batch_size=(10,)
     >>> # Accessing rank 1 (vectors) also auto-creates
@@ -189,7 +193,7 @@ class RankDict(dict):
 
 def split_by_leaf_rank(
     td: TensorDict[str, torch.Tensor], new_batch_dim: int | None = None
-) -> RankDict[int, TensorDict[str, torch.Tensor]]:
+) -> TensorsByRank[int, TensorDict[str, torch.Tensor]]:
     r"""Splits a TensorDict into multiple TensorDicts grouped by tensor rank.
 
     This function groups leaf tensors by their rank (number of dimensions excluding
@@ -206,7 +210,7 @@ def split_by_leaf_rank(
 
     Returns
     -------
-    RankDict[int, TensorDict[str, torch.Tensor]]
+    TensorsByRank[int, TensorDict[str, torch.Tensor]]
         Dictionary mapping rank (int) to TensorDict. Each
         TensorDict has the same ``batch_size`` and device as the input, and contains
         only the tensors with the corresponding rank. Empty TensorDicts are created
@@ -230,7 +234,7 @@ def split_by_leaf_rank(
     >>> list(split_td[2].keys())
     ['matrix']
     """
-    result = RankDict(
+    result = TensorsByRank(
         batch_size=td.batch_size, new_batch_dim=new_batch_dim, device=td.device
     )
 

@@ -32,6 +32,9 @@ or nested to mirror a hierarchical TensorDict structure::
 Use :func:`flatten_rank_spec` to reduce a nested spec to dot-separated
 flat keys, and :func:`ranks_from_tensordict` to derive a rank spec from
 an existing data TensorDict.
+
+For *runtime* grouping of actual tensor data by observed rank, see
+:func:`~physicsnemo.experimental.models.globe.utilities.tensordict_utils.split_by_leaf_rank`.
 """
 
 from collections import Counter
