@@ -31,7 +31,3 @@ hyperparameters:
   attn_kernel_size: 31
   num_heads: 16
   patch_size: 4
-  conditioning_embedder: "edm"
-  conditioning_embedder_kwargs:
-    emb_channels: 768
-    noise_channels: 256
