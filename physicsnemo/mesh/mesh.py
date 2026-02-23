@@ -538,15 +538,15 @@ class Mesh:
 
     @property
     def point_normals(self) -> torch.Tensor:
-        """Compute angle-area-weighted normal vectors at mesh vertices.
+        """Compute weighted normal vectors at mesh vertices.
 
-        This property returns the canonical/default point normals using combined
-        angle and area weighting (Maya default). For other weighting schemes
-        (unweighted, area, angle), use :meth:`compute_point_normals`.
+        This property returns the canonical/default point normals. For 2D+
+        manifolds (surfaces, volumes), angle-area weighting is used, which
+        balances face area and vertex interior angle for high-quality normals.
+        For 1D manifolds (curves), area weighting (i.e. segment-length
+        weighting) is used, since interior angles are not defined for edges.
 
-        Angle-area weighting ensures that each face's contribution is weighted by
-        both its area and the interior angle at the vertex, balancing both geometric
-        factors for high-quality normals.
+        For explicit weighting control, use :meth:`compute_point_normals`.
 
         The result is cached in ``_cache["point", "normals"]`` for efficiency.
 
@@ -560,7 +560,7 @@ class Mesh:
         Raises
         ------
         ValueError
-            If the mesh is not codimension-1 (n_manifold_dims ≠ n_spatial_dims - 1).
+            If the mesh is not codimension-1 (n_manifold_dims != n_spatial_dims - 1).
 
         See Also
         --------
@@ -577,7 +577,8 @@ class Mesh:
         """
         cached = self._cache.get(("point", "normals"), None)
         if cached is None:
-            cached = self.compute_point_normals(weighting="angle_area")
+            weighting = "area" if self.n_manifold_dims < 2 else "angle_area"
+            cached = self.compute_point_normals(weighting=weighting)
             self._cache["point", "normals"] = cached
         return cached
 
