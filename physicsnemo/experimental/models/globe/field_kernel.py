@@ -1032,8 +1032,8 @@ class MultiscaleKernel(Module):
         # pair of reference lengths. These are rank-0 (scalar) features.
         augmented_global = {
             **global_data_ranks,
-            **{
-                f"log_reference_length_ratio_{k1}_{k2}": 0
+            "log_reference_length_ratios": {
+                f"{k1}_{k2}": 0
                 for k1, k2 in itertools.combinations(reference_length_names, 2)
             },
         }
@@ -1152,7 +1152,7 @@ class MultiscaleKernel(Module):
         # place into the scalar group via split_by_leaf_rank.
         name_pairs = list(itertools.combinations(self.reference_length_names, 2))
         for k1, k2 in name_pairs:
-            global_data[f"log_reference_length_ratio_{k1}_{k2}"] = (
+            global_data["log_reference_length_ratios", f"{k1}_{k2}"] = (
                 reference_lengths[k1] / reference_lengths[k2]
             ).log()
 
