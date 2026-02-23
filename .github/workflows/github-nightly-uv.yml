@@ -122,7 +122,15 @@ jobs:
     - name: Run core tests (collect all for testmon)
       run: |
         # This populates the testmon database for PR workflows
-        uv run python -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*"
+        uv run python -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*" --junitxml=testmon-report.xml
+
+    - name: Upload test report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: testmon-junit-report
+        path: testmon-report.xml
+        retention-days: 30
 
     - name: Save testmon database to cache
       uses: actions/cache/save@v4
@@ -164,11 +172,21 @@ jobs:
 
     - name: Run core tests for coverage report
       run: |
-        uv run coverage run --rcfile='test/coverage.pytest.rc' -m pytest --ignore-glob="*docs*" --ignore-glob="*examples*"
+        uv run coverage run --rcfile='test/coverage.pytest.rc' -m pytest --ignore-glob="*docs*" --ignore-glob="*examples*" --junitxml=coverage-core-report.xml
 
     - name: Run doc tests (testmon not supported for doctests)
       run: |
-        uv run coverage run --rcfile='test/coverage.docstring.rc' -m pytest --doctest-modules physicsnemo/ --ignore-glob="*internal*" --ignore-glob="*experimental*"
+        uv run coverage run --rcfile='test/coverage.docstring.rc' -m pytest --doctest-modules physicsnemo/ --ignore-glob="*internal*" --ignore-glob="*experimental*" --junitxml=coverage-doctest-report.xml
+
+    - name: Upload test reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-junit-reports
+        path: |
+          coverage-core-report.xml
+          coverage-doctest-report.xml
+        retention-days: 30
 
     - name: Save coverage files to cache
       uses: actions/cache/save@v4
