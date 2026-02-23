@@ -1,2 +1,3 @@
 pyproj
-torch-optimi
+pydantic
+torch-optimi[optimi]

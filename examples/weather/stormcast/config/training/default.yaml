@@ -28,6 +28,7 @@ seed: -1 # Specify a random seed by setting this to an int > 0
 cudnn_benchmark: True # Enable/disable CuDNN benchmark mode
 resume_checkpoint: "latest" # epoch number to continue training from, or "latest" for the latest checkpoint
 initial_weights: null # if not null, a .mdlus checkpoint to load weights at the start of training; no effect if training continues from a checkpoint
+max_run_steps: null
 
 # Logging frequency
 print_progress_freq: 100 # How often to print progress, measured in number of training steps
@@ -37,10 +38,11 @@ validation_freq: 1000 # how often to record the validation loss, measured in num
 # Optimization hyperparameters
 batch_size: 64 # Total training batch size -- must be >= (and divisble by) number of GPUs being used
 batch_size_per_gpu: "auto" # Batch size on each GPU, set to an int to force smaller local batch with gradient accumulation
-lr: 4E-4 # Initial learning rate
-lr_rampup_steps: 1000 # Number of training steps over which to perform linear LR warmup
 total_train_steps: 16000 # Number of total training steps, 16000 with batch size 64 corresponds to StormCast paper regression
 clip_grad_norm: -1 # Threshold for gradient clipping, set to -1 to disable
+
+domain_parallel_size: 1
+force_sharding: False
 
 # Performance and optimization (like corrdiff perf section)
 perf:
@@ -53,6 +55,7 @@ perf:
 # Optimizer configuration
 optimizer:
   name: "adam" # Optimizer type: "adam", "adamw", "stableadamw"
+  lr: 4E-4 # Initial learning rate
   betas: [0.9, 0.999] # Adam beta parameters
   weight_decay: 0.0 # Weight decay (L2 regularization)
   eps: 1.0E-8 # Adam epsilon for numerical stability
@@ -77,11 +80,13 @@ optimizer:
 #   threshold: 1e-5 # Threshold for measuring improvement
 #   cooldown: 0 # Steps to wait after reducing LR before resuming normal operation
 #   min_lr: 0.0 # Minimum learning rate
+scheduler:
+  lr_rampup_steps: 1000 # Number of training steps over which to perform linear LR warmup
 
 # Validation options
 validation_steps: 1 # Number of batches to evaluate during validation
 validation_plot_variables: ["u10m", "v10m", "t2m", "refc", "q1", "q5", "q10"]
-validation_plot_background_variables: [] # Background variables to show in validation plots (list of names or indices)
+validation_plot_background_channels: [] # Background channels to show in validation plots (list of names or indices)
 
 # Loss options
 loss:
