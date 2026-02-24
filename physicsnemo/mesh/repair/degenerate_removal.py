@@ -23,8 +23,6 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from physicsnemo.mesh.utilities._cache import CACHE_KEY
-
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -106,7 +104,7 @@ def remove_degenerate_cells(
     new_cells = mesh.cells[keep_mask]
 
     ### Transfer data (excluding cache)
-    new_cell_data = mesh.cell_data.exclude(CACHE_KEY)[keep_mask]
+    new_cell_data = mesh.cell_data[keep_mask]
 
     ### Keep all points and point data (will be cleaned by remove_isolated_points if needed)
     from physicsnemo.mesh.mesh import Mesh
@@ -114,7 +112,7 @@ def remove_degenerate_cells(
     cleaned_mesh = Mesh(
         points=mesh.points,
         cells=new_cells,
-        point_data=mesh.point_data.exclude(CACHE_KEY).clone(),
+        point_data=mesh.point_data.clone(),
         cell_data=new_cell_data,
         global_data=mesh.global_data.clone(),
     )

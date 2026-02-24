@@ -24,8 +24,6 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from physicsnemo.mesh.utilities._cache import CACHE_KEY
-
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
     from physicsnemo.mesh.neighbors._adjacency import Adjacency
@@ -261,8 +259,8 @@ def fix_orientation(
         oriented_mesh = Mesh(
             points=mesh.points,
             cells=new_cells,
-            point_data=mesh.point_data.exclude(CACHE_KEY).clone(),
-            cell_data=mesh.cell_data.exclude(CACHE_KEY).clone(),
+            point_data=mesh.point_data.clone(),
+            cell_data=mesh.cell_data.clone(),
             global_data=mesh.global_data.clone(),
         )
     else:

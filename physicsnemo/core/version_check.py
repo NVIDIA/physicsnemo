@@ -208,7 +208,7 @@ _PACKAGE_HINTS: Dict[str, str] = {
     ),
     "h5py": _format_install_hint(
         "h5py",
-        direct_install="h5py",
+        group="datapipes-extras",
     ),
     "netCDF4": _format_install_hint(
         "netCDF4",
@@ -242,19 +242,19 @@ _PACKAGE_HINTS: Dict[str, str] = {
     ),
     "nvidia.dali": _format_install_hint(
         "nvidia-dali",
-        group="perf",
+        direct_hint='pip install "nvidia-physicsnemo[cu13]"  # or "nvidia-physicsnemo[cu12]"',
     ),
     "cuml": _format_install_hint(
         "cuml",
-        group="perf",
+        direct_hint='pip install "nvidia-physicsnemo[cu13]"  # or "nvidia-physicsnemo[cu12]"',
     ),
     "cupy": _format_install_hint(
         "cupy",
-        group="perf",
+        direct_hint='pip install "nvidia-physicsnemo[cu13]"  # or "nvidia-physicsnemo[cu12]"',
     ),
     "rmm": _format_install_hint(
         "rmm",
-        group="perf",
+        direct_hint='pip install "nvidia-physicsnemo[cu13]"  # or "nvidia-physicsnemo[cu12]"',
     ),
     "nvfuser": _format_install_hint(
         "nvfuser",
@@ -368,6 +368,7 @@ def get_package_hint(package_name: str) -> str:
 _VARIANT_BASE_PACKAGES: frozenset = frozenset(
     {
         "cupy",  # cupy-cuda11x, cupy-cuda12x, …
+        "cuml",  # cuml-cu12x, cuml-cu13x, …
         "onnxruntime",  # onnxruntime-gpu, onnxruntime-openvino, …
         "warp",  # pip installs as `warp-lang`
     }

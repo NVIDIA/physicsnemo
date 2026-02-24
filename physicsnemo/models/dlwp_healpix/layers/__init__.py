@@ -91,7 +91,7 @@ def _remap_target(target: str) -> str:
 
     if target.startswith("physicsnemo.models.dlwp_healpix_layers.healpix_layers."):
         cls_name = target.split(".")[-1]
-        return f"physicsnemo.nn.module.hpx.{cls_name}"
+        return f"physicsnemo.nn.{cls_name}"
 
     if target.startswith("physicsnemo.models.dlwp_healpix_layers."):
         cls_name = target.split(".")[-1]
@@ -100,7 +100,7 @@ def _remap_target(target: str) -> str:
         if cls_name == "MaxPool":
             return "physicsnemo.nn.HEALPixMaxPool"
         if cls_name.startswith("HEALPix"):
-            return f"physicsnemo.nn.module.hpx.{cls_name}"
+            return f"physicsnemo.nn.{cls_name}"
         return f"physicsnemo.models.dlwp_healpix.layers.{cls_name}"
 
     if target.startswith("physicsnemo.models.dlwp_healpix.layers.healpix_blocks."):

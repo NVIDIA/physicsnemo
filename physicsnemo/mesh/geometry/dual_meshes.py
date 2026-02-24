@@ -45,7 +45,6 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from physicsnemo.mesh.utilities._cache import get_cached, set_cached
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
@@ -663,10 +662,10 @@ def get_or_compute_dual_volumes_0(mesh: "Mesh") -> torch.Tensor:
     torch.Tensor
         Dual volumes for vertices, shape (n_points,)
     """
-    cached = get_cached(mesh.point_data, "dual_volumes_0")
+    cached = mesh._cache.get(("point", "dual_volumes_0"), None)
     if cached is None:
         cached = compute_dual_volumes_0(mesh)
-        set_cached(mesh.point_data, "dual_volumes_0", cached)
+        mesh._cache["point", "dual_volumes_0"] = cached
     return cached
 
 
@@ -683,9 +682,9 @@ def get_or_compute_circumcenters(mesh: "Mesh") -> torch.Tensor:
     torch.Tensor
         Circumcenters for all cells, shape (n_cells, n_spatial_dims)
     """
-    cached = get_cached(mesh.cell_data, "circumcenters")
+    cached = mesh._cache.get(("cell", "circumcenters"), None)
     if cached is None:
         parent_cell_vertices = mesh.points[mesh.cells]
         cached = compute_circumcenters(parent_cell_vertices)
-        set_cached(mesh.cell_data, "circumcenters", cached)
+        mesh._cache["cell", "circumcenters"] = cached
     return cached

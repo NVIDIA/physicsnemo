@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING
 import torch
 
 from physicsnemo.mesh.neighbors._adjacency import build_adjacency_from_pairs
-from physicsnemo.mesh.utilities._cache import CACHE_KEY
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -268,8 +267,8 @@ def fill_holes(
         pad = torch.full(pad_shape, fill, dtype=tensor.dtype, device=device)
         return torch.cat([tensor, pad], dim=0)
 
-    new_point_data = mesh.point_data.exclude(CACHE_KEY).apply(extend_point_data)
-    new_cell_data = mesh.cell_data.exclude(CACHE_KEY).apply(extend_cell_data)
+    new_point_data = mesh.point_data.apply(extend_point_data)
+    new_cell_data = mesh.cell_data.apply(extend_cell_data)
 
     from physicsnemo.mesh.mesh import Mesh
 

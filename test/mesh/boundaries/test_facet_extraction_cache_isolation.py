@@ -25,7 +25,6 @@ import pytest
 import torch
 
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.utilities._cache import get_cached
 
 
 class TestCacheIsolation:
@@ -51,9 +50,9 @@ class TestCacheIsolation:
 
         mesh = Mesh(points=points, cells=cells)
 
-        # Compute point normals for triangle mesh (caches in point_data["_cache"]["normals"])
+        # Compute point normals for triangle mesh
         triangle_normals = mesh.point_normals
-        assert get_cached(mesh.point_data, "normals") is not None
+        assert mesh._cache.get(("point", "normals"), None) is not None
         assert mesh.codimension == 1  # Valid for normals
 
         # Verify normals were correctly computed (should point in +z direction for this mesh)
@@ -71,8 +70,8 @@ class TestCacheIsolation:
         edge_mesh = mesh.get_facet_mesh(manifold_codimension=1)
 
         # Edge mesh should NOT have cached normals from parent
-        assert get_cached(edge_mesh.point_data, "normals") is None, (
-            "Cached point normals from parent mesh should not be in facet mesh point_data"
+        assert edge_mesh._cache.get(("point", "normals"), None) is None, (
+            "Cached point normals from parent mesh should not be in facet mesh"
         )
 
         # Attempting to access point_normals on edge mesh should raise ValueError
@@ -115,10 +114,10 @@ class TestCacheIsolation:
         assert torch.equal(edge_mesh.point_data["velocity"], point_data["velocity"])
 
         # Cached properties should NOT be preserved
-        assert get_cached(edge_mesh.point_data, "normals") is None
+        assert edge_mesh._cache.get(("point", "normals"), None) is None
 
     def test_multiple_cache_types_filtered(self):
-        """Test that all cached properties (under "_cache") are filtered."""
+        """Test that all cached properties are filtered from facet meshes."""
         points = torch.tensor(
             [
                 [0.0, 0.0, 0.0],
@@ -130,12 +129,10 @@ class TestCacheIsolation:
 
         mesh = Mesh(points=points, cells=cells)
 
-        # Manually add various cached properties to point_data
-        from physicsnemo.mesh.utilities._cache import set_cached
-
-        set_cached(mesh.point_data, "normals", torch.ones(3, 3))
-        set_cached(mesh.point_data, "custom_cache", torch.zeros(3))
-        set_cached(mesh.point_data, "another_property", torch.tensor([1.0, 2.0, 3.0]))
+        # Manually add various cached properties
+        mesh._cache["point", "normals"] = torch.ones(3, 3)
+        mesh._cache["point", "custom_cache"] = torch.zeros(3)
+        mesh._cache["point", "another_property"] = torch.tensor([1.0, 2.0, 3.0])
 
         # Add non-cached property
         mesh.point_data["user_field"] = torch.tensor([10.0, 20.0, 30.0])
@@ -144,9 +141,9 @@ class TestCacheIsolation:
         edge_mesh = mesh.get_facet_mesh(manifold_codimension=1)
 
         # All cached properties should be filtered
-        assert get_cached(edge_mesh.point_data, "normals") is None
-        assert get_cached(edge_mesh.point_data, "custom_cache") is None
-        assert get_cached(edge_mesh.point_data, "another_property") is None
+        assert edge_mesh._cache.get(("point", "normals"), None) is None
+        assert edge_mesh._cache.get(("point", "custom_cache"), None) is None
+        assert edge_mesh._cache.get(("point", "another_property"), None) is None
 
         # User field should be preserved
         assert "user_field" in edge_mesh.point_data
@@ -171,13 +168,13 @@ class TestCacheIsolation:
 
         # Add cached property
         _ = mesh.point_normals  # Creates cache
-        assert get_cached(mesh.point_data, "normals") is not None
+        assert mesh._cache.get(("point", "normals"), None) is not None
 
         # Extract facet mesh
         facet_mesh = mesh.get_facet_mesh(manifold_codimension=manifold_codimension)
 
         # Cached properties should always be filtered
-        assert get_cached(facet_mesh.point_data, "normals") is None
+        assert facet_mesh._cache.get(("point", "normals"), None) is None
 
     def test_empty_point_data(self):
         """Test that facet extraction works with empty point_data."""
@@ -251,14 +248,14 @@ class TestCacheConsistency:
 
         # Compute and cache point normals
         original_normals = mesh.point_normals.clone()
-        assert get_cached(mesh.point_data, "normals") is not None
+        assert mesh._cache.get(("point", "normals"), None) is not None
 
         # Extract facet mesh
         _ = mesh.get_facet_mesh(manifold_codimension=1)
 
         # Parent mesh caches should be unchanged
-        assert get_cached(mesh.point_data, "normals") is not None
-        assert torch.equal(get_cached(mesh.point_data, "normals"), original_normals)
+        assert mesh._cache.get(("point", "normals"), None) is not None
+        assert torch.equal(mesh._cache["point", "normals"], original_normals)
 
     def test_independent_caches_after_extraction(self):
         """Test that parent and facet meshes maintain independent caches."""
@@ -287,7 +284,5 @@ class TestCacheConsistency:
         assert "custom_field" not in parent_mesh.point_data
 
         # Parent mesh should still have its cached normals
-        assert get_cached(parent_mesh.point_data, "normals") is not None
-        assert torch.equal(
-            get_cached(parent_mesh.point_data, "normals"), parent_normals
-        )
+        assert parent_mesh._cache.get(("point", "normals"), None) is not None
+        assert torch.equal(parent_mesh._cache["point", "normals"], parent_normals)

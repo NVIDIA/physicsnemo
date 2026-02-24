@@ -408,6 +408,9 @@ class ShardTensor(DTensor):
 
     # For torch.ops.aten operators (low-level dispatch)
     _dispatch_registry: dict[torch._ops.OpOverload, Callable] = {}
+    # Fallback by op name (e.g. "aten.neg.default") when the OpOverload
+    # passed to __torch_dispatch__ is not the same object as the one used to register.
+    _dispatch_registry_by_name: dict[str, Callable] = {}
 
     # For Python-level functions (torch.mean, tensor.mean, etc.)
     _function_registry: dict[Callable, Callable] = {}
@@ -457,6 +460,7 @@ class ShardTensor(DTensor):
             The handler function to call when the operator is invoked.
         """
         cls._dispatch_registry[op] = handler
+        cls._dispatch_registry_by_name[str(op)] = handler
 
     @classmethod
     def register_function_handler(cls, func: Callable, handler: Callable) -> None:
@@ -716,8 +720,11 @@ class ShardTensor(DTensor):
         with annotate(f"__torch_dispatch___{func.__name__}"):
             # Leverage DTensor Dispatch as much as possible, but, enable
             # the ability to operate on this output in the future:
-            if func in cls._dispatch_registry:
-                res = cls._dispatch_registry[func](*args, **kwargs)
+            handler = cls._dispatch_registry.get(func)
+            if handler is None:
+                handler = cls._dispatch_registry_by_name.get(str(func))
+            if handler is not None:
+                res = handler(*args, **kwargs)
                 return res
 
             # We assume that if we reach this point, the operator has not been

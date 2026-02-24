@@ -32,7 +32,6 @@ from typing import TYPE_CHECKING, Literal
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.mesh.utilities._cache import CACHE_KEY
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
@@ -515,8 +514,7 @@ def extract_facet_mesh_data(
 
     if data_source == "cells":
         ### Aggregate data from parent cells
-        filtered_cell_data = parent_mesh.cell_data.exclude(CACHE_KEY)
-
+        filtered_cell_data = parent_mesh.cell_data
         if len(filtered_cell_data.keys()) > 0:
             ### Compute facet centroids if needed for inverse_distance
             facet_centroids = None
@@ -556,7 +554,7 @@ def extract_facet_mesh_data(
 
     elif data_source == "points":
         ### Aggregate data from facet vertices
-        if len(parent_mesh.point_data.exclude(CACHE_KEY).keys()) > 0:
+        if len(parent_mesh.point_data.keys()) > 0:
             facet_cell_data = _aggregate_point_data_to_facets(
                 point_data=parent_mesh.point_data,
                 candidate_facets=candidate_facets,
