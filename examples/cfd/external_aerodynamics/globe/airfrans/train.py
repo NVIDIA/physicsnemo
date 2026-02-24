@@ -162,7 +162,11 @@ def main(
     device = dist.device
     torch.cuda.set_device(device)
 
-    logging.basicConfig(level=logging.INFO)
+    if dist.rank == 0:
+        logging.basicConfig(level=logging.INFO)
+    else:
+        logging.disable(logging.ERROR)
+        warnings.filterwarnings("ignore")
     logger = PythonLogger("globe.airfrans.train")
     logger0 = RankZeroLoggingWrapper(logger, dist)
     logger0.info(f"{dist.world_size = }")
