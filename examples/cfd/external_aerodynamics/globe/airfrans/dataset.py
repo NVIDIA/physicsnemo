@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
 
 import pyvista as pv
 import torch
-from jaxtyping import Float, Int
+from jaxtyping import Bool, Float, Int
 from tensordict import TensorDict, tensorclass
 from torch.distributed import ReduceOp, all_reduce, is_initialized
 from torch.utils.data import DataLoader, Dataset
@@ -279,24 +279,24 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         )
 
         ### Reference quantities from freestream boundary
-        U_inf: torch.Tensor = freestream.cell_data["U"].mean(dim=0)  # ty: ignore[invalid-assignment]  # (2,)
-        U_inf_magnitude = torch.norm(U_inf)
-        q_inf = 0.5 * RHO * U_inf_magnitude**2
+        U_inf: Float[torch.Tensor, "2"] = freestream.cell_data["U"].mean(dim=0)  # ty: ignore[invalid-assignment]
+        U_inf_magnitude: Float[torch.Tensor, ""] = torch.norm(U_inf)
+        q_inf: Float[torch.Tensor, ""] = 0.5 * RHO * U_inf_magnitude**2
         chord = 1.0
 
         ### Nondimensional volume fields (from raw simulation data on internal mesh)
-        U: torch.Tensor = internal.point_data["U"]  # ty: ignore[invalid-assignment]  # (n_points, 2)
-        p: torch.Tensor = internal.point_data["p"]  # ty: ignore[invalid-assignment]  # (n_points,)
-        nut: torch.Tensor = internal.point_data["nut"]  # ty: ignore[invalid-assignment]  # (n_points,)
+        U: Float[torch.Tensor, "n_points 2"] = internal.point_data["U"]  # ty: ignore[invalid-assignment]
+        p: Float[torch.Tensor, " n_points"] = internal.point_data["p"]  # ty: ignore[invalid-assignment]
+        nut: Float[torch.Tensor, " n_points"] = internal.point_data["nut"]  # ty: ignore[invalid-assignment]
 
-        U_over_U_inf = U / U_inf_magnitude
-        C_p = p / q_inf
-        q = q_inf * U_over_U_inf.square().sum(dim=-1)
-        C_pt = (p + q) / q_inf
+        U_over_U_inf: Float[torch.Tensor, "n_points 2"] = U / U_inf_magnitude
+        C_p: Float[torch.Tensor, " n_points"] = p / q_inf
+        q: Float[torch.Tensor, " n_points"] = q_inf * U_over_U_inf.square().sum(dim=-1)
+        C_pt: Float[torch.Tensor, " n_points"] = (p + q) / q_inf
 
         ### Gradient fields via Mesh calculus
         mesh_with_grads = compute_point_derivatives(mesh=internal, keys=["p", "U"])
-        grad_C_p: torch.Tensor = mesh_with_grads.point_data["p_gradient"] * (
+        grad_C_p: Float[torch.Tensor, "n_points 2"] = mesh_with_grads.point_data["p_gradient"] * (
             chord / q_inf
         )
         # Clip nondimensional pressure-gradient values whose magnitude exceeds
@@ -306,12 +306,12 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         # they are masked out in the loss function.
         grad_C_p[grad_C_p.norm(dim=-1) > grad_c_p_clip_threshold] = torch.nan
 
-        velocity_jacobian: torch.Tensor = mesh_with_grads.point_data[  # ty: ignore[invalid-assignment]
+        velocity_jacobian: Float[torch.Tensor, "n_points 2 2"] = mesh_with_grads.point_data[  # ty: ignore[invalid-assignment]
             "U_gradient"
-        ]  # (n_points, 2, 2)
+        ]
 
         ### Surface force fields
-        point_is_on_airfoil: torch.Tensor = (  # ty: ignore[invalid-assignment]
+        point_is_on_airfoil: Bool[torch.Tensor, " n_points"] = (  # ty: ignore[invalid-assignment]
             internal.point_data["implicit_distance"] == 0
         )
 
@@ -322,7 +322,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         nearest_airfoil_idx, _ = knn(
             points=airfoil.points, queries=internal.points, k=1
         )
-        nearest_airfoil_idx = nearest_airfoil_idx[:, 0]
+        nearest_airfoil_idx: Int[torch.Tensor, " n_points"] = nearest_airfoil_idx[:, 0]
 
         # The physicsnemo 1D-manifold normal is a 90-degree CCW rotation of the
         # edge tangent, whose sign depends on the vertex ordering in the VTP file.
@@ -330,17 +330,17 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         # -1 flip produces the body-outward normal (into the fluid), which is the
         # convention expected by the Cauchy traction formula:
         #   F_body = sigma · n_body = (-p I + 2 nu eps) · n_body
-        airfoil_normals = -1 * airfoil.point_normals[nearest_airfoil_idx]
+        airfoil_normals: Float[torch.Tensor, "n_points 2"] = -1 * airfoil.point_normals[nearest_airfoil_idx]
         airfoil_normals[~point_is_on_airfoil] = torch.nan
 
-        strain_rate = 0.5 * (velocity_jacobian + velocity_jacobian.transpose(1, 2))
-        wall_shear_stress = 2 * NU * strain_rate
-        wall_shear_force = torch.einsum(
+        strain_rate: Float[torch.Tensor, "n_points 2 2"] = 0.5 * (velocity_jacobian + velocity_jacobian.transpose(1, 2))
+        wall_shear_stress: Float[torch.Tensor, "n_points 2 2"] = 2 * NU * strain_rate
+        wall_shear_force: Float[torch.Tensor, "n_points 2"] = torch.einsum(
             "pij,pj->pi",
             wall_shear_stress,
             airfoil_normals,
         )
-        pressure_force = -p[:, None] * airfoil_normals
+        pressure_force: Float[torch.Tensor, "n_points 2"] = -p[:, None] * airfoil_normals
 
         ### Assemble output fields
         output_fields = TensorDict(
@@ -365,7 +365,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
             # solution (e.g. cell averaging near stagnation points).  Points
             # exceeding the threshold are replaced with NaN across ALL output
             # fields so that the loss function ignores them.
-            non_physical_C_pt = C_pt > c_pt_nonphysical_threshold
+            non_physical_C_pt: Bool[torch.Tensor, " n_points"] = C_pt > c_pt_nonphysical_threshold
             if non_physical_C_pt.sum() / len(C_pt) > 0.0001:
                 logger.warning(
                     f"In {sample_path.name}, {non_physical_C_pt.sum() / len(C_pt):.2%} of points had non-physical total pressures and were patched out."
