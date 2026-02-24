@@ -69,7 +69,7 @@ def legendre_polynomials(x: TensorDict, n: int) -> list[TensorDict]: ...
 def legendre_polynomials(
     x: Float[torch.Tensor, "..."] | TensorDict, n: int
 ) -> list[Float[torch.Tensor, "..."] | TensorDict]:
-    r"""Computes the first n Legendre polynomials evaluated at x.
+    r"""Computes the first ``n`` Legendre polynomials evaluated at ``x``.
 
     Acts elementwise on all entries of ``x``.
 
@@ -84,13 +84,19 @@ def legendre_polynomials(
     x : Float[torch.Tensor, "..."] or TensorDict
         Input tensor of any shape.
     n : int
-        Number of Legendre polynomials to compute (will return ``P_0`` through ``P_{n-1}``).
+        Number of Legendre polynomials to compute (must be >= 0).
+        Returns ``P_0`` through ``P_{n-1}``.
 
     Returns
     -------
     list[Float[torch.Tensor, "..."] or TensorDict]
         List of ``n`` tensors, where the i-th tensor is ``P_i(x)`` with the same
-        shape as ``x``.
+        shape as ``x``. Returns an empty list when ``n = 0``.
+
+    Raises
+    ------
+    ValueError
+        If ``n`` is negative.
 
     Examples
     --------
@@ -101,20 +107,18 @@ def legendre_polynomials(
     >>> # polys[2] is P_2(x) = (3x^2 - 1)/2
     >>> # polys[3] is P_3(x) = (5x^3 - 3x)/2
     """
-    if n < 1:
+    if n < 0:
+        raise ValueError(f"n must be non-negative, got {n=}")
+    if n == 0:
         return []
 
-    ### Initialize the list with P_0(x) = 1
-    polynomials = [torch.ones_like(x)]  # type: ignore[invalid-argument-type]
-    # Note: TensorDicts work fine here with torch.ones_like.
+    ### Seed with the two base cases; slice to handle n=1
+    polynomials: list[Float[torch.Tensor, "..."] | TensorDict] = [
+        torch.ones_like(x),  # P_0(x) = 1  # type: ignore[invalid-argument-type]
+        x,  # P_1(x) = x
+    ][:n]
 
-    if n == 1:
-        return polynomials
-
-    ### Add P_1(x) = x
-    polynomials.append(x)
-
-    ### Use recurrence relation for P_2 and beyond
+    ### Recurrence relation for P_2 and beyond
     for i in range(2, n):
         # (i)*P_i(x) = (2i-1)*x*P_{i-1}(x) - (i-1)*P_{i-2}(x)
         p_i = ((2 * i - 1) * x * polynomials[i - 1] - (i - 1) * polynomials[i - 2]) / i  # type: ignore[operator]
