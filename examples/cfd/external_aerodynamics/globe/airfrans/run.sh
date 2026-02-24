@@ -50,7 +50,7 @@ else
     exit 1
 fi
 echo "Detected CUDA major version ${CUDA_MAJOR} -> syncing with extra '${CUDA_EXTRA}'"
-uv sync --inexact --extra "${CUDA_EXTRA}" --extra mesh-extras
+uv sync --inexact --compile-bytecode --extra "${CUDA_EXTRA}" --extra mesh-extras
 uv pip install -r requirements.txt
 
 ### [Dataset Path]
