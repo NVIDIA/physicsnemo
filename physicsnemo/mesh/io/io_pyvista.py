@@ -132,9 +132,13 @@ def from_pyvista(
         if isinstance(pyvista_mesh, pv.PolyData):
             all_triangles = pyvista_mesh.is_all_triangles
         elif isinstance(pyvista_mesh, pv.UnstructuredGrid):
-            all_triangles = set(pyvista_mesh.cells_dict.keys()) == {pv.CellType.TRIANGLE}
+            all_triangles = set(pyvista_mesh.cells_dict.keys()) == {
+                pv.CellType.TRIANGLE
+            }
         else:
-            raise NotImplementedError(f"Only PolyData and UnstructuredGrid are supported for manifold dimension 2, got {type(pyvista_mesh)=}.")
+            raise NotImplementedError(
+                f"Only PolyData and UnstructuredGrid are supported for manifold dimension 2, got {type(pyvista_mesh)=}."
+            )
         if not all_triangles:
             pyvista_mesh = pyvista_mesh.triangulate()
 
@@ -239,7 +243,9 @@ def from_pyvista(
         elif isinstance(pyvista_mesh, pv.UnstructuredGrid):
             tri_faces = pyvista_mesh.cells_dict[pv.CellType.TRIANGLE]
         else:
-            raise NotImplementedError(f"Only PolyData and UnstructuredGrid are supported for manifold dimension 2, got {type(pyvista_mesh)=}.")
+            raise NotImplementedError(
+                f"Only PolyData and UnstructuredGrid are supported for manifold dimension 2, got {type(pyvista_mesh)=}."
+            )
         cells = torch.from_numpy(tri_faces).long()
 
     elif manifold_dim == 3:
