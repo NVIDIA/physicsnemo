@@ -169,7 +169,7 @@ def polar_and_dipole_basis(
     r"""Computes a local vector basis for 2D vectors that is rotation-invariant
     w.r.t. ``n_hat``.
 
-    Notably, this isn't a true vector basis, as it has has 3 vectors, not the
+    Notably, this isn't a true vector basis, as it has 3 vectors, not the
     required 2. The basis is essentially a combination of a polar basis (r,
     theta) and an additional dipole-like direction (kappa) for the third vector.
     The axis for the dipole direction is set by ``n_hat``.
