@@ -208,9 +208,14 @@ def log_hyperparameters(
 def install_graceful_shutdown(rank: int = 0) -> Callable[[], bool]:
     """Install signal handlers for graceful training shutdown.
 
-    Catches SIGTERM, SIGINT, and SIGQUIT. On the first signal a warning is
-    logged (on rank 0) and an internal flag is set. The training loop can
-    poll the returned callable each epoch to decide whether to break.
+    Catches SIGTERM, SIGINT, SIGQUIT, and SIGUSR1. On the first signal a
+    warning is logged (on rank 0) and an internal flag is set. The training
+    loop can poll the returned callable each epoch to decide whether to break.
+
+    SIGUSR1 is the standard signal for SLURM preemption handling: the
+    ``--signal=B:USR1@<seconds>`` sbatch directive sends SIGUSR1 to the batch
+    script before the time limit, and torchrun's ``--signals-to-handle`` flag
+    makes it forward the signal to worker processes.
 
     Args:
         rank: Distributed rank. Only rank 0 logs the signal message.
@@ -228,7 +233,7 @@ def install_graceful_shutdown(rank: int = 0) -> Callable[[], bool]:
             )
         received[0] = True
 
-    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGQUIT):
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGQUIT, signal.SIGUSR1):
         signal.signal(sig, _handler)
 
     return lambda: received[0]

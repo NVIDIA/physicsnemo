@@ -9,6 +9,7 @@
 #SBATCH -o ./sbatch_logs/%x.log
 #SBATCH -e ./sbatch_logs/%x.log
 #SBATCH --open-mode=append
+#SBATCH --signal=B:USR1@120
 
 set -euo pipefail
 
@@ -75,6 +76,12 @@ fi
 export MLFLOW_TRACKING_URI="sqlite:///${SLURM_SUBMIT_DIR:-$(pwd)}/output/mlflow.db"
 
 ### [Launch Training]
+# torchrun's --signals-to-handle makes it catch SIGUSR1 and forward it to
+# each worker's process group.  uv forwards signals transparently.
+# The SBATCH --signal=B:USR1@120 directive sends SIGUSR1 to this script
+# 120 seconds before the time limit; the trap below relays it to the child.
+TORCHRUN_SIGNALS="SIGTERM,SIGINT,SIGHUP,SIGQUIT,SIGUSR1"
+
 if [ "${SLURM_NNODES:-1}" -gt 1 ]; then
     echo "Running multi-node training..."
     head_node=$(scontrol show hostnames $SLURM_NODELIST | head -n1)
@@ -82,17 +89,23 @@ if [ "${SLURM_NNODES:-1}" -gt 1 ]; then
     echo "Head node: $head_node"
     echo "Head node IP: $head_node_ip"
     srun uv run --no-sync torchrun \
+      --signals-to-handle="$TORCHRUN_SIGNALS" \
       --nnodes $SLURM_NNODES \
       --nproc-per-node $NUM_GPUS_PER_NODE \
       --rdzv_id $RANDOM \
       --rdzv_backend c10d \
       --rdzv_endpoint $head_node_ip:29500 \
       train.py \
-      "${TRAIN_ARGS[@]}"
+      "${TRAIN_ARGS[@]}" &
 else
     echo "Running single-node training..."
     uv run --no-sync torchrun \
+      --signals-to-handle="$TORCHRUN_SIGNALS" \
       --nproc-per-node $NUM_GPUS_PER_NODE \
       train.py \
-      "${TRAIN_ARGS[@]}"
+      "${TRAIN_ARGS[@]}" &
 fi
+TRAIN_PID=$!
+trap 'kill -USR1 $TRAIN_PID 2>/dev/null' USR1
+wait $TRAIN_PID || true
+wait $TRAIN_PID 2>/dev/null

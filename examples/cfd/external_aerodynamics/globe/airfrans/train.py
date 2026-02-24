@@ -641,7 +641,13 @@ def main(
                 torch_compile_cache.write_bytes(artifacts_bytes)
                 logger.info(f"Saved torch.compile cache to {torch_compile_cache}.")
 
-            if shutdown_requested():
+            # Coordinate shutdown across all ranks so they break on the same epoch.
+            _shutdown = torch.tensor(
+                [shutdown_requested()], dtype=torch.int32, device=device
+            )
+            if dist.world_size > 1:
+                all_reduce(_shutdown, op=ReduceOp.MAX)
+            if _shutdown.item():
                 logger0.info("Quitting due to shutdown request.")
                 if dist.rank == 0:
                     save_checkpoint(
