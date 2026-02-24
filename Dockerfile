@@ -89,24 +89,8 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
     fi
 
 # Install vtk and pyvista
-ARG VTK_ARM64_WHEEL
-ENV VTK_ARM64_WHEEL=${VTK_ARM64_WHEEL:-unknown}
-
-RUN if [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$VTK_ARM64_WHEEL" != "unknown" ]; then \
-        echo "VTK wheel $VTK_ARM64_WHEEL for $TARGETPLATFORM exists, installing!" && \
-        uv pip install /physicsnemo/deps/${VTK_ARM64_WHEEL}; \
-    elif [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
-        echo "Installing vtk for: $TARGETPLATFORM" && \
-        uv pip install "vtk>=9.2.6"; \
-    else \
-        echo "No custom wheel or wheel on PyPi found. Installing vtk for: $TARGETPLATFORM from source" && \
-        apt-get update && apt-get install -y libgl1-mesa-dev && \
-        git clone https://gitlab.kitware.com/vtk/vtk.git && cd vtk && git checkout tags/v9.4.1 && git submodule update --init --recursive && \
-        mkdir build && cd build && cmake -GNinja -DVTK_WHEEL_BUILD=ON -DVTK_WRAP_PYTHON=ON /workspace/vtk/ && ninja && \
-        python setup.py bdist_wheel && \
-        uv pip install dist/vtk-*.whl && \
-        cd ../../ && rm -r vtk; \
-    fi
+# VTK has started shipping aarch64 wheels, hence we no longer need a custom installation. Ref: https://pypi.org/project/vtk/9.6.0/#files
+RUN uv pip install "vtk>=9.6.0"
 RUN uv pip install "pyvista>=0.40.1"
 
 # Install onnxruntime (custom wheel for ARM)
