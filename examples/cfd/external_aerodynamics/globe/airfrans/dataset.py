@@ -15,18 +15,17 @@
 # limitations under the License.
 
 import json
-from abc import ABC, abstractmethod
 from collections import defaultdict
-from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
 
 import pyvista as pv
 import torch
+from cached_dataset import CachedPreprocessingDataset
 from jaxtyping import Bool, Float, Int
 from tensordict import TensorDict, tensorclass
 from torch.distributed import ReduceOp, all_reduce, is_initialized
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
@@ -39,75 +38,6 @@ from physicsnemo.utils.logging import PythonLogger
 
 logger = PythonLogger("globe.airfrans.dataset")
 
-
-class CachedPreprocessingDataset(Dataset, ABC):
-    """Dataset that lazily preprocesses samples and caches results to disk/RAM.
-
-    Subclasses implement the ``preprocess`` static method to define how raw
-    samples are transformed. On first access the result is computed and
-    (optionally) saved to *cache_dir* as a ``.pt`` file keyed by the sample
-    directory name. Subsequent accesses load the cached result directly.
-
-    Args:
-        sample_paths: Paths to individual samples in the dataset.
-        cache_dir: Directory for disk caching. ``None`` disables disk caching.
-        use_ram_caching: If True, wraps ``__getitem__`` with
-            ``functools.cache`` for in-memory caching (increases memory usage).
-
-    Raises:
-        FileNotFoundError: If any *sample_paths* entry does not exist on disk.
-    """
-
-    def __init__(
-        self,
-        sample_paths: Sequence[Path | str],
-        cache_dir: Path | str | None = None,
-        use_ram_caching: bool = False,
-    ):
-        self.sample_paths = [Path(path) for path in sample_paths]
-        self.cache_dir = Path(cache_dir) if cache_dir is not None else None
-        self.use_ram_caching = use_ram_caching
-
-        if self.cache_dir is not None:
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-
-        nonexistent_sample_paths = [
-            path for path in self.sample_paths if not path.exists()
-        ]
-        if nonexistent_sample_paths:
-            raise FileNotFoundError(
-                "The following sample paths were given, but do not exist:\n"
-                f"{nonexistent_sample_paths}"
-            )
-
-        if self.use_ram_caching:
-            self.__getitem__ = cache(self.__getitem__)  # ty: ignore[invalid-assignment]
-
-    def __len__(self) -> int:
-        return len(self.sample_paths)
-
-    def __getitem__(self, index) -> Any:  # ty: ignore[invalid-method-override]
-        sample_path = self.sample_paths[index]
-
-        if self.cache_dir is not None:
-            cache_path = (self.cache_dir / sample_path.name).with_suffix(".pt")
-            if cache_path.exists():
-                return torch.load(cache_path, weights_only=False)
-
-        sample = self.preprocess(sample_path=sample_path)
-
-        if self.cache_dir is not None:
-            torch.save(sample, cache_path)
-
-        return sample
-
-    @staticmethod
-    @abstractmethod
-    def preprocess(sample_path: Path) -> Any:
-        """Transform a raw sample at *sample_path* into the desired format."""
-
-
-# --- AirFRANS constants ---
 RHO = 1  # kg/m^3
 # NOTE: this RHO is correct; in some places, the AirFRANS authors incorrectly
 # report their density as 1.204, but if you actually dig into the OpenFOAM case
