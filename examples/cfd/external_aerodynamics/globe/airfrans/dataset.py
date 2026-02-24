@@ -247,6 +247,8 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
     def preprocess(
         sample_path: Path,
         patch_out_nonphysical_values: bool = True,
+        grad_c_p_clip_threshold: float = 20.0,
+        c_pt_nonphysical_threshold: float = 1.02,
     ) -> AirFRANSSample:
         ### Load meshes and convert to 2D Mesh objects
         sample_dir = Path(sample_path)
@@ -296,7 +298,12 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         grad_C_p: torch.Tensor = mesh_with_grads.point_data["p_gradient"] * (
             chord / q_inf
         )
-        grad_C_p[grad_C_p.norm(dim=-1) > 20] = torch.nan
+        # Clip nondimensional pressure-gradient values whose magnitude exceeds
+        # the threshold.  Spurious spikes arise from the least-squares gradient
+        # reconstruction near poorly-resolved regions (e.g. sharp trailing
+        # edges or thin boundary layers).  These are replaced with NaN so that
+        # they are masked out in the loss function.
+        grad_C_p[grad_C_p.norm(dim=-1) > grad_c_p_clip_threshold] = torch.nan
 
         velocity_jacobian: torch.Tensor = mesh_with_grads.point_data[  # ty: ignore[invalid-assignment]
             "U_gradient"
@@ -339,7 +346,13 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         )
 
         if patch_out_nonphysical_values:
-            non_physical_C_pt = C_pt > 1.02
+            # In incompressible flow, total pressure is conserved along
+            # streamlines (Bernoulli), so C_pt should not exceed 1.0.  Values
+            # slightly above 1.0 arise from numerical artifacts in the CFD
+            # solution (e.g. cell averaging near stagnation points).  Points
+            # exceeding the threshold are replaced with NaN across ALL output
+            # fields so that the loss function ignores them.
+            non_physical_C_pt = C_pt > c_pt_nonphysical_threshold
             if non_physical_C_pt.sum() / len(C_pt) > 0.0001:
                 logger.warning(
                     f"In {sample_path.name}, {non_physical_C_pt.sum() / len(C_pt):.2%} of points had non-physical total pressures and were patched out."
