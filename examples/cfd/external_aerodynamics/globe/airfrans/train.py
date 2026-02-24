@@ -250,6 +250,11 @@ def main(
     if use_compile and torch_compile_cache.exists():
         torch.compiler.load_cache_artifacts(torch_compile_cache.read_bytes())
 
+    # Different MultiscaleKernel instances have different MLP output sizes.
+    # Without this, Dynamo guards on parameter shapes and recompiles for each
+    # kernel branch, quickly exhausting the recompile limit.
+    torch._dynamo.config.force_parameter_static_shapes = False
+
     ### [Distribute the model across GPUs]
     if dist.world_size > 1:
         model = torch.nn.parallel.DistributedDataParallel(
