@@ -444,6 +444,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         )
 
         ### Create subplot grid
+        kind_data = {"true": true_selected, "pred": pred_selected, "error": error_data}
         kinds: dict[str, str] = {"true": "Truth", "pred": "Prediction"}
         if show_error:
             kinds["error"] = "Error"
@@ -482,16 +483,16 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
 
             for row, (key, label) in enumerate(kinds.items()):
                 ax = axes[row, col]
+                vals: torch.Tensor = kind_data[key][field_name]  # ty: ignore[invalid-assignment]
 
                 if key == "error":
-                    err_vals: torch.Tensor = error_data[field_name]  # ty: ignore[invalid-assignment]
                     if is_vector:
-                        finite_err = err_vals.norm(dim=-1)
+                        finite_err = vals.norm(dim=-1)
                         finite_err = finite_err[torch.isfinite(finite_err)]
                         emax = finite_err.max().item() if len(finite_err) > 0 else 1.0
                         cmap, vmin, vmax = "Reds", 0.0, emax
                     else:
-                        finite_err = err_vals.reshape(-1)
+                        finite_err = vals.reshape(-1)
                         finite_err = finite_err[torch.isfinite(finite_err)]
                         emax = (
                             finite_err.abs().max().item()
@@ -503,7 +504,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                     cmap, vmin, vmax = "turbo", shared_vmin, shared_vmax
 
                 combined.draw(
-                    point_scalars=(key, field_name),
+                    point_scalars=vals,
                     ax=ax,
                     show=False,
                     cmap=cmap,
@@ -537,7 +538,8 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                     labelleft=False,
                 )
                 if row == 0:
-                    ax.set_title(field_name, fontsize=12, fontweight="bold")
+                    title = ".".join(field_name) if isinstance(field_name, tuple) else field_name
+                    ax.set_title(title, fontsize=12, fontweight="bold")
                 if col == 0:
                     ax.set_ylabel(label, fontsize=12, fontweight="bold")
 
