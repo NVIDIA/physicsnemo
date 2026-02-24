@@ -13,11 +13,17 @@
 
 set -euo pipefail
 
+### [User Configuration]
 TRAIN_ARGS=(
     --output-name ${SLURM_JOB_NAME:-globe_airfrans_local}
     --airfrans-task "scarce"
 
 )
+
+export AIRFRANS_DATA_DIR="${HOME}/datasets/airfrans/Dataset"  # Set this to your AirFRANS dataset
+# This dataset can be downloaded from https://airfrans.readthedocs.io/en/latest/notes/dataset.html
+
+export MLFLOW_TRACKING_URI="sqlite:///${SLURM_SUBMIT_DIR:-$(pwd)}/output/mlflow.db"
 
 ### [Run Information]
 echo "SLURM Job ID: ${SLURM_JOB_ID:-n/a}"
@@ -37,7 +43,7 @@ export OMP_NUM_THREADS=$((CPUS_PER_NODE / NUM_GPUS_PER_NODE))
 OMP_NUM_THREADS=$((OMP_NUM_THREADS > 0 ? OMP_NUM_THREADS : 1))
 echo "OMP_NUM_THREADS=$OMP_NUM_THREADS (${CPUS_PER_NODE} CPUs / ${NUM_GPUS_PER_NODE} GPUs)"
 
-### [Sync dependencies]
+### [Sync Dependencies]
 if [ -z "$CUDA_MAJOR" ]; then
     echo "ERROR: Could not detect CUDA version from nvidia-smi." >&2
     exit 1
@@ -52,28 +58,6 @@ fi
 echo "Detected CUDA major version ${CUDA_MAJOR} -> syncing with extra '${CUDA_EXTRA}'"
 uv sync --inexact --compile-bytecode --extra "${CUDA_EXTRA}" --extra mesh-extras
 uv pip install -r requirements.txt
-
-### [Dataset Path]
-# Auto-detect AirFRANS dataset location by hostname if not already set.
-if [ -z "${AIRFRANS_DATA_DIR:-}" ]; then
-    HOSTNAME=$(hostname)
-    if [[ "$HOSTNAME" == "NV-pds" ]]; then  # Local workstation
-        export AIRFRANS_DATA_DIR="${HOME}/gh/aerodynamics_datasets/airfrans/Dataset"
-    elif [[ "$HOSTNAME" == *"eos.clusters.nvidia.com" ]]; then  # EOS cluster
-        export AIRFRANS_DATA_DIR="${HOME}/coreai_modulus_cae/datasets/airfrans/Dataset"
-    elif [[ "$HOSTNAME" == "nvl72"* ]]; then  # HSG cluster
-        export AIRFRANS_DATA_DIR="${HOME}/coreai_modulus_cae/datasets/airfrans/Dataset"
-    else
-        echo "WARNING: AIRFRANS_DATA_DIR is not set and hostname '$HOSTNAME' is not recognized." >&2
-        echo "Continuing anyway -- train.py will fail unless --data-dir is in TRAIN_ARGS." >&2
-    fi
-    if [ -n "${AIRFRANS_DATA_DIR:-}" ]; then
-        echo "Auto-detected AIRFRANS_DATA_DIR=$AIRFRANS_DATA_DIR"
-    fi
-fi
-
-### [MLflow Configuration]
-export MLFLOW_TRACKING_URI="sqlite:///${SLURM_SUBMIT_DIR:-$(pwd)}/output/mlflow.db"
 
 ### [Launch Training]
 # torchrun's --signals-to-handle makes it catch SIGUSR1 and forward it to
