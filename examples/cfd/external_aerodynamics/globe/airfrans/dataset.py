@@ -34,6 +34,7 @@ from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus import compute_point_derivatives
 from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.projections import project
+from physicsnemo.nn.functional.knn import knn
 from physicsnemo.utils.logging import PythonLogger
 
 logger = PythonLogger("globe.airfrans.dataset")
@@ -313,10 +314,22 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         point_is_on_airfoil: torch.Tensor = (  # ty: ignore[invalid-assignment]
             internal.point_data["implicit_distance"] == 0
         )
-        nearest_airfoil_idx = torch.cdist(
-            internal.points,
-            airfoil.points,
-        ).argmin(dim=1)
+
+        # For each internal point, find the nearest airfoil surface point.
+        # Uses O(n log m) KDTree lookup (auto-dispatched via physicsnemo)
+        # instead of the O(n * m) brute-force distance matrix.
+
+        nearest_airfoil_idx, _ = knn(
+            points=airfoil.points, queries=internal.points, k=1
+        )
+        nearest_airfoil_idx = nearest_airfoil_idx[:, 0]
+
+        # The physicsnemo 1D-manifold normal is a 90-degree CCW rotation of the
+        # edge tangent, whose sign depends on the vertex ordering in the VTP file.
+        # For AirFRANS airfoil meshes the raw normals point INTO the body; the
+        # -1 flip produces the body-outward normal (into the fluid), which is the
+        # convention expected by the Cauchy traction formula:
+        #   F_body = sigma · n_body = (-p I + 2 nu eps) · n_body
         airfoil_normals = -1 * airfoil.point_normals[nearest_airfoil_idx]
         airfoil_normals[~point_is_on_airfoil] = torch.nan
 
@@ -551,7 +564,11 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                     labelleft=False,
                 )
                 if row == 0:
-                    title = ".".join(field_name) if isinstance(field_name, tuple) else field_name
+                    title = (
+                        ".".join(field_name)
+                        if isinstance(field_name, tuple)
+                        else field_name
+                    )
                     ax.set_title(title, fontsize=12, fontweight="bold")
                 if col == 0:
                     ax.set_ylabel(label, fontsize=12, fontweight="bold")
