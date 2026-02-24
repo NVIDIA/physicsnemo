@@ -1148,13 +1148,18 @@ class MultiscaleKernel(Module):
                     )
 
         ### Augment global_data with log-ratios of reference lengths.
-        # These are rank-0 tensors that Kernel.forward() will automatically
-        # place into the scalar group via split_by_leaf_rank.
-        name_pairs = list(itertools.combinations(self.reference_length_names, 2))
-        for k1, k2 in name_pairs:
-            global_data["log_reference_length_ratios", f"{k1}_{k2}"] = (
-                reference_lengths[k1] / reference_lengths[k2]
-            ).log()
+        log_ratios = TensorDict(
+            {
+                f"{k1}_{k2}": (
+                    reference_lengths[k1] / reference_lengths[k2]
+                ).log()
+                for k1, k2 in itertools.combinations(
+                    self.reference_length_names, 2
+                )
+            },
+            device=device,
+        )
+        global_data["log_reference_length_ratios"] = log_ratios
 
         results_pieces: list[TensorDict[str, Float[torch.Tensor, "..."]]] = [
             self.kernels[name](
