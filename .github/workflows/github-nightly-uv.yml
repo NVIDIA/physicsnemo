@@ -32,6 +32,11 @@ on:
   workflow_dispatch:
     # Allow manual triggering
 
+permissions:
+  contents: read
+  actions: read
+  checks: write
+
 env:
   PYTHON_VERSION: "3.12"
   UV_CACHE_KEY_PREFIX: uv-cache-nightly-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12
@@ -124,13 +129,14 @@ jobs:
         # This populates the testmon database for PR workflows
         uv run python -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*" --junitxml=testmon-report.xml
 
-    - name: Upload test report
-      if: always()
-      uses: actions/upload-artifact@v4
+    - name: Testmon test report
+      if: ${{ !cancelled() }}
+      uses: dorny/test-reporter@v2
       with:
-        name: testmon-junit-report
+        name: Testmon Test Results
         path: testmon-report.xml
-        retention-days: 30
+        reporter: java-junit
+        fail-on-error: 'false'
 
     - name: Save testmon database to cache
       uses: actions/cache/save@v4
@@ -178,15 +184,23 @@ jobs:
       run: |
         uv run coverage run --rcfile='test/coverage.docstring.rc' -m pytest --doctest-modules physicsnemo/ --ignore-glob="*internal*" --ignore-glob="*experimental*" --junitxml=coverage-doctest-report.xml
 
-    - name: Upload test reports
-      if: always()
-      uses: actions/upload-artifact@v4
+    - name: Core test report
+      if: ${{ !cancelled() }}
+      uses: dorny/test-reporter@v2
       with:
-        name: coverage-junit-reports
-        path: |
-          coverage-core-report.xml
-          coverage-doctest-report.xml
-        retention-days: 30
+        name: Coverage Core Test Results
+        path: coverage-core-report.xml
+        reporter: java-junit
+        fail-on-error: 'false'
+
+    - name: Doctest report
+      if: ${{ !cancelled() }}
+      uses: dorny/test-reporter@v2
+      with:
+        name: Coverage Doctest Results
+        path: coverage-doctest-report.xml
+        reporter: java-junit
+        fail-on-error: 'false'
 
     - name: Save coverage files to cache
       uses: actions/cache/save@v4
