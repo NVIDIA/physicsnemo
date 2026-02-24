@@ -89,7 +89,7 @@ def main(
     n_latent_vectors: int = 6,
     n_spherical_harmonics: int = 1,
     airfrans_task: Literal["full", "scarce", "reynolds", "aoa"] = "full",
-    profile: bool = True,
+    use_profiler: bool = True,
     make_images: bool = True,
     use_mlflow: bool = True,
     mlflow_experiment: str = "GLOBE_AirFRANS",
@@ -117,7 +117,7 @@ def main(
         n_latent_vectors: Number of vector latent channels propagated between hyperlayers.
         n_spherical_harmonics: Number of Legendre polynomial terms for angle features.
         airfrans_task: Which AirFRANS dataset task to train on.
-        profile: Enable PyTorch profiler for performance analysis.
+        use_profiler: Enable PyTorch profiler for performance analysis.
         make_images: Whether to make images for visualization.
         use_mlflow: Enable MLflow experiment tracking. Requires MLFLOW_TRACKING_URI to be set
             in the environment (see run.sh). When False, training still logs to console and
@@ -539,7 +539,7 @@ def main(
         return epoch_loss
 
     ### [Profiler Setup]
-    profile = profile and dist.rank == 0 and (not any(profiling_dir.iterdir()))
+    use_profiler = use_profiler and dist.rank == 0 and (not any(profiling_dir.iterdir()))
     profiler_ctx = (
         torch.profiler.profile(
             schedule=torch.profiler.schedule(wait=4, warmup=1, active=1, repeat=1),
@@ -548,7 +548,7 @@ def main(
             ),
             with_stack=True,
         )
-        if profile
+        if use_profiler
         else contextlib.nullcontext()
     )
     with mlflow_run_ctx, profiler_ctx as profiler:
