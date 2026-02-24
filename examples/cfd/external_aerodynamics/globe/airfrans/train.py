@@ -435,25 +435,31 @@ def main(
                             mesh = mesh.slice_cells(
                                 torch.randperm(mesh.n_cells)[:new_n_cells]
                             )
-                        if train_randomize_face_centers:
-                            mesh._cache["cell", "centroids"] = (
-                                mesh.sample_random_points_on_cells()
-                            )
                         sample.boundary_meshes[bc_type] = mesh
 
                 ### Pad boundary meshes to fixed size for static compilation
                 split_max_sizes = max_sizes[split]
                 for bc_type, mesh in sample.boundary_meshes.items():
-                    ### Pre-cache normals before entering torch.compile.
-                    # Areas and centroids are already cached above; normals must also
-                    # be cached here so the computation+cache-write path is never
-                    # traced by Dynamo (avoiding graph breaks and recompilations).
-                    _ = mesh.cell_normals
-                    sample.boundary_meshes[bc_type] = mesh.pad(
+                    padded = mesh.pad(
                         target_n_points=int(split_max_sizes[bc_type, "n_points"]),
                         target_n_cells=int(split_max_sizes[bc_type, "n_cells"]),
                         data_padding_value=0.0,
                     )
+                    ### Pre-cache all geometry on the *padded* mesh so that
+                    # the cache structure is fully populated before torch.compile
+                    # ever sees it.  Mesh.pad() creates a new Mesh with an empty
+                    # cache, so caching must happen *after* padding.  Without
+                    # this, lazy computation during the compiled forward pass
+                    # grows the cache dict, triggering Dynamo guard failures.
+                    if training and train_randomize_face_centers:
+                        padded._cache["cell", "centroids"] = (
+                            padded.sample_random_points_on_cells()
+                        )
+                    else:
+                        _ = padded.cell_centroids
+                    _ = padded.cell_areas
+                    _ = padded.cell_normals
+                    sample.boundary_meshes[bc_type] = padded
 
             with record_function("data_transfer"):
                 sample = sample.to(device)
@@ -497,7 +503,7 @@ def main(
         logger0.info(
             " | ".join(
                 [
-                    f"{epoch:d=} {split.title()}",
+                    f"{epoch:d=} {split.title():<{max(len(s.title()) for s in splits)}}",
                     f"Loss: {epoch_loss:7.3g}",
                     *[f"{k}: {v:7.3g}" for k, v in epoch_loss_components.items()],
                     f"LR: {optimizer.param_groups[0]['lr']:.2e}",
