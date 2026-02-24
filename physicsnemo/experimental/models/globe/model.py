@@ -32,6 +32,17 @@ from physicsnemo.experimental.models.globe.utilities.rank_spec import (
     flatten_rank_spec,
 )
 from physicsnemo.mesh import Mesh
+
+# allow_in_graph wraps these TensorDict methods as opaque graph nodes so that
+# torch.compile doesn't trace into them (their internals cause graph breaks).
+# This is safe because flatten_keys/unflatten_keys are pure structural
+# key-renaming operations with no tensor-data side effects — the set of tensor
+# storages in equals the set coming out.  Do NOT generalise this pattern to
+# functions with tensor-value-dependent control flow or side effects.
+# If a future tensordict version makes these natively Dynamo-traceable, remove
+# these wrappers.
+_flatten_keys = torch.compiler.allow_in_graph(TensorDict.flatten_keys)
+_unflatten_keys = torch.compiler.allow_in_graph(TensorDict.unflatten_keys)
 from physicsnemo.utils.logging import PythonLogger
 
 logger = PythonLogger("globe.model")
@@ -358,7 +369,7 @@ class GLOBE(Module):
             ### Combine non-strength features with cell normals into source_data.
             # flatten_keys produces a flat namespace so the kernel's
             # split_by_leaf_rank can separate scalars from vectors by rank.
-            source_data = mesh.cell_data.exclude("strengths").flatten_keys(".")
+            source_data = _flatten_keys(mesh.cell_data.exclude("strengths"))
             source_data["normals"] = mesh.cell_normals
 
             kernel: MultiscaleKernel = self.kernel_layers[layer_idx][bc_type]  # ty: ignore[not-subscriptable]
@@ -371,7 +382,7 @@ class GLOBE(Module):
                 global_data=global_data,
                 chunk_size=chunk_size,
             )
-            result_pieces.append(kernel_result.unflatten_keys())
+            result_pieces.append(_unflatten_keys(kernel_result))
 
         return reduce(operator.add, result_pieces)
 
@@ -576,11 +587,10 @@ class GLOBE(Module):
             point_data=result,
             global_data=global_data,
         )
-        flat_data = output_mesh.point_data.flatten_keys(".")
         for idx, name in enumerate(self._output_field_order):
-            t = flat_data[name]
-            flat_data[name] = self.final_field_transforms[idx](t.view(-1, 1)).view(
-                t.shape
-            )
-        output_mesh.point_data = flat_data.unflatten_keys(".")
+            key = tuple(name.split("."))
+            t = output_mesh.point_data[key]
+            output_mesh.point_data[key] = self.final_field_transforms[idx](
+                t.view(-1, 1)
+            ).view(t.shape)
         return output_mesh
