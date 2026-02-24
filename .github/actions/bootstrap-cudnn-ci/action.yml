@@ -29,10 +29,6 @@ runs:
         ln -sf /usr/bin/python3 /usr/bin/python
         rm -rf /var/lib/apt/lists/*
 
-    - name: Mark workspace as safe for git
-      shell: bash
-      run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
     - name: Install uv
       shell: bash
       run: |

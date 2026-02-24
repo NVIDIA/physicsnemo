@@ -127,16 +127,7 @@ jobs:
     - name: Run core tests (collect all for testmon)
       run: |
         # This populates the testmon database for PR workflows
-        uv run python -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*" --junitxml=testmon-report.xml
-
-    - name: Testmon test report
-      if: ${{ !cancelled() }}
-      uses: dorny/test-reporter@v2
-      with:
-        name: Testmon Test Results
-        path: testmon-report.xml
-        reporter: java-junit
-        fail-on-error: 'false'
+        uv run python -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*"
 
     - name: Save testmon database to cache
       uses: actions/cache/save@v4
@@ -184,23 +175,19 @@ jobs:
       run: |
         uv run coverage run --rcfile='test/coverage.docstring.rc' -m pytest --doctest-modules physicsnemo/ --ignore-glob="*internal*" --ignore-glob="*experimental*" --junitxml=coverage-doctest-report.xml
 
-    - name: Core test report
+    - name: Upload core test JUnit XML
       if: ${{ !cancelled() }}
-      uses: dorny/test-reporter@v2
+      uses: actions/upload-artifact@v4
       with:
-        name: Coverage Core Test Results
+        name: junit-coverage-core
         path: coverage-core-report.xml
-        reporter: java-junit
-        fail-on-error: 'false'
 
-    - name: Doctest report
+    - name: Upload doctest JUnit XML
       if: ${{ !cancelled() }}
-      uses: dorny/test-reporter@v2
+      uses: actions/upload-artifact@v4
       with:
-        name: Coverage Doctest Results
+        name: junit-coverage-doctest
         path: coverage-doctest-report.xml
-        reporter: java-junit
-        fail-on-error: 'false'
 
     - name: Save coverage files to cache
       uses: actions/cache/save@v4
@@ -231,3 +218,34 @@ jobs:
           .coverage
           coverage.xml
         retention-days: 30
+
+  # Stage 4: Generate browsable test reports from JUnit XML
+  test-reports:
+    name: Test Reports
+    needs: [coverage]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download JUnit artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: junit-*
+
+    - name: Core test report
+      uses: dorny/test-reporter@v2
+      with:
+        name: Core Test Results
+        path: junit-coverage-core/coverage-core-report.xml
+        reporter: java-junit
+        fail-on-error: 'false'
+
+    - name: Doctest report
+      uses: dorny/test-reporter@v2
+      with:
+        name: Doctest Results
+        path: junit-coverage-doctest/coverage-doctest-report.xml
+        reporter: java-junit
+        fail-on-error: 'false'
