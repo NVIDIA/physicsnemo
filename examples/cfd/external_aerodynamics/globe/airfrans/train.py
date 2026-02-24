@@ -598,7 +598,7 @@ def main(
 
                 ### [MLflow Scalars Logging]
                 if use_mlflow:
-                    time_now = perf_counter()
+                    time_now = perf_counter()  # End-of-epoch timestamp for seconds_per_epoch metric
                     log_metrics(
                         {
                             "lr": optimizer.param_groups[0]["lr"],
