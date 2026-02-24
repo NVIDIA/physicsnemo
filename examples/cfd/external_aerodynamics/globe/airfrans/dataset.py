@@ -226,9 +226,9 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
 
         ### Gradient fields via Mesh calculus
         mesh_with_grads = compute_point_derivatives(mesh=internal, keys=["p", "U"])
-        grad_C_p: Float[torch.Tensor, "n_points 2"] = mesh_with_grads.point_data["p_gradient"] * (
-            chord / q_inf
-        )
+        grad_C_p: Float[torch.Tensor, "n_points 2"] = mesh_with_grads.point_data[
+            "p_gradient"
+        ] * (chord / q_inf)
         # Clip nondimensional pressure-gradient values whose magnitude exceeds
         # the threshold.  Spurious spikes arise from the least-squares gradient
         # reconstruction near poorly-resolved regions (e.g. sharp trailing
@@ -236,9 +236,9 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         # they are masked out in the loss function.
         grad_C_p[grad_C_p.norm(dim=-1) > grad_c_p_clip_threshold] = torch.nan
 
-        velocity_jacobian: Float[torch.Tensor, "n_points 2 2"] = mesh_with_grads.point_data[  # ty: ignore[invalid-assignment]
-            "U_gradient"
-        ]
+        velocity_jacobian: Float[torch.Tensor, "n_points 2 2"] = (  # ty: ignore[invalid-assignment]
+            mesh_with_grads.point_data["U_gradient"]
+        )
 
         ### Surface force fields
         point_is_on_airfoil: Bool[torch.Tensor, " n_points"] = (  # ty: ignore[invalid-assignment]
@@ -260,17 +260,23 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         # -1 flip produces the body-outward normal (into the fluid), which is the
         # convention expected by the Cauchy traction formula:
         #   F_body = sigma · n_body = (-p I + 2 nu eps) · n_body
-        airfoil_normals: Float[torch.Tensor, "n_points 2"] = -1 * airfoil.point_normals[nearest_airfoil_idx]
+        airfoil_normals: Float[torch.Tensor, "n_points 2"] = (
+            -1 * airfoil.point_normals[nearest_airfoil_idx]
+        )
         airfoil_normals[~point_is_on_airfoil] = torch.nan
 
-        strain_rate: Float[torch.Tensor, "n_points 2 2"] = 0.5 * (velocity_jacobian + velocity_jacobian.transpose(1, 2))
+        strain_rate: Float[torch.Tensor, "n_points 2 2"] = 0.5 * (
+            velocity_jacobian + velocity_jacobian.transpose(1, 2)
+        )
         wall_shear_stress: Float[torch.Tensor, "n_points 2 2"] = 2 * NU * strain_rate
         wall_shear_force: Float[torch.Tensor, "n_points 2"] = torch.einsum(
             "pij,pj->pi",
             wall_shear_stress,
             airfoil_normals,
         )
-        pressure_force: Float[torch.Tensor, "n_points 2"] = -p[:, None] * airfoil_normals
+        pressure_force: Float[torch.Tensor, "n_points 2"] = (
+            -p[:, None] * airfoil_normals
+        )
 
         ### Assemble output fields
         output_fields = TensorDict(
@@ -295,7 +301,9 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
             # solution (e.g. cell averaging near stagnation points).  Points
             # exceeding the threshold are replaced with NaN across ALL output
             # fields so that the loss function ignores them.
-            non_physical_C_pt: Bool[torch.Tensor, " n_points"] = C_pt > c_pt_nonphysical_threshold
+            non_physical_C_pt: Bool[torch.Tensor, " n_points"] = (
+                C_pt > c_pt_nonphysical_threshold
+            )
             if non_physical_C_pt.sum() / len(C_pt) > 0.0001:
                 logger.warning(
                     f"In {sample_path.name}, {non_physical_C_pt.sum() / len(C_pt):.2%} of points had non-physical total pressures and were patched out."

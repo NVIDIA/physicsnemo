@@ -539,7 +539,9 @@ def main(
         return epoch_loss
 
     ### [Profiler Setup]
-    use_profiler = use_profiler and dist.rank == 0 and (not any(profiling_dir.iterdir()))
+    use_profiler = (
+        use_profiler and dist.rank == 0 and (not any(profiling_dir.iterdir()))
+    )
     profiler_ctx = (
         torch.profiler.profile(
             schedule=torch.profiler.schedule(wait=4, warmup=1, active=1, repeat=1),
@@ -598,7 +600,9 @@ def main(
 
                 ### [MLflow Scalars Logging]
                 if use_mlflow:
-                    time_now = perf_counter()  # End-of-epoch timestamp for seconds_per_epoch metric
+                    time_now = (
+                        perf_counter()
+                    )  # End-of-epoch timestamp for seconds_per_epoch metric
                     log_metrics(
                         {
                             "lr": optimizer.param_groups[0]["lr"],
