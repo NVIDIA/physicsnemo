@@ -49,7 +49,6 @@ jobs:
            github.actor == 'mnabian' ||
            github.actor == 'stadlmax' ||
            github.actor == 'daviddpruitt' ||
-           github.actor == 'Alexey-Kamenev' ||
            github.actor == 'jleinonen' ||
            github.actor == 'MortezaMardani' ||
            github.actor == 'tge25' ||
@@ -63,7 +62,6 @@ jobs:
            github.actor == 'coreyjadams' ||
            github.actor == 'CharlelieLrt' ||
            github.actor == 'abokov-nv' ||
-           github.actor == 'saikrishnanc-nv' ||
            github.actor == 'laserkelvin'
          )
     steps:
