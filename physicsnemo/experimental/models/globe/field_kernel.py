@@ -124,7 +124,7 @@ class Kernel(Module):
 
     Outputs
     -------
-    TensorDict[str, Float[torch.Tensor, "..."]]
+    TensorDict[str, Float[torch.Tensor, "n_targets ..."]]
         TensorDict with batch_size :math:`(N_{targets},)` containing the computed
         fields. Each scalar field has shape :math:`(N_{targets},)` and each vector
         field has shape :math:`(N_{targets}, D)`.
@@ -323,7 +323,7 @@ class Kernel(Module):
         source_strengths: Float[torch.Tensor, " n_sources"] | None = None,
         source_data: TensorDict | None = None,
         global_data: TensorDict | None = None,
-    ) -> TensorDict[str, Float[torch.Tensor, "..."]]:
+    ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
         r"""Evaluates a field kernel at target points based on source point influences.
 
         Parameters
@@ -346,15 +346,19 @@ class Kernel(Module):
             internally via :func:`split_by_leaf_rank`. Scalar count must
             match ``n_source_scalars``; vector count must match
             ``n_source_vectors``. All values must be dimensionless.
+            ``None`` (the default) indicates no per-source features; an empty
+            TensorDict is used internally.
         global_data : TensorDict or None, optional
             Problem-level features with ``batch_size=()``. Contains a mix of
             scalar (rank-0) and vector (rank-1) tensors, split internally.
             Scalar count must match ``n_global_scalars``; vector count must
             match ``n_global_vectors``. All values must be dimensionless.
+            ``None`` (the default) indicates no global conditioning; an empty
+            TensorDict is used internally.
 
         Returns
         -------
-        TensorDict[str, Float[torch.Tensor, "..."]]
+        TensorDict[str, Float[torch.Tensor, "n_targets ..."]]
             TensorDict with batch_size :math:`(N_{targets},)` containing the computed
             fields. Each scalar field has shape :math:`(N_{targets},)` and each vector
             field has shape :math:`(N_{targets}, D)`.
@@ -501,6 +505,7 @@ class Kernel(Module):
         cos_theta_pairs = torch.sum(v1_hat * v2_hat, dim=-2)
         # shape: (n_targets, n_sources, len(keypairs))
 
+        # [1:] skips P_0(x) = 1 (constant), which carries no angular information
         spherical_harmonics: list[torch.Tensor] = legendre_polynomials(
             x=cos_theta_pairs, n=self.n_spherical_harmonics + 1
         )[1:]
