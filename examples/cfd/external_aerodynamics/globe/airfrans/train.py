@@ -553,6 +553,18 @@ def main(
         if dist.rank == 0:
             time_last_epoch = perf_counter()
 
+        def checkpoint_metadata() -> dict[str, Any]:
+            return {
+                "best_loss": best_loss,
+                "last_image_epoch": last_image_epoch,
+                "last_image_loss": last_image_loss,
+                "mlflow_run_id": (
+                    _run.info.run_id
+                    if use_mlflow and (_run := active_run())
+                    else None
+                ),
+            }
+
         for epoch in count(start=epoch + 1):
             loss = {}
             loss_components = {}
@@ -576,16 +588,7 @@ def main(
                         scheduler=scheduler,
                         scaler=scaler,
                         epoch=epoch,
-                        metadata={
-                            "best_loss": best_loss,
-                            "last_image_epoch": last_image_epoch,
-                            "last_image_loss": last_image_loss,
-                            "mlflow_run_id": (
-                                _run.info.run_id
-                                if use_mlflow and (_run := active_run())
-                                else None
-                            ),
-                        },
+                        metadata=checkpoint_metadata(),
                     )
                 if loss["test"] < best_loss:
                     best_loss = loss["test"]
@@ -615,6 +618,28 @@ def main(
                         step=epoch,
                     )
                     time_last_epoch = time_now
+
+            # Coordinate shutdown across all ranks before potentially-slow
+            # image generation, so ranks 1..N don't block at the all_reduce
+            # while rank 0 renders images.
+            _shutdown = torch.tensor(
+                [shutdown_requested()], dtype=torch.int32, device=device
+            )
+            if dist.world_size > 1:
+                all_reduce(_shutdown, op=ReduceOp.MAX)
+            if _shutdown.item():
+                logger0.info("Quitting due to shutdown request.")
+                if dist.rank == 0:
+                    save_checkpoint(
+                        checkpoint_dir,
+                        models=base_model,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        scaler=scaler,
+                        epoch=epoch,
+                        metadata=checkpoint_metadata(),
+                    )
+                break
 
             ### [MLflow Image Logging]
             if (
@@ -652,35 +677,6 @@ def main(
                 artifacts_bytes, cache_info = torch.compiler.save_cache_artifacts()  # ty: ignore[not-iterable]
                 torch_compile_cache.write_bytes(artifacts_bytes)
                 logger.info(f"Saved torch.compile cache to {torch_compile_cache}.")
-
-            # Coordinate shutdown across all ranks so they break on the same epoch.
-            _shutdown = torch.tensor(
-                [shutdown_requested()], dtype=torch.int32, device=device
-            )
-            if dist.world_size > 1:
-                all_reduce(_shutdown, op=ReduceOp.MAX)
-            if _shutdown.item():
-                logger0.info("Quitting due to shutdown request.")
-                if dist.rank == 0:
-                    save_checkpoint(
-                        checkpoint_dir,
-                        models=base_model,
-                        optimizer=optimizer,
-                        scheduler=scheduler,
-                        scaler=scaler,
-                        epoch=epoch,
-                        metadata={
-                            "best_loss": best_loss,
-                            "last_image_epoch": last_image_epoch,
-                            "last_image_loss": last_image_loss,
-                            "mlflow_run_id": (
-                                _run.info.run_id
-                                if use_mlflow and (_run := active_run())
-                                else None
-                            ),
-                        },
-                    )
-                break
 
 
 def field_loss_fn(
