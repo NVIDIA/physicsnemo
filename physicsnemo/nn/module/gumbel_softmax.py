@@ -84,8 +84,8 @@ class GumbelSoftmax(nn.Module):
     >>> probs = gs(logits)
     >>> probs.shape
     torch.Size([2, 10])
-    >>> probs.sum(dim=-1)  # Each row sums to 1
-    tensor([1.0000, 1.0000])
+    >>> torch.allclose(probs.sum(dim=-1), torch.ones(2))  # Each row sums to 1
+    True
 
     >>> # With learnable temperature
     >>> gs_learnable = GumbelSoftmax(tau=1.0, learnable=True)
