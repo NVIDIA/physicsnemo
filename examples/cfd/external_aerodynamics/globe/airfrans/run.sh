@@ -17,7 +17,6 @@ set -euo pipefail
 TRAIN_ARGS=(
     --output-name ${SLURM_JOB_NAME:-globe_airfrans_local}
     --airfrans-task "scarce"
-
 )
 
 export AIRFRANS_DATA_DIR="${HOME}/datasets/airfrans/Dataset"  # Set this to your AirFRANS dataset
