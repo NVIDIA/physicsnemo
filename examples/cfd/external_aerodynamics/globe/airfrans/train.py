@@ -560,9 +560,7 @@ def main(
                 "last_image_epoch": last_image_epoch,
                 "last_image_loss": last_image_loss,
                 "mlflow_run_id": (
-                    _run.info.run_id
-                    if use_mlflow and (_run := active_run())
-                    else None
+                    _run.info.run_id if use_mlflow and (_run := active_run()) else None
                 ),
             }
 
@@ -601,10 +599,7 @@ def main(
                 if use_mlflow:
                     log_metrics(
                         {
-                            **{
-                                f"{split}_loss": loss[split].item()
-                                for split in splits
-                            },
+                            **{f"{split}_loss": loss[split].item() for split in splits},
                             **{
                                 f"{split}_loss_components/{sanitize_metric_name(k)}": v.item()
                                 for split in splits
@@ -613,8 +608,10 @@ def main(
                             "lr": optimizer.param_groups[0]["lr"],
                             "system/vram_gb": torch.cuda.memory_stats()[
                                 "reserved_bytes.all.peak"
-                            ] / 1024**3,
-                            "system/seconds_per_epoch": (time_now := perf_counter()) - time_last_epoch,
+                            ]
+                            / 1024**3,
+                            "system/seconds_per_epoch": (time_now := perf_counter())
+                            - time_last_epoch,
                         },
                         step=epoch,
                     )

@@ -24,7 +24,7 @@ from physicsnemo.core.module import Module
 
 
 class RunningNorm(Module):
-    r"""Shape-aware EWMA normalization in log-space based on ``mean(abs(x))``.
+    r"""Shape-aware exponentially-weighted moving average (EWMA) normalization in log-space based on ``mean(abs(x))``.
 
     Maintains a running estimate of ``mean(abs(x))`` in log-space and
     normalizes inputs by that estimate. The tracked statistic can be a
@@ -50,15 +50,32 @@ class RunningNorm(Module):
     momentum : float, optional, default=0.99
         EWMA momentum in :math:`[0, 1)`. Higher values emphasize
         historical estimates.
-    learnable_weight_shape : torch.Size | Sequence[int] | None, optional, default=None
-        If provided, creates a learnable multiplicative ``weight``
-        parameter with the given shape.
-    learnable_bias_shape : torch.Size | Sequence[int] | None, optional, default=None
-        If provided, creates a learnable additive ``bias`` parameter
-        with the given shape.
+    affine : bool, optional, default=False
+        If ``True``, creates a learnable multiplicative ``weight``
+        parameter of shape ``shape``, initialized to ones. Follows the
+        same convention as ``torch.nn.LayerNorm``'s
+        ``elementwise_affine`` parameter.
+    bias : bool, optional, default=True
+        If ``True`` *and* ``affine`` is ``True``, creates a learnable
+        additive ``bias`` parameter of shape ``shape``, initialized to
+        zeros. Has no effect when ``affine`` is ``False``. Set to
+        ``False`` when normalizing vector-valued fields where an additive
+        shift would break rotational equivariance.
     initialization_behavior : Literal["no_op", "first_batch"], optional, default="no_op"
         Controls how the running mean is initialized on the first
-        forward call.
+        forward call:
+        - ``"no_op"``: the running mean stays at its initial value of 1
+          (i.e., ``ln_running_mean`` remains zero), so the first few
+          batches pass through nearly unnormalized while the EWMA
+          gradually adapts. This avoids seeding the estimate with a
+          potentially unrepresentative first batch.
+        - ``"first_batch"``: the running mean is set to the first
+          batch's ``mean(abs(x))``, so normalization is calibrated
+          immediately.
+        In theory, the choice should not affect the resulting checkpoint for a
+        sufficiently long training run, though it may affect numerical stability
+        during the first few batches.
+
     disable : bool, optional, default=False
         If ``True``, the normalizer is a no-op pass-through.
 
@@ -83,7 +100,7 @@ class RunningNorm(Module):
     --------
     >>> norm = RunningNorm(shape=(1,), momentum=0.99)
     >>> norm.train()
-    RunningNorm(ln_running_mean=tensor([0.]))
+    RunningNorm(shape=(1,), affine=False)
     >>> x = torch.randn(32)
     >>> y = norm(x)  # updates running mean, returns normalized x
     """
@@ -92,8 +109,8 @@ class RunningNorm(Module):
         self,
         shape: torch.Size | Sequence[int] = tuple(),
         momentum: float = 0.99,
-        learnable_weight_shape: torch.Size | Sequence[int] | None = None,
-        learnable_bias_shape: torch.Size | Sequence[int] | None = None,
+        affine: bool = False,
+        bias: bool = True,
         initialization_behavior: Literal["no_op", "first_batch"] = "no_op",
         disable: bool = False,
     ):
@@ -106,17 +123,20 @@ class RunningNorm(Module):
         ### Store parameters
         self.shape = shape
         self.momentum = momentum
-        self.learnable_weight_shape = learnable_weight_shape
-        self.learnable_bias_shape = learnable_bias_shape
+        self.affine = affine
         self.initialization_behavior = initialization_behavior
         self.disable = disable
 
         ### Initialize learnable parameters, if applicable
-        if not disable:
-            if self.learnable_weight_shape is not None:
-                self.weight = nn.Parameter(torch.ones(self.learnable_weight_shape))
-            if self.learnable_bias_shape is not None:
-                self.bias = nn.Parameter(torch.zeros(self.learnable_bias_shape))
+        if not disable and affine:
+            self.weight = nn.Parameter(torch.ones(shape))
+            if bias:
+                self.bias = nn.Parameter(torch.zeros(shape))
+            else:
+                self.register_parameter("bias", None)
+        else:
+            self.register_parameter("weight", None)
+            self.register_parameter("bias", None)
 
         ### Buffers to track state across devices/checkpoints
         # Start with ln(1.0) = 0.0 so eval before train is a no-op.
@@ -124,14 +144,7 @@ class RunningNorm(Module):
         self.register_buffer("_initialized", torch.tensor(False, dtype=torch.bool))
 
     def __repr__(self) -> str:
-        r"""String representation showing the current running mean state.
-
-        Returns
-        -------
-        str
-            Format: ``RunningNorm(ln_running_mean=<tensor>)``.
-        """
-        return f"RunningNorm(ln_running_mean={self.ln_running_mean!r})"
+        return f"RunningNorm(shape={tuple(self.shape)}, affine={self.affine})"
 
     def forward(self, x: Float[torch.Tensor, "..."]) -> Float[torch.Tensor, "..."]:
         r"""Normalize by a log-space EWMA of ``mean(abs(x))``.
@@ -210,8 +223,8 @@ class RunningNorm(Module):
 
         # Divide by running mean via exp(-ln_running_mean)
         x = x * torch.exp(-self.ln_running_mean)
-        if self.learnable_weight_shape is not None:
+        if self.weight is not None:
             x = x * self.weight
-        if self.learnable_bias_shape is not None:
+        if self.bias is not None:
             x = x + self.bias
         return x
