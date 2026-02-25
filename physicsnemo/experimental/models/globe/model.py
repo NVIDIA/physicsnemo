@@ -83,6 +83,8 @@ class GLOBE(Module):
     3. Final hyperlayer evaluates fields at user-specified query points
     4. Learnable per-field calibration transforms applied to outputs
 
+    For more details, see the paper: https://arxiv.org/abs/2511.15856
+
     Parameters
     ----------
     n_spatial_dims : int
