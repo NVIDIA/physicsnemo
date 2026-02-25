@@ -2,7 +2,6 @@ tyro~=1.0.6
 pyyaml
 polars~=1.38.1
 torchinfo~=1.8.0
-gitpython~=3.1.46
 mlflow~=3.10.0
 pyvista~=0.47.0
 matplotlib~=3.10.8
