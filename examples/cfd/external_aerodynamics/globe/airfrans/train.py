@@ -287,7 +287,8 @@ def main(
     # Square-root batch-size scaling: when the effective batch size grows
     # (more GPUs or more points), gradient variance decreases proportionally,
     # so the optimal LR scales as sqrt(batch_size).  The denominator 2048
-    # is the reference batch size at which the base `learning_rate` applies.
+    # is the reference point count per iteration (not samples) at which the
+    # base `learning_rate` applies.
     learning_rate *= (dist.world_size * points_per_iter / 2048) ** 0.5
     if use_muon:
         # Muon is designed for matrix-shaped parameters (2D weight tensors
