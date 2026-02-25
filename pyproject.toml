@@ -217,6 +217,7 @@ model-extras = [
 ]
 datapipes-extras = [
     "tfrecord",
+    "dask",
     "netCDF4",
     "xarray>=2025.6.1",
     "zarr>=3.0.0",

@@ -121,7 +121,7 @@ def _remap_target(target: str) -> str:
 
     if target.startswith("physicsnemo.models.layers.activations"):
         cls_name = target.split(".")[-1]
-        return f"physicsnemo.nn.activations.{cls_name}"
+        return f"physicsnemo.nn.{cls_name}"
 
     return target
 
