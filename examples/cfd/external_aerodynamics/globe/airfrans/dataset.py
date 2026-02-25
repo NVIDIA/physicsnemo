@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
 
 import pyvista as pv
 import torch
-from physicsnemo.experimental.globe.utilities.cached_dataset import CachedPreprocessingDataset
 from jaxtyping import Bool, Float, Int
 from tensordict import TensorDict, tensorclass
 from torch.distributed import ReduceOp, all_reduce, is_initialized
@@ -29,6 +28,9 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
+from physicsnemo.experimental.models.globe.utilities.cached_dataset import (
+    CachedPreprocessingDataset,
+)
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus import compute_point_derivatives
 from physicsnemo.mesh.io import from_pyvista
