@@ -413,8 +413,15 @@ def main(
         batch_loss = batch_loss_components.stack_from_tensordict().sum()
         return batch_loss, batch_loss_components
 
-    def run_epoch(split: Split) -> torch.Tensor:
-        """Run one epoch of training or testing. Returns the average total loss across all batches."""
+    def run_epoch(split: Split) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Run one epoch of training or testing.
+
+        Returns:
+            ``(epoch_loss, epoch_loss_components)``: average total loss
+            (scalar tensor) and a dict mapping component names to their
+            average losses (scalar tensors).  All values are synchronized
+            across ranks via all-reduce.
+        """
         training = split == "train"
         dataloaders[split].sampler.set_epoch(epoch=epoch)  # ty: ignore[unresolved-attribute]
         model.train(training)
@@ -523,20 +530,7 @@ def main(
                 ]
             )
         )
-        if dist.rank == 0:
-            if use_mlflow:
-                log_metrics(
-                    {
-                        f"{split}_loss": epoch_loss.item(),
-                        **{
-                            f"{split}_loss_components/{sanitize_metric_name(k)}": v.item()
-                            for k, v in epoch_loss_components.items()
-                        },
-                    },
-                    step=epoch,
-                )
-
-        return epoch_loss
+        return epoch_loss, epoch_loss_components
 
     ### [Profiler Setup]
     use_profiler = (
@@ -561,9 +555,10 @@ def main(
 
         for epoch in count(start=epoch + 1):
             loss = {}
+            loss_components = {}
             for split in splits:
                 with record_function(f"epoch_{epoch}_{split}"):
-                    loss[split] = run_epoch(split)
+                    loss[split], loss_components[split] = run_epoch(split)
 
             scheduler.step(loss["train"])
 
@@ -600,17 +595,22 @@ def main(
 
                 ### [MLflow Scalars Logging]
                 if use_mlflow:
-                    time_now = (
-                        perf_counter()
-                    )  # End-of-epoch timestamp for seconds_per_epoch metric
                     log_metrics(
                         {
+                            **{
+                                f"{split}_loss": loss[split].item()
+                                for split in splits
+                            },
+                            **{
+                                f"{split}_loss_components/{sanitize_metric_name(k)}": v.item()
+                                for split in splits
+                                for k, v in loss_components[split].items()
+                            },
                             "lr": optimizer.param_groups[0]["lr"],
                             "system/vram_gb": torch.cuda.memory_stats()[
                                 "reserved_bytes.all.peak"
-                            ]
-                            / 1024**3,
-                            "system/seconds_per_epoch": time_now - time_last_epoch,
+                            ] / 1024**3,
+                            "system/seconds_per_epoch": (time_now := perf_counter()) - time_last_epoch,
                         },
                         step=epoch,
                     )
