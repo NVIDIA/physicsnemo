@@ -61,7 +61,6 @@ sample_path = sample_paths["test"][0]
 
 # %%
 device = torch.device("cuda")
-torch.cuda.set_per_process_memory_fraction(0.99)
 torch.set_float32_matmul_precision("high")
 
 ### [Datasets with cached preprocessing]
