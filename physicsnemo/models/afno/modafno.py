@@ -366,6 +366,60 @@ class ModAFNO(Module):
             embed_model = {} if embed_model is None else embed_model
             self.mod_embed_net = ModEmbedNet(**embed_model)
 
+        self.register_load_state_dict_pre_hook(self._migrate_legacy_checkpoint)
+
+    @staticmethod
+    def _migrate_legacy_checkpoint(
+        module,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        r"""Remap legacy scale-shift keys to the new ModuleList layout.
+
+        Previous checkpoints stored scale-shift parameters under
+        ``scale_shift.net.{idx}.{param}``. The current implementation nests the
+        layers under ``scale_shift.net.layers.{idx}.{param}``. This pre-hook
+        rewrites legacy keys in-place to maintain compatibility.
+
+        Parameters
+        ----------
+        module : torch.nn.Module
+            The module being loaded (unused; required by ``register_load_state_dict_pre_hook``).
+        state_dict : dict
+            State dict being loaded; modified in-place.
+        prefix : str
+            Prefix for the module (unused).
+        local_metadata : dict, optional
+            Local metadata (unused).
+        strict : bool
+            Whether strict loading is requested (unused).
+        missing_keys : list of str
+            List of missing keys (unused).
+        unexpected_keys : list of str
+            List of unexpected keys (unused).
+        error_msgs : list of str
+            Error messages (unused).
+
+        Returns
+        -------
+        None
+            Modifies ``state_dict`` in-place; no return value.
+        """
+        legacy_token = ".scale_shift.net."  # noqa: S105 - state_dict key token
+        new_token = ".scale_shift.net.layers."  # noqa: S105 - state_dict key token
+
+        for old_key in list(state_dict.keys()):
+            if legacy_token not in old_key or new_token in old_key:
+                continue
+            new_key = old_key.replace(legacy_token, new_token)
+            if new_key not in state_dict:
+                state_dict[new_key] = state_dict.pop(old_key)
+
     def _init_weights(self, m: nn.Module) -> None:
         r"""Initialize model weights.
 
