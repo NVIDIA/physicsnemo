@@ -16,14 +16,11 @@
 
 """Training utilities for the GLOBE AirFRANS example.
 
-Contains helpers for hyperparameter logging, MLflow metric sanitization,
-and signal handling.
+Contains helpers for hyperparameter logging and MLflow metric sanitization.
 """
 
 import inspect
 import logging
-import signal
-from collections.abc import Callable
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -200,43 +197,6 @@ def log_hyperparameters(
                 if len(str(v)) <= _MLFLOW_MAX_PARAM_LENGTH
             }
         )
-
-
-### [Signal handling] #####################################################
-
-
-def install_graceful_shutdown(rank: int = 0) -> Callable[[], bool]:
-    """Install signal handlers for graceful training shutdown.
-
-    Catches SIGTERM, SIGINT, SIGQUIT, and SIGUSR1. On the first signal a
-    warning is logged (on rank 0) and an internal flag is set. The training
-    loop can poll the returned callable each epoch to decide whether to break.
-
-    SIGUSR1 is the standard signal for SLURM preemption handling: the
-    ``--signal=B:USR1@<seconds>`` sbatch directive sends SIGUSR1 to the batch
-    script before the time limit, and torchrun's ``--signals-to-handle`` flag
-    makes it forward the signal to worker processes.
-
-    Args:
-        rank: Distributed rank. Only rank 0 logs the signal message.
-
-    Returns:
-        A zero-argument callable that returns ``True`` once a shutdown
-        signal has been received.
-    """
-    received = [False]
-
-    def _handler(signum: int, _frame: Any) -> None:
-        if rank == 0:
-            logger.warning(
-                f"{signal.Signals(signum).name} received; quitting after this epoch."
-            )
-        received[0] = True
-
-    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGQUIT, signal.SIGUSR1):
-        signal.signal(sig, _handler)
-
-    return lambda: received[0]
 
 
 if __name__ == "__main__":

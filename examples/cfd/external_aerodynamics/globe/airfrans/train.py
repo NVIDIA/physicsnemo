@@ -48,7 +48,6 @@ from tqdm import tqdm
 from utilities import (
     disable_autotune_printing,
     get_physicsnemo_pkg_info,
-    install_graceful_shutdown,
     log_hyperparameters,
     sanitize_metric_name,
 )
@@ -184,6 +183,7 @@ def main(
     checkpoint_dir = output_dir / "checkpoints"
     best_model_path = output_dir / "best_model.mdlus"
     profiling_dir = output_dir / "profiling"
+    shutdown_file = output_dir / "SHUTDOWN"
 
     if dist.rank == 0:
         for directory in (
@@ -192,9 +192,7 @@ def main(
             profiling_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
-
-    ### [Signal Handling]
-    shutdown_requested = install_graceful_shutdown(rank=dist.rank)
+        shutdown_file.unlink(missing_ok=True)
 
     ### [PyTorch Configuration]
     autocast_ctx = torch.autocast(
@@ -620,12 +618,7 @@ def main(
             # Coordinate shutdown across all ranks before potentially-slow
             # image generation, so ranks 1..N don't block at the all_reduce
             # while rank 0 renders images.
-            _shutdown = torch.tensor(
-                [shutdown_requested()], dtype=torch.int32, device=device
-            )
-            if dist.world_size > 1:
-                all_reduce(_shutdown, op=ReduceOp.MAX)
-            if _shutdown.item():
+            if shutdown_file.exists():
                 logger0.info("Quitting due to shutdown request.")
                 if dist.rank == 0:
                     save_checkpoint(
