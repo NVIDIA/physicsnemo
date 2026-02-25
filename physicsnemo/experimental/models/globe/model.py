@@ -143,8 +143,9 @@ class GLOBE(Module):
     -------
     Mesh
         A point-cloud :class:`~physicsnemo.mesh.Mesh` (0-dimensional manifold)
-        with ``points`` equal to the input ``prediction_points``. The predicted
-        fields are in ``point_data``, keyed by the names from ``output_field_ranks``.
+        whose ``.points`` attribute equals the input ``prediction_points``. The
+        predicted fields are in ``.point_data``, keyed by the names from
+        ``output_field_ranks``.
         Scalar fields have shape :math:`(N_{points},)`, vector fields have shape
         :math:`(N_{points}, D)`. Cells are empty (shape ``(0, 1)``).
         ``global_data`` is passed through from the input.
@@ -319,7 +320,7 @@ class GLOBE(Module):
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None,
         chunk_size: None | int | Literal["auto"],
-    ) -> TensorDict[str, Float[torch.Tensor, "..."]]:
+    ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
         r"""Evaluate one hyperlayer by summing kernel contributions from all BC types.
 
         For each boundary condition type, extracts source data from the mesh's
@@ -329,7 +330,9 @@ class GLOBE(Module):
         Each mesh's ``cell_data`` carries a namespaced structure:
 
         - ``"physical"``: original boundary condition features
-        - ``"strengths"``: per-reference-length kernel strengths
+        - ``"strengths"``: per-reference-length scalar multipliers that modulate
+          each source face's kernel contribution (learned during communication
+          and area-normalized before use)
         - ``"latent"``: (after first layer) learned scalar and vector features
 
         Strengths are extracted and area-normalized separately. All remaining
@@ -356,10 +359,10 @@ class GLOBE(Module):
 
         Returns
         -------
-        TensorDict[str, Float[torch.Tensor, "..."]]
+        TensorDict[str, Float[torch.Tensor, "n_targets ..."]]
             Summed kernel outputs across all boundary condition types.
         """
-        result_pieces: list[TensorDict[str, Float[torch.Tensor, "..."]]] = []
+        result_pieces: list[TensorDict[str, Float[torch.Tensor, "n_targets ..."]]] = []
 
         for bc_type, mesh in source_meshes.items():
             strengths: TensorDict[str, Float[torch.Tensor, " n_cells"]] = (
@@ -375,7 +378,7 @@ class GLOBE(Module):
             source_data["normals"] = mesh.cell_normals
 
             kernel: MultiscaleKernel = self.kernel_layers[layer_idx][bc_type]  # ty: ignore[not-subscriptable]
-            kernel_result: TensorDict[str, Float[torch.Tensor, "..."]] = kernel(
+            kernel_result: TensorDict[str, Float[torch.Tensor, "n_targets ..."]] = kernel(
                 source_points=mesh.cell_centroids,
                 source_data=source_data,
                 source_strengths=strengths,
@@ -574,7 +577,7 @@ class GLOBE(Module):
             )
 
         ### Phase 3: Final evaluation at prediction points.
-        result: TensorDict[str, Float[torch.Tensor, "..."]] = self._evaluate_hyperlayer(
+        result: TensorDict[str, Float[torch.Tensor, "n_points ..."]] = self._evaluate_hyperlayer(
             layer_idx=self.n_communication_hyperlayers,
             target_points=prediction_points,
             source_meshes=boundary_meshes,

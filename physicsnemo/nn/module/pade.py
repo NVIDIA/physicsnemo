@@ -158,6 +158,15 @@ class Pade(Module):
         else:
             self.combined_mlp = Mlp(out_features=out_features + denom_out, **mlp_kwargs)
 
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}("
+            f"in={self.in_features}, out={self.out_features}, "
+            f"hidden={self.hidden_features}, "
+            f"order=[{self.numerator_order},{self.denominator_order}]"
+            f")"
+        )
+
     def forward(
         self, x: Float[torch.Tensor, "batch input_dim"]
     ) -> Float[torch.Tensor, "batch output_dim"]:

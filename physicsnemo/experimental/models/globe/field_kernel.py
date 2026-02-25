@@ -747,7 +747,7 @@ class ChunkedKernel(Kernel):
 
     Outputs
     -------
-    TensorDict[str, Float[torch.Tensor, "..."]]
+    TensorDict[str, Float[torch.Tensor, "n_targets ..."]]
         TensorDict with batch_size :math:`(N_{targets},)` containing the computed
         fields. Numerically identical to non-chunked :class:`Kernel` evaluation.
 
@@ -788,7 +788,7 @@ class ChunkedKernel(Kernel):
         | None = None,
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None = None,
         chunk_size: None | int | Literal["auto"] = "auto",
-    ) -> TensorDict[str, Float[torch.Tensor, "..."]]:
+    ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
         r"""Evaluates the kernel with optional chunking for memory efficiency.
 
         Parameters
@@ -808,7 +808,7 @@ class ChunkedKernel(Kernel):
 
         Returns
         -------
-        TensorDict[str, Float[torch.Tensor, "..."]]
+        TensorDict[str, Float[torch.Tensor, "n_targets ..."]]
             TensorDict mapping field names to computed tensors.
             Each scalar field has shape :math:`(N_{targets},)` and each vector field
             has shape :math:`(N_{targets}, D)`.
@@ -974,7 +974,7 @@ class MultiscaleKernel(Module):
 
     Outputs
     -------
-    TensorDict[str, Float[torch.Tensor, "..."]]
+    TensorDict[str, Float[torch.Tensor, "n_targets ..."]]
         TensorDict with the summed results from all kernel branches. Each scalar
         field has shape :math:`(N_{targets},)` and each vector field has shape
         :math:`(N_{targets}, D)`.
@@ -1077,7 +1077,7 @@ class MultiscaleKernel(Module):
         | None = None,
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None = None,
         chunk_size: None | int | Literal["auto"] = "auto",
-    ) -> TensorDict[str, Float[torch.Tensor, "..."]]:
+    ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
         r"""Evaluates the multiscale kernel by combining results from multiple scales.
 
         Evaluates each constituent kernel at its respective reference length
@@ -1111,7 +1111,7 @@ class MultiscaleKernel(Module):
 
         Returns
         -------
-        TensorDict[str, Float[torch.Tensor, "..."]]
+        TensorDict[str, Float[torch.Tensor, "n_targets ..."]]
             Dictionary mapping field names to the summed results from all kernels.
             Each scalar field has shape :math:`(N_{targets},)` and each vector field
             has shape :math:`(N_{targets}, D)`.
@@ -1166,7 +1166,7 @@ class MultiscaleKernel(Module):
         )
         global_data["log_reference_length_ratios"] = log_ratios
 
-        results_pieces: list[TensorDict[str, Float[torch.Tensor, "..."]]] = [
+        results_pieces: list[TensorDict[str, Float[torch.Tensor, "n_targets ..."]]] = [
             self.kernels[name](
                 reference_length=reference_lengths[name]
                 * torch.exp(self.log_scalefactors[name]),
@@ -1180,7 +1180,7 @@ class MultiscaleKernel(Module):
             for name in self.reference_length_names
         ]
 
-        result: TensorDict[str, Float[torch.Tensor, "..."]] = reduce(
+        result: TensorDict[str, Float[torch.Tensor, "n_targets ..."]] = reduce(
             operator.add, results_pieces
         )
 

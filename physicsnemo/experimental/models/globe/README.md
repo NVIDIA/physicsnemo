@@ -5,6 +5,8 @@
 This code contains an experimental architecture called GLOBE:
 Green's-function-Like Operator for Boundary Element PDEs.
 
+Paper: <https://arxiv.org/abs/2511.15856>
+
 ## PDE Problems Suitable for GLOBE
 
 GLOBE is intended to be used for PDEs with the following mathematical
