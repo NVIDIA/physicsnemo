@@ -48,10 +48,10 @@ class ParallelHelper:
     ----------
     domain_parallel_size : int
         Number of ranks in the domain-parallel dimension.
-    shard : bool, optional
+    use_shard_tensor : bool, optional
         Whether to shard batches across the domain mesh.
     """
-    def __init__(self, domain_parallel_size: int, shard: bool = False):
+    def __init__(self, domain_parallel_size: int, use_shard_tensor: bool = False):
         if not DistributedManager.is_initialized:
             DistributedManager.initialize()
         self.dist = DistributedManager()
@@ -65,7 +65,7 @@ class ParallelHelper:
             mesh_dim_names=["ddp", "domain"],
         )
         self.domain_rank = self.mesh["domain"].get_local_rank()
-        self.shard = shard
+        self.use_shard_tensor = use_shard_tensor
 
     def get_domain_group_zero_rank(self) -> int:
         """Return the global rank of domain-group rank 0.
@@ -176,7 +176,7 @@ class ParallelHelper:
             if source_rank == self.dist.rank or i == 0:
                 batch = nested_to(next(data_iter), device=self.dist.device, non_blocking=True)
 
-            yield self.nested_scatter(batch, source_rank) if self.shard else batch
+            yield self.nested_scatter(batch, source_rank) if self.use_shard_tensor else batch
 
             i += 1
             if i == num_samples:
@@ -211,11 +211,12 @@ class ParallelHelper:
         torch.distributed.fsdp.FullyShardedDataParallel
             Distributed model wrapper.
         """
-        model = distribute_module(
-            model,
-            device_mesh=self.mesh["domain"],
-            partition_fn=partition_model_selective,
-        )
+        if self.use_shard_tensor:
+            model = distribute_module(
+                model,
+                device_mesh=self.mesh["domain"],
+                partition_fn=partition_model_selective,
+            )
         return FSDP(
             model,
             device_mesh=self.mesh["ddp"],
@@ -306,22 +307,25 @@ class ParallelHelper:
             Local scheduler instance.
         """
         if self.dist.rank == 0:
-            optim_state_dict_full = optimizer_full.state_dict()
+            optim_state_dict = optimizer_full.state_dict()
             if isinstance(model, FSDP):
-                optim_state_dict_full = FSDP.rekey_optim_state_dict(
-                    optim_state_dict_full,
+                optim_state_dict = FSDP.rekey_optim_state_dict(
+                    optim_state_dict,
                     OptimStateKeyType.PARAM_NAME,
                     model_full
                 )
 
-        # shard positional embeddings
-        optim_state_dict_sharded = self.shard_state_dict(
-            optim_state_dict_full if self.dist.rank == 0 else None,
-            shard_dim_selector=lambda key: 1 if ("pos_embed" in key) else None
-        )
+        if self.use_shard_tensor:
+            # shard positional embeddings
+            optim_state_dict = self.shard_state_dict(
+                optim_state_dict if self.dist.rank == 0 else None,
+                shard_dim_selector=lambda key: 1 if ("pos_embed" in key) else None
+            )
+        else:
+            optim_state_dict = self.scatter_object(optim_state_dict if self.dist.rank == 0 else None)
 
         options = StateDictOptions(full_state_dict=True)
-        set_optimizer_state_dict(model, optimizer, optim_state_dict_sharded, options=options)
+        set_optimizer_state_dict(model, optimizer, optim_state_dict, options=options)
 
         if scheduler is not None:
             sched_state_dict_full = None if scheduler_full is None else scheduler_full.state_dict()

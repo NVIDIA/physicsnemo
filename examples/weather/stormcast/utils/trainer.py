@@ -102,9 +102,9 @@ class Trainer:
         self.dist = DistributedManager()
         self.device = self.dist.device
         domain_parallel_size = self.cfg.training.domain_parallel_size
-        self.shard = (domain_parallel_size > 1) or self.cfg.training.force_sharding
-        self.parallel_helper = ParallelHelper(domain_parallel_size=domain_parallel_size, shard=self.shard)
-        if self.shard and (self.parallel_helper.local_batch_size(cfg.training.batch_size) > 1):
+        self.use_shard_tensor = (domain_parallel_size > 1) or self.cfg.training.force_sharding
+        self.parallel_helper = ParallelHelper(domain_parallel_size=domain_parallel_size, use_shard_tensor=self.use_shard_tensor)
+        if self.use_shard_tensor and (self.parallel_helper.local_batch_size(cfg.training.batch_size) > 1):
             raise ValueError("Domain parallelism is only available with a local batch size of 1.")
 
         # Parse config
@@ -138,16 +138,19 @@ class Trainer:
         self.regression_net = self._load_regression_net()
 
         # Sharding
-        if self.shard:
-            self.logger.info("Sharding model for domain parallelism")
-            self.net = self.parallel_helper.distribute_model(self.net)
-            if self.regression_net is not None:
-                self.regression_net = self.parallel_helper.distribute_model(self.regression_net)
-            if self.invariant_tensor is not None:
-                self.invariant_tensor = self.parallel_helper.distribute_tensor(self.invariant_tensor)
+
+        if self.use_shard_tensor:
+            self.logger.info("Distributing model with FSDP and sharding for domain parallelism")
+        else:
+            self.logger.info("Distributing model with FSDP")
+        self.net = self.parallel_helper.distribute_model(self.net)
+        if self.regression_net is not None:
+            self.regression_net = self.parallel_helper.distribute_model(self.regression_net)
+        if self.invariant_tensor is not None:
+            self.invariant_tensor = self.parallel_helper.distribute_tensor(self.invariant_tensor)
         # Create optimizer on sharded net
         (self.optimizer, self.scheduler) = self._setup_optimizer(self.net)  # for sharded net
-        if self.shard and self.total_steps > 0:
+        if self.total_steps > 0:
             self.parallel_helper.scatter_optimizer_state(
                 self.net_full,
                 self.optimizer_full,
@@ -615,7 +618,7 @@ class Trainer:
                     loss = loss * mask
 
             channelwise_loss_step = loss.detach().mean(dim=(0, 2, 3))
-            if self.shard:
+            if self.use_shard_tensor:
                 channelwise_loss_step = channelwise_loss_step.to_local()
             channelwise_loss = channelwise_loss + channelwise_loss_step
 
@@ -655,7 +658,7 @@ class Trainer:
         # Sync loss across ranks
         if self.dist.world_size > 1:
             torch.distributed.barrier()
-            if self.shard:
+            if self.use_shard_tensor:
                 loss = loss.detach().mean().to_local()
             torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.AVG)
 
@@ -761,7 +764,7 @@ class Trainer:
                         if not isinstance(valid_loss, tuple)
                         else valid_loss[0].mean(dim=(0, 2, 3))
                     )
-                    if self.shard:
+                    if self.use_shard_tensor:
                         valid_loss_mean_step = valid_loss_mean_step.to_local()
                     valid_loss_sum = valid_loss_sum + valid_loss_mean_step
 
@@ -867,22 +870,21 @@ class Trainer:
         Saves model weights, optimizer state, scheduler state, and validation loss
         to the checkpoint directory. Only rank 0 saves to avoid file conflicts.
         """
-        if self.shard:
-            self.parallel_helper.gather_training_state(
-                self.net,
-                self.optimizer,
-                self.scheduler,
-                self.net_full,
-                self.optimizer_full,
-                self.scheduler_full
-            )
+        self.parallel_helper.gather_training_state(
+            self.net,
+            self.optimizer,
+            self.scheduler,
+            self.net_full,
+            self.optimizer_full,
+            self.scheduler_full
+        )
 
         if self.dist.rank == 0:
             save_checkpoint(
                 path=self.ckpt_path,
-                models=self.net_full if self.shard else self.net,
-                optimizer=self.optimizer_full if self.shard else self.optimizer,
-                scheduler=self.scheduler_full if self.shard else self.scheduler,
+                models=self.net_full,
+                optimizer=self.optimizer_full,
+                scheduler=self.scheduler_full,
                 epoch=self.total_steps,
                 metadata={"val_loss": self.val_loss},
             )
@@ -933,7 +935,7 @@ class Trainer:
                 for (ch, value) in zip(self.state_channels, val_loss_channel):
                     self.logger.log_value(f"loss/valid/{ch}", value)
 
-                if self.shard:
+                if self.use_shard_tensor:
                     plot_outputs = None if plot_outputs is None else plot_outputs.full_tensor()
                     plot_state = None if plot_state is None else [s.full_tensor() for s in plot_state]
                     plot_background = None if plot_background is None else plot_background.full_tensor()
