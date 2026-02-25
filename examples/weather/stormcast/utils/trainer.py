@@ -43,7 +43,7 @@ from utils.nn import (
     unpack_batch,
 )
 from utils.optimizers import build_optimizer
-from utils.parallel import ParallelManager
+from utils.parallel import ParallelHelper
 from utils.plots import save_validation_plots
 from utils.schedulers import init_scheduler, step_scheduler
 from datasets import dataset_classes
@@ -103,8 +103,8 @@ class Trainer:
         self.device = self.dist.device
         domain_parallel_size = self.cfg.training.domain_parallel_size
         self.shard = (domain_parallel_size > 1) or self.cfg.training.force_sharding
-        self.parallel_manager = ParallelManager(domain_parallel_size=domain_parallel_size, shard=self.shard)
-        if self.shard and (self.parallel_manager.local_batch_size(cfg.training.batch_size) > 1):
+        self.parallel_helper = ParallelHelper(domain_parallel_size=domain_parallel_size, shard=self.shard)
+        if self.shard and (self.parallel_helper.local_batch_size(cfg.training.batch_size) > 1):
             raise ValueError("Domain parallelism is only available with a local batch size of 1.")
 
         # Parse config
@@ -121,7 +121,7 @@ class Trainer:
         else:
             self.net_full = self.optimizer_full = self.scheduler_full = None
 
-        (self.total_steps, self.val_loss) = self.parallel_manager.scatter_object(
+        (self.total_steps, self.val_loss) = self.parallel_helper.scatter_object(
             (self.total_steps, self.val_loss) if self.dist.rank == 0 else None
         )
 
@@ -129,7 +129,7 @@ class Trainer:
         self.net = self._setup_model()
         self.logger.info(str(self.net))
         self.net.load_state_dict(  # TODO: avoid replicating full state_dict on every rank
-            self.parallel_manager.scatter_object(
+            self.parallel_helper.scatter_object(
                 self.net_full.state_dict() if self.dist.rank == 0 else {}
             )
         )
@@ -140,15 +140,15 @@ class Trainer:
         # Sharding
         if self.shard:
             self.logger.info("Sharding model for domain parallelism")
-            self.net = self.parallel_manager.distribute_model(self.net)
+            self.net = self.parallel_helper.distribute_model(self.net)
             if self.regression_net is not None:
-                self.regression_net = self.parallel_manager.distribute_model(self.regression_net)
+                self.regression_net = self.parallel_helper.distribute_model(self.regression_net)
             if self.invariant_tensor is not None:
-                self.invariant_tensor = self.parallel_manager.distribute_tensor(self.invariant_tensor)
+                self.invariant_tensor = self.parallel_helper.distribute_tensor(self.invariant_tensor)
         # Create optimizer on sharded net
         (self.optimizer, self.scheduler) = self._setup_optimizer(self.net)  # for sharded net
         if self.shard and self.total_steps > 0:
-            self.parallel_manager.scatter_optimizer_state(
+            self.parallel_helper.scatter_optimizer_state(
                 self.net_full,
                 self.optimizer_full,
                 self.scheduler_full,
@@ -183,14 +183,14 @@ class Trainer:
 
         # Batch sizes
         self.batch_size = cfg.training.batch_size
-        max_local_batch_size = self.parallel_manager.local_batch_size(self.batch_size)
+        max_local_batch_size = self.parallel_helper.local_batch_size(self.batch_size)
         if cfg.training.batch_size_per_gpu == "auto":
             self.local_batch_size = max_local_batch_size
         else:
             self.local_batch_size = cfg.training.batch_size_per_gpu
             assert max_local_batch_size % self.local_batch_size == 0
         self.num_accumulation_rounds = max_local_batch_size // self.local_batch_size
-        assert self.batch_size * self.parallel_manager.domain_parallel_size == self.dist.world_size * max_local_batch_size
+        assert self.batch_size * self.parallel_helper.domain_parallel_size == self.dist.world_size * max_local_batch_size
 
         # Training params
         self.total_train_steps = cfg.training.total_train_steps
@@ -295,12 +295,12 @@ class Trainer:
 
         # Dataloaders
         num_workers = self.cfg.training.num_data_workers
-        self.train_dataloader = self.parallel_manager.sharded_dataloader(
+        self.train_dataloader = self.parallel_helper.sharded_dataloader(
             self.dataset_train,
             batch_size=self.local_batch_size,
             num_workers=num_workers
         )
-        self.dataset_iterator = self.parallel_manager.sharded_data_iter(self.train_dataloader)
+        self.dataset_iterator = self.parallel_helper.sharded_data_iter(self.train_dataloader)
 
         # Invariants
         invariant_array = self.dataset_train.get_invariants()
@@ -447,7 +447,7 @@ class Trainer:
             raise ValueError("training.loss.sigma_distribution must be 'lognormal' or 'loguniform'")
 
         params = {k: getattr(loss_params, k) for k in param_names}
-        params["sigma_source_rank"] = self.parallel_manager.get_domain_group_zero_rank()
+        params["sigma_source_rank"] = self.parallel_helper.get_domain_group_zero_rank()
         self.logger.info(f"Using loss: {sigma_dist}, params: {params or 'default'}")
         loss_fn = loss_cls(sigma_data=sigma_data, **params)
 
@@ -689,14 +689,14 @@ class Trainer:
         np.random.seed(self.dist.rank)
         torch.manual_seed(self.dist.rank)
 
-        valid_dataloader = self.parallel_manager.sharded_dataloader(
+        valid_dataloader = self.parallel_helper.sharded_dataloader(
             self.dataset_valid,
             batch_size=self.local_batch_size,
             seed=0,
             num_workers=0,#self.cfg.training.num_data_workers,
             shuffle=False
         )
-        valid_iter = self.parallel_manager.sharded_data_iter(
+        valid_iter = self.parallel_helper.sharded_data_iter(
             valid_dataloader,
             self.validation_steps
         )
@@ -868,7 +868,7 @@ class Trainer:
         to the checkpoint directory. Only rank 0 saves to avoid file conflicts.
         """
         if self.shard:
-            self.parallel_manager.gather_training_state(
+            self.parallel_helper.gather_training_state(
                 self.net,
                 self.optimizer,
                 self.scheduler,

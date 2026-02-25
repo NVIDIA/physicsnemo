@@ -41,7 +41,7 @@ from datasets.dataset import worker_init
 from utils.nn import nested_to
 
 
-class ParallelManager:
+class ParallelHelper:
     """Manage model and data distribution and sharding in domain parallel training.
 
     Parameters
