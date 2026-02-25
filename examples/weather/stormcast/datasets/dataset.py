@@ -58,7 +58,7 @@ class StormCastDataset(torch.utils.data.Dataset, ABC):
         pass
 
     def scalar_condition_channels(self) -> list[str]:
-        """Metadata for the scala condition channels. A list of channel names, one for each channel"""
+        """Metadata for the scalar condition channels. A list of channel names, one for each channel"""
         return []
 
     @abstractmethod
