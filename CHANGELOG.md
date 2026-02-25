@@ -6,7 +6,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0a0] - 2026-XX-YY
+## [2.1.0a0] - 2026-XX-YY
+
+### Added
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+### Dependencies
+
+## [2.0.0] - 2026-XX-YY
 
 ### Added
 
@@ -27,15 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - DiT (Diffusion Transformer) has been moved from `physicsnemo.experimental.models.dit`
   to `physicsnemo.models.dit`.
 
-### Deprecated
-
-### Removed
-
 ### Fixed
 
 - Shape mistmatch bug in the Lennard Jones example
-
-### Security
 
 ### Dependencies
 

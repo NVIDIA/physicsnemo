@@ -1,0 +1,73 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Bumper beam crash experiment using GeoTransolver (autoregressive rollout).
+# Usage: python train.py --config-name=experiment_bumper_geotransolver
+#
+# To switch models, pass model=<name> on the CLI, e.g.:
+#   python train.py --config-name=experiment_bumper_geotransolver model=geotransolver_one_shot_training
+
+hydra:
+  job:
+    chdir: True
+  run:
+    dir: ./outputs/
+
+experiment_name: "Bumper-GeoTransolver"
+experiment_desc: "Bumper beam experiment using GeoTransolver"
+run_desc: "Bumper beam experiment using GeoTransolver"
+
+defaults:
+  - reader: vtp
+  - datapipe: point_cloud
+  - model: geotransolver_one_shot_training
+  - training: default
+  - inference: default
+  - _self_
+
+# ┌───────────────────────────────────────────┐
+# │                   Data                    │
+# └───────────────────────────────────────────┘
+
+training:
+  raw_data_dir: ???              # set in config or via CLI: training.raw_data_dir=/path/to/train
+  raw_data_dir_validation: ???   # set in config or via CLI: training.raw_data_dir_validation=/path/to/validation
+  global_features_filepath: ???  # set in config or via CLI: training.global_features_filepath=/path/to/global_features.json
+
+  # ┌───────────────────────────────────────────┐
+  # │                 Dataset                   │
+  # └───────────────────────────────────────────┘
+
+  num_time_steps: 51
+  num_training_samples: 121
+  num_validation_samples: 5
+
+inference:
+  raw_data_dir_test: ???         # set in config or via CLI: inference.raw_data_dir_test=/path/to/test
+
+# ┌───────────────────────────────────────────┐
+# │            Datapipe features              │
+# └───────────────────────────────────────────┘
+
+datapipe:
+  static_features: []  # no per-node static features for this dataset
+  dynamic_targets:
+    - effective_plastic_strain
+    - stress_vm
+  global_features:
+    - velocity_x
+    - thickness_scale
+    - rwall_origin_y
