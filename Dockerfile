@@ -229,7 +229,7 @@ RUN cd /physicsnemo && uv pip install ".[cu13,utils-extras,mesh-extras,datapipes
 RUN rm -rf /physicsnemo/
 
 #######################################################################
-# CI image: builder + dev group + netcdf4 hack + FigNet/Makani + CI-only packages
+# CI image: builder + dev group + FigNet/Makani + CI-only packages
 #######################################################################
 FROM builder AS ci
 
@@ -240,8 +240,7 @@ ENV UV_SYSTEM_PYTHON=1
 ENV UV_BREAK_SYSTEM_PACKAGES=1
 ENV UV_CONSTRAINT=/etc/pip/constraint.txt
 
-# TODO: Remove hacky downgrade of netCDF4. netCDF4 v1.7.1 issue: https://github.com/Unidata/netcdf4-python/issues/1343
-RUN uv pip install "netcdf4>=1.6.3,<1.7.1"
+RUN uv pip install "netcdf4>1.7.3" dask
 
 COPY . /physicsnemo/
 
@@ -252,7 +251,7 @@ RUN cd /physicsnemo && uv pip install --group dev
 RUN FORCE_CUDA_EXTENSION=1 uv pip install --no-build-isolation "torch-harmonics==0.8.0"
 RUN uv pip install "tensorly>=0.8.1" "tensorly-torch>=0.4.0" "torchinfo>=1.8" "webdataset>=0.2"
 # Install Makani via direct URL
-RUN uv pip install --no-deps "git+https://github.com/NVIDIA/makani.git@v0.2.1#egg=makani"
+# RUN uv pip install --no-deps "git+https://github.com/NVIDIA/makani.git@v0.2.1#egg=makani"
 
 # Other CI-only specs (moto, scikit-image, etc.)
 RUN uv pip install "moto[s3]>=5.0.28"
@@ -260,7 +259,7 @@ RUN uv pip install "numpy-stl" "scikit-image>=0.24.0" "sparse-dot-mkl" "shapely"
 RUN uv pip install "multi-storage-client[boto3]>=0.33.0"
 
 # E2Grid install
-RUN uv pip install --no-deps --no-build-isolation "git+https://github.com/NVlabs/earth2grid.git@11dcf1b0787a7eb6a8497a3a5a5e1fdcc31232d3"
+# RUN uv pip install --no-deps --no-build-isolation "git+https://github.com/NVlabs/earth2grid.git@11dcf1b0787a7eb6a8497a3a5a5e1fdcc31232d3"
 
 # Uninstall the non-editable physicsnemo from builder
 RUN uv pip uninstall nvidia-physicsnemo
