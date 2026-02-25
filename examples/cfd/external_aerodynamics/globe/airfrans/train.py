@@ -325,9 +325,9 @@ def main(
         factor=0.5,
         patience=400,
         min_lr=learning_rate / 64,
-        threshold=0,
+        threshold=1e-3,
     )
-    scaler = torch.amp.GradScaler(device=device.type)
+    scaler = torch.amp.GradScaler(device=device.type, enabled=amp)
 
     ### [Checkpoint Save/Load]
     mlflow_run_id: str | None = None
@@ -687,7 +687,7 @@ def field_loss_fn(
     pred: Float[torch.Tensor, "n_points ..."],
     true: Float[torch.Tensor, "n_points ..."],
     error_scale: Float[torch.Tensor, ""],
-) -> Float[torch.Tensor, "n_points ..."]:
+) -> Float[torch.Tensor, " n_points"]:
     """Per-point Huber loss for GLOBE field predictions, with NaN masking.
 
     Computes the scaled error ``(pred - true) / error_scale``, masks out
