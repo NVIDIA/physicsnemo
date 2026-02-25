@@ -36,8 +36,8 @@ def make_sample(N: int = 5, T: int = 4, F: int = 2) -> SimSample:
     torch.manual_seed(0)
     coords = torch.randn(N, 3)
     features = torch.randn(N, F)
-    # create ground-truth future positions flattened: [N, (T-1)*3]
-    future = torch.randn(N, (T - 1) * 3)
+    # Ground-truth future positions: [N, T-1, 3] (rollout steps)
+    future = torch.randn(N, T - 1, 3)
 
     class DummyGraph:
         pass
@@ -118,7 +118,7 @@ def test_transolver_autoregressive_rollout_eval():
     model.eval()
 
     out = model.forward(sample=sample, data_stats=stats)
-    assert out.shape == (T - 1, N, 3)
+    assert out.shape == (N, T - 1, 3)
 
 
 def test_transolver_time_conditional_rollout_eval():
@@ -130,7 +130,7 @@ def test_transolver_time_conditional_rollout_eval():
     model.eval()
 
     out = model.forward(sample=sample, data_stats=stats)
-    assert out.shape == (T - 1, N, 3)
+    assert out.shape == (N, T - 1, 3)
 
 
 def test_transolver_one_step_rollout_eval():
@@ -144,7 +144,7 @@ def test_transolver_one_step_rollout_eval():
     model.eval()
 
     out = model.forward(sample=sample, data_stats=stats)
-    assert out.shape == (T - 1, N, 3)
+    assert out.shape == (N, T - 1, 3)
 
 
 def test_meshgraphnet_autoregressive_rollout_eval():
@@ -158,7 +158,7 @@ def test_meshgraphnet_autoregressive_rollout_eval():
     model.eval()
 
     out = model.forward(sample=sample, data_stats=stats)
-    assert out.shape == (T - 1, N, 3)
+    assert out.shape == (N, T - 1, 3)
 
 
 def test_meshgraphnet_time_conditional_rollout_eval():
@@ -170,7 +170,7 @@ def test_meshgraphnet_time_conditional_rollout_eval():
     model.eval()
 
     out = model.forward(sample=sample, data_stats=stats)
-    assert out.shape == (T - 1, N, 3)
+    assert out.shape == (N, T - 1, 3)
 
 
 def test_meshgraphnet_one_step_rollout_eval():
@@ -178,7 +178,7 @@ def test_meshgraphnet_one_step_rollout_eval():
     # allow zero features
     torch.manual_seed(0)
     coords = torch.randn(N, 3)
-    future = torch.randn(N, (T - 1) * 3)
+    future = torch.randn(N, T - 1, 3)
 
     class DummyGraph:
         pass
@@ -196,7 +196,7 @@ def test_meshgraphnet_one_step_rollout_eval():
     model.eval()
 
     out = model.forward(sample=sample, data_stats=stats)
-    assert out.shape == (T - 1, N, 3)
+    assert out.shape == (N, T - 1, 3)
 
 
 def test_figconvunet_time_conditional_rollout_eval():
@@ -208,7 +208,7 @@ def test_figconvunet_time_conditional_rollout_eval():
     model.eval()
 
     out = model.forward(sample=sample, data_stats=stats)
-    assert out.shape == (T - 1, N, 3)
+    assert out.shape == (N, T - 1, 3)
 
 
 def test_figconvunet_one_step_rollout_eval():
@@ -222,7 +222,7 @@ def test_figconvunet_one_step_rollout_eval():
     model.eval()
 
     out = model.forward(sample=sample, data_stats=stats)
-    assert out.shape == (T - 1, N, 3)
+    assert out.shape == (N, T - 1, 3)
 
 
 def test_figconvunet_autoregressive_rollout_eval():
@@ -236,4 +236,4 @@ def test_figconvunet_autoregressive_rollout_eval():
     model.eval()
 
     out = model.forward(sample=sample, data_stats=stats)
-    assert out.shape == (T - 1, N, 3)
+    assert out.shape == (N, T - 1, 3)
