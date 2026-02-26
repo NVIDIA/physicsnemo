@@ -59,11 +59,10 @@ uv sync --inexact --compile-bytecode --extra "${CUDA_EXTRA}" --extra mesh-extras
 uv pip install -r requirements.txt
 
 ### [Launch Training]
-# torchrun's --signals-to-handle makes it catch SIGUSR1 and forward it to
-# each worker's process group.  uv forwards signals transparently.
 # The SBATCH --signal=B:USR1@120 directive sends SIGUSR1 to this script
-# 120 seconds before the time limit; the trap below relays it to the child.
-TORCHRUN_SIGNALS="SIGTERM,SIGINT,SIGHUP,SIGQUIT,SIGUSR1"
+# 120 seconds before the time limit.  The trap below writes a sentinel file
+# that the training loop polls each epoch
+rm -f "$OUTPUT_DIR/SHUTDOWN"
 
 if [ "${SLURM_NNODES:-1}" -gt 1 ]; then
     echo "Running multi-node training..."
@@ -72,7 +71,6 @@ if [ "${SLURM_NNODES:-1}" -gt 1 ]; then
     echo "Head node: $head_node"
     echo "Head node IP: $head_node_ip"
     srun uv run --no-sync torchrun \
-      --signals-to-handle="$TORCHRUN_SIGNALS" \
       --nnodes $SLURM_NNODES \
       --nproc-per-node $NUM_GPUS_PER_NODE \
       --rdzv_id $RANDOM \
@@ -83,12 +81,11 @@ if [ "${SLURM_NNODES:-1}" -gt 1 ]; then
 else
     echo "Running single-node training..."
     uv run --no-sync torchrun \
-      --signals-to-handle="$TORCHRUN_SIGNALS" \
       --nproc-per-node $NUM_GPUS_PER_NODE \
       train.py \
       "${TRAIN_ARGS[@]}" &
 fi
 TRAIN_PID=$!
-trap 'kill -USR1 $TRAIN_PID 2>/dev/null' USR1
+trap 'touch "$OUTPUT_DIR/SHUTDOWN"' USR1
 wait $TRAIN_PID || true
 wait $TRAIN_PID 2>/dev/null
