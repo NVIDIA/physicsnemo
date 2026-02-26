@@ -47,11 +47,11 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from utilities import (
     disable_autotune_printing,
-    get_physicsnemo_pkg_info,
     log_hyperparameters,
     sanitize_metric_name,
 )
 
+from physicsnemo.core import get_physicsnemo_pkg_info
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.optim import CombinedOptimizer

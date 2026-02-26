@@ -21,17 +21,14 @@ Contains helpers for hyperparameter logging and MLflow metric sanitization.
 
 import inspect
 import logging
-from functools import cache
 from pathlib import Path
 from typing import Any
 
-import git
 import numpy as np
 import torch
 import yaml
 from mlflow.tracking.fluent import active_run, log_params
 
-import physicsnemo
 from physicsnemo.utils.logging import PythonLogger
 
 logger = PythonLogger("globe.airfrans.utilities")
@@ -84,28 +81,6 @@ def sanitize_metric_name(name: str) -> str:
     while "  " in sanitized:
         sanitized = sanitized.replace("  ", " ")
     return sanitized.strip().replace(" ", "_")
-
-
-### [Package metadata] ####################################################
-
-
-@cache
-def get_physicsnemo_pkg_info() -> dict[str, str | None]:
-    """Return the PhysicsNeMo package version and current git commit hash.
-
-    Returns:
-        Dictionary with ``"version"`` (package version or ``None``) and
-        ``"git_hash"`` (hex SHA or ``None`` if not in a git repository).
-    """
-    try:
-        git_hash = git.Repo(search_parent_directories=True).head.commit.hexsha
-    except git.InvalidGitRepositoryError:
-        git_hash = None
-
-    return {
-        "version": getattr(physicsnemo, "__version__", None),
-        "git_hash": git_hash,
-    }
 
 
 ### [Hyperparameter logging] ##############################################
@@ -201,4 +176,6 @@ def log_hyperparameters(
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    from physicsnemo.core import get_physicsnemo_pkg_info
+
     logger.info(str(get_physicsnemo_pkg_info()))
