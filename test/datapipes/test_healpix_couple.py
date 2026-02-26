@@ -835,6 +835,7 @@ def test_CoupledTimeSeriesDataset_get(
 
 
 @requires_module("omegaconf")
+@requires_module("dask")
 @requires_module("netCDF4")
 @requires_module("xarray")
 def test_CoupledTimeSeriesDataModule_initialization(

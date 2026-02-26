@@ -129,8 +129,17 @@ def from_pyvista(
 
     ### Preprocess mesh based on manifold dimension
     if manifold_dim == 2:
-        # Ensure all faces are triangles
-        if not pyvista_mesh.is_all_triangles:
+        if isinstance(pyvista_mesh, pv.PolyData):
+            all_triangles = pyvista_mesh.is_all_triangles
+        elif isinstance(pyvista_mesh, pv.UnstructuredGrid):
+            all_triangles = set(pyvista_mesh.cells_dict.keys()) == {
+                pv.CellType.TRIANGLE
+            }
+        else:
+            raise NotImplementedError(
+                f"Only PolyData and UnstructuredGrid are supported for manifold dimension 2, got {type(pyvista_mesh)=}."
+            )
+        if not all_triangles:
             pyvista_mesh = pyvista_mesh.triangulate()
 
     elif manifold_dim == 3:
@@ -142,7 +151,7 @@ def from_pyvista(
 
         def is_all_tetra(pv_mesh) -> bool:
             """Check if mesh contains only tetrahedral cells."""
-            return list(pv_mesh.cells_dict.keys()) == [pv.CellType.TETRA]
+            return set(pv_mesh.cells_dict.keys()) == {pv.CellType.TETRA}
 
         if not is_all_tetra(pyvista_mesh):
             pyvista_mesh = pyvista_mesh.tessellate(max_n_subdivide=1)
@@ -228,10 +237,16 @@ def from_pyvista(
                     cells = torch.empty((0, 2), dtype=torch.long)
 
     elif manifold_dim == 2:
-        # Triangular cells - use regular_faces property
-        # After triangulation, regular_faces returns n_cells × 3 array
-        regular_faces = pyvista_mesh.regular_faces
-        cells = torch.from_numpy(regular_faces).long()
+        # After triangulation, extract the (n_cells, 3) connectivity array
+        if isinstance(pyvista_mesh, pv.PolyData):
+            tri_faces = pyvista_mesh.regular_faces
+        elif isinstance(pyvista_mesh, pv.UnstructuredGrid):
+            tri_faces = pyvista_mesh.cells_dict[pv.CellType.TRIANGLE]
+        else:
+            raise NotImplementedError(
+                f"Only PolyData and UnstructuredGrid are supported for manifold dimension 2, got {type(pyvista_mesh)=}."
+            )
+        cells = torch.from_numpy(tri_faces).long()
 
     elif manifold_dim == 3:
         # Tetrahedral cells - extract from cells

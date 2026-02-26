@@ -16,24 +16,25 @@
 
 # ┌───────────────────────────────────────────┐
 # │                   Data                    │
-# └───────────────────────────────────────────┘  
+# └───────────────────────────────────────────┘
 
-raw_data_dir:  "/code/datasets/gm_crash/train"  # TODO change
-raw_data_dir_validation:  "/code/datasets/gm_crash/validation"  
-max_workers_preprocessing: 64  # Maximum parallel workers
+raw_data_dir: ???               # Required: set via experiment config
+raw_data_dir_validation: ???    # Required: set via experiment config
+global_features_filepath: null  # Optional: path to global features JSON
+max_workers_preprocessing: 64   # Maximum parallel workers
 
 # ┌───────────────────────────────────────────┐
 # │                 Training                  │
-# └───────────────────────────────────────────┘  
+# └───────────────────────────────────────────┘
 
-num_time_steps: 14
-num_training_samples: 8
-num_validation_samples: 8
+num_time_steps: ???             # Required: set via experiment config
+num_training_samples: ???       # Required: set via experiment config
+num_validation_samples: 0       # 0 disables validation; override per experiment
 start_lr: 0.0001
 end_lr: 0.0000003
 epochs: 10000
 validation_freq: 10
-save_chckpoint_freq: 10
+save_checkpoint_freq: 10
 
 # ┌───────────────────────────────────────────┐
 # │        Performance Optimization           │

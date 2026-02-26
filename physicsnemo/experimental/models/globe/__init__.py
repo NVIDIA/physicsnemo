@@ -14,20 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-hydra:
-  job:
-    chdir: True
-  run:
-    dir: ./outputs/
+from physicsnemo.experimental.models.globe.field_kernel import (
+    ChunkedKernel,
+    Kernel,
+    MultiscaleKernel,
+)
+from physicsnemo.experimental.models.globe.model import GLOBE
 
-experiment_name: "Unified-Training"
-experiment_desc: "unified training recipe for crash models"
-run_desc: "unified training recipe for crash models"
-
-defaults:
-  - reader: vtp # Options are: vtp, d3plot, zarr
-  - datapipe: point_cloud   # will be overridden by model configs
-  - model: transolver_autoregressive_rollout_training
-  - training: default
-  - inference: default
-  - _self_
+__all__ = [
+    "GLOBE",
+    "Kernel",
+    "ChunkedKernel",
+    "MultiscaleKernel",
+]

@@ -408,7 +408,7 @@ class TestExtrude:
         ### Create mesh with global data
         points = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
-        global_data = TensorDict({"timestamp": torch.tensor(12345)}, batch_size=[])
+        global_data = TensorDict({"timestamp": torch.tensor(12345)})
         mesh = Mesh(points=points, cells=cells, global_data=global_data)
 
         ### Extrude
@@ -694,7 +694,7 @@ class TestEmbed:
         ### Create mesh with global data
         points = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
-        global_data = TensorDict({"simulation_time": torch.tensor(1.5)}, batch_size=[])
+        global_data = TensorDict({"simulation_time": torch.tensor(1.5)})
         mesh = Mesh(points=points, cells=cells, global_data=global_data)
 
         ### Embed in 3D
@@ -1007,7 +1007,7 @@ class TestProject:
             {"temperature": torch.tensor([300.0, 400.0])}, batch_size=[2]
         )
         cell_data = TensorDict({"region_id": torch.tensor([42])}, batch_size=[1])
-        global_data = TensorDict({"time": torch.tensor(1.5)}, batch_size=[])
+        global_data = TensorDict({"time": torch.tensor(1.5)})
         mesh = Mesh(
             points=points,
             cells=cells,
@@ -1232,3 +1232,131 @@ class TestProject:
 
         with pytest.raises(ValueError, match="keep_dims contains index -1"):
             project(mesh, keep_dims=[-1, 0])
+
+    # --- Data transformation tests ---
+
+    def test_project_transform_cell_data_vectors(self):
+        """Test that 3D vector cell data is projected to 2D with transform_cell_data."""
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        cell_data = TensorDict(
+            {"velocity": torch.tensor([[3.0, 4.0, 5.0]])},
+            batch_size=[1],
+        )
+        mesh = Mesh(points=points, cells=cells, cell_data=cell_data)
+
+        result = project(mesh, keep_dims=[0, 1], transform_cell_data=True)
+
+        ### Vector should be projected: keep x and y, drop z
+        assert result.cell_data["velocity"].shape == (1, 2)
+        assert torch.allclose(result.cell_data["velocity"], torch.tensor([[3.0, 4.0]]))
+
+    def test_project_transform_point_data_vectors(self):
+        """Test that 3D vector point data is projected to 2D with transform_point_data."""
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        point_data = TensorDict(
+            {"displacement": torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])},
+            batch_size=[2],
+        )
+        mesh = Mesh(points=points, cells=cells, point_data=point_data)
+
+        result = project(mesh, keep_dims=[0, 2], transform_point_data=True)
+
+        ### Vector should keep dims 0 and 2 (x and z)
+        assert result.point_data["displacement"].shape == (2, 2)
+        expected = torch.tensor([[1.0, 3.0], [4.0, 6.0]])
+        assert torch.allclose(result.point_data["displacement"], expected)
+
+    def test_project_transform_scalars_invariant(self):
+        """Test that scalar fields are unchanged even when transform flags are True."""
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        cell_data = TensorDict(
+            {
+                "pressure": torch.tensor([42.0]),
+                "velocity": torch.tensor([[1.0, 2.0, 3.0]]),
+            },
+            batch_size=[1],
+        )
+        mesh = Mesh(points=points, cells=cells, cell_data=cell_data)
+
+        result = project(mesh, target_n_spatial_dims=2, transform_cell_data=True)
+
+        ### Scalar should be unchanged
+        assert torch.allclose(result.cell_data["pressure"], torch.tensor([42.0]))
+        ### Vector should be projected
+        assert result.cell_data["velocity"].shape == (1, 2)
+
+    def test_project_transform_rank2_tensors(self):
+        """Test that rank-2 tensor fields (e.g., stress) are correctly projected."""
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        # A symmetric 3x3 "stress" tensor
+        stress = torch.tensor([[[1.0, 2.0, 3.0], [2.0, 4.0, 5.0], [3.0, 5.0, 6.0]]])
+        cell_data = TensorDict({"stress": stress}, batch_size=[1])
+        mesh = Mesh(points=points, cells=cells, cell_data=cell_data)
+
+        result = project(mesh, target_n_spatial_dims=2, transform_cell_data=True)
+
+        ### Rank-2 tensor should be projected: (1, 3, 3) -> (1, 2, 2)
+        assert result.cell_data["stress"].shape == (1, 2, 2)
+        # M @ T @ M^T where M = [[1,0,0],[0,1,0]] extracts the top-left 2x2 block
+        expected = torch.tensor([[[1.0, 2.0], [2.0, 4.0]]])
+        assert torch.allclose(result.cell_data["stress"], expected)
+
+    def test_project_no_transform_by_default(self):
+        """Test that vector data is NOT projected when flags are False (default)."""
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        cell_data = TensorDict(
+            {"velocity": torch.tensor([[1.0, 2.0, 3.0]])},
+            batch_size=[1],
+        )
+        mesh = Mesh(points=points, cells=cells, cell_data=cell_data)
+
+        result = project(mesh, target_n_spatial_dims=2)
+
+        ### Vector should be preserved as-is (still 3D) when flag is off
+        assert result.cell_data["velocity"].shape == (1, 3)
+        assert torch.allclose(
+            result.cell_data["velocity"], torch.tensor([[1.0, 2.0, 3.0]])
+        )
+
+    def test_project_transform_global_data(self):
+        """Test that global vector data is projected with transform_global_data."""
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        global_data = TensorDict(
+            {"freestream_dir": torch.tensor([0.6, 0.8, 0.0])},
+            batch_size=[],
+        )
+        mesh = Mesh(points=points, cells=cells, global_data=global_data)
+
+        result = project(mesh, target_n_spatial_dims=2, transform_global_data=True)
+
+        ### Global vector should be projected
+        assert result.global_data["freestream_dir"].shape == (2,)
+        assert torch.allclose(
+            result.global_data["freestream_dir"], torch.tensor([0.6, 0.8])
+        )
+
+        ### Original mesh's global_data should be unmodified
+        assert mesh.global_data["freestream_dir"].shape == (3,)
+
+    def test_project_transform_with_keep_dims_reorder(self):
+        """Test that data transformation respects keep_dims ordering."""
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        cell_data = TensorDict(
+            {"velocity": torch.tensor([[10.0, 20.0, 30.0]])},
+            batch_size=[1],
+        )
+        mesh = Mesh(points=points, cells=cells, cell_data=cell_data)
+
+        ### keep_dims=[2, 0] should give [z, x]
+        result = project(mesh, keep_dims=[2, 0], transform_cell_data=True)
+
+        assert result.cell_data["velocity"].shape == (1, 2)
+        expected = torch.tensor([[30.0, 10.0]])
+        assert torch.allclose(result.cell_data["velocity"], expected)

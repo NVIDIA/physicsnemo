@@ -88,7 +88,7 @@ containers=
    physicsnemo.models
 layers = 
    mesh_reduced
-   afno | dlwp | dlwp_healpix | dit |domino | dpot | fengwu | figconvnet | fno | graphcast | meshgraphnet | pangu | pix2pix | rnn |  srrn | swinvrnn | topodiff | transolver  | vfgn | diffusion_unets
+   afno | dlwp | dlwp_healpix | dit | domino | dpot | fengwu | figconvnet | fno | graphcast | meshgraphnet | pangu | pix2pix | rnn |  srrn | swinvrnn | topodiff | transolver  | vfgn | diffusion_unets
    unet
 
 [importlinter:contract:physicsnemo-diffusion]

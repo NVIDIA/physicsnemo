@@ -113,6 +113,9 @@ physicsnemo/models/figconvnet @coreyjadams
 # FNO
 # NEEDSOWNER
 
+# GLOBE
+physicsnemo/models/globe @peterdsharpe
+
 # GNN layers, mesh graphnet, graphcast
 physicsnemo/models/gnn_layers @mnabian
 physicsnemo/models/meshgraphnet @mnabian
@@ -143,6 +146,9 @@ physicsnemo/models/vfgn @mnabian
 
 # EXAMPLE SPECIFIC OWNERSHIP
 
+# GLOBE
+examples/cfd/external_aerodynamics/globe @peterdsharpe
+
 # corrdiff
 examples/weather/corrdiff @CharlelieLrt
 examples/active_learning @laserkelvin @dallasfoster
@@ -155,6 +161,9 @@ test/metrics/diffusion @CharlelieLrt
 test/utils/generative @CharlelieLrt
 test/utils/corrdiff @CharlelieLrt
 test/active_learning @laserkelvin @dallasfoster
+
+# GLOBE
+test/models/globe @peterdsharpe
 
 # Mesh
 test/mesh @peterdsharpe

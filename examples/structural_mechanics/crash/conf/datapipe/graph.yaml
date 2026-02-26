@@ -17,8 +17,10 @@
 _target_: datapipe.CrashGraphDataset
 _convert_: all
 data_dir: ${training.raw_data_dir}
-name: crash_train
-split: train
+global_features_filepath: ${training.global_features_filepath}
 num_samples: ${training.num_training_samples}
 num_steps: ${training.num_time_steps}
-features: [thickness]
+static_features: [thickness]  # or [] for no features; override per experiment
+dynamic_features: []
+dynamic_targets: []    # Override per experiment (e.g. [effective_plastic_strain, stress_vm])
+global_features: null  # Override per experiment (e.g. [velocity_x, thickness_scale])

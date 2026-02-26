@@ -14,7 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: d3plot_reader.Reader
+_target_: rollout.GeoTransolverOneShotTraining
 _convert_: all
-wall_node_disp_threshold: 1.0
 
+functional_dim: 3
+out_dim: 250
+geometry_dim: 3
+global_dim: 3
+slice_num: 128
+n_layers: 6
+use_te: false
+time_input: false
+include_local_features: true
+
+### Rollout parameters ###
+num_time_steps: ${training.num_time_steps}
+dt: 5e-3

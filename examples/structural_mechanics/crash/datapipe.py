@@ -15,14 +15,17 @@
 # limitations under the License.
 
 import os
+import re
 import numpy as np
 import torch
 from typing import Any, Callable, Optional
 
-from torch_geometric.data import Data
-from torch_geometric.utils import coalesce, add_self_loops
-
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.gnn.utils import load_json, save_json
+
+# Lazy imports for graph datapipe (PyG only loaded when CrashGraphDataset is used)
+_pyg_data = OptionalImport("torch_geometric.data")
+_pyg_utils = OptionalImport("torch_geometric.utils")
 from physicsnemo.utils.logging import PythonLogger
 
 STATS_DIRNAME = "stats"
@@ -41,7 +44,8 @@ class SimSample:
     node_features: dict[str, Tensor] with at least:
       - 'coords': FloatTensor [N, 3]
       - any other feature keys configured, e.g., 'thickness': [N, Fk]
-    node_target   : FloatTensor [N, Dout] or [N, (T-1)*3] depending on task
+    node_target   : FloatTensor [N, T, Fo] where T=rollout steps, Fo=3+sum(C_k)
+    target_series : Optional[dict[str, Tensor]] mapping name -> [T, N] or [T, N, C]
     graph         : PyG Data or None
     """
 
@@ -49,7 +53,9 @@ class SimSample:
         self,
         node_features: dict[str, torch.Tensor],
         node_target: torch.Tensor,
-        graph: Optional[Data] = None,
+        graph=None,
+        global_features: Optional[dict[str, torch.Tensor]] = None,
+        target_series: Optional[dict[str, torch.Tensor]] = None,
     ):
         assert isinstance(node_features, dict), "node_features must be a dict"
         assert "coords" in node_features, "node_features must contain 'coords'"
@@ -59,6 +65,8 @@ class SimSample:
         self.node_features = node_features
         self.node_target = node_target
         self.graph = graph  # PyG Data or None
+        self.global_features = global_features
+        self.target_series = target_series
 
     def to(self, device: torch.device):
         for k, v in self.node_features.items():
@@ -66,6 +74,10 @@ class SimSample:
         self.node_target = self.node_target.to(device)
         if self.graph is not None:
             self.graph = self.graph.to(device)
+        if self.global_features is not None:
+            self.global_features = {
+                k: v.to(device) for k, v in self.global_features.items()
+            }
         return self
 
     def is_graph(self) -> bool:
@@ -84,7 +96,17 @@ class SimSample:
             else tuple(self.node_target.shape[1:])
         )
         e = 0 if self.graph is None else self.graph.num_edges
-        return f"SimSample(N={n}, keys={list(self.node_features.keys())}, Din={din}, Dout={dout}, E={e})"
+        gf = (
+            ""
+            if self.global_features is None
+            else f", global_features={list(self.global_features.keys())}"
+        )
+        ts = (
+            ""
+            if self.target_series is None
+            else f", target_series={list(self.target_series.keys())}"
+        )
+        return f"SimSample(N={n}, keys={list(self.node_features.keys())}, Din={din}, Dout={dout}, E={e}{gf}{ts})"
 
 
 class CrashBaseDataset:
@@ -103,20 +125,28 @@ class CrashBaseDataset:
         name: str = "dataset",
         reader: Optional[Callable] = None,
         data_dir: Optional[str] = None,
+        global_features_filepath: Optional[str] = None,
+        global_features: Optional[list[str]] = None,
         split: str = "train",
         num_samples: int = 1000,
         num_steps: int = 400,
-        features: Optional[list[str]] = None,
+        static_features: Optional[list[str]] = None,
+        dynamic_features: Optional[list[str]] = None,
+        dynamic_targets: Optional[list[str]] = None,
         logger=None,
         dt: float = 5e-3,
     ):
         super().__init__()
         self.name = name
         self.data_dir = data_dir or "."
+        self.global_features_filepath = global_features_filepath
+        self.global_features_keys = global_features
         self.split = split
         self.num_samples = num_samples
         self.num_steps = num_steps
-        self.features = features
+        self.static_features = static_features if static_features is not None else []
+        self.dynamic_features = dynamic_features or []
+        self.dynamic_targets = dynamic_targets or []
         self.length = num_samples
         self.logger = logger or PythonLogger()
         self.dt = dt
@@ -125,8 +155,6 @@ class CrashBaseDataset:
             f"[{self.__class__.__name__}] Preparing the {split} dataset..."
         )
 
-        self.features = features or []
-
         # Prepare stats dir
         self._stats_dir = STATS_DIRNAME
         os.makedirs(STATS_DIRNAME, exist_ok=True)
@@ -134,12 +162,53 @@ class CrashBaseDataset:
         # Load raw records via provided reader callable (Hydra can pass a class/callable)
         if reader is None:
             raise ValueError("Data reader function is not specified.")
-        self.srcs, self.dsts, point_data = reader(
+
+        # Require global_features_filepath when global_features keys are configured
+        if global_features and len(global_features) > 0:
+            if (
+                not global_features_filepath
+                or not str(global_features_filepath).strip()
+            ):
+                raise ValueError(
+                    "datapipe.global_features is configured but training.global_features_filepath "
+                    "is not set or is empty. Set it via config or CLI, e.g. "
+                    "training.global_features_filepath=/path/to/global_features.json"
+                )
+            if str(global_features_filepath).strip() == "???":
+                raise ValueError(
+                    "datapipe.global_features is configured but training.global_features_filepath "
+                    "is unresolved (???). Set it via config or CLI, e.g. "
+                    "training.global_features_filepath=/path/to/global_features.json"
+                )
+
+        self.srcs, self.dsts, point_data, global_features = reader(
             data_dir=self.data_dir,
             num_samples=num_samples,
             split=split,
+            global_features_filepath=self.global_features_filepath,
             logger=self.logger,
         )
+        # Check if any global features are present
+        # global_features is a list of dictionaries, each containing the global features for a sample
+        has_global = global_features and any(gf for gf in global_features)
+        if not has_global:
+            self.global_features = None
+        else:
+            if self.global_features_keys is None:
+                raise ValueError(
+                    "global_features_filepath is set, but no global_features keys were specified"
+                )
+
+            for i, gf in enumerate(global_features):
+                missing = set(self.global_features_keys) - gf.keys()
+                if missing:
+                    raise KeyError(
+                        f"Missing global features {missing} "
+                        f"for sample {i}. Available: {list(gf.keys())}"
+                    )
+                global_features[i] = {k: gf[k] for k in self.global_features_keys}
+
+            self.global_features = global_features
 
         # Storage for per-sample tensors
         self.mesh_pos_seq: list[torch.Tensor] = []  # [T,N,3]
@@ -147,6 +216,7 @@ class CrashBaseDataset:
         self._feature_slices: dict[
             str, tuple[int, int]
         ] = {}  # per-sample feature slices
+        self.target_series_data: list[dict[str, torch.Tensor]] = []
 
         for rec in point_data:
             # Coordinates
@@ -160,13 +230,24 @@ class CrashBaseDataset:
 
             # Features: concatenate requested keys if present; allow empty
             parts = []
-            for k in self.features:
-                if k not in rec:
-                    raise KeyError(f"Missing feature key '{k}' in reader record")
-                arr = rec[k]
+            # Static features: use as-is (N,[C])
+            for k in self.static_features:
+                arr = self._get_static_feature(rec, k)
                 if arr.ndim == 1:
                     arr = arr[:, None]
                 parts.append(arr)
+            # Dynamic features: collect series up to num_steps, flatten to [N, T*C]
+            T = coords_np.shape[0]
+            for k in self.dynamic_features:
+                dyn = self._get_dynamic_feature(rec, k, T)
+                # dyn: [T,N] or [T,N,C] -> [N, T*C]
+                if dyn.ndim == 2:
+                    dyn_flat = dyn.transpose(1, 0)  # [N,T]
+                else:
+                    dyn_flat = dyn.transpose(1, 0, 2).reshape(
+                        dyn.shape[1], -1
+                    )  # [N,T*C]
+                parts.append(dyn_flat)
 
             feats_np = (
                 np.concatenate(parts, axis=-1)
@@ -180,14 +261,32 @@ class CrashBaseDataset:
             # build slice map on first record to make future slicing trivial
             if len(self._feature_slices) == 0:
                 start = 0
-                for k in self.features:
-                    width = rec[k].shape[1] if rec[k].ndim > 1 else 1
+                for k in self.static_features:
+                    arr_k = self._get_static_feature(rec, k)
+                    width = arr_k.shape[1] if arr_k.ndim > 1 else 1
+                    self._feature_slices[k] = (start, start + width)
+                    start += width
+                for k in self.dynamic_features:
+                    dyn_k = self._get_dynamic_feature(rec, k, T)
+                    width = (
+                        dyn_k.shape[0]
+                        if dyn_k.ndim == 2
+                        else dyn_k.shape[0] * dyn_k.shape[2]
+                    )
+                    # After flattening to [N, width]
                     self._feature_slices[k] = (start, start + width)
                     start += width
 
             self.node_features_data.append(
                 torch.as_tensor(feats_np, dtype=torch.float32)
             )
+
+            # Collect dynamic target series (kept as [T,N] or [T,N,C])
+            target_series_rec: dict[str, torch.Tensor] = {}
+            for k in self.dynamic_targets:
+                dyn = self._get_dynamic_feature(rec, k, T)  # [T,N] or [T,N,C]
+                target_series_rec[k] = torch.as_tensor(dyn, dtype=torch.float32)
+            self.target_series_data.append(target_series_rec)
 
         # Stats (node + generic features)
         node_stats_path = os.path.join(self._stats_dir, NODE_STATS_FILE)
@@ -234,16 +333,22 @@ class CrashBaseDataset:
         T, N, _ = self.mesh_pos_seq[idx].shape
         F = self.node_features_data[idx].shape[1]
         Din = 3 + F
-        Dout = (T - 1) * 3
+        Fo = 3  # position dims per timestep
+        if len(self.dynamic_targets) > 0:
+            ts_rec = self.target_series_data[idx]
+            for k in self.dynamic_targets:
+                series = ts_rec[k]
+                Fo += 1 if series.ndim == 2 else series.shape[-1]
+        Dout = (T - 1) * Fo
         return Din, Dout
 
     # Common x/y construction used by both datasets
     def build_xy(self, idx: int):
         """
-        x: dict with two keys:
+        x: dict with:
             - 'coords': [N, 3] at t0
-            - 'features': [N, F] concatenated in the order given by self.features
-        y: [N, (T-1)*3]
+            - 'features': [N, F] concatenated (static + flattened dynamic)
+        y: [N, T, Fo] where T=rollout steps, Fo=3+sum(C_k) per timestep
         """
         assert 0 <= idx < self.num_samples, f"Index {idx} out of range"
         pos_seq = self.mesh_pos_seq[idx]  # [T,N,3]
@@ -254,15 +359,37 @@ class CrashBaseDataset:
         pos_t0 = pos_seq[0]  # [N,3]
         x = {"coords": pos_t0, "features": feats}
 
-        # Flatten all future positions along feature dim
-        y = pos_seq[1:].transpose(0, 1).flatten(start_dim=1)  # [N,(T-1)*3]
+        # pos_seq[1:]: [T-1, N, 3]
+        pos_rollout = pos_seq[1:]  # [T-1, N, 3]
 
-        _, Dout = self._xy_shapes(idx)
+        if len(self.dynamic_targets) > 0:
+            # Collect dynamic targets [T-1, N, C_k] for each target
+            ts_rec = self.target_series_data[idx]
+            dyn_list = []
+            for k in self.dynamic_targets:
+                if k not in ts_rec:
+                    raise KeyError(f"Missing dynamic target '{k}' for sample {idx}")
+                series = ts_rec[k]  # Tensor [T,N] or [T,N,C]
+                if series.ndim == 2:
+                    series = series.unsqueeze(-1)  # [T,N,1]
+                # keep steps 1..T-1 to match rollout_steps
+                series_rollout = series[1:]  # [T-1,N,C]
+                dyn_list.append(series_rollout)
+
+            # Concatenate along feature dim per timestep: [T-1, N, 3+sum(C_k)]
+            y_per_t = torch.cat([pos_rollout] + dyn_list, dim=-1)  # [T-1, N, Fo]
+        else:
+            y_per_t = pos_rollout  # [T-1, N, 3]
+
+        # [N, T, Fo] where T = rollout steps
+        y = y_per_t.transpose(0, 1)  # [N, T-1, Fo]
+
+        T_out, Fo = y.shape[1], y.shape[2]
         assert x["coords"].shape == (N, 3) and x["features"].shape == (N, F), (
             f"coords shape {x['coords'].shape}, features shape {x['features'].shape}, expected (N,3)/(N,{F})"
         )
-        assert y.shape == (N, Dout), (
-            f"y shape mismatch: expected {(N, Dout)}, got {y.shape}"
+        assert y.shape == (N, T_out, Fo), (
+            f"target shape {y.shape} does not match expected (N={N}, T={T_out}, Fo={Fo})"
         )
         return x, y
 
@@ -350,13 +477,75 @@ class CrashBaseDataset:
         )
         return (invar - mu.view(1, 1, -1)) / (std.view(1, 1, -1) + EPS)
 
+    @staticmethod
+    def _get_static_feature(rec: dict, key: str) -> np.ndarray:
+        """
+        Fetch a per-point static feature from the reader record.
+        Supports:
+          - direct top-level fields: rec[key]
+          - rec['point_data'][key]
+        """
+        # Direct field
+        if key in rec:
+            return np.asarray(rec[key])
+
+        # From point_data dict
+        pd = rec.get("point_data", {})
+        if key in pd:
+            return np.asarray(pd[key])
+
+        raise KeyError(
+            f"Missing static feature key '{key}' in reader record (checked top-level and point_data)"
+        )
+
+    @staticmethod
+    def _get_dynamic_feature(rec: dict, key: str, T: int) -> np.ndarray:
+        """
+        Fetch a per-point dynamic feature time series from the reader record.
+        Expects point_data keys like '<key>_t...' per timestep.
+        Returns array of shape [T, N] or [T, N, C]; pads by repeating last frame if fewer than T.
+        """
+        pd = rec.get("point_data", {})
+        prefix = f"{key}_t"
+        names = [name for name in pd.keys() if name.startswith(prefix)]
+        if not names:
+            raise KeyError(f"Missing dynamic feature series for '{key}' in point_data")
+
+        def natural_key(name):
+            return [
+                int(s) if s.isdigit() else s.lower()
+                for s in re.findall(r"\d+|\D+", name)
+            ]
+
+        names = sorted(names, key=natural_key)
+        series = [np.asarray(pd[n]) for n in names]
+        # Normalize shapes to [N,C]
+        series = [x[:, None] if x.ndim == 1 else x for x in series]
+        N = series[0].shape[0]
+        C = series[0].shape[1]
+        for x in series:
+            assert x.shape[0] == N and x.shape[1] == C, (
+                f"Inconsistent shapes in dynamic feature '{key}': "
+                f"expected (N={N},C={C}), got {x.shape}"
+            )
+        # Stack to [T', N, C]
+        arr = np.stack(series, axis=0)
+        Tprime = arr.shape[0]
+        if Tprime >= T:
+            arr = arr[:T]
+        else:
+            # pad by repeating last frame
+            pad = np.repeat(arr[-1:], repeats=(T - Tprime), axis=0)
+            arr = np.concatenate([arr, pad], axis=0)
+        return arr
+
 
 class CrashGraphDataset(CrashBaseDataset):
     """
     Graph version:
       - Builds PyG graphs (create_graph + add_self_loop)
       - Computes/loads edge stats and normalizes edge features
-      - Returns SimSample with edge_index/edge_features
+      - Returns SimSample with graph, global_features, and target_series (parity with point-cloud).
     """
 
     def __init__(self, *args, **kwargs):
@@ -370,7 +559,8 @@ class CrashGraphDataset(CrashBaseDataset):
             _dsts.append(np.asarray(dst)[mask])
         self.srcs, self.dsts = _srcs, _dsts
 
-        self.graphs: list[Data] = []
+        Data = _pyg_data.Data
+        self.graphs = []
         for i in range(self.num_samples):
             g = self.create_graph(
                 self.srcs[i],
@@ -412,15 +602,23 @@ class CrashGraphDataset(CrashBaseDataset):
     def __getitem__(self, idx: int):
         assert 0 <= idx < self.num_samples, f"Index {idx} out of range"
         g = self.graphs[idx]
-        x, y = self.build_xy(idx)  # [N,3+F], [N,(T-1)*3]
-
+        x, y = self.build_xy(idx)
+        if self.global_features is not None:
+            gf = {
+                k: torch.tensor(v, dtype=torch.float32)
+                for k, v in self.global_features[idx].items()
+            }
+        else:
+            gf = None
         return SimSample(
             node_features=x,
             node_target=y,
             graph=g,
+            global_features=gf,
+            target_series=self.target_series_data[idx],
         )
 
-    # ----- graph-specific helpers -----
+    # ----- graph-specific helpers (use _pyg_data / _pyg_utils so PyG loads only when used) -----
     @staticmethod
     def create_graph(src, dst, num_nodes: int, dtype=torch.long):
         src = torch.as_tensor(src, dtype=dtype)
@@ -428,13 +626,13 @@ class CrashGraphDataset(CrashBaseDataset):
         edge_index = torch.stack(
             [torch.cat([src, dst]), torch.cat([dst, src])], dim=0
         )  # [2, E]
-        edge_index, _ = coalesce(edge_index, None, num_nodes=num_nodes)
-        edge_index, _ = add_self_loops(edge_index, num_nodes=num_nodes)
-        return Data(edge_index=edge_index, num_nodes=num_nodes)
+        edge_index, _ = _pyg_utils.coalesce(edge_index, None, num_nodes=num_nodes)
+        edge_index, _ = _pyg_utils.add_self_loops(edge_index, num_nodes=num_nodes)
+        return _pyg_data.Data(edge_index=edge_index, num_nodes=num_nodes)
 
     @staticmethod
-    def add_edge_features(data: Data, pos: torch.Tensor) -> Data:
-        # pos: [N,3] (denormalized)
+    def add_edge_features(data, pos: torch.Tensor):
+        # data: PyG Data; pos: [N,3]
         row, col = data.edge_index
         pos_t = torch.as_tensor(pos, dtype=torch.float32)
         disp = pos_t[row] - pos_t[col]  # [E,3]
@@ -484,7 +682,19 @@ class CrashPointCloudDataset(CrashBaseDataset):
     def __getitem__(self, idx: int):
         assert 0 <= idx < self.num_samples, f"Index {idx} out of range"
         x, y = self.build_xy(idx)
-        return SimSample(node_features=x, node_target=y)
+        if self.global_features is not None:
+            gf = {
+                k: torch.tensor(v, dtype=torch.float32)
+                for k, v in self.global_features[idx].items()
+            }
+        else:
+            gf = None
+        return SimSample(
+            node_features=x,
+            node_target=y,
+            global_features=gf,
+            target_series=self.target_series_data[idx],
+        )
 
 
 def simsample_collate(batch: list[SimSample]) -> list[SimSample]:

@@ -147,6 +147,75 @@ def test_mlp_gradient_flow(device):
     assert input_tensor.grad.shape == input_tensor.shape
 
 
+def test_mlp_bias_false(device):
+    """Test that bias=False removes all bias parameters."""
+    target_device = torch.device(device)
+    model = Mlp(in_features=10, hidden_features=20, out_features=5, bias=False).to(
+        target_device
+    )
+    for name, param in model.named_parameters():
+        assert "bias" not in name, f"Unexpected bias parameter: {name}"
+
+    output = model(torch.randn(2, 10, device=target_device))
+    assert output.shape == torch.Size([2, 5])
+
+
+def test_mlp_batchnorm(device):
+    """Test that use_batchnorm inserts BatchNorm1d layers."""
+    target_device = torch.device(device)
+    model = Mlp(
+        in_features=10, hidden_features=20, out_features=5, use_batchnorm=True
+    ).to(target_device)
+
+    bn_count = sum(1 for m in model.modules() if isinstance(m, torch.nn.BatchNorm1d))
+    # One BN per hidden layer + one for the output layer = 2
+    assert bn_count == 2
+
+    output = model(torch.randn(4, 10, device=target_device))
+    assert output.shape == torch.Size([4, 5])
+
+
+def test_mlp_spectral_norm(device):
+    """Test that spectral_norm wraps linear layers with spectral normalization."""
+    target_device = torch.device(device)
+    model = Mlp(
+        in_features=10, hidden_features=20, out_features=5, spectral_norm=True
+    ).to(target_device)
+
+    # Spectral-normed layers have a 'parametrizations' attribute
+    sn_count = sum(
+        1
+        for m in model.modules()
+        if isinstance(m, torch.nn.Linear) and hasattr(m, "parametrizations")
+    )
+    # One per hidden layer + one for the output layer = 2
+    assert sn_count == 2
+
+    output = model(torch.randn(2, 10, device=target_device))
+    assert output.shape == torch.Size([2, 5])
+
+
+def test_mlp_multiple_hidden_with_features(device):
+    """Test explicit hidden_features list with multiple layers."""
+    target_device = torch.device(device)
+    model = Mlp(
+        in_features=10, hidden_features=[64, 32], out_features=3, act_layer="silu"
+    ).to(target_device)
+    output = model(torch.randn(5, 10, device=target_device))
+    assert output.shape == torch.Size([5, 3])
+
+
+def test_mlp_empty_hidden(device):
+    """Test that an empty hidden_features list creates a linear-only network."""
+    target_device = torch.device(device)
+    model = Mlp(in_features=10, hidden_features=[], out_features=5).to(target_device)
+    output = model(torch.randn(3, 10, device=target_device))
+    assert output.shape == torch.Size([3, 5])
+
+    linear_count = sum(1 for m in model.modules() if isinstance(m, torch.nn.Linear))
+    assert linear_count == 1
+
+
 def test_transolver_mlp_checkpoint_compatibility():
     """Test that _TransolverMlp can load legacy checkpoint format."""
     from physicsnemo.models.transolver.transolver import _TransolverMlp
