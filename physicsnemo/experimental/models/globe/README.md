@@ -50,6 +50,7 @@ In addition:
   small feature tends to fall off as 1/r^2 in 3D and 1/r in 2D. Model is
   globally interacting but with provably-diminishing influence as a function of
   distance -- this describes many elliptic PDEs of industrial relevance.
+
 ## Other Notes
 
 - Notably, the model is *not* invariant with respect to normal-vector-flips of
