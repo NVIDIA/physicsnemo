@@ -1,0 +1,34 @@
+defaults:
+  - reader@reader: arrow
+  - transforms@gradients: gradients
+  - transforms@normals: normals
+  - transforms@freestream: freestream
+  - transforms@nondimensionalize: nondimensionalize
+  - transforms@forces: forces
+  - transforms@patch: patch
+  - _self_
+
+# Data paths (set via CLI overrides or environment)
+dataset_path: /Users/coreya/data/airfrans/huggingface  # used by reader=arrow
+data_dir: /Users/coreya/data/airfrans/Dataset          # used by reader=vtk
+
+# Dataset parameters
+task: full
+split: train
+device: cpu
+
+# Reader (populated from defaults)
+reader: {}
+
+# Dataset wrapping the reader + transforms
+dataset:
+  _target_: physicsnemo.datapipes.Dataset
+  device: ${device}
+  reader: ${reader}
+  transforms:
+    - ${gradients}
+    - ${normals}
+    - ${freestream}
+    - ${nondimensionalize}
+    - ${forces}
+    - ${patch}
