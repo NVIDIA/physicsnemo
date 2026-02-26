@@ -37,6 +37,7 @@ import torch
 from physicsnemo.core.filesystem import _download_cached, _get_fs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.registry import _ENTRYPOINT_TYPES, ModelRegistry
+from physicsnemo.core.version_check import get_physicsnemo_pkg_info
 
 # Used for saving checkpoints of nested modules
 _BASE_CKPT_PREFIX = "__physicsnemo.Module__"
@@ -549,20 +550,13 @@ class Module(torch.nn.Module):
             self._orig_mod.save(file_name, verbose)
             return
 
-        # Save the physicsnemo version and git hash (if available)
+        pkg_info = get_physicsnemo_pkg_info()
         metadata_info = {
-            "physicsnemo_version": importlib.metadata.version("nvidia-physicsnemo"),
+            "physicsnemo_version": pkg_info["version"],
             "mdlus_file_version": self.__model_checkpoint_version__,
         }
-
         if verbose:
-            import git
-
-            try:
-                repo = git.Repo(search_parent_directories=True)
-                metadata_info["git_hash"] = repo.head.object.hexsha
-            except git.InvalidGitRepositoryError:
-                metadata_info["git_hash"] = None
+            metadata_info["git_hash"] = pkg_info["git_hash"]
 
         # Copy self._args to avoid side effects
         _args = self._args.copy()
