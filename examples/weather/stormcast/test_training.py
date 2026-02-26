@@ -154,6 +154,9 @@ def test_training(
 
     train.main(cfg_diffusion)
 
+    if dist.world_size > 1:
+        torch.distributed.barrier()
+
     net_cls = "EDMPrecond" if net_architecture == "unet" else "EDMPreconditioner"
     ckpt_path = os.path.join(rundir, "checkpoints_diffusion", f"{net_cls}.0.10.mdlus")
     assert os.path.isfile(ckpt_path), "Diffusion checkpoint not found"
@@ -221,7 +224,7 @@ def test_checkpointing(
         torch.distributed.barrier()
 
     net_cls = "EDMPrecond" if net_architecture == "unet" else "EDMPreconditioner"
-    ckpt_path = os.path.join(rundir, "checkpoints_diffusion", f"{net_cls}.0.10.mdlus")
+    ckpt_path = os.path.join(rundir, "checkpoints_diffusion", f"{net_cls}.0.20.mdlus")
     assert os.path.isfile(ckpt_path), f"Diffusion checkpoint not found on rank {dist.rank}"
 
 

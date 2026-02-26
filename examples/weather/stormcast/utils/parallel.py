@@ -454,7 +454,7 @@ class ParallelHelper:
         if domain_rank is None:
             domain_rank = self.domain_rank
 
-        kwargs = {"domain_rank": domain_rank, "shard_dim_selector": shard_dim_selector}
+        kwargs = {"domain_rank": domain_rank}
         if isinstance(x, Mapping):
             return {k: self.get_state_dict_shard(v, _key=(_key + "." + k), **kwargs) for (k, v) in x.items()}
         elif isinstance(x, (list, tuple)):
