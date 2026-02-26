@@ -20,7 +20,6 @@ Contains helpers for hyperparameter logging and MLflow metric sanitization.
 """
 
 import inspect
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -172,10 +171,3 @@ def log_hyperparameters(
                 if len(str(v)) <= _MLFLOW_MAX_PARAM_LENGTH
             }
         )
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    from physicsnemo.core import get_physicsnemo_pkg_info
-
-    logger.info(str(get_physicsnemo_pkg_info()))
