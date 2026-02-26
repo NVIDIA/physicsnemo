@@ -25,7 +25,8 @@ from physicsnemo.core import Module
 from physicsnemo.models.diffusion_unets import StormCastUNet
 from physicsnemo.diffusion.preconditioners import EDMPrecond, EDMPreconditioner
 from physicsnemo.diffusion.utils import ConcatConditionWrapper
-#from physicsnemo.diffusion.samplers import deterministic_sampler
+
+# from physicsnemo.diffusion.samplers import deterministic_sampler
 from physicsnemo.models.dit import DiT
 
 from utils.sampler import deterministic_sampler
@@ -148,7 +149,7 @@ def get_preconditioned_natten_dit(
         attn_kwargs=attn_kwargs,
         condition_dim=condition_dim,
         conditioning_embedder=conditioning_embedder,
-        **model_kwargs
+        **model_kwargs,
     )
     return EDMPreconditioner(model=ConcatConditionWrapper(dit))
 
@@ -215,7 +216,7 @@ def build_network_condition_and_target(
     if scalar_conditions is not None:
         condition = TensorDict(
             {"cond_concat": condition, "cond_vec": scalar_conditions},
-            device=condition.device
+            device=condition.device,
         ).to(dtype=condition.dtype)
 
     return (condition, target, condition_tensors["regression"])
@@ -224,7 +225,7 @@ def build_network_condition_and_target(
 def unpack_batch(
     batch: dict[str, Any],
     device: torch.device | str,
-    memory_format: torch.memory_format = torch.preserve_format
+    memory_format: torch.memory_format = torch.preserve_format,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Unpack a data batch into background, state and lead time label with the correct
     device and data types.
@@ -234,15 +235,19 @@ def unpack_batch(
         device=device,
         dtype=torch.float32,
         non_blocking=True,
-        memory_format=memory_format
+        memory_format=memory_format,
     )
 
     lead_time_label = batch.get("lead_time_label")
     if lead_time_label is not None:
-        lead_time_label = lead_time_label.to(device=device, dtype=torch.int64, non_blocking=True)
+        lead_time_label = lead_time_label.to(
+            device=device, dtype=torch.int64, non_blocking=True
+        )
     scalar_conditions = batch.get("scalar_conditions")
     if scalar_conditions is not None:
-        scalar_conditions = scalar_conditions.to(device=device, dtype=torch.float32, non_blocking=True)
+        scalar_conditions = scalar_conditions.to(
+            device=device, dtype=torch.float32, non_blocking=True
+        )
 
     return (background, state, mask, lead_time_label, scalar_conditions)
 
@@ -252,7 +257,7 @@ def diffusion_model_forward(
     condition: torch.Tensor,
     shape: Iterable[int],
     lead_time_label: torch.Tensor | None = None,
-    sampler_args: dict[str, Any] = {}
+    sampler_args: dict[str, Any] = {},
 ) -> torch.Tensor:
     """Helper function to run diffusion model sampling"""
 
@@ -337,8 +342,7 @@ def regression_loss_fn(
 
 
 def nested_to(
-    x: torch.Tensor | Mapping | list | tuple | Any,
-    **kwargs
+    x: torch.Tensor | Mapping | list | tuple | Any, **kwargs
 ) -> torch.Tensor | dict | list | Any:
     """Move tensors in nested structures to a device/dtype.
 

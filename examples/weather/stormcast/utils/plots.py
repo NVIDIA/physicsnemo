@@ -64,9 +64,12 @@ def validation_plot(generated, truth, input_state, variable, background=None):
 
     backgrounds = _normalize_backgrounds(background)
     num_panels = 3 + max(len(backgrounds), 1)
-    for (name, bg) in backgrounds.items():
+    for name, bg in backgrounds.items():
         gmin, gmax = float(np.nanmin(bg)), float(np.nanmax(bg))
-        yield (f"background_{name}", _make_fig(bg, f"Background: {name}", vmin=gmin, vmax=gmax))
+        yield (
+            f"background_{name}",
+            _make_fig(bg, f"Background: {name}", vmin=gmin, vmax=gmax),
+        )
 
 
 color_limits = {
@@ -187,8 +190,13 @@ def save_validation_plots(trainer, plot_outputs, plot_state, plot_background):
                 f_,
                 bg_panels,
             )
-            for (name, fig) in validation_figs:
-                fig.savefig(os.path.join(image_dir, f"{trainer.total_steps}_{i}_{f_}_{name}.png"), bbox_inches='tight')
+            for name, fig in validation_figs:
+                fig.savefig(
+                    os.path.join(
+                        image_dir, f"{trainer.total_steps}_{i}_{f_}_{name}.png"
+                    ),
+                    bbox_inches="tight",
+                )
                 trainer.logger.log_figure(f"{name}/{f_}", fig)
                 plt.close(fig)
 
@@ -201,7 +209,7 @@ def save_validation_plots(trainer, plot_outputs, plot_state, plot_background):
 
             plt.close("all")
 
-    for (key, value) in spec_ratios.items():
+    for key, value in spec_ratios.items():
         trainer.logger.log_value(f"spectrum/valid/{key}", value)
 
 

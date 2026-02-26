@@ -23,8 +23,10 @@ Provides a factory function to build optimizers from configuration.
 from collections.abc import Iterable
 
 import torch
+
 try:
     from optimi import StableAdamW
+
     IS_OPTIMI_AVAILABLE = True
 except ImportError:
     IS_OPTIMI_AVAILABLE = False
@@ -32,10 +34,7 @@ except ImportError:
 from utils.config import OptimizerConfig
 
 
-def build_optimizer(
-    params: Iterable,
-    cfg: OptimizerConfig
-) -> torch.optim.Optimizer:
+def build_optimizer(params: Iterable, cfg: OptimizerConfig) -> torch.optim.Optimizer:
     r"""
     Construct an optimizer from a config dict.
 
@@ -103,7 +102,9 @@ def build_optimizer(
         )
     elif name == "stableadamw":  # TODO: StableAdamW doesn't work with DTensor
         if not IS_OPTIMI_AVAILABLE:
-            raise ImportError("Selected 'stableadamw' optimizer but optimi is not installed.")
+            raise ImportError(
+                "Selected 'stableadamw' optimizer but optimi is not installed."
+            )
         return StableAdamW(
             params,
             lr=cfg.lr,

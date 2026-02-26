@@ -24,7 +24,7 @@ regional weather forecasting and climate risk analysis.
 </p>
 
 2. [Stormscope](https://arxiv.org/abs/2601.17268),
-a nowcasting/nearcasting model for clouds and precipitation, using GOES satellite radiances and NEXRAD
+a nowcasting/nearcasting model for clouds and precipitation, using GOES satellite radiances and MRMS
 radar measurements as training data. Stormscope's generative model architecture allows the uncertainty of
 the predicted variables to be accurately quantified.
 
@@ -63,7 +63,7 @@ The tests take a while to run. Potentially useful `pytest` options include `-k "
 
 ### Configuration basics
 
-Training is handled by `train.py`, configured using [hydra](https://hydra.cc/docs/intro/) based on the contents of the `config` directory. Hydra allows for YAML-based modular and hierarchical configuration management and supports command-line overrides for quick testing and experimentation. The `config` directory includes the following subdirectories:
+Training is handled by `train.py`, configured using [hydra](https://hydra.cc/docs/intro/) based on the contents of the `config` directory and validated using `pydantic`. Hydra allows for YAML-based modular and hierarchical configuration management and supports command-line overrides for quick testing and experimentation. The `config` directory includes the following subdirectories:
  - `dataset`: specifies the dataset used for training as well as the resolution, number of variables, and other parameters of the dataset
  - `model`: specifies the model type and model-specific hyperparameters
  - `sampler`: specifies hyperparameters used in the sampling process for diffusion models
@@ -78,7 +78,7 @@ python train.py --config-name regression training.batch_size=4
 
 More extensive configuration modifications can be made by creating a new top-level configuration file similar to `regression` or `diffusion`. See `diffusion.yaml` for an example of how to specify a top-level config that uses default configuration settings with additional custom modifications added on top.
 
-At runtime, hydra will parse the config subdirectory and command line over-rides into a runtime configuration object `cfg`, which will have all settings accessible via both attribute or dictionary-like interfaces. For example, the total training batch size can be accessed either as `cfg.training.batch_size` or `cfg['training']['batch_size']`.
+At runtime, hydra will parse the config subdirectory and command line over-rides into a runtime configuration object `cfg`, which will have all settings accessible via both attribute or dictionary-like interfaces. For example, the total training batch size can be accessed either as `cfg.training.batch_size` or `cfg['training']['batch_size']`. The actual content of the config will be validated using `pydantic` based on the guidelines specified in [`utils/config.py`](./utils/config.py).
 
 The training script `train.py` will initialize the training experiment and launch the main training loop, which is defined in `utils/trainer.py`. Outputs (training logs, checkpoints, etc.) will be saved to a directory specified by the following `training` config items:
 ```yaml
@@ -124,7 +124,7 @@ torchrun --standalone --nnodes=1 --nproc_per_node=8 train.py --config-name <your
 
 #### Domain parallelism
 
-As an advanced form of distributed training, the training code also supports domain parallelism, adapted from Stormcast. It distributes individual training samples across multiple GPUs, and therefore can be used to train large models and/or large domains when even a single sample will not fit in the memory of one GPU. Domain parallelism is controlled by the `training.domain_parallel_size` config setting that specifies how many GPUs each sample should be distributed to. For example, if you have at least two GPUs
+As an advanced form of distributed training, the training code also supports domain parallelism via PhysicsNeMo `ShardTensor`, adapted from StormScope. It distributes individual training samples across multiple GPUs, and therefore can be used to train large models and/or large domains when even a single sample will not fit in the memory of one GPU. Domain parallelism is controlled by the `training.domain_parallel_size` config setting that specifies how many GPUs each sample should be distributed to. For example, if you have at least two GPUs,
 
 ```bash
 torchrun --standalone --nnodes=1 --nproc_per_node=2 train.py --config-name test_diffusion training.domain_parallel_size=2
@@ -237,11 +237,11 @@ Possible solutions include decreasing batch size, training with more GPUs and us
 
 ### How do I train a model without low-resolution conditioning (e.g. a nowcasting model)?
 
-Ensure that the `model.diffusion_conditions` and `model.regression_conditions` settings for your model don't include `"background"`. Also set `background` in the `__getitem__` function of your dataset to a dummy value such as `np.array([0])`.
+Ensure that the `model.diffusion_conditions` and `model.regression_conditions` settings for your model don't include `"background"`. If you have a dataset that provides background/low-resolution conditioning, then it will be ignored; if you don't have such a dataset you must set `background` in the `__getitem__` function of your dataset to a dummy value such as `np.array([0])`.
 
 ### How do I train pure downscaling model without state update?
 
-Ensure that the `model.diffusion_conditions` and `model.regression_conditions` settings for your model don't include `"state"`. Also set `state[0]` in the `__getitem__` function of your dataset to a dummy value such as `np.array([0])`.
+Ensure that the `model.diffusion_conditions` and `model.regression_conditions` settings for your model don't include `"state"`. If you have a dataset that provides a state as conditioining input, then it will be ignored; if you don't have such a dataset you must set `state[0]` in the `__getitem__` function of your dataset to a dummy value such as `np.array([0])`.
 
 ### Training is slow
 

@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Trainer class for StormCast."""
+"""Trainer class for StormCast/StormScope training."""
 
 from collections.abc import Callable, Sequence
 import os
@@ -29,10 +29,9 @@ from physicsnemo.core import Module
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 
-#from physicsnemo.diffusion.metrics import EDMLoss, EDMLossLogUniform
 from utils.loss import EDMLoss, EDMLossLogUniform
 
-from utils.config import StormCastConfig
+from utils.config import MainConfig
 from utils.logging import ExperimentLogger
 from utils.nn import (
     diffusion_model_forward,
@@ -63,7 +62,7 @@ class Trainer:
 
     Attributes
     ----------
-    cfg : StormCastConfig
+    cfg : DictConfig
         Configuration object.
     dist : DistributedManager
         Distributed training manager.
@@ -89,10 +88,8 @@ class Trainer:
     """
 
     def __init__(self, cfg: DictConfig):
-        #self.cfg = cfg
-
         cfg_dict = OmegaConf.to_container(cfg, resolve=True)
-        self.cfg = StormCastConfig(**cfg_dict)  # validates config, including types
+        self.cfg = MainConfig(**cfg_dict)  # validates config, including types
         self.logger = ExperimentLogger("train", self.cfg)
         self.logger.info("Configuration validated successfully")
 
@@ -102,10 +99,19 @@ class Trainer:
         self.dist = DistributedManager()
         self.device = self.dist.device
         domain_parallel_size = self.cfg.training.domain_parallel_size
-        self.use_shard_tensor = (domain_parallel_size > 1) or self.cfg.training.force_sharding
-        self.parallel_helper = ParallelHelper(domain_parallel_size=domain_parallel_size, use_shard_tensor=self.use_shard_tensor)
-        if self.use_shard_tensor and (self.parallel_helper.local_batch_size(cfg.training.batch_size) > 1):
-            raise ValueError("Domain parallelism is only available with a local batch size of 1.")
+        self.use_shard_tensor = (
+            domain_parallel_size > 1
+        ) or self.cfg.training.force_sharding
+        self.parallel_helper = ParallelHelper(
+            domain_parallel_size=domain_parallel_size,
+            use_shard_tensor=self.use_shard_tensor,
+        )
+        if self.use_shard_tensor and (
+            self.parallel_helper.local_batch_size(cfg.training.batch_size) > 1
+        ):
+            raise ValueError(
+                "Domain parallelism is only available with a local batch size of 1."
+            )
 
         # Parse config
         self._parse_config()
@@ -116,8 +122,12 @@ class Trainer:
         # Placeholder model+optimizer for checkpoint loading/saving (rank 0 only, kept on CPU)
         if self.dist.rank == 0:
             self.net_full = self._setup_model()
-            (self.optimizer_full, self.scheduler_full) = self._setup_optimizer(self.net_full)
-            (self.total_steps, self.val_loss) = self._resume_or_init(self.net_full, self.optimizer_full, self.scheduler_full)
+            (self.optimizer_full, self.scheduler_full) = self._setup_optimizer(
+                self.net_full
+            )
+            (self.total_steps, self.val_loss) = self._resume_or_init(
+                self.net_full, self.optimizer_full, self.scheduler_full
+            )
         else:
             self.net_full = self.optimizer_full = self.scheduler_full = None
 
@@ -133,23 +143,33 @@ class Trainer:
                 self.net_full.state_dict() if self.dist.rank == 0 else {}
             )
         )
-        self.net.train().requires_grad_(True).to(device=self.device, memory_format=self.memory_format)
+        self.net.train().requires_grad_(True).to(
+            device=self.device, memory_format=self.memory_format
+        )
         # Load regression net if needed
         self.regression_net = self._load_regression_net()
 
         # Sharding
 
         if self.use_shard_tensor:
-            self.logger.info("Distributing model with FSDP and sharding for domain parallelism")
+            self.logger.info(
+                "Distributing model with FSDP and sharding for domain parallelism"
+            )
         else:
             self.logger.info("Distributing model with FSDP")
         self.net = self.parallel_helper.distribute_model(self.net)
         if self.regression_net is not None:
-            self.regression_net = self.parallel_helper.distribute_model(self.regression_net)
+            self.regression_net = self.parallel_helper.distribute_model(
+                self.regression_net
+            )
         if self.invariant_tensor is not None:
-            self.invariant_tensor = self.parallel_helper.distribute_tensor(self.invariant_tensor)
+            self.invariant_tensor = self.parallel_helper.distribute_tensor(
+                self.invariant_tensor
+            )
         # Create optimizer on sharded net
-        (self.optimizer, self.scheduler) = self._setup_optimizer(self.net)  # for sharded net
+        (self.optimizer, self.scheduler) = self._setup_optimizer(
+            self.net
+        )  # for sharded net
         if self.total_steps > 0:
             self.parallel_helper.scatter_optimizer_state(
                 self.net_full,
@@ -193,7 +213,10 @@ class Trainer:
             self.local_batch_size = cfg.training.batch_size_per_gpu
             assert max_local_batch_size % self.local_batch_size == 0
         self.num_accumulation_rounds = max_local_batch_size // self.local_batch_size
-        assert self.batch_size * self.parallel_helper.domain_parallel_size == self.dist.world_size * max_local_batch_size
+        assert (
+            self.batch_size * self.parallel_helper.domain_parallel_size
+            == self.dist.world_size * max_local_batch_size
+        )
 
         # Training params
         self.total_train_steps = cfg.training.total_train_steps
@@ -235,7 +258,9 @@ class Trainer:
         self.use_torch_compile = perf_cfg.torch_compile
         self.use_apex_gn = perf_cfg.use_apex_gn
         use_channels_last = self.use_apex_gn or (self.cfg.model.architecture == "dit")
-        self.memory_format = torch.channels_last if use_channels_last else torch.preserve_format
+        self.memory_format = (
+            torch.channels_last if use_channels_last else torch.preserve_format
+        )
 
         # CUDA backend settings (configurable via perf section)
         self.cudnn_benchmark = self.cfg.training.cudnn_benchmark
@@ -248,8 +273,8 @@ class Trainer:
         # Apply CUDA backend settings from perf config
         torch.backends.cudnn.benchmark = self.cudnn_benchmark
         if self.allow_tf32:
-            torch.backends.cudnn.conv.fp32_precision = 'tf32'
-            torch.backends.cuda.matmul.fp32_precision = 'tf32'
+            torch.backends.cudnn.conv.fp32_precision = "tf32"
+            torch.backends.cuda.matmul.fp32_precision = "tf32"
         torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = (
             self.allow_fp16_reduced_precision
         )
@@ -263,8 +288,8 @@ class Trainer:
         step : int, optional
             Current training step for seed offset calculation, by default 0.
         """
-        #torch.manual_seed(self.dist.rank)
-        #return
+        # torch.manual_seed(self.dist.rank)
+        # return
         seed_offset = (
             self.cfg.training.seed * self.dist.world_size * max(step, 1)
             + self.dist.rank
@@ -301,9 +326,11 @@ class Trainer:
         self.train_dataloader = self.parallel_helper.sharded_dataloader(
             self.dataset_train,
             batch_size=self.local_batch_size,
-            num_workers=num_workers
+            num_workers=num_workers,
         )
-        self.dataset_iterator = self.parallel_helper.sharded_data_iter(self.train_dataloader)
+        self.dataset_iterator = self.parallel_helper.sharded_data_iter(
+            self.train_dataloader
+        )
 
         # Invariants
         invariant_array = self.dataset_train.get_invariants()
@@ -364,7 +391,7 @@ class Trainer:
                 attn_resolutions=model_cfg.attn_resolutions,
                 lead_time_steps=self.lead_time_steps,
                 amp_mode=self.enable_amp,
-                **model_cfg.hyperparameters
+                **model_cfg.hyperparameters,
             )
         elif model_cfg.architecture == "dit":
             net = get_preconditioned_natten_dit(
@@ -373,7 +400,7 @@ class Trainer:
                 conditional_channels=num_condition_channels,
                 scalar_condition_channels=len(self.scalar_cond_channels),
                 lead_time_steps=self.lead_time_steps,
-                **model_cfg.hyperparameters
+                **model_cfg.hyperparameters,
             )
         else:
             raise ValueError("model.architecture must be 'unet' or 'dit'")
@@ -404,7 +431,9 @@ class Trainer:
         if self.enable_amp:
             regression_net.amp_mode = self.enable_amp
         return (
-            regression_net.eval().requires_grad_(False).to(device=self.device, memory_format=self.memory_format)
+            regression_net.eval()
+            .requires_grad_(False)
+            .to(device=self.device, memory_format=self.memory_format)
         )
 
     # =========================================================================
@@ -447,7 +476,9 @@ class Trainer:
         elif sigma_dist == "loguniform":
             loss_cls, param_names = EDMLossLogUniform, ("sigma_min", "sigma_max")
         else:
-            raise ValueError("training.loss.sigma_distribution must be 'lognormal' or 'loguniform'")
+            raise ValueError(
+                "training.loss.sigma_distribution must be 'lognormal' or 'loguniform'"
+            )
 
         params = {k: getattr(loss_params, k) for k in param_names}
         params["sigma_source_rank"] = self.parallel_helper.get_domain_group_zero_rank()
@@ -461,8 +492,7 @@ class Trainer:
         return loss_fn
 
     def _setup_optimizer(
-        self,
-        net: torch.nn.Module
+        self, net: torch.nn.Module
     ) -> tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LRScheduler | None]:
         r"""
         Create optimizer and scheduler.
@@ -484,16 +514,13 @@ class Trainer:
         """
         self.logger.info("Setting up optimizer...")
 
-        optimizer = build_optimizer(
-            net.parameters(),
-            self.cfg.training.optimizer
-        )
+        optimizer = build_optimizer(net.parameters(), self.cfg.training.optimizer)
 
         scheduler, scheduler_name = init_scheduler(
             optimizer,
             self.cfg.training.scheduler,
             total_steps=self.total_train_steps,
-            logger=self.logger
+            logger=self.logger,
         )
         if scheduler:
             self.logger.info(f"Using scheduler: {scheduler_name}")
@@ -506,7 +533,7 @@ class Trainer:
         self,
         net: Module,
         optimizer: torch.optim.Optimizer,
-        scheduler: torch.optim.lr_scheduler.LRScheduler | None
+        scheduler: torch.optim.lr_scheduler.LRScheduler | None,
     ) -> tuple[int, float]:
         r"""
         Resume from checkpoint or initialize training.
@@ -625,8 +652,10 @@ class Trainer:
             loss_value = loss.sum() / len(self.state_channels)
             loss_value.backward()
 
-        for (ch, value) in zip(self.state_channels, channelwise_loss):
-            self.logger.log_value(f"loss/train/{ch}", value / self.num_accumulation_rounds)
+        for ch, value in zip(self.state_channels, channelwise_loss):
+            self.logger.log_value(
+                f"loss/train/{ch}", value / self.num_accumulation_rounds
+            )
 
         # Gradient clipping
         if self.cfg.training.clip_grad_norm > 0:
@@ -652,7 +681,7 @@ class Trainer:
             self.scheduler,
             total_steps=self.total_steps,
             warmup_steps=self.warmup_steps,
-            logger=self.logger
+            logger=self.logger,
         )
 
         # Sync loss across ranks
@@ -670,7 +699,9 @@ class Trainer:
 
     def validate(
         self,
-    ) -> tuple[float, torch.Tensor | None, list[torch.Tensor] | None, torch.Tensor | None]:
+    ) -> tuple[
+        float, torch.Tensor | None, list[torch.Tensor] | None, torch.Tensor | None
+    ]:
         r"""
         Run validation loop.
 
@@ -696,20 +727,19 @@ class Trainer:
             self.dataset_valid,
             batch_size=self.local_batch_size,
             seed=0,
-            num_workers=0,#self.cfg.training.num_data_workers,
-            shuffle=False
+            num_workers=0,  # self.cfg.training.num_data_workers,
+            shuffle=False,
         )
         valid_iter = self.parallel_helper.sharded_data_iter(
-            valid_dataloader,
-            self.validation_steps
+            valid_dataloader, self.validation_steps
         )
         valid_loss_sum = torch.zeros((), device=self.device)
         plot_outputs, plot_state, plot_background = None, None, None
 
         with torch.no_grad():
-            for (v_i, batch) in enumerate(valid_iter):
-                background, state, mask, lead_time_label, scalar_conditions = unpack_batch(
-                    batch, self.device, memory_format=self.memory_format
+            for v_i, batch in enumerate(valid_iter):
+                background, state, mask, lead_time_label, scalar_conditions = (
+                    unpack_batch(batch, self.device, memory_format=self.memory_format)
                 )
 
                 with torch.autocast(
@@ -782,7 +812,7 @@ class Trainer:
             total_steps=self.total_steps,
             warmup_steps=self.warmup_steps,
             metric=val_loss.mean(),
-            logger=self.logger
+            logger=self.logger,
         )
 
         return val_loss, plot_outputs, plot_state, plot_background
@@ -876,7 +906,7 @@ class Trainer:
             self.scheduler,
             self.net_full,
             self.optimizer_full,
-            self.scheduler_full
+            self.scheduler_full,
         )
 
         if self.dist.rank == 0:
@@ -932,13 +962,23 @@ class Trainer:
                 self.val_loss = float(val_loss_channel.mean())
 
                 self.logger.log_value("loss/valid", self.val_loss)
-                for (ch, value) in zip(self.state_channels, val_loss_channel):
+                for ch, value in zip(self.state_channels, val_loss_channel):
                     self.logger.log_value(f"loss/valid/{ch}", value)
 
                 if self.use_shard_tensor:
-                    plot_outputs = None if plot_outputs is None else plot_outputs.full_tensor()
-                    plot_state = None if plot_state is None else [s.full_tensor() for s in plot_state]
-                    plot_background = None if plot_background is None else plot_background.full_tensor()
+                    plot_outputs = (
+                        None if plot_outputs is None else plot_outputs.full_tensor()
+                    )
+                    plot_state = (
+                        None
+                        if plot_state is None
+                        else [s.full_tensor() for s in plot_state]
+                    )
+                    plot_background = (
+                        None
+                        if plot_background is None
+                        else plot_background.full_tensor()
+                    )
                 save_validation_plots(self, plot_outputs, plot_state, plot_background)
                 self.valid_time = time.time() - valid_start
 

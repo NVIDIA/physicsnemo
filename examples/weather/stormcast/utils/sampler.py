@@ -25,7 +25,9 @@ from physicsnemo.core.warnings import LegacyFeatureWarning
 from physicsnemo.diffusion.multi_diffusion import GridPatching2D
 from physicsnemo.diffusion.preconditioners import EDMPrecond, EDMPreconditioner
 from tensordict import TensorDict
-from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp.fully_sharded_data_parallel import (
+    FullyShardedDataParallel as FSDP,
+)
 
 from physicsnemo.domain_parallel.shard_tensor import scatter_tensor
 from torch.distributed.tensor import DTensor
@@ -551,8 +553,12 @@ def deterministic_sampler(
     return x_next
 
 
-def _shard_in_mesh(x: torch.Tensor, y: torch.Tensor, shard_dim: int | None = None) -> torch.Tensor:
-    if (hasattr(y, "_local_tensor") or hasattr(y, "placements")) and hasattr(y, "device_mesh"):
+def _shard_in_mesh(
+    x: torch.Tensor, y: torch.Tensor, shard_dim: int | None = None
+) -> torch.Tensor:
+    if (hasattr(y, "_local_tensor") or hasattr(y, "placements")) and hasattr(
+        y, "device_mesh"
+    ):
         # y is sharded - need to replicate sigma to be compatible with DTensor operations
         source_rank = torch.distributed.get_global_rank(y.device_mesh.get_group(), 0)
         # Get the source rank for replication

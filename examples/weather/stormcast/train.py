@@ -34,10 +34,16 @@ def main(cfg: DictConfig) -> None:
     """Train regression or diffusion models for use in the StormCast (https://arxiv.org/abs/2408.10958) ML-based weather model"""
 
     # suppress nuisance warnings
-    warnings.filterwarnings("ignore", message="^.*``NO_SHARD`` for ``ShardingStrategy``.*$")
+    warnings.filterwarnings(
+        "ignore", message="^.*``NO_SHARD`` for ``ShardingStrategy``.*$"
+    )
     warnings.filterwarnings("ignore", message="^.*`_get_pg_default_device.*$")
-    warnings.filterwarnings("ignore", message="^.*`NO_SHARD` sharding strategy is deprecated.*$")
-    warnings.filterwarnings("ignore", message="^.*You are importing from 'physicsnemo.experimental'.*$")
+    warnings.filterwarnings(
+        "ignore", message="^.*`NO_SHARD` sharding strategy is deprecated.*$"
+    )
+    warnings.filterwarnings(
+        "ignore", message="^.*You are importing from 'physicsnemo.experimental'.*$"
+    )
 
     # Initialize
     DistributedManager.initialize()

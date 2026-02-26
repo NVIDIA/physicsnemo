@@ -29,11 +29,7 @@ from utils.logging import ExperimentLogger
 
 
 def init_scheduler(
-    optimizer,
-    cfg: SchedulerConfig,
-    *,
-    total_steps: int,
-    logger: ExperimentLogger
+    optimizer, cfg: SchedulerConfig, *, total_steps: int, logger: ExperimentLogger
 ) -> tuple[LRScheduler | None, str | None]:
     r"""
     Create a scheduler from config.
@@ -105,7 +101,7 @@ def step_scheduler(
     total_steps: int,
     warmup_steps: int,
     metric: float | None = None,
-    logger: ExperimentLogger
+    logger: ExperimentLogger,
 ) -> None:
     r"""
     Advance the scheduler by one step.

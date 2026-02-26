@@ -27,16 +27,13 @@ import wandb
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
-from utils.config import StormCastConfig
+from utils.config import MainConfig
 
 
 class ExperimentLogger:
     """Wraps logging functions in one place."""
-    def __init__(
-        self,
-        name: str,
-        cfg: StormCastConfig
-    ):
+
+    def __init__(self, name: str, cfg: MainConfig):
         dist = DistributedManager()
         self.log_to_wandb = cfg.training.log_to_wandb and (dist.rank == 0)
         self.log_to_tensorboard = cfg.training.log_to_tensorboard and (dist.rank == 0)
@@ -46,9 +43,13 @@ class ExperimentLogger:
         if self.log_to_wandb:
             wandb_resume = False
             os.makedirs(cfg.training.rundir, exist_ok=True)
-            net_name = "regression" if cfg.training.loss.type == "regression" else "diffusion"
+            net_name = (
+                "regression" if cfg.training.loss.type == "regression" else "diffusion"
+            )
             training_states = glob.glob(
-                os.path.join(cfg.training.rundir, f"checkpoints_{net_name}/checkpoint*.pt")
+                os.path.join(
+                    cfg.training.rundir, f"checkpoints_{net_name}/checkpoint*.pt"
+                )
             )
             if training_states:
                 wandb_resume = True

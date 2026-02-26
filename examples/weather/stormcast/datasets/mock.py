@@ -38,7 +38,7 @@ class _MockDataset(StormCastDataset):
         num_scalar_cond_channels: int = 2,
         image_size: tuple[int, int] = (256, 128),
         num_samples: int = 100,
-        train: bool = True
+        train: bool = True,
     ):
         self._num_state_channels = num_state_channels
         self._num_background_channels = num_background_channels
@@ -56,11 +56,17 @@ class _MockDataset(StormCastDataset):
         height, width = self._image_size
 
         # Generate random background data
-        background = rng.normal(size=(self._num_background_channels, height, width)).astype(np.float32)
+        background = rng.normal(
+            size=(self._num_background_channels, height, width)
+        ).astype(np.float32)
 
         # Generate random state data (input and target)
-        state_input = rng.normal(size=(self._num_state_channels, height, width)).astype(np.float32)
-        state_target = rng.normal(size=(self._num_state_channels, height, width)).astype(np.float32)
+        state_input = rng.normal(size=(self._num_state_channels, height, width)).astype(
+            np.float32
+        )
+        state_target = rng.normal(
+            size=(self._num_state_channels, height, width)
+        ).astype(np.float32)
 
         item = {
             "background": background,
@@ -69,7 +75,9 @@ class _MockDataset(StormCastDataset):
 
         # Generate scalar conditions
         if self._num_scalar_cond_channels:
-            item["scalar_conditions"] = rng.normal(size=(self._num_scalar_cond_channels,)).astype(np.float32)
+            item["scalar_conditions"] = rng.normal(
+                size=(self._num_scalar_cond_channels,)
+            ).astype(np.float32)
 
         return item
 

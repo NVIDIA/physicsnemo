@@ -24,12 +24,13 @@ import torch
 from torch.distributed.checkpoint.state_dict import (
     get_state_dict,
     set_optimizer_state_dict,
-    StateDictOptions
+    StateDictOptions,
 )
 from torch.distributed.fsdp import (
     FullyShardedDataParallel as FSDP,
-    ShardingStrategy, BackwardPrefetch,
-    OptimStateKeyType
+    ShardingStrategy,
+    BackwardPrefetch,
+    OptimStateKeyType,
 )
 from torch.distributed.tensor import distribute_module, distribute_tensor
 from torch.distributed.tensor.placement_types import Replicate, Shard
@@ -51,6 +52,7 @@ class ParallelHelper:
     use_shard_tensor : bool, optional
         Whether to shard batches across the domain mesh.
     """
+
     def __init__(self, domain_parallel_size: int, use_shard_tensor: bool = False):
         if not DistributedManager.is_initialized:
             DistributedManager.initialize()
@@ -58,7 +60,9 @@ class ParallelHelper:
         self.domain_parallel_size = domain_parallel_size
 
         if self.dist.world_size % domain_parallel_size != 0:
-            raise ValueError("domain_parallel_size must evenly divide the number of processes")
+            raise ValueError(
+                "domain_parallel_size must evenly divide the number of processes"
+            )
         self.data_parallel_size = self.dist.world_size // domain_parallel_size
         self.mesh = self.dist.initialize_mesh(
             mesh_shape=(self.data_parallel_size, domain_parallel_size),
@@ -98,7 +102,7 @@ class ParallelHelper:
         batch_size: int = 1,
         seed: int | None = None,
         num_workers: int = 2,
-        shuffle: bool = True
+        shuffle: bool = True,
     ) -> torch.utils.data.DataLoader:
         """Create a rank-sharded DataLoader.
 
@@ -132,7 +136,9 @@ class ParallelHelper:
         # determine samples used by the current rank
         global_samples = np.arange(len(dataset))
         num_samples_global = len(global_samples)
-        source_rank = (global_samples / num_samples_global * self.dist.world_size).astype(int)
+        source_rank = (
+            global_samples / num_samples_global * self.dist.world_size
+        ).astype(int)
         local_samples = global_samples[source_rank == self.dist.rank]
 
         def sampler():
@@ -156,9 +162,7 @@ class ParallelHelper:
         )
 
     def sharded_data_iter(
-        self,
-        dataloader: torch.utils.data.DataLoader,
-        num_samples: int | None = None
+        self, dataloader: torch.utils.data.DataLoader, num_samples: int | None = None
     ) -> Iterator[torch.Tensor | dict | list]:
         """Iterate over sharded batches.
 
@@ -188,16 +192,21 @@ class ParallelHelper:
             source_rank_in_mesh = i % self.domain_parallel_size
             # the global rank of the source
             source_rank = torch.distributed.get_global_rank(
-                domain_group,
-                source_rank_in_mesh
+                domain_group, source_rank_in_mesh
             )
             if source_rank == self.dist.rank or i == 0:
                 # The source rank is the current rank: fetch a batch of data
                 # We use prefetching in the dataloader so this should be fast
-                batch = nested_to(next(data_iter), device=self.dist.device, non_blocking=True)
+                batch = nested_to(
+                    next(data_iter), device=self.dist.device, non_blocking=True
+                )
 
             # scatter sample within the domain group (if using domain parallelism)
-            yield self.nested_scatter(batch, source_rank) if self.use_shard_tensor else batch
+            yield (
+                self.nested_scatter(batch, source_rank)
+                if self.use_shard_tensor
+                else batch
+            )
 
             i += 1
             if i == num_samples:
@@ -267,10 +276,7 @@ class ParallelHelper:
         torch.distributed.scatter_object_list(output_list, states_to_sync, src=0)
         return output_list[0]
 
-    def shard_state_dict(
-        self,
-        state_dict: dict[str, Any] | None
-    ) -> dict[str, Any]:
+    def shard_state_dict(self, state_dict: dict[str, Any] | None) -> dict[str, Any]:
         """Shard a state dict across the domain mesh and scatter.
 
         Parameters
@@ -290,7 +296,10 @@ class ParallelHelper:
                 for i in range(self.domain_parallel_size)
             ]
             # shard of state dict for each global rank
-            shards = [shards[i % self.domain_parallel_size] for i in range(self.dist.world_size)]
+            shards = [
+                shards[i % self.domain_parallel_size]
+                for i in range(self.dist.world_size)
+            ]
 
         states_to_sync = shards if self.dist.rank == 0 else None
         output_list = [None]
@@ -305,7 +314,7 @@ class ParallelHelper:
         scheduler_full: torch.optim.lr_scheduler.LRScheduler | None,
         model: torch.nn.Module,
         optimizer: torch.optim.Optimizer,
-        scheduler: torch.optim.lr_scheduler.LRScheduler | None
+        scheduler: torch.optim.lr_scheduler.LRScheduler | None,
     ):
         """Scatter and load optimizer and scheduler state.
 
@@ -328,9 +337,7 @@ class ParallelHelper:
             optim_state_dict = optimizer_full.state_dict()
             if isinstance(model, FSDP):
                 optim_state_dict = FSDP.rekey_optim_state_dict(
-                    optim_state_dict,
-                    OptimStateKeyType.PARAM_NAME,
-                    model_full
+                    optim_state_dict, OptimStateKeyType.PARAM_NAME, model_full
                 )
 
         if self.use_shard_tensor:
@@ -339,13 +346,17 @@ class ParallelHelper:
                 optim_state_dict if self.dist.rank == 0 else None
             )
         else:
-            optim_state_dict = self.scatter_object(optim_state_dict if self.dist.rank == 0 else None)
+            optim_state_dict = self.scatter_object(
+                optim_state_dict if self.dist.rank == 0 else None
+            )
 
         options = StateDictOptions(full_state_dict=True)
         set_optimizer_state_dict(model, optimizer, optim_state_dict, options=options)
 
         if scheduler is not None:
-            sched_state_dict_full = None if scheduler_full is None else scheduler_full.state_dict()
+            sched_state_dict_full = (
+                None if scheduler_full is None else scheduler_full.state_dict()
+            )
             sched_state_dict_full = self.scatter_object(sched_state_dict_full)
             scheduler.load_state_dict(sched_state_dict_full)
 
@@ -356,7 +367,7 @@ class ParallelHelper:
         scheduler: torch.optim.lr_scheduler.LRScheduler | None,
         model_full: torch.nn.Module | None,
         optimizer_full: torch.optim.Optimizer | None,
-        scheduler_full: torch.optim.lr_scheduler.LRScheduler | None
+        scheduler_full: torch.optim.lr_scheduler.LRScheduler | None,
     ):
         """Gather model and optimizer state onto rank 0.
 
@@ -377,7 +388,9 @@ class ParallelHelper:
         """
         # TODO: we should be using the cpu_offload=True option but it seems to cause this to hang
         options = StateDictOptions(full_state_dict=True)
-        (state_dict, optim_state_dict) = get_state_dict(model, optimizer, options=options)
+        (state_dict, optim_state_dict) = get_state_dict(
+            model, optimizer, options=options
+        )
         if self.dist.rank == 0:
             model_full.load_state_dict(state_dict)
             optimizer_full.load_state_dict(optim_state_dict)
@@ -388,7 +401,7 @@ class ParallelHelper:
         self,
         x: torch.Tensor | Mapping | list | tuple | Any,
         global_rank_of_source: int,
-        shard_dim: int | None = 2
+        shard_dim: int | None = 2,
     ) -> ShardTensor | dict | list | Any:
         """Scatter tensors within nested structures.
 
@@ -407,16 +420,26 @@ class ParallelHelper:
             Scattered structure with tensors sharded or replicated.
         """
         if isinstance(x, Mapping):
-            return {k: self.nested_scatter(v, global_rank_of_source, shard_dim=shard_dim) for (k, v) in x.items()}
+            return {
+                k: self.nested_scatter(v, global_rank_of_source, shard_dim=shard_dim)
+                for (k, v) in x.items()
+            }
         elif isinstance(x, (list, tuple)):
-            return [self.nested_scatter(v, global_rank_of_source, shard_dim=shard_dim) for v in x]
+            return [
+                self.nested_scatter(v, global_rank_of_source, shard_dim=shard_dim)
+                for v in x
+            ]
         else:
             x_type = type(x)
             is_scalar = not isinstance(x, torch.Tensor)
             if is_scalar:
                 x = torch.as_tensor(x, device=self.dist.device)
 
-            placement = Shard(shard_dim) if (x.ndim >= 3 and shard_dim is not None) else Replicate()
+            placement = (
+                Shard(shard_dim)
+                if (x.ndim >= 3 and shard_dim is not None)
+                else Replicate()
+            )
             x = scatter_tensor(
                 x,
                 global_rank_of_source,
@@ -456,16 +479,29 @@ class ParallelHelper:
 
         kwargs = {"domain_rank": domain_rank}
         if isinstance(x, Mapping):
-            return {k: self.get_state_dict_shard(v, _key=(_key + "." + k), **kwargs) for (k, v) in x.items()}
+            return {
+                k: self.get_state_dict_shard(v, _key=(_key + "." + k), **kwargs)
+                for (k, v) in x.items()
+            }
         elif isinstance(x, (list, tuple)):
-            return [self.get_state_dict_shard(v, _key=(_key + "." + str(i)), **kwargs) for (i, v) in enumerate(x)]
+            return [
+                self.get_state_dict_shard(v, _key=(_key + "." + str(i)), **kwargs)
+                for (i, v) in enumerate(x)
+            ]
         else:
             shard_dim = shard_dim_selector(_key)
-            if isinstance(x, torch.Tensor) and (shard_dim is not None) and (shard_dim < x.ndim):
+            if (
+                isinstance(x, torch.Tensor)
+                and (shard_dim is not None)
+                and (shard_dim < x.ndim)
+            ):
                 shard_size = x.shape[shard_dim] // self.domain_parallel_size
                 i0 = domain_rank * shard_size
                 i1 = i0 + shard_size
-                shard_slice = tuple(slice(i0, i1) if i == shard_dim else slice(None) for i in range(x.ndim))
+                shard_slice = tuple(
+                    slice(i0, i1) if i == shard_dim else slice(None)
+                    for i in range(x.ndim)
+                )
                 return x[shard_slice]
             else:
                 return x
@@ -497,7 +533,7 @@ def shard_dim_selector(param_name: str) -> int | None:
 def partition_model_selective(
     name: str,  # pylint:disable=W0613
     submodule: torch.nn.Module,
-    device_mesh: torch.distributed.device_mesh.DeviceMesh
+    device_mesh: torch.distributed.device_mesh.DeviceMesh,
 ):
     """Shard positional embeddings across the domain mesh.
 
