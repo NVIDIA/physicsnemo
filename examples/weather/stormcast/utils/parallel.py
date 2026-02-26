@@ -269,8 +269,7 @@ class ParallelHelper:
 
     def shard_state_dict(
         self,
-        state_dict: dict[str, Any] | None,
-        shard_dim_selector: Callable[[str], int | None]
+        state_dict: dict[str, Any] | None
     ) -> dict[str, Any]:
         """Shard a state dict across the domain mesh and scatter.
 
@@ -278,8 +277,6 @@ class ParallelHelper:
         ----------
         state_dict : dict[str, Any] or None
             Full state dict provided on rank 0.
-        shard_dim_selector : Callable[[str], int or None]
-            Function returning shard dimension for a key.
 
         Returns
         -------
@@ -289,7 +286,7 @@ class ParallelHelper:
         if self.dist.rank == 0:
             # shard of state dict for each domain rank
             shards = [
-                self.get_state_dict_shard(state_dict, domain_rank=i, shard_dim_selector=shard_dim_selector)
+                self.get_state_dict_shard(state_dict, domain_rank=i)
                 for i in range(self.domain_parallel_size)
             ]
             # shard of state dict for each global rank
@@ -339,8 +336,7 @@ class ParallelHelper:
         if self.use_shard_tensor:
             # shard positional embeddings
             optim_state_dict = self.shard_state_dict(
-                optim_state_dict if self.dist.rank == 0 else None,
-                shard_dim_selector=lambda key: 1 if ("pos_embed" in key) else None
+                optim_state_dict if self.dist.rank == 0 else None
             )
         else:
             optim_state_dict = self.scatter_object(optim_state_dict if self.dist.rank == 0 else None)
@@ -438,7 +434,6 @@ class ParallelHelper:
     def get_state_dict_shard(
         self,
         x: Any,
-        shard_dim_selector: Callable[[str], int | None],
         domain_rank: int | None = None,
         _key: str = "",
     ) -> Any:
@@ -448,9 +443,6 @@ class ParallelHelper:
         ----------
         x : Any
             State dict or nested structure.
-        shard_dim_selector : Callable[[str], int or None]
-            Function returning shard dimension for a key, or None if the tensor corresponding to
-            the key should not be sharded.
         domain_rank : int or None, optional
             Domain rank to shard for.
 
@@ -479,6 +471,29 @@ class ParallelHelper:
                 return x
 
 
+def shard_dim_selector(param_name: str) -> int | None:
+    """
+    Return the dimension along which a model parameter should be sharded, if any.
+
+    Parameters
+    ----------
+    param_name: str
+        The name of the parameter.
+
+    Returns
+    -------
+    int or None
+        Shard dimension for param_name, or None if the tensor corresponding to
+        param_name should not be sharded.
+    """
+    # this should find the spatial parameters for SongUNet and DiT
+    sharded_params = ["pos_embed", "pos_embd", "spatial_emb"]
+    if any(sharded_param in param_name for sharded_param in sharded_params):
+        return 1
+    else:
+        return None
+
+
 def partition_model_selective(
     name: str,  # pylint:disable=W0613
     submodule: torch.nn.Module,
@@ -498,12 +513,10 @@ def partition_model_selective(
     for key, param in submodule._parameters.items():
         if param is None:
             continue
-        # this should find the spatial parameters for SongUNet and DiT
-        # would be nice to have a more robust solution
-        if "pos_embed" in key or "spatial_emb" in key or "pos_embd" in key:
+        if (shard_dim := shard_dim_selector(key)) is not None:
             sharded = distribute_tensor(
                 param,
                 device_mesh=device_mesh,
-                placements=[Shard(1)],
+                placements=[Shard(shard_dim)],
             )
             submodule.register_parameter(key, torch.nn.Parameter(sharded))
