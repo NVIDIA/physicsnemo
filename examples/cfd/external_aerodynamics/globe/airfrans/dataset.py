@@ -664,7 +664,7 @@ def compute_max_mesh_sizes(
             all_reduce(result[bc_type, "n_cells"], op=ReduceOp.MAX)
 
     if rank == 0:
-        logger.info(f"Max mesh sizes: {result}")
+        logger.info(f"Max mesh sizes: {result.to_dict()}")
 
     return result
 
