@@ -3,3 +3,4 @@ tensorly
 tensorly-torch
 mlflow>=2.1.1
 imageio
+wandb
