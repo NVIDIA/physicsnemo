@@ -1,0 +1,6 @@
+_target_: pipeline.arrow_reader.AirFRANSArrowReader
+dataset_path: ${dataset_path}
+task: ${task}
+split: ${split}
+pin_memory: false
+include_index_in_metadata: true

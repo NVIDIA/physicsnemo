@@ -1,0 +1,6 @@
+_target_: pipeline.vtk_reader.AirFRANSVTKReader
+data_dir: ${data_dir}
+task: ${task}
+split: ${split}
+pin_memory: false
+include_index_in_metadata: true

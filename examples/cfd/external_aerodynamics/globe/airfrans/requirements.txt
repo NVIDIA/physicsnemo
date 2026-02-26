@@ -6,3 +6,8 @@ mlflow~=3.10.0
 pyvista~=0.47.0
 matplotlib~=3.10.8
 tensordict>=0.11.0
+#Added by corey to support datasets:
+datasets
+einops
+hydra-core
+omegaconf
