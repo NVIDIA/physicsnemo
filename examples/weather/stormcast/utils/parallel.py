@@ -102,6 +102,14 @@ class ParallelHelper:
     ) -> torch.utils.data.DataLoader:
         """Create a rank-sharded DataLoader.
 
+        Each rank accesses the dataset at indices [i_start : i_end] where
+        i_start = int(rank / world_size * len(dataset))
+        i_end = int((rank+1) / world_size * len(dataset))
+
+        Therefore each rank gets a contiguous slice of samples, in contrast to torch
+        DistributedSampler which gives a strided slice. This helps with caching as
+        forecasting models frequently access subsequent time steps.
+
         Parameters
         ----------
         dataset : torch.utils.data.Dataset
@@ -120,12 +128,15 @@ class ParallelHelper:
         torch.utils.data.DataLoader
             DataLoader that yields data from the local shard only.
         """
+
+        # determine samples used by the current rank
         global_samples = np.arange(len(dataset))
         num_samples_global = len(global_samples)
         source_rank = (global_samples / num_samples_global * self.dist.world_size).astype(int)
         local_samples = global_samples[source_rank == self.dist.rank]
 
         def sampler():
+            """Iterate sample indices accessed by the current rank."""
             local_seed = None if seed is None else seed + self.dist.rank
             rng = np.random.default_rng(seed=local_seed)
             while True:
@@ -149,7 +160,11 @@ class ParallelHelper:
         dataloader: torch.utils.data.DataLoader,
         num_samples: int | None = None
     ) -> Iterator[torch.Tensor | dict | list]:
-        """Iterate over sharded batches with optional scatter.
+        """Iterate over sharded batches.
+
+        If domain parallelism is used, each rank within a domain group receives the same
+        sample from one rank within the group used as the source. The source rank rotates
+        within the domain group so that each rank contributes equally to data loading.
 
         Parameters
         ----------
@@ -167,15 +182,21 @@ class ParallelHelper:
 
         i = 0
         batch = None
+        domain_group = self.mesh["domain"].get_group()
         while True:
+            # the source rank within the domain group (always 0 when domain_parallel_size == 1)
             source_rank_in_mesh = i % self.domain_parallel_size
+            # the global rank of the source
             source_rank = torch.distributed.get_global_rank(
-                self.mesh["domain"].get_group(),
+                domain_group,
                 source_rank_in_mesh
             )
             if source_rank == self.dist.rank or i == 0:
+                # The source rank is the current rank: fetch a batch of data
+                # We use prefetching in the dataloader so this should be fast
                 batch = nested_to(next(data_iter), device=self.dist.device, non_blocking=True)
 
+            # scatter sample within the domain group (if using domain parallelism)
             yield self.nested_scatter(batch, source_rank) if self.use_shard_tensor else batch
 
             i += 1
