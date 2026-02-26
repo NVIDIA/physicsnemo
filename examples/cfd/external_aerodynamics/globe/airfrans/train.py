@@ -253,6 +253,12 @@ def main(
     # kernel branch, quickly exhausting the recompile limit.
     torch._dynamo.config.force_parameter_static_shapes = False
 
+    # The GLOBE model stores latent channels as individually-named TensorDict
+    # entries (18 keys for 12 scalar + 6 vector channels).  Dynamo specializes
+    # on each key, so the default limit of 8 is exhausted mid-forward and
+    # remaining code falls back to eager.
+    torch._dynamo.config.cache_size_limit = 64
+
     ### [Distribute the model across GPUs]
     if dist.world_size > 1:
         model = torch.nn.parallel.DistributedDataParallel(
@@ -615,9 +621,6 @@ def main(
                     )
                     time_last_epoch = time_now
 
-            # Coordinate shutdown across all ranks before potentially-slow
-            # image generation, so ranks 1..N don't block at the all_reduce
-            # while rank 0 renders images.
             if shutdown_file.exists():
                 logger0.info("Quitting due to shutdown request.")
                 if dist.rank == 0:
