@@ -493,7 +493,7 @@ class VPPreconditioner(BaseAffinePreconditioner):
     training or others.
     
     For training, it is usually paired with
-    :class:`~physicsnemo.diffusion.metrics.losses.DSMLoss`
+    :class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss`
     (``prediction_type="x0"``) and
     :class:`~physicsnemo.diffusion.noise_schedulers.VPNoiseScheduler`.
 
@@ -638,7 +638,7 @@ class VEPreconditioner(BaseAffinePreconditioner):
     is not directly compatible for score-prediction training or others.
     
     For training, it is usually paired with
-    :class:`~physicsnemo.diffusion.metrics.losses.DSMLoss`
+    :class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss`
     (``prediction_type="x0"``) and
     :class:`~physicsnemo.diffusion.noise_schedulers.VENoiseScheduler`.
 
@@ -746,7 +746,7 @@ class IDDPMPreconditioner(BaseAffinePreconditioner):
     others.
     
     For training, it is usually paired with
-    :class:`~physicsnemo.diffusion.metrics.losses.DSMLoss`
+    :class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss`
     (``prediction_type="x0"``) and
     :class:`~physicsnemo.diffusion.noise_schedulers.IDDPMNoiseScheduler`.
 
@@ -890,7 +890,7 @@ class EDMPreconditioner(BaseAffinePreconditioner):
     is not directly compatible for score-prediction training or others.
     
     For training, it is usually paired with
-    :class:`~physicsnemo.diffusion.metrics.losses.DSMLoss`
+    :class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss`
     (``prediction_type="x0"``) and
     :class:`~physicsnemo.diffusion.noise_schedulers.EDMNoiseScheduler`.
 

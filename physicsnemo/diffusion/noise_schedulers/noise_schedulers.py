@@ -244,7 +244,7 @@ class NoiseScheduler(Protocol):
         Compute loss weight for denoising score matching training.
 
         Used in training to weight the per-sample loss in
-        :class:`~physicsnemo.diffusion.metrics.losses.DSMLoss`.
+        :class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss`.
 
         Parameters
         ----------
@@ -564,12 +564,12 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         Compute loss weight for denoising score matching training.
 
         Used in training to weight the per-sample loss in
-        :class:`~physicsnemo.diffusion.metrics.losses.DSMLoss`. The loss
+        :class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss`. The loss
         weight is designed for training an x0-predictor (clean data
         predictor).
         For training a score-predictor, additionally provide a
         ``score_to_x0_fn`` callback to
-        :class:`~physicsnemo.diffusion.metrics.losses.DSMLoss`.
+        :class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss`.
 
         Parameters
         ----------
@@ -724,7 +724,7 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
             {\alpha(t)}
 
         A common use case is with
-        :class:`~physicsnemo.diffusion.metrics.losses.DSMLoss` to train a
+        :class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss` to train a
         score-predictor instead of an x0-predictor: pass this method as the
         ``score_to_x0_fn`` argument with ``prediction_type="score"``.
 
