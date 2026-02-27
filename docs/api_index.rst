@@ -7,6 +7,7 @@ API Reference
    :name: API Reference
 
    api_models
+   mesh/index
    api/physicsnemo.nn.layers.rst
    api/physicsnemo.nn.functionals.rst
 
