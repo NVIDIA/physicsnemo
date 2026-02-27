@@ -652,11 +652,12 @@ def main(
                                 **viz_sample.model_input_kwargs,
                                 chunk_size=points_per_iter,
                             )
-                        AirFRANSDataSet.postprocess(
+
+                        combined = AirFRANSDataSet.postprocess(
                             pred_mesh=pred_mesh.to(device="cpu"),
-                            true_mesh=viz_sample.interior_mesh.to(device="cpu"),
-                            show=False,
+                            sample=viz_sample.to(device="cpu"),
                         )
+                        AirFRANSDataSet.visualize_comparison(combined, show=False)
                         plt.gcf().set_dpi(300)
                         if use_mlflow:
                             log_figure(
@@ -664,6 +665,33 @@ def main(
                                 f"visualization/{split}_sample_epoch_{epoch}.png",
                             )
                         plt.close()
+
+                        ### [Surface Force Coefficients]
+                        pred_coeffs = combined.global_data["pred"].to_dict()  # ty: ignore[unresolved-attribute]
+                        true_coeffs = combined.global_data["true"].to_dict()  # ty: ignore[unresolved-attribute]
+
+                        logger0.info(
+                            f"Force coefficients ({split}):"
+                            + "".join(
+                                f"\n  {k}: pred={pred_coeffs[k]:.5f}"
+                                f"  true={true_coeffs[k]:.5f}"
+                                f"  err={pred_coeffs[k] - true_coeffs[k]:+.5f}"
+                                for k in ("Cd", "Cl")
+                            )
+                        )
+                        if use_mlflow:
+                            log_metrics(
+                                {
+                                    f"force_coeffs/{split}_{k}_{src}": coeffs[k]
+                                    for src, coeffs in [
+                                        ("pred", pred_coeffs),
+                                        ("true", true_coeffs),
+                                    ]
+                                    for k in pred_coeffs
+                                },
+                                step=epoch,
+                            )
+
                 last_image_epoch, last_image_loss = epoch, loss["train"]
 
             ### [torch.compile Caching]
