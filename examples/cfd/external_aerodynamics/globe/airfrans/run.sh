@@ -70,8 +70,8 @@ rm -f "$OUTPUT_DIR/SHUTDOWN"
 
 if [ "${SLURM_NNODES:-1}" -gt 1 ]; then
     echo "Running multi-node training..."
-    head_node=$(scontrol show hostnames $SLURM_NODELIST | head -n1)
-    head_node_ip=$(srun --nodes=1 --ntasks=1 -w "$head_node" hostname --ip-address)
+    head_node=$(hostname -s)
+    head_node_ip=$(hostname --ip-address)
     echo "Head node: $head_node"
     echo "Head node IP: $head_node_ip"
     srun uv run --no-sync torchrun \

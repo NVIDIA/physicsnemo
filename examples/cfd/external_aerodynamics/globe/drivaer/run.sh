@@ -61,13 +61,15 @@ uv sync --inexact --compile-bytecode --extra "${CUDA_EXTRA}" --extra mesh-extras
 uv pip install -r requirements.txt
 
 ### [Launch Training]
-OUTPUT_DIR="output/${SLURM_JOB_NAME:-globe_drivaer_local}"
+# The SBATCH --signal=B:USR1@120 directive sends SIGUSR1 to this script
+# 120 seconds before the time limit.  The trap below writes a sentinel file
+# that the training loop polls each epoch
 rm -f "$OUTPUT_DIR/SHUTDOWN"
 
 if [ "${SLURM_NNODES:-1}" -gt 1 ]; then
     echo "Running multi-node training..."
-    head_node=$(scontrol show hostnames $SLURM_NODELIST | head -n1)
-    head_node_ip=$(srun --nodes=1 --ntasks=1 -w "$head_node" hostname --ip-address)
+    head_node=$(hostname -s)
+    head_node_ip=$(hostname --ip-address)
     echo "Head node: $head_node"
     echo "Head node IP: $head_node_ip"
     srun uv run --no-sync torchrun \
