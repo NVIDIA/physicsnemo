@@ -14,8 +14,12 @@
 set -euo pipefail
 
 ### [User Configuration]
+OUTPUT_NAME="${SLURM_JOB_NAME:-globe_drivaer_local}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUTPUT_DIR="${SCRIPT_DIR}/output/${OUTPUT_NAME}"
+
 TRAIN_ARGS=(
-    --output-name ${SLURM_JOB_NAME:-globe_drivaer_local}
+    --output-name "${OUTPUT_NAME}"
 )
 
 export DRIVAER_DATA_DIR="${HOME}/datasets/drivaer_aws/drivaer_data_full"
