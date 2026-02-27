@@ -10,7 +10,7 @@ API Reference
    api/physicsnemo.nn.layers.rst
    api/physicsnemo.nn.functionals.rst
 
-   api/physicsnemo.datapipes.rst
+   api/datapipes/physicsnemo.datapipes.rst
    api/physicsnemo.metrics.rst
    api/physicsnemo.deploy.rst
    api/physicsnemo.distributed.rst
