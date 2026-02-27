@@ -379,7 +379,7 @@ def main(
         sample: DrivAerMLSample,
     ) -> tuple[torch.Tensor, TensorDict[str, Float[torch.Tensor, ""]]]:
         """Forward pass + loss for one sample."""
-        pred_mesh = model(**sample.model_input_kwargs)
+        pred_mesh = model(**sample.model_input_kwargs, chunk_size="auto")
         batch_loss_components = pred_mesh.point_data.apply(
             field_loss_fn,
             sample.surface_mesh.point_data,
@@ -559,8 +559,8 @@ def main(
                         epoch=epoch,
                         metadata=checkpoint_metadata(),
                     )
-                if loss["test"] < best_loss:
-                    best_loss = loss["test"]
+                if loss["validation"] < best_loss:
+                    best_loss = loss["validation"]
                     base_model.save(best_model_path)
                     if use_mlflow:
                         log_artifact(

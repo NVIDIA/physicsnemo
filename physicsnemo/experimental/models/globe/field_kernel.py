@@ -878,7 +878,8 @@ class ChunkedKernel(Kernel):
             return result
 
         elif chunk_size is None:
-            return super().forward(
+            fn = super().forward
+            kwargs = dict(
                 reference_length=reference_length,
                 source_points=source_points,
                 target_points=target_points,
@@ -886,6 +887,9 @@ class ChunkedKernel(Kernel):
                 source_data=source_data,
                 global_data=global_data,
             )
+            if self.training and self.use_gradient_checkpointing:
+                return checkpoint(fn, use_reentrant=False, **kwargs)
+            return fn(**kwargs)
 
         else:
             raise ValueError(
