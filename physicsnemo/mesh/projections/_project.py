@@ -18,7 +18,10 @@
 
 from collections.abc import Sequence
 
+import torch
+
 from physicsnemo.mesh.mesh import Mesh
+from physicsnemo.mesh.transformations.geometric import _transform_tensordict
 
 
 def project(
@@ -26,6 +29,9 @@ def project(
     target_n_spatial_dims: int | None = None,
     *,
     keep_dims: Sequence[int] | None = None,
+    transform_point_data: bool = False,
+    transform_cell_data: bool = False,
+    transform_global_data: bool = False,
 ) -> Mesh:
     """Project a mesh to a lower-dimensional ambient space.
 
@@ -43,7 +49,9 @@ def project(
     Key behaviors:
         - Manifold dimension (n_manifold_dims) is preserved
         - Topology (cell connectivity) is preserved
-        - Point/cell/global data are preserved as-is
+        - By default, point/cell/global data are preserved as-is
+        - Optionally, vector and tensor fields can be projected alongside
+          the geometry (see ``transform_*_data`` parameters)
         - Cached geometric properties are cleared
         - **Information in removed dimensions is discarded**
 
@@ -64,6 +72,15 @@ def project(
         Indices of spatial dimensions to retain, in the order they should
         appear in the output. For example, ``keep_dims=[0, 2]`` on a 3D mesh
         produces a 2D mesh with coordinates ``[x, z]``.
+    transform_point_data : bool, optional, default=False
+        If ``True``, vector and tensor fields in ``point_data`` are projected
+        using the same dimension selection applied to the coordinates. Scalar
+        fields are left unchanged. See :func:`~physicsnemo.mesh.Mesh.transform`
+        for the field-type discrimination rules.
+    transform_cell_data : bool, optional, default=False
+        If ``True``, vector and tensor fields in ``cell_data`` are projected.
+    transform_global_data : bool, optional, default=False
+        If ``True``, vector and tensor fields in ``global_data`` are projected.
 
     Returns
     -------
@@ -73,7 +90,7 @@ def project(
           ``(n_points, target_n_spatial_dims)``
         - n_manifold_dims: unchanged
         - cells: unchanged
-        - point_data, cell_data: preserved (non-cached fields only)
+        - point_data, cell_data: preserved or projected (depending on flags)
         - Cached geometric properties: cleared
 
     Raises
@@ -106,6 +123,14 @@ def project(
     >>> # Keep x and z (drop y) using keep_dims
     >>> mesh_xz = project(mesh, keep_dims=[0, 2])
     >>> assert torch.allclose(mesh_xz.points, torch.tensor([[0., 2.], [3., 5.]]))
+    >>>
+    >>> # Project with vector cell data transformation
+    >>> mesh_with_vel = Mesh(
+    ...     points=points, cells=cells,
+    ...     cell_data={"velocity": torch.tensor([[1., 2., 3.]])}
+    ... )
+    >>> projected = project(mesh_with_vel, target_n_spatial_dims=2, transform_cell_data=True)
+    >>> assert projected.cell_data["velocity"].shape == (1, 2)
 
     Notes
     -----
@@ -116,11 +141,18 @@ def project(
 
     When spatial dimensions change, all cached geometric properties are cleared
     because they depend on the spatial embedding (normals, centroids, areas,
-    curvature). User data in ``point_data`` and ``cell_data`` is preserved as-is.
+    curvature). When ``transform_*_data`` flags are ``False`` (the default),
+    user data in ``point_data`` and ``cell_data`` is preserved as-is. When a
+    flag is ``True``, fields whose first non-batch dimension equals
+    ``n_spatial_dims`` are projected via matrix multiplication; scalar fields
+    are left unchanged. See
+    :func:`~physicsnemo.mesh.transformations.geometric._transform_tensordict`
+    for the exact field-type discrimination logic.
 
     See Also
     --------
     embed : The inverse operation - add spatial dimensions.
+    Mesh.transform : General linear transformation with data transformation.
     """
     ### Validate mutually exclusive arguments
     if target_n_spatial_dims is not None and keep_dims is not None:
@@ -194,6 +226,35 @@ def project(
     new_point_data = mesh.point_data
     new_cell_data = mesh.cell_data
     new_global_data = mesh.global_data
+
+    ### Optionally transform vector/tensor data fields via projection matrix
+    # The projection matrix is the identity with rows selected by keep_dims:
+    # e.g., keep_dims=[0, 1] on a 3D mesh gives [[1,0,0],[0,1,0]] (shape 2x3).
+    # Applying v @ M^T selects the kept columns of v, which correctly projects
+    # vectors. Rank-2 tensors are projected as M @ T @ M^T.
+    if transform_point_data or transform_cell_data or transform_global_data:
+        projection_matrix = torch.eye(
+            current_n_spatial_dims,
+            device=mesh.points.device,
+            dtype=mesh.points.dtype,
+        )[keep_dims_list]  # shape: (result_n_dims, current_n_spatial_dims)
+
+        if transform_point_data:
+            _transform_tensordict(
+                new_point_data, projection_matrix, current_n_spatial_dims, "point_data"
+            )
+        if transform_cell_data:
+            _transform_tensordict(
+                new_cell_data, projection_matrix, current_n_spatial_dims, "cell_data"
+            )
+        if transform_global_data:
+            new_global_data = new_global_data.clone()
+            _transform_tensordict(
+                new_global_data,
+                projection_matrix,
+                current_n_spatial_dims,
+                "global_data",
+            )
 
     ### Create new mesh with modified spatial dimensions
     return Mesh(

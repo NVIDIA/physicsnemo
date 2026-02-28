@@ -18,11 +18,12 @@
 paper "Elucidating the Design Space of Diffusion-Based Generative Models"."""
 
 import os
+import warnings
+
 import hydra
+from omegaconf import DictConfig
 import torch
-import wandb
-import glob
-from omegaconf import DictConfig, OmegaConf
+
 from physicsnemo.distributed import DistributedManager
 
 from utils.trainer import Trainer
@@ -32,15 +33,25 @@ from utils.trainer import Trainer
 def main(cfg: DictConfig) -> None:
     """Train regression or diffusion models for use in the StormCast (https://arxiv.org/abs/2408.10958) ML-based weather model"""
 
+    # suppress nuisance warnings
+    warnings.filterwarnings(
+        "ignore", message="^.*``NO_SHARD`` for ``ShardingStrategy``.*$"
+    )
+    warnings.filterwarnings("ignore", message="^.*`_get_pg_default_device.*$")
+    warnings.filterwarnings(
+        "ignore", message="^.*`NO_SHARD` sharding strategy is deprecated.*$"
+    )
+    warnings.filterwarnings(
+        "ignore", message="^.*You are importing from 'physicsnemo.experimental'.*$"
+    )
+
     # Initialize
     DistributedManager.initialize()
-    dist = DistributedManager()
 
     # Random seed.
     if cfg.training.seed < 0:
         seed = torch.randint(1 << 31, size=[], device=torch.device("cuda"))
-        if dist.distributed:
-            torch.distributed.broadcast(seed, src=0)
+        torch.distributed.broadcast(seed, src=0)
         cfg.training.seed = int(seed)
 
     # Start from specified checkpoint, if provided
@@ -53,28 +64,8 @@ def main(cfg: DictConfig) -> None:
                 "training.initial_weights must point to a physicsnemo .mdlus or .pt checkpoint from a previous training run"
             )
 
-    # If checkpoint directory already exists, then resume training from last checkpoint
-    wandb_resume = False
+    # Set up rundir if not existing
     os.makedirs(cfg.training.rundir, exist_ok=True)
-    net_name = "regression" if cfg.training.loss == "regression" else "diffusion"
-    training_states = glob.glob(
-        os.path.join(cfg.training.rundir, f"checkpoints_{net_name}/checkpoint*.pt")
-    )
-    if training_states:
-        wandb_resume = True
-
-    # Setup wandb, if enabled
-    if dist.rank == 0 and cfg.training.log_to_wandb:
-        entity, project = "wandb_entity", "wandb_project"
-        wandb.init(
-            dir=cfg.training.rundir,
-            config=OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True),
-            name=os.path.basename(cfg.training.rundir),
-            project=project,
-            entity=entity,
-            resume=wandb_resume,
-            mode=cfg.training.wandb_mode,
-        )
 
     # Train.
     trainer = Trainer(cfg)

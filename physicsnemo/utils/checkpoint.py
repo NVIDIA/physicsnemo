@@ -14,16 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Checkpoint utilities for saving and loading training state.
+
+Provides :func:`save_checkpoint` and :func:`load_checkpoint` for persisting
+and restoring model weights, optimizer/scheduler/scaler state, and arbitrary
+metadata.  Supports local filesystems and remote stores via ``fsspec``.
+"""
+
 import os
 import re
 from pathlib import Path, PurePath
-from typing import Any, Dict, List, NewType, Optional, Union
+from typing import Any
 
 import fsspec
 import fsspec.utils
 import torch
-from torch.cuda.amp import GradScaler
-from torch.optim.lr_scheduler import _LRScheduler
+from torch.amp import GradScaler
+from torch.optim.lr_scheduler import LRScheduler
 
 import physicsnemo
 from physicsnemo.core.filesystem import LOCAL_CACHE, _download_cached
@@ -31,47 +38,50 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.capture import _StaticCapture
 from physicsnemo.utils.logging import PythonLogger
 
-optimizer = NewType("optimizer", torch.optim)
-scheduler = NewType("scheduler", _LRScheduler)
-scaler = NewType("scaler", GradScaler)
-
 checkpoint_logging = PythonLogger("checkpoint")
 
 
 def _get_checkpoint_filename(
     path: str,
     base_name: str = "checkpoint",
-    index: Union[int, None] = None,
+    index: int | None = None,
     saving: bool = False,
     model_type: str = "mdlus",
 ) -> str:
-    """Gets the file name /path of checkpoint
+    r"""Build the filename for a numbered checkpoint.
 
-    This function has three different ways of providing a checkout filename:
-    - If supplied an index this will return the checkpoint name using that index.
-    - If index is None and saving is false, this will get the checkpoint with the
-    largest index (latest save).
-    - If index is None and saving is true, it will return the next valid index file name
-    which is calculated by indexing the largest checkpoint index found by one.
+    Resolution logic:
+
+    * **Explicit index** (``index`` is not ``None``): returns that exact
+      checkpoint path.
+    * **Latest** (``index is None``, ``saving=False``): scans for existing
+      checkpoints and returns the one with the largest index.
+    * **Next** (``index is None``, ``saving=True``): returns the path for
+      the *next* index after the largest existing one.
+
+    When no existing checkpoints are found, the returned path uses index 0.
 
     Parameters
     ----------
     path : str
-        Path to checkpoints
-    base_name: str, optional
-        Base file name, by default checkpoint
-    index : Union[int, None], optional
-        Checkpoint index, by default None
+        Directory containing checkpoint files.
+    base_name : str, optional
+        Stem used in the filename, by default ``"checkpoint"``.
+    index : int | None, optional
+        Specific checkpoint index to use.  When ``None``, the latest or
+        next index is determined automatically.
     saving : bool, optional
-        Get filename for saving a new checkpoint, by default False
-    model_type : str
-        Model type, by default "mdlus" for PhysicsNeMo models and "pt" for PyTorch models
-
+        If ``True`` (and ``index is None``), return the *next* available
+        filename rather than the latest existing one.  By default ``False``.
+    model_type : str, optional
+        ``"mdlus"`` for :class:`~physicsnemo.core.Module` models,
+        ``"pt"`` for vanilla PyTorch models.  Determines the file
+        extension.  By default ``"mdlus"``.
 
     Returns
     -------
     str
-        Checkpoint file name
+        Fully qualified checkpoint filename.
     """
     # Get model parallel rank so all processes in the first model parallel group
     # can save their checkpoint. In the case without model parallelism,
@@ -139,23 +149,29 @@ def _get_checkpoint_filename(
 
 
 def _unique_model_names(
-    models: List[torch.nn.Module],
+    models: list[torch.nn.Module],
     loading: bool = False,
-) -> Dict[str, torch.nn.Module]:
-    """Util to clean model names and index if repeat names, will also strip DDP wrappers
-     and torch dynamo wrappers if they exist.
+) -> dict[str, torch.nn.Module]:
+    r"""Map a list of models to unique names derived from their class names.
+
+    DDP wrappers (``model.module``) and ``torch.compile`` wrappers
+    (``OptimizedModule``) are automatically stripped before naming.
+    When multiple models share a class name, a numeric suffix is appended
+    (e.g. ``"MyModel0"``, ``"MyModel1"``).
 
     Parameters
     ----------
-    model :  List[torch.nn.Module]
-        List of models to generate names for.
+    models : list[torch.nn.Module]
+        Models to generate names for.
     loading : bool, optional
-        Whether the models are being loaded, by default False.
+        When ``True``, emits a warning if a model is already compiled
+        (loading into a compiled model can cause issues).  By default
+        ``False``.
 
     Returns
     -------
-    Dict[str, torch.nn.Module]
-        Dictionary of model names and respective modules
+    dict[str, torch.nn.Module]
+        Mapping from unique name to (unwrapped) module.
     """
     # Loop through provided models and set up base names
     model_dict = {}
@@ -195,57 +211,57 @@ def _unique_model_names(
 
 
 def save_checkpoint(
-    path: str,
-    models: Union[torch.nn.Module, List[torch.nn.Module], None] = None,
-    optimizer: Union[optimizer, None] = None,
-    scheduler: Union[scheduler, None] = None,
-    scaler: Union[scaler, None] = None,
-    epoch: Union[int, None] = None,
-    metadata: Optional[Dict[str, Any]] = None,
+    path: Path | str,
+    models: torch.nn.Module | list[torch.nn.Module] | None = None,
+    optimizer: torch.optim.Optimizer | None = None,
+    scheduler: LRScheduler | None = None,
+    scaler: GradScaler | None = None,
+    epoch: int | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
-    r"""Training checkpoint saving utility.
+    r"""Save a training checkpoint to disk (or a remote store).
 
-    This function saves training checkpoints to the provided path. Multiple
-    files may be created depending on what is being saved:
+    Up to two categories of files are created inside ``path``:
 
-    - Model checkpoints (when ``models`` are provided):
-      "{model_name}{model_id}.{model_parallel_rank}.{epoch}.{ext}"
-      where ext is ".mdlus" for instances of
-      :class:`~physicsnemo.core.Module` or ".pt" for PyTorch models.
+    * **Model weights** (when ``models`` is provided) - one file per model:
+      ``{class_name}{id}.{mp_rank}.{epoch}.{ext}`` where *ext* is
+      ``.mdlus`` for :class:`~physicsnemo.core.Module` instances or
+      ``.pt`` for plain PyTorch models.  When several models share a class
+      name, a numeric *id* is appended (``"MyModel0"``, ``"MyModel1"``).
+    * **Training state** (when any of ``optimizer`` / ``scheduler`` /
+      ``scaler`` is provided, or
+      :class:`~physicsnemo.utils.capture._StaticCapture` scalers exist):
+      ``checkpoint.{mp_rank}.{epoch}.pt`` containing their combined
+      ``state_dict`` entries, plus ``epoch`` and ``metadata``.
 
-    - Training state (when optimizer/scheduler/scaler are provided):
-      "checkpoint.{model_parallel_rank}.{epoch}.pt"
-
-    For both PhysicsNeMo and PyTorch models, the {model_name} is always derived from
-    the model's class name ``model.__class__.__name__``.
-    If multiple models share the same {model_name}, they are indexed by {model_id}
-    (e.g., "MyModel0", "MyModel1").
-
-    The function :func:`~physicsnemo.launch.utils.checkpoint.load_checkpoint`
-    can be used to restore from these files with models that are **already instantiated**.
-    To load only the model checkpoint (even when the models are **not** already instantiated),
-    use the method :meth:`~physicsnemo.core.module.Module.from_checkpoint` to
-    instantiate and load the model from the checkpoint.
+    Use :func:`load_checkpoint` to restore from these files.
+    To instantiate *and* load a model in one step (without pre-constructing
+    it), use :meth:`~physicsnemo.core.module.Module.from_checkpoint`.
 
     Parameters
     ----------
-    path : str
-        Path to save the training checkpoint
-    models : Union[torch.nn.Module, List[torch.nn.Module], None], optional
-        A single or list of PyTorch models, by default None
-    optimizer : Union[optimizer, None], optional
-        Optimizer, by default None
-    scheduler : Union[scheduler, None], optional
-        Learning rate scheduler, by default None
-    scaler : Union[scaler, None], optional
-        AMP grad scaler. Will attempt to save on in static capture if none provided, by
-        default None
-    epoch : Union[int, None], optional
-        Epoch checkpoint to load. If none this will save the checkpoint in the next
-        valid index, by default None
-    metadata : Optional[Dict[str, Any]], optional
-        Additional metadata to save, by default None
+    path : Path | str
+        Directory in which to store checkpoint files.  Created
+        automatically for local paths if it does not exist.
+    models : torch.nn.Module | list[torch.nn.Module] | None, optional
+        Model(s) whose weights should be saved.
+    optimizer : torch.optim.Optimizer | None, optional
+        Optimizer whose ``state_dict`` should be saved.
+    scheduler : LRScheduler | None, optional
+        Learning-rate scheduler whose ``state_dict`` should be saved.
+    scaler : GradScaler | None, optional
+        AMP gradient scaler whose ``state_dict`` should be saved.
+        If ``None`` but a
+        :class:`~physicsnemo.utils.capture._StaticCapture` scaler exists,
+        that scaler's state is saved instead.
+    epoch : int | None, optional
+        Epoch index to embed in the filename and the checkpoint dict.
+        When ``None``, the next available index is used.
+    metadata : dict[str, Any] | None, optional
+        Arbitrary key-value pairs persisted alongside the training state
+        (e.g. best validation loss, MLflow run ID).
     """
+    path = str(path)
     protocol = fsspec.utils.get_protocol(path)
     fs = fsspec.filesystem(protocol)
     # Create checkpoint directory if it does not exist.
@@ -322,46 +338,56 @@ def save_checkpoint(
 
 
 def load_checkpoint(
-    path: str,
-    models: Union[torch.nn.Module, List[torch.nn.Module], None] = None,
-    optimizer: Union[optimizer, None] = None,
-    scheduler: Union[scheduler, None] = None,
-    scaler: Union[scaler, None] = None,
-    epoch: Union[int, None] = None,
-    metadata_dict: Optional[Dict[str, Any]] = {},
-    device: Union[str, torch.device] = "cpu",
+    path: Path | str,
+    models: torch.nn.Module | list[torch.nn.Module] | None = None,
+    optimizer: torch.optim.Optimizer | None = None,
+    scheduler: LRScheduler | None = None,
+    scaler: GradScaler | None = None,
+    epoch: int | None = None,
+    metadata_dict: dict[str, Any] | None = None,
+    device: str | torch.device = "cpu",
 ) -> int:
-    """Checkpoint loading utility
+    r"""Load a training checkpoint saved by :func:`save_checkpoint`.
 
-    This loader is designed to be used with the save checkpoint utility in PhysicsNeMo
-    Launch. Given a path, this method will try to find a checkpoint and load state
-    dictionaries into the provided training objects.
+    Scans ``path`` for checkpoint files and restores state dictionaries
+    into the provided training objects.  Objects that are ``None`` are
+    silently skipped.
 
     Parameters
     ----------
-    path : str
-        Path to training checkpoint
-    models : Union[torch.nn.Module, List[torch.nn.Module], None], optional
-        A single or list of PyTorch models, by default None
-    optimizer : Union[optimizer, None], optional
-        Optimizer, by default None
-    scheduler : Union[scheduler, None], optional
-        Learning rate scheduler, by default None
-    scaler : Union[scaler, None], optional
-        AMP grad scaler, by default None
-    epoch : Union[int, None], optional
-        Epoch checkpoint to load. If none is provided this will attempt to load the
-        checkpoint with the largest index, by default None
-    metadata_dict: Optional[Dict[str, Any]], optional
-        Dictionary to store metadata from the checkpoint, by default None
-    device : Union[str, torch.device], optional
-        Target device, by default "cpu"
+    path : Path | str
+        Directory containing checkpoint files (local path or ``fsspec``
+        URI).  If the directory does not exist, the load is skipped and
+        ``0`` is returned.
+    models : torch.nn.Module | list[torch.nn.Module] | None, optional
+        Model(s) whose ``state_dict`` should be restored.  DDP and
+        ``torch.compile`` wrappers are stripped automatically.
+    optimizer : torch.optim.Optimizer | None, optional
+        Optimizer whose ``state_dict`` should be restored.
+    scheduler : LRScheduler | None, optional
+        Learning-rate scheduler whose ``state_dict`` should be restored.
+    scaler : GradScaler | None, optional
+        AMP gradient scaler whose ``state_dict`` should be restored.
+    epoch : int | None, optional
+        Specific checkpoint index to load.  When ``None``, the checkpoint
+        with the largest index (most recent) is loaded.
+    metadata_dict : dict[str, Any] | None, optional
+        If a ``dict`` is provided, it is updated **in-place** with any
+        metadata that was persisted by :func:`save_checkpoint`.
+    device : str | torch.device, optional
+        Device onto which tensors are mapped during loading.  By default
+        ``"cpu"``.
 
     Returns
     -------
     int
-        Loaded epoch
+        The epoch stored in the checkpoint.  Returns ``0`` when:
+
+        * The checkpoint directory does not exist.
+        * No training-state file is found inside the directory.
+        * The training-state file does not contain an ``"epoch"`` key.
     """
+    path = str(path)
     fs = fsspec.filesystem(fsspec.utils.get_protocol(path))
     # Check if checkpoint directory exists
     if fs.exists(path):
@@ -451,29 +477,31 @@ def load_checkpoint(
     if "epoch" in checkpoint_dict:
         epoch = checkpoint_dict["epoch"]
 
-    # Update metadata if exists and the dictionary object is provided
-    metadata = checkpoint_dict.get("metadata", {})
-    for key, value in metadata.items():
-        metadata_dict[key] = value
+    if metadata_dict is not None:
+        metadata_dict.update(checkpoint_dict.get("metadata", {}))
 
     return epoch
 
 
-def get_checkpoint_dir(base_dir: str, model_name: str) -> str:
-    """Get a checkpoint directory based on a given base directory and model name
+def get_checkpoint_dir(base_dir: Path | str, model_name: str) -> str:
+    r"""Build a model-specific checkpoint directory path.
+
+    Returns ``"{base_dir}/checkpoints_{model_name}"``, handling both
+    local paths and ``msc://`` URIs.
 
     Parameters
     ----------
-    base_dir : str
-        Path to the base directory where checkpoints are stored
-    model_name: str, optional
-        Name of the model which is generating the checkpoint
+    base_dir : Path | str
+        Root directory under which the checkpoint subdirectory is placed.
+    model_name : str
+        Model name used as the directory suffix.
 
     Returns
     -------
     str
-        Checkpoint directory
+        Full path to the checkpoint directory.
     """
+    base_dir = str(base_dir)
     top_level_dir = f"checkpoints_{model_name}"
     protocol = fsspec.utils.get_protocol(base_dir)
     if protocol == "msc":
@@ -484,8 +512,24 @@ def get_checkpoint_dir(base_dir: str, model_name: str) -> str:
         return os.path.join(base_dir, top_level_dir)
 
 
-# Read via cache and return the cached path for non-file protocols, otherwise just return the path
 def _cache_if_needed(path: str) -> str:
+    r"""Return a local path for ``path``, downloading to cache if remote.
+
+    For the ``"file"`` protocol the path is returned unchanged.  For remote
+    protocols the file is fetched via
+    :func:`~physicsnemo.core.filesystem._download_cached` into a
+    process-specific cache directory.
+
+    Parameters
+    ----------
+    path : str
+        Checkpoint file path (local or ``fsspec`` URI).
+
+    Returns
+    -------
+    str
+        Local filesystem path suitable for :func:`torch.load`.
+    """
     protocol = fsspec.utils.get_protocol(path)
     if protocol == "file":
         return path

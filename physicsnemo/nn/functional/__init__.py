@@ -15,6 +15,13 @@
 # limitations under the License.
 
 from .drop_path import drop_path
+from .equivariant_ops import (
+    legendre_polynomials,
+    polar_and_dipole_basis,
+    smooth_log,
+    spherical_basis,
+    vector_project,
+)
 from .fft import imag, irfft, irfft2, real, rfft, rfft2, view_as_complex
 from .interpolation import interpolation
 from .knn import knn
@@ -29,11 +36,16 @@ __all__ = [
     "imag",
     "interpolation",
     "knn",
+    "legendre_polynomials",
+    "polar_and_dipole_basis",
     "radius_search",
     "real",
     "rfft",
     "rfft2",
     "signed_distance_field",
+    "smooth_log",
+    "spherical_basis",
+    "vector_project",
     "view_as_complex",
     "weight_fact",
 ]

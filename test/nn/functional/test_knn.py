@@ -154,9 +154,10 @@ def test_opcheck(device):
     torch.library.opcheck(op, args=(points, queries, k))
 
 
-def test_knn_comparison(device):
-    points = torch.randn(53, 3, device=device)
-    queries = torch.randn(21, 3, device=device)
+@pytest.mark.parametrize("n_dims", [2, 3, 7])
+def test_knn_comparison(device, n_dims: int):
+    points = torch.randn(53, n_dims, device=device)
+    queries = torch.randn(21, n_dims, device=device)
     k = 5
 
     if not check_version_spec("cuml", hard_fail=False):
@@ -182,6 +183,37 @@ def test_knn_comparison(device):
     sorted_dist_cuml = torch.sort(distances_A, dim=1)[0]
     sorted_dist_torch = torch.sort(distances_B, dim=1)[0]
     assert torch.allclose(sorted_dist_cuml, sorted_dist_torch, atol=1e-5)
+
+
+@pytest.mark.parametrize("n_dims", [2, 7])
+@pytest.mark.parametrize("implementation", ["cuml", "torch", "scipy", None])
+def test_knn_arbitrary_dims(device: str, n_dims: int, implementation: str):
+    """Verify kNN works for D != 3 across all backends."""
+    if implementation == "cuml":
+        if not check_version_spec("cuml", "24.0.0", hard_fail=False):
+            pytest.skip("cuml not available")
+    elif implementation == "scipy":
+        if not check_version_spec("scipy", "1.7.0", hard_fail=False):
+            pytest.skip("scipy not available")
+
+    if implementation == "cuml" and "cpu" in device:
+        pytest.skip("cuml implementation not supported on CPU")
+    if implementation == "scipy" and "cuda" in device:
+        pytest.skip("scipy implementation not supported on CUDA")
+
+    torch.manual_seed(42)
+    points = torch.randn(200, n_dims, device=device)
+    queries = torch.randn(50, n_dims, device=device)
+    k = 5
+
+    indices, distances = knn(points, queries, k=k, implementation=implementation)
+
+    assert indices.shape == (50, k)
+    assert distances.shape == (50, k)
+    assert (indices >= 0).all()
+    assert (indices < 200).all()
+    assert (distances >= 0).all()
+    assert torch.all(distances[:, 1:] >= distances[:, :-1])
 
 
 if __name__ == "__main__":
