@@ -6,10 +6,10 @@ Geometric Transformations
 
 .. currentmodule:: physicsnemo.mesh.transformations.geometric
 
-Linear and affine transformations on mesh geometry. Each function returns a
-new :class:`~physicsnemo.mesh.mesh.Mesh` with transformed point coordinates
-and appropriately invalidated caches (cached normals, areas, etc. are
-recomputed on next access).
+Linear and affine transformations on mesh geometry. Each function returns a new
+:class:`~physicsnemo.mesh.mesh.Mesh` with transformed point coordinates and
+appropriately invalidated caches. (Any cached quantities, such as normals and
+areas, are automatically recomputed on next access.)
 
 All transformations are also available as methods on
 :class:`~physicsnemo.mesh.mesh.Mesh`.
