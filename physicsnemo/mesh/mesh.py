@@ -429,27 +429,34 @@ class Mesh:
         """
         cached = self._cache.get(("cell", "areas"), None)
         if cached is None:
-            ### Compute relative vectors from first vertex to all others
-            # Shape: (n_cells, n_manifold_dims, n_spatial_dims)
-            relative_vectors = (
-                self.points[self.cells[:, 1:]] - self.points[self.cells[:, [0]]]
-            )
+            # Disable autocast so that torch.matmul (which is on the autocast
+            # "lower precision" list) stays in the native dtype of the points.
+            # Geometry should not be downcast to bfloat16/float16.
+            with torch.autocast(
+                device_type=self.points.device.type, enabled=False
+            ):
+                ### Compute relative vectors from first vertex to all others
+                # Shape: (n_cells, n_manifold_dims, n_spatial_dims)
+                relative_vectors = (
+                    self.points[self.cells[:, 1:]]
+                    - self.points[self.cells[:, [0]]]
+                )
 
-            ### Compute Gram matrix: G = E^T @ E
-            # E conceptually has shape (n_spatial_dims, n_manifold_dims) per cell
-            # Gram matrix has shape (n_manifold_dims, n_manifold_dims) per cell
-            # In batch form: (n_cells, n_manifold_dims, n_spatial_dims) @ (n_cells, n_spatial_dims, n_manifold_dims)
-            gram_matrix = torch.matmul(
-                relative_vectors,  # (n_cells, n_manifold_dims, n_spatial_dims)
-                relative_vectors.transpose(
-                    -2, -1
-                ),  # (n_cells, n_spatial_dims, n_manifold_dims)
-            )  # Result: (n_cells, n_manifold_dims, n_manifold_dims)
+                ### Compute Gram matrix: G = E^T @ E
+                # E conceptually has shape (n_spatial_dims, n_manifold_dims) per cell
+                # Gram matrix has shape (n_manifold_dims, n_manifold_dims) per cell
+                # In batch form: (n_cells, n_manifold_dims, n_spatial_dims) @ (n_cells, n_spatial_dims, n_manifold_dims)
+                gram_matrix = torch.matmul(
+                    relative_vectors,  # (n_cells, n_manifold_dims, n_spatial_dims)
+                    relative_vectors.transpose(
+                        -2, -1
+                    ),  # (n_cells, n_spatial_dims, n_manifold_dims)
+                )  # Result: (n_cells, n_manifold_dims, n_manifold_dims)
 
-            ### Compute volume: sqrt(|det(G)|) / n!
-            factorial = math.factorial(self.n_manifold_dims)
+                ### Compute volume: sqrt(|det(G)|) / n!
+                factorial = math.factorial(self.n_manifold_dims)
 
-            cached = gram_matrix.det().abs().sqrt() / factorial
+                cached = gram_matrix.det().abs().sqrt() / factorial
             self._cache["cell", "areas"] = cached
 
         return cached
