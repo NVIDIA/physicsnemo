@@ -1,4 +1,4 @@
-Boundaries & Topology
+Boundaries and Topology
 =====================
 
 .. currentmodule:: physicsnemo.mesh.boundaries
