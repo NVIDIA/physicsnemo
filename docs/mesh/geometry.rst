@@ -12,11 +12,11 @@ curvature computations:
 - **Dual volumes** (Voronoi areas/volumes around vertices and edges)
 - **Cotangent weights** (the standard FEM/DEC edge weighting)
 
-Most users will not call these functions directly -- they are invoked
-internally by the calculus and curvature modules, and their results are
-cached on the :class:`~physicsnemo.mesh.mesh.Mesh` object. They are
-exposed here for advanced use cases such as custom DEC operators or
-specialized FEM assembly.
+Most users will not call these functions directly. They are most commonly
+invoked internally by the calculus and curvature modules, and their results are
+cached on the :class:~physicsnemo.mesh.mesh.Mesh object. The API exposes them
+for advanced use cases such as custom discrete exterior calculus (DEC) operators
+or specialized finite element method (FEM) assembly.
 
 .. code:: python
 
