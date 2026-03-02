@@ -22,6 +22,7 @@ import torch
 import torch.nn.functional as F
 from tensordict import TensorDict, tensorclass
 
+from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
     scale,
@@ -413,14 +414,16 @@ class Mesh:
 
     @property
     def cell_areas(self) -> torch.Tensor:
-        """Compute volumes (areas) of n-simplices using the Gram determinant method.
+        """Compute volumes (areas) of n-simplices.
 
         This works for simplices of any manifold dimension embedded in any spatial dimension.
         For example: edges in 2D/3D, triangles in 2D/3D/4D, tetrahedra in 3D/4D, etc.
 
-        The volume of an n-simplex with vertices (v0, v1, ..., vn) is:
-            Volume = (1/n!) * sqrt(det(E^T @ E))
-        where E is the matrix with columns (v1-v0, v2-v0, ..., vn-v0).
+        Uses dimension-specific closed-form expressions for n <= 3 (Lagrange
+        identity, scalar triple product, etc.) and falls back to the Gram
+        determinant for higher dimensions.  See
+        :func:`~physicsnemo.mesh.geometry._cell_areas.compute_cell_areas` for
+        details.
 
         Returns
         -------
@@ -429,34 +432,10 @@ class Mesh:
         """
         cached = self._cache.get(("cell", "areas"), None)
         if cached is None:
-            # Disable autocast so that torch.matmul (which is on the autocast
-            # "lower precision" list) stays in the native dtype of the points.
-            # Geometry should not be downcast to bfloat16/float16.
-            with torch.autocast(
-                device_type=self.points.device.type, enabled=False
-            ):
-                ### Compute relative vectors from first vertex to all others
-                # Shape: (n_cells, n_manifold_dims, n_spatial_dims)
-                relative_vectors = (
-                    self.points[self.cells[:, 1:]]
-                    - self.points[self.cells[:, [0]]]
-                )
-
-                ### Compute Gram matrix: G = E^T @ E
-                # E conceptually has shape (n_spatial_dims, n_manifold_dims) per cell
-                # Gram matrix has shape (n_manifold_dims, n_manifold_dims) per cell
-                # In batch form: (n_cells, n_manifold_dims, n_spatial_dims) @ (n_cells, n_spatial_dims, n_manifold_dims)
-                gram_matrix = torch.matmul(
-                    relative_vectors,  # (n_cells, n_manifold_dims, n_spatial_dims)
-                    relative_vectors.transpose(
-                        -2, -1
-                    ),  # (n_cells, n_spatial_dims, n_manifold_dims)
-                )  # Result: (n_cells, n_manifold_dims, n_manifold_dims)
-
-                ### Compute volume: sqrt(|det(G)|) / n!
-                factorial = math.factorial(self.n_manifold_dims)
-
-                cached = gram_matrix.det().abs().sqrt() / factorial
+            relative_vectors = (
+                self.points[self.cells[:, 1:]] - self.points[self.cells[:, [0]]]
+            )
+            cached = compute_cell_areas(relative_vectors)
             self._cache["cell", "areas"] = cached
 
         return cached

@@ -18,6 +18,7 @@
 
 This module contains fundamental geometric operations that are shared across
 the codebase, including:
+- Cell area (n-simplex volume) computation
 - Interior angle computation for n-simplices
 - Dual mesh (Voronoi/circumcentric) computations
 - Circumcenter calculations
@@ -28,6 +29,7 @@ These are used by both DEC operators (calculus module) and differential
 geometry computations (curvature module).
 """
 
+from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._angles import (
     compute_vertex_angle_sums,
     compute_vertex_angles,

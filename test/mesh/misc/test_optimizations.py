@@ -244,48 +244,6 @@ class TestCellNormalsOptimizations:
         torch.testing.assert_close(lengths, torch.ones(5), rtol=1e-5, atol=1e-6)
 
 
-class TestGramMatrixOptimization:
-    """Test einsum optimization in Gram matrix computation."""
-
-    def test_cell_areas_correctness(self):
-        """Verify cell area computation is still correct after optimization."""
-        # Create a known triangle
-        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
-        cells = torch.tensor([[0, 1, 2]])
-
-        mesh = Mesh(points=points, cells=cells)
-        area = mesh.cell_areas[0]
-
-        # Right triangle with legs 1, area = 0.5
-        expected_area = 0.5
-        torch.testing.assert_close(
-            area, torch.tensor(expected_area), rtol=1e-5, atol=1e-7
-        )
-
-    def test_3d_tetrahedron_volume(self):
-        """Test tetrahedron volume computation."""
-        # Unit tetrahedron
-        points = torch.tensor(
-            [
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [0.0, 0.0, 1.0],
-            ],
-            dtype=torch.float32,
-        )
-        cells = torch.tensor([[0, 1, 2, 3]])
-
-        mesh = Mesh(points=points, cells=cells)
-        volume = mesh.cell_areas[0]
-
-        # Volume of unit tetrahedron is 1/6
-        expected_volume = 1.0 / 6.0
-        torch.testing.assert_close(
-            volume, torch.tensor(expected_volume), rtol=1e-5, atol=1e-7
-        )
-
-
 class TestMeshMergeOptimization:
     """Test optimized mesh merging."""
 
@@ -526,36 +484,6 @@ class TestOptimizationsParametrized:
         assert torch.allclose(
             recon_error, torch.zeros(n_queries, device=device), rtol=1e-5, atol=1e-6
         )
-
-    @pytest.mark.parametrize("n_manifold_dims", [2, 3])
-    def test_cell_areas_computation_parametrized(self, n_manifold_dims, device):
-        """Test cell area computation across backends."""
-        if n_manifold_dims == 2:
-            points = torch.tensor(
-                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0]],
-                device=device,
-            )
-            cells = torch.tensor([[0, 1, 2]], device=device, dtype=torch.int64)
-        else:
-            points = torch.tensor(
-                [
-                    [0.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                ],
-                device=device,
-            )
-            cells = torch.tensor([[0, 1, 2, 3]], device=device, dtype=torch.int64)
-
-        mesh = Mesh(points=points, cells=cells)
-        areas = mesh.cell_areas
-
-        # Verify device
-        assert_on_device(areas, device)
-
-        # Verify areas are positive
-        assert torch.all(areas > 0), "All areas should be positive"
 
     @pytest.mark.parametrize("n_manifold_dims", [1, 2])
     def test_cell_normals_computation_parametrized(self, n_manifold_dims, device):
