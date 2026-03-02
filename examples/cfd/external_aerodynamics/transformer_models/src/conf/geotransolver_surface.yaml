@@ -39,7 +39,7 @@ data:
   include_sdf: false
   include_geometry: true
   geometry_sampling: 300_000
-  broadcast_global_features: true
+  broadcast_global_features: false
 
 
 # Logging configuration

@@ -27,4 +27,5 @@ data_keys:
   - "stl_faces"
   - "stl_centers"
   - "stl_coordinates"
-  
+  - "air_density"
+  - "stream_velocity"
