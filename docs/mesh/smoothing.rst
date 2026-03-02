@@ -6,7 +6,7 @@ Smoothing
 Mesh smoothing algorithms for improving mesh regularity while preserving
 geometric features.
 
-Currently provides
+Provides
 `Laplacian smoothing <https://en.wikipedia.org/wiki/Laplacian_smoothing>`_,
 which iteratively moves each vertex toward the centroid of its neighbors.
 Boundary vertices are held fixed to preserve the mesh boundary.

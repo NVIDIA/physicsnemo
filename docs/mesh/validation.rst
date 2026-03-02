@@ -1,5 +1,5 @@
-Validation & Quality
-====================
+Validation and Quality
+======================
 
 .. currentmodule:: physicsnemo.mesh.validation
 

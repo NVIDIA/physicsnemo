@@ -1,5 +1,5 @@
-Sampling & Interpolation
-========================
+Sampling and Interpolation
+==========================
 
 .. currentmodule:: physicsnemo.mesh.sampling
 

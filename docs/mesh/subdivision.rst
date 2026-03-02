@@ -4,7 +4,7 @@ Subdivision
 .. currentmodule:: physicsnemo.mesh.subdivision
 
 Mesh subdivision refines a mesh by splitting each n-simplex into
-:math:`2^n` child simplices (e.g., each triangle becomes 4 triangles).
+:math:`2^n` child simplices (for example, each triangle becomes four triangles).
 New vertices are inserted at or near edge midpoints, and existing data
 is interpolated onto the refined mesh.
 

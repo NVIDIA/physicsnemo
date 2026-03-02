@@ -4,7 +4,7 @@ I/O
 .. currentmodule:: physicsnemo.mesh.io
 
 Conversion between PhysicsNeMo :class:`~physicsnemo.mesh.mesh.Mesh` objects and
-`PyVista <https://pyvista.org/>`_ meshes. Since PyVista supports a wide range of
+`PyVista <https://pyvista.org/>`_ meshes. Because PyVista supports a wide range of
 file formats (VTK, STL, PLY, OBJ, and many others), this module serves as the
 primary I/O gateway for PhysicsNeMo-Mesh.
 

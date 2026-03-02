@@ -14,7 +14,7 @@ vertex, cell, and global levels. All tensors move together under ``.to(device)``
 calls, and expensive geometric quantities -- centroids, normals, areas, curvature
 -- are computed lazily on first access and cached internally.
 
-Most mesh operations (subdivision, derivatives, transformations, etc.) are
+Most mesh operations (subdivision, derivatives, transformations) are
 available both as ``Mesh`` methods and as standalone functions in the
 corresponding submodules. The methods are thin wrappers that pass ``self`` to
 the standalone functions.

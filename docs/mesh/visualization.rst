@@ -7,7 +7,7 @@ PhysicsNeMo-Mesh supports two visualization backends:
 
 **Matplotlib**
     2D and 3D static plots. The default backend when PyVista is not available or
-    when rendering in non-interactive environments (e.g., Jupyter notebooks
+    when rendering in non-interactive environments (for example, Jupyter notebooks
     without a GPU display).
 
 **PyVista**

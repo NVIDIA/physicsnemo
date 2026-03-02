@@ -42,7 +42,7 @@ derivatives are supported for manifolds embedded in higher-dimensional spaces.
     div_v = compute_divergence_points_lsq(mesh, mesh.point_data["velocity"])
     curl_v = compute_curl_points_lsq(mesh, mesh.point_data["velocity"])  # 3D only
 
-Key operators
+Key Operators
 -------------
 
 - **Gradient**: :math:`\nabla\varphi` (scalar :math:`\to` vector)

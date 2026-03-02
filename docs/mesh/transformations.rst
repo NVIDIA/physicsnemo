@@ -1,5 +1,5 @@
-Transformations & Projections
-=============================
+Transformations and Projections
+===============================
 
 Geometric Transformations
 -------------------------
@@ -44,10 +44,10 @@ Projections
 Spatial dimension manipulation -- changing the embedding dimension of a mesh
 without altering its manifold dimension.
 
-- :func:`embed` -- add spatial dimensions (non-destructive; e.g., 2D mesh to 3D
+- :func:`embed` -- add spatial dimensions (non-destructive; for example, 2D mesh to 3D
   by appending zero coordinates)
 - :func:`extrude` -- sweep a manifold to create a mesh one dimension higher
-  (e.g., a triangle mesh extruded to a prism mesh)
+  (for example, a triangle mesh extruded to a prism mesh)
 - :func:`project` -- reduce spatial dimensions (lossy; drops coordinate axes)
 
 .. automodule:: physicsnemo.mesh.projections

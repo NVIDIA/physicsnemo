@@ -86,7 +86,7 @@ Design Properties
 **Arbitrary-rank tensor fields**
     Field data attached to a mesh is not limited to scalars or vectors. You
     can store tensors of any rank - scalar fields, vector fields, matrix
-    fields (e.g. stress tensors), or higher-order tensor fields - at any of
+    fields (for example, stress tensors), or higher-order tensor fields - at any of
     the three levels (per-point, per-cell, or global).
 
 **Nested, structured data via TensorDict**

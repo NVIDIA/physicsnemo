@@ -9,7 +9,7 @@ curvatures on simplicial manifolds.
 Two kinds of curvature are provided:
 
 **Gaussian Curvature** (intrinsic)
-    Computed via the
+    Computed through the
     `angle defect <https://en.wikipedia.org/wiki/Angular_defect>`_ method:
     :math:`K_i = (\theta_{\text{full}} - \sum \theta_{ij}) / A_i^*`, where
     :math:`A_i^*` is the dual (Voronoi) area around vertex :math:`i`.
@@ -17,7 +17,7 @@ Two kinds of curvature are provided:
     so it works for any codimension. Available at both vertices and cells.
 
 **Mean Curvature** (extrinsic)
-    Computed via the
+    Computed through the
     `cotangent Laplacian <https://en.wikipedia.org/wiki/Discrete_Laplace_operator#Mesh_Laplacians>`_
     method: :math:`H_i = \|L \mathbf{x}\|_i / (2 A_i^*)`. Requires
     codimension 1 (the mesh must have well-defined normal vectors).

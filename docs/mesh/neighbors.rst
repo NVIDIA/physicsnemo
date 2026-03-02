@@ -1,11 +1,11 @@
-Neighbors & Adjacency
-=====================
+Neighbors and Adjacency
+=======================
 
 .. currentmodule:: physicsnemo.mesh.neighbors
 
 This module computes topological adjacency relationships between mesh
-elements -- that is, which points/cells are connected to which other
-points/cells through the mesh connectivity, as opposed to spatial proximity.
+elements. Rather than using spatial proximity, it indicates the mesh connectivity for which points/cells are connected to which other
+points/cells.
 
 Four adjacency types are supported:
 
