@@ -11,17 +11,25 @@ is interpolated onto the refined mesh.
 Three schemes are available:
 
 **Linear** (midpoint)
-    New vertices are placed at exact edge midpoints. Interpolating -- original
-    vertices remain in place. No smoothing is applied.
+    New vertices are placed at exact edge midpoints. This is an `interpolating`
+    scheme, in that the original vertices can be found, without repositioning,
+    in the subdivided mesh. This scheme is also the fastest and most
+    dimensionally-generic of the provided schemes. However, it does not provide
+    any smoothing. This can result in visible `meta-facets` in the subdivided
+    mesh, each of which corresponds to an original cell of the parent mesh.
 
 **Loop** (`Loop, 1987 <https://www.microsoft.com/en-us/research/publication/smooth-subdivision-surfaces-based-on-triangles/>`_)
-    Valence-based weighted averaging produces :math:`C^2`-smooth limit
-    surfaces. Approximating -- original vertices are repositioned. The
-    standard choice for generating smooth surfaces from coarse meshes.
+    Valence-based weighted averaging produces :math:`C^2`-smooth limit surfaces.
+    This is an `approximating` scheme, in that the original vertices are
+    repositioned. Hence, the subdivided mesh will not contain the original
+    vertices. This scheme is the standard choice for generating smooth surfaces
+    from coarse meshes.
 
 **Butterfly** (`Zorin et al., 1996 <https://cims.nyu.edu/gcl/papers/zorin1996ism.pdf>`_)
-    Weighted stencil subdivision that is interpolating (original vertices
-    stay fixed) while still producing smooth surfaces. Preferred when exact
+    Weighted stencil subdivision that is interpolating (original vertices stay
+    fixed) while still producing smooth surfaces. In practice, this reduced
+    geometric flexibility compared to the Loop scheme can result in less robust
+    performance across varying mesh topologies. Preferred when exact
     interpolation of existing data is required.
 
 All schemes propagate ``point_data`` and ``cell_data`` to the refined mesh
