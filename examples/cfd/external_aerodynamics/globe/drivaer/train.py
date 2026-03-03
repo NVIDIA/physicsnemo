@@ -222,7 +222,7 @@ def main(
             "C_p": 0,
             "C_f": 1,
         },
-        boundary_source_data_ranks={"car_body": {}},
+        boundary_source_data_ranks={"no_slip": {}},
         reference_length_names=["L_ref", "sqrt_A_ref"],
         reference_area=2.170,
         global_data_ranks=None,
@@ -626,7 +626,7 @@ def main(
                         viz_sample = DrivAerMLDataSet.preprocess(
                             sample_path,
                         )
-                        viz_sample.boundary_meshes["car_body"] = (
+                        viz_sample.boundary_meshes["no_slip"] = (
                             DrivAerMLDataSet._subsample_boundary(
                                 viz_sample.surface_mesh, boundary_n_faces
                             )

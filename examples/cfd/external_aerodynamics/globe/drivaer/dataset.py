@@ -16,10 +16,10 @@
 
 """Dataset loading and preprocessing for the GLOBE DrivAerML 3D case study.
 
-Reads DrivAerML simulation outputs (VTP boundary meshes, geometry CSVs, force
-coefficient CSVs), extracts the car body surface, and assembles
-nondimensionalized prediction targets.  The GLOBE boundary mesh is created at
-load time by randomly subsampling cells from the cached surface mesh.
+Reads DrivAerML simulation outputs (VTP car body surfaces, geometry CSVs,
+force coefficient CSVs), triangulates and assembles nondimensionalized
+prediction targets.  The GLOBE boundary mesh is created at load time by
+randomly subsampling cells from the cached surface mesh.
 """
 
 import csv
@@ -64,7 +64,7 @@ class DrivAerMLSample:
         surface_mesh: Full-resolution car body surface with ``point_data``
             containing nondimensional prediction targets (``C_p``, ``C_f``).
             Has cell connectivity for visualization.
-        boundary_meshes: ``{"car_body": Mesh}`` - randomly subsampled car body
+        boundary_meshes: ``{"no_slip": Mesh}`` - randomly subsampled car body
             cells used as GLOBE boundary input (geometry only, no field data).
             Populated at load time by :meth:`DrivAerMLDataSet.__getitem__`.
         reference_lengths: Per-sample reference lengths (``L_ref``,
@@ -96,106 +96,6 @@ class DrivAerMLSample:
 
 
 # ---------------------------------------------------------------------------
-# Car body extraction
-# ---------------------------------------------------------------------------
-
-
-def _identify_car_body_cells(
-    pv_mesh: pv.PolyData,
-    *,
-    tol: float = 0.05,
-    ground_nz: float = 0.85,
-) -> np.ndarray:
-    """Return a boolean mask identifying car body cells in a DrivAerML VTP.
-
-    The VTP boundary mesh contains all domain boundaries merged into a single
-    mesh with no patch identifiers. This function classifies each cell as
-    either *tunnel wall* or *car body* using coordinate and surface-normal
-    heuristics.
-
-    Tunnel walls are identified as cells whose centers lie within *tol* of
-    the domain bounding box on any face (inlet, outlet, sides, ceiling), or
-    cells at z_min whose outward normal points predominantly upward (ground
-    plane, not car underbody).
-
-    Args:
-        pv_mesh: Full boundary PolyData from the VTP file.
-        tol: Distance threshold (meters) for identifying domain-boundary cells.
-        ground_nz: Minimum z-component of the outward normal for a cell at
-            z_min to be classified as ground rather than car underbody.
-
-    Returns:
-        Boolean array of shape ``(n_cells,)``. True = car body.
-    """
-    cell_centers: np.ndarray = pv_mesh.cell_centers().points  # (n_cells, 3)
-    normals: np.ndarray = pv_mesh.cell_normals  # (n_cells, 3)
-    x_min, x_max, y_min, y_max, z_min, z_max = pv_mesh.bounds
-
-    is_inlet = cell_centers[:, 0] < x_min + tol
-    is_outlet = cell_centers[:, 0] > x_max - tol
-    is_left = cell_centers[:, 1] < y_min + tol
-    is_right = cell_centers[:, 1] > y_max - tol
-    is_ceiling = cell_centers[:, 2] > z_max - tol
-    is_near_floor = cell_centers[:, 2] < z_min + tol
-    is_ground = is_near_floor & (normals[:, 2] > ground_nz)
-
-    is_tunnel = is_inlet | is_outlet | is_left | is_right | is_ceiling | is_ground
-    return ~is_tunnel
-
-
-def _extract_car_body(pv_mesh: pv.PolyData, **kwargs: Any) -> pv.PolyData:
-    """Extract the car body sub-mesh from a full DrivAerML boundary VTP.
-
-    The full VTP boundary mesh forms a closed surface (tunnel + car body),
-    so VTK's normal-consistency algorithm can reliably orient all face
-    normals outward.  This orientation step is performed on the FULL mesh
-    first, then car body cells are extracted with their corrected winding
-    intact.
-
-    Args:
-        pv_mesh: Full boundary PolyData from the VTP file.
-        **kwargs: Forwarded to :func:`_identify_car_body_cells`.
-
-    Returns:
-        Triangulated PolyData of the car body with outward-facing normals
-        and cell data preserved.
-    """
-    if not pv_mesh.is_all_triangles:
-        pv_mesh = pv_mesh.triangulate()
-
-    # Orient normals on the FULL (closed) boundary mesh. The full tunnel
-    # envelope is closed, so auto_orient reliably determines outward.
-    pv_mesh.compute_normals(
-        cell_normals=True,
-        point_normals=False,
-        consistent_normals=True,
-        auto_orient_normals=True,
-        inplace=True,
-    )
-
-    car_mask = _identify_car_body_cells(pv_mesh, **kwargs)
-    all_faces: np.ndarray = pv_mesh.regular_faces  # (n_cells, 3)
-    car_faces = all_faces[car_mask]
-
-    # Compact sub-mesh (renumber vertices, remove orphaned points)
-    unique_pts, inverse = np.unique(car_faces.ravel(), return_inverse=True)
-    new_faces = inverse.reshape(-1, 3)
-    new_points = pv_mesh.points[unique_pts]
-
-    faces_padded = np.column_stack(
-        [np.full(len(new_faces), 3, dtype=np.int64), new_faces]
-    ).ravel()
-    car_body = pv.PolyData(new_points, faces_padded)
-
-    for name in pv_mesh.cell_data:
-        if name == "Normals":
-            continue  # Skip VTK-generated normals array
-        car_body.cell_data[name] = pv_mesh.cell_data[name][car_mask]
-
-    return car_body
-
-
-# ---------------------------------------------------------------------------
 # Dataset
 # ---------------------------------------------------------------------------
 
@@ -222,7 +122,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
 
     def __getitem__(self, index) -> DrivAerMLSample:  # ty: ignore[invalid-method-override]
         sample: DrivAerMLSample = super().__getitem__(index)
-        sample.boundary_meshes["car_body"] = self._subsample_boundary(
+        sample.boundary_meshes["no_slip"] = self._subsample_boundary(
             sample.surface_mesh, self.boundary_n_faces
         )
         return sample
@@ -330,7 +230,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         Performs the expensive, hyperparameter-invariant work that is cached
         to disk by :class:`CachedPreprocessingDataset`:
 
-            1. Load the VTP boundary mesh (~600 MB) and extract the car body.
+            1. Load the VTP car body surface and triangulate.
             2. Compute nondimensional surface fields (C_p, C_f).
             3. Interpolate cell-centered data to mesh vertices.
             4. Parse geometry reference CSV for per-sample reference lengths.
@@ -350,37 +250,41 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         sample_dir = Path(sample_path)
         run_idx = sample_dir.name.removeprefix("run_")
 
-        ### Load VTP boundary mesh
+        ### Load VTP car body surface
         vtp_path = sample_dir / f"boundary_{run_idx}.vtp"
         if not vtp_path.exists():
             raise FileNotFoundError(f"Missing VTP boundary file: {vtp_path}")
-        pv_boundary: pv.PolyData = pv.read(vtp_path)
+        pv_surface: pv.PolyData = pv.read(vtp_path)
 
-        ### Extract car body sub-mesh
-        car_body = _extract_car_body(pv_boundary)
-        logger.info(
-            f"run_{run_idx}: extracted {car_body.n_cells} car body cells "
-            f"from {pv_boundary.n_cells} total boundary cells"
+        ### Triangulate and ensure consistent face winding
+        if not pv_surface.is_all_triangles:
+            pv_surface = pv_surface.triangulate()
+        pv_surface.compute_normals(
+            cell_normals=True,
+            point_normals=False,
+            consistent_normals=True,
+            auto_orient_normals=False,
+            inplace=True,
         )
-        del pv_boundary  # free ~600 MB
+        logger.info(f"run_{run_idx}: {pv_surface.n_cells:,} surface cells")
 
         ### Compute nondimensional surface fields (cell-centered)
-        car_body.cell_data["C_p"] = car_body.cell_data["CpMeanTrim"].copy()
-        car_body.cell_data["C_f"] = (
-            car_body.cell_data["wallShearStressMeanTrim"] / Q_INF
+        pv_surface.cell_data["C_p"] = pv_surface.cell_data["CpMeanTrim"].copy()
+        pv_surface.cell_data["C_f"] = (
+            pv_surface.cell_data["wallShearStressMeanTrim"] / Q_INF
         )
 
-        # Remove raw fields to avoid carrying unnecessary data
         for name in ("CpMeanTrim", "pMeanTrim", "pPrime2MeanTrim",
                      "wallShearStressMeanTrim", "Normals"):
-            if name in car_body.cell_data:
-                del car_body.cell_data[name]
+            if name in pv_surface.cell_data:
+                del pv_surface.cell_data[name]
 
         ### Interpolate cell data to vertices for GLOBE prediction targets
-        car_body_pt = car_body.cell_data_to_point_data()
+        pv_surface_pt = pv_surface.cell_data_to_point_data()
+        del pv_surface
 
         ### Build the full-resolution surface Mesh (geometry + prediction targets)
-        surface_mesh = from_pyvista(car_body_pt)
+        surface_mesh = from_pyvista(pv_surface_pt)
         surface_mesh = Mesh(
             points=surface_mesh.points,
             cells=surface_mesh.cells,
@@ -650,6 +554,12 @@ def compute_max_mesh_sizes(
     global maximum across all ranks.  Results are used to pad meshes to
     uniform sizes for ``torch.compile`` with static shapes.
 
+    ``n_points`` is bounded by ``cells.numel()`` (the total number of
+    vertex references) rather than the observed ``n_points``, because
+    random cell subsampling produces a stochastic point count after
+    compaction and the observed value from a single draw is not a safe
+    upper bound for subsequent draws.
+
     Args:
         dataloader: DataLoader yielding :class:`DrivAerMLSample` objects.
         device: Device for the all-reduce tensors.
@@ -671,7 +581,7 @@ def compute_max_mesh_sizes(
     ):
         for bc_type, mesh in sample.boundary_meshes.items():
             raw_maxes[bc_type]["n_points"] = max(
-                raw_maxes[bc_type]["n_points"], mesh.n_points
+                raw_maxes[bc_type]["n_points"], mesh.cells.numel()
             )
             n_cells = (
                 int(mesh.n_cells * face_downsampling_ratio)
