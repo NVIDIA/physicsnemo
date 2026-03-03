@@ -12,6 +12,6 @@ Domino utils
 Utilities for working with the Domino model, including data processing and grid construction.
 These utilities are essential for implementing and training Domino-based models.
 
-.. automodule:: physicsnemo.utils.domino.utils
+.. automodule:: physicsnemo.models.domino.utils
     :members:
     :show-inheritance:

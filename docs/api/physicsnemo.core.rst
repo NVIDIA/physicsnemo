@@ -22,7 +22,7 @@ Utilities for handling file operations, caching, and data management across diff
 These utilities abstract away the complexity of dealing with different filesystem types and provide
 consistent interfaces for data access.
 
-.. automodule:: physicsnemo.utils.filesystem
+.. automodule:: physicsnemo.core.filesystem
     :members:
     :show-inheritance:
 

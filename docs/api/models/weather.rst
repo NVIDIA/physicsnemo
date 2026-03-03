@@ -18,23 +18,14 @@ Weather / Climate Models
 GraphCast utils
 ---------------
 
-A collection of utilities specifically designed for working with the GraphCast model, including data processing,
-graph construction, and specialized loss functions. These utilities are essential for implementing and
-training GraphCast-based weather prediction models.
+Utilities for working with the GraphCast model, including graph construction and mesh handling.
+These are used when implementing and training GraphCast-based weather prediction models.
 
-.. automodule:: physicsnemo.graphcast.utils.data_utils
+.. automodule:: physicsnemo.models.graphcast.utils.graph
     :members:
     :show-inheritance:
 
-.. automodule:: physicsnemo.graphcast.utils.graph
-    :members:
-    :show-inheritance:
-
-.. automodule:: physicsnemo.graphcast.utils.graph_utils
-    :members:
-    :show-inheritance:
-
-.. automodule:: physicsnemo.graphcast.utils.loss
+.. automodule:: physicsnemo.models.graphcast.utils.graph_utils
     :members:
     :show-inheritance:
 

@@ -42,7 +42,7 @@ and atmospheric parameters. These utilities are used extensively in weather pred
 Checkpointing
 -------------
 
-.. automodule:: physicsnemo.launch.utils.checkpoint
+.. automodule:: physicsnemo.utils.checkpoint
     :members:
     :show-inheritance:
 
