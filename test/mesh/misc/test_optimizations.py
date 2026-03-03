@@ -191,59 +191,6 @@ class TestBarycentricOptimizations:
         # We don't compute it here to avoid memory issues, but the shapes tell the story
 
 
-class TestCellNormalsOptimizations:
-    """Test optimized cell normal computation."""
-
-    def test_2d_edge_normals(self):
-        """Test 2D edge normal computation (special case)."""
-        # Create a simple edge in 2D
-        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
-        cells = torch.tensor([[0, 1], [0, 2]])  # Two edges
-
-        mesh = Mesh(points=points, cells=cells)
-        normals = mesh.cell_normals
-
-        # Edge from (0,0) to (1,0): direction is (1,0), normal is (0,1)
-        expected_normal_0 = torch.tensor([0.0, 1.0], dtype=torch.float32)
-        torch.testing.assert_close(normals[0], expected_normal_0, rtol=1e-5, atol=1e-7)
-
-        # Edge from (0,0) to (0,1): direction is (0,1), normal is (-1,0)
-        expected_normal_1 = torch.tensor([-1.0, 0.0], dtype=torch.float32)
-        torch.testing.assert_close(normals[1], expected_normal_1, rtol=1e-5, atol=1e-7)
-
-    def test_3d_triangle_normals(self):
-        """Test 3D triangle normal computation (special case)."""
-        # Create a triangle in the XY plane
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32
-        )
-        cells = torch.tensor([[0, 1, 2]])
-
-        mesh = Mesh(points=points, cells=cells)
-        normals = mesh.cell_normals
-
-        # Triangle in XY plane should have normal in +Z direction
-        expected_normal = torch.tensor([0.0, 0.0, 1.0], dtype=torch.float32)
-        torch.testing.assert_close(normals[0], expected_normal, rtol=1e-5, atol=1e-7)
-
-    def test_normals_are_unit_length(self):
-        """Verify all normals are unit length."""
-        torch.manual_seed(42)
-        # Create non-degenerate triangles (sequential indices to avoid duplicates)
-        points = torch.randn(15, 3)
-        # Use sequential indices to ensure non-degenerate triangles
-        cells = torch.tensor(
-            [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11], [12, 13, 14]]
-        )
-
-        mesh = Mesh(points=points, cells=cells)
-        normals = mesh.cell_normals
-
-        # Check all are unit length
-        lengths = torch.norm(normals, dim=1)
-        torch.testing.assert_close(lengths, torch.ones(5), rtol=1e-5, atol=1e-6)
-
-
 class TestMeshMergeOptimization:
     """Test optimized mesh merging."""
 
@@ -484,34 +431,6 @@ class TestOptimizationsParametrized:
         assert torch.allclose(
             recon_error, torch.zeros(n_queries, device=device), rtol=1e-5, atol=1e-6
         )
-
-    @pytest.mark.parametrize("n_manifold_dims", [1, 2])
-    def test_cell_normals_computation_parametrized(self, n_manifold_dims, device):
-        """Test cell normals computation across backends (codimension-1 only)."""
-        if n_manifold_dims == 1:
-            points = torch.tensor([[0.0, 0.0], [1.0, 0.0]], device=device)
-            cells = torch.tensor([[0, 1]], device=device, dtype=torch.int64)
-        else:
-            points = torch.tensor(
-                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-                device=device,
-            )
-            cells = torch.tensor([[0, 1, 2]], device=device, dtype=torch.int64)
-
-        mesh = Mesh(points=points, cells=cells)
-        normals = mesh.cell_normals
-
-        # Verify device
-        assert_on_device(normals, device)
-
-        # Verify unit length
-        lengths = torch.norm(normals, dim=1)
-        assert torch.allclose(
-            lengths,
-            torch.ones(mesh.n_cells, device=device),
-            rtol=1e-5,
-        ), "Normals should be unit length"
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -23,6 +23,7 @@ import torch.nn.functional as F
 from tensordict import TensorDict, tensorclass
 
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
+from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
     scale,
@@ -444,25 +445,14 @@ class Mesh:
     def cell_normals(self) -> torch.Tensor:
         """Compute unit normal vectors for codimension-1 cells.
 
-        Normal vectors are uniquely defined (up to orientation) only for codimension-1
-        manifolds, where n_manifold_dims = n_spatial_dims - 1. This is because the
-        perpendicular subspace to an (n-1)-dimensional manifold in n-dimensional space
-        is 1-dimensional, yielding a unique normal direction.
+        Normal vectors are uniquely defined (up to orientation) only for
+        codimension-1 manifolds, where ``n_manifold_dims = n_spatial_dims - 1``.
 
-        Examples of valid codimension-1 manifolds:
-        - Edges (1-simplices) in 2D space: normal is a 2D vector
-        - Triangles (2-simplices) in 3D space: normal is a 3D vector
-        - Tetrahedron cells (3-simplices) in 4D space: normal is a 4D vector
-
-        Examples of invalid higher-codimension cases:
-        - Edges in 3D space: perpendicular space is 2D (no unique normal)
-        - Points in 2D/3D space: perpendicular space is 2D/3D (no unique normal)
-
-        The implementation uses the generalized cross product (Hodge star operator),
-        computed via signed minor determinants. This generalizes:
-        - 2D: 90° counterclockwise rotation of edge vector
-        - 3D: Standard cross product of two edge vectors
-        - nD: Determinant-based formula for (n-1) edge vectors in n-space
+        Uses dimension-specific closed-form expressions for d=2 (rotation)
+        and d=3 (cross product), falling back to signed minor determinants
+        for higher dimensions.  See
+        :func:`~physicsnemo.mesh.geometry._cell_normals.compute_cell_normals`
+        for details.
 
         Returns
         -------
@@ -476,7 +466,6 @@ class Mesh:
         """
         cached = self._cache.get(("cell", "normals"), None)
         if cached is None:
-            ### Validate codimension-1 requirement
             if self.codimension != 1:
                 raise ValueError(
                     f"cell normals are only defined for codimension-1 manifolds.\n"
@@ -484,40 +473,10 @@ class Mesh:
                     f"Required: n_manifold_dims = n_spatial_dims - 1 (codimension-1).\n"
                     f"Current codimension: {self.codimension}"
                 )
-
-            ### Compute relative vectors from first vertex to all others
-            # Shape: (n_cells, n_manifold_dims, n_spatial_dims)
-            # These form the rows of matrix E for each cell
             relative_vectors = (
                 self.points[self.cells[:, 1:]] - self.points[self.cells[:, [0]]]
             )
-
-            ### Compute normal using generalized cross product (Hodge star)
-            # For (n-1) vectors in R^n represented as rows of matrix E,
-            # the perpendicular vector has components:
-            #   n_i = (-1)^(n-1+i) * det(E with column i removed)
-            # This generalizes 2D rotation and 3D cross product.
-            normal_components = []
-
-            for i in range(self.n_spatial_dims):
-                ### Select all columns except the i-th to form (n-1)×(n-1) submatrix
-                # Uses slice concatenation instead of boolean mask indexing to avoid
-                # aten.nonzero (a dynamic shape op that causes torch.compile graph breaks).
-                submatrix = torch.cat(
-                    [relative_vectors[:, :, :i], relative_vectors[:, :, i + 1 :]],
-                    dim=-1,
-                )  # (n_cells, n_manifold_dims, n_manifold_dims)
-
-                ### Compute signed minor: (-1)^(n_manifold_dims + i) * det(submatrix)
-                det = submatrix.det()  # (n_cells,)
-                sign = (-1) ** (self.n_manifold_dims + i)
-                normal_components.append(sign * det)
-
-            ### Stack components and normalize to unit length
-            normals = torch.stack(
-                normal_components, dim=-1
-            )  # (n_cells, n_spatial_dims)
-            cached = F.normalize(normals, dim=-1)
+            cached = compute_cell_normals(relative_vectors)
             self._cache["cell", "normals"] = cached
 
         return cached
