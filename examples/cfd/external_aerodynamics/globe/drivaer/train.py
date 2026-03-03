@@ -91,6 +91,7 @@ def main(
     n_spherical_harmonics: int = 4,
     boundary_n_faces: int = 20_000,
     use_profiler: bool = True,
+    max_viz_points: int = 100_000,
     make_images: bool = True,
     use_mlflow: bool = True,
     mlflow_experiment: str = "GLOBE_DrivAerML",
@@ -122,6 +123,10 @@ def main(
         n_latent_vectors: Vector latent channels between hyperlayers.
         n_spherical_harmonics: Legendre polynomial terms (default 4 for 3D).
         boundary_n_faces: Target boundary mesh face count after decimation.
+        max_viz_points: Maximum number of surface points for visualization.
+            Full-resolution meshes (~8M points) make auto-chunked inference
+            prohibitively slow; subsampling to this count keeps visualization
+            fast while retaining visual quality.
         use_profiler: Enable PyTorch profiler (rank 0 only).
         make_images: Generate visualization images during training.
         use_mlflow: Enable MLflow experiment tracking.
@@ -204,6 +209,7 @@ def main(
             cache_dir,
             world_size=dist.world_size,
             rank=dist.rank,
+            boundary_n_faces=boundary_n_faces,
         )
         for split in splits
     }
@@ -618,13 +624,36 @@ def main(
                     for split in splits:
                         sample_path = sample_paths[split][0]
                         viz_sample = DrivAerMLDataSet.preprocess(
-                            sample_path
-                        ).to(device)
+                            sample_path,
+                        )
+                        viz_sample.boundary_meshes["car_body"] = (
+                            DrivAerMLDataSet._subsample_boundary(
+                                viz_sample.surface_mesh, boundary_n_faces
+                            )
+                        )
+
+                        ### Subsample prediction surface for speed.
+                        # Cell-based selection preserves mesh topology so
+                        # that postprocess can integrate force coefficients
+                        # and visualize_comparison can render a surface.
+                        if viz_sample.surface_mesh.n_points > max_viz_points:
+                            n_cells = viz_sample.surface_mesh.n_cells
+                            target_n_cells = min(n_cells, max_viz_points * 2)
+                            cell_subset = viz_sample.surface_mesh.cells[
+                                torch.randperm(n_cells)[:target_n_cells]
+                            ]
+                            viz_sample.surface_mesh = (
+                                viz_sample.surface_mesh.slice_points(
+                                    cell_subset.unique()
+                                )
+                            )
+
+                        viz_sample = viz_sample.to(device)
                         with torch.no_grad(), autocast_ctx:
                             base_model.eval()
                             pred_mesh = base_model(
                                 **viz_sample.model_input_kwargs,
-                                chunk_size=points_per_iter,
+                                chunk_size="auto",
                             )
                         combined = DrivAerMLDataSet.postprocess(
                             pred_mesh=pred_mesh.to(device="cpu"),

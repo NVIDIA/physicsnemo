@@ -17,8 +17,9 @@
 """Dataset loading and preprocessing for the GLOBE DrivAerML 3D case study.
 
 Reads DrivAerML simulation outputs (VTP boundary meshes, geometry CSVs, force
-coefficient CSVs), extracts the car body surface, decimates it for GLOBE
-boundary input, and assembles nondimensionalized prediction targets.
+coefficient CSVs), extracts the car body surface, and assembles
+nondimensionalized prediction targets.  The GLOBE boundary mesh is created at
+load time by randomly subsampling cells from the cached surface mesh.
 """
 
 import csv
@@ -52,13 +53,6 @@ U_INF = 38.89  # m/s  (140 km/h freestream velocity)
 Q_INF = 0.5 * U_INF**2  # ~756 m²/s²  (kinematic dynamic pressure)
 NU = 1.5e-5  # m²/s  (kinematic viscosity of air)
 
-### Preprocessing parameters
-DEFAULT_BOUNDARY_N_FACES = 20_000
-DOMAIN_BOUNDARY_TOL = 0.05  # meters; cells within this distance of the domain
-#   boundary are classified as tunnel walls
-GROUND_NORMAL_Z_THRESHOLD = 0.85  # cells at z_min with n_z above this threshold
-#   are classified as ground plane (not car underbody)
-
 Split = Literal["train", "validation"]
 
 
@@ -70,8 +64,9 @@ class DrivAerMLSample:
         surface_mesh: Full-resolution car body surface with ``point_data``
             containing nondimensional prediction targets (``C_p``, ``C_f``).
             Has cell connectivity for visualization.
-        boundary_meshes: ``{"car_body": Mesh}`` - decimated car body surface
-            used as GLOBE boundary input (geometry only, no field data).
+        boundary_meshes: ``{"car_body": Mesh}`` - randomly subsampled car body
+            cells used as GLOBE boundary input (geometry only, no field data).
+            Populated at load time by :meth:`DrivAerMLDataSet.__getitem__`.
         reference_lengths: Per-sample reference lengths (``L_ref``,
             ``sqrt_A_ref``) used for GLOBE multiscale kernel construction.
         dimensional_constants: ``U_inf``, ``q_inf`` for re-dimensionalization.
@@ -108,8 +103,8 @@ class DrivAerMLSample:
 def _identify_car_body_cells(
     pv_mesh: pv.PolyData,
     *,
-    tol: float = DOMAIN_BOUNDARY_TOL,
-    ground_nz: float = GROUND_NORMAL_Z_THRESHOLD,
+    tol: float = 0.05,
+    ground_nz: float = 0.85,
 ) -> np.ndarray:
     """Return a boolean mask identifying car body cells in a DrivAerML VTP.
 
@@ -200,36 +195,61 @@ def _extract_car_body(pv_mesh: pv.PolyData, **kwargs: Any) -> pv.PolyData:
     return car_body
 
 
-def _ensure_outward_normals(mesh: Mesh) -> None:
-    """Flip cell winding if normals point inward (toward the mesh centroid).
-
-    Uses a majority-vote heuristic: for each cell, checks whether the normal
-    points away from the overall mesh centroid.  If more than half point
-    inward, reverses the winding of ALL cells (swapping vertex indices 1
-    and 2).  Modifies *mesh* in place.
-
-    Args:
-        mesh: A 2-manifold (surface) Mesh.
-    """
-    centroid = mesh.points.mean(dim=0)
-    outward = mesh.cell_centroids - centroid  # (n_cells, 3)
-    dot = (outward * mesh.cell_normals).sum(dim=-1)  # (n_cells,)
-    if dot.mean() < 0:
-        mesh.cells[:, 1], mesh.cells[:, 2] = (
-            mesh.cells[:, 2].clone(),
-            mesh.cells[:, 1].clone(),
-        )
-        mesh._cache.clear()
-        logger.info("  flipped cell winding to ensure outward normals")
-
-
 # ---------------------------------------------------------------------------
 # Dataset
 # ---------------------------------------------------------------------------
 
 
 class DrivAerMLDataSet(CachedPreprocessingDataset):
-    """Disk-cached preprocessing dataset for DrivAerML + GLOBE."""
+    """Disk-cached preprocessing dataset for DrivAerML + GLOBE.
+
+    The cached ``.pt`` files store hyperparameter-invariant data (full-
+    resolution surface mesh, reference lengths, aero coefficients).  The
+    GLOBE boundary mesh is created on every load by randomly subsampling
+    ``boundary_n_faces`` cells from the surface mesh, so changing the
+    target face count takes effect immediately without invalidating caches.
+    """
+
+    def __init__(
+        self,
+        sample_paths: Sequence[Path | str],
+        cache_dir: Path | str | None = None,
+        *,
+        boundary_n_faces: int = 20_000,
+    ):
+        super().__init__(sample_paths=sample_paths, cache_dir=cache_dir)
+        self.boundary_n_faces = boundary_n_faces
+
+    def __getitem__(self, index) -> DrivAerMLSample:  # ty: ignore[invalid-method-override]
+        sample: DrivAerMLSample = super().__getitem__(index)
+        sample.boundary_meshes["car_body"] = self._subsample_boundary(
+            sample.surface_mesh, self.boundary_n_faces
+        )
+        return sample
+
+    @staticmethod
+    def _subsample_boundary(surface_mesh: Mesh, n_cells: int) -> Mesh:
+        """Randomly subsample cells from a surface mesh for GLOBE boundary input.
+
+        Selects ``n_cells`` random cells, compacts away unreferenced vertices,
+        strips field data (geometry only), and scales cell areas by the
+        inverse selection fraction to preserve the total surface area integral.
+
+        Args:
+            surface_mesh: Full-resolution car body surface Mesh.
+            n_cells: Number of cells to select.
+
+        Returns:
+            Geometry-only Mesh with ``n_cells`` cells and area-scaled cache.
+        """
+        total = surface_mesh.n_cells
+        indices = torch.randperm(total)[:n_cells]
+        boundary = surface_mesh.slice_cells(indices).clean()
+
+        area_scale = total / n_cells
+        boundary = Mesh(points=boundary.points, cells=boundary.cells)
+        boundary._cache["cell", "areas"] = boundary.cell_areas * area_scale
+        return boundary
 
     @classmethod
     def get_split_paths(
@@ -263,6 +283,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         world_size: int = 1,
         rank: int = 0,
         num_workers: int = 4,
+        boundary_n_faces: int = 20_000,
     ) -> DataLoader:
         """Create a distributed DataLoader yielding one sample per iteration.
 
@@ -272,11 +293,17 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
             world_size: Total distributed ranks.
             rank: This process's rank.
             num_workers: DataLoader worker processes.
+            boundary_n_faces: Number of cells randomly subsampled from
+                the surface mesh to form the GLOBE boundary mesh.
 
         Returns:
             DataLoader with :class:`DistributedSampler`.
         """
-        dataset = cls(sample_paths=sample_paths, cache_dir=cache_dir)
+        dataset = cls(
+            sample_paths=sample_paths,
+            cache_dir=cache_dir,
+            boundary_n_faces=boundary_n_faces,
+        )
         return DataLoader(
             dataset,
             sampler=DistributedSampler(
@@ -297,28 +324,28 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def preprocess(
-        sample_path: Path,
-        boundary_n_faces: int = DEFAULT_BOUNDARY_N_FACES,
-    ) -> DrivAerMLSample:
+    def preprocess(sample_path: Path) -> DrivAerMLSample:
         """Preprocess a single DrivAerML run into a GLOBE-ready sample.
 
-        Pipeline:
+        Performs the expensive, hyperparameter-invariant work that is cached
+        to disk by :class:`CachedPreprocessingDataset`:
+
             1. Load the VTP boundary mesh (~600 MB) and extract the car body.
             2. Compute nondimensional surface fields (C_p, C_f).
             3. Interpolate cell-centered data to mesh vertices.
-            4. Decimate the car body to create a compact GLOBE boundary mesh.
-            5. Parse geometry reference CSV for per-sample reference lengths.
-            6. Parse force/moment CSV for ground-truth aero coefficients.
+            4. Parse geometry reference CSV for per-sample reference lengths.
+            5. Parse force/moment CSV for ground-truth aero coefficients.
+
+        Boundary mesh creation (random cell subsampling, which depends on
+        ``boundary_n_faces``) is NOT performed here; it runs post-cache-load
+        in :meth:`DrivAerMLDataSet.__getitem__`.
 
         Args:
             sample_path: Path to a ``run_N/`` directory.
-            boundary_n_faces: Target face count for the decimated GLOBE
-                boundary mesh.  The actual count may differ slightly due to
-                decimation algorithm constraints.
 
         Returns:
-            Fully preprocessed :class:`DrivAerMLSample`.
+            :class:`DrivAerMLSample` with ``boundary_meshes`` empty (populated
+            later by ``__getitem__``).
         """
         sample_dir = Path(sample_path)
         run_idx = sample_dir.name.removeprefix("run_")
@@ -352,69 +379,15 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         ### Interpolate cell data to vertices for GLOBE prediction targets
         car_body_pt = car_body.cell_data_to_point_data()
 
-        # Keep only the nondimensional fields in point_data
-        point_data = TensorDict(
-            {
-                "C_p": torch.from_numpy(
-                    np.ascontiguousarray(car_body_pt.point_data["C_p"])
-                ).float(),
-                "C_f": torch.from_numpy(
-                    np.ascontiguousarray(car_body_pt.point_data["C_f"])
-                ).float(),
-            },
-            batch_size=[car_body_pt.n_points],
-        )
-
-        # Build the full-resolution surface Mesh (with cell connectivity)
+        ### Build the full-resolution surface Mesh (geometry + prediction targets)
+        surface_mesh = from_pyvista(car_body_pt)
         surface_mesh = Mesh(
-            points=torch.from_numpy(
-                np.ascontiguousarray(car_body_pt.points)
-            ).float(),
-            cells=torch.from_numpy(
-                np.ascontiguousarray(car_body_pt.regular_faces)
-            ).long(),
-            point_data=point_data,
+            points=surface_mesh.points,
+            cells=surface_mesh.cells,
+            point_data=surface_mesh.point_data.select("C_p", "C_f").apply(
+                torch.Tensor.float
+            ),
         )
-
-        ### Decimate car body for GLOBE boundary input (geometry only)
-        # Multi-stage decimation: large meshes (~7M faces) are reduced in
-        # stages because a single extreme-ratio decimation can be very slow.
-        # Each stage reduces by at most ~95%, which keeps per-stage runtime
-        # manageable.  vtkQuadricDecimation (decimate) is used rather than
-        # vtkDecimatePro for better performance on large meshes.
-        car_body_coarse = car_body.copy()
-        n_original = car_body_coarse.n_cells
-        while car_body_coarse.n_cells > boundary_n_faces * 1.1:
-            current = car_body_coarse.n_cells
-            target = max(boundary_n_faces, int(current * 0.05))
-            reduction = 1.0 - target / current
-            car_body_coarse = car_body_coarse.decimate(reduction)
-            logger.info(
-                f"  decimation stage: {current} -> {car_body_coarse.n_cells} faces"
-            )
-
-        if not car_body_coarse.is_all_triangles:
-            car_body_coarse = car_body_coarse.triangulate()
-
-        boundary_mesh = Mesh(
-            points=torch.from_numpy(
-                np.ascontiguousarray(car_body_coarse.points)
-            ).float(),
-            cells=torch.from_numpy(
-                np.ascontiguousarray(car_body_coarse.regular_faces)
-            ).long(),
-        )
-        logger.info(
-            f"run_{run_idx}: boundary mesh decimated from {n_original} "
-            f"to {boundary_mesh.n_cells} faces"
-        )
-
-        ### Verify outward normal orientation (centroid heuristic)
-        # For car-like meshes the majority of surface normals should point
-        # away from the geometric centroid. If the mean dot product
-        # (cell_center - centroid) . normal is negative, flip all cells.
-        for mesh_to_check in (surface_mesh, boundary_mesh):
-            _ensure_outward_normals(mesh_to_check)
 
         ### Parse geometry reference CSV
         geo_ref_path = sample_dir / f"geo_ref_{run_idx}.csv"
@@ -428,7 +401,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
 
         return DrivAerMLSample(
             surface_mesh=surface_mesh,
-            boundary_meshes=TensorDict({"car_body": boundary_mesh}),
+            boundary_meshes=TensorDict({}),
             reference_lengths=TensorDict(
                 {
                     "L_ref": torch.as_tensor(l_ref),
@@ -743,14 +716,10 @@ def compute_surface_force_coefficients(
     body surface.
 
     The pressure force on the body is ``-C_p * n`` (outward normal convention)
-    and the friction force is ``C_f`` (tangential).
-
-    Note:
-        The DrivAerML VTP boundary meshes contain non-manifold topology
-        (merged patches), which prevents perfect outward-normal orientation
-        for all cells.  Integrated force coefficients from this function are
-        therefore approximate.  Ground-truth coefficients from the CSV files
-        should be used for quantitative evaluation.
+    and the friction force is ``C_f`` (tangential).  Normal orientation is
+    determined at integration time using the divergence theorem (matching
+    the AirFRANS pattern), so cell winding in the input mesh does not
+    need to be pre-corrected.
 
     Args:
         surface_mesh: Car surface Mesh with ``point_data["C_p"]`` and
@@ -762,7 +731,18 @@ def compute_surface_force_coefficients(
         TensorDict with scalar-tensor entries ``"Cd"``, ``"Cl"``, ``"Cs"``.
     """
     areas = surface_mesh.cell_areas  # (n_cells,)
-    normals = surface_mesh.cell_normals  # (n_cells, 3)
+    raw_normals = surface_mesh.cell_normals  # (n_cells, 3)
+
+    ### Orient normals outward using the divergence theorem
+    # For a closed surface, integral(x . n dA) = 3V > 0 when normals point
+    # outward.  For an open surface like the car body, we use the mesh
+    # centroid to make this robust to arbitrary mesh positioning.
+    mesh_centroid = surface_mesh.points.mean(dim=0)
+    outward_sign = torch.sign(
+        ((surface_mesh.cell_centroids - mesh_centroid) * raw_normals).sum(dim=-1)
+        @ areas
+    )
+    normals = outward_sign * raw_normals
 
     ### Interpolate vertex-centered data to cell centers (average of vertices)
     cells = surface_mesh.cells  # (n_cells, 3)
@@ -804,9 +784,6 @@ if __name__ == "__main__":
     logger.info(f"Surface mesh cells:  {sample.surface_mesh.cells.shape}")
     logger.info(
         f"Output keys: {list(sample.surface_mesh.point_data.keys())}"
-    )
-    logger.info(
-        f"Boundary mesh: {sample.boundary_meshes['car_body'].n_cells} cells"
     )
     logger.info(f"Reference lengths: {sample.reference_lengths.to_dict()}")
     logger.info(f"Aero coefficients: {sample.aero_coefficients.to_dict()}")
