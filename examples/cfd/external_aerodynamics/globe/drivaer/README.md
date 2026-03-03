@@ -92,12 +92,11 @@ and multiscale kernels parameterized by per-sample reference lengths
 
 ## Preprocessing Pipeline
 
-1. Load VTP boundary mesh (~8.8M surface cells)
-2. Extract car body cells (~83% of total) by filtering out tunnel walls
-   (inlet, outlet, sides, ceiling, ground plane)
-3. Interpolate cell-centered data to mesh vertices
-4. Decimate car body to ~20K faces for GLOBE boundary input
-5. Compute nondimensional fields: C_p (already nondimensional),
+1. Load VTP car body surface (~8.8M quad-dominant cells) and triangulate
+2. Compute nondimensional fields: C_p (already nondimensional),
    C_f = wallShearStress / q_inf
-6. Parse reference lengths and force coefficients from CSV files
-7. Cache preprocessed samples as .pt files for fast subsequent loading
+3. Interpolate cell-centered data to mesh vertices
+4. Parse reference lengths and force coefficients from CSV files
+5. Cache preprocessed samples as .pt files for fast subsequent loading
+6. At load time, randomly subsample cells for the GLOBE boundary mesh
+   (default 20K faces, configurable via `--boundary-n-faces`)
