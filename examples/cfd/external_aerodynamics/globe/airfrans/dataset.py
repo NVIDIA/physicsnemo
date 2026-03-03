@@ -74,36 +74,6 @@ class AirFRANSSample:
     if TYPE_CHECKING:
 
         def to(self, *args: Any, **kwargs: Any) -> Self:
-            """Move sample and all nested data to the specified device/dtype.
-
-            All tensors in ``interior_mesh``, ``boundary_meshes``,
-            ``reference_lengths``, and ``dimensional_constants`` are moved
-            together.
-
-            Parameters
-            ----------
-            *args : Any
-                Positional arguments forwarded to the underlying tensorclass
-                ``to`` method.  Common usage: ``sample.to("cuda")`` or
-                ``sample.to(torch.float32)``.
-            **kwargs : Any
-                Keyword arguments forwarded to the underlying tensorclass
-                ``to`` method.
-
-            Keyword Arguments
-            -----------------
-            device : torch.device, optional
-                Target device.
-            dtype : torch.dtype, optional
-                Target floating-point or complex dtype.
-            non_blocking : bool, optional
-                Whether the transfer should be non-blocking.
-
-            Returns
-            -------
-            AirFRANSSample
-                A new sample on the target device/dtype.
-            """
             ...
 
 
