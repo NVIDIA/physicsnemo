@@ -333,7 +333,7 @@ def main(
         set_experiment(experiment_name=mlflow_experiment)
         if mlflow_run_id:
             try:
-                mlflow_run_ctx = start_run(run_id=mlflow_run_id)
+                mlflow_run_ctx = start_run(run_id=mlflow_run_id, log_system_metrics=True)
                 logger0.info(f"Resumed MLflow run {mlflow_run_id}")
             except Exception:
                 warnings.warn(
@@ -344,6 +344,7 @@ def main(
             mlflow_run_ctx = start_run(
                 run_name=f"{output_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
                 tags={"output_name": output_name},
+                log_system_metrics=True,
             )
 
     ### [Hyperparameter Logging]

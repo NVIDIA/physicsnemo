@@ -1,6 +1,7 @@
-tyro~=1.0.6
+tyro~=1.0.8
 pyyaml
 torchinfo~=1.8.0
 mlflow~=3.10.0
 pyvista~=0.47.0
 tensordict>=0.11.0
+nvidia-ml-py>=13.590.48
