@@ -196,7 +196,7 @@ Example usage:
     # Create logger with W&B backend
     logger = LaunchLogger.initialize(use_wandb=True)
 
-Logging utils
+Logging Utils
 -------------
 
 Utility functions and helpers for logging operations.
