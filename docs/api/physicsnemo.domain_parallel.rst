@@ -1,6 +1,6 @@
 
-PhysicsNeMo domain_parallel
-===========================
+PhysicsNeMo ``domain_parallel``
+================================
 
 In scientific AI applications, the parallelization techniques to enable state of the art 
 models are different from those used in training large language models.  PhysicsNeMo 
