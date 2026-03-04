@@ -26,7 +26,6 @@ pv = pytest.importorskip("pyvista")
 
 from physicsnemo.mesh.io.io_pyvista import from_pyvista  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -34,9 +33,7 @@ from physicsnemo.mesh.io.io_pyvista import from_pyvista  # noqa: E402
 
 def _make_tet_with_data() -> "pv.UnstructuredGrid":
     """Single tetrahedron with both point_data and cell_data."""
-    points = np.array(
-        [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=np.float64
-    )
+    points = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=np.float64)
     cells = np.array([4, 0, 1, 2, 3])
     celltypes = np.array([pv.CellType.TETRA])
     mesh = pv.UnstructuredGrid(cells, celltypes, points)
@@ -49,9 +46,18 @@ def _make_hex_pair() -> "pv.UnstructuredGrid":
     """Two adjacent hexahedra sharing a face, with point and cell data."""
     points = np.array(
         [
-            [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
-            [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1],
-            [2, 0, 0], [2, 1, 0], [2, 0, 1], [2, 1, 1],
+            [0, 0, 0],
+            [1, 0, 0],
+            [1, 1, 0],
+            [0, 1, 0],
+            [0, 0, 1],
+            [1, 0, 1],
+            [1, 1, 1],
+            [0, 1, 1],
+            [2, 0, 0],
+            [2, 1, 0],
+            [2, 0, 1],
+            [2, 1, 1],
         ],
         dtype=np.float64,
     )
@@ -88,7 +94,6 @@ class TestPointSourceVerticesDefault:
 
 
 class TestVerticesPointCloud:
-
     def test_0d_from_3d_mesh(self):
         pv_mesh = _make_tet_with_data()
         mesh = from_pyvista(pv_mesh, manifold_dim=0, warn_on_lost_data=False)
@@ -114,7 +119,6 @@ class TestVerticesPointCloud:
 
 
 class TestVerticesEdgeGraph:
-
     def test_edge_graph_from_tet(self):
         """A single tet has 6 edges."""
         pv_mesh = _make_tet_with_data()
@@ -165,11 +169,12 @@ class TestVerticesEdgeGraph:
 
 
 class TestCellCentroidsPointCloud:
-
     def test_centroid_point_cloud(self):
         pv_mesh = _make_tet_with_data()
         mesh = from_pyvista(
-            pv_mesh, manifold_dim=0, point_source="cell_centroids",
+            pv_mesh,
+            manifold_dim=0,
+            point_source="cell_centroids",
             warn_on_lost_data=False,
         )
 
@@ -181,30 +186,39 @@ class TestCellCentroidsPointCloud:
         """Centroid of a unit tet at (0,0,0),(1,0,0),(0,1,0),(0,0,1) is (0.25,0.25,0.25)."""
         pv_mesh = _make_tet_with_data()
         mesh = from_pyvista(
-            pv_mesh, manifold_dim=0, point_source="cell_centroids",
+            pv_mesh,
+            manifold_dim=0,
+            point_source="cell_centroids",
             warn_on_lost_data=False,
         )
 
         np.testing.assert_allclose(
-            mesh.points.numpy(), [[0.25, 0.25, 0.25]], atol=1e-5,
+            mesh.points.numpy(),
+            [[0.25, 0.25, 0.25]],
+            atol=1e-5,
         )
 
     def test_cell_data_becomes_point_data(self):
         pv_mesh = _make_tet_with_data()
         mesh = from_pyvista(
-            pv_mesh, manifold_dim=0, point_source="cell_centroids",
+            pv_mesh,
+            manifold_dim=0,
+            point_source="cell_centroids",
             warn_on_lost_data=False,
         )
 
         assert "pressure" in mesh.point_data
         np.testing.assert_allclose(
-            mesh.point_data["pressure"].numpy(), [999.0],
+            mesh.point_data["pressure"].numpy(),
+            [999.0],
         )
 
     def test_centroid_auto_resolves_to_0d(self):
         pv_mesh = _make_tet_with_data()
         mesh = from_pyvista(
-            pv_mesh, manifold_dim="auto", point_source="cell_centroids",
+            pv_mesh,
+            manifold_dim="auto",
+            point_source="cell_centroids",
             warn_on_lost_data=False,
         )
 
@@ -214,7 +228,9 @@ class TestCellCentroidsPointCloud:
         pv_mesh = _make_tet_with_data()
         with pytest.raises(ValueError, match="only supports manifold_dim"):
             from_pyvista(
-                pv_mesh, manifold_dim=3, point_source="cell_centroids",
+                pv_mesh,
+                manifold_dim=3,
+                point_source="cell_centroids",
             )
 
     def test_centroid_from_polyhedron(self):
@@ -227,7 +243,9 @@ class TestCellCentroidsPointCloud:
         pv_mesh.cell_data["vol_id"] = np.array([42])
 
         mesh = from_pyvista(
-            pv_mesh, manifold_dim=0, point_source="cell_centroids",
+            pv_mesh,
+            manifold_dim=0,
+            point_source="cell_centroids",
             warn_on_lost_data=False,
         )
 
@@ -242,12 +260,13 @@ class TestCellCentroidsPointCloud:
 
 
 class TestCellCentroidsDualGraph:
-
     def test_dual_graph_two_hexes(self):
         """Two adjacent hexes sharing a face produce 1 dual-graph edge."""
         pv_mesh = _make_hex_pair()
         mesh = from_pyvista(
-            pv_mesh, manifold_dim=1, point_source="cell_centroids",
+            pv_mesh,
+            manifold_dim=1,
+            point_source="cell_centroids",
             warn_on_lost_data=False,
         )
 
@@ -259,7 +278,9 @@ class TestCellCentroidsDualGraph:
     def test_dual_graph_cell_data_as_point_data(self):
         pv_mesh = _make_hex_pair()
         mesh = from_pyvista(
-            pv_mesh, manifold_dim=1, point_source="cell_centroids",
+            pv_mesh,
+            manifold_dim=1,
+            point_source="cell_centroids",
             warn_on_lost_data=False,
         )
 
@@ -270,7 +291,9 @@ class TestCellCentroidsDualGraph:
         """A single cell has no face-neighbors, so the dual graph has 0 edges."""
         pv_mesh = _make_tet_with_data()
         mesh = from_pyvista(
-            pv_mesh, manifold_dim=1, point_source="cell_centroids",
+            pv_mesh,
+            manifold_dim=1,
+            point_source="cell_centroids",
             warn_on_lost_data=False,
         )
 
@@ -284,7 +307,6 @@ class TestCellCentroidsDualGraph:
 
 
 class TestWarnOnLostData:
-
     def test_warns_on_lost_cell_data(self):
         """Extracting 0D from 3D with cell_data should warn."""
         pv_mesh = _make_tet_with_data()
@@ -296,14 +318,17 @@ class TestWarnOnLostData:
         pv_mesh = _make_tet_with_data()
         with pytest.warns(UserWarning, match="point_data"):
             from_pyvista(
-                pv_mesh, manifold_dim=0, point_source="cell_centroids",
+                pv_mesh,
+                manifold_dim=0,
+                point_source="cell_centroids",
                 warn_on_lost_data=True,
             )
 
     def test_no_warn_when_data_empty(self):
         """No warning when the discarded data category is empty."""
         points = np.array(
-            [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=np.float64,
+            [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]],
+            dtype=np.float64,
         )
         cells = np.array([4, 0, 1, 2, 3])
         celltypes = np.array([pv.CellType.TETRA])
@@ -314,7 +339,9 @@ class TestWarnOnLostData:
             warnings.simplefilter("error")
             from_pyvista(pv_mesh, manifold_dim=0, warn_on_lost_data=True)
             from_pyvista(
-                pv_mesh, manifold_dim=0, point_source="cell_centroids",
+                pv_mesh,
+                manifold_dim=0,
+                point_source="cell_centroids",
                 warn_on_lost_data=True,
             )
 
@@ -325,7 +352,9 @@ class TestWarnOnLostData:
             warnings.simplefilter("error")
             from_pyvista(pv_mesh, manifold_dim=0, warn_on_lost_data=False)
             from_pyvista(
-                pv_mesh, manifold_dim=0, point_source="cell_centroids",
+                pv_mesh,
+                manifold_dim=0,
+                point_source="cell_centroids",
                 warn_on_lost_data=False,
             )
 

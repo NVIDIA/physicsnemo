@@ -555,8 +555,12 @@ def _detect_native_dim(pyvista_mesh, pv) -> int:  # noqa: ANN001
     if hasattr(pyvista_mesh, "celltypes"):
         ct = pyvista_mesh.celltypes
         volume_types = [
-            pv.CellType.TETRA, pv.CellType.HEXAHEDRON, pv.CellType.WEDGE,
-            pv.CellType.PYRAMID, pv.CellType.VOXEL, pv.CellType.POLYHEDRON,
+            pv.CellType.TETRA,
+            pv.CellType.HEXAHEDRON,
+            pv.CellType.WEDGE,
+            pv.CellType.PYRAMID,
+            pv.CellType.VOXEL,
+            pv.CellType.POLYHEDRON,
         ]
         if np.isin(ct, volume_types).any():
             return 3
