@@ -310,10 +310,12 @@ def from_pyvista(
         cells = torch.from_numpy(tetra_cells).long()
 
     ### Return Mesh object
-    # When the output manifold dim is lower than the native mesh dim, the
-    # original cell_data has a different count than the output cells and
-    # cannot be passed through.
-    pass_cell_data = manifold_dim >= native_dim
+    # Cell data can only be passed through when the output cells have a
+    # 1:many relationship with input cells (e.g., VTK's triangulate
+    # replicates cell_data to child cells).  This fails when manifold_dim
+    # is lower than native_dim (different cell topology) or when
+    # manifold_dim is 0 (output has no cells at all).
+    pass_cell_data = manifold_dim > 0 and manifold_dim >= native_dim
     return Mesh(
         points=points,
         cells=cells,
@@ -561,7 +563,10 @@ def _detect_native_dim(pyvista_mesh, pv) -> int:  # noqa: ANN001
         surface_types = [pv.CellType.TRIANGLE, pv.CellType.QUAD, pv.CellType.POLYGON]
         if np.isin(ct, surface_types).any():
             return 2
-        return 1
+        line_types = [pv.CellType.LINE, pv.CellType.POLY_LINE]
+        if np.isin(ct, line_types).any():
+            return 1
+        return 0
     # PolyData without celltypes - check for faces vs lines
     n_lines = _get_count_safely(pyvista_mesh, "n_lines")
     n_cells = _get_count_safely(pyvista_mesh, "n_cells")
