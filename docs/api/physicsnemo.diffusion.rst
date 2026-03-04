@@ -1,7 +1,7 @@
 PhysicsNeMo Diffusion
 =====================
 
-Patching utils
+Patching Utils
 --------------
 
 Patching utilities are particularly useful for *patch-based* diffusion, also called
