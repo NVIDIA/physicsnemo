@@ -114,7 +114,7 @@ is created for each epoch, a separate logger is created for training and validat
 You can use the `.log_minibatch` method to log metrics during training and validation.
 You can use the `.log_epoch` method to log the learning rate at the end of the epoch.
 
-For a more detailed example, please refer to the `Logging and Checkpointing recipe <../../user-guide/simple_logging_and_checkpointing.html>`_ .
+For a more detailed example, refer to the `Logging and Checkpointing recipe <../../user-guide/simple_logging_and_checkpointing.html>`_ .
 
 .. autosummary::
    :toctree: generated
