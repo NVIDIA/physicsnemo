@@ -15,7 +15,7 @@ Weather / Climate Models
 
 .. autofunction:: physicsnemo.models.graphcast.graph_cast_net.get_lat_lon_partition_separators
 
-GraphCast utils
+GraphCast Utils
 ---------------
 
 Utilities for working with the GraphCast model, including graph construction and mesh handling.
