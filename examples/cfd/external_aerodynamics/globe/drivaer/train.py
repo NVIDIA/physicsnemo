@@ -32,9 +32,8 @@ import torchinfo
 from dataset import (
     DrivAerMLDataSet,
     DrivAerMLSample,
-    compute_max_mesh_sizes,
 )
-from jaxtyping import Float, Int
+from jaxtyping import Float
 from mlflow.tracking.fluent import (
     active_run,
     log_artifact,
@@ -43,7 +42,7 @@ from mlflow.tracking.fluent import (
     start_run,
 )
 from tensordict import TensorDict
-from torch.distributed import ReduceOp, all_reduce
+from torch.distributed import ReduceOp, all_reduce, barrier
 from torch.profiler import record_function
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -216,13 +215,15 @@ def main(
 
     ### [Model]
     # Reference area: constant aRefRef = 2.170 m² from the DrivAerML spec
+    n_spatial_dims = 3
+    boundary_source_data_ranks: dict[str, dict] = {"no_slip": {}}
     model = GLOBE(
-        n_spatial_dims=3,
+        n_spatial_dims=n_spatial_dims,
         output_field_ranks={
             "C_p": 0,
             "C_f": 1,
         },
-        boundary_source_data_ranks={"no_slip": {}},
+        boundary_source_data_ranks=boundary_source_data_ranks,
         reference_length_names=["L_ref", "sqrt_A_ref"],
         reference_area=2.170,
         global_data_ranks=None,
@@ -255,23 +256,30 @@ def main(
             static_graph=True,
         )
 
-    ### [Compute Maximum Mesh Sizes Per BC Type and Split]
-    max_sizes: dict[
-        Split,
-        TensorDict[
-            str, TensorDict[Literal["n_points", "n_cells"], Int[torch.Tensor, ""]]
-        ],
-    ] = {
-        split: compute_max_mesh_sizes(
-            dataloaders[split],
-            device,
-            face_downsampling_ratio=(
-                train_face_downsampling_ratio if split == "train" else 1.0
-            ),
-            rank=dist.rank,
-        )
+    ### [Boundary Mesh Padding Targets]
+    # Boundary simplices have (manifold_dim + 1) = n_spatial_dims vertices,
+    # so n_spatial_dims * n_cells is a hard upper bound on unique points.
+    max_sizes: dict[Split, TensorDict] = {
+        split: TensorDict({
+            bc_type: TensorDict({
+                "n_points": torch.tensor(
+                    boundary_n_faces * n_spatial_dims, device=device
+                ),
+                "n_cells": torch.tensor(
+                    int(boundary_n_faces * (
+                        train_face_downsampling_ratio
+                        if split == "train" else 1.0
+                    )),
+                    device=device,
+                ),
+            })
+            for bc_type in boundary_source_data_ranks
+        })
         for split in splits
     }
+    if dist.rank == 0:
+        for split in splits:
+            logger0.info(f"Padding targets ({split}): {max_sizes[split].to_dict()}")
 
     ### [Optimizer and Scheduler Setup]
     learning_rate *= (dist.world_size * points_per_iter / 2048) ** 0.5
@@ -622,15 +630,7 @@ def main(
                 if dist.rank == 0:
                     logger0.info("Generating visualization images...")
                     for split in splits:
-                        sample_path = sample_paths[split][0]
-                        viz_sample = DrivAerMLDataSet.preprocess(
-                            sample_path,
-                        )
-                        viz_sample.boundary_meshes["no_slip"] = (
-                            DrivAerMLDataSet._subsample_boundary(
-                                viz_sample.surface_mesh, boundary_n_faces
-                            )
-                        )
+                        viz_sample = dataloaders[split].dataset[0]
 
                         ### Subsample prediction surface for speed.
                         # Cell-based selection preserves mesh topology so
@@ -700,6 +700,8 @@ def main(
                             )
 
                 last_image_epoch, last_image_loss = epoch, loss["train"]
+                if dist.world_size > 1:
+                    barrier()
 
             ### [torch.compile Caching]
             if use_compile and not torch_compile_cache.exists():

@@ -41,7 +41,7 @@ from mlflow.tracking.fluent import (
     start_run,
 )
 from tensordict import TensorDict
-from torch.distributed import ReduceOp, all_reduce
+from torch.distributed import ReduceOp, all_reduce, barrier
 from torch.profiler import record_function
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -644,8 +644,7 @@ def main(
                 if dist.rank == 0:
                     logger0.info("Generating visualization images...")
                     for split in splits:
-                        sample_path = sample_paths[split][0]
-                        viz_sample = AirFRANSDataSet.preprocess(sample_path).to(device)
+                        viz_sample = dataloaders[split].dataset[0].to(device)
                         with torch.no_grad(), autocast_ctx:
                             base_model.eval()
                             pred_mesh = base_model(
@@ -693,6 +692,8 @@ def main(
                             )
 
                 last_image_epoch, last_image_loss = epoch, loss["train"]
+                if dist.world_size > 1:
+                    barrier()
 
             ### [torch.compile Caching]
             if use_compile and not torch_compile_cache.exists():

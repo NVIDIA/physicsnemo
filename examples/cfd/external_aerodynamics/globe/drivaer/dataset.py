@@ -23,19 +23,16 @@ randomly subsampling cells from the cached surface mesh.
 """
 
 import csv
-from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
 
 import numpy as np
 import pyvista as pv
 import torch
-from jaxtyping import Float, Int
+from jaxtyping import Float
 from tensordict import TensorDict, tensorclass
-from torch.distributed import ReduceOp, all_reduce, is_initialized
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from tqdm import tqdm
 
 from physicsnemo.experimental.models.globe.utilities.cached_dataset import (
     CachedPreprocessingDataset,
@@ -538,81 +535,6 @@ def _read_single_row_csv(path: Path) -> dict[str, str]:
     with open(path) as f:
         reader = csv.DictReader(f)
         return next(reader)
-
-
-def compute_max_mesh_sizes(
-    dataloader: DataLoader,
-    device: torch.device,
-    *,
-    face_downsampling_ratio: float = 1.0,
-    rank: int = 0,
-) -> TensorDict[str, TensorDict[Literal["n_points", "n_cells"], Int[torch.Tensor, ""]]]:
-    """Compute the maximum n_points and n_cells per boundary-condition type.
-
-    Scans all samples in *dataloader*, tracking the largest boundary mesh
-    dimensions for each BC type.  Uses distributed all-reduce to find the
-    global maximum across all ranks.  Results are used to pad meshes to
-    uniform sizes for ``torch.compile`` with static shapes.
-
-    ``n_points`` is bounded by ``cells.numel()`` (the total number of
-    vertex references) rather than the observed ``n_points``, because
-    random cell subsampling produces a stochastic point count after
-    compaction and the observed value from a single draw is not a safe
-    upper bound for subsequent draws.
-
-    Args:
-        dataloader: DataLoader yielding :class:`DrivAerMLSample` objects.
-        device: Device for the all-reduce tensors.
-        face_downsampling_ratio: Scale factor applied to cell counts (< 1.0
-            for training, 1.0 for validation).
-        rank: Distributed rank (progress bar shown only on rank 0).
-
-    Returns:
-        ``TensorDict`` mapping BC types to ``{"n_points": ..., "n_cells": ...}``.
-    """
-    raw_maxes: dict[str, dict[str, int]] = defaultdict(
-        lambda: {"n_points": 0, "n_cells": 0}
-    )
-
-    for sample in tqdm(
-        dataloader,
-        desc=f"Computing max mesh sizes (rank {rank})",
-        disable=rank != 0,
-    ):
-        for bc_type, mesh in sample.boundary_meshes.items():
-            raw_maxes[bc_type]["n_points"] = max(
-                raw_maxes[bc_type]["n_points"], mesh.cells.numel()
-            )
-            n_cells = (
-                int(mesh.n_cells * face_downsampling_ratio)
-                if face_downsampling_ratio != 1.0
-                else mesh.n_cells
-            )
-            raw_maxes[bc_type]["n_cells"] = max(
-                raw_maxes[bc_type]["n_cells"], n_cells
-            )
-
-    result = TensorDict(
-        {
-            bc_type: TensorDict(
-                {
-                    "n_points": torch.tensor(sizes["n_points"], device=device),
-                    "n_cells": torch.tensor(sizes["n_cells"], device=device),
-                }
-            )
-            for bc_type, sizes in raw_maxes.items()
-        },
-    )
-
-    if is_initialized():
-        for bc_type in result.keys(include_nested=False):
-            all_reduce(result[bc_type, "n_points"], op=ReduceOp.MAX)
-            all_reduce(result[bc_type, "n_cells"], op=ReduceOp.MAX)
-
-    if rank == 0:
-        logger.info(f"Max mesh sizes: {result.to_dict()}")
-
-    return result
 
 
 def compute_surface_force_coefficients(
