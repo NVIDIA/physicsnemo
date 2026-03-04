@@ -195,31 +195,24 @@ class Kernel(Module):
             )
 
     @cached_property
-    def _approx_peak_bytes_per_interaction(self) -> int:
-        """Estimated peak memory per (target, source) interaction.
+    def _floats_per_interaction(self) -> int:
+        """Identifiable float allocations per (target, source) interaction.
 
-        Used by :class:`ChunkedKernel` to size chunks so that one chunk's
-        peak allocation fits within a memory budget.  The estimate accounts
-        for three categories of tensors that coexist at peak:
+        Counts tensor elements from feature engineering, MLP evaluation,
+        and post-processing that coexist at peak during ``Kernel.forward``.
+        Used by :class:`ChunkedKernel` to estimate chunk memory budgets.
 
-        1. **Feature engineering** - relative-position vectors, unit vectors,
-           magnitudes, spherical-harmonic angular features, and the
-           concatenated MLP input.
-        2. **MLP evaluation** - hidden-layer activations, Pade numerator/
-           denominator outputs.
-        3. **Post-processing** - far-field decay, equivariant basis vectors
-           for vector-field reprojection.
-
-        A safety factor of 2 is applied to account for autograd saved
-        tensors during the backward recomputation inside the outer
-        activation checkpoint.
+        This is a lower bound - the actual peak is higher due to autograd
+        saving input tensors for backward through each element-wise
+        operation.  The caller applies a runtime multiplier to account for
+        this (see ``ChunkedKernel.forward``).
         """
         source_rc = rank_counts(self.source_data_ranks)
         global_rc = rank_counts(self.global_data_ranks)
         n_vec = 1 + source_rc[1] + global_rc[1]
         n_pairs = comb(n_vec, 2)
 
-        floats_per_interaction = (
+        return (
             ### Feature engineering: spatial vectors (n_targets, n_sources, 3, ...)
             3                                                  # r = target - source
             + 3 * n_vec * 2                                    # vectors + unit vectors
@@ -236,10 +229,6 @@ class Kernel(Module):
             + 1                                                # far-field r_mag_sq
             + self.n_spatial_dims * max(1, 2 * n_vec - 1)      # basis vectors
         )
-
-        element_bytes = 2  # bfloat16
-        autograd_safety_factor = 2
-        return floats_per_interaction * element_bytes * autograd_safety_factor
 
     @cached_property
     def network_in_features(self) -> int:
@@ -587,10 +576,12 @@ class Kernel(Module):
         ### Deferred from __init__ so that torchinfo and other introspection
         ### tools can inspect the uncompiled module tree. Skipped when an
         ### outer torch.compile is already tracing (it handles fusion itself).
+        ### Uses dynamic=True so that varying chunk sizes (batch dimension)
+        ### share one compiled graph per kernel, avoiding repeated recompilation.
         if not torch.compiler.is_compiling() and not isinstance(
             self.network, torch._dynamo.eval_frame.OptimizedModule
         ):
-            self.network = torch.compile(self.network, dynamic=False, mode="default")
+            self.network = torch.compile(self.network, dynamic=True, mode="default")
         flattened_output = self.network(flattened_input)
 
         output = flattened_output.view(n_targets, n_sources, self.network_out_features)
@@ -870,10 +861,27 @@ class ChunkedKernel(Kernel):
         n_interactions: int = n_targets * n_sources
 
         if chunk_size == "auto":
-            approx_peak_bytes = n_interactions * self._approx_peak_bytes_per_interaction
-            target_bytes = torch.cuda.get_device_properties(
-                source_points.device
-            ).total_memory // 2
+            device = source_points.device
+
+            if torch.is_autocast_enabled(device.type):
+                element_bytes = torch.tensor(
+                    [], dtype=torch.get_autocast_dtype(device.type)
+                ).element_size()
+            else:
+                element_bytes = source_points.element_size()
+
+            # _floats_per_interaction counts identifiable tensor allocations.
+            # Autograd saves 1-2 additional tensors per element-wise operation
+            # during the backward recomputation inside the outer activation
+            # checkpoint; empirically this ~5x the identifiable count.
+            _AUTOGRAD_OVERHEAD = 5
+            approx_peak_bytes = (
+                n_interactions
+                * self._floats_per_interaction
+                * element_bytes
+                * _AUTOGRAD_OVERHEAD
+            )
+            target_bytes = torch.cuda.get_device_properties(device).total_memory // 2
 
             n_chunks_needed = max(1, ceil(approx_peak_bytes / target_bytes))
             chunk_size: int = max(1, ceil(n_targets / n_chunks_needed))
