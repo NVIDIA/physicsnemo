@@ -418,3 +418,12 @@ implement a regression model.
     :show-inheritance:
     :members:
     :exclude-members: forward
+
+CorrDiff Utils
+--------------
+
+Utilities for working with the CorrDiff model, particularly for the diffusion and regression steps.
+
+.. automodule:: physicsnemo.diffusion.samplers
+    :members:
+    :show-inheritance:

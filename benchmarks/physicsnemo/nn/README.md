@@ -47,4 +47,4 @@ PHYSICSNEMO_ASV_FUNCTIONALS=Interpolation,RadiusSearch ./benchmarks/run_benchmar
 
 Plots are written under:
 
-- `docs/nn/functional/<functional_name>/benchmark.png`
+- `docs/img/nn/functional/<functional_name>/benchmark.png`
