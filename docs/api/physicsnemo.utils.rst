@@ -24,7 +24,7 @@ These are particularly useful when implementing custom training loops or special
 
 
 Weather and Climate Utils
-------------------------
+--------------------------
 
 Specialized utilities for weather and climate modeling, including calculations for solar radiation
 and atmospheric parameters. These utilities are used extensively in weather prediction models.
