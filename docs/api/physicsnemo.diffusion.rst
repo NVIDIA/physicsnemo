@@ -17,7 +17,7 @@ image from the individual predicted patches.
     :members:
     :show-inheritance:
 
-Diffusion utils
+Diffusion Utils
 ----------------
 
 Tools for working with diffusion models and other generative approaches,
