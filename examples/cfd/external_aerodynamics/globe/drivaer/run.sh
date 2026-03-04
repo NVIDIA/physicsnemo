@@ -20,6 +20,7 @@ OUTPUT_DIR="${SCRIPT_DIR}/output/${OUTPUT_NAME}"
 
 TRAIN_ARGS=(
     --output-name "${OUTPUT_NAME}"
+    --no-use-compile
     --amp
 )
 
