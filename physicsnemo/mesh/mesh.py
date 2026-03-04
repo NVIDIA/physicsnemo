@@ -1699,6 +1699,20 @@ class Mesh:
                 batch_size=torch.Size([target_n_cells]),
             ),
             global_data=self.global_data,
+            _cache=TensorDict(
+                {
+                    "cell": self._cache["cell"].apply(
+                        lambda x: _pad_with_value(x, target_n_cells, 0.0),
+                        batch_size=torch.Size([target_n_cells]),
+                    ),
+                    "point": self._cache["point"].apply(
+                        lambda x: _pad_with_value(x, target_n_points, 0.0),
+                        batch_size=torch.Size([target_n_points]),
+                    ),
+                },
+                batch_size=[],
+                device=self.points.device,
+            ),
         )
 
     def pad_to_next_power(
