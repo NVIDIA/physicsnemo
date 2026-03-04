@@ -363,7 +363,7 @@ def main(
             )
 
     ### [Hyperparameter Logging]
-    if dist.rank == 0:
+    if dist.rank == 0 and epoch == 0:
         log_hyperparameters(
             log_dir=output_dir,
             model=base_model,
