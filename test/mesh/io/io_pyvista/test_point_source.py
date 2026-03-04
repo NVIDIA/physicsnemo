@@ -20,7 +20,6 @@ import warnings
 
 import numpy as np
 import pytest
-import torch
 
 pv = pytest.importorskip("pyvista")
 

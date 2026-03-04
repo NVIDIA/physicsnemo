@@ -313,9 +313,16 @@ def from_pyvista(
     # Cell data can only be passed through when the output cells have a
     # 1:many relationship with input cells (e.g., VTK's triangulate
     # replicates cell_data to child cells).  This fails when manifold_dim
-    # is lower than native_dim (different cell topology) or when
-    # manifold_dim is 0 (output has no cells at all).
-    pass_cell_data = manifold_dim > 0 and manifold_dim >= native_dim
+    # is lower than native_dim (different cell topology), when
+    # manifold_dim is 0 (output has no cells at all), or when a topology
+    # transformation (polyline splitting, edge extraction) changed the
+    # cell count.
+    n_output_cells = 0 if cells is None else cells.shape[0]
+    pass_cell_data = (
+        manifold_dim > 0
+        and manifold_dim >= native_dim
+        and n_output_cells == pyvista_mesh.n_cells
+    )
     return Mesh(
         points=points,
         cells=cells,
