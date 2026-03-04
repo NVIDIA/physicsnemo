@@ -174,7 +174,7 @@ Weights and Biases Logger
 
 Integration with Weights & Biases (W&B) for experiment tracking and visualization. This utility provides rich
 visualization capabilities and easy experiment comparison, making it ideal for projects that require detailed
-analysis of training runs and model performance. Users should initialize the W&B backend before using the LaunchLogger.
+analysis of training runs and model performance. You must initialize the W&B backend before using the LaunchLogger.
 
 .. automodule:: physicsnemo.utils.logging.wandb
     :members:
