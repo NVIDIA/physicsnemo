@@ -111,7 +111,7 @@ Consider the following example usage:
 This example shows how to use the LaunchLogger to log metrics during training and
 validation. The LaunchLogger is initialized with the MLflow backend, and the logger
 is created for each epoch, a separate logger is created for training and validation.
-We can use the `.log_minibatch` method to log metrics during training and validation.
+You can use the `.log_minibatch` method to log metrics during training and validation.
 We can use the `.log_epoch` method to log the learning rate at the end of the epoch.
 
 For a more detailed example, please refer to the `Logging and Checkpointing recipe <../../user-guide/simple_logging_and_checkpointing.html>`_ .
