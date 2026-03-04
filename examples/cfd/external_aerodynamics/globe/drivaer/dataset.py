@@ -129,8 +129,8 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         """Randomly subsample cells from a surface mesh for GLOBE boundary input.
 
         Selects ``n_cells`` random cells, compacts away unreferenced vertices,
-        strips field data (geometry only), and scales cell areas by the
-        inverse selection fraction to preserve the total surface area integral.
+        strips field data (geometry only), and rescales cell areas so that
+        the subsampled mesh has the same total surface area as the original.
 
         Args:
             surface_mesh: Full-resolution car body surface Mesh.
@@ -139,13 +139,13 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         Returns:
             Geometry-only Mesh with ``n_cells`` cells and area-scaled cache.
         """
-        total = surface_mesh.n_cells
-        indices = torch.randperm(total)[:n_cells]
+        total_area = surface_mesh.cell_areas.sum()
+        indices = torch.randperm(surface_mesh.n_cells)[:n_cells]
         boundary = surface_mesh.slice_cells(indices).clean()
 
-        area_scale = total / n_cells
         boundary = Mesh(points=boundary.points, cells=boundary.cells)
-        boundary._cache["cell", "areas"] = boundary.cell_areas * area_scale
+        raw_areas = boundary.cell_areas
+        boundary._cache["cell", "areas"] = raw_areas * (total_area / raw_areas.sum())
         return boundary
 
     @classmethod

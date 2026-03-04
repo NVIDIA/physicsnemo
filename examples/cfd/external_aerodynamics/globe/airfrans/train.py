@@ -78,7 +78,6 @@ def main(
     weight_decay: float = 1e-4,
     use_muon: bool = True,
     muon_method: Literal["original", "match_rms_adamw"] = "original",
-    train_face_downsampling_ratio: float = 1.0,
     train_randomize_face_centers: bool = True,
     seed: int = 0,
     error_scales: dict[str, float] | None = None,
@@ -106,7 +105,6 @@ def main(
         points_per_iter: Number of points to sample per training iteration.
         learning_rate: Initial learning rate for the Adam optimizer.
         weight_decay: Weight decay (L2 regularization) factor for the optimizer.
-        train_face_downsampling_ratio: Ratio of faces to keep when downsampling boundary meshes.
         train_randomize_face_centers: Whether to use random points inside faces instead of centroids.
         seed: Random seed for reproducibility across runs.
         error_scales: Dictionary specifying error scales for loss components. If None, uses default scales.
@@ -277,12 +275,7 @@ def main(
         ],
     ] = {
         split: compute_max_mesh_sizes(
-            dataloaders[split],
-            device,
-            face_downsampling_ratio=(
-                train_face_downsampling_ratio if split == "train" else 1.0
-            ),
-            rank=dist.rank,
+            dataloaders[split], device, rank=dist.rank
         )
         for split in splits
     }
@@ -446,21 +439,6 @@ def main(
                 n_points = min(points_per_iter, sample.interior_mesh.n_points)
                 mask = torch.randperm(sample.interior_mesh.n_points)[:n_points]
                 sample.interior_mesh = sample.interior_mesh.slice_points(mask)
-
-                ### Subsample boundary mesh cells during training
-                if training:
-                    for bc_type, mesh in sample.boundary_meshes.items():
-                        if train_face_downsampling_ratio != 1.0:
-                            mesh._cache["cell", "areas"] = (
-                                mesh.cell_areas / train_face_downsampling_ratio
-                            )
-                            new_n_cells = int(
-                                mesh.n_cells * train_face_downsampling_ratio
-                            )
-                            mesh = mesh.slice_cells(
-                                torch.randperm(mesh.n_cells)[:new_n_cells]
-                            )
-                        sample.boundary_meshes[bc_type] = mesh
 
                 ### Pad boundary meshes to fixed size for static compilation
                 split_max_sizes = max_sizes[split]

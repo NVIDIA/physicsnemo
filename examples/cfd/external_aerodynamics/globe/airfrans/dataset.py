@@ -717,7 +717,6 @@ def compute_max_mesh_sizes(
     dataloader: DataLoader,
     device: torch.device,
     *,
-    face_downsampling_ratio: float = 1.0,
     rank: int = 0,
 ) -> TensorDict[str, TensorDict[Literal["n_points", "n_cells"], Int[torch.Tensor, ""]]]:
     """Compute the maximum n_points and n_cells per boundary-condition type.
@@ -730,9 +729,6 @@ def compute_max_mesh_sizes(
     Args:
         dataloader: DataLoader yielding ``AirFRANSSample`` objects.
         device: Device for the all-reduce tensors.
-        face_downsampling_ratio: Scale factor applied to cell counts. Use
-            a value < 1.0 for training (downsampled meshes) and 1.0 for
-            validation (full meshes).
         rank: Distributed rank (progress bar shown only on rank 0).
 
     Returns:
@@ -753,14 +749,8 @@ def compute_max_mesh_sizes(
             raw_maxes[bc_type]["n_points"] = max(
                 raw_maxes[bc_type]["n_points"], mesh.n_points
             )
-            n_cells = (
-                int(mesh.n_cells * face_downsampling_ratio)
-                if face_downsampling_ratio != 1.0
-                else mesh.n_cells
-            )
             raw_maxes[bc_type]["n_cells"] = max(
-                raw_maxes[bc_type]["n_cells"],
-                n_cells,
+                raw_maxes[bc_type]["n_cells"], mesh.n_cells
             )
 
     ### Convert to TensorDict and all-reduce across ranks

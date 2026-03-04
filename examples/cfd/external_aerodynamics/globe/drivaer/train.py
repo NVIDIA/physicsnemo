@@ -79,7 +79,6 @@ def main(
     weight_decay: float = 1e-4,
     use_muon: bool = True,
     muon_method: Literal["original", "match_rms_adamw"] = "original",
-    train_face_downsampling_ratio: float = 1.0,
     train_randomize_face_centers: bool = True,
     seed: int = 0,
     error_scales: dict[str, float] | None = None,
@@ -90,7 +89,6 @@ def main(
     n_spherical_harmonics: int = 4,
     boundary_n_faces: int = 20_000,
     use_profiler: bool = True,
-    max_viz_points: int = 100_000,
     make_images: bool = True,
     use_mlflow: bool = True,
     mlflow_experiment: str = "GLOBE_DrivAerML",
@@ -109,8 +107,6 @@ def main(
         weight_decay: Weight decay factor.
         use_muon: Use Muon optimizer for 2D parameters (matrix weights).
         muon_method: Muon learning-rate adjustment method.
-        train_face_downsampling_ratio: Fraction of boundary mesh faces to
-            keep during training (stochastic downsampling for regularization).
         train_randomize_face_centers: Sample random points inside faces
             instead of centroids during training.
         seed: Random seed.
@@ -122,10 +118,6 @@ def main(
         n_latent_vectors: Vector latent channels between hyperlayers.
         n_spherical_harmonics: Legendre polynomial terms (default 4 for 3D).
         boundary_n_faces: Target boundary mesh face count after decimation.
-        max_viz_points: Maximum number of surface points for visualization.
-            Full-resolution meshes (~8M points) make auto-chunked inference
-            prohibitively slow; subsampling to this count keeps visualization
-            fast while retaining visual quality.
         use_profiler: Enable PyTorch profiler (rank 0 only).
         make_images: Generate visualization images during training.
         use_mlflow: Enable MLflow experiment tracking.
@@ -259,27 +251,17 @@ def main(
     ### [Boundary Mesh Padding Targets]
     # Boundary simplices have (manifold_dim + 1) = n_spatial_dims vertices,
     # so n_spatial_dims * n_cells is a hard upper bound on unique points.
-    max_sizes: dict[Split, TensorDict] = {
-        split: TensorDict({
-            bc_type: TensorDict({
-                "n_points": torch.tensor(
-                    boundary_n_faces * n_spatial_dims, device=device
-                ),
-                "n_cells": torch.tensor(
-                    int(boundary_n_faces * (
-                        train_face_downsampling_ratio
-                        if split == "train" else 1.0
-                    )),
-                    device=device,
-                ),
-            })
-            for bc_type in boundary_source_data_ranks
+    max_sizes: TensorDict = TensorDict({
+        bc_type: TensorDict({
+            "n_points": torch.tensor(
+                boundary_n_faces * n_spatial_dims, device=device
+            ),
+            "n_cells": torch.tensor(boundary_n_faces, device=device),
         })
-        for split in splits
-    }
+        for bc_type in boundary_source_data_ranks
+    })
     if dist.rank == 0:
-        for split in splits:
-            logger0.info(f"Padding targets ({split}): {max_sizes[split].to_dict()}")
+        logger0.info(f"Padding targets: {max_sizes.to_dict()}")
 
     ### [Optimizer and Scheduler Setup]
     learning_rate *= (dist.world_size * points_per_iter / 2048) ** 0.5
@@ -426,30 +408,14 @@ def main(
                 mask = torch.randperm(sample.surface_mesh.n_points)[:n_points]
                 sample.surface_mesh = sample.surface_mesh.slice_points(mask)
 
-                ### Subsample boundary mesh cells during training
-                if training:
-                    for bc_type, mesh in sample.boundary_meshes.items():
-                        if train_face_downsampling_ratio != 1.0:
-                            mesh._cache["cell", "areas"] = (
-                                mesh.cell_areas / train_face_downsampling_ratio
-                            )
-                            new_n_cells = int(
-                                mesh.n_cells * train_face_downsampling_ratio
-                            )
-                            mesh = mesh.slice_cells(
-                                torch.randperm(mesh.n_cells)[:new_n_cells]
-                            )
-                        sample.boundary_meshes[bc_type] = mesh
-
                 ### Pad boundary meshes to fixed size for static compilation
-                split_max_sizes = max_sizes[split]
                 for bc_type, mesh in sample.boundary_meshes.items():
                     padded = mesh.pad(
                         target_n_points=int(
-                            split_max_sizes[bc_type, "n_points"]
+                            max_sizes[bc_type, "n_points"]
                         ),
                         target_n_cells=int(
-                            split_max_sizes[bc_type, "n_cells"]
+                            max_sizes[bc_type, "n_cells"]
                         ),
                         data_padding_value=0.0,
                     )
@@ -632,20 +598,15 @@ def main(
                     for split in splits:
                         viz_sample = dataloaders[split].dataset[0]
 
-                        ### Subsample prediction surface for speed.
-                        # Cell-based selection preserves mesh topology so
-                        # that postprocess can integrate force coefficients
-                        # and visualize_comparison can render a surface.
-                        if viz_sample.surface_mesh.n_points > max_viz_points:
-                            n_cells = viz_sample.surface_mesh.n_cells
-                            target_n_cells = min(n_cells, max_viz_points * 2)
-                            cell_subset = viz_sample.surface_mesh.cells[
-                                torch.randperm(n_cells)[:target_n_cells]
-                            ]
+                        ### Subsample prediction surface to boundary_n_faces
+                        # cells for speed.  Cell-based selection preserves
+                        # mesh topology for force integration and rendering.
+                        n_cells = viz_sample.surface_mesh.n_cells
+                        if n_cells > boundary_n_faces:
                             viz_sample.surface_mesh = (
-                                viz_sample.surface_mesh.slice_points(
-                                    cell_subset.unique()
-                                )
+                                viz_sample.surface_mesh.slice_cells(
+                                    torch.randperm(n_cells)[:boundary_n_faces]
+                                ).clean()
                             )
 
                         viz_sample = viz_sample.to(device)
