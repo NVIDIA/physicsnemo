@@ -194,6 +194,55 @@ class Kernel(Module):
                 f"Invalid network type: {network_type=!r}; must be one of ['pade', 'mlp']"
             )
 
+        self.network = torch.compile(self.network, dynamic=False, mode="default")
+
+    @cached_property
+    def _approx_peak_bytes_per_interaction(self) -> int:
+        """Estimated peak memory per (target, source) interaction.
+
+        Used by :class:`ChunkedKernel` to size chunks so that one chunk's
+        peak allocation fits within a memory budget.  The estimate accounts
+        for three categories of tensors that coexist at peak:
+
+        1. **Feature engineering** - relative-position vectors, unit vectors,
+           magnitudes, spherical-harmonic angular features, and the
+           concatenated MLP input.
+        2. **MLP evaluation** - hidden-layer activations, Pade numerator/
+           denominator outputs.
+        3. **Post-processing** - far-field decay, equivariant basis vectors
+           for vector-field reprojection.
+
+        A safety factor of 2 is applied to account for autograd saved
+        tensors during the backward recomputation inside the outer
+        activation checkpoint.
+        """
+        source_rc = rank_counts(self.source_data_ranks)
+        global_rc = rank_counts(self.global_data_ranks)
+        n_vec = 1 + source_rc[1] + global_rc[1]
+        n_pairs = comb(n_vec, 2)
+
+        floats_per_interaction = (
+            ### Feature engineering: spatial vectors (n_targets, n_sources, 3, ...)
+            3                                                  # r = target - source
+            + 3 * n_vec * 2                                    # vectors + unit vectors
+            ### Feature engineering: scalars (n_targets, n_sources, ...)
+            + n_vec * 3                                        # magnitudes: squared, raw, log
+            + n_pairs * (1 + 2 * self.n_spherical_harmonics)   # cos_theta + harmonics + products
+            + self.network_in_features                         # concatenated MLP input
+            ### MLP layers (sequential; peak is largest layer plus I/O)
+            + self.network_in_features
+            + sum(self.hidden_layer_sizes)
+            + self.network_out_features
+            ### Post-processing
+            + self.network_out_features                        # reshaped output
+            + 1                                                # far-field r_mag_sq
+            + self.n_spatial_dims * max(1, 2 * n_vec - 1)      # basis vectors
+        )
+
+        element_bytes = 2  # bfloat16
+        autograd_safety_factor = 2
+        return floats_per_interaction * element_bytes * autograd_safety_factor
+
     @cached_property
     def network_in_features(self) -> int:
         r"""Number of input features for the kernel's internal network.
@@ -520,6 +569,7 @@ class Kernel(Module):
             )
 
         cat_input_tensors: torch.Tensor = concatenate_leaves(scalars)
+        del scalars
         # shape (n_targets, n_sources, self.network_in_features)
 
         ### Evaluate the neural-network-based field kernel function
@@ -534,12 +584,7 @@ class Kernel(Module):
             n_targets * n_sources, self.network_in_features
         )
 
-        if self.training and self.use_gradient_checkpointing:
-            flattened_output = checkpoint(
-                self.network, flattened_input, use_reentrant=False
-            )  # shape (n_targets * n_sources, last_layer_size)
-        else:
-            flattened_output = self.network(flattened_input)
+        flattened_output = self.network(flattened_input)
 
         output = flattened_output.view(n_targets, n_sources, self.network_out_features)
 
@@ -818,18 +863,12 @@ class ChunkedKernel(Kernel):
         n_interactions: int = n_targets * n_sources
 
         if chunk_size == "auto":
-            approx_n_floats = n_interactions * (
-                self.network_in_features
-                + sum(self.hidden_layer_sizes)
-                + self.network_out_features
-            )
-            approx_n_bytes = (
-                approx_n_floats * 4
-            )  # float32; conservative enough for bfloat16 too
-            approx_memory_gb = approx_n_bytes / (1024**3)
-            target_memory_gb = 1.0
+            approx_peak_bytes = n_interactions * self._approx_peak_bytes_per_interaction
+            target_bytes = torch.cuda.get_device_properties(
+                source_points.device
+            ).total_memory // 2
 
-            n_chunks_needed = max(1, ceil(approx_memory_gb / target_memory_gb))
+            n_chunks_needed = max(1, ceil(approx_peak_bytes / target_bytes))
             chunk_size: int = max(1, ceil(n_targets / n_chunks_needed))
 
             if not torch.compiler.is_compiling():
