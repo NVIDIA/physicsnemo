@@ -103,9 +103,7 @@ def from_pyvista(
                     pv.CellType.VOXEL,
                     pv.CellType.POLYHEDRON,
                 ]
-                n_volume_cells = int(
-                    np.isin(cell_types, volume_cell_types).sum()
-                )
+                n_volume_cells = int(np.isin(cell_types, volume_cell_types).sum())
             else:
                 n_volume_cells = 0
 
@@ -137,9 +135,7 @@ def from_pyvista(
         if isinstance(pyvista_mesh, pv.PolyData):
             all_triangles = pyvista_mesh.is_all_triangles
         elif isinstance(pyvista_mesh, pv.UnstructuredGrid):
-            all_triangles = bool(
-                (pyvista_mesh.celltypes == pv.CellType.TRIANGLE).all()
-            )
+            all_triangles = bool((pyvista_mesh.celltypes == pv.CellType.TRIANGLE).all())
         else:
             raise NotImplementedError(
                 f"Only PolyData and UnstructuredGrid are supported for manifold dimension 2, got {type(pyvista_mesh)=}."
@@ -163,9 +159,7 @@ def from_pyvista(
 
         if not is_all_tetra(pyvista_mesh):
             unique_types = np.unique(pyvista_mesh.celltypes)
-            cell_type_names = "\n".join(
-                f"- {pv.CellType(t)}" for t in unique_types
-            )
+            cell_type_names = "\n".join(f"- {pv.CellType(t)}" for t in unique_types)
             raise ValueError(
                 f"Expected all cells to be tetrahedra after triangulation, but got:\n{cell_type_names}"
             )
