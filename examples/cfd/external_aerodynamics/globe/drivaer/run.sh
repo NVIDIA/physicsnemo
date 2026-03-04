@@ -20,6 +20,7 @@ OUTPUT_DIR="${SCRIPT_DIR}/output/${OUTPUT_NAME}"
 
 TRAIN_ARGS=(
     --output-name "${OUTPUT_NAME}"
+    --amp
 )
 
 export DRIVAER_DATA_DIR="${HOME}/datasets/drivaer_aws/drivaer_data_full"

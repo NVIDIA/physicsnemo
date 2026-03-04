@@ -194,8 +194,6 @@ class Kernel(Module):
                 f"Invalid network type: {network_type=!r}; must be one of ['pade', 'mlp']"
             )
 
-        self.network = torch.compile(self.network, dynamic=False, mode="default")
-
     @cached_property
     def _approx_peak_bytes_per_interaction(self) -> int:
         """Estimated peak memory per (target, source) interaction.
