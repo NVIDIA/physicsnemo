@@ -626,7 +626,8 @@ def main(
                             / f"viz_{split}_epoch_{epoch}.png"
                         )
                         DrivAerMLDataSet.visualize_comparison(
-                            combined, save_path=save_path
+                            combined, save_path=save_path,
+                            backend="matplotlib",
                         )
                         if use_mlflow:
                             log_artifact(

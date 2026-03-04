@@ -424,11 +424,12 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         *,
         save_path: Path | None = None,
         show: bool = False,
+        backend: Literal["matplotlib", "pyvista"] = "pyvista",
     ) -> None:
         """Render a 3D comparison of predicted vs. true surface fields.
 
         Takes the combined Mesh returned by :meth:`postprocess` and draws
-        truth / prediction / error rows for each field using PyVista.
+        truth / prediction / error rows for each field.
 
         Args:
             combined: Mesh returned by :meth:`postprocess`, with
@@ -437,9 +438,12 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
             save_path: File path for the rendered screenshot.  Defaults to
                 ``drivaer_comparison.png`` in the current directory.
             show: Whether to display interactively (requires a display).
+            backend: Rendering backend.  ``"pyvista"`` gives high-quality
+                GPU-accelerated rendering but needs EGL or OSMesa on
+                headless nodes.  ``"matplotlib"`` works everywhere via
+                ``mpl_toolkits.mplot3d`` (lower fidelity, but no GPU
+                rendering dependency).
         """
-        from physicsnemo.mesh.io import to_pyvista
-
         if save_path is None:
             save_path = Path("drivaer_comparison.png")
 
@@ -455,74 +459,204 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         n_cols = len(fields)
         n_rows = len(kinds)
 
-        plotter = pv.Plotter(
-            shape=(n_rows, n_cols),
-            off_screen=not show,
-            window_size=(600 * n_cols, 500 * n_rows),
-        )
+        if backend == "pyvista":
+            _visualize_pyvista(
+                combined, true_flat, pred_flat, kind_data, kinds,
+                fields, n_rows, n_cols, save_path, show,
+            )
+        elif backend == "matplotlib":
+            _visualize_matplotlib(
+                combined, true_flat, pred_flat, kind_data, kinds,
+                fields, n_rows, n_cols, save_path, show,
+            )
+        else:
+            raise ValueError(
+                f"Unsupported {backend=!r}. Must be 'matplotlib' or 'pyvista'."
+            )
 
-        combined_pv = to_pyvista(combined.to("cpu"))
 
-        for col, field_name in enumerate(fields):
-            true_vals = true_flat[field_name].cpu().numpy()
-            pred_vals = pred_flat[field_name].cpu().numpy()
+# ---------------------------------------------------------------------------
+# Visualization helpers
+# ---------------------------------------------------------------------------
 
-            is_vector = true_vals.ndim > 1 and true_vals.shape[-1] > 1
+
+def _visualize_pyvista(
+    combined: Mesh,
+    true_flat: TensorDict,
+    pred_flat: TensorDict,
+    kind_data: dict[str, TensorDict],
+    kinds: dict[str, str],
+    fields: list[str],
+    n_rows: int,
+    n_cols: int,
+    save_path: Path,
+    show: bool,
+) -> None:
+    """PyVista backend for :meth:`DrivAerMLDataSet.visualize_comparison`."""
+    from physicsnemo.mesh.io import to_pyvista
+
+    plotter = pv.Plotter(
+        shape=(n_rows, n_cols),
+        off_screen=not show,
+        window_size=(600 * n_cols, 500 * n_rows),
+    )
+
+    combined_pv = to_pyvista(combined.to("cpu"))
+
+    for col, field_name in enumerate(fields):
+        true_vals = true_flat[field_name].float().cpu().numpy()
+        pred_vals = pred_flat[field_name].float().cpu().numpy()
+
+        is_vector = true_vals.ndim > 1 and true_vals.shape[-1] > 1
+        if is_vector:
+            true_scalars = np.linalg.norm(true_vals, axis=-1)
+            pred_scalars = np.linalg.norm(pred_vals, axis=-1)
+            label = f"|{field_name}|"
+        else:
+            true_scalars = true_vals.ravel()
+            pred_scalars = pred_vals.ravel()
+            label = field_name
+
+        ### Shared color limits across truth and prediction
+        finite_all = np.concatenate([
+            true_scalars[np.isfinite(true_scalars)],
+            pred_scalars[np.isfinite(pred_scalars)],
+        ])
+        shared_clim = [float(finite_all.min()), float(finite_all.max())]
+
+        for row, (key, title) in enumerate(kinds.items()):
+            plotter.subplot(row, col)
+            vals: torch.Tensor = kind_data[key][field_name]  # ty: ignore[invalid-assignment]
+
             if is_vector:
-                true_scalars = np.linalg.norm(true_vals, axis=-1)
-                pred_scalars = np.linalg.norm(pred_vals, axis=-1)
-                label = f"|{field_name}|"
+                scalars = np.linalg.norm(vals.float().cpu().numpy(), axis=-1)
             else:
-                true_scalars = true_vals.ravel()
-                pred_scalars = pred_vals.ravel()
-                label = field_name
+                scalars = vals.float().cpu().numpy().ravel()
 
-            ### Shared color limits across truth and prediction
-            finite_all = np.concatenate([
-                true_scalars[np.isfinite(true_scalars)],
-                pred_scalars[np.isfinite(pred_scalars)],
-            ])
-            shared_clim = [float(finite_all.min()), float(finite_all.max())]
-
-            for row, (key, title) in enumerate(kinds.items()):
-                plotter.subplot(row, col)
-                vals: torch.Tensor = kind_data[key][field_name]  # ty: ignore[invalid-assignment]
-
+            if key == "error":
+                emax = float(
+                    np.abs(scalars[np.isfinite(scalars)]).max()
+                )
                 if is_vector:
-                    scalars = np.linalg.norm(vals.cpu().numpy(), axis=-1)
+                    cmap, clim = "Reds", [0.0, emax]
                 else:
-                    scalars = vals.cpu().numpy().ravel()
+                    cmap, clim = "RdBu_r", [-emax, emax]
+            else:
+                cmap, clim = "turbo", shared_clim
 
-                if key == "error":
-                    emax = float(
-                        np.abs(scalars[np.isfinite(scalars)]).max()
-                    )
-                    if is_vector:
-                        cmap, clim = "Reds", [0.0, emax]
-                    else:
-                        cmap, clim = "RdBu_r", [-emax, emax]
+            plotter.add_mesh(
+                combined_pv.copy(),
+                scalars=scalars,
+                cmap=cmap,
+                clim=clim,
+                show_edges=False,
+                scalar_bar_args={"title": label if row == 0 else ""},
+            )
+            plotter.add_text(
+                f"{title}\n{label}" if row == 0 else title,
+                font_size=10,
+            )
+            plotter.camera_position = "xy"
+
+    plotter.screenshot(str(save_path), scale=2)
+    logger.info(f"Saved comparison to {save_path}")
+    if show:
+        plotter.show()
+    plotter.close()
+
+
+def _visualize_matplotlib(
+    combined: Mesh,
+    true_flat: TensorDict,
+    pred_flat: TensorDict,
+    kind_data: dict[str, TensorDict],
+    kinds: dict[str, str],
+    fields: list[str],
+    n_rows: int,
+    n_cols: int,
+    save_path: Path,
+    show: bool,
+) -> None:
+    """Matplotlib backend for :meth:`DrivAerMLDataSet.visualize_comparison`.
+
+    Uses ``mesh.draw(backend="matplotlib")`` which renders 3D surface
+    meshes via ``mpl_toolkits.mplot3d.Poly3DCollection``.  Lower
+    fidelity than PyVista but works on headless nodes without EGL/OSMesa.
+    """
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(
+        nrows=n_rows,
+        ncols=n_cols,
+        figsize=(5 * n_cols, 4 * n_rows),
+        subplot_kw={"projection": "3d"},
+        squeeze=False,
+    )
+
+    for col, field_name in enumerate(fields):
+        true_vals: torch.Tensor = true_flat[field_name]  # ty: ignore[invalid-assignment]
+        pred_vals: torch.Tensor = pred_flat[field_name]  # ty: ignore[invalid-assignment]
+
+        is_vector = true_vals.ndim > 1 and true_vals.shape[-1] > 1
+
+        ### Reduce to scalar magnitudes for color-mapping
+        if is_vector:
+            true_scalars = true_vals.float().norm(dim=-1)
+            pred_scalars = pred_vals.float().norm(dim=-1)
+        else:
+            true_scalars = true_vals.float().reshape(-1)
+            pred_scalars = pred_vals.float().reshape(-1)
+
+        ### Shared color limits across truth and prediction
+        finite_mask_t = torch.isfinite(true_scalars)
+        finite_mask_p = torch.isfinite(pred_scalars)
+        finite_all = torch.cat([
+            true_scalars[finite_mask_t], pred_scalars[finite_mask_p],
+        ])
+        shared_vmin = float(finite_all.min())
+        shared_vmax = float(finite_all.max())
+
+        for row, (key, title) in enumerate(kinds.items()):
+            ax = axes[row, col]
+            vals: torch.Tensor = kind_data[key][field_name]  # ty: ignore[invalid-assignment]
+
+            if is_vector:
+                scalars = vals.float().norm(dim=-1)
+            else:
+                scalars = vals.float().reshape(-1)
+
+            if key == "error":
+                finite_err = scalars[torch.isfinite(scalars)]
+                emax = float(finite_err.abs().max()) if len(finite_err) > 0 else 1.0
+                if is_vector:
+                    cmap, vmin, vmax = "Reds", 0.0, emax
                 else:
-                    cmap, clim = "turbo", shared_clim
+                    cmap, vmin, vmax = "RdBu_r", -emax, emax
+            else:
+                cmap, vmin, vmax = "turbo", shared_vmin, shared_vmax
 
-                plotter.add_mesh(
-                    combined_pv.copy(),
-                    scalars=scalars,
-                    cmap=cmap,
-                    clim=clim,
-                    show_edges=False,
-                    scalar_bar_args={"title": label if row == 0 else ""},
-                )
-                plotter.add_text(
-                    f"{title}\n{label}" if row == 0 else title,
-                    font_size=10,
-                )
-                plotter.camera_position = "xy"
+            combined.draw(
+                backend="matplotlib",
+                ax=ax,
+                point_scalars=scalars,
+                cmap=cmap,
+                vmin=vmin,
+                vmax=vmax,
+                show=False,
+                show_edges=False,
+            )
 
-        plotter.screenshot(str(save_path), scale=2)
-        logger.info(f"Saved comparison to {save_path}")
-        if show:
-            plotter.show()
-        plotter.close()
+            ax.set_title(
+                f"{title}\n{field_name}" if row == 0 else title,
+                fontsize=10,
+            )
+
+    plt.tight_layout()
+    plt.savefig(str(save_path), dpi=150, bbox_inches="tight")
+    logger.info(f"Saved comparison to {save_path}")
+    if show:
+        plt.show()
+    plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
