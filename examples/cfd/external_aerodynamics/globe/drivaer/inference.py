@@ -67,11 +67,20 @@ sample_path = sample_paths["validation"][0]
 device = torch.device("cuda")
 torch.set_float32_matmul_precision("high")
 
-### Preprocess sample
-sample = DrivAerMLDataSet.preprocess(sample_path).to(device)
-
-### Load model from saved hyperparameters
+### Load hyperparameters and model
 hyperparameters = yaml.safe_load((output_dir / "hyperparameters.yaml").read_text())
+
+### Preprocess sample and populate boundary meshes
+# preprocess() returns boundary_meshes empty (the cached representation is
+# hyperparameter-invariant); boundary subsampling is normally done by
+# __getitem__, so we replicate it here for standalone inference.
+sample = DrivAerMLDataSet.preprocess(sample_path)
+sample.boundary_meshes["no_slip"] = DrivAerMLDataSet._subsample_boundary(
+    sample.surface_mesh,
+    n_cells=hyperparameters.get("boundary_n_faces", 20_000),
+)
+sample = sample.to(device)
+
 model = GLOBE(**hyperparameters["model"]).to(device)
 
 best_model_path = output_dir / "best_model.mdlus"
