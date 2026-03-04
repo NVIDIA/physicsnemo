@@ -144,7 +144,7 @@ def from_pyvista(
             pyvista_mesh = pyvista_mesh.triangulate()
 
     elif manifold_dim == 3:
-        if not hasattr(pyvista_mesh, "celltypes"):
+        if not isinstance(pyvista_mesh, pv.UnstructuredGrid):
             raise ValueError(
                 f"Expected an UnstructuredGrid with volume cells for 3D meshes, "
                 f"but got {type(pyvista_mesh)=}."
