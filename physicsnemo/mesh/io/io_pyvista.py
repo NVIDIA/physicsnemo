@@ -297,7 +297,7 @@ def to_pyvista(
     pv = importlib.import_module("pyvista")
 
     ### Convert points to numpy and pad to 3D if needed (PyVista requires 3D points)
-    points_np = mesh.points.cpu().numpy()
+    points_np = mesh.points.float().cpu().numpy()
 
     if mesh.n_spatial_dims < 3:
         # Pad with zeros to make 3D
