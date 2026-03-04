@@ -80,29 +80,34 @@ def from_pyvista(
                 n_cells_total = _get_count_safely(pyvista_mesh, "n_cells")
                 n_faces = max(0, n_cells_total - n_verts - n_lines)
             else:
-                # For UnstructuredGrid, check cells_dict for 2D cells
-                cells_dict = getattr(pyvista_mesh, "cells_dict", {})
-                n_faces = sum(
-                    len(cells)
-                    for cell_type, cells in cells_dict.items()
-                    if cell_type
-                    in [pv.CellType.TRIANGLE, pv.CellType.QUAD, pv.CellType.POLYGON]
-                )
+                # For UnstructuredGrid, use the celltypes array instead of
+                # cells_dict.  celltypes is a simple int array that works for
+                # all cell types, including variable-length polyhedra that
+                # cause cells_dict to raise ValueError.
+                cell_types = pyvista_mesh.celltypes
+                surface_cell_types = [
+                    pv.CellType.TRIANGLE,
+                    pv.CellType.QUAD,
+                    pv.CellType.POLYGON,
+                ]
+                n_faces = int(np.isin(cell_types, surface_cell_types).sum())
 
             # Check for 3D volume cells
-            cells_dict = getattr(pyvista_mesh, "cells_dict", {})
-            volume_cell_types = [
-                pv.CellType.TETRA,
-                pv.CellType.HEXAHEDRON,
-                pv.CellType.WEDGE,
-                pv.CellType.PYRAMID,
-                pv.CellType.VOXEL,
-            ]
-            n_volume_cells = sum(
-                len(cells)
-                for cell_type, cells in cells_dict.items()
-                if cell_type in volume_cell_types
-            )
+            if hasattr(pyvista_mesh, "celltypes"):
+                cell_types = pyvista_mesh.celltypes
+                volume_cell_types = [
+                    pv.CellType.TETRA,
+                    pv.CellType.HEXAHEDRON,
+                    pv.CellType.WEDGE,
+                    pv.CellType.PYRAMID,
+                    pv.CellType.VOXEL,
+                    pv.CellType.POLYHEDRON,
+                ]
+                n_volume_cells = int(
+                    np.isin(cell_types, volume_cell_types).sum()
+                )
+            else:
+                n_volume_cells = 0
 
             # Determine dimension based on what's present (highest dimension wins)
             if n_volume_cells > 0:
@@ -132,9 +137,9 @@ def from_pyvista(
         if isinstance(pyvista_mesh, pv.PolyData):
             all_triangles = pyvista_mesh.is_all_triangles
         elif isinstance(pyvista_mesh, pv.UnstructuredGrid):
-            all_triangles = set(pyvista_mesh.cells_dict.keys()) == {
-                pv.CellType.TRIANGLE
-            }
+            all_triangles = bool(
+                (pyvista_mesh.celltypes == pv.CellType.TRIANGLE).all()
+            )
         else:
             raise NotImplementedError(
                 f"Only PolyData and UnstructuredGrid are supported for manifold dimension 2, got {type(pyvista_mesh)=}."
@@ -143,25 +148,26 @@ def from_pyvista(
             pyvista_mesh = pyvista_mesh.triangulate()
 
     elif manifold_dim == 3:
-        if not hasattr(pyvista_mesh, "cells_dict"):
+        if not hasattr(pyvista_mesh, "celltypes"):
             raise ValueError(
-                f"Expected a `cells_dict` attribute for 3D meshes (typically pv.UnstructuredGrid), "
-                f"but did not find one. For reference, got {type(pyvista_mesh)=}."
+                f"Expected an UnstructuredGrid with volume cells for 3D meshes, "
+                f"but got {type(pyvista_mesh)=}."
             )
 
         def is_all_tetra(pv_mesh) -> bool:
             """Check if mesh contains only tetrahedral cells."""
-            return set(pv_mesh.cells_dict.keys()) == {pv.CellType.TETRA}
+            return bool((pv_mesh.celltypes == pv.CellType.TETRA).all())
 
         if not is_all_tetra(pyvista_mesh):
-            pyvista_mesh = pyvista_mesh.tessellate(max_n_subdivide=1)
+            pyvista_mesh = pyvista_mesh.triangulate()
 
         if not is_all_tetra(pyvista_mesh):
+            unique_types = np.unique(pyvista_mesh.celltypes)
             cell_type_names = "\n".join(
-                f"- {pv.CellType(id)}" for id in pyvista_mesh.cells_dict.keys()
+                f"- {pv.CellType(t)}" for t in unique_types
             )
             raise ValueError(
-                f"Expected all cells to be tetrahedra after tessellation, but got:\n{cell_type_names}"
+                f"Expected all cells to be tetrahedra after triangulation, but got:\n{cell_type_names}"
             )
 
     ### Extract and convert geometry
@@ -250,11 +256,11 @@ def from_pyvista(
 
     elif manifold_dim == 3:
         # Tetrahedral cells - extract from cells
-        # After tessellation, all cells should be tetrahedra
+        # After triangulation, all cells should be tetrahedra
         cells_dict = pyvista_mesh.cells_dict
         if pv.CellType.TETRA not in cells_dict:
             raise ValueError(
-                f"Expected tetrahedral cells after tessellation, but got {list(cells_dict.keys())}"
+                f"Expected tetrahedral cells after triangulation, but got {list(cells_dict.keys())}"
             )
         tetra_cells = cells_dict[pv.CellType.TETRA]
         cells = torch.from_numpy(tetra_cells).long()
