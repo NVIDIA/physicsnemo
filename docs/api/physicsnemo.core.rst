@@ -15,7 +15,7 @@ The :class:`Module` provides a base class for all user facing models in PhysicsN
 It provides a unified interface for the registry, checkpointing, and optimization.
 Full API information can be found in the :doc:`PhysicsNeMo Modules <models/modules>`.
 
-Filesystem utils
+Filesystem Utils
 ----------------
 
 Utilities for handling file operations, caching, and data management across different storage systems.
