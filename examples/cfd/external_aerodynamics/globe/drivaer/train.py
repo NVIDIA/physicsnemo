@@ -90,6 +90,7 @@ def main(
     boundary_n_faces: int = 20_000,
     use_profiler: bool = True,
     make_images: bool = True,
+    save_every: int = 1,
     use_mlflow: bool = True,
     mlflow_experiment: str = "GLOBE_DrivAerML",
 ):
@@ -120,6 +121,7 @@ def main(
         boundary_n_faces: Target boundary mesh face count after decimation.
         use_profiler: Enable PyTorch profiler (rank 0 only).
         make_images: Generate visualization images during training.
+        save_every: Save a checkpoint every this many epochs.
         use_mlflow: Enable MLflow experiment tracking.
         mlflow_experiment: MLflow experiment name.
     """
@@ -529,7 +531,7 @@ def main(
 
             ### [Logging and Checkpointing]
             if dist.rank == 0:
-                if epoch % (25 * dist.world_size) == 0:
+                if epoch % save_every == 0:
                     save_checkpoint(
                         checkpoint_dir,
                         models=base_model,
