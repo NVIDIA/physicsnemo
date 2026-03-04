@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
@@ -30,6 +31,9 @@ if TYPE_CHECKING:
 def from_pyvista(
     pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet",
     manifold_dim: int | Literal["auto"] = "auto",
+    *,
+    point_source: Literal["vertices", "cell_centroids"] = "vertices",
+    warn_on_lost_data: bool = True,
 ) -> Mesh:
     """Convert a PyVista mesh to a physicsnemo.mesh Mesh.
 
@@ -43,6 +47,23 @@ def from_pyvista(
         - 1: Line mesh (edge cells)
         - 2: Surface mesh (triangular cells)
         - 3: Volume mesh (tetrahedral cells)
+        When ``point_source="cell_centroids"``, only 0 and 1 are valid
+        (defaulting to 0 for "auto").
+    point_source : {"vertices", "cell_centroids"}
+        Controls what becomes the Mesh points:
+        - ``"vertices"`` (default): Mesh vertices become points, ``point_data``
+          is preserved. ``manifold_dim`` controls cell topology as usual.
+        - ``"cell_centroids"``: Cell centroids become points, ``cell_data``
+          is mapped to ``point_data``. With ``manifold_dim=0`` the result is
+          a point cloud; with ``manifold_dim=1`` the result is a dual graph
+          whose edges connect cells that share a face in the original mesh.
+          This mode avoids expensive tetrahedralization and is suitable for
+          large polyhedral meshes.
+    warn_on_lost_data : bool
+        If True, emit a ``UserWarning`` when the conversion discards non-empty
+        data arrays. Cell data is lost when ``point_source="vertices"`` and
+        ``manifold_dim`` is lower than the detected mesh dimension. Point data
+        is lost when ``point_source="cell_centroids"``.
 
     Returns
     -------
@@ -59,6 +80,18 @@ def from_pyvista(
     import importlib
 
     pv = importlib.import_module("pyvista")
+
+    ### Validate point_source
+    if point_source not in {"vertices", "cell_centroids"}:
+        raise ValueError(
+            f"Invalid {point_source=!r}. Must be 'vertices' or 'cell_centroids'."
+        )
+
+    ### Handle cell_centroids path (completely separate flow)
+    if point_source == "cell_centroids":
+        return _from_pyvista_cell_centroids(
+            pyvista_mesh, manifold_dim, warn_on_lost_data
+        )
 
     ### Determine the manifold dimension
     if manifold_dim == "auto":
@@ -130,6 +163,20 @@ def from_pyvista(
             f"Invalid {manifold_dim=}. Must be one of {{0, 1, 2, 3}} or 'auto'."
         )
 
+    # Determine the native mesh dimension independently of the user's
+    # requested manifold_dim.  This is needed for data-loss warnings and
+    # for deciding whether cell_data can be passed through.
+    native_dim = _detect_native_dim(pyvista_mesh, pv)
+
+    ### Warn about data that will be dropped
+    if warn_on_lost_data:
+        _warn_on_data_loss(
+            pyvista_mesh,
+            point_source="vertices",
+            manifold_dim=manifold_dim,
+            detected_dim=native_dim,
+        )
+
     ### Preprocess mesh based on manifold dimension
     if manifold_dim == 2:
         if isinstance(pyvista_mesh, pv.PolyData):
@@ -170,15 +217,18 @@ def from_pyvista(
 
     # Cells
     if manifold_dim == 0:
-        # Point cloud - no connectivity
-        cells = torch.empty((0, 1), dtype=torch.long)
+        cells = None  # Mesh constructor creates empty cells
 
     elif manifold_dim == 1:
-        # Lines - extract from PyVista lines format
-        # PyVista stores lines as [n0, i0, i1, ..., i_{n0-1}, n1, j0, j1, ...]
-        # where n is the number of points in each polyline
-        # For a manifold 1D mesh, we convert polylines to line segments
-        lines_raw = pyvista_mesh.lines
+        # Lines - extract from PyVista lines format.
+        # If the mesh has no native lines (e.g., a 3D volume mesh with
+        # manifold_dim=1 requested explicitly), extract all unique edges
+        # from the mesh topology to build a vertex graph.
+        lines_raw = getattr(pyvista_mesh, "lines", None)
+        if (lines_raw is None or len(lines_raw) == 0) and pyvista_mesh.n_cells > 0:
+            edges_mesh = pyvista_mesh.extract_all_edges()
+            lines_raw = edges_mesh.lines
+
         if lines_raw is None or len(lines_raw) == 0:
             cells = torch.empty((0, 2), dtype=torch.long)
         else:
@@ -260,11 +310,15 @@ def from_pyvista(
         cells = torch.from_numpy(tetra_cells).long()
 
     ### Return Mesh object
+    # When the output manifold dim is lower than the native mesh dim, the
+    # original cell_data has a different count than the output cells and
+    # cannot be passed through.
+    pass_cell_data = manifold_dim >= native_dim
     return Mesh(
         points=points,
         cells=cells,
         point_data=pyvista_mesh.point_data,
-        cell_data=pyvista_mesh.cell_data,
+        cell_data=pyvista_mesh.cell_data if pass_cell_data else {},
         global_data=pyvista_mesh.field_data,
     )
 
@@ -380,6 +434,193 @@ def to_pyvista(
         )
 
     return pv_mesh
+
+
+def _from_pyvista_cell_centroids(
+    pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid",
+    manifold_dim: int | Literal["auto"],
+    warn_on_lost_data: bool,
+) -> Mesh:
+    """Build a Mesh from cell centroids, mapping cell_data to point_data.
+
+    Parameters
+    ----------
+    pyvista_mesh : pv.PolyData or pv.UnstructuredGrid
+        Input PyVista mesh.
+    manifold_dim : int or {"auto"}
+        0 for a point cloud, 1 for a dual graph (cell-neighbor edges).
+        "auto" resolves to 0.
+    warn_on_lost_data : bool
+        Emit a warning if non-empty point_data will be discarded.
+
+    Returns
+    -------
+    Mesh
+        Mesh whose points are the cell centroids.
+    """
+    if manifold_dim == "auto":
+        manifold_dim = 0
+    if manifold_dim not in {0, 1}:
+        raise ValueError(
+            f"point_source='cell_centroids' only supports manifold_dim in {{0, 1}}, "
+            f"got {manifold_dim=}."
+        )
+
+    if warn_on_lost_data:
+        _warn_on_data_loss(
+            pyvista_mesh,
+            point_source="cell_centroids",
+            manifold_dim=manifold_dim,
+            detected_dim=None,
+        )
+
+    ### Compute cell centroids (fast C++ filter, works for all cell types)
+    centroids_np = pyvista_mesh.cell_centers().points
+    points = torch.from_numpy(centroids_np.copy()).float()
+
+    ### Build cells
+    if manifold_dim == 0:
+        cells = None  # Mesh constructor creates empty cells
+    else:
+        # Dual graph: edges connect cells that share a face.
+        cells = _build_dual_graph_edges(pyvista_mesh)
+
+    return Mesh(
+        points=points,
+        cells=cells,
+        point_data=pyvista_mesh.cell_data,
+        global_data=pyvista_mesh.field_data,
+    )
+
+
+def _build_dual_graph_edges(
+    pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid",
+) -> torch.Tensor:
+    """Build (n_edges, 2) tensor of cell-neighbor pairs sharing a face.
+
+    Uses PyVista's ``cell_neighbors`` with ``connections="faces"`` after
+    building VTK cell links for O(1) per-cell neighbor lookups.  The
+    Python-level loop is O(n_cells); for very large meshes (>10M cells)
+    this may take minutes.
+
+    Parameters
+    ----------
+    pyvista_mesh : pv.PolyData or pv.UnstructuredGrid
+        Input mesh with cell connectivity.
+
+    Returns
+    -------
+    torch.Tensor
+        Shape ``(n_edges, 2)`` with dtype ``torch.long``.
+    """
+    pyvista_mesh.BuildLinks()
+    n_cells = pyvista_mesh.n_cells
+
+    # Collect upper-triangular neighbor pairs to avoid duplicates.
+    # Pre-allocate a list for edge pairs; each internal face contributes
+    # one pair, and an n-cell mesh typically has ~3-6n internal faces.
+    edge_pairs: list[tuple[int, int]] = []
+    for i in range(n_cells):
+        for j in pyvista_mesh.cell_neighbors(i, "faces"):
+            if j > i:
+                edge_pairs.append((i, j))
+
+    if not edge_pairs:
+        return torch.empty((0, 2), dtype=torch.long)
+    return torch.tensor(edge_pairs, dtype=torch.long)
+
+
+def _detect_native_dim(pyvista_mesh, pv) -> int:  # noqa: ANN001
+    """Determine the native manifold dimension of a PyVista mesh.
+
+    This is a lightweight check (no cell processing) used for data-loss
+    warnings and for deciding whether cell_data can be passed through.
+
+    Parameters
+    ----------
+    pyvista_mesh : PyVista mesh
+        Input mesh.
+    pv : module
+        The lazily-imported pyvista module.
+
+    Returns
+    -------
+    int
+        0, 1, 2, or 3.
+    """
+    if pyvista_mesh.n_cells == 0:
+        return 0
+    if hasattr(pyvista_mesh, "celltypes"):
+        ct = pyvista_mesh.celltypes
+        volume_types = [
+            pv.CellType.TETRA, pv.CellType.HEXAHEDRON, pv.CellType.WEDGE,
+            pv.CellType.PYRAMID, pv.CellType.VOXEL, pv.CellType.POLYHEDRON,
+        ]
+        if np.isin(ct, volume_types).any():
+            return 3
+        surface_types = [pv.CellType.TRIANGLE, pv.CellType.QUAD, pv.CellType.POLYGON]
+        if np.isin(ct, surface_types).any():
+            return 2
+        return 1
+    # PolyData without celltypes - check for faces vs lines
+    n_lines = _get_count_safely(pyvista_mesh, "n_lines")
+    n_cells = _get_count_safely(pyvista_mesh, "n_cells")
+    n_verts = _get_count_safely(pyvista_mesh, "n_verts")
+    if n_cells > n_verts + n_lines:
+        return 2
+    if n_lines > 0:
+        return 1
+    return 0
+
+
+def _warn_on_data_loss(
+    pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet",
+    point_source: str,
+    manifold_dim: int,
+    detected_dim: int | None,
+) -> None:
+    """Emit UserWarning if non-empty data arrays will be discarded.
+
+    Parameters
+    ----------
+    pyvista_mesh : PyVista mesh
+        The input mesh (before any preprocessing).
+    point_source : str
+        ``"vertices"`` or ``"cell_centroids"``.
+    manifold_dim : int
+        The resolved (non-"auto") target manifold dimension.
+    detected_dim : int or None
+        The auto-detected manifold dimension of the original mesh.
+        ``None`` when called from the cell_centroids path.
+    """
+    ### Case 1: point_data lost when using cell centroids
+    if point_source == "cell_centroids":
+        pd_keys = list(pyvista_mesh.point_data.keys())
+        if pd_keys:
+            warnings.warn(
+                f"point_source='cell_centroids' discards {len(pd_keys)} point_data "
+                f"field(s) from the input mesh: {pd_keys}. "
+                f"Use point_source='vertices' to preserve point_data, "
+                f"or set warn_on_lost_data=False to silence this warning.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+    ### Case 2: cell_data lost when extracting lower-dimensional representation
+    if point_source == "vertices" and detected_dim is not None:
+        if manifold_dim < detected_dim:
+            cd_keys = list(pyvista_mesh.cell_data.keys())
+            if cd_keys:
+                warnings.warn(
+                    f"manifold_dim={manifold_dim} (< detected {detected_dim}) with "
+                    f"point_source='vertices' discards {len(cd_keys)} cell_data "
+                    f"field(s) from the input mesh: {cd_keys}. "
+                    f"Use point_source='cell_centroids' to preserve cell_data "
+                    f"as point_data, or set warn_on_lost_data=False to silence "
+                    f"this warning.",
+                    UserWarning,
+                    stacklevel=3,
+                )
 
 
 def _get_count_safely(obj, attr: str) -> int:

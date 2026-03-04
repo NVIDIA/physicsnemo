@@ -1506,6 +1506,126 @@ class Mesh:
             target_counts="boundary",
         )
 
+    def to_edge_graph(self) -> "Mesh":
+        r"""Return a 1D Mesh whose cells are the unique edges of this mesh.
+
+        Each edge (pair of vertices connected in a cell) appears exactly once.
+        The resulting Mesh has the same ``points`` array, with ``cells`` of
+        shape :math:`(E, 2)` where *E* is the number of unique edges.
+
+        Cell data from the parent mesh is aggregated onto edges via the
+        facet extraction pipeline (mean aggregation by default).
+
+        Returns
+        -------
+        Mesh
+            A 1D Mesh (``n_manifold_dims == 1``) with edge cells.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> points = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.]])
+        >>> cells = torch.tensor([[0, 1, 2]])
+        >>> mesh = Mesh(points=points, cells=cells)
+        >>> edge_graph = mesh.to_edge_graph()
+        >>> assert edge_graph.n_manifold_dims == 1
+        >>> assert edge_graph.n_cells == 3  # triangle has 3 edges
+        """
+        codim = self.n_manifold_dims - 1
+        return self.get_facet_mesh(manifold_codimension=codim, target_counts="all")
+
+    def to_dual_graph(self) -> "Mesh":
+        r"""Return a 1D Mesh representing the cell-adjacency (dual) graph.
+
+        Points are the cell centroids of this mesh.  Cells are
+        :math:`(E, 2)` line segments connecting pairs of cells that share a
+        codimension-1 facet (e.g., cells sharing an edge in 2D or a face in
+        3D).  The parent mesh's ``cell_data`` becomes the ``point_data`` of the
+        returned Mesh, since each dual-graph node corresponds to a parent cell.
+
+        Returns
+        -------
+        Mesh
+            A 1D Mesh (``n_manifold_dims == 1``) whose points are cell
+            centroids and whose cells encode the cell-neighbor adjacency.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> # Two triangles sharing an edge
+        >>> points = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.], [1.5, 1.]])
+        >>> cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+        >>> mesh = Mesh(points=points, cells=cells)
+        >>> dual = mesh.to_dual_graph()
+        >>> assert dual.n_manifold_dims == 1
+        >>> assert dual.n_cells == 1  # 1 shared edge -> 1 dual edge
+        """
+        adj = self.get_cell_to_cells_adjacency(adjacency_codimension=1)
+        sources, targets = adj.expand_to_pairs()
+
+        # Keep only upper-triangular pairs (source < target) to avoid
+        # counting each neighbor relationship twice.
+        mask = sources < targets
+        edges = torch.stack([sources[mask], targets[mask]], dim=1)
+
+        return Mesh(
+            points=self.cell_centroids,
+            cells=edges,
+            point_data=self.cell_data,
+            global_data=self.global_data,
+        )
+
+    def to_point_cloud(
+        self, point_source: "Literal['vertices', 'cell_centroids']" = "vertices"
+    ) -> "Mesh":
+        r"""Return a 0D Mesh (point cloud) with no cell connectivity.
+
+        Parameters
+        ----------
+        point_source : {"vertices", "cell_centroids"}
+            What becomes the points of the returned Mesh:
+
+            - ``"vertices"`` (default): Uses mesh vertices as points,
+              preserving ``point_data``.
+            - ``"cell_centroids"``: Uses cell centroids as points,
+              mapping ``cell_data`` to ``point_data``.
+
+        Returns
+        -------
+        Mesh
+            A 0D Mesh (``n_manifold_dims == 0``) with no cells.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> points = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.]])
+        >>> cells = torch.tensor([[0, 1, 2]])
+        >>> mesh = Mesh(points=points, cells=cells)
+        >>> pc = mesh.to_point_cloud()
+        >>> assert pc.n_manifold_dims == 0
+        >>> assert pc.n_points == 3
+        >>> assert pc.n_cells == 0
+        """
+        if point_source == "vertices":
+            return Mesh(
+                points=self.points,
+                point_data=self.point_data,
+                global_data=self.global_data,
+            )
+        elif point_source == "cell_centroids":
+            return Mesh(
+                points=self.cell_centroids,
+                point_data=self.cell_data,
+                global_data=self.global_data,
+            )
+        else:
+            raise ValueError(
+                f"Invalid {point_source=!r}. Must be 'vertices' or 'cell_centroids'."
+            )
+
     def is_watertight(self) -> bool:
         """Check if mesh is watertight (has no boundary).
 

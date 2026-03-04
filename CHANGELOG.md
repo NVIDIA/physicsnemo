@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds GLOBE AirFRANS example case (`examples/cfd/external_aerodynamics/globe/airfrans`)
 - PhysicsNeMo-Mesh now supports conversion from PyVista/VTK/VTU meshes that may
   contain polyhedral cells.
+- In PhysicsNeMo-Mesh, adds `Mesh.to_point_cloud()`, `.to_edge_graph()`, and
+  `.to_dual_graph()` methods. These allow Mesh conversion to 0D point clouds, 1D
+  edge graphs, and 1D dual graphs, respectively, when connectivity information
+  is not needed.
 
 ### Changed
 
