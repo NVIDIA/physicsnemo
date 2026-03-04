@@ -6,7 +6,7 @@ Operator Models
     :members:
     :exclude-members: forward
 
-Domino utils
+Domino Utils
 ------------
 
 Utilities for working with the Domino model, including data processing and grid construction.
