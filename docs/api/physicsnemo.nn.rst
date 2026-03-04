@@ -1,25 +1,8 @@
-Geometry utils
---------------
+PhysicsNeMo NN
+===============
 
-Utilities for geometric operations, including neighbor search and signed distance field calculations.
-These are essential for physics simulations and geometric deep learning applications.
+The ``physicsnemo.nn`` package provides layers and stateless functionals for building
+neural networks, aligned with the ``torch.nn`` and ``torch.nn.functional`` patterns.
 
-.. automodule:: physicsnemo.nn.neighbors.radius_search
-    :members:
-    :show-inheritance:
-
-.. automodule:: physicsnemo.nn.neighbors.knn
-    :members:
-    :show-inheritance:
-
-.. automodule:: physicsnemo.nn.sdf
-    :show-inheritance:
-
-Neighbor utils
---------------
-
-Utilities for optimized layers for neighbor searches.
-
-.. automodule:: physicsnemo.nn.neighbors
-    :members:
-    :show-inheritance:
+- **Layers** (modules): :doc:`PhysicsNeMo Layers <physicsnemo.nn.layers>`
+- **Functionals** (stateless ops): :doc:`PhysicsNeMo Functionals <physicsnemo.nn.functionals>`
