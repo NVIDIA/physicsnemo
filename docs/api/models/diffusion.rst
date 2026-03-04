@@ -419,7 +419,7 @@ implement a regression model.
     :members:
     :exclude-members: forward
 
-CorrDiff utils
+CorrDiff Utils
 --------------
 
 Utilities for working with the CorrDiff model, particularly for the diffusion and regression steps.
