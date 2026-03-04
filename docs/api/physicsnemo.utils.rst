@@ -23,7 +23,7 @@ These are particularly useful when implementing custom training loops or special
     :show-inheritance:
 
 
-Weather / Climate utils
+Weather and Climate Utils
 ------------------------
 
 Specialized utilities for weather and climate modeling, including calculations for solar radiation
