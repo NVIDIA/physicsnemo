@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Helper functions for diffusion preconditioner tests."""
+"""Helper functions for diffusion tests."""
 
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
@@ -26,6 +26,33 @@ import physicsnemo.core
 
 # Directory for test reference data
 DATA_DIR = Path(__file__).parent / "data"
+
+
+def make_input(
+    shape: Tuple[int, ...],
+    seed: int = 42,
+    device: str = "cpu",
+) -> torch.Tensor:
+    """
+    Create a deterministic input tensor using a separate Generator.
+
+    Parameters
+    ----------
+    shape : Tuple[int, ...]
+        Shape of the output tensor.
+    seed : int
+        Random seed for deterministic generation.
+    device : str
+        Device to place the tensor on.
+
+    Returns
+    -------
+    torch.Tensor
+        A normally-distributed random tensor with the given shape.
+    """
+    gen = torch.Generator(device="cpu")
+    gen.manual_seed(seed)
+    return torch.randn(*shape, generator=gen).to(device)
 
 
 def instantiate_model_deterministic(

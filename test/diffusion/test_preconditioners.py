@@ -136,53 +136,9 @@ PRECOND_CONFIGS = [
 ]
 
 
-# Tolerances for non-regression tests (device-dependent)
-# CPU tests use tighter tolerances, GPU tests need more relaxed tolerances
-CPU_TOLERANCES = {"atol": 1e-5, "rtol": 1e-5}
-GPU_TOLERANCES = {"atol": 1e-2, "rtol": 5e-2}
-
-# Global random seed for reproducibility
-GLOBAL_SEED = 42
-
-
 # =============================================================================
 # Fixtures
 # =============================================================================
-
-
-@pytest.fixture
-def deterministic_settings():
-    """Set deterministic settings for reproducibility, then restore old state."""
-    # Save old state
-    old_cudnn_deterministic = torch.backends.cudnn.deterministic
-    old_cudnn_benchmark = torch.backends.cudnn.benchmark
-    old_matmul_tf32 = torch.backends.cuda.matmul.allow_tf32
-    old_cudnn_tf32 = torch.backends.cudnn.allow_tf32
-
-    try:
-        # Set deterministic settings
-        torch.manual_seed(GLOBAL_SEED)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(GLOBAL_SEED)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False
-        yield
-    finally:
-        # Restore old state
-        torch.backends.cudnn.deterministic = old_cudnn_deterministic
-        torch.backends.cudnn.benchmark = old_cudnn_benchmark
-        torch.backends.cuda.matmul.allow_tf32 = old_matmul_tf32
-        torch.backends.cudnn.allow_tf32 = old_cudnn_tf32
-
-
-@pytest.fixture
-def tolerances(device):
-    """Return tolerances based on the device (CPU vs GPU)."""
-    if device == "cpu":
-        return CPU_TOLERANCES
-    return GPU_TOLERANCES
 
 
 @pytest.fixture(params=MODEL_CONFIGS, ids=["ConvModel", "LinearModel"])
