@@ -20,18 +20,21 @@ Optimizer utilities for StormCast training.
 Provides a factory function to build optimizers from configuration.
 """
 
-from __future__ import annotations
-from typing import Iterable, Dict, Any
+from collections.abc import Iterable
+
 import torch
-from optimi import StableAdamW
+
+try:
+    from optimi import StableAdamW
+
+    IS_OPTIMI_AVAILABLE = True
+except ImportError:
+    IS_OPTIMI_AVAILABLE = False
+
+from utils.config import OptimizerConfig
 
 
-def build_optimizer(
-    params: Iterable,
-    cfg: Dict[str, Any],
-    *,
-    lr: float,
-) -> torch.optim.Optimizer:
+def build_optimizer(params: Iterable, cfg: OptimizerConfig) -> torch.optim.Optimizer:
     r"""
     Construct an optimizer from a config dict.
 
@@ -39,11 +42,13 @@ def build_optimizer(
     ----------
     params : Iterable
         Model parameters to optimize (typically ``model.parameters()``).
-    cfg : dict
-        Optimizer configuration dict with keys:
+    cfg : OptimizerConfig
+        Optimizer configuration with keys:
 
         - ``name`` : str
             Optimizer type: "adam", "adamw", or "stableadamw".
+        - ``lr`` : float, optional
+            Learning rate (overrides default_lr if specified).
         - ``betas`` : list of float, optional
             Adam beta parameters [beta1, beta2], default [0.9, 0.999].
         - ``weight_decay`` : float, optional
@@ -53,8 +58,8 @@ def build_optimizer(
         - ``fused`` : bool, optional
             Use fused CUDA kernel for better performance, default True.
 
-    lr : float
-        Learning rate for the optimizer.
+    default_lr : float
+        Default learning rate used if not specified in cfg.
 
     Returns
     -------
@@ -71,41 +76,46 @@ def build_optimizer(
     >>> optimizer = build_optimizer(
     ...     model.parameters(),
     ...     {"name": "adamw", "weight_decay": 0.01},
-    ...     lr=1e-4,
+    ...     default_lr=1e-4,
     ... )
     """
-    name = (cfg.get("name") or "adam").lower()
-    betas = tuple(cfg.get("betas", [0.9, 0.999]))
-    weight_decay = float(cfg.get("weight_decay", 0.0))
-    eps = float(cfg.get("eps", 1e-8))
-    fused = bool(cfg.get("fused", True))
+    name = cfg.name
 
     if name == "adam":
         return torch.optim.Adam(
             params,
-            lr=lr,
-            betas=betas,
-            eps=eps,
-            weight_decay=weight_decay,
-            fused=fused,
+            lr=cfg.lr,
+            betas=cfg.betas,
+            eps=cfg.eps,
+            weight_decay=cfg.weight_decay,
+            fused=cfg.fused,
         )
     elif name == "adamw":
         return torch.optim.AdamW(
             params,
-            lr=lr,
-            betas=betas,
-            eps=eps,
-            weight_decay=weight_decay,
-            fused=fused,
+            lr=cfg.lr,
+            betas=cfg.betas,
+            eps=cfg.eps,
+            weight_decay=cfg.weight_decay,
+            fused=cfg.fused,
             amsgrad=False,
         )
-    elif name == "stableadamw":
+    elif name == "stableadamw":  # TODO: StableAdamW doesn't work with DTensor
+        if not IS_OPTIMI_AVAILABLE:
+            raise ImportError(
+                "Selected 'stableadamw' optimizer but optimi is not installed."
+            )
         return StableAdamW(
             params,
-            lr=lr,
-            betas=betas,
-            eps=eps,
-            weight_decay=weight_decay,
+            lr=cfg.lr,
+            betas=cfg.betas,
+            eps=cfg.eps,
+            weight_decay=cfg.weight_decay,
         )
+    elif isinstance(name, tuple):
+        # if you know what you're doing, you can pass the name and kwargs or any torch optimizer
+        (name, opt_kwargs) = name
+        opt_cls = getattr(torch.optim, name)
+        return opt_cls(params, lr=cfg.lr, **opt_kwargs)
     else:
         raise ValueError(f"Unsupported optimizer '{name}'")

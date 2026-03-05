@@ -21,22 +21,15 @@ Note: Warmup is handled manually in the trainer via linear scaling.
 Schedulers here handle the decay phase after warmup.
 """
 
-import logging
-from collections.abc import Mapping
-from typing import Any
-
 import torch.optim.lr_scheduler as lr_scheduler_module
 from torch.optim.lr_scheduler import LRScheduler, ReduceLROnPlateau
 
-logger = logging.getLogger("scheduler")
+from utils.config import SchedulerConfig
+from utils.logging import ExperimentLogger
 
 
 def init_scheduler(
-    optimizer,
-    cfg: Mapping[str, Any] | None,
-    *,
-    warmup_steps: int,
-    total_steps: int,
+    optimizer, cfg: SchedulerConfig, *, total_steps: int, logger: ExperimentLogger
 ) -> tuple[LRScheduler | None, str | None]:
     r"""
     Create a scheduler from config.
@@ -48,8 +41,8 @@ def init_scheduler(
     ----------
     optimizer : torch.optim.Optimizer
         The optimizer to schedule.
-    cfg : dict or None
-        Scheduler configuration dict with keys:
+    cfg : SchedulerConfig
+        Scheduler configuration:
         - ``name``: Any ``torch.optim.lr_scheduler`` class name (e.g., "CosineAnnealingLR")
         - Other scheduler-specific parameters passed to the constructor
     warmup_steps : int
@@ -81,34 +74,25 @@ def init_scheduler(
     >>> name
     'CosineAnnealingLR'
     """
-    # Support both dict and OmegaConf DictConfig (which is a Mapping)
-    if not isinstance(cfg, Mapping) or not cfg:
-        return None, None
-
-    cfg = dict(cfg)  # Convert to dict (also copies to avoid mutating original)
-    name = cfg.pop("name", None)
-    if name is None:
+    if cfg.name is None:
         return None, None
 
     # Get scheduler class from torch
-    if not hasattr(lr_scheduler_module, name):
-        raise ValueError(f"Unknown scheduler: {name}")
-    scheduler_cls = getattr(lr_scheduler_module, name)
-    # Allow LRScheduler subclasses and ReduceLROnPlateau (which didn't inherit
-    # from LRScheduler in PyTorch <2.0)
-    if not isinstance(scheduler_cls, type) or not (
-        issubclass(scheduler_cls, LRScheduler)
-        or issubclass(scheduler_cls, ReduceLROnPlateau)
+    scheduler_cls = getattr(lr_scheduler_module, cfg.name)
+    if not isinstance(scheduler_cls, type) or not issubclass(
+        scheduler_cls, LRScheduler
     ):
-        raise ValueError(f"{name} is not a learning rate scheduler")
+        raise ValueError(f"{cfg.name} is not a learning rate scheduler")
 
     # Set default T_max for cosine schedulers (decay steps after warmup)
-    if name == "CosineAnnealingLR" and "T_max" not in cfg:
-        cfg["T_max"] = total_steps - warmup_steps
+    if cfg.name == "CosineAnnealingLR" and not hasattr(cfg, "T_max"):
+        cfg.T_max = total_steps - cfg.lr_rampup_steps
 
-    scheduler = scheduler_cls(optimizer, **cfg)
-    logger.info(f"Initialized scheduler: {name} with params: {cfg}")
-    return scheduler, name
+    scheduler_kwargs = cfg.__dict__.copy()
+    del scheduler_kwargs["name"], scheduler_kwargs["lr_rampup_steps"]
+    scheduler = scheduler_cls(optimizer, **scheduler_kwargs)
+    logger.info(f"Initialized scheduler: {cfg.name} with params: {scheduler_kwargs}")
+    return scheduler, cfg.name
 
 
 def step_scheduler(
@@ -117,6 +101,7 @@ def step_scheduler(
     total_steps: int,
     warmup_steps: int,
     metric: float | None = None,
+    logger: ExperimentLogger,
 ) -> None:
     r"""
     Advance the scheduler by one step.
