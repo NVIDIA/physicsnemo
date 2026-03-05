@@ -208,27 +208,27 @@ class TestClusterTree:
             assert plan.far_node_ids.min() >= 0
             assert plan.far_node_ids.max() < tree.n_nodes
 
-    def test_high_theta_all_far(self):
-        """With very large theta, most interactions become far-field."""
+    def test_small_theta_all_far(self):
+        """With very small theta, most interactions become far-field."""
         torch.manual_seed(DEFAULT_SEED)
         source_pts = torch.randn(30, 2) * 0.1
         target_pts = torch.randn(10, 2) * 100  # far from sources
         tree = ClusterTree.from_points(source_pts, leaf_size=4)
         plan = tree.find_interaction_pairs(target_pts, theta=0.01)
 
-        # With very small theta (very aggressive approximation), most should be far
+        # theta=0.01: dist > 0.01 * diameter for far-field, a very low bar
         assert plan.n_far > 0, "Expected some far-field interactions"
 
-    def test_zero_theta_all_near(self):
-        """With theta=0 (most conservative), all interactions are near-field."""
+    def test_large_theta_all_near(self):
+        """With very large theta, all interactions are near-field."""
         torch.manual_seed(DEFAULT_SEED)
         source_pts = torch.randn(20, 2)
         target_pts = torch.randn(5, 2) * 3
         tree = ClusterTree.from_points(source_pts, leaf_size=4)
         plan = tree.find_interaction_pairs(target_pts, theta=1e10)
 
-        # theta=1e10 means dist > diameter * 1e10 is needed for far-field,
-        # which essentially never happens. All interactions should be near-field.
+        # theta=1e10: dist > 1e10 * diameter for far-field, which never
+        # happens, so all interactions are near-field.
         assert plan.n_near > 0
         # Every target should see every source
         assert plan.n_near == 20 * 5, (
@@ -662,6 +662,92 @@ def test_bh_globe_like_config(n_dims: int):
             atol=5e-3,
             rtol=5e-2,
             msg=f"GLOBE-like config: {field!r} not close to exact at theta=100",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Nested source_data keys (matches GLOBE's actual data structure)
+# ---------------------------------------------------------------------------
+
+
+@dims_params
+def test_bh_nested_source_data_keys(n_dims: int):
+    """Convergence with nested TensorDict keys matching GLOBE's production format.
+
+    GLOBE passes source_data structured like:
+        {"physical": {"velocity": ...}, "latent": {"scalars": {"0": ...},
+         "vectors": {"0": ...}}, "normals": ...}
+
+    The aggregation, split_by_leaf_rank, and TensorDict.cat operations must
+    handle this nesting correctly.
+    """
+    torch.manual_seed(DEFAULT_SEED)
+    n_src, n_tgt = 30, 15
+
+    source_data_ranks = {
+        "physical": {"pressure": 0},
+        "latent": {"scalars": {"0": 0, "1": 0}, "vectors": {"0": 1}},
+        "normals": 1,
+    }
+    output_field_ranks = {"p": 0, "u": 1}
+
+    common_kwargs = dict(
+        n_spatial_dims=n_dims,
+        output_field_ranks={k: (0 if v == "scalar" else 1) for k, v in output_field_ranks.items()},
+        source_data_ranks=source_data_ranks,
+        hidden_layer_sizes=[16],
+    )
+
+    bh_kernel = BarnesHutKernel(**common_kwargs, leaf_size=DEFAULT_LEAF_SIZE)
+    exact_kernel = Kernel(**common_kwargs)
+    exact_kernel.load_state_dict(bh_kernel.state_dict(), strict=False)
+    bh_kernel.eval()
+    exact_kernel.eval()
+
+    torch.manual_seed(DEFAULT_SEED + 1)
+    source_data = TensorDict(
+        {
+            "physical": TensorDict(
+                {"pressure": torch.randn(n_src)},
+                batch_size=[n_src],
+            ),
+            "latent": TensorDict(
+                {
+                    "scalars": TensorDict(
+                        {"0": torch.randn(n_src), "1": torch.randn(n_src)},
+                        batch_size=[n_src],
+                    ),
+                    "vectors": TensorDict(
+                        {"0": F.normalize(torch.randn(n_src, n_dims), dim=-1)},
+                        batch_size=[n_src],
+                    ),
+                },
+                batch_size=[n_src],
+            ),
+            "normals": F.normalize(torch.randn(n_src, n_dims), dim=-1),
+        },
+        batch_size=[n_src],
+    )
+
+    data = {
+        "source_points": torch.randn(n_src, n_dims),
+        "target_points": torch.randn(n_tgt, n_dims) * 5,
+        "source_strengths": torch.rand(n_src) + 0.1,
+        "reference_length": torch.ones(()),
+        "source_data": source_data,
+        "global_data": TensorDict({}, batch_size=[]),
+    }
+
+    exact_result = exact_kernel(**data)
+    bh_result = bh_kernel(**data, theta=100.0)
+
+    for field_name in output_field_ranks:
+        torch.testing.assert_close(
+            bh_result[field_name],
+            exact_result[field_name],
+            atol=1e-3,
+            rtol=1e-2,
+            msg=f"Nested keys: {field_name!r} not close to exact at theta=100",
         )
 
 

@@ -485,8 +485,7 @@ class ClusterTree:
         is_leaf = self.leaf_count > 0
         leaf_node_ids = torch.where(is_leaf)[0]
 
-        ### Build segment IDs: map each sorted source to its leaf node
-        seg_ids = torch.zeros(self.n_sources, dtype=torch.long, device=device)
+        ### Build compact segment IDs: map each sorted source to its leaf node
         if leaf_node_ids.numel() > 0:
             leaf_starts = self.leaf_start[leaf_node_ids]
             leaf_counts = self.leaf_count[leaf_node_ids]
@@ -541,11 +540,6 @@ class ClusterTree:
             )
 
         ### Bottom-up propagation: internal node centroids
-        is_internal = ~is_leaf & (
-            torch.arange(n_nodes, device=device) < n_nodes
-        )
-        # Process level by level from deepest internal to root
-        # Recompute levels from children structure
         _propagate_centroids_bottom_up(
             centroid_buf,
             node_source_data,
@@ -576,9 +570,10 @@ class ClusterTree:
         target_points : Float[torch.Tensor, "n_targets n_dims"]
             Target coordinates, shape :math:`(N_{tgt}, D)`.
         theta : float
-            Opening angle parameter. Smaller values are more conservative
-            (more exact interactions, higher accuracy, slower). Typical
-            values: ``0.3``--``1.0``.
+            Far-field distance threshold: a node is approximated when
+            ``dist > diameter * theta``. Larger values are more
+            conservative (more exact interactions, higher accuracy,
+            slower). Typical values: ``0.3``--``1.0``.
 
         Returns
         -------

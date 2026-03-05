@@ -15,7 +15,6 @@
 # limitations under the License.
 
 import itertools
-import logging
 import operator
 from functools import cached_property, reduce
 from math import ceil, comb, prod
@@ -23,7 +22,6 @@ from typing import Literal, Sequence
 
 import torch
 import torch.nn as nn
-import tqdm
 from jaxtyping import Float
 from tensordict import TensorDict
 from torch.utils.checkpoint import checkpoint
@@ -46,10 +44,6 @@ from physicsnemo.nn.functional.equivariant_ops import (
     smooth_log,
     spherical_basis,
 )
-from physicsnemo.utils.logging import PythonLogger
-
-logger = PythonLogger("globe.field_kernel")
-
 
 class Kernel(Module):
     r"""A kernel function for evaluating scalar and vector fields from source points.
@@ -200,12 +194,12 @@ class Kernel(Module):
 
         Counts tensor elements from feature engineering, MLP evaluation,
         and post-processing that coexist at peak during ``Kernel.forward``.
-        Used by :class:`ChunkedKernel` to estimate chunk memory budgets.
+        Used by :class:`BarnesHutKernel` to estimate chunk memory budgets.
 
         This is a lower bound - the actual peak is higher due to autograd
         saving input tensors for backward through each element-wise
         operation.  The caller applies a runtime multiplier to account for
-        this (see ``ChunkedKernel.forward``).
+        this (see ``BarnesHutKernel._auto_chunk_size``).
         """
         source_rc = rank_counts(self.source_data_ranks)
         global_rc = rank_counts(self.global_data_ranks)
@@ -585,7 +579,7 @@ class Kernel(Module):
         scalars["vectors_log_mag"] = vectors_log_mag
 
         # TODO in 3D, add cross products of pairs of vectors as input features
-        
+
         ### Pairwise spherical harmonic features from vector pairs
         keypairs = list(itertools.combinations(range(concatenated_length(vectors)), 2))
         k1, k2 = zip(*keypairs) if keypairs else ([], [])
@@ -771,8 +765,9 @@ class BarnesHutKernel(Kernel):
     Same parameters as :class:`Kernel`, with additions:
 
     theta : float, optional, default=0.5
-        Barnes-Hut opening angle parameter. Smaller values are more
-        conservative (more exact interactions, higher accuracy, slower).
+        Far-field distance threshold: a node is approximated when
+        ``dist > diameter * theta``. Larger values are more conservative
+        (more exact interactions, higher accuracy, slower).
     cluster_tree : ClusterTree or None, optional, default=None
         Precomputed spatial tree over source points. If ``None``, built
         from ``source_points`` on each call.
@@ -781,6 +776,9 @@ class BarnesHutKernel(Kernel):
         and target points on each call.
     source_areas : Float[torch.Tensor, "n_sources"] or None, optional, default=None
         Per-source areas for aggregate weighting. Defaults to ones.
+    source_aggregates : SourceAggregates or None, optional, default=None
+        Precomputed per-node aggregates. If ``None``, computed on each
+        call.  Pass this to avoid redundant computation across branches.
 
     Outputs
     -------
@@ -831,6 +829,7 @@ class BarnesHutKernel(Kernel):
         cluster_tree: "ClusterTree | None" = None,
         interaction_plan: "InteractionPlan | None" = None,
         source_areas: Float[torch.Tensor, " n_sources"] | None = None,
+        source_aggregates: "SourceAggregates | None" = None,
     ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
         r"""Evaluate the kernel with Barnes-Hut tree acceleration.
 
@@ -849,13 +848,17 @@ class BarnesHutKernel(Kernel):
         global_data : TensorDict or None
             Problem-level conditioning features.
         theta : float
-            Opening angle parameter controlling accuracy/speed tradeoff.
+            Far-field distance threshold (larger = more conservative).
         cluster_tree : ClusterTree or None
             Precomputed tree. Built on-the-fly if ``None``.
         interaction_plan : InteractionPlan or None
             Precomputed traversal plan. Computed on-the-fly if ``None``.
         source_areas : Float[torch.Tensor, "n_sources"] or None
             Per-source areas for aggregate weighting. Defaults to ones.
+        source_aggregates : SourceAggregates or None
+            Precomputed per-node aggregates. Computed on-the-fly if ``None``.
+            Pass this to avoid redundant computation when multiple kernels
+            share the same tree and source data.
 
         Returns
         -------
@@ -865,6 +868,7 @@ class BarnesHutKernel(Kernel):
         from physicsnemo.experimental.models.globe.cluster_tree import (
             ClusterTree,
             InteractionPlan,
+            SourceAggregates,
         )
 
         n_sources = source_points.shape[0]
@@ -894,11 +898,14 @@ class BarnesHutKernel(Kernel):
             )
 
         ### Compute source aggregates for far-field clusters
-        aggregates = cluster_tree.compute_source_aggregates(
-            source_points=source_points,
-            areas=source_areas,
-            source_data=source_data,
-        )
+        if source_aggregates is not None:
+            aggregates = source_aggregates
+        else:
+            aggregates = cluster_tree.compute_source_aggregates(
+                source_points=source_points,
+                areas=source_areas,
+                source_data=source_data,
+            )
 
         ### Compute per-node total strengths for far-field weighting
         node_total_strength = self._compute_node_strengths(
@@ -1103,20 +1110,33 @@ class BarnesHutKernel(Kernel):
             leaf_sums.scatter_add_(0, seg_ids, sorted_strengths)
             node_strengths[leaf_ids] = leaf_sums
 
-        ### Bottom-up propagation
-        for depth in range(int(tree.max_depth.item()), 0, -1):
-            # Find internal nodes by checking left_child >= 0
-            internal = tree.node_left_child >= 0
-            left = tree.node_left_child
-            right = tree.node_right_child
+        ### Bottom-up propagation via BFS level ordering
+        is_internal = tree.node_left_child[:n_nodes] >= 0
 
-            has_children = internal & (left < n_nodes) & (right >= 0) & (right < n_nodes)
-            int_ids = torch.where(has_children)[0]
-            if int_ids.numel() > 0:
-                node_strengths[int_ids] = (
-                    node_strengths[tree.node_left_child[int_ids]]
-                    + node_strengths[tree.node_right_child[int_ids]]
-                )
+        depth_levels: list[torch.Tensor] = []
+        current_level = torch.tensor([0], dtype=torch.long, device=device)
+        while current_level.numel() > 0:
+            mask = is_internal[current_level]
+            internal_at_level = current_level[mask]
+            if internal_at_level.numel() > 0:
+                depth_levels.append(internal_at_level)
+            next_parts: list[torch.Tensor] = []
+            if internal_at_level.numel() > 0:
+                left = tree.node_left_child[internal_at_level]
+                right = tree.node_right_child[internal_at_level]
+                if (valid_l := left >= 0).any():
+                    next_parts.append(left[valid_l])
+                if (valid_r := right >= 0).any():
+                    next_parts.append(right[valid_r])
+            current_level = torch.cat(next_parts) if next_parts else torch.empty(
+                0, dtype=torch.long, device=device
+            )
+
+        for level_ids in reversed(depth_levels):
+            node_strengths[level_ids] = (
+                node_strengths[tree.node_left_child[level_ids]]
+                + node_strengths[tree.node_right_child[level_ids]]
+            )
 
         return node_strengths
 
@@ -1248,7 +1268,7 @@ class MultiscaleKernel(Module):
         augmented with log-ratios of reference lengths before being passed
         to each kernel branch.
     theta : float, optional, default=0.5
-        Barnes-Hut opening angle for far-field approximation.
+        Far-field distance threshold (larger = more conservative).
     cluster_tree : ClusterTree or None, optional, default=None
         Pre-built cluster tree for source points.  If ``None``, one is
         built from ``source_points`` using the kernel's ``leaf_size``.
@@ -1391,7 +1411,7 @@ class MultiscaleKernel(Module):
         global_data : TensorDict or None, optional
             Problem-level features with ``batch_size=()``.
         theta : float
-            Barnes-Hut opening angle parameter.
+            Far-field distance threshold (larger = more conservative).
         cluster_tree : ClusterTree or None, optional
             Precomputed tree. Built from ``source_points`` if ``None``.
         interaction_plan : InteractionPlan or None, optional
@@ -1444,15 +1464,20 @@ class MultiscaleKernel(Module):
                         f"but the forward-method input gives {actual} {name}."
                     )
 
-        ### Build shared tree and interaction plan (reused across branches)
+        ### Build shared tree, interaction plan, and aggregates (reused across branches)
         if cluster_tree is None:
             cluster_tree = ClusterTree.from_points(
-                source_points, areas=source_areas,
+                source_points, leaf_size=self.leaf_size, areas=source_areas,
             )
         if interaction_plan is None:
             interaction_plan = cluster_tree.find_interaction_pairs(
                 target_points, theta=theta
             )
+        source_aggregates = cluster_tree.compute_source_aggregates(
+            source_points=source_points,
+            areas=source_areas,
+            source_data=source_data,
+        )
 
         ### Augment global_data with log-ratios of reference lengths.
         log_ratios = TensorDict(
@@ -1468,7 +1493,7 @@ class MultiscaleKernel(Module):
         )
         global_data["log_reference_length_ratios"] = log_ratios
 
-        ### Evaluate each branch with the shared tree and plan
+        ### Evaluate each branch with the shared tree, plan, and aggregates
         results_pieces: list[TensorDict[str, Float[torch.Tensor, "n_targets ..."]]] = [
             self.kernels[name](
                 reference_length=reference_lengths[name]
@@ -1482,6 +1507,7 @@ class MultiscaleKernel(Module):
                 cluster_tree=cluster_tree,
                 interaction_plan=interaction_plan,
                 source_areas=source_areas,
+                source_aggregates=source_aggregates,
             )
             for name in self.reference_length_names
         ]
