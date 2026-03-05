@@ -558,7 +558,7 @@ class GLOBE(Module):
             areas = mesh.cell_areas / self.reference_area
             bc_areas[bc_type] = areas
             cluster_trees[bc_type] = ClusterTree.from_points(
-                mesh.cell_centroids, areas=areas
+                mesh.cell_centroids, leaf_size=self.leaf_size, areas=areas
             )
 
         ### Communication interaction plans (targets = sources, reusable)

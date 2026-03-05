@@ -1182,13 +1182,20 @@ class MultiscaleKernel(Module):
         ``reference_length_names``. Defaults to all ones.
     source_data : TensorDict or None, optional, default=None
         Per-source features with ``batch_size=(N_sources,)``. Mixed-rank
-        TensorDict passed through to each :class:`ChunkedKernel` branch.
+        TensorDict passed through to each :class:`BarnesHutKernel` branch.
     global_data : TensorDict or None, optional, default=None
         Problem-level features with ``batch_size=()``. Automatically
         augmented with log-ratios of reference lengths before being passed
         to each kernel branch.
-    chunk_size : None or int or {"auto"}, optional, default="auto"
-        Chunking behavior.
+    theta : float, optional, default=0.5
+        Barnes-Hut opening angle for far-field approximation.
+    cluster_tree : ClusterTree or None, optional, default=None
+        Pre-built cluster tree for source points.  If ``None``, one is
+        built from ``source_points`` using the kernel's ``leaf_size``.
+    interaction_plan : InteractionPlan or None, optional, default=None
+        Pre-computed interaction plan.  If ``None``, computed from the tree.
+    source_areas : Float[torch.Tensor, " n_sources"] or None, optional, default=None
+        Area weight per source, used for cluster aggregation.
 
     Outputs
     -------
