@@ -251,27 +251,26 @@ class TestClusterTree:
                 f"extra sources {covered - all_sources}"
             )
 
-    def test_small_theta_all_far(self):
-        """With very small theta, most interactions become far-field."""
+    def test_large_theta_all_far(self):
+        """With very large theta, most interactions become far-field."""
         torch.manual_seed(DEFAULT_SEED)
         source_pts = torch.randn(30, 2) * 0.1
         target_pts = torch.randn(10, 2) * 100  # far from sources
         tree = ClusterTree.from_points(source_pts, leaf_size=4)
-        plan = tree.find_interaction_pairs(target_pts, theta=0.01)
+        plan = tree.find_interaction_pairs(target_pts, theta=100.0)
 
-        # theta=0.01: dist > 0.01 * diameter for far-field, a very low bar
+        # theta=100: D/r < 100 is easily satisfied -> most things far-field
         assert plan.n_far > 0, "Expected some far-field interactions"
 
-    def test_large_theta_all_near(self):
-        """With very large theta, all interactions are near-field."""
+    def test_zero_theta_all_near(self):
+        """With theta=0 (exact), all interactions are near-field."""
         torch.manual_seed(DEFAULT_SEED)
         source_pts = torch.randn(20, 2)
         target_pts = torch.randn(5, 2) * 3
         tree = ClusterTree.from_points(source_pts, leaf_size=4)
-        plan = tree.find_interaction_pairs(target_pts, theta=1e10)
+        plan = tree.find_interaction_pairs(target_pts, theta=0.0)
 
-        # theta=1e10: dist > 1e10 * diameter for far-field, which never
-        # happens, so all interactions are near-field.
+        # theta=0: D/r < 0 is never satisfied, so everything is near-field.
         assert plan.n_near > 0
         assert plan.n_near == 20 * 5, (
             f"Expected {20 * 5} near-field pairs, got {plan.n_near}"
@@ -374,7 +373,7 @@ def test_bh_convergence_to_exact(
     n_source_scalars: int,
     n_source_vectors: int,
 ):
-    """BarnesHutKernel converges to exact Kernel as theta increases."""
+    """BarnesHutKernel converges to exact Kernel as theta decreases toward 0."""
     bh_kernel, exact_kernel, data = _make_bh_kernel_and_data(
         n_spatial_dims=n_dims,
         output_fields=output_fields,
@@ -388,30 +387,29 @@ def test_bh_convergence_to_exact(
         **data,
     )
 
-    ### At large theta (very conservative, many near-field), result should
-    ### converge toward exact
+    ### As theta decreases (more conservative), result converges to exact
     prev_max_err = float("inf")
-    for theta in [0.1, 0.5, 2.0, 100.0]:
+    for theta in [10.0, 2.0, 0.5, 0.01]:
         bh_result = bh_kernel(**data, theta=theta)
 
         max_err = max(
             (bh_result[k] - exact_result[k]).abs().max().item() for k in output_fields
         )
 
-        # Error should decrease (or stay flat) with increasing theta
+        # Error should decrease (or stay flat) with decreasing theta
         assert max_err <= prev_max_err * 1.5 + 1e-5, (
             f"Error increased from {prev_max_err:.2e} to {max_err:.2e} at theta={theta}"
         )
         prev_max_err = max_err
 
-    # At theta=100.0, should be very close to exact
+    # At theta=0.01, should be very close to exact
     for field_name in output_fields:
         torch.testing.assert_close(
             bh_result[field_name],
             exact_result[field_name],
             atol=1e-4,
             rtol=1e-3,
-            msg=f"Field {field_name!r} not close to exact at theta=100.0",
+            msg=f"Field {field_name!r} not close to exact at theta=0.01",
         )
 
 
@@ -422,7 +420,7 @@ def test_bh_gradient_correctness(
     n_source_scalars: int,
     n_source_vectors: int,
 ):
-    """Gradients through BarnesHutKernel match exact kernel at high theta."""
+    """Gradients through BarnesHutKernel match exact kernel at low theta."""
     bh_kernel, exact_kernel, data = _make_bh_kernel_and_data(
         n_spatial_dims=n_dims,
         output_fields={"field": "scalar"},
@@ -445,8 +443,8 @@ def test_bh_gradient_correctness(
 
     data["source_points"].grad = None
 
-    # BH gradient at high theta (should match closely)
-    bh_result = bh_kernel(**data, theta=100.0)
+    # BH gradient at low theta (near-exact, should match closely)
+    bh_result = bh_kernel(**data, theta=0.01)
     bh_loss = bh_result["field"].sum()
     bh_loss.backward()
     bh_grad = data["source_points"].grad.clone()
@@ -456,7 +454,7 @@ def test_bh_gradient_correctness(
         exact_grad,
         atol=1e-3,
         rtol=1e-2,
-        msg="BH gradients don't match exact at high theta",
+        msg="BH gradients don't match exact at low theta",
     )
 
 
@@ -487,14 +485,14 @@ def test_bh_translation_equivariance(
         n_source_vectors=n_source_vectors,
     )
 
-    result1 = bh_kernel(**data, theta=0.5)
+    result1 = bh_kernel(**data, theta=2.0)
 
     translation = torch.randn(n_dims)
     translated_data = {**data}
     translated_data["source_points"] = data["source_points"] + translation
     translated_data["target_points"] = data["target_points"] + translation
 
-    result2 = bh_kernel(**translated_data, theta=0.5)
+    result2 = bh_kernel(**translated_data, theta=2.0)
 
     for field_name in output_fields:
         torch.testing.assert_close(
@@ -520,7 +518,7 @@ def test_bh_rotational_equivariance(
     The underlying kernel is exactly equivariant, but the tree
     decomposition is axis-aligned (morton codes). Rotation changes the tree
     structure, so equivariance is only recovered in the near-exact limit.
-    We use a large theta so that nearly all interactions are exact.
+    We use a small theta so that nearly all interactions are exact.
     """
     # Ensure at least one source vector for basis construction
     effective_src_vectors = max(n_source_vectors, 1)
@@ -553,8 +551,8 @@ def test_bh_rotational_equivariance(
     def _rotate_td(td: TensorDict) -> TensorDict:
         return td.apply(lambda v: v @ R.T if v.ndim > td.batch_dims else v)
 
-    # High theta: near-exact, so equivariance holds
-    result1 = bh_kernel(**data, theta=100.0)
+    # Low theta: near-exact, so equivariance holds
+    result1 = bh_kernel(**data, theta=0.01)
 
     rotated_data = {**data}
     rotated_data["source_points"] = data["source_points"] @ R.T
@@ -562,7 +560,7 @@ def test_bh_rotational_equivariance(
     rotated_data["source_data"] = _rotate_td(data["source_data"])
     rotated_data["global_data"] = _rotate_td(data["global_data"])
 
-    result2 = bh_kernel(**rotated_data, theta=100.0)
+    result2 = bh_kernel(**rotated_data, theta=0.01)
 
     for field_name, field_type in output_fields.items():
         if field_type == "scalar":
@@ -591,7 +589,7 @@ def test_bh_rotational_equivariance(
 
 @dims_params
 def test_multiscale_bh_convergence(n_dims: int):
-    """MultiscaleKernel at high theta converges to exact per-branch Kernel results."""
+    """MultiscaleKernel at low theta converges to exact per-branch Kernel results."""
     torch.manual_seed(DEFAULT_SEED)
 
     ms = MultiscaleKernel(
@@ -646,7 +644,7 @@ def test_multiscale_bh_convergence(n_dims: int):
         target_points=tgt,
         reference_lengths=ref_lengths,
         source_data=TensorDict({"normal": normals}, batch_size=[n_src]),
-        theta=100.0,
+        theta=0.01,
     )
 
     torch.testing.assert_close(
@@ -654,7 +652,7 @@ def test_multiscale_bh_convergence(n_dims: int):
         exact_total["p"],
         atol=1e-3,
         rtol=1e-2,
-        msg="MultiscaleKernel BH doesn't converge to exact at high theta",
+        msg="MultiscaleKernel BH doesn't converge to exact at low theta",
     )
 
 
@@ -678,7 +676,7 @@ def test_bh_source_permutation(
         n_source_vectors=n_source_vectors,
     )
 
-    result1 = bh_kernel(**data, theta=0.5)
+    result1 = bh_kernel(**data, theta=2.0)
 
     perm = torch.randperm(data["source_points"].shape[0])
     perm_data = {**data}
@@ -686,7 +684,7 @@ def test_bh_source_permutation(
     perm_data["source_strengths"] = data["source_strengths"][perm]
     perm_data["source_data"] = data["source_data"][perm]
 
-    result2 = bh_kernel(**perm_data, theta=0.5)
+    result2 = bh_kernel(**perm_data, theta=2.0)
 
     torch.testing.assert_close(
         result1["p"],
@@ -720,18 +718,18 @@ def test_bh_globe_like_config(n_dims: int):
     )
 
     exact_result = exact_kernel(**data)
-    bh_result = bh_kernel(**data, theta=100.0)
+    bh_result = bh_kernel(**data, theta=0.01)
 
     # Wider tolerance than basic tests: 8 scalars + 3 vectors + globals
     # produces more accumulated floating-point error through the aggregation
-    # and feature engineering pipeline, even at high theta.
+    # and feature engineering pipeline, even at low theta.
     for field in ("p", "u"):
         torch.testing.assert_close(
             bh_result[field],
             exact_result[field],
             atol=5e-3,
             rtol=5e-2,
-            msg=f"GLOBE-like config: {field!r} not close to exact at theta=100",
+            msg=f"GLOBE-like config: {field!r} not close to exact at theta=0.01",
         )
 
 
@@ -811,7 +809,7 @@ def test_bh_nested_source_data_keys(n_dims: int):
     }
 
     exact_result = exact_kernel(**data)
-    bh_result = bh_kernel(**data, theta=100.0)
+    bh_result = bh_kernel(**data, theta=0.01)
 
     for field_name in output_field_ranks:
         torch.testing.assert_close(
@@ -819,7 +817,7 @@ def test_bh_nested_source_data_keys(n_dims: int):
             exact_result[field_name],
             atol=1e-3,
             rtol=1e-2,
-            msg=f"Nested keys: {field_name!r} not close to exact at theta=100",
+            msg=f"Nested keys: {field_name!r} not close to exact at theta=0.01",
         )
 
 

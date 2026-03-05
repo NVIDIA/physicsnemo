@@ -764,10 +764,11 @@ class BarnesHutKernel(Kernel):
     -------
     Same parameters as :class:`Kernel`, with additions:
 
-    theta : float, optional, default=0.5
-        Far-field distance threshold: a node is approximated when
-        ``dist > diameter * theta``. Larger values are more conservative
-        (more exact interactions, higher accuracy, slower).
+    theta : float, optional, default=1.0
+        Barnes-Hut opening angle.  A node is approximated when
+        ``D/r < theta``.  Larger values are more aggressive (more
+        approximation, faster).  At ``theta = 0``, all interactions
+        are exact.
     cluster_tree : ClusterTree or None, optional, default=None
         Precomputed spatial tree over source points. If ``None``, built
         from ``source_points`` on each call.
@@ -784,7 +785,7 @@ class BarnesHutKernel(Kernel):
     -------
     TensorDict[str, Float[torch.Tensor, "n_targets ..."]]
         Approximate kernel output, converging to the exact result as
-        ``theta`` increases.
+        ``theta`` approaches zero.
     """
 
     def __init__(
@@ -825,7 +826,7 @@ class BarnesHutKernel(Kernel):
         source_strengths: Float[torch.Tensor, " n_sources"] | None = None,
         source_data: TensorDict | None = None,
         global_data: TensorDict | None = None,
-        theta: float = 0.5,
+        theta: float = 1.0,
         cluster_tree: "ClusterTree | None" = None,
         interaction_plan: "InteractionPlan | None" = None,
         source_areas: Float[torch.Tensor, " n_sources"] | None = None,
@@ -848,7 +849,7 @@ class BarnesHutKernel(Kernel):
         global_data : TensorDict or None
             Problem-level conditioning features.
         theta : float
-            Far-field distance threshold (larger = more conservative).
+            Barnes-Hut opening angle (larger = more aggressive).
         cluster_tree : ClusterTree or None
             Precomputed tree. Built on-the-fly if ``None``.
         interaction_plan : InteractionPlan or None
@@ -1287,8 +1288,8 @@ class MultiscaleKernel(Module):
         Problem-level features with ``batch_size=()``. Automatically
         augmented with log-ratios of reference lengths before being passed
         to each kernel branch.
-    theta : float, optional, default=0.5
-        Far-field distance threshold (larger = more conservative).
+    theta : float, optional, default=1.0
+        Barnes-Hut opening angle (larger = more aggressive).
     cluster_tree : ClusterTree or None, optional, default=None
         Pre-built cluster tree for source points.  If ``None``, one is
         built from ``source_points`` using the kernel's ``leaf_size``.
@@ -1404,7 +1405,7 @@ class MultiscaleKernel(Module):
         source_data: TensorDict[str, Float[torch.Tensor, "n_sources ..."]]
         | None = None,
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None = None,
-        theta: float = 0.5,
+        theta: float = 1.0,
         cluster_tree: "ClusterTree | None" = None,
         interaction_plan: "InteractionPlan | None" = None,
         source_areas: Float[torch.Tensor, " n_sources"] | None = None,
@@ -1431,7 +1432,7 @@ class MultiscaleKernel(Module):
         global_data : TensorDict or None, optional
             Problem-level features with ``batch_size=()``.
         theta : float
-            Far-field distance threshold (larger = more conservative).
+            Barnes-Hut opening angle (larger = more aggressive).
         cluster_tree : ClusterTree or None, optional
             Precomputed tree. Built from ``source_points`` if ``None``.
         interaction_plan : InteractionPlan or None, optional

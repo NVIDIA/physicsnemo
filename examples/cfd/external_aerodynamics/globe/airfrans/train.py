@@ -233,7 +233,7 @@ def main(
         n_latent_scalars=n_latent_scalars,
         n_latent_vectors=n_latent_vectors,
         n_spherical_harmonics=n_spherical_harmonics,
-        theta=2.0,
+        theta=1.0,
         leaf_size=32,
     ).to(device)
 

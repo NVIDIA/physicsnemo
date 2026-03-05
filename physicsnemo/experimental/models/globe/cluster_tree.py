@@ -600,23 +600,24 @@ class ClusterTree:
     def find_interaction_pairs(
         self,
         target_points: Float[torch.Tensor, "n_targets n_dims"],
-        theta: float = 0.5,
+        theta: float = 1.0,
     ) -> InteractionPlan:
         r"""Find near-field and far-field interaction pairs via tree traversal.
 
         Uses the AABB-distance opening angle criterion: a target uses the
         far-field (monopole) approximation for a node when
-        :math:`\text{dist}(target, AABB)^2 > \text{diameter}^2 \cdot \theta^2`.
+        :math:`D / r < \theta`, where *D* is the AABB diagonal and *r*
+        is the distance from the target to the nearest point on the AABB.
 
         Parameters
         ----------
         target_points : Float[torch.Tensor, "n_targets n_dims"]
             Target coordinates, shape :math:`(N_{tgt}, D)`.
         theta : float
-            Far-field distance threshold: a node is approximated when
-            ``dist > diameter * theta``. Larger values are more
-            conservative (more exact interactions, higher accuracy,
-            slower). Typical values: ``0.3``--``1.0``.
+            Barnes-Hut opening angle.  A node is approximated when
+            ``D/r < theta``.  Larger values are more aggressive (more
+            approximation, faster).  At ``theta = 0``, all interactions
+            are exact.  Typical values: ``0.5``--``1.5``.
 
         Returns
         -------
@@ -667,10 +668,10 @@ class ClusterTree:
             dist_sq = (pts - clamped).pow(2).sum(dim=-1)  # (n_active,)
 
             diam_sq = self.node_diameter_sq[active_node_ids]
-            is_far = dist_sq > diam_sq * theta_sq
+            is_far = dist_sq * theta_sq > diam_sq
 
             ### Three-way classification of active (target, node) pairs:
-            #  1. Far-field: dist > diameter * theta -> use monopole
+            #  1. Far-field: D/r < theta -> use monopole
             #  2. Near-field leaf: not far, node is a leaf -> exact per-source
             #  3. Near-field internal: not far, node has children -> recurse
             hit_leaf_count = self.leaf_count[active_node_ids]
