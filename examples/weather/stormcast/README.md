@@ -44,7 +44,13 @@ These models can make longer forecasts (more than one timestep) during inference
 
 Start by installing PhysicsNeMo (if not already installed) and copying this folder (`examples/weather/stormcast`) to a system with a GPU available. Also, prepare a combined HRRR/ERA5 dataset in the form specified in `datasets/data_loader_hrrr_era5.py` or implement a custom dataset class as shown below under [Adding custom datasets](#adding-custom-datasets).
 
-PyTorch 2.10 or higher is recommended for this recipe and is _required_ to use domain parallelism. Tests using domain parallel features will likely fail with older PyTorch versions.
+PyTorch 2.10 or higher is recommended for this recipe and is _required_ to use domain parallelism. Tests using domain parallel features will likely fail with older PyTorch versions. To install all requirements beyond those of PhysicsNeMo itself, you can run
+
+```bash
+pip install -r requirements.txt
+```
+
+in this directory.
 
 ### Testing
 
