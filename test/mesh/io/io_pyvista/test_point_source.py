@@ -93,6 +93,9 @@ class TestPointSourceVerticesDefault:
 
 
 class TestVerticesPointCloud:
+    """Vertex-based 0D extraction via from_pyvista: strips cell connectivity from a
+    3D mesh, retaining original vertices as a point cloud with point_data preserved."""
+
     def test_0d_from_3d_mesh(self):
         pv_mesh = _make_tet_with_data()
         mesh = from_pyvista(pv_mesh, manifold_dim=0, warn_on_lost_data=False)
@@ -118,6 +121,9 @@ class TestVerticesPointCloud:
 
 
 class TestVerticesEdgeGraph:
+    """Vertex-based 1D extraction via from_pyvista: extracts unique edges from
+    volumetric cells (tets, hexes, polyhedra) with shared-edge deduplication."""
+
     def test_edge_graph_from_tet(self):
         """A single tet has 6 edges."""
         pv_mesh = _make_tet_with_data()
@@ -168,6 +174,10 @@ class TestVerticesEdgeGraph:
 
 
 class TestCellCentroidsPointCloud:
+    """Centroid-based 0D extraction via from_pyvista: replaces mesh vertices with cell
+    centroids, remaps cell_data to point_data, and validates auto-detection of
+    manifold dimension."""
+
     def test_centroid_point_cloud(self):
         pv_mesh = _make_tet_with_data()
         mesh = from_pyvista(
@@ -259,6 +269,10 @@ class TestCellCentroidsPointCloud:
 
 
 class TestCellCentroidsDualGraph:
+    """Centroid-based dual graph via from_pyvista: builds a 1D graph where cell
+    centroids are nodes and face-adjacent cell pairs are edges, with cell_data
+    remapped to point_data."""
+
     def test_dual_graph_two_hexes(self):
         """Two adjacent hexes sharing a face produce 1 dual-graph edge."""
         pv_mesh = _make_hex_pair()
@@ -306,6 +320,10 @@ class TestCellCentroidsDualGraph:
 
 
 class TestWarnOnLostData:
+    """Verifies from_pyvista emits UserWarnings naming discarded fields when dimension
+    reduction drops point_data or cell_data, and that warnings are suppressed when
+    disabled or when no data is lost."""
+
     def test_warns_on_lost_cell_data(self):
         """Extracting 0D from 3D with cell_data should warn."""
         pv_mesh = _make_tet_with_data()

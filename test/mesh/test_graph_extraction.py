@@ -90,6 +90,10 @@ def _triangle_with_data() -> Mesh:
 
 
 class TestToEdgeGraph:
+    """Extracts unique edges from cell connectivity into a 1D mesh, verifying correct
+    edge counts for triangles and tets, point coordinate preservation, and valid
+    index bounds."""
+
     def test_single_triangle(self):
         """A single triangle has 3 edges."""
         mesh = _single_triangle()
@@ -143,6 +147,10 @@ class TestToEdgeGraph:
 
 
 class TestToDualGraph:
+    """Constructs a cell-adjacency graph with centroids as nodes and shared-face pairs
+    as edges, verifying topology, centroid positions, cell_data-to-point_data
+    remapping, and edge uniqueness."""
+
     def test_two_triangles_one_edge(self):
         """Two adjacent triangles produce 1 dual-graph edge."""
         mesh = _two_triangles()
@@ -208,6 +216,10 @@ class TestToDualGraph:
 
 
 class TestToPointCloud:
+    """Reduces a mesh to a 0D point cloud using either original vertices or cell
+    centroids, verifying both modes, data preservation, and rejection of invalid
+    point_source values."""
+
     def test_vertices_default(self):
         """Default point cloud from vertices."""
         mesh = _single_triangle()
