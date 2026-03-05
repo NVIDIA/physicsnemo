@@ -17,7 +17,7 @@
 import operator
 from dataclasses import dataclass
 from functools import reduce
-from typing import Literal, Sequence
+from typing import Sequence
 
 import torch
 import torch.nn as nn
@@ -136,8 +136,6 @@ class GLOBE(Module):
     global_data : TensorDict or None, optional, default=None
         Nondimensional conditioning features. Leaf keys and ranks must match
         ``global_data_ranks``. Passed through to the output Mesh.
-    chunk_size : None | int | Literal["auto"], optional, default=None
-        Controls memory usage during kernel evaluation.
 
     Outputs
     -------
