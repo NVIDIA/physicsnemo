@@ -53,7 +53,6 @@ from utilities import (
 
 from physicsnemo.core import get_physicsnemo_pkg_info
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.experimental.models.globe.field_kernel import BarnesHutKernel
 from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.optim import CombinedOptimizer
 from physicsnemo.utils.checkpoint import load_checkpoint, save_checkpoint
@@ -234,9 +233,8 @@ def main(
         n_latent_scalars=n_latent_scalars,
         n_latent_vectors=n_latent_vectors,
         n_spherical_harmonics=n_spherical_harmonics,
-        kernel_class=BarnesHutKernel,
-        kernel_class_kwargs={"leaf_size": 32},
         theta=2.0,
+        leaf_size=32,
     ).to(device)
 
     if dist.rank == 0:
@@ -606,7 +604,6 @@ def main(
                             base_model.eval()
                             pred_mesh = base_model(
                                 **viz_sample.model_input_kwargs,
-                                chunk_size=points_per_iter,
                             )
 
                         combined = AirFRANSDataSet.postprocess(
