@@ -3,9 +3,9 @@
 
 ## Problem overview
 
-Convection-allowing models (CAMs) are essential tools for forecasting severe thunderstorms and 
-mesoscale convective systems, which are responsible for some of the most extreme weather events. 
-By resolving kilometer-scale convective dynamics, these models provide the precision needed for 
+Convection-allowing models (CAMs) are essential tools for forecasting severe thunderstorms and
+mesoscale convective systems, which are responsible for some of the most extreme weather events.
+By resolving kilometer-scale convective dynamics, these models provide the precision needed for
 accurate hazard prediction. However, modeling the atmosphere at this scale is both challenging
 and expensive with traditional numerical weather prediction.
 
@@ -13,7 +13,7 @@ This example provides a toolkit for training and simple inference for regional A
 using diffusion. Examples of the types of models that can be trained with it include:
 
 1. [StormCast](https://arxiv.org/abs/2408.10958),
-a generative diffusion model designed to emulate NOAA’s High-Resolution Rapid Refresh (HRRR) model, a 3km 
+a generative diffusion model designed to emulate NOAA’s High-Resolution Rapid Refresh (HRRR) model, a 3km
 operational CAM. StormCast autoregressively predicts multiple atmospheric state variables with remarkable
 accuracy, demonstrating ability to replicate storm dynamics, observed radar reflectivity, and realistic
 atmospheric structure via deep learning-based CAM emulation. StormCast enables high-resolution ML-driven
@@ -30,7 +30,7 @@ the predicted variables to be accurately quantified.
 
 
 The design of StormCast relies on two UNet-type neural networks:
-  1. A regression model, which provides a deterministic estimate of the next HRRR timestep given the previous timestep's HRRR and background ERA5 states
+  1. A regression model, which provides a deterministic estimate of the next HRRR timestep given the previous timestep's HRRR and background ERA5 states.
   2. A diffusion model, which is given the previous HRRR timestep as well as the estimate from the regression model, and provides a correction to the regression model estimate to produce a final high-quality prediction of the next high-resolution atmospheric state.
 The regression and diffusion components are trained separately (with the diffusion model training requiring a regression model as prerequisite), then coupled together in inference.
 
@@ -81,14 +81,14 @@ python train.py --config-name regression training.batch_size=4
 
 More extensive configuration modifications can be made by creating a new top-level configuration file similar to `regression` or `diffusion`. See `diffusion.yaml` for an example of how to specify a top-level config that uses default configuration settings with additional custom modifications added on top.
 
-At runtime, hydra will parse the config subdirectory and command line over-rides into a runtime configuration object `cfg`, which will have all settings accessible via both attribute or dictionary-like interfaces. For example, the total training batch size can be accessed either as `cfg.training.batch_size` or `cfg['training']['batch_size']`. The actual content of the config will be validated using `pydantic` based on the guidelines specified in [`utils/config.py`](./utils/config.py).
+At runtime, hydra will parse the config subdirectory and command-line overrides into a runtime configuration object `cfg`, which will have all settings accessible via both attribute or dictionary-like interfaces. For example, the total training batch size can be accessed either as `cfg.training.batch_size` or `cfg['training']['batch_size']`. The actual content of the config will be validated using `pydantic` based on the guidelines specified in [`utils/config.py`](./utils/config.py).
 
 The training script `train.py` will initialize the training experiment and launch the main training loop, which is defined in `utils/trainer.py`. Outputs (training logs, checkpoints, etc.) will be saved to a directory specified by the following `training` config items:
 ```yaml
 training.outdir: 'rundir' # Root path under which to save training outputs
 training.experiment_name: 'stormcast' # Name for the training experiment
-training.run_id: '0' # Unique ID to use for this training run 
-training.rundir: ./${training.outdir}/${training.experiment_name}/${training.run_id} # Path where experiement outputs will be saved
+training.run_id: '0' # Unique ID to use for this training run
+training.rundir: ./${training.outdir}/${training.experiment_name}/${training.run_id} # Path where experiment outputs will be saved
 ```
 As you can see, the `training.run_id` setting can be used for distinguishing between different runs of the same configuration. The final training output directory is constructed by composing together the `training.outdir` root path (defaults to `rundir`), the `training.experiment_name`, and the `training.run_id`. For inference runs, equivalent options are available in the `stormcast_inference.yaml` config file used with the `inference.py` script.
 
@@ -109,7 +109,7 @@ The following table shows typical settings for each type of model:
 | Downscaling | CorrDiff | `["background"]` | `{"background": background_tensor, "state": state_tensor}` |
 | Unconditional | | `[]` | `{"state": state_tensor}` |
 
-Changing the form of the dictionary returned by `__getitem__` is not strictly necessary if, for instance, the same dataset is used to train different types of models. As long as the conditions list is set appropriately, unnecessary tensors will be ignored (if `"state"` is a list for models that expect only one state tensor, `state_tensor[1]` will be used).
+Changing the form of the dictionary returned by `__getitem__` is not strictly necessary if, for instance, the same dataset is used to train different types of models. As long as the conditions list is set appropriately, unnecessary tensors will be ignored (if `"state"` is a list for models that expect only one state tensor, the second element of the list (`state[1]`) will be used as the target). However, unnecessary outputs may introduce overhead that negatively affects performance.
 
 If you want to use invariants (i.e. conditions that are the same for each sample, a surface elevation map is a typical example), return the invariants as a NumPy array from the `get_invariants` function of your dataset and add `"invariant"` to your condition list.
 
@@ -142,13 +142,13 @@ With that, launching diffusion training for the default StormCast configuration 
 ```bash
 python train.py --config-name diffusion training.experiment_name=diffusion
 ```
-Similar to regression, diffusion training can be tested using on a single GPU using `--config-name diffusion_lite` (U-Net with StormCast training data), `--config-name test_diffusion_unet` (U-Net without data) or `--config-name test_diffusion` (DiT without data).
+Similar to regression, diffusion training can be tested using a single GPU using `--config-name diffusion_lite` (U-Net with StormCast training data), `--config-name test_diffusion_unet` (U-Net without data) or `--config-name test_diffusion` (DiT without data).
 
-Note that the full training pipeline for StormCast diffusion model is fairly lengthy, requiring about 120 hours on 64 NVIDIA H100 GPUs. However, more lightweight trainings can still produce decent models if the diffusion model is not trained for as long. The example `regression` and `diffusion` configs use the configuration used in the StormCast paper. New configs can be easily added [as described above](#configuration-basics).
+Note that the full training pipeline for StormCast diffusion model is fairly lengthy, requiring about 120 hours on 64 NVIDIA H100 GPUs. However, more lightweight training runs can still produce decent models if the diffusion model is not trained for as long. The example `regression` and `diffusion` configs use the configuration used in the StormCast paper. New configs can be easily added [as described above](#configuration-basics).
 
 ### Distributed training
 
-Both regression and diffusion training can be distributed easily with data parallelism via `torchrun` or other launchers (e.g., SLURM `srun`). As long as GPU memory is sufficient, the same configuration file can be used regardless of the number of GPUs. One just needs to ensure the configuration being run has a batch size that is divisible by the number of available GPUs/processes.  For example, distributed training of the regression model over 8 GPUs on one node would look something like:
+Both regression and diffusion training can be distributed easily with data parallelism via `torchrun` or other launchers (e.g., SLURM `srun`). As long as GPU memory is sufficient, the same configuration file can be used regardless of the number of GPUs. One just needs to ensure the configuration being run has a batch size that is divisible by the number of available GPUs/processes. For example, distributed training of the regression model over 8 GPUs on one node would look something like:
 ```bash
 torchrun --standalone --nnodes=1 --nproc_per_node=8 train.py --config-name <your_distributed_training_config>
 ```
@@ -201,7 +201,7 @@ The `inference.py` script currently fully supports only the default ERA5-HRRR St
 
 With the default configuration, StormCast is trained on the [HRRR dataset](https://rapidrefresh.noaa.gov/hrrr/),
 conditioned on the [ERA5 dataset](https://www.ecmwf.int/en/forecasts/dataset/ecmwf-reanalysis-v5).
-The datapipe in this example is tailored specifically for the domain and problem setting posed in the 
+The datapipe in this example is tailored specifically for the domain and problem setting posed in the
 [original StormCast preprint](https://arxiv.org/abs/2408.10958), namely a subset of HRRR and ERA5 variables
 in a region over the Central US with spatial extent 1536km x 1920km.
 
@@ -238,13 +238,13 @@ A custom dataset object is defined in `datasets/data_loader_hrrr_era5.py`, which
 
 ### Adding custom datasets
 
-While it is possible to train models on custom datasets by formatting them indentically to the Zarr datasets used in the ERA5-HRRR example, a more flexible option is to define a custom dataset object. These datasets must follow the `StormCastDataset` interface defined in `datasets/dataset.py`; see the docstrings in that file for a specification of what the functions must accept and return. You can use the `datasets/mock.py` implementation as a minimal synthetic example and `datasets/data_loader_hrrr_era5.py` implementation as a real-world example.
+While it is possible to train models on custom datasets by formatting them identically to the Zarr datasets used in the ERA5-HRRR example, a more flexible option is to define a custom dataset object. These datasets must follow the `StormCastDataset` interface defined in `datasets/dataset.py`; see the docstrings in that file for a specification of what the functions must accept and return. You can use the `datasets/mock.py` implementation as a minimal synthetic example and `datasets/data_loader_hrrr_era5.py` implementation as a real-world example.
 
 The dataset class must implement the following methods:
 
 * `__len__`: Returns the number of items in the dataset
-* `__getitem__`: Returns the data for item at index `idx`. For StormCast-like hybrid models, it returns a dict with the following format: `{"background": background, "state": [old_state, new_state]}` where `background` is the low-resolution conditioning, `old_state` is the previous state used as input for the model and `new_state` is the next state used as the training target. Models that use different inputs can omit some of these; see [Model types](#model-types)
-* `background_channels`: Returns a list with the names of each background channel. It is important that the length of this list correspond to the exact number of channels in `background`, as this is used to set the number of inputs used by the model. May return a empty list for models that do not utilize a background input (i.e. no `"background"` in `model.diffusion_conditions`/`model.regression_conditions`).
+* `__getitem__`: Returns the data for item at index `idx`. For StormCast-like hybrid models, it returns a dict with the following format: `{"background": background, "state": [old_state, new_state]}` where `background` is the low-resolution conditioning, `old_state` is the previous state used as input for the model and `new_state` is the next state used as the training target. Models that use different inputs can omit some of these; see [Model types](#model-types).
+* `background_channels`: Returns a list with the names of each background channel. It is important that the length of this list correspond to the exact number of channels in `background`, as this is used to set the number of inputs used by the model. May return an empty list for models that do not utilize a background input (i.e. no `"background"` in `model.diffusion_conditions`/`model.regression_conditions`).
 * `state_channels`: Returns a list with the names of each state channel. As above, the length of this list must match the number of channels in `state`.
 * `image_shape`: Returns a 2-tuple with the spatial dimensions of the data.
 
@@ -264,6 +264,7 @@ The following methods are optional and are **only used by the `inference.py` scr
 While not used in the original StormCast, the `StormCastDataset` interface also supports lead-time aware training. To enable this:
 - Set the `self.lead_time_steps` attribute of the dataset to an integer larger than 1.
 - Include a key `"lead_time_label"` with a corresponding integer value (range `0 <= lead_time_label < self.lead_time_steps`) in the dict returned by `__getitem__`.
+
 Lead time labels can currently only be used with U-Nets, but `scalar_conditions` may achieve the same effect with DiT models.
 
 Once you have implemented the custom dataset, create a configuration file in `config/dataset`. This configuration file must have one special attribute, `name`. This indicates a module in the `datasets` directory and a class to be used for the dataset. For instance, specifying `name: data_loader_hrrr_era5.HrrrEra5Dataset` will use the default ERA5-HRRR dataset, found in `datasets/data_loader_hrrr_era5.py`. The other parameters in the dataset configuration file will be passed to the `params` object used to initialize the dataset and can be used to specify e.g. the file system path from which the dataset is loaded.
