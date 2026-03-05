@@ -72,7 +72,7 @@ def main(
     use_compile: bool = True,
     compile_mode: Literal[
         "default", "max-autotune-no-cudagraphs", "reduce-overhead", "max-autotune"
-    ] = "max-autotune",
+    ] = "max-autotune-no-cudagraphs",
     points_per_iter: int = 2048,
     learning_rate: float = 1e-3,
     weight_decay: float = 1e-4,
@@ -383,7 +383,7 @@ def main(
 
     ### [Training and Testing]
     @torch.compile(
-        dynamic=False,
+        dynamic=True,
         mode=compile_mode,
         disable=not use_compile,
     )
