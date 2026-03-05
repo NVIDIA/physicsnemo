@@ -201,9 +201,10 @@ utils-extras = [
     "stl",
 ]
 mesh-extras = [
-    "matplotlib>=3.10.7",
+    "matplotlib>=3.10.8",
     "pyacvd>=0.3.2",
-    "pyvista>=0.46.4",
+    "pyvista>=0.47.0",
+    "vtk>=9.6.0",
 ]
 nn-extras = [
     "scipy",

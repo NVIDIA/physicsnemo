@@ -472,6 +472,7 @@ def _to_vtk_cell_array(cells_np: np.ndarray) -> np.ndarray:
     ).ravel()
 
 
+@require_version_spec("vtk")
 def _build_dual_graph_edges(
     pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid",
 ) -> torch.Tensor:
@@ -495,7 +496,9 @@ def _build_dual_graph_edges(
     torch.Tensor
         Shape ``(n_edges, 2)`` with dtype ``torch.long``.
     """
-    import vtk as _vtk
+    import importlib
+
+    _vtk = importlib.import_module("vtk")
 
     pyvista_mesh.BuildLinks()
     n_cells = pyvista_mesh.n_cells
