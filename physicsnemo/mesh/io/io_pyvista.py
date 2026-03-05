@@ -345,9 +345,7 @@ def to_pyvista(
         if mesh.n_cells == 0:
             pv_mesh = pv.PolyData(points_np)
         else:
-            pv_mesh = pv.PolyData(
-                points_np, lines=_to_vtk_cell_array(cells_np)
-            )
+            pv_mesh = pv.PolyData(points_np, lines=_to_vtk_cell_array(cells_np))
 
     elif mesh.n_manifold_dims == 2:
         cells_np = mesh.cells.cpu().numpy()
