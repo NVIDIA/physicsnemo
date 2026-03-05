@@ -432,5 +432,6 @@ class TestOptimizationsParametrized:
             recon_error, torch.zeros(n_queries, device=device), rtol=1e-5, atol=1e-6
         )
 
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -72,7 +72,8 @@ def main(
     amp: bool = False,
     use_compile: bool = True,
     compile_mode: Literal[
-        "default", "max-autotune-no-cudagraphs",
+        "default",
+        "max-autotune-no-cudagraphs",
     ] = "max-autotune-no-cudagraphs",
     points_per_iter: int = 2048,
     learning_rate: float = 1e-3,
@@ -198,8 +199,7 @@ def main(
 
     ### [Dataset Preparation]
     sample_paths: dict[Split, list[Path]] = {
-        split: DrivAerMLDataSet.get_split_paths(data_dir, split)
-        for split in splits
+        split: DrivAerMLDataSet.get_split_paths(data_dir, split) for split in splits
     }
     dataloaders: dict[Split, DataLoader] = {
         split: DrivAerMLDataSet.make_dataloader(
@@ -260,15 +260,19 @@ def main(
     ### [Boundary Mesh Padding Targets]
     # Boundary simplices have (manifold_dim + 1) = n_spatial_dims vertices,
     # so n_spatial_dims * n_cells is a hard upper bound on unique points.
-    max_sizes: TensorDict = TensorDict({
-        bc_type: TensorDict({
-            "n_points": torch.tensor(
-                boundary_n_faces * n_spatial_dims, device=device
-            ),
-            "n_cells": torch.tensor(boundary_n_faces, device=device),
-        })
-        for bc_type in boundary_source_data_ranks
-    })
+    max_sizes: TensorDict = TensorDict(
+        {
+            bc_type: TensorDict(
+                {
+                    "n_points": torch.tensor(
+                        boundary_n_faces * n_spatial_dims, device=device
+                    ),
+                    "n_cells": torch.tensor(boundary_n_faces, device=device),
+                }
+            )
+            for bc_type in boundary_source_data_ranks
+        }
+    )
     if dist.rank == 0:
         logger0.info(f"Padding targets: {max_sizes.to_dict()}")
 
@@ -340,7 +344,9 @@ def main(
         set_experiment(experiment_name=mlflow_experiment)
         if mlflow_run_id:
             try:
-                mlflow_run_ctx = start_run(run_id=mlflow_run_id, log_system_metrics=True)
+                mlflow_run_ctx = start_run(
+                    run_id=mlflow_run_id, log_system_metrics=True
+                )
                 logger0.info(f"Resumed MLflow run {mlflow_run_id}")
             except Exception:
                 warnings.warn(
@@ -366,10 +372,7 @@ def main(
                 "scaler": scaler.__class__.__name__,
                 "physicsnemo_pkg_info": get_physicsnemo_pkg_info(),
                 "world_size": dist.world_size,
-                **{
-                    f"n_{split}_samples": len(sample_paths[split])
-                    for split in splits
-                },
+                **{f"n_{split}_samples": len(sample_paths[split]) for split in splits},
             },
         )
         if use_mlflow:
@@ -401,9 +404,7 @@ def main(
         model.train(training)
 
         all_batch_losses: list[torch.Tensor] = []
-        all_batch_loss_components: dict[str, list[torch.Tensor]] = defaultdict(
-            list
-        )
+        all_batch_loss_components: dict[str, list[torch.Tensor]] = defaultdict(list)
 
         for sample in tqdm(
             dataloaders[split],
@@ -421,12 +422,8 @@ def main(
                 ### Pad boundary meshes to fixed size for static compilation
                 for bc_type, mesh in sample.boundary_meshes.items():
                     padded = mesh.pad(
-                        target_n_points=int(
-                            max_sizes[bc_type, "n_points"]
-                        ),
-                        target_n_cells=int(
-                            max_sizes[bc_type, "n_cells"]
-                        ),
+                        target_n_points=int(max_sizes[bc_type, "n_points"]),
+                        target_n_cells=int(max_sizes[bc_type, "n_cells"]),
                         data_padding_value=0.0,
                     )
                     if training and train_randomize_face_centers:
@@ -452,9 +449,7 @@ def main(
                 batch_loss, batch_loss_components = run_batch(sample)
                 if training:
                     if torch.isnan(batch_loss):
-                        warnings.warn(
-                            f"{batch_loss=} at: {dist.rank=}, {epoch=}"
-                        )
+                        warnings.warn(f"{batch_loss=} at: {dist.rank=}, {epoch=}")
                     scaler.scale(batch_loss).backward()
                     scaler.step(optimizer)
                     scaler.update()
@@ -496,9 +491,7 @@ def main(
     )
     profiler_ctx = (
         torch.profiler.profile(
-            schedule=torch.profiler.schedule(
-                wait=4, warmup=1, active=1, repeat=1
-            ),
+            schedule=torch.profiler.schedule(wait=4, warmup=1, active=1, repeat=1),
             on_trace_ready=torch.profiler.tensorboard_trace_handler(
                 str(profiling_dir), worker_name=f"worker_{dist.rank}"
             ),
@@ -519,9 +512,7 @@ def main(
                 "last_image_epoch": last_image_epoch,
                 "last_image_loss": last_image_loss,
                 "mlflow_run_id": (
-                    _run.info.run_id
-                    if use_mlflow and (_run := active_run())
-                    else None
+                    _run.info.run_id if use_mlflow and (_run := active_run()) else None
                 ),
             }
 
@@ -553,17 +544,12 @@ def main(
                     best_loss = loss["validation"]
                     base_model.save(best_model_path)
                     if use_mlflow:
-                        log_artifact(
-                            str(best_model_path), artifact_path="best_model"
-                        )
+                        log_artifact(str(best_model_path), artifact_path="best_model")
 
                 if use_mlflow:
                     log_metrics(
                         {
-                            **{
-                                f"{split}_loss": loss[split].item()
-                                for split in splits
-                            },
+                            **{f"{split}_loss": loss[split].item() for split in splits},
                             **{
                                 f"{split}_loss_components/{sanitize_metric_name(k)}": v.item()
                                 for split in splits
@@ -574,9 +560,7 @@ def main(
                                 "reserved_bytes.all.peak"
                             ]
                             / 1024**3,
-                            "system/seconds_per_epoch": (
-                                time_now := perf_counter()
-                            )
+                            "system/seconds_per_epoch": (time_now := perf_counter())
                             - time_last_epoch,
                         },
                         step=epoch,
@@ -638,12 +622,10 @@ def main(
                             sample=viz_sample.to(device="cpu"),
                         )
 
-                        save_path = (
-                            output_dir
-                            / f"viz_{split}_epoch_{epoch}.png"
-                        )
+                        save_path = output_dir / f"viz_{split}_epoch_{epoch}.png"
                         DrivAerMLDataSet.visualize_comparison(
-                            combined, save_path=save_path,
+                            combined,
+                            save_path=save_path,
                             backend="matplotlib",
                         )
                         if use_mlflow:
@@ -686,9 +668,7 @@ def main(
             if use_compile and not torch_compile_cache.exists():
                 artifacts_bytes, cache_info = torch.compiler.save_cache_artifacts()
                 torch_compile_cache.write_bytes(artifacts_bytes)
-                logger.info(
-                    f"Saved torch.compile cache to {torch_compile_cache}."
-                )
+                logger.info(f"Saved torch.compile cache to {torch_compile_cache}.")
 
 
 def field_loss_fn(
@@ -716,9 +696,7 @@ def field_loss_fn(
     )
     if error.ndim > 1:
         error = error.norm(dim=-1)
-    return 2 * F.huber_loss(
-        error, torch.zeros_like(error), reduction="none", delta=1.0
-    )
+    return 2 * F.huber_loss(error, torch.zeros_like(error), reduction="none", delta=1.0)
 
 
 if __name__ == "__main__":

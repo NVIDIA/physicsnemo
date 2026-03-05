@@ -95,9 +95,7 @@ def _normals_3d(
     relative_vectors: Float[torch.Tensor, "n_cells 2 3"],
 ) -> Float[torch.Tensor, "n_cells 3"]:
     """Triangle normals in 3D via cross product."""
-    normals = torch.linalg.cross(
-        relative_vectors[:, 0], relative_vectors[:, 1]
-    )
+    normals = torch.linalg.cross(relative_vectors[:, 0], relative_vectors[:, 1])
     return F.normalize(normals, dim=-1)
 
 

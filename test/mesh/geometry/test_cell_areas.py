@@ -33,7 +33,6 @@ import torch
 
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 
-
 ### Helpers ###
 
 
@@ -68,8 +67,10 @@ class TestEdgeLengths:
         vecs = _relative_vectors([[0.0, 0.0, 0.0], [1.0, 2.0, 3.0]])
         result = compute_cell_areas(vecs)
         torch.testing.assert_close(
-            result, torch.tensor([math.sqrt(14.0)], dtype=torch.float64),
-            atol=1e-12, rtol=1e-12,
+            result,
+            torch.tensor([math.sqrt(14.0)], dtype=torch.float64),
+            atol=1e-12,
+            rtol=1e-12,
         )
 
     def test_multiple_edges(self):
@@ -80,7 +81,8 @@ class TestEdgeLengths:
         )
         result = compute_cell_areas(vecs)
         torch.testing.assert_close(
-            result, torch.tensor([1.0, 1.0], dtype=torch.float64),
+            result,
+            torch.tensor([1.0, 1.0], dtype=torch.float64),
         )
 
 
@@ -98,9 +100,7 @@ class TestTriangleAreas:
 
     def test_right_triangle_3d(self):
         """Right triangle with legs 1 in 3D (in the xy-plane): area = 0.5."""
-        vecs = _relative_vectors(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
-        )
+        vecs = _relative_vectors([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
         result = compute_cell_areas(vecs)
         torch.testing.assert_close(result, torch.tensor([0.5], dtype=torch.float64))
 
@@ -111,8 +111,10 @@ class TestTriangleAreas:
         )
         result = compute_cell_areas(vecs)
         torch.testing.assert_close(
-            result, torch.tensor([math.sqrt(3.0)], dtype=torch.float64),
-            atol=1e-12, rtol=1e-12,
+            result,
+            torch.tensor([math.sqrt(3.0)], dtype=torch.float64),
+            atol=1e-12,
+            rtol=1e-12,
         )
 
     def test_triangle_4d(self):
@@ -135,30 +137,38 @@ class TestTetrahedronVolumes3D:
 
     def test_unit_tetrahedron(self):
         """Unit tetrahedron with orthogonal edges: volume = 1/6."""
-        vecs = _relative_vectors([
-            [0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ])
+        vecs = _relative_vectors(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ]
+        )
         result = compute_cell_areas(vecs)
         torch.testing.assert_close(
-            result, torch.tensor([1.0 / 6.0], dtype=torch.float64),
-            atol=1e-12, rtol=1e-12,
+            result,
+            torch.tensor([1.0 / 6.0], dtype=torch.float64),
+            atol=1e-12,
+            rtol=1e-12,
         )
 
     def test_scaled_tetrahedron(self):
         """Tetrahedron with edge lengths 2: volume = 8/6 = 4/3."""
-        vecs = _relative_vectors([
-            [0.0, 0.0, 0.0],
-            [2.0, 0.0, 0.0],
-            [0.0, 2.0, 0.0],
-            [0.0, 0.0, 2.0],
-        ])
+        vecs = _relative_vectors(
+            [
+                [0.0, 0.0, 0.0],
+                [2.0, 0.0, 0.0],
+                [0.0, 2.0, 0.0],
+                [0.0, 0.0, 2.0],
+            ]
+        )
         result = compute_cell_areas(vecs)
         torch.testing.assert_close(
-            result, torch.tensor([4.0 / 3.0], dtype=torch.float64),
-            atol=1e-12, rtol=1e-12,
+            result,
+            torch.tensor([4.0 / 3.0], dtype=torch.float64),
+            atol=1e-12,
+            rtol=1e-12,
         )
 
 
@@ -173,31 +183,39 @@ class TestTetrahedronVolumesGeneral:
 
         Same geometry as the 3D case, with an extra zero coordinate.
         """
-        vecs = _relative_vectors([
-            [0.0, 0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-        ])
+        vecs = _relative_vectors(
+            [
+                [0.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ]
+        )
         result = compute_cell_areas(vecs)
         torch.testing.assert_close(
-            result, torch.tensor([1.0 / 6.0], dtype=torch.float64),
-            atol=1e-12, rtol=1e-12,
+            result,
+            torch.tensor([1.0 / 6.0], dtype=torch.float64),
+            atol=1e-12,
+            rtol=1e-12,
         )
 
     def test_tetrahedron_using_4th_dim(self):
         """Tetrahedron that actually extends into the 4th dimension."""
-        vecs = _relative_vectors([
-            [0.0, 0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ])
+        vecs = _relative_vectors(
+            [
+                [0.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        )
         result = compute_cell_areas(vecs)
         # Orthogonal edges of length 1 → same volume as 3D unit tet
         torch.testing.assert_close(
-            result, torch.tensor([1.0 / 6.0], dtype=torch.float64),
-            atol=1e-12, rtol=1e-12,
+            result,
+            torch.tensor([1.0 / 6.0], dtype=torch.float64),
+            atol=1e-12,
+            rtol=1e-12,
         )
 
 
@@ -209,29 +227,37 @@ class TestGramDetVolumes:
 
     def test_4_simplex_in_4d(self):
         """Unit 4-simplex (orthogonal edges) in 4D: volume = 1/24."""
-        vecs = _relative_vectors([
-            [0.0, 0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ])
+        vecs = _relative_vectors(
+            [
+                [0.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        )
         result = compute_cell_areas(vecs)
         torch.testing.assert_close(
-            result, torch.tensor([1.0 / 24.0], dtype=torch.float64),
-            atol=1e-12, rtol=1e-12,
+            result,
+            torch.tensor([1.0 / 24.0], dtype=torch.float64),
+            atol=1e-12,
+            rtol=1e-12,
         )
 
     def test_5_simplex_in_5d(self):
         """Unit 5-simplex (orthogonal edges) in 5D: volume = 1/120."""
         n = 5
         origin = [0.0] * n
-        vertices = [origin] + [[1.0 if j == i else 0.0 for j in range(n)] for i in range(n)]
+        vertices = [origin] + [
+            [1.0 if j == i else 0.0 for j in range(n)] for i in range(n)
+        ]
         vecs = _relative_vectors(vertices)
         result = compute_cell_areas(vecs)
         torch.testing.assert_close(
-            result, torch.tensor([1.0 / math.factorial(n)], dtype=torch.float64),
-            atol=1e-12, rtol=1e-12,
+            result,
+            torch.tensor([1.0 / math.factorial(n)], dtype=torch.float64),
+            atol=1e-12,
+            rtol=1e-12,
         )
 
 
@@ -243,23 +269,26 @@ class TestDegenerateCases:
 
     def test_collinear_triangle(self):
         """Collinear points form a zero-area triangle."""
-        vecs = _relative_vectors(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]
-        )
+        vecs = _relative_vectors([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
         result = compute_cell_areas(vecs)
         torch.testing.assert_close(result, torch.tensor([0.0], dtype=torch.float64))
 
     def test_coplanar_tetrahedron(self):
         """Coplanar vertices form a zero-volume tetrahedron."""
-        vecs = _relative_vectors([
-            [0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.5, 0.5, 0.0],
-        ])
+        vecs = _relative_vectors(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.5, 0.5, 0.0],
+            ]
+        )
         result = compute_cell_areas(vecs)
         torch.testing.assert_close(
-            result, torch.tensor([0.0], dtype=torch.float64), atol=1e-12, rtol=0,
+            result,
+            torch.tensor([0.0], dtype=torch.float64),
+            atol=1e-12,
+            rtol=0,
         )
 
 

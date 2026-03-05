@@ -611,6 +611,9 @@ class GLOBE(Module):
         )
 
         ### Phase 2: Communication hyperlayers (boundary-to-boundary).
+        # Trees and comm_plans are reused across all layers because cell
+        # centroids (the source/target points) are fixed - only the
+        # cell_data (latent features, strengths) changes between layers.
         for i in range(self.n_communication_hyperlayers):
             boundary_meshes = self._evaluate_communication_hyperlayer(
                 layer_idx=i,
@@ -623,6 +626,9 @@ class GLOBE(Module):
             )
 
         ### Phase 3: Final evaluation at prediction points.
+        # Prediction plans differ from comm_plans because the targets are
+        # prediction_points (the volume query locations), not the boundary
+        # cell centroids used during communication.
         pred_plans = self._build_prediction_plans(
             cluster_trees, prediction_points
         )

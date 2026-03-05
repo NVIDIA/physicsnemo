@@ -73,8 +73,7 @@ class AirFRANSSample:
 
     if TYPE_CHECKING:
 
-        def to(self, *args: Any, **kwargs: Any) -> Self:
-            ...
+        def to(self, *args: Any, **kwargs: Any) -> Self: ...
 
 
 class AirFRANSDataSet(CachedPreprocessingDataset):
@@ -486,7 +485,8 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         ### Build matplotlib Triangulation from the mesh topology
         pts = combined.points.cpu().numpy()
         tri = mpl_tri.Triangulation(
-            pts[:, 0], pts[:, 1],
+            pts[:, 0],
+            pts[:, 1],
             triangles=combined.cells.cpu().numpy(),
         )
 
@@ -500,10 +500,12 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
             pred_scalars_np = _to_scalars(pred_vals, is_vector)
 
             ### Shared color limits across truth and prediction
-            all_finite = np.concatenate([
-                true_scalars_np[np.isfinite(true_scalars_np)],
-                pred_scalars_np[np.isfinite(pred_scalars_np)],
-            ])
+            all_finite = np.concatenate(
+                [
+                    true_scalars_np[np.isfinite(true_scalars_np)],
+                    pred_scalars_np[np.isfinite(pred_scalars_np)],
+                ]
+            )
             shared_vmin = float(all_finite.min()) if len(all_finite) > 0 else 0.0
             shared_vmax = float(all_finite.max()) if len(all_finite) > 0 else 1.0
             if shared_vmin == shared_vmax:
@@ -513,19 +515,29 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
             ### Detect surface-only fields: every triangle has at least one
             # NaN in truth OR pred.  Fields like C_F exist only on the airfoil
             # surface; all interior points are NaN.
-            is_surface_field = bool(np.all(np.logical_or(
-                np.any(np.isnan(true_scalars_np[tri.triangles]), axis=1),
-                np.any(np.isnan(pred_scalars_np[tri.triangles]), axis=1),
-            )))
+            is_surface_field = bool(
+                np.all(
+                    np.logical_or(
+                        np.any(np.isnan(true_scalars_np[tri.triangles]), axis=1),
+                        np.any(np.isnan(pred_scalars_np[tri.triangles]), axis=1),
+                    )
+                )
+            )
 
             if is_surface_field:
-                max_magnitude = float(max(
-                    np.nanmax(true_scalars_np), np.nanmax(pred_scalars_np),
-                ))
+                max_magnitude = float(
+                    max(
+                        np.nanmax(true_scalars_np),
+                        np.nanmax(pred_scalars_np),
+                    )
+                )
                 arrow_scale = 0.6 / max_magnitude if max_magnitude > 0 else 1.0
-                surface_indices = np.argwhere(~np.logical_or(
-                    np.isnan(true_scalars_np), np.isnan(pred_scalars_np),
-                ))
+                surface_indices = np.argwhere(
+                    ~np.logical_or(
+                        np.isnan(true_scalars_np),
+                        np.isnan(pred_scalars_np),
+                    )
+                )
 
             for row, (key, label) in enumerate(kinds.items()):
                 ax = axes[row, col]
@@ -536,9 +548,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 if key == "error":
                     finite_err = scalars_np[np.isfinite(scalars_np)]
                     emax = (
-                        float(np.abs(finite_err).max())
-                        if len(finite_err) > 0
-                        else 1.0
+                        float(np.abs(finite_err).max()) if len(finite_err) > 0 else 1.0
                     )
                     if is_vector:
                         cmap, vmin, vmax = "Reds", 0.0, emax
@@ -555,7 +565,8 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                     ### Surface-only field: arrow visualization
                     vals_np = vals.cpu().numpy().astype("float64")
                     color_norm = mpl.colors.Normalize(
-                        vmin=0, vmax=max_magnitude,
+                        vmin=0,
+                        vmax=max_magnitude,
                     )
                     colormap = plt.get_cmap(cmap)
 
@@ -565,10 +576,8 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                             "",
                             xytext=(tri.x[i].item(), tri.y[i].item()),
                             xy=(
-                                tri.x[i].item()
-                                + vals_np[i, 0].item() * arrow_scale,
-                                tri.y[i].item()
-                                + vals_np[i, 1].item() * arrow_scale,
+                                tri.x[i].item() + vals_np[i, 0].item() * arrow_scale,
+                                tri.y[i].item() + vals_np[i, 1].item() * arrow_scale,
                             ),
                             arrowprops=dict(
                                 arrowstyle="-",
@@ -581,42 +590,57 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                             annotation_clip=False,
                         )
                     ax.plot(
-                        tri.x[surface_indices], tri.y[surface_indices],
-                        "k.", ms=0.2, alpha=1, zorder=1.5,
+                        tri.x[surface_indices],
+                        tri.y[surface_indices],
+                        "k.",
+                        ms=0.2,
+                        alpha=1,
+                        zorder=1.5,
                     )
                     fig.colorbar(
                         mpl.cm.ScalarMappable(norm=color_norm, cmap=colormap),
                         ax=ax,
                         orientation="horizontal",
-                        shrink=0.8, fraction=0.03, aspect=50, pad=0.01,
+                        shrink=0.8,
+                        fraction=0.03,
+                        aspect=50,
+                        pad=0.01,
                     )
                 else:
                     ### Volume field: tricontourf + tricontour
-                    tri.set_mask(
-                        np.any(np.isnan(scalars_np[tri.triangles]), axis=1)
-                    )
+                    tri.set_mask(np.any(np.isnan(scalars_np[tri.triangles]), axis=1))
                     extend_kwargs = {"vmin": vmin, "vmax": vmax, "extend": "both"}
                     contf = ax.tricontourf(
-                        tri, scalars_np,
+                        tri,
+                        scalars_np,
                         levels=np.linspace(vmin, vmax, 101),
-                        cmap=cmap, zorder=-1, **extend_kwargs,
+                        cmap=cmap,
+                        zorder=-1,
+                        **extend_kwargs,
                     )
                     ax.tricontour(
-                        tri, scalars_np,
+                        tri,
+                        scalars_np,
                         levels=np.linspace(vmin, vmax, 26),
-                        colors="k", linewidths=0.2, zorder=1,
+                        colors="k",
+                        linewidths=0.2,
+                        zorder=1,
                         **extend_kwargs,
                     )
                     ax.set_rasterization_zorder(0)
                     ax.set_facecolor("lightgray")
                     fig.colorbar(
                         mpl.cm.ScalarMappable(
-                            norm=contf.norm, cmap=contf.cmap,
+                            norm=contf.norm,
+                            cmap=contf.cmap,
                         ),
                         ax=ax,
                         orientation="horizontal",
                         extendrect="both",
-                        shrink=0.8, fraction=0.03, aspect=50, pad=0.01,
+                        shrink=0.8,
+                        fraction=0.03,
+                        aspect=50,
+                        pad=0.01,
                     )
 
                 ### Formatting
@@ -624,9 +648,13 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
                 ax.set_ylim(*ylim)
                 ax.set_aspect("equal", adjustable="box")
                 ax.tick_params(
-                    axis="both", which="both", length=0,
-                    bottom=False, left=False,
-                    labelbottom=False, labelleft=False,
+                    axis="both",
+                    which="both",
+                    length=0,
+                    bottom=False,
+                    left=False,
+                    labelbottom=False,
+                    labelleft=False,
                 )
                 if row == 0:
                     ax.set_title(field_name, fontsize=12, fontweight="bold")
@@ -895,8 +923,7 @@ if __name__ == "__main__":
     ### Sanity-check: divergence theorem should confirm inward raw normals
     airfoil = sample.boundary_meshes["no_slip"]
     outward_sign = torch.sign(
-        (airfoil.cell_centroids * airfoil.cell_normals).sum(dim=-1)
-        @ airfoil.cell_areas
+        (airfoil.cell_centroids * airfoil.cell_normals).sum(dim=-1) @ airfoil.cell_areas
     )
     logger.info(f"Airfoil outward normal sign: {outward_sign.item()}")
 

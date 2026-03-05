@@ -30,12 +30,12 @@ These are used by both DEC operators (calculus module) and differential
 geometry computations (curvature module).
 """
 
-from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
-from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
 from physicsnemo.mesh.geometry._angles import (
     compute_vertex_angle_sums,
     compute_vertex_angles,
 )
+from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
+from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
 from physicsnemo.mesh.geometry.dual_meshes import (
     compute_circumcenters,
     compute_cotan_weights_fem,

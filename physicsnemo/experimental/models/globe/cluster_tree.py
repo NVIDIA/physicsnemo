@@ -89,16 +89,62 @@ class InteractionPlan:
 
 
 # ---------------------------------------------------------------------------
-# Segmented weighted reduction helpers
+# Segmented reduction helpers
 # ---------------------------------------------------------------------------
 
 
+def _ragged_arange(
+    starts: Int[torch.Tensor, " n_segments"],
+    counts: Int[torch.Tensor, " n_segments"],
+) -> tuple[Int[torch.Tensor, " total"], Int[torch.Tensor, " total"]]:
+    r"""Expand segment descriptors ``(start, count)`` into flat index arrays.
+
+    Given *N* segments where segment *i* spans positions
+    ``[starts[i], starts[i] + counts[i])``, produces two flat tensors of
+    length ``sum(counts)``:
+
+    - ``positions[k]``: the absolute index for element *k*
+    - ``seg_ids[k]``: the segment (``0..N-1``) that element *k* belongs to
+
+    Conceptually, this concatenates ``arange(s, s+c)`` for each ``(s, c)``
+    pair, along with the corresponding segment labels.
+
+    Parameters
+    ----------
+    starts : torch.Tensor
+        Start offset per segment, shape ``(N,)``, int64.
+    counts : torch.Tensor
+        Element count per segment, shape ``(N,)``, int64.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        ``(positions, seg_ids)`` each with shape ``(sum(counts),)``.
+    """
+    total = int(counts.sum())
+    device = starts.device
+    n_segments = starts.shape[0]
+
+    seg_ids = torch.repeat_interleave(
+        torch.arange(n_segments, dtype=torch.long, device=device),
+        counts,
+    )
+    # Within-segment offsets: [0, 1, ..., c0-1, 0, 1, ..., c1-1, ...]
+    cum = counts.cumsum(0)
+    offsets = torch.arange(total, dtype=torch.long, device=device)
+    offsets = offsets - torch.repeat_interleave(cum - counts, counts)
+
+    positions = torch.repeat_interleave(starts, counts) + offsets
+
+    return positions, seg_ids
+
+
 def _segmented_weighted_sum(
-    values: torch.Tensor,
-    weights: torch.Tensor,
-    seg_ids: torch.Tensor,
+    values: Float[torch.Tensor, "n *features"],
+    weights: Float[torch.Tensor, " n"],
+    seg_ids: Int[torch.Tensor, " n"],
     n_segments: int,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "n_segments *features"]:
     """Compute weighted sum per segment via scatter_add.
 
     Parameters
@@ -129,12 +175,12 @@ def _segmented_weighted_sum(
 
 
 def _expand_leaf_hits(
-    leaf_query_indices: torch.Tensor,
-    leaf_node_indices: torch.Tensor,
-    leaf_start: torch.Tensor,
-    leaf_count: torch.Tensor,
-    sorted_order: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    leaf_query_indices: Int[torch.Tensor, " n_hits"],
+    leaf_node_indices: Int[torch.Tensor, " n_hits"],
+    leaf_start: Int[torch.Tensor, " n_nodes"],
+    leaf_count: Int[torch.Tensor, " n_nodes"],
+    sorted_order: Int[torch.Tensor, " n_sources"],
+) -> tuple[Int[torch.Tensor, " n_expanded"], Int[torch.Tensor, " n_expanded"]]:
     """Expand ``(query, leaf_node)`` hits into ``(query, source)`` pairs.
 
     Each leaf node contains a contiguous range of sources in morton-sorted
@@ -170,11 +216,7 @@ def _expand_leaf_hits(
 
     expanded_queries = torch.repeat_interleave(leaf_query_indices, counts)
 
-    cum = counts.cumsum(0)
-    offsets = torch.arange(total, dtype=torch.long, device=device)
-    offsets = offsets - torch.repeat_interleave(cum - counts, counts)
-
-    sorted_positions = torch.repeat_interleave(starts, counts) + offsets
+    sorted_positions, _ = _ragged_arange(starts, counts)
     expanded_sources = sorted_order[sorted_positions]
 
     return expanded_queries, expanded_sources
@@ -315,7 +357,12 @@ class ClusterTree:
         sorted_points = points[sorted_order]  # (n_points, D)
         sorted_areas = areas[sorted_order]  # (n_points,)
 
-        ### Pre-allocate node storage
+        ### Pre-allocate node storage.
+        # The midpoint split guarantees each child gets at least
+        # floor(parent_size / 2) sources, so the minimum leaf occupancy
+        # is ceil(leaf_size / 2).  From that we bound the maximum number
+        # of leaves and apply the full-binary-tree identity (n_internal =
+        # n_leaves - 1) to get max_nodes.
         min_per_leaf = max(1, (leaf_size + 1) // 2)
         max_leaves = (n_points + min_per_leaf - 1) // min_per_leaf
         max_nodes = max(1, 2 * max_leaves - 1)
@@ -375,7 +422,10 @@ class ClusterTree:
                     leaf_nids, l_starts, l_sizes, sorted_areas, total_area_buf
                 )
 
-            ### Process internal segments: split at midpoint, assign children
+            ### Process internal segments: split at the midpoint of the
+            # morton-sorted range.  Because morton codes preserve spatial
+            # locality, this approximates a spatial median split and produces
+            # a balanced binary tree in O(log N) iterations.
             internal_indices = torch.where(is_internal_seg)[0]
             if len(internal_indices) == 0:
                 break
@@ -485,25 +535,18 @@ class ClusterTree:
         is_leaf = self.leaf_count > 0
         leaf_node_ids = torch.where(is_leaf)[0]
 
-        ### Build compact segment IDs: map each sorted source to its leaf node
+        ### Build compact segment IDs: map each sorted source to its leaf node.
+        # Leaf node IDs are sparse (not all tree nodes are leaves), so we
+        # use a compact 0..n_leaves-1 indexing for scatter operations, then
+        # re-expand to the full n_nodes space when writing results.
         if leaf_node_ids.numel() > 0:
             leaf_starts = self.leaf_start[leaf_node_ids]
             leaf_counts = self.leaf_count[leaf_node_ids]
-            # Compact mapping: leaf_node_ids[i] -> i for scatter, then remap
             n_leaves = leaf_node_ids.shape[0]
-            compact_ids = torch.repeat_interleave(
-                torch.arange(n_leaves, dtype=torch.long, device=device),
-                leaf_counts,
-            )
-            cum = leaf_counts.cumsum(0)
-            total = int(leaf_counts.sum())
-            offsets = torch.arange(total, dtype=torch.long, device=device)
-            offsets = offsets - torch.repeat_interleave(
-                cum - leaf_counts, leaf_counts
-            )
-            positions = torch.repeat_interleave(leaf_starts, leaf_counts) + offsets
+            positions, compact_ids = _ragged_arange(leaf_starts, leaf_counts)
 
-            # seg_ids maps sorted position -> compact leaf index
+            # Invert: for each sorted-source position, store which compact
+            # leaf it belongs to.  Used by _segmented_weighted_sum below.
             seg_ids_compact = torch.zeros(
                 self.n_sources, dtype=torch.long, device=device
             )
@@ -611,7 +654,11 @@ class ClusterTree:
             if active_target_ids.numel() == 0:
                 break
 
-            ### AABB-distance opening angle test
+            ### Opening-angle test: squared distance from each target to
+            # the nearest point on the node's AABB.  Clamping the target
+            # coordinates to the AABB bounds gives the closest point; the
+            # squared distance to that point is zero when the target is
+            # inside the box.
             pts = target_points[active_target_ids]  # (n_active, D)
             aabb_lo = self.node_aabb_min[active_node_ids]
             aabb_hi = self.node_aabb_max[active_node_ids]
@@ -622,7 +669,10 @@ class ClusterTree:
             diam_sq = self.node_diameter_sq[active_node_ids]
             is_far = dist_sq > diam_sq * theta_sq
 
-            ### Separate leaf from internal among non-far nodes
+            ### Three-way classification of active (target, node) pairs:
+            #  1. Far-field: dist > diameter * theta -> use monopole
+            #  2. Near-field leaf: not far, node is a leaf -> exact per-source
+            #  3. Near-field internal: not far, node has children -> recurse
             hit_leaf_count = self.leaf_count[active_node_ids]
             is_leaf = hit_leaf_count > 0
 
@@ -719,8 +769,8 @@ class SourceAggregates:
     by :class:`BarnesHutKernel` during kernel evaluation.
     """
 
-    node_centroid: torch.Tensor
-    """Area-weighted centroid per node, shape ``(n_nodes, D)``."""
+    node_centroid: Float[torch.Tensor, "n_nodes n_dims"]
+    """Area-weighted centroid per node."""
 
     node_source_data: TensorDict | None
     """Area-weighted average source features per node, or ``None`` if no
@@ -733,12 +783,12 @@ class SourceAggregates:
 
 
 def _fill_leaf_aabbs(
-    leaf_nids: torch.Tensor,
-    leaf_starts: torch.Tensor,
-    leaf_sizes: torch.Tensor,
-    sorted_points: torch.Tensor,
-    aabb_min_buf: torch.Tensor,
-    aabb_max_buf: torch.Tensor,
+    leaf_nids: Int[torch.Tensor, " n_leaves"],
+    leaf_starts: Int[torch.Tensor, " n_leaves"],
+    leaf_sizes: Int[torch.Tensor, " n_leaves"],
+    sorted_points: Float[torch.Tensor, "n_sorted_sources n_dims"],
+    aabb_min_buf: Float[torch.Tensor, "n_nodes n_dims"],
+    aabb_max_buf: Float[torch.Tensor, "n_nodes n_dims"],
 ) -> None:
     """Fill AABB buffers for leaf nodes via segmented reduction (in-place)."""
     device = leaf_nids.device
@@ -750,15 +800,7 @@ def _fill_leaf_aabbs(
     if total == 0 or n_leaves == 0:
         return
 
-    seg_ids = torch.repeat_interleave(
-        torch.arange(n_leaves, dtype=torch.long, device=device),
-        leaf_sizes,
-    )
-    cum = leaf_sizes.cumsum(0)
-    offsets = torch.arange(total, dtype=torch.long, device=device)
-    offsets = offsets - torch.repeat_interleave(cum - leaf_sizes, leaf_sizes)
-    positions = torch.repeat_interleave(leaf_starts, leaf_sizes) + offsets
-
+    positions, seg_ids = _ragged_arange(leaf_starts, leaf_sizes)
     pts = sorted_points[positions]  # (total, D)
 
     seg_min = torch.full((n_leaves, D), float("inf"), dtype=dtype, device=device)
@@ -772,11 +814,11 @@ def _fill_leaf_aabbs(
 
 
 def _fill_leaf_total_areas(
-    leaf_nids: torch.Tensor,
-    leaf_starts: torch.Tensor,
-    leaf_sizes: torch.Tensor,
-    sorted_areas: torch.Tensor,
-    total_area_buf: torch.Tensor,
+    leaf_nids: Int[torch.Tensor, " n_leaves"],
+    leaf_starts: Int[torch.Tensor, " n_leaves"],
+    leaf_sizes: Int[torch.Tensor, " n_leaves"],
+    sorted_areas: Float[torch.Tensor, " n_sorted_sources"],
+    total_area_buf: Float[torch.Tensor, " n_nodes"],
 ) -> None:
     """Compute total area per leaf node (in-place)."""
     device = leaf_nids.device
@@ -786,15 +828,7 @@ def _fill_leaf_total_areas(
     if total == 0 or n_leaves == 0:
         return
 
-    seg_ids = torch.repeat_interleave(
-        torch.arange(n_leaves, dtype=torch.long, device=device),
-        leaf_sizes,
-    )
-    cum = leaf_sizes.cumsum(0)
-    offsets = torch.arange(total, dtype=torch.long, device=device)
-    offsets = offsets - torch.repeat_interleave(cum - leaf_sizes, leaf_sizes)
-    positions = torch.repeat_interleave(leaf_starts, leaf_sizes) + offsets
-
+    positions, seg_ids = _ragged_arange(leaf_starts, leaf_sizes)
     areas = sorted_areas[positions]
 
     leaf_areas = torch.zeros(n_leaves, dtype=areas.dtype, device=device)
@@ -805,11 +839,11 @@ def _fill_leaf_total_areas(
 
 def _aggregate_source_data_leaves(
     sorted_source_data: TensorDict,
-    sorted_areas: torch.Tensor,
-    seg_ids: torch.Tensor,
+    sorted_areas: Float[torch.Tensor, " n_sorted_sources"],
+    seg_ids: Int[torch.Tensor, " n_sorted_sources"],
     n_leaves: int,
-    leaf_node_ids: torch.Tensor,
-    leaf_total_areas: torch.Tensor,
+    leaf_node_ids: Int[torch.Tensor, " n_leaves"],
+    leaf_total_areas: Float[torch.Tensor, " n_leaves"],
     n_nodes: int,
     device: torch.device,
 ) -> TensorDict:
@@ -843,11 +877,11 @@ def _aggregate_source_data_leaves(
 
 
 def _propagate_centroids_bottom_up(
-    centroid_buf: torch.Tensor,
+    centroid_buf: Float[torch.Tensor, "n_nodes n_dims"],
     node_source_data: TensorDict | None,
-    left_child: torch.Tensor,
-    right_child: torch.Tensor,
-    total_area: torch.Tensor,
+    left_child: Int[torch.Tensor, " n_nodes"],
+    right_child: Int[torch.Tensor, " n_nodes"],
+    total_area: Float[torch.Tensor, " n_nodes"],
     n_nodes: int,
 ) -> None:
     """Propagate centroids and source data from leaves to root (in-place).
@@ -862,7 +896,10 @@ def _propagate_centroids_bottom_up(
     if internal_ids.numel() == 0:
         return
 
-    # Build depth ordering by BFS from root
+    # BFS from root discovers which internal nodes live at each depth.
+    # We then process reversed(depth_levels) so the deepest internal
+    # nodes (whose children are leaves with known values) are computed
+    # first, and each shallower level can read correct children.
     device = centroid_buf.device
     depth_levels: list[torch.Tensor] = []
     current_level = torch.tensor([0], dtype=torch.long, device=device)

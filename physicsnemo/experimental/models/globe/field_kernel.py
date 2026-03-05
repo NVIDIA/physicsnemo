@@ -897,7 +897,15 @@ class BarnesHutKernel(Kernel):
                 target_points, theta=theta
             )
 
-        ### Compute source aggregates for far-field clusters
+        ### Compute source aggregates for far-field clusters.
+        # Aggregates (centroids, averaged features) use *area*-weighting
+        # because areas are fixed geometric properties, making aggregates
+        # reusable across kernel branches.  Strengths, by contrast, are
+        # learned per-source and per-branch, so they must be summed
+        # per-node separately and applied as a multiplicative factor
+        # during kernel evaluation (the monopole approximation):
+        #   exact:  sum_i  strength_i * K(target, source_i, data_i)
+        #   approx: total_strength * K(target, centroid, avg_data)
         if source_aggregates is not None:
             aggregates = source_aggregates
         else:
@@ -907,7 +915,6 @@ class BarnesHutKernel(Kernel):
                 source_data=source_data,
             )
 
-        ### Compute per-node total strengths for far-field weighting
         node_total_strength = self._compute_node_strengths(
             cluster_tree, source_strengths
         )
@@ -946,7 +953,18 @@ class BarnesHutKernel(Kernel):
                 [cluster_tree.n_nodes, self.n_spatial_dims]
             )
 
-        ### Concatenate only the compact int64 index arrays (not float data)
+        ### Concatenate only the compact int64 index arrays upfront.
+        # IMPORTANT: all_source_ids has *dual semantics*.  Its first
+        # n_near entries are source-point indices (into source_points),
+        # while its last n_far entries are tree-node indices (into
+        # aggregates.node_centroid).  They index into different arrays
+        # and are separated by the near/far split within each chunk.
+        #
+        # We concatenate only these small int64 arrays, NOT the float
+        # data.  Pre-gathering all float data for n_total pairs would
+        # allocate O(n_total * features * dtype_bytes), which can exceed
+        # GPU memory for large meshes.  Deferring gathering to per-chunk
+        # keeps peak float memory at O(chunk_size * features).
         all_target_ids = torch.cat(
             [interaction_plan.near_target_ids, interaction_plan.far_target_ids],
             dim=0,
@@ -956,7 +974,6 @@ class BarnesHutKernel(Kernel):
             dim=0,
         )
 
-        ### Auto-size chunks to fit in free GPU memory
         chunk_size = self._auto_chunk_size(n_total, device)
 
         ### Evaluate kernel in chunks with deferred per-chunk gathering
@@ -966,7 +983,11 @@ class BarnesHutKernel(Kernel):
             end = min(start + chunk_size, n_total)
             n_chunk = end - start
 
-            ### Determine near/far split within this chunk
+            ### Determine near/far split within this chunk.
+            # Pairs are laid out as [near_0..near_{n-1} | far_0..far_{m-1}].
+            # Any chunk [start, end) can overlap the near portion, the far
+            # portion, or straddle the boundary.  near_end_in_chunk counts
+            # how many of this chunk's pairs belong to the near portion.
             near_end_in_chunk = min(max(n_near - start, 0), n_chunk)
             far_start_in_chunk = near_end_in_chunk
 
@@ -1040,7 +1061,11 @@ class BarnesHutKernel(Kernel):
             else:
                 chunk_result = fn(**kw)
 
-            ### Weighted scatter-add into output buffers
+            ### Scatter-add strength-weighted results into per-target buffers.
+            # Multiple pairs map to the same target (each target interacts
+            # with many sources/clusters), so contributions must be summed.
+            # The view/expand broadcasts the 1D target index across vector
+            # feature dimensions (e.g., n_spatial_dims for vector fields).
             for k, v in chunk_result.items():
                 weighted = v * chunk_strengths.view(-1, *([1] * (v.ndim - 1)))
                 if k not in output_bufs:
@@ -1063,16 +1088,16 @@ class BarnesHutKernel(Kernel):
     def _compute_node_strengths(
         self,
         tree: "ClusterTree",
-        source_strengths: torch.Tensor,
-    ) -> torch.Tensor:
+        source_strengths: Float[torch.Tensor, " n_sources"],
+    ) -> Float[torch.Tensor, " n_nodes"]:
         """Compute total source strength per tree node via bottom-up summation.
 
         Parameters
         ----------
         tree : ClusterTree
             The spatial cluster tree.
-        source_strengths : torch.Tensor
-            Per-source strength values, shape ``(n_sources,)``.
+        source_strengths : Float[torch.Tensor, "n_sources"]
+            Per-source strength values.
 
         Returns
         -------
@@ -1093,18 +1118,13 @@ class BarnesHutKernel(Kernel):
         leaf_starts = tree.leaf_start[leaf_ids]
         leaf_counts = tree.leaf_count[leaf_ids]
         n_leaves = leaf_ids.shape[0]
-        total = int(leaf_counts.sum())
 
-        if total > 0:
-            seg_ids = torch.repeat_interleave(
-                torch.arange(n_leaves, dtype=torch.long, device=device),
-                leaf_counts,
+        if int(leaf_counts.sum()) > 0:
+            from physicsnemo.experimental.models.globe.cluster_tree import (
+                _ragged_arange,
             )
-            cum = leaf_counts.cumsum(0)
-            offsets = torch.arange(total, dtype=torch.long, device=device)
-            offsets = offsets - torch.repeat_interleave(cum - leaf_counts, leaf_counts)
-            positions = torch.repeat_interleave(leaf_starts, leaf_counts) + offsets
 
+            positions, seg_ids = _ragged_arange(leaf_starts, leaf_counts)
             sorted_strengths = source_strengths[tree.sorted_source_order[positions]]
             leaf_sums = torch.zeros(n_leaves, dtype=source_strengths.dtype, device=device)
             leaf_sums.scatter_add_(0, seg_ids, sorted_strengths)

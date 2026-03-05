@@ -112,23 +112,26 @@ def _make_bh_kernel_and_data(
 
     global_data_dict: dict[str, torch.Tensor] = {}
     for i in range(n_global_scalars):
-        global_data_dict[f"global_scalar_{i}"] = torch.randn(1, device=device_obj).squeeze()
+        global_data_dict[f"global_scalar_{i}"] = torch.randn(
+            1, device=device_obj
+        ).squeeze()
     for i in range(n_global_vectors):
         global_data_dict[f"global_vector_{i}"] = F.normalize(
             torch.randn(n_spatial_dims, device=device_obj), dim=0
         )
 
     input_data = {
-        "source_points": torch.randn(n_source_points, n_spatial_dims, device=device_obj),
-        "target_points": torch.randn(n_target_points, n_spatial_dims, device=device_obj) * 5,
+        "source_points": torch.randn(
+            n_source_points, n_spatial_dims, device=device_obj
+        ),
+        "target_points": torch.randn(n_target_points, n_spatial_dims, device=device_obj)
+        * 5,
         "source_strengths": torch.randn(n_source_points, device=device_obj).abs() + 0.1,
         "reference_length": torch.ones((), device=device_obj),
         "source_data": TensorDict(
             source_data_dict, batch_size=[n_source_points], device=device_obj
         ),
-        "global_data": TensorDict(
-            global_data_dict, batch_size=[], device=device_obj
-        ),
+        "global_data": TensorDict(global_data_dict, batch_size=[], device=device_obj),
     }
 
     return bh_kernel, exact_kernel, input_data
@@ -188,7 +191,9 @@ class TestClusterTree:
         is_leaf = tree.leaf_count > 0
         leaf_ids = torch.where(is_leaf)[0]
         total_sources = tree.leaf_count[leaf_ids].sum().item()
-        assert total_sources == 60, f"Expected 60 sources in leaves, got {total_sources}"
+        assert total_sources == 60, (
+            f"Expected 60 sources in leaves, got {total_sources}"
+        )
 
     def test_interaction_plan_coverage(self):
         """Near + far pairs together cover all sources for each target."""
@@ -246,7 +251,9 @@ class TestClusterTree:
         expected_centroid = (points * areas.unsqueeze(-1)).sum(0) / areas.sum()
         root_centroid = agg.node_centroid[0]
 
-        torch.testing.assert_close(root_centroid, expected_centroid, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(
+            root_centroid, expected_centroid, atol=1e-5, rtol=1e-5
+        )
 
     def test_aggregate_source_data_scalars(self):
         """Root aggregate of scalar source data matches brute-force."""
@@ -257,9 +264,7 @@ class TestClusterTree:
         scalar_feat = torch.randn(n)
 
         tree = ClusterTree.from_points(points, leaf_size=4, areas=areas)
-        source_data = TensorDict(
-            {"my_scalar": scalar_feat}, batch_size=[n]
-        )
+        source_data = TensorDict({"my_scalar": scalar_feat}, batch_size=[n])
         agg = tree.compute_source_aggregates(points, areas, source_data=source_data)
 
         expected = (scalar_feat * areas).sum() / areas.sum()
@@ -278,9 +283,7 @@ class TestClusterTree:
         vector_feat = torch.randn(n, D)
 
         tree = ClusterTree.from_points(points, leaf_size=4, areas=areas)
-        source_data = TensorDict(
-            {"s": scalar_feat, "v": vector_feat}, batch_size=[n]
-        )
+        source_data = TensorDict({"s": scalar_feat, "v": vector_feat}, batch_size=[n])
         agg = tree.compute_source_aggregates(points, areas, source_data=source_data)
 
         total_area = areas.sum()
@@ -346,14 +349,12 @@ def test_bh_convergence_to_exact(
         bh_result = bh_kernel(**data, theta=theta)
 
         max_err = max(
-            (bh_result[k] - exact_result[k]).abs().max().item()
-            for k in output_fields
+            (bh_result[k] - exact_result[k]).abs().max().item() for k in output_fields
         )
 
         # Error should decrease (or stay flat) with increasing theta
         assert max_err <= prev_max_err * 1.5 + 1e-5, (
-            f"Error increased from {prev_max_err:.2e} to {max_err:.2e} "
-            f"at theta={theta}"
+            f"Error increased from {prev_max_err:.2e} to {max_err:.2e} at theta={theta}"
         )
         prev_max_err = max_err
 
@@ -405,7 +406,10 @@ def test_bh_gradient_correctness(
     bh_grad = data["source_points"].grad.clone()
 
     torch.testing.assert_close(
-        bh_grad, exact_grad, atol=1e-3, rtol=1e-2,
+        bh_grad,
+        exact_grad,
+        atol=1e-3,
+        rtol=1e-2,
         msg="BH gradients don't match exact at high theta",
     )
 
@@ -448,8 +452,10 @@ def test_bh_translation_equivariance(
 
     for field_name in output_fields:
         torch.testing.assert_close(
-            result1[field_name], result2[field_name],
-            atol=1e-4, rtol=1e-4,
+            result1[field_name],
+            result2[field_name],
+            atol=1e-4,
+            rtol=1e-4,
             msg=f"Translation equivariance failed for {field_name!r}",
         )
 
@@ -483,10 +489,12 @@ def test_bh_rotational_equivariance(
     ### Build rotation matrix
     if n_dims == 2:
         angle = torch.tensor(torch.pi / 3)
-        R = torch.tensor([
-            [torch.cos(angle), -torch.sin(angle)],
-            [torch.sin(angle), torch.cos(angle)],
-        ])
+        R = torch.tensor(
+            [
+                [torch.cos(angle), -torch.sin(angle)],
+                [torch.sin(angle), torch.cos(angle)],
+            ]
+        )
     else:
         axis = F.normalize(torch.randn(3), dim=0)
         angle = torch.tensor(torch.pi / 3)
@@ -513,15 +521,19 @@ def test_bh_rotational_equivariance(
     for field_name, field_type in output_fields.items():
         if field_type == "scalar":
             torch.testing.assert_close(
-                result1[field_name], result2[field_name],
-                atol=1e-4, rtol=1e-4,
+                result1[field_name],
+                result2[field_name],
+                atol=1e-4,
+                rtol=1e-4,
                 msg=f"Scalar {field_name!r} not invariant under rotation",
             )
         else:
             rotated_field1 = result1[field_name] @ R.T
             torch.testing.assert_close(
-                rotated_field1, result2[field_name],
-                atol=1e-4, rtol=1e-4,
+                rotated_field1,
+                result2[field_name],
+                atol=1e-4,
+                rtol=1e-4,
                 msg=f"Vector {field_name!r} not equivariant under rotation",
             )
 
@@ -556,24 +568,32 @@ def test_multiscale_bh_convergence(n_dims: int):
     # Compute exact reference by evaluating each branch's underlying Kernel
     # (the parent class forward = exact dense evaluation)
     from physicsnemo.experimental.models.globe.field_kernel import Kernel
+
     exact_total = None
     for name in ms.reference_length_names:
         branch: BarnesHutKernel = ms.kernels[name]
         branch_result = Kernel.forward(
             branch,
-            reference_length=ref_lengths[name]
-            * torch.exp(ms.log_scalefactors[name]),
+            reference_length=ref_lengths[name] * torch.exp(ms.log_scalefactors[name]),
             source_points=src,
             target_points=tgt,
             source_strengths=torch.ones(n_src),
             source_data=TensorDict({"normal": normals}, batch_size=[n_src]),
-            global_data=TensorDict({
-                "log_reference_length_ratios": TensorDict({
-                    "short_long": (ref_lengths["short"] / ref_lengths["long"]).log()
-                }),
-            }),
+            global_data=TensorDict(
+                {
+                    "log_reference_length_ratios": TensorDict(
+                        {
+                            "short_long": (
+                                ref_lengths["short"] / ref_lengths["long"]
+                            ).log()
+                        }
+                    ),
+                }
+            ),
         )
-        exact_total = branch_result if exact_total is None else exact_total + branch_result
+        exact_total = (
+            branch_result if exact_total is None else exact_total + branch_result
+        )
 
     bh_result = ms(
         source_points=src,
@@ -584,8 +604,10 @@ def test_multiscale_bh_convergence(n_dims: int):
     )
 
     torch.testing.assert_close(
-        bh_result["p"], exact_total["p"],
-        atol=1e-3, rtol=1e-2,
+        bh_result["p"],
+        exact_total["p"],
+        atol=1e-3,
+        rtol=1e-2,
         msg="MultiscaleKernel BH doesn't converge to exact at high theta",
     )
 
@@ -621,8 +643,10 @@ def test_bh_source_permutation(
     result2 = bh_kernel(**perm_data, theta=0.5)
 
     torch.testing.assert_close(
-        result1["p"], result2["p"],
-        atol=1e-4, rtol=1e-4,
+        result1["p"],
+        result2["p"],
+        atol=1e-4,
+        rtol=1e-4,
         msg="BH result changed under source permutation",
     )
 
@@ -693,7 +717,9 @@ def test_bh_nested_source_data_keys(n_dims: int):
 
     common_kwargs = dict(
         n_spatial_dims=n_dims,
-        output_field_ranks={k: (0 if v == "scalar" else 1) for k, v in output_field_ranks.items()},
+        output_field_ranks={
+            k: (0 if v == "scalar" else 1) for k, v in output_field_ranks.items()
+        },
         source_data_ranks=source_data_ranks,
         hidden_layer_sizes=[16],
     )

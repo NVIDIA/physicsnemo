@@ -271,8 +271,13 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
             pv_surface.cell_data["wallShearStressMeanTrim"] / Q_INF
         )
 
-        for name in ("CpMeanTrim", "pMeanTrim", "pPrime2MeanTrim",
-                     "wallShearStressMeanTrim", "Normals"):
+        for name in (
+            "CpMeanTrim",
+            "pMeanTrim",
+            "pPrime2MeanTrim",
+            "wallShearStressMeanTrim",
+            "Normals",
+        ):
             if name in pv_surface.cell_data:
                 del pv_surface.cell_data[name]
 
@@ -461,13 +466,29 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
 
         if backend == "pyvista":
             _visualize_pyvista(
-                combined, true_flat, pred_flat, kind_data, kinds,
-                fields, n_rows, n_cols, save_path, show,
+                combined,
+                true_flat,
+                pred_flat,
+                kind_data,
+                kinds,
+                fields,
+                n_rows,
+                n_cols,
+                save_path,
+                show,
             )
         elif backend == "matplotlib":
             _visualize_matplotlib(
-                combined, true_flat, pred_flat, kind_data, kinds,
-                fields, n_rows, n_cols, save_path, show,
+                combined,
+                true_flat,
+                pred_flat,
+                kind_data,
+                kinds,
+                fields,
+                n_rows,
+                n_cols,
+                save_path,
+                show,
             )
         else:
             raise ValueError(
@@ -518,10 +539,12 @@ def _visualize_pyvista(
             label = field_name
 
         ### Shared color limits across truth and prediction
-        finite_all = np.concatenate([
-            true_scalars[np.isfinite(true_scalars)],
-            pred_scalars[np.isfinite(pred_scalars)],
-        ])
+        finite_all = np.concatenate(
+            [
+                true_scalars[np.isfinite(true_scalars)],
+                pred_scalars[np.isfinite(pred_scalars)],
+            ]
+        )
         shared_clim = [float(finite_all.min()), float(finite_all.max())]
 
         for row, (key, title) in enumerate(kinds.items()):
@@ -534,9 +557,7 @@ def _visualize_pyvista(
                 scalars = vals.float().cpu().numpy().ravel()
 
             if key == "error":
-                emax = float(
-                    np.abs(scalars[np.isfinite(scalars)]).max()
-                )
+                emax = float(np.abs(scalars[np.isfinite(scalars)]).max())
                 if is_vector:
                     cmap, clim = "Reds", [0.0, emax]
                 else:
@@ -634,11 +655,8 @@ def _draw_disk_cells(
     sin_t = np.sin(theta)  # (S,)
 
     # offset[c, s, :] = r[c] * (cos(t[s]) * u[c] + sin(t[s]) * v[c])
-    offsets = (
-        radii[:, None, None] * (
-            cos_t[None, :, None] * u[:, None, :]
-            + sin_t[None, :, None] * v[:, None, :]
-        )
+    offsets = radii[:, None, None] * (
+        cos_t[None, :, None] * u[:, None, :] + sin_t[None, :, None] * v[:, None, :]
     )  # (C, S, 3)
     disk_verts = centroids[:, None, :] + offsets  # (C, S, 3)
 
@@ -728,9 +746,12 @@ def _visualize_matplotlib(
         ### Shared color limits across truth and prediction
         finite_mask_t = torch.isfinite(true_scalars)
         finite_mask_p = torch.isfinite(pred_scalars)
-        finite_all = torch.cat([
-            true_scalars[finite_mask_t], pred_scalars[finite_mask_p],
-        ])
+        finite_all = torch.cat(
+            [
+                true_scalars[finite_mask_t],
+                pred_scalars[finite_mask_p],
+            ]
+        )
         shared_vmin = float(finite_all.min())
         shared_vmax = float(finite_all.max())
 
@@ -756,7 +777,8 @@ def _visualize_matplotlib(
                 cmap, vmin, vmax = "turbo", shared_vmin, shared_vmax
 
             _draw_disk_cells(
-                ax, combined,
+                ax,
+                combined,
                 cell_scalars=cell_scalars,
                 cmap=cmap,
                 vmin=vmin,
@@ -865,8 +887,6 @@ if __name__ == "__main__":
     logger.info(f"Sample path: {sample_paths[0]}")
     logger.info(f"Surface mesh points: {sample.surface_mesh.points.shape}")
     logger.info(f"Surface mesh cells:  {sample.surface_mesh.cells.shape}")
-    logger.info(
-        f"Output keys: {list(sample.surface_mesh.point_data.keys())}"
-    )
+    logger.info(f"Output keys: {list(sample.surface_mesh.point_data.keys())}")
     logger.info(f"Reference lengths: {sample.reference_lengths.to_dict()}")
     logger.info(f"Aero coefficients: {sample.aero_coefficients.to_dict()}")

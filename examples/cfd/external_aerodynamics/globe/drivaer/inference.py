@@ -110,7 +110,5 @@ for src in ("pred", "true"):
     coeffs = combined.global_data[src].to_dict()  # ty: ignore[unresolved-attribute]
     logger.info(
         f"Force coefficients ({src}):"
-        + "".join(
-            f"\n  {k}: {coeffs[k]:.5f}" for k in ("Cd", "Cl", "Cs")
-        )
+        + "".join(f"\n  {k}: {coeffs[k]:.5f}" for k in ("Cd", "Cl", "Cs"))
     )

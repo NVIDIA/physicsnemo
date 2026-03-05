@@ -31,7 +31,6 @@ import torch
 
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
 
-
 ### Helpers ###
 
 
@@ -60,7 +59,8 @@ class TestNormals2D:
         vecs = _relative_vectors([[0.0, 0.0], [1.0, 0.0]])
         result = compute_cell_normals(vecs)
         torch.testing.assert_close(
-            result, torch.tensor([[0.0, 1.0]], dtype=torch.float64),
+            result,
+            torch.tensor([[0.0, 1.0]], dtype=torch.float64),
         )
 
     def test_edge_along_y(self):
@@ -68,7 +68,8 @@ class TestNormals2D:
         vecs = _relative_vectors([[0.0, 0.0], [0.0, 1.0]])
         result = compute_cell_normals(vecs)
         torch.testing.assert_close(
-            result, torch.tensor([[-1.0, 0.0]], dtype=torch.float64),
+            result,
+            torch.tensor([[-1.0, 0.0]], dtype=torch.float64),
         )
 
     def test_diagonal_edge(self):
@@ -77,8 +78,10 @@ class TestNormals2D:
         result = compute_cell_normals(vecs)
         s = 1.0 / math.sqrt(2.0)
         torch.testing.assert_close(
-            result, torch.tensor([[-s, s]], dtype=torch.float64),
-            atol=1e-12, rtol=1e-12,
+            result,
+            torch.tensor([[-s, s]], dtype=torch.float64),
+            atol=1e-12,
+            rtol=1e-12,
         )
 
     def test_multiple_edges(self):
@@ -89,7 +92,8 @@ class TestNormals2D:
         )
         result = compute_cell_normals(vecs)
         expected = torch.tensor(
-            [[0.0, 1.0], [-1.0, 0.0]], dtype=torch.float64,
+            [[0.0, 1.0], [-1.0, 0.0]],
+            dtype=torch.float64,
         )
         torch.testing.assert_close(result, expected)
 
@@ -102,44 +106,41 @@ class TestNormals3D:
 
     def test_xy_plane_triangle(self):
         """Triangle in XY-plane: normal is +z."""
-        vecs = _relative_vectors(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
-        )
+        vecs = _relative_vectors([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
         result = compute_cell_normals(vecs)
         torch.testing.assert_close(
-            result, torch.tensor([[0.0, 0.0, 1.0]], dtype=torch.float64),
+            result,
+            torch.tensor([[0.0, 0.0, 1.0]], dtype=torch.float64),
         )
 
     def test_xz_plane_triangle(self):
         """Triangle in XZ-plane: normal is -y (right-hand rule)."""
-        vecs = _relative_vectors(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
-        )
+        vecs = _relative_vectors([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
         result = compute_cell_normals(vecs)
         torch.testing.assert_close(
-            result, torch.tensor([[0.0, -1.0, 0.0]], dtype=torch.float64),
+            result,
+            torch.tensor([[0.0, -1.0, 0.0]], dtype=torch.float64),
         )
 
     def test_yz_plane_triangle(self):
         """Triangle in YZ-plane: normal is +x."""
-        vecs = _relative_vectors(
-            [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
-        )
+        vecs = _relative_vectors([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
         result = compute_cell_normals(vecs)
         torch.testing.assert_close(
-            result, torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float64),
+            result,
+            torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float64),
         )
 
     def test_tilted_triangle(self):
         """Triangle with edges (1,0,0) and (0,1,1): normal = (0,-1,1)/sqrt(2)."""
-        vecs = _relative_vectors(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 1.0]]
-        )
+        vecs = _relative_vectors([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 1.0]])
         result = compute_cell_normals(vecs)
         s = 1.0 / math.sqrt(2.0)
         torch.testing.assert_close(
-            result, torch.tensor([[0.0, -s, s]], dtype=torch.float64),
-            atol=1e-12, rtol=1e-12,
+            result,
+            torch.tensor([[0.0, -s, s]], dtype=torch.float64),
+            atol=1e-12,
+            rtol=1e-12,
         )
 
 
@@ -155,12 +156,14 @@ class TestNormalsGeneral:
         The 3 edge vectors span the (x, y, z) subspace, so the normal
         should point along the 4th axis: (0, 0, 0, +/-1).
         """
-        vecs = _relative_vectors([
-            [0.0, 0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-        ])
+        vecs = _relative_vectors(
+            [
+                [0.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ]
+        )
         result = compute_cell_normals(vecs)
         # Normal should be along w-axis; accept either sign
         assert torch.allclose(
@@ -174,12 +177,14 @@ class TestNormalsGeneral:
 
         Spans (x, y, w) subspace, so normal is along z: (0, 0, +/-1, 0).
         """
-        vecs = _relative_vectors([
-            [0.0, 0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ])
+        vecs = _relative_vectors(
+            [
+                [0.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        )
         result = compute_cell_normals(vecs)
         assert torch.allclose(
             result.abs(),
@@ -201,8 +206,10 @@ class TestUnitLength:
         result = compute_cell_normals(vecs)
         lengths = result.norm(dim=-1)
         torch.testing.assert_close(
-            lengths, torch.ones(100, dtype=torch.float64),
-            atol=1e-12, rtol=1e-12,
+            lengths,
+            torch.ones(100, dtype=torch.float64),
+            atol=1e-12,
+            rtol=1e-12,
         )
 
     def test_random_edges_2d(self):
@@ -212,8 +219,10 @@ class TestUnitLength:
         result = compute_cell_normals(vecs)
         lengths = result.norm(dim=-1)
         torch.testing.assert_close(
-            lengths, torch.ones(100, dtype=torch.float64),
-            atol=1e-12, rtol=1e-12,
+            lengths,
+            torch.ones(100, dtype=torch.float64),
+            atol=1e-12,
+            rtol=1e-12,
         )
 
 
@@ -228,17 +237,17 @@ class TestDegenerateCases:
         vecs = torch.tensor([[[0.0, 0.0]]], dtype=torch.float64)
         result = compute_cell_normals(vecs)
         torch.testing.assert_close(
-            result, torch.tensor([[0.0, 0.0]], dtype=torch.float64),
+            result,
+            torch.tensor([[0.0, 0.0]], dtype=torch.float64),
         )
 
     def test_collinear_triangle_3d(self):
         """Collinear edges produce a zero-area triangle with zero normal."""
-        vecs = _relative_vectors(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]
-        )
+        vecs = _relative_vectors([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
         result = compute_cell_normals(vecs)
         torch.testing.assert_close(
-            result, torch.tensor([[0.0, 0.0, 0.0]], dtype=torch.float64),
+            result,
+            torch.tensor([[0.0, 0.0, 0.0]], dtype=torch.float64),
         )
 
 
@@ -259,9 +268,7 @@ class TestCrossBranchConsistency:
             _normals_general,
         )
 
-        vecs = _relative_vectors(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
-        )
+        vecs = _relative_vectors([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
         n_cross = _normals_3d(vecs)
         n_general = _normals_general(vecs)
         torch.testing.assert_close(n_cross, n_general, atol=1e-12, rtol=0)
@@ -295,7 +302,11 @@ class TestDeviceParametrized:
         n_manifold_dims = n_spatial_dims - 1
         # Build orthogonal unit edge vectors
         vecs = torch.zeros(
-            1, n_manifold_dims, n_spatial_dims, device=device, dtype=torch.float64,
+            1,
+            n_manifold_dims,
+            n_spatial_dims,
+            device=device,
+            dtype=torch.float64,
         )
         for i in range(n_manifold_dims):
             vecs[0, i, i] = 1.0
@@ -303,6 +314,8 @@ class TestDeviceParametrized:
         assert result.device.type == device
         lengths = result.norm(dim=-1)
         torch.testing.assert_close(
-            lengths, torch.ones(1, device=device, dtype=torch.float64),
-            atol=1e-12, rtol=1e-12,
+            lengths,
+            torch.ones(1, device=device, dtype=torch.float64),
+            atol=1e-12,
+            rtol=1e-12,
         )

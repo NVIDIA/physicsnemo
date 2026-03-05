@@ -164,7 +164,9 @@ def draw_mesh_pyvista(
 
         # Add point scalar data if present
         if active_scalar_source == "points" and point_scalar_values is not None:
-            point_cloud.point_data["_viz_scalars"] = point_scalar_values.float().cpu().numpy()
+            point_cloud.point_data["_viz_scalars"] = (
+                point_scalar_values.float().cpu().numpy()
+            )
             point_scalars = "_viz_scalars"
             point_color = None
         else:
