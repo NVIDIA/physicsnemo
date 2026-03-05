@@ -732,221 +732,6 @@ class Kernel(Module):
         return result
 
 
-class ChunkedKernel(Kernel):
-    r"""Memory-efficient kernel evaluation through automatic target point chunking.
-
-    :class:`ChunkedKernel` extends the base :class:`Kernel` class with chunking
-    capabilities that enable memory-efficient evaluation on large target point sets.
-    The kernel evaluation has ``O(n_sources * n_targets)`` memory complexity due to
-    the all-to-all pairwise computation, which can exhaust GPU memory for large
-    problems. Chunking processes target points in smaller batches, trading modest
-    computational overhead for dramatic memory reduction.
-
-    Chunking is particularly useful in three scenarios:
-
-    1. **Training**: When using downsampled query points (e.g., 4096 points) but many
-       source faces, chunking can reduce memory during the backward pass.
-    2. **Inference on dense grids**: When evaluating on complete high-resolution volume
-       meshes (e.g., 100k+ points), chunking prevents out-of-memory errors.
-    3. **Limited GPU memory**: When running on GPUs with constrained memory (e.g., during
-       development or deployment on smaller hardware).
-
-    The chunking is implemented at the target point dimension, so each chunk independently
-    computes its output from all source points, then results are concatenated. This is
-    numerically identical to non-chunked evaluation - there are no approximations.
-
-    Chunk size selection:
-
-    - ``chunk_size=None``: No chunking, fastest but highest memory (default for small
-      problems)
-    - ``chunk_size="auto"``: Automatically determines size targeting ~1GB per chunk
-    - ``chunk_size=int``: Manual specification for fine control
-
-    The ``"auto"`` mode estimates memory based on network layer sizes and interaction
-    count, providing a good balance for most use cases. The implementation uses recursive
-    calls to handle the chunking logic, and the overhead is minimal for reasonable chunk
-    sizes.
-
-    Inherits all other functionality from :class:`Kernel`, including invariant feature
-    engineering, Pade-approximant networks, far-field decay, and equivariant vector
-    reprojection.
-
-    Parameters
-    ----------
-    Inherits all parameters from :class:`Kernel`.
-
-    Forward
-    -------
-    Same parameters as :class:`Kernel`, with the addition of:
-
-    chunk_size : None or int or {"auto"}, optional, default="auto"
-        Controls chunking behavior. ``"auto"`` determines chunk size targeting
-        ~1GB per chunk. An integer processes in exact chunk sizes. ``None``
-        evaluates all at once.
-
-    Outputs
-    -------
-    TensorDict[str, Float[torch.Tensor, "n_targets ..."]]
-        TensorDict with batch_size :math:`(N_{targets},)` containing the computed
-        fields. Numerically identical to non-chunked :class:`Kernel` evaluation.
-
-    Examples
-    --------
-    >>> # For a large problem with 1M query points:
-    >>> kernel = ChunkedKernel(
-    ...     n_spatial_dims=3,
-    ...     output_fields={"pressure": "scalar"},
-    ...     n_source_vectors=1,
-    ...     hidden_layer_sizes=[64, 64],
-    ... )
-    >>> # Evaluate with automatic chunking to prevent OOM
-    >>> result = kernel(
-    ...     source_points=boundary_centers,  # e.g., 10k faces
-    ...     target_points=volume_points,     # e.g., 1M points
-    ...     reference_length=torch.tensor(1.0),
-    ...     source_vectors=TensorDict({"normal": normals}, ...),
-    ...     chunk_size="auto",  # Will process in chunks of ~10-20k points
-    ... )
-
-    Notes
-    -----
-    During training, chunking has limited benefit because PyTorch's autograd must
-    store all intermediate activations regardless. Memory reduction is most effective
-    during inference (with ``torch.no_grad()``) where chunking can reduce peak usage
-    by orders of magnitude.
-    """
-
-    def forward(
-        self,
-        *,
-        reference_length: Float[torch.Tensor, ""],
-        source_points: Float[torch.Tensor, "n_sources n_dims"],
-        target_points: Float[torch.Tensor, "n_targets n_dims"],
-        source_strengths: Float[torch.Tensor, " n_sources"] | None = None,
-        source_data: TensorDict[str, Float[torch.Tensor, "n_sources ..."]]
-        | None = None,
-        global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None = None,
-        chunk_size: None | int | Literal["auto"] = "auto",
-    ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
-        r"""Evaluates the kernel with optional chunking for memory efficiency.
-
-        Parameters
-        ----------
-        chunk_size : None or int or {"auto"}, optional
-            Controls chunking behavior:
-
-            - ``"auto"``: Automatically determine chunk size based on estimated memory
-              usage, targeting approximately 1GB per chunk.
-            - ``int``: Process target points in chunks of exactly this size.
-            - ``None``: No chunking, evaluate all target points at once.
-
-        **kernel_kwargs
-            All arguments accepted by :meth:`Kernel.forward`, including:
-            ``reference_length``, ``source_points``, ``target_points``,
-            ``source_strengths``, ``source_data``, ``global_data``.
-
-        Returns
-        -------
-        TensorDict[str, Float[torch.Tensor, "n_targets ..."]]
-            TensorDict mapping field names to computed tensors.
-            Each scalar field has shape :math:`(N_{targets},)` and each vector field
-            has shape :math:`(N_{targets}, D)`.
-        """
-        n_sources: int = len(source_points)
-        n_targets: int = len(target_points)
-        n_interactions: int = n_targets * n_sources
-
-        if chunk_size == "auto":
-            device = source_points.device
-
-            if torch.is_autocast_enabled(device.type):
-                element_bytes = torch.tensor(
-                    [], dtype=torch.get_autocast_dtype(device.type)
-                ).element_size()
-            else:
-                element_bytes = source_points.element_size()
-
-            # _floats_per_interaction counts identifiable tensor allocations.
-            # Autograd saves 1-2 additional tensors per element-wise operation
-            # during the backward recomputation inside the outer activation
-            # checkpoint; empirically this ~5x the identifiable count.
-            _AUTOGRAD_OVERHEAD = 5
-            approx_peak_bytes = (
-                n_interactions
-                * self._floats_per_interaction
-                * element_bytes
-                * _AUTOGRAD_OVERHEAD
-            )
-            target_bytes = torch.cuda.get_device_properties(device).total_memory // 2
-
-            n_chunks_needed = max(1, ceil(approx_peak_bytes / target_bytes))
-            chunk_size: int = max(1, ceil(n_targets / n_chunks_needed))
-
-            if not torch.compiler.is_compiling():
-                logger.debug(f"Auto-chunking: {chunk_size=!r}, {n_chunks_needed=!r}")
-
-            return self.forward(
-                reference_length=reference_length,
-                source_points=source_points,
-                target_points=target_points,
-                source_strengths=source_strengths,
-                source_data=source_data,
-                global_data=global_data,
-                chunk_size=chunk_size,
-            )
-
-        elif isinstance(chunk_size, int):
-            result_pieces: list[TensorDict[str, Float[torch.Tensor, "..."]]] = []
-
-            start_indices = range(0, n_targets, chunk_size)
-
-            if not torch.compiler.is_compiling() and logger.isEnabledFor(logging.DEBUG):
-                start_indices = tqdm.tqdm(
-                    start_indices,
-                    desc="Evaluating kernel in chunks",
-                    unit=" chunks",
-                )
-
-            for start_idx in start_indices:
-                end_idx = min(start_idx + chunk_size, n_targets)
-                target_points_chunk = target_points[start_idx:end_idx]
-
-                chunk_result = self.forward(
-                    reference_length=reference_length,
-                    source_points=source_points,
-                    target_points=target_points_chunk,
-                    source_strengths=source_strengths,
-                    source_data=source_data,
-                    global_data=global_data,
-                    chunk_size=None,
-                )
-
-                result_pieces.append(chunk_result)
-
-            result = TensorDict.cat(result_pieces, dim=0)
-
-            return result
-
-        elif chunk_size is None:
-            fn = super().forward
-            kwargs = dict(
-                reference_length=reference_length,
-                source_points=source_points,
-                target_points=target_points,
-                source_strengths=source_strengths,
-                source_data=source_data,
-                global_data=global_data,
-            )
-            if self.training and self.use_gradient_checkpointing:
-                return checkpoint(fn, use_reentrant=False, **kwargs)
-            return fn(**kwargs)
-
-        else:
-            raise ValueError(
-                f"Got {chunk_size=!r}; this must be one of ['auto', int, None]"
-            )
-
-
 class BarnesHutKernel(Kernel):
     r"""Tree-accelerated kernel evaluation via Barnes-Hut monopole approximation.
 
@@ -1446,8 +1231,7 @@ class MultiscaleKernel(Module):
         network_type: Literal["pade", "mlp"] = "pade",
         spectral_norm: bool = False,
         use_gradient_checkpointing: bool = True,
-        kernel_class: type[ChunkedKernel] | type[BarnesHutKernel] = ChunkedKernel,
-        kernel_class_kwargs: dict | None = None,
+        leaf_size: int = 32,
     ):
         super().__init__()
 
@@ -1467,7 +1251,7 @@ class MultiscaleKernel(Module):
         self.network_type = network_type
         self.spectral_norm = spectral_norm
         self.use_gradient_checkpointing = use_gradient_checkpointing
-        self._kernel_class = kernel_class
+        self.leaf_size = leaf_size
 
         ### Augment global_data_ranks with log-ratio entries for each
         # pair of reference lengths. These are rank-0 (scalar) features.
@@ -1479,11 +1263,9 @@ class MultiscaleKernel(Module):
             },
         }
 
-        extra_kwargs = kernel_class_kwargs or {}
-
         self.kernels = nn.ModuleDict(
             {
-                name: kernel_class(
+                name: BarnesHutKernel(
                     n_spatial_dims=n_spatial_dims,
                     output_field_ranks=output_field_ranks,
                     source_data_ranks=source_data_ranks,
@@ -1494,7 +1276,7 @@ class MultiscaleKernel(Module):
                     network_type=network_type,
                     spectral_norm=spectral_norm,
                     use_gradient_checkpointing=use_gradient_checkpointing,
-                    **extra_kwargs,
+                    leaf_size=leaf_size,
                 )
                 for name in reference_length_names
             }
@@ -1515,7 +1297,6 @@ class MultiscaleKernel(Module):
         source_data: TensorDict[str, Float[torch.Tensor, "n_sources ..."]]
         | None = None,
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None = None,
-        chunk_size: None | int | Literal["auto"] = "auto",
         theta: float = 0.5,
         cluster_tree: "ClusterTree | None" = None,
         interaction_plan: "InteractionPlan | None" = None,
@@ -1523,53 +1304,41 @@ class MultiscaleKernel(Module):
     ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
         r"""Evaluates the multiscale kernel by combining results from multiple scales.
 
-        Evaluates each constituent kernel at its respective reference length
-        (scaled by a learnable factor), automatically adds log-ratios of
-        reference lengths to ``global_data`` as scalar features, and sums
-        the results across all scales.
-
-        When using :class:`BarnesHutKernel` branches, the tree and interaction
-        plan are built once and shared across all branches (they depend only
-        on geometry, not on per-branch reference lengths or strengths).
+        Builds a shared :class:`ClusterTree` and :class:`InteractionPlan` once,
+        then evaluates each :class:`BarnesHutKernel` branch at its respective
+        reference length. Log-ratios of reference lengths are automatically
+        added to ``global_data`` as scalar features.
 
         Parameters
         ----------
         reference_lengths : dict[str, torch.Tensor]
             Mapping of reference length names to scalar tensors.
         source_points : Float[torch.Tensor, "n_sources n_dims"]
-            Tensor of shape :math:`(N_{sources}, D)`. Physical coordinates of
-            the source points.
+            Source point coordinates, shape :math:`(N_{sources}, D)`.
         target_points : Float[torch.Tensor, "n_targets n_dims"]
-            Tensor of shape :math:`(N_{targets}, D)`. Physical coordinates of
-            the target points.
-        source_strengths : TensorDict[str, Float[torch.Tensor, " n_sources"]] or None, optional
-            Per-source, per-branch strength values, keyed by
-            ``reference_length_names``. Defaults to all ones.
+            Target point coordinates, shape :math:`(N_{targets}, D)`.
+        source_strengths : TensorDict or None, optional
+            Per-source, per-branch strength values. Defaults to all ones.
         source_data : TensorDict or None, optional
-            Per-source features with ``batch_size=(N_sources,)``. Passed
-            through to each kernel branch unchanged.
+            Per-source features with ``batch_size=(N_sources,)``.
         global_data : TensorDict or None, optional
-            Problem-level features with ``batch_size=()``. Augmented with
-            log-ratios of reference lengths before being passed to each
-            kernel branch.
-        chunk_size : None or int or {"auto"}, optional
-            Chunking behavior for :class:`ChunkedKernel` branches.
-        theta : float, optional
-            Opening angle for :class:`BarnesHutKernel` branches.
+            Problem-level features with ``batch_size=()``.
+        theta : float
+            Barnes-Hut opening angle parameter.
         cluster_tree : ClusterTree or None, optional
-            Precomputed tree for BH branches. Built on-the-fly if needed.
+            Precomputed tree. Built from ``source_points`` if ``None``.
         interaction_plan : InteractionPlan or None, optional
-            Precomputed traversal plan for BH branches.
+            Precomputed traversal plan. Computed if ``None``.
         source_areas : Float[torch.Tensor, "n_sources"] or None, optional
-            Per-source areas for BH aggregate weighting.
+            Per-source areas for aggregate weighting. Defaults to ones.
 
         Returns
         -------
         TensorDict[str, Float[torch.Tensor, "n_targets ..."]]
-            Dictionary mapping field names to the summed results from all kernels.
-            Each scalar field has shape :math:`(N_{targets},)` and each vector field
-            has shape :math:`(N_{targets}, D)`.
+            Summed results from all kernel branches.
         """
+        from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
+
         n_sources: int = len(source_points)
         device = source_points.device
 
@@ -1587,6 +1356,8 @@ class MultiscaleKernel(Module):
             source_data = TensorDict({}, batch_size=[n_sources], device=device)
         if global_data is None:
             global_data = TensorDict({}, device=device)
+        if source_areas is None:
+            source_areas = torch.ones(n_sources, device=device)
 
         # Skip validation when running under torch.compile for performance
         if not torch.compiler.is_compiling():
@@ -1606,17 +1377,12 @@ class MultiscaleKernel(Module):
                         f"but the forward-method input gives {actual} {name}."
                     )
 
-        ### Build shared tree for BarnesHutKernel branches
-        uses_bh = self._kernel_class is BarnesHutKernel
-        if uses_bh and cluster_tree is None:
-            from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
-            _areas = source_areas if source_areas is not None else torch.ones(
-                n_sources, device=device
-            )
+        ### Build shared tree and interaction plan (reused across branches)
+        if cluster_tree is None:
             cluster_tree = ClusterTree.from_points(
-                source_points, areas=_areas,
+                source_points, areas=source_areas,
             )
-        if uses_bh and interaction_plan is None:
+        if interaction_plan is None:
             interaction_plan = cluster_tree.find_interaction_pairs(
                 target_points, theta=theta
             )
@@ -1635,9 +1401,9 @@ class MultiscaleKernel(Module):
         )
         global_data["log_reference_length_ratios"] = log_ratios
 
-        ### Build branch-specific kwargs
-        def _branch_kwargs(name: str) -> dict:
-            base = dict(
+        ### Evaluate each branch with the shared tree and plan
+        results_pieces: list[TensorDict[str, Float[torch.Tensor, "n_targets ..."]]] = [
+            self.kernels[name](
                 reference_length=reference_lengths[name]
                 * torch.exp(self.log_scalefactors[name]),
                 source_points=source_points,
@@ -1645,20 +1411,11 @@ class MultiscaleKernel(Module):
                 source_strengths=source_strengths[name],
                 source_data=source_data,
                 global_data=global_data,
+                theta=theta,
+                cluster_tree=cluster_tree,
+                interaction_plan=interaction_plan,
+                source_areas=source_areas,
             )
-            if uses_bh:
-                base.update(
-                    theta=theta,
-                    cluster_tree=cluster_tree,
-                    interaction_plan=interaction_plan,
-                    source_areas=source_areas,
-                )
-            else:
-                base["chunk_size"] = chunk_size
-            return base
-
-        results_pieces: list[TensorDict[str, Float[torch.Tensor, "n_targets ..."]]] = [
-            self.kernels[name](**_branch_kwargs(name))
             for name in self.reference_length_names
         ]
 

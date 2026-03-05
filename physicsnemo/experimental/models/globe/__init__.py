@@ -21,7 +21,6 @@ from physicsnemo.experimental.models.globe.cluster_tree import (
 )
 from physicsnemo.experimental.models.globe.field_kernel import (
     BarnesHutKernel,
-    ChunkedKernel,
     Kernel,
     MultiscaleKernel,
 )
@@ -30,7 +29,6 @@ from physicsnemo.experimental.models.globe.model import GLOBE
 __all__ = [
     "GLOBE",
     "Kernel",
-    "ChunkedKernel",
     "BarnesHutKernel",
     "MultiscaleKernel",
     "ClusterTree",
