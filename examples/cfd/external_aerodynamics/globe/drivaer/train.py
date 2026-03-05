@@ -84,8 +84,8 @@ def main(
     error_scales: dict[str, float] | None = None,
     n_communication_hyperlayers: int = 2,
     hidden_layer_sizes: tuple[int, ...] = (64, 64, 64),
-    n_latent_scalars: int = 12,
-    n_latent_vectors: int = 6,
+    n_latent_scalars: int = 8,
+    n_latent_vectors: int = 4,
     n_spherical_harmonics: int = 4,
     boundary_n_faces: int = 20_000,
     use_profiler: bool = True,
@@ -604,13 +604,21 @@ def main(
                         ### Subsample prediction surface to boundary_n_faces
                         # cells for speed.  Cell-based selection preserves
                         # mesh topology for force integration and rendering.
+                        # Areas are rescaled so the subsampled mesh has the
+                        # same total surface area as the original (mirroring
+                        # _subsample_boundary), which makes the oriented-disk
+                        # visualization in _draw_disk_cells work correctly.
                         n_cells = viz_sample.surface_mesh.n_cells
                         if n_cells > boundary_n_faces:
-                            viz_sample.surface_mesh = (
-                                viz_sample.surface_mesh.slice_cells(
-                                    torch.randperm(n_cells)[:boundary_n_faces]
-                                ).clean()
+                            total_area = viz_sample.surface_mesh.cell_areas.sum()
+                            subsampled = viz_sample.surface_mesh.slice_cells(
+                                torch.randperm(n_cells)[:boundary_n_faces]
+                            ).clean()
+                            raw_areas = subsampled.cell_areas
+                            subsampled._cache["cell", "areas"] = raw_areas * (
+                                total_area / raw_areas.sum()
                             )
+                            viz_sample.surface_mesh = subsampled
 
                         viz_sample = viz_sample.to(device)
                         with torch.no_grad(), autocast_ctx:

@@ -565,6 +565,118 @@ def _visualize_pyvista(
     plotter.close()
 
 
+def _draw_disk_cells(
+    ax,
+    mesh: Mesh,
+    cell_scalars: np.ndarray,
+    *,
+    cmap: str = "turbo",
+    vmin: float | None = None,
+    vmax: float | None = None,
+    n_sides: int = 6,
+) -> None:
+    """Render mesh cells as oriented disks in a matplotlib 3D axes.
+
+    Each cell is drawn as a regular ``n_sides``-gon (default: hexagon)
+    centred at the cell centroid, lying in the tangent plane defined by the
+    cell normal, with area scaled so that the total disk area equals the
+    total area the subsampled cells would have if they covered the full
+    original surface (i.e. ``raw_area * n_original / n_subsampled``).
+
+    This is useful when the mesh is a sparse subsample of a much finer
+    surface: the original triangles are sub-pixel at typical plot
+    resolution, but the scaled disks are large enough to be visible and
+    convey spatial field variation.
+
+    Args:
+        ax: A matplotlib ``Axes3D`` instance.
+        mesh: Surface Mesh with triangular cells (``n_manifold_dims == 2``,
+            ``n_spatial_dims == 3``).
+        cell_scalars: 1-D array of shape ``(n_cells,)`` with a scalar
+            value per cell used for colour-mapping.
+        cmap: Matplotlib colourmap name.
+        vmin: Colourmap minimum.  ``None`` uses data min.
+        vmax: Colourmap maximum.  ``None`` uses data max.
+        n_sides: Number of polygon sides per disk (6 = hexagon).
+    """
+    import importlib
+
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import Normalize
+
+    Poly3DCollection = importlib.import_module(
+        "mpl_toolkits.mplot3d.art3d"
+    ).Poly3DCollection
+
+    centroids = mesh.cell_centroids.float().cpu().numpy()  # (C, 3)
+    normals = mesh.cell_normals.float().cpu().numpy()  # (C, 3)
+    radii = np.sqrt(mesh.cell_areas.float().cpu().numpy() / np.pi)  # (C,)
+
+    ### Build a tangent-plane basis (u, v) for each cell from its normal.
+    # Choose an arbitrary vector *not* parallel to the normal, cross it
+    # with the normal to get u, then v = normal x u.
+    n_cells = len(centroids)
+    abs_n = np.abs(normals)
+    # Pick the coordinate axis least aligned with the normal to avoid
+    # degeneracy.  For each cell, the axis with the smallest |n_i|.
+    aux = np.zeros_like(normals)
+    aux[np.arange(n_cells), abs_n.argmin(axis=1)] = 1.0
+
+    u = np.cross(normals, aux)
+    u /= np.linalg.norm(u, axis=1, keepdims=True) + 1e-30
+    v = np.cross(normals, u)
+    v /= np.linalg.norm(v, axis=1, keepdims=True) + 1e-30
+
+    ### Generate polygon vertices for every cell.
+    # theta: (S,)  with S = n_sides angular samples around the disk.
+    theta = np.linspace(0, 2 * np.pi, n_sides, endpoint=False)  # (S,)
+    cos_t = np.cos(theta)  # (S,)
+    sin_t = np.sin(theta)  # (S,)
+
+    # offset[c, s, :] = r[c] * (cos(t[s]) * u[c] + sin(t[s]) * v[c])
+    offsets = (
+        radii[:, None, None] * (
+            cos_t[None, :, None] * u[:, None, :]
+            + sin_t[None, :, None] * v[:, None, :]
+        )
+    )  # (C, S, 3)
+    disk_verts = centroids[:, None, :] + offsets  # (C, S, 3)
+
+    ### Colour-map the cell scalars.
+    norm = Normalize(
+        vmin=vmin if vmin is not None else float(cell_scalars.min()),
+        vmax=vmax if vmax is not None else float(cell_scalars.max()),
+    )
+    sm = ScalarMappable(norm=norm, cmap=cmap)
+    facecolors = sm.to_rgba(cell_scalars)  # (C, 4)
+
+    ### Render as a single Poly3DCollection.
+    pc = Poly3DCollection(
+        disk_verts,
+        facecolors=facecolors,
+        edgecolors="none",
+        linewidths=0,
+        alpha=1.0,
+        zorder=1,
+    )
+    ax.add_collection3d(pc)
+
+    ### Set axis limits from centroids.
+    margin = 0.01 * (centroids.max() - centroids.min())
+    ax.set_xlim(centroids[:, 0].min() - margin, centroids[:, 0].max() + margin)
+    ax.set_ylim(centroids[:, 1].min() - margin, centroids[:, 1].max() + margin)
+    ax.set_zlim(centroids[:, 2].min() - margin, centroids[:, 2].max() + margin)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_zlabel("z")
+    ax.set_box_aspect((1, 1, 1))
+
+    ### Add colourbar.
+    import matplotlib.pyplot as plt
+
+    plt.colorbar(sm, ax=ax, label="Scalars")
+
+
 def _visualize_matplotlib(
     combined: Mesh,
     true_flat: TensorDict,
@@ -579,9 +691,10 @@ def _visualize_matplotlib(
 ) -> None:
     """Matplotlib backend for :meth:`DrivAerMLDataSet.visualize_comparison`.
 
-    Uses ``mesh.draw(backend="matplotlib")`` which renders 3D surface
-    meshes via ``mpl_toolkits.mplot3d.Poly3DCollection``.  Lower
-    fidelity than PyVista but works on headless nodes without EGL/OSMesa.
+    Renders each subsampled cell as an oriented hexagonal disk whose area
+    is scaled so that the disks collectively approximate the full car
+    surface.  This avoids the sub-pixel triangle problem that occurs when
+    ``slice_cells`` picks a small number of cells from a very fine mesh.
     """
     import matplotlib.pyplot as plt
 
@@ -592,6 +705,11 @@ def _visualize_matplotlib(
         subplot_kw={"projection": "3d"},
         squeeze=False,
     )
+
+    ### Pre-compute per-cell scalars for every (kind, field) combination.
+    # The combined mesh has per-*point* data; we average to per-cell here
+    # so _draw_disk_cells can colour each disk uniformly.
+    cells = combined.cells  # (n_cells, 3)
 
     for col, field_name in enumerate(fields):
         true_vals: torch.Tensor = true_flat[field_name]  # ty: ignore[invalid-assignment]
@@ -621,13 +739,15 @@ def _visualize_matplotlib(
             vals: torch.Tensor = kind_data[key][field_name]  # ty: ignore[invalid-assignment]
 
             if is_vector:
-                scalars = vals.float().norm(dim=-1)
+                pt_scalars = vals.float().norm(dim=-1)
             else:
-                scalars = vals.float().reshape(-1)
+                pt_scalars = vals.float().reshape(-1)
+
+            cell_scalars = pt_scalars[cells].mean(dim=1).cpu().numpy()
 
             if key == "error":
-                finite_err = scalars[torch.isfinite(scalars)]
-                emax = float(finite_err.abs().max()) if len(finite_err) > 0 else 1.0
+                finite_err = cell_scalars[np.isfinite(cell_scalars)]
+                emax = float(np.abs(finite_err).max()) if len(finite_err) > 0 else 1.0
                 if is_vector:
                     cmap, vmin, vmax = "Reds", 0.0, emax
                 else:
@@ -635,15 +755,12 @@ def _visualize_matplotlib(
             else:
                 cmap, vmin, vmax = "turbo", shared_vmin, shared_vmax
 
-            combined.draw(
-                backend="matplotlib",
-                ax=ax,
-                point_scalars=scalars,
+            _draw_disk_cells(
+                ax, combined,
+                cell_scalars=cell_scalars,
                 cmap=cmap,
                 vmin=vmin,
                 vmax=vmax,
-                show=False,
-                show_edges=False,
             )
 
             ax.set_title(
