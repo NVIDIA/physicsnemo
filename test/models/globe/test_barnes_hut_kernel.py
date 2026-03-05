@@ -34,7 +34,7 @@ from physicsnemo.experimental.models.globe.cluster_tree import (
 )
 from physicsnemo.experimental.models.globe.field_kernel import (
     BarnesHutKernel,
-    ChunkedKernel,
+    Kernel,
     MultiscaleKernel,
 )
 
@@ -60,7 +60,7 @@ def _make_bh_kernel_and_data(
     leaf_size: int = DEFAULT_LEAF_SIZE,
     device: str = "cpu",
     seed: int = DEFAULT_SEED,
-) -> tuple[BarnesHutKernel, ChunkedKernel, dict[str, Any]]:
+) -> tuple[BarnesHutKernel, Kernel, dict[str, Any]]:
     """Create matched BH and exact kernels with shared weights and test data."""
     if output_fields is None:
         output_fields = {"pressure": "scalar", "velocity": "vector"}
@@ -91,7 +91,7 @@ def _make_bh_kernel_and_data(
     )
 
     bh_kernel = BarnesHutKernel(**common_kwargs, leaf_size=leaf_size).to(device_obj)
-    exact_kernel = ChunkedKernel(**common_kwargs).to(device_obj)
+    exact_kernel = Kernel(**common_kwargs).to(device_obj)
 
     # Share weights so outputs are comparable
     exact_kernel.load_state_dict(bh_kernel.state_dict(), strict=False)
@@ -325,7 +325,7 @@ def test_bh_convergence_to_exact(
     n_source_scalars: int,
     n_source_vectors: int,
 ):
-    """BarnesHutKernel converges to exact ChunkedKernel as theta increases."""
+    """BarnesHutKernel converges to exact Kernel as theta increases."""
     bh_kernel, exact_kernel, data = _make_bh_kernel_and_data(
         n_spatial_dims=n_dims,
         output_fields=output_fields,
@@ -336,7 +336,7 @@ def test_bh_convergence_to_exact(
     )
 
     exact_result = exact_kernel(
-        **data, chunk_size=None,
+        **data,
     )
 
     ### At large theta (very conservative, many near-field), result should
@@ -391,7 +391,7 @@ def test_bh_gradient_correctness(
     data["source_points"] = data["source_points"].clone().requires_grad_(True)
 
     # Exact gradient
-    exact_result = exact_kernel(**data, chunk_size=None)
+    exact_result = exact_kernel(**data)
     exact_loss = exact_result["field"].sum()
     exact_loss.backward()
     exact_grad = data["source_points"].grad.clone()
@@ -533,42 +533,49 @@ def test_bh_rotational_equivariance(
 
 @dims_params
 def test_multiscale_bh_convergence(n_dims: int):
-    """MultiscaleKernel with BarnesHutKernel converges to ChunkedKernel result."""
+    """MultiscaleKernel at high theta converges to exact per-branch Kernel results."""
     torch.manual_seed(DEFAULT_SEED)
 
-    common_kwargs = dict(
+    ms = MultiscaleKernel(
         n_spatial_dims=n_dims,
         output_field_ranks={"p": 0},
         reference_length_names=["short", "long"],
         source_data_ranks={"normal": 1},
         hidden_layer_sizes=[16],
+        leaf_size=4,
     )
+    ms.eval()
+
     n_src = 25
-
-    ms_bh = MultiscaleKernel(
-        **common_kwargs,
-        kernel_class=BarnesHutKernel,
-        kernel_class_kwargs={"leaf_size": 4},
-    )
-    ms_exact = MultiscaleKernel(**common_kwargs, kernel_class=ChunkedKernel)
-    ms_exact.load_state_dict(ms_bh.state_dict(), strict=False)
-    ms_bh.eval()
-    ms_exact.eval()
-
     torch.manual_seed(DEFAULT_SEED + 1)
     src = torch.randn(n_src, n_dims)
     tgt = torch.randn(10, n_dims) * 3
     normals = F.normalize(torch.randn(n_src, n_dims), dim=-1)
     ref_lengths = {"short": torch.tensor(0.1), "long": torch.tensor(1.0)}
 
-    exact_result = ms_exact(
-        source_points=src,
-        target_points=tgt,
-        reference_lengths=ref_lengths,
-        source_data=TensorDict({"normal": normals}, batch_size=[n_src]),
-        chunk_size=None,
-    )
-    bh_result = ms_bh(
+    # Compute exact reference by evaluating each branch's underlying Kernel
+    # (the parent class forward = exact dense evaluation)
+    from physicsnemo.experimental.models.globe.field_kernel import Kernel
+    exact_total = None
+    for name in ms.reference_length_names:
+        branch: BarnesHutKernel = ms.kernels[name]
+        branch_result = Kernel.forward(
+            branch,
+            reference_length=ref_lengths[name]
+            * torch.exp(ms.log_scalefactors[name]),
+            source_points=src,
+            target_points=tgt,
+            source_strengths=torch.ones(n_src),
+            source_data=TensorDict({"normal": normals}, batch_size=[n_src]),
+            global_data=TensorDict({
+                "log_reference_length_ratios": TensorDict({
+                    "short_long": (ref_lengths["short"] / ref_lengths["long"]).log()
+                }),
+            }),
+        )
+        exact_total = branch_result if exact_total is None else exact_total + branch_result
+
+    bh_result = ms(
         source_points=src,
         target_points=tgt,
         reference_lengths=ref_lengths,
@@ -577,7 +584,7 @@ def test_multiscale_bh_convergence(n_dims: int):
     )
 
     torch.testing.assert_close(
-        bh_result["p"], exact_result["p"],
+        bh_result["p"], exact_total["p"],
         atol=1e-3, rtol=1e-2,
         msg="MultiscaleKernel BH doesn't converge to exact at high theta",
     )
@@ -642,7 +649,7 @@ def test_bh_globe_like_config(n_dims: int):
         n_target_points=20,
     )
 
-    exact_result = exact_kernel(**data, chunk_size=None)
+    exact_result = exact_kernel(**data)
     bh_result = bh_kernel(**data, theta=100.0)
 
     # Wider tolerance than basic tests: 8 scalars + 3 vectors + globals
