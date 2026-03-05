@@ -90,10 +90,10 @@ logger.info(f"Loading best model from {best_model_path.name!r}...")
 model.load(best_model_path)
 
 # %%
-### Run inference with chunked evaluation for memory efficiency
+### Run inference
 with torch.no_grad():
     model.eval()
-    pred_mesh = model(**sample.model_input_kwargs, chunk_size=128)
+    pred_mesh = model(**sample.model_input_kwargs)
 
 # %%
 combined = DrivAerMLDataSet.postprocess(

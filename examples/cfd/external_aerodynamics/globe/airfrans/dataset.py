@@ -63,7 +63,7 @@ class AirFRANSSample:
 
     @property
     def model_input_kwargs(self) -> dict:
-        """Kwargs for :meth:`GLOBE.forward`, minus control-flow args like ``chunk_size``."""
+        """Kwargs for :meth:`GLOBE.forward`."""
         return {
             "prediction_points": self.interior_mesh.points,
             "boundary_meshes": self.boundary_meshes,

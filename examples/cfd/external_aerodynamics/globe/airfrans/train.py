@@ -71,7 +71,7 @@ def main(
     amp: bool = False,
     use_compile: bool = True,
     compile_mode: Literal[
-        "default", "max-autotune-no-cudagraphs", "reduce-overhead", "max-autotune"
+        "default", "max-autotune-no-cudagraphs"
     ] = "max-autotune-no-cudagraphs",
     points_per_iter: int = 2048,
     learning_rate: float = 1e-3,

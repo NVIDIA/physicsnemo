@@ -72,8 +72,8 @@ def main(
     amp: bool = False,
     use_compile: bool = True,
     compile_mode: Literal[
-        "default", "max-autotune-no-cudagraphs", "reduce-overhead", "max-autotune"
-    ] = "default",
+        "default", "max-autotune-no-cudagraphs",
+    ] = "max-autotune-no-cudagraphs",
     points_per_iter: int = 2048,
     learning_rate: float = 1e-3,
     weight_decay: float = 1e-4,
@@ -87,6 +87,8 @@ def main(
     n_latent_scalars: int = 8,
     n_latent_vectors: int = 4,
     n_spherical_harmonics: int = 4,
+    theta: float = 0.5,
+    leaf_size: int = 32,
     boundary_n_faces: int = 20_000,
     use_profiler: bool = True,
     make_images: bool = True,
@@ -118,6 +120,9 @@ def main(
         n_latent_scalars: Scalar latent channels between hyperlayers.
         n_latent_vectors: Vector latent channels between hyperlayers.
         n_spherical_harmonics: Legendre polynomial terms (default 4 for 3D).
+        theta: Barnes-Hut opening angle. Larger values approximate more
+            aggressively (faster, less accurate). 0 disables approximation.
+        leaf_size: Maximum sources per leaf node in the Barnes-Hut tree.
         boundary_n_faces: Target boundary mesh face count after decimation.
         use_profiler: Enable PyTorch profiler (rank 0 only).
         make_images: Generate visualization images during training.
@@ -226,6 +231,8 @@ def main(
         n_latent_scalars=n_latent_scalars,
         n_latent_vectors=n_latent_vectors,
         n_spherical_harmonics=n_spherical_harmonics,
+        theta=theta,
+        leaf_size=leaf_size,
     ).to(device)
 
     if dist.rank == 0:
@@ -370,7 +377,7 @@ def main(
 
     ### [Training and Testing]
     @torch.compile(
-        dynamic=False,
+        dynamic=True,
         mode=compile_mode,
         disable=not use_compile,
     )
@@ -378,7 +385,7 @@ def main(
         sample: DrivAerMLSample,
     ) -> tuple[torch.Tensor, TensorDict[str, Float[torch.Tensor, ""]]]:
         """Forward pass + loss for one sample."""
-        pred_mesh = model(**sample.model_input_kwargs, chunk_size="auto")
+        pred_mesh = model(**sample.model_input_kwargs)
         batch_loss_components = pred_mesh.point_data.apply(
             field_loss_fn,
             sample.surface_mesh.point_data,
@@ -625,7 +632,6 @@ def main(
                             base_model.eval()
                             pred_mesh = base_model(
                                 **viz_sample.model_input_kwargs,
-                                chunk_size="auto",
                             )
                         combined = DrivAerMLDataSet.postprocess(
                             pred_mesh=pred_mesh.to(device="cpu"),
