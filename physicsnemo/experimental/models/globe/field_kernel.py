@@ -578,11 +578,19 @@ class Kernel(Module):
         ### outer torch.compile is already tracing (it handles fusion itself).
         ### Uses dynamic=True so that varying chunk sizes (batch dimension)
         ### share one compiled graph per kernel, avoiding repeated recompilation.
-        if not torch.compiler.is_compiling() and not isinstance(
-            self.network, torch._dynamo.eval_frame.OptimizedModule
-        ):
-            self.network = torch.compile(self.network, dynamic=True, mode="default")
-        flattened_output = self.network(flattened_input)
+        ### Stored via object.__setattr__ to bypass nn.Module submodule
+        ### registration, keeping self.network (and thus state_dict) unmodified.
+        if torch.compiler.is_compiling():
+            network = self.network
+        else:
+            if not hasattr(self, "_compiled_network"):
+                object.__setattr__(
+                    self,
+                    "_compiled_network",
+                    torch.compile(self.network, dynamic=True, mode="default"),
+                )
+            network = self._compiled_network
+        flattened_output = network(flattened_input)
 
         output = flattened_output.view(n_targets, n_sources, self.network_out_features)
 
