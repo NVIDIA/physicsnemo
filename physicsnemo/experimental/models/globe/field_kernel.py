@@ -920,111 +920,138 @@ class BarnesHutKernel(Kernel):
         n_far = interaction_plan.n_far
         n_total = n_near + n_far
 
-        ### Handle degenerate case: no interactions at all
         if n_total == 0:
             return self._empty_result(n_targets, device)
 
-        ### Gather near-field interaction inputs
-        if n_near > 0:
-            near_tgt_pts = target_points[interaction_plan.near_target_ids]
-            near_src_pts = source_points[interaction_plan.near_source_ids]
-            near_r = (near_tgt_pts - near_src_pts) / reference_length
-            near_src_scalars = source_scalars[interaction_plan.near_source_ids]
-            near_src_vectors = source_vectors[interaction_plan.near_source_ids]
-            near_strengths = source_strengths[interaction_plan.near_source_ids]
-        else:
-            near_r = torch.empty(0, self.n_spatial_dims, device=device)
-            near_src_scalars = source_scalars[:0]
-            near_src_vectors = source_vectors[:0]
-            near_strengths = torch.empty(0, device=device)
-
-        ### Gather far-field interaction inputs from cluster aggregates
+        ### Prepare compact per-node data for far-field gathering
         if n_far > 0:
-            far_tgt_pts = target_points[interaction_plan.far_target_ids]
-            far_src_pts = aggregates.node_centroid[interaction_plan.far_node_ids]
-            far_r = (far_tgt_pts - far_src_pts) / reference_length
-
             if aggregates.node_source_data is not None:
-                agg_data_by_rank = split_by_leaf_rank(aggregates.node_source_data)
+                agg_by_rank = split_by_leaf_rank(aggregates.node_source_data)
             else:
-                agg_data_by_rank = split_by_leaf_rank(
+                agg_by_rank = split_by_leaf_rank(
                     TensorDict(
                         {}, batch_size=[cluster_tree.n_nodes], device=device
                     )
                 )
-            far_src_scalars = agg_data_by_rank[0][interaction_plan.far_node_ids]
-            far_src_vectors = agg_data_by_rank[1]
-            far_src_vectors.batch_size = torch.Size(
+            agg_scalars = agg_by_rank[0]
+            agg_vectors = agg_by_rank[1]
+            agg_vectors.batch_size = torch.Size(
                 [cluster_tree.n_nodes, self.n_spatial_dims]
             )
-            far_src_vectors = far_src_vectors[interaction_plan.far_node_ids]
-            far_strengths = node_total_strength[interaction_plan.far_node_ids]
-        else:
-            far_r = torch.empty(0, self.n_spatial_dims, device=device)
-            far_src_scalars = source_scalars[:0]
-            far_src_vectors = source_vectors[:0]
-            far_strengths = torch.empty(0, device=device)
 
-        ### Concatenate near + far into one batch for a single _evaluate_interactions call
-        all_r = torch.cat([near_r, far_r], dim=0)  # (n_total, D)
-        all_src_scalars = TensorDict.cat(
-            [near_src_scalars, far_src_scalars], dim=0
-        )
-        all_src_vectors = TensorDict.cat(
-            [near_src_vectors, far_src_vectors], dim=0
-        )
-        all_strengths = torch.cat([near_strengths, far_strengths], dim=0)
-
-        ### Assemble scalars/vectors TensorDicts for _evaluate_interactions
-        scalars = TensorDict(
-            {
-                "source_scalars": all_src_scalars,
-                "global_scalars": global_scalars.expand(n_total, *global_scalars.batch_size),
-            },
-            batch_size=torch.Size([n_total]),
-            device=device,
-        )
-        vectors = TensorDict(
-            {
-                "source_vectors": all_src_vectors,
-                "global_vectors": global_vectors.expand(
-                    torch.Size([n_total]) + global_vectors.batch_size
-                ),
-            },
-            batch_size=torch.Size([n_total, self.n_spatial_dims]),
-            device=device,
-        )
-        vectors["r"] = all_r
-
-        ### Evaluate the kernel network on all pairs at once
-        fn = self._evaluate_interactions
-        kwargs = dict(scalars=scalars, vectors=vectors, device=device)
-        if self.training and self.use_gradient_checkpointing:
-            per_pair_result = checkpoint(fn, use_reentrant=False, **kwargs)
-        else:
-            per_pair_result = fn(**kwargs)
-
-        ### Weight by strengths and scatter-add back to target indices
+        ### Concatenate only the compact int64 index arrays (not float data)
         all_target_ids = torch.cat(
             [interaction_plan.near_target_ids, interaction_plan.far_target_ids],
             dim=0,
         )
+        all_source_ids = torch.cat(
+            [interaction_plan.near_source_ids, interaction_plan.far_node_ids],
+            dim=0,
+        )
 
-        final_result = TensorDict(
-            {},
+        ### Auto-size chunks to fit in free GPU memory
+        chunk_size = self._auto_chunk_size(n_total, device)
+
+        ### Evaluate kernel in chunks with deferred per-chunk gathering
+        output_bufs: dict[str, torch.Tensor] = {}
+
+        for start in range(0, n_total, chunk_size):
+            end = min(start + chunk_size, n_total)
+            n_chunk = end - start
+
+            ### Determine near/far split within this chunk
+            near_end_in_chunk = min(max(n_near - start, 0), n_chunk)
+            far_start_in_chunk = near_end_in_chunk
+
+            ### Gather per-chunk displacement vectors (in fp32 for precision)
+            chunk_tgt_ids = all_target_ids[start:end]
+            chunk_src_ids = all_source_ids[start:end]
+            chunk_tgt_pts = target_points[chunk_tgt_ids]
+
+            # Near-field: source positions are real source points
+            # Far-field: source positions are cluster centroids
+            if near_end_in_chunk > 0 and far_start_in_chunk < n_chunk:
+                near_src_pts = source_points[chunk_src_ids[:near_end_in_chunk]]
+                far_src_pts = aggregates.node_centroid[chunk_src_ids[far_start_in_chunk:]]
+                chunk_src_pts = torch.cat([near_src_pts, far_src_pts], dim=0)
+            elif near_end_in_chunk > 0:
+                chunk_src_pts = source_points[chunk_src_ids]
+            else:
+                chunk_src_pts = aggregates.node_centroid[chunk_src_ids]
+
+            chunk_r = (chunk_tgt_pts - chunk_src_pts) / reference_length
+
+            ### Gather per-chunk source scalars and vectors
+            if near_end_in_chunk > 0 and far_start_in_chunk < n_chunk:
+                near_sc = source_scalars[chunk_src_ids[:near_end_in_chunk]]
+                far_sc = agg_scalars[chunk_src_ids[far_start_in_chunk:]]
+                chunk_src_sc = TensorDict.cat([near_sc, far_sc], dim=0)
+
+                near_vc = source_vectors[chunk_src_ids[:near_end_in_chunk]]
+                far_vc = agg_vectors[chunk_src_ids[far_start_in_chunk:]]
+                chunk_src_vc = TensorDict.cat([near_vc, far_vc], dim=0)
+
+                near_str = source_strengths[chunk_src_ids[:near_end_in_chunk]]
+                far_str = node_total_strength[chunk_src_ids[far_start_in_chunk:]]
+                chunk_strengths = torch.cat([near_str, far_str], dim=0)
+            elif near_end_in_chunk > 0:
+                chunk_src_sc = source_scalars[chunk_src_ids]
+                chunk_src_vc = source_vectors[chunk_src_ids]
+                chunk_strengths = source_strengths[chunk_src_ids]
+            else:
+                chunk_src_sc = agg_scalars[chunk_src_ids]
+                chunk_src_vc = agg_vectors[chunk_src_ids]
+                chunk_strengths = node_total_strength[chunk_src_ids]
+
+            ### Assemble TensorDicts for _evaluate_interactions
+            chunk_scalars = TensorDict(
+                {
+                    "source_scalars": chunk_src_sc,
+                    "global_scalars": global_scalars.expand(
+                        n_chunk, *global_scalars.batch_size
+                    ),
+                },
+                batch_size=torch.Size([n_chunk]),
+                device=device,
+            )
+            chunk_vectors = TensorDict(
+                {
+                    "source_vectors": chunk_src_vc,
+                    "global_vectors": global_vectors.expand(
+                        torch.Size([n_chunk]) + global_vectors.batch_size
+                    ),
+                },
+                batch_size=torch.Size([n_chunk, self.n_spatial_dims]),
+                device=device,
+            )
+            chunk_vectors["r"] = chunk_r
+
+            fn = self._evaluate_interactions
+            kw = dict(scalars=chunk_scalars, vectors=chunk_vectors, device=device)
+            if self.training and self.use_gradient_checkpointing:
+                chunk_result = checkpoint(fn, use_reentrant=False, **kw)
+            else:
+                chunk_result = fn(**kw)
+
+            ### Weighted scatter-add into output buffers
+            for k, v in chunk_result.items():
+                weighted = v * chunk_strengths.view(-1, *([1] * (v.ndim - 1)))
+                if k not in output_bufs:
+                    output_bufs[k] = torch.zeros(
+                        (n_targets,) + v.shape[1:],
+                        dtype=weighted.dtype,
+                        device=device,
+                    )
+                idx = chunk_tgt_ids.view(
+                    -1, *([1] * (v.ndim - 1))
+                ).expand_as(weighted)
+                output_bufs[k].scatter_add_(0, idx, weighted)
+
+        return TensorDict(
+            output_bufs,
             batch_size=torch.Size([n_targets]),
             device=device,
         )
-        for k, v in per_pair_result.items():
-            weighted = v * all_strengths.view(-1, *([1] * (v.ndim - 1)))
-            out = torch.zeros(
-                (n_targets,) + v.shape[1:], dtype=weighted.dtype, device=device
-            )
-            idx = all_target_ids.view(-1, *([1] * (v.ndim - 1))).expand_as(weighted)
-            out.scatter_add_(0, idx, weighted)
-            final_result[k] = out
-
-        return final_result
 
     def _compute_node_strengths(
         self,
@@ -1109,6 +1136,39 @@ class BarnesHutKernel(Kernel):
                     n_targets, self.n_spatial_dims, device=device
                 )
         return TensorDict(fields, batch_size=torch.Size([n_targets]), device=device)
+
+    def _auto_chunk_size(self, n_total_pairs: int, device: torch.device) -> int:
+        """Determine chunk size for pair-batched kernel evaluation.
+
+        Estimates peak memory per pair from the kernel's feature engineering
+        pipeline and sizes chunks to fit within ~50% of GPU memory. During
+        inference (no grad), the autograd overhead multiplier is dropped,
+        allowing larger chunks.
+
+        Returns ``n_total_pairs`` (i.e., no chunking) when the estimated
+        peak fits comfortably, or when running on CPU.
+        """
+        if device.type != "cuda":
+            return n_total_pairs
+
+        if torch.is_autocast_enabled(device.type):
+            element_bytes = torch.tensor(
+                [], dtype=torch.get_autocast_dtype(device.type)
+            ).element_size()
+        else:
+            element_bytes = 4  # fp32
+
+        autograd_overhead = 5 if torch.is_grad_enabled() else 1
+        approx_peak_bytes = (
+            n_total_pairs
+            * self._floats_per_interaction
+            * element_bytes
+            * autograd_overhead
+        )
+        target_bytes = torch.cuda.mem_get_info(device)[0] // 2
+
+        n_chunks = max(1, ceil(approx_peak_bytes / target_bytes))
+        return max(1, ceil(n_total_pairs / n_chunks))
 
 
 class MultiscaleKernel(Module):
