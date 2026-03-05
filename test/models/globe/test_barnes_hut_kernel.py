@@ -28,10 +28,7 @@ import torch
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from physicsnemo.experimental.models.globe.cluster_tree import (
-    ClusterTree,
-    InteractionPlan,
-)
+from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
 from physicsnemo.experimental.models.globe.field_kernel import (
     BarnesHutKernel,
     Kernel,
@@ -195,23 +192,65 @@ class TestClusterTree:
             f"Expected 60 sources in leaves, got {total_sources}"
         )
 
-    def test_interaction_plan_coverage(self):
-        """Near + far pairs together cover all sources for each target."""
-        torch.manual_seed(DEFAULT_SEED)
-        source_pts = torch.randn(40, 2)
-        target_pts = torch.randn(10, 2) * 3
-        tree = ClusterTree.from_points(source_pts, leaf_size=4)
-        plan = tree.find_interaction_pairs(target_pts, theta=0.5)
+    @pytest.mark.parametrize("n_dims", [2, 3])
+    @pytest.mark.parametrize("theta", [0.3, 1.0, 5.0])
+    def test_interaction_plan_source_coverage(self, n_dims: int, theta: float):
+        """For every target, near + far pairs cover all sources exactly once.
 
-        assert plan.n_total > 0, "No interactions found"
-        # Near-field source indices should be valid
-        if plan.n_near > 0:
-            assert plan.near_source_ids.min() >= 0
-            assert plan.near_source_ids.max() < 40
-        # Far-field node indices should be valid
-        if plan.n_far > 0:
-            assert plan.far_node_ids.min() >= 0
-            assert plan.far_node_ids.max() < tree.n_nodes
+        This is the fundamental invariant of the Barnes-Hut traversal:
+        every source must be accounted for (no omissions) and no source
+        may be double-counted (no duplicates).  We verify this by
+        expanding far-field node IDs into their constituent source sets
+        via DFS and checking per-target coverage.
+        """
+        torch.manual_seed(DEFAULT_SEED)
+        n_src, n_tgt = 40, 10
+        source_pts = torch.randn(n_src, n_dims)
+        target_pts = torch.randn(n_tgt, n_dims) * 3
+        tree = ClusterTree.from_points(source_pts, leaf_size=4)
+        plan = tree.find_interaction_pairs(target_pts, theta=theta)
+
+        all_sources = set(range(n_src))
+
+        def _collect_leaf_sources(node_id: int) -> set[int]:
+            """DFS to collect all source indices under a tree node."""
+            count = tree.leaf_count[node_id].item()
+            if count > 0:
+                start = tree.leaf_start[node_id].item()
+                return {
+                    tree.sorted_source_order[start + j].item()
+                    for j in range(count)
+                }
+            result: set[int] = set()
+            left = tree.node_left_child[node_id].item()
+            right = tree.node_right_child[node_id].item()
+            if left >= 0:
+                result |= _collect_leaf_sources(left)
+            if right >= 0:
+                result |= _collect_leaf_sources(right)
+            return result
+
+        near_tgt = plan.near_target_ids.tolist()
+        near_src = plan.near_source_ids.tolist()
+        far_tgt = plan.far_target_ids.tolist()
+        far_nid = plan.far_node_ids.tolist()
+
+        for t in range(n_tgt):
+            near_sources = {s for ti, s in zip(near_tgt, near_src) if ti == t}
+            far_sources: set[int] = set()
+            for ti, nid in zip(far_tgt, far_nid):
+                if ti == t:
+                    far_sources |= _collect_leaf_sources(nid)
+
+            overlap = near_sources & far_sources
+            assert not overlap, (
+                f"Target {t}: sources {overlap} counted in both near and far"
+            )
+            covered = near_sources | far_sources
+            assert covered == all_sources, (
+                f"Target {t}: missing sources {all_sources - covered}, "
+                f"extra sources {covered - all_sources}"
+            )
 
     def test_small_theta_all_far(self):
         """With very small theta, most interactions become far-field."""
@@ -235,9 +274,17 @@ class TestClusterTree:
         # theta=1e10: dist > 1e10 * diameter for far-field, which never
         # happens, so all interactions are near-field.
         assert plan.n_near > 0
-        # Every target should see every source
         assert plan.n_near == 20 * 5, (
             f"Expected {20 * 5} near-field pairs, got {plan.n_near}"
+        )
+
+        # Every (target, source) pair must be unique - verifies the leaf
+        # expansion logic doesn't produce duplicate interactions.
+        pairs = torch.stack([plan.near_target_ids, plan.near_source_ids], dim=1)
+        unique_pairs = pairs.unique(dim=0)
+        assert unique_pairs.shape[0] == pairs.shape[0], (
+            f"Found {pairs.shape[0] - unique_pairs.shape[0]} duplicate "
+            f"(target, source) pairs"
         )
 
     def test_aggregate_centroid_accuracy(self):
