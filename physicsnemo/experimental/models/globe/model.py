@@ -26,7 +26,10 @@ from tensordict import TensorDict
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.models.globe.field_kernel import MultiscaleKernel
+from physicsnemo.experimental.models.globe.field_kernel import (
+    ChunkedKernel,
+    MultiscaleKernel,
+)
 from physicsnemo.experimental.models.globe.utilities.rank_spec import (
     RankSpecDict,
     flatten_rank_spec,
@@ -197,11 +200,29 @@ class GLOBE(Module):
         smoothing_radius: float = 1e-8,
         hidden_layer_sizes: Sequence[int] | None = None,
         n_spherical_harmonics: int = 4,
+        kernel_class: str = "ChunkedKernel",
+        kernel_class_kwargs: dict | None = None,
+        theta: float = 0.5,
     ):
         if hidden_layer_sizes is None:
             hidden_layer_sizes = [64, 64, 64]
         if global_data_ranks is None:
             global_data_ranks = {}
+
+        from physicsnemo.experimental.models.globe.field_kernel import (
+            BarnesHutKernel,
+            ChunkedKernel,
+        )
+
+        _kernel_class_map: dict[str, type] = {
+            "ChunkedKernel": ChunkedKernel,
+            "BarnesHutKernel": BarnesHutKernel,
+        }
+        if kernel_class not in _kernel_class_map:
+            raise ValueError(
+                f"{kernel_class=!r} must be one of {list(_kernel_class_map)}"
+            )
+        resolved_kernel_class = _kernel_class_map[kernel_class]
 
         boundary_condition_names = list(boundary_source_data_ranks.keys())
 
@@ -234,6 +255,9 @@ class GLOBE(Module):
         self.smoothing_radius = smoothing_radius
         self.hidden_layer_sizes = hidden_layer_sizes
         self.n_spherical_harmonics = n_spherical_harmonics
+        self._kernel_class = resolved_kernel_class
+        self._kernel_class_name = kernel_class
+        self.theta = theta
 
         ### Build the intermediate output-field rank spec for communication
         # hyperlayers. Only the final hyperlayer emits output_field_ranks.
@@ -267,6 +291,8 @@ class GLOBE(Module):
                         smoothing_radius=smoothing_radius,
                         hidden_layer_sizes=hidden_layer_sizes,
                         n_spherical_harmonics=n_spherical_harmonics,
+                        kernel_class=resolved_kernel_class,
+                        kernel_class_kwargs=kernel_class_kwargs,
                     )
                     for bc_type in boundary_condition_names
                 }
@@ -320,6 +346,7 @@ class GLOBE(Module):
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None,
         chunk_size: None | int | Literal["auto"],
+        kernel_kwargs: dict | None = None,
     ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
         r"""Evaluate one hyperlayer by summing kernel contributions from all BC types.
 
@@ -356,12 +383,16 @@ class GLOBE(Module):
             Problem-level features (mixed scalar/vector ranks).
         chunk_size : None or int or {"auto"}
             Controls memory usage during kernel evaluation.
+        kernel_kwargs : dict or None
+            Additional keyword arguments (theta, cluster_tree,
+            interaction_plan, source_areas) passed through to the kernel.
 
         Returns
         -------
         TensorDict[str, Float[torch.Tensor, "n_targets ..."]]
             Summed kernel outputs across all boundary condition types.
         """
+        extra = kernel_kwargs or {}
         result_pieces: list[TensorDict[str, Float[torch.Tensor, "n_targets ..."]]] = []
 
         for bc_type, mesh in source_meshes.items():
@@ -372,10 +403,23 @@ class GLOBE(Module):
             )
 
             ### Combine non-strength features with cell normals into source_data.
-            # flatten_keys produces a flat namespace so the kernel's
-            # split_by_leaf_rank can separate scalars from vectors by rank.
             source_data = _flatten_keys(mesh.cell_data.exclude("strengths"))
             source_data["normals"] = mesh.cell_normals
+
+            ### Per-BC kernel kwargs: extract bc-specific tree/plan/areas
+            bc_extra = {}
+            if extra:
+                bc_trees = extra.get("cluster_trees")
+                bc_plans = extra.get("interaction_plans")
+                bc_areas_dict = extra.get("source_areas")
+                if bc_trees and bc_type in bc_trees:
+                    bc_extra["cluster_tree"] = bc_trees[bc_type]
+                if bc_plans and bc_type in bc_plans:
+                    bc_extra["interaction_plan"] = bc_plans[bc_type]
+                if bc_areas_dict and bc_type in bc_areas_dict:
+                    bc_extra["source_areas"] = bc_areas_dict[bc_type]
+                if "theta" in extra:
+                    bc_extra["theta"] = extra["theta"]
 
             kernel: MultiscaleKernel = self.kernel_layers[layer_idx][bc_type]  # ty: ignore[not-subscriptable]
             kernel_result: TensorDict[str, Float[torch.Tensor, "n_targets ..."]] = kernel(
@@ -386,6 +430,7 @@ class GLOBE(Module):
                 reference_lengths=reference_lengths,
                 global_data=global_data,
                 chunk_size=chunk_size,
+                **bc_extra,
             )
             result_pieces.append(_unflatten_keys(kernel_result))
 
@@ -398,6 +443,7 @@ class GLOBE(Module):
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None,
         chunk_size: None | int | Literal["auto"],
+        kernel_kwargs: dict | None = None,
     ) -> dict[str, Mesh]:
         r"""Run one boundary-to-boundary communication step.
 
@@ -421,6 +467,9 @@ class GLOBE(Module):
             Problem-level features (mixed scalar/vector ranks).
         chunk_size : None or int or {"auto"}
             Controls memory usage during kernel evaluation.
+        kernel_kwargs : dict or None
+            Additional keyword arguments passed through to
+            :meth:`_evaluate_hyperlayer` (theta, cluster_trees, etc.).
 
         Returns
         -------
@@ -436,6 +485,7 @@ class GLOBE(Module):
                 reference_lengths=reference_lengths,
                 global_data=global_data,
                 chunk_size=chunk_size,
+                kernel_kwargs=kernel_kwargs,
             )
             new_cell_data = TensorDict(
                 {"physical": mesh.cell_data["physical"]},
@@ -566,6 +616,37 @@ class GLOBE(Module):
             for bc_type, mesh in boundary_meshes.items()
         }
 
+        ### Build BH kernel kwargs if using BarnesHutKernel
+        from physicsnemo.experimental.models.globe.field_kernel import BarnesHutKernel
+
+        uses_bh = self._kernel_class is BarnesHutKernel
+        comm_kernel_kwargs: dict | None = None
+        pred_kernel_kwargs: dict | None = None
+
+        if uses_bh:
+            from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
+
+            ### Build one ClusterTree per BC type (reused across all layers)
+            cluster_trees: dict[str, ClusterTree] = {}
+            comm_plans: dict[str, object] = {}
+            bc_areas: dict[str, torch.Tensor] = {}
+            for bc_type, mesh in boundary_meshes.items():
+                areas = mesh.cell_areas / self.reference_area
+                bc_areas[bc_type] = areas
+                tree = ClusterTree.from_points(mesh.cell_centroids, areas=areas)
+                cluster_trees[bc_type] = tree
+                # Communication: targets = sources, so plan is reusable across layers
+                comm_plans[bc_type] = tree.find_interaction_pairs(
+                    mesh.cell_centroids, theta=self.theta
+                )
+
+            comm_kernel_kwargs = {
+                "theta": self.theta,
+                "cluster_trees": cluster_trees,
+                "interaction_plans": comm_plans,
+                "source_areas": bc_areas,
+            }
+
         ### Phase 2: Communication hyperlayers (boundary-to-boundary).
         for i in range(self.n_communication_hyperlayers):
             boundary_meshes = self._evaluate_communication_hyperlayer(
@@ -574,9 +655,26 @@ class GLOBE(Module):
                 reference_lengths=reference_lengths,
                 global_data=global_data,
                 chunk_size=chunk_size,
+                kernel_kwargs=comm_kernel_kwargs,
             )
 
         ### Phase 3: Final evaluation at prediction points.
+        if uses_bh:
+            # Reuse source trees but compute new interaction plans for
+            # prediction targets (different from communication targets)
+            pred_plans: dict[str, object] = {}
+            for bc_type, mesh in boundary_meshes.items():
+                tree = cluster_trees[bc_type]
+                pred_plans[bc_type] = tree.find_interaction_pairs(
+                    prediction_points, theta=self.theta
+                )
+            pred_kernel_kwargs = {
+                "theta": self.theta,
+                "cluster_trees": cluster_trees,
+                "interaction_plans": pred_plans,
+                "source_areas": bc_areas,
+            }
+
         result: TensorDict[str, Float[torch.Tensor, "n_points ..."]] = self._evaluate_hyperlayer(
             layer_idx=self.n_communication_hyperlayers,
             target_points=prediction_points,
@@ -584,6 +682,7 @@ class GLOBE(Module):
             reference_lengths=reference_lengths,
             global_data=global_data,
             chunk_size=chunk_size,
+            kernel_kwargs=pred_kernel_kwargs,
         )
 
         ### Wrap as point-cloud Mesh and apply per-field calibration.
