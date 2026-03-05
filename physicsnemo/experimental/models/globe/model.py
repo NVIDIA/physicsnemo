@@ -315,6 +315,59 @@ class GLOBE(Module):
             }
         return result
 
+    @torch.compiler.disable
+    def _build_trees_and_plans(
+        self,
+        boundary_meshes: dict[str, "Mesh"],
+    ) -> tuple[
+        dict[str, "ClusterTree"],
+        dict[str, torch.Tensor],
+        dict[str, "InteractionPlan"],
+    ]:
+        """Build per-BC-type cluster trees and interaction plans.
+
+        Runs outside torch.compile because tree construction involves
+        irregular control flow (morton codes, variable-depth loops) that
+        Dynamo cannot trace.
+        """
+        from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
+
+        cluster_trees: dict[str, ClusterTree] = {}
+        bc_areas: dict[str, torch.Tensor] = {}
+        for bc_type, mesh in boundary_meshes.items():
+            areas = mesh.cell_areas / self.reference_area
+            bc_areas[bc_type] = areas
+            cluster_trees[bc_type] = ClusterTree.from_points(
+                mesh.cell_centroids, leaf_size=self.leaf_size, areas=areas
+            )
+
+        comm_plans = {
+            bc_type: cluster_trees[bc_type].find_interaction_pairs(
+                boundary_meshes[bc_type].cell_centroids, theta=self.theta
+            )
+            for bc_type in boundary_meshes
+        }
+
+        return cluster_trees, bc_areas, comm_plans
+
+    @torch.compiler.disable
+    def _build_prediction_plans(
+        self,
+        cluster_trees: dict[str, "ClusterTree"],
+        prediction_points: torch.Tensor,
+    ) -> dict[str, "InteractionPlan"]:
+        """Build interaction plans for prediction-point evaluation.
+
+        Separate from communication plans because target points differ.
+        Runs outside torch.compile for the same reasons as tree construction.
+        """
+        return {
+            bc_type: tree.find_interaction_pairs(
+                prediction_points, theta=self.theta
+            )
+            for bc_type, tree in cluster_trees.items()
+        }
+
     def _evaluate_hyperlayer(
         self,
         layer_idx: int,
@@ -484,8 +537,6 @@ class GLOBE(Module):
         Mesh
             A point-cloud Mesh (0-dimensional manifold) with predicted fields.
         """
-        from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
-
         device = prediction_points.device
 
         if global_data is None:
@@ -551,23 +602,13 @@ class GLOBE(Module):
             for bc_type, mesh in boundary_meshes.items()
         }
 
-        ### Build per-BC-type trees and areas (reused across all layers)
-        cluster_trees: dict[str, ClusterTree] = {}
-        bc_areas: dict[str, torch.Tensor] = {}
-        for bc_type, mesh in boundary_meshes.items():
-            areas = mesh.cell_areas / self.reference_area
-            bc_areas[bc_type] = areas
-            cluster_trees[bc_type] = ClusterTree.from_points(
-                mesh.cell_centroids, leaf_size=self.leaf_size, areas=areas
-            )
-
-        ### Communication interaction plans (targets = sources, reusable)
-        comm_plans = {
-            bc_type: cluster_trees[bc_type].find_interaction_pairs(
-                boundary_meshes[bc_type].cell_centroids, theta=self.theta
-            )
-            for bc_type in boundary_meshes
-        }
+        ### Build per-BC-type trees and areas (reused across all layers).
+        ### Tree construction and traversal involve irregular control flow
+        ### (morton codes, variable-depth loops) that cannot be traced by
+        ### torch.compile, so we skip compilation for this block.
+        cluster_trees, bc_areas, comm_plans = self._build_trees_and_plans(
+            boundary_meshes
+        )
 
         ### Phase 2: Communication hyperlayers (boundary-to-boundary).
         for i in range(self.n_communication_hyperlayers):
@@ -582,12 +623,9 @@ class GLOBE(Module):
             )
 
         ### Phase 3: Final evaluation at prediction points.
-        pred_plans = {
-            bc_type: cluster_trees[bc_type].find_interaction_pairs(
-                prediction_points, theta=self.theta
-            )
-            for bc_type in boundary_meshes
-        }
+        pred_plans = self._build_prediction_plans(
+            cluster_trees, prediction_points
+        )
 
         result: TensorDict[str, Float[torch.Tensor, "n_points ..."]] = self._evaluate_hyperlayer(
             layer_idx=self.n_communication_hyperlayers,
