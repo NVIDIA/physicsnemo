@@ -54,7 +54,7 @@ perf:
 
 # Optimizer configuration
 optimizer:
-  name: "adam" # Optimizer type: "adam", "adamw", "stableadamw"
+  name: "adam" # Optimizer type: "adam", "adamw"
   lr: 4E-4 # Initial learning rate
   betas: [0.9, 0.999] # Adam beta parameters
   weight_decay: 0.0 # Weight decay (L2 regularization)
