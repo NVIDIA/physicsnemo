@@ -218,8 +218,7 @@ class TestClusterTree:
             if count > 0:
                 start = tree.leaf_start[node_id].item()
                 return {
-                    tree.sorted_source_order[start + j].item()
-                    for j in range(count)
+                    tree.sorted_source_order[start + j].item() for j in range(count)
                 }
             result: set[int] = set()
             left = tree.node_left_child[node_id].item()
