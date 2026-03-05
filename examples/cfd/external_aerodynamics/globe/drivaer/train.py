@@ -120,8 +120,8 @@ def main(
         n_latent_scalars: Scalar latent channels between hyperlayers.
         n_latent_vectors: Vector latent channels between hyperlayers.
         n_spherical_harmonics: Legendre polynomial terms (default 4 for 3D).
-        theta: Barnes-Hut opening angle. Larger values approximate more
-            aggressively (faster, less accurate). 0 disables approximation.
+        theta: Far-field distance threshold. Larger values are more
+            conservative (more exact interactions, higher accuracy, slower).
         leaf_size: Maximum sources per leaf node in the Barnes-Hut tree.
         boundary_n_faces: Target boundary mesh face count after decimation.
         use_profiler: Enable PyTorch profiler (rank 0 only).
