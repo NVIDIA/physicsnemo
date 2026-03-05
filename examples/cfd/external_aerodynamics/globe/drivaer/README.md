@@ -24,7 +24,7 @@ force coefficients (Cd, Cl, Cs) for engineering evaluation.
 
 The DrivAerML dataset should be available at a path like:
 
-```
+```text
 drivaer_data_full/
   run_1/
     boundary_1.vtp       # Boundary surface mesh (~600 MB)

@@ -36,13 +36,13 @@ and grouping them into clusters introduces only small approximation error.
 
 For a target point far from a cluster C of source faces, the exact sum
 
-```
+```text
 exact = sum_{s in C}  strength_s * K(target, source_s, data_s)
 ```
 
 is approximated by
 
-```
+```text
 approx = total_strength_C * K(target, centroid_C, avg_data_C)
 ```
 
@@ -154,7 +154,7 @@ The standard Barnes-Hut opening criterion compares the ratio of a cluster's
 spatial extent to the distance from the target.  Our implementation uses
 AABB-distance rather than centroid-distance:
 
-```
+```python
 is_far = D / r < theta
 ```
 
@@ -257,8 +257,8 @@ This avoids duplicating the ~250-line feature engineering pipeline.
 
 For large problems, the total number of interaction pairs (near + far) can be
 in the millions.  Pre-gathering all float data (displacement vectors, source
-features, strengths) for all pairs simultaneously would consume O(N_total *
-features * 4 bytes) of GPU memory, potentially exceeding capacity.
+features, strengths) for all pairs simultaneously would consume `O(N_total *
+features * 4 bytes)` of GPU memory, potentially exceeding capacity.
 
 The solution: only the compact int64 index arrays are concatenated upfront.
 Inside the chunk loop, each chunk gathers its own float data from the raw
@@ -404,7 +404,7 @@ interaction count (from 10 billion to ~2 million at theta=1.0).
 
 ## 9. Architecture Summary
 
-```
+```text
 GLOBE.forward()
   |
   +-- _build_trees_and_plans()        [outside torch.compile]
