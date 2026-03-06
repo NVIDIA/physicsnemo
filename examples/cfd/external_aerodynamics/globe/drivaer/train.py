@@ -257,25 +257,6 @@ def main(
             static_graph=True,
         )
 
-    ### [Boundary Mesh Padding Targets]
-    # Boundary simplices have (manifold_dim + 1) = n_spatial_dims vertices,
-    # so n_spatial_dims * n_cells is a hard upper bound on unique points.
-    max_sizes: TensorDict = TensorDict(
-        {
-            bc_type: TensorDict(
-                {
-                    "n_points": torch.tensor(
-                        boundary_n_faces * n_spatial_dims, device=device
-                    ),
-                    "n_cells": torch.tensor(boundary_n_faces, device=device),
-                }
-            )
-            for bc_type in boundary_source_data_ranks
-        }
-    )
-    if dist.rank == 0:
-        logger0.info(f"Padding targets: {max_sizes.to_dict()}")
-
     ### [Optimizer and Scheduler Setup]
     learning_rate *= (dist.world_size * points_per_iter / 2048) ** 0.5
     if use_muon:
@@ -419,22 +400,16 @@ def main(
                 mask = torch.randperm(sample.surface_mesh.n_points)[:n_points]
                 sample.surface_mesh = sample.surface_mesh.slice_points(mask)
 
-                ### Pad boundary meshes to fixed size for static compilation
+                ### Precompute boundary mesh geometry (lazy properties)
                 for bc_type, mesh in sample.boundary_meshes.items():
-                    padded = mesh.pad(
-                        target_n_points=int(max_sizes[bc_type, "n_points"]),
-                        target_n_cells=int(max_sizes[bc_type, "n_cells"]),
-                        data_padding_value=0.0,
-                    )
                     if training and train_randomize_face_centers:
-                        padded._cache["cell", "centroids"] = (
-                            padded.sample_random_points_on_cells()
+                        mesh._cache["cell", "centroids"] = (
+                            mesh.sample_random_points_on_cells()
                         )
                     else:
-                        _ = padded.cell_centroids
-                    _ = padded.cell_areas
-                    _ = padded.cell_normals
-                    sample.boundary_meshes[bc_type] = padded
+                        _ = mesh.cell_centroids
+                    _ = mesh.cell_areas
+                    _ = mesh.cell_normals
 
             with record_function("data_transfer"):
                 sample = sample.to(device)
