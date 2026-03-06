@@ -14,26 +14,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Bumper beam crash experiment using GeoTransolver (autoregressive rollout).
-# Usage: python train.py --config-name=experiment_bumper_geotransolver
-#
-# To switch models, pass model=<name> on the CLI, e.g.:
-#   python train.py --config-name=experiment_bumper_geotransolver model=geotransolver_one_shot_training
+# Bumper beam crash experiment using GeoFLARE (one-shot).
+# Usage: python train.py --config-name=bumper_geoflare
 
+# @package _global_
 hydra:
   job:
     chdir: True
   run:
     dir: ./outputs/
 
-experiment_name: "Bumper-GeoTransolver"
-experiment_desc: "Bumper beam experiment using GeoTransolver"
-run_desc: "Bumper beam experiment using GeoTransolver"
+experiment_name: "Bumper-GeoFLARE"
 
 defaults:
   - reader: vtp
   - datapipe: point_cloud
-  - model: geotransolver_one_shot_training
+  - model: geotransolver_one_shot
   - training: default
   - inference: default
   - _self_
@@ -46,6 +42,7 @@ training:
   raw_data_dir: ???              # set in config or via CLI: training.raw_data_dir=/path/to/train
   raw_data_dir_validation: ???   # set in config or via CLI: training.raw_data_dir_validation=/path/to/validation
   global_features_filepath: ???  # set in config or via CLI: training.global_features_filepath=/path/to/global_features.json
+  optimizer: muon
 
   # ┌───────────────────────────────────────────┐
   # │                 Dataset                   │
@@ -71,3 +68,13 @@ datapipe:
     - velocity_x
     - thickness_scale
     - rwall_origin_y
+  sample_type: all_time_steps
+# ┌───────────────────────────────────────────┐
+# │            Model overrides                │
+# └───────────────────────────────────────────┘
+
+model:
+  functional_dim: 3   # coords (3)
+  out_dim: 250        # (num_time_steps - 1) * 5 = 50 * 5
+  global_dim: 3       # must match len(datapipe.global_features)
+  attention_type: "GALE_FE"  # GALE for GeoTransolver, GALE_FE for GeoFLARE

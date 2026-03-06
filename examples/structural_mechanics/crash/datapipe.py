@@ -135,6 +135,7 @@ class CrashBaseDataset:
         dynamic_targets: Optional[list[str]] = None,
         logger=None,
         dt: float = 5e-3,
+        sample_type: str = "all_time_steps",
     ):
         super().__init__()
         self.name = name
@@ -150,6 +151,21 @@ class CrashBaseDataset:
         self.length = num_samples
         self.logger = logger or PythonLogger()
         self.dt = dt
+        self.sample_type = sample_type
+
+        if sample_type not in ["all_time_steps", "one_time_step"]:
+            raise ValueError(
+                f"Invalid sample type: {sample_type} Expected 'all_time_steps' or 'one_time_step'"
+            )
+
+        # Precompute batch_idx logic
+        rollout_steps = num_steps - 1
+        if sample_type == "one_time_step":
+            self._max_idx = num_samples * rollout_steps
+            self._resolve_idx = lambda idx: (idx // rollout_steps, idx % rollout_steps)
+        else:
+            self._max_idx = num_samples
+            self._resolve_idx = lambda idx: (idx, None)
 
         self.logger.info(
             f"[{self.__class__.__name__}] Preparing the {split} dataset..."
@@ -327,32 +343,23 @@ class CrashBaseDataset:
                 ) / (std.view(1, -1) + EPS)
 
     def __len__(self):
-        return self.length
+        return self._max_idx
 
-    def _xy_shapes(self, idx: int) -> tuple[int, int]:
-        T, N, _ = self.mesh_pos_seq[idx].shape
-        F = self.node_features_data[idx].shape[1]
-        Din = 3 + F
-        Fo = 3  # position dims per timestep
-        if len(self.dynamic_targets) > 0:
-            ts_rec = self.target_series_data[idx]
-            for k in self.dynamic_targets:
-                series = ts_rec[k]
-                Fo += 1 if series.ndim == 2 else series.shape[-1]
-        Dout = (T - 1) * Fo
-        return Din, Dout
-
-    # Common x/y construction used by both datasets
-    def build_xy(self, idx: int):
+    # Common x/y construction
+    def build_xy(self, batch_idx: int, time_idx: int | None):
         """
         x: dict with:
             - 'coords': [N, 3] at t0
             - 'features': [N, F] concatenated (static + flattened dynamic)
         y: [N, T, Fo] where T=rollout steps, Fo=3+sum(C_k) per timestep
         """
-        assert 0 <= idx < self.num_samples, f"Index {idx} out of range"
-        pos_seq = self.mesh_pos_seq[idx]  # [T,N,3]
-        feats = self.node_features_data[idx]  # [N,F]
+        assert 0 <= batch_idx < self.num_samples, f"batch_idx {batch_idx} out of range"
+        if time_idx is not None:
+            assert 0 <= time_idx < self.num_steps - 1, (
+                f"time_idx {time_idx} out of range [0, {self.num_steps - 1})"
+            )
+        pos_seq = self.mesh_pos_seq[batch_idx]  # [T,N,3]
+        feats = self.node_features_data[batch_idx]  # [N,F]
         T, N, _ = pos_seq.shape
         F = feats.shape[1]
 
@@ -364,11 +371,13 @@ class CrashBaseDataset:
 
         if len(self.dynamic_targets) > 0:
             # Collect dynamic targets [T-1, N, C_k] for each target
-            ts_rec = self.target_series_data[idx]
+            ts_rec = self.target_series_data[batch_idx]
             dyn_list = []
             for k in self.dynamic_targets:
                 if k not in ts_rec:
-                    raise KeyError(f"Missing dynamic target '{k}' for sample {idx}")
+                    raise KeyError(
+                        f"Missing dynamic target '{k}' for sample {batch_idx}"
+                    )
                 series = ts_rec[k]  # Tensor [T,N] or [T,N,C]
                 if series.ndim == 2:
                     series = series.unsqueeze(-1)  # [T,N,1]
@@ -384,13 +393,26 @@ class CrashBaseDataset:
         # [N, T, Fo] where T = rollout steps
         y = y_per_t.transpose(0, 1)  # [N, T-1, Fo]
 
-        T_out, Fo = y.shape[1], y.shape[2]
-        assert x["coords"].shape == (N, 3) and x["features"].shape == (N, F), (
-            f"coords shape {x['coords'].shape}, features shape {x['features'].shape}, expected (N,3)/(N,{F})"
-        )
-        assert y.shape == (N, T_out, Fo), (
-            f"target shape {y.shape} does not match expected (N={N}, T={T_out}, Fo={Fo})"
-        )
+        if time_idx is not None:
+            x["time"] = torch.tensor(time_idx / (self.num_steps - 1))
+            y = y[:, time_idx]
+
+            Fo = y.shape[-1]
+            assert x["coords"].shape == (N, 3) and x["features"].shape == (N, F), (
+                f"coords shape {x['coords'].shape}, features shape {x['features'].shape}, expected (N,3)/(N,{F})"
+            )
+            assert y.shape == (N, Fo), (
+                f"target shape {y.shape} does not match expected (N={N}, Fo={Fo})"
+            )
+
+        else:
+            T_out, Fo = y.shape[1], y.shape[2]
+            assert x["coords"].shape == (N, 3) and x["features"].shape == (N, F), (
+                f"coords shape {x['coords'].shape}, features shape {x['features'].shape}, expected (N,3)/(N,{F})"
+            )
+            assert y.shape == (N, T_out, Fo), (
+                f"target shape {y.shape} does not match expected (N={N}, T={T_out}, Fo={Fo})"
+            )
         return x, y
 
     # ---- stats helpers ----
@@ -600,22 +622,28 @@ class CrashGraphDataset(CrashBaseDataset):
             )
 
     def __getitem__(self, idx: int):
-        assert 0 <= idx < self.num_samples, f"Index {idx} out of range"
-        g = self.graphs[idx]
-        x, y = self.build_xy(idx)
+        assert 0 <= idx < self._max_idx, f"Index {idx} out of range"
+        batch_idx, time_idx = self._resolve_idx(idx)
+        g = self.graphs[batch_idx]
+        x, y = self.build_xy(batch_idx, time_idx)
         if self.global_features is not None:
             gf = {
                 k: torch.tensor(v, dtype=torch.float32)
-                for k, v in self.global_features[idx].items()
+                for k, v in self.global_features[batch_idx].items()
             }
         else:
             gf = None
+        # For one_time_step (time_idx is not None): pass target_series=None to avoid moving
+        # full [T,N,C] tensors to device. target_series is only used at inference (to slice
+        # stress/strain from pred); training uses node_target only. Inference always uses
+        # all_time_steps, so it never receives one_time_step samples.
+        ts = None if time_idx is not None else self.target_series_data[batch_idx]
         return SimSample(
             node_features=x,
             node_target=y,
             graph=g,
             global_features=gf,
-            target_series=self.target_series_data[idx],
+            target_series=ts,
         )
 
     # ----- graph-specific helpers (use _pyg_data / _pyg_utils so PyG loads only when used) -----
@@ -680,20 +708,26 @@ class CrashPointCloudDataset(CrashBaseDataset):
         self.edge_stats: dict[str, Any] = {}
 
     def __getitem__(self, idx: int):
-        assert 0 <= idx < self.num_samples, f"Index {idx} out of range"
-        x, y = self.build_xy(idx)
+        assert 0 <= idx < self._max_idx, f"Index {idx} out of range"
+        batch_idx, time_idx = self._resolve_idx(idx)
+        x, y = self.build_xy(batch_idx, time_idx)
         if self.global_features is not None:
             gf = {
                 k: torch.tensor(v, dtype=torch.float32)
-                for k, v in self.global_features[idx].items()
+                for k, v in self.global_features[batch_idx].items()
             }
         else:
             gf = None
+        # For one_time_step (time_idx is not None): pass target_series=None to avoid moving
+        # full [T,N,C] tensors to device. target_series is only used at inference (to slice
+        # stress/strain from pred); training uses node_target only. Inference always uses
+        # all_time_steps, so it never receives one_time_step samples.
+        ts = None if time_idx is not None else self.target_series_data[batch_idx]
         return SimSample(
             node_features=x,
             node_target=y,
             global_features=gf,
-            target_series=self.target_series_data[idx],
+            target_series=ts,
         )
 
 

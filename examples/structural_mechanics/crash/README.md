@@ -3,29 +3,18 @@
 
 ## Problem Overview
 
-Automotive crashworthiness assessment is a critical step in vehicle design.   Traditionally, engineers rely on high-fidelity finite element (FE) simulations (e.g., LS-DYNA) to predict structural deformation and crash responses. While accurate, these simulations are computationally expensive and limit the speed of design iterations.
+Automotive crashworthiness assessment is a critical step in vehicle design. Traditionally, engineers rely on high-fidelity finite element (FE) simulations (e.g., LS-DYNA) to predict structural deformation and crash responses. While accurate, these simulations are computationally expensive and limit the speed of design iterations.
 
-Machine Learning (ML) surrogates provide a promising alternative by learning mappings directly from simulation data, enabling:
+Machine Learning (ML) surrogates provide a promising alternative by learning mappings directly from simulation data, enabling rapid prediction of deformation histories across thousands of design candidates.
 
-- **Rapid prediction** of deformation histories across thousands of design candidates.
-- **Scalability** to large structural models without rerunning costly FE simulations.
-- **Flexibility** in experimenting with different model architectures (GNNs, Transformers).
-
-In this example, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports GeoTransolver, Transolver, FIGConvUNet, and MeshGraphNet architectures with multiple rollout schemes. It supports VTP and Zarr formats (preprocessed from LS-DYNA d3plot via PhysicsNeMo-Curator). The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes. Multiple experiments (different datasets, models, or feature sets) are managed via Hydra experiment configs without touching the core code.
+In this recipe, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports GeoTransolver, Transolver, MeshGraphNet, and FIGConvUNet architectures with multiple rollout schemes. It supports VTP and Zarr formats (preprocessed from LS-DYNA d3plot via PhysicsNeMo-Curator). The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes. Multiple experiments (different datasets, models, or feature sets) are managed via Hydra experiment configs without touching the core code.
 
 For an in-depth comparison between the Transolver and MeshGraphNet models and the transient schemes for crash dynamics, see [this paper](https://arxiv.org/pdf/2510.15201).
-
-### Bumper Beam modeling
-
-<p align="center">
-  <img src="../../../docs/img/crash/bumper_beam.gif" alt="Bumper beam animation" width="80%" />
-
-</p>
 
 ### Body-in-White Crash Modeling
 
 <p align="center">
-  <img src="../../../docs/img/crash/crash_case4_reduced.gif" alt="Crash animation" width="60%" />
+  <img src="../../../docs/img/crash/crash.gif" alt="Crash animation" width="60%" />
 
 </p>
 
@@ -36,72 +25,36 @@ For an in-depth comparison between the Transolver and MeshGraphNet models and th
 
 </p>
 
-## Quickstart
+### Bumper Beam modeling
 
-This pipeline uses **Hydra configs** to manage different datasets, models, and feature sets from a single codebase. Each experiment is a self-contained config file in `conf/` with the naming pattern `experiment_*.yaml`.
+<p align="center">
+  <img src="../../../docs/img/crash/bumper_beam.gif" alt="Bumper beam animation" width="80%" />
 
-1) Pick or create an experiment config. Ready-to-use configs are provided:
+</p>
 
-```
-conf/experiment_bumper_geotransolver.yaml
-conf/experiment_crash_transolver.yaml
-```
-
-2) Preprocess your data (see [Data Preprocessing](#data-preprocessing) below).
-
-3) **Launch training and inference.** Data paths are not hardcoded—edit the experiment YAML to replace `???` placeholders, or pass overrides on the command line. Training needs `training.raw_data_dir`, `training.raw_data_dir_validation` (and `training.global_features_filepath` for experiments with global features). Inference needs `inference.raw_data_dir_test`.
-
-   **Training:**
-
-   ```bash
-   # Single GPU
-   python train.py --config-name=experiment_bumper_geotransolver
-
-   # Multi-GPU (DDP)
-   torchrun --nproc_per_node=4 train.py --config-name=experiment_bumper_geotransolver
-   ```
-
-   **Inference:**
-
-   ```bash
-   # Single GPU
-   python inference.py --config-name=experiment_bumper_geotransolver
-
-   # Multi-GPU
-   torchrun --nproc_per_node=4 inference.py --config-name=experiment_bumper_geotransolver
-   ```
-
-   Predictions are saved under `output_dir_pred` (default `./predicted_vtps/`). Normalization stats are written to `./stats/` during training and reused for inference.
-
-You can override any individual config value on the command line without editing any file:
-
-```bash
-python train.py --config-name=experiment_bumper_geotransolver training.epochs=500 training.start_lr=1e-3
-```
 
 ## Prerequisites
 
-This example requires:
-- LS-DYNA crash data preprocessed to VTP or Zarr via [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator).
-- A GPU-enabled environment with PyTorch.
+**Data:** LS-DYNA crash data preprocessed to VTP or Zarr format using [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator/tree/main/examples/structural_mechanics/crash). See [Data Preprocessing](#data-preprocessing) below for setup instructions.
 
-Install dependencies:
+**Code dependencies:**
 
 ```bash
 pip install -r requirements.txt
 ```
 
-To use graph-based models (e.g., MeshGraphNet) or the graph datapipe, install the PhysicsNeMo `gnns` extra: `pip install "nvidia-physicsnemo[gnns]"` or `uv sync --extra gnns`.
+For graph-based models (e.g., MeshGraphNet) or the graph datapipe, install the PhysicsNeMo `gnns` extra:
+
+```bash
+pip install "nvidia-physicsnemo[gnns]"
+# or with uv:
+uv sync --extra gnns
+```
 
 ## Data Preprocessing
 
-`PhysicsNeMo` has a related project to help with data processing, called
-[PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator).
 Using `PhysicsNeMo-Curator`, crash simulation data from LS-DYNA can be processed into training-ready formats easily.
-
 PhysicsNeMo-Curator can preprocess d3plot files into **VTP** (for visualization and smaller datasets) or **Zarr** (for large-scale ML training).
-
-### Quick Start
 
 Install PhysicsNeMo-Curator following
 [these instructions](https://github.com/NVIDIA/physicsnemo-curator?tab=readme-ov-file#installation-and-usage).
@@ -131,8 +84,6 @@ physicsnemo-curator-etl                                         \
     serialization_format.sink.output_dir=/data/crash_zarr/      \
     etl.processing.num_processes=4
 ```
-
-### Input Data Structure
 
 The Curator expects your LS-DYNA data organized as:
 
@@ -188,7 +139,7 @@ Each Zarr store contains:
 
 **NOTE:** All heavy preprocessing (node filtering, edge building, thickness computation) is done once during curation using PhysicsNeMo-Curator. The reader simply loads pre-computed arrays.
 
-This format is directly compatible with the Zarr reader in this example.
+This format is directly compatible with the Zarr reader in this recipe.
 
 ## Training
 
@@ -199,22 +150,23 @@ The main script is `train.py`.
 
 ```
 conf/
-├── experiment_bumper_geotransolver.yaml  # ← self-contained experiment configs
-├── experiment_crash_transolver.yaml
+├── bumper_geotransolver_oneshot.yaml       # ← self-contained experiment configs
+├── bumper_geotransolver_time_conditional.yaml
+├── crash_geotransolver_oneshot.yaml
+├── bumper_geoflare_oneshot.yaml
+├── crash_geoflare_oneshot.yaml
 ├── datapipe/                              # dataset configs (generic defaults)
 │   ├── graph.yaml
 │   └── point_cloud.yaml
 ├── model/                                 # model configs
-│   ├── geotransolver_one_shot_training.yaml
-│   ├── transolver_autoregressive_rollout_training.yaml
-│   ├── transolver_one_step_rollout.yaml
-│   ├── transolver_time_conditional.yaml
-│   ├── figconvunet_autoregressive_rollout_training.yaml
-│   ├── figconvunet_one_step_rollout.yaml
-│   ├── figconvunet_time_conditional.yaml
-│   ├── mgn_autoregressive_rollout_training.yaml
-│   ├── mgn_one_step_rollout.yaml
-│   └── mgn_time_conditional.yaml
+│   ├── geotransolver_one_shot.yaml
+│   ├── geotransolver_autoregressive_rollout_training.yaml
+│   ├── geotransolver_one_step_rollout.yaml
+│   ├── geotransolver_time_conditional.yaml
+│   ├── transolver_one_shot.yaml
+│   ├── figconvunet_one_shot.yaml
+│   ├── mgn_one_shot.yaml
+│   └── ...
 ├── reader/                                # reader configs
 │   ├── vtp.yaml
 │   └── zarr.yaml
@@ -229,40 +181,31 @@ Each experiment config is self-contained with its own defaults for reader, datap
 Single GPU:
 
 ```bash
-python train.py --config-name=experiment_bumper_geotransolver
+python train.py --config-name=bumper_geotransolver_oneshot
 ```
 
 Multi-GPU (Distributed Data Parallel):
 
 ```bash
-torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name=experiment_bumper_geotransolver
+torchrun --nproc_per_node=<NUM_GPUS> train.py --config-name=bumper_geotransolver_oneshot
 ```
 
 ## Inference
 
-Use `inference.py` to evaluate trained models on test crash runs.
+Use `inference.py` to evaluate trained models on test crash runs. Outputs are written under `output_dir_pred/rank{N}/{run_name}/`.
 
-**Note:** For inference, place all `.vtp` files directly in `raw_data_dir_test` (flat layout).
-Each file is treated as one run; outputs are written under `output_dir_pred/rank{N}/{run_name}/`.
-
-Example directory structure:
-```
-data/
-├── Run0.vtp
-├── Run1.vtp
-└── Run2.vtp
-```
+**Note:** Inference currently supports only the VTP format.
 
 Single GPU:
 
 ```bash
-python inference.py --config-name=experiment_bumper_geotransolver
+python inference.py --config-name=bumper_geotransolver_oneshot
 ```
 
 Multi-GPU (Distributed Data Parallel):
 
 ```bash
-torchrun --nproc_per_node=<NUM_GPUS> inference.py --config-name=experiment_bumper_geotransolver
+torchrun --nproc_per_node=<NUM_GPUS> inference.py --config-name=bumper_geotransolver_oneshot
 ```
 
 Runs are sharded across ranks: rank `r` processes `run_items[r::world_size]`.
@@ -270,14 +213,14 @@ Predicted meshes are written as .vtp files under `./predicted_vtps/`, and can be
 
 ## Experiments
 
-Each experiment is a self-contained YAML file in `conf/` with the naming pattern `experiment_*.yaml`. Each config file includes all defaults and experiment-specific settings.
+Each experiment is a self-contained YAML file in `conf/`. Each config file includes all defaults and experiment-specific settings.
 
 ### Anatomy of an experiment config
 
 Data paths must be set either in the config file or via CLI overrides. For training: `raw_data_dir`, `raw_data_dir_validation`. For inference: `raw_data_dir_test`. Use `???` in the config to make them mandatory overrides, or set concrete paths directly.
 
 ```yaml
-# conf/experiment_my_experiment.yaml
+# conf/my_experiment.yaml
 
 hydra:
   job:
@@ -286,13 +229,11 @@ hydra:
     dir: ./outputs/
 
 experiment_name: "My-Experiment"
-experiment_desc: "Description of the experiment"
-run_desc: "Run description"
 
 defaults:
   - reader: vtp
   - datapipe: point_cloud
-  - model: geotransolver_one_shot_training
+  - model: geotransolver_one_shot
   - training: default
   - inference: default
   - _self_
@@ -325,64 +266,69 @@ datapipe:
     - velocity_x
     - thickness_scale
     - rwall_origin_y
+  sample_type: all_time_steps  # or one_time_step for time-conditional models
 ```
 
 ### Provided experiments
 
 | File | Dataset | Model | Launch command |
 |------|---------|-------|----------------|
-| `experiment_bumper_geotransolver.yaml` | Bumper beam (VTP) | GeoTransolver one-shot | `python train.py --config-name=experiment_bumper_geotransolver` |
-| `experiment_crash_transolver.yaml` | Car body-in-white crash (VTP) | Transolver autoregressive | `python train.py --config-name=experiment_crash_transolver` |
+| `bumper_geotransolver_oneshot.yaml` | Bumper beam (VTP) | GeoTransolver one-shot | `python train.py --config-name=bumper_geotransolver_oneshot` |
+| `bumper_geotransolver_time_conditional.yaml` | Bumper beam (VTP) | GeoTransolver time-conditional | `python train.py --config-name=bumper_geotransolver_time_conditional` |
+| `crash_geotransolver_oneshot.yaml` | Car body-in-white crash (VTP) | GeoTransolver one-shot | `python train.py --config-name=crash_geotransolver_oneshot` |
+| `bumper_geoflare_oneshot.yaml` | Bumper beam (VTP) | GeoFLARE one-shot | `python train.py --config-name=bumper_geoflare_oneshot` |
+| `crash_geoflare_oneshot.yaml` | Car body-in-white crash (VTP) | GeoFLARE one-shot | `python train.py --config-name=crash_geoflare_oneshot` |
+
+### Choosing a time scheme
+
+Two rollout schemes are supported, selected by the experiment config (model + datapipe):
+
+| Scheme | Model | Datapipe `sample_type` | Behavior |
+|--------|-------|------------------------|----------|
+| **One-shot** | `geotransolver_one_shot` | `all_time_steps` | One sample per run. Model predicts the full trajectory `[N, T-1, Fo]` from t0 in a single forward pass. Lower training cost, competitive accuracy. |
+| **Time-conditional** | `geotransolver_time_conditional` | `one_time_step` | One sample per run per timestep. Model predicts a single step `[N, Fo]` conditioned on normalized time `t/(T-1)`. Best accuracy for long horizons; higher training cost. Inference always rolls out the full trajectory. |
+
+Use **one-shot** when you need fast iteration or have limited compute. Use **time-conditional** when validation quality matters most. See [Development tips](#development-tips) for a comparison table.
+
+Two additional schemes are available in the rollout (`geotransolver_autoregressive_rollout_training`, `geotransolver_one_step_rollout`) but are not provided as premade experiment configs. You can enable them by selecting the corresponding model in `conf/model/` and configuring the datapipe accordingly.
 
 ### Adding a new experiment
 
-1. Create `conf/experiment_<my_experiment>.yaml` following the template above.
+1. Create `conf/<my_experiment>.yaml` following the template above.
 2. Set defaults for reader, datapipe, model, training, and inference in the `defaults` section.
 3. Set all required fields: `raw_data_dir`, `raw_data_dir_validation` (training), `raw_data_dir_test` (inference), `num_time_steps`, `num_training_samples`. Either set concrete paths in the config or use `???` and pass them via CLI when launching `train.py` or `inference.py` as appropriate.
-4. If using global features, set `global_features_filepath`; otherwise use `null`.
-5. Optionally override any model or training hyperparameter directly in the experiment file (e.g., `model.out_dim: 150`, `training.epochs: 5000`), or add a new model config under `conf/model/` and select it in the defaults.
-6. Run: `python train.py --config-name=experiment_<my_experiment>`
+4. Set `datapipe.sample_type` to match your model: `all_time_steps` for one-shot, `one_time_step` for time-conditional.
+5. If using global features, set `global_features_filepath`; otherwise use `null`.
+6. Optionally override any model or training hyperparameter directly in the experiment file (e.g., `model.out_dim: 150`, `training.epochs: 5000`), or add a new model config under `conf/model/` and select it in the defaults.
+7. Run: `python train.py --config-name=<my_experiment>`
 
-You can also override lower-level defaults in the `defaults` section:
+You can also override the model in the `defaults` section. For time-conditional training, use the dedicated experiment config:
 ```yaml
+# Use bumper_geotransolver_time_conditional.yaml, or in your experiment:
 defaults:
   - reader: vtp
-  - override /model: transolver_time_conditional  # Override model
-  - override /training: default
+  - model: geotransolver_time_conditional  # Override model
+  - training: default
   - _self_
 ```
 
 ## Datapipe: how inputs are constructed and normalized
 
-The datapipe is responsible for turning raw LS-DYNA/Abaqus or other crash runs into model-ready tensors and statistics. It does three things in a predictable, repeatable way: it reads and filters the raw data, it constructs inputs and targets with a stable interface, and it computes the statistics required to normalize both positions and features. This section explains what the datapipe returns, how to configure it, and what models should expect to receive at training and inference time.
+The datapipe converts reader output into model-ready `SimSample`s. Each sample is one crash run (or one timestep of a run, depending on `sample_type`).
 
-At a high level, each sample corresponds to one crash run. The datapipe loads the full deformation trajectory for that run, and emits exactly two items: inputs x and targets y. Inputs are a dictionary with two entries. The first entry, 'coords', is a [N, 3] tensor that contains the positions at the first timestep (t0) for all retained nodes. The second entry, 'features', is a [N, F] tensor that contains the concatenation of all node-wise features configured for this experiment. The order of columns in 'features' matches the order you provide in the configuration. This means if your configuration lists features as [thickness, Y_modulus], then column 0 will always be thickness and column 1 will always be Y_modulus. Targets y are the remaining positions from t1 to tT flattened along the feature dimension, so y has shape [N, (T-1)*3].
+Inputs `x` contain `x['coords']` (`[N, 3]` at t0) and `x['features']` (`[N, F]` static plus flattened dynamic features in config order). Targets `y` have shape `[N, T-1, Fo]` where Fo=3 for positions only, or 3+sum(C_k) if `dynamic_targets` is set (e.g. strain, stress).
 
-Configuration lives under `conf/datapipe/`. There are two datapipe variants: one for graph-based models and one for point-cloud models. Both accept the same core options, and both expose a `features` list. The `features` list is the single source of truth for what goes into the 'features' tensor and in which order. If you do not want any features, set `features: []` and the datapipe will return an empty [N, 0] tensor for 'features' while keeping 'coords' intact. If you add more features later, the datapipe will preserve their order and update the per-dimension statistics automatically.
+Config lives under `conf/datapipe/`. Two variants exist: `graph` for MeshGraphNet and `point_cloud` for point cloud-based models (e.g., GeoTransolver and Transolver). Both use `static_features` (e.g. `[thickness]`), `dynamic_features`, `dynamic_targets`, and `global_features`. Use `static_features: []` for no node features. Position and feature stats are computed on the train split, saved to `./stats/` (`node_stats.json`, `feature_stats.json`, `edge_stats.json` for graph), and reused at eval and inference.
 
-Under the hood the datapipe reads node positions over time via the configured reader (VTP or Zarr). For each run it constructs a fixed number of time steps, selects and reindexes the active nodes, and optionally builds graph connectivity. It also computes statistics necessary for normalization. Position statistics include per-axis means and standard deviations, as well as normalized velocity and acceleration statistics used by autoregressive rollouts. Feature statistics are computed column-wise on the concatenated 'features' tensor. During dataset creation the datapipe normalizes the position trajectory using position means and standard deviations and normalizes every column of 'features' using feature means and standard deviations. The resulting tensors are numerically stable and consistent across training and evaluation. The statistics are written under `./stats/` as `node_stats.json` and `feature_stats.json` during training, and then read back in evaluation or inference.
+### Sample type: all_time_steps vs one_time_step
 
-Readers are configurable through Hydra. A reader is any callable that returns `(srcs, dsts, point_data)`, where `point_data` is a list of records—one per run. Each record must include 'coords' as a [T, N, 3] array and one array per configured feature name. Arrays for features can be [N] or [N, K]; the datapipe will promote [N] to [N, 1] and then concatenate all feature arrays in the order declared in the configuration to form 'features'. If you are using graph-based models, the `srcs` and `dsts` arrays will be used to build a PyG `Data` object with symmetric edges and self-loops, and initial edge features are computed from positions at t0 (displacements and distances). If you are using point-cloud models, graph connectivity is ignored but the remainder of the pipeline is identical.
+The datapipe `sample_type` (set in each experiment's `datapipe` block) controls how samples are constructed to match the model's rollout scheme:
 
-Models should consume the two-part input without guessing column indices. Positions are always available in `x['coords']` and every node-wise feature is already concatenated in `x['features']`. If you need to separate features later—for example to log per-feature metrics—you can do so deterministically because the order of columns in `x['features']` exactly matches the `features` list in the configuration. For time-conditional models, you can pass the full `x['features']` to your functional input; for autoregressive models, you can concatenate `x['features']` to the normalized velocity (and time, if used) to form the model input at each rollout step.
+- **`all_time_steps`** (one-shot): One sample per run. `x` has `coords` and `features`; `y` is the full trajectory `[N, T-1, Fo]`. Dataset length = `num_samples`.
 
-Finally, the datapipe is designed to be resilient to the “no features” case. If you set `features: []`, the 'features' tensor simply has width zero. Statistics are computed correctly (zero-length mean and unit standard deviation) and concatenations degrade gracefully to the original position-only behavior. This makes it easy to start simple and then scale up to richer feature sets without revisiting model-side code or the data normalization logic.
+- **`one_time_step`** (time-conditional): One sample per run per timestep. Each sample corresponds to `(batch_idx, time_idx)`; `x` adds `x['time']` = `time_idx/(T-1)` (normalized); `y` is a single step `[N, Fo]`. Dataset length = `num_samples * (T-1)`. Inference always uses `all_time_steps`, so it receives full trajectories.
 
-For completeness, the datapipe also records a lightweight name-to-column map called `_feature_slices`. It associates each configured feature name with its [start, end) slice in `x['features']`. You typically won’t need it if you just consume the full `features` tensor, but it enables reliable, reproducible slicing by name for diagnostics or logging.
-
-### Model I/O at a glance (what models receive)
-
-- Inputs `x` (dictionary):
-  - `x['coords']`: `[N, 3]` positions at `t0`
-  - `x['features']`: `[N, F]` concatenated node features in the config‑specified order (can be width 0)
-
-- Targets `y`: `[N, (T-1)*3]` positions from `t1..tT` flattened along the feature dimension.
-
-- Rollout input construction (high level):
-  - Autoregressive: per step, the model consumes normalized velocity, optionally time, and `x['features']`; positions are fed as embeddings/state.
-  - Time‑conditional one‑step: time index is provided once per call along with `x['features']` and the positional embedding.
-
-- Transolver specifics: for unstructured data, the embedding tensor is required; in this pipeline it is the current positions over the rollout. If you set `features: []`, the functional input still includes velocity (and optionally time), so the overall functional dimension remains > 0.
+Readers return `(srcs, dsts, point_data)`; see the [Reader](#reader-built-in-vtp-and-zarr-readers-and-how-to-add-your-own) section. The graph datapipe builds PyG `Data` with edge features from t0 positions; the point-cloud datapipe ignores connectivity. Models consume `x['coords']` and `x['features']` directly. The `_feature_slices` map associates feature names with column ranges for diagnostics. With `static_features: []`, the features tensor has width zero and the pipeline handles it correctly.
 
 ### Global features
 
@@ -415,7 +361,7 @@ Global features are stored in a single JSON file shared across all splits (train
 Point to the JSON file and declare which keys to use in your experiment config. Set `global_features_filepath` in the config file or via CLI (`training.global_features_filepath=/path/to/global_features.json`):
 
 ```yaml
-# conf/experiment_my_experiment.yaml
+# conf/my_experiment.yaml
 training:
   global_features_filepath: ???  # or a concrete path
 
@@ -445,23 +391,15 @@ sample.global_features = {
 In the model forward pass, these are stacked into a single global embedding vector and passed to the network. The **`global_dim`** parameter in the model config must equal the number of global features selected:
 
 ```yaml
-# conf/model/geotransolver_one_shot_rollout_training.yaml
+# conf/model/geotransolver_one_shot.yaml (or in experiment model overrides)
 global_dim: 3   # must match len(datapipe.global_features)
 ```
 
-If `global_features` is `null`, `sample.global_features` is `None` and the model must handle this case (currently only `GeoTransolverOneShotTraining` uses global features; other models ignore them).
+If `global_features` is `null`, `sample.global_features` is `None` and the model must handle this case (currently only `GeoTransolverOneShot` uses global features; other models ignore them).
 
 ## Reader: built-in VTP and Zarr readers and how to add your own
 
 The reader opens preprocessed simulation data and produces the arrays the datapipe consumes. Raw LS-DYNA d3plot files must be preprocessed to VTP or Zarr using [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator/tree/main/examples/structural_mechanics/crash) before use. The reader is swappable via Hydra so you can adapt the pipeline to different formats or add your own.
-
-### Built-in VTP reader (PolyData)
-
-A lightweight VTP reader is provided in `vtp_reader.py`. It treats each `.vtp` file in a directory as a separate run. For each run it opens the `d3plot` with `lasso.dyna.D3plot` and extracts node coordinates, time-varying displacements, element connectivity, and part identifiers. If a LS‑DYNA keyword (`.k`) file is present, it parses the shell section definitions to obtain per-part thickness values, then converts those into per-node thickness by averaging the values of incident elements. To avoid contaminating the training with rigid content, the reader classifies nodes as structural or wall based on a displacement variation threshold and drops wall nodes. After filtering, it builds a compact node index, remaps connectivity, and—if you are training a graph model—collects undirected edges from the remapped shell elements. It can optionally save one VTP file per time step to help you visually inspect the trajectories, or write the predictions to those files in inference.
-
-The reader then assembles the per-run record expected by the datapipe. Positions are returned under the key `'coords'` as a float array of shape `[T, N, 3]`, where T is the number of time steps and N is the number of retained nodes after filtering and remapping. Feature arrays are returned one per configured feature name; for example, if your datapipe configuration lists `features: [thickness, Y_modulus]`, the reader should provide a `'thickness'` array with shape `[N]` or `[N, 1]` and a `'Y_modulus'` array with shape `[N]` or `[N, K]`. The datapipe promotes 1D arrays to 2D and concatenates all provided feature arrays in the order given by the configuration to form the final `'features'` block supplied to the model.
-
-If you use the graph datapipe, the edge list is produced by walking the filtered shell elements and collecting unique boundary pairs, then symmetrized and augmented with self-loops inside the datapipe when constructing the PyG `Data` object. If you use the point‑cloud datapipe, the edge outputs are ignored but the rest of the record shape is the same, so you can swap between model families by changing configuration only.
 
 ### Built‑in VTP reader (PolyData)
 
@@ -485,11 +423,11 @@ _target_: vtp_reader.Reader
 Select it in your experiment config defaults:
 
 ```yaml
-# conf/experiment_my_experiment.yaml
+# conf/my_experiment.yaml
 defaults:
   - reader: vtp
   - datapipe: point_cloud
-  - model: transolver_time_conditional
+  - model: geotransolver_one_shot
   - training: default
   - inference: default
   - _self_
@@ -498,7 +436,7 @@ defaults:
 And configure features in the experiment's `datapipe` block:
 
 ```yaml
-# conf/experiment/my_experiment.yaml
+# conf/my_experiment.yaml
 datapipe:
   static_features: [thickness]  # or [] for no features
 ```
@@ -529,11 +467,11 @@ _target_: zarr_reader.Reader
 Select it in your experiment config defaults:
 
 ```yaml
-# conf/experiment_my_experiment.yaml
+# conf/my_experiment.yaml
 defaults:
   - reader: zarr
   - datapipe: point_cloud
-  - model: transolver_autoregressive_rollout_training
+  - model: geotransolver_one_shot
   - training: default
   - inference: default
   - _self_
@@ -542,14 +480,10 @@ defaults:
 And configure features in the experiment's `datapipe` block:
 
 ```yaml
-# conf/experiment/my_experiment.yaml
+# conf/my_experiment.yaml
 datapipe:
   static_features: [thickness]  # Must match fields stored in Zarr
 ```
-
-**Recommended workflow:**
-1. Use PhysicsNeMo-Curator to preprocess d3plot → VTP or Zarr once
-2. Use corresponding reader for all training/validation
 
 ### Data layout expected by readers
 
@@ -565,7 +499,7 @@ datapipe:
 
 To write your own reader, implement a Hydra‑instantiable function or class whose call returns a three‑tuple `(srcs, dsts, point_data)`. The first two entries are lists of integer arrays describing edges per run (they can be empty lists if you are not producing a graph), and `point_data` is a list of Python dicts with one dict per run. Each dict must contain `'coords'` as a `[T, N, 3]` array and one array per feature name listed in `conf/datapipe/*.yaml` under `features`. Feature arrays can be `[N]` or `[N, K]` and should use the same node indexing as `'coords'`. For convenience, a simple class reader can accept the Hydra `split` argument (e.g., "train" or "test") and decide whether to save VTP frames, but this is optional.
 
-As a starting point, your YAML can point to a class by dotted path. For a class:
+As a starting point, your YAML can point to a class by dotted path:
 
 ```yaml
 # conf/reader/my_reader.yaml
@@ -645,12 +579,6 @@ python postprocessing/plot_cross_section.py \
 
 run_post_processing.sh can automate all evaluation tasks across runs.
 
-## Performance tips
-
-- AMP is enabled by default in training; it reduces memory and accelerates matmuls on modern GPUs.
-- For multi-GPU training, use `torchrun --nproc_per_node=<NUM_GPUS> train.py`.
-- For DDP, prefer `torchrun --nproc_per_node=<NUM_GPUS> train.py`.
-
 ## Development tips
 
 ### Dynamics prediction
@@ -716,9 +644,6 @@ Muon: Car-crash test MSE at probe location (Driver, Passenger):
 - [ ] **Support batch_size > 1**: The pipeline currently uses `batch_size=1` due to variable node counts per sample. Add padding or batching logic to enable larger batch sizes for improved throughput.
 
 ## Troubleshooting / FAQ
-
-- I want to run without an experiment config file.
-  - You can still override required fields directly, but you'll need to specify a base config or create a minimal experiment config. For recurring setups, creating an experiment config file is recommended.
 
 - My `.vtp` has no displacement fields.
   - Ensure point_data contains vector arrays named like `displacement_t0.000`, `displacement_t0.005`, ...; the reader falls back to any `displacement_t*` pattern.

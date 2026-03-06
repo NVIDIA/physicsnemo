@@ -14,19 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: rollout.TransolverOneStepRollout
+_target_: rollout.MeshGraphNetOneShot
 _convert_: all
 
-functional_dim: 4
-embedding_dim: 3
-out_dim: 3
-slice_num: 128
-n_layers: 6
-unified_pos: false
-structured_shape: null
-use_te: false
-time_input: false
+input_dim_nodes: 4   # coords (3) + features; override in experiment if using global_features
+input_dim_edges: 4   # dx, dy, dz, distance (from graph datapipe)
+output_dim: 75       # (num_time_steps - 1) * 3; override in experiment
+do_concat_trick: true
+num_processor_checkpoint_segments: 3
+
 ### Rollout parameters ###
 num_time_steps: ${training.num_time_steps}
-dt: 5e-3
-initial_vel: 9.22

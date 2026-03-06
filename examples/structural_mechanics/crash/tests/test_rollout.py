@@ -65,17 +65,37 @@ def make_data_stats() -> Dict[str, Dict[str, torch.Tensor]]:
 
 @pytest.fixture(autouse=True)
 def stub_parent_classes(monkeypatch):
-    # Stub Transolver.__init__ and Transolver.forward
+    # Stub Transolver.__init__ and Transolver.forward (for TransolverOneShot)
     def transolver_init(self, *args, **kwargs):
         torch.nn.Module.__init__(self)
 
     def transolver_forward(self, fx=None, embedding=None, time=None):
-        # Match shapes expected downstream: return zeros like embedding
         assert embedding is not None
         return torch.zeros_like(embedding)
 
     monkeypatch.setattr(rollout.Transolver, "__init__", transolver_init, raising=True)
     monkeypatch.setattr(rollout.Transolver, "forward", transolver_forward, raising=True)
+
+    # Stub GeoTransolver.__init__ and GeoTransolver.forward
+    def geotransolver_init(self, *args, **kwargs):
+        torch.nn.Module.__init__(self)
+
+    def geotransolver_forward(
+        self,
+        local_embedding=None,
+        geometry=None,
+        local_positions=None,
+        global_embedding=None,
+    ):
+        assert geometry is not None
+        return torch.zeros_like(geometry)
+
+    monkeypatch.setattr(
+        rollout.GeoTransolver, "__init__", geotransolver_init, raising=True
+    )
+    monkeypatch.setattr(
+        rollout.GeoTransolver, "forward", geotransolver_forward, raising=True
+    )
 
     # Stub MeshGraphNet.__init__ and MeshGraphNet.forward
     def mgn_init(self, *args, **kwargs):
@@ -107,12 +127,12 @@ def stub_parent_classes(monkeypatch):
     )
 
 
-def test_transolver_autoregressive_rollout_eval():
+def test_geotransolver_autoregressive_rollout_eval():
     N, T, F = 5, 4, 2
     sample = make_sample(N=N, T=T, F=F)
     stats = make_data_stats()
 
-    model = rollout.TransolverAutoregressiveRolloutTraining(
+    model = rollout.GeoTransolverAutoregressiveRolloutTraining(
         dt=5e-3, initial_vel=torch.zeros(1, 3), num_time_steps=T
     )
     model.eval()
@@ -121,24 +141,24 @@ def test_transolver_autoregressive_rollout_eval():
     assert out.shape == (N, T - 1, 3)
 
 
-def test_transolver_time_conditional_rollout_eval():
+def test_geotransolver_time_conditional_rollout_eval():
     N, T, F = 6, 5, 3
     sample = make_sample(N=N, T=T, F=F)
     stats = make_data_stats()
 
-    model = rollout.TransolverTimeConditionalRollout(num_time_steps=T)
+    model = rollout.GeoTransolverTimeConditional(num_time_steps=T)
     model.eval()
 
     out = model.forward(sample=sample, data_stats=stats)
     assert out.shape == (N, T - 1, 3)
 
 
-def test_transolver_one_step_rollout_eval():
+def test_geotransolver_one_step_rollout_eval():
     N, T, F = 7, 6, 1
     sample = make_sample(N=N, T=T, F=F)
     stats = make_data_stats()
 
-    model = rollout.TransolverOneStepRollout(
+    model = rollout.GeoTransolverOneStepRollout(
         dt=5e-3, initial_vel=torch.zeros(1, 3), num_time_steps=T
     )
     model.eval()
