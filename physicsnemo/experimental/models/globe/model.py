@@ -23,6 +23,7 @@ import torch
 import torch.nn as nn
 from jaxtyping import Float
 from tensordict import TensorDict
+from torch.profiler import record_function
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
@@ -578,82 +579,88 @@ class GLOBE(Module):
                 )
 
         ### Phase 1: Enrich boundary meshes with initial (all-ones) strengths.
-        boundary_meshes = {
-            bc_type: Mesh(
-                points=mesh.points,
-                cells=mesh.cells,
-                cell_data=TensorDict(
-                    {
-                        "physical": mesh.cell_data,
-                        "strengths": TensorDict(
-                            {
-                                name: torch.ones(mesh.n_cells, device=device)
-                                for name in self.reference_length_names
-                            },
-                            batch_size=torch.Size([mesh.n_cells]),
-                            device=device,
-                        ),
-                    },
-                    batch_size=torch.Size([mesh.n_cells]),
-                    device=device,
-                ),
-                _cache=mesh._cache,
-            )
-            for bc_type, mesh in boundary_meshes.items()
-        }
+        with record_function("globe::enrich_meshes"):
+            boundary_meshes = {
+                bc_type: Mesh(
+                    points=mesh.points,
+                    cells=mesh.cells,
+                    cell_data=TensorDict(
+                        {
+                            "physical": mesh.cell_data,
+                            "strengths": TensorDict(
+                                {
+                                    name: torch.ones(mesh.n_cells, device=device)
+                                    for name in self.reference_length_names
+                                },
+                                batch_size=torch.Size([mesh.n_cells]),
+                                device=device,
+                            ),
+                        },
+                        batch_size=torch.Size([mesh.n_cells]),
+                        device=device,
+                    ),
+                    _cache=mesh._cache,
+                )
+                for bc_type, mesh in boundary_meshes.items()
+            }
 
         ### Build per-BC-type trees and areas (reused across all layers).
         ### Tree construction and traversal involve irregular control flow
         ### (morton codes, variable-depth loops) that cannot be traced by
         ### torch.compile, so we skip compilation for this block.
-        cluster_trees, bc_areas, comm_plans = self._build_trees_and_plans(
-            boundary_meshes
-        )
+        with record_function("globe::build_trees_and_plans"):
+            cluster_trees, bc_areas, comm_plans = self._build_trees_and_plans(
+                boundary_meshes
+            )
 
         ### Phase 2: Communication hyperlayers (boundary-to-boundary).
         # Trees and comm_plans are reused across all layers because cell
         # centroids (the source/target points) are fixed - only the
         # cell_data (latent features, strengths) changes between layers.
         for i in range(self.n_communication_hyperlayers):
-            boundary_meshes = self._evaluate_communication_hyperlayer(
-                layer_idx=i,
-                boundary_meshes=boundary_meshes,
-                reference_lengths=reference_lengths,
-                global_data=global_data,
-                cluster_trees=cluster_trees,
-                comm_plans=comm_plans,
-                source_areas=bc_areas,
-            )
+            with record_function(f"globe::communication_layer/{i}"):
+                boundary_meshes = self._evaluate_communication_hyperlayer(
+                    layer_idx=i,
+                    boundary_meshes=boundary_meshes,
+                    reference_lengths=reference_lengths,
+                    global_data=global_data,
+                    cluster_trees=cluster_trees,
+                    comm_plans=comm_plans,
+                    source_areas=bc_areas,
+                )
 
         ### Phase 3: Final evaluation at prediction points.
         # Prediction plans differ from comm_plans because the targets are
         # prediction_points (the volume query locations), not the boundary
         # cell centroids used during communication.
-        pred_plans = self._build_prediction_plans(
-            cluster_trees, prediction_points
-        )
+        with record_function("globe::build_prediction_plans"):
+            pred_plans = self._build_prediction_plans(
+                cluster_trees, prediction_points
+            )
 
-        result: TensorDict[str, Float[torch.Tensor, "n_points ..."]] = self._evaluate_hyperlayer(
-            layer_idx=self.n_communication_hyperlayers,
-            target_points=prediction_points,
-            source_meshes=boundary_meshes,
-            reference_lengths=reference_lengths,
-            global_data=global_data,
-            cluster_trees=cluster_trees,
-            interaction_plans=pred_plans,
-            source_areas=bc_areas,
-        )
+        with record_function("globe::final_evaluation"):
+            result: TensorDict[str, Float[torch.Tensor, "n_points ..."]] = self._evaluate_hyperlayer(
+                layer_idx=self.n_communication_hyperlayers,
+                target_points=prediction_points,
+                source_meshes=boundary_meshes,
+                reference_lengths=reference_lengths,
+                global_data=global_data,
+                cluster_trees=cluster_trees,
+                interaction_plans=pred_plans,
+                source_areas=bc_areas,
+            )
 
         ### Wrap as point-cloud Mesh and apply per-field calibration.
-        output_mesh = Mesh(
-            points=prediction_points,
-            point_data=result,
-            global_data=global_data,
-        )
-        for idx, name in enumerate(self._output_field_order):
-            key = tuple(name.split("."))
-            t = output_mesh.point_data[key]
-            output_mesh.point_data[key] = self.final_field_transforms[idx](
-                t.view(-1, 1)
-            ).view(t.shape)
+        with record_function("globe::calibration"):
+            output_mesh = Mesh(
+                points=prediction_points,
+                point_data=result,
+                global_data=global_data,
+            )
+            for idx, name in enumerate(self._output_field_order):
+                key = tuple(name.split("."))
+                t = output_mesh.point_data[key]
+                output_mesh.point_data[key] = self.final_field_transforms[idx](
+                    t.view(-1, 1)
+                ).view(t.shape)
         return output_mesh

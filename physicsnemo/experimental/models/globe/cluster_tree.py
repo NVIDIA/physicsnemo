@@ -42,6 +42,7 @@ from math import ceil
 import torch
 from jaxtyping import Float, Int
 from tensordict import TensorDict, tensorclass
+from torch.profiler import record_function
 
 from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
 
@@ -352,10 +353,11 @@ class ClusterTree:
             )
 
         ### Sort points by morton code for spatial coherence
-        morton_codes = _compute_morton_codes(points)
-        sorted_order = morton_codes.argsort(stable=True)  # (n_points,)
-        sorted_points = points[sorted_order]  # (n_points, D)
-        sorted_areas = areas[sorted_order]  # (n_points,)
+        with record_function("cluster_tree::morton_sort"):
+            morton_codes = _compute_morton_codes(points)
+            sorted_order = morton_codes.argsort(stable=True)  # (n_points,)
+            sorted_points = points[sorted_order]  # (n_points, D)
+            sorted_areas = areas[sorted_order]  # (n_points,)
 
         ### Pre-allocate node storage.
         # The midpoint split guarantees each child gets at least
@@ -382,93 +384,95 @@ class ClusterTree:
         # -----------------------------------------------------------
         # Phase 1: Top-down LBVH construction (O(log N) iterations)
         # -----------------------------------------------------------
-        seg_starts = torch.tensor([0], dtype=torch.long, device=device)
-        seg_ends = torch.tensor([n_points], dtype=torch.long, device=device)
-        seg_node_ids = torch.tensor([0], dtype=torch.long, device=device)
-        node_count = 1
-        actual_depth = 0
+        with record_function("cluster_tree::top_down_build"):
+            seg_starts = torch.tensor([0], dtype=torch.long, device=device)
+            seg_ends = torch.tensor([n_points], dtype=torch.long, device=device)
+            seg_node_ids = torch.tensor([0], dtype=torch.long, device=device)
+            node_count = 1
+            actual_depth = 0
 
-        internal_nodes_per_level: list[torch.Tensor] = []
+            internal_nodes_per_level: list[torch.Tensor] = []
 
-        while len(seg_starts) > 0:
-            seg_sizes = seg_ends - seg_starts
+            while len(seg_starts) > 0:
+                seg_sizes = seg_ends - seg_starts
 
-            ### Classify segments as leaf or internal
-            is_leaf_seg = seg_sizes <= leaf_size
-            is_internal_seg = ~is_leaf_seg
+                ### Classify segments as leaf or internal
+                is_leaf_seg = seg_sizes <= leaf_size
+                is_internal_seg = ~is_leaf_seg
 
-            ### Process leaf segments
-            leaf_indices = torch.where(is_leaf_seg)[0]
-            if len(leaf_indices) > 0:
-                leaf_nids = seg_node_ids[leaf_indices]
-                l_starts = seg_starts[leaf_indices]
-                l_sizes = seg_sizes[leaf_indices]
+                ### Process leaf segments
+                leaf_indices = torch.where(is_leaf_seg)[0]
+                if len(leaf_indices) > 0:
+                    leaf_nids = seg_node_ids[leaf_indices]
+                    l_starts = seg_starts[leaf_indices]
+                    l_sizes = seg_sizes[leaf_indices]
 
-                leaf_start_buf[leaf_nids] = l_starts
-                leaf_count_buf[leaf_nids] = l_sizes
+                    leaf_start_buf[leaf_nids] = l_starts
+                    leaf_count_buf[leaf_nids] = l_sizes
 
-                # Compute leaf AABBs via segmented reduction
-                _fill_leaf_aabbs(
-                    leaf_nids,
-                    l_starts,
-                    l_sizes,
-                    sorted_points,
-                    aabb_min_buf,
-                    aabb_max_buf,
+                    # Compute leaf AABBs via segmented reduction
+                    _fill_leaf_aabbs(
+                        leaf_nids,
+                        l_starts,
+                        l_sizes,
+                        sorted_points,
+                        aabb_min_buf,
+                        aabb_max_buf,
+                    )
+
+                    # Compute leaf total areas
+                    _fill_leaf_total_areas(
+                        leaf_nids, l_starts, l_sizes, sorted_areas, total_area_buf
+                    )
+
+                ### Process internal segments: split at the midpoint of the
+                # morton-sorted range.  Because morton codes preserve spatial
+                # locality, this approximates a spatial median split and produces
+                # a balanced binary tree in O(log N) iterations.
+                internal_indices = torch.where(is_internal_seg)[0]
+                if len(internal_indices) == 0:
+                    break
+
+                actual_depth += 1
+                int_starts = seg_starts[internal_indices]
+                int_ends = seg_ends[internal_indices]
+                int_sizes = seg_sizes[internal_indices]
+                int_node_ids = seg_node_ids[internal_indices]
+
+                midpoints = int_starts + int_sizes // 2
+
+                n_internal = len(internal_indices)
+                left_ids = (
+                    node_count
+                    + torch.arange(n_internal, dtype=torch.long, device=device) * 2
                 )
+                right_ids = left_ids + 1
+                node_count += 2 * n_internal
 
-                # Compute leaf total areas
-                _fill_leaf_total_areas(
-                    leaf_nids, l_starts, l_sizes, sorted_areas, total_area_buf
-                )
+                left_child[int_node_ids] = left_ids
+                right_child[int_node_ids] = right_ids
+                internal_nodes_per_level.append(int_node_ids)
 
-            ### Process internal segments: split at the midpoint of the
-            # morton-sorted range.  Because morton codes preserve spatial
-            # locality, this approximates a spatial median split and produces
-            # a balanced binary tree in O(log N) iterations.
-            internal_indices = torch.where(is_internal_seg)[0]
-            if len(internal_indices) == 0:
-                break
-
-            actual_depth += 1
-            int_starts = seg_starts[internal_indices]
-            int_ends = seg_ends[internal_indices]
-            int_sizes = seg_sizes[internal_indices]
-            int_node_ids = seg_node_ids[internal_indices]
-
-            midpoints = int_starts + int_sizes // 2
-
-            n_internal = len(internal_indices)
-            left_ids = (
-                node_count
-                + torch.arange(n_internal, dtype=torch.long, device=device) * 2
-            )
-            right_ids = left_ids + 1
-            node_count += 2 * n_internal
-
-            left_child[int_node_ids] = left_ids
-            right_child[int_node_ids] = right_ids
-            internal_nodes_per_level.append(int_node_ids)
-
-            seg_starts = torch.cat([int_starts, midpoints])
-            seg_ends = torch.cat([midpoints, int_ends])
-            seg_node_ids = torch.cat([left_ids, right_ids])
+                seg_starts = torch.cat([int_starts, midpoints])
+                seg_ends = torch.cat([midpoints, int_ends])
+                seg_node_ids = torch.cat([left_ids, right_ids])
 
         # -----------------------------------------------------------
         # Phase 2: Bottom-up AABB and area propagation
         # -----------------------------------------------------------
-        for level_node_ids in reversed(internal_nodes_per_level):
-            left = left_child[level_node_ids]
-            right = right_child[level_node_ids]
-            aabb_min_buf[level_node_ids] = torch.minimum(
-                aabb_min_buf[left], aabb_min_buf[right]
-            )
-            aabb_max_buf[level_node_ids] = torch.maximum(
-                aabb_max_buf[left], aabb_max_buf[right]
-            )
-            total_area_buf[level_node_ids] = (
-                total_area_buf[left] + total_area_buf[right]
-            )
+        with record_function("cluster_tree::bottom_up_aabb"):
+            for level_node_ids in reversed(internal_nodes_per_level):
+                left = left_child[level_node_ids]
+                right = right_child[level_node_ids]
+                aabb_min_buf[level_node_ids] = torch.minimum(
+                    aabb_min_buf[left], aabb_min_buf[right]
+                )
+                aabb_max_buf[level_node_ids] = torch.maximum(
+                    aabb_max_buf[left], aabb_max_buf[right]
+                )
+                total_area_buf[level_node_ids] = (
+                    total_area_buf[left] + total_area_buf[right]
+                )
 
         ### Compute squared AABB diagonals
         aabb_min_trimmed = aabb_min_buf[:node_count]
@@ -531,66 +535,60 @@ class ClusterTree:
         D = source_points.shape[1]
         n_nodes = self.n_nodes
 
-        ### Identify leaf nodes and their source ranges
-        is_leaf = self.leaf_count > 0
-        leaf_node_ids = torch.where(is_leaf)[0]
+        ### Leaf aggregation: compute per-leaf centroids and source data
+        with record_function("cluster_tree::leaf_aggregation"):
+            is_leaf = self.leaf_count > 0
+            leaf_node_ids = torch.where(is_leaf)[0]
 
-        ### Build compact segment IDs: map each sorted source to its leaf node.
-        # Leaf node IDs are sparse (not all tree nodes are leaves), so we
-        # use a compact 0..n_leaves-1 indexing for scatter operations, then
-        # re-expand to the full n_nodes space when writing results.
-        if leaf_node_ids.numel() > 0:
-            leaf_starts = self.leaf_start[leaf_node_ids]
-            leaf_counts = self.leaf_count[leaf_node_ids]
-            n_leaves = leaf_node_ids.shape[0]
-            positions, compact_ids = _ragged_arange(leaf_starts, leaf_counts)
+            if leaf_node_ids.numel() > 0:
+                leaf_starts = self.leaf_start[leaf_node_ids]
+                leaf_counts = self.leaf_count[leaf_node_ids]
+                n_leaves = leaf_node_ids.shape[0]
+                positions, compact_ids = _ragged_arange(leaf_starts, leaf_counts)
 
-            # Invert: for each sorted-source position, store which compact
-            # leaf it belongs to.  Used by _segmented_weighted_sum below.
-            seg_ids_compact = torch.zeros(
-                self.n_sources, dtype=torch.long, device=device
-            )
-            seg_ids_compact[positions] = compact_ids
+                seg_ids_compact = torch.zeros(
+                    self.n_sources, dtype=torch.long, device=device
+                )
+                seg_ids_compact[positions] = compact_ids
 
-        ### Compute leaf centroids: area-weighted mean of source positions
-        sorted_points = source_points[self.sorted_source_order]
-        sorted_areas = areas[self.sorted_source_order]
+            sorted_points = source_points[self.sorted_source_order]
+            sorted_areas = areas[self.sorted_source_order]
 
-        centroid_buf = torch.zeros(n_nodes, D, dtype=dtype, device=device)
+            centroid_buf = torch.zeros(n_nodes, D, dtype=dtype, device=device)
 
-        if leaf_node_ids.numel() > 0:
-            leaf_centroids = _segmented_weighted_sum(
-                sorted_points, sorted_areas, seg_ids_compact, n_leaves
-            )
-            leaf_total_areas = self.node_total_area[leaf_node_ids]
-            safe_areas = leaf_total_areas.clamp(min=1e-30)
-            leaf_centroids = leaf_centroids / safe_areas.unsqueeze(-1)
-            centroid_buf[leaf_node_ids] = leaf_centroids
+            if leaf_node_ids.numel() > 0:
+                leaf_centroids = _segmented_weighted_sum(
+                    sorted_points, sorted_areas, seg_ids_compact, n_leaves
+                )
+                leaf_total_areas = self.node_total_area[leaf_node_ids]
+                safe_areas = leaf_total_areas.clamp(min=1e-30)
+                leaf_centroids = leaf_centroids / safe_areas.unsqueeze(-1)
+                centroid_buf[leaf_node_ids] = leaf_centroids
 
-        ### Compute leaf aggregate source data
-        node_source_data: TensorDict | None = None
-        if source_data is not None and leaf_node_ids.numel() > 0:
-            sorted_source_data = source_data[self.sorted_source_order]
-            node_source_data = _aggregate_source_data_leaves(
-                sorted_source_data,
-                sorted_areas,
-                seg_ids_compact,
-                n_leaves,
-                leaf_node_ids,
-                leaf_total_areas,
-                n_nodes,
-                device,
-            )
+            node_source_data: TensorDict | None = None
+            if source_data is not None and leaf_node_ids.numel() > 0:
+                sorted_source_data = source_data[self.sorted_source_order]
+                node_source_data = _aggregate_source_data_leaves(
+                    sorted_source_data,
+                    sorted_areas,
+                    seg_ids_compact,
+                    n_leaves,
+                    leaf_node_ids,
+                    leaf_total_areas,
+                    n_nodes,
+                    device,
+                )
 
         ### Bottom-up propagation: internal node centroids
-        _propagate_centroids_bottom_up(
-            centroid_buf,
-            node_source_data,
-            self.node_left_child,
-            self.node_right_child,
-            self.node_total_area,
-            n_nodes,
-        )
+        with record_function("cluster_tree::bottom_up_propagation"):
+            _propagate_centroids_bottom_up(
+                centroid_buf,
+                node_source_data,
+                self.node_left_child,
+                self.node_right_child,
+                self.node_total_area,
+                n_nodes,
+            )
 
         return SourceAggregates(
             node_centroid=centroid_buf,
@@ -640,114 +638,115 @@ class ClusterTree:
             )
 
         ### Initialize: all targets start at root (node 0)
-        active_target_ids = torch.arange(n_targets, dtype=torch.long, device=device)
-        active_node_ids = torch.zeros(n_targets, dtype=torch.long, device=device)
+        with record_function("cluster_tree::traversal"):
+            active_target_ids = torch.arange(n_targets, dtype=torch.long, device=device)
+            active_node_ids = torch.zeros(n_targets, dtype=torch.long, device=device)
 
-        near_target_list: list[torch.Tensor] = []
-        near_source_list: list[torch.Tensor] = []
-        far_target_list: list[torch.Tensor] = []
-        far_node_list: list[torch.Tensor] = []
+            near_target_list: list[torch.Tensor] = []
+            near_source_list: list[torch.Tensor] = []
+            far_target_list: list[torch.Tensor] = []
+            far_node_list: list[torch.Tensor] = []
 
-        max_depth = int(self.max_depth.item())
+            max_depth = int(self.max_depth.item())
 
-        ### Breadth-first traversal, one iteration per tree level
-        for _ in range(max_depth + 1):
-            if active_target_ids.numel() == 0:
-                break
+            ### Breadth-first traversal, one iteration per tree level
+            for _ in range(max_depth + 1):
+                if active_target_ids.numel() == 0:
+                    break
 
-            ### Opening-angle test: squared distance from each target to
-            # the nearest point on the node's AABB.  Clamping the target
-            # coordinates to the AABB bounds gives the closest point; the
-            # squared distance to that point is zero when the target is
-            # inside the box.
-            pts = target_points[active_target_ids]  # (n_active, D)
-            aabb_lo = self.node_aabb_min[active_node_ids]
-            aabb_hi = self.node_aabb_max[active_node_ids]
+                ### Opening-angle test: squared distance from each target to
+                # the nearest point on the node's AABB.  Clamping the target
+                # coordinates to the AABB bounds gives the closest point; the
+                # squared distance to that point is zero when the target is
+                # inside the box.
+                pts = target_points[active_target_ids]  # (n_active, D)
+                aabb_lo = self.node_aabb_min[active_node_ids]
+                aabb_hi = self.node_aabb_max[active_node_ids]
 
-            clamped = torch.clamp(pts, min=aabb_lo, max=aabb_hi)
-            dist_sq = (pts - clamped).pow(2).sum(dim=-1)  # (n_active,)
+                clamped = torch.clamp(pts, min=aabb_lo, max=aabb_hi)
+                dist_sq = (pts - clamped).pow(2).sum(dim=-1)  # (n_active,)
 
-            diam_sq = self.node_diameter_sq[active_node_ids]
-            is_far = dist_sq * theta_sq > diam_sq
+                diam_sq = self.node_diameter_sq[active_node_ids]
+                is_far = dist_sq * theta_sq > diam_sq
 
-            ### Three-way classification of active (target, node) pairs:
-            #  1. Far-field: D/r < theta -> use monopole
-            #  2. Near-field leaf: not far, node is a leaf -> exact per-source
-            #  3. Near-field internal: not far, node has children -> recurse
-            hit_leaf_count = self.leaf_count[active_node_ids]
-            is_leaf = hit_leaf_count > 0
+                ### Three-way classification of active (target, node) pairs:
+                #  1. Far-field: D/r < theta -> use monopole
+                #  2. Near-field leaf: not far, node is a leaf -> exact per-source
+                #  3. Near-field internal: not far, node has children -> recurse
+                hit_leaf_count = self.leaf_count[active_node_ids]
+                is_leaf = hit_leaf_count > 0
 
-            ### Far-field: accumulate (target, node) pairs
-            if is_far.any():
-                far_target_list.append(active_target_ids[is_far])
-                far_node_list.append(active_node_ids[is_far])
+                ### Far-field: accumulate (target, node) pairs
+                if is_far.any():
+                    far_target_list.append(active_target_ids[is_far])
+                    far_node_list.append(active_node_ids[is_far])
 
-            ### Near-field leaves: expand to (target, source) pairs
-            near_leaf = ~is_far & is_leaf
-            if near_leaf.any():
-                expanded_tgts, expanded_srcs = _expand_leaf_hits(
-                    active_target_ids[near_leaf],
-                    active_node_ids[near_leaf],
-                    self.leaf_start,
-                    self.leaf_count,
-                    self.sorted_source_order,
-                )
-                near_target_list.append(expanded_tgts)
-                near_source_list.append(expanded_srcs)
+                ### Near-field leaves: expand to (target, source) pairs
+                near_leaf = ~is_far & is_leaf
+                if near_leaf.any():
+                    expanded_tgts, expanded_srcs = _expand_leaf_hits(
+                        active_target_ids[near_leaf],
+                        active_node_ids[near_leaf],
+                        self.leaf_start,
+                        self.leaf_count,
+                        self.sorted_source_order,
+                    )
+                    near_target_list.append(expanded_tgts)
+                    near_source_list.append(expanded_srcs)
 
-            ### Internal near-field: expand to children for next iteration
-            expand = ~is_far & ~is_leaf
-            if not expand.any():
-                break
+                ### Internal near-field: expand to children for next iteration
+                expand = ~is_far & ~is_leaf
+                if not expand.any():
+                    break
 
-            exp_targets = active_target_ids[expand]
-            exp_nodes = active_node_ids[expand]
-            left = self.node_left_child[exp_nodes]
-            right = self.node_right_child[exp_nodes]
+                exp_targets = active_target_ids[expand]
+                exp_nodes = active_node_ids[expand]
+                left = self.node_left_child[exp_nodes]
+                right = self.node_right_child[exp_nodes]
 
-            valid_left = left >= 0
-            valid_right = right >= 0
+                valid_left = left >= 0
+                valid_right = right >= 0
 
-            parts_t: list[torch.Tensor] = []
-            parts_n: list[torch.Tensor] = []
-            if valid_left.any():
-                parts_t.append(exp_targets[valid_left])
-                parts_n.append(left[valid_left])
-            if valid_right.any():
-                parts_t.append(exp_targets[valid_right])
-                parts_n.append(right[valid_right])
+                parts_t: list[torch.Tensor] = []
+                parts_n: list[torch.Tensor] = []
+                if valid_left.any():
+                    parts_t.append(exp_targets[valid_left])
+                    parts_n.append(left[valid_left])
+                if valid_right.any():
+                    parts_t.append(exp_targets[valid_right])
+                    parts_n.append(right[valid_right])
 
-            if parts_t:
-                active_target_ids = torch.cat(parts_t)
-                active_node_ids = torch.cat(parts_n)
+                if parts_t:
+                    active_target_ids = torch.cat(parts_t)
+                    active_node_ids = torch.cat(parts_n)
+                else:
+                    break
+
+            ### Concatenate accumulated pairs
+            if near_target_list:
+                near_tgt = torch.cat(near_target_list)
+                near_src = torch.cat(near_source_list)
             else:
-                break
+                near_tgt = torch.empty(0, dtype=torch.long, device=device)
+                near_src = torch.empty(0, dtype=torch.long, device=device)
 
-        ### Concatenate accumulated pairs
-        if near_target_list:
-            near_tgt = torch.cat(near_target_list)
-            near_src = torch.cat(near_source_list)
-        else:
-            near_tgt = torch.empty(0, dtype=torch.long, device=device)
-            near_src = torch.empty(0, dtype=torch.long, device=device)
+            if far_target_list:
+                far_tgt = torch.cat(far_target_list)
+                far_nid = torch.cat(far_node_list)
+            else:
+                far_tgt = torch.empty(0, dtype=torch.long, device=device)
+                far_nid = torch.empty(0, dtype=torch.long, device=device)
 
-        if far_target_list:
-            far_tgt = torch.cat(far_target_list)
-            far_nid = torch.cat(far_node_list)
-        else:
-            far_tgt = torch.empty(0, dtype=torch.long, device=device)
-            far_nid = torch.empty(0, dtype=torch.long, device=device)
+            ### Sort pairs for memory-coalesced gather during kernel evaluation
+            if near_src.numel() > 0:
+                sort_order = near_src.argsort(stable=True)
+                near_tgt = near_tgt[sort_order]
+                near_src = near_src[sort_order]
 
-        ### Sort pairs for memory-coalesced gather during kernel evaluation
-        if near_src.numel() > 0:
-            sort_order = near_src.argsort(stable=True)
-            near_tgt = near_tgt[sort_order]
-            near_src = near_src[sort_order]
-
-        if far_nid.numel() > 0:
-            sort_order = far_nid.argsort(stable=True)
-            far_tgt = far_tgt[sort_order]
-            far_nid = far_nid[sort_order]
+            if far_nid.numel() > 0:
+                sort_order = far_nid.argsort(stable=True)
+                far_tgt = far_tgt[sort_order]
+                far_nid = far_nid[sort_order]
 
         return InteractionPlan(
             near_target_ids=near_tgt,
