@@ -46,13 +46,13 @@ logger = logging.getLogger(__name__)
 class AirFRANSVTKReader(Reader):
     """Reader for AirFRANS samples stored as VTU/VTP files on disk.
 
-    Expects a ``data_dir`` containing sample subdirectories, each with three
+    Expects a ``dataset_path`` containing sample subdirectories, each with three
     VTK files following the AirFRANS naming convention. A ``manifest.json``
-    at the root of ``data_dir`` defines the task/split membership.
+    at the root of ``dataset_path`` defines the task/split membership.
 
     Parameters
     ----------
-    data_dir : str or Path
+    dataset_path : str or Path
         Root directory containing ``manifest.json`` and sample subdirectories.
     task : str
         AirFRANS task name. One of ``"full"``, ``"scarce"``,
@@ -67,7 +67,7 @@ class AirFRANSVTKReader(Reader):
 
     def __init__(
         self,
-        data_dir: str | Path,
+        dataset_path: str | Path,
         *,
         task: Literal["full", "scarce", "reynolds", "aoa"] = "full",
         split: Literal["train", "test"] = "train",
@@ -79,17 +79,17 @@ class AirFRANSVTKReader(Reader):
             include_index_in_metadata=include_index_in_metadata,
         )
 
-        self.data_dir = Path(data_dir)
+        self.dataset_path = Path(dataset_path)
         self.task = task
         self.split = split
 
-        if not self.data_dir.exists():
-            raise FileNotFoundError(f"Data directory not found: {self.data_dir}")
+        if not self.dataset_path.exists():
+            raise FileNotFoundError(f"Data directory not found: {self.dataset_path}")
 
-        manifest_path = self.data_dir / "manifest.json"
+        manifest_path = self.dataset_path / "manifest.json"
         if not manifest_path.exists():
             raise FileNotFoundError(
-                f"manifest.json not found in {self.data_dir}. "
+                f"manifest.json not found in {self.dataset_path}. "
                 "This file defines train/test splits for each task."
             )
 
@@ -105,7 +105,7 @@ class AirFRANSVTKReader(Reader):
             )
 
         self._sample_paths: list[Path] = [
-            self.data_dir / name for name in manifest[split_key]
+            self.dataset_path / name for name in manifest[split_key]
         ]
 
         missing = [p for p in self._sample_paths if not p.exists()]
@@ -244,7 +244,7 @@ class AirFRANSVTKReader(Reader):
 
     def __repr__(self) -> str:
         return (
-            f"AirFRANSVTKReader(data_dir={self.data_dir}, "
+            f"AirFRANSVTKReader(dataset_path={self.dataset_path}, "
             f"task={self.task}, split={self.split}, "
             f"len={len(self)})"
         )

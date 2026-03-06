@@ -257,7 +257,7 @@ class AirFRANSArrowReader(Reader):
             on_surface = sdf == 0
             surface_ids = np.where(on_surface)[0]
             if len(surface_ids) > 0:
-                surface_mesh = mesh.extract_points(surface_ids).extract_surface()
+                surface_mesh = mesh.extract_points(surface_ids).extract_surface(algorithm="dataset_surface")
                 airfoil_pts = surface_mesh.points[:, :2].astype(np.float32)
                 lines = np.asarray(surface_mesh.lines)
                 if len(lines) > 0:
