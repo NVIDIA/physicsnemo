@@ -446,13 +446,19 @@ def main(
             ):
                 if training:
                     optimizer.zero_grad()
-                batch_loss, batch_loss_components = run_batch(sample)
+
+                with record_function("forward"):
+                    batch_loss, batch_loss_components = run_batch(sample)
+
                 if training:
                     if torch.isnan(batch_loss):
                         warnings.warn(f"{batch_loss=} at: {dist.rank=}, {epoch=}")
-                    scaler.scale(batch_loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
+                    with record_function("backward"):
+                        scaler.scale(batch_loss).backward()
+                    with record_function("optimizer_step"):
+                        scaler.step(optimizer)
+                        scaler.update()
+
                 all_batch_losses.append(batch_loss.detach().clone())
                 for k, v in batch_loss_components.items():
                     all_batch_loss_components[k].append(v.detach().clone())
