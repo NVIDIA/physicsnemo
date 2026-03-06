@@ -23,6 +23,7 @@ randomly subsampling cells from the cached surface mesh.
 """
 
 import csv
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
 
@@ -179,7 +180,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         *,
         world_size: int = 1,
         rank: int = 0,
-        num_workers: int = 4,
+        num_workers: int | None = None,
         boundary_n_faces: int = 20_000,
     ) -> DataLoader:
         """Create a distributed DataLoader yielding one sample per iteration.
@@ -189,13 +190,25 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
             cache_dir: Directory for disk-cached preprocessed ``.pt`` files.
             world_size: Total distributed ranks.
             rank: This process's rank.
-            num_workers: DataLoader worker processes.
+            num_workers: DataLoader worker processes per rank.  When ``None``
+                (the default), auto-computed as ``floor(n_cpus / n_gpus)``
+                to fully overlap data loading with GPU training.
             boundary_n_faces: Number of cells randomly subsampled from
                 the surface mesh to form the GLOBE boundary mesh.
 
         Returns:
             DataLoader with :class:`DistributedSampler`.
         """
+        if num_workers is None:
+            n_cpus = os.cpu_count() or 1
+            n_gpus = max(1, torch.cuda.device_count())
+            num_workers = n_cpus // n_gpus
+            if rank == 0:
+                logger.info(
+                    f"Auto-set DataLoader num_workers={num_workers} "
+                    f"({n_cpus} CPUs / {n_gpus} GPUs)"
+                )
+
         dataset = cls(
             sample_paths=sample_paths,
             cache_dir=cache_dir,
