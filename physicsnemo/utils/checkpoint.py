@@ -221,7 +221,7 @@ def save_checkpoint(
     If multiple models share the same {model_name}, they are indexed by {model_id}
     (e.g., "MyModel0", "MyModel1").
 
-    The function :func:`~physicsnemo.launch.utils.checkpoint.load_checkpoint`
+    The function :func:`~physicsnemo.utils.checkpoint.load_checkpoint`
     can be used to restore from these files with models that are **already instantiated**.
     To load only the model checkpoint (even when the models are **not** already instantiated),
     use the method :meth:`~physicsnemo.core.module.Module.from_checkpoint` to
