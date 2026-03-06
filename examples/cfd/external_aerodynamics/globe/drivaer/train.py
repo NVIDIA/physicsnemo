@@ -508,8 +508,8 @@ def main(
 
             if profiler is not None:
                 profiler.step()
-                if dist.world_size > 1:
-                    barrier()
+            if use_profiler and dist.world_size > 1:
+                barrier()
 
             ### [Logging and Checkpointing]
             if dist.rank == 0:
