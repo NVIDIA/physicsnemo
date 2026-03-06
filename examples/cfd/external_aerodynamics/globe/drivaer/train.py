@@ -497,7 +497,7 @@ def main(
     )
     profiler_ctx = (
         torch.profiler.profile(
-            schedule=torch.profiler.schedule(wait=4, warmup=1, active=1, repeat=1),
+            schedule=torch.profiler.schedule(wait=0, warmup=1, active=1, repeat=1),
             on_trace_ready=torch.profiler.tensorboard_trace_handler(
                 str(profiling_dir), worker_name=f"worker_{dist.rank}"
             ),
