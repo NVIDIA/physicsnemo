@@ -2360,26 +2360,42 @@ class Mesh:
         remove_duplicate_cells: bool = True,
         remove_unused_points: bool = True,
     ) -> "Mesh":
-        """Clean and repair this mesh.
+        r"""Clean and repair this mesh.
 
-        Performs various cleaning operations to fix common mesh issues:
-        1. Merge duplicate points within tolerance
-        2. Remove duplicate cells
-        3. Remove unused points
+        Performs up to three cleaning operations in sequence:
 
-        This is useful after mesh operations that may introduce duplicate geometry
-        or after importing meshes from external sources that may have redundant data.
+        1. **Merge duplicate points** (``merge_points``): Finds points
+           within ``tolerance`` L2 distance using BVH spatial queries and
+           merges them into a single representative.  Point data values
+           are averaged across merged groups.  Cost: :math:`O(N \log N)`
+           where *N* is the number of points.  This is the most expensive
+           step - on meshes with millions of points it can take tens of
+           seconds.
+        2. **Remove duplicate cells** (``remove_duplicate_cells``): Sorts
+           vertex indices within each cell and removes cells that share
+           the same vertex set.  Cost: :math:`O(C \log C)` where *C* is
+           the number of cells.  Typically fast.
+        3. **Remove unused points** (``remove_unused_points``): Drops
+           points not referenced by any cell and compacts the point
+           array.  Cost: :math:`O(N + C \cdot V)` where *V* is vertices
+           per cell.  Very fast (linear scatter + mask).
+
+        This is useful after importing meshes from external sources (VTK,
+        STL, CAD) that may have redundant geometry.  For programmatic mesh
+        operations like ``slice_cells`` that don't create duplicates, you
+        can disable the expensive steps and only keep
+        ``remove_unused_points=True`` for a large speedup.
 
         Parameters
         ----------
         tolerance : float, optional
             Absolute L2 distance threshold for merging duplicate points.
         merge_points : bool, optional
-            Whether to merge duplicate points (default True).
+            Whether to merge spatially-duplicate points (default True).
         remove_duplicate_cells : bool, optional
-            Whether to remove duplicate cells (default True).
+            Whether to remove cells with identical vertex sets (default True).
         remove_unused_points : bool, optional
-            Whether to remove unused points (default True).
+            Whether to drop points not referenced by any cell (default True).
 
         Returns
         -------
@@ -2397,13 +2413,12 @@ class Mesh:
         >>> cleaned = mesh.clean()
         >>> assert cleaned.n_points == 3  # points 0 and 2 merged
         >>>
-        >>> # Adjust tolerance for coarser merging
-        >>> mesh_loose = mesh.clean(tolerance=1e-6)
-        >>>
-        >>> # Only merge points, keep duplicate cells
-        >>> mesh_partial = mesh.clean(
-        ...     merge_points=True,
-        ...     remove_duplicate_cells=False
+        >>> # Fast path: only remove unreferenced points (after slice_cells, etc.)
+        >>> subset = mesh.slice_cells(torch.tensor([0]))
+        >>> compacted = subset.clean(
+        ...     merge_points=False,
+        ...     remove_duplicate_cells=False,
+        ...     remove_unused_points=True,
         ... )
         """
         from physicsnemo.mesh.repair import clean_mesh
