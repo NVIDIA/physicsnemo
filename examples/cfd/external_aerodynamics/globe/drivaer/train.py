@@ -501,7 +501,7 @@ def main(
             on_trace_ready=torch.profiler.tensorboard_trace_handler(
                 str(profiling_dir), worker_name=f"worker_{dist.rank}"
             ),
-            with_stack=True,
+            with_stack=False,
         )
         if use_profiler
         else contextlib.nullcontext()
@@ -533,6 +533,8 @@ def main(
 
             if profiler is not None:
                 profiler.step()
+                if dist.world_size > 1:
+                    barrier()
 
             ### [Logging and Checkpointing]
             if dist.rank == 0:

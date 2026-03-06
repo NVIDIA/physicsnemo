@@ -3,7 +3,7 @@
 #SBATCH -J accountname-%u.train_globe_drivaer
 #SBATCH --time=4:00:00
 #SBATCH -p batch
-#SBATCH -N 4
+#SBATCH -N 6
 #SBATCH --ntasks-per-node=1
 #SBATCH --dependency=singleton
 #SBATCH -o ./sbatch_logs/%x.log
