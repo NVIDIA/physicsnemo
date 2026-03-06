@@ -249,7 +249,7 @@ While it is possible to train models on custom datasets by formatting them ident
 The dataset class must implement the following methods:
 
 * `__len__`: Returns the number of items in the dataset
-* `__getitem__`: Returns the data for item at index `idx`. For StormCast-like hybrid models, it returns a dict with the following format: `{"background": background, "state": [old_state, new_state]}` where `background` is the low-resolution conditioning, `old_state` is the previous state used as input for the model and `new_state` is the next state used as the training target. Models that use different inputs can omit some of these; see [Model types](#model-types).
+* `__getitem__`: Returns the data for the item at index `idx`. For StormCast-like hybrid models, it returns a dict with the following format: `{"background": background, "state": [old_state, new_state]}` where `background` is the low-resolution conditioning, `old_state` is the previous state used as input for the model and `new_state` is the next state used as the training target. Models that use different inputs can omit some of these; see [Model types](#model-types).
 * `background_channels`: Returns a list with the names of each background channel. It is important that the length of this list correspond to the exact number of channels in `background`, as this is used to set the number of inputs used by the model. May return an empty list for models that do not utilize a background input (i.e. no `"background"` in `model.diffusion_conditions`/`model.regression_conditions`).
 * `state_channels`: Returns a list with the names of each state channel. As above, the length of this list must match the number of channels in `state`.
 * `image_shape`: Returns a 2-tuple with the spatial dimensions of the data.
@@ -301,12 +301,14 @@ Ensure that the `model.diffusion_conditions` and `model.regression_conditions` s
 
 ### Training is slow
 
-If training seems slow, check your GPU utilization. If it's low, the problem is likely a bottleneck with the data loading. Many datasets used in regional high-resolution models contain lots of data. Depending on the dataset size and format, consider the following optimizations:
+If training seems slow, check your GPU utilization. If it's low, the problem is likely a bottleneck with the data loading. Another way to identify a data bottleneck is to test your model using `MockDataset` (set `dataset.name=mock.MockDataset`); if training with `MockDataset` is much faster than with real data, it likely indicates a data loading bottleneck. Many datasets used in regional high-resolution models contain lots of data. Depending on the dataset size and format, consider the following optimizations:
   * Increasing `training.num_data_workers`
   * Parallel loading of data in multiple threads within the dataset
   * Optimized data preprocessing using e.g. [Numba](https://numba.pydata.org/)
   * Data compression, if bandwidth from storage is the limiting factor
   * Caching data, particularly if your dataset is small enough to be preloaded to memory
+
+Enabling BF16 (`training.perf.fp_optimizations=amp-bf16`) speeds up training considerably but is only recommended for U-Nets. Model compilation (`training.perf.torch_compile=True`) also typically improves performance but is not compatible with domain parallelism.
 
 ### Training is unstable / not converging
 

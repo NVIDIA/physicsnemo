@@ -267,7 +267,7 @@ def deterministic_sampler(
     # conditioning = [mean_hr, img_lr, global_lr]
     x_lr = img_lr
     if mean_hr is not None:
-        if mean_hr.shape[-2:] != img_lr.shape[-2:]:
+        if img_lr is not None and mean_hr.shape[-2:] != img_lr.shape[-2:]:
             raise ValueError(
                 f"mean_hr and img_lr must have the same height and width, "
                 f"but found {mean_hr.shape[-2:]} vs {img_lr.shape[-2:]}."
