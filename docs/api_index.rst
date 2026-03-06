@@ -16,7 +16,7 @@ API Reference
    api/physicsnemo.active_learning.rst
    api/physicsnemo.core.rst
    api/physicsnemo.datapipes.rst
-   api/physicsnemo.diffusion.rst
+   api_diffusion
    api/physicsnemo.distributed.rst
    api/physicsnemo.domain_parallel.rst
    api/physicsnemo.metrics.rst

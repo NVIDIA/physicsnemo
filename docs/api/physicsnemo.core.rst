@@ -25,5 +25,3 @@ consistent interfaces for data access.
 .. automodule:: physicsnemo.core.filesystem
     :members:
     :show-inheritance:
-
-.. _diffusion_utils:
