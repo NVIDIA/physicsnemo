@@ -473,7 +473,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         def _to_scalars(t: torch.Tensor, is_vec: bool) -> np.ndarray:
             """Reduce a possibly-vector tensor to a 1D float64 numpy array."""
             s = t.norm(dim=-1) if is_vec else t.reshape(-1)
-            return s.cpu().numpy().astype("float64")
+            return s.float().cpu().numpy()
 
         ### Flatten nested keys to dot-separated strings for display
         true_flat = combined.point_data["true"].flatten_keys(".")  # ty: ignore[unresolved-attribute]
@@ -576,7 +576,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
 
                 if is_surface_field:
                     ### Surface-only field: arrow visualization
-                    vals_np = vals.cpu().numpy().astype("float64")
+                    vals_np = vals.float().cpu().numpy()
                     color_norm = mpl.colors.Normalize(
                         vmin=0,
                         vmax=max_magnitude,
@@ -705,7 +705,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
             is_vector = t.ndim > 1 and t.shape[-1] > 1
             if is_vector:
                 t = torch.linalg.norm(t, dim=-1)
-            return t.detach().cpu().numpy().flatten(), is_vector
+            return t.detach().float().cpu().numpy().flatten(), is_vector
 
         ### Create subplot grid
         field_keys = sorted(point_data.keys())
