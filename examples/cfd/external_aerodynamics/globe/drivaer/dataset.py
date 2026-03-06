@@ -142,7 +142,11 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         """
         total_area = surface_mesh.cell_areas.sum()
         indices = torch.randperm(surface_mesh.n_cells)[:n_cells]
-        boundary = surface_mesh.slice_cells(indices).clean()
+        boundary = surface_mesh.slice_cells(indices).clean(
+            merge_points=False,
+            remove_duplicate_cells=False,
+            remove_unused_points=True,
+        )
 
         boundary = Mesh(points=boundary.points, cells=boundary.cells)
         raw_areas = boundary.cell_areas
