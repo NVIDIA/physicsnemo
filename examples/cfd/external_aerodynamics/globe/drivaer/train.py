@@ -587,7 +587,11 @@ def main(
                             total_area = viz_sample.surface_mesh.cell_areas.sum()
                             subsampled = viz_sample.surface_mesh.slice_cells(
                                 torch.randperm(n_cells)[:boundary_n_faces]
-                            ).clean()
+                            ).clean(
+                                merge_points=False,
+                                remove_duplicate_cells=False,
+                                remove_unused_points=True,
+                            )
                             raw_areas = subsampled.cell_areas
                             subsampled._cache["cell", "areas"] = raw_areas * (
                                 total_area / raw_areas.sum()

@@ -21,6 +21,8 @@ OUTPUT_DIR="${SCRIPT_DIR}/output/${OUTPUT_NAME}"
 TRAIN_ARGS=(
     --output-name "${OUTPUT_NAME}"
     --airfrans-task "scarce"
+    --no-use-compile
+    --amp
 )
 
 export AIRFRANS_DATA_DIR="${HOME}/datasets/airfrans/Dataset"  # Set this to your AirFRANS dataset
@@ -41,10 +43,12 @@ CUDA_MAJOR=$(sed -n 's/.*CUDA Version: \([0-9]*\).*/\1/p' <<< "$NVIDIA_SMI_OUTPU
 echo "Number of GPUs per node detected: $NUM_GPUS_PER_NODE"
 
 ### [Thread Configuration]
+# OMP_NUM_THREADS=1: DataLoader workers use process-level parallelism
+# (num_workers auto-computed as n_cpus/n_gpus), so per-process threading
+# is unnecessary and causes thread oversubscription.
 CPUS_PER_NODE=${SLURM_CPUS_ON_NODE:-$(nproc)}
-export OMP_NUM_THREADS=$((CPUS_PER_NODE / NUM_GPUS_PER_NODE))
-OMP_NUM_THREADS=$((OMP_NUM_THREADS > 0 ? OMP_NUM_THREADS : 1))
-echo "OMP_NUM_THREADS=$OMP_NUM_THREADS (${CPUS_PER_NODE} CPUs / ${NUM_GPUS_PER_NODE} GPUs)"
+export OMP_NUM_THREADS=1
+echo "OMP_NUM_THREADS=$OMP_NUM_THREADS (process-level parallelism via DataLoader workers; ${CPUS_PER_NODE} CPUs / ${NUM_GPUS_PER_NODE} GPUs)"
 
 ### [Sync Dependencies]
 if [ -z "$CUDA_MAJOR" ]; then

@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import json
+import os
 from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
@@ -111,7 +112,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         *,
         world_size: int = 1,
         rank: int = 0,
-        num_workers: int = 8,
+        num_workers: int | None = None,
     ) -> DataLoader:
         """Create a distributed DataLoader for this dataset.
 
@@ -124,11 +125,23 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
             cache_dir: Directory for disk caching of preprocessed samples.
             world_size: Total number of distributed ranks.
             rank: This process's distributed rank.
-            num_workers: Number of DataLoader worker processes.
+            num_workers: DataLoader worker processes per rank.  When ``None``
+                (the default), auto-computed as ``floor(n_cpus / n_gpus)``
+                to fully overlap data loading with GPU training.
 
         Returns:
             Configured DataLoader with distributed sampling.
         """
+        if num_workers is None:
+            n_cpus = os.cpu_count() or 1
+            n_gpus = max(1, torch.cuda.device_count())
+            num_workers = n_cpus // n_gpus
+            if rank == 0:
+                logger.info(
+                    f"Auto-set DataLoader num_workers={num_workers} "
+                    f"({n_cpus} CPUs / {n_gpus} GPUs)"
+                )
+
         dataset = cls(sample_paths=sample_paths, cache_dir=cache_dir)
         return DataLoader(
             dataset,
