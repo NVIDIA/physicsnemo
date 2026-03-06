@@ -333,16 +333,14 @@ way is to start with a reference sample and then update it for your own use case
 
 ## Installation
 
-The following instructions help you install the base PhysicsNeMo modules to get
-started. In addition to this, optional dependencies can be installed to provide
-additional functionality. A complete list of optional dependencies is available
-in the [`pyproject.toml`](./pyproject.toml) file.
+You can install PhysicsNeMo in two supported ways: **via pip** (native pip or
+**uv**) or by using the **NVIDIA container image**. Choose the method that fits your
+environment and workflow.
 
-The [training recipes](./examples) are not packaged into the pip wheels or the
-container to keep the footprint low. We recommend users clone the appropriate
-training recipes and use them as a starting point. These training recipes may
-require additional example-specific dependencies, as indicated through an
-associated `requirements.txt` file in such cases.
+The following instructions cover the base PhysicsNeMo modules. Optional dependencies
+are listed in [`pyproject.toml`](./pyproject.toml). The [training recipes](./examples)
+are not bundled in the pip wheels or container; clone the repo and use the examples
+as a starting point. Many examples have a `requirements.txt` for extra dependencies.
 
 ### CUDA Backend Selection
 
@@ -363,7 +361,7 @@ via an extra that is orthogonal to the feature extras - combine them freely:
 
 ### PyPI
 
-The recommended method for installing the latest version of PhysicsNeMo is using PyPI:
+Install the latest version from PyPI:
 
 ```Bash
 pip install nvidia-physicsnemo
@@ -387,7 +385,7 @@ The installation can also be verified by running the [Hello World](#hello-world)
 
 ### uv
 
-For development or to run examples, we recommend using [uv](https://docs.astral.sh/uv/)
+For development or to run examples from source, you can use [uv](https://docs.astral.sh/uv/)
 to clone the repository and sync dependencies:
 
 ```Bash
@@ -411,7 +409,7 @@ uv sync --extra cu12 --extra nn-extras
 
 ### NVCR Container
 
-The recommended PhysicsNeMo Docker image can be pulled from the
+The PhysicsNeMo Docker image can be pulled from the
 [NVIDIA Container Registry](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/physicsnemo/containers/physicsnemo)
 (refer to the NGC registry for the latest tag):
 
@@ -443,6 +441,8 @@ pip install --upgrade pip
 pip install .
 python -c "import physicsnemo; print('PhysicsNeMo version:', physicsnemo.__version__)"
 ```
+
+For editable installs, testing your changes locally, and contribution workflows, see the [Customizing PhysicsNeMo](https://docs.nvidia.com/physicsnemo/latest/resources/customization_guide.html) guide in the documentation. See also the [contributing guidelines](CONTRIBUTING.md) for pull requests, coding style, and CI, and the [developer wiki](https://github.com/NVIDIA/physicsnemo/wiki) for community and contributing overview.
 
 ### Building Docker from Source
 
@@ -504,8 +504,9 @@ PhysicsNeMo is an open-source collaboration, and its success is rooted in commun
 contributions to further the field of Physics-ML. Thank you for contributing to the
 project so others can build on top of your contributions.
 
-For guidance on contributing to PhysicsNeMo, please refer to the
-[contributing guidelines](CONTRIBUTING.md).
+For guidance on contributing to PhysicsNeMo, see the [contributing guidelines](CONTRIBUTING.md) (pull requests, coding style, CI).
+For install-from-source steps, editable installs, and testing your changes, see the [Customizing PhysicsNeMo](https://docs.nvidia.com/physicsnemo/latest/resources/customization_guide.html) guide in the documentation.
+For community and contributing overview, see the [developer wiki](https://github.com/NVIDIA/physicsnemo/wiki).
 
 ## Cite PhysicsNeMo
 
