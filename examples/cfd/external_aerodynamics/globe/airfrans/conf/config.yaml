@@ -6,11 +6,12 @@ defaults:
   - transforms@nondimensionalize: nondimensionalize
   - transforms@forces: forces
   - transforms@patch: patch
+  - transforms@to_airfrans_sample: to_airfrans_sample
   - _self_
 
 # Data paths (set via CLI overrides or environment)
-# dataset_path: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/airfrans/huggingface/  # used by reader=arrow
-dataset_path: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/airfrans/Dataset/  # used by reader=vtk
+dataset_path: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/airfrans/huggingface/  # used by reader=arrow
+# dataset_path: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/airfrans/Dataset/  # used by reader=vtk
 
 # Dataset parameters
 task: full
@@ -32,3 +33,4 @@ dataset:
     - ${nondimensionalize}
     - ${forces}
     - ${patch}
+    - ${to_airfrans_sample}

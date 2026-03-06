@@ -15,10 +15,11 @@
 # limitations under the License.
 
 """
-Benchmark the AirFRANS datapipe throughput.
+Benchmark the AirFRANS datapipe throughput via the physicsnemo DataLoader.
 
-Instantiates the full pipeline from the Hydra config and measures
-wall-clock time per sample over N iterations.
+Instantiates the full pipeline from the Hydra config, wraps it in
+physicsnemo.datapipes.DataLoader with the same collate as training, and
+measures wall-clock time per batch over N iterations.
 
 Usage
 -----
@@ -37,36 +38,80 @@ from __future__ import annotations
 import logging
 import statistics
 import time
+from typing import Any, Sequence
 
 import hydra
+import torch
 from omegaconf import DictConfig, OmegaConf
+from torch.utils.data import SequentialSampler
 
-from physicsnemo.datapipes import Dataset
+from physicsnemo.datapipes import DataLoader as PhysicsnemoDataLoader
+from physicsnemo.datapipes import Dataset as PhysicsnemoDataset
+from tensordict import TensorDict
+
+from physicsnemo_dataset import _structured_tensordict_to_airfrans_sample
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+_CUDA_AVAILABLE = torch.cuda.is_available()
+_BYTES_PER_MB = 2**20
 
-def benchmark(dataset: Dataset, n_samples: int) -> list[float]:
+
+def collate_single(
+    samples: Sequence[tuple[TensorDict, dict[str, Any]]],
+):
+    """Collate for batch_size=1: convert structured TensorDict to AirFRANSSample."""
+    data, _ = samples[0]
+    return _structured_tensordict_to_airfrans_sample(data)
+
+
+def _gpu_memory_mb() -> dict[str, float] | None:
+    """Return current GPU memory stats in MB, or None if CUDA not available."""
+    if not _CUDA_AVAILABLE:
+        return None
+    torch.cuda.synchronize()
+    return {
+        "allocated_mb": torch.cuda.memory_allocated() / _BYTES_PER_MB,
+        "reserved_mb": torch.cuda.memory_reserved() / _BYTES_PER_MB,
+        "max_allocated_mb": torch.cuda.max_memory_allocated() / _BYTES_PER_MB,
+        "max_reserved_mb": torch.cuda.max_memory_reserved() / _BYTES_PER_MB,
+    }
+
+
+def benchmark(
+    dataloader: PhysicsnemoDataLoader,
+    n_samples: int,
+) -> tuple[list[float], dict[str, float] | None]:
+    dataset = dataloader.dataset
     actual_n = min(n_samples, len(dataset))
     if actual_n == 0:
         logger.warning("Dataset is empty — nothing to benchmark.")
-        return []
+        return [], _gpu_memory_mb() if _CUDA_AVAILABLE else None
 
-    logger.info("Warming up (1 sample)...")
-    _ = dataset[0]
+    logger.info("Warming up (1 batch)...")
+    _ = next(iter(dataloader))
 
-    logger.info("Timing %d samples...", actual_n)
+    if _CUDA_AVAILABLE:
+        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.synchronize()
+
+    logger.info("Timing %d batches...", actual_n)
     times: list[float] = []
-    for i in range(actual_n):
+    it = iter(dataloader)
+    for _ in range(actual_n):
         t0 = time.perf_counter()
-        _ = dataset[i]
+        _ = next(it)
         times.append(time.perf_counter() - t0)
 
-    return times
+    gpu_stats = _gpu_memory_mb()
+    return times, gpu_stats
 
 
-def print_results(times: list[float]) -> None:
+def print_results(
+    times: list[float],
+    gpu_stats: dict[str, float] | None = None,
+) -> None:
     n = len(times)
     if n == 0:
         return
@@ -90,6 +135,18 @@ def print_results(times: list[float]) -> None:
         f"{median:>11.4f} {std:>10.4f} {throughput:>10.2f}/s"
     )
     print(sep)
+
+    if gpu_stats is not None:
+        print()
+        print("GPU memory (peak during benchmark):")
+        print(
+            f"  max allocated: {gpu_stats['max_allocated_mb']:.2f} MB  "
+            f"max reserved: {gpu_stats['max_reserved_mb']:.2f} MB"
+        )
+        print(
+            f"  current allocated: {gpu_stats['allocated_mb']:.2f} MB  "
+            f"current reserved: {gpu_stats['reserved_mb']:.2f} MB"
+        )
     print()
 
 
@@ -99,18 +156,25 @@ def print_results(times: list[float]) -> None:
     config_name="config",
 )
 def main(cfg: DictConfig) -> None:
-    n_samples: int = cfg.get("n_samples", 10)
+    n_samples: int = cfg.get("n_samples", 100)
 
     print("=== AirFRANS Datapipe Benchmark ===")
     print()
     print(OmegaConf.to_yaml(cfg, resolve=True))
 
-    logger.info("Building dataset...")
-    dataset: Dataset = hydra.utils.instantiate(cfg.dataset)
+    logger.info("Building physicsnemo dataloader...")
+    dataset: PhysicsnemoDataset = hydra.utils.instantiate(cfg.dataset)
+    sampler = SequentialSampler(dataset)
+    dataloader = PhysicsnemoDataLoader(
+        dataset,
+        batch_size=1,
+        sampler=sampler,
+        collate_fn=collate_single,
+    )
     logger.info("Dataset size: %d samples", len(dataset))
 
-    times = benchmark(dataset, n_samples)
-    print_results(times)
+    times, gpu_stats = benchmark(dataloader, n_samples)
+    print_results(times, gpu_stats)
 
     dataset.close()
 

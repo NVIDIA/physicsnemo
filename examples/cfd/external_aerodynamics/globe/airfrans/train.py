@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import contextlib
+import gc
 import logging
 import os
 import warnings
@@ -31,6 +32,7 @@ import torch
 import torch.nn.functional as F
 import torchinfo
 from dataset import AirFRANSDataSet, AirFRANSSample, compute_max_mesh_sizes
+# from physicsnemo_dataset import AirFRANSDataSet, AirFRANSSample, compute_max_mesh_sizes
 from jaxtyping import Float, Int
 from mlflow.tracking.fluent import (
     active_run,
@@ -69,7 +71,7 @@ def main(
     data_dir: Path | None = None,
     output_name: str | None = None,
     amp: bool = False,
-    use_compile: bool = True,
+    use_compile: bool = False,
     compile_mode: Literal[
         "default", "max-autotune-no-cudagraphs", "reduce-overhead", "max-autotune"
     ] = "max-autotune",
@@ -84,11 +86,11 @@ def main(
     error_scales: dict[str, float] | None = None,
     n_communication_hyperlayers: int = 2,
     hidden_layer_sizes: tuple[int, ...] = (64, 64, 64),
-    n_latent_scalars: int = 12,
-    n_latent_vectors: int = 6,
+    n_latent_scalars: int = 6,
+    n_latent_vectors: int = 3,
     n_spherical_harmonics: int = 1,
     airfrans_task: Literal["full", "scarce", "reynolds", "aoa"] = "full",
-    use_profiler: bool = True,
+    use_profiler: bool = False,
     make_images: bool = True,
     use_mlflow: bool = True,
     mlflow_experiment: str = "GLOBE_AirFRANS",
@@ -286,6 +288,15 @@ def main(
         )
         for split in splits
     }
+
+    ### [Free GPU memory after max mesh sizes / datapipe scan]
+    for split in splits:
+        loader = dataloaders[split]
+        if hasattr(loader, "dataset") and hasattr(loader.dataset, "cancel_prefetch"):
+            loader.dataset.cancel_prefetch(None)
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     ### [Optimizer and Scheduler Setup]
     # Square-root batch-size scaling: when the effective batch size grows
@@ -645,7 +656,12 @@ def main(
                     logger0.info("Generating visualization images...")
                     for split in splits:
                         sample_path = sample_paths[split][0]
-                        viz_sample = AirFRANSDataSet.preprocess(sample_path).to(device)
+                        viz_sample = AirFRANSDataSet.preprocess(
+                            sample_path,
+                            split=split,
+                            index=0,
+                            task=airfrans_task,
+                        ).to(device)
                         with torch.no_grad(), autocast_ctx:
                             base_model.eval()
                             pred_mesh = base_model(

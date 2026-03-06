@@ -149,13 +149,31 @@ class AirFRANSVTKReader(Reader):
 
     @staticmethod
     def _extract_line_cells(mesh: pv.PolyData) -> np.ndarray:
-        """Extract edge connectivity from a PolyData boundary mesh."""
+        """Extract edge connectivity from a PolyData boundary mesh.
+
+        VTK lines format: for each cell [n_pts, id0, id1, ..., id_{n-1}].
+        Converts both LINE (2 pts) and POLY_LINE (many pts) to (n_edges, 2) edges.
+        """
         lines = np.asarray(mesh.lines)
         if len(lines) == 0:
             return np.empty((0, 2), dtype=np.int64)
-        stride = int(lines[0]) + 1
-        n_segments = len(lines) // stride
-        return lines.reshape(n_segments, stride)[:, 1:].astype(np.int64)
+        result = []
+        i = 0
+        while i < len(lines):
+            n_pts = int(lines[i])
+            i += 1
+            if n_pts < 2:
+                i += n_pts
+                continue
+            indices = lines[i : i + n_pts]
+            i += n_pts
+            edges = np.column_stack([indices[:-1], indices[1:]])
+            result.append(edges)
+        return (
+            np.vstack(result).astype(np.int64)
+            if result
+            else np.empty((0, 2), dtype=np.int64)
+        )
 
     def _load_sample(self, index: int) -> dict[str, torch.Tensor]:
         sample_path = self._sample_paths[index]

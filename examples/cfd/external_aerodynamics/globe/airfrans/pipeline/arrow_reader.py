@@ -118,6 +118,31 @@ def _parse_cgns_tree(sample_blob: bytes) -> tuple[dict[str, np.ndarray], dict[st
     return arrays, scalars
 
 
+def _polyline_to_edges(lines: np.ndarray) -> np.ndarray:
+    """Convert VTK lines array (LINE or POLY_LINE cells) to (n_edges, 2) edge indices.
+
+    VTK format: for each cell [n_pts, id0, id1, ..., id_{n-1}].
+    """
+    if len(lines) == 0:
+        return np.empty((0, 2), dtype=np.int64)
+    result = []
+    i = 0
+    while i < len(lines):
+        n_pts = int(lines[i])
+        i += 1
+        if n_pts < 2:
+            i += n_pts
+            continue
+        indices = lines[i : i + n_pts]
+        i += n_pts
+        result.append(np.column_stack([indices[:-1], indices[1:]]))
+    return (
+        np.vstack(result).astype(np.int64)
+        if result
+        else np.empty((0, 2), dtype=np.int64)
+    )
+
+
 def _build_pyvista_mesh(arrays: dict[str, np.ndarray]) -> pv.UnstructuredGrid:
     """Construct a PyVista UnstructuredGrid from parsed CGNS arrays."""
     x = arrays["x"]
@@ -257,15 +282,22 @@ class AirFRANSArrowReader(Reader):
             on_surface = sdf == 0
             surface_ids = np.where(on_surface)[0]
             if len(surface_ids) > 0:
-                surface_mesh = mesh.extract_points(surface_ids).extract_surface(algorithm="dataset_surface")
+                surface_mesh = mesh.extract_points(surface_ids).extract_surface(
+                    algorithm="dataset_surface"
+                )
                 airfoil_pts = surface_mesh.points[:, :2].astype(np.float32)
-                lines = np.asarray(surface_mesh.lines)
-                if len(lines) > 0:
-                    stride = int(lines[0]) + 1
-                    n_seg = len(lines) // stride
-                    airfoil_cells = lines.reshape(n_seg, stride)[:, 1:].astype(np.int64)
-                else:
-                    airfoil_cells = np.empty((0, 2), dtype=np.int64)
+                airfoil_cells = _polyline_to_edges(np.asarray(surface_mesh.lines))
+                if airfoil_cells.shape[0] == 0 and airfoil_pts.shape[0] > 1:
+                    # Fallback when extract_surface does not populate lines: chain by angle
+                    centroid = airfoil_pts.mean(axis=0)
+                    angles = np.arctan2(
+                        airfoil_pts[:, 1] - centroid[1],
+                        airfoil_pts[:, 0] - centroid[0],
+                    )
+                    order = np.argsort(angles)
+                    airfoil_cells = np.column_stack([order[:-1], order[1:]]).astype(
+                        np.int64
+                    )
             else:
                 airfoil_pts = np.empty((0, 2), dtype=np.float32)
                 airfoil_cells = np.empty((0, 2), dtype=np.int64)

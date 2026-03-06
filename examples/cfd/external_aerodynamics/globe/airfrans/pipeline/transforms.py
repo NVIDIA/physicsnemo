@@ -286,3 +286,139 @@ class PatchNonPhysicalValues(Transform):
 
     def extra_repr(self) -> str:
         return f"threshold={self.threshold}"
+
+
+# Pipeline key (ASCII) -> AirFRANSSample / GLOBE key (unicode)
+_PIPELINE_TO_UNICODE = {
+    "DeltaU/|U_inf|": "ΔU/|U_inf|",
+    "grad_C_p_chord": "∇C_p*chord",
+    "C_F_shear": "C_F,shear",
+    "C_F_pressure": "C_F,pressure",
+}
+
+# Output field keys in unicode (for point_data)
+_UNICODE_POINT_DATA_KEYS = [
+    "U/|U_inf|",
+    "ΔU/|U_inf|",
+    "C_p",
+    "C_pt",
+    "ln(1+nut/nu)",
+    "∇C_p*chord",
+    "C_F,shear",
+    "C_F,pressure",
+    "C_F",
+]
+
+
+class ToAirFRANSSampleStructure(Transform):
+    """Restructure flat pipeline TensorDict into AirFRANSSample shape and rename keys to unicode.
+
+    Runs last in the pipeline. Renames pipeline keys (e.g. DeltaU/|U_inf|, grad_C_p_chord,
+    C_F_shear, C_F_pressure) to the fancy unicode versions expected by GLOBE. Outputs a
+    TensorDict with top-level keys: interior_mesh, boundary_meshes, reference_lengths,
+    dimensional_constants, so the wrapper can build AirFRANSSample by constructing Mesh
+    instances from the nested tensors. Only includes keys that exist in the input.
+    """
+
+    def __call__(self, data: TensorDict) -> TensorDict:
+        points = data["points"]
+        n_points = points.shape[0]
+        device = points.device
+
+        # Build point_data with unicode key names (copy/rename from pipeline keys)
+        point_data_dict = {}
+        for unicode_key in _UNICODE_POINT_DATA_KEYS:
+            if unicode_key in data.keys():
+                point_data_dict[unicode_key] = data[unicode_key]
+            else:
+                # Check if we have the ASCII pipeline name
+                ascii_key = None
+                for asc, uni in _PIPELINE_TO_UNICODE.items():
+                    if uni == unicode_key and asc in data.keys():
+                        ascii_key = asc
+                        break
+                if ascii_key is not None:
+                    point_data_dict[unicode_key] = data[ascii_key]
+
+        point_data = TensorDict(
+            point_data_dict,
+            batch_size=[n_points],
+            device=device,
+        )
+
+        # Global data: U_inf / U_inf_magnitude
+        U_inf = data["U_inf"]
+        U_inf_mag = data["U_inf_magnitude"]
+        if U_inf_mag.dim() > 0:
+            U_inf_mag = U_inf_mag.squeeze()
+        if U_inf.dim() > 1:
+            U_inf = U_inf.squeeze(0)
+        global_data = TensorDict(
+            {
+                "U_inf / U_inf_magnitude": U_inf / U_inf_mag,
+            },
+            batch_size=[],
+            device=device,
+        )
+
+        interior_mesh = TensorDict(
+            {
+                "points": data["points"],
+                "cells": data["internal_cells"],
+                "point_data": point_data,
+                "global_data": global_data,
+            },
+            batch_size=[],
+            device=device,
+        )
+
+        boundary_meshes = TensorDict(
+            {
+                "no_slip": TensorDict(
+                    {
+                        "points": data["airfoil_points"],
+                        "cells": data["airfoil_cells"],
+                    },
+                    batch_size=[],
+                    device=device,
+                )
+            },
+            batch_size=[],
+            device=device,
+        )
+
+        chord = torch.tensor(CHORD, device=device, dtype=points.dtype)
+        delta_FS = data["delta_FS"]
+        if delta_FS.dim() > 0:
+            delta_FS = delta_FS.squeeze()
+        reference_lengths = TensorDict(
+            {
+                "chord": chord,
+                "delta_FS": delta_FS,
+            },
+            batch_size=[],
+            device=device,
+        )
+
+        q_inf = data["q_inf"]
+        if q_inf.dim() > 0:
+            q_inf = q_inf.squeeze()
+        dimensional_constants = TensorDict(
+            {
+                "U_inf": data["U_inf"].squeeze(0) if data["U_inf"].dim() > 1 else data["U_inf"],
+                "q_inf": q_inf,
+            },
+            batch_size=[],
+            device=device,
+        )
+
+        return TensorDict(
+            {
+                "interior_mesh": interior_mesh,
+                "boundary_meshes": boundary_meshes,
+                "reference_lengths": reference_lengths,
+                "dimensional_constants": dimensional_constants,
+            },
+            batch_size=[],
+            device=device,
+        )

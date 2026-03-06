@@ -32,6 +32,7 @@ from .transforms import (
     ComputeGradients,
     NondimensionalizeFields,
     PatchNonPhysicalValues,
+    ToAirFRANSSampleStructure,
 )
 from .vtk_reader import AirFRANSVTKReader
 
@@ -47,6 +48,7 @@ __all__ = [
     "NondimensionalizeFields",
     "PatchNonPhysicalValues",
     "RHO",
+    "ToAirFRANSSampleStructure",
     "compute_airfoil_normals_nearest",
     "compute_gradients",
     "compute_mesh_quantities",

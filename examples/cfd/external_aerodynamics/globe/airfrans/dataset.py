@@ -14,10 +14,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+AirFRANS dataset interface for train and inference.
+
+Two implementations:
+
+- **AirFRANSDataSet**: VTK-based loader with disk cache (original).
+- **AirFRANSDataSetDatapipe**: Hydra-configured physicsnemo datapipe (Arrow/VTK, ToAirFRANSSample).
+
+To use the datapipe in train or inference, change the import only:
+
+  # Original
+  from dataset import AirFRANSDataSet, AirFRANSSample, compute_max_mesh_sizes
+
+  # Datapipe (same names)
+  from dataset import (
+      AirFRANSDataSetDatapipe as AirFRANSDataSet,
+      AirFRANSSample,
+      compute_max_mesh_sizes,
+  )
+
+When using the datapipe: pass ``task=`` and ``split=`` to ``make_dataloader``; use
+``preprocess(split="test", index=0)`` for single-sample load in inference (no path).
+"""
+
 import json
+import os
 from collections import defaultdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
+from typing import TYPE_CHECKING, Any, Iterable, Literal, Self, Sequence
 
 import pyvista as pv
 import torch
@@ -596,7 +621,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
 
 
 def compute_max_mesh_sizes(
-    dataloader: DataLoader,
+    dataloader: Iterable[AirFRANSSample],
     device: torch.device,
     *,
     face_downsampling_ratio: float = 1.0,
@@ -667,6 +692,129 @@ def compute_max_mesh_sizes(
         logger.info(f"Max mesh sizes: {result.to_dict()}")
 
     return result
+
+
+def _collate_single_datapipe(
+    samples: Sequence[tuple[TensorDict, dict[str, Any]]],
+) -> TensorDict:
+    """Collate for batch_size=1: return the AirFRANSSample (first element of tuple)."""
+    data, _ = samples[0]
+    return data
+
+
+class AirFRANSDataSetDatapipe:
+    """
+    Drop-in replacement for :class:`AirFRANSDataSet` using the physicsnemo datapipe.
+
+    Same interface as :class:`AirFRANSDataSet` so train/inference scripts only need
+    an import change, e.g. ``from dataset import AirFRANSDataSetDatapipe as AirFRANSDataSet``.
+
+    - :meth:`get_split_paths`: same as original (reads manifest.json when present).
+    - :meth:`make_dataloader`: returns :class:`physicsnemo.datapipes.DataLoader`;
+      requires ``task`` and ``split`` (config from conf/config.yaml).
+    - :meth:`preprocess`: use ``preprocess(split=..., index=...)`` to load one sample
+      by index; no path-based preprocess for arrow backend.
+    - :meth:`postprocess` / :meth:`visualize_output_distributions`: delegate to original.
+    """
+
+    _config_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "conf")
+
+    @classmethod
+    def get_split_paths(
+        cls,
+        data_dir: Path,
+        task: Literal["full", "scarce", "reynolds", "aoa"],
+        split: Literal["train", "test"],
+    ) -> list[Path]:
+        """Same as :meth:`AirFRANSDataSet.get_split_paths` (reads manifest.json)."""
+        return AirFRANSDataSet.get_split_paths(data_dir, task, split)
+
+    @classmethod
+    def make_dataloader(
+        cls,
+        sample_paths: Sequence[Path],
+        cache_dir: Path,
+        *,
+        world_size: int = 1,
+        rank: int = 0,
+        num_workers: int = 0,
+        task: str = "full",
+        split: Literal["train", "test"] = "train",
+    ):
+        """Build a physicsnemo DataLoader for the given task/split (config from Hydra)."""
+        import hydra
+        from hydra import compose, initialize_config_dir
+        from physicsnemo.datapipes import DataLoader as PhysicsnemoDataLoader
+        from physicsnemo.datapipes import Dataset as PhysicsnemoDataset
+
+        with initialize_config_dir(config_dir=cls._config_dir, version_base=None):
+            cfg = compose(
+                config_name="config",
+                overrides=[
+                    f"task={task}",
+                    f"split={split}",
+                    "reader.pin_memory=false",
+                ],
+            )
+        datapipe: PhysicsnemoDataset = hydra.utils.instantiate(cfg.dataset)
+        sampler = DistributedSampler(
+            datapipe,
+            num_replicas=world_size,
+            rank=rank,
+        )
+        return PhysicsnemoDataLoader(
+            datapipe,
+            batch_size=1,
+            sampler=sampler,
+            collate_fn=_collate_single_datapipe,
+        )
+
+    @classmethod
+    def preprocess(
+        cls,
+        sample_path: Path | None = None,
+        *,
+        split: Literal["train", "test"] = "test",
+        index: int = 0,
+        task: str = "full",
+    ) -> AirFRANSSample:
+        """Load one sample by split/index from the datapipe (no path-based load for arrow)."""
+        if sample_path is not None:
+            return AirFRANSDataSet.preprocess(sample_path)
+        import hydra
+        from hydra import compose, initialize_config_dir
+        from physicsnemo.datapipes import Dataset as PhysicsnemoDataset
+
+        with initialize_config_dir(config_dir=cls._config_dir, version_base=None):
+            cfg = compose(
+                config_name="config",
+                overrides=[f"task={task}", f"split={split}", "reader.pin_memory=false"],
+            )
+        datapipe: PhysicsnemoDataset = hydra.utils.instantiate(cfg.dataset)
+        data, _ = datapipe[index]
+        return data
+
+    @staticmethod
+    def postprocess(
+        pred_mesh: Mesh,
+        true_mesh: Mesh,
+        *,
+        fields: Sequence[str | tuple[str, ...]] | None = None,
+        show: bool = True,
+        show_error: bool = True,
+    ) -> Mesh:
+        """Delegate to :meth:`AirFRANSDataSet.postprocess`."""
+        return AirFRANSDataSet.postprocess(
+            pred_mesh, true_mesh, fields=fields, show=show, show_error=show_error
+        )
+
+    @staticmethod
+    def visualize_output_distributions(
+        output_dict: TensorDict[str, Float[torch.Tensor, "..."]],
+        show: bool = True,
+    ) -> None:
+        """Delegate to :meth:`AirFRANSDataSet.visualize_output_distributions`."""
+        AirFRANSDataSet.visualize_output_distributions(output_dict, show=show)
 
 
 if __name__ == "__main__":
