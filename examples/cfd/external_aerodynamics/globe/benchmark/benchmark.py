@@ -286,7 +286,7 @@ def profiler_run(
                 ProfileRegion(
                     name=evt.key,
                     cpu_ms=evt.cpu_time_total / 1000,
-                    cuda_ms=evt.cuda_time_total / 1000,
+                    cuda_ms=evt.device_time_total / 1000,
                     count=evt.count,
                 )
             )
@@ -317,12 +317,12 @@ def profiler_top_backward_ops(
 
     ops: list[ProfileRegion] = []
     for evt in prof.key_averages():
-        if evt.cuda_time_total > 0:
+        if evt.device_time_total > 0:
             ops.append(
                 ProfileRegion(
                     name=evt.key,
                     cpu_ms=evt.cpu_time_total / 1000,
-                    cuda_ms=evt.cuda_time_total / 1000,
+                    cuda_ms=evt.device_time_total / 1000,
                     count=evt.count,
                 )
             )
@@ -337,6 +337,9 @@ def profiler_top_backward_ops(
 
 def clean_gpu(device: torch.device) -> None:
     """Reset GPU state between experiments."""
+    gc.collect()
+    torch.cuda.synchronize(device)
+    torch.cuda.empty_cache()
     gc.collect()
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats(device)
@@ -652,9 +655,27 @@ def run_deep_profiler(
             loss.backward()
         model.zero_grad(set_to_none=True)
 
-    regions_fwd = profiler_run(fwd_only, device, n_warmup=n_warmup)
-    regions_fwd_bwd = profiler_run(fwd_bwd, device, n_warmup=n_warmup)
-    top_bwd_ops = profiler_top_backward_ops(fwd_bwd, device, n_warmup=n_warmup)
+    regions_fwd: list[ProfileRegion] = []
+    regions_fwd_bwd: list[ProfileRegion] = []
+    top_bwd_ops: list[ProfileRegion] = []
+
+    try:
+        regions_fwd = profiler_run(fwd_only, device, n_warmup=n_warmup)
+    except torch.cuda.OutOfMemoryError:
+        print("    OOM during inference profiling, skipping.", flush=True)
+        clean_gpu(device)
+
+    try:
+        regions_fwd_bwd = profiler_run(fwd_bwd, device, n_warmup=n_warmup)
+    except torch.cuda.OutOfMemoryError:
+        print("    OOM during fwd+bwd profiling, skipping.", flush=True)
+        clean_gpu(device)
+
+    try:
+        top_bwd_ops = profiler_top_backward_ops(fwd_bwd, device, n_warmup=n_warmup)
+    except torch.cuda.OutOfMemoryError:
+        print("    OOM during backward op profiling, skipping.", flush=True)
+        clean_gpu(device)
 
     del model
     clean_gpu(device)
@@ -699,19 +720,23 @@ def run_grad_ckpt_comparison(
     results = {}
     for ckpt_enabled in [True, False]:
         label = "with_grad_ckpt" if ckpt_enabled else "without_grad_ckpt"
-        model = GLOBE(**model_kwargs).to(device)
-        for module in model.modules():
-            if isinstance(module, BarnesHutKernel):
-                module.use_gradient_checkpointing = ckpt_enabled
-        result = time_training_step(
-            model, mesh, prediction_points, ref_lengths,
-            device=device, amp=amp, n_warmup=n_warmup, n_trials=n_trials,
-        )
-        if result is not None:
-            results[label] = asdict(result)
-        else:
+        try:
+            model = GLOBE(**model_kwargs).to(device)
+            for module in model.modules():
+                if isinstance(module, BarnesHutKernel):
+                    module.use_gradient_checkpointing = ckpt_enabled
+            result = time_training_step(
+                model, mesh, prediction_points, ref_lengths,
+                device=device, amp=amp, n_warmup=n_warmup, n_trials=n_trials,
+            )
+            if result is not None:
+                results[label] = asdict(result)
+            else:
+                results[label] = {"oom": True}
+            del model
+        except torch.cuda.OutOfMemoryError:
             results[label] = {"oom": True}
-        del model
+            print(f"    OOM for {label}, skipping.", flush=True)
         clean_gpu(device)
 
     return results
@@ -738,40 +763,38 @@ def run_theta_sweep(
 
     for theta in theta_values:
         clean_gpu(device)
-        tree = ClusterTree.from_points(
-            source_points, leaf_size=model_kwargs["leaf_size"], areas=source_areas,
-        )
-        plan = tree.find_interaction_pairs(source_points, theta=theta)
-        compression = n_a2a / max(1, plan.n_total)
-        depth = int(tree.max_depth.item())
+        sp = SweepPoint(label=f"theta={theta}", config={"theta": theta}, n_faces=n_faces)
+        try:
+            tree = ClusterTree.from_points(
+                source_points, leaf_size=model_kwargs["leaf_size"], areas=source_areas,
+            )
+            plan = tree.find_interaction_pairs(source_points, theta=theta)
+            sp.compression_ratio = n_a2a / max(1, plan.n_total)
+            sp.tree_depth = int(tree.max_depth.item())
+            sp.n_near = plan.n_near
+            sp.n_far = plan.n_far
+            sp.tree_nodes = tree.n_nodes
+            sp.tree_leaves = int((tree.leaf_count > 0).sum())
 
-        kwargs = {**model_kwargs, "theta": theta}
-        model = GLOBE(**kwargs).to(device)
-        result = time_training_step(
-            model, mesh, prediction_points, ref_lengths,
-            device=device, amp=amp, n_warmup=n_warmup, n_trials=n_trials,
-        )
-        sp = SweepPoint(
-            label=f"theta={theta}",
-            config={"theta": theta},
-            n_near=plan.n_near,
-            n_far=plan.n_far,
-            compression_ratio=compression,
-            tree_depth=depth,
-            tree_nodes=tree.n_nodes,
-            tree_leaves=int((tree.leaf_count > 0).sum()),
-            n_faces=n_faces,
-        )
-        if result is None:
+            kwargs = {**model_kwargs, "theta": theta}
+            model = GLOBE(**kwargs).to(device)
+            result = time_training_step(
+                model, mesh, prediction_points, ref_lengths,
+                device=device, amp=amp, n_warmup=n_warmup, n_trials=n_trials,
+            )
+            if result is None:
+                sp.oom = True
+            else:
+                sp.forward_ms = result.forward_ms
+                sp.backward_ms = result.backward_ms
+                sp.total_ms = result.total_ms
+                sp.peak_alloc_gb = result.peak_alloc_gb
+                sp.peak_reserved_gb = result.peak_reserved_gb
+            del model
+        except torch.cuda.OutOfMemoryError:
             sp.oom = True
-        else:
-            sp.forward_ms = result.forward_ms
-            sp.backward_ms = result.backward_ms
-            sp.total_ms = result.total_ms
-            sp.peak_alloc_gb = result.peak_alloc_gb
-            sp.peak_reserved_gb = result.peak_reserved_gb
+            print(f"    OOM at theta={theta}, skipping.", flush=True)
         points.append(sp)
-        del model
         clean_gpu(device)
 
     return points
@@ -799,41 +822,42 @@ def run_leaf_size_sweep(
 
     for leaf_size in leaf_size_values:
         clean_gpu(device)
-        tree = ClusterTree.from_points(
-            source_points, leaf_size=leaf_size, areas=source_areas,
-        )
-        plan = tree.find_interaction_pairs(source_points, theta=theta)
-        compression = n_a2a / max(1, plan.n_total)
-        depth = int(tree.max_depth.item())
-        n_leaves = int((tree.leaf_count > 0).sum())
-
-        kwargs = {**model_kwargs, "leaf_size": leaf_size}
-        model = GLOBE(**kwargs).to(device)
-        result = time_training_step(
-            model, mesh, prediction_points, ref_lengths,
-            device=device, amp=amp, n_warmup=n_warmup, n_trials=n_trials,
-        )
         sp = SweepPoint(
             label=f"leaf_size={leaf_size}",
             config={"leaf_size": leaf_size},
-            n_near=plan.n_near,
-            n_far=plan.n_far,
-            compression_ratio=compression,
-            tree_depth=depth,
-            tree_nodes=tree.n_nodes,
-            tree_leaves=n_leaves,
             n_faces=n_faces,
         )
-        if result is None:
+        try:
+            tree = ClusterTree.from_points(
+                source_points, leaf_size=leaf_size, areas=source_areas,
+            )
+            plan = tree.find_interaction_pairs(source_points, theta=theta)
+            sp.compression_ratio = n_a2a / max(1, plan.n_total)
+            sp.tree_depth = int(tree.max_depth.item())
+            sp.n_near = plan.n_near
+            sp.n_far = plan.n_far
+            sp.tree_nodes = tree.n_nodes
+            sp.tree_leaves = int((tree.leaf_count > 0).sum())
+
+            kwargs = {**model_kwargs, "leaf_size": leaf_size}
+            model = GLOBE(**kwargs).to(device)
+            result = time_training_step(
+                model, mesh, prediction_points, ref_lengths,
+                device=device, amp=amp, n_warmup=n_warmup, n_trials=n_trials,
+            )
+            if result is None:
+                sp.oom = True
+            else:
+                sp.forward_ms = result.forward_ms
+                sp.backward_ms = result.backward_ms
+                sp.total_ms = result.total_ms
+                sp.peak_alloc_gb = result.peak_alloc_gb
+                sp.peak_reserved_gb = result.peak_reserved_gb
+            del model
+        except torch.cuda.OutOfMemoryError:
             sp.oom = True
-        else:
-            sp.forward_ms = result.forward_ms
-            sp.backward_ms = result.backward_ms
-            sp.total_ms = result.total_ms
-            sp.peak_alloc_gb = result.peak_alloc_gb
-            sp.peak_reserved_gb = result.peak_reserved_gb
+            print(f"    OOM at leaf_size={leaf_size}, skipping.", flush=True)
         points.append(sp)
-        del model
         clean_gpu(device)
 
     return points
@@ -862,62 +886,66 @@ def run_compile_test(
     for label, compile_mode in configs:
         clean_gpu(device)
         torch._dynamo.reset()
-        model = GLOBE(**model_kwargs).to(device)
-        model.train()
-
-        if compile_mode is not None:
-            def make_step_fn(mdl, compile_mode_str):
-                @torch.compile(dynamic=True, mode=compile_mode_str)
-                def _step(pp, bm, rl):
-                    pred_mesh = mdl(
-                        prediction_points=pp,
-                        boundary_meshes=bm,
-                        reference_lengths=rl,
-                    )
-                    return sum(
-                        v.float().sum()
-                        for v in pred_mesh.point_data.values(
-                            include_nested=True, leaves_only=True
-                        )
-                    )
-                return _step
-            step_fn = make_step_fn(model, compile_mode)
-
-            warmup_count = max(n_warmup, 5)
-            print(f"    {label}: compiling ({warmup_count} warmup iters)...",
-                  end="", flush=True)
-            for _ in range(warmup_count):
-                try:
-                    with torch.autocast(
-                        device_type="cuda", dtype=torch.bfloat16, enabled=amp,
-                    ):
-                        loss = step_fn(
-                            prediction_points, boundary_meshes, ref_lengths,
-                        )
-                        loss.backward()
-                    model.zero_grad(set_to_none=True)
-                    torch.cuda.synchronize(device)
-                except torch.cuda.OutOfMemoryError:
-                    model.zero_grad(set_to_none=True)
-                    torch.cuda.empty_cache()
-                    break
-            print(" done.", flush=True)
-
-        result = time_training_step(
-            model, mesh, prediction_points, ref_lengths,
-            device=device, amp=amp, n_warmup=0, n_trials=n_trials,
-        )
         sp = SweepPoint(label=label, config={"compile_mode": compile_mode})
-        if result is None:
+        try:
+            model = GLOBE(**model_kwargs).to(device)
+            model.train()
+
+            if compile_mode is not None:
+                def make_step_fn(mdl, compile_mode_str):
+                    @torch.compile(dynamic=True, mode=compile_mode_str)
+                    def _step(pp, bm, rl):
+                        pred_mesh = mdl(
+                            prediction_points=pp,
+                            boundary_meshes=bm,
+                            reference_lengths=rl,
+                        )
+                        return sum(
+                            v.float().sum()
+                            for v in pred_mesh.point_data.values(
+                                include_nested=True, leaves_only=True
+                            )
+                        )
+                    return _step
+                step_fn = make_step_fn(model, compile_mode)
+
+                warmup_count = max(n_warmup, 5)
+                print(f"    {label}: compiling ({warmup_count} warmup iters)...",
+                      end="", flush=True)
+                for _ in range(warmup_count):
+                    try:
+                        with torch.autocast(
+                            device_type="cuda", dtype=torch.bfloat16, enabled=amp,
+                        ):
+                            loss = step_fn(
+                                prediction_points, boundary_meshes, ref_lengths,
+                            )
+                            loss.backward()
+                        model.zero_grad(set_to_none=True)
+                        torch.cuda.synchronize(device)
+                    except torch.cuda.OutOfMemoryError:
+                        model.zero_grad(set_to_none=True)
+                        torch.cuda.empty_cache()
+                        break
+                print(" done.", flush=True)
+
+            result = time_training_step(
+                model, mesh, prediction_points, ref_lengths,
+                device=device, amp=amp, n_warmup=0, n_trials=n_trials,
+            )
+            if result is None:
+                sp.oom = True
+            else:
+                sp.forward_ms = result.forward_ms
+                sp.backward_ms = result.backward_ms
+                sp.total_ms = result.total_ms
+                sp.peak_alloc_gb = result.peak_alloc_gb
+                sp.peak_reserved_gb = result.peak_reserved_gb
+            del model
+        except torch.cuda.OutOfMemoryError:
             sp.oom = True
-        else:
-            sp.forward_ms = result.forward_ms
-            sp.backward_ms = result.backward_ms
-            sp.total_ms = result.total_ms
-            sp.peak_alloc_gb = result.peak_alloc_gb
-            sp.peak_reserved_gb = result.peak_reserved_gb
+            print(f"    OOM for {label}, skipping.", flush=True)
         points.append(sp)
-        del model
         clean_gpu(device)
         torch._dynamo.reset()
 
@@ -942,46 +970,48 @@ def run_scale_sweep(
 
     for subdiv in subdivision_values:
         clean_gpu(device)
-        mesh = lumpy_sphere.load(subdivisions=subdiv, device="cuda")
-        n_faces = mesh.n_cells
-        source_points = mesh.cell_centroids
-        source_areas = mesh.cell_areas
-        _ = mesh.cell_normals
-
-        n_a2a = n_faces * n_faces
-        tree = ClusterTree.from_points(
-            source_points, leaf_size=leaf_size, areas=source_areas,
-        )
-        plan = tree.find_interaction_pairs(source_points, theta=theta)
-        compression = n_a2a / max(1, plan.n_total)
-        depth = int(tree.max_depth.item())
-
-        model = GLOBE(**model_kwargs).to(device)
-        result = time_training_step(
-            model, mesh, prediction_points, ref_lengths,
-            device=device, amp=amp, n_warmup=n_warmup, n_trials=n_trials,
-        )
         sp = SweepPoint(
             label=f"subdiv={subdiv}",
             config={"subdivisions": subdiv},
-            n_near=plan.n_near,
-            n_far=plan.n_far,
-            compression_ratio=compression,
-            tree_depth=depth,
-            tree_nodes=tree.n_nodes,
-            tree_leaves=int((tree.leaf_count > 0).sum()),
-            n_faces=n_faces,
         )
-        if result is None:
+        try:
+            mesh = lumpy_sphere.load(subdivisions=subdiv, device="cuda")
+            n_faces = mesh.n_cells
+            sp.n_faces = n_faces
+            source_points = mesh.cell_centroids
+            source_areas = mesh.cell_areas
+            _ = mesh.cell_normals
+
+            n_a2a = n_faces * n_faces
+            tree = ClusterTree.from_points(
+                source_points, leaf_size=leaf_size, areas=source_areas,
+            )
+            plan = tree.find_interaction_pairs(source_points, theta=theta)
+            sp.compression_ratio = n_a2a / max(1, plan.n_total)
+            sp.tree_depth = int(tree.max_depth.item())
+            sp.n_near = plan.n_near
+            sp.n_far = plan.n_far
+            sp.tree_nodes = tree.n_nodes
+            sp.tree_leaves = int((tree.leaf_count > 0).sum())
+
+            model = GLOBE(**model_kwargs).to(device)
+            result = time_training_step(
+                model, mesh, prediction_points, ref_lengths,
+                device=device, amp=amp, n_warmup=n_warmup, n_trials=n_trials,
+            )
+            if result is None:
+                sp.oom = True
+            else:
+                sp.forward_ms = result.forward_ms
+                sp.backward_ms = result.backward_ms
+                sp.total_ms = result.total_ms
+                sp.peak_alloc_gb = result.peak_alloc_gb
+                sp.peak_reserved_gb = result.peak_reserved_gb
+            del model, mesh
+        except torch.cuda.OutOfMemoryError:
             sp.oom = True
-        else:
-            sp.forward_ms = result.forward_ms
-            sp.backward_ms = result.backward_ms
-            sp.total_ms = result.total_ms
-            sp.peak_alloc_gb = result.peak_alloc_gb
-            sp.peak_reserved_gb = result.peak_reserved_gb
+            print(f"    OOM at subdiv={subdiv}, skipping.", flush=True)
         points.append(sp)
-        del model, mesh
         clean_gpu(device)
 
     return points
@@ -1526,6 +1556,7 @@ def main(
         all_results.phase_results = [asdict(r) for r in phase_rows]
 
     # ── Section 3: Deep profiler analysis ──────────────────────────────
+    clean_gpu(device)
     if not skip_profiler:
         section_num += 1
         section_header(section_num, n_sections, "Deep Profiler Analysis")
@@ -1548,6 +1579,7 @@ def main(
         all_results.profiler_top_bwd_ops = [asdict(r) for r in top_bwd_ops]
 
     # ── Section 4: Training step analysis ──────────────────────────────
+    clean_gpu(device)
     if not skip_training_step:
         section_num += 1
         section_header(section_num, n_sections,
@@ -1562,6 +1594,7 @@ def main(
             all_results.training_step = asdict(ts_result)
 
     # ── Section 5: Gradient checkpointing comparison ───────────────────
+    clean_gpu(device)
     if not skip_grad_ckpt:
         section_num += 1
         section_header(section_num, n_sections,
@@ -1575,6 +1608,7 @@ def main(
         all_results.grad_ckpt_comparison = gc_data
 
     # ── Section 6: Theta sensitivity sweep ─────────────────────────────
+    clean_gpu(device)
     if not skip_theta_sweep:
         section_num += 1
         section_header(section_num, n_sections, "Theta Sensitivity Sweep")
@@ -1587,6 +1621,7 @@ def main(
         all_results.theta_sweep = [asdict(sp) for sp in theta_pts]
 
     # ── Section 7: Leaf size sensitivity sweep ─────────────────────────
+    clean_gpu(device)
     if not skip_leaf_size_sweep:
         section_num += 1
         section_header(section_num, n_sections, "Leaf Size Sensitivity Sweep")
@@ -1599,6 +1634,7 @@ def main(
         all_results.leaf_size_sweep = [asdict(sp) for sp in ls_pts]
 
     # ── Section 8: torch.compile comparison ────────────────────────────
+    clean_gpu(device)
     if not skip_compile_test:
         section_num += 1
         section_header(section_num, n_sections, "torch.compile Comparison")
@@ -1611,6 +1647,7 @@ def main(
         all_results.compile_comparison = [asdict(sp) for sp in compile_pts]
 
     # ── Section 9: Mesh scale analysis ─────────────────────────────────
+    clean_gpu(device)
     if not skip_scale_sweep:
         section_num += 1
         section_header(section_num, n_sections, "Mesh Scale Analysis")
