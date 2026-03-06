@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -169,7 +169,7 @@ def create_edges(node_positions, threshold, box_size):
                 np.append(relative_pos_periodic[i], relative_pos_norm[i] / threshold)
             )
 
-    # Convert the edges to a format that DGL can use
+    # Convert the edges to a format that PyG can use
     src, dst = tuple(zip(*edges))
 
     return src, dst, edge_features

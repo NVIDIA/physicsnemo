@@ -29,7 +29,7 @@ and physical parameters
 as the input and predicts the solution for the following sequence in the latent space
 just like a language model.
 
-The model uses the input mesh to construct a bi-directional DGL graph for each sample.
+The model uses the input mesh to construct a bi-directional graph for each sample.
 The node features include (3 in total):
 
 - Velocity components at time step $t$, i.e., $u_t$, $v_t$

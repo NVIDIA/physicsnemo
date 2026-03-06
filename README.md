@@ -2,18 +2,20 @@
 
 <!-- markdownlint-disable -->
 
-📝 NVIDIA Modulus has been renamed to NVIDIA PhysicsNeMo
+📝 NVIDIA PhysicsNeMo is undergoing an update to v2.0 - all the features, with easier installation and integration to external packages.  See the [migration guide](https://github.com/NVIDIA/physicsnemo/blob/main/v2.0-MIGRATION-GUIDE.md) for more details!
 
 [![Project Status: Active - The project has reached a stable, usable state and is being actively developed.](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)
 [![GitHub](https://img.shields.io/github/license/NVIDIA/physicsnemo)](https://github.com/NVIDIA/physicsnemo/blob/master/LICENSE.txt)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Install CI](https://github.com/NVIDIA/physicsnemo/actions/workflows/install-ci.yml/badge.svg?event=schedule)](https://github.com/NVIDIA/physicsnemo/actions/workflows/install-ci.yml)
+
 <!-- markdownlint-enable -->
 [**NVIDIA PhysicsNeMo**](#what-is-physicsnemo)
 | [**Documentation**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/index.html)
 | [**Install Guide**](#installation)
-| [**Getting Started**](#getting-started)
+| [**Getting Started**](#getting-started-with-physicsnemo)
 | [**Contributing Guidelines**](#contributing-to-physicsnemo)
-| [**License**](#license)
+| [**Dev blog**](https://nvidia.github.io/physicsnemo/blog/)
 
 ## What is PhysicsNeMo?
 
@@ -46,13 +48,13 @@ provides you with an optimized stack that will enable you to train your models a
     - [Domain-Specific Packages](#domain-specific-packages)
 - [Who is Using and Contributing to PhysicsNeMo](#who-is-using-and-contributing-to-physicsnemo)
 - [Why Use PhysicsNeMo](#why-are-they-using-physicsnemo)
-- [Getting Started](#getting-started)
+- [Getting Started](#getting-started-with-physicsnemo)
 - [Resources](#resources)
 - [Installation](#installation)
 - [Contributing](#contributing-to-physicsnemo)
 - [Communication](#communication)
 - [License](#license)
-  
+
 <!-- tocstop -->
 
 ## More About PhysicsNeMo
@@ -211,9 +213,9 @@ from physicsnemo.models.mlp.fully_connected import FullyConnected
 def main():
     DistributedManager.initialize()
     dist = DistributedManager()
-    
+
     arch = FullyConnected(in_features=32, out_features=64).to(dist.device)
-    
+
     if dist.distributed:
         ddps = torch.cuda.Stream()
         with torch.cuda.stream(ddps):
@@ -302,7 +304,7 @@ Here are some of the key benefits of PhysicsNeMo for SciML model development:
 
 See what your peer SciML researchers are saying about PhysicsNeMo (coming soon).
 
-## Getting Started
+## Getting Started with PhysicsNeMo
 
 The following resources will help you learn how to use PhysicsNeMo. The best
 way is to start with a reference sample and then update it for your own use case.
@@ -313,26 +315,51 @@ way is to start with a reference sample and then update it for your own use case
 - [Reference Samples](https://github.com/NVIDIA/physicsnemo/blob/main/examples/README.md)
 - [User Guide Documentation](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/index.html)
 
+## Learning AI Physics
+
+- [Explore Jupyter Notebooks on Hugging Face](https://huggingface.co/collections/nvidia/physicsnemo)
+- [AI4Science PhysicsNeMo Bootcamp](https://github.com/openhackathons-org/End-to-End-AI-for-Science)
+- [Self-Paced DLI Training](https://learn.nvidia.com/courses/course-detail?course_id=course-v1:DLI+S-OV-04+V1)
+- [Deep Learning for Science and Engineering Lecture Series](https://www.nvidia.com/en-us/on-demand/deep-learning-for-science-and-engineering/)
+- [Video Tutorials](https://www.nvidia.com/en-us/on-demand/search/?facet.mimetype[]=event%20session&layout=list&page=1&q=physicsnemo&sort=relevance&sortDir=desc)
+
 ## Resources
 
 - [Getting Started Webinar](https://www.nvidia.com/en-us/on-demand/session/gtc24-dlit61460/?playlistId=playList-bd07f4dc-1397-4783-a959-65cec79aa985)
+- [PhysicsNeMo: Purpose and Usage](https://www.nvidia.com/en-us/on-demand/session/dliteachingkit-setk5002/)
 - [AI4Science PhysicsNeMo Bootcamp](https://github.com/openhackathons-org/End-to-End-AI-for-Science)
 - [PhysicsNeMo Pretrained Models](https://catalog.ngc.nvidia.com/models?filters=&orderBy=scoreDESC&query=PhysicsNeMo&page=&pageSize=)
 - [PhysicsNeMo Datasets and Supplementary Materials](https://catalog.ngc.nvidia.com/resources?filters=&orderBy=scoreDESC&query=PhysicsNeMo&page=&pageSize=)
-- [Self-Paced PhysicsNeMo DLI Training](https://learn.nvidia.com/courses/course-detail?course_id=course-v1:DLI+S-OV-04+V1)
-- [Deep Learning for Science and Engineering Lecture Series with PhysicsNeMo](https://www.nvidia.com/en-us/on-demand/deep-learning-for-science-and-engineering/)
-  - [PhysicsNeMo: Purpose and Usage](https://www.nvidia.com/en-us/on-demand/session/dliteachingkit-setk5002/)
-- [Video Tutorials](https://www.nvidia.com/en-us/on-demand/search/?facet.mimetype[]=event%20session&layout=list&page=1&q=physicsnemo&sort=relevance&sortDir=desc)
-  
+
 ## Installation
 
-The following instructions help you install the base PhysicsNeMo modules to get started.
-There are additional optional dependencies for specific models that are listed under
-[optional dependencies](#optional-dependencies).
-The training recipes are not packaged into the pip wheels or the container to keep the
-footprint low. We recommend users clone the appropriate training recipes and use them
-as a starting point. These training recipes may require additional example-specific dependencies,
-as indicated through their associated `requirements.txt` file.
+The following instructions help you install the base PhysicsNeMo modules to get
+started. In addition to this, optional dependencies can be installed to provide
+additional functionality. A complete list of optional dependencies is available
+in the [`pyproject.toml`](./pyproject.toml) file.
+
+The [training recipes](./examples) are not packaged into the pip wheels or the
+container to keep the footprint low. We recommend users clone the appropriate
+training recipes and use them as a starting point. These training recipes may
+require additional example-specific dependencies, as indicated through an
+associated `requirements.txt` file in such cases.
+
+### CUDA Backend Selection
+
+> **Important:** To get GPU-accelerated RAPIDS packages (cuML, pylibraft, cupy)
+> and a CUDA-matched PyTorch build, you **must** include either `cu13` or `cu12`
+> when installing. Feature extras like `nn-extras` and `utils-extras` provide
+> additional non-CUDA packages (scipy, natten, wandb, etc.) but do not include
+> RAPIDS dependencies on their own.
+
+PhysicsNeMo supports both CUDA 12 and CUDA 13 backends. The backend is selected
+via an extra that is orthogonal to the feature extras - combine them freely:
+
+| Extra | What it provides |
+| --- | --- |
+| `cu13` | PyTorch (CUDA 13.0), cuML-cu13, pylibraft-cu13, cupy-cuda13x |
+| `cu12` | PyTorch (CUDA 12.8), cuML-cu12, pylibraft-cu12, cupy-cuda12x |
+| *(neither)* | PyTorch from PyPI (default build), **no RAPIDS packages** |
 
 ### PyPI
 
@@ -340,19 +367,47 @@ The recommended method for installing the latest version of PhysicsNeMo is using
 
 ```Bash
 pip install nvidia-physicsnemo
+python -c "import physicsnemo; print('PhysicsNeMo version:', physicsnemo.__version__)"
 ```
 
-The installation can be verified by running the [Hello World](#hello-world) example.
+To install with a specific CUDA backend and optional feature extras:
 
-#### Optional Dependencies
+```Bash
+# CUDA 13 backend with nn-extras
+pip install "nvidia-physicsnemo[cu13,nn-extras]"
 
-PhysicsNeMo has many optional dependencies that are used in specific components.
-When using pip, all dependencies used in PhysicsNeMo can be installed with
-`pip install nvidia-physicsnemo[all]`. If you are developing PhysicsNeMo, developer dependencies
-can be installed using `pip install nvidia-physicsnemo[dev]`. Otherwise, additional dependencies
-can be installed on a case-by-case basis. Detailed information on installing the
-optional dependencies can be found in the
-[Getting Started Guide](https://docs.nvidia.com/deeplearning/physicsnemo/getting-started/index.html).
+# CUDA 12 backend with nn-extras
+pip install "nvidia-physicsnemo[cu12,nn-extras]"
+```
+
+Other feature extras (`utils-extras`, `mesh-extras`, `model-extras`,
+`datapipes-extras`, `gnns`) can be combined in the same way.
+
+The installation can also be verified by running the [Hello World](#hello-world) example.
+
+### uv
+
+For development or to run examples, we recommend using [uv](https://docs.astral.sh/uv/)
+to clone the repository and sync dependencies:
+
+```Bash
+git clone https://github.com/NVIDIA/physicsnemo.git
+cd physicsnemo
+uv sync --extra cu13
+uv run python -c "import physicsnemo; print('PhysicsNeMo version:', physicsnemo.__version__)"
+```
+
+To install with optional feature extras (e.g., `nn-extras`):
+
+```Bash
+uv sync --extra cu13 --extra nn-extras
+```
+
+For a CUDA 12 environment, replace `cu13` with `cu12`:
+
+```Bash
+uv sync --extra cu12 --extra nn-extras
+```
 
 ### NVCR Container
 
@@ -377,9 +432,7 @@ pip install warp-lang # install NVIDIA Warp to run the Darcy example
 python train_fno_darcy.py
 ```
 
-## From Source
-
-### Package
+### From Source
 
 For a local build of the PhysicsNeMo Python package from source, use:
 
@@ -388,9 +441,10 @@ git clone git@github.com:NVIDIA/physicsnemo.git && cd physicsnemo
 
 pip install --upgrade pip
 pip install .
+python -c "import physicsnemo; print('PhysicsNeMo version:', physicsnemo.__version__)"
 ```
 
-### Source Container
+### Building Docker from Source
 
 To build the PhysicsNeMo Docker image:
 
@@ -410,8 +464,12 @@ docker build -t physicsnemo:ci \
 
 Alternatively, you can run `make container-ci`.
 
-Currently, only `linux/amd64` and `linux/arm64` platforms are supported. If using
-`linux/arm64`, some dependencies like `warp-lang` might not install correctly.
+### Platform Support
+
+For pip or uv installation, Linux, macOS (ARM), and Windows are supported.
+
+Docker containers are available for `linux/amd64` and `linux/arm64` platforms only.
+If using `linux/arm64`, some dependencies like `warp-lang` might not install correctly.
 
 ## PhysicsNeMo Migration Guide
 
@@ -431,6 +489,14 @@ and will not receive any bug fixes/updates. The old checkpoints will remain
 compatible with these updates.
 
 More details to follow soon.
+
+## DGL to PyTorch Geometric Migration Guide
+
+PhysicsNeMo supports a wide range of Graph Neural Networks (GNNs),
+including MeshGraphNet and others.
+Currently, PhysicsNeMo uses the DGL library as its GNN backend,
+with plans to completely transition to PyTorch Geometric (PyG) in a future release.
+For more details, please refer to the [DGL-to-PyG migration guide](https://github.com/NVIDIA/physicsnemo/blob/main/examples/dgl_to_pyg_migration.md).
 
 ## Contributing to PhysicsNeMo
 

@@ -80,11 +80,13 @@ command line or in the config file.
 
 ## Getting Started
 
-This example requires the `tensorflow` library to load the data in the `.tfrecord`
-format. Install with:
+This example uses the lightweight `tfrecord` package to load the data in the `.tfrecord`
+format.
+
+Install the requirements using:
 
 ```bash
-pip install "tensorflow<=2.17.1"
+pip install -r requirements.txt
 ```
 
 To download the data from DeepMind's repo, run:

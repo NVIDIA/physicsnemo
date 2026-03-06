@@ -17,3 +17,4 @@ Weather and climate modeling examples using PhysicsNeMo.
    examples/weather/unified_recipe/README.rst
    examples/weather/corrdiff/README.rst
    examples/weather/stormcast/README.rst 
+   examples/weather/temporal_interpolation/README.rst

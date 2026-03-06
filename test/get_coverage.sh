@@ -3,8 +3,7 @@
 # do the coverage checks
 coverage run \
 --rcfile='coverage.pytest.rc' \
--m pytest \
---ignore=derivs_test.py
+-m pytest 
 
 coverage run \
 --rcfile='coverage.docstring.rc' \

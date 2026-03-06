@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,7 +17,7 @@
 import torch
 
 from physicsnemo.datapipes.gnn.utils import load_json
-from physicsnemo.utils.neighbors.radius_search import radius_search
+from physicsnemo.nn.functional import radius_search
 
 
 def add_world_edges(graph, world_edge_radius=0.03, edge_stats_path="edge_stats.json"):
@@ -64,13 +64,8 @@ def add_world_edges(graph, world_edge_radius=0.03, edge_stats_path="edge_stats.j
         device=device,
     ).T  # shape: (2, num_world_edges)
 
-    if world_edges.shape[1] == 0:
-        # No new world edges to add
-        return (
-            graph,
-            graph.edge_attr,
-            torch.zeros((0, graph.edge_attr.shape[1]), device=device),
-        )
+    if world_edges.size(0) == 0:
+        raise ValueError("No world edges to add. Try increasing the world edge radius.")
 
     # Compute edge features for new edges
     world_src, world_dst = world_edges

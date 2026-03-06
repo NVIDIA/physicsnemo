@@ -126,6 +126,39 @@ of the samples from the test dataset.](../../../../docs/img/drivaernet_results.p
 
 ## Model training
 
+### Prerequisites
+
+This example also requires the `pyvista`, `shapely` and `vtk` libraries. Install with
+
+```bash
+pip install pyvista shapely vtk
+```
+
+BSMS MGN model requires additional dependency:
+
+```bash
+pip install sparse_dot_mkl
+```
+
+Additionally, if you are using the [PhysicsNeMo Docker Container](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/physicsnemo/containers/physicsnemo),
+install a few system-level packages with
+
+```bash
+apt install libosmesa6 libosmesa6-dev
+apt install mesa-utils libgl1-mesa-dev
+```
+
+> [!NOTE]
+> If you are running this example using the
+> [PhysicsNeMo Docker Container](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/physicsnemo/containers/physicsnemo)
+> you may have to pass a few additional flags to your `docker run` command.
+> Specifically, include `--ulimit nofile=65535:65535` and `--shm-size=4g` as
+> additional flags while launching the container. These flags are required
+> because a process pool is used to parallelize dataset creation prior to
+> starting training, which requires additional resources inside the container.
+
+### Running the experiments
+
 The example uses [Hydra](https://hydra.cc/docs/intro/) for experiment configuration.
 Hydra provides a convenient way to change almost any experiment parameter,
 such as dataset configuration, model and optimizer settings and so on.
@@ -142,18 +175,6 @@ environment variable:
 
 ```bash
 HYDRA_FULL_ERROR=1 python train.py ...
-```
-
-This example also requires the `pyvista`, `shapely` and `vtk` libraries. Install with
-
-```bash
-pip install pyvista shapely vtk
-```
-
-BSMS MGN model requires additional dependency:
-
-```bash
-pip install sparse_dot_mkl
 ```
 
 ### Ahmed Body training

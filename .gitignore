@@ -49,6 +49,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+.testmon*
 cover/
 
 # Translations
@@ -164,7 +165,10 @@ cython_debug/
 nsight-systems*
 build/
 mlruns/
+mlflow.db
 checkpoints/
+cache/
+output/
 
 # Hydra
 outputs/
@@ -174,3 +178,6 @@ multirun/
 # SLURM
 slurm-*.out
 sbatch_logs/
+
+# ASV
+.asv/

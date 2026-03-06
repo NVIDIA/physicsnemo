@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -15,39 +15,39 @@
 # limitations under the License.
 
 import contextlib
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
 import hydra
-from omegaconf import OmegaConf, DictConfig
-from hydra.utils import to_absolute_path
-import torch
-import torch._dynamo
-from torch.distributed import gather
+import netCDF4 as nc
 import numpy as np
 import nvtx
-import netCDF4 as nc
-from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
-from physicsnemo.experimental.models.diffusion.preconditioning import (
-    tEDMPrecondSuperRes,
-)
-from physicsnemo.utils.patching import GridPatching2D
-from physicsnemo import Module
-from physicsnemo.utils.diffusion import deterministic_sampler, stochastic_sampler
-from physicsnemo.utils.corrdiff import (
-    NetCDFWriter,
-    get_time_from_range,
-    regression_step,
-    diffusion_step,
-)
-
+import torch
+import torch._dynamo
+from datasets.dataset import register_dataset
 from helpers.generate_helpers import (
+    NetCDFWriter,
     get_dataset_and_sampler,
+    get_time_from_range,
     save_images,
 )
 from helpers.train_helpers import set_patch_shape
-from datasets.dataset import register_dataset
+from hydra.utils import to_absolute_path
+from omegaconf import DictConfig, OmegaConf
+from torch.distributed import gather
+
+from physicsnemo import Module
+from physicsnemo.diffusion.generate import diffusion_step, regression_step
+from physicsnemo.diffusion.multi_diffusion import GridPatching2D
+from physicsnemo.diffusion.samplers import (
+    deterministic_sampler,
+    stochastic_sampler,
+)
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.experimental.models.diffusion.preconditioning import (
+    tEDMPrecondSuperRes,
+)
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 
 @hydra.main(version_base="1.2", config_path="conf", config_name="config_generate")
@@ -186,13 +186,17 @@ def main(cfg: DictConfig) -> None:
     if cfg.sampler.type == "deterministic":
         sampler_fn = partial(
             deterministic_sampler,
-            num_steps=cfg.sampler.num_steps,
+            num_steps=getattr(cfg.sampler, "num_steps", 9),
             # num_ensembles=cfg.generation.num_ensembles,
             solver=cfg.sampler.solver,
             patching=patching,
         )
     elif cfg.sampler.type == "stochastic":
-        sampler_fn = partial(stochastic_sampler, patching=patching)
+        sampler_fn = partial(
+            stochastic_sampler,
+            patching=patching,
+            num_steps=getattr(cfg.sampler, "num_steps", 18),
+        )
     else:
         raise ValueError(f"Unknown sampling method {cfg.sampling.type}")
 
@@ -355,7 +359,7 @@ def main(cfg: DictConfig) -> None:
                     has_lead_time=has_lead_time,
                 )
 
-                if cfg.generation.perf.io_syncronous:
+                if cfg.generation.perf.io_synchronous:
                     writer_executor = ThreadPoolExecutor(
                         max_workers=cfg.generation.perf.num_writer_workers
                     )
@@ -381,8 +385,9 @@ def main(cfg: DictConfig) -> None:
                 start = end = DummyEvent()
 
             times = dataset.time()
-            for index, (image_tar, image_lr, *lead_time_label) in enumerate(
-                iter(data_loader)
+            for dataset_index, (image_tar, image_lr, *lead_time_label) in zip(
+                sampler,
+                iter(data_loader),
             ):
                 time_index += 1
                 if dist.rank == 0:
@@ -405,7 +410,7 @@ def main(cfg: DictConfig) -> None:
                 image_out = generate_fn()
                 if dist.rank == 0:
                     batch_size = image_out.shape[0]
-                    if cfg.generation.perf.io_syncronous:
+                    if cfg.generation.perf.io_synchronous:
                         # write out data in a seperate thread so we don't hold up inferencing
                         writer_threads.append(
                             writer_executor.submit(
@@ -417,8 +422,7 @@ def main(cfg: DictConfig) -> None:
                                 image_tar.cpu(),
                                 image_lr.cpu(),
                                 time_index,
-                                index,
-                                has_lead_time,
+                                dataset_index,
                             )
                         )
                     else:
@@ -430,8 +434,7 @@ def main(cfg: DictConfig) -> None:
                             image_tar.cpu(),
                             image_lr.cpu(),
                             time_index,
-                            index,
-                            has_lead_time,
+                            dataset_index,
                         )
             end.record()
             end.synchronize()
@@ -449,7 +452,7 @@ def main(cfg: DictConfig) -> None:
                 )
 
             # make sure all the workers are done writing
-            if dist.rank == 0 and cfg.generation.perf.io_syncronous:
+            if dist.rank == 0 and cfg.generation.perf.io_synchronous:
                 for thread in list(writer_threads):
                     thread.result()
                     writer_threads.remove(thread)

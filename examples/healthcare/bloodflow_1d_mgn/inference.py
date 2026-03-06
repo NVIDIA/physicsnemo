@@ -14,7 +14,6 @@
 # limitations under the License.
 
 import torch
-import torch
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -22,8 +21,8 @@ import os
 from torch.cuda.amp import GradScaler
 from generate_dataset import generate_normalized_graphs
 from physicsnemo.models.meshgraphnet import MeshGraphNet
-from physicsnemo.launch.logging import PythonLogger
-from physicsnemo.launch.utils import load_checkpoint
+from physicsnemo.utils.logging import PythonLogger
+from physicsnemo.utils import load_checkpoint
 import hydra
 from omegaconf import DictConfig
 import json
@@ -108,7 +107,7 @@ class MGNRollout:
         )
 
         if cfg.performance.jit:
-            self.model = torch.jit.script(self.model).to(self.device)
+            self.model = torch.compile(self.model).to(self.device)
         else:
             self.model = self.model.to(self.device)
 

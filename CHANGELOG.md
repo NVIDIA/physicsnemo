@@ -6,7 +6,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.3.0a0] - 2025-XX-YY
+## [2.1.0a0] - 2026-XX-YY
+
+### Added
+
+- Adds GLOBE model (`physicsnemo.experimental.models.globe.model.GLOBE`)
+- Adds GLOBE AirFRANS example case (`examples/cfd/external_aerodynamics/globe/airfrans`)
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+### Dependencies
+
+## [2.0.0] - 2026-XX-YY
+
+### Added
+
+- Refactored diffusion preconditioners in
+  `physicsnemo.diffusion.preconditioners` relying on a new abstract base class
+  `BaseAffinePreconditioner` for preconditioning schemes using affine
+  transformations. Existing preconditioners (`VPPrecond`, `VEPrecond`,
+  `iDDPMPrecond`, `EDMPrecond`) reimplemented based on this new interface.
+- New `physicsnemo.experimental.nn.symmetry` module that implements building
+  blocks that preserve 2D and 3D rotational equivariance using a
+  grid-based layout for efficient GPU parallelization, and an emphasis on
+  compact `einsum` operations.
+
+### Changed
+
+- PhysicsNemo v2.0 contains significant reorganization of tools.  Please see
+  the v2.0-MIGRATION-GUIDE.md to understand what has changed and why.
+- DiT (Diffusion Transformer) has been moved from `physicsnemo.experimental.models.dit`
+  to `physicsnemo.models.dit`.
+
+### Fixed
+
+- Shape mistmatch bug in the Lennard Jones example
+
+### Dependencies
+
+- CUDA backend is now selected via orthogonal `cu12` / `cu13` extras rather
+  than being hardcoded to CUDA 13. Feature extras (`nn-extras`, `utils-extras`,
+  etc.) are now CUDA-agnostic and can be combined with either backend, e.g.
+  `pip install "nvidia-physicsnemo[cu13,nn-extras]"`. When neither `cu12` nor
+  `cu13` is specified, PyTorch is installed from PyPI using its default build
+  (currently CUDA 12.8 on Linux). For development with `uv`, use
+  `uv sync --extra cu13` (or `--extra cu12`) to select the backend.
+
+## [1.3.0] - 2025-11-17
 
 ### Added
 
@@ -20,6 +74,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added additional testing of the DoMINO datapipe.
 - Examples: added a new example for full-waveform inversion using diffusion
   models. Accessible in `examples/geophysics/diffusion_fwi`.
+- Domain Parallelism: Domain Parallelism is now available for kNN, radius_search,
+  and torch.nn.functional.pad.
+- Unified recipe for crash modeling, supporting Transolver and MeshGraphNet,
+  and three transient schemes.
+- Added a check to `stochastic_sampler` that helps handle the `EDMPrecond` model,
+  which has a specific `.forward()` signature
+- Examples: added a new example for reservoir simulation using X-MeshGraphNet.
+  Accessible in `examples/reservoir_simulation`
+- Added abstract interfaces for constructing active learning workflows, contained
+  under the `physicsnemo.active_learning` namespace. A preliminary example of how
+  to compose and define an active learning workflow is provided in `examples/active_learning`.
+  The `moons` example provides a minimal (pedagogical) composition that is meant to
+  illustrate how to define the necessary parts of the workflow.
+- Added a new example for temporal interpolation of weather forecasts using ModAFNO.
+  Accessible in `examples/weather/temporal_interpolation`.
 
 ### Changed
 
@@ -30,16 +99,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refactored DiTBlock to be more modular
 - Added NATTEN 2D neighborhood attention backend for DiTBlock
 - Migrated blood flow example to PyTorch Geometric.
+- Refactored DoMINO model code and examples for performance optimizations and improved readability.
 - Migrated HydroGraphNet example to PyTorch Geometric.
 - Support for saving and loading nested `physicsnemo.Module`s. It is now
   possible to create nested modules with `m = Module(submodule, ...)`, and save
   and load them with `Module.save` and `Module.from_checkpoint`.
   **⚠️Warning:** - The modules have to be `physicsnemo.Module`s, and not
   `torch.nn.Module`s.
-
-### Deprecated
-
-### Removed
+- Support passing custom tokenizer, detokenizer, and attention `Module`s in
+  experimental DiT architecture
+- Improved Transolver training recipe's configuration for checkpointing and normalization.
+- Bumped `multi-storage-client` version to 0.33.0 with rust client.
+- Improved configuration for DLWP Healpix (checkpoint directory) and GraphCast (W&B settings).
 
 ### Fixed
 
@@ -48,10 +119,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed the issue with incorrect handling of files with consecutive runs of
   `combine_stl_solids.py` in the X-MGN recipe.
 - Fixed the `RuntimeError: Worker data receiving interrupted` error in the datacenter example.
-
-### Security
-
-### Dependencies
 
 ## [1.2.0] - 2025-08-26
 

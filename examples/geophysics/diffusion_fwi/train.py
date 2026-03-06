@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -28,9 +28,9 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from functools import partial
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
-from physicsnemo.launch.logging.wandb import initialize_wandb
-from physicsnemo.launch.utils import (
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils.logging.wandb import initialize_wandb
+from physicsnemo.utils import (
     load_checkpoint,
     save_checkpoint,
     get_checkpoint_dir,
@@ -75,6 +75,7 @@ def main(cfg: DictConfig) -> None:
         resume=resume,
         save_code=True,
         name=f"train-{timestamp}",
+        init_timeout=600,
     )
 
     logger.info(f"Rank: {dist.rank}, Device: {dist.device}")
@@ -86,6 +87,7 @@ def main(cfg: DictConfig) -> None:
         rank_zero_logger.info(f"Using model configuration: {model_args}")
     else:
         model_args = {}
+    unconditional = getattr(cfg.model, "unconditional", False)
     model_arch = DiffusionFWINet(
         x_resolution=list(cfg.model.x_resolution),
         x_channels=cfg.model.x_channels,
@@ -97,17 +99,21 @@ def main(cfg: DictConfig) -> None:
         model_channels=cfg.model.model_channels,
         channel_mult=list(cfg.model.channel_mult),
         num_blocks=cfg.model.num_blocks,
+        unconditional=unconditional,
         **model_args,
     ).to(dist.device)
     # Thin wrapper around the model_backbone to convert it into a conditional
     # diffusion model compatible with EDM preconditioning and ResidualLoss
     model = DiffusionAdapter(
         model=model_arch,
-        args_map=("x", "t", {"y": "y"}),
+        args_map=("x", "sigma", {"y": "y"}),
     )
 
     rank_zero_logger.info(
         f"Using model DiffusionFWINet with {model.num_parameters()} parameters."
+    )
+    rank_zero_logger.info(
+        f"Training {'unconditional' if unconditional else 'conditional'} model."
     )
 
     # Distributed learning (Data parallel)

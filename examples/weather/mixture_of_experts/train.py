@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -27,10 +27,10 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.amp import GradScaler, autocast
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
-from physicsnemo.launch.logging import LaunchLogger
-from physicsnemo.launch.logging.wandb import initialize_wandb
-from physicsnemo.launch.utils import (
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils.logging import LaunchLogger
+from physicsnemo.utils.logging.wandb import initialize_wandb
+from physicsnemo.utils import (
     load_checkpoint,
     save_checkpoint,
     get_checkpoint_dir,
@@ -106,8 +106,8 @@ def main(cfg: DictConfig) -> None:
         depth=cfg.model_params.depth,
         num_heads=cfg.model_params.num_heads,
         mlp_ratio=cfg.model_params.mlp_ratio,
-        attention_backbone=cfg.model_params.attention_backbone,
-        layernorm_backbone=cfg.model_params.layernorm_backbone,
+        attention_backend=cfg.model_params.attention_backend,
+        layernorm_backend=cfg.model_params.layernorm_backend,
         noise_dim=cfg.model_params.noise_dim,
         return_probabilities=cfg.model_params.return_probabilities,
         bias=cfg.model_params.bias,

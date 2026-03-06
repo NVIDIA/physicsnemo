@@ -11,7 +11,7 @@
 ## What is the recommended hardware for training using PhysicsNeMo framework?
 
 Please refer to the recommended hardware section:
-[System Requirments](https://docs.nvidia.com/deeplearning/physicsnemo/getting-started/index.html#system-requirements)
+[System Requirements](https://docs.nvidia.com/deeplearning/physicsnemo/getting-started/index.html#system-requirements)
 
 ## What model architectures are in PhysicsNeMo?
 
@@ -19,7 +19,7 @@ Nvidia PhysicsNeMo is built on top of PyTorch and you can build and train any mo
 architecture you want in PhysicsNeMo. PhysicsNeMo however has a catalog of models that
 have been packaged in a configurable form to make it easy to retrain with new data or certain
 config parameters. Examples include GNNs like MeshGraphNet or Neural Operators like FNO.
-PhysicsNeMo samples have more models that illustrate how a specific approach with a specifc
+PhysicsNeMo samples have more models that illustrate how a specific approach with a specific
 model architecture can be applied to a specific problem.
 These are reference starting points for users to get started.
 
@@ -47,7 +47,7 @@ that illustrates the concept.
 
 ## What can I do if I dont see a PDE in PhysicsNeMo?
 
-PhysicsNeMo Symbolic provides a well documeted
+PhysicsNeMo Symbolic provides a well documented
 [example](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/foundational/1d_wave_equation.html#writing-custom-pdes-and-boundary-initial-conditions)
 that walks you through how to define a custom PDE. Please see the source [here](https://github.com/NVIDIA/physicsnemo-sym/tree/main/physicsnemo/sym/eq/pdes)
 to see the built-in PDE implementation as an additional reference for your own implementation.

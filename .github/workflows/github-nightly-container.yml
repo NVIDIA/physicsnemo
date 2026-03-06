@@ -1,0 +1,206 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# This CI runs nightly to generate the coverage report and testmon database.
+# It runs ALL tests and caches the testmon database for use by PR workflows.
+# The tests run here will only use UV.  This is meant to be nightly functionality
+# testing AND a baseline dependency graph for PRs.
+
+
+# TO DO: THE COVERAGE LIMIT IS VERY LOW, BECAUSE THIS IS NOT USING GPU TESTS OR
+# THE DATA-DRIVEN TESTS.  RAISE THIS UP AGAIN EVENTUALLY.
+
+
+name: Nightly Github Workflow
+on:
+  schedule:
+    # Run nightly at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    # Allow manual triggering
+
+# Container image used across all jobs - update this single value to change everywhere
+# Note: env context not available in container.image, so we hardcode the value
+jobs:
+  # Stage 1: Build and cache the environment
+  build-environment:
+    name: Build Environment
+    runs-on: linux-amd64-cpu8
+    container:
+      image: nvcr.io/nvidia/pytorch:25.12-py3
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: nick-fields/retry@v3
+      with:
+        timeout_minutes: 5
+        max_attempts: 3
+        command: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    - name: Restore uv cache
+      id: cache-uv-restore
+      uses: actions/cache/restore@v4
+      with:
+        path: .venv
+        key: uv-env-nightly-latest
+
+    - name: Install package with uv
+      if: steps.cache-uv-restore.outputs.cache-hit != 'true'
+      run: |
+        # Install core dependencies and development group
+        uv sync --group dev --preview-features extra-build-dependencies
+
+    - name: Free disk space before caching
+      if: steps.cache-uv-restore.outputs.cache-hit != 'true'
+      run: |
+        rm -rf ~/.cache/uv
+        df -h
+
+    - name: Delete old environment cache
+      if: steps.cache-uv-restore.outputs.cache-hit != 'true'
+      run: |
+        gh cache delete "uv-env-nightly-latest" || true
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Save environment to cache
+      if: steps.cache-uv-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: .venv
+        key: uv-env-nightly-latest
+
+  # Stage 2: Run testmon tests and cache the database
+  testmon:
+    name: Testmon
+    needs: build-environment
+    runs-on: linux-amd64-gpu-h100-latest-1
+    container:
+      image: nvcr.io/nvidia/pytorch:25.12-py3
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: nick-fields/retry@v3
+      with:
+        timeout_minutes: 5
+        max_attempts: 3
+        command: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    - name: Restore environment from cache
+      uses: actions/cache/restore@v4
+      with:
+        path: .venv
+        key: uv-env-nightly-latest
+        fail-on-cache-miss: true
+
+    - name: Run core tests (collect all for testmon)
+      run: |
+        # This populates the testmon database for PR workflows
+        uv run python -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*"
+
+    - name: Delete old testmon cache
+      run: |
+        gh cache delete "testmon-nightly-latest" || true
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Save testmon database to cache
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          .testmondata
+          .testmondata-shm
+          .testmondata-wal
+        key: testmon-nightly-latest
+
+  # Stage 3: Run coverage tests and upload artifacts
+  coverage:
+    name: Coverage
+    needs: build-environment
+    runs-on: linux-amd64-gpu-h100-latest-1
+    container:
+      image: nvcr.io/nvidia/pytorch:25.12-py3
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: nick-fields/retry@v3
+      with:
+        timeout_minutes: 5
+        max_attempts: 3
+        command: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    - name: Restore environment from cache
+      uses: actions/cache/restore@v4
+      with:
+        path: .venv
+        key: uv-env-nightly-latest
+        fail-on-cache-miss: true
+
+    - name: Run core tests for coverage report
+      run: |
+        uv run coverage run --rcfile='test/coverage.pytest.rc' -m pytest --ignore-glob="*docs*" --ignore-glob="*examples*"
+
+    - name: Run doc tests (testmon not supported for doctests)
+      run: |
+        uv run coverage run --rcfile='test/coverage.docstring.rc' -m pytest --doctest-modules physicsnemo/ --ignore-glob="*internal*" --ignore-glob="*experimental*"
+
+    - name: Delete old coverage cache
+      run: |
+        gh cache delete "coverage-nightly-latest" || true
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Save coverage files to cache
+      uses: actions/cache/save@v4
+      with:
+        path: .coverage*
+        key: coverage-nightly-latest
+
+    - name: Merge coverage reports
+      run: |
+        uv run coverage combine
+        uv run coverage report --show-missing --omit="*test*" --omit="*internal*" --omit="*experimental*" --fail-under=45
+        uv run coverage html
+        # Also create an XML report for potential CI integrations
+        uv run coverage xml -o coverage.xml
+
+    - name: Upload coverage HTML report
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report-nightly
+        path: htmlcov/
+        retention-days: 7
+
+    - name: Upload combined coverage data
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-data-nightly
+        path: |
+          .coverage
+          coverage.xml
+        retention-days: 30

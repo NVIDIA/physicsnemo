@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -27,9 +27,9 @@ import wandb
 from einops import repeat, rearrange
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo import Module
-from physicsnemo.launch.logging.wandb import initialize_wandb
+from physicsnemo.utils.logging.wandb import initialize_wandb
 
 from datasets.dataset import EFWIDatapipe
 from utils.preconditioning import edm_precond
@@ -152,7 +152,7 @@ def main(cfg: DictConfig) -> None:
     )
     model = DiffusionAdapter(
         model=diffusion_net,
-        args_map=("x", "t", {"y": "y"}),
+        args_map=("x", "sigma", {"y": "y"}),
     )
     # EDM preconditioning wrapper
     model_fn = partial(edm_precond, model, sigma_data=0.5)

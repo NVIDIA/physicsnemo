@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -24,10 +24,10 @@ import fsspec
 import pytest
 import torch
 import torch.nn as nn
-from pytest_utils import import_or_fail
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.models.mlp import FullyConnected
+from test.conftest import requires_module
 
 mock_aws = pytest.importorskip("moto.mock_aws")
 
@@ -63,7 +63,7 @@ def model_generator(request) -> Callable:
 
 
 @mock_aws
-@import_or_fail(["wandb", "mlflow", "boto3"])
+@requires_module(["wandb", "mlflow", "boto3"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_model_checkpointing(
     device,
@@ -78,7 +78,7 @@ def test_model_checkpointing(
     import boto3
     from moto import mock_aws
 
-    from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+    from physicsnemo.utils import load_checkpoint, save_checkpoint
 
     # Set up the mock with IAM credentials for access. These should match those in
     # the MSC Config file (./msc_config_checkpoint.yaml).
@@ -156,7 +156,7 @@ def test_model_checkpointing(
 
 
 def test_get_checkpoint_dir():
-    from physicsnemo.launch.utils import get_checkpoint_dir
+    from physicsnemo.utils import get_checkpoint_dir
 
     assert get_checkpoint_dir(".", "model") == "./checkpoints_model"
     assert get_checkpoint_dir("./", "model") == "./checkpoints_model"
@@ -185,7 +185,7 @@ def test_compiled_model_checkpointing(
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA not available in the test environment")
 
-    from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+    from physicsnemo.utils import load_checkpoint, save_checkpoint
 
     # Create and compile a simple model
     in_feats = 4

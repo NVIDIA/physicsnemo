@@ -1,0 +1,25 @@
+{
+    "version": 1,
+    "project": "physicsnemo",
+    "project_url": "https://github.com/NVIDIA/physicsnemo",
+    "repo": ".",
+    "branches": ["main"],
+    "dvcs": "git",
+    "environment_type": "virtualenv",
+    "install_timeout": 600,
+    "show_commit_url": "https://github.com/NVIDIA/physicsnemo/commit/",
+    "pythons": ["3.12"],
+    "build_command": ["python -m pip wheel --no-deps --wheel-dir {build_cache_dir} {build_dir}"],
+    "install_command": ["in-dir={env_dir} python -m pip install {wheel_file}"],
+    "uninstall_command": ["return-code=any python -m pip uninstall -y nvidia-{project}"],
+    "benchmark_dir": "benchmarks",
+    "env_dir": ".asv/env",
+    "results_dir": ".asv/results",
+    "html_dir": ".asv/html",
+    "matrix": {
+        "req": {
+            "cuml-cu13": [],
+            "scipy": []
+        }
+    }
+}
