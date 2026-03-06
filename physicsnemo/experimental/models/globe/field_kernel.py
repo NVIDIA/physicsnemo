@@ -817,6 +817,7 @@ class BarnesHutKernel(Kernel):
         )
         self.leaf_size = leaf_size
 
+    @torch.compiler.disable
     def forward(
         self,
         *,
