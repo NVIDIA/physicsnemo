@@ -197,22 +197,25 @@ class TestClusterTree:
     def test_interaction_plan_source_coverage(self, n_dims: int, theta: float):
         """For every target, near + far pairs cover all sources exactly once.
 
-        This is the fundamental invariant of the Barnes-Hut traversal:
+        This is the fundamental invariant of the dual-tree traversal:
         every source must be accounted for (no omissions) and no source
-        may be double-counted (no duplicates).  We verify this by
-        expanding far-field node IDs into their constituent source sets
-        via DFS and checking per-target coverage.
+        may be double-counted (no duplicates).  For far-field node pairs,
+        we expand both the target node (to individual targets) and the
+        source node (to individual sources via DFS) to verify coverage.
         """
         torch.manual_seed(DEFAULT_SEED)
         n_src, n_tgt = 40, 10
         source_pts = torch.randn(n_src, n_dims)
         target_pts = torch.randn(n_tgt, n_dims) * 3
-        tree = ClusterTree.from_points(source_pts, leaf_size=4)
-        plan = tree.find_interaction_pairs(target_pts, theta=theta)
+        source_tree = ClusterTree.from_points(source_pts, leaf_size=4)
+        target_tree = ClusterTree.from_points(target_pts, leaf_size=4)
+        plan = source_tree.find_dual_interaction_pairs(
+            target_tree=target_tree, theta=theta
+        )
 
         all_sources = set(range(n_src))
 
-        def _collect_leaf_sources(node_id: int) -> set[int]:
+        def _collect_sources(tree: ClusterTree, node_id: int) -> set[int]:
             """DFS to collect all source indices under a tree node."""
             count = tree.leaf_count[node_id].item()
             if count > 0:
@@ -224,22 +227,26 @@ class TestClusterTree:
             left = tree.node_left_child[node_id].item()
             right = tree.node_right_child[node_id].item()
             if left >= 0:
-                result |= _collect_leaf_sources(left)
+                result |= _collect_sources(tree, left)
             if right >= 0:
-                result |= _collect_leaf_sources(right)
+                result |= _collect_sources(tree, right)
             return result
 
         near_tgt = plan.near_target_ids.tolist()
         near_src = plan.near_source_ids.tolist()
-        far_tgt = plan.far_target_ids.tolist()
-        far_nid = plan.far_node_ids.tolist()
+        far_tgt_nids = plan.far_target_node_ids.tolist()
+        far_src_nids = plan.far_source_node_ids.tolist()
+
+        ### Expand far-field target nodes to individual target IDs
+        far_expanded: list[tuple[int, int]] = []
+        for tgt_nid, src_nid in zip(far_tgt_nids, far_src_nids):
+            tgt_set = _collect_sources(target_tree, tgt_nid)
+            src_set = _collect_sources(source_tree, src_nid)
+            far_expanded.extend((t, s) for t in tgt_set for s in src_set)
 
         for t in range(n_tgt):
             near_sources = {s for ti, s in zip(near_tgt, near_src) if ti == t}
-            far_sources: set[int] = set()
-            for ti, nid in zip(far_tgt, far_nid):
-                if ti == t:
-                    far_sources |= _collect_leaf_sources(nid)
+            far_sources = {s for ti, s in far_expanded if ti == t}
 
             overlap = near_sources & far_sources
             assert not overlap, (
@@ -252,32 +259,36 @@ class TestClusterTree:
             )
 
     def test_large_theta_all_far(self):
-        """With very large theta, most interactions become far-field."""
+        """With very large theta, most interactions become far-field node pairs."""
         torch.manual_seed(DEFAULT_SEED)
         source_pts = torch.randn(30, 2) * 0.1
-        target_pts = torch.randn(10, 2) * 100  # far from sources
-        tree = ClusterTree.from_points(source_pts, leaf_size=4)
-        plan = tree.find_interaction_pairs(target_pts, theta=100.0)
-
-        # theta=100: D/r < 100 is easily satisfied -> most things far-field
-        assert plan.n_far > 0, "Expected some far-field interactions"
+        target_pts = torch.randn(10, 2) * 100
+        source_tree = ClusterTree.from_points(source_pts, leaf_size=4)
+        target_tree = ClusterTree.from_points(target_pts, leaf_size=4)
+        plan = source_tree.find_dual_interaction_pairs(
+            target_tree=target_tree, theta=100.0
+        )
+        assert plan.n_far_nodes > 0, "Expected some far-field node pairs"
 
     def test_zero_theta_all_near(self):
         """With theta=0 (exact), all interactions are near-field."""
         torch.manual_seed(DEFAULT_SEED)
         source_pts = torch.randn(20, 2)
         target_pts = torch.randn(5, 2) * 3
-        tree = ClusterTree.from_points(source_pts, leaf_size=4)
-        plan = tree.find_interaction_pairs(target_pts, theta=0.0)
+        source_tree = ClusterTree.from_points(source_pts, leaf_size=4)
+        target_tree = ClusterTree.from_points(target_pts, leaf_size=4)
+        plan = source_tree.find_dual_interaction_pairs(
+            target_tree=target_tree, theta=0.0
+        )
 
-        # theta=0: D/r < 0 is never satisfied, so everything is near-field.
+        # theta=0: combined MAC never satisfied, everything is near-field.
         assert plan.n_near > 0
         assert plan.n_near == 20 * 5, (
             f"Expected {20 * 5} near-field pairs, got {plan.n_near}"
         )
+        assert plan.n_far_nodes == 0
 
-        # Every (target, source) pair must be unique - verifies the leaf
-        # expansion logic doesn't produce duplicate interactions.
+        # Every (target, source) pair must be unique.
         pairs = torch.stack([plan.near_target_ids, plan.near_source_ids], dim=1)
         unique_pairs = pairs.unique(dim=0)
         assert unique_pairs.shape[0] == pairs.shape[0], (

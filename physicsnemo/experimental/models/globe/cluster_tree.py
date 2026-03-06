@@ -14,26 +14,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Spatial cluster tree for Barnes-Hut acceleration of GLOBE kernel evaluation.
+"""Spatial cluster tree for dual-tree Barnes-Hut acceleration of GLOBE kernels.
 
 This module provides a GPU-compatible hierarchical spatial decomposition over a
-set of points, designed for Barnes-Hut-style O(N log N) kernel acceleration.
-The tree enables replacing the O(N^2) all-to-all source-target interaction with
-a mix of exact near-field and approximate far-field evaluations.
+set of points, designed for dual-tree Barnes-Hut O(N) kernel acceleration.
+Trees are built over both source and target points.  The dual-tree traversal
+classifies (target_node, source_node) pairs as near-field or far-field:
+
+- **Near-field**: both nodes are leaves and nearby - expand to individual
+  (target, source) pairs for exact kernel evaluation.
+- **Far-field**: nodes are well-separated - evaluate the kernel ONCE at the
+  node centroids and broadcast the result to all targets in the target node.
+
+This reduces far-field kernel evaluations from O(N log N) (single-tree) to
+O(N) (dual-tree), which is critical at large mesh scales (800k+ faces).
 
 Construction uses a morton-code-based Linear BVH (LBVH) algorithm identical in
 structure to :mod:`physicsnemo.mesh.spatial.bvh`, producing a binary radix tree
 stored as flat tensors for GPU compatibility.
-
-The tree supports two key operations beyond construction:
-
-1. **Aggregate computation**: bottom-up computation of per-node aggregate source
-   data (centroids, normals, features) used as "virtual source" representations
-   for far-field cluster approximations.
-
-2. **Interaction pair finding**: breadth-first traversal that classifies each
-   (target, node) pair as near-field (requiring exact kernel evaluation) or
-   far-field (using the monopole approximation), returning an ``InteractionPlan``.
 """
 
 from dataclasses import dataclass
@@ -53,40 +51,37 @@ from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
 
 
 @dataclass(frozen=True)
-class InteractionPlan:
-    r"""Result of a Barnes-Hut tree traversal: the sets of near-field and
-    far-field interaction pairs that together cover all source contributions
-    for every target point.
+class DualInteractionPlan:
+    r"""Result of a dual-tree Barnes-Hut traversal: near-field individual
+    pairs and far-field node-to-node pairs that together cover all source
+    contributions for every target point.
 
-    Near-field pairs ``(near_target_ids[i], near_source_ids[i])`` require
-    exact kernel evaluation. Far-field pairs ``(far_target_ids[i],
-    far_node_ids[i])`` use the cluster's aggregate data as a monopole
-    approximation.
+    Near-field pairs ``(near_target_ids[i], near_source_ids[i])`` are
+    individual target-source pairs requiring exact kernel evaluation.
+
+    Far-field pairs ``(far_target_node_ids[i], far_source_node_ids[i])``
+    are node-to-node pairs where the kernel is evaluated ONCE at the
+    node centroids and the result is broadcast to all individual targets
+    in the target node.  This reduces far-field kernel evaluations from
+    O(N log N) to O(N).
 
     All index tensors are ``int64`` on the same device as the tree.
-    Pairs are sorted (near by source index, far by node index) for
-    memory-coalesced gather operations during kernel evaluation.
     """
 
     near_target_ids: Int[torch.Tensor, " n_near"]
     near_source_ids: Int[torch.Tensor, " n_near"]
-    far_target_ids: Int[torch.Tensor, " n_far"]
-    far_node_ids: Int[torch.Tensor, " n_far"]
+    far_target_node_ids: Int[torch.Tensor, " n_far_nodes"]
+    far_source_node_ids: Int[torch.Tensor, " n_far_nodes"]
 
     @property
     def n_near(self) -> int:
-        """Number of near-field (exact) interaction pairs."""
+        """Number of near-field (exact) individual interaction pairs."""
         return self.near_target_ids.shape[0]
 
     @property
-    def n_far(self) -> int:
-        """Number of far-field (approximate) interaction pairs."""
-        return self.far_target_ids.shape[0]
-
-    @property
-    def n_total(self) -> int:
-        """Total number of interaction pairs."""
-        return self.n_near + self.n_far
+    def n_far_nodes(self) -> int:
+        """Number of far-field node-to-node pairs (each = one kernel eval)."""
+        return self.far_target_node_ids.shape[0]
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +218,73 @@ def _expand_leaf_hits(
     return expanded_queries, expanded_sources
 
 
+def _expand_dual_leaf_hits(
+    target_leaf_ids: Int[torch.Tensor, " n_leaf_pairs"],
+    source_leaf_ids: Int[torch.Tensor, " n_leaf_pairs"],
+    target_tree: "ClusterTree",
+    source_tree: "ClusterTree",
+) -> tuple[Int[torch.Tensor, " n_expanded"], Int[torch.Tensor, " n_expanded"]]:
+    """Expand ``(target_leaf, source_leaf)`` pairs into all individual pairs.
+
+    For each leaf pair, forms the Cartesian product: every target in the
+    target leaf paired with every source in the source leaf.  This is the
+    near-field expansion for the dual-tree traversal.
+
+    Parameters
+    ----------
+    target_leaf_ids : torch.Tensor
+        Target tree node IDs for near-field leaf pairs, shape ``(n,)``.
+    source_leaf_ids : torch.Tensor
+        Source tree node IDs for near-field leaf pairs, shape ``(n,)``.
+    target_tree : ClusterTree
+        Tree over target points.
+    source_tree : ClusterTree
+        Tree over source points.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        ``(expanded_target_ids, expanded_source_ids)`` in original
+        (unsorted) point indices.
+    """
+    t_starts = target_tree.leaf_start[target_leaf_ids]
+    t_counts = target_tree.leaf_count[target_leaf_ids]
+    s_starts = source_tree.leaf_start[source_leaf_ids]
+    s_counts = source_tree.leaf_count[source_leaf_ids]
+
+    product_counts = t_counts * s_counts
+    total = int(product_counts.sum())
+    device = target_leaf_ids.device
+
+    if total == 0:
+        empty = torch.empty(0, dtype=torch.long, device=device)
+        return empty, empty.clone()
+
+    ### Expand pair indices and compute within-pair linear offsets
+    pair_ids = torch.repeat_interleave(
+        torch.arange(len(target_leaf_ids), dtype=torch.long, device=device),
+        product_counts,
+    )
+    cum = product_counts.cumsum(0)
+    linear = torch.arange(total, dtype=torch.long, device=device)
+    linear = linear - torch.repeat_interleave(cum - product_counts, product_counts)
+
+    ### Decompose linear offset into (target_within, source_within) via
+    # row-major indexing into a |T_i| x |S_i| grid.
+    s_counts_per = torch.repeat_interleave(s_counts, product_counts)
+    target_within = linear // s_counts_per
+    source_within = linear % s_counts_per
+
+    ### Map within-leaf offsets to original point indices
+    t_starts_per = torch.repeat_interleave(t_starts, product_counts)
+    s_starts_per = torch.repeat_interleave(s_starts, product_counts)
+
+    expanded_targets = target_tree.sorted_source_order[t_starts_per + target_within]
+    expanded_sources = source_tree.sorted_source_order[s_starts_per + source_within]
+
+    return expanded_targets, expanded_sources
+
+
 # ---------------------------------------------------------------------------
 # ClusterTree tensorclass
 # ---------------------------------------------------------------------------
@@ -258,6 +320,14 @@ class ClusterTree:
     leaf_count : torch.Tensor
         Number of sources in each leaf node, ``0`` for internal nodes,
         shape ``(n_nodes,)``.
+    node_range_start : torch.Tensor
+        Start offset into ``sorted_source_order`` for ALL nodes (both
+        leaf and internal), shape ``(n_nodes,)``.  Each node's subtree
+        covers a contiguous range in morton-sorted order.
+    node_range_count : torch.Tensor
+        Number of points in each node's subtree, shape ``(n_nodes,)``.
+        For leaves this equals ``leaf_count``; for internal nodes it
+        equals the sum of children's range counts.
     node_total_area : torch.Tensor
         Total source area in each node's subtree, shape ``(n_nodes,)``.
     sorted_source_order : torch.Tensor
@@ -276,6 +346,8 @@ class ClusterTree:
     node_right_child: torch.Tensor
     leaf_start: torch.Tensor
     leaf_count: torch.Tensor
+    node_range_start: torch.Tensor
+    node_range_count: torch.Tensor
     node_total_area: torch.Tensor
     sorted_source_order: torch.Tensor
     source_points: torch.Tensor
@@ -345,6 +417,8 @@ class ClusterTree:
                 node_right_child=empty_long,
                 leaf_start=empty_long,
                 leaf_count=empty_long,
+                node_range_start=empty_long,
+                node_range_count=empty_long,
                 node_total_area=torch.empty(0, dtype=dtype, device=device),
                 sorted_source_order=empty_long,
                 source_points=points,
@@ -379,6 +453,8 @@ class ClusterTree:
         right_child = torch.full((max_nodes,), -1, dtype=torch.long, device=device)
         leaf_start_buf = torch.full((max_nodes,), -1, dtype=torch.long, device=device)
         leaf_count_buf = torch.zeros(max_nodes, dtype=torch.long, device=device)
+        range_start_buf = torch.zeros(max_nodes, dtype=torch.long, device=device)
+        range_count_buf = torch.zeros(max_nodes, dtype=torch.long, device=device)
         total_area_buf = torch.zeros(max_nodes, dtype=dtype, device=device)
 
         # -----------------------------------------------------------
@@ -395,6 +471,13 @@ class ClusterTree:
 
             while len(seg_starts) > 0:
                 seg_sizes = seg_ends - seg_starts
+
+                ### Store the sorted-order range for ALL nodes at this level.
+                # Each node covers a contiguous range [seg_start, seg_end)
+                # in the morton-sorted order.  Used by dual-tree traversal
+                # to expand node-level results to individual points.
+                range_start_buf[seg_node_ids] = seg_starts
+                range_count_buf[seg_node_ids] = seg_sizes
 
                 ### Classify segments as leaf or internal
                 is_leaf_seg = seg_sizes <= leaf_size
@@ -487,6 +570,8 @@ class ClusterTree:
             node_right_child=right_child[:node_count],
             leaf_start=leaf_start_buf[:node_count],
             leaf_count=leaf_count_buf[:node_count],
+            node_range_start=range_start_buf[:node_count],
+            node_range_count=range_count_buf[:node_count],
             node_total_area=total_area_buf[:node_count],
             sorted_source_order=sorted_order,
             source_points=points,
@@ -595,130 +680,181 @@ class ClusterTree:
             node_source_data=node_source_data,
         )
 
-    def find_interaction_pairs(
+    def find_dual_interaction_pairs(
         self,
-        target_points: Float[torch.Tensor, "n_targets n_dims"],
+        target_tree: "ClusterTree",
         theta: float = 1.0,
-    ) -> InteractionPlan:
-        r"""Find near-field and far-field interaction pairs via tree traversal.
+    ) -> DualInteractionPlan:
+        r"""Find near-field and far-field pairs via dual-tree traversal.
 
-        Uses the AABB-distance opening angle criterion: a target uses the
-        far-field (monopole) approximation for a node when
-        :math:`D / r < \theta`, where *D* is the AABB diagonal and *r*
-        is the distance from the target to the nearest point on the AABB.
+        Traverses both the source tree (``self``) and ``target_tree``
+        simultaneously.  For well-separated node pairs, records a single
+        far-field (target_node, source_node) entry - the kernel is evaluated
+        ONCE at the node centroids and broadcast to all targets in the node.
+        This reduces far-field kernel evaluations from O(N log N) to O(N).
+
+        Uses a combined AABB-distance opening criterion:
+        ``(D_T + D_S) / r < theta``, where D_T and D_S are the AABB
+        diagonals and r is the minimum distance between the two AABBs.
+        This accounts for approximation error on both the target and
+        source sides.
 
         Parameters
         ----------
-        target_points : Float[torch.Tensor, "n_targets n_dims"]
-            Target coordinates, shape :math:`(N_{tgt}, D)`.
+        target_tree : ClusterTree
+            Tree over target points.  For self-interaction (communication
+            layers), this is the same object as ``self``.
         theta : float
-            Barnes-Hut opening angle.  A node is approximated when
-            ``D/r < theta``.  Larger values are more aggressive (more
-            approximation, faster).  At ``theta = 0``, all interactions
-            are exact.  Typical values: ``0.5``--``1.5``.
+            Barnes-Hut opening angle.  Larger = more aggressive.
+            ``theta = 0`` forces all interactions to be exact.
 
         Returns
         -------
-        InteractionPlan
-            Near-field and far-field interaction pairs sorted for
-            memory-coalesced access.
+        DualInteractionPlan
+            Near-field individual pairs and far-field node-to-node pairs.
         """
-        n_targets = target_points.shape[0]
-        device = target_points.device
+        source_tree = self
+        device = source_tree.node_aabb_min.device
         theta_sq = theta * theta
 
-        ### Handle empty tree or empty targets
-        if self.n_nodes == 0 or n_targets == 0:
+        ### Handle empty trees
+        if source_tree.n_nodes == 0 or target_tree.n_nodes == 0:
             empty = torch.empty(0, dtype=torch.long, device=device)
-            return InteractionPlan(
+            return DualInteractionPlan(
                 near_target_ids=empty,
                 near_source_ids=empty.clone(),
-                far_target_ids=empty.clone(),
-                far_node_ids=empty.clone(),
+                far_target_node_ids=empty.clone(),
+                far_source_node_ids=empty.clone(),
             )
 
-        ### Initialize: all targets start at root (node 0)
-        with record_function("cluster_tree::traversal"):
-            active_target_ids = torch.arange(n_targets, dtype=torch.long, device=device)
-            active_node_ids = torch.zeros(n_targets, dtype=torch.long, device=device)
+        with record_function("cluster_tree::dual_traversal"):
+            ### Initialize: root-to-root pair
+            active_tgt_nodes = torch.zeros(1, dtype=torch.long, device=device)
+            active_src_nodes = torch.zeros(1, dtype=torch.long, device=device)
 
             near_target_list: list[torch.Tensor] = []
             near_source_list: list[torch.Tensor] = []
-            far_target_list: list[torch.Tensor] = []
-            far_node_list: list[torch.Tensor] = []
+            far_tgt_node_list: list[torch.Tensor] = []
+            far_src_node_list: list[torch.Tensor] = []
 
-            max_depth = int(self.max_depth.item())
+            max_iters = int(target_tree.max_depth.item()) + int(source_tree.max_depth.item()) + 1
 
-            ### Breadth-first traversal, one iteration per tree level
-            for _ in range(max_depth + 1):
-                if active_target_ids.numel() == 0:
+            for _ in range(max_iters):
+                if active_tgt_nodes.numel() == 0:
                     break
 
-                ### Opening-angle test: squared distance from each target to
-                # the nearest point on the node's AABB.  Clamping the target
-                # coordinates to the AABB bounds gives the closest point; the
-                # squared distance to that point is zero when the target is
-                # inside the box.
-                pts = target_points[active_target_ids]  # (n_active, D)
-                aabb_lo = self.node_aabb_min[active_node_ids]
-                aabb_hi = self.node_aabb_max[active_node_ids]
+                ### Combined opening criterion: minimum AABB-to-AABB gap.
+                # For each dimension, the gap is the positive distance
+                # between the two boxes (zero if they overlap).
+                aabb_min_T = target_tree.node_aabb_min[active_tgt_nodes]
+                aabb_max_T = target_tree.node_aabb_max[active_tgt_nodes]
+                aabb_min_S = source_tree.node_aabb_min[active_src_nodes]
+                aabb_max_S = source_tree.node_aabb_max[active_src_nodes]
 
-                clamped = torch.clamp(pts, min=aabb_lo, max=aabb_hi)
-                dist_sq = (pts - clamped).pow(2).sum(dim=-1)  # (n_active,)
+                gap = torch.clamp(
+                    torch.maximum(aabb_min_T - aabb_max_S, aabb_min_S - aabb_max_T),
+                    min=0,
+                )
+                min_dist_sq = gap.pow(2).sum(dim=-1)
 
-                diam_sq = self.node_diameter_sq[active_node_ids]
-                is_far = dist_sq * theta_sq > diam_sq
+                diam_T = target_tree.node_diameter_sq[active_tgt_nodes].sqrt()
+                diam_S = source_tree.node_diameter_sq[active_src_nodes].sqrt()
+                combined_diam_sq = (diam_T + diam_S).pow(2)
 
-                ### Three-way classification of active (target, node) pairs:
-                #  1. Far-field: D/r < theta -> use monopole
-                #  2. Near-field leaf: not far, node is a leaf -> exact per-source
-                #  3. Near-field internal: not far, node has children -> recurse
-                hit_leaf_count = self.leaf_count[active_node_ids]
-                is_leaf = hit_leaf_count > 0
+                is_far = min_dist_sq * theta_sq > combined_diam_sq
 
-                ### Far-field: accumulate (target, node) pairs
+                ### Classify active pairs
+                is_leaf_T = target_tree.leaf_count[active_tgt_nodes] > 0
+                is_leaf_S = source_tree.leaf_count[active_src_nodes] > 0
+
+                ### 1. Far-field: well-separated node pairs
                 if is_far.any():
-                    far_target_list.append(active_target_ids[is_far])
-                    far_node_list.append(active_node_ids[is_far])
+                    far_tgt_node_list.append(active_tgt_nodes[is_far])
+                    far_src_node_list.append(active_src_nodes[is_far])
 
-                ### Near-field leaves: expand to (target, source) pairs
-                near_leaf = ~is_far & is_leaf
-                if near_leaf.any():
-                    expanded_tgts, expanded_srcs = _expand_leaf_hits(
-                        active_target_ids[near_leaf],
-                        active_node_ids[near_leaf],
-                        self.leaf_start,
-                        self.leaf_count,
-                        self.sorted_source_order,
+                ### 2. Near-field, both leaves: Cartesian product expansion
+                near_leaf_leaf = (~is_far) & is_leaf_T & is_leaf_S
+                if near_leaf_leaf.any():
+                    exp_tgts, exp_srcs = _expand_dual_leaf_hits(
+                        active_tgt_nodes[near_leaf_leaf],
+                        active_src_nodes[near_leaf_leaf],
+                        target_tree,
+                        source_tree,
                     )
-                    near_target_list.append(expanded_tgts)
-                    near_source_list.append(expanded_srcs)
+                    near_target_list.append(exp_tgts)
+                    near_source_list.append(exp_srcs)
 
-                ### Internal near-field: expand to children for next iteration
-                expand = ~is_far & ~is_leaf
-                if not expand.any():
+                ### 3. Need to split: at least one is internal, not far
+                need_split = (~is_far) & (~near_leaf_leaf)
+                if not need_split.any():
                     break
 
-                exp_targets = active_target_ids[expand]
-                exp_nodes = active_node_ids[expand]
-                left = self.node_left_child[exp_nodes]
-                right = self.node_right_child[exp_nodes]
+                split_tgt = active_tgt_nodes[need_split]
+                split_src = active_src_nodes[need_split]
+                split_is_leaf_T = is_leaf_T[need_split]
+                split_is_leaf_S = is_leaf_S[need_split]
+                split_diam_sq_T = target_tree.node_diameter_sq[split_tgt]
+                split_diam_sq_S = source_tree.node_diameter_sq[split_src]
 
-                valid_left = left >= 0
-                valid_right = right >= 0
+                ### Splitting decision: split the larger node.
+                # If equal (including self-interaction T==S), split both.
+                # If one side is a leaf, can only split the other.
+                do_split_T = (~split_is_leaf_T) & (
+                    split_is_leaf_S | (split_diam_sq_T >= split_diam_sq_S)
+                )
+                do_split_S = (~split_is_leaf_S) & (
+                    split_is_leaf_T | (split_diam_sq_S >= split_diam_sq_T)
+                )
 
-                parts_t: list[torch.Tensor] = []
-                parts_n: list[torch.Tensor] = []
-                if valid_left.any():
-                    parts_t.append(exp_targets[valid_left])
-                    parts_n.append(left[valid_left])
-                if valid_right.any():
-                    parts_t.append(exp_targets[valid_right])
-                    parts_n.append(right[valid_right])
+                ### Generate child pairs for each split case
+                next_tgt_parts: list[torch.Tensor] = []
+                next_src_parts: list[torch.Tensor] = []
 
-                if parts_t:
-                    active_target_ids = torch.cat(parts_t)
-                    active_node_ids = torch.cat(parts_n)
+                # Case A: split T only (T internal, S leaf or T strictly larger)
+                case_T_only = do_split_T & (~do_split_S)
+                if case_T_only.any():
+                    t_ids = split_tgt[case_T_only]
+                    s_ids = split_src[case_T_only]
+                    left_T = target_tree.node_left_child[t_ids]
+                    right_T = target_tree.node_right_child[t_ids]
+                    for child_T in (left_T, right_T):
+                        valid = child_T >= 0
+                        if valid.any():
+                            next_tgt_parts.append(child_T[valid])
+                            next_src_parts.append(s_ids[valid])
+
+                # Case B: split S only (S internal, T leaf or S strictly larger)
+                case_S_only = do_split_S & (~do_split_T)
+                if case_S_only.any():
+                    t_ids = split_tgt[case_S_only]
+                    s_ids = split_src[case_S_only]
+                    left_S = source_tree.node_left_child[s_ids]
+                    right_S = source_tree.node_right_child[s_ids]
+                    for child_S in (left_S, right_S):
+                        valid = child_S >= 0
+                        if valid.any():
+                            next_tgt_parts.append(t_ids[valid])
+                            next_src_parts.append(child_S[valid])
+
+                # Case C: split both (both internal, equal diameter or T==S)
+                case_both = do_split_T & do_split_S
+                if case_both.any():
+                    t_ids = split_tgt[case_both]
+                    s_ids = split_src[case_both]
+                    left_T = target_tree.node_left_child[t_ids]
+                    right_T = target_tree.node_right_child[t_ids]
+                    left_S = source_tree.node_left_child[s_ids]
+                    right_S = source_tree.node_right_child[s_ids]
+                    for child_T in (left_T, right_T):
+                        for child_S in (left_S, right_S):
+                            valid = (child_T >= 0) & (child_S >= 0)
+                            if valid.any():
+                                next_tgt_parts.append(child_T[valid])
+                                next_src_parts.append(child_S[valid])
+
+                if next_tgt_parts:
+                    active_tgt_nodes = torch.cat(next_tgt_parts)
+                    active_src_nodes = torch.cat(next_src_parts)
                 else:
                     break
 
@@ -730,29 +866,30 @@ class ClusterTree:
                 near_tgt = torch.empty(0, dtype=torch.long, device=device)
                 near_src = torch.empty(0, dtype=torch.long, device=device)
 
-            if far_target_list:
-                far_tgt = torch.cat(far_target_list)
-                far_nid = torch.cat(far_node_list)
+            if far_tgt_node_list:
+                far_tgt_nid = torch.cat(far_tgt_node_list)
+                far_src_nid = torch.cat(far_src_node_list)
             else:
-                far_tgt = torch.empty(0, dtype=torch.long, device=device)
-                far_nid = torch.empty(0, dtype=torch.long, device=device)
+                far_tgt_nid = torch.empty(0, dtype=torch.long, device=device)
+                far_src_nid = torch.empty(0, dtype=torch.long, device=device)
 
-            ### Sort pairs for memory-coalesced gather during kernel evaluation
+            ### Sort near pairs by source index for coalesced gather
             if near_src.numel() > 0:
                 sort_order = near_src.argsort(stable=True)
                 near_tgt = near_tgt[sort_order]
                 near_src = near_src[sort_order]
 
-            if far_nid.numel() > 0:
-                sort_order = far_nid.argsort(stable=True)
-                far_tgt = far_tgt[sort_order]
-                far_nid = far_nid[sort_order]
+            ### Sort far pairs by source node for coalesced aggregate gather
+            if far_src_nid.numel() > 0:
+                sort_order = far_src_nid.argsort(stable=True)
+                far_tgt_nid = far_tgt_nid[sort_order]
+                far_src_nid = far_src_nid[sort_order]
 
-        return InteractionPlan(
+        return DualInteractionPlan(
             near_target_ids=near_tgt,
             near_source_ids=near_src,
-            far_target_ids=far_tgt,
-            far_node_ids=far_nid,
+            far_target_node_ids=far_tgt_nid,
+            far_source_node_ids=far_src_nid,
         )
 
 

@@ -153,7 +153,9 @@ def profile_single_sample(
     phases: list[PhaseTime] = []
 
     ### Measure cache file size
-    cache_path = (cache_dir / sample_path.name).with_suffix(".pt") if cache_dir else None
+    cache_path = (
+        (cache_dir / sample_path.name).with_suffix(".pt") if cache_dir else None
+    )
     if cache_path and cache_path.exists():
         cache_file_mb = cache_path.stat().st_size / 1024**2
     else:
@@ -164,17 +166,23 @@ def profile_single_sample(
         t0 = perf_counter()
         raw_sample: DrivAerMLSample = torch.load(cache_path, weights_only=False)
         t1 = perf_counter()
-        phases.append(PhaseTime(
-            "torch.load (cache)", (t1 - t0) * 1000,
-            f"{cache_file_mb:.1f} MB",
-        ))
+        phases.append(
+            PhaseTime(
+                "torch.load (cache)",
+                (t1 - t0) * 1000,
+                f"{cache_file_mb:.1f} MB",
+            )
+        )
     else:
         t0 = perf_counter()
         raw_sample = DrivAerMLDataSet.preprocess(sample_path=sample_path)
         t1 = perf_counter()
-        phases.append(PhaseTime(
-            "preprocess (no cache)", (t1 - t0) * 1000,
-        ))
+        phases.append(
+            PhaseTime(
+                "preprocess (no cache)",
+                (t1 - t0) * 1000,
+            )
+        )
 
     surface_n_cells = raw_sample.surface_mesh.n_cells
     surface_n_points = raw_sample.surface_mesh.n_points
@@ -183,28 +191,37 @@ def profile_single_sample(
     t0 = perf_counter()
     total_area = raw_sample.surface_mesh.cell_areas.sum()
     t1 = perf_counter()
-    phases.append(PhaseTime(
-        "surface cell_areas", (t1 - t0) * 1000,
-        f"{surface_n_cells:,} cells",
-    ))
+    phases.append(
+        PhaseTime(
+            "surface cell_areas",
+            (t1 - t0) * 1000,
+            f"{surface_n_cells:,} cells",
+        )
+    )
 
     ### Phase 2b: torch.randperm (select random cell indices)
     t0 = perf_counter()
     indices = torch.randperm(surface_n_cells)[:boundary_n_faces]
     t1 = perf_counter()
-    phases.append(PhaseTime(
-        "randperm", (t1 - t0) * 1000,
-        f"{surface_n_cells:,} -> {boundary_n_faces:,}",
-    ))
+    phases.append(
+        PhaseTime(
+            "randperm",
+            (t1 - t0) * 1000,
+            f"{surface_n_cells:,} -> {boundary_n_faces:,}",
+        )
+    )
 
     ### Phase 2c: slice_cells (select cells + associated points)
     t0 = perf_counter()
     sliced = raw_sample.surface_mesh.slice_cells(indices)
     t1 = perf_counter()
-    phases.append(PhaseTime(
-        "slice_cells", (t1 - t0) * 1000,
-        f"{sliced.n_cells:,} cells, {sliced.n_points:,} pts",
-    ))
+    phases.append(
+        PhaseTime(
+            "slice_cells",
+            (t1 - t0) * 1000,
+            f"{sliced.n_cells:,} cells, {sliced.n_points:,} pts",
+        )
+    )
 
     ### Phase 2d: clean (remove unreferenced points only)
     t0 = perf_counter()
@@ -214,10 +231,13 @@ def profile_single_sample(
         remove_unused_points=True,
     )
     t1 = perf_counter()
-    phases.append(PhaseTime(
-        "clean", (t1 - t0) * 1000,
-        f"{sliced.n_points:,} -> {boundary.n_points:,} pts",
-    ))
+    phases.append(
+        PhaseTime(
+            "clean",
+            (t1 - t0) * 1000,
+            f"{sliced.n_points:,} -> {boundary.n_points:,} pts",
+        )
+    )
 
     ### Phase 2e: Mesh() constructor + cell_areas (strip data, recompute areas)
     t0 = perf_counter()
@@ -225,10 +245,13 @@ def profile_single_sample(
     raw_areas = boundary.cell_areas
     boundary._cache["cell", "areas"] = raw_areas * (total_area / raw_areas.sum())
     t1 = perf_counter()
-    phases.append(PhaseTime(
-        "boundary cell_areas + rescale", (t1 - t0) * 1000,
-        f"{boundary.n_cells:,} cells",
-    ))
+    phases.append(
+        PhaseTime(
+            "boundary cell_areas + rescale",
+            (t1 - t0) * 1000,
+            f"{boundary.n_cells:,} cells",
+        )
+    )
 
     ### Build the sample as __getitem__ would
     raw_sample.boundary_meshes["no_slip"] = boundary
@@ -239,10 +262,13 @@ def profile_single_sample(
     mask = torch.randperm(raw_sample.surface_mesh.n_points)[:n_points]
     subsampled_surface = raw_sample.surface_mesh.slice_points(mask)
     t1 = perf_counter()
-    phases.append(PhaseTime(
-        "slice_points (prediction)", (t1 - t0) * 1000,
-        f"{raw_sample.surface_mesh.n_points:,} -> {n_points:,} pts",
-    ))
+    phases.append(
+        PhaseTime(
+            "slice_points (prediction)",
+            (t1 - t0) * 1000,
+            f"{raw_sample.surface_mesh.n_points:,} -> {n_points:,} pts",
+        )
+    )
 
     ### Phase 3b: mesh.pad (pad boundary to fixed size)
     t0 = perf_counter()
@@ -252,18 +278,24 @@ def profile_single_sample(
         data_padding_value=0.0,
     )
     t1 = perf_counter()
-    phases.append(PhaseTime(
-        "pad", (t1 - t0) * 1000,
-        f"-> {pad_n_cells:,} cells, {pad_n_points:,} pts",
-    ))
+    phases.append(
+        PhaseTime(
+            "pad",
+            (t1 - t0) * 1000,
+            f"-> {pad_n_cells:,} cells, {pad_n_points:,} pts",
+        )
+    )
 
     ### Phase 3c: sample_random_points_on_cells (randomize face centers)
     t0 = perf_counter()
     _ = padded.sample_random_points_on_cells()
     t1 = perf_counter()
-    phases.append(PhaseTime(
-        "sample_random_points_on_cells", (t1 - t0) * 1000,
-    ))
+    phases.append(
+        PhaseTime(
+            "sample_random_points_on_cells",
+            (t1 - t0) * 1000,
+        )
+    )
 
     ### Phase 3d: lazy geometry computation (cell_areas, cell_normals)
     padded_stripped = padded.strip_caches()
@@ -271,10 +303,13 @@ def profile_single_sample(
     t0 = perf_counter()
     _ = padded_stripped.cell_centroids
     t1 = perf_counter()
-    phases.append(PhaseTime(
-        "pad cell_centroids", (t1 - t0) * 1000,
-        f"{padded_stripped.n_cells:,} cells",
-    ))
+    phases.append(
+        PhaseTime(
+            "pad cell_centroids",
+            (t1 - t0) * 1000,
+            f"{padded_stripped.n_cells:,} cells",
+        )
+    )
 
     padded_stripped2 = padded.strip_caches()
     t0 = perf_counter()
@@ -420,18 +455,32 @@ def print_sample_profile(prof: SampleProfile) -> None:
 def print_summary(summary: PipelineSummary) -> None:
     """Print aggregate pipeline statistics."""
     print(f"\n  Aggregate across {summary.n_samples} samples:")
-    print(f"  Cache file size:  median={summary.cache_file_median_mb:.1f} MB  "
-          f"min={summary.cache_file_min_mb:.1f} MB  max={summary.cache_file_max_mb:.1f} MB")
-    print(f"  Surface cells:    median={summary.surface_n_cells_median:,}  "
-          f"min={summary.surface_n_cells_min:,}  max={summary.surface_n_cells_max:,}")
-    print(f"  Total load time:  median={summary.total_median_ms:.1f} ms  "
-          f"min={summary.total_min_ms:.1f} ms  max={summary.total_max_ms:.1f} ms")
+    print(
+        f"  Cache file size:  median={summary.cache_file_median_mb:.1f} MB  "
+        f"min={summary.cache_file_min_mb:.1f} MB  max={summary.cache_file_max_mb:.1f} MB"
+    )
+    print(
+        f"  Surface cells:    median={summary.surface_n_cells_median:,}  "
+        f"min={summary.surface_n_cells_min:,}  max={summary.surface_n_cells_max:,}"
+    )
+    print(
+        f"  Total load time:  median={summary.total_median_ms:.1f} ms  "
+        f"min={summary.total_min_ms:.1f} ms  max={summary.total_max_ms:.1f} ms"
+    )
 
     total_median = summary.total_median_ms
-    name_w = max(len(k) for k in summary.per_phase_median_ms) + 2 if summary.per_phase_median_ms else 20
+    name_w = (
+        max(len(k) for k in summary.per_phase_median_ms) + 2
+        if summary.per_phase_median_ms
+        else 20
+    )
 
-    print(f"\n  {'Phase':<{name_w}}  {'Median':>9}  {'Min':>9}  {'Max':>9}  {'% Total':>7}")
-    print(f"  {H_LINE * name_w}  {H_LINE * 9}  {H_LINE * 9}  {H_LINE * 9}  {H_LINE * 7}")
+    print(
+        f"\n  {'Phase':<{name_w}}  {'Median':>9}  {'Min':>9}  {'Max':>9}  {'% Total':>7}"
+    )
+    print(
+        f"  {H_LINE * name_w}  {H_LINE * 9}  {H_LINE * 9}  {H_LINE * 9}  {H_LINE * 7}"
+    )
 
     for name in summary.per_phase_median_ms:
         med = summary.per_phase_median_ms[name]
@@ -440,29 +489,39 @@ def print_summary(summary: PipelineSummary) -> None:
         pct = f"{med / total_median * 100:5.1f}%" if total_median > 0 else "    \u2014"
         print(f"  {name:<{name_w}}  {med:>8.1f}ms {mn:>8.1f}ms {mx:>8.1f}ms  {pct:>7}")
 
-    print(f"\n  Pipeline throughput: 1 sample / {summary.total_median_ms / 1000:.2f}s "
-          f"= {1000 / summary.total_median_ms:.2f} samples/s (single-threaded)")
+    print(
+        f"\n  Pipeline throughput: 1 sample / {summary.total_median_ms / 1000:.2f}s "
+        f"= {1000 / summary.total_median_ms:.2f} samples/s (single-threaded)"
+    )
 
     gpu_step_s = 14.0
     for nw in [1, 4, 8, 16, 28]:
         t_load = summary.total_median_ms / 1000
         stall = max(0, t_load - nw * gpu_step_s)
         effective = gpu_step_s + stall / max(1, 14 // nw + 1)
-        print(f"  With {nw:>2} workers: stall/cycle = {stall:.1f}s, "
-              f"effective ~{effective:.1f}s/sample "
-              f"{'(no stall)' if stall < 0.1 else ''}")
+        print(
+            f"  With {nw:>2} workers: stall/cycle = {stall:.1f}s, "
+            f"effective ~{effective:.1f}s/sample "
+            f"{'(no stall)' if stall < 0.1 else ''}"
+        )
 
 
 def print_dataloader_table(profiles: list[DataLoaderProfile]) -> None:
     """Print DataLoader throughput comparison."""
-    print(f"  {'Workers':>7} {'Prefetch':>8} {'Samples':>7} {'Total':>8} "
-          f"{'Per Sample':>10} {'Throughput':>12}")
-    print(f"  {H_LINE * 7} {H_LINE * 8} {H_LINE * 7} {H_LINE * 8} "
-          f"{H_LINE * 10} {H_LINE * 12}")
+    print(
+        f"  {'Workers':>7} {'Prefetch':>8} {'Samples':>7} {'Total':>8} "
+        f"{'Per Sample':>10} {'Throughput':>12}"
+    )
+    print(
+        f"  {H_LINE * 7} {H_LINE * 8} {H_LINE * 7} {H_LINE * 8} "
+        f"{H_LINE * 10} {H_LINE * 12}"
+    )
     for p in profiles:
-        print(f"  {p.num_workers:>7} {p.prefetch_factor:>8} {p.n_samples:>7} "
-              f"{p.total_s:>7.1f}s {p.per_sample_s:>9.2f}s "
-              f"{p.throughput_samples_per_s:>9.2f} samp/s")
+        print(
+            f"  {p.num_workers:>7} {p.prefetch_factor:>8} {p.n_samples:>7} "
+            f"{p.total_s:>7.1f}s {p.per_sample_s:>9.2f}s "
+            f"{p.throughput_samples_per_s:>9.2f} samp/s"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -482,7 +541,8 @@ def generate_recommendations(
     ### Identify dominant phase
     if summary.per_phase_median_ms:
         dominant_name = max(
-            summary.per_phase_median_ms, key=summary.per_phase_median_ms.get,
+            summary.per_phase_median_ms,
+            key=summary.per_phase_median_ms.get,
         )
         dominant_frac = (
             summary.per_phase_median_ms[dominant_name] / summary.total_median_ms
@@ -668,7 +728,8 @@ def main(
         for i in range(len(sample_paths)):
             print(f"\n  Sample {i}: {sample_paths[i].name}")
             prof = profile_single_sample(
-                dataset, i,
+                dataset,
+                i,
                 boundary_n_faces=boundary_n_faces,
                 points_per_iter=points_per_iter,
                 pad_n_points=pad_n_points,
@@ -698,8 +759,10 @@ def main(
     if not skip_dataloader:
         n_sections_so_far = 1 + (not skip_per_sample)
         n_sections = 3 - skip_per_sample - skip_worker_scaling
-        print(f"\n[{n_sections_so_far}/{n_sections}] DataLoader Throughput "
-              f"(single-process, varying workers)")
+        print(
+            f"\n[{n_sections_so_far}/{n_sections}] DataLoader Throughput "
+            f"(single-process, varying workers)"
+        )
         print(f"  {H_LINE * 78}")
 
         n_gpus = max(1, torch.cuda.device_count()) if has_gpu else 1
@@ -709,17 +772,23 @@ def main(
         dl_profiles: list[DataLoaderProfile] = []
         for nw in test_configs:
             pf = prefetch_factor if nw > 0 else 2
-            print(f"  Testing num_workers={nw}, prefetch_factor={pf}...",
-                  end="", flush=True)
+            print(
+                f"  Testing num_workers={nw}, prefetch_factor={pf}...",
+                end="",
+                flush=True,
+            )
             prof = profile_dataloader(
-                sample_paths, cache_dir,
+                sample_paths,
+                cache_dir,
                 num_workers=nw,
                 prefetch_factor=pf,
                 boundary_n_faces=boundary_n_faces,
                 n_epochs=2,
             )
-            print(f" {prof.per_sample_s:.2f}s/sample, "
-                  f"{prof.throughput_samples_per_s:.2f} samp/s")
+            print(
+                f" {prof.per_sample_s:.2f}s/sample, "
+                f"{prof.throughput_samples_per_s:.2f} samp/s"
+            )
             dl_profiles.append(prof)
 
         print()
@@ -735,17 +804,19 @@ def main(
         scaling_profiles: list[DataLoaderProfile] = []
         for nw in worker_counts:
             pf = prefetch_factor if nw > 0 else 2
-            print(f"  num_workers={nw:>3}, prefetch={pf}...",
-                  end="", flush=True)
+            print(f"  num_workers={nw:>3}, prefetch={pf}...", end="", flush=True)
             prof = profile_dataloader(
-                sample_paths, cache_dir,
+                sample_paths,
+                cache_dir,
                 num_workers=nw,
                 prefetch_factor=pf,
                 boundary_n_faces=boundary_n_faces,
                 n_epochs=2,
             )
-            print(f"  {prof.per_sample_s:.2f}s/sample  "
-                  f"{prof.throughput_samples_per_s:.2f} samp/s")
+            print(
+                f"  {prof.per_sample_s:.2f}s/sample  "
+                f"{prof.throughput_samples_per_s:.2f} samp/s"
+            )
             scaling_profiles.append(prof)
 
         print()
@@ -759,9 +830,8 @@ def main(
     summary_for_recs = (
         summarize_profiles(profiles) if not skip_per_sample else PipelineSummary()
     )
-    dl_for_recs = (
-        (dl_profiles if not skip_dataloader else [])
-        + (scaling_profiles if not skip_worker_scaling else [])
+    dl_for_recs = (dl_profiles if not skip_dataloader else []) + (
+        scaling_profiles if not skip_worker_scaling else []
     )
     recs = generate_recommendations(summary_for_recs, dl_for_recs)
     all_results.recommendations = recs

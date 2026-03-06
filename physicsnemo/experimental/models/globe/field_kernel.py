@@ -751,9 +751,9 @@ class BarnesHutKernel(Kernel):
     minimizing kernel launch overhead ("accumulate pairs, evaluate once").
 
     The ``ClusterTree`` spatial structure can be precomputed per mesh geometry
-    and reused across kernel branches and hyperlayers. The ``InteractionPlan``
-    (which target-source pairs are near vs. far) can be cached when targets
-    equal sources (communication hyperlayers).
+    and reused across kernel branches and hyperlayers. The
+    ``DualInteractionPlan`` can be cached when targets equal sources
+    (communication hyperlayers).
 
     Parameters
     ----------
@@ -833,11 +833,23 @@ class BarnesHutKernel(Kernel):
         global_data: TensorDict | None = None,
         theta: float = 1.0,
         cluster_tree: "ClusterTree | None" = None,
-        interaction_plan: "InteractionPlan | None" = None,
+        target_tree: "ClusterTree | None" = None,
+        dual_plan: "DualInteractionPlan | None" = None,
         source_areas: Float[torch.Tensor, " n_sources"] | None = None,
         source_aggregates: "SourceAggregates | None" = None,
+        target_centroids: Float[torch.Tensor, "n_target_nodes n_dims"] | None = None,
+        near_chunk_size: int | None = None,
     ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
-        r"""Evaluate the kernel with Barnes-Hut tree acceleration.
+        r"""Evaluate the kernel with dual-tree Barnes-Hut acceleration.
+
+        Uses two separate evaluation phases:
+
+        - **Phase A (near-field)**: individual target-source pairs from
+          nearby leaf nodes, evaluated exactly with chunked processing.
+        - **Phase B (far-field node pairs)**: the kernel is evaluated ONCE
+          at ``(centroid_T, centroid_S, avg_data_S)`` per well-separated
+          node pair, then broadcast to all individual targets in the
+          target node via scatter_add.
 
         Parameters
         ----------
@@ -856,15 +868,28 @@ class BarnesHutKernel(Kernel):
         theta : float
             Barnes-Hut opening angle (larger = more aggressive).
         cluster_tree : ClusterTree or None
-            Precomputed tree. Built on-the-fly if ``None``.
-        interaction_plan : InteractionPlan or None
-            Precomputed traversal plan. Computed on-the-fly if ``None``.
+            Precomputed source tree. Built on-the-fly if ``None``.
+        target_tree : ClusterTree or None
+            Precomputed target tree. Built on-the-fly if ``None``.
+            For self-interaction (comm layers), pass the same tree as
+            ``cluster_tree``.
+        dual_plan : DualInteractionPlan or None
+            Precomputed dual traversal plan. Computed on-the-fly if ``None``.
         source_areas : Float[torch.Tensor, "n_sources"] or None
             Per-source areas for aggregate weighting. Defaults to ones.
         source_aggregates : SourceAggregates or None
-            Precomputed per-node aggregates. Computed on-the-fly if ``None``.
-            Pass this to avoid redundant computation when multiple kernels
-            share the same tree and source data.
+            Precomputed per-node source aggregates.
+        target_centroids : Float[torch.Tensor, "n_target_nodes n_dims"] or None
+            Per-node centroids for the target tree. If ``None`` and
+            ``target_tree is cluster_tree`` (self-interaction), source
+            aggregates' centroids are reused. Otherwise computed from
+            the target tree.
+        near_chunk_size : int or None
+            Fixed chunk size for near-field pair processing. When provided,
+            overrides :meth:`_auto_chunk_size`. Pass this from an outer scope
+            to ensure deterministic chunking inside ``torch.utils.checkpoint``
+            replay (free GPU memory changes between forward and backward,
+            so ``_auto_chunk_size`` would return different values).
 
         Returns
         -------
@@ -873,8 +898,9 @@ class BarnesHutKernel(Kernel):
         """
         from physicsnemo.experimental.models.globe.cluster_tree import (
             ClusterTree,
-            InteractionPlan,
+            DualInteractionPlan,
             SourceAggregates,
+            _ragged_arange,
         )
 
         n_sources = source_points.shape[0]
@@ -891,27 +917,23 @@ class BarnesHutKernel(Kernel):
         if source_areas is None:
             source_areas = torch.ones(n_sources, device=device)
 
-        ### Build tree if not precomputed
+        ### Build trees if not precomputed
         if cluster_tree is None:
             cluster_tree = ClusterTree.from_points(
                 source_points, leaf_size=self.leaf_size, areas=source_areas
             )
+        if target_tree is None:
+            target_tree = ClusterTree.from_points(
+                target_points, leaf_size=self.leaf_size,
+            )
 
-        ### Find interaction pairs if not precomputed
-        if interaction_plan is None:
-            interaction_plan = cluster_tree.find_interaction_pairs(
-                target_points, theta=theta
+        ### Find dual interaction pairs if not precomputed
+        if dual_plan is None:
+            dual_plan = cluster_tree.find_dual_interaction_pairs(
+                target_tree=target_tree, theta=theta
             )
 
         ### Compute source aggregates for far-field clusters.
-        # Aggregates (centroids, averaged features) use *area*-weighting
-        # because areas are fixed geometric properties, making aggregates
-        # reusable across kernel branches.  Strengths, by contrast, are
-        # learned per-source and per-branch, so they must be summed
-        # per-node separately and applied as a multiplicative factor
-        # during kernel evaluation (the monopole approximation):
-        #   exact:  sum_i  strength_i * K(target, source_i, data_i)
-        #   approx: total_strength * K(target, centroid, avg_data)
         if source_aggregates is not None:
             aggregates = source_aggregates
         else:
@@ -920,6 +942,20 @@ class BarnesHutKernel(Kernel):
                 areas=source_areas,
                 source_data=source_data,
             )
+
+        ### Resolve target centroids for far-field node pairs.
+        # For self-interaction (target_tree is cluster_tree), reuse source
+        # centroids. For separate targets, compute from the target tree.
+        if target_centroids is None:
+            if target_tree is cluster_tree:
+                target_centroids = aggregates.node_centroid
+            else:
+                tgt_agg = target_tree.compute_source_aggregates(
+                    source_points=target_points,
+                    areas=torch.ones(n_targets, device=device, dtype=target_points.dtype),
+                    source_data=None,
+                )
+                target_centroids = tgt_agg.node_centroid
 
         with record_function("bh_kernel::compute_strengths"):
             node_total_strength = self._compute_node_strengths(
@@ -938,15 +974,14 @@ class BarnesHutKernel(Kernel):
             global_vectors = global_by_rank[1]
             global_vectors.batch_size = torch.Size([self.n_spatial_dims])
 
-            n_near = interaction_plan.n_near
-            n_far = interaction_plan.n_far
-            n_total = n_near + n_far
+            n_near = dual_plan.n_near
+            n_far_nodes = dual_plan.n_far_nodes
 
-            if n_total == 0:
+            if n_near == 0 and n_far_nodes == 0:
                 return self._empty_result(n_targets, device)
 
-            ### Prepare compact per-node data for far-field gathering
-            if n_far > 0:
+            ### Prepare aggregate data for far-field
+            if n_far_nodes > 0:
                 if aggregates.node_source_data is not None:
                     agg_by_rank = split_by_leaf_rank(aggregates.node_source_data)
                 else:
@@ -961,134 +996,123 @@ class BarnesHutKernel(Kernel):
                     [cluster_tree.n_nodes, self.n_spatial_dims]
                 )
 
-            ### Concatenate only the compact int64 index arrays upfront.
-            # IMPORTANT: all_source_ids has *dual semantics*.  Its first
-            # n_near entries are source-point indices (into source_points),
-            # while its last n_far entries are tree-node indices (into
-            # aggregates.node_centroid).  They index into different arrays
-            # and are separated by the near/far split within each chunk.
-            #
-            # We concatenate only these small int64 arrays, NOT the float
-            # data.  Pre-gathering all float data for n_total pairs would
-            # allocate O(n_total * features * dtype_bytes), which can exceed
-            # GPU memory for large meshes.  Deferring gathering to per-chunk
-            # keeps peak float memory at O(chunk_size * features).
-            all_target_ids = torch.cat(
-                [interaction_plan.near_target_ids, interaction_plan.far_target_ids],
-                dim=0,
-            )
-            all_source_ids = torch.cat(
-                [interaction_plan.near_source_ids, interaction_plan.far_node_ids],
-                dim=0,
-            )
-
-            chunk_size = self._auto_chunk_size(n_total, device)
-
-        ### Evaluate kernel in chunks with deferred per-chunk gathering
+        ### Initialize output buffers
         output_bufs: dict[str, torch.Tensor] = {}
 
-        for start in range(0, n_total, chunk_size):
-            end = min(start + chunk_size, n_total)
-            n_chunk = end - start
+        # ==================================================================
+        # Phase A: Near-field (individual target-source pairs, chunked)
+        # ==================================================================
+        if n_near > 0:
+            near_tgt_ids = dual_plan.near_target_ids
+            near_src_ids = dual_plan.near_source_ids
+            chunk_size = (
+                near_chunk_size
+                if near_chunk_size is not None
+                else self._auto_chunk_size(n_near, device)
+            )
 
-            ### Determine near/far split within this chunk.
-            # Pairs are laid out as [near_0..near_{n-1} | far_0..far_{m-1}].
-            # Any chunk [start, end) can overlap the near portion, the far
-            # portion, or straddle the boundary.  near_end_in_chunk counts
-            # how many of this chunk's pairs belong to the near portion.
-            near_end_in_chunk = min(max(n_near - start, 0), n_chunk)
-            far_start_in_chunk = near_end_in_chunk
+            for start in range(0, n_near, chunk_size):
+                end = min(start + chunk_size, n_near)
 
-            ### Gather per-chunk displacement vectors (in fp32 for precision)
-            with record_function("bh_kernel::chunk_gather"):
-                chunk_tgt_ids = all_target_ids[start:end]
-                chunk_src_ids = all_source_ids[start:end]
-                chunk_tgt_pts = target_points[chunk_tgt_ids]
+                chunk_tgt_ids = near_tgt_ids[start:end]
+                chunk_src_ids = near_src_ids[start:end]
 
-                # Near-field: source positions are real source points
-                # Far-field: source positions are cluster centroids
-                if near_end_in_chunk > 0 and far_start_in_chunk < n_chunk:
-                    near_src_pts = source_points[chunk_src_ids[:near_end_in_chunk]]
-                    far_src_pts = aggregates.node_centroid[chunk_src_ids[far_start_in_chunk:]]
-                    chunk_src_pts = torch.cat([near_src_pts, far_src_pts], dim=0)
-                elif near_end_in_chunk > 0:
-                    chunk_src_pts = source_points[chunk_src_ids]
-                else:
-                    chunk_src_pts = aggregates.node_centroid[chunk_src_ids]
+                ### Gather + evaluate inside one checkpoint boundary.
+                # By checkpointing a function that takes INDICES (int64,
+                # ~8 bytes/pair) and references to the shared source data
+                # (O(1)), the autograd graph saves only the indices - not
+                # the gathered float data (~300 bytes/pair).  This is a
+                # ~37x reduction in checkpoint-saved memory per branch.
+                with record_function("bh_kernel::near_chunk"):
+                    if self.training and self.use_gradient_checkpointing:
+                        chunk_result = checkpoint(
+                            self._gather_and_evaluate,
+                            chunk_tgt_ids, chunk_src_ids,
+                            target_points, source_points,
+                            source_scalars, source_vectors,
+                            global_scalars, global_vectors,
+                            reference_length, device,
+                            use_reentrant=False,
+                        )
+                    else:
+                        chunk_result = self._gather_and_evaluate(
+                            chunk_tgt_ids, chunk_src_ids,
+                            target_points, source_points,
+                            source_scalars, source_vectors,
+                            global_scalars, global_vectors,
+                            reference_length, device,
+                        )
 
-                chunk_r = (chunk_tgt_pts - chunk_src_pts) / reference_length
-
-                ### Gather per-chunk source scalars and vectors
-                if near_end_in_chunk > 0 and far_start_in_chunk < n_chunk:
-                    near_sc = source_scalars[chunk_src_ids[:near_end_in_chunk]]
-                    far_sc = agg_scalars[chunk_src_ids[far_start_in_chunk:]]
-                    chunk_src_sc = TensorDict.cat([near_sc, far_sc], dim=0)
-
-                    near_vc = source_vectors[chunk_src_ids[:near_end_in_chunk]]
-                    far_vc = agg_vectors[chunk_src_ids[far_start_in_chunk:]]
-                    chunk_src_vc = TensorDict.cat([near_vc, far_vc], dim=0)
-
-                    near_str = source_strengths[chunk_src_ids[:near_end_in_chunk]]
-                    far_str = node_total_strength[chunk_src_ids[far_start_in_chunk:]]
-                    chunk_strengths = torch.cat([near_str, far_str], dim=0)
-                elif near_end_in_chunk > 0:
-                    chunk_src_sc = source_scalars[chunk_src_ids]
-                    chunk_src_vc = source_vectors[chunk_src_ids]
+                with record_function("bh_kernel::near_scatter"):
                     chunk_strengths = source_strengths[chunk_src_ids]
-                else:
-                    chunk_src_sc = agg_scalars[chunk_src_ids]
-                    chunk_src_vc = agg_vectors[chunk_src_ids]
-                    chunk_strengths = node_total_strength[chunk_src_ids]
+                    for k, v in chunk_result.items():
+                        weighted = v * chunk_strengths.view(-1, *([1] * (v.ndim - 1)))
+                        if k not in output_bufs:
+                            output_bufs[k] = torch.zeros(
+                                (n_targets,) + v.shape[1:],
+                                dtype=weighted.dtype,
+                                device=device,
+                            )
+                        idx = chunk_tgt_ids.view(
+                            -1, *([1] * (v.ndim - 1))
+                        ).expand_as(weighted)
+                        output_bufs[k].scatter_add_(0, idx, weighted)
 
-                ### Assemble TensorDicts for _evaluate_interactions
-                chunk_scalars = TensorDict(
-                    {
-                        "source_scalars": chunk_src_sc,
-                        "global_scalars": global_scalars.expand(
-                            n_chunk, *global_scalars.batch_size
-                        ),
-                    },
-                    batch_size=torch.Size([n_chunk]),
-                    device=device,
-                )
-                chunk_vectors = TensorDict(
-                    {
-                        "source_vectors": chunk_src_vc,
-                        "global_vectors": global_vectors.expand(
-                            torch.Size([n_chunk]) + global_vectors.batch_size
-                        ),
-                    },
-                    batch_size=torch.Size([n_chunk, self.n_spatial_dims]),
-                    device=device,
-                )
-                chunk_vectors["r"] = chunk_r
+        # ==================================================================
+        # Phase B: Far-field node pairs (evaluate once, broadcast to targets)
+        # ==================================================================
+        if n_far_nodes > 0:
+            far_tgt_nids = dual_plan.far_target_node_ids
+            far_src_nids = dual_plan.far_source_node_ids
 
-            with record_function("bh_kernel::chunk_evaluate"):
-                fn = self._evaluate_interactions
-                kw = dict(scalars=chunk_scalars, vectors=chunk_vectors, device=device)
+            ### Evaluate kernel at (centroid_T, centroid_S, avg_data_S).
+            # Same gather-inside-checkpoint pattern: the checkpoint saves
+            # only the node ID indices, not the gathered aggregate data.
+            with record_function("bh_kernel::far_node_evaluate"):
                 if self.training and self.use_gradient_checkpointing:
-                    chunk_result = checkpoint(fn, use_reentrant=False, **kw)
+                    far_result = checkpoint(
+                        self._gather_and_evaluate,
+                        far_tgt_nids, far_src_nids,
+                        target_centroids, aggregates.node_centroid,
+                        agg_scalars, agg_vectors,
+                        global_scalars, global_vectors,
+                        reference_length, device,
+                        use_reentrant=False,
+                    )
                 else:
-                    chunk_result = fn(**kw)
+                    far_result = self._gather_and_evaluate(
+                        far_tgt_nids, far_src_nids,
+                        target_centroids, aggregates.node_centroid,
+                        agg_scalars, agg_vectors,
+                        global_scalars, global_vectors,
+                        reference_length, device,
+                    )
 
-            ### Scatter-add strength-weighted results into per-target buffers.
-            # Multiple pairs map to the same target (each target interacts
-            # with many sources/clusters), so contributions must be summed.
-            # The view/expand broadcasts the 1D target index across vector
-            # feature dimensions (e.g., n_spatial_dims for vector fields).
-            with record_function("bh_kernel::chunk_scatter"):
-                for k, v in chunk_result.items():
-                    weighted = v * chunk_strengths.view(-1, *([1] * (v.ndim - 1)))
+            ### Broadcast node-level results to individual targets.
+            with record_function("bh_kernel::far_node_broadcast"):
+                far_strengths = node_total_strength[far_src_nids]
+
+                node_starts = target_tree.node_range_start[far_tgt_nids]
+                node_counts = target_tree.node_range_count[far_tgt_nids]
+                positions, pair_ids = _ragged_arange(node_starts, node_counts)
+                expanded_tgt_ids = target_tree.sorted_source_order[positions]
+
+                for k, v in far_result.items():
+                    weighted = v * far_strengths.view(-1, *([1] * (v.ndim - 1)))
+                    expanded = weighted[pair_ids]
                     if k not in output_bufs:
                         output_bufs[k] = torch.zeros(
                             (n_targets,) + v.shape[1:],
-                            dtype=weighted.dtype,
+                            dtype=expanded.dtype,
                             device=device,
                         )
-                    idx = chunk_tgt_ids.view(
+                    idx = expanded_tgt_ids.view(
                         -1, *([1] * (v.ndim - 1))
-                    ).expand_as(weighted)
-                    output_bufs[k].scatter_add_(0, idx, weighted)
+                    ).expand_as(expanded)
+                    output_bufs[k].scatter_add_(0, idx, expanded)
+
+        if not output_bufs:
+            return self._empty_result(n_targets, device)
 
         return TensorDict(
             output_bufs,
@@ -1187,6 +1211,59 @@ class BarnesHutKernel(Kernel):
                     n_targets, self.n_spatial_dims, device=device
                 )
         return TensorDict(fields, batch_size=torch.Size([n_targets]), device=device)
+
+    def _gather_and_evaluate(
+        self,
+        tgt_ids: torch.Tensor,
+        src_ids: torch.Tensor,
+        target_positions: torch.Tensor,
+        source_positions: torch.Tensor,
+        source_scalars: TensorDict,
+        source_vectors: TensorDict,
+        global_scalars: TensorDict,
+        global_vectors: TensorDict,
+        reference_length: torch.Tensor,
+        device: torch.device,
+    ) -> TensorDict:
+        """Gather source/target data by index and evaluate interactions.
+
+        This function is the checkpoint boundary for memory-efficient
+        training.  By wrapping both the gather (indexing into shared
+        source data) and the evaluate (feature engineering + MLP) in one
+        checkpointed call, the autograd graph saves only the int64 index
+        tensors (~8 bytes/pair) and references to the shared source data
+        (O(1)), instead of the gathered float features (~300 bytes/pair).
+        """
+        n_pairs = tgt_ids.shape[0]
+        chunk_r = (
+            target_positions[tgt_ids] - source_positions[src_ids]
+        ) / reference_length
+
+        scalars = TensorDict(
+            {
+                "source_scalars": source_scalars[src_ids],
+                "global_scalars": global_scalars.expand(
+                    n_pairs, *global_scalars.batch_size
+                ),
+            },
+            batch_size=torch.Size([n_pairs]),
+            device=device,
+        )
+        vectors = TensorDict(
+            {
+                "source_vectors": source_vectors[src_ids],
+                "global_vectors": global_vectors.expand(
+                    torch.Size([n_pairs]) + global_vectors.batch_size
+                ),
+            },
+            batch_size=torch.Size([n_pairs, self.n_spatial_dims]),
+            device=device,
+        )
+        vectors["r"] = chunk_r
+
+        return self._evaluate_interactions(
+            scalars=scalars, vectors=vectors, device=device,
+        )
 
     def _auto_chunk_size(self, n_total_pairs: int, device: torch.device) -> int:
         """Determine chunk size for pair-batched kernel evaluation.
@@ -1303,8 +1380,11 @@ class MultiscaleKernel(Module):
     cluster_tree : ClusterTree or None, optional, default=None
         Pre-built cluster tree for source points.  If ``None``, one is
         built from ``source_points`` using the kernel's ``leaf_size``.
-    interaction_plan : InteractionPlan or None, optional, default=None
-        Pre-computed interaction plan.  If ``None``, computed from the tree.
+    target_tree : ClusterTree or None, optional, default=None
+        Pre-built target tree.  For self-interaction, pass the same tree
+        as ``cluster_tree``.
+    dual_plan : DualInteractionPlan or None, optional, default=None
+        Pre-computed dual traversal plan.  If ``None``, computed from trees.
     source_areas : Float[torch.Tensor, " n_sources"] or None, optional, default=None
         Area weight per source, used for cluster aggregation.
 
@@ -1417,15 +1497,15 @@ class MultiscaleKernel(Module):
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None = None,
         theta: float = 1.0,
         cluster_tree: "ClusterTree | None" = None,
-        interaction_plan: "InteractionPlan | None" = None,
+        target_tree: "ClusterTree | None" = None,
+        dual_plan: "DualInteractionPlan | None" = None,
         source_areas: Float[torch.Tensor, " n_sources"] | None = None,
     ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
         r"""Evaluates the multiscale kernel by combining results from multiple scales.
 
-        Builds a shared :class:`ClusterTree` and :class:`InteractionPlan` once,
-        then evaluates each :class:`BarnesHutKernel` branch at its respective
-        reference length. Log-ratios of reference lengths are automatically
-        added to ``global_data`` as scalar features.
+        Builds a shared :class:`ClusterTree` and :class:`DualInteractionPlan`
+        once, then evaluates each :class:`BarnesHutKernel` branch at its
+        respective reference length.
 
         Parameters
         ----------
@@ -1444,9 +1524,11 @@ class MultiscaleKernel(Module):
         theta : float
             Barnes-Hut opening angle (larger = more aggressive).
         cluster_tree : ClusterTree or None, optional
-            Precomputed tree. Built from ``source_points`` if ``None``.
-        interaction_plan : InteractionPlan or None, optional
-            Precomputed traversal plan. Computed if ``None``.
+            Precomputed source tree. Built from ``source_points`` if ``None``.
+        target_tree : ClusterTree or None, optional
+            Precomputed target tree. Built from ``target_points`` if ``None``.
+        dual_plan : DualInteractionPlan or None, optional
+            Precomputed dual traversal plan. Computed if ``None``.
         source_areas : Float[torch.Tensor, "n_sources"] or None, optional
             Per-source areas for aggregate weighting. Defaults to ones.
 
@@ -1495,15 +1577,19 @@ class MultiscaleKernel(Module):
                         f"but the forward-method input gives {actual} {name}."
                     )
 
-        ### Build shared tree, interaction plan, and aggregates (reused across branches)
+        ### Build shared trees, dual plan, and aggregates (reused across branches)
         with record_function("multiscale_kernel::build_tree"):
             if cluster_tree is None:
                 cluster_tree = ClusterTree.from_points(
                     source_points, leaf_size=self.leaf_size, areas=source_areas,
                 )
-            if interaction_plan is None:
-                interaction_plan = cluster_tree.find_interaction_pairs(
-                    target_points, theta=theta
+            if target_tree is None:
+                target_tree = ClusterTree.from_points(
+                    target_points, leaf_size=self.leaf_size,
+                )
+            if dual_plan is None:
+                dual_plan = cluster_tree.find_dual_interaction_pairs(
+                    target_tree=target_tree, theta=theta
                 )
         with record_function("multiscale_kernel::compute_aggregates"):
             source_aggregates = cluster_tree.compute_source_aggregates(
@@ -1526,26 +1612,50 @@ class MultiscaleKernel(Module):
         )
         global_data["log_reference_length_ratios"] = log_ratios
 
-        ### Evaluate each branch with the shared tree, plan, and aggregates
+        ### Precompute near-field chunk sizes outside the checkpoint boundary.
+        # _auto_chunk_size queries free GPU memory, which differs between
+        # forward and checkpoint replay (backward).  Computing here ensures
+        # each branch's chunk size is a fixed checkpoint input.
+        near_chunk_sizes: dict[str, int] = {
+            name: self.kernels[name]._auto_chunk_size(
+                dual_plan.n_near, source_points.device
+            )
+            for name in self.reference_length_names
+        }
+
+        ### Evaluate each branch with the shared tree, plan, and aggregates.
+        # Branch-level checkpointing ensures only ONE branch's autograd
+        # graph exists at a time during backward, preventing autograd
+        # memory from accumulating across all branches.  Combined with
+        # the gather-inside-checkpoint pattern in BarnesHutKernel, this
+        # reduces peak autograd memory from O(n_branches * n_pairs * features)
+        # to O(n_pairs * indices_only).
         results_pieces: list[TensorDict[str, Float[torch.Tensor, "n_targets ..."]]] = []
         for name in self.reference_length_names:
             with record_function(f"multiscale_kernel::branch/{name}"):
-                results_pieces.append(
-                    self.kernels[name](
-                        reference_length=reference_lengths[name]
-                        * torch.exp(self.log_scalefactors[name]),
-                        source_points=source_points,
-                        target_points=target_points,
-                        source_strengths=source_strengths[name],
-                        source_data=source_data,
-                        global_data=global_data,
-                        theta=theta,
-                        cluster_tree=cluster_tree,
-                        interaction_plan=interaction_plan,
-                        source_areas=source_areas,
-                        source_aggregates=source_aggregates,
-                    )
+                branch_kwargs = dict(
+                    reference_length=reference_lengths[name]
+                    * torch.exp(self.log_scalefactors[name]),
+                    source_points=source_points,
+                    target_points=target_points,
+                    source_strengths=source_strengths[name],
+                    source_data=source_data,
+                    global_data=global_data,
+                    theta=theta,
+                    cluster_tree=cluster_tree,
+                    target_tree=target_tree,
+                    dual_plan=dual_plan,
+                    source_areas=source_areas,
+                    source_aggregates=source_aggregates,
+                    near_chunk_size=near_chunk_sizes[name],
                 )
+                if self.training and self.use_gradient_checkpointing:
+                    kernel = self.kernels[name]
+                    results_pieces.append(
+                        checkpoint(kernel, use_reentrant=False, **branch_kwargs)
+                    )
+                else:
+                    results_pieces.append(self.kernels[name](**branch_kwargs))
 
         result: TensorDict[str, Float[torch.Tensor, "n_targets ..."]] = reduce(
             operator.add, results_pieces

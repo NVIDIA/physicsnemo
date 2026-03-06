@@ -16,7 +16,7 @@
 
 from physicsnemo.experimental.models.globe.cluster_tree import (
     ClusterTree,
-    InteractionPlan,
+    DualInteractionPlan,
     SourceAggregates,
 )
 from physicsnemo.experimental.models.globe.field_kernel import (
@@ -32,6 +32,6 @@ __all__ = [
     "BarnesHutKernel",
     "MultiscaleKernel",
     "ClusterTree",
-    "InteractionPlan",
+    "DualInteractionPlan",
     "SourceAggregates",
 ]

@@ -412,23 +412,34 @@ def run_phase_breakdown(
 
     ### Phase 1: Tree construction
     tree = ClusterTree.from_points(
-        source_points, leaf_size=leaf_size, areas=source_areas,
+        source_points,
+        leaf_size=leaf_size,
+        areas=source_areas,
     )
     m0 = mem_mb(device)
     w, g = time_fn(
         lambda: ClusterTree.from_points(
-            source_points, leaf_size=leaf_size, areas=source_areas,
+            source_points,
+            leaf_size=leaf_size,
+            areas=source_areas,
         ),
-        device, n_warmup, n_trials,
+        device,
+        n_warmup,
+        n_trials,
     )
     m1 = mem_mb(device)
     n_nodes = tree.n_nodes
     n_leaves = int((tree.leaf_count > 0).sum())
     depth = int(tree.max_depth.item())
-    rows.append(PhaseResult(
-        "Tree construction", w, g, m1 - m0,
-        f"depth={depth} nodes={n_nodes} leaves={n_leaves}",
-    ))
+    rows.append(
+        PhaseResult(
+            "Tree construction",
+            w,
+            g,
+            m1 - m0,
+            f"depth={depth} nodes={n_nodes} leaves={n_leaves}",
+        )
+    )
     stats["tree_depth"] = depth
     stats["tree_nodes"] = n_nodes
     stats["tree_leaves"] = n_leaves
@@ -438,16 +449,23 @@ def run_phase_breakdown(
     m0 = mem_mb(device)
     w, g = time_fn(
         lambda: tree.find_interaction_pairs(source_points, theta=theta),
-        device, n_warmup, n_trials,
+        device,
+        n_warmup,
+        n_trials,
     )
     m1 = mem_mb(device)
     n_a2a_comm = n_faces * n_faces
     comp_comm = n_a2a_comm / max(1, comm_plan.n_total)
-    rows.append(PhaseResult(
-        "Find pairs (comm)", w, g, m1 - m0,
-        f"near={comm_plan.n_near:,} far={comm_plan.n_far:,} "
-        f"total={comm_plan.n_total:,} ratio={comp_comm:.1f}x",
-    ))
+    rows.append(
+        PhaseResult(
+            "Find pairs (comm)",
+            w,
+            g,
+            m1 - m0,
+            f"near={comm_plan.n_near:,} far={comm_plan.n_far:,} "
+            f"total={comm_plan.n_total:,} ratio={comp_comm:.1f}x",
+        )
+    )
     stats["comm_n_near"] = comm_plan.n_near
     stats["comm_n_far"] = comm_plan.n_far
     stats["comm_n_total"] = comm_plan.n_total
@@ -458,54 +476,72 @@ def run_phase_breakdown(
     m0 = mem_mb(device)
     w, g = time_fn(
         lambda: tree.find_interaction_pairs(prediction_points, theta=theta),
-        device, n_warmup, n_trials,
+        device,
+        n_warmup,
+        n_trials,
     )
     m1 = mem_mb(device)
     n_a2a_pred = n_prediction_points * n_faces
     comp_pred = n_a2a_pred / max(1, pred_plan.n_total)
-    rows.append(PhaseResult(
-        "Find pairs (pred)", w, g, m1 - m0,
-        f"near={pred_plan.n_near:,} far={pred_plan.n_far:,} "
-        f"total={pred_plan.n_total:,} ratio={comp_pred:.1f}x",
-    ))
+    rows.append(
+        PhaseResult(
+            "Find pairs (pred)",
+            w,
+            g,
+            m1 - m0,
+            f"near={pred_plan.n_near:,} far={pred_plan.n_far:,} "
+            f"total={pred_plan.n_total:,} ratio={comp_pred:.1f}x",
+        )
+    )
 
     ### Phase 4: Source aggregation
     source_data = TensorDict(
         {"normals": mesh.cell_normals},
-        batch_size=[n_faces], device=device,
+        batch_size=[n_faces],
+        device=device,
     )
     m0 = mem_mb(device)
     agg = tree.compute_source_aggregates(
-        source_points=source_points, areas=source_areas,
+        source_points=source_points,
+        areas=source_areas,
         source_data=source_data,
     )
     w, g = time_fn(
         lambda: tree.compute_source_aggregates(
-            source_points=source_points, areas=source_areas,
+            source_points=source_points,
+            areas=source_areas,
             source_data=source_data,
         ),
-        device, n_warmup, n_trials,
+        device,
+        n_warmup,
+        n_trials,
     )
     m1 = mem_mb(device)
     rows.append(PhaseResult("Source aggregation", w, g, m1 - m0))
 
     ### Phase 5: Node strengths
     output_ranks = {"C_p": 0, "C_f": 1}
-    bh_kernel = BarnesHutKernel(
-        n_spatial_dims=3,
-        output_field_ranks=output_ranks,
-        source_data_ranks={"normals": 1},
-        hidden_layer_sizes=hidden_layer_sizes,
-        n_spherical_harmonics=n_spherical_harmonics,
-        leaf_size=leaf_size,
-        use_gradient_checkpointing=False,
-    ).to(device).eval()
+    bh_kernel = (
+        BarnesHutKernel(
+            n_spatial_dims=3,
+            output_field_ranks=output_ranks,
+            source_data_ranks={"normals": 1},
+            hidden_layer_sizes=hidden_layer_sizes,
+            n_spherical_harmonics=n_spherical_harmonics,
+            leaf_size=leaf_size,
+            use_gradient_checkpointing=False,
+        )
+        .to(device)
+        .eval()
+    )
 
     strengths = torch.ones(n_faces, device=device)
     m0 = mem_mb(device)
     w, g = time_fn(
         lambda: bh_kernel._compute_node_strengths(tree, strengths),
-        device, n_warmup, n_trials,
+        device,
+        n_warmup,
+        n_trials,
     )
     m1 = mem_mb(device)
     rows.append(PhaseResult("Node strengths", w, g, m1 - m0))
@@ -531,30 +567,40 @@ def run_phase_breakdown(
         m1 = mem_mb(device)
     chunk_sz = bh_kernel._auto_chunk_size(comm_plan.n_total, device)
     n_chunks = max(1, -(-comm_plan.n_total // chunk_sz))
-    rows.append(PhaseResult(
-        "BH kernel (comm)", w, g, m1 - m0,
-        f"chunk_size={chunk_sz:,} n_chunks={n_chunks}",
-    ))
+    rows.append(
+        PhaseResult(
+            "BH kernel (comm)",
+            w,
+            g,
+            m1 - m0,
+            f"chunk_size={chunk_sz:,} n_chunks={n_chunks}",
+        )
+    )
     stats["chunk_size"] = chunk_sz
     stats["n_chunks"] = n_chunks
 
     ### Phase 7: MultiscaleKernel.forward (comm config)
     ref_names = ["L_ref", "sqrt_A_ref"]
-    ms_kernel = MultiscaleKernel(
-        n_spatial_dims=3,
-        output_field_ranks=output_ranks,
-        reference_length_names=ref_names,
-        source_data_ranks={"normals": 1},
-        hidden_layer_sizes=hidden_layer_sizes,
-        n_spherical_harmonics=n_spherical_harmonics,
-        leaf_size=leaf_size,
-        use_gradient_checkpointing=False,
-    ).to(device).eval()
+    ms_kernel = (
+        MultiscaleKernel(
+            n_spatial_dims=3,
+            output_field_ranks=output_ranks,
+            reference_length_names=ref_names,
+            source_data_ranks={"normals": 1},
+            hidden_layer_sizes=hidden_layer_sizes,
+            n_spherical_harmonics=n_spherical_harmonics,
+            leaf_size=leaf_size,
+            use_gradient_checkpointing=False,
+        )
+        .to(device)
+        .eval()
+    )
 
     ref_lengths = {n: torch.tensor(1.0, device=device) for n in ref_names}
     ms_strengths = TensorDict(
         {n: strengths.clone() for n in ref_names},
-        batch_size=[n_faces], device=device,
+        batch_size=[n_faces],
+        device=device,
     )
     ms_kwargs = dict(
         reference_lengths=ref_lengths,
@@ -572,26 +618,35 @@ def run_phase_breakdown(
         m0 = mem_mb(device)
         w, g = time_fn(lambda: ms_kernel(**ms_kwargs), device, n_warmup, n_trials)
         m1 = mem_mb(device)
-    rows.append(PhaseResult(
-        "MultiscaleKernel (comm)", w, g, m1 - m0,
-        f"{len(ref_names)} branches",
-    ))
+    rows.append(
+        PhaseResult(
+            "MultiscaleKernel (comm)",
+            w,
+            g,
+            m1 - m0,
+            f"{len(ref_names)} branches",
+        )
+    )
 
     ### Phase 8: Full GLOBE.forward (inference)
-    model = GLOBE(
-        n_spatial_dims=3,
-        output_field_ranks={"C_p": 0, "C_f": 1},
-        boundary_source_data_ranks={"no_slip": {}},
-        reference_length_names=ref_names,
-        reference_area=1.0,
-        n_communication_hyperlayers=n_communication_hyperlayers,
-        hidden_layer_sizes=hidden_layer_sizes,
-        n_latent_scalars=n_latent_scalars,
-        n_latent_vectors=n_latent_vectors,
-        n_spherical_harmonics=n_spherical_harmonics,
-        theta=theta,
-        leaf_size=leaf_size,
-    ).to(device).eval()
+    model = (
+        GLOBE(
+            n_spatial_dims=3,
+            output_field_ranks={"C_p": 0, "C_f": 1},
+            boundary_source_data_ranks={"no_slip": {}},
+            reference_length_names=ref_names,
+            reference_area=1.0,
+            n_communication_hyperlayers=n_communication_hyperlayers,
+            hidden_layer_sizes=hidden_layer_sizes,
+            n_latent_scalars=n_latent_scalars,
+            n_latent_vectors=n_latent_vectors,
+            n_spherical_harmonics=n_spherical_harmonics,
+            theta=theta,
+            leaf_size=leaf_size,
+        )
+        .to(device)
+        .eval()
+    )
 
     globe_call = lambda: model(
         prediction_points=prediction_points,
@@ -603,10 +658,15 @@ def run_phase_breakdown(
         m0 = mem_mb(device)
         w, g = time_fn(globe_call, device, n_warmup, n_trials)
         m1 = mem_mb(device)
-    rows.append(PhaseResult(
-        "GLOBE.forward (inference)", w, g, m1 - m0,
-        f"{n_communication_hyperlayers} comm + 1 final",
-    ))
+    rows.append(
+        PhaseResult(
+            "GLOBE.forward (inference)",
+            w,
+            g,
+            m1 - m0,
+            f"{n_communication_hyperlayers} comm + 1 final",
+        )
+    )
 
     stats["peak_mem_gb"] = torch.cuda.max_memory_allocated(device) / 1024**3
 
@@ -697,8 +757,14 @@ def run_training_step_analysis(
     """Section 4: training step analysis."""
     model = GLOBE(**model_kwargs).to(device)
     result = time_training_step(
-        model, mesh, prediction_points, ref_lengths,
-        device=device, amp=amp, n_warmup=n_warmup, n_trials=n_trials,
+        model,
+        mesh,
+        prediction_points,
+        ref_lengths,
+        device=device,
+        amp=amp,
+        n_warmup=n_warmup,
+        n_trials=n_trials,
     )
     del model
     clean_gpu(device)
@@ -726,8 +792,14 @@ def run_grad_ckpt_comparison(
                 if isinstance(module, BarnesHutKernel):
                     module.use_gradient_checkpointing = ckpt_enabled
             result = time_training_step(
-                model, mesh, prediction_points, ref_lengths,
-                device=device, amp=amp, n_warmup=n_warmup, n_trials=n_trials,
+                model,
+                mesh,
+                prediction_points,
+                ref_lengths,
+                device=device,
+                amp=amp,
+                n_warmup=n_warmup,
+                n_trials=n_trials,
             )
             if result is not None:
                 results[label] = asdict(result)
@@ -763,10 +835,14 @@ def run_theta_sweep(
 
     for theta in theta_values:
         clean_gpu(device)
-        sp = SweepPoint(label=f"theta={theta}", config={"theta": theta}, n_faces=n_faces)
+        sp = SweepPoint(
+            label=f"theta={theta}", config={"theta": theta}, n_faces=n_faces
+        )
         try:
             tree = ClusterTree.from_points(
-                source_points, leaf_size=model_kwargs["leaf_size"], areas=source_areas,
+                source_points,
+                leaf_size=model_kwargs["leaf_size"],
+                areas=source_areas,
             )
             plan = tree.find_interaction_pairs(source_points, theta=theta)
             sp.compression_ratio = n_a2a / max(1, plan.n_total)
@@ -779,8 +855,14 @@ def run_theta_sweep(
             kwargs = {**model_kwargs, "theta": theta}
             model = GLOBE(**kwargs).to(device)
             result = time_training_step(
-                model, mesh, prediction_points, ref_lengths,
-                device=device, amp=amp, n_warmup=n_warmup, n_trials=n_trials,
+                model,
+                mesh,
+                prediction_points,
+                ref_lengths,
+                device=device,
+                amp=amp,
+                n_warmup=n_warmup,
+                n_trials=n_trials,
             )
             if result is None:
                 sp.oom = True
@@ -829,7 +911,9 @@ def run_leaf_size_sweep(
         )
         try:
             tree = ClusterTree.from_points(
-                source_points, leaf_size=leaf_size, areas=source_areas,
+                source_points,
+                leaf_size=leaf_size,
+                areas=source_areas,
             )
             plan = tree.find_interaction_pairs(source_points, theta=theta)
             sp.compression_ratio = n_a2a / max(1, plan.n_total)
@@ -842,8 +926,14 @@ def run_leaf_size_sweep(
             kwargs = {**model_kwargs, "leaf_size": leaf_size}
             model = GLOBE(**kwargs).to(device)
             result = time_training_step(
-                model, mesh, prediction_points, ref_lengths,
-                device=device, amp=amp, n_warmup=n_warmup, n_trials=n_trials,
+                model,
+                mesh,
+                prediction_points,
+                ref_lengths,
+                device=device,
+                amp=amp,
+                n_warmup=n_warmup,
+                n_trials=n_trials,
             )
             if result is None:
                 sp.oom = True
@@ -892,6 +982,7 @@ def run_compile_test(
             model.train()
 
             if compile_mode is not None:
+
                 def make_step_fn(mdl, compile_mode_str):
                     @torch.compile(dynamic=True, mode=compile_mode_str)
                     def _step(pp, bm, rl):
@@ -906,19 +997,28 @@ def run_compile_test(
                                 include_nested=True, leaves_only=True
                             )
                         )
+
                     return _step
+
                 step_fn = make_step_fn(model, compile_mode)
 
                 warmup_count = max(n_warmup, 5)
-                print(f"    {label}: compiling ({warmup_count} warmup iters)...",
-                      end="", flush=True)
+                print(
+                    f"    {label}: compiling ({warmup_count} warmup iters)...",
+                    end="",
+                    flush=True,
+                )
                 for _ in range(warmup_count):
                     try:
                         with torch.autocast(
-                            device_type="cuda", dtype=torch.bfloat16, enabled=amp,
+                            device_type="cuda",
+                            dtype=torch.bfloat16,
+                            enabled=amp,
                         ):
                             loss = step_fn(
-                                prediction_points, boundary_meshes, ref_lengths,
+                                prediction_points,
+                                boundary_meshes,
+                                ref_lengths,
                             )
                             loss.backward()
                         model.zero_grad(set_to_none=True)
@@ -930,8 +1030,14 @@ def run_compile_test(
                 print(" done.", flush=True)
 
             result = time_training_step(
-                model, mesh, prediction_points, ref_lengths,
-                device=device, amp=amp, n_warmup=0, n_trials=n_trials,
+                model,
+                mesh,
+                prediction_points,
+                ref_lengths,
+                device=device,
+                amp=amp,
+                n_warmup=0,
+                n_trials=n_trials,
             )
             if result is None:
                 sp.oom = True
@@ -984,7 +1090,9 @@ def run_scale_sweep(
 
             n_a2a = n_faces * n_faces
             tree = ClusterTree.from_points(
-                source_points, leaf_size=leaf_size, areas=source_areas,
+                source_points,
+                leaf_size=leaf_size,
+                areas=source_areas,
             )
             plan = tree.find_interaction_pairs(source_points, theta=theta)
             sp.compression_ratio = n_a2a / max(1, plan.n_total)
@@ -996,8 +1104,14 @@ def run_scale_sweep(
 
             model = GLOBE(**model_kwargs).to(device)
             result = time_training_step(
-                model, mesh, prediction_points, ref_lengths,
-                device=device, amp=amp, n_warmup=n_warmup, n_trials=n_trials,
+                model,
+                mesh,
+                prediction_points,
+                ref_lengths,
+                device=device,
+                amp=amp,
+                n_warmup=n_warmup,
+                n_trials=n_trials,
             )
             if result is None:
                 sp.oom = True
@@ -1053,7 +1167,7 @@ def generate_recommendations(results: AllResults) -> list[str]:
         if frac > 0.20:
             recs.append(
                 f"TREE/PLAN COST: Tree construction + interaction planning = "
-                f"{frac*100:.0f}% of forward pass. Trees are already cached "
+                f"{frac * 100:.0f}% of forward pass. Trees are already cached "
                 f"across communication layers; consider also caching across "
                 f"training iterations when the mesh geometry is fixed."
             )
@@ -1090,9 +1204,7 @@ def generate_recommendations(results: AllResults) -> list[str]:
             )
         )
     elif without_gc.get("oom") and not with_gc.get("oom"):
-        recs.append(
-            "GRADIENT CHECKPOINTING: Required to avoid OOM. Keep enabled."
-        )
+        recs.append("GRADIENT CHECKPOINTING: Required to avoid OOM. Keep enabled.")
 
     ### Theta sensitivity
     if results.theta_sweep:
@@ -1181,8 +1293,10 @@ def print_phase_table(rows: list[PhaseResult], stats: dict) -> None:
         f"  {'Phase':<{name_w}}  {'Wall':>8}  {'GPU':>8}  "
         f"{'Overhead':>8}  {'% Total':>7}  {'Mem':>7}  Notes"
     )
-    print(f"  {H_LINE * name_w}  {H_LINE * 8}  {H_LINE * 8}  "
-          f"{H_LINE * 8}  {H_LINE * 7}  {H_LINE * 7}  {H_LINE * 5}")
+    print(
+        f"  {H_LINE * name_w}  {H_LINE * 8}  {H_LINE * 8}  "
+        f"{H_LINE * 8}  {H_LINE * 7}  {H_LINE * 7}  {H_LINE * 5}"
+    )
     for r in rows:
         print(
             f"  {r.name:<{name_w}}  {r.wall_ms:7.1f}ms {r.gpu_ms:7.1f}ms "
@@ -1234,16 +1348,21 @@ def print_profiler_table(regions: list[ProfileRegion], title: str) -> None:
     if total_cpu <= 0:
         total_cpu = max(r.cpu_ms for r in regions) if regions else 1.0
 
-    sorted_regions = sorted(regions, key=lambda r: (
-        0 if r.name.startswith("globe::") else
-        1 if r.name.startswith("multiscale_kernel::") else
-        2 if r.name.startswith("bh_kernel::") else 3,
-        r.name,
-    ))
-
-    print(
-        f"  {'Region':<55} {'CPU':>8}  {'CUDA':>8}  {'Calls':>5}  {'% Top':>6}"
+    sorted_regions = sorted(
+        regions,
+        key=lambda r: (
+            0
+            if r.name.startswith("globe::")
+            else 1
+            if r.name.startswith("multiscale_kernel::")
+            else 2
+            if r.name.startswith("bh_kernel::")
+            else 3,
+            r.name,
+        ),
     )
+
+    print(f"  {'Region':<55} {'CPU':>8}  {'CUDA':>8}  {'Calls':>5}  {'% Top':>6}")
     print(f"  {H_LINE * 55} {H_LINE * 8}  {H_LINE * 8}  {H_LINE * 5}  {H_LINE * 6}")
 
     for r in sorted_regions:
@@ -1267,7 +1386,9 @@ def print_top_ops_table(ops: list[ProfileRegion]) -> None:
     print(f"  {H_LINE * 55} {H_LINE * 8}  {H_LINE * 5}  {H_LINE * 7}")
     for r in ops:
         name = r.name[:55]
-        pct = f"{r.cuda_ms / total_cuda * 100:5.1f}%" if total_cuda > 0 else "    \u2014"
+        pct = (
+            f"{r.cuda_ms / total_cuda * 100:5.1f}%" if total_cuda > 0 else "    \u2014"
+        )
         print(f"  {name:<55} {r.cuda_ms:7.1f}ms {r.count:>5}  {pct:>7}")
 
 
@@ -1291,17 +1412,27 @@ def print_grad_ckpt(data: dict) -> None:
     with_gc = data.get("with_grad_ckpt", {})
     without_gc = data.get("without_grad_ckpt", {})
 
-    print(f"  {'Config':<28} {'Forward':>10} {'Backward':>10} "
-          f"{'Total':>10} {'Alloc':>7} {'Rsvd':>7}")
-    print(f"  {H_LINE * 28} {H_LINE * 10} {H_LINE * 10} "
-          f"{H_LINE * 10} {H_LINE * 7} {H_LINE * 7}")
+    print(
+        f"  {'Config':<28} {'Forward':>10} {'Backward':>10} "
+        f"{'Total':>10} {'Alloc':>7} {'Rsvd':>7}"
+    )
+    print(
+        f"  {H_LINE * 28} {H_LINE * 10} {H_LINE * 10} "
+        f"{H_LINE * 10} {H_LINE * 7} {H_LINE * 7}"
+    )
 
-    for label, d in [("With grad checkpointing", with_gc),
-                     ("Without grad checkpointing", without_gc)]:
+    for label, d in [
+        ("With grad checkpointing", with_gc),
+        ("Without grad checkpointing", without_gc),
+    ]:
         if d.get("oom"):
             print(f"  {label:<28}        OOM        OOM        OOM     OOM     OOM")
         else:
-            t = d.get("forward_ms", 0) + d.get("backward_ms", 0) + d.get("zero_grad_ms", 0)
+            t = (
+                d.get("forward_ms", 0)
+                + d.get("backward_ms", 0)
+                + d.get("zero_grad_ms", 0)
+            )
             print(
                 f"  {label:<28} {d.get('forward_ms', 0):>8,.0f}ms "
                 f"{d.get('backward_ms', 0):>8,.0f}ms "
@@ -1337,11 +1468,13 @@ def print_sweep_table(points: list[SweepPoint], show_tree: bool = False) -> None
 
     for sp in points:
         if sp.oom:
-            print(f"  {sp.label:<28}        OOM        OOM        OOM"
-                  f"    OOM    OOM"
-                  f" {'':>10} {'':>10} {'':>8}"
-                  + (f" {'':>5} {'':>6} {'':>6}" if show_tree else "")
-                  + f"     ---")
+            print(
+                f"  {sp.label:<28}        OOM        OOM        OOM"
+                f"    OOM    OOM"
+                f" {'':>10} {'':>10} {'':>8}"
+                + (f" {'':>5} {'':>6} {'':>6}" if show_tree else "")
+                + f"     ---"
+            )
             continue
         spd = (
             f"{baseline_ms / sp.total_ms:>5.1f}x"
@@ -1355,9 +1488,7 @@ def print_sweep_table(points: list[SweepPoint], show_tree: bool = False) -> None
             f" {sp.n_near:>10,} {sp.n_far:>10,} {sp.compression_ratio:>7.1f}x",
         ]
         if show_tree:
-            parts.append(
-                f" {sp.tree_depth:>5} {sp.tree_nodes:>6} {sp.tree_leaves:>6}"
-            )
+            parts.append(f" {sp.tree_depth:>5} {sp.tree_nodes:>6} {sp.tree_leaves:>6}")
         parts.append(f" {spd:>7}")
         print("".join(parts))
 
@@ -1480,11 +1611,18 @@ def main(
     )
     ref_lengths = {n: torch.tensor(1.0, device=device) for n in ref_names}
 
-    n_sections = 10 - sum([
-        skip_phase_breakdown, skip_profiler, skip_training_step,
-        skip_grad_ckpt, skip_theta_sweep, skip_leaf_size_sweep,
-        skip_compile_test, skip_scale_sweep,
-    ])
+    n_sections = 10 - sum(
+        [
+            skip_phase_breakdown,
+            skip_profiler,
+            skip_training_step,
+            skip_grad_ckpt,
+            skip_theta_sweep,
+            skip_leaf_size_sweep,
+            skip_compile_test,
+            skip_scale_sweep,
+        ]
+    )
     section_num = 0
 
     all_results = AllResults()
@@ -1499,7 +1637,10 @@ def main(
 
     generator = torch.Generator(device=device).manual_seed(0)
     prediction_points = torch.randn(
-        n_prediction_points, 3, generator=generator, device=device,
+        n_prediction_points,
+        3,
+        generator=generator,
+        device=device,
     )
 
     gpu_name = torch.cuda.get_device_name(device)
@@ -1513,10 +1654,14 @@ def main(
     print(f"  GPU:                 {gpu_name}  ({total_vram_gb:.1f} GB, SM {cc}x)")
     print(f"  Mesh:                {n_faces:,} faces, {mesh.n_points:,} points")
     print(f"  Prediction points:   {n_prediction_points:,}")
-    print(f"  Reference config:    theta={theta}  leaf_size={leaf_size}  "
-          f"hidden={list(hidden_layer_sizes)}")
+    print(
+        f"  Reference config:    theta={theta}  leaf_size={leaf_size}  "
+        f"hidden={list(hidden_layer_sizes)}"
+    )
     print(f"  Comm hyperlayers:    {n_communication_hyperlayers}")
-    print(f"  Latent channels:     {n_latent_scalars} scalar, {n_latent_vectors} vector")
+    print(
+        f"  Latent channels:     {n_latent_scalars} scalar, {n_latent_vectors} vector"
+    )
     print(f"  Benchmark:           {n_warmup} warmup, {n_trials} trials (median)")
     print(f"  AMP (bfloat16):      {'yes' if amp else 'no'}")
     print(f"{'=' * hdr_w}")
@@ -1540,17 +1685,22 @@ def main(
     # ── Section 2: Phase-level forward pass breakdown ──────────────────
     if not skip_phase_breakdown:
         section_num += 1
-        section_header(section_num, n_sections,
-                       "Phase-Level Forward Pass Breakdown (inference)")
+        section_header(
+            section_num, n_sections, "Phase-Level Forward Pass Breakdown (inference)"
+        )
         phase_rows, phase_stats = run_phase_breakdown(
-            mesh, prediction_points,
-            theta=theta, leaf_size=leaf_size,
+            mesh,
+            prediction_points,
+            theta=theta,
+            leaf_size=leaf_size,
             hidden_layer_sizes=list(hidden_layer_sizes),
             n_spherical_harmonics=n_spherical_harmonics,
             n_communication_hyperlayers=n_communication_hyperlayers,
             n_latent_scalars=n_latent_scalars,
             n_latent_vectors=n_latent_vectors,
-            device=device, n_warmup=n_warmup, n_trials=n_trials,
+            device=device,
+            n_warmup=n_warmup,
+            n_trials=n_trials,
         )
         print_phase_table(phase_rows, phase_stats)
         all_results.phase_results = [asdict(r) for r in phase_rows]
@@ -1562,8 +1712,12 @@ def main(
         section_header(section_num, n_sections, "Deep Profiler Analysis")
 
         regions_fwd, regions_fwd_bwd, top_bwd_ops = run_deep_profiler(
-            mesh, prediction_points, ref_lengths,
-            model_kwargs=model_kwargs, device=device, n_warmup=n_warmup,
+            mesh,
+            prediction_points,
+            ref_lengths,
+            model_kwargs=model_kwargs,
+            device=device,
+            n_warmup=n_warmup,
         )
 
         print("\n  Forward pass (inference) - record_function regions:")
@@ -1582,12 +1736,20 @@ def main(
     clean_gpu(device)
     if not skip_training_step:
         section_num += 1
-        section_header(section_num, n_sections,
-                       f"Training Step Analysis {'(AMP)' if amp else '(FP32)'}")
+        section_header(
+            section_num,
+            n_sections,
+            f"Training Step Analysis {'(AMP)' if amp else '(FP32)'}",
+        )
         ts_result = run_training_step_analysis(
-            mesh, prediction_points, ref_lengths,
-            model_kwargs=model_kwargs, device=device, amp=amp,
-            n_warmup=n_warmup, n_trials=n_trials,
+            mesh,
+            prediction_points,
+            ref_lengths,
+            model_kwargs=model_kwargs,
+            device=device,
+            amp=amp,
+            n_warmup=n_warmup,
+            n_trials=n_trials,
         )
         print_training_step(ts_result)
         if ts_result is not None:
@@ -1597,12 +1759,16 @@ def main(
     clean_gpu(device)
     if not skip_grad_ckpt:
         section_num += 1
-        section_header(section_num, n_sections,
-                       "Gradient Checkpointing Comparison")
+        section_header(section_num, n_sections, "Gradient Checkpointing Comparison")
         gc_data = run_grad_ckpt_comparison(
-            mesh, prediction_points, ref_lengths,
-            model_kwargs=model_kwargs, device=device, amp=amp,
-            n_warmup=n_warmup, n_trials=n_trials,
+            mesh,
+            prediction_points,
+            ref_lengths,
+            model_kwargs=model_kwargs,
+            device=device,
+            amp=amp,
+            n_warmup=n_warmup,
+            n_trials=n_trials,
         )
         print_grad_ckpt(gc_data)
         all_results.grad_ckpt_comparison = gc_data
@@ -1613,9 +1779,15 @@ def main(
         section_num += 1
         section_header(section_num, n_sections, "Theta Sensitivity Sweep")
         theta_pts = run_theta_sweep(
-            mesh, prediction_points, ref_lengths,
-            model_kwargs=model_kwargs, theta_values=theta_values,
-            device=device, amp=amp, n_warmup=n_warmup, n_trials=n_trials,
+            mesh,
+            prediction_points,
+            ref_lengths,
+            model_kwargs=model_kwargs,
+            theta_values=theta_values,
+            device=device,
+            amp=amp,
+            n_warmup=n_warmup,
+            n_trials=n_trials,
         )
         print_sweep_table(theta_pts)
         all_results.theta_sweep = [asdict(sp) for sp in theta_pts]
@@ -1626,9 +1798,15 @@ def main(
         section_num += 1
         section_header(section_num, n_sections, "Leaf Size Sensitivity Sweep")
         ls_pts = run_leaf_size_sweep(
-            mesh, prediction_points, ref_lengths,
-            model_kwargs=model_kwargs, leaf_size_values=leaf_size_values,
-            device=device, amp=amp, n_warmup=n_warmup, n_trials=n_trials,
+            mesh,
+            prediction_points,
+            ref_lengths,
+            model_kwargs=model_kwargs,
+            leaf_size_values=leaf_size_values,
+            device=device,
+            amp=amp,
+            n_warmup=n_warmup,
+            n_trials=n_trials,
         )
         print_sweep_table(ls_pts, show_tree=True)
         all_results.leaf_size_sweep = [asdict(sp) for sp in ls_pts]
@@ -1639,9 +1817,14 @@ def main(
         section_num += 1
         section_header(section_num, n_sections, "torch.compile Comparison")
         compile_pts = run_compile_test(
-            mesh, prediction_points, ref_lengths,
-            model_kwargs=model_kwargs, device=device, amp=amp,
-            n_warmup=n_warmup, n_trials=n_trials,
+            mesh,
+            prediction_points,
+            ref_lengths,
+            model_kwargs=model_kwargs,
+            device=device,
+            amp=amp,
+            n_warmup=n_warmup,
+            n_trials=n_trials,
         )
         print_sweep_table(compile_pts)
         all_results.compile_comparison = [asdict(sp) for sp in compile_pts]
@@ -1652,9 +1835,14 @@ def main(
         section_num += 1
         section_header(section_num, n_sections, "Mesh Scale Analysis")
         scale_pts = run_scale_sweep(
-            prediction_points, ref_lengths,
-            model_kwargs=model_kwargs, subdivision_values=subdivision_values,
-            device=device, amp=amp, n_warmup=n_warmup, n_trials=n_trials,
+            prediction_points,
+            ref_lengths,
+            model_kwargs=model_kwargs,
+            subdivision_values=subdivision_values,
+            device=device,
+            amp=amp,
+            n_warmup=n_warmup,
+            n_trials=n_trials,
         )
         print_scale_table(scale_pts)
         all_results.scale_sweep = [asdict(sp) for sp in scale_pts]
@@ -1671,6 +1859,7 @@ def main(
     # ── Save JSON ──────────────────────────────────────────────────────
     if save_json:
         from pathlib import Path
+
         Path(save_json).write_text(json.dumps(asdict(all_results), indent=2))
         print(f"  Results saved to {save_json}")
 

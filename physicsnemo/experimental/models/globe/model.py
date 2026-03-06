@@ -323,13 +323,13 @@ class GLOBE(Module):
     ) -> tuple[
         dict[str, "ClusterTree"],
         dict[str, torch.Tensor],
-        dict[str, "InteractionPlan"],
+        dict[str, "DualInteractionPlan"],
     ]:
-        """Build per-BC-type cluster trees and interaction plans.
+        """Build per-BC-type cluster trees and dual interaction plans.
 
-        Runs outside torch.compile because tree construction involves
-        irregular control flow (morton codes, variable-depth loops) that
-        Dynamo cannot trace.
+        For communication layers (targets = sources), the target tree is
+        the same object as the source tree.  The dual traversal produces
+        node-to-node far-field pairs for O(N) far-field kernel evaluations.
         """
         from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
 
@@ -343,8 +343,8 @@ class GLOBE(Module):
             )
 
         comm_plans = {
-            bc_type: cluster_trees[bc_type].find_interaction_pairs(
-                boundary_meshes[bc_type].cell_centroids, theta=self.theta
+            bc_type: cluster_trees[bc_type].find_dual_interaction_pairs(
+                target_tree=cluster_trees[bc_type], theta=self.theta
             )
             for bc_type in boundary_meshes
         }
@@ -356,18 +356,27 @@ class GLOBE(Module):
         self,
         cluster_trees: dict[str, "ClusterTree"],
         prediction_points: torch.Tensor,
-    ) -> dict[str, "InteractionPlan"]:
-        """Build interaction plans for prediction-point evaluation.
+    ) -> tuple[dict[str, "ClusterTree"], dict[str, "DualInteractionPlan"]]:
+        """Build target trees and dual plans for prediction-point evaluation.
 
-        Separate from communication plans because target points differ.
-        Runs outside torch.compile for the same reasons as tree construction.
+        Builds a separate target tree from prediction_points and computes
+        dual interaction plans against each source tree.
         """
-        return {
-            bc_type: tree.find_interaction_pairs(
-                prediction_points, theta=self.theta
+        from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
+
+        pred_target_tree = ClusterTree.from_points(
+            prediction_points, leaf_size=self.leaf_size,
+        )
+        pred_target_trees = {
+            bc_type: pred_target_tree for bc_type in cluster_trees
+        }
+        pred_plans = {
+            bc_type: tree.find_dual_interaction_pairs(
+                target_tree=pred_target_tree, theta=self.theta
             )
             for bc_type, tree in cluster_trees.items()
         }
+        return pred_target_trees, pred_plans
 
     def _evaluate_hyperlayer(
         self,
@@ -377,7 +386,8 @@ class GLOBE(Module):
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None,
         cluster_trees: dict[str, "ClusterTree"],
-        interaction_plans: dict[str, "InteractionPlan"],
+        target_trees: dict[str, "ClusterTree"],
+        dual_plans: dict[str, "DualInteractionPlan"],
         source_areas: dict[str, torch.Tensor],
     ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
         r"""Evaluate one hyperlayer by summing kernel contributions from all BC types.
@@ -396,9 +406,11 @@ class GLOBE(Module):
         global_data : TensorDict or None
             Problem-level features.
         cluster_trees : dict[str, ClusterTree]
-            Per-BC-type precomputed spatial trees.
-        interaction_plans : dict[str, InteractionPlan]
-            Per-BC-type precomputed interaction plans for target_points.
+            Per-BC-type precomputed source trees.
+        target_trees : dict[str, ClusterTree]
+            Per-BC-type precomputed target trees.
+        dual_plans : dict[str, DualInteractionPlan]
+            Per-BC-type precomputed dual interaction plans.
         source_areas : dict[str, torch.Tensor]
             Per-BC-type source area tensors.
 
@@ -429,7 +441,8 @@ class GLOBE(Module):
                 global_data=global_data,
                 theta=self.theta,
                 cluster_tree=cluster_trees[bc_type],
-                interaction_plan=interaction_plans[bc_type],
+                target_tree=target_trees[bc_type],
+                dual_plan=dual_plans[bc_type],
                 source_areas=source_areas[bc_type],
             )
             result_pieces.append(_unflatten_keys(kernel_result))
@@ -443,37 +456,14 @@ class GLOBE(Module):
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None,
         cluster_trees: dict[str, "ClusterTree"],
-        comm_plans: dict[str, "InteractionPlan"],
+        comm_plans: dict[str, "DualInteractionPlan"],
         source_areas: dict[str, torch.Tensor],
     ) -> dict[str, Mesh]:
         r"""Run one boundary-to-boundary communication step.
 
         For each BC type, evaluates :meth:`_evaluate_hyperlayer` at the mesh's
-        cell centroids and wraps the result into an enriched Mesh that carries
-        both the original physical ``cell_data`` (under ``"physical"``) and the
-        new latent state (``"strengths"``, ``"latent"``).
-
-        Parameters
-        ----------
-        layer_idx : int
-            Index into ``self.kernel_layers``.
-        boundary_meshes : dict[str, Mesh]
-            Current enriched boundary meshes.
-        reference_lengths : dict[str, Float[torch.Tensor, ""]]
-            Reference length names to scalar tensors.
-        global_data : TensorDict or None
-            Problem-level features.
-        cluster_trees : dict[str, ClusterTree]
-            Per-BC-type precomputed spatial trees.
-        comm_plans : dict[str, InteractionPlan]
-            Per-BC-type precomputed interaction plans (targets = sources).
-        source_areas : dict[str, torch.Tensor]
-            Per-BC-type source area tensors.
-
-        Returns
-        -------
-        dict[str, Mesh]
-            New enriched boundary meshes for the next layer.
+        cell centroids and wraps the result into an enriched Mesh.  For
+        communication layers, the target tree IS the source tree (same object).
         """
         new_meshes: dict[str, Mesh] = {}
         for bc_type, mesh in boundary_meshes.items():
@@ -484,7 +474,8 @@ class GLOBE(Module):
                 reference_lengths=reference_lengths,
                 global_data=global_data,
                 cluster_trees=cluster_trees,
-                interaction_plans=comm_plans,
+                target_trees=cluster_trees,
+                dual_plans=comm_plans,
                 source_areas=source_areas,
             )
             new_cell_data = TensorDict(
@@ -629,12 +620,13 @@ class GLOBE(Module):
                     source_areas=bc_areas,
                 )
 
+        ### Free comm plans - no longer needed after communication layers.
+        # At 800k faces, near-pair indices can be ~3 GB of int64.
+        del comm_plans
+
         ### Phase 3: Final evaluation at prediction points.
-        # Prediction plans differ from comm_plans because the targets are
-        # prediction_points (the volume query locations), not the boundary
-        # cell centroids used during communication.
         with record_function("globe::build_prediction_plans"):
-            pred_plans = self._build_prediction_plans(
+            pred_target_trees, pred_plans = self._build_prediction_plans(
                 cluster_trees, prediction_points
             )
 
@@ -646,9 +638,12 @@ class GLOBE(Module):
                 reference_lengths=reference_lengths,
                 global_data=global_data,
                 cluster_trees=cluster_trees,
-                interaction_plans=pred_plans,
+                target_trees=pred_target_trees,
+                dual_plans=pred_plans,
                 source_areas=bc_areas,
             )
+
+        del pred_plans, pred_target_trees
 
         ### Wrap as point-cloud Mesh and apply per-field calibration.
         with record_function("globe::calibration"):
