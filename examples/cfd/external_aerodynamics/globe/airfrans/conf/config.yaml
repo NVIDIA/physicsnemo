@@ -9,13 +9,13 @@ defaults:
   - _self_
 
 # Data paths (set via CLI overrides or environment)
-dataset_path: /Users/coreya/data/airfrans/huggingface  # used by reader=arrow
-data_dir: /Users/coreya/data/airfrans/Dataset          # used by reader=vtk
+# dataset_path: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/airfrans/huggingface/  # used by reader=arrow
+dataset_path: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/airfrans/Dataset/  # used by reader=vtk
 
 # Dataset parameters
 task: full
 split: train
-device: cpu
+device: auto
 
 # Reader (populated from defaults)
 reader: {}

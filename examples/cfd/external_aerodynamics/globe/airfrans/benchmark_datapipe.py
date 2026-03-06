@@ -15,208 +15,102 @@
 # limitations under the License.
 
 """
-Benchmark the AirFRANS datapipe throughput with per-stage timing.
+Benchmark the AirFRANS datapipe throughput.
 
-Measures wall-clock time for each pipeline stage independently:
-  1. Reader-only (raw I/O)
-  2. Each transform individually
-  3. Full pipeline (reader + all transforms)
+Instantiates the full pipeline from the Hydra config and measures
+wall-clock time per sample over N iterations.
 
 Usage
 -----
-    # Arrow reader
-    python benchmark_datapipe.py --reader arrow \\
-        --dataset-path data/airfrans_dataset --n-samples 10
+    # Arrow reader (default; dataset_path from conf/config.yaml)
+    python benchmark_datapipe.py
+
+    # Override config from CLI
+    python benchmark_datapipe.py dataset_path=/path/to/arrow +n_samples=50
 
     # VTK reader
-    python benchmark_datapipe.py --reader vtk \\
-        --data-dir /path/to/vtk --n-samples 10
+    python benchmark_datapipe.py reader=vtk data_dir=/path/to/vtk
 """
 
 from __future__ import annotations
 
-import argparse
+import logging
 import statistics
 import time
 
+import hydra
+from omegaconf import DictConfig, OmegaConf
+
 from physicsnemo.datapipes import Dataset
 
-from pipeline import (
-    AirFRANSArrowReader,
-    AirFRANSVTKReader,
-    ComputeAirfoilNormals,
-    ComputeForceCoefficients,
-    ComputeFreestreamQuantities,
-    ComputeGradients,
-    NondimensionalizeFields,
-    PatchNonPhysicalValues,
-)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-def build_reader(args: argparse.Namespace):
-    if args.reader == "arrow":
-        if args.dataset_path is None:
-            raise ValueError("--dataset-path is required for the arrow reader")
-        return AirFRANSArrowReader(
-            dataset_path=args.dataset_path,
-            task=args.task,
-            split=args.split,
-        )
-    elif args.reader == "vtk":
-        if args.data_dir is None:
-            raise ValueError("--data-dir is required for the vtk reader")
-        return AirFRANSVTKReader(
-            data_dir=args.data_dir,
-            task=args.task,
-            split=args.split,
-        )
-    else:
-        raise ValueError(f"Unknown reader: {args.reader}")
-
-
-TRANSFORM_STAGES = [
-    ("ComputeGradients", ComputeGradients),
-    ("ComputeAirfoilNormals", ComputeAirfoilNormals),
-    ("ComputeFreestreamQty", ComputeFreestreamQuantities),
-    ("NondimensionalizeFields", NondimensionalizeFields),
-    ("ComputeForceCoeffs", ComputeForceCoefficients),
-    ("PatchNonPhysical", PatchNonPhysicalValues),
-]
-
-
-def build_transforms():
-    return [cls() if cls != PatchNonPhysicalValues else cls(threshold=1.02)
-            for _, cls in TRANSFORM_STAGES]
-
-
-def time_reader(reader, n_samples: int) -> list[float]:
-    actual_n = min(n_samples, len(reader))
-    _ = reader[0]
-
-    times: list[float] = []
-    for i in range(actual_n):
-        t0 = time.perf_counter()
-        _ = reader[i]
-        times.append(time.perf_counter() - t0)
-    return times
-
-
-def time_per_stage(reader, n_samples: int) -> dict[str, list[float]]:
-    """Time each transform stage independently across n_samples."""
-    actual_n = min(n_samples, len(reader))
-    transforms = build_transforms()
-
-    # Warm up
-    data, _ = reader[0]
-    for t in transforms:
-        data = t(data)
-
-    stage_times: dict[str, list[float]] = {name: [] for name, _ in TRANSFORM_STAGES}
-
-    for i in range(actual_n):
-        data, _ = reader[i]
-        for (name, _), transform in zip(TRANSFORM_STAGES, transforms):
-            t0 = time.perf_counter()
-            data = transform(data)
-            stage_times[name].append(time.perf_counter() - t0)
-
-    return stage_times
-
-
-def time_full_pipeline(dataset: Dataset, n_samples: int) -> list[float]:
+def benchmark(dataset: Dataset, n_samples: int) -> list[float]:
     actual_n = min(n_samples, len(dataset))
+    if actual_n == 0:
+        logger.warning("Dataset is empty — nothing to benchmark.")
+        return []
+
+    logger.info("Warming up (1 sample)...")
     _ = dataset[0]
 
+    logger.info("Timing %d samples...", actual_n)
     times: list[float] = []
     for i in range(actual_n):
         t0 = time.perf_counter()
         _ = dataset[i]
         times.append(time.perf_counter() - t0)
+
     return times
 
 
-def print_table(rows: list[tuple[str, list[float]]]) -> None:
+def print_results(times: list[float]) -> None:
+    n = len(times)
+    if n == 0:
+        return
+    total = sum(times)
+    mean = statistics.mean(times)
+    std = statistics.stdev(times) if n > 1 else 0.0
+    median = statistics.median(times)
+    throughput = n / total if total > 0 else 0.0
+
     header = (
-        f"{'Stage':<30s} {'Samples':>7s} {'Total (s)':>10s} "
-        f"{'Mean (s)':>10s} {'Std (s)':>10s} {'Throughput':>12s}"
+        f"{'Samples':>8s} {'Total (s)':>10s} {'Mean (s)':>10s} "
+        f"{'Median (s)':>11s} {'Std (s)':>10s} {'Throughput':>12s}"
     )
     sep = "-" * len(header)
     print()
     print(sep)
     print(header)
     print(sep)
-    for label, times in rows:
-        n = len(times)
-        if n == 0:
-            continue
-        total = sum(times)
-        mean = statistics.mean(times)
-        std = statistics.stdev(times) if n > 1 else 0.0
-        throughput = n / total if total > 0 else 0.0
-        print(
-            f"{label:<30s} {n:>7d} {total:>10.3f} {mean:>10.3f} "
-            f"{std:>10.3f} {throughput:>10.2f}/s"
-        )
+    print(
+        f"{n:>8d} {total:>10.3f} {mean:>10.4f} "
+        f"{median:>11.4f} {std:>10.4f} {throughput:>10.2f}/s"
+    )
     print(sep)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Benchmark AirFRANS datapipe throughput"
-    )
-    parser.add_argument(
-        "--reader",
-        choices=["arrow", "vtk"],
-        required=True,
-        help="Which reader to benchmark",
-    )
-    parser.add_argument("--dataset-path", type=str, default=None)
-    parser.add_argument("--data-dir", type=str, default=None)
-    parser.add_argument("--task", type=str, default="full")
-    parser.add_argument("--split", type=str, default="train")
-    parser.add_argument(
-        "--n-samples",
-        type=int,
-        default=10,
-        help="Number of samples to time (clamped to dataset size)",
-    )
-    args = parser.parse_args()
-
-    print(f"=== AirFRANS Datapipe Benchmark ===")
-    print(f"  Reader:    {args.reader}")
-    print(f"  Task:      {args.task}")
-    print(f"  Split:     {args.split}")
-    print(f"  N samples: {args.n_samples}")
     print()
 
-    reader = build_reader(args)
-    print(f"Reader: {reader}")
-    print(f"Dataset size: {len(reader)} samples")
+
+@hydra.main(
+    version_base=None,
+    config_path="./conf",
+    config_name="config",
+)
+def main(cfg: DictConfig) -> None:
+    n_samples: int = cfg.get("n_samples", 10)
+
+    print("=== AirFRANS Datapipe Benchmark ===")
     print()
+    print(OmegaConf.to_yaml(cfg, resolve=True))
 
-    # --- Reader-only ---
-    print("Timing reader-only...")
-    reader_times = time_reader(reader, args.n_samples)
+    logger.info("Building dataset...")
+    dataset: Dataset = hydra.utils.instantiate(cfg.dataset)
+    logger.info("Dataset size: %d samples", len(dataset))
 
-    # --- Per-stage ---
-    print("Timing per-stage transforms...")
-    stage_times = time_per_stage(reader, args.n_samples)
-
-    # --- Full pipeline ---
-    print("Timing full pipeline...")
-    transforms = build_transforms()
-    dataset = Dataset(reader=reader, transforms=transforms, device="cpu")
-    pipeline_times = time_full_pipeline(dataset, args.n_samples)
-
-    # --- Summary ---
-    rows: list[tuple[str, list[float]]] = [
-        ("Reader-only (I/O)", reader_times),
-    ]
-    for name, _ in TRANSFORM_STAGES:
-        rows.append((f"  + {name}", stage_times[name]))
-    rows.append(("Full pipeline", pipeline_times))
-
-    print_table(rows)
+    times = benchmark(dataset, n_samples)
+    print_results(times)
 
     dataset.close()
 
