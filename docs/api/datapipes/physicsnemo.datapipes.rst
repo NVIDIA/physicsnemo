@@ -46,7 +46,7 @@ Data flows through a PhysicsNeMo datapipe in a consistent path:
 
 At the highest level, `physicsnemo.datapipes.DataLoader` has a similar API and
 model as `pytorch.utils.data.DataLoader`, enabling a drop-in replacement in many
-cases.  Under the hood, physicsnemo follows a very differnt computation orchestration.
+cases.  Under the hood, physicsnemo follows a very different computation orchestration.
 
 Quick Start
 -----------
