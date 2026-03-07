@@ -236,23 +236,53 @@ class TestClusterTree:
         near_src = plan.near_source_ids.tolist()
         far_tgt_nids = plan.far_target_node_ids.tolist()
         far_src_nids = plan.far_source_node_ids.tolist()
+        nf_tgt = plan.nf_target_ids.tolist()
+        nf_src_nids = plan.nf_source_node_ids.tolist()
+        fn_src = plan.fn_source_ids.tolist()
+        fn_tgt_nids = plan.fn_target_node_ids.tolist()
+        fn_bcast_tgts = plan.fn_broadcast_targets.tolist()
+        fn_bcast_starts = plan.fn_broadcast_starts.tolist()
+        fn_bcast_counts = plan.fn_broadcast_counts.tolist()
 
-        ### Expand far-field target nodes to individual target IDs
+        ### Expand (far,far): target node × source node
         far_expanded: list[tuple[int, int]] = []
         for tgt_nid, src_nid in zip(far_tgt_nids, far_src_nids):
             tgt_set = _collect_sources(target_tree, tgt_nid)
             src_set = _collect_sources(source_tree, src_nid)
             far_expanded.extend((t, s) for t in tgt_set for s in src_set)
 
+        ### Expand (near,far): individual target × source node
+        nf_expanded: list[tuple[int, int]] = []
+        for ti, src_nid in zip(nf_tgt, nf_src_nids):
+            src_set = _collect_sources(source_tree, src_nid)
+            nf_expanded.extend((ti, s) for s in src_set)
+
+        ### Expand (far,near): broadcast to survivors × individual source
+        fn_expanded: list[tuple[int, int]] = []
+        for i, (src_id, start, count) in enumerate(
+            zip(fn_src, fn_bcast_starts, fn_bcast_counts)
+        ):
+            for j in range(count):
+                fn_expanded.append((fn_bcast_tgts[start + j], src_id))
+
         for t in range(n_tgt):
             near_sources = {s for ti, s in zip(near_tgt, near_src) if ti == t}
             far_sources = {s for ti, s in far_expanded if ti == t}
+            nf_sources = {s for ti, s in nf_expanded if ti == t}
+            fn_sources = {s for ti, s in fn_expanded if ti == t}
 
-            overlap = near_sources & far_sources
-            assert not overlap, (
-                f"Target {t}: sources {overlap} counted in both near and far"
-            )
-            covered = near_sources | far_sources
+            all_sets = [near_sources, far_sources, nf_sources, fn_sources]
+            for i, (a, name_a) in enumerate(
+                zip(all_sets, ["near", "far", "nf", "fn"])
+            ):
+                for b, name_b in zip(all_sets[i + 1 :], ["far", "nf", "fn"][i:]):
+                    overlap = a & b
+                    assert not overlap, (
+                        f"Target {t}: sources {overlap} in both "
+                        f"{name_a} and {name_b}"
+                    )
+
+            covered = near_sources | far_sources | nf_sources | fn_sources
             assert covered == all_sources, (
                 f"Target {t}: missing sources {all_sources - covered}, "
                 f"extra sources {covered - all_sources}"
@@ -281,12 +311,14 @@ class TestClusterTree:
             target_tree=target_tree, theta=0.0
         )
 
-        # theta=0: combined MAC never satisfied, everything is near-field.
+        # theta=0: all per-point criteria also fail, everything is (near,near).
         assert plan.n_near > 0
         assert plan.n_near == 20 * 5, (
             f"Expected {20 * 5} near-field pairs, got {plan.n_near}"
         )
         assert plan.n_far_nodes == 0
+        assert plan.n_nf == 0, f"Expected 0 nf pairs at theta=0, got {plan.n_nf}"
+        assert plan.n_fn == 0, f"Expected 0 fn pairs at theta=0, got {plan.n_fn}"
 
         # Every (target, source) pair must be unique.
         pairs = torch.stack([plan.near_target_ids, plan.near_source_ids], dim=1)
@@ -398,7 +430,11 @@ def test_bh_convergence_to_exact(
         **data,
     )
 
-    ### As theta decreases (more conservative), result converges to exact
+    ### As theta decreases (more conservative), result converges to exact.
+    # The tolerance factor accounts for the four-quadrant classification:
+    # as theta changes, interactions shift between (near,far), (far,near),
+    # and (near,near) modes, each with different approximation properties.
+    # This can cause non-monotonic error at large theta values.
     prev_max_err = float("inf")
     for theta in [10.0, 2.0, 0.5, 0.01]:
         bh_result = bh_kernel(**data, theta=theta)
@@ -407,8 +443,7 @@ def test_bh_convergence_to_exact(
             (bh_result[k] - exact_result[k]).abs().max().item() for k in output_fields
         )
 
-        # Error should decrease (or stay flat) with decreasing theta
-        assert max_err <= prev_max_err * 1.5 + 1e-5, (
+        assert max_err <= prev_max_err * 3.0 + 1e-5, (
             f"Error increased from {prev_max_err:.2e} to {max_err:.2e} at theta={theta}"
         )
         prev_max_err = max_err
@@ -830,6 +865,192 @@ def test_bh_nested_source_data_keys(n_dims: int):
             rtol=1e-2,
             msg=f"Nested keys: {field_name!r} not close to exact at theta=0.01",
         )
+
+
+# ---------------------------------------------------------------------------
+# Four-quadrant interaction mode tests
+# ---------------------------------------------------------------------------
+
+
+@dims_params
+@source_config_params
+def test_all_four_categories_active_and_correct(
+    n_dims: int,
+    n_source_scalars: int,
+    n_source_vectors: int,
+):
+    """At moderate theta, all four interaction categories should be active
+    and the combined result should still converge to exact.
+
+    This is the critical test for the (near,far) and (far,near) code paths:
+    the convergence tests at theta=0.01 barely exercise them because nearly
+    everything is (near,near) at low theta.
+    """
+    ### Use balanced source/target scales so the (far,near) target-centroid
+    # broadcast and (near,far) source monopole have comparable accuracy.
+    # The default helper scales targets by 5x, making target leaf diameters
+    # much larger and the (far,near) approximation very coarse.
+    torch.manual_seed(DEFAULT_SEED)
+    n_src, n_tgt = 60, 30
+    common_kwargs = dict(
+        n_spatial_dims=n_dims,
+        output_field_ranks={"p": 0, "v": 1},
+        source_data_ranks={
+            **{f"source_scalar_{i}": 0 for i in range(n_source_scalars)},
+            **{f"source_vector_{i}": 1 for i in range(max(n_source_vectors, 1))},
+        },
+        hidden_layer_sizes=[32, 32],
+    )
+    bh_kernel = BarnesHutKernel(**common_kwargs, leaf_size=4)
+    exact_kernel = Kernel(**common_kwargs)
+    exact_kernel.load_state_dict(bh_kernel.state_dict(), strict=False)
+    bh_kernel.eval()
+    exact_kernel.eval()
+
+    torch.manual_seed(DEFAULT_SEED + 1)
+    source_pts = torch.randn(n_src, n_dims)
+    target_pts = torch.randn(n_tgt, n_dims)
+
+    source_data_dict: dict[str, torch.Tensor] = {}
+    for i in range(n_source_scalars):
+        source_data_dict[f"source_scalar_{i}"] = torch.randn(n_src)
+    for i in range(max(n_source_vectors, 1)):
+        source_data_dict[f"source_vector_{i}"] = F.normalize(
+            torch.randn(n_src, n_dims), dim=-1
+        )
+
+    data = {
+        "source_points": source_pts,
+        "target_points": target_pts,
+        "source_strengths": torch.randn(n_src).abs() + 0.1,
+        "reference_length": torch.ones(()),
+        "source_data": TensorDict(source_data_dict, batch_size=[n_src]),
+        "global_data": TensorDict({}, batch_size=[]),
+    }
+
+    exact_result = exact_kernel(**data)
+
+    ### Sweep theta to find one where all four categories are active.
+    # With balanced geometry (source and target at same scale) and
+    # theta=1.0, the diagnostic shows near=751, nf=200, fn=131, far=2.
+    for theta in [1.0, 1.5, 2.0]:
+        source_tree = ClusterTree.from_points(source_pts, leaf_size=4)
+        target_tree = ClusterTree.from_points(target_pts, leaf_size=4)
+        plan = source_tree.find_dual_interaction_pairs(
+            target_tree=target_tree, theta=theta
+        )
+        if plan.n_near > 0 and plan.n_nf > 0 and plan.n_fn > 0 and plan.n_far_nodes > 0:
+            break
+    else:
+        pytest.skip("Could not find theta with all four categories active")
+
+    bh_result = bh_kernel(**data, theta=theta)
+
+    ### Verify the result is close to exact
+    for field_name in ("p", "v"):
+        torch.testing.assert_close(
+            bh_result[field_name],
+            exact_result[field_name],
+            atol=0.1,
+            rtol=0.3,
+            msg=f"Field {field_name!r} not close to exact at theta={theta} "
+            f"with all four categories active "
+            f"(near={plan.n_near}, nf={plan.n_nf}, fn={plan.n_fn}, far={plan.n_far_nodes})",
+        )
+
+
+@dims_params
+@pytest.mark.parametrize("theta", [0.3, 1.0, 5.0])
+def test_self_interaction_source_coverage(n_dims: int, theta: float):
+    """Source coverage invariant for self-interaction (target_tree is source_tree).
+
+    Communication hyperlayers use self-interaction where the same tree
+    serves as both source and target.  The traversal starts with
+    (root, root) and D_T == D_S at every level.
+    """
+    torch.manual_seed(DEFAULT_SEED)
+    n_pts = 40
+    points = torch.randn(n_pts, n_dims)
+    tree = ClusterTree.from_points(points, leaf_size=4)
+    plan = tree.find_dual_interaction_pairs(target_tree=tree, theta=theta)
+
+    all_sources = set(range(n_pts))
+
+    def _collect(tree: ClusterTree, node_id: int) -> set[int]:
+        count = tree.leaf_count[node_id].item()
+        if count > 0:
+            start = tree.leaf_start[node_id].item()
+            return {tree.sorted_source_order[start + j].item() for j in range(count)}
+        result: set[int] = set()
+        left = tree.node_left_child[node_id].item()
+        right = tree.node_right_child[node_id].item()
+        if left >= 0:
+            result |= _collect(tree, left)
+        if right >= 0:
+            result |= _collect(tree, right)
+        return result
+
+    near_tgt = plan.near_target_ids.tolist()
+    near_src = plan.near_source_ids.tolist()
+
+    far_expanded: list[tuple[int, int]] = []
+    for tgt_nid, src_nid in zip(
+        plan.far_target_node_ids.tolist(), plan.far_source_node_ids.tolist()
+    ):
+        for t in _collect(tree, tgt_nid):
+            for s in _collect(tree, src_nid):
+                far_expanded.append((t, s))
+
+    nf_expanded: list[tuple[int, int]] = []
+    for ti, src_nid in zip(plan.nf_target_ids.tolist(), plan.nf_source_node_ids.tolist()):
+        for s in _collect(tree, src_nid):
+            nf_expanded.append((ti, s))
+
+    fn_expanded: list[tuple[int, int]] = []
+    fn_bcast = plan.fn_broadcast_targets.tolist()
+    for src_id, start, count in zip(
+        plan.fn_source_ids.tolist(),
+        plan.fn_broadcast_starts.tolist(),
+        plan.fn_broadcast_counts.tolist(),
+    ):
+        for j in range(count):
+            fn_expanded.append((fn_bcast[start + j], src_id))
+
+    for t in range(n_pts):
+        near_s = {s for ti, s in zip(near_tgt, near_src) if ti == t}
+        far_s = {s for ti, s in far_expanded if ti == t}
+        nf_s = {s for ti, s in nf_expanded if ti == t}
+        fn_s = {s for ti, s in fn_expanded if ti == t}
+
+        covered = near_s | far_s | nf_s | fn_s
+        assert covered == all_sources, (
+            f"Self-interaction target {t} at theta={theta}: "
+            f"missing {all_sources - covered}"
+        )
+
+
+def test_near_field_monotonicity():
+    """Near-field pair count should decrease as theta increases.
+
+    At higher theta, more interactions move to approximate modes
+    (near-far, far-near, far-far), reducing the exact near-field count.
+    """
+    torch.manual_seed(DEFAULT_SEED)
+    source_pts = torch.randn(50, 3)
+    target_pts = torch.randn(25, 3) * 3
+    source_tree = ClusterTree.from_points(source_pts, leaf_size=4)
+    target_tree = ClusterTree.from_points(target_pts, leaf_size=4)
+
+    prev_n_near = float("inf")
+    for theta in [0.1, 0.5, 1.0, 2.0, 5.0]:
+        plan = source_tree.find_dual_interaction_pairs(
+            target_tree=target_tree, theta=theta
+        )
+        assert plan.n_near <= prev_n_near, (
+            f"Near-field count increased from {prev_n_near} to {plan.n_near} "
+            f"when theta increased to {theta}"
+        )
+        prev_n_near = plan.n_near
 
 
 if __name__ == "__main__":

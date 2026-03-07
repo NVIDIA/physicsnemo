@@ -979,19 +979,20 @@ class BarnesHutKernel(Kernel):
 
             n_near = dual_plan.n_near
             n_nf = dual_plan.n_nf
+            n_fn = dual_plan.n_fn
             n_far_nodes = dual_plan.n_far_nodes
 
             if not torch.compiler.is_compiling():
                 n_dense = n_sources * n_targets
                 logger.debug(
-                    "BarnesHutKernel: %d near + %d nf + %d far_node "
+                    "BarnesHutKernel: %d near + %d nf + %d fn + %d far_node "
                     "(%d sources x %d targets = %d dense, %.2f%% near-field)",
-                    n_near, n_nf, n_far_nodes,
+                    n_near, n_nf, n_fn, n_far_nodes,
                     n_sources, n_targets, n_dense,
                     100.0 * n_near / max(n_dense, 1),
                 )
 
-            if n_near == 0 and n_nf == 0 and n_far_nodes == 0:
+            if n_near == 0 and n_nf == 0 and n_fn == 0 and n_far_nodes == 0:
                 return self._empty_result(n_targets, device)
 
             ### Prepare aggregate data for far-field and (near,far) phases
@@ -1168,6 +1169,61 @@ class BarnesHutKernel(Kernel):
                         -1, *([1] * (v.ndim - 1))
                     ).expand_as(weighted)
                     output_bufs[k].scatter_add_(0, idx, weighted)
+
+        # ==================================================================
+        # Phase D: (far,near) - target node centroid × individual sources,
+        #          broadcast to stage-1 survivors
+        # ==================================================================
+        if n_fn > 0:
+            fn_tgt_nids = dual_plan.fn_target_node_ids
+            fn_src_ids = dual_plan.fn_source_ids
+
+            ### Evaluate K(target_centroid, source_point, source_data).
+            # Uses target centroids (like Phase B) but individual source
+            # points and data (like Phase A).
+            with record_function("bh_kernel::fn_evaluate"):
+                if self.training and self.use_gradient_checkpointing:
+                    fn_result = checkpoint(
+                        self._gather_and_evaluate,
+                        fn_tgt_nids, fn_src_ids,
+                        target_centroids, source_points,
+                        source_scalars, source_vectors,
+                        global_scalars, global_vectors,
+                        reference_length, device,
+                        use_reentrant=False,
+                    )
+                else:
+                    fn_result = self._gather_and_evaluate(
+                        fn_tgt_nids, fn_src_ids,
+                        target_centroids, source_points,
+                        source_scalars, source_vectors,
+                        global_scalars, global_vectors,
+                        reference_length, device,
+                    )
+
+            ### Broadcast to stage-1 survivors via the ragged mapping.
+            with record_function("bh_kernel::fn_broadcast"):
+                fn_strengths = source_strengths[fn_src_ids]
+
+                positions, pair_ids = _ragged_arange(
+                    dual_plan.fn_broadcast_starts,
+                    dual_plan.fn_broadcast_counts,
+                )
+                expanded_tgt_ids = dual_plan.fn_broadcast_targets[positions]
+
+                for k, v in fn_result.items():
+                    weighted = v * fn_strengths.view(-1, *([1] * (v.ndim - 1)))
+                    expanded = weighted[pair_ids]
+                    if k not in output_bufs:
+                        output_bufs[k] = torch.zeros(
+                            (n_targets,) + v.shape[1:],
+                            dtype=expanded.dtype,
+                            device=device,
+                        )
+                    idx = expanded_tgt_ids.view(
+                        -1, *([1] * (v.ndim - 1))
+                    ).expand_as(expanded)
+                    output_bufs[k].scatter_add_(0, idx, expanded)
 
         if not output_bufs:
             return self._empty_result(n_targets, device)
@@ -1702,7 +1758,7 @@ class MultiscaleKernel(Module):
         n_branches = len(self.reference_length_names)
         use_branch_ckpt = False
         if self.training and self.use_gradient_checkpointing and n_branches > 1:
-            n_total_pairs = dual_plan.n_near + dual_plan.n_nf
+            n_total_pairs = dual_plan.n_near + dual_plan.n_nf + dual_plan.n_fn
             per_branch_bytes = n_total_pairs * _AUTOGRAD_BYTES_PER_PAIR
             all_branches_bytes = per_branch_bytes * n_branches
             if device.type == "cuda":
