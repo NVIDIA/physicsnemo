@@ -131,11 +131,11 @@ class DhariwalUNet(Module):
         The noise labels of shape :math:`(B,)`. Used for conditioning on
         the noise level.
     class_labels : torch.Tensor
-        The class labels of shape :math:`(B, \text{label_dim})`. Used for
+        The class labels of shape :math:`(B, \text{label\_dim})`. Used for
         conditioning on any vector-valued quantity. Can pass ``None`` when
         ``label_dim`` is 0.
     augment_labels : torch.Tensor, optional, default=None
-        The augmentation labels of shape :math:`(B, \text{augment_dim})`. Used
+        The augmentation labels of shape :math:`(B, \text{augment\_dim})`. Used
         for conditioning on any additional vector-valued quantity. Can pass
         ``None`` when ``augment_dim`` is 0.
 
