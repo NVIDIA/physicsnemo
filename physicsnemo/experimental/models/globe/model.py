@@ -197,7 +197,7 @@ class GLOBE(Module):
         hidden_layer_sizes: Sequence[int] | None = None,
         n_spherical_harmonics: int = 4,
         theta: float = 1.0,
-        leaf_size: int = 32,
+        leaf_size: int = 1,
     ):
         if hidden_layer_sizes is None:
             hidden_layer_sizes = [64, 64, 64]

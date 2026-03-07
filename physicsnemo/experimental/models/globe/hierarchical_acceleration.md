@@ -425,27 +425,27 @@ little regardless of approximation quality, providing a natural error ceiling.
 
 ### 8.2 Leaf Size
 
-The `leaf_size` parameter (default 32) controls tree granularity:
+The `leaf_size` parameter (default 1) controls tree granularity:
 
-- **Smaller leaf_size** (e.g., 4-8): deeper trees, finer-grained near/far
-  classification, more far-field approximations, but more traversal overhead
-  and larger near-field Cartesian products per leaf-pair hit.
+- **Smaller leaf_size** (e.g., 1-4): deeper trees, finer-grained near/far
+  classification, more far-field approximations at higher precision (each
+  node represents a smaller spatial region, so centroids are more accurate).
+  Near-field count drops dramatically since the opening criterion passes more
+  easily for small-diameter nodes.
 - **Larger leaf_size** (e.g., 32-64): shallower trees, coarser
   classification, fewer traversal iterations, but each near-field leaf-pair
-  hit expands into up to `leaf_size^2` individual interactions.
+  hit expands into up to `leaf_size^2` individual interactions, and far-field
+  node centroids are coarser averages over larger spatial regions.
 
-The optimal leaf size balances:
+Crucially, **smaller leaf_size does not reduce accuracy** for a fixed theta.
+The far-field approximation for a single-point leaf (leaf_size=1) is exact in
+the source coordinate (the "centroid" is the point itself), so all
+approximation error comes from the target side, which is controlled by theta.
+Smaller leaves produce strictly finer-resolution far-field evaluations.
 
-- **Traversal cost**: O(log(N/leaf_size)) iterations, each processing all
-  active pairs.
-- **Near-field granularity**: Each near-field leaf-pair hit contributes up to
-  `leaf_size_T * leaf_size_S` exact interactions.
-- **Far-field quality**: Larger leaves have larger AABBs, making the
-  acceptance criterion harder to pass (fewer far-field approximations for the
-  same theta).
-
-For GLOBE with typical boundary mesh sizes (1k-100k faces), `leaf_size=32`
-provides a good balance.
+Benchmarks on DrivAerML (20k boundary faces, H100) show `leaf_size=1` is
+3.8x faster than `leaf_size=32` with no accuracy penalty.  The default is
+`leaf_size=1`.
 
 ---
 

@@ -762,7 +762,7 @@ class BarnesHutKernel(Kernel):
     ----------
     Inherits all parameters from :class:`Kernel`.
 
-    leaf_size : int, optional, default=32
+    leaf_size : int, optional, default=1
         Maximum sources per tree leaf node. Larger values produce shallower
         trees (fewer traversal iterations) at the cost of more exact
         interactions per leaf.
@@ -808,7 +808,7 @@ class BarnesHutKernel(Kernel):
         network_type: Literal["pade", "mlp"] = "pade",
         spectral_norm: bool = False,
         use_gradient_checkpointing: bool = True,
-        leaf_size: int = 32,
+        leaf_size: int = 1,
     ):
         super().__init__(
             n_spatial_dims=n_spatial_dims,
@@ -1554,7 +1554,7 @@ class MultiscaleKernel(Module):
         network_type: Literal["pade", "mlp"] = "pade",
         spectral_norm: bool = False,
         use_gradient_checkpointing: bool = True,
-        leaf_size: int = 32,
+        leaf_size: int = 1,
     ):
         super().__init__()
 

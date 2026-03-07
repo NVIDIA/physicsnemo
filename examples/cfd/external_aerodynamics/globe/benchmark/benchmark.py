@@ -1520,7 +1520,7 @@ def main(
     subdivisions: int = 5,
     n_prediction_points: int = 2048,
     theta: float = 1.0,
-    leaf_size: int = 32,
+    leaf_size: int = 1,
     hidden_layer_sizes: tuple[int, ...] = (64, 64, 64),
     n_communication_hyperlayers: int = 2,
     n_latent_scalars: int = 8,

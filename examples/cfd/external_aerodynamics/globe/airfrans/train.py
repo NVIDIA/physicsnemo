@@ -234,7 +234,7 @@ def main(
         n_latent_vectors=n_latent_vectors,
         n_spherical_harmonics=n_spherical_harmonics,
         theta=1.0,
-        leaf_size=32,
+        leaf_size=1,
     ).to(device)
 
     if dist.rank == 0:

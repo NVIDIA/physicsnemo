@@ -89,7 +89,7 @@ def main(
     n_latent_vectors: int = 4,
     n_spherical_harmonics: int = 4,
     theta: float = 1.0,
-    leaf_size: int = 32,
+    leaf_size: int = 1,
     n_faces_per_boundary: int = 20_000,
     use_profiler: bool = True,
     make_images: bool = True,

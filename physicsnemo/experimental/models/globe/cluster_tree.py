@@ -507,7 +507,7 @@ class ClusterTree:
         cls,
         points: Float[torch.Tensor, "n_points n_dims"],
         *,
-        leaf_size: int = 32,
+        leaf_size: int = 1,
         areas: Float[torch.Tensor, " n_points"] | None = None,
     ) -> "ClusterTree":
         r"""Build a cluster tree from a set of points via morton-code LBVH.
