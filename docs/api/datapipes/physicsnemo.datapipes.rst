@@ -32,7 +32,7 @@ that are specifically made to enable diverse scientific machine learning dataset
 - Composability and Extensibility: We aim to provide a tool kit and examples that
   lets you build what you need yourself, easily, if it's not here.
 - Datapipes as configuration: Changing a pipeline shouldn't require source code
-  modification; the registry system in PhysicsNeMo datapipes enables hydra instantition
+  modification; the registry system in PhysicsNeMo datapipes enables hydra instantiation
   of datapipes at runtime for version-controlled, runtime-configured datapipes.
   You can register and instantiate custom components, of course.
 
