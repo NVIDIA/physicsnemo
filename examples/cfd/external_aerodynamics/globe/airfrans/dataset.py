@@ -53,7 +53,7 @@ NU = 1.56e-5  # m^2/s
 
 @tensorclass
 class AirFRANSSample:
-    interior_mesh: Mesh  # Point cloud with nondimensional point_data and global_data
+    prediction_mesh: Mesh  # Point cloud with nondimensional point_data and global_data
     boundary_meshes: TensorDict[str, Mesh]  # BC name -> Mesh
     reference_lengths: TensorDict[
         str, Float[torch.Tensor, ""]
@@ -66,10 +66,10 @@ class AirFRANSSample:
     def model_input_kwargs(self) -> dict:
         """Kwargs for :meth:`GLOBE.forward`."""
         return {
-            "prediction_points": self.interior_mesh.points,
+            "prediction_points": self.prediction_mesh.points,
             "boundary_meshes": self.boundary_meshes,
             "reference_lengths": self.reference_lengths,
-            "global_data": self.interior_mesh.global_data,
+            "global_data": self.prediction_mesh.global_data,
         }
 
     if TYPE_CHECKING:
@@ -324,7 +324,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
             output_fields[non_physical_C_pt] = torch.nan
 
         return AirFRANSSample(
-            interior_mesh=Mesh(
+            prediction_mesh=Mesh(
                 points=internal.points,
                 cells=internal.cells,
                 point_data=output_fields,
@@ -371,7 +371,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         Args:
             pred_mesh: Point-cloud Mesh with predicted field values in
                 ``point_data``.
-            sample: The preprocessed sample.  ``sample.interior_mesh`` provides
+            sample: The preprocessed sample.  ``sample.prediction_mesh`` provides
                 the ground-truth fields and cell connectivity;
                 ``sample.boundary_meshes["no_slip"]`` and
                 ``sample.reference_lengths["chord"]`` are used for surface
@@ -390,7 +390,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
             ValueError: If pred_mesh and the sample interior mesh have
                 different numbers of points.
         """
-        true_mesh = sample.interior_mesh
+        true_mesh = sample.prediction_mesh
 
         if pred_mesh.n_points != true_mesh.n_points:
             raise ValueError(
@@ -691,14 +691,14 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
 
         Args:
             sample: Preprocessed AirFRANS sample whose
-                ``interior_mesh.point_data`` fields are plotted.
+                ``prediction_mesh.point_data`` fields are plotted.
             show: Whether to display the plot with ``plt.show()``.
         """
         import matplotlib.pyplot as plt
         import numpy as np
         import polars as pl
 
-        point_data = sample.interior_mesh.point_data.flatten_keys(".")
+        point_data = sample.prediction_mesh.point_data.flatten_keys(".")
 
         def _to_scalar_array(t: torch.Tensor) -> tuple[np.ndarray, bool]:
             """Reduce to 1D numpy; returns ``(array, is_vector)``."""
@@ -852,7 +852,7 @@ def compute_surface_force_coefficients(
     Example:
         >>> sample = AirFRANSDataSet.preprocess(sample_path)
         >>> coeffs = compute_surface_force_coefficients(
-        ...     volume_mesh=sample.interior_mesh,
+        ...     volume_mesh=sample.prediction_mesh,
         ...     airfoil_mesh=sample.boundary_meshes["no_slip"],
         ...     chord=float(sample.reference_lengths["chord"]),
         ... )
@@ -929,8 +929,8 @@ if __name__ == "__main__":
     sample = AirFRANSDataSet.preprocess(sample_paths[0])
 
     logger.info(f"Sample path: {sample_paths[0]}")
-    logger.info(f"Interior mesh points: {sample.interior_mesh.points.shape}")
-    logger.info(f"Output keys: {list(sample.interior_mesh.point_data.keys())}")
+    logger.info(f"Interior mesh points: {sample.prediction_mesh.points.shape}")
+    logger.info(f"Output keys: {list(sample.prediction_mesh.point_data.keys())}")
     logger.info(f"Boundary meshes: {list(sample.boundary_meshes.keys())}")
 
     ### Sanity-check: divergence theorem should confirm inward raw normals
@@ -943,7 +943,7 @@ if __name__ == "__main__":
     AirFRANSDataSet.visualize_output_distributions(sample, show=True)
 
     combined = AirFRANSDataSet.postprocess(
-        pred_mesh=sample.interior_mesh,
+        pred_mesh=sample.prediction_mesh,
         sample=sample,
     )
     AirFRANSDataSet.visualize_comparison(combined)

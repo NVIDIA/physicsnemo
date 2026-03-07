@@ -59,9 +59,10 @@ class DrivAerMLSample:
     """Single preprocessed DrivAerML sample for GLOBE training / inference.
 
     Attributes:
-        surface_mesh: Full-resolution car body surface with ``point_data``
-            containing nondimensional prediction targets (``C_p``, ``C_f``).
-            Has cell connectivity for visualization.
+        prediction_mesh: Mesh of points where GLOBE predicts output fields.
+            Contains ``point_data`` with nondimensional targets (``C_p``,
+            ``C_f``) and cell connectivity for visualization and force
+            integration.
         boundary_meshes: ``{"no_slip": Mesh}`` - randomly subsampled car body
             cells used as GLOBE boundary input (geometry only, no field data).
             Populated at load time by :meth:`DrivAerMLDataSet.__getitem__`.
@@ -72,7 +73,7 @@ class DrivAerMLSample:
             simulation, for evaluation of integrated force predictions.
     """
 
-    surface_mesh: Mesh
+    prediction_mesh: Mesh
     boundary_meshes: TensorDict[str, Mesh]
     reference_lengths: TensorDict[str, Float[torch.Tensor, ""]]
     dimensional_constants: TensorDict
@@ -82,7 +83,7 @@ class DrivAerMLSample:
     def model_input_kwargs(self) -> dict:
         """Keyword arguments for :meth:`GLOBE.forward`."""
         return {
-            "prediction_points": self.surface_mesh.points,
+            "prediction_points": self.prediction_mesh.points,
             "boundary_meshes": self.boundary_meshes,
             "reference_lengths": self.reference_lengths,
             "global_data": None,
@@ -104,7 +105,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
     The cached ``.pt`` files store hyperparameter-invariant data (full-
     resolution surface mesh, reference lengths, aero coefficients).  The
     GLOBE boundary mesh is created on every load by randomly subsampling
-    ``boundary_n_faces`` cells from the surface mesh, so changing the
+    ``n_faces_per_boundary`` cells from the surface mesh, so changing the
     target face count takes effect immediately without invalidating caches.
     """
 
@@ -113,42 +114,49 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         sample_paths: Sequence[Path | str],
         cache_dir: Path | str | None = None,
         *,
-        boundary_n_faces: int = 20_000,
+        n_faces_per_boundary: int = 20_000,
     ):
         super().__init__(sample_paths=sample_paths, cache_dir=cache_dir)
-        self.boundary_n_faces = boundary_n_faces
+        self.n_faces_per_boundary = n_faces_per_boundary
 
     def __getitem__(self, index) -> DrivAerMLSample:  # ty: ignore[invalid-method-override]
         sample: DrivAerMLSample = super().__getitem__(index)
-        sample.boundary_meshes["no_slip"] = self._subsample_boundary(
-            sample.surface_mesh, self.boundary_n_faces
+        sample.boundary_meshes["no_slip"] = self._subsample_mesh(
+            sample.prediction_mesh, self.n_faces_per_boundary
         )
         return sample
 
     @staticmethod
-    def _subsample_boundary(surface_mesh: Mesh, n_cells: int) -> Mesh:
-        """Randomly subsample cells from a surface mesh for GLOBE boundary input.
+    def _subsample_mesh(
+        mesh: Mesh, n_cells: int, *, geometry_only: bool = True
+    ) -> Mesh:
+        """Randomly subsample cells from a mesh.
 
         Selects ``n_cells`` random cells, compacts away unreferenced vertices,
-        strips field data (geometry only), and rescales cell areas so that
-        the subsampled mesh has the same total surface area as the original.
+        and rescales cell areas so that the subsampled mesh has the same total
+        surface area as the original.
 
         Args:
-            surface_mesh: Full-resolution car body surface Mesh.
+            mesh: Source Mesh to subsample from.
             n_cells: Number of cells to select.
+            geometry_only: If ``True`` (default), strip all field data and
+                return a geometry-only Mesh (used for GLOBE boundary input).
+                If ``False``, preserve ``point_data`` and ``cell_data``
+                (used for visualization).
 
         Returns:
-            Geometry-only Mesh with ``n_cells`` cells and area-scaled cache.
+            Mesh with ``n_cells`` cells and area-scaled cache.
         """
-        total_area = surface_mesh.cell_areas.sum()
-        indices = torch.randperm(surface_mesh.n_cells)[:n_cells]
-        boundary = surface_mesh.slice_cells(indices).clean(
+        total_area = mesh.cell_areas.sum()
+        indices = torch.randperm(mesh.n_cells)[:n_cells]
+        boundary = mesh.slice_cells(indices).clean(
             merge_points=False,
             remove_duplicate_cells=False,
             remove_unused_points=True,
         )
 
-        boundary = Mesh(points=boundary.points, cells=boundary.cells)
+        if geometry_only:
+            boundary = Mesh(points=boundary.points, cells=boundary.cells)
         raw_areas = boundary.cell_areas
         boundary._cache["cell", "areas"] = raw_areas * (total_area / raw_areas.sum())
         return boundary
@@ -185,7 +193,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         world_size: int = 1,
         rank: int = 0,
         num_workers: int | None = None,
-        boundary_n_faces: int = 20_000,
+        n_faces_per_boundary: int = 20_000,
     ) -> DataLoader:
         """Create a distributed DataLoader yielding one sample per iteration.
 
@@ -197,7 +205,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
             num_workers: DataLoader worker processes per rank.  When ``None``
                 (the default), auto-computed as ``floor(n_cpus / n_gpus)``
                 to fully overlap data loading with GPU training.
-            boundary_n_faces: Number of cells randomly subsampled from
+            n_faces_per_boundary: Number of cells randomly subsampled from
                 the surface mesh to form the GLOBE boundary mesh.
 
         Returns:
@@ -216,7 +224,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         dataset = cls(
             sample_paths=sample_paths,
             cache_dir=cache_dir,
-            boundary_n_faces=boundary_n_faces,
+            n_faces_per_boundary=n_faces_per_boundary,
         )
         return DataLoader(
             dataset,
@@ -251,7 +259,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
             5. Parse force/moment CSV for ground-truth aero coefficients.
 
         Boundary mesh creation (random cell subsampling, which depends on
-        ``boundary_n_faces``) is NOT performed here; it runs post-cache-load
+        ``n_faces_per_boundary``) is NOT performed here; it runs post-cache-load
         in :meth:`DrivAerMLDataSet.__getitem__`.
 
         Args:
@@ -302,12 +310,12 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         pv_surface_pt = pv_surface.cell_data_to_point_data()
         del pv_surface
 
-        ### Build the full-resolution surface Mesh (geometry + prediction targets)
-        surface_mesh = from_pyvista(pv_surface_pt)
-        surface_mesh = Mesh(
-            points=surface_mesh.points,
-            cells=surface_mesh.cells,
-            point_data=surface_mesh.point_data.select("C_p", "C_f").apply(
+        ### Build the prediction Mesh (geometry + prediction targets)
+        prediction_mesh = from_pyvista(pv_surface_pt)
+        prediction_mesh = Mesh(
+            points=prediction_mesh.points,
+            cells=prediction_mesh.cells,
+            point_data=prediction_mesh.point_data.select("C_p", "C_f").apply(
                 torch.Tensor.float
             ),
         )
@@ -323,7 +331,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         force_mom = _read_single_row_csv(force_mom_path)
 
         return DrivAerMLSample(
-            surface_mesh=surface_mesh,
+            prediction_mesh=prediction_mesh,
             boundary_meshes=TensorDict({}),
             reference_lengths=TensorDict(
                 {
@@ -370,7 +378,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         Args:
             pred_mesh: Point-cloud Mesh with predicted field values in
                 ``point_data``.
-            sample: The preprocessed sample.  ``sample.surface_mesh`` provides
+            sample: The preprocessed sample.  ``sample.prediction_mesh`` provides
                 the ground-truth fields and cell connectivity;
                 ``sample.reference_lengths["sqrt_A_ref"]`` is used for
                 normalization; ``sample.aero_coefficients`` provides the
@@ -389,7 +397,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
             ValueError: If pred_mesh and the sample surface mesh have
                 different numbers of points.
         """
-        true_mesh = sample.surface_mesh
+        true_mesh = sample.prediction_mesh
 
         if pred_mesh.n_points != true_mesh.n_points:
             raise ValueError(
@@ -470,42 +478,20 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
             save_path = Path("drivaer_comparison.png")
 
         ### Flatten nested keys to dot-separated strings for display
-        true_flat = combined.point_data["true"].flatten_keys(".")  # ty: ignore[unresolved-attribute]
-        pred_flat = combined.point_data["pred"].flatten_keys(".")  # ty: ignore[unresolved-attribute]
-        error_flat = combined.point_data["error"].flatten_keys(".")  # ty: ignore[unresolved-attribute]
-
-        fields = sorted(true_flat.keys())
-        kind_data = {"true": true_flat, "pred": pred_flat, "error": error_flat}
+        kind_data: dict[str, TensorDict] = {
+            key: combined.point_data[key].flatten_keys(".")  # ty: ignore[unresolved-attribute]
+            for key in ("true", "pred", "error")
+        }
+        fields = sorted(kind_data["true"].keys())
         kinds = {"true": "Truth", "pred": "Prediction", "error": "Error"}
-
-        n_cols = len(fields)
-        n_rows = len(kinds)
 
         if backend == "pyvista":
             _visualize_pyvista(
-                combined,
-                true_flat,
-                pred_flat,
-                kind_data,
-                kinds,
-                fields,
-                n_rows,
-                n_cols,
-                save_path,
-                show,
+                combined, kind_data, kinds, fields, save_path, show,
             )
         elif backend == "matplotlib":
             _visualize_matplotlib(
-                combined,
-                true_flat,
-                pred_flat,
-                kind_data,
-                kinds,
-                fields,
-                n_rows,
-                n_cols,
-                save_path,
-                show,
+                combined, kind_data, kinds, fields, save_path, show,
             )
         else:
             raise ValueError(
@@ -520,19 +506,16 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
 
 def _visualize_pyvista(
     combined: Mesh,
-    true_flat: TensorDict,
-    pred_flat: TensorDict,
     kind_data: dict[str, TensorDict],
     kinds: dict[str, str],
     fields: list[str],
-    n_rows: int,
-    n_cols: int,
     save_path: Path,
     show: bool,
 ) -> None:
     """PyVista backend for :meth:`DrivAerMLDataSet.visualize_comparison`."""
     from physicsnemo.mesh.io import to_pyvista
 
+    n_rows, n_cols = len(kinds), len(fields)
     plotter = pv.Plotter(
         shape=(n_rows, n_cols),
         off_screen=not show,
@@ -542,8 +525,8 @@ def _visualize_pyvista(
     combined_pv = to_pyvista(combined.to("cpu"))
 
     for col, field_name in enumerate(fields):
-        true_vals = true_flat[field_name].float().cpu().numpy()
-        pred_vals = pred_flat[field_name].float().cpu().numpy()
+        true_vals = kind_data["true"][field_name].float().cpu().numpy()
+        pred_vals = kind_data["pred"][field_name].float().cpu().numpy()
 
         is_vector = true_vals.ndim > 1 and true_vals.shape[-1] > 1
         if is_vector:
@@ -714,13 +697,9 @@ def _draw_disk_cells(
 
 def _visualize_matplotlib(
     combined: Mesh,
-    true_flat: TensorDict,
-    pred_flat: TensorDict,
     kind_data: dict[str, TensorDict],
     kinds: dict[str, str],
     fields: list[str],
-    n_rows: int,
-    n_cols: int,
     save_path: Path,
     show: bool,
 ) -> None:
@@ -733,6 +712,7 @@ def _visualize_matplotlib(
     """
     import matplotlib.pyplot as plt
 
+    n_rows, n_cols = len(kinds), len(fields)
     fig, axes = plt.subplots(
         nrows=n_rows,
         ncols=n_cols,
@@ -747,8 +727,8 @@ def _visualize_matplotlib(
     cells = combined.cells  # (n_cells, 3)
 
     for col, field_name in enumerate(fields):
-        true_vals: torch.Tensor = true_flat[field_name]  # ty: ignore[invalid-assignment]
-        pred_vals: torch.Tensor = pred_flat[field_name]  # ty: ignore[invalid-assignment]
+        true_vals: torch.Tensor = kind_data["true"][field_name]  # ty: ignore[invalid-assignment]
+        pred_vals: torch.Tensor = kind_data["pred"][field_name]  # ty: ignore[invalid-assignment]
 
         is_vector = true_vals.ndim > 1 and true_vals.shape[-1] > 1
 
@@ -868,8 +848,8 @@ def compute_surface_force_coefficients(
 
     ### Interpolate vertex-centered data to cell centers (average of vertices)
     cells = surface_mesh.cells  # (n_cells, 3)
-    cp_pts: torch.Tensor = surface_mesh.point_data["C_p"]  # (n_points,)
-    cf_pts: torch.Tensor = surface_mesh.point_data["C_f"]  # (n_points, 3)
+    cp_pts: torch.Tensor = surface_mesh.point_data["C_p"]  # ty: ignore[invalid-assignment]  # (n_points,)
+    cf_pts: torch.Tensor = surface_mesh.point_data["C_f"]  # ty: ignore[invalid-assignment]  # (n_points, 3)
 
     cp_cells = cp_pts[cells].mean(dim=1)  # (n_cells,)
     cf_cells = cf_pts[cells].mean(dim=1)  # (n_cells, 3)
@@ -902,8 +882,8 @@ if __name__ == "__main__":
 
     sample = DrivAerMLDataSet.preprocess(sample_paths[0])
     logger.info(f"Sample path: {sample_paths[0]}")
-    logger.info(f"Surface mesh points: {sample.surface_mesh.points.shape}")
-    logger.info(f"Surface mesh cells:  {sample.surface_mesh.cells.shape}")
-    logger.info(f"Output keys: {list(sample.surface_mesh.point_data.keys())}")
+    logger.info(f"Prediction mesh points: {sample.prediction_mesh.points.shape}")
+    logger.info(f"Prediction mesh cells:  {sample.prediction_mesh.cells.shape}")
+    logger.info(f"Output keys: {list(sample.prediction_mesh.point_data.keys())}")
     logger.info(f"Reference lengths: {sample.reference_lengths.to_dict()}")
     logger.info(f"Aero coefficients: {sample.aero_coefficients.to_dict()}")

@@ -648,11 +648,12 @@ def run_phase_breakdown(
         .eval()
     )
 
-    globe_call = lambda: model(
-        prediction_points=prediction_points,
-        boundary_meshes={"no_slip": mesh},
-        reference_lengths=ref_lengths,
-    )
+    def globe_call():
+        return model(
+            prediction_points=prediction_points,
+            boundary_meshes={"no_slip": mesh},
+            reference_lengths=ref_lengths,
+        )
     with torch.no_grad():
         globe_call()
         m0 = mem_mb(device)
@@ -1473,7 +1474,7 @@ def print_sweep_table(points: list[SweepPoint], show_tree: bool = False) -> None
                 f"    OOM    OOM"
                 f" {'':>10} {'':>10} {'':>8}"
                 + (f" {'':>5} {'':>6} {'':>6}" if show_tree else "")
-                + f"     ---"
+                + "     ---"
             )
             continue
         spd = (
@@ -1649,7 +1650,7 @@ def main(
 
     hdr_w = 90
     print(f"\n{'=' * hdr_w}")
-    print(f"  GLOBE Comprehensive Benchmark")
+    print("  GLOBE Comprehensive Benchmark")
     print(f"{'=' * hdr_w}")
     print(f"  GPU:                 {gpu_name}  ({total_vram_gb:.1f} GB, SM {cc}x)")
     print(f"  Mesh:                {n_faces:,} faces, {mesh.n_points:,} points")

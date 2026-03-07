@@ -24,7 +24,7 @@ where CPU time is spent and what can be optimized.
 The pipeline under test (per-sample) is:
 
     1. torch.load(.pt cache file from Lustre)
-    2. _subsample_boundary: randperm + slice_cells + clean + area recompute
+    2. _subsample_mesh: randperm + slice_cells + clean + area recompute
     3. train.py main-thread preprocessing:
        a. slice_points (subsample surface prediction points)
        b. mesh.pad (pad boundary to fixed size)
@@ -137,8 +137,8 @@ def profile_single_sample(
     dataset: DrivAerMLDataSet,
     index: int,
     *,
-    boundary_n_faces: int,
-    points_per_iter: int,
+    n_faces_per_boundary: int,
+    n_prediction_points: int,
     pad_n_points: int,
     pad_n_cells: int,
     device: torch.device | None,
@@ -184,12 +184,12 @@ def profile_single_sample(
             )
         )
 
-    surface_n_cells = raw_sample.surface_mesh.n_cells
-    surface_n_points = raw_sample.surface_mesh.n_points
+    surface_n_cells = raw_sample.prediction_mesh.n_cells
+    surface_n_points = raw_sample.prediction_mesh.n_points
 
-    ### Phase 2a: surface_mesh.cell_areas.sum() (in _subsample_boundary)
+    ### Phase 2a: prediction_mesh.cell_areas.sum() (in _subsample_mesh)
     t0 = perf_counter()
-    total_area = raw_sample.surface_mesh.cell_areas.sum()
+    total_area = raw_sample.prediction_mesh.cell_areas.sum()
     t1 = perf_counter()
     phases.append(
         PhaseTime(
@@ -201,19 +201,19 @@ def profile_single_sample(
 
     ### Phase 2b: torch.randperm (select random cell indices)
     t0 = perf_counter()
-    indices = torch.randperm(surface_n_cells)[:boundary_n_faces]
+    indices = torch.randperm(surface_n_cells)[:n_faces_per_boundary]
     t1 = perf_counter()
     phases.append(
         PhaseTime(
             "randperm",
             (t1 - t0) * 1000,
-            f"{surface_n_cells:,} -> {boundary_n_faces:,}",
+            f"{surface_n_cells:,} -> {n_faces_per_boundary:,}",
         )
     )
 
     ### Phase 2c: slice_cells (select cells + associated points)
     t0 = perf_counter()
-    sliced = raw_sample.surface_mesh.slice_cells(indices)
+    sliced = raw_sample.prediction_mesh.slice_cells(indices)
     t1 = perf_counter()
     phases.append(
         PhaseTime(
@@ -257,16 +257,16 @@ def profile_single_sample(
     raw_sample.boundary_meshes["no_slip"] = boundary
 
     ### Phase 3a: slice_points (subsample surface prediction points)
-    n_points = min(points_per_iter, raw_sample.surface_mesh.n_points)
+    n_points = min(n_prediction_points, raw_sample.prediction_mesh.n_points)
     t0 = perf_counter()
-    mask = torch.randperm(raw_sample.surface_mesh.n_points)[:n_points]
-    subsampled_surface = raw_sample.surface_mesh.slice_points(mask)
+    mask = torch.randperm(raw_sample.prediction_mesh.n_points)[:n_points]
+    subsampled_surface = raw_sample.prediction_mesh.slice_points(mask)
     t1 = perf_counter()
     phases.append(
         PhaseTime(
             "slice_points (prediction)",
             (t1 - t0) * 1000,
-            f"{raw_sample.surface_mesh.n_points:,} -> {n_points:,} pts",
+            f"{raw_sample.prediction_mesh.n_points:,} -> {n_points:,} pts",
         )
     )
 
@@ -326,7 +326,7 @@ def profile_single_sample(
     ### Phase 4: .to(device) (H2D transfer, if CUDA available)
     if device is not None and device.type == "cuda":
         assembled = DrivAerMLSample(
-            surface_mesh=subsampled_surface,
+            prediction_mesh=subsampled_surface,
             boundary_meshes=TensorDict({"no_slip": padded}),
             reference_lengths=raw_sample.reference_lengths,
             dimensional_constants=raw_sample.dimensional_constants,
@@ -395,14 +395,14 @@ def profile_dataloader(
     *,
     num_workers: int,
     prefetch_factor: int,
-    boundary_n_faces: int,
+    n_faces_per_boundary: int,
     n_epochs: int = 1,
 ) -> DataLoaderProfile:
     """Measure DataLoader throughput with given worker configuration."""
     dataset = DrivAerMLDataSet(
         sample_paths=sample_paths,
         cache_dir=cache_dir,
-        boundary_n_faces=boundary_n_faces,
+        n_faces_per_boundary=n_faces_per_boundary,
     )
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -621,8 +621,8 @@ def generate_recommendations(
 def main(
     data_dir: Path | None = None,
     n_samples: int | None = None,
-    boundary_n_faces: int = 20_000,
-    points_per_iter: int = 2048,
+    n_faces_per_boundary: int = 20_000,
+    n_prediction_points: int = 2048,
     pad_n_points: int = 60_000,
     pad_n_cells: int = 20_000,
     skip_per_sample: bool = False,
@@ -643,8 +643,8 @@ def main(
         data_dir: Path to the DrivAerML dataset root.  Falls back to
             ``DRIVAER_DATA_DIR`` env var.
         n_samples: Number of samples to profile.  None = all training samples.
-        boundary_n_faces: Number of cells for boundary subsampling.
-        points_per_iter: Surface prediction points per training iteration.
+        n_faces_per_boundary: Number of cells for boundary subsampling.
+        n_prediction_points: Surface prediction points per training iteration.
         pad_n_points: Padding target for boundary mesh points.
         pad_n_cells: Padding target for boundary mesh cells.
         skip_per_sample: Skip per-sample phase breakdown.
@@ -681,7 +681,7 @@ def main(
     ### System info
     hdr_w = 90
     print(f"\n{'=' * hdr_w}")
-    print(f"  DrivAerML Data Pipeline Benchmark")
+    print("  DrivAerML Data Pipeline Benchmark")
     print(f"{'=' * hdr_w}")
     print(f"  CPUs:               {n_cpus}")
     if has_gpu:
@@ -689,8 +689,8 @@ def main(
         print(f"  GPUs:               {torch.cuda.device_count()}")
     print(f"  Dataset:            {len(sample_paths)} training samples")
     print(f"  Cache dir:          {cache_dir}")
-    print(f"  boundary_n_faces:   {boundary_n_faces:,}")
-    print(f"  points_per_iter:    {points_per_iter:,}")
+    print(f"  n_faces_per_boundary:   {n_faces_per_boundary:,}")
+    print(f"  n_prediction_points:    {n_prediction_points:,}")
     print(f"  Pad targets:        {pad_n_cells:,} cells, {pad_n_points:,} points")
     print(f"  OMP_NUM_THREADS:    {os.environ.get('OMP_NUM_THREADS', 'not set')}")
     print(f"{'=' * hdr_w}")
@@ -700,8 +700,8 @@ def main(
         "n_gpus": torch.cuda.device_count() if has_gpu else 0,
         "gpu_name": torch.cuda.get_device_name() if has_gpu else "N/A",
         "n_samples": len(sample_paths),
-        "boundary_n_faces": boundary_n_faces,
-        "points_per_iter": points_per_iter,
+        "n_faces_per_boundary": n_faces_per_boundary,
+        "n_prediction_points": n_prediction_points,
         "pad_n_cells": pad_n_cells,
         "pad_n_points": pad_n_points,
         "omp_num_threads": os.environ.get("OMP_NUM_THREADS", "not set"),
@@ -717,11 +717,11 @@ def main(
         dataset = DrivAerMLDataSet(
             sample_paths=sample_paths,
             cache_dir=cache_dir,
-            boundary_n_faces=boundary_n_faces,
+            n_faces_per_boundary=n_faces_per_boundary,
         )
 
         ### Warmup: load one sample to populate Lustre page cache metadata
-        print(f"  Warming up (loading sample 0)...")
+        print("  Warming up (loading sample 0)...")
         _ = dataset[0]
 
         profiles: list[SampleProfile] = []
@@ -730,8 +730,8 @@ def main(
             prof = profile_single_sample(
                 dataset,
                 i,
-                boundary_n_faces=boundary_n_faces,
-                points_per_iter=points_per_iter,
+                n_faces_per_boundary=n_faces_per_boundary,
+                n_prediction_points=n_prediction_points,
                 pad_n_points=pad_n_points,
                 pad_n_cells=pad_n_cells,
                 device=device,
@@ -782,7 +782,7 @@ def main(
                 cache_dir,
                 num_workers=nw,
                 prefetch_factor=pf,
-                boundary_n_faces=boundary_n_faces,
+                n_faces_per_boundary=n_faces_per_boundary,
                 n_epochs=2,
             )
             print(
@@ -810,7 +810,7 @@ def main(
                 cache_dir,
                 num_workers=nw,
                 prefetch_factor=pf,
-                boundary_n_faces=boundary_n_faces,
+                n_faces_per_boundary=n_faces_per_boundary,
                 n_epochs=2,
             )
             print(
@@ -824,7 +824,7 @@ def main(
         all_results.worker_scaling = [asdict(p) for p in scaling_profiles]
 
     # ── Recommendations ────────────────────────────────────────────────
-    print(f"\n  Recommendations")
+    print("\n  Recommendations")
     print(f"  {H_LINE * 78}")
 
     summary_for_recs = (

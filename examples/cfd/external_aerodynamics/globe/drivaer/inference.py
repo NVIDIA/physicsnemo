@@ -75,9 +75,9 @@ hyperparameters = yaml.safe_load((output_dir / "hyperparameters.yaml").read_text
 # hyperparameter-invariant); boundary subsampling is normally done by
 # __getitem__, so we replicate it here for standalone inference.
 sample = DrivAerMLDataSet.preprocess(sample_path)
-sample.boundary_meshes["no_slip"] = DrivAerMLDataSet._subsample_boundary(
-    sample.surface_mesh,
-    n_cells=hyperparameters.get("boundary_n_faces", 20_000),
+sample.boundary_meshes["no_slip"] = DrivAerMLDataSet._subsample_mesh(
+    sample.prediction_mesh,
+    n_cells=hyperparameters.get("n_faces_per_boundary", 20_000),
 )
 sample = sample.to(device)
 

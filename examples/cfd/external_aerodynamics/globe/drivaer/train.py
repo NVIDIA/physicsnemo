@@ -75,7 +75,7 @@ def main(
         "default",
         "max-autotune-no-cudagraphs",
     ] = "max-autotune-no-cudagraphs",
-    points_per_iter: int | None = None,
+    n_prediction_points: int | None = None,
     learning_rate: float = 1e-3,
     weight_decay: float = 1e-4,
     use_muon: bool = True,
@@ -90,7 +90,7 @@ def main(
     n_spherical_harmonics: int = 4,
     theta: float = 1.0,
     leaf_size: int = 32,
-    boundary_n_faces: int = 20_000,
+    n_faces_per_boundary: int = 20_000,
     use_profiler: bool = True,
     make_images: bool = True,
     save_every: int = 1,
@@ -106,8 +106,8 @@ def main(
         amp: Enable automatic mixed precision (bfloat16).
         use_compile: Enable ``torch.compile`` for the forward/loss function.
         compile_mode: Compilation mode for ``torch.compile``.
-        points_per_iter: Surface points sampled per training iteration.
-            ``None`` (default) uses ``boundary_n_faces``.
+        n_prediction_points: Surface points sampled per training iteration.
+            ``None`` (default) uses ``n_faces_per_boundary``.
         learning_rate: Base learning rate (sqrt-scaled by world size).
         weight_decay: Weight decay factor.
         use_muon: Use Muon optimizer for 2D parameters (matrix weights).
@@ -125,7 +125,7 @@ def main(
         theta: Barnes-Hut opening angle. Larger values are more
             aggressive (more approximation, faster). 0 = exact.
         leaf_size: Maximum sources per leaf node in the Barnes-Hut tree.
-        boundary_n_faces: Target boundary mesh face count after decimation.
+        n_faces_per_boundary: Target boundary mesh face count after decimation.
         use_profiler: Enable PyTorch profiler (rank 0 only).
         make_images: Generate visualization images during training.
         save_every: Save a checkpoint every this many epochs.
@@ -149,8 +149,8 @@ def main(
     output_dir = Path(__file__).parent / "output" / output_name
     cache_dir = Path(__file__).parent / "cache"
 
-    if points_per_iter is None:
-        points_per_iter = boundary_n_faces
+    if n_prediction_points is None:
+        n_prediction_points = n_faces_per_boundary
 
     error_scales = {
         "C_p": 1.0,
@@ -217,7 +217,7 @@ def main(
             cache_dir,
             world_size=dist.world_size,
             rank=dist.rank,
-            boundary_n_faces=boundary_n_faces,
+            n_faces_per_boundary=n_faces_per_boundary,
         )
         for split in splits
     }
@@ -306,7 +306,6 @@ def main(
     scaler = torch.amp.GradScaler(device=device.type, enabled=amp)
 
     ### [Checkpoint Save/Load]
-    mlflow_run_id: str | None = None
     metadata_dict: dict[str, Any] = {}
     epoch = load_checkpoint(
         checkpoint_dir,
@@ -317,17 +316,14 @@ def main(
         metadata_dict=metadata_dict,
         device=dist.device,
     )
-    if epoch > 0:
-        logger0.info(f"Resuming training from epoch {epoch}")
-        best_loss = metadata_dict.get("best_loss", float("inf"))
-        last_image_epoch = metadata_dict.get("last_image_epoch", -float("inf"))
-        last_image_loss = metadata_dict.get("last_image_loss", float("inf"))
-        mlflow_run_id = metadata_dict.get("mlflow_run_id")
-    else:
-        logger0.info("Starting training from scratch.")
-        best_loss = float("inf")
-        last_image_epoch = -float("inf")
-        last_image_loss = float("inf")
+    logger0.info(
+        f"Resuming training from epoch {epoch}" if epoch > 0
+        else "Starting training from scratch."
+    )
+    best_loss = metadata_dict.get("best_loss", float("inf"))
+    last_image_epoch = metadata_dict.get("last_image_epoch", -float("inf"))
+    last_image_loss = metadata_dict.get("last_image_loss", float("inf"))
+    mlflow_run_id: str | None = metadata_dict.get("mlflow_run_id")
 
     ### [MLflow Setup]
     mlflow_run_ctx: contextlib.AbstractContextManager = contextlib.nullcontext()
@@ -382,7 +378,7 @@ def main(
         pred_mesh = model(**sample.model_input_kwargs)
         batch_loss_components = pred_mesh.point_data.apply(
             field_loss_fn,
-            sample.surface_mesh.point_data,
+            sample.prediction_mesh.point_data,
             error_scales.expand_as(pred_mesh.point_data),
         ).mean(dim=0)
         batch_loss = batch_loss_components.stack_from_tensordict().sum()
@@ -406,12 +402,12 @@ def main(
             torch.compiler.cudagraph_mark_step_begin()
             with record_function("data_subsampling"):
                 ### Subsample surface prediction points
-                n_points = min(points_per_iter, sample.surface_mesh.n_points)
-                mask = torch.randperm(sample.surface_mesh.n_points)[:n_points]
-                sample.surface_mesh = sample.surface_mesh.slice_points(mask)
+                n_points = min(n_prediction_points, sample.prediction_mesh.n_points)
+                mask = torch.randperm(sample.prediction_mesh.n_points)[:n_points]
+                sample.prediction_mesh = sample.prediction_mesh.slice_points(mask)
 
                 ### Precompute boundary mesh geometry (lazy properties)
-                for bc_type, mesh in sample.boundary_meshes.items():
+                for mesh in sample.boundary_meshes.values():
                     if training and train_randomize_face_centers:
                         mesh._cache["cell", "centroids"] = (
                             mesh.sample_random_points_on_cells()
@@ -507,6 +503,17 @@ def main(
                 ),
             }
 
+        def save_ckpt() -> None:
+            save_checkpoint(
+                checkpoint_dir,
+                models=base_model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                scaler=scaler,
+                epoch=epoch,
+                metadata=checkpoint_metadata(),
+            )
+
         _first_epoch = True
         for epoch in count(start=epoch + 1):
             loss = {}
@@ -529,15 +536,7 @@ def main(
             ### [Logging and Checkpointing]
             if dist.rank == 0:
                 if epoch % save_every == 0:
-                    save_checkpoint(
-                        checkpoint_dir,
-                        models=base_model,
-                        optimizer=optimizer,
-                        scheduler=scheduler,
-                        scaler=scaler,
-                        epoch=epoch,
-                        metadata=checkpoint_metadata(),
-                    )
+                    save_ckpt()
                 if loss["validation"] < best_loss:
                     best_loss = loss["validation"]
                     base_model.save(best_model_path)
@@ -568,15 +567,7 @@ def main(
             if shutdown_file.exists():
                 logger0.info("Quitting due to shutdown request.")
                 if dist.rank == 0:
-                    save_checkpoint(
-                        checkpoint_dir,
-                        models=base_model,
-                        optimizer=optimizer,
-                        scheduler=scheduler,
-                        scaler=scaler,
-                        epoch=epoch,
-                        metadata=checkpoint_metadata(),
-                    )
+                    save_ckpt()
                 break
 
             ### [MLflow Image Logging]
@@ -590,28 +581,15 @@ def main(
                     for split in splits:
                         viz_sample = dataloaders[split].dataset[0]
 
-                        ### Subsample prediction surface to boundary_n_faces
-                        # cells for speed.  Cell-based selection preserves
-                        # mesh topology for force integration and rendering.
-                        # Areas are rescaled so the subsampled mesh has the
-                        # same total surface area as the original (mirroring
-                        # _subsample_boundary), which makes the oriented-disk
-                        # visualization in _draw_disk_cells work correctly.
-                        n_cells = viz_sample.surface_mesh.n_cells
-                        if n_cells > boundary_n_faces:
-                            total_area = viz_sample.surface_mesh.cell_areas.sum()
-                            subsampled = viz_sample.surface_mesh.slice_cells(
-                                torch.randperm(n_cells)[:boundary_n_faces]
-                            ).clean(
-                                merge_points=False,
-                                remove_duplicate_cells=False,
-                                remove_unused_points=True,
+                        ### Subsample prediction surface for speed
+                        if viz_sample.prediction_mesh.n_cells > n_faces_per_boundary:
+                            viz_sample.prediction_mesh = (
+                                DrivAerMLDataSet._subsample_mesh(
+                                    viz_sample.prediction_mesh,
+                                    n_faces_per_boundary,
+                                    geometry_only=False,
+                                )
                             )
-                            raw_areas = subsampled.cell_areas
-                            subsampled._cache["cell", "areas"] = raw_areas * (
-                                total_area / raw_areas.sum()
-                            )
-                            viz_sample.surface_mesh = subsampled
 
                         viz_sample = viz_sample.to(device)
                         with torch.no_grad(), autocast_ctx:

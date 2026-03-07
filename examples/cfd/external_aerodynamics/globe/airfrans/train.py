@@ -73,7 +73,7 @@ def main(
     compile_mode: Literal[
         "default", "max-autotune-no-cudagraphs"
     ] = "max-autotune-no-cudagraphs",
-    points_per_iter: int = 2048,
+    n_prediction_points: int = 2048,
     learning_rate: float = 1e-3,
     weight_decay: float = 1e-4,
     use_muon: bool = True,
@@ -102,7 +102,7 @@ def main(
         amp: Enable automatic mixed precision (AMP) training for faster computation.
         use_compile: Enable torch.compile for model optimization and performance.
         compile_mode: Mode for torch.compile.
-        points_per_iter: Number of points to sample per training iteration.
+        n_prediction_points: Number of points to sample per training iteration.
         learning_rate: Initial learning rate for the Adam optimizer.
         weight_decay: Weight decay (L2 regularization) factor for the optimizer.
         train_randomize_face_centers: Whether to use random points inside faces instead of centroids.
@@ -275,7 +275,7 @@ def main(
     # so the optimal LR scales as sqrt(batch_size).  The denominator 2048
     # is the reference point count per iteration (not samples) at which the
     # base `learning_rate` applies.
-    learning_rate *= (dist.world_size * points_per_iter / 2048) ** 0.5
+    learning_rate *= (dist.world_size * n_prediction_points / 2048) ** 0.5
     if use_muon:
         # Muon is designed for matrix-shaped parameters (2D weight tensors
         # of linear layers); biases, norms, and other non-matrix parameters
@@ -394,7 +394,7 @@ def main(
         pred_mesh = model(**sample.model_input_kwargs)
         batch_loss_components = pred_mesh.point_data.apply(
             field_loss_fn,
-            sample.interior_mesh.point_data,
+            sample.prediction_mesh.point_data,
             error_scales.expand_as(pred_mesh.point_data),
         ).mean(dim=0)  # Mean over points
         batch_loss = batch_loss_components.stack_from_tensordict().sum()
@@ -425,13 +425,13 @@ def main(
             torch.compiler.cudagraph_mark_step_begin()
             with record_function("data_subsampling"):
                 ### Subsample interior points (on CPU to reduce GPU transfer)
-                n_points = min(points_per_iter, sample.interior_mesh.n_points)
-                mask = torch.randperm(sample.interior_mesh.n_points)[:n_points]
-                sample.interior_mesh = sample.interior_mesh.slice_points(mask)
+                n_points = min(n_prediction_points, sample.prediction_mesh.n_points)
+                mask = torch.randperm(sample.prediction_mesh.n_points)[:n_points]
+                sample.prediction_mesh = sample.prediction_mesh.slice_points(mask)
 
                 ### Pre-cache geometry so lazy computation doesn't trigger
                 # Dynamo guard failures during compiled forward passes.
-                for bc_type, mesh in sample.boundary_meshes.items():
+                for mesh in sample.boundary_meshes.values():
                     if training and train_randomize_face_centers:
                         mesh._cache["cell", "centroids"] = (
                             mesh.sample_random_points_on_cells()
