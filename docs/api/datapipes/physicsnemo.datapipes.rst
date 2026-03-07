@@ -11,7 +11,7 @@ and broadly not extensible.  Those datapipes, preserved in v2.0 for compatibilit
 are described in the climate, cae, gnn, and
 benchmark subsections.
 
-In PhysicsNeMo v2.0, the datapipes API has been redesign from scratch to focus
+In PhysicsNeMo v2.0, the datapipes API has been redesigned from scratch to focus
 on key factors to enable scientific machine learning training and inference.
 These documentation pages describe the architecture and design philosophy, while
 in the examples of PhysicsNeMo there are runnable datapipe tutorials for
