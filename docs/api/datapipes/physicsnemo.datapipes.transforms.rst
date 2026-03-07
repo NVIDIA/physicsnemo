@@ -22,7 +22,7 @@ it resides whenever possible.
 By default, transforms accept and return `tensordict` objects: this is not, 
 strictly, a requirement that must be enforced.
 If you implement custom transforms that return different data types, downstream
-transforms should expect that data type.  On example of this, found in the
+transforms should expect that data type.  One example of this, found in the
 minimal datapipe examples, is turning the `tensordict` objects into a PyTorch
 Geometric graph object.  This type of manipulation is perfectly valid, but
 requires custom collation functions and prevents usage of `tensordict`-based
