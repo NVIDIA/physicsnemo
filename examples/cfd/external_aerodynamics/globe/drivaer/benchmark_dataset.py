@@ -48,9 +48,9 @@ from statistics import median
 from time import perf_counter
 
 import torch
+from dataset import DrivAerMLDataSet, DrivAerMLSample
 from tensordict import TensorDict
 
-from dataset import DrivAerMLDataSet, DrivAerMLSample
 from physicsnemo.mesh import Mesh
 
 H_LINE = "\u2500"
