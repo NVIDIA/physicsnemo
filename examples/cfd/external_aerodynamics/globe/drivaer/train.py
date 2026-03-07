@@ -268,7 +268,7 @@ def main(
         )
 
     ### [Optimizer and Scheduler Setup]
-    learning_rate *= (dist.world_size * points_per_iter / 2048) ** 0.5
+    learning_rate *= (dist.world_size)
     if use_muon:
         optimizer = CombinedOptimizer(
             optimizers=[
