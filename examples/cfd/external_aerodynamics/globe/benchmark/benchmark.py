@@ -48,7 +48,6 @@ from physicsnemo.experimental.models.globe.field_kernel import (
 from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.mesh.primitives.procedural import lumpy_sphere
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Data classes for structured results
 # ═══════════════════════════════════════════════════════════════════════════
@@ -279,17 +278,16 @@ def profiler_run(
         torch.cuda.synchronize(device)
 
     PREFIXES = ("globe::", "multiscale_kernel::", "bh_kernel::", "kernel::")
-    regions: list[ProfileRegion] = []
-    for evt in prof.key_averages():
-        if any(evt.key.startswith(p) for p in PREFIXES):
-            regions.append(
-                ProfileRegion(
-                    name=evt.key,
-                    cpu_ms=evt.cpu_time_total / 1000,
-                    cuda_ms=evt.device_time_total / 1000,
-                    count=evt.count,
-                )
-            )
+    regions: list[ProfileRegion] = [
+        ProfileRegion(
+            name=evt.key,
+            cpu_ms=evt.cpu_time_total / 1000,
+            cuda_ms=evt.device_time_total / 1000,
+            count=evt.count,
+        )
+        for evt in prof.key_averages()
+        if any(evt.key.startswith(p) for p in PREFIXES)
+    ]
     regions.sort(key=lambda r: r.cpu_ms, reverse=True)
     return regions
 
@@ -315,17 +313,17 @@ def profiler_top_backward_ops(
         fn()
         torch.cuda.synchronize(device)
 
-    ops: list[ProfileRegion] = []
-    for evt in prof.key_averages():
-        if evt.device_time_total > 0:
-            ops.append(
-                ProfileRegion(
-                    name=evt.key,
-                    cpu_ms=evt.cpu_time_total / 1000,
-                    cuda_ms=evt.device_time_total / 1000,
-                    count=evt.count,
-                )
-            )
+    ops: list[ProfileRegion] = [
+        ProfileRegion(
+            name=evt.key,
+            cpu_ms=evt.cpu_time_total / 1000,
+            cuda_ms=evt.device_time_total / 1000,
+            count=evt.count,
+        )
+        for evt in prof.key_averages()
+        if evt.device_time_total > 0
+    ]
+
     ops.sort(key=lambda r: r.cuda_ms, reverse=True)
     return ops[:top_n]
 
