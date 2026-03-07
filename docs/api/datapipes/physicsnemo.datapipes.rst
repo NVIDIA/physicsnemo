@@ -37,15 +37,16 @@ that are specifically made to enable diverse scientific machine learning dataset
   You can register and instantiate custom components, of course.
 
 Data flows through a PhysicsNeMo datapipe in a consistent path:
-1. A `reader` will bring the data from storage to CPU memory
+
+1. A ``reader`` will bring the data from storage to CPU memory
 2. An optional series of one or more transformations will apply on-the-fly
    manipulations of that data, per instance of data.
 3. Several instances of data will be collated into a batch (customizable,
    just like in PyTorch).
 4. The batched data is ready for use in a model.
 
-At the highest level, `physicsnemo.datapipes.DataLoader` has a similar API and
-model as `pytorch.utils.data.DataLoader`, enabling a drop-in replacement in many
+At the highest level, ``physicsnemo.datapipes.DataLoader`` has a similar API and
+model as ``pytorch.utils.data.DataLoader``, enabling a drop-in replacement in many
 cases.  Under the hood, physicsnemo follows a very different computation orchestration.
 
 Quick Start
@@ -93,6 +94,9 @@ Quick Start
 Architecture
 ------------
 
+The diagram below gives a very high level overview of how the ``physicsnemo``
+datapipe tools interplay. 
+
 .. code-block:: text
 
     ┌──────────────┐       ┌──────────────────┐       ┌──────────────────────┐
@@ -118,19 +122,31 @@ Architecture
 Core API
 --------
 
+DataLoader
+^^^^^^^^^^
+
+The ``DataLoader`` is meant, in most ways, to be  a nearly drop-in
+replacement to the PyTorch dataloader. A notable difference is the movement
+of ``pin_memory`` from the ``DataLoader`` class to the ``Reader`` classes.
+This is because of the much earlier GPU data transfer in the PhysicsNeMo
+datapipe compared to PyTorch.
+
+.. autoclass:: physicsnemo.datapipes.dataloader.DataLoader
+    :members:
+    :show-inheritance:
+
 Dataset
 ^^^^^^^
+
+The ``Dataset`` is the core IO + Transformation coordinator of the datapipe 
+infrastructor.  Whereas the ``DataLoader`` will orchestrate the pipeline,
+the ``Dataset`` is responsible for the threaded execution of ``Reader``s and
+``Transform`` pipelines to execute it.
 
 .. autoclass:: physicsnemo.datapipes.dataset.Dataset
     :members:
     :show-inheritance:
 
-DataLoader
-^^^^^^^^^^
-
-.. autoclass:: physicsnemo.datapipes.dataloader.DataLoader
-    :members:
-    :show-inheritance:
 
 Readers
 ^^^^^^^

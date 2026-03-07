@@ -1,6 +1,11 @@
 Benchmark Datapipes
 ===================
 
+Benchmark datapipes are a unique class of datapipes: they are generating
+data on the fly, rather than reading from disk, and are therefore highly portable,
+great for testing new applications against known datapipes without worrying
+about IO, and overall useful for development.
+
 The Benchmark Datapipes are targeted v1 datapipes for specific datasets.  These
 are largely maintained but not actively developed.
 
