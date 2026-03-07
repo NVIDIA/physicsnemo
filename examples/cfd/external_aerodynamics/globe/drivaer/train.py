@@ -75,7 +75,7 @@ def main(
         "default",
         "max-autotune-no-cudagraphs",
     ] = "max-autotune-no-cudagraphs",
-    points_per_iter: int = 2048,
+    points_per_iter: int | None = None,
     learning_rate: float = 1e-3,
     weight_decay: float = 1e-4,
     use_muon: bool = True,
@@ -107,6 +107,7 @@ def main(
         use_compile: Enable ``torch.compile`` for the forward/loss function.
         compile_mode: Compilation mode for ``torch.compile``.
         points_per_iter: Surface points sampled per training iteration.
+            ``None`` (default) uses ``boundary_n_faces``.
         learning_rate: Base learning rate (sqrt-scaled by world size).
         weight_decay: Weight decay factor.
         use_muon: Use Muon optimizer for 2D parameters (matrix weights).
@@ -147,6 +148,9 @@ def main(
 
     output_dir = Path(__file__).parent / "output" / output_name
     cache_dir = Path(__file__).parent / "cache"
+
+    if points_per_iter is None:
+        points_per_iter = boundary_n_faces
 
     error_scales = {
         "C_p": 1.0,
