@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import itertools
+import logging
 import operator
 from functools import cached_property, reduce
 from math import ceil, comb, prod
@@ -28,6 +29,8 @@ from torch.profiler import record_function
 from torch.utils.checkpoint import checkpoint
 
 from physicsnemo.core.module import Module
+
+logger = logging.getLogger("globe.field_kernel")
 from physicsnemo.experimental.models.globe.utilities.rank_spec import (
     RankSpecDict,
     flatten_rank_spec,
@@ -975,13 +978,24 @@ class BarnesHutKernel(Kernel):
             global_vectors.batch_size = torch.Size([self.n_spatial_dims])
 
             n_near = dual_plan.n_near
+            n_nf = dual_plan.n_nf
             n_far_nodes = dual_plan.n_far_nodes
 
-            if n_near == 0 and n_far_nodes == 0:
+            if not torch.compiler.is_compiling():
+                n_dense = n_sources * n_targets
+                logger.debug(
+                    "BarnesHutKernel: %d near + %d nf + %d far_node "
+                    "(%d sources x %d targets = %d dense, %.2f%% near-field)",
+                    n_near, n_nf, n_far_nodes,
+                    n_sources, n_targets, n_dense,
+                    100.0 * n_near / max(n_dense, 1),
+                )
+
+            if n_near == 0 and n_nf == 0 and n_far_nodes == 0:
                 return self._empty_result(n_targets, device)
 
-            ### Prepare aggregate data for far-field
-            if n_far_nodes > 0:
+            ### Prepare aggregate data for far-field and (near,far) phases
+            if n_far_nodes > 0 or n_nf > 0:
                 if aggregates.node_source_data is not None:
                     agg_by_rank = split_by_leaf_rank(aggregates.node_source_data)
                 else:
@@ -1110,6 +1124,50 @@ class BarnesHutKernel(Kernel):
                         -1, *([1] * (v.ndim - 1))
                     ).expand_as(expanded)
                     output_bufs[k].scatter_add_(0, idx, expanded)
+
+        # ==================================================================
+        # Phase C: (near,far) - individual targets × source node centroids
+        # ==================================================================
+        if n_nf > 0:
+            nf_tgt_ids = dual_plan.nf_target_ids
+            nf_src_nids = dual_plan.nf_source_node_ids
+
+            ### Same evaluation as Phase B (source centroids + aggregates),
+            # but same scatter as Phase A (per-target, no broadcast).
+            with record_function("bh_kernel::nf_evaluate"):
+                if self.training and self.use_gradient_checkpointing:
+                    nf_result = checkpoint(
+                        self._gather_and_evaluate,
+                        nf_tgt_ids, nf_src_nids,
+                        target_points, aggregates.node_centroid,
+                        agg_scalars, agg_vectors,
+                        global_scalars, global_vectors,
+                        reference_length, device,
+                        use_reentrant=False,
+                    )
+                else:
+                    nf_result = self._gather_and_evaluate(
+                        nf_tgt_ids, nf_src_nids,
+                        target_points, aggregates.node_centroid,
+                        agg_scalars, agg_vectors,
+                        global_scalars, global_vectors,
+                        reference_length, device,
+                    )
+
+            with record_function("bh_kernel::nf_scatter"):
+                nf_strengths = node_total_strength[nf_src_nids]
+                for k, v in nf_result.items():
+                    weighted = v * nf_strengths.view(-1, *([1] * (v.ndim - 1)))
+                    if k not in output_bufs:
+                        output_bufs[k] = torch.zeros(
+                            (n_targets,) + v.shape[1:],
+                            dtype=weighted.dtype,
+                            device=device,
+                        )
+                    idx = nf_tgt_ids.view(
+                        -1, *([1] * (v.ndim - 1))
+                    ).expand_as(weighted)
+                    output_bufs[k].scatter_add_(0, idx, weighted)
 
         if not output_bufs:
             return self._empty_result(n_targets, device)
@@ -1293,10 +1351,21 @@ class BarnesHutKernel(Kernel):
             * element_bytes
             * autograd_overhead
         )
-        target_bytes = torch.cuda.mem_get_info(device)[0] // 2
+        free_bytes, total_bytes = torch.cuda.mem_get_info(device)
+        target_bytes = free_bytes // 2
 
         n_chunks = max(1, ceil(approx_peak_bytes / target_bytes))
-        return max(1, ceil(n_total_pairs / n_chunks))
+        chunk_size = max(1, ceil(n_total_pairs / n_chunks))
+
+        if not torch.compiler.is_compiling():
+            logger.debug(
+                "auto_chunk_size: %d pairs -> %d chunks of %d "
+                "(%.1f MB est. peak, %.1f MB free / %.1f MB total GPU)",
+                n_total_pairs, n_chunks, chunk_size,
+                approx_peak_bytes / 1e6, free_bytes / 1e6, total_bytes / 1e6,
+            )
+
+        return chunk_size
 
 
 class MultiscaleKernel(Module):
@@ -1623,13 +1692,40 @@ class MultiscaleKernel(Module):
             for name in self.reference_length_names
         }
 
+        ### Decide whether branch-level checkpointing is worthwhile.
+        # Each branch accumulates ~34 bytes/near-pair of autograd state
+        # (int64 checkpoint-saved indices + multiply/scatter graph nodes).
+        # Branch checkpointing avoids holding all branches' graphs
+        # simultaneously, which is essential at large N (800k+ faces)
+        # but a pure compute overhead at small N (20k faces).
+        _AUTOGRAD_BYTES_PER_PAIR = 34
+        n_branches = len(self.reference_length_names)
+        use_branch_ckpt = False
+        if self.training and self.use_gradient_checkpointing and n_branches > 1:
+            n_total_pairs = dual_plan.n_near + dual_plan.n_nf
+            per_branch_bytes = n_total_pairs * _AUTOGRAD_BYTES_PER_PAIR
+            all_branches_bytes = per_branch_bytes * n_branches
+            if device.type == "cuda":
+                free_bytes = torch.cuda.mem_get_info(device)[0]
+                use_branch_ckpt = all_branches_bytes > free_bytes * 0.1
+            else:
+                use_branch_ckpt = False
+
+            if not torch.compiler.is_compiling():
+                logger.debug(
+                    "branch checkpoint: %s (est. %.1f MB/branch, "
+                    "%.1f MB all branches, %.1f MB free, %d branches)",
+                    "ENABLED" if use_branch_ckpt else "DISABLED",
+                    per_branch_bytes / 1e6,
+                    all_branches_bytes / 1e6,
+                    free_bytes / 1e6 if device.type == "cuda" else 0,
+                    n_branches,
+                )
+
         ### Evaluate each branch with the shared tree, plan, and aggregates.
-        # Branch-level checkpointing ensures only ONE branch's autograd
-        # graph exists at a time during backward, preventing autograd
-        # memory from accumulating across all branches.  Combined with
-        # the gather-inside-checkpoint pattern in BarnesHutKernel, this
-        # reduces peak autograd memory from O(n_branches * n_pairs * features)
-        # to O(n_pairs * indices_only).
+        # When enabled, branch-level checkpointing ensures only ONE branch's
+        # autograd graph exists at a time during backward, preventing
+        # autograd memory from accumulating across all branches.
         results_pieces: list[TensorDict[str, Float[torch.Tensor, "n_targets ..."]]] = []
         for name in self.reference_length_names:
             with record_function(f"multiscale_kernel::branch/{name}"):
@@ -1649,7 +1745,7 @@ class MultiscaleKernel(Module):
                     source_aggregates=source_aggregates,
                     near_chunk_size=near_chunk_sizes[name],
                 )
-                if self.training and self.use_gradient_checkpointing:
+                if use_branch_ckpt:
                     kernel = self.kernels[name]
                     results_pieces.append(
                         checkpoint(kernel, use_reentrant=False, **branch_kwargs)

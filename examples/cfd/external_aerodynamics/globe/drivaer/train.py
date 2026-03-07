@@ -163,6 +163,12 @@ def main(
 
     if dist.rank == 0:
         logging.basicConfig(level=logging.INFO)
+        ### Enable debug logging for GLOBE internals during the first epoch.
+        # Captures tree construction stats, interaction pair counts,
+        # chunk sizing decisions, and checkpoint enable/disable choices.
+        # Reverted to INFO after epoch 1 (see the training loop below).
+        _globe_logger = logging.getLogger("globe")
+        _globe_logger.setLevel(logging.DEBUG)
     else:
         logging.disable(logging.ERROR)
         warnings.filterwarnings("ignore")
@@ -497,12 +503,17 @@ def main(
                 ),
             }
 
+        _first_epoch = True
         for epoch in count(start=epoch + 1):
             loss = {}
             loss_components = {}
             for split in splits:
                 with record_function(f"epoch_{epoch}_{split}"):
                     loss[split], loss_components[split] = run_epoch(split)
+
+            if _first_epoch and dist.rank == 0:
+                _globe_logger.setLevel(logging.INFO)
+                _first_epoch = False
 
             scheduler.step(loss["train"])
 

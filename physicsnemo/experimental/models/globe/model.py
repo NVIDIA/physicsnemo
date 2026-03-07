@@ -349,6 +349,16 @@ class GLOBE(Module):
             for bc_type in boundary_meshes
         }
 
+        for bc_type, plan in comm_plans.items():
+            n_faces = boundary_meshes[bc_type].n_cells
+            logger.logger.debug(
+                "comm plan [%s]: %d near + %d nf + %d far_node "
+                "(%.2f%% near-field, %d faces, theta=%.2f, leaf_size=%d)",
+                bc_type, plan.n_near, plan.n_nf, plan.n_far_nodes,
+                100.0 * plan.n_near / max(n_faces * n_faces, 1),
+                n_faces, self.theta, self.leaf_size,
+            )
+
         return cluster_trees, bc_areas, comm_plans
 
     @torch.compiler.disable
@@ -376,6 +386,17 @@ class GLOBE(Module):
             )
             for bc_type, tree in cluster_trees.items()
         }
+
+        n_pred = prediction_points.shape[0]
+        for bc_type, plan in pred_plans.items():
+            n_src = cluster_trees[bc_type].n_sources
+            logger.logger.debug(
+                "pred plan [%s]: %d near + %d nf + %d far_node "
+                "(%d sources x %d targets, theta=%.2f)",
+                bc_type, plan.n_near, plan.n_nf, plan.n_far_nodes,
+                n_src, n_pred, self.theta,
+            )
+
         return pred_target_trees, pred_plans
 
     def _evaluate_hyperlayer(
