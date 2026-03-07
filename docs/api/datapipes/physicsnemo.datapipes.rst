@@ -156,7 +156,7 @@ Combining a set of tensordict objects into a batch of data can, at times,
 Some datasets, like graph datasets, require special care.  For
 this reason, PhysicsNeMo datapipes offers custom collation functions 
 as well as an interface to write your own collator.  If the dataset you are
-trying to collate can not be accomodated here, please open an issue on github.
+trying to collate can not be accommodated here, please open an issue on github.
 
 For an example of a custom collation function to produce a batch of PyG graph data,
 see the examples on github for the datapipes.
