@@ -15,7 +15,7 @@ example.
 
 The DoMINO DataPipe reads the DrivearML dataset, and other datasets, for 
 the DoMINO model for external aerodynamics.  The expected format of inputs can
-be acheived using PhysicsNeMo-Curator.
+be achieved using PhysicsNeMo-Curator.
 
 .. automodule:: physicsnemo.datapipes.cae.domino_datapipe
     :members:
