@@ -203,10 +203,13 @@ def time_training_step(
     amp: bool = False,
     n_warmup: int = 3,
     n_trials: int = 5,
+    max_step_ms: float = 300_000,
 ) -> TrainingStepResult | None:
     """Time a full training step (forward + backward + zero_grad).
 
-    Returns median timings across *n_trials*, or ``None`` on OOM.
+    Returns median timings across *n_trials*, or ``None`` on OOM or if
+    a single step exceeds *max_step_ms* (prevents NCCL timeouts when one
+    rank gets a pathologically slow case).
     """
     model.train()
 
@@ -235,9 +238,11 @@ def time_training_step(
         t3 = perf_counter()
         return (t1 - t0) * 1000, (t2 - t1) * 1000, (t3 - t2) * 1000
 
-    for _ in range(n_warmup):
+    for i in range(n_warmup):
         try:
-            _step()
+            f, b, z = _step()
+            if f + b + z > max_step_ms:
+                return None
         except torch.cuda.OutOfMemoryError:
             model.zero_grad(set_to_none=True)
             torch.cuda.empty_cache()
@@ -284,11 +289,12 @@ def _time_compiled_step(
     amp: bool,
     n_warmup: int,
     n_trials: int,
+    max_step_ms: float = 300_000,
 ) -> TrainingStepResult | None:
     """Time a training step with ``torch.compile`` wrapping the forward pass.
 
     Compilation happens during warmup; timed iterations use the compiled
-    graph.  Returns ``None`` on OOM.
+    graph.  Returns ``None`` on OOM or per-step timeout.
     """
     model.train()
 
@@ -308,6 +314,8 @@ def _time_compiled_step(
 
     for _ in range(n_warmup):
         try:
+            torch.cuda.synchronize(device)
+            t0 = perf_counter()
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=amp):
                 loss = compiled_fwd(
                     prediction_points, boundary_meshes, reference_lengths
@@ -315,6 +323,8 @@ def _time_compiled_step(
                 loss.backward()
             model.zero_grad(set_to_none=True)
             torch.cuda.synchronize(device)
+            if (perf_counter() - t0) * 1000 > max_step_ms:
+                return None
         except torch.cuda.OutOfMemoryError:
             model.zero_grad(set_to_none=True)
             torch.cuda.empty_cache()
@@ -914,12 +924,10 @@ def build_cases(
         )
     if theta_values is None:
         theta_values = (
-            (0.5, 1.0, 2.0) if quick else (0.3, 0.5, 0.7, 1.0, 1.5, 2.0, 3.0)
+            (0.7, 1.0, 2.0) if quick else (0.7, 1.0, 1.5, 2.0, 3.0)
         )
     if leaf_size_values is None:
-        leaf_size_values = (
-            (1, 4, 8, 32) if quick else (1, 2, 4, 8, 16, 32, 64, 128)
-        )
+        leaf_size_values = (1, 2, 4, 8) if quick else (1, 2, 4, 8)
     if n_comm_values is None:
         n_comm_values = (1, 2, 4) if quick else (1, 2, 3, 4)
     if hidden_values is None:
@@ -929,11 +937,11 @@ def build_cases(
             else ((32, 32, 32), (64, 64, 64), (128, 128, 128), (256, 256, 256))
         )
     if n_sph_values is None:
-        n_sph_values = (1, 4, 8) if quick else (1, 2, 4, 8, 16)
+        n_sph_values = (1, 4, 8) if quick else (1, 2, 4, 8)
     if n_latent_scalar_values is None:
-        n_latent_scalar_values = (4, 16) if quick else (2, 4, 8, 16, 32)
+        n_latent_scalar_values = (4, 16) if quick else (2, 4, 8, 16)
     if n_latent_vector_values is None:
-        n_latent_vector_values = (2, 8) if quick else (1, 2, 4, 8, 16)
+        n_latent_vector_values = (2, 8) if quick else (1, 2, 4, 8)
 
     cases: list[BenchmarkCase] = []
 
