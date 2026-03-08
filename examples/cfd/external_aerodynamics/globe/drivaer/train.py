@@ -69,7 +69,7 @@ splits: list[Split] = ["train", "validation"]
 def main(
     data_dir: Path | None = None,
     output_name: str | None = None,
-    amp: bool = False,
+    amp: bool = True,
     use_compile: bool = False,
     compile_mode: Literal[
         "default",
@@ -268,7 +268,7 @@ def main(
         )
 
     ### [Optimizer and Scheduler Setup]
-    learning_rate *= (dist.world_size)
+    learning_rate *= (dist.world_size) ** 0.5
     if use_muon:
         optimizer = CombinedOptimizer(
             optimizers=[
