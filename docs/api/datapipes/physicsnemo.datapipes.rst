@@ -91,6 +91,12 @@ Quick Start
     for batch in loader:
         predictions = model(batch["pressure"], batch["coordinates"])
 
+
+The best place to see the PhysicsNeMo datapipes in action, and get a sense of 
+how they work and use them, is to start with the examples located in the
+`examples directory <https://github.com/NVIDIA/physicsnemo/tree/main/examples/minimal/datapipes>`_.
+
+
 Architecture
 ------------
 
