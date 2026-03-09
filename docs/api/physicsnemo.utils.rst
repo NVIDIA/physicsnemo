@@ -12,17 +12,6 @@ tasks while maintaining high performance and scalability.
 .. autosummary::
    :toctree: generated
 
-Optimization Utils
-------------------
-
-The optimization utilities provide tools for capturing and managing training states, gradients, and optimization processes.
-These are particularly useful when implementing custom training loops or specialized optimization strategies.
-
-.. automodule:: physicsnemo.utils.capture
-    :members:
-    :show-inheritance:
-
-
 Weather and Climate Utils
 --------------------------
 
@@ -53,6 +42,17 @@ Profiling Utils
 Utilities for profiling the performance of a model.
 
 .. automodule:: physicsnemo.utils.profiling
+    :members:
+    :show-inheritance:
+
+
+Optimization Utils
+------------------
+
+The optimization utilities provide tools for capturing and managing training states, gradients, and optimization processes.
+These are particularly useful when implementing custom training loops or specialized optimization strategies.
+
+.. automodule:: physicsnemo.utils.capture
     :members:
     :show-inheritance:
 
