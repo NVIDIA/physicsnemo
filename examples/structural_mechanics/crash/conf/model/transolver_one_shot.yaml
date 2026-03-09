@@ -14,13 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: rollout.MeshGraphNetTimeConditionalRollout
+_target_: rollout.TransolverOneShot
 _convert_: all
 
-input_dim_nodes: 5                  # pos(3) + thickness(1) + time(1)
-input_dim_edges: 4                  # dx, dy, dz, distance
-output_dim: 3                       # next step position
-do_concat_trick: true               # Reduced memory overhead
-num_processor_checkpoint_segments: 3
+functional_dim: 4   # coords (3) + features; override in experiment if using global_features
+embedding_dim: 3    # position
+out_dim: 75        # (num_time_steps - 1) * 3; override in experiment
+slice_num: 128
+n_layers: 6
+unified_pos: false
+structured_shape: null
+use_te: false
+time_input: false
+
 ### Rollout parameters ###
 num_time_steps: ${training.num_time_steps}

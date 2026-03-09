@@ -232,6 +232,7 @@ class InferenceWorker:
             num_samples=1,
             logger=self.logger,
             data_dir=run_path,
+            sample_type="all_time_steps",  # always all_time_steps for inference
         )
 
         # Data stats for de/normalization

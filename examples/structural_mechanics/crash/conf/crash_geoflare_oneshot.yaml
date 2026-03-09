@@ -14,11 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Car body-in-white crash experiment using GeoTransolver (one-shot).
-# Usage: python train.py --config-name=experiment_crash_transolver
-#
-# To switch model (same dataset, different model):
-#   python train.py --config-name=experiment_crash_transolver model=transolver_time_conditional
+# Car body-in-white crash experiment using GeoFLARE (one-shot).
+# Usage: python train.py --config-name=crash_geoflare
 
 hydra:
   job:
@@ -26,14 +23,12 @@ hydra:
   run:
     dir: ./outputs/
 
-experiment_name: "Car-Crash-GeoTransolver"
-experiment_desc: "Car body-in-white crash experiment using GeoTransolver"
-run_desc: "Car body-in-white crash experiment using GeoTransolver"
+experiment_name: "Car-Crash-GeoFLARE"
 
 defaults:
   - reader: vtp
   - datapipe: point_cloud
-  - model: geotransolver_one_shot_training
+  - model: geotransolver_one_shot
   - training: default
   - inference: default
   - _self_
@@ -46,14 +41,15 @@ training:
   raw_data_dir: ???              # set in config or via CLI: training.raw_data_dir=/path/to/train
   raw_data_dir_validation: ???   # set in config or via CLI: training.raw_data_dir_validation=/path/to/validation
   global_features_filepath: null # no per-run global scalars for this dataset
+  optimizer: muon
 
   # ┌───────────────────────────────────────────┐
   # │                 Dataset                   │
   # └───────────────────────────────────────────┘
 
   num_time_steps: 26
-  num_training_samples: 136
-  num_validation_samples: 15
+  num_training_samples: 135
+  num_validation_samples: 8
 
 inference:
   raw_data_dir_test: ???         # set in config or via CLI: inference.raw_data_dir_test=/path/to/test
@@ -67,12 +63,15 @@ datapipe:
     - thickness     # per-node thickness read from the VTP/d3plot files
   dynamic_targets: []   # position-only targets; no extra per-node time series
   global_features: null
+  sample_type: all_time_steps
 
 # ┌───────────────────────────────────────────┐
-# │            Model overrides                 │
+# │            Model overrides                │
 # └───────────────────────────────────────────┘
 
 model:
   functional_dim: 4   # coords (3) + thickness (1)
-  out_dim: 75        # (num_time_steps - 1) * 3 = 25 * 3
+  out_dim: 75         # (num_time_steps - 1) * 3 = 25 * 3
   global_dim: null    # no global features for this dataset
+  n_layers: 5         # memory bottleneck for this dataset
+  attention_type: "GALE_FA"  # GALE for GeoTransolver, GALE_FE for GeoFLARE
