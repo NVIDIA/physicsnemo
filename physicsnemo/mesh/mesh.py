@@ -249,9 +249,7 @@ class Mesh:
         # The tensordict memmap format does not persist tensors with 0 elements,
         # so this also restores cells after deserialization.
         if self.cells is None:
-            self.cells = torch.zeros(
-                0, 1, dtype=torch.long, device=self.points.device
-            )
+            self.cells = torch.zeros(0, 1, dtype=torch.long, device=self.points.device)
 
         ### point_data: coerce dict -> TensorDict and enforce batch_size
         if isinstance(self.point_data, TensorDict):

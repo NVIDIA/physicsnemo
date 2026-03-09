@@ -27,7 +27,6 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.primitives.basic import two_triangles_2d
 
-
 ### Memmap Round-Trip Tests ###
 
 
@@ -123,7 +122,9 @@ class TestMemmapRoundTrip:
         assert loaded.cells.shape == (0, 1)
         assert "velocity" in loaded.point_data.keys()
         assert "pressure" in loaded.point_data.keys()
-        assert torch.allclose(loaded.point_data["velocity"], mesh.point_data["velocity"])
+        assert torch.allclose(
+            loaded.point_data["velocity"], mesh.point_data["velocity"]
+        )
 
     def test_all_dimension_configs(self, tmp_path, dims_all):
         """All (n_spatial_dims, n_manifold_dims) configurations survive memmap round-trip."""
