@@ -1,3 +1,0 @@
-_target_: pipeline.transforms.PatchNonPhysicalValues
-threshold: 1.02
-warn_fraction: 0.0001
