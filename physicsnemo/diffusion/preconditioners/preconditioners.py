@@ -110,38 +110,36 @@ class BaseAffinePreconditioner(Module, ABC):
         Preconditioned model output with the same shape as the original model
         output.
 
-    .. note::
+    Note
+    ----
+    To implement a new preconditioner, a subclass of
+    :class:`BaseAffinePreconditioner` must be defined, and some methods
+    have to be implemented:
 
-        To implement a new preconditioner, a subclass of
-        :class:`BaseAffinePreconditioner` must be defined, and some methods
-        have to be implemented:
+    - Subclasses must implement the :meth:`compute_coefficients` method to
+      define the specific preconditioning scheme.
 
-        - Subclasses must implement the :meth:`compute_coefficients` method to
-          define the specific preconditioning scheme.
+    - A :meth:`sigma` method can optionally be implemented.
+      If a subclass implements the :meth:`sigma` method, the diffusion time
+      :math:`t` is first transformed to a noise level :math:`\sigma(t)`
+      before being passed to :meth:`compute_coefficients`. This allows
+      implementing preconditioners for different time-to-noise-level
+      mappings while keeping the same preconditioning interface, in
+      particular for
+      preconditioning schemes based on noise level (that is
+      :math:`c_{\text{in}}(\sigma)`,
+      :math:`c_{\text{noise}}(\sigma)`, :math:`c_{\text{out}}(\sigma)`,
+      :math:`c_{\text{skip}}(\sigma)` instead of :math:`c_{\text{in}}(t)`,
+      :math:`c_{\text{noise}}(t)`, :math:`c_{\text{out}}(t)`,
+      :math:`c_{\text{skip}}(t)`).
 
-        - A :meth:`sigma` method can optionally be implemented.
-          If a subclass implements the :meth:`sigma` method, the diffusion time
-          :math:`t` is first transformed to a noise level :math:`\sigma(t)`
-          before being passed to :meth:`compute_coefficients`. This allows
-          implementing preconditioners for different time-to-noise-level
-          mappings while keeping the same preconditioning interface, in
-          particular for
-          preconditioning schemes based on noise level (that is
-          :math:`c_{\text{in}}(\sigma)`,
-          :math:`c_{\text{noise}}(\sigma)`, :math:`c_{\text{out}}(\sigma)`,
-          :math:`c_{\text{skip}}(\sigma)` instead of :math:`c_{\text{in}}(t)`,
-          :math:`c_{\text{noise}}(t)`, :math:`c_{\text{out}}(t)`,
-          :math:`c_{\text{skip}}(t)`).
+    - The ``forward`` method of the preconditioner *should not* be
+      overriden.
 
-        - The ``forward`` method of the preconditioner *should not* be
-          overriden.
-
-    .. note::
-
-        The arguments ``t`` of the preconditioner forward method is always
-        assumed to be the diffusion time. For preconditioning schemes based
-        on noise level the noise level :math:`\sigma(t)` is computed internally
-        using the :meth:`sigma` method.
+    The argument ``t`` of the preconditioner forward method is always
+    assumed to be the diffusion time. For preconditioning schemes based
+    on noise level, the noise level :math:`\sigma(t)` is computed
+    internally using the :meth:`sigma` method.
 
     Examples
     --------
