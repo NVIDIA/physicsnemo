@@ -84,11 +84,7 @@ def compute_max_mesh_sizes(
     When cache_dir, airfrans_task, and split are provided, loads from or saves to
     cache_dir / "max_mesh_sizes" / "{task}_{split}_ratio{ratio}_n{n_samp}.pt".
     """
-    if (
-        cache_dir is not None
-        and airfrans_task is not None
-        and split is not None
-    ):
+    if cache_dir is not None and airfrans_task is not None and split is not None:
         cache_subdir = cache_dir / "max_mesh_sizes"
         n_samp = len(dataloader.dataset)
         cache_path = cache_subdir / (
@@ -154,7 +150,9 @@ def _structured_tensordict_to_airfrans_sample(data: TensorDict) -> AirFRANSSampl
     )
 
 
-def _collate_single(samples: Sequence[tuple[TensorDict, dict[str, Any]]]) -> AirFRANSSample:
+def _collate_single(
+    samples: Sequence[tuple[TensorDict, dict[str, Any]]],
+) -> AirFRANSSample:
     """Collate for batch_size=1: convert structured TensorDict to AirFRANSSample."""
     data, _ = samples[0]
     return _structured_tensordict_to_airfrans_sample(data)

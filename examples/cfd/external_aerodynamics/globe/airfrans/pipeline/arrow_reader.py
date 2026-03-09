@@ -63,7 +63,9 @@ def _ensure_plaid_stub() -> None:
         sys.modules["plaid.containers.sample"] = plaid_containers_sample
 
 
-def _parse_cgns_tree(sample_blob: bytes) -> tuple[dict[str, np.ndarray], dict[str, float]]:
+def _parse_cgns_tree(
+    sample_blob: bytes,
+) -> tuple[dict[str, np.ndarray], dict[str, float]]:
     """Deserialize a PLAID binary blob and extract arrays from its CGNS tree.
 
     Returns
@@ -98,9 +100,7 @@ def _parse_cgns_tree(sample_blob: bytes) -> tuple[dict[str, np.ndarray], dict[st
     elem_type = int(elements[1][0])
     arrays["element_type"] = np.array([elem_type], dtype=np.int32)
     elem_range = np.asarray(elements[2][0][1])
-    arrays["n_elements"] = np.array(
-        [elem_range[1] - elem_range[0] + 1], dtype=np.int64
-    )
+    arrays["n_elements"] = np.array([elem_range[1] - elem_range[0] + 1], dtype=np.int64)
 
     for child in vertex_fields[2]:
         name, value, _, ntype = child
@@ -182,7 +182,11 @@ def _build_pyvista_mesh(arrays: dict[str, np.ndarray]) -> pv.UnstructuredGrid:
 
     if "vertex_Ux" in arrays and "vertex_Uy" in arrays:
         mesh.point_data["U"] = np.column_stack(
-            [arrays["vertex_Ux"], arrays["vertex_Uy"], np.zeros(n_points, dtype=np.float32)]
+            [
+                arrays["vertex_Ux"],
+                arrays["vertex_Uy"],
+                np.zeros(n_points, dtype=np.float32),
+            ]
         )
     if "cell_Ux" in arrays and "cell_Uy" in arrays:
         mesh.cell_data["U"] = np.column_stack(
@@ -248,9 +252,7 @@ class AirFRANSArrowReader(Reader):
 
         if split_key not in split_info:
             available = sorted(split_info.keys())
-            raise ValueError(
-                f"Split '{split_key}' not found. Available: {available}"
-            )
+            raise ValueError(f"Split '{split_key}' not found. Available: {available}")
 
         self._indices: list[int] = split_info[split_key]
         logger.info(
@@ -322,9 +324,7 @@ class AirFRANSArrowReader(Reader):
             ),
             "p": torch.from_numpy(arrays["vertex_p"]),
             "nut": torch.from_numpy(arrays["vertex_nut"]),
-            "implicit_distance": torch.from_numpy(
-                arrays["vertex_implicit_distance"]
-            ),
+            "implicit_distance": torch.from_numpy(arrays["vertex_implicit_distance"]),
             "angle_of_attack": torch.tensor(
                 [scalars["angle_of_attack"]], dtype=torch.float32
             ),

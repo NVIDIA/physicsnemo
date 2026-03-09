@@ -188,7 +188,10 @@ class ComputeForceCoefficients(Transform):
     """
 
     def __call__(self, data: TensorDict) -> TensorDict:
-        if "velocity_jacobian" not in data.keys() or "airfoil_normals" not in data.keys():
+        if (
+            "velocity_jacobian" not in data.keys()
+            or "airfoil_normals" not in data.keys()
+        ):
             return data
 
         vel_jac = data["velocity_jacobian"]  # (N, 2, 2)
@@ -405,7 +408,9 @@ class ToAirFRANSSampleStructure(Transform):
             q_inf = q_inf.squeeze()
         dimensional_constants = TensorDict(
             {
-                "U_inf": data["U_inf"].squeeze(0) if data["U_inf"].dim() > 1 else data["U_inf"],
+                "U_inf": data["U_inf"].squeeze(0)
+                if data["U_inf"].dim() > 1
+                else data["U_inf"],
                 "q_inf": q_inf,
             },
             batch_size=[],

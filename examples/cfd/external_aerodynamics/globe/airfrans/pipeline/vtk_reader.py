@@ -205,9 +205,7 @@ class AirFRANSVTKReader(Reader):
         U = get_2d(internal.point_data["U"])
         p = internal.point_data["p"].astype(np.float32)
         nut = internal.point_data["nut"].astype(np.float32)
-        implicit_distance = internal.point_data["implicit_distance"].astype(
-            np.float32
-        )
+        implicit_distance = internal.point_data["implicit_distance"].astype(np.float32)
 
         internal_cells = self._extract_cells_2d(internal)
         airfoil_pts = get_2d(airfoil.points)
@@ -219,12 +217,8 @@ class AirFRANSVTKReader(Reader):
             "p": torch.from_numpy(p),
             "nut": torch.from_numpy(nut),
             "implicit_distance": torch.from_numpy(implicit_distance),
-            "angle_of_attack": torch.tensor(
-                [angle_of_attack], dtype=torch.float32
-            ),
-            "inlet_velocity": torch.tensor(
-                [inlet_velocity], dtype=torch.float32
-            ),
+            "angle_of_attack": torch.tensor([angle_of_attack], dtype=torch.float32),
+            "inlet_velocity": torch.tensor([inlet_velocity], dtype=torch.float32),
             "C_D": torch.tensor([float("nan")], dtype=torch.float32),
             "C_L": torch.tensor([float("nan")], dtype=torch.float32),
             "internal_cells": torch.from_numpy(internal_cells).long(),

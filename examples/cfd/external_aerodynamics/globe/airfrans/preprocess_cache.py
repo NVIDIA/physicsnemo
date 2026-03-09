@@ -91,7 +91,9 @@ def main() -> None:
 
     total = time.perf_counter() - t_total
     print()
-    print(f"Done. {len(dataset)} samples in {total:.1f}s ({total / len(dataset):.2f}s/sample)")
+    print(
+        f"Done. {len(dataset)} samples in {total:.1f}s ({total / len(dataset):.2f}s/sample)"
+    )
     print(f"Cached to: {cache_dir.resolve()}")
 
 

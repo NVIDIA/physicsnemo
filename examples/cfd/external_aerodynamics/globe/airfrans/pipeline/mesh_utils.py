@@ -173,9 +173,7 @@ def compute_mesh_quantities(
 
     # --- Velocity jacobian (computed on points) ---
     try:
-        mesh_with_jac = mesh.compute_derivative(
-            scalars="U", gradient="jacobian"
-        )
+        mesh_with_jac = mesh.compute_derivative(scalars="U", gradient="jacobian")
         jac_raw = mesh_with_jac.point_data["jacobian"].reshape(-1, 3, 3)
         velocity_jacobian = jac_raw[:, :2, :2].astype(np.float32)
     except Exception:

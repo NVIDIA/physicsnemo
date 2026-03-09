@@ -88,7 +88,9 @@ def compare_tensors(
 
     if new.shape != old.shape:
         result["status"] = "FAIL"
-        result["reason"] = f"shape mismatch: new={list(new.shape)} vs old={list(old.shape)}"
+        result["reason"] = (
+            f"shape mismatch: new={list(new.shape)} vs old={list(old.shape)}"
+        )
         return result
 
     result["shape"] = list(new.shape)
@@ -132,9 +134,7 @@ def compare_tensors(
 
 def run_old_pipeline(sample_path: Path) -> AirFRANSSample:
     """Run the old monolithic pipeline on a single sample."""
-    return AirFRANSDataSet.preprocess(
-        sample_path, patch_out_nonphysical_values=True
-    )
+    return AirFRANSDataSet.preprocess(sample_path, patch_out_nonphysical_values=True)
 
 
 def run_new_pipeline(reader: AirFRANSVTKReader, index: int) -> dict[str, torch.Tensor]:
@@ -203,9 +203,7 @@ def print_field_table(results: list[tuple[str, dict[str, object]]]) -> None:
             )
         )
         if not r.get("nan_mask_agree", True):
-            print(
-                f"  NaN counts: new={r['new_nan_count']}, old={r['old_nan_count']}"
-            )
+            print(f"  NaN counts: new={r['new_nan_count']}, old={r['old_nan_count']}")
     print(sep)
 
 
@@ -232,9 +230,7 @@ def main() -> None:
     )
     n = min(args.n_samples, len(sample_paths))
 
-    reader = AirFRANSVTKReader(
-        data_dir=data_dir, task=args.task, split=args.split
-    )
+    reader = AirFRANSVTKReader(data_dir=data_dir, task=args.task, split=args.split)
 
     print(f"=== AirFRANS Datapipe Validation ===")
     print(f"  Data dir:   {data_dir}")
@@ -267,7 +263,10 @@ def main() -> None:
                 old_tensor = get_old_tensor(old_sample, old_key)
             except KeyError:
                 sample_results.append(
-                    (new_key, {"status": "SKIP", "reason": f"'{old_key}' not in old sample"})
+                    (
+                        new_key,
+                        {"status": "SKIP", "reason": f"'{old_key}' not in old sample"},
+                    )
                 )
                 aggregate_status[new_key].append("SKIP")
                 continue
