@@ -181,11 +181,10 @@ def main():
         filenames = get_all_files(working_path.resolve(), exts, exclude_dirs)
         print("License check config:")
         print(json.dumps(config, sort_keys=True, indent=4))
+        print(f"Checking {len(filenames)} git-tracked files")
     elif args.filenames:
-        # Files passed from pre-commit (already filtered by pre-commit config)
         filenames = [Path(f) for f in args.filenames]
     else:
-        # No files to check
         print("No files to check.")
         return 0
 
