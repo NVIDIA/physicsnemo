@@ -204,7 +204,7 @@ def main():
         if has_gpl:
             gpl_files.append(filename)
 
-    if len(problematic_files) > 0:
+    if problematic_files:
         print(
             "header_check.py found the following files that might not have a "
             "copyright header:"
@@ -212,14 +212,14 @@ def main():
         for _file in problematic_files:
             print(f"  {_file}")
 
-    if len(gpl_files) > 0:
+    if gpl_files:
         print(
             "header_check.py found the following files that might have GPL copyright:"
         )
         for _file in gpl_files:
             print(f"  {_file}")
 
-    if len(problematic_files) > 0 or len(gpl_files) > 0:
+    if problematic_files or gpl_files:
         return 1
 
     return 0
