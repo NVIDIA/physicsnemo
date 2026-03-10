@@ -225,47 +225,80 @@ class Mesh:
         *,
         _cache: TensorDict | None = None,
     ) -> None:
-        ### Assign tensorclass fields
-        if cells is None:
-            cells = torch.zeros(0, 1, dtype=torch.long, device=points.device)
         self.points = points
-        self.cells = cells
+        self.cells = cells  # type: ignore[assignment]  # normalized by __post_init__
+        # The tensorclass setter silently drops entries from non-dict Mappings
+        # (e.g. PyVista DataSetAttributes). Wrapping with dict() converts any
+        # Mapping to a plain dict that the setter handles correctly.
+        self.point_data = (  # type: ignore[assignment]  # normalized by __post_init__
+            dict(point_data)
+            if point_data is not None and not isinstance(point_data, TensorDict)
+            else point_data
+        )
+        self.cell_data = (  # type: ignore[assignment]  # normalized by __post_init__ (coerced to TensorDict)
+            dict(cell_data)
+            if cell_data is not None and not isinstance(cell_data, TensorDict)
+            else cell_data
+        )
+        self.global_data = (  # type: ignore[assignment]  # normalized by __post_init__
+            dict(global_data)
+            if global_data is not None and not isinstance(global_data, TensorDict)
+            else global_data
+        )
+        self._cache = _cache  # type: ignore[assignment]  # normalized by __post_init__
+        # tensorclass only auto-calls __post_init__ from the *generated* __init__
+        # (same semantics as dataclasses). Since we define a custom __init__,
+        # we must call it explicitly. During load(), tensorclass calls it
+        # automatically, so __post_init__ is the single source of truth for
+        # defaults, coercions, and validation.
+        self.__post_init__()
 
-        # For data fields, convert inputs to TensorDicts if needed
-        if isinstance(point_data, TensorDict):
-            point_data.batch_size = torch.Size(
-                [self.n_points]
-            )  # Ensure shape-compatible
+    def __post_init__(self):
+        """Normalize fields and validate invariants.
+
+        Called automatically during ``load()`` by tensorclass, and explicitly
+        from ``__init__`` during normal construction. This is the single source
+        of truth for all default values, type coercions, and shape validation.
+        """
+        ### cells: default empty-cells sentinel for point clouds
+        # The tensordict memmap format does not persist tensors with 0 elements,
+        # so this also restores cells after deserialization.
+        if self.cells is None:
+            self.cells = torch.zeros(0, 1, dtype=torch.long, device=self.points.device)
+
+        ### point_data: coerce dict -> TensorDict and enforce batch_size
+        if isinstance(self.point_data, TensorDict):
+            self.point_data.batch_size = torch.Size([self.n_points])
         else:
-            point_data = TensorDict(
-                {} if point_data is None else dict(point_data),
+            self.point_data = TensorDict(
+                {} if self.point_data is None else dict(self.point_data),
                 batch_size=torch.Size([self.n_points]),
                 device=self.points.device,
             )
-        self.point_data = point_data
 
-        if isinstance(cell_data, TensorDict):
-            cell_data.batch_size = torch.Size([self.n_cells])  # Ensure shape-compatible
+        ### cell_data: coerce dict -> TensorDict and enforce batch_size
+        if isinstance(self.cell_data, TensorDict):
+            self.cell_data.batch_size = torch.Size([self.n_cells])
         else:
-            cell_data = TensorDict(
-                {} if cell_data is None else dict(cell_data),
+            self.cell_data = TensorDict(
+                {} if self.cell_data is None else dict(self.cell_data),
                 batch_size=torch.Size([self.n_cells]),
                 device=self.cells.device,
             )
-        self.cell_data = cell_data
 
-        if isinstance(global_data, TensorDict):
-            global_data.batch_size = torch.Size([])  # Ensure shape-compatible
+        ### global_data: coerce dict -> TensorDict and enforce batch_size
+        if isinstance(self.global_data, TensorDict):
+            self.global_data.batch_size = torch.Size([])
         else:
-            global_data = TensorDict(
-                {} if global_data is None else dict(global_data),
+            self.global_data = TensorDict(
+                {} if self.global_data is None else dict(self.global_data),
                 batch_size=torch.Size([]),
                 device=self.points.device,
             )
-        self.global_data = global_data
 
-        if _cache is None:
-            _cache = TensorDict(
+        ### _cache: default empty cache structure
+        if self._cache is None:
+            self._cache = TensorDict(
                 {
                     "cell": TensorDict(
                         {}, batch_size=[self.n_cells], device=self.points.device
@@ -277,7 +310,6 @@ class Mesh:
                 batch_size=[],
                 device=self.points.device,
             )
-        self._cache = _cache
 
         ### Validate shapes and dtypes
         if not torch.compiler.is_compiling():
@@ -1505,6 +1537,126 @@ class Mesh:
             data_aggregation=data_aggregation,
             target_counts="boundary",
         )
+
+    def to_edge_graph(self) -> "Mesh":
+        r"""Return a 1D Mesh whose cells are the unique edges of this mesh.
+
+        Each edge (pair of vertices connected in a cell) appears exactly once.
+        The resulting Mesh has the same ``points`` array, with ``cells`` of
+        shape :math:`(E, 2)` where *E* is the number of unique edges.
+
+        Cell data from the parent mesh is aggregated onto edges via the
+        facet extraction pipeline (mean aggregation by default).
+
+        Returns
+        -------
+        Mesh
+            A 1D Mesh (``n_manifold_dims == 1``) with edge cells.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> points = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.]])
+        >>> cells = torch.tensor([[0, 1, 2]])
+        >>> mesh = Mesh(points=points, cells=cells)
+        >>> edge_graph = mesh.to_edge_graph()
+        >>> assert edge_graph.n_manifold_dims == 1
+        >>> assert edge_graph.n_cells == 3  # triangle has 3 edges
+        """
+        codim = self.n_manifold_dims - 1
+        return self.get_facet_mesh(manifold_codimension=codim, target_counts="all")
+
+    def to_dual_graph(self) -> "Mesh":
+        r"""Return a 1D Mesh representing the cell-adjacency (dual) graph.
+
+        Points are the cell centroids of this mesh.  Cells are
+        :math:`(E, 2)` line segments connecting pairs of cells that share a
+        codimension-1 facet (e.g., cells sharing an edge in 2D or a face in
+        3D).  The parent mesh's ``cell_data`` becomes the ``point_data`` of the
+        returned Mesh, since each dual-graph node corresponds to a parent cell.
+
+        Returns
+        -------
+        Mesh
+            A 1D Mesh (``n_manifold_dims == 1``) whose points are cell
+            centroids and whose cells encode the cell-neighbor adjacency.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> # Two triangles sharing an edge
+        >>> points = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.], [1.5, 1.]])
+        >>> cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+        >>> mesh = Mesh(points=points, cells=cells)
+        >>> dual = mesh.to_dual_graph()
+        >>> assert dual.n_manifold_dims == 1
+        >>> assert dual.n_cells == 1  # 1 shared edge -> 1 dual edge
+        """
+        adj = self.get_cell_to_cells_adjacency(adjacency_codimension=1)
+        sources, targets = adj.expand_to_pairs()
+
+        # Keep only upper-triangular pairs (source < target) to avoid
+        # counting each neighbor relationship twice.
+        mask = sources < targets
+        edges = torch.stack([sources[mask], targets[mask]], dim=1)
+
+        return Mesh(
+            points=self.cell_centroids,
+            cells=edges,
+            point_data=self.cell_data,
+            global_data=self.global_data,
+        )
+
+    def to_point_cloud(
+        self, point_source: "Literal['vertices', 'cell_centroids']" = "vertices"
+    ) -> "Mesh":
+        r"""Return a 0D Mesh (point cloud) with no cell connectivity.
+
+        Parameters
+        ----------
+        point_source : {"vertices", "cell_centroids"}
+            What becomes the points of the returned Mesh:
+
+            - ``"vertices"`` (default): Uses mesh vertices as points,
+              preserving ``point_data``.
+            - ``"cell_centroids"``: Uses cell centroids as points,
+              mapping ``cell_data`` to ``point_data``.
+
+        Returns
+        -------
+        Mesh
+            A 0D Mesh (``n_manifold_dims == 0``) with no cells.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> points = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.]])
+        >>> cells = torch.tensor([[0, 1, 2]])
+        >>> mesh = Mesh(points=points, cells=cells)
+        >>> pc = mesh.to_point_cloud()
+        >>> assert pc.n_manifold_dims == 0
+        >>> assert pc.n_points == 3
+        >>> assert pc.n_cells == 0
+        """
+        if point_source == "vertices":
+            return Mesh(
+                points=self.points,
+                point_data=self.point_data,
+                global_data=self.global_data,
+            )
+        elif point_source == "cell_centroids":
+            return Mesh(
+                points=self.cell_centroids,
+                point_data=self.cell_data,
+                global_data=self.global_data,
+            )
+        else:
+            raise ValueError(
+                f"Invalid {point_source=!r}. Must be 'vertices' or 'cell_centroids'."
+            )
 
     def is_watertight(self) -> bool:
         """Check if mesh is watertight (has no boundary).

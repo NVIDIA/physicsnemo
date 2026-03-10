@@ -28,7 +28,6 @@ _pyg_data = OptionalImport("torch_geometric.data")
 _pyg_utils = OptionalImport("torch_geometric.utils")
 from physicsnemo.utils.logging import PythonLogger
 
-STATS_DIRNAME = "stats"
 NODE_STATS_FILE = "node_stats.json"
 FEATURE_STATS_FILE = "feature_stats.json"
 EDGE_STATS_FILE = "edge_stats.json"
@@ -135,6 +134,7 @@ class CrashBaseDataset:
         dynamic_targets: Optional[list[str]] = None,
         logger=None,
         dt: float = 5e-3,
+        stats_dir: str = "stats",
         sample_type: str = "all_time_steps",
     ):
         super().__init__()
@@ -172,8 +172,8 @@ class CrashBaseDataset:
         )
 
         # Prepare stats dir
-        self._stats_dir = STATS_DIRNAME
-        os.makedirs(STATS_DIRNAME, exist_ok=True)
+        self._stats_dir = stats_dir
+        os.makedirs(self._stats_dir, exist_ok=True)
 
         # Load raw records via provided reader callable (Hydra can pass a class/callable)
         if reader is None:
