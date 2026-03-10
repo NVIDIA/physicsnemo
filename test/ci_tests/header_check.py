@@ -25,11 +25,12 @@ This script can be run in two modes:
 import argparse
 import json
 import re
-import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
+
+import git
 
 _COPYRIGHT_RE = re.compile(r"Copyright.*NVIDIA.*", re.IGNORECASE)
 
@@ -72,17 +73,13 @@ def get_git_tracked_files(
     Uses ``git ls-files`` so that only committed/staged files are returned and
     everything in ``.gitignore`` is automatically skipped.
     """
+    repo = git.Repo(search_parent_directories=True)
     pathspecs = [f"*.{ext.lstrip('.')}" if ext.startswith(".") else ext for ext in exts]
-    result = subprocess.run(  # noqa: S603
-        ["git", "ls-files", "--cached", "--", *pathspecs],  # noqa: S607
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    output = repo.git.ls_files("--cached", "--", *pathspecs)
     exclude_tuple = tuple(exclude_prefixes)
     return [
         Path(line)
-        for line in result.stdout.splitlines()
+        for line in output.splitlines()
         if not line.startswith(exclude_tuple)
     ]
 
