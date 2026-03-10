@@ -55,8 +55,7 @@ resilient = retry(
     stop=stop_after_attempt(2),
     wait=wait_fixed(2),
     retry_error_callback=lambda rs: logger.warning(
-        f"{rs.fn.__name__}() failed after "
-        f"{rs.attempt_number} attempts, skipping."
+        f"{rs.fn.__name__}() failed after {rs.attempt_number} attempts, skipping."
     ),
 )
 
