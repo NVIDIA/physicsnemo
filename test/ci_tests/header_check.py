@@ -15,24 +15,24 @@
 # limitations under the License.
 
 
-"""A script to check that copyright headers exist.
+"""Check that copyright headers exist in source files.
 
-This script can be run in two modes:
-1. With filenames passed as arguments (used by pre-commit)
-2. With --all-files to check all files in the repository
+Accepts filenames as positional arguments (the interface pre-commit uses).
+File discovery, extension filtering, and exclusions are all handled by
+pre-commit via the ``files:`` and ``exclude:`` keys in
+``.pre-commit-config.yaml``.
 """
 
 import argparse
-import json
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
-import git
-
 _COPYRIGHT_RE = re.compile(r"Copyright.*NVIDIA.*", re.IGNORECASE)
+
+_COPYRIGHT_TEMPLATE = Path(__file__).parent / "copyright.txt"
 
 
 class HeaderCheckResult(NamedTuple):
@@ -62,25 +62,6 @@ def read_header_comments(filepath: Path, *, max_lines: int) -> list[str]:
             else:
                 break
     return comments
-
-
-def get_git_tracked_files(exts: list[str], exclude_prefixes: list[str]) -> list[Path]:
-    """Return git-tracked files matching *exts*, excluding paths that start
-    with any of *exclude_prefixes*.
-
-    Uses ``git ls-files`` so that only committed/staged files are returned and
-    everything in ``.gitignore`` is automatically skipped.
-    """
-    repo = git.Repo(search_parent_directories=True)
-    root = Path(repo.working_dir)
-    pathspecs = [f"*.{ext.lstrip('.')}" if ext.startswith(".") else ext for ext in exts]
-    output = repo.git.ls_files("--cached", "--", *pathspecs)
-    exclude_tuple = tuple(exclude_prefixes)
-    return [
-        root / line
-        for line in output.splitlines()
-        if not line.startswith(exclude_tuple)
-    ]
 
 
 def check_file_header(
@@ -145,42 +126,22 @@ def main() -> int:
         nargs="*",
         help="Filenames to check (passed by pre-commit).",
     )
-    parser.add_argument(
-        "-a",
-        "--all-files",
-        action="store_true",
-        help="Check all git-tracked files matching the configured extensions.",
-    )
     args = parser.parse_args()
 
-    config_dir = Path(__file__).parent.resolve()
-    with open(config_dir / "config.json") as f:
-        config = json.loads(f.read())
+    if not args.filenames:
+        print("No files to check.")
+        return 0
 
     current_year = int(datetime.today().year)
     starting_year = 2024
 
-    with open(config_dir / config["copyright_file"], "r", encoding="utf-8") as f:
+    with open(_COPYRIGHT_TEMPLATE, "r", encoding="utf-8") as f:
         pyheader: list[str] = f.read().split("\n")
-
-    ### Determine which files to check
-    if args.all_files:
-        exts: list[str] = config["include-ext"]
-        exclude_prefixes: list[str] = config.get("exclude-dir", [])
-        filenames = get_git_tracked_files(exts, exclude_prefixes)
-        print("License check config:")
-        print(json.dumps(config, sort_keys=True, indent=4))
-        print(f"Checking {len(filenames)} git-tracked files")
-    elif args.filenames:
-        filenames = [Path(f) for f in args.filenames]
-    else:
-        print("No files to check.")
-        return 0
 
     problematic_files: list[Path] = []
     gpl_files: list[Path] = []
 
-    for filename in filenames:
+    for filename in (Path(f) for f in args.filenames):
         result = check_file_header(filename, pyheader, starting_year, current_year)
 
         if result.is_problematic:
