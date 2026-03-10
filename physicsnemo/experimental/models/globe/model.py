@@ -17,7 +17,7 @@
 import operator
 from dataclasses import dataclass
 from functools import reduce
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import torch
 import torch.nn as nn
@@ -47,6 +47,12 @@ _flatten_keys = torch.compiler.allow_in_graph(TensorDict.flatten_keys)
 _unflatten_keys = torch.compiler.allow_in_graph(TensorDict.unflatten_keys)
 
 logger = PythonLogger("globe.model")
+
+if TYPE_CHECKING:
+    from physicsnemo.experimental.models.globe.cluster_tree import (
+        ClusterTree,
+        DualInteractionPlan,
+    )
 
 
 @dataclass

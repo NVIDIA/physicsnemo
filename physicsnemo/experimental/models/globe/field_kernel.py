@@ -19,7 +19,7 @@ import logging
 import operator
 from functools import cached_property, reduce
 from math import ceil, comb, prod
-from typing import Literal, Sequence
+from typing import TYPE_CHECKING, Literal, Sequence
 
 import torch
 import torch.nn as nn
@@ -48,6 +48,13 @@ from physicsnemo.nn.functional.equivariant_ops import (
 )
 
 logger = logging.getLogger("globe.field_kernel")
+
+if TYPE_CHECKING:
+    from physicsnemo.experimental.models.globe.cluster_tree import (
+        ClusterTree,
+        DualInteractionPlan,
+        SourceAggregates,
+    )
 
 
 class Kernel(Module):
@@ -574,7 +581,7 @@ class Kernel(Module):
 
         ### Vector magnitude, direction, and log-magnitude features
         with record_function("kernel::feature_engineering"):
-            vectors_mag_squared: TensorDict = (  # ty: ignore[invalid-assignment]
+            vectors_mag_squared: TensorDict = (
                 (vectors * vectors).sum(dim=-1).apply(lambda x: x + smoothing_radius**2)
             )
             vectors_mag = vectors_mag_squared.sqrt()
@@ -652,7 +659,7 @@ class Kernel(Module):
 
         ### Far-field decay envelope and vector reprojection
         with record_function("kernel::postprocess"):
-            r_mag_sq: torch.Tensor = vectors_mag_squared["r"]  # ty: ignore[invalid-assignment]
+            r_mag_sq: torch.Tensor = vectors_mag_squared["r"]
             output = output * (
                 -torch.expm1(-r_mag_sq[..., None])
             )  # Lamb-Oseen vortex kernel, numerically stable via expm1
@@ -696,7 +703,7 @@ class Kernel(Module):
                     if k == "r":
                         continue
 
-                    scale: torch.Tensor = vectors_log_mag[k][..., None]  # ty: ignore[invalid-assignment]
+                    scale: torch.Tensor = vectors_log_mag[k][..., None]
 
                     basis_vector_components.append(scale * vectors_hat[k])
 
