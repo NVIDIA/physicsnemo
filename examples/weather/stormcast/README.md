@@ -1,5 +1,5 @@
 <!-- markdownlint-disable -->
-# StormCast: Regional High-Resolution Weather Models using Generative Diffusion
+# Regional High-Resolution Weather Models using Generative Diffusion
 
 ## Problem overview
 
