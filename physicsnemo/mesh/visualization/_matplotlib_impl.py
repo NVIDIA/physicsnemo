@@ -125,8 +125,14 @@ def draw_mesh_matplotlib(
         if cell_scalar_values is not None:
             cell_scalar_values = mesh.cell_data[_VIZ_KEY]
 
+    ### Ensure scalar tensors are NumPy-compatible (BFloat16 has no NumPy equivalent)
+    if point_scalar_values is not None:
+        point_scalar_values = point_scalar_values.float()
+    if cell_scalar_values is not None:
+        cell_scalar_values = cell_scalar_values.float()
+
     ### Convert mesh data to numpy
-    points_np = mesh.points.cpu().detach().numpy()
+    points_np = mesh.points.float().cpu().detach().numpy()
     cells_np = mesh.cells.cpu().detach().numpy()
 
     ### Determine neutral colors based on active_scalar_source
@@ -502,7 +508,7 @@ def _draw_3d(
                 edgecolors = [(0, 0, 0, alpha_edges)] * len(verts)
                 linewidths = 0.25
             else:
-                edgecolors = None
+                edgecolors = "none"
                 linewidths = 0
 
             pc = Poly3DCollection(
