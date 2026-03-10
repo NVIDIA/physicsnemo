@@ -272,8 +272,11 @@ def deterministic_sampler(
                 f"mean_hr and img_lr must have the same height and width, "
                 f"but found {mean_hr.shape[-2:]} vs {img_lr.shape[-2:]}."
             )
-        mean_hr = mean_hr.expand(x_lr.shape[0], -1, -1, -1)
-        x_lr = torch.cat((mean_hr, x_lr), dim=1) if x_lr is not None else mean_hr
+        if x_lr is not None:
+            mean_hr = mean_hr.expand(x_lr.shape[0], -1, -1, -1)
+            x_lr = torch.cat((mean_hr, x_lr), dim=1)
+        else:
+            x_lr = mean_hr
 
     # Safety check on type of patching
     if patching is not None and not isinstance(patching, GridPatching2D):
