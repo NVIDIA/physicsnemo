@@ -239,7 +239,6 @@ class TestClusterTree:
         nf_tgt = plan.nf_target_ids.tolist()
         nf_src_nids = plan.nf_source_node_ids.tolist()
         fn_src = plan.fn_source_ids.tolist()
-        fn_tgt_nids = plan.fn_target_node_ids.tolist()
         fn_bcast_tgts = plan.fn_broadcast_targets.tolist()
         fn_bcast_starts = plan.fn_broadcast_starts.tolist()
         fn_bcast_counts = plan.fn_broadcast_counts.tolist()
@@ -259,11 +258,8 @@ class TestClusterTree:
 
         ### Expand (far,near): broadcast to survivors × individual source
         fn_expanded: list[tuple[int, int]] = []
-        for i, (src_id, start, count) in enumerate(
-            zip(fn_src, fn_bcast_starts, fn_bcast_counts)
-        ):
-            for j in range(count):
-                fn_expanded.append((fn_bcast_tgts[start + j], src_id))
+        for src_id, start, count in zip(fn_src, fn_bcast_starts, fn_bcast_counts):
+            fn_expanded.extend((fn_bcast_tgts[start + j], src_id) for j in range(count))
 
         for t in range(n_tgt):
             near_sources = {s for ti, s in zip(near_tgt, near_src) if ti == t}
@@ -994,16 +990,15 @@ def test_self_interaction_source_coverage(n_dims: int, theta: float):
     for tgt_nid, src_nid in zip(
         plan.far_target_node_ids.tolist(), plan.far_source_node_ids.tolist()
     ):
-        for t in _collect(tree, tgt_nid):
-            for s in _collect(tree, src_nid):
-                far_expanded.append((t, s))
+        far_expanded.extend(
+            (t, s) for t in _collect(tree, tgt_nid) for s in _collect(tree, src_nid)
+        )
 
     nf_expanded: list[tuple[int, int]] = []
     for ti, src_nid in zip(
         plan.nf_target_ids.tolist(), plan.nf_source_node_ids.tolist()
     ):
-        for s in _collect(tree, src_nid):
-            nf_expanded.append((ti, s))
+        nf_expanded.extend((ti, s) for s in _collect(tree, src_nid))
 
     fn_expanded: list[tuple[int, int]] = []
     fn_bcast = plan.fn_broadcast_targets.tolist()
@@ -1012,8 +1007,7 @@ def test_self_interaction_source_coverage(n_dims: int, theta: float):
         plan.fn_broadcast_starts.tolist(),
         plan.fn_broadcast_counts.tolist(),
     ):
-        for j in range(count):
-            fn_expanded.append((fn_bcast[start + j], src_id))
+        fn_expanded.extend((fn_bcast[start + j], src_id) for j in range(count))
 
     for t in range(n_pts):
         near_s = {s for ti, s in zip(near_tgt, near_src) if ti == t}
