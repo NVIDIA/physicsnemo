@@ -652,6 +652,7 @@ def run_phase_breakdown(
             boundary_meshes={"no_slip": mesh},
             reference_lengths=ref_lengths,
         )
+
     with torch.no_grad():
         globe_call()
         m0 = mem_mb(device)

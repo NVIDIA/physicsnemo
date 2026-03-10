@@ -272,14 +272,11 @@ class TestClusterTree:
             fn_sources = {s for ti, s in fn_expanded if ti == t}
 
             all_sets = [near_sources, far_sources, nf_sources, fn_sources]
-            for i, (a, name_a) in enumerate(
-                zip(all_sets, ["near", "far", "nf", "fn"])
-            ):
+            for i, (a, name_a) in enumerate(zip(all_sets, ["near", "far", "nf", "fn"])):
                 for b, name_b in zip(all_sets[i + 1 :], ["far", "nf", "fn"][i:]):
                     overlap = a & b
                     assert not overlap, (
-                        f"Target {t}: sources {overlap} in both "
-                        f"{name_a} and {name_b}"
+                        f"Target {t}: sources {overlap} in both {name_a} and {name_b}"
                     )
 
             covered = near_sources | far_sources | nf_sources | fn_sources
@@ -1002,7 +999,9 @@ def test_self_interaction_source_coverage(n_dims: int, theta: float):
                 far_expanded.append((t, s))
 
     nf_expanded: list[tuple[int, int]] = []
-    for ti, src_nid in zip(plan.nf_target_ids.tolist(), plan.nf_source_node_ids.tolist()):
+    for ti, src_nid in zip(
+        plan.nf_target_ids.tolist(), plan.nf_source_node_ids.tolist()
+    ):
         for s in _collect(tree, src_nid):
             nf_expanded.append((ti, s))
 

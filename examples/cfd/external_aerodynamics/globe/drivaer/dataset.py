@@ -487,11 +487,21 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
 
         if backend == "pyvista":
             _visualize_pyvista(
-                combined, kind_data, kinds, fields, save_path, show,
+                combined,
+                kind_data,
+                kinds,
+                fields,
+                save_path,
+                show,
             )
         elif backend == "matplotlib":
             _visualize_matplotlib(
-                combined, kind_data, kinds, fields, save_path, show,
+                combined,
+                kind_data,
+                kinds,
+                fields,
+                save_path,
+                show,
             )
         else:
             raise ValueError(

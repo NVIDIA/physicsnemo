@@ -307,9 +307,7 @@ def _time_compiled_step(
         )
         return sum(
             v.float().sum()
-            for v in pred_mesh.point_data.values(
-                include_nested=True, leaves_only=True
-            )
+            for v in pred_mesh.point_data.values(include_nested=True, leaves_only=True)
         )
 
     for _ in range(n_warmup):
@@ -681,14 +679,10 @@ def run_phase_breakdown(
 
     ### Phase 3: Dual interaction planning (pred: boundary -> prediction)
     pred_tree = ClusterTree.from_points(prediction_points, leaf_size=leaf_size)
-    pred_plan = tree.find_dual_interaction_pairs(
-        target_tree=pred_tree, theta=theta
-    )
+    pred_plan = tree.find_dual_interaction_pairs(target_tree=pred_tree, theta=theta)
     m0 = mem_mb(device)
     w, g = time_fn(
-        lambda: tree.find_dual_interaction_pairs(
-            target_tree=pred_tree, theta=theta
-        ),
+        lambda: tree.find_dual_interaction_pairs(target_tree=pred_tree, theta=theta),
         device,
         n_warmup,
         n_trials,
@@ -918,14 +912,10 @@ def build_cases(
         )
     if n_pred_values is None:
         n_pred_values = (
-            (4_096, 40_000, 80_000)
-            if quick
-            else (1_024, 4_096, 16_384, 40_000, 80_000)
+            (4_096, 40_000, 80_000) if quick else (1_024, 4_096, 16_384, 40_000, 80_000)
         )
     if theta_values is None:
-        theta_values = (
-            (0.7, 1.0, 2.0) if quick else (0.7, 1.0, 1.5, 2.0, 3.0)
-        )
+        theta_values = (0.7, 1.0, 2.0) if quick else (0.7, 1.0, 1.5, 2.0, 3.0)
     if leaf_size_values is None:
         leaf_size_values = (1, 2, 4, 8) if quick else (1, 2, 4, 8)
     if n_comm_values is None:
@@ -1110,11 +1100,7 @@ def build_cases(
     ls_theta_grid: list[tuple[int, float]] = (
         [(4, 1.0), (4, 2.0), (8, 1.0), (8, 2.0)]
         if quick
-        else [
-            (ls, th)
-            for ls in (4, 8)
-            for th in (0.7, 1.0, 1.5, 2.0)
-        ]
+        else [(ls, th) for ls in (4, 8) for th in (0.7, 1.0, 1.5, 2.0)]
     )
     for ls, th in ls_theta_grid:
         cases.append(
@@ -1443,9 +1429,7 @@ def print_sweep_table(
             baseline_ms = sp.total_ms
             break
 
-    header_parts = [
-        f"  {'Config':<30} {'Forward':>10} {'Backward':>10} {'Total':>10}"
-    ]
+    header_parts = [f"  {'Config':<30} {'Forward':>10} {'Backward':>10} {'Total':>10}"]
     header_parts.append(f" {'Alloc':>6} {'Rsvd':>6}")
     header_parts.append(f" {'Near':>10} {'Far':>8} {'Compress':>8}")
     if show_tree:
@@ -1486,9 +1470,7 @@ def print_sweep_table(
             f" {sp.n_near:>10,} {n_far_total:>8,} {sp.compression_ratio:>7.1f}x",
         ]
         if show_tree:
-            parts.append(
-                f" {sp.tree_depth:>5} {sp.tree_nodes:>6} {sp.tree_leaves:>6}"
-            )
+            parts.append(f" {sp.tree_depth:>5} {sp.tree_nodes:>6} {sp.tree_leaves:>6}")
         parts.append(f" {spd:>7}")
         print("".join(parts))
 
@@ -1662,18 +1644,14 @@ def generate_recommendations(
             )
         oom_labels = {sp.label for sp in pts if sp.oom}
         if "grad_ckpt=off" in oom_labels and "grad_ckpt=on" not in oom_labels:
-            recs.append(
-                "GRADIENT CHECKPOINTING: Required to avoid OOM. Keep enabled."
-            )
+            recs.append("GRADIENT CHECKPOINTING: Required to avoid OOM. Keep enabled.")
 
     ### torch.compile
     if "torch_compile" in sweep_groups:
         pts = sweep_groups["torch_compile"]
         non_oom = [sp for sp in pts if not sp.oom and sp.total_ms > 0]
         if len(non_oom) >= 2:
-            uncompiled = next(
-                (sp for sp in non_oom if sp.label == "uncompiled"), None
-            )
+            uncompiled = next((sp for sp in non_oom if sp.label == "uncompiled"), None)
             if uncompiled:
                 for sp in non_oom:
                     if sp is not uncompiled and sp.total_ms > 0:
@@ -2052,15 +2030,12 @@ def main(
                     continue
                 pts = sweep_groups[sweep_name]
                 print(f"\n  --- {sweep_name} ---")
-                print_sweep_table(
-                    pts, sweep_name, show_tree=sweep_name in SHOW_TREE
-                )
+                print_sweep_table(pts, sweep_name, show_tree=sweep_name in SHOW_TREE)
                 if sweep_name in SHOW_SCALE:
                     print_scale_analysis(pts, sweep_name)
 
             all_results.sweeps = {
-                name: [asdict(sp) for sp in pts]
-                for name, pts in sweep_groups.items()
+                name: [asdict(sp) for sp in pts] for name, pts in sweep_groups.items()
             }
 
     # ── Summary and recommendations ────────────────────────────────────

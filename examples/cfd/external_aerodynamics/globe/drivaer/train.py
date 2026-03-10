@@ -317,7 +317,8 @@ def main(
         device=dist.device,
     )
     logger0.info(
-        f"Resuming training from epoch {epoch}" if epoch > 0
+        f"Resuming training from epoch {epoch}"
+        if epoch > 0
         else "Starting training from scratch."
     )
     best_loss = metadata_dict.get("best_loss", float("inf"))
