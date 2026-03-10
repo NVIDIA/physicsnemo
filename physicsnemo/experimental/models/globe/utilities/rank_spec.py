@@ -38,12 +38,12 @@ For *runtime* grouping of actual tensor data by observed rank, see
 """
 
 from collections import Counter
-from typing import TypeAlias
+from typing import TypeAlias, Union
 
 from tensordict import TensorDict
 
 ### Type definition
-RankSpecDict: TypeAlias = "dict[str, int | RankSpecDict]"
+RankSpecDict: TypeAlias = dict[str, Union[int, "RankSpecDict"]]
 
 
 def flatten_rank_spec(
