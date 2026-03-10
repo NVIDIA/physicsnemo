@@ -380,6 +380,10 @@ def test_model_types(
         cfg_diffusion.model.diffusion_conditions = ["background", "invariant"]
     elif model_type == "unconditional":
         cfg_diffusion.model.diffusion_conditions = ["invariant"]
+    else:
+        raise ValueError(
+            "Model_type must be one of ['hybrid', 'nowcasting', 'downscaling', 'unconditional']."
+        )
 
     unsupported_scalar_conds = (
         num_scalar_cond_channels > 0 and net_architecture != "dit"
