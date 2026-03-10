@@ -43,6 +43,8 @@ from typing import TypeAlias, Union
 from tensordict import TensorDict
 
 ### Type definition
+# TODO: replace with `type RankSpecDict = dict[str, int | RankSpecDict]`
+# once Python 3.11 support is dropped (PEP 695).
 RankSpecDict: TypeAlias = dict[str, Union[int, "RankSpecDict"]]
 
 
