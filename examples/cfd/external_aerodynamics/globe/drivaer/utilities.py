@@ -28,6 +28,7 @@ import numpy as np
 import torch
 import yaml
 from mlflow.tracking.fluent import active_run, log_params
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 from physicsnemo.utils.logging import PythonLogger
 
@@ -48,6 +49,16 @@ def disable_autotune_printing() -> None:
 
 
 ### [MLflow helpers] ######################################################
+
+
+resilient = retry(
+    stop=stop_after_attempt(2),
+    wait=wait_fixed(2),
+    retry_error_callback=lambda rs: logger.warning(
+        f"{rs.fn.__name__}() failed after "
+        f"{rs.attempt_number} attempts, skipping."
+    ),
+)
 
 
 def sanitize_metric_name(name: str) -> str:

@@ -49,6 +49,7 @@ from tqdm import tqdm
 from utilities import (
     disable_autotune_printing,
     log_hyperparameters,
+    resilient,
     sanitize_metric_name,
 )
 
@@ -64,6 +65,12 @@ disable_autotune_printing()
 
 Split = Literal["train", "validation"]
 splits: list[Split] = ["train", "validation"]
+
+# MLflow's system-metrics monitor thread can collide with the main thread
+# when both write to SQLite on Lustre, causing "database is locked" errors.
+# Wrapping with retry ensures transient failures never kill training.
+log_artifact = resilient(log_artifact)
+log_metrics = resilient(log_metrics)
 
 
 def main(
