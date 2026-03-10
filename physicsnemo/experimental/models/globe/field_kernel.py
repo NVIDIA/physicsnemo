@@ -29,8 +29,6 @@ from torch.profiler import record_function
 from torch.utils.checkpoint import checkpoint
 
 from physicsnemo.core.module import Module
-
-logger = logging.getLogger("globe.field_kernel")
 from physicsnemo.experimental.models.globe.utilities.rank_spec import (
     RankSpecDict,
     flatten_rank_spec,
@@ -48,6 +46,9 @@ from physicsnemo.nn.functional.equivariant_ops import (
     smooth_log,
     spherical_basis,
 )
+
+logger = logging.getLogger("globe.field_kernel")
+
 
 class Kernel(Module):
     r"""A kernel function for evaluating scalar and vector fields from source points.

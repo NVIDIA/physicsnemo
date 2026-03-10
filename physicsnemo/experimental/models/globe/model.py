@@ -33,6 +33,7 @@ from physicsnemo.experimental.models.globe.utilities.rank_spec import (
     flatten_rank_spec,
 )
 from physicsnemo.mesh import Mesh
+from physicsnemo.utils.logging import PythonLogger
 
 # allow_in_graph wraps these TensorDict methods as opaque graph nodes so that
 # torch.compile doesn't trace into them (their internals cause graph breaks).
@@ -44,7 +45,6 @@ from physicsnemo.mesh import Mesh
 # these wrappers.
 _flatten_keys = torch.compiler.allow_in_graph(TensorDict.flatten_keys)
 _unflatten_keys = torch.compiler.allow_in_graph(TensorDict.unflatten_keys)
-from physicsnemo.utils.logging import PythonLogger
 
 logger = PythonLogger("globe.model")
 
