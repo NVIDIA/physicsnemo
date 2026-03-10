@@ -65,7 +65,7 @@ provides built-in composable modules that are packaged into a few key components
 <!-- markdownlint-disable -->
 Component | Description |
 ---- | --- |
-[**physicsnemo.models**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.models.html) | A collection of optimized, customizable, and easy-to-use families of model architectures such as Neural Operators, Graph Neural Networks, Diffusion models, Transformer models, and many more|
+[**physicsnemo.models**](https://docs.nvidia.com/physicsnemo/latest/user-guide/model_architectures.html) ( [More Details](https://docs.nvidia.com/physicsnemo/latest/physicsnemo/api_models.html)) | A collection of optimized, customizable, and easy-to-use families of model architectures such as Neural Operators, Graph Neural Networks, Diffusion models, Transformer models, and many more|
 [**physicsnemo.datapipes**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.datapipes.html) | Optimized and scalable built-in data pipelines fine-tuned to handle engineering and scientific data structures like point clouds, meshes, etc.|
 [**physicsnemo.distributed**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.distributed.html) | A distributed computing sub-module built on top of `torch.distributed` to enable parallel training with just a few steps|
 [**physicsnemo.curator**](https://github.com/NVIDIA/physicsnemo-curator) | A sub-module to streamline and accelerate the process of data curation for engineering datasets|
@@ -119,7 +119,7 @@ PhysicsNeMo offers a library of state-of-the-art models specifically designed
 for Physics-ML applications. Users can build any model architecture by using the underlying
 PyTorch layers and combining them with curated PhysicsNeMo layers.
 
-The [Model Zoo](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.models.html#model-zoo)
+The [Model Zoo](https://docs.nvidia.com/physicsnemo/latest/user-guide/model_architectures.html)
 includes optimized implementations of families of model architectures such as
 Neural Operators:
 

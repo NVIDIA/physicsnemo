@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from contextlib import nullcontext
 import os
 from pathlib import Path
 from typing import Literal
@@ -30,13 +31,6 @@ from torch.distributed.fsdp import (
     ShardedOptimStateDictConfig,
 )
 from torch.distributed.tensor import DTensor
-
-try:
-    from optimi import StableAdamW
-
-    IS_OPTIMI_AVAILABLE = True
-except ImportError:
-    IS_OPTIMI_AVAILABLE = False
 
 from physicsnemo.distributed import DistributedManager
 
@@ -94,9 +88,6 @@ def _setup_rundir(tmp_path, num_procs):
 @pytest.mark.parametrize("fp_optimizations", ["fp32", "amp-bf16"])
 # @pytest.mark.parametrize("torch_compile", [True, False])
 @pytest.mark.parametrize("torch_compile", [False])
-@pytest.mark.parametrize(
-    "optimizer", ["adamw", "stableadamw"]
-)  # deliberately skipping adam to reduce combinations
 @pytest.mark.parametrize("scheduler", [None, "CosineAnnealingLR"])
 @pytest.mark.parametrize("sigma_distribution", ["lognormal", "loguniform"])
 def test_training(
@@ -112,7 +103,6 @@ def test_training(
     force_sharding: bool,
     fp_optimizations: Literal["fp32", "amp-fp16", "amp-bf16"],
     torch_compile: bool,
-    optimizer: Literal["adam", "adamw", "stableadamw"],
     scheduler: str | None,
     sigma_distribution: Literal["lognormal", "loguniform"],
 ):
@@ -134,14 +124,6 @@ def test_training(
         pytest.skip(
             "Skipping: torch.compile is not supported with ShardTensor for now."
         )
-    if (not IS_OPTIMI_AVAILABLE) and (optimizer == "stableadamw"):
-        pytest.skip(
-            "Skipping: StableAdamW optimizer is not available because optimi is not installed."
-        )
-    if sharding and (optimizer == "stableadamw"):
-        pytest.skip(
-            "Skipping: StableAdamW optimizer is not supported with ShardTensor for now."
-        )
 
     # Set up rundir in the temporary directory
     rundir = _setup_rundir(tmp_path, dist.world_size)
@@ -159,7 +141,6 @@ def test_training(
         cfg.training.force_sharding = force_sharding
         cfg.training.perf.fp_optimizations = fp_optimizations
         cfg.training.perf.torch_compile = torch_compile
-        cfg.training.optimizer.name = optimizer
         cfg.training.scheduler.name = scheduler
         cfg.training.rundir = rundir
     cfg_diffusion.training.loss.sigma_distribution = sigma_distribution
@@ -356,3 +337,66 @@ def test_checkpoint_integrity(
                         )
 
         torch.distributed.barrier()
+
+
+@pytest.mark.parametrize("net_architecture", ["unet", "dit"])
+@pytest.mark.parametrize(
+    "model_type", ["hybrid", "nowcasting", "downscaling", "unconditional"]
+)
+@pytest.mark.parametrize("num_scalar_cond_channels", [0, 2])
+def test_model_types(
+    tmp_path: Path,
+    cfg_diffusion: DictConfig,
+    cfg_diffusion_unet: DictConfig,
+    *,
+    net_architecture: Literal["unet", "dit"],
+    model_type: Literal["hybrid", "nowcasting", "downscaling", "unconditional"],
+    num_scalar_cond_channels: int,
+):
+    """Test that training runs with different model configurations."""
+    dist = DistributedManager()
+
+    if dist.world_size > 1:
+        pytest.skip("Skipping: `test_model_types` is only run with 1 process.")
+
+    # Set up rundir in the temporary directory
+    rundir = _setup_rundir(tmp_path, dist.world_size)
+
+    cfg_diffusion = (
+        cfg_diffusion if net_architecture == "dit" else cfg_diffusion_unet
+    ).copy()
+
+    # override params from config
+    cfg_diffusion.model.architecture = net_architecture
+    cfg_diffusion.training.rundir = rundir
+    cfg_diffusion.dataset.model_type = model_type
+    cfg_diffusion.dataset.num_scalar_cond_channels = num_scalar_cond_channels
+
+    if model_type == "hybrid":
+        cfg_diffusion.model.diffusion_conditions = ["state", "background", "invariant"]
+    elif model_type == "nowcasting":
+        cfg_diffusion.model.diffusion_conditions = ["state", "invariant"]
+    elif model_type == "downscaling":
+        cfg_diffusion.model.diffusion_conditions = ["background", "invariant"]
+    elif model_type == "unconditional":
+        cfg_diffusion.model.diffusion_conditions = ["invariant"]
+    else:
+        raise ValueError(
+            "Model_type must be one of ['hybrid', 'nowcasting', 'downscaling', 'unconditional']."
+        )
+
+    unsupported_scalar_conds = (
+        num_scalar_cond_channels > 0 and net_architecture != "dit"
+    )
+    context = pytest.raises(ValueError) if unsupported_scalar_conds else nullcontext()
+    with context:
+        train.main(cfg_diffusion)
+
+        if dist.world_size > 1:
+            torch.distributed.barrier()
+
+        net_cls = "EDMPrecond" if net_architecture == "unet" else "EDMPreconditioner"
+        ckpt_path = os.path.join(
+            rundir, "checkpoints_diffusion", f"{net_cls}.0.10.mdlus"
+        )
+        assert os.path.isfile(ckpt_path), "Diffusion checkpoint not found"

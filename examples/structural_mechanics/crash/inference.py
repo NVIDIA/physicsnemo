@@ -232,6 +232,7 @@ class InferenceWorker:
             num_samples=1,
             logger=self.logger,
             data_dir=run_path,
+            sample_type="all_time_steps",  # always all_time_steps for inference
         )
 
         # Data stats for de/normalization
@@ -359,6 +360,8 @@ def main(cfg: DictConfig):
         return
 
     logger0.info(f"Found {len(run_items)} runs under {parent_dir}")
+    stats_dir = getattr(cfg.datapipe, "stats_dir")
+    logger0.info(f"Stats directory: {stats_dir}")
 
     # Shard run list across ranks: rank r processes run_items[r::world_size]
     my_items = run_items[dist.rank :: dist.world_size]

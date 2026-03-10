@@ -27,6 +27,9 @@ max_workers_preprocessing: 64   # Maximum parallel workers
 # │                 Training                  │
 # └───────────────────────────────────────────┘
 
+optimizer: adam                 # adam or muon (muon requires PyTorch >= 2.9)
+optimizer_weight_decay: 0.0001  # used when optimizer=muon (AdamW weight_decay for non-Muon params)
+
 num_time_steps: ???             # Required: set via experiment config
 num_training_samples: ???       # Required: set via experiment config
 num_validation_samples: 0       # 0 disables validation; override per experiment

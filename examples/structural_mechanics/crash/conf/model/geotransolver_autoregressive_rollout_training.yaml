@@ -14,15 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: rollout.MeshGraphNetAutoregressiveRolloutTraining
+_target_: rollout.GeoTransolverAutoregressiveRolloutTraining
 _convert_: all
 
-input_dim_nodes: 7                 # pos(3) + vel(3) + thickness(1)
-input_dim_edges: 4                 # dx, dy, dz, distance
-output_dim: 3                      # next step position
-do_concat_trick: true              # Reduced memory overhead
-num_processor_checkpoint_segments: 3
+functional_dim: 4   # vel_norm (3) + features; override in experiment if using global_features
+out_dim: 3          # acceleration per step
+geometry_dim: 3
+global_dim: 3       # override in experiment if no global features (e.g. global_dim: null)
+slice_num: 128
+n_layers: 6
+use_te: false
+time_input: false
+include_local_features: true
+
 ### Rollout parameters ###
 num_time_steps: ${training.num_time_steps}
 dt: 5e-3
-initial_vel: 9.22
+initial_vel: 9.22   # override in experiment for dataset-specific impact velocity

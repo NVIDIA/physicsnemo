@@ -14,54 +14,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Utilities for multi-diffusion (patching and fusion)."""
 
 import math
 import random
 import warnings
 from abc import ABC, abstractmethod
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import torch
 from einops import rearrange
+from jaxtyping import Float, Int
 from torch import Tensor
 
-"""
-This module defines utilities, including classes and functions, for domain
-decomposition.
-"""
 
+class BasePatching2D(torch.nn.Module, ABC):
+    r"""Abstract base class for 2D image patching operations.
 
-class BasePatching2D(ABC):
-    """
-    Abstract base class for 2D image patching operations.
-
-    This class provides a foundation for implementing various image patching
-    strategies.
-    It handles basic parameter validation and provides default methods for
-    patching and fusing.
-
-    It is designed to be extensible to support different patching strategies.
-    Any new patching strategy for 2D images should inherit from this class and
-    implement the abstract methods.
+    Provides the common interface and validation logic for patching
+    strategies that decompose a batch of 2D images into smaller spatial
+    tiles (patches). Concrete subclasses must implement
+    :meth:`forward` to define the actual patching logic.
 
     Parameters
     ----------
     img_shape : Tuple[int, int]
-        The height and width of the full input images :math:`(H, W)`.
+        Height and width of the full input images :math:`(H, W)`.
     patch_shape : Tuple[int, int]
-        The height and width of the patches to extract :math:`(H_p, W_p)`.
+        Height and width of the patches to extract :math:`(H_p, W_p)`.
     """
 
     def __init__(
         self, img_shape: Tuple[int, int], patch_shape: Tuple[int, int]
     ) -> None:
-        # Check that img_shape and patch_shape are 2D
+        super().__init__()
         if len(img_shape) != 2:
             raise ValueError(f"img_shape must be 2D, got {len(img_shape)}D")
         if len(patch_shape) != 2:
             raise ValueError(f"patch_shape must be 2D, got {len(patch_shape)}D")
 
-        # Make sure patches fit within the image
         if any(p > i for p, i in zip(patch_shape, img_shape)):
             warnings.warn(
                 f"Patch shape {patch_shape} is larger than "
@@ -71,41 +62,55 @@ class BasePatching2D(ABC):
         self.img_shape = img_shape
         self.patch_shape = tuple(min(p, i) for p, i in zip(patch_shape, img_shape))
 
+    def forward(
+        self, input: Float[Tensor, "B C H W"], **kwargs
+    ) -> Float[Tensor, "P_times_B C Hp Wp"]:
+        r"""Forward pass. Delegates to :meth:`apply` by default."""
+        return self.apply(input, **kwargs)
+
     @abstractmethod
-    def apply(self, input: Tensor, **kwargs) -> Tensor:
-        """
-        Apply the patching operation to a batch of full images.
+    def apply(
+        self,
+        input: Float[Tensor, "B C H W"],
+        *args,
+        **kwargs,
+    ) -> Float[Tensor, "P_times_B C Hp Wp"]:
+        r"""Apply the patching operation to a batch of full images.
+
+        Subclasses **must** override this method.
 
         Parameters
         ----------
         input : Tensor
-            Batch of full input images of shape :math:`(B, C, H, W)`.
+            Batch of full images of shape :math:`(B, C, H, W)`.
+        *args : tuple
+            Additional positional arguments.
         **kwargs : dict
-            Additional keyword arguments specific to the patching
-            implementation.
+            Additional keyword arguments.
 
         Returns
         -------
         Tensor
-            Patched tensor, shape depends on specific implementation.
+            Patched tensor of shape :math:`(P \times B, C, H_p, W_p)`.
         """
         pass
 
-    def fuse(self, input: Tensor, **kwargs) -> Tensor:
-        """
-        Fuse patches back into a complete image.
+    def fuse(
+        self, input: Float[Tensor, "P_times_B C Hp Wp"], **kwargs
+    ) -> Float[Tensor, "B C H W"]:
+        r"""Fuse patches back into a complete image.
 
         Parameters
         ----------
         input : Tensor
-            Input tensor containing patches. Shape depends on specific implementation.
+            Patched tensor. Shape depends on the subclass.
         **kwargs : dict
-            Additional keyword arguments specific to the fusion implementation.
+            Additional keyword arguments specific to the subclass.
 
         Returns
         -------
         Tensor
-            Fused tensor. Shape depends on specific implementation.
+            Fused image tensor.
 
         Raises
         ------
@@ -115,69 +120,98 @@ class BasePatching2D(ABC):
         raise NotImplementedError("'fuse' method must be implemented in subclasses.")
 
     def global_index(
-        self, batch_size: int, device: Union[torch.device, str] = "cpu"
-    ) -> Tensor:
-        """
-        Returns a tensor containing the global indices for each patch.
+        self, batch_size: int = 1, device: Union[torch.device, str] = "cpu"
+    ) -> Int[Tensor, "P 2 Hp Wp"]:
+        r"""Return the global :math:`(y, x)` grid coordinates for each patch.
 
-        Global indices correspond to :math:`(y, x)` global grid coordinates of each
-        element within the original image (before patching). It is typically
-        used to keep track of the original position of each patch in the
-        original image.
+        Returns a **new tensor** (clone) each time, so the caller owns the
+        result and it will not be mutated by subsequent calls to
+        :meth:`~RandomPatching2D.reset_patch_indices`. For zero-copy access
+        to the underlying buffer, use ``self._global_index`` directly.
 
         Parameters
         ----------
-        batch_size : int
-            The size :math:`B` of the batch of images to patch.
+        batch_size : int, default=1
+            Kept for backward compatibility. Ignored.
         device : Union[torch.device, str], default="cpu"
-            Proper device to initialize ``global_index`` on.
+            Kept for backward compatibility. The buffer follows the module
+            device (use ``.to(device)`` to move the module).
 
         Returns
         -------
         Tensor
-            A tensor of shape :math:`(P, 2, H_p, W_p)`, where :math:`P` is the
-            number of patches to extract (corresponds to ``self.patch_num`` for
-            classes that implement this attribute).
-            The y-coordinate is stored in ``global_index[:, 0, :, :]`` and the
-            x-coordinate is stored in ``global_index[:, 1, :, :]``.
+            Integer tensor of shape :math:`(P, 2, H_p, W_p)`.
+            Channel 0 holds y-coordinates, channel 1 holds x-coordinates.
         """
-        Ny = torch.arange(self.img_shape[0], device=device).int()
-        Nx = torch.arange(self.img_shape[1], device=device).int()
-        grid = torch.stack(torch.meshgrid(Ny, Nx, indexing="ij"), dim=0).unsqueeze(0)
-        global_index = self.apply(grid).long()
-        return global_index
+        if hasattr(self, "_global_index") and self._global_index is not None:
+            return self._global_index.clone()
+        return self._compute_global_index()
+
+    def _compute_global_index(self) -> Int[Tensor, "P 2 Hp Wp"]:
+        r"""Compute the global-index tensor from current patch positions.
+
+        Returns
+        -------
+        Tensor
+            Integer tensor of shape :math:`(P, 2, H_p, W_p)`.
+        """
+        Ny = torch.arange(self.img_shape[0]).int()
+        Nx = torch.arange(self.img_shape[1]).int()
+        grid = torch.stack(torch.meshgrid(Ny, Nx, indexing="ij"), dim=0).unsqueeze(
+            0
+        )  # (1, 2, H, W)
+        return self(grid).long()
 
 
 class RandomPatching2D(BasePatching2D):
-    """
-    Class for randomly extracting patches from 2D images.
+    r"""Randomly extract patches from 2D images.
 
-    This class provides utilities to randomly extract patches from a batch of full
-    images represented as 4D tensors. It maintains a list of random patch indices
-    that can be reset as needed.
+    Maintains a set of :math:`P` random upper-left corner positions and
+    extracts the corresponding patches from every batch element.  Positions
+    are drawn at construction time and can be refreshed by calling
+    :meth:`reset_patch_indices`.
 
     Parameters
     ----------
     img_shape : Tuple[int, int]
-        The height and width :math:`(H, W)` of the full input images.
+        Height and width :math:`(H, W)` of the full input images.
     patch_shape : Tuple[int, int]
-        The height and width :math:`(H_p, W_p)` of the patches to extract.
+        Height and width :math:`(H_p, W_p)` of the patches to extract.
     patch_num : int
-        The number of patches :math:`P` to extract.
+        Number of patches :math:`P` to extract per image.
 
     Attributes
     ----------
-    patch_indices : List[Tuple[int, int]]
-        The indices of the patches to extract from the images. These indices
-        correspond to the :math:`(y, x)` coordinates of the upper left corner of
-        each patch.
+    patch_indices : Tensor
+        Buffer of shape :math:`(P, 2)` with the :math:`(y, x)` upper-left
+        corner of each patch.
 
     See Also
     --------
-    :class:`physicsnemo.diffusion.multi_diffusion.BasePatching2D`
-        The base class providing the patching interface.
-    :class:`physicsnemo.diffusion.multi_diffusion.GridPatching2D`
-        Alternative patching strategy using deterministic patch locations.
+    :class:`~physicsnemo.diffusion.multi_diffusion.GridPatching2D` :
+        Deterministic grid-based patching strategy.
+
+    Examples
+    --------
+    Extract patches, re-draw random positions, then extract again:
+
+    >>> import torch
+    >>> from physicsnemo.diffusion.multi_diffusion import RandomPatching2D
+    >>> rp = RandomPatching2D(img_shape=(16, 16), patch_shape=(8, 8), patch_num=6)
+    >>> x = torch.randn(2, 3, 16, 16)
+    >>> # First extraction: 6 patches per sample, batch of 2
+    >>> rp.apply(x).shape
+    torch.Size([12, 3, 8, 8])
+    >>> # Re-draw random positions (e.g. between training steps)
+    >>> rp.reset_patch_indices()
+    >>> rp.apply(x).shape
+    torch.Size([12, 3, 8, 8])
+
+    Retrieve the global (y, x) coordinates for each patch:
+
+    >>> gi = rp.global_index()
+    >>> gi.shape  # (P, 2, Hp, Wp) — channel 0 = y, channel 1 = x
+    torch.Size([6, 2, 8, 8])
     """
 
     def __init__(
@@ -185,175 +219,182 @@ class RandomPatching2D(BasePatching2D):
     ) -> None:
         super().__init__(img_shape, patch_shape)
         self._patch_num = patch_num
-        # Generate the indices of the patches to extract
         self.reset_patch_indices()
 
     @property
     def patch_num(self) -> int:
-        """
-        Get the number of patches to extract.
-
-        Returns
-        -------
-        int
-            The number of patches :math:`P` to extract.
-        """
+        r"""Number of patches :math:`P` to extract."""
         return self._patch_num
 
     def set_patch_num(self, value: int) -> None:
-        """
-        Set the number of patches to extract and reset patch indices.
-        This is the only way to modify the ``patch_num`` attribute.
+        r"""Set the number of patches and re-draw positions.
 
         Parameters
         ----------
         value : int
-            The new number of patches :math:`P` to extract.
+            New number of patches :math:`P`.
         """
         self._patch_num = value
         self.reset_patch_indices()
 
     def reset_patch_indices(self) -> None:
-        """
-        Generate new random indices for the patches to extract. These are the
-        starting indices of the patches to extract (upper left corner).
-        """
-        self.patch_indices = [
-            (
-                random.randint(0, self.img_shape[0] - self.patch_shape[0]),
-                random.randint(0, self.img_shape[1] - self.patch_shape[1]),
-            )
-            for _ in range(self.patch_num)
-        ]
-        return
+        r"""Re-draw random upper-left corner positions for all patches.
 
-    def get_patch_indices(self) -> List[Tuple[int, int]]:
+        Also refreshes the cached ``_global_index`` buffer.
         """
-        Get the current list of patch starting indices.
+        has_buffer = hasattr(self, "patch_indices") and isinstance(
+            self.patch_indices, Tensor
+        )
+        device = self.patch_indices.device if has_buffer else None
 
-        These are the upper-left coordinates of each extracted patch
-        from the full image.
+        max_y = self.img_shape[0] - self.patch_shape[0]
+        max_x = self.img_shape[1] - self.patch_shape[1]
+        # TODO: use torch.randint instead of random.randint to create
+        # patch indices directly on right device. Note: this will break
+        # non-regression tests because torch.randint and random.randint do not
+        # use the same random number generation process. But for an object taht
+        # is deliberately designed to be random, breaking these non-regression
+        # tests might not be a problem.
+        new_indices = torch.tensor(
+            [
+                (random.randint(0, max_y), random.randint(0, max_x))
+                for _ in range(self.patch_num)
+            ],
+            dtype=torch.long,
+            device=device,
+        )
 
-        Returns
-        -------
-        List[Tuple[int, int]]
-            A list of (row, column) tuples representing patch starting positions.
-        """
-        return self.patch_indices
+        if has_buffer and new_indices.shape == self.patch_indices.shape:
+            self.patch_indices.copy_(new_indices)
+        else:
+            self.register_buffer("patch_indices", new_indices, persistent=False)
+
+        # Refresh cached global index
+        new_global_index = self._compute_global_index()
+        if (
+            hasattr(self, "_global_index")
+            and isinstance(self._global_index, Tensor)
+            and new_global_index.shape == self._global_index.shape
+        ):
+            self._global_index.copy_(new_global_index)
+        else:
+            self.register_buffer("_global_index", new_global_index, persistent=False)
+
+    def forward(
+        self,
+        input: Float[Tensor, "B C H W"],
+        additional_input: Optional[Float[Tensor, "B C_add H_add W_add"]] = None,
+    ) -> Float[Tensor, "P_times_B C_out Hp Wp"]:
+        r"""Extract random patches from the input tensor."""
+        B = input.shape[0]
+        Hp, Wp = self.patch_shape
+        P = self.patch_num
+
+        # Unfold creates a view of all stride-1 patches (no copy)
+        patches = input.unfold(2, Hp, 1).unfold(3, Wp, 1)
+        # patches: (B, C, H-Hp+1, W-Wp+1, Hp, Wp)
+
+        # Gather the P patches at stored random positions
+        py = self.patch_indices[:, 0]  # (P,)
+        px = self.patch_indices[:, 1]  # (P,)
+        gathered = patches[:, :, py, px]  # (B, C, P, Hp, Wp)
+
+        # Reorder to patch-major layout
+        out = gathered.permute(2, 0, 1, 3, 4).reshape(
+            P * B, -1, Hp, Wp
+        )  # (P*B, C, Hp, Wp)
+
+        if input.is_contiguous(memory_format=torch.channels_last):
+            out = out.to(memory_format=torch.channels_last)
+
+        if additional_input is not None:
+            add_input_interp = torch.nn.functional.interpolate(
+                input=additional_input, size=self.patch_shape, mode="bilinear"
+            )  # (B, C_add, Hp, Wp)
+            out = torch.cat(
+                (out, add_input_interp.repeat(P, 1, 1, 1)), dim=1
+            )  # (P*B, C+C_add, Hp, Wp)
+
+        return out
 
     def apply(
         self,
-        input: Tensor,
-        additional_input: Optional[Tensor] = None,
-    ) -> Tensor:
-        r"""
-        Applies the patching operation by extracting patches specified by
-        ``self.patch_indices`` from the ``input`` Tensor. Extracted patches are
-        batched along the first dimension of the output. The layout of the
-        output assumes that for any patch index ``i``, ``out[B * i: B * (i + 1)]``
-        corresponds to the *same patch* extracted from each batch element of
-        ``input``.
+        input: Float[Tensor, "B C H W"],
+        additional_input: Optional[Float[Tensor, "B C_add H_add W_add"]] = None,
+    ) -> Float[Tensor, "P_times_B C_out Hp Wp"]:
+        r"""Extract random patches.
 
         Parameters
         ----------
         input : Tensor
-            The input tensor representing the full image with shape :math:`(B, C, H, W)`.
-        additional_input : Optional[Tensor], optional
-            Its shape should be :math:`(B, C_{add}, H_{add}, W_{add})`.
-            Must have same batch size as ``input``. Bilinear interpolation is
-            used to interpolate ``additional_input`` onto a 2D grid of shape
-            :math:`(H_p, W_p)`. It is then channel-wise concatenated to the
-            extracted patches.
-            *Note: ``additional_input`` is not patched or decomposed.*
+            Full images of shape :math:`(B, C, H, W)`.
+        additional_input : Tensor, optional
+            Interpolated to :math:`(H_p, W_p)` and concatenated
+            channel-wise to each patch. Should have shape :math:`(B, C_add,
+            H_add, W_add)`.
 
         Returns
         -------
         Tensor
-            A tensor of shape :math:`(P \times B, C [+ C_{add}], H_p, W_p)`.
-            If ``additional_input`` is provided, it is channel-wise concatenated
-            to the extracted patches.
+            Shape :math:`(P \times B, C [+ C_{add}], H_p, W_p)`.
 
-        See Also
-        --------
-        :func:`physicsnemo.diffusion.multi_diffusion.image_batching`
-            The underlying function used to perform the patching operation.
         """
-        B = input.shape[0]
-        out = torch.zeros(
-            B * self.patch_num,
-            (
-                input.shape[1]
-                + (additional_input.shape[1] if additional_input is not None else 0)
-            ),
-            self.patch_shape[0],
-            self.patch_shape[1],
-            device=input.device,
-        )
-        out = out.to(
-            memory_format=torch.channels_last
-            if input.is_contiguous(memory_format=torch.channels_last)
-            else torch.contiguous_format
-        )
-        if additional_input is not None:
-            add_input_interp = torch.nn.functional.interpolate(
-                input=additional_input, size=self.patch_shape, mode="bilinear"
-            )
-
-        for i, (py, px) in enumerate(self.patch_indices):
-            if additional_input is not None:
-                out[B * i : B * (i + 1),] = torch.cat(
-                    (
-                        input[
-                            :,
-                            :,
-                            py : py + self.patch_shape[0],
-                            px : px + self.patch_shape[1],
-                        ],
-                        add_input_interp,
-                    ),
-                    dim=1,
-                )
-            else:
-                out[B * i : B * (i + 1),] = input[
-                    :,
-                    :,
-                    py : py + self.patch_shape[0],
-                    px : px + self.patch_shape[1],
-                ]
-        return out
+        if isinstance(input, Tensor):
+            return self(input, additional_input=additional_input)
+        return super().apply(input)
 
 
 class GridPatching2D(BasePatching2D):
-    """
-    Class for deterministically extracting patches from 2D images in a grid pattern.
+    r"""Deterministically extract patches from 2D images in a grid pattern.
 
-    This class provides utilities to extract patches from images in a
-    deterministic manner, with configurable overlap and boundary pixels.
-    The patches are extracted in a grid-like pattern covering the entire image.
+    Tiles the image with a regular grid of :math:`P = P_y \times P_x`
+    patches, with configurable overlap and boundary padding. Supports
+    reconstructing the full image from patches via :meth:`fuse`.
 
     Parameters
     ----------
     img_shape : Tuple[int, int]
-        The height and width of the full input images :math:`(H, W)`.
+        Height and width of the full input images :math:`(H, W)`.
     patch_shape : Tuple[int, int]
-        The height and width of the patches to extract :math:`(H_p, W_p)`.
+        Height and width of the patches to extract :math:`(H_p, W_p)`.
     overlap_pix : int, optional, default=0
-        Number of pixels to overlap between adjacent patches.
+        Number of overlapping pixels between adjacent patches.
     boundary_pix : int, optional, default=0
-        Number of pixels to crop as boundary from each patch.
+        Number of boundary pixels to pad on each side.
 
     Attributes
     ----------
     patch_num : int
-        Total number of patches :math:`P` that will be extracted from the image,
-        calculated as :math:`P = P_x * P_y`.
+        Total number of patches :math:`P = P_y \times P_x`.
 
     See Also
     --------
-    :class:`physicsnemo.diffusion.multi_diffusion.BasePatching2D`
-        The base class providing the patching interface.
-    :class:`physicsnemo.diffusion.multi_diffusion.RandomPatching2D`
-        Alternative patching strategy using random patch locations.
+    :class:`~physicsnemo.diffusion.multi_diffusion.RandomPatching2D` :
+        Random patching strategy.
+
+    Examples
+    --------
+    Patch an image and fuse it back (roundtrip):
+
+    >>> import torch
+    >>> from physicsnemo.diffusion.multi_diffusion import GridPatching2D
+    >>> gp = GridPatching2D(img_shape=(16, 16), patch_shape=(8, 8))
+    >>> x = torch.randn(2, 3, 16, 16)
+    >>> patches = gp.apply(x)
+    >>> patches.shape  # (P*B, C, Hp, Wp)
+    torch.Size([8, 3, 8, 8])
+    >>> # Fuse is the inverse of apply
+    >>> reconstructed = gp.fuse(patches, batch_size=2)
+    >>> reconstructed.shape
+    torch.Size([2, 3, 16, 16])
+    >>> torch.allclose(x, reconstructed)
+    True
+
+    Retrieve the global (y, x) coordinates for each patch:
+
+    >>> gi = gp.global_index()
+    >>> gi.shape  # (P, 2, Hp, Wp)
+    torch.Size([4, 2, 8, 8])
     """
 
     def __init__(
@@ -374,54 +415,30 @@ class GridPatching2D(BasePatching2D):
         )
 
         self.patch_num = patch_num_x * patch_num_y
-        self._overlap_count = self.get_overlap_count(
-            self.patch_shape, self.img_shape, self.overlap_pix, self.boundary_pix
+        self.register_buffer(
+            "_overlap_count",
+            self.get_overlap_count(
+                self.patch_shape, self.img_shape, self.overlap_pix, self.boundary_pix
+            ),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_global_index", self._compute_global_index(), persistent=False
         )
 
-    def apply(
+    def forward(
         self,
-        input: Tensor,
-        additional_input: Optional[Tensor] = None,
-    ) -> Tensor:
-        r"""
-        Apply deterministic patching to the input tensor.
-
-        Splits the input tensor into patches in a grid-like pattern. Can
-        optionally concatenate additional interpolated data to each patch.
-        Extracted patches are batched along the first dimension of the output.
-        The layout of the output assumes that for any patch index ``i``,
-        ``out[B * i: B * (i + 1)]`` corresponds to the *same patch* extracted
-        from each batch element of ``input``.
-
-        Parameters
-        ----------
-        input : Tensor
-            Batch of full input images of shape :math:`(B, C, H, W)`.
-        additional_input : Optional[Tensor], optional, default=None
-            Additional data to concatenate to each patch. Shape must be
-            :math:`(B, C_{add}, H_{add}, W_{add})`. Will be interpolated
-            to match patch dimensions :math:`(H_p, W_p)`
-            *Note: ``additional_input`` is not patched or decomposed.*
-
-        Returns
-        -------
-        Tensor
-            Tensor containing patches with shape :math:`(P \times B, C [+ C_{add}], H_p, W_p)`.
-            If ``additional_input`` is provided, it is channel-wise concatenated
-            to the extracted patches.
-
-        See Also
-        --------
-        :func:`physicsnemo.diffusion.multi_diffusion.image_batching`
-            The underlying function used to perform the patching operation.
-        """
+        input: Float[Tensor, "B C H W"],
+        additional_input: Optional[Float[Tensor, "B C_add H_add W_add"]] = None,
+    ) -> Float[Tensor, "P_times_B C_out Hp Wp"]:
+        r"""Extract grid patches from the input tensor."""
         if additional_input is not None:
             add_input_interp = torch.nn.functional.interpolate(
                 input=additional_input, size=self.patch_shape, mode="bilinear"
             )
         else:
             add_input_interp = None
-        out = image_batching(
+        return image_batching(
             input=input,
             patch_shape_y=self.patch_shape[0],
             patch_shape_x=self.patch_shape[1],
@@ -429,37 +446,71 @@ class GridPatching2D(BasePatching2D):
             boundary_pix=self.boundary_pix,
             input_interp=add_input_interp,
         )
-        return out
 
-    def fuse(self, input: Tensor, batch_size: int) -> Tensor:
-        r"""
-        Fuse patches back into a complete image.
+    def apply(
+        self,
+        input: Float[Tensor, "B C H W"],
+        additional_input: Optional[Float[Tensor, "B C_add H_add W_add"]] = None,
+    ) -> Float[Tensor, "P_times_B C_out Hp Wp"]:
+        r"""Apply deterministic grid patching.
 
-        Reconstructs the original image by stitching together patches,
-        accounting for overlapping regions and boundary pixels. In overlapping
-        regions, values are averaged.
+        Splits the input tensor into patches in a grid-like pattern.
+        Extracted patches are batched along the first dimension.  For any
+        patch index ``i``, ``out[B * i : B * (i + 1)]`` corresponds to the
+        *same patch* extracted from every batch element.
 
         Parameters
         ----------
         input : Tensor
-            Input tensor containing patches with shape :math:`(P \times B, C, H_p, W_p)`.
-            *Note: the patch layout along the batch dimension should be the same
-            as the one returned by the method
-            :meth:`~physicsnemo.diffusion.multi_diffusion.GridPatching2D.apply`.*
-        batch_size : int
-            The original batch size :math:`B` before patching.
+            Full images of shape :math:`(B, C, H, W)`.
+        additional_input : Tensor, optional, default=None
+            Additional data of shape :math:`(B, C_{add}, H', W')`.
+            Interpolated to :math:`(H_p, W_p)` and channel-wise
+            concatenated to each patch. Not decomposed.
 
         Returns
         -------
         Tensor
-            Reconstructed image tensor with shape :math:`(B, C, H, W)`.
+            Shape :math:`(P \times B, C [+ C_{add}], H_p, W_p)`.
 
         See Also
         --------
-        :func:`physicsnemo.diffusion.multi_diffusion.image_fuse`
-            The underlying function used to perform the fusion operation.
+        :func:`~physicsnemo.diffusion.multi_diffusion.image_batching` :
+            Low-level function used internally.
         """
-        out = image_fuse(
+        if isinstance(input, Tensor):
+            return self(input, additional_input=additional_input)
+        return super().apply(input)
+
+    def fuse(
+        self,
+        input: Float[Tensor, "P_times_B C Hp Wp"],
+        batch_size: int,
+    ) -> Float[Tensor, "B C H W"]:
+        r"""Fuse patches back into a complete image.
+
+        Reconstructs the original image by stitching together patches.
+        Overlapping regions are averaged with a uniform weight.
+
+        Parameters
+        ----------
+        input : Tensor
+            Patches of shape :math:`(P \times B, C, H_p, W_p)`, with the
+            same batch layout as returned by :meth:`apply`.
+        batch_size : int
+            Original batch size :math:`B` before patching.
+
+        Returns
+        -------
+        Tensor
+            Reconstructed image of shape :math:`(B, C, H, W)`.
+
+        See Also
+        --------
+        :func:`~physicsnemo.diffusion.multi_diffusion.image_fuse` :
+            Low-level function used internally.
+        """
+        return image_fuse(
             input=input,
             img_shape_y=self.img_shape[0],
             img_shape_x=self.img_shape[1],
@@ -468,7 +519,6 @@ class GridPatching2D(BasePatching2D):
             boundary_pix=self.boundary_pix,
             overlap_count=self._overlap_count,
         )
-        return out
 
     @staticmethod
     def get_overlap_count(
@@ -476,45 +526,31 @@ class GridPatching2D(BasePatching2D):
         img_shape: tuple[int, int],
         overlap_pix: int,
         boundary_pix: int,
-    ) -> Tensor:
-        r"""
-        Compute overlap count map for image patch reconstruction.
+    ) -> Float[Tensor, "1 1 Hpad Wpad"]:
+        r"""Compute per-pixel overlap count for patch reconstruction.
 
-        Calculates how many times each pixel in the padded image is covered by
-        extracted patches, based on the patch size, overlap size, and boundary
-        padding. This is useful for normalizing the reconstructed image after
-        folding overlapping patches.
-
-        The overlap count is stored in `self._overlap_count`.
+        Calculates how many patches cover each pixel in the padded image.
+        Used to normalise the reconstructed image after folding.
 
         Parameters
         ----------
-        img_shape : Tuple[int, int]
-            The height and width of the full input images :math:`(H, W)`.
-        patch_shape : Tuple[int, int]
-            The height and width of the patches to extract :math:`(H_p, W_p)`.
+        patch_shape : tuple[int, int]
+            Patch dimensions :math:`(H_p, W_p)`.
+        img_shape : tuple[int, int]
+            Full image dimensions :math:`(H, W)`.
         overlap_pix : int
-            The number of overlapping pixels between adjacent patches.
+            Overlap between adjacent patches in pixels.
         boundary_pix : int
-            The number of pixels to crop as a boundary from each patch.
+            Boundary padding in pixels.
 
         Returns
         -------
         Tensor
-            Tensor indicating how many times each pixel in the original input
-            is visited (or covered) by patches. Shape is :math:`(1, 1, H_{pad},
-            W_{pad})`, where :math:`H_{pad}` and :math:`W_{pad}` are
-            the padded image dimensions. Those are computed as :math:`H_{pad} = (H_p -
-            \text{overlap_pix} - \text{boundary_pix}) \times (P_H - 1) + H_p +
-            \text{boundary_pix}`, where :math:`P_H` is the number of patches
-            along the height of the image (and similarly for :math:`W_{pad}`).
-
+            Overlap count of shape :math:`(1, 1, H_{pad}, W_{pad})`.
         """
-        # Infer sizes from input image shape
         patch_shape_y, patch_shape_x = patch_shape
         img_shape_y, img_shape_x = img_shape
 
-        # Calculate the number of patches in each dimension
         patch_num_x = math.ceil(
             img_shape_x / (patch_shape_x - overlap_pix - boundary_pix)
         )
@@ -522,7 +558,6 @@ class GridPatching2D(BasePatching2D):
             img_shape_y / (patch_shape_y - overlap_pix - boundary_pix)
         )
 
-        # Calculate the shape of the input after padding
         padded_shape_x = (
             (patch_shape_x - overlap_pix - boundary_pix) * (patch_num_x - 1)
             + patch_shape_x
@@ -534,73 +569,66 @@ class GridPatching2D(BasePatching2D):
             + boundary_pix
         )
 
-        input_ones = torch.ones(
-            (1, 1, padded_shape_y, padded_shape_x),
+        stride = (
+            patch_shape_y - overlap_pix - boundary_pix,
+            patch_shape_x - overlap_pix - boundary_pix,
         )
-        overlap_count = torch.nn.functional.unfold(
-            input=input_ones,
-            kernel_size=(patch_shape_y, patch_shape_x),
-            stride=(
-                patch_shape_y - overlap_pix - boundary_pix,
-                patch_shape_x - overlap_pix - boundary_pix,
-            ),
-        )
+        kernel = (patch_shape_y, patch_shape_x)
+        ones = torch.ones(1, 1, padded_shape_y, padded_shape_x)
         overlap_count = torch.nn.functional.fold(
-            input=overlap_count,
-            output_size=(padded_shape_y, padded_shape_x),
-            kernel_size=(patch_shape_y, patch_shape_x),
-            stride=(
-                patch_shape_y - overlap_pix - boundary_pix,
-                patch_shape_x - overlap_pix - boundary_pix,
+            input=torch.nn.functional.unfold(
+                input=ones, kernel_size=kernel, stride=stride
             ),
+            output_size=(padded_shape_y, padded_shape_x),
+            kernel_size=kernel,
+            stride=stride,
         )
         return overlap_count
 
 
+# ---------------------------------------------------------------------------
+# Standalone functions
+# ---------------------------------------------------------------------------
+
+
 def image_batching(
-    input: Tensor,
+    input: Float[Tensor, "B C H W"],
     patch_shape_y: int,
     patch_shape_x: int,
     overlap_pix: int,
     boundary_pix: int,
-    input_interp: Optional[Tensor] = None,
-) -> Tensor:
-    r"""
-    Splits a full image into a batch of patched images.
+    input_interp: Optional[Float[Tensor, "B C_add Hp Wp"]] = None,
+) -> Float[Tensor, "P_times_B C_out Hp Wp"]:
+    r"""Split a batch of images into a batch of patches.
 
-    This function takes a full image and splits it into patches, adding padding
-    where necessary. It can also concatenate additional interpolated data to
-    each patch if provided.
+    Adds reflection padding where necessary and extracts patches in a
+    regular grid using ``torch.nn.functional.unfold``.
 
     Parameters
     ----------
     input : Tensor
-        The input tensor representing a batch of full image with shape :math:`(B, C, H, W)`.
+        Batch of full images of shape :math:`(B, C, H, W)`.
     patch_shape_y : int
-        The height :math:`H_p` of each image patch.
+        Patch height :math:`H_p`.
     patch_shape_x : int
-        The width :math:`W_p` of each image patch.
+        Patch width :math:`W_p`.
     overlap_pix : int
-        The number of overlapping pixels between adjacent patches.
+        Overlap between adjacent patches in pixels.
     boundary_pix : int
-        The number of pixels to crop as a boundary from each patch.
-    input_interp : Optional[Tensor], optional
-        Optional additional data to concatenate to each patch with shape
-        :math:`(B, C_{add}, H_{add}, W_{add})`.
-        *Note: ``additional_input`` is not patched or decomposed.*
+        Boundary padding in pixels.
+    input_interp : Tensor, optional
+        Pre-interpolated additional data of shape
+        :math:`(B, C_{add}, H_p, W_p)`.  Channel-wise concatenated to
+        every extracted patch (not decomposed).
 
     Returns
     -------
     Tensor
-        A tensor containing the image patches, with shape :math:`(P \times B, C [+ C_{add}], H_p, W_p)`.
-        If ``additional_input`` is provided, it is channel-wise concatenated
-        to the extracted patches.
+        Patches of shape :math:`(P \times B, C [+ C_{add}], H_p, W_p)`.
     """
-    # Infer sizes from input image
     batch_size, _, img_shape_y, img_shape_x = input.shape
 
-    # Safety check: make sure patch_shapes are large enough to accommodate
-    # overlaps and boundaries pixels
+    # Validate patch / overlap / boundary compatibility
     if (patch_shape_x - overlap_pix - boundary_pix) < 1:
         raise ValueError(
             f"patch_shape_x must verify patch_shape_x ({patch_shape_x}) >= "
@@ -611,7 +639,6 @@ def image_batching(
             f"patch_shape_y must verify patch_shape_y ({patch_shape_y}) >= "
             f"1 + overlap_pix ({overlap_pix}) + boundary_pix ({boundary_pix})"
         )
-    # Safety check: validate input_interp dimensions if provided
     if input_interp is not None:
         if input_interp.shape[0] != batch_size:
             raise ValueError(
@@ -625,10 +652,6 @@ def image_batching(
                 f"input_interp patch shape ({input_interp.shape[2]}, {input_interp.shape[3]}) "
                 f"must match specified patch shape ({patch_shape_y}, {patch_shape_x})"
             )
-
-    # Safety check: make sure patch_shape is large enough in comparison to
-    # overlap_pix and boundary_pix. Otherwise, number of patches extracted by
-    # unfold differs from the expected number of patches.
     if patch_shape_x <= overlap_pix + 2 * boundary_pix:
         raise ValueError(
             f"patch_shape_x ({patch_shape_x}) must verify "
@@ -642,45 +665,39 @@ def image_batching(
             f"overlap_pix ({overlap_pix}) + 2 * boundary_pix ({boundary_pix})"
         )
 
-    patch_num_x = math.ceil(img_shape_x / (patch_shape_x - overlap_pix - boundary_pix))
-    patch_num_y = math.ceil(img_shape_y / (patch_shape_y - overlap_pix - boundary_pix))
-    padded_shape_x = (
-        (patch_shape_x - overlap_pix - boundary_pix) * (patch_num_x - 1)
-        + patch_shape_x
-        + boundary_pix
-    )
-    padded_shape_y = (
-        (patch_shape_y - overlap_pix - boundary_pix) * (patch_num_y - 1)
-        + patch_shape_y
-        + boundary_pix
-    )
-    pad_x_right = padded_shape_x - img_shape_x - boundary_pix
-    pad_y_right = padded_shape_y - img_shape_y - boundary_pix
-    image_padding = torch.nn.ReflectionPad2d(
-        (boundary_pix, pad_x_right, boundary_pix, pad_y_right)
-    )  # (padding_left,padding_right,padding_top,padding_bottom)
-    input_padded = image_padding(input)
+    # Grid layout
+    stride_x = patch_shape_x - overlap_pix - boundary_pix
+    stride_y = patch_shape_y - overlap_pix - boundary_pix
+    patch_num_x = math.ceil(img_shape_x / stride_x)
+    patch_num_y = math.ceil(img_shape_y / stride_y)
+    padded_shape_x = stride_x * (patch_num_x - 1) + patch_shape_x + boundary_pix
+    padded_shape_y = stride_y * (patch_num_y - 1) + patch_shape_y + boundary_pix
     patch_num = patch_num_x * patch_num_y
 
-    # Cast to float for unfold
+    # Reflection-pad to fit the grid
+    pad_x_right = padded_shape_x - img_shape_x - boundary_pix
+    pad_y_right = padded_shape_y - img_shape_y - boundary_pix
+    input_padded = torch.nn.ReflectionPad2d(
+        (boundary_pix, pad_x_right, boundary_pix, pad_y_right)
+    )(input)
+
+    # Integer dtypes are not supported by unfold — cast temporarily
     if input.dtype == torch.int32:
         input_padded = input_padded.view(torch.float32)
     elif input.dtype == torch.int64:
         input_padded = input_padded.view(torch.float64)
 
+    # Extract patches via unfold
     x_unfold = torch.nn.functional.unfold(
         input=input_padded,
         kernel_size=(patch_shape_y, patch_shape_x),
-        stride=(
-            patch_shape_y - overlap_pix - boundary_pix,
-            patch_shape_x - overlap_pix - boundary_pix,
-        ),
+        stride=(stride_y, stride_x),
     )
 
-    # Cast back to original dtype
     if input.dtype in [torch.int32, torch.int64]:
         x_unfold = x_unfold.view(input.dtype)
 
+    # Rearrange to patch-major batch layout: (P*B, C, Hp, Wp)
     x_unfold = rearrange(
         x_unfold,
         "b (c p_h p_w) (nb_p_h nb_p_w) -> (nb_p_w nb_p_h b) c p_h p_w",
@@ -689,88 +706,65 @@ def image_batching(
         nb_p_h=patch_num_y,
         nb_p_w=patch_num_x,
     )
+
     if input_interp is not None:
         input_interp_repeated = input_interp.repeat(patch_num, 1, 1, 1)
         return torch.cat((x_unfold, input_interp_repeated), dim=1)
-    else:
-        return x_unfold
+    return x_unfold
 
 
 def image_fuse(
-    input: Tensor,
+    input: Float[Tensor, "P_times_B C Hp Wp"],
     img_shape_y: int,
     img_shape_x: int,
     batch_size: int,
     overlap_pix: int,
     boundary_pix: int,
-    overlap_count: Optional[Tensor] = None,
-) -> Tensor:
-    r"""
-    Reconstructs a full image from a batch of patched images. Reverts the patching
-    operation performed by :func:`~physicsnemo.diffusion.multi_diffusion.image_batching`.
+    overlap_count: Optional[Float[Tensor, "1 1 Hpad Wpad"]] = None,
+) -> Float[Tensor, "B C H W"]:
+    r"""Reconstruct a full image from a batch of grid patches.
 
-    It assumes that the patches are extracted in a grid-like pattern, and that
-    their layout along the batch dimension is the same as the one returned by
+    Reverts the operation performed by
     :func:`~physicsnemo.diffusion.multi_diffusion.image_batching`.
-
-    This function takes a batch of image patches and reconstructs the full
-    image by stitching the patches together. The function accounts for
-    overlapping and boundary pixels, ensuring that overlapping areas are
-    averaged.
-    *Note: a simple unweighted average between overlapping patches is used to
-    fuse the patches.*
+    Overlapping regions are averaged with a uniform weight.
 
     Parameters
     ----------
     input : Tensor
-        The input tensor containing the image patches with shape :math:`(P \times B, C, H_p, W_p)`.
+        Patches of shape :math:`(P \times B, C, H_p, W_p)`.
     img_shape_y : int
-        The height :math:`H` of the original full image.
+        Height :math:`H` of the original full image.
     img_shape_x : int
-        The width :math:`W` of the original full image.
+        Width :math:`W` of the original full image.
     batch_size : int
-        The original batch size :math:`B` before patching.
+        Original batch size :math:`B`.
     overlap_pix : int
-        The number of overlapping pixels between adjacent patches.
+        Overlap between adjacent patches in pixels.
     boundary_pix : int
-        The number of pixels to crop as a boundary from each patch.
-    overlap_count : Tensor, optional, default=None
-        A tensor of shape :math:`(1, 1, H, W)` containing the number of
-        overlaps for each pixel (i.e. the number of patches that cover each pixel).
-        This is typically computed by
-        :meth:`~physicsnemo.diffusion.multi_diffusion.GridPatching2D.get_overlap_count`.
-        If not provided, it will be computed internally.
+        Boundary padding in pixels.
+    overlap_count : Tensor, optional
+        Pre-computed overlap count of shape :math:`(1, 1, H_{pad}, W_{pad})`.
+        Computed internally if not provided.
 
     Returns
     -------
     Tensor
-        The reconstructed full image tensor with shape :math:`(B, C, H, W)`.
+        Reconstructed image of shape :math:`(B, C, H, W)`.
     """
-
-    # Infer sizes from input image shape
     patch_shape_y, patch_shape_x = input.shape[2], input.shape[3]
 
-    # Calculate the number of patches in each dimension
-    patch_num_x = math.ceil(img_shape_x / (patch_shape_x - overlap_pix - boundary_pix))
-    patch_num_y = math.ceil(img_shape_y / (patch_shape_y - overlap_pix - boundary_pix))
+    stride_x = patch_shape_x - overlap_pix - boundary_pix
+    stride_y = patch_shape_y - overlap_pix - boundary_pix
+    patch_num_x = math.ceil(img_shape_x / stride_x)
+    patch_num_y = math.ceil(img_shape_y / stride_y)
 
-    # Calculate the shape of the input after padding
-    padded_shape_x = (
-        (patch_shape_x - overlap_pix - boundary_pix) * (patch_num_x - 1)
-        + patch_shape_x
-        + boundary_pix
-    )
-    padded_shape_y = (
-        (patch_shape_y - overlap_pix - boundary_pix) * (patch_num_y - 1)
-        + patch_shape_y
-        + boundary_pix
-    )
-    # Calculate the shape of the padding to add to input
+    padded_shape_x = stride_x * (patch_num_x - 1) + patch_shape_x + boundary_pix
+    padded_shape_y = stride_y * (patch_num_y - 1) + patch_shape_y + boundary_pix
+
     pad_x_right = padded_shape_x - img_shape_x - boundary_pix
     pad_y_right = padded_shape_y - img_shape_y - boundary_pix
     pad = (boundary_pix, pad_x_right, boundary_pix, pad_y_right)
 
-    # Count local overlaps between patches
     if overlap_count is None:
         overlap_count = GridPatching2D.get_overlap_count(
             (patch_shape_y, patch_shape_x),
@@ -782,7 +776,7 @@ def image_fuse(
     if overlap_count.device != input.device:
         overlap_count = overlap_count.to(input.device)
 
-    # Reshape input to make it 3D to apply fold
+    # Rearrange patches back to fold-compatible layout
     x = rearrange(
         input,
         "(nb_p_w nb_p_h b) c p_h p_w -> b (c p_h p_w) (nb_p_h nb_p_w)",
@@ -792,34 +786,28 @@ def image_fuse(
         nb_p_w=patch_num_x,
     )
 
-    # Cast to float for fold
+    # Integer dtypes are not supported by fold — cast temporarily
     if input.dtype == torch.int32:
         x = x.view(torch.float32)
     elif input.dtype == torch.int64:
         x = x.view(torch.float64)
 
-    # Stitch patches together (by summing over overlapping patches)
+    # Stitch patches by summing over overlapping regions
     x_folded = torch.nn.functional.fold(
         input=x,
         output_size=(padded_shape_y, padded_shape_x),
         kernel_size=(patch_shape_y, patch_shape_x),
-        stride=(
-            patch_shape_y - overlap_pix - boundary_pix,
-            patch_shape_x - overlap_pix - boundary_pix,
-        ),
+        stride=(stride_y, stride_x),
     )
 
-    # Cast back to original dtype
     if input.dtype in [torch.int32, torch.int64]:
         x_folded = x_folded.view(input.dtype)
 
-    # Remove padding
+    # Crop padding and normalise by overlap count
     x_no_padding = x_folded[
         ..., pad[2] : pad[2] + img_shape_y, pad[0] : pad[0] + img_shape_x
     ]
     overlap_count_no_padding = overlap_count[
         ..., pad[2] : pad[2] + img_shape_y, pad[0] : pad[0] + img_shape_x
     ]
-
-    # Normalize by overlap count
     return x_no_padding / overlap_count_no_padding

@@ -396,10 +396,9 @@ class TestRandomPatching2D:
     # -----------------------------------------------------------------
     # torch.compile tests
     # -----------------------------------------------------------------
-
     def test_apply_torch_compile(self, device):
-        """apply() is compatible with torch.compile."""
-        torch._dynamo.reset()
+        """apply() is compatible with torch.compile and does not recompile
+        after reset_patch_indices()."""
         torch._dynamo.config.error_on_recompile = True
         patcher = RandomPatching2D(
             img_shape=(IMG_H, IMG_W), patch_shape=(8, 12), patch_num=4
@@ -413,8 +412,14 @@ class TestRandomPatching2D:
 
         out_eager = patcher.apply(x)
         out_compiled = compiled_fn(x)
-
         torch.testing.assert_close(out_eager, out_compiled)
+
+        # After resetting patch indices the compiled function should still
+        # work without recompilation
+        patcher.reset_patch_indices()
+        out_eager_2 = patcher.apply(x)
+        out_compiled_2 = compiled_fn(x)
+        torch.testing.assert_close(out_eager_2, out_compiled_2)
 
 
 # =============================================================================
@@ -730,7 +735,6 @@ class TestGridPatching2D:
 
     def test_apply_torch_compile(self, device):
         """apply() is compatible with torch.compile."""
-        torch._dynamo.reset()
         torch._dynamo.config.error_on_recompile = True
         patcher = GridPatching2D(
             img_shape=(IMG_H, IMG_W),
@@ -747,12 +751,14 @@ class TestGridPatching2D:
 
         out_eager = patcher.apply(x)
         out_compiled = compiled_fn(x)
-
         torch.testing.assert_close(out_eager, out_compiled)
+
+        # Second call should not trigger recompilation
+        out_compiled_2 = compiled_fn(x)
+        torch.testing.assert_close(out_eager, out_compiled_2)
 
     def test_fuse_torch_compile(self, device):
         """fuse() is compatible with torch.compile."""
-        torch._dynamo.reset()
         torch._dynamo.config.error_on_recompile = True
         patcher = GridPatching2D(
             img_shape=(IMG_H, IMG_W),
@@ -770,5 +776,8 @@ class TestGridPatching2D:
 
         out_eager = patcher.fuse(patches, batch_size=BATCH_SIZE)
         out_compiled = compiled_fn(patches)
-
         torch.testing.assert_close(out_eager, out_compiled)
+
+        # Second call should not trigger recompilation
+        out_compiled_2 = compiled_fn(patches)
+        torch.testing.assert_close(out_eager, out_compiled_2)
