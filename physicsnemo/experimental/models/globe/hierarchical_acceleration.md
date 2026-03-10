@@ -342,8 +342,8 @@ multiplier is dropped, allowing larger chunks.
 `checkpoint(use_reentrant=False)`.  This ensures only ONE branch's autograd
 graph exists at a time during backward, preventing autograd memory from
 accumulating across all branches.  Combined with the gather-inside-checkpoint
-pattern, peak autograd memory scales as O(chunk_size * indices_only) rather
-than O(n_branches * n_pairs * features).
+pattern, peak autograd memory scales as O(chunk_size \* indices_only) rather
+than O(n_branches \* n_pairs \* features).
 
 The branch-level and chunk-level checkpoints nest correctly:
 `use_reentrant=False` composes via `saved_tensors_hooks`.
