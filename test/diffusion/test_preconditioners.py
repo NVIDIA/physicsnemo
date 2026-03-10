@@ -141,53 +141,6 @@ PRECOND_CONFIGS = [
 # =============================================================================
 
 
-<<<<<<< HEAD
-=======
-@pytest.fixture
-def deterministic_settings():
-    """Set deterministic settings for reproducibility, then restore old state.
-
-    CUDA/cuDNN backend flags are only touched when CUDA is available. This avoids
-    failures when running the full test suite on CPU-only builds or when a
-    CPU-parameterized test runs before CUDA is initialized (backend attributes
-    may be missing or their setters may raise in those cases).
-    """
-    torch.manual_seed(GLOBAL_SEED)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(GLOBAL_SEED)
-
-    if not torch.cuda.is_available():
-        yield
-        return
-
-    # Save old state (only when CUDA is available)
-    old_cudnn_deterministic = torch.backends.cudnn.deterministic
-    old_cudnn_benchmark = torch.backends.cudnn.benchmark
-    old_matmul_tf32 = torch.backends.cuda.matmul.allow_tf32
-    old_cudnn_tf32 = torch.backends.cudnn.allow_tf32
-
-    try:
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False
-        yield
-    finally:
-        torch.backends.cudnn.deterministic = old_cudnn_deterministic
-        torch.backends.cudnn.benchmark = old_cudnn_benchmark
-        torch.backends.cuda.matmul.allow_tf32 = old_matmul_tf32
-        torch.backends.cudnn.allow_tf32 = old_cudnn_tf32
-
-
-@pytest.fixture
-def tolerances(device):
-    """Return tolerances based on the device (CPU vs GPU)."""
-    if device == "cpu":
-        return CPU_TOLERANCES
-    return GPU_TOLERANCES
-
-
->>>>>>> 5a6f9238 (Fixes from SFB builds / testing (#1459))
 @pytest.fixture(params=MODEL_CONFIGS, ids=["ConvModel", "LinearModel"])
 def model_config(request):
     """Parameterized fixture returning (model_class, shape, arch_name)."""
