@@ -165,7 +165,7 @@ class EDMLoss:
                 **optional_args,
             )
         else:
-            D_yn = net(y + n, sigma, labels, **optional_args)
+            D_yn = net(y + n, sigma.flatten(), labels, **optional_args)
         loss = weight * ((D_yn - y) ** 2)
         return loss
 

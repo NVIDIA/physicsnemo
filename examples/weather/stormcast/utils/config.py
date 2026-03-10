@@ -70,8 +70,8 @@ class PerfConfig:
 class OptimizerConfig:
     """Optimizer configuration: cfg.training.optimizer"""
 
-    name: Literal["adam", "adamw", "stableadamw"] | tuple[str, dict[str, Any]] = (
-        "adam"  # Optimizer type: "adam", "adamw", "stableadamw"
+    name: Literal["adam", "adamw"] | tuple[str, dict[str, Any]] = (
+        "adam"  # Optimizer type: "adam", "adamw"
     )
     lr: float = Field(default=4e-4, gt=0)  # Initial learning rate
     betas: tuple[float, float] = (0.9, 0.999)  # Adam beta parameters

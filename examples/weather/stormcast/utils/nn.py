@@ -211,13 +211,15 @@ def build_network_condition_and_target(
         condition = [
             y for c in condition_list if (y := condition_tensors[c]) is not None
         ]
-        condition = torch.cat(condition, dim=1)
+        condition = torch.cat(condition, dim=1) if condition else None
 
     if scalar_conditions is not None:
         condition = TensorDict(
-            {"cond_concat": condition, "cond_vec": scalar_conditions},
-            device=condition.device,
-        ).to(dtype=condition.dtype)
+            {"cond_concat": condition, "cond_vec": scalar_conditions}
+            if condition is not None
+            else {"cond_vec": scalar_conditions},
+            device=state[1].device,
+        ).to(dtype=state[1].dtype)
 
     return (condition, target, condition_tensors["regression"])
 
@@ -230,8 +232,12 @@ def unpack_batch(
     """Unpack a data batch into background, state and lead time label with the correct
     device and data types.
     """
+    if isinstance(batch["state"], torch.Tensor):
+        # downscaling and unconditional models may return a single tensor as "state"
+        batch["state"] = [None, batch["state"]]
+
     (background, state, mask) = nested_to(
-        (batch["background"], batch["state"], batch.get("mask")),
+        (batch.get("background"), batch["state"], batch.get("mask")),
         device=device,
         dtype=torch.float32,
         non_blocking=True,
@@ -256,13 +262,15 @@ def diffusion_model_forward(
     model: Module,
     condition: torch.Tensor,
     shape: Iterable[int],
+    dtype: torch.dtype,
+    device: torch.device,
     lead_time_label: torch.Tensor | None = None,
     sampler_args: dict[str, Any] = {},
 ) -> torch.Tensor:
     """Helper function to run diffusion model sampling"""
 
     # TODO: avoid creating full tensor here when sharding
-    latents = torch.randn(*shape, device=condition.device, dtype=condition.dtype)
+    latents = torch.randn(*shape, device=device, dtype=dtype)
 
     if not hasattr(model, "sigma_min"):
         model.sigma_min = 0.0
@@ -276,7 +284,7 @@ def diffusion_model_forward(
         latents=latents,
         img_lr=condition,
         lead_time_label=lead_time_label,
-        dtype=condition.dtype,
+        dtype=dtype,
         **sampler_args,
     )
 
