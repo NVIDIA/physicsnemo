@@ -23,7 +23,7 @@ GLOBE hyperparameters using real DrivAerML car body geometry.
 All sweep cases are distributed round-robin across available GPUs, so
 the benchmark parallelizes naturally on an 8-GPU node.
 
-Usage::
+Usage:
 
     uv run torchrun --nproc-per-node 8 benchmark_train.py
     uv run torchrun --nproc-per-node 8 benchmark_train.py --quick

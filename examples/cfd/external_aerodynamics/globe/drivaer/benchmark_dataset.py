@@ -32,7 +32,7 @@ The pipeline under test (per-sample) is:
        d. sample_random_points_on_cells (randomize face centers)
     4. sample.to(device) (pin_memory H2D transfer)
 
-Usage::
+Usage:
 
     uv run benchmark_dataset.py
     uv run benchmark_dataset.py --n-samples 50 --boundary-n-faces 40000
