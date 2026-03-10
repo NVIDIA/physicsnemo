@@ -64,9 +64,7 @@ def read_header_comments(filepath: Path, *, max_lines: int) -> list[str]:
     return comments
 
 
-def get_git_tracked_files(
-    exts: list[str], exclude_prefixes: list[str]
-) -> list[Path]:
+def get_git_tracked_files(exts: list[str], exclude_prefixes: list[str]) -> list[Path]:
     """Return git-tracked files matching *exts*, excluding paths that start
     with any of *exclude_prefixes*.
 
