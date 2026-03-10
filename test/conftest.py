@@ -14,9 +14,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+
+# Set before any import that might load HDF5 to avoid [Errno -101] NetCDF: HDF
+# error when opening .nc on bind-mounted /workspace.
+if "HDF5_USE_FILE_LOCKING" not in os.environ:
+    os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+
+# Import netCDF4 before h5py (or other HDF5-using packages) so they share the
+# same HDF5 linkage and avoid library version conflict -101 errors.
+try:
+    import netCDF4  # noqa: F401
+except ImportError:
+    pass
+
 import importlib
 import importlib.util
-import os
 import pathlib
 import random
 from collections import defaultdict
@@ -29,7 +42,6 @@ from packaging.requirements import Requirement
 from packaging.version import Version
 
 NFS_DATA_PATH = "/data/nfs/modulus-data"
-
 
 # Total time per file
 file_timings = defaultdict(float)
@@ -76,10 +88,15 @@ def pytest_addoption(parser):
 
 @pytest.fixture(scope="session")
 def nfs_data_dir(request):
-    data_dir = pathlib.Path(
-        request.config.getoption("--nfs-data-dir")
-        or os.environ.get("TEST_DATA_DIR", NFS_DATA_PATH)
-    )
+    nfs_data_dir_opt = request.config.getoption("--nfs-data-dir")
+    test_data_dir_env = os.environ.get("TEST_DATA_DIR")
+    if nfs_data_dir_opt:
+        data_dir = pathlib.Path(nfs_data_dir_opt)
+    elif test_data_dir_env:
+        # get-data clones into $(TEST_DATA_DIR)/modulus-data
+        data_dir = pathlib.Path(test_data_dir_env) / "modulus-data"
+    else:
+        data_dir = pathlib.Path(NFS_DATA_PATH)
     if not data_dir.exists():
         pytest.skip(
             "NFS volumes not set up with CI data repo. Run `make get-data` from the root directory of the repo"

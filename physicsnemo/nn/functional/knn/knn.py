@@ -35,9 +35,9 @@ class KNN(FunctionSpec):
     Parameters
     ----------
     points : torch.Tensor
-        Tensor of shape (N, 3) containing the points to search from.
+        Tensor of shape (N, D) containing the points to search from.
     queries : torch.Tensor
-        Tensor of shape (M, 3) containing the points to search for.
+        Tensor of shape (M, D) containing the points to search for.
     k : int
         Number of nearest neighbors to return for each query point.
     implementation : {"cuml", "torch", "scipy"} or None

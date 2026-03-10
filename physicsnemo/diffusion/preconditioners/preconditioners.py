@@ -24,13 +24,6 @@ from tensordict import TensorDict
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 
-# TODO: once noise schedulers are implemeneted, some of the methods they define
-# can be reused here, e.g. preconditioner.sigma = noise_scheduler.sigma for the
-# noise schedule. This would allow to avoid duplicate code between the
-# preconditioners and the noise schedulers. Particularly for the iDDPM
-# preconditioner, that requires more computations than the other
-# preconditioners.
-
 
 class BaseAffinePreconditioner(Module, ABC):
     r"""
@@ -130,8 +123,9 @@ class BaseAffinePreconditioner(Module, ABC):
           If a subclass implements the :meth:`sigma` method, the diffusion time
           :math:`t` is first transformed to a noise level :math:`\sigma(t)`
           before being passed to :meth:`compute_coefficients`. This allows
-          implementing preconditioners for different noise schedules while
-          keeping the same preconditioning interface, in particular for
+          implementing preconditioners for different time-to-noise-level
+          mappings while keeping the same preconditioning interface, in
+          particular for
           preconditioning schemes based on noise level (that is
           :math:`c_{\text{in}}(\sigma)`,
           :math:`c_{\text{noise}}(\sigma)`, :math:`c_{\text{out}}(\sigma)`,
@@ -208,7 +202,7 @@ class BaseAffinePreconditioner(Module, ABC):
     ...         super().__init__(model)
     ...
     ...     def sigma(self, t: torch.Tensor) -> torch.Tensor:
-    ...         # Override sigma to implement VE noise schedule
+    ...         # Override sigma for VE time-to-noise-level mapping
     ...         return t.sqrt()
     ...
     ...     def compute_coefficients(self, sigma: torch.Tensor):
@@ -399,7 +393,7 @@ class BaseAffinePreconditioner(Module, ABC):
 
         By default, this is the identity function :math:`\sigma(t) = t`.
         Subclasses can override this to implement preconditioners for different
-        noise schedules.
+        time-to-noise-level mappings.
 
         When overridden, the output of this method is passed to
         :meth:`compute_coefficients` instead of the raw time ``t``.
@@ -477,7 +471,7 @@ class VPPreconditioner(BaseAffinePreconditioner):
     Implements the preconditioning scheme from the VP formulation of
     score-based generative models.
 
-    The noise schedule is:
+    The time-to-noise-level mapping is:
 
     .. math::
 
@@ -492,6 +486,16 @@ class VPPreconditioner(BaseAffinePreconditioner):
         c_{\text{out}} &= -\sigma \\
         c_{\text{in}} &= \frac{1}{\sqrt{\sigma^2 + 1}} \\
         c_{\text{noise}} &= (M - 1) \cdot \sigma^{-1}(\sigma)
+    
+    With these coefficients, the preconditioned model output is expected to be
+    an :math:`\mathbf{x}_0`-prediction (clean data estimate).
+    This preconditioner is not directly compatible for score-prediction
+    training or others.
+    
+    For training, it is usually paired with
+    :class:`~physicsnemo.diffusion.metrics.losses.DSMLoss`
+    (``prediction_type="x0"``) and
+    :class:`~physicsnemo.diffusion.noise_schedulers.VPNoiseScheduler`.
 
     Parameters
     ----------
@@ -617,7 +621,8 @@ class VEPreconditioner(BaseAffinePreconditioner):
     Implements the preconditioning scheme from the VE formulation of
     score-based generative models.
 
-    For VE, the noise schedule is identity: :math:`\sigma(t) = t`.
+    For VE, the time-to-noise-level mapping is the identity:
+    :math:`\sigma(t) = t`.
 
     The preconditioning coefficients are:
 
@@ -627,6 +632,15 @@ class VEPreconditioner(BaseAffinePreconditioner):
         c_{\text{out}} &= \sigma \\
         c_{\text{in}} &= 1 \\
         c_{\text{noise}} &= \log(0.5 \cdot \sigma)
+    
+    With these coefficients, the preconditioned model output is expected to be an
+    :math:`\mathbf{x}_0`-prediction (clean data estimate). This preconditioner
+    is not directly compatible for score-prediction training or others.
+    
+    For training, it is usually paired with
+    :class:`~physicsnemo.diffusion.metrics.losses.DSMLoss`
+    (``prediction_type="x0"``) and
+    :class:`~physicsnemo.diffusion.noise_schedulers.VENoiseScheduler`.
 
     Parameters
     ----------
@@ -713,7 +727,7 @@ class IDDPMPreconditioner(BaseAffinePreconditioner):
 
     Implements the preconditioning scheme from the improved DDPM
     formulation.
-
+    
     The preconditioning coefficients are:
 
     .. math::
@@ -723,8 +737,18 @@ class IDDPMPreconditioner(BaseAffinePreconditioner):
         c_{\text{in}} &= \frac{1}{\sqrt{\sigma^2 + 1}} \\
         c_{\text{noise}} &= M - 1 - \text{argmin}|\sigma - u_j|
 
-    where :math:`u_j, j = 0, ..., M` are the precomputed noise levels in the
-    noise schedule.
+    where :math:`u_j, j = 0, ..., M` are the precomputed noise levels from
+    the iDDPM discretization.
+
+    With these coefficients, the preconditioned model output is expected to be
+    an :math:`\mathbf{x}_0`-prediction (clean data estimate). This
+    preconditioner is not directly compatible for score-prediction training or
+    others.
+    
+    For training, it is usually paired with
+    :class:`~physicsnemo.diffusion.metrics.losses.DSMLoss`
+    (``prediction_type="x0"``) and
+    :class:`~physicsnemo.diffusion.noise_schedulers.IDDPMNoiseScheduler`.
 
     Parameters
     ----------
@@ -846,7 +870,8 @@ class EDMPreconditioner(BaseAffinePreconditioner):
     Implements the improved preconditioning scheme proposed in the EDM
     paper.
 
-    For EDM, the noise schedule is identity: :math:`\sigma(t) = t`.
+    For EDM, the time-to-noise-level mapping is the identity:
+    :math:`\sigma(t) = t`.
 
     The preconditioning coefficients are:
 
@@ -859,6 +884,15 @@ class EDMPreconditioner(BaseAffinePreconditioner):
         c_{\text{in}} &= \frac{1}
             {\sqrt{\sigma_{\text{data}}^2 + \sigma^2}} \\
         c_{\text{noise}} &= \frac{\log(\sigma)}{4}
+
+    With these coefficients, the preconditioned model output is expected to be an
+    :math:`\mathbf{x}_0`-prediction (clean data estimate). This preconditioner
+    is not directly compatible for score-prediction training or others.
+    
+    For training, it is usually paired with
+    :class:`~physicsnemo.diffusion.metrics.losses.DSMLoss`
+    (``prediction_type="x0"``) and
+    :class:`~physicsnemo.diffusion.noise_schedulers.EDMNoiseScheduler`.
 
     Parameters
     ----------

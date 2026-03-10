@@ -36,7 +36,7 @@ doctest:
 	coverage run \
 		--rcfile='test/coverage.docstring.rc' \
 		-m pytest \
-		--doctest-modules physicsnemo/ --ignore-glob=*internal* --ignore-glob=*experimental*
+		--doctest-modules physicsnemo/ --ignore-glob=*internal* --ignore-glob=*experimental* --ignore-glob=*deploy/onnx*
 
 pytest: 
 	coverage run \

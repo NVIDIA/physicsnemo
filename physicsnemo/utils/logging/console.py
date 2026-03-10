@@ -65,6 +65,9 @@ class PythonLogger:
         """Log error"""
         self.logger.error(colored(message, "light_red"))
 
+    def __getattr__(self, name: str):
+        return getattr(self.logger, name)
+
 
 class RankZeroLoggingWrapper:
     """Wrapper class to only log from rank 0 process in distributed training."""

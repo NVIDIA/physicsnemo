@@ -451,6 +451,34 @@ def is_package_available(distribution_name: str) -> bool:
 
 
 @functools.lru_cache(maxsize=None)
+def get_physicsnemo_pkg_info() -> dict[str, str | None]:
+    """Return the PhysicsNeMo package version and current git commit hash.
+
+    Both values are determined without importing ``physicsnemo`` itself:
+    the version is read from installed package metadata, and the commit
+    hash comes from the enclosing git repository (if any).
+
+    Returns
+    -------
+    dict[str, str | None]
+        ``"version"``: the installed version string, or ``None`` if the
+        package is not installed.
+        ``"git_hash"``: the HEAD commit SHA, or ``None`` if the current
+        working directory is not inside a git repository.
+    """
+    import git
+
+    version = get_installed_version("nvidia-physicsnemo")
+
+    try:
+        git_hash = git.Repo(search_parent_directories=True).head.commit.hexsha
+    except git.InvalidGitRepositoryError:
+        git_hash = None
+
+    return {"version": version, "git_hash": git_hash}
+
+
+@functools.lru_cache(maxsize=None)
 def _is_module_findable(module_name: str) -> bool:
     """Check if a module can be found by the import system without importing it.
 

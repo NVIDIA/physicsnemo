@@ -53,7 +53,8 @@ if STL_AVAILABLE:
             Filename for output stl file, by default "output_stl.stl"
         """
         if backend == "warp":
-            # Convert numpy array to warp array
+            # Warp MarchingCubes.surface() requires wp.float32; coerce if caller passed float64
+            field = np.asarray(field, dtype=np.float32)
             field = wp.array(field)
 
             mc = wp.MarchingCubes(

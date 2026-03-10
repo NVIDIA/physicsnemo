@@ -22,6 +22,7 @@ import logging
 sys.path.insert(0, os.path.dirname(__file__))
 
 import hydra
+import omegaconf
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 
@@ -31,13 +32,19 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 
-# Import unified datapipe
+# Optional: tabulate for metrics tables, torchinfo for model summary
+_tabulate = OptionalImport("tabulate")
+_torchinfo = OptionalImport("torchinfo")
+
+# Import unified datapipe and utils
 from datapipe import SimSample, simsample_collate
 from omegaconf import open_dict
+from utils import build_muon_optimizer
 
 
 class Trainer:
@@ -136,6 +143,7 @@ class Trainer:
                 reader=reader,
                 split="validation",
                 logger=logger0,
+                sample_type="all_time_steps",  # always all_time_steps for validation
             )
 
             if self.dist.rank < self.num_validation_replicas:
@@ -172,6 +180,18 @@ class Trainer:
         self.model.to(self.dist.device)
         self.model.train()
 
+        # Log model summary and parameter count (optional: torchinfo)
+        if self.dist.rank == 0:
+            num_params = sum(p.numel() for p in self.model.parameters())
+            logger0.info(f"Model parameters: {num_params:,}")
+            if _torchinfo.available:
+                try:
+                    logger0.info(f"\n{_torchinfo.summary(self.model, verbose=0)}")
+                except Exception:
+                    logger0.info(
+                        "(torchinfo summary skipped: model requires sample input)"
+                    )
+
         # distributed data parallel for multi-node training
         if self.dist.world_size > 1:
             self.model = DistributedDataParallel(
@@ -185,20 +205,14 @@ class Trainer:
         # Loss
         self.criterion = torch.nn.MSELoss()
 
-        # Optimizer
-        self.optimizer = None
-        try:
-            if cfg.training.use_apex:
-                from apex.optimizers import FusedAdam
-
-                self.optimizer = FusedAdam(
-                    self.model.parameters(), lr=cfg.training.start_lr
-                )
-        except ImportError:
-            logger0.warning("Apex not installed, falling back to Adam optimizer.")
-        if self.optimizer is None:
+        # Optimizer (adam or muon; muon requires PyTorch >= 2.9)
+        opt_name = cfg.training.get("optimizer", "adam")
+        assert opt_name in ["adam", "muon"], f"Unsupported optimizer: {opt_name}"
+        if opt_name == "muon":
+            self.optimizer = build_muon_optimizer(self.model, cfg)
+        else:
             self.optimizer = torch.optim.Adam(
-                self.model.parameters(), lr=cfg.training.start_lr
+                self.model.parameters(), lr=cfg.training.start_lr, fused=True
             )
         logger0.info(f"Using {self.optimizer.__class__.__name__} optimizer")
 
@@ -231,20 +245,11 @@ class Trainer:
 
     def forward(self, sample: SimSample):
         with autocast(device_type="cuda", enabled=self.amp):
-            T = self.rollout_steps
-
-            # Model forward
+            # Model forward - returns [N, T, Fo]
             pred = self.model(sample=sample, data_stats=self.data_stats)
 
-            # Reshape target
-            target_flat = sample.node_target  # [N, T*Fo]
-            N = target_flat.size(0)
-            Fo = 3  # output features per node
-            assert target_flat.size(1) == T * Fo, (
-                f"target dim {target_flat.size(1)} != {T * Fo}"
-            )
-            target = target_flat.view(N, T, Fo).transpose(0, 1).contiguous()  # [T,N,Fo]
-
+            # Target is [N, T, Fo]
+            target = sample.node_target
             return self.criterion(pred, target)
 
     def backward(self, loss):
@@ -265,24 +270,18 @@ class Trainer:
         MSE_w_time = torch.zeros(self.rollout_steps, device=self.dist.device)
         for idx, sample in enumerate(self.val_dataloader):
             sample = sample[0].to(self.dist.device)  # SimSample .to()
-            T = self.rollout_steps
 
-            # Model forward
-            pred_seq = self.model(sample=sample, data_stats=self.data_stats)
+            # Model forward - returns [N, T, Fo]
+            pred = self.model(sample=sample, data_stats=self.data_stats)
 
-            # Exact sequence
-            N = sample.node_target.size(0)
-            Fo = 3  # output features per node
-            assert sample.node_target.size(1) == T * Fo, (
-                f"target dim {sample.node_target.size(1)} != {T * Fo}"
-            )
-            exact_seq = (
-                sample.node_target.view(N, T, Fo).transpose(0, 1).contiguous()
-            )  # [T,N,Fo]
+            # Target is [N, T, Fo]
+            target = sample.node_target
 
             # Compute and add error
-            SqError = torch.square(pred_seq - exact_seq)
-            MSE_w_time += torch.mean(SqError, dim=(1, 2))
+            SqError = torch.square(pred - target)
+            MSE_w_time += torch.mean(
+                SqError, dim=(0, 2)
+            )  # mean over N, Fo per timestep
             MSE += torch.mean(SqError)
 
         # Sum errors across all ranks
@@ -308,6 +307,13 @@ def main(cfg: DictConfig) -> None:
     logger0 = RankZeroLoggingWrapper(logger, dist)
     logger0.file_logging()
 
+    # Log full config and paths
+    logger0.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
+    logger0.info(f"Output directory: {cfg.training.tensorboard_log_dir}")
+    logger0.info(f"Checkpoint directory: {cfg.training.ckpt_path}")
+    stats_dir = getattr(cfg.datapipe, "stats_dir")
+    logger0.info(f"Stats directory: {stats_dir}")
+
     trainer = Trainer(cfg, logger0)
     logger0.info("Training started...")
 
@@ -318,20 +324,40 @@ def main(cfg: DictConfig) -> None:
         total_loss = 0.0
         num_batches = 0
         start = time.time()
+        batch_start = start
+        epoch_len = len(trainer.dataloader)
+        log_every = max(1, epoch_len // 10)  # Log ~10 times per epoch
 
-        for sample in trainer.dataloader:
+        for batch_idx, sample in enumerate(trainer.dataloader):
             sample = sample[0].to(dist.device)  # SimSample .to()
             loss = trainer.train(sample)
             total_loss += loss.detach().item()
             num_batches += 1
 
+            # Per-batch progress
+            if (batch_idx + 1) % log_every == 0 or batch_idx == 0:
+                batch_duration = time.time() - batch_start
+                mem_gb = (
+                    torch.cuda.memory_reserved() / 1024**3
+                    if torch.cuda.is_available()
+                    else 0.0
+                )
+                logger0.info(
+                    f"Epoch {epoch + 1} [{batch_idx + 1}/{epoch_len}] "
+                    f"Loss: {loss.detach().item():.6f} "
+                    f"Duration: {batch_duration:.2f}s Mem: {mem_gb:.2f}GB"
+                )
+            batch_start = time.time()
+
         trainer.scheduler.step()
 
         avg_loss = total_loss / max(num_batches, 1)
+        epoch_duration = time.time() - start
         logger0.info(
-            f"epoch: {epoch + 1}, avg_loss: {avg_loss:10.3e}, "
-            f"lr: {trainer.optimizer.param_groups[0]['lr']:.3e}, "
-            f"time per epoch: {(time.time() - start):10.3e}"
+            f"Epoch {epoch + 1}/{cfg.training.epochs} "
+            f"avg_loss: {avg_loss:.6f} "
+            f"lr: {trainer.optimizer.param_groups[0]['lr']:.3e} "
+            f"duration: {epoch_duration:.2f}s"
         )
 
         if dist.rank == 0:
@@ -343,7 +369,7 @@ def main(cfg: DictConfig) -> None:
         if dist.world_size > 1:
             torch.distributed.barrier()
 
-        if dist.rank == 0 and (epoch + 1) % cfg.training.save_chckpoint_freq == 0:
+        if dist.rank == 0 and (epoch + 1) % cfg.training.save_checkpoint_freq == 0:
             save_checkpoint(
                 cfg.training.ckpt_path,
                 models=trainer.model,
@@ -359,13 +385,19 @@ def main(cfg: DictConfig) -> None:
             cfg.training.num_validation_samples > 0
             and (epoch + 1) % cfg.training.validation_freq == 0
         ):
-            # logger0.info(f"Validation started...")
             val_stats = trainer.validate(epoch)
 
-            # Log detailed validation statistics
-            logger0.info(
-                f"Validation epoch {epoch + 1}: MSE: {val_stats['MSE'].item():.3e}, "
-            )
+            # Log validation metrics
+            mse_val = val_stats["MSE"].item()
+            mse_w_time = val_stats["MSE_w_time"]
+            logger0.info(f"Validation epoch {epoch + 1}: MSE: {mse_val:.6f}")
+            if _tabulate.available and dist.rank == 0:
+                rows = [["MSE (overall)", f"{mse_val:.6f}"]]
+                for i, m in enumerate(mse_w_time):
+                    rows.append([f"timestep_{i}_MSE", f"{m.item():.6f}"])
+                logger0.info(
+                    f"\nValidation metrics:\n{_tabulate.tabulate(rows, headers=['Metric', 'Value'], tablefmt='pretty')}\n"
+                )
 
             if dist.rank == 0:
                 # Log to tensorboard

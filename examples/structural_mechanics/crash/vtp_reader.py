@@ -19,6 +19,8 @@ import re
 import numpy as np
 import pyvista as pv
 
+from utils import load_global_features, get_global_features_for_run
+
 
 def find_run_folders(base_data_dir):
     """Return a list of absolute VTP file paths; each file is a separate sample."""
@@ -112,6 +114,30 @@ def load_vtp_file(vtp_path):
         if not name.startswith("displacement_"):
             point_data_dict[name] = np.asarray(poly.point_data[name])
 
+    # Extract cell data and convert to point data
+    if poly.cell_data:
+        converted = poly.cell_data_to_point_data(pass_cell_data=True)
+        cell_point_names = [
+            name
+            for name in converted.point_data.keys()
+            if name.startswith("cell_effective_plastic_strain_")
+            or name.startswith("cell_stress_vm_")
+        ]
+        if cell_point_names:
+
+            def natural_key(name):
+                return [
+                    int(s) if s.isdigit() else s.lower()
+                    for s in re.findall(r"\d+|\D+", name)
+                ]
+
+            cell_point_names = sorted(cell_point_names, key=natural_key)
+            for name in cell_point_names:
+                arr = np.asarray(converted.point_data[name])
+                # Drop the 'cell_' prefix to reflect point semantics
+                point_name = name.replace("cell_", "", 1)
+                point_data_dict[point_name] = arr
+
     return pos_raw, mesh_connectivity, point_data_dict
 
 
@@ -162,7 +188,13 @@ def collect_mesh_pos(
     return np.stack(mesh_pos_all)
 
 
-def process_vtp_data(data_dir, num_samples=2, write_vtp=False, logger=None):
+def process_vtp_data(
+    data_dir,
+    num_samples=2,
+    write_vtp=False,
+    global_features_filepath: str | None = None,
+    logger=None,
+):
     """
     Preprocesses VTP crash simulation data in a given directory.
     Each .vtp file is treated as one sample. For each sample, computes edges from connectivity,
@@ -174,17 +206,32 @@ def process_vtp_data(data_dir, num_samples=2, write_vtp=False, logger=None):
     vtp_files = find_run_folders(base_data_dir)
     srcs, dsts = [], []
     point_data_all = []
+    global_features_all = []
 
     if not vtp_files:
         if logger:
             logger.error(f"No .vtp files found in: {base_data_dir}")
         exit(1)
 
+    # Load global features
+    if global_features_filepath is not None:
+        all_global_features = load_global_features(global_features_filepath)
+
     for vtp_path in vtp_files:
         if logger:
             logger.info(f"Processing {vtp_path}...")
         output_dir = f"./output_{os.path.splitext(os.path.basename(vtp_path))[0]}"
         os.makedirs(output_dir, exist_ok=True)
+
+        # Get global features for this run
+        run_id = os.path.splitext(os.path.basename(vtp_path))[0]
+        if global_features_filepath is not None:
+            global_features = get_global_features_for_run(
+                all_global_features,
+                run_id,
+            )
+        else:
+            global_features = {}
 
         pos_raw, mesh_connectivity, point_data_dict = load_vtp_file(vtp_path)
 
@@ -210,15 +257,19 @@ def process_vtp_data(data_dir, num_samples=2, write_vtp=False, logger=None):
         )
 
         # Create record with coords and all other point data fields
-        record = {"coords": mesh_pos_all}
-        record.update(point_data_dict)  # Add thickness and any other fields
+        record = {
+            "coords": mesh_pos_all,
+            "point_data": point_data_dict,
+        }
+
         point_data_all.append(record)
+        global_features_all.append(global_features)
 
         processed_runs += 1
         if processed_runs >= num_samples:
             break
 
-    return srcs, dsts, point_data_all
+    return srcs, dsts, point_data_all, global_features_all
 
 
 class Reader:
@@ -234,6 +285,7 @@ class Reader:
         data_dir: str,
         num_samples: int,
         split: str | None = None,
+        global_features_filepath: str | None = None,
         logger=None,
         **kwargs,
     ):
@@ -242,5 +294,6 @@ class Reader:
             data_dir=data_dir,
             num_samples=num_samples,
             write_vtp=write_vtp,
+            global_features_filepath=global_features_filepath,
             logger=logger,
         )

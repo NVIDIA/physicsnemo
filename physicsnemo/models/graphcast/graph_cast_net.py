@@ -224,6 +224,7 @@ class GraphCastNet(Module):
     --------
     >>> import torch
     >>> from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
+    >>> device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     >>> model = GraphCastNet(
     ...     mesh_level=1,
     ...     input_res=(10, 20),
@@ -234,8 +235,8 @@ class GraphCastNet(Module):
     ...     processor_layers=3,
     ...     hidden_dim=4,
     ...     do_concat_trick=True,
-    ... )
-    >>> x = torch.randn(1, 2, 10, 20)
+    ... ).to(device)
+    >>> x = torch.randn(1, 2, 10, 20, device=device)
     >>> y = model(x)
     >>> y.shape
     torch.Size([1, 2, 10, 20])

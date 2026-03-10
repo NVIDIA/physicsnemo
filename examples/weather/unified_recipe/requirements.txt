@@ -3,3 +3,4 @@ wandb
 termcolor>=2.1.1
 hydra-core
 gcsfs
+dask

@@ -89,12 +89,14 @@ from .module.hpx import (
 )
 from .module.kan_layers import KolmogorovArnoldNetwork
 from .module.mlp_layers import Mlp
+from .module.pade import Pade
 from .module.resample_layers import (
     DownSample2D,
     DownSample3D,
     UpSample2D,
     UpSample3D,
 )
+from .module.running_norm import RunningNorm
 from .module.siren_layers import SirenLayer, SirenLayerType
 from .module.spectral_layers import (
     SpectralConv1d,

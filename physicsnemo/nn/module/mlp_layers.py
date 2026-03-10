@@ -16,6 +16,8 @@
 
 """Multi-layer perceptron (MLP) module with optional Transformer Engine support."""
 
+import itertools
+
 import torch
 from torch import nn
 
@@ -28,13 +30,11 @@ te = OptionalImport("transformer_engine.pytorch")
 
 
 class Mlp(nn.Module):
-    """Multi-layer perceptron with configurable architecture and optional Transformer Engine support.
+    """Multi-layer perceptron with configurable architecture.
 
-    A flexible MLP that supports:
-    - Arbitrary number of hidden layers with configurable dimensions
-    - Optional Transformer Engine linear layers for optimized performance
-    - Configurable activation function
-    - Optional dropout
+    Supports arbitrary depth, dropout, batch normalization, spectral
+    normalization, bias control, and optional Transformer Engine linear
+    layers.
 
     Parameters
     ----------
@@ -49,16 +49,24 @@ class Mlp(nn.Module):
     out_features : int | None, optional
         Number of output features. If ``None``, defaults to ``in_features``.
         Default is ``None``.
-    act_layer : nn.Module | str, optional
+    act_layer : nn.Module | type[nn.Module] | str, optional
         Activation function. Can be:
         - ``str``: Name of activation (e.g., ``"gelu"``, ``"relu"``, ``"silu"``)
         - ``type``: Activation class to instantiate (e.g., ``nn.GELU``)
         - ``nn.Module``: Pre-instantiated activation module
         Default is ``nn.GELU``.
     drop : float, optional
-        Dropout rate applied after each layer. Default is ``0.0``.
+        Dropout rate applied after each hidden layer. Default is ``0.0``.
     final_dropout : bool, optional
         Whether to apply dropout after the final linear layer. Default is ``True``.
+    bias : bool, optional
+        Whether to include bias terms in the linear layers. Default is ``True``.
+    use_batchnorm : bool, optional
+        If ``True``, applies ``BatchNorm1d`` after each linear layer
+        (including the output layer). Default is ``False``.
+    spectral_norm : bool, optional
+        If ``True``, applies spectral normalization to all linear layer
+        weights, constraining the spectral norm to 1. Default is ``False``.
     use_te : bool, optional
         Whether to use Transformer Engine linear layers for optimized performance.
         Requires Transformer Engine to be installed. Default is ``False``.
@@ -66,20 +74,28 @@ class Mlp(nn.Module):
     Examples
     --------
     >>> import torch
-    >>> # Simple MLP with single hidden layer
     >>> mlp = Mlp(in_features=64, hidden_features=128, out_features=32)
     >>> x = torch.randn(2, 64)
     >>> out = mlp(x)
     >>> out.shape
     torch.Size([2, 32])
 
-    >>> # MLP with multiple hidden layers
     >>> mlp = Mlp(in_features=64, hidden_features=[128, 256, 128], out_features=32)
     >>> x = torch.randn(2, 64)
     >>> out = mlp(x)
     >>> out.shape
     torch.Size([2, 32])
 
+    >>> # With batch normalization and spectral normalization
+    >>> mlp = Mlp(
+    ...     in_features=10,
+    ...     hidden_features=[32, 16],
+    ...     out_features=4,
+    ...     use_batchnorm=True,
+    ...     spectral_norm=True,
+    ... )
+    >>> mlp(torch.randn(8, 10)).shape
+    torch.Size([8, 4])
     """
 
     def __init__(
@@ -90,25 +106,23 @@ class Mlp(nn.Module):
         act_layer: nn.Module | type[nn.Module] | str = nn.GELU,
         drop: float = 0.0,
         final_dropout: bool = True,
+        bias: bool = True,
+        use_batchnorm: bool = False,
+        spectral_norm: bool = False,
         use_te: bool = False,
     ):
         super().__init__()
 
         self.use_te = use_te
 
-        # Set default output features
         out_features = out_features or in_features
 
-        # Normalize hidden_features to list
-        if isinstance(hidden_features, int):
-            hidden_features = [hidden_features]
-        elif hidden_features is None:
+        if hidden_features is None:
             hidden_features = [in_features]
+        elif isinstance(hidden_features, int):
+            hidden_features = [hidden_features]
 
-        # Process activation layer
-        # If it's a string, get the activation by name
-        # If it's a type (class), instantiate it
-        # If it's already an instance, use it directly
+        ### Resolve activation
         if isinstance(act_layer, str):
             act_layer = get_activation(act_layer)
         elif isinstance(act_layer, nn.Module):
@@ -120,24 +134,25 @@ class Mlp(nn.Module):
                     f"Activation layer must be a string or a module, got {type(act_layer)}"
                 )
 
-        # Select linear layer type based on use_te
         linear_layer = te.Linear if use_te else nn.Linear
 
-        # Build layers
+        ### Build layers
         layers: list[nn.Module] = []
-        input_dim = in_features
+        dims = [in_features, *hidden_features, out_features]
+        n_layers = len(dims) - 1
 
-        for hidden_dim in hidden_features:
-            layers.append(linear_layer(input_dim, hidden_dim))
-            layers.append(act_layer)
-            if drop != 0:
+        for i, (in_dim, out_dim) in enumerate(itertools.pairwise(dims)):
+            is_last = i == n_layers - 1
+            linear = linear_layer(in_dim, out_dim, bias=bias)
+            if spectral_norm:
+                linear = nn.utils.parametrizations.spectral_norm(linear, name="weight")
+            layers.append(linear)
+            if use_batchnorm:
+                layers.append(nn.BatchNorm1d(out_dim))
+            if not is_last:
+                layers.append(act_layer)
+            if drop != 0 and (not is_last or final_dropout):
                 layers.append(nn.Dropout(drop))
-            input_dim = hidden_dim
-
-        # Add the final output layer
-        layers.append(linear_layer(input_dim, out_features))
-        if drop != 0 and final_dropout:
-            layers.append(nn.Dropout(drop))
 
         self.layers = nn.Sequential(*layers)
 

@@ -110,9 +110,10 @@ class Mesh:
     ----------
     points : torch.Tensor
         Vertex coordinates with shape :math:`(N_p, D_s)`. Must be floating-point.
-    cells : torch.Tensor
+    cells : torch.Tensor, optional
         Cell connectivity with shape :math:`(N_c, D_m + 1)`. Each row contains
         indices into ``points`` defining one simplex. Must be integer dtype.
+        Defaults to an empty 0-simplex tensor for point-cloud meshes.
     point_data : TensorDict or dict[str, torch.Tensor], optional
         Per-vertex data. Dicts are automatically converted to TensorDict.
     cell_data : TensorDict or dict[str, torch.Tensor], optional
@@ -169,6 +170,13 @@ class Mesh:
     >>> graph.n_manifold_dims, graph.n_spatial_dims
     (1, 3)
 
+    Create a point cloud (no connectivity):
+
+    >>> points = torch.randn(50, 3)
+    >>> cloud = Mesh(points=points)
+    >>> cloud.n_points, cloud.n_cells, cloud.n_manifold_dims
+    (50, 0, 0)
+
     Notes
     -----
     **Mixed Manifold Dimensions**
@@ -210,52 +218,87 @@ class Mesh:
     def __init__(
         self,
         points: torch.Tensor,
-        cells: torch.Tensor,
+        cells: torch.Tensor | None = None,
         point_data: TensorDict | dict[str, torch.Tensor] | None = None,
         cell_data: TensorDict | dict[str, torch.Tensor] | None = None,
         global_data: TensorDict | dict[str, torch.Tensor] | None = None,
         *,
         _cache: TensorDict | None = None,
     ) -> None:
-        ### Assign tensorclass fields
         self.points = points
-        self.cells = cells
+        self.cells = cells  # type: ignore[assignment]  # normalized by __post_init__
+        # The tensorclass setter silently drops entries from non-dict Mappings
+        # (e.g. PyVista DataSetAttributes). Wrapping with dict() converts any
+        # Mapping to a plain dict that the setter handles correctly.
+        self.point_data = (  # type: ignore[assignment]  # normalized by __post_init__
+            dict(point_data)
+            if point_data is not None and not isinstance(point_data, TensorDict)
+            else point_data
+        )
+        self.cell_data = (  # type: ignore[assignment]  # normalized by __post_init__ (coerced to TensorDict)
+            dict(cell_data)
+            if cell_data is not None and not isinstance(cell_data, TensorDict)
+            else cell_data
+        )
+        self.global_data = (  # type: ignore[assignment]  # normalized by __post_init__
+            dict(global_data)
+            if global_data is not None and not isinstance(global_data, TensorDict)
+            else global_data
+        )
+        self._cache = _cache  # type: ignore[assignment]  # normalized by __post_init__
+        # tensorclass only auto-calls __post_init__ from the *generated* __init__
+        # (same semantics as dataclasses). Since we define a custom __init__,
+        # we must call it explicitly. During load(), tensorclass calls it
+        # automatically, so __post_init__ is the single source of truth for
+        # defaults, coercions, and validation.
+        self.__post_init__()
 
-        # For data fields, convert inputs to TensorDicts if needed
-        if isinstance(point_data, TensorDict):
-            point_data.batch_size = torch.Size(
-                [self.n_points]
-            )  # Ensure shape-compatible
+    def __post_init__(self):
+        """Normalize fields and validate invariants.
+
+        Called automatically during ``load()`` by tensorclass, and explicitly
+        from ``__init__`` during normal construction. This is the single source
+        of truth for all default values, type coercions, and shape validation.
+        """
+        ### cells: default empty-cells sentinel for point clouds
+        # The tensordict memmap format does not persist tensors with 0 elements,
+        # so this also restores cells after deserialization.
+        if self.cells is None:
+            self.cells = torch.zeros(0, 1, dtype=torch.long, device=self.points.device)
+
+        ### point_data: coerce dict -> TensorDict and enforce batch_size
+        if isinstance(self.point_data, TensorDict):
+            self.point_data.batch_size = torch.Size([self.n_points])
         else:
-            point_data = TensorDict(
-                {} if point_data is None else dict(point_data),
+            self.point_data = TensorDict(
+                {} if self.point_data is None else dict(self.point_data),
                 batch_size=torch.Size([self.n_points]),
                 device=self.points.device,
             )
-        self.point_data = point_data
 
-        if isinstance(cell_data, TensorDict):
-            cell_data.batch_size = torch.Size([self.n_cells])  # Ensure shape-compatible
+        ### cell_data: coerce dict -> TensorDict and enforce batch_size
+        if isinstance(self.cell_data, TensorDict):
+            self.cell_data.batch_size = torch.Size([self.n_cells])
         else:
-            cell_data = TensorDict(
-                {} if cell_data is None else dict(cell_data),
+            self.cell_data = TensorDict(
+                {} if self.cell_data is None else dict(self.cell_data),
                 batch_size=torch.Size([self.n_cells]),
                 device=self.cells.device,
             )
-        self.cell_data = cell_data
 
-        if isinstance(global_data, TensorDict):
-            global_data.batch_size = torch.Size([])  # Ensure shape-compatible
+        ### global_data: coerce dict -> TensorDict and enforce batch_size
+        if isinstance(self.global_data, TensorDict):
+            self.global_data.batch_size = torch.Size([])
         else:
-            global_data = TensorDict(
-                {} if global_data is None else dict(global_data),
+            self.global_data = TensorDict(
+                {} if self.global_data is None else dict(self.global_data),
                 batch_size=torch.Size([]),
                 device=self.points.device,
             )
-        self.global_data = global_data
 
-        if _cache is None:
-            _cache = TensorDict(
+        ### _cache: default empty cache structure
+        if self._cache is None:
+            self._cache = TensorDict(
                 {
                     "cell": TensorDict(
                         {}, batch_size=[self.n_cells], device=self.points.device
@@ -267,7 +310,6 @@ class Mesh:
                 batch_size=[],
                 device=self.points.device,
             )
-        self._cache = _cache
 
         ### Validate shapes and dtypes
         if not torch.compiler.is_compiling():
@@ -505,15 +547,12 @@ class Mesh:
 
             for i in range(self.n_spatial_dims):
                 ### Select all columns except the i-th to form (n-1)×(n-1) submatrix
-                cols_mask = torch.ones(
-                    self.n_spatial_dims,
-                    dtype=torch.bool,
-                    device=relative_vectors.device,
-                )
-                cols_mask[i] = False
-                submatrix = relative_vectors[
-                    :, :, cols_mask
-                ]  # (n_cells, n_manifold_dims, n_manifold_dims)
+                # Uses slice concatenation instead of boolean mask indexing to avoid
+                # aten.nonzero (a dynamic shape op that causes torch.compile graph breaks).
+                submatrix = torch.cat(
+                    [relative_vectors[:, :, :i], relative_vectors[:, :, i + 1 :]],
+                    dim=-1,
+                )  # (n_cells, n_manifold_dims, n_manifold_dims)
 
                 ### Compute signed minor: (-1)^(n_manifold_dims + i) * det(submatrix)
                 det = submatrix.det()  # (n_cells,)
@@ -531,15 +570,15 @@ class Mesh:
 
     @property
     def point_normals(self) -> torch.Tensor:
-        """Compute angle-area-weighted normal vectors at mesh vertices.
+        """Compute weighted normal vectors at mesh vertices.
 
-        This property returns the canonical/default point normals using combined
-        angle and area weighting (Maya default). For other weighting schemes
-        (unweighted, area, angle), use :meth:`compute_point_normals`.
+        This property returns the canonical/default point normals. For 2D+
+        manifolds (surfaces, volumes), angle-area weighting is used, which
+        balances face area and vertex interior angle for high-quality normals.
+        For 1D manifolds (curves), area weighting (i.e. segment-length
+        weighting) is used, since interior angles are not defined for edges.
 
-        Angle-area weighting ensures that each face's contribution is weighted by
-        both its area and the interior angle at the vertex, balancing both geometric
-        factors for high-quality normals.
+        For explicit weighting control, use :meth:`compute_point_normals`.
 
         The result is cached in ``_cache["point", "normals"]`` for efficiency.
 
@@ -553,7 +592,7 @@ class Mesh:
         Raises
         ------
         ValueError
-            If the mesh is not codimension-1 (n_manifold_dims ≠ n_spatial_dims - 1).
+            If the mesh is not codimension-1 (n_manifold_dims != n_spatial_dims - 1).
 
         See Also
         --------
@@ -570,7 +609,8 @@ class Mesh:
         """
         cached = self._cache.get(("point", "normals"), None)
         if cached is None:
-            cached = self.compute_point_normals(weighting="angle_area")
+            weighting = "area" if self.n_manifold_dims < 2 else "angle_area"
+            cached = self.compute_point_normals(weighting=weighting)
             self._cache["point", "normals"] = cached
         return cached
 
@@ -1497,6 +1537,126 @@ class Mesh:
             data_aggregation=data_aggregation,
             target_counts="boundary",
         )
+
+    def to_edge_graph(self) -> "Mesh":
+        r"""Return a 1D Mesh whose cells are the unique edges of this mesh.
+
+        Each edge (pair of vertices connected in a cell) appears exactly once.
+        The resulting Mesh has the same ``points`` array, with ``cells`` of
+        shape :math:`(E, 2)` where *E* is the number of unique edges.
+
+        Cell data from the parent mesh is aggregated onto edges via the
+        facet extraction pipeline (mean aggregation by default).
+
+        Returns
+        -------
+        Mesh
+            A 1D Mesh (``n_manifold_dims == 1``) with edge cells.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> points = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.]])
+        >>> cells = torch.tensor([[0, 1, 2]])
+        >>> mesh = Mesh(points=points, cells=cells)
+        >>> edge_graph = mesh.to_edge_graph()
+        >>> assert edge_graph.n_manifold_dims == 1
+        >>> assert edge_graph.n_cells == 3  # triangle has 3 edges
+        """
+        codim = self.n_manifold_dims - 1
+        return self.get_facet_mesh(manifold_codimension=codim, target_counts="all")
+
+    def to_dual_graph(self) -> "Mesh":
+        r"""Return a 1D Mesh representing the cell-adjacency (dual) graph.
+
+        Points are the cell centroids of this mesh.  Cells are
+        :math:`(E, 2)` line segments connecting pairs of cells that share a
+        codimension-1 facet (e.g., cells sharing an edge in 2D or a face in
+        3D).  The parent mesh's ``cell_data`` becomes the ``point_data`` of the
+        returned Mesh, since each dual-graph node corresponds to a parent cell.
+
+        Returns
+        -------
+        Mesh
+            A 1D Mesh (``n_manifold_dims == 1``) whose points are cell
+            centroids and whose cells encode the cell-neighbor adjacency.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> # Two triangles sharing an edge
+        >>> points = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.], [1.5, 1.]])
+        >>> cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+        >>> mesh = Mesh(points=points, cells=cells)
+        >>> dual = mesh.to_dual_graph()
+        >>> assert dual.n_manifold_dims == 1
+        >>> assert dual.n_cells == 1  # 1 shared edge -> 1 dual edge
+        """
+        adj = self.get_cell_to_cells_adjacency(adjacency_codimension=1)
+        sources, targets = adj.expand_to_pairs()
+
+        # Keep only upper-triangular pairs (source < target) to avoid
+        # counting each neighbor relationship twice.
+        mask = sources < targets
+        edges = torch.stack([sources[mask], targets[mask]], dim=1)
+
+        return Mesh(
+            points=self.cell_centroids,
+            cells=edges,
+            point_data=self.cell_data,
+            global_data=self.global_data,
+        )
+
+    def to_point_cloud(
+        self, point_source: "Literal['vertices', 'cell_centroids']" = "vertices"
+    ) -> "Mesh":
+        r"""Return a 0D Mesh (point cloud) with no cell connectivity.
+
+        Parameters
+        ----------
+        point_source : {"vertices", "cell_centroids"}
+            What becomes the points of the returned Mesh:
+
+            - ``"vertices"`` (default): Uses mesh vertices as points,
+              preserving ``point_data``.
+            - ``"cell_centroids"``: Uses cell centroids as points,
+              mapping ``cell_data`` to ``point_data``.
+
+        Returns
+        -------
+        Mesh
+            A 0D Mesh (``n_manifold_dims == 0``) with no cells.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> points = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.]])
+        >>> cells = torch.tensor([[0, 1, 2]])
+        >>> mesh = Mesh(points=points, cells=cells)
+        >>> pc = mesh.to_point_cloud()
+        >>> assert pc.n_manifold_dims == 0
+        >>> assert pc.n_points == 3
+        >>> assert pc.n_cells == 0
+        """
+        if point_source == "vertices":
+            return Mesh(
+                points=self.points,
+                point_data=self.point_data,
+                global_data=self.global_data,
+            )
+        elif point_source == "cell_centroids":
+            return Mesh(
+                points=self.cell_centroids,
+                point_data=self.cell_data,
+                global_data=self.global_data,
+            )
+        else:
+            raise ValueError(
+                f"Invalid {point_source=!r}. Must be 'vertices' or 'cell_centroids'."
+            )
 
     def is_watertight(self) -> bool:
         """Check if mesh is watertight (has no boundary).

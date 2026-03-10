@@ -304,6 +304,17 @@ class TestValidMeshCreation:
         assert mesh.n_manifold_dims == 0
         assert mesh.n_spatial_dims == 3
 
+    def test_point_cloud_no_cells(self):
+        """Test that omitting cells creates a valid point-cloud mesh."""
+        points = torch.randn(50, 3)
+        mesh = Mesh(points=points)
+        assert mesh.n_points == 50
+        assert mesh.n_cells == 0
+        assert mesh.n_manifold_dims == 0
+        assert mesh.cells.shape == (0, 1)
+        assert mesh.cells.dtype == torch.long
+        assert mesh.cells.device == points.device
+
     def test_large_spatial_dims_valid(self):
         """Test that high-dimensional spatial embedding is valid."""
         points = torch.randn(10, 10)  # 10D spatial embedding

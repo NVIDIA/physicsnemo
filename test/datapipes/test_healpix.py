@@ -91,6 +91,7 @@ def scaling_double_dict():
 
 
 @requires_module("omegaconf")
+@requires_module("dask")
 @requires_module("netCDF4")
 def test_open_time_series_on_the_fly(create_path, pytestconfig):
     from physicsnemo.datapipes.healpix.data_modules import (
@@ -133,6 +134,7 @@ def test_open_time_series(data_dir, dataset_name, pytestconfig):
 
 
 @requires_module("omegaconf")
+@requires_module("dask")
 @requires_module("netCDF4")
 @requires_module("numpy")
 def test_create_time_series(data_dir, dataset_name, create_path, pytestconfig):
@@ -197,6 +199,7 @@ def test_create_time_series(data_dir, dataset_name, create_path, pytestconfig):
 
 
 @requires_module("omegaconf")
+@requires_module("dask")
 @requires_module("netCDF4")
 def test_TimeSeriesDataset_initialization(
     data_dir, dataset_name, scaling_dict, pytestconfig
@@ -472,6 +475,7 @@ def test_TimeSeriesDataset_get(
 
 
 @requires_module("omegaconf")
+@requires_module("dask")
 @requires_module("netCDF4")
 def test_TimeSeriesDataModule_initialization(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig

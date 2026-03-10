@@ -20,6 +20,7 @@ import math
 from abc import ABC, abstractmethod
 from typing import Any, Literal, Protocol, Tuple, runtime_checkable
 
+import numpy as np
 import torch
 from jaxtyping import Float
 from torch import Tensor
@@ -44,6 +45,7 @@ class NoiseScheduler(Protocol):
 
     - :meth:`sample_time`: Sample diffusion time values for training
     - :meth:`add_noise`: Add noise to clean data at given diffusion time
+    - :meth:`loss_weight`: Compute per-sample loss weight for training
 
     **Sampling methods:**
 
@@ -80,6 +82,8 @@ class NoiseScheduler(Protocol):
     ...             elif score_predictor is not None:
     ...                 return -score_predictor(x, t) * t.view(-1, 1)
     ...         return denoiser
+    ...     def loss_weight(self, t):
+    ...         return 1 / t**2
     ...
     >>> scheduler = MyScheduler()
     >>> isinstance(scheduler, NoiseScheduler)
@@ -232,6 +236,29 @@ class NoiseScheduler(Protocol):
         """
         ...
 
+    def loss_weight(
+        self,
+        t: Float[Tensor, " N"],
+    ) -> Float[Tensor, " N"]:
+        r"""
+        Compute loss weight for denoising score matching training.
+
+        Used in training to weight the per-sample loss in
+        :class:`~physicsnemo.diffusion.metrics.losses.DSMLoss`.
+
+        Parameters
+        ----------
+        t : Tensor
+            Diffusion time values of shape :math:`(N,)`.
+
+        Returns
+        -------
+        Tensor
+            Loss weight of shape :math:`(N,)`, same device and dtype
+            as ``t``.
+        """
+        ...
+
 
 class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
     r"""
@@ -282,6 +309,7 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
     - :meth:`alpha_dot`: Time derivative :math:`\dot{\alpha}(t)`
     - :meth:`timesteps`: Generate discrete time-steps for sampling
     - :meth:`sample_time`: Sample diffusion times for training
+    - :meth:`loss_weight`: Compute loss weight for training
 
     **Concrete methods (have default implementations, but can be overridden for
     custom behavior):**
@@ -289,6 +317,7 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
     - :meth:`drift`: Drift term :math:`f(\mathbf{x}, t)` for ODE/SDE
     - :meth:`diffusion`: Squared diffusion term :math:`g^2(\mathbf{x}, t)`
     - :meth:`x0_to_score`: Convert x0-prediction to score
+    - :meth:`score_to_x0`: Convert score to x0-prediction
     - :meth:`add_noise`: Add noise to clean data (training)
     - :meth:`init_latents`: Initialize latent state (sampling)
     - :meth:`get_denoiser`: Get ODE/SDE RHS (sampling)
@@ -326,6 +355,8 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
     ...     def sample_time(self, N, *, device=None, dtype=None):
     ...         u = torch.rand(N, device=device, dtype=dtype)
     ...         return self.sigma_min * (self.sigma_max/self.sigma_min)**u
+    ...     def loss_weight(self, t):
+    ...         return 1 / t**2
     ...
     >>> scheduler = SimpleEDMScheduler()
     >>> t_steps = scheduler.timesteps(10)
@@ -524,6 +555,35 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         """
         ...
 
+    @abstractmethod
+    def loss_weight(
+        self,
+        t: Float[Tensor, " N"],
+    ) -> Float[Tensor, " N"]:
+        r"""
+        Compute loss weight for denoising score matching training.
+
+        Used in training to weight the per-sample loss in
+        :class:`~physicsnemo.diffusion.metrics.losses.DSMLoss`. The loss
+        weight is designed for training an x0-predictor (clean data
+        predictor).
+        For training a score-predictor, additionally provide a
+        ``score_to_x0_fn`` callback to
+        :class:`~physicsnemo.diffusion.metrics.losses.DSMLoss`.
+
+        Parameters
+        ----------
+        t : Tensor
+            Diffusion time values of shape :math:`(N,)`.
+
+        Returns
+        -------
+        Tensor
+            Loss weight of shape :math:`(N,)`, same device and dtype
+            as ``t``.
+        """
+        ...
+
     def drift(
         self,
         x: Float[Tensor, " B *dims"],
@@ -643,6 +703,67 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         alpha_t_bc = self.alpha(t_bc)
         sigma_t_bc = self.sigma(t_bc)
         return (alpha_t_bc * x0 - x_t) / (sigma_t_bc**2)
+
+    def score_to_x0(
+        self,
+        score: Float[Tensor, " B *dims"],
+        x_t: Float[Tensor, " B *dims"],
+        t: Float[Tensor, " B"],
+    ) -> Float[Tensor, " B *dims"]:
+        r"""
+        Convert score to x0-prediction.
+
+        This is the inverse of :meth:`x0_to_score`. Given a score
+        prediction :math:`s(\mathbf{x}_t, t)` and
+        the noisy state :math:`\mathbf{x}_t`, recover the corresponding
+        :math:`\hat{\mathbf{x}}_0` estimate:
+
+        .. math::
+            \hat{\mathbf{x}}_0 = \frac{\mathbf{x}_t
+            + \sigma^2(t) \nabla_{\mathbf{x}_t} \log p(\mathbf{x}_t)}
+            {\alpha(t)}
+
+        A common use case is with
+        :class:`~physicsnemo.diffusion.metrics.losses.DSMLoss` to train a
+        score-predictor instead of an x0-predictor: pass this method as the
+        ``score_to_x0_fn`` argument with ``prediction_type="score"``.
+
+        This is a helper method that usually does not need to be overridden
+        in subclasses.
+
+        Parameters
+        ----------
+        score : Tensor
+            Predicted score :math:`s(\mathbf{x}_t, t)` of shape :math:`(B, *)`.
+        x_t : Tensor
+            Current noisy state :math:`\mathbf{x}_t` with same shape as
+            ``score``.
+        t : Tensor
+            Diffusion time with shape :math:`(B,)`.
+
+        Returns
+        -------
+        Tensor
+            Estimated clean data :math:`\hat{\mathbf{x}}_0` with same shape
+            as ``score``.
+
+        Examples
+        --------
+        >>> scheduler = EDMNoiseScheduler()
+        >>> # If you have a score-predictor, convert to x0 for DSM loss:
+        >>> def score_predictor(x, t):
+        ...     return -x / (1 + t.view(-1, *([1] * (x.ndim - 1)))**2)
+        >>> x_t = torch.randn(2, 4)
+        >>> t = torch.tensor([1.0, 1.0])
+        >>> score = score_predictor(x_t, t)
+        >>> x0_est = scheduler.score_to_x0(score, x_t, t)
+        >>> x0_est.shape
+        torch.Size([2, 4])
+        """
+        t_bc = t.reshape(-1, *([1] * (score.ndim - 1)))
+        alpha_t_bc = self.alpha(t_bc)
+        sigma_t_bc = self.sigma(t_bc)
+        return (x_t + sigma_t_bc**2 * score) / alpha_t_bc
 
     def get_denoiser(
         self,
@@ -877,7 +998,7 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
 
 class EDMNoiseScheduler(LinearGaussianNoiseScheduler):
     r"""
-    EDM noise scheduler with identity mapping :math:`\sigma(t) = t`.
+    EDM noise scheduler.
 
     The EDM formulation uses :math:`\alpha(t) = 1` (no signal attenuation)
     and :math:`\sigma(t) = t` (identity mapping between time and noise level).
@@ -889,18 +1010,27 @@ class EDMNoiseScheduler(LinearGaussianNoiseScheduler):
         \left(\sigma_{\min}^{1/\rho} - \sigma_{\max}^{1/\rho}\right)
         \right)^{\rho}
 
-    **Training times** are sampled log-uniformly between ``sigma_min`` and
-    ``sigma_max``.
+    **Training times** are sampled from a log-normal distribution with
+    mean :math:`P_{\text{mean}}` and standard deviation :math:`P_{\text{std}}`.
 
     Parameters
     ----------
     sigma_min : float, optional
-        Minimum noise level, by default 0.002.
+        Minimum noise level for sampling time-steps, by default 0.002.
     sigma_max : float, optional
-        Maximum noise level, by default 80.
+        Maximum noise level for sampling time-steps, by default 80.
     rho : float, optional
         Exponent controlling time-step spacing. Larger values concentrate more
         steps at lower noise levels (better for fine details). By default 7.
+    sigma_data : float, optional
+        Expected standard deviation of the training data, by default 0.5.
+        Used by :meth:`loss_weight` to compute the per-sample loss weight.
+    P_mean : float, optional
+        Mean of the log-normal distribution used to sample training times,
+        by default -1.2.
+    P_std : float, optional
+        Standard deviation of the log-normal distribution used to sample
+        training times, by default 1.2.
 
     Note
     ----
@@ -942,10 +1072,16 @@ class EDMNoiseScheduler(LinearGaussianNoiseScheduler):
         sigma_min: float = 0.002,
         sigma_max: float = 80.0,
         rho: float = 7.0,
+        sigma_data: float = 0.5,
+        P_mean: float = -1.2,
+        P_std: float = 1.2,
     ) -> None:
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
         self.rho = rho
+        self.sigma_data = sigma_data
+        self.P_mean = P_mean
+        self.P_std = P_std
 
     def sigma(
         self,
@@ -1024,8 +1160,9 @@ class EDMNoiseScheduler(LinearGaussianNoiseScheduler):
         dtype: torch.dtype | None = None,
     ) -> Float[Tensor, " N"]:
         r"""
-        Sample N diffusion times log-uniformly in :math:`[\sigma_{min},
-        \sigma_{max}]`.
+        Sample N diffusion times from a log-normal distribution:
+        :math:`\ln(\sigma) \sim \mathcal{N}(P_{\text{mean}},
+        P_{\text{std}}^2)`.
 
         Parameters
         ----------
@@ -1041,9 +1178,41 @@ class EDMNoiseScheduler(LinearGaussianNoiseScheduler):
         Tensor
             Sampled diffusion times of shape :math:`(N,)`.
         """
-        u = torch.rand(N, device=device, dtype=dtype)
-        log_ratio = math.log(self.sigma_max / self.sigma_min)
-        return self.sigma_min * torch.exp(u * log_ratio)
+        rnd_normal = torch.randn(N, device=device, dtype=dtype)
+        return (rnd_normal * self.P_std + self.P_mean).exp()
+
+    def loss_weight(
+        self,
+        t: Float[Tensor, " N"],
+    ) -> Float[Tensor, " N"]:
+        r"""
+        Compute EDM loss weight.
+
+        .. math::
+            w(t) = \frac{\sigma(t)^2 + \sigma_{\text{data}}^2}
+            {\left(\sigma(t) \cdot \sigma_{\text{data}}\right)^2}
+
+        .. important::
+
+            This loss weight is designed for training an x0-predictor
+            (clean data predictor) wrapped with
+            :class:`~physicsnemo.diffusion.preconditioners.EDMPreconditioner`.
+            It is not suitable for training a score-predictor, or a model
+            without a pre-conditioner.
+
+        Parameters
+        ----------
+        t : Tensor
+            Diffusion time values of shape :math:`(N,)`.
+
+        Returns
+        -------
+        Tensor
+            Loss weight of shape :math:`(N,)`.
+        """
+        sd = self.sigma_data
+        sigma_t = self.sigma(t)
+        return (sigma_t**2 + sd**2) / (sigma_t * sd) ** 2
 
 
 class VENoiseScheduler(LinearGaussianNoiseScheduler):
@@ -1207,10 +1376,37 @@ class VENoiseScheduler(LinearGaussianNoiseScheduler):
         sigma = self.sigma_min * torch.exp(u * log_ratio)
         return self.sigma_inv(sigma)
 
+    def loss_weight(
+        self,
+        t: Float[Tensor, " N"],
+    ) -> Float[Tensor, " N"]:
+        r"""
+        Compute VE loss weight: :math:`w(t) = 1 / \sigma(t)^2`.
+
+        .. important::
+
+            This loss weight is designed for training an x0-predictor
+            (clean data predictor) wrapped with
+            :class:`~physicsnemo.diffusion.preconditioners.VEPreconditioner`.
+            It is not suitable for training a score-predictor, or a model
+            without a pre-conditioner.
+
+        Parameters
+        ----------
+        t : Tensor
+            Diffusion time values of shape :math:`(N,)`.
+
+        Returns
+        -------
+        Tensor
+            Loss weight of shape :math:`(N,)`.
+        """
+        return 1 / self.sigma(t) ** 2
+
 
 class IDDPMNoiseScheduler(LinearGaussianNoiseScheduler):
     r"""
-    Improved DDPM (iDDPM) noise scheduler with cosine-based schedule.
+    Improved DDPM (iDDPM) noise scheduler.
 
     Uses identity mappings :math:`\sigma(t) = t` and :math:`\alpha(t) = 1`.
     The key feature is a precomputed noise level schedule derived from a
@@ -1406,6 +1602,33 @@ class IDDPMNoiseScheduler(LinearGaussianNoiseScheduler):
         indices = torch.randint(0, len(u_filtered), (N,), device=device)
         return u_filtered[indices]
 
+    def loss_weight(
+        self,
+        t: Float[Tensor, " N"],
+    ) -> Float[Tensor, " N"]:
+        r"""
+        Compute iDDPM loss weight: :math:`w(t) = 1 / \sigma(t)^2`.
+
+        .. important::
+
+            This loss weight is designed for training an x0-predictor
+            (clean data predictor) wrapped with
+            :class:`~physicsnemo.diffusion.preconditioners.IDDPMPreconditioner`.
+            It is not suitable for training a score-predictor, or a model
+            without a pre-conditioner.
+
+        Parameters
+        ----------
+        t : Tensor
+            Diffusion time values of shape :math:`(N,)`.
+
+        Returns
+        -------
+        Tensor
+            Loss weight of shape :math:`(N,)`.
+        """
+        return 1 / self.sigma(t) ** 2
+
 
 class VPNoiseScheduler(LinearGaussianNoiseScheduler):
     r"""
@@ -1490,19 +1713,12 @@ class VPNoiseScheduler(LinearGaussianNoiseScheduler):
         self.epsilon_s = epsilon_s
         self.t_max = t_max
 
-    def _exponent(
-        self,
-        t: Float[Tensor, " *shape"],
-    ) -> Float[Tensor, " *shape"]:
-        r"""Compute exponent: :math:`a(t) = \frac{\beta_d}{2} t^2 + \beta_{\min} t`."""
-        return 0.5 * self.beta_d * t**2 + self.beta_min * t
-
     def alpha(
         self,
         t: Float[Tensor, " *shape"],
     ) -> Float[Tensor, " *shape"]:
         r"""Signal coefficient: :math:`\alpha(t) = \exp(-a(t)/2)`."""
-        return torch.exp(-0.5 * self._exponent(t))
+        return torch.exp(-0.5 * (0.5 * self.beta_d * t**2 + self.beta_min * t))
 
     def alpha_dot(
         self,
@@ -1605,6 +1821,33 @@ class VPNoiseScheduler(LinearGaussianNoiseScheduler):
         u = torch.rand(N, device=device, dtype=dtype)
         return self.epsilon_s + u * (self.t_max - self.epsilon_s)
 
+    def loss_weight(
+        self,
+        t: Float[Tensor, " N"],
+    ) -> Float[Tensor, " N"]:
+        r"""
+        Compute VP loss weight: :math:`w(t) = \alpha(t)^2 / \sigma(t)^2`.
+
+        .. important::
+
+            This loss weight is designed for training an x0-predictor
+            (clean data predictor) wrapped with
+            :class:`~physicsnemo.diffusion.preconditioners.VPPreconditioner`.
+            It is not suitable for training a score-predictor, or a model
+            without a pre-conditioner.
+
+        Parameters
+        ----------
+        t : Tensor
+            Diffusion time values of shape :math:`(N,)`.
+
+        Returns
+        -------
+        Tensor
+            Loss weight of shape :math:`(N,)`.
+        """
+        return (self.alpha(t) / self.sigma(t)) ** 2
+
 
 class StudentTEDMNoiseScheduler(LinearGaussianNoiseScheduler):
     r"""
@@ -1643,9 +1886,9 @@ class StudentTEDMNoiseScheduler(LinearGaussianNoiseScheduler):
     Parameters
     ----------
     sigma_min : float, optional
-        Minimum noise level, by default 0.002.
+        Minimum noise level for sampling time-steps, by default 0.002.
     sigma_max : float, optional
-        Maximum noise level, by default 80.
+        Maximum noise level for sampling time-steps, by default 80.
     rho : float, optional
         Exponent controlling time-step spacing. Larger values concentrate more
         steps at lower noise levels (better for fine details). By default 7.
@@ -1653,6 +1896,15 @@ class StudentTEDMNoiseScheduler(LinearGaussianNoiseScheduler):
         Degrees of freedom for Student-t distribution. Must be > 2.
         As ``nu`` increases, the distribution approaches Gaussian. Lower values
         produce heavier tails. By default 10.
+    sigma_data : float, optional
+        Expected standard deviation of the training data, by default 0.5.
+        Used by :meth:`loss_weight` to compute the per-sample loss weight.
+    P_mean : float, optional
+        Mean of the log-normal distribution used to sample training times,
+        by default -1.2.
+    P_std : float, optional
+        Standard deviation of the log-normal distribution used to sample
+        training times, by default 1.2.
 
     Note
     ----
@@ -1691,6 +1943,9 @@ class StudentTEDMNoiseScheduler(LinearGaussianNoiseScheduler):
         sigma_max: float = 80.0,
         rho: float = 7.0,
         nu: int = 10,
+        sigma_data: float = 0.5,
+        P_mean: float = -1.2,
+        P_std: float = 1.2,
     ) -> None:
         if nu <= 2:
             raise ValueError(f"nu must be > 2, got {nu}")
@@ -1698,6 +1953,9 @@ class StudentTEDMNoiseScheduler(LinearGaussianNoiseScheduler):
         self.sigma_max = sigma_max
         self.rho = rho
         self.nu = nu
+        self.sigma_data = sigma_data
+        self.P_mean = P_mean
+        self.P_std = P_std
 
     def sigma(
         self,
@@ -1776,8 +2034,9 @@ class StudentTEDMNoiseScheduler(LinearGaussianNoiseScheduler):
         dtype: torch.dtype | None = None,
     ) -> Float[Tensor, " N"]:
         r"""
-        Sample N diffusion times log-uniformly in :math:`[\sigma_{min},
-        \sigma_{max}]`.
+        Sample N diffusion times from a log-normal distribution:
+        :math:`\ln(\sigma) \sim \mathcal{N}(P_{\text{mean}},
+        P_{\text{std}}^2)`.
 
         Parameters
         ----------
@@ -1793,13 +2052,45 @@ class StudentTEDMNoiseScheduler(LinearGaussianNoiseScheduler):
         Tensor
             Sampled diffusion times of shape :math:`(N,)`.
         """
-        u = torch.rand(N, device=device, dtype=dtype)
-        log_ratio = math.log(self.sigma_max / self.sigma_min)
-        return self.sigma_min * torch.exp(u * log_ratio)
+        rnd_normal = torch.randn(N, device=device, dtype=dtype)
+        return (rnd_normal * self.P_std + self.P_mean).exp()
+
+    def loss_weight(
+        self,
+        t: Float[Tensor, " N"],
+    ) -> Float[Tensor, " N"]:
+        r"""
+        Compute Student-t EDM loss weight: :math:`w(t) = \frac{\tilde{\sigma}(t)^2 + \sigma_{\text{data}}^2}
+        {\left(\tilde{\sigma}(t) \cdot \sigma_{\text{data}}\right)^2}`
+
+        where :math:`\tilde{\sigma}(t) = \sigma(t) \cdot \sqrt{\frac{\nu}{\nu -
+        2}}` is the scaled noise level.
+
+        .. important::
+
+            This loss weight is designed for training an x0-predictor
+            (clean data predictor) wrapped with
+            :class:`~physicsnemo.diffusion.preconditioners.EDMPreconditioner`.
+            It is not suitable for training a score-predictor, or a model
+            without a pre-conditioner.
+
+        Parameters
+        ----------
+        t : Tensor
+            Diffusion time values of shape :math:`(N,)`.
+
+        Returns
+        -------
+        Tensor
+            Loss weight of shape :math:`(N,)`.
+        """
+        sd = self.sigma_data
+        sigma_t_scaled = self.sigma(t) * np.sqrt(self.nu / (self.nu - 2))
+        return (sigma_t_scaled**2 + sd**2) / (sigma_t_scaled * sd) ** 2
 
     def _sample_student_t(
         self,
-        shape: Tuple[int, ...],
+        *shape: int,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> Tensor:
@@ -1811,7 +2102,7 @@ class StudentTEDMNoiseScheduler(LinearGaussianNoiseScheduler):
 
         Parameters
         ----------
-        shape : Tuple[int, ...]
+        *shape : int
             Shape of the output tensor.
         device : torch.device, optional
             Device to place the tensor on.
@@ -1823,22 +2114,13 @@ class StudentTEDMNoiseScheduler(LinearGaussianNoiseScheduler):
         Tensor
             Student-t samples of the specified shape.
         """
-        # Sample standard normal
-        normal = torch.randn(shape, device=device, dtype=dtype)
+        normal = torch.randn(*shape, device=device, dtype=dtype)
 
-        # Sample chi-squared and compute scaling
-        chi2_dist = torch.distributions.Chi2(df=self.nu)
-        chi2_samples = chi2_dist.sample((shape[0],))
-        if device is not None:
-            chi2_samples = chi2_samples.to(device)
-        if dtype is not None:
-            chi2_samples = chi2_samples.to(dtype)
+        nu = torch.tensor(self.nu, device=device, dtype=dtype)
+        chi2_dist = torch.distributions.Chi2(df=nu)
+        chi2_samples = chi2_dist.sample((shape[0], *([1] * (len(shape) - 1))))
+        kappa = chi2_samples / nu
 
-        # kappa = chi2 / nu, reshape for broadcasting
-        kappa = chi2_samples / self.nu
-        kappa = kappa.view(-1, *([1] * (len(shape) - 1)))
-
-        # Student-t = normal / sqrt(kappa)
         return normal / torch.sqrt(kappa)
 
     def add_noise(
@@ -1870,7 +2152,7 @@ class StudentTEDMNoiseScheduler(LinearGaussianNoiseScheduler):
         """
         t_bc = time.reshape(-1, *([1] * (x0.ndim - 1)))
         sigma_t_bc = self.sigma(t_bc)
-        noise = self._sample_student_t(x0.shape, device=x0.device, dtype=x0.dtype)
+        noise = self._sample_student_t(*x0.shape, device=x0.device, dtype=x0.dtype)
         return x0 + sigma_t_bc * noise
 
     def init_latents(
@@ -1908,7 +2190,7 @@ class StudentTEDMNoiseScheduler(LinearGaussianNoiseScheduler):
             Initial noisy latent of shape :math:`(B, *spatial\_shape)`.
         """
         B = tN.shape[0]
-        noise = self._sample_student_t((B, *spatial_shape), device=device, dtype=dtype)
+        noise = self._sample_student_t(B, *spatial_shape, device=device, dtype=dtype)
         tN_bc = tN.reshape(-1, *([1] * len(spatial_shape)))
         sigma_tN_bc = self.sigma(tN_bc)
         return sigma_tN_bc * noise
