@@ -25,94 +25,97 @@ This script can be run in two modes:
 import argparse
 import json
 import re
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import NamedTuple
+
+_COPYRIGHT_RE = re.compile(r"Copyright.*NVIDIA.*", re.IGNORECASE)
 
 
-def get_top_comments(_data):
+class HeaderCheckResult(NamedTuple):
+    """Result of checking a single file's copyright header."""
+
+    is_problematic: bool
+    has_gpl: bool
+    error_msg: str | None
+
+
+def read_header_comments(filepath: Path, *, max_lines: int) -> list[str]:
+    """Read comment lines from the top of a file.
+
+    Iterates lazily, stopping at the first non-blank, non-comment line
+    or after *max_lines* total lines have been seen, whichever comes first.
+    Works correctly for all file types (Python, YAML, Dockerfile, etc.).
     """
-    Get all lines where comments should exist.
-    """
-    lines_to_extract = []
-    for i, line in enumerate(_data):
-        # If empty line, skip
-        if line in ["", "\n", "", "\r", "\r\n"]:
-            continue
-        # If it is a comment line, we should get it
-        if line.startswith("#"):
-            lines_to_extract.append(i)
-        # Assume all copyright headers occur before any import or from statements
-        # and not enclosed in a comment block
-        elif "import" in line:
-            break
-        elif "from" in line:
-            break
-
-    comments = [_data[line] for line in lines_to_extract]
-
+    comments: list[str] = []
+    with open(filepath, "r", encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            if i >= max_lines:
+                break
+            if line.strip() == "":
+                continue
+            if line.startswith("#"):
+                comments.append(line)
+            else:
+                break
     return comments
 
 
-def get_all_files(working_path, exts, exclude_dirs):
+def get_git_tracked_files(
+    exts: list[str], exclude_prefixes: list[str]
+) -> list[Path]:
+    """Return git-tracked files matching *exts*, excluding paths that start
+    with any of *exclude_prefixes*.
+
+    Uses ``git ls-files`` so that only committed/staged files are returned and
+    everything in ``.gitignore`` is automatically skipped.
     """
-    Get a list of all files in the directory with specified extensions,
-    excluding files in excluded directories.
-    """
-    all_files = []
-    exclude_paths = [Path(p).resolve() for p in exclude_dirs]
-
-    for ext in exts:
-        # Handle extensions that start with "." vs filenames like "Dockerfile"
-        if ext.startswith("."):
-            pattern = f"*{ext}"
-        else:
-            pattern = ext
-
-        for filepath in working_path.rglob(pattern):
-            # Check if file is under any excluded directory
-            is_excluded = any(
-                exclude_path in filepath.parents or filepath == exclude_path
-                for exclude_path in exclude_paths
-            )
-            if not is_excluded:
-                all_files.append(filepath)
-
-    return all_files
+    pathspecs = [f"*.{ext.lstrip('.')}" if ext.startswith(".") else ext for ext in exts]
+    result = subprocess.run(  # noqa: S603
+        ["git", "ls-files", "--cached", "--", *pathspecs],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    exclude_tuple = tuple(exclude_prefixes)
+    return [
+        Path(line)
+        for line in result.stdout.splitlines()
+        if not line.startswith(exclude_tuple)
+    ]
 
 
-def check_file_header(filename, pyheader, pyheader_lines, starting_year, current_year):
-    """
-    Check a single file for proper copyright header.
-
-    Returns:
-        tuple: (is_problematic, has_gpl, error_message)
-    """
+def check_file_header(
+    filename: Path,
+    pyheader: list[str],
+    starting_year: int,
+    current_year: int,
+) -> HeaderCheckResult:
+    """Check a single file for proper copyright header."""
+    max_lines = 3 * len(pyheader)
     try:
-        with open(str(filename), "r", encoding="utf-8") as original:
-            data = original.readlines()
+        data = read_header_comments(filename, max_lines=max_lines)
     except (OSError, UnicodeDecodeError) as e:
-        return True, False, f"Could not read file: {e}"
+        return HeaderCheckResult(True, False, f"Could not read file: {e}")
 
-    data = get_top_comments(data)
-
-    # Check for ignore marker
     if data and "# ignore_header_test" in data[0]:
-        return False, False, None
+        return HeaderCheckResult(False, False, None)
 
-    # Check if enough header lines exist
-    if len(data) < pyheader_lines - 1:
-        return True, False, "has less header lines than the copyright template"
+    if len(data) < len(pyheader) - 1:
+        return HeaderCheckResult(
+            True, False, "has less header lines than the copyright template"
+        )
 
-    # Look for NVIDIA copyright line
+    ### Look for NVIDIA copyright line
     found = False
     is_problematic = False
-    error_msg = None
+    error_msg: str | None = None
 
     for i, line in enumerate(data):
-        if re.search(re.compile("Copyright.*NVIDIA.*", re.IGNORECASE), line):
+        if _COPYRIGHT_RE.search(line):
             found = True
-            # Check year
             year_good = False
             for year in range(starting_year, current_year + 1):
                 year_line = pyheader[0].format(CURRENT_YEAR=year)
@@ -133,16 +136,13 @@ def check_file_header(filename, pyheader, pyheader_lines, starting_year, current
         is_problematic = True
         error_msg = "did not match the regex: `Copyright.*NVIDIA.*`"
 
-    # Check for GPL license
     has_gpl = any("gpl" in line.lower() for line in data)
 
-    return is_problematic, has_gpl, error_msg
+    return HeaderCheckResult(is_problematic, has_gpl, error_msg)
 
 
-def main():
-    """
-    Main function to check the copyright headers.
-    """
+def main() -> int:
+    """Main function to check the copyright headers."""
     parser = argparse.ArgumentParser(description="Check copyright headers in files.")
     parser.add_argument(
         "filenames",
@@ -153,32 +153,25 @@ def main():
         "-a",
         "--all-files",
         action="store_true",
-        help="Check all files in the directory instead of files passed as arguments.",
+        help="Check all git-tracked files matching the configured extensions.",
     )
     args = parser.parse_args()
 
-    with open(Path(__file__).parent.resolve() / Path("config.json")) as f:
+    config_dir = Path(__file__).parent.resolve()
+    with open(config_dir / "config.json") as f:
         config = json.loads(f.read())
 
     current_year = int(datetime.today().year)
     starting_year = 2024
-    python_header_path = Path(__file__).parent.resolve() / Path(
-        config["copyright_file"]
-    )
 
-    with open(python_header_path, "r", encoding="utf-8") as original:
-        pyheader = original.read().split("\n")
-        pyheader_lines = len(pyheader)
+    with open(config_dir / config["copyright_file"], "r", encoding="utf-8") as f:
+        pyheader: list[str] = f.read().split("\n")
 
-    # Determine which files to check
+    ### Determine which files to check
     if args.all_files:
-        working_path = Path(__file__).parent.resolve() / Path(config["dir"])
-        exts = config["include-ext"]
-        exclude_dirs = [
-            (Path(__file__).parent / Path(path)).resolve()
-            for path in config.get("exclude-dir", [])
-        ]
-        filenames = get_all_files(working_path.resolve(), exts, exclude_dirs)
+        exts: list[str] = config["include-ext"]
+        exclude_prefixes: list[str] = config.get("exclude-dir", [])
+        filenames = get_git_tracked_files(exts, exclude_prefixes)
         print("License check config:")
         print(json.dumps(config, sort_keys=True, indent=4))
         print(f"Checking {len(filenames)} git-tracked files")
@@ -188,19 +181,17 @@ def main():
         print("No files to check.")
         return 0
 
-    problematic_files = []
-    gpl_files = []
+    problematic_files: list[Path] = []
+    gpl_files: list[Path] = []
 
     for filename in filenames:
-        is_problematic, has_gpl, error_msg = check_file_header(
-            filename, pyheader, pyheader_lines, starting_year, current_year
-        )
+        result = check_file_header(filename, pyheader, starting_year, current_year)
 
-        if is_problematic:
-            print(f"{filename} {error_msg}")
+        if result.is_problematic:
+            print(f"{filename} {result.error_msg}")
             problematic_files.append(filename)
 
-        if has_gpl:
+        if result.has_gpl:
             gpl_files.append(filename)
 
     if problematic_files:

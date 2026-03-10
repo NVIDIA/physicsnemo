@@ -1,11 +1,9 @@
-
 {
   "copyright_file": "copyright.txt",
-  "dir": "../../",
   "exclude-dir": [
-      "../../physicsnemo/internal",
-      "../../docs/"
-    ],
+      "physicsnemo/internal/",
+      "docs/"
+  ],
   "include-ext": [
       ".py",
       ".yaml",
