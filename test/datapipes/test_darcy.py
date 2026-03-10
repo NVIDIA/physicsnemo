@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -18,15 +18,15 @@ from typing import Tuple
 
 import pytest
 import torch
-from pytest_utils import import_or_fail
+
+from test.conftest import requires_module
 
 from . import common
 
 Tensor = torch.Tensor
 
 
-@import_or_fail("warp")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@requires_module("warp")
 def test_darcy_2d_constructor(device, pytestconfig):
     from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
 
@@ -49,8 +49,7 @@ def test_darcy_2d_constructor(device, pytestconfig):
     assert common.check_datapipe_iterable(datapipe)
 
 
-@import_or_fail("warp")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@requires_module("warp")
 def test_darcy_2d_device(device, pytestconfig):
     from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
 
@@ -76,10 +75,9 @@ def test_darcy_2d_device(device, pytestconfig):
         break
 
 
-@import_or_fail("warp")
+@requires_module("warp")
 @pytest.mark.parametrize("resolution", [128, 64])
 @pytest.mark.parametrize("batch_size", [1, 2, 3])
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_darcy_2d_shape(resolution, batch_size, device, pytestconfig):
     from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
 
@@ -116,10 +114,13 @@ def test_darcy_2d_shape(resolution, batch_size, device, pytestconfig):
         break
 
 
-@import_or_fail("warp")
-@pytest.mark.parametrize("device", ["cuda:0"])
+@requires_module("warp")
 def test_darcy_cudagraphs(device, pytestconfig):
     from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
+
+    # CUDA only:
+    if device == "cpu":
+        pytest.skip("CUDA only")
 
     # Preprocess function to convert dataloader output into Tuple of tensors
     def input_fn(data) -> Tuple[Tensor, ...]:

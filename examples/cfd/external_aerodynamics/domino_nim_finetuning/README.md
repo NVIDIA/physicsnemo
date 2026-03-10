@@ -34,7 +34,7 @@ training from scratch.
 
 The finetuning example validated on the OSS DrivAerML dataset with only 16 training
 and 8 testing samples. The results presented are preliminary and show encouraging
-results. A thourough investigation is underway to provide more concrete datapoints
+results. A thorough investigation is underway to provide more concrete datapoints
 in terms of accuracy improvement and convergence acceleration.
 
 ### Key Features
@@ -311,7 +311,7 @@ The predictor-corrector approach is model-agnostic.
 **To use custom architectures:**
 
 1. **Custom Predictor**: Replace `model_base_predictor.py` with your pretrained model
-2. **Custom Corrector**: Modify the corrector architecture in training configuration  
+2. **Custom Corrector**: Modify the corrector architecture in training configuration
 3. **Maintain Interface**: Ensure input/output compatibility between components
 4. **Update Testing**: Adapt `test.py` for new model combinations
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -18,7 +18,7 @@
 import pytest
 import torch
 
-from physicsnemo.metrics.diffusion import calculate_fid_from_inception_stats
+from physicsnemo.diffusion.metrics import calculate_fid_from_inception_stats
 
 
 def test_fid_calculation():

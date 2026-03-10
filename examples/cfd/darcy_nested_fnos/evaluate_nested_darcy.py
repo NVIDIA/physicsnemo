@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -26,8 +26,8 @@ from physicsnemo.models.mlp import FullyConnected
 from physicsnemo.models.fno import FNO
 from physicsnemo.utils import StaticCaptureEvaluateNoGrad
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.logging import PythonLogger
-from physicsnemo.launch.utils import load_checkpoint
+from physicsnemo.utils.logging import PythonLogger
+from physicsnemo.utils import load_checkpoint
 
 from utils import NestedDarcyDataset, PlotNestedDarcy
 

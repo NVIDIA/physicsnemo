@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -40,7 +40,7 @@ from omegaconf import DictConfig, OmegaConf
 from hydra.utils import to_absolute_path
 
 # Import the load_checkpoint utility from Modulus Launch.
-from physicsnemo.launch.utils import load_checkpoint
+from physicsnemo.utils import load_checkpoint
 
 # Import the dataset and model.
 from physicsnemo.datapipes.gnn.hydrographnet_dataset import HydroGraphDataset

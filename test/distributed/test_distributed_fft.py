@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,13 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+
 import pytest
 import torch
 import torch.distributed as dist
-from pytest_utils import modify_environment
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.distributed.fft import DistributedRFFT2
+
+
+@pytest.fixture(autouse=True)
+def skip_on_cpu(device):
+    if device == "cpu":
+        pytest.skip("Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu")
 
 
 def distributed_setup(rank, model_parallel_size, verbose):
@@ -60,148 +67,144 @@ def global_rfft2(inp, dim, norm, s=None):
 
 
 def run_distributed_fft(rank, model_parallel_size, verbose):
-    with modify_environment(
-        RANK=f"{rank}",
-        WORLD_SIZE=f"{model_parallel_size}",
-        MASTER_ADDR="localhost",
-        MASTER_PORT=str(12355),
-        LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
-    ):
-        # Setup DistributedManager
-        distributed_setup(rank, model_parallel_size, verbose)
+    os.environ["RANK"] = f"{rank}"
+    os.environ["LOCAL_RANK"] = f"{rank % torch.cuda.device_count()}"
 
-        B = 2  # batch size
-        C = 10  # channels
-        H = 720  # height
-        W = 1440  # width
+    # Setup DistributedManager
+    distributed_setup(rank, model_parallel_size, verbose)
 
-        input_split_dim = -1  # dimension to split inputs
-        output_split_dim = -2  # dimension to split inputs
+    B = 2  # batch size
+    C = 10  # channels
+    H = 720  # height
+    W = 1440  # width
 
-        manager = DistributedManager()
+    input_split_dim = -1  # dimension to split inputs
+    output_split_dim = -2  # dimension to split inputs
 
-        if verbose and manager.rank == 0:
-            print(
-                "Running FFT for "
-                f"({B}, {C}, {H}, {W}) on {manager.group_size(name='spatial_parallel')}"
-                " ranks"
-            )
+    manager = DistributedManager()
 
-        # Set random seed for reproducible tests
-        torch.cuda.manual_seed(13)
-
-        # Create inputs
-        global_input = torch.rand(
-            (B, C, H, W), dtype=torch.float32, device=manager.device, requires_grad=True
+    if verbose and manager.rank == 0:
+        print(
+            "Running FFT for "
+            f"({B}, {C}, {H}, {W}) on {manager.group_size(name='spatial_parallel')}"
+            " ranks"
         )
 
-        if manager.distributed:
-            # Broadcast global input from rank 0 to all other ranks
-            dist.broadcast(
-                global_input, src=0, group=manager.group(name="spatial_parallel")
-            )
-        torch.cuda.synchronize()
+    # Set random seed for reproducible tests
+    torch.cuda.manual_seed(13)
 
-        # Split global input to get each rank's local input
-        with torch.no_grad():
-            split_size = global_input.shape[input_split_dim] // manager.group_size(
-                name="spatial_parallel"
-            )
-            tmp = torch.split(global_input, split_size, dim=input_split_dim)[
-                manager.group_rank(name="spatial_parallel")
-            ].contiguous()
-            local_input = torch.empty_like(tmp, requires_grad=True)
-            local_input.copy_(tmp)
-        torch.cuda.synchronize()
+    # Create inputs
+    global_input = torch.rand(
+        (B, C, H, W), dtype=torch.float32, device=manager.device, requires_grad=True
+    )
 
-        local_output = DistributedRFFT2.apply(
-            local_input, (None, None), (-2, -1), "ortho"
+    if manager.distributed:
+        # Broadcast global input from rank 0 to all other ranks
+        dist.broadcast(
+            global_input, src=0, group=manager.group(name="spatial_parallel")
         )
-        dist.barrier()
+    torch.cuda.synchronize()
 
-        global_output = global_rfft2(global_input, dim=(-2, -1), norm="ortho")
+    # Split global input to get each rank's local input
+    with torch.no_grad():
+        split_size = global_input.shape[input_split_dim] // manager.group_size(
+            name="spatial_parallel"
+        )
+        tmp = torch.split(global_input, split_size, dim=input_split_dim)[
+            manager.group_rank(name="spatial_parallel")
+        ].contiguous()
+        local_input = torch.empty_like(tmp, requires_grad=True)
+        local_input.copy_(tmp)
+    torch.cuda.synchronize()
 
-        # Split global fft and get local shard
-        with torch.no_grad():
-            split_size = global_output.shape[output_split_dim] // manager.group_size(
-                name="spatial_parallel"
-            )
-            split_global_output = torch.split(
-                global_output, split_size, dim=output_split_dim
-            )[manager.group_rank(name="spatial_parallel")].contiguous()
+    local_output = DistributedRFFT2.apply(local_input, (None, None), (-2, -1), "ortho")
+    dist.barrier()
 
-        if verbose:
-            print(f"local_output.shape = {local_output.shape}")
-            print(f"global_output.shape = {global_output.shape}")
-            print(f"split_global_output.shape = {split_global_output.shape}")
+    global_output = global_rfft2(global_input, dim=(-2, -1), norm="ortho")
 
-        # Ensure that distributed FFT matches single GPU
-        assert torch.allclose(
-            local_output, split_global_output, rtol=1e-3, atol=1e-3
-        ), "Distributed FFT does not match single GPU version!"
+    # Split global fft and get local shard
+    with torch.no_grad():
+        split_size = global_output.shape[output_split_dim] // manager.group_size(
+            name="spatial_parallel"
+        )
+        split_global_output = torch.split(
+            global_output, split_size, dim=output_split_dim
+        )[manager.group_rank(name="spatial_parallel")].contiguous()
 
-        # Now test backward pass
-        # Create input gradients
-        global_output_grads = torch.rand_like(global_output).contiguous()
+    if verbose:
+        print(f"local_output.shape = {local_output.shape}")
+        print(f"global_output.shape = {global_output.shape}")
+        print(f"split_global_output.shape = {split_global_output.shape}")
 
-        # Global gradients
-        global_output.backward(global_output_grads)
-        global_input_grads = global_input.grad.clone().contiguous()
+    # Ensure that distributed FFT matches single GPU
+    assert torch.allclose(local_output, split_global_output, rtol=1e-3, atol=1e-3), (
+        "Distributed FFT does not match single GPU version!"
+    )
 
-        if manager.distributed:
-            # Broadcast global input from rank 0 to all other ranks
-            global_output_grads_tmp = torch.view_as_real(global_output_grads)
-            dist.broadcast(
-                global_output_grads_tmp,
-                src=0,
-                group=manager.group(name="spatial_parallel"),
-            )
-            global_output_grads = torch.view_as_complex(global_output_grads_tmp)
-        torch.cuda.synchronize()
+    # Now test backward pass
+    # Create input gradients
+    global_output_grads = torch.rand_like(global_output).contiguous()
 
-        # Split global grads and get local shard
-        with torch.no_grad():
-            split_size = global_output_grads.shape[
-                output_split_dim
-            ] // manager.group_size(name="spatial_parallel")
-            split_global_output_grads = torch.split(
-                global_output_grads, split_size, dim=output_split_dim
-            )[manager.group_rank(name="spatial_parallel")].contiguous()
+    # Global gradients
+    global_output.backward(global_output_grads)
+    global_input_grads = global_input.grad.clone().contiguous()
 
-        # Distributed gradients
-        local_output.backward(split_global_output_grads)
-        local_input_grads = local_input.grad.clone()
+    if manager.distributed:
+        # Broadcast global input from rank 0 to all other ranks
+        global_output_grads_tmp = torch.view_as_real(global_output_grads)
+        dist.broadcast(
+            global_output_grads_tmp,
+            src=0,
+            group=manager.group(name="spatial_parallel"),
+        )
+        global_output_grads = torch.view_as_complex(global_output_grads_tmp)
+    torch.cuda.synchronize()
 
-        # Split global input grads and get local shard
-        with torch.no_grad():
-            split_size = global_input_grads.shape[
-                input_split_dim
-            ] // manager.group_size(name="spatial_parallel")
-            split_global_input_grads = torch.split(
-                global_input_grads, split_size, dim=input_split_dim
-            )[manager.group_rank(name="spatial_parallel")].contiguous()
+    # Split global grads and get local shard
+    with torch.no_grad():
+        split_size = global_output_grads.shape[output_split_dim] // manager.group_size(
+            name="spatial_parallel"
+        )
+        split_global_output_grads = torch.split(
+            global_output_grads, split_size, dim=output_split_dim
+        )[manager.group_rank(name="spatial_parallel")].contiguous()
 
-        if verbose:
-            print(f"global_output_grads.shape = {global_output_grads.shape}")
-            print(
-                f"split_global_output_grads.shape = {split_global_output_grads.shape}"
-            )
-            print(f"local_input_grads.shape = {local_input_grads.shape}")
-            print(f"global_input_grads.shape = {global_input_grads.shape}")
-            print(f"split_global_input_grads.shape = {split_global_input_grads.shape}")
+    # Distributed gradients
+    local_output.backward(split_global_output_grads)
+    local_input_grads = local_input.grad.clone()
 
-        # Ensure that distributed FFT backward matches single GPU
-        assert torch.allclose(
-            local_input_grads, split_global_input_grads, rtol=1e-3, atol=1e-3
-        ), "Distributed FFT backward does not match single GPU version!"
+    # Split global input grads and get local shard
+    with torch.no_grad():
+        split_size = global_input_grads.shape[input_split_dim] // manager.group_size(
+            name="spatial_parallel"
+        )
+        split_global_input_grads = torch.split(
+            global_input_grads, split_size, dim=input_split_dim
+        )[manager.group_rank(name="spatial_parallel")].contiguous()
+
+    if verbose:
+        print(f"global_output_grads.shape = {global_output_grads.shape}")
+        print(f"split_global_output_grads.shape = {split_global_output_grads.shape}")
+        print(f"local_input_grads.shape = {local_input_grads.shape}")
+        print(f"global_input_grads.shape = {global_input_grads.shape}")
+        print(f"split_global_input_grads.shape = {split_global_input_grads.shape}")
+
+    # Ensure that distributed FFT backward matches single GPU
+    assert torch.allclose(
+        local_input_grads, split_global_input_grads, rtol=1e-3, atol=1e-3
+    ), "Distributed FFT backward does not match single GPU version!"
 
 
 @pytest.mark.multigpu_dynamic
-def test_distributed_fft():
+def test_distributed_fft(monkeypatch):
     num_gpus = torch.cuda.device_count()
     assert num_gpus >= 2, "Not enough GPUs available for test"
     model_parallel_size = 2
     verbose = False  # Change to True for debug
+
+    monkeypatch.setenv("WORLD_SIZE", f"{model_parallel_size}")
+    monkeypatch.setenv("MASTER_ADDR", "localhost")
+    monkeypatch.setenv("MASTER_PORT", str(12355))
 
     torch.multiprocessing.set_start_method("spawn", force=True)
 

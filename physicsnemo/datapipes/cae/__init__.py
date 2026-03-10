@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -15,4 +15,6 @@
 # limitations under the License.
 
 from .domino_datapipe import DoMINODataPipe
-from .mesh_datapipe import MeshDatapipe
+
+# from .mesh_datapipe import MeshDatapipe
+from .transolver_datapipe import TransolverDataPipe

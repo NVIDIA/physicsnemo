@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -26,9 +26,9 @@ from physicsnemo.models.transolver import Transolver
 from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-from physicsnemo.launch.logging import PythonLogger, LaunchLogger
-from physicsnemo.launch.logging.mlflow import initialize_mlflow
+from physicsnemo.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging import PythonLogger, LaunchLogger
+from physicsnemo.utils.logging.mlflow import initialize_mlflow
 
 from validator import GridValidator
 from einops import rearrange

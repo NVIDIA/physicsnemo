@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -25,8 +25,8 @@ import numpy as np
 import torch
 import torch.distributed as dist
 
+from physicsnemo.core.version_check import check_version_spec, require_version_spec
 from physicsnemo.distributed.config import ProcessGroupConfig, ProcessGroupNode
-from physicsnemo.utils.version_check import check_min_version, require_version
 
 # warnings.simplefilter("default", DeprecationWarning)
 
@@ -179,7 +179,7 @@ class DistributedManager(object):
         """
 
         # Properties don't mesh with decorators.  So in this function, I call the check manually:
-        check_min_version("torch", "2.4")
+        check_version_spec("torch", "2.4", hard_fail=True)
 
         if self._global_mesh is None:
             # Fully flat mesh (1D) by default:
@@ -187,14 +187,14 @@ class DistributedManager(object):
 
         return self._global_mesh
 
-    @require_version("torch", "2.4")
+    @require_version_spec("torch", "2.4")
     def mesh_names(self):
         """
         Return mesh axis names
         """
         return self._mesh_dims.keys()
 
-    @require_version("torch", "2.4")
+    @require_version_spec("torch", "2.4")
     def mesh_sizes(self):
         """
         Return mesh axis sizes
@@ -214,7 +214,7 @@ class DistributedManager(object):
         else:
             raise PhysicsNeMoUndefinedGroupError(name)
 
-    @require_version("torch", "2.4")
+    @require_version_spec("torch", "2.4")
     def mesh(self, name=None):
         """
         Return a device_mesh with the given name.
@@ -389,7 +389,7 @@ class DistributedManager(object):
         to one of the options above.
         """
         if DistributedManager.is_initialized():
-            warn("Distributed manager is already intialized")
+            warn("Distributed manager is already initialized")
             return
 
         addr = os.getenv("MASTER_ADDR", "localhost")
@@ -434,7 +434,7 @@ class DistributedManager(object):
         # Set per rank numpy random seed for data sampling
         np.random.seed(seed=DistributedManager().rank)
 
-    @require_version("torch", "2.4")
+    @require_version_spec("torch", "2.4")
     def initialize_mesh(
         self, mesh_shape: Tuple[int, ...], mesh_dim_names: Tuple[str, ...]
     ) -> "torch.distributed.DeviceMesh":
@@ -521,7 +521,7 @@ class DistributedManager(object):
         return self._global_mesh
 
     # Device mesh available in torch 2.4 or higher
-    @require_version("torch", "2.4")
+    @require_version_spec("torch", "2.4")
     def get_mesh_group(self, mesh: "dist.DeviceMesh") -> dist.ProcessGroup:
         """
         Get the process group for a given mesh.

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -20,15 +20,14 @@ from typing import Any, Literal, Tuple, Union
 import numpy as np
 import torch
 
-from physicsnemo.models.diffusion.preconditioning import EDMPrecondSuperResolution
-from physicsnemo.models.meta import ModelMetaData
+from physicsnemo.diffusion.preconditioners import EDMPrecondSuperResolution
+from physicsnemo.core.meta import ModelMetaData
 
 
 @dataclass
 class tEDMPrecondSuperResMetaData(ModelMetaData):
     """tEDMPrecondSuperRes meta data"""
 
-    name: str = "tEDMPrecondSuperRes"
     # Optimization
     jit: bool = False
     cuda_graphs: bool = False
@@ -48,7 +47,7 @@ class tEDMPrecondSuperRes(EDMPrecondSuperResolution):
     """
     Preconditioning proposed in the paper `Heavy-Tailed Diffusion Models,
     Pandey et al. <https://arxiv.org/abs/2410.14171>`_ (t-EDM). A variant of
-    :class:`~physicsnemo.models.diffusion.preconditioning.EDMPrecondSuperResolution`
+    :class:`~physicsnemo.diffusion.preconditioners.EDMPrecondSuperResolution`
     that replaces the traditional Gaussian noise with a noise sampled from a
     Student-t distribution.
 

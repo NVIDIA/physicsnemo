@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,10 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib.util
 from importlib.metadata import entry_points
 
 import pytest
-from pytest_utils import _import_or_fail
 
 
 @pytest.mark.parametrize(
@@ -38,7 +38,8 @@ def test_model_entry_points(model_name, pytestconfig):
     """Test model entry points"""
 
     if model_name == "GraphCastNet" or model_name == "MeshGraphNet":
-        _import_or_fail("dgl", pytestconfig)
+        if importlib.util.find_spec("dgl") is None:
+            pytest.skip(f"dgl not found, can not test entrypoint for {model_name}")
 
     # Get all the models exposed by the package
     models = {

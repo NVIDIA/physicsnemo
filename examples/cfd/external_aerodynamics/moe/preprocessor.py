@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -25,7 +25,7 @@ import logging
 from omegaconf import DictConfig
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
-from physicsnemo.launch.logging import LaunchLogger
+from physicsnemo.utils.logging import LaunchLogger
 
 import multiprocessing
 

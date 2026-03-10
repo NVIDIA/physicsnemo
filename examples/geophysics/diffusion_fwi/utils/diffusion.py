@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -21,7 +21,7 @@ from collections.abc import Callable, Sequence
 import torch
 import nvtx
 
-from physicsnemo.utils.diffusion import StackedRandomGenerator
+from physicsnemo.diffusion.utils import StackedRandomGenerator
 
 
 class _RemovableHandle:

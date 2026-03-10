@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -23,7 +23,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 import physicsnemo  # noqa: F401 for docs
-import physicsnemo.models.layers as layers
+import physicsnemo.nn as layers
 from .spectral_layers import (
     FactorizedSpectralConv1d,
     FactorizedSpectralConv2d,
@@ -31,9 +31,9 @@ from .spectral_layers import (
     FactorizedSpectralConv4d,
 )
 
-from physicsnemo.models.meta import ModelMetaData
+from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.models.mlp import FullyConnected
-from physicsnemo.models.module import Module
+from physicsnemo.core.module import Module
 
 # ===================================================================
 # ===================================================================

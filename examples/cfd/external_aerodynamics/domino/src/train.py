@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -33,7 +33,6 @@ import re
 from typing import Literal, Any
 from tabulate import tabulate
 
-import apex
 import numpy as np
 import hydra
 from hydra.utils import to_absolute_path
@@ -43,6 +42,7 @@ from omegaconf import DictConfig, OmegaConf
 from physicsnemo.utils.memory import unified_gpu_memory
 
 import torchinfo
+import torch
 import torch.distributed as dist
 from torch.distributed.fsdp import fully_shard
 from torch.distributed.tensor import distribute_module
@@ -57,15 +57,15 @@ import torch.cuda.nvtx as nvtx
 
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 from physicsnemo.datapipes.cae.domino_datapipe import (
     DoMINODataPipe,
     create_domino_dataset,
 )
 from physicsnemo.models.domino.model import DoMINO
-from physicsnemo.utils.domino.utils import *
+from physicsnemo.models.domino.utils import create_directory
 
 from utils import ScalingFactors, get_keys_to_read, coordinate_distributed_environment
 
@@ -110,9 +110,7 @@ def validation_step(
     with torch.no_grad():
         metrics = None
 
-        for i_batch, sample_batched in enumerate(dataloader):
-            sampled_batched = dict_to_device(sample_batched, device)
-
+        for i_batch, sampled_batched in enumerate(dataloader):
             with autocast("cuda", enabled=autocast_enabled, cache_enabled=False):
                 if add_physics_loss:
                     prediction_vol, prediction_surf = model(

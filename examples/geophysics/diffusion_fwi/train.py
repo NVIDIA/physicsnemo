@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -28,9 +28,9 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from functools import partial
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
-from physicsnemo.launch.logging.wandb import initialize_wandb
-from physicsnemo.launch.utils import (
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils.logging.wandb import initialize_wandb
+from physicsnemo.utils import (
     load_checkpoint,
     save_checkpoint,
     get_checkpoint_dir,

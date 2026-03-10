@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -48,8 +48,8 @@ from vtk.util import numpy_support
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.datapipes.cae.domino_datapipe import DoMINODataPipe
 from physicsnemo.models.domino.model import DoMINO
-from physicsnemo.utils.domino.utils import *
-from physicsnemo.utils.sdf import signed_distance_field
+from physicsnemo.models.domino.utils import *
+from physicsnemo.nn.functional import signed_distance_field
 
 # AIR_DENSITY = 1.205
 # STREAM_VELOCITY = 30.00

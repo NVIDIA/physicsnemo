@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -162,7 +162,7 @@ def main(cfg: DictConfig) -> None:
     load_model_params(model, cfg.checkpoint_filename)
 
     # compile
-    # model = torch.jit.script(model)
+    # model = torch.compile(model)
     # torch._dynamo.reset()
     # model = torch.compile(model, mode="reduce-overhead")
 

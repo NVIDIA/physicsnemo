@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -33,7 +33,6 @@ class Model(torch.nn.Module):
     output_variables = ["tcwv", "t2m"]
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_MSE_SSIM(device):
     model = Model()
 
@@ -125,7 +124,6 @@ def test_MSE_SSIM(device):
     assert mse_ssim_loss(ones, zeros, model) == expected
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_SSIM(device):
     """Test SSIM loss in loss"""
     ssim_loss = SSIM(time_series_forecasting=False)

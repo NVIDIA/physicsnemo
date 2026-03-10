@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,7 +17,7 @@
 import hydra
 from omegaconf import OmegaConf
 
-from physicsnemo.launch.utils import load_checkpoint
+from physicsnemo.utils import load_checkpoint
 
 from diagnostic import data, distribute, export, models
 

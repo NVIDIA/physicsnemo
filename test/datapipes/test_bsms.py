@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -16,7 +16,8 @@
 
 import pytest
 import torch
-from pytest_utils import import_or_fail
+
+from test.conftest import requires_module
 
 
 @pytest.fixture
@@ -24,7 +25,7 @@ def ahmed_data_dir(nfs_data_dir):
     return nfs_data_dir.joinpath("datasets/ahmed_body")
 
 
-@import_or_fail(["sparse_dot_mkl", "torch_geometric", "torch_scatter"])
+@requires_module(["sparse_dot_mkl", "torch_geometric", "torch_scatter"])
 def test_bsms_init(pytestconfig):
     import torch_geometric as pyg
 
@@ -57,7 +58,7 @@ def test_bsms_init(pytestconfig):
     assert len(ms_ids) == 1, "Expected 1 subsampled graph."
 
 
-@import_or_fail(["sparse_dot_mkl", "torch_geometric", "torch_scatter"])
+@requires_module(["sparse_dot_mkl", "torch_geometric", "torch_scatter"])
 def test_bsms_ahmed_dataset(pytestconfig, ahmed_data_dir):
     from physicsnemo.datapipes.gnn.ahmed_body_dataset import AhmedBodyDataset
     from physicsnemo.datapipes.gnn.bsms import BistrideMultiLayerGraphDataset
@@ -84,7 +85,7 @@ def test_bsms_ahmed_dataset(pytestconfig, ahmed_data_dir):
     assert len(g0["ms_ids"]) == 2
 
 
-@import_or_fail(["sparse_dot_mkl", "torch_geometric", "torch_scatter"])
+@requires_module(["sparse_dot_mkl", "torch_geometric", "torch_scatter"])
 def test_bsms_ahmed_dataset_caching(pytestconfig, ahmed_data_dir, tmp_path):
     from physicsnemo.datapipes.gnn.ahmed_body_dataset import AhmedBodyDataset
     from physicsnemo.datapipes.gnn.bsms import BistrideMultiLayerGraphDataset

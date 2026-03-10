@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -24,7 +24,7 @@ from typing import Any, Callable, Dict, NewType, Optional, Union
 
 import torch
 
-import physicsnemo
+from physicsnemo.core.module import Module as physicsnemo_module
 
 float16 = NewType("float16", torch.float16)
 bfloat16 = NewType("bfloat16", torch.bfloat16)
@@ -54,7 +54,7 @@ class _StaticCapture(object):
 
     def __init__(
         self,
-        model: "physicsnemo.Module",
+        model: physicsnemo_module,
         optim: Optional[optim] = None,
         logger: Optional[Logger] = None,
         use_graphs: bool = True,
@@ -71,12 +71,10 @@ class _StaticCapture(object):
         self.label = label if label else f"scaler_{len(self.amp_scalers.keys())}"
 
         # DDP fix
-        if not isinstance(model, physicsnemo.models.Module) and hasattr(
-            model, "module"
-        ):
+        if not isinstance(model, physicsnemo_module) and hasattr(model, "module"):
             model = model.module
 
-        if not isinstance(model, physicsnemo.models.Module):
+        if not isinstance(model, physicsnemo_module):
             self.logger.error("Model not a PhysicsNeMo Module!")
             raise ValueError("Model not a PhysicsNeMo Module!")
         if compile:
@@ -97,7 +95,7 @@ class _StaticCapture(object):
             # CUDA graphs
             if use_graphs and not self.model.meta.cuda_graphs:
                 self.logger.warning(
-                    f"Model {model.meta.name} does not support CUDA graphs, turning off"
+                    f"Model {type(model).__name__} does not support CUDA graphs, turning off"
                 )
                 use_graphs = False
             self.cuda_graphs_enabled = use_graphs
@@ -105,7 +103,7 @@ class _StaticCapture(object):
             # AMP GPU
             if not self.model.meta.amp_gpu:
                 self.logger.warning(
-                    f"Model {model.meta.name} does not support AMP on GPUs, turning off"
+                    f"Model {type(model).__name__} does not support AMP on GPUs, turning off"
                 )
                 use_autocast = False
                 use_gradscaler = False
@@ -131,7 +129,7 @@ class _StaticCapture(object):
             # AMP CPU
             if use_autocast and not self.model.meta.amp_cpu:
                 self.logger.warning(
-                    f"Model {model.meta.name} does not support AMP on CPUs, turning off"
+                    f"Model {type(model).__name__} does not support AMP on CPUs, turning off"
                 )
                 use_autocast = False
 
@@ -350,7 +348,7 @@ class StaticCaptureTraining(_StaticCapture):
 
     Parameters
     ----------
-    model : physicsnemo.models.Module
+    model : physicsnemo.core.Module
         PhysicsNeMo Model
     optim : torch.optim
         Optimizer
@@ -372,11 +370,12 @@ class StaticCaptureTraining(_StaticCapture):
     Raises
     ------
     ValueError
-        If the model provided is not a physicsnemo.models.Module. I.e. has no meta data.
+        If the model provided is not a physicsnemo.core.Module. I.e. has no meta data.
 
     Example
     -------
     >>> # Create model
+    >>> import physicsnemo
     >>> model = physicsnemo.models.mlp.FullyConnected(2, 64, 2)
     >>> input = torch.rand(8, 2)
     >>> output = torch.rand(8, 2)
@@ -410,7 +409,7 @@ class StaticCaptureTraining(_StaticCapture):
 
     def __init__(
         self,
-        model: "physicsnemo.Module",
+        model: physicsnemo_module,
         optim: torch.optim,
         logger: Optional[Logger] = None,
         use_graphs: bool = True,
@@ -445,7 +444,7 @@ class StaticCaptureEvaluateNoGrad(_StaticCapture):
 
     Parameters
     ----------
-    model : physicsnemo.models.Module
+    model : physicsnemo.core.Module
         PhysicsNeMo Model
     logger : Optional[Logger], optional
         PhysicsNeMo Launch Logger, by default None
@@ -463,11 +462,12 @@ class StaticCaptureEvaluateNoGrad(_StaticCapture):
     Raises
     ------
     ValueError
-        If the model provided is not a physicsnemo.models.Module. I.e. has no meta data.
+        If the model provided is not a physicsnemo.core.Module. I.e. has no meta data.
 
     Example
     -------
     >>> # Create model
+    >>> import physicsnemo
     >>> model = physicsnemo.models.mlp.FullyConnected(2, 64, 2)
     >>> input = torch.rand(8, 2)
     >>> # Create evaluate function with optimization wrapper
@@ -489,7 +489,7 @@ class StaticCaptureEvaluateNoGrad(_StaticCapture):
 
     def __init__(
         self,
-        model: "physicsnemo.Module",
+        model: physicsnemo_module,
         logger: Optional[Logger] = None,
         use_graphs: bool = True,
         use_amp: bool = True,

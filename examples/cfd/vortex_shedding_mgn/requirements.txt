@@ -1,4 +1,4 @@
-tensorflow<=2.17.1
+tfrecord>=1.14.0
 hydra-core>=1.2.0
 wandb>=0.13.7
 scipy>=1.15.0

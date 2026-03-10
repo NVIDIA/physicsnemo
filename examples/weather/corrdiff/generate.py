@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -15,39 +15,39 @@
 # limitations under the License.
 
 import contextlib
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
 import hydra
-from omegaconf import OmegaConf, DictConfig
-from hydra.utils import to_absolute_path
-import torch
-import torch._dynamo
-from torch.distributed import gather
+import netCDF4 as nc
 import numpy as np
 import nvtx
-import netCDF4 as nc
-from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
-from physicsnemo.experimental.models.diffusion.preconditioning import (
-    tEDMPrecondSuperRes,
-)
-from physicsnemo.utils.patching import GridPatching2D
-from physicsnemo import Module
-from physicsnemo.utils.diffusion import deterministic_sampler, stochastic_sampler
-from physicsnemo.utils.corrdiff import (
-    NetCDFWriter,
-    get_time_from_range,
-    regression_step,
-    diffusion_step,
-)
-
+import torch
+import torch._dynamo
+from datasets.dataset import register_dataset
 from helpers.generate_helpers import (
+    NetCDFWriter,
     get_dataset_and_sampler,
+    get_time_from_range,
     save_images,
 )
 from helpers.train_helpers import set_patch_shape
-from datasets.dataset import register_dataset
+from hydra.utils import to_absolute_path
+from omegaconf import DictConfig, OmegaConf
+from torch.distributed import gather
+
+from physicsnemo import Module
+from physicsnemo.diffusion.generate import diffusion_step, regression_step
+from physicsnemo.diffusion.multi_diffusion import GridPatching2D
+from physicsnemo.diffusion.samplers import (
+    deterministic_sampler,
+    stochastic_sampler,
+)
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.experimental.models.diffusion.preconditioning import (
+    tEDMPrecondSuperRes,
+)
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 
 @hydra.main(version_base="1.2", config_path="conf", config_name="config_generate")
@@ -186,13 +186,17 @@ def main(cfg: DictConfig) -> None:
     if cfg.sampler.type == "deterministic":
         sampler_fn = partial(
             deterministic_sampler,
-            num_steps=cfg.sampler.num_steps,
+            num_steps=getattr(cfg.sampler, "num_steps", 9),
             # num_ensembles=cfg.generation.num_ensembles,
             solver=cfg.sampler.solver,
             patching=patching,
         )
     elif cfg.sampler.type == "stochastic":
-        sampler_fn = partial(stochastic_sampler, patching=patching)
+        sampler_fn = partial(
+            stochastic_sampler,
+            patching=patching,
+            num_steps=getattr(cfg.sampler, "num_steps", 18),
+        )
     else:
         raise ValueError(f"Unknown sampling method {cfg.sampling.type}")
 

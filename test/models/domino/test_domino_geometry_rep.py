@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -23,14 +23,11 @@ import torch
 from .utils import validate_output_shape_and_values
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("act", ["relu", "gelu"])
 @pytest.mark.parametrize("fourier_features", [True, False])
 def test_geo_conv_out(device, act, fourier_features):
     """Test GeoConvOut layer"""
     from physicsnemo.models.domino.geometry_rep import GeoConvOut
-
-    torch.manual_seed(0)
 
     @dataclass
     class TestParams:
@@ -67,13 +64,10 @@ def test_geo_conv_out(device, act, fourier_features):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("act", ["relu", "gelu"])
 def test_geo_processor(device, act):
     """Test GeoProcessor CNN"""
     from physicsnemo.models.domino.geometry_rep import GeoProcessor
-
-    torch.manual_seed(0)
 
     @dataclass
     class TestParams:
@@ -92,7 +86,6 @@ def test_geo_processor(device, act):
     validate_output_shape_and_values(output, (2, 2, 16, 16, 16))
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("geometry_encoding_type", ["both", "stl", "sdf"])
 @pytest.mark.parametrize("processor_type", ["unet", "conv"])
 def test_geometry_rep(
@@ -100,8 +93,6 @@ def test_geometry_rep(
 ):
     """Test GeometryRep module with different configurations"""
     from physicsnemo.models.domino.geometry_rep import GeometryRep
-
-    torch.manual_seed(0)
 
     # Modify params for this test
     params = base_model_params()

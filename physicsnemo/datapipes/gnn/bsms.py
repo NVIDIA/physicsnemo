@@ -218,20 +218,15 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import scipy.sparse
 import torch
 from torch.utils.data import Dataset
 
-from physicsnemo.models.gnn_layers.utils import DGLGraph, GraphType, PyGData
+from physicsnemo.core.version_check import OptionalImport
+from physicsnemo.nn.module.gnn_layers.utils import GraphType
 
-try:
-    from sparse_dot_mkl import dot_product_mkl
-except ImportError:
-    import warnings
-
-    warnings.warn(
-        "sparse_dot_mkl is not installed, install using: pip install sparse_dot_mkl"
-    )
+# Lazy imports for optional dependencies
+scipy_sparse = OptionalImport("scipy.sparse")
+sparse_dot_mkl = OptionalImport("sparse_dot_mkl")
 
 
 _INF = 1 + 1e10
@@ -319,17 +314,9 @@ class BistrideMultiLayerGraph:
             The number of layers to generate.
         """
         self.num_layers = num_layers
-        # (DGL2PYG): keep only PyG version once DGL is removed.
-        if isinstance(graph, DGLGraph):
-            self.num_nodes = graph.num_nodes()
-            self.pos_mesh = graph.ndata["pos"].numpy()
-            edges = graph.edges()
-        elif isinstance(graph, PyGData):
-            self.num_nodes = graph.num_nodes
-            self.pos_mesh = graph.pos.numpy()
-            edges = graph.edge_index
-        else:
-            raise ValueError(f"Unsupported graph type: {type(graph)}")
+        self.num_nodes = graph.num_nodes
+        self.pos_mesh = graph.pos.numpy()
+        edges = graph.edge_index
 
         # Initialize the first layer graph
         # Flatten edges to [2, num_edges].
@@ -412,7 +399,7 @@ class BistrideMultiLayerGraph:
         combined_idx_kept = list(combined_idx_kept)
         combined_idx_kept.sort()
         adj_mat = adj_mat.tocsr().astype(float)
-        adj_mat = dot_product_mkl(adj_mat, adj_mat)
+        adj_mat = sparse_dot_mkl.dot_product_mkl(adj_mat, adj_mat)
         adj_mat.setdiag(0)
         new_g = BistrideMultiLayerGraph.pool_edge(adj_mat, n, combined_idx_kept)
 
@@ -613,7 +600,7 @@ class Graph:
         Returns:
         scipy.sparse.coo_matrix: The sparse adjacency matrix.
         """
-        adj_mat = scipy.sparse.coo_matrix(
+        adj_mat = scipy_sparse.coo_matrix(
             (np.ones_like(edge_list[0]), (edge_list[0], edge_list[1])), shape=(n, n)
         )
         return adj_mat
@@ -667,13 +654,13 @@ class Graph:
         """
         if isinstance(adj_mat, np.ndarray):
             s, r = np.where(adj_mat.astype(bool))
-        elif isinstance(adj_mat, scipy.sparse.coo_matrix):
+        elif isinstance(adj_mat, scipy_sparse.coo_matrix):
             s, r = adj_mat.row, adj_mat.col
             dat = adj_mat.data
             valid = np.where(dat.astype(bool))[0]
             s, r = s[valid], r[valid]
-        elif isinstance(adj_mat, scipy.sparse.csr_matrix):
-            adj_mat = scipy.sparse.coo_matrix(adj_mat)
+        elif isinstance(adj_mat, scipy_sparse.csr_matrix):
+            adj_mat = scipy_sparse.coo_matrix(adj_mat)
             s, r = adj_mat.row, adj_mat.col
             dat = adj_mat.data
             valid = np.where(dat.astype(bool))[0]

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -23,7 +23,7 @@ import re
 
 import numpy as np
 import torch
-from physicsnemo.utils.diffusion.utils import EasyDict, profiled_function
+from misc import EasyDict, profiled_function
 
 # ----------------------------------------------------------------------------
 

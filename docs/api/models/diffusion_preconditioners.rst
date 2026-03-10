@@ -9,27 +9,27 @@ level that are passed to a network. Some preconditioning also requires to
 re-scale the output of the network. PhysicsNeMo provides a set of preconditioning
 classes that are wrappers around backbones or specialized architectures.
 
-.. autoclass:: physicsnemo.models.diffusion.preconditioning.VPPrecond
+.. autoclass:: physicsnemo.diffusion.preconditioners.VPPrecond
     :show-inheritance:
     :members:
     :exclude-members: forward
 
-.. autoclass:: physicsnemo.models.diffusion.preconditioning.VEPrecond
+.. autoclass:: physicsnemo.diffusion.preconditioners.VEPrecond
     :show-inheritance:
     :members:
     :exclude-members: forward
 
-.. autoclass:: physicsnemo.models.diffusion.preconditioning.iDDPMPrecond
+.. autoclass:: physicsnemo.diffusion.preconditioners.iDDPMPrecond
     :show-inheritance:
     :members:
     :exclude-members: forward
 
-.. autoclass:: physicsnemo.models.diffusion.preconditioning.EDMPrecond
+.. autoclass:: physicsnemo.diffusion.preconditioners.EDMPrecond
     :show-inheritance:
     :members:
     :exclude-members: forward
 
-.. autoclass:: physicsnemo.models.diffusion.preconditioning.EDMPrecondSuperResolution
+.. autoclass:: physicsnemo.diffusion.preconditioners.EDMPrecondSuperResolution
     :show-inheritance:
     :members:
     :exclude-members: forward

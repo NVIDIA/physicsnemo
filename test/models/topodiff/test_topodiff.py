@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,18 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ruff: noqa: E402
-import os
 import random
-import sys
 
 import numpy as np
-import pytest
 import torch
 
-script_path = os.path.abspath(__file__)
-sys.path.append(os.path.join(os.path.dirname(script_path), ".."))
-
-import common
+from test import common
 
 # from pytest_utils import import_or_fail
 
@@ -33,7 +27,6 @@ import common
 
 
 # @import_or_fail("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_topodiff_forward(device):
     """Test topodiff forward pass"""
 
@@ -60,10 +53,10 @@ def test_topodiff_forward(device):
             cons,
             timesteps,
         ),
+        file_name="models/topodiff/data/topodiff_output.pth",
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_topodiff_constructor(device):
     """Test topodiff forward pass"""
 

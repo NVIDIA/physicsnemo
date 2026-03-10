@@ -2,11 +2,13 @@
 
 <!-- markdownlint-disable -->
 
-📝 NVIDIA Modulus has been renamed to NVIDIA PhysicsNeMo
+📝 NVIDIA PhysicsNeMo is undergoing an update to v2.0 - all the features, with easier installation and integration to external packages.  See the [migration guide](https://github.com/NVIDIA/physicsnemo/blob/main/v2.0-MIGRATION-GUIDE.md) for more details!
 
 [![Project Status: Active - The project has reached a stable, usable state and is being actively developed.](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)
 [![GitHub](https://img.shields.io/github/license/NVIDIA/physicsnemo)](https://github.com/NVIDIA/physicsnemo/blob/master/LICENSE.txt)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Install CI](https://github.com/NVIDIA/physicsnemo/actions/workflows/install-ci.yml/badge.svg?event=schedule)](https://github.com/NVIDIA/physicsnemo/actions/workflows/install-ci.yml)
+
 <!-- markdownlint-enable -->
 [**NVIDIA PhysicsNeMo**](#what-is-physicsnemo)
 | [**Documentation**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/index.html)
@@ -331,13 +333,33 @@ way is to start with a reference sample and then update it for your own use case
 
 ## Installation
 
-The following instructions help you install the base PhysicsNeMo modules to get started.
-There are additional optional dependencies for specific models that are listed under
-[optional dependencies](#optional-dependencies).
-The training recipes are not packaged into the pip wheels or the container to keep the
-footprint low. We recommend users clone the appropriate training recipes and use them
-as a starting point. These training recipes may require additional example-specific dependencies,
-as indicated through their associated `requirements.txt` file.
+The following instructions help you install the base PhysicsNeMo modules to get
+started. In addition to this, optional dependencies can be installed to provide
+additional functionality. A complete list of optional dependencies is available
+in the [`pyproject.toml`](./pyproject.toml) file.
+
+The [training recipes](./examples) are not packaged into the pip wheels or the
+container to keep the footprint low. We recommend users clone the appropriate
+training recipes and use them as a starting point. These training recipes may
+require additional example-specific dependencies, as indicated through an
+associated `requirements.txt` file in such cases.
+
+### CUDA Backend Selection
+
+> **Important:** To get GPU-accelerated RAPIDS packages (cuML, pylibraft, cupy)
+> and a CUDA-matched PyTorch build, you **must** include either `cu13` or `cu12`
+> when installing. Feature extras like `nn-extras` and `utils-extras` provide
+> additional non-CUDA packages (scipy, natten, wandb, etc.) but do not include
+> RAPIDS dependencies on their own.
+
+PhysicsNeMo supports both CUDA 12 and CUDA 13 backends. The backend is selected
+via an extra that is orthogonal to the feature extras - combine them freely:
+
+| Extra | What it provides |
+| --- | --- |
+| `cu13` | PyTorch (CUDA 13.0), cuML-cu13, pylibraft-cu13, cupy-cuda13x |
+| `cu12` | PyTorch (CUDA 12.8), cuML-cu12, pylibraft-cu12, cupy-cuda12x |
+| *(neither)* | PyTorch from PyPI (default build), **no RAPIDS packages** |
 
 ### PyPI
 
@@ -345,19 +367,47 @@ The recommended method for installing the latest version of PhysicsNeMo is using
 
 ```Bash
 pip install nvidia-physicsnemo
+python -c "import physicsnemo; print('PhysicsNeMo version:', physicsnemo.__version__)"
 ```
 
-The installation can be verified by running the [Hello World](#hello-world) example.
+To install with a specific CUDA backend and optional feature extras:
 
-#### Optional Dependencies
+```Bash
+# CUDA 13 backend with nn-extras
+pip install "nvidia-physicsnemo[cu13,nn-extras]"
 
-PhysicsNeMo has many optional dependencies that are used in specific components.
-When using pip, all dependencies used in PhysicsNeMo can be installed with
-`pip install nvidia-physicsnemo[all]`. If you are developing PhysicsNeMo, developer dependencies
-can be installed using `pip install nvidia-physicsnemo[dev]`. Otherwise, additional dependencies
-can be installed on a case-by-case basis. Detailed information on installing the
-optional dependencies can be found in the
-[Getting Started Guide](https://docs.nvidia.com/deeplearning/physicsnemo/getting-started/index.html).
+# CUDA 12 backend with nn-extras
+pip install "nvidia-physicsnemo[cu12,nn-extras]"
+```
+
+Other feature extras (`utils-extras`, `mesh-extras`, `model-extras`,
+`datapipes-extras`, `gnns`) can be combined in the same way.
+
+The installation can also be verified by running the [Hello World](#hello-world) example.
+
+### uv
+
+For development or to run examples, we recommend using [uv](https://docs.astral.sh/uv/)
+to clone the repository and sync dependencies:
+
+```Bash
+git clone https://github.com/NVIDIA/physicsnemo.git
+cd physicsnemo
+uv sync --extra cu13
+uv run python -c "import physicsnemo; print('PhysicsNeMo version:', physicsnemo.__version__)"
+```
+
+To install with optional feature extras (e.g., `nn-extras`):
+
+```Bash
+uv sync --extra cu13 --extra nn-extras
+```
+
+For a CUDA 12 environment, replace `cu13` with `cu12`:
+
+```Bash
+uv sync --extra cu12 --extra nn-extras
+```
 
 ### NVCR Container
 
@@ -382,9 +432,7 @@ pip install warp-lang # install NVIDIA Warp to run the Darcy example
 python train_fno_darcy.py
 ```
 
-## From Source
-
-### Package
+### From Source
 
 For a local build of the PhysicsNeMo Python package from source, use:
 
@@ -393,9 +441,10 @@ git clone git@github.com:NVIDIA/physicsnemo.git && cd physicsnemo
 
 pip install --upgrade pip
 pip install .
+python -c "import physicsnemo; print('PhysicsNeMo version:', physicsnemo.__version__)"
 ```
 
-### Source Container
+### Building Docker from Source
 
 To build the PhysicsNeMo Docker image:
 
@@ -415,8 +464,12 @@ docker build -t physicsnemo:ci \
 
 Alternatively, you can run `make container-ci`.
 
-Currently, only `linux/amd64` and `linux/arm64` platforms are supported. If using
-`linux/arm64`, some dependencies like `warp-lang` might not install correctly.
+### Platform Support
+
+For pip or uv installation, Linux, macOS (ARM), and Windows are supported.
+
+Docker containers are available for `linux/amd64` and `linux/arm64` platforms only.
+If using `linux/arm64`, some dependencies like `warp-lang` might not install correctly.
 
 ## PhysicsNeMo Migration Guide
 

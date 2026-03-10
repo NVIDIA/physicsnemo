@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,14 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
 import torch
-from pytest_utils import import_or_fail
 
-from physicsnemo.models.module import Module
+from physicsnemo.core.module import Module
+from test.conftest import requires_module
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_EDMPrecondSuperResolution_forward(device):
     b, c_target, x, y = 1, 3, 8, 8
     c_cond = 4
@@ -55,13 +53,12 @@ def test_EDMPrecondSuperResolution_forward(device):
     assert output.shape == (b, c_target, x, y)
 
 
-@import_or_fail("termcolor")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@requires_module("termcolor")
 def test_EDMPrecondSuperResolution_serialization(tmp_path, pytestconfig, device):
     from physicsnemo.experimental.models.diffusion.preconditioning import (
         tEDMPrecondSuperRes,
     )
-    from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+    from physicsnemo.utils.checkpoint import load_checkpoint, save_checkpoint
 
     module = tEDMPrecondSuperRes(8, 1, 1, nu=10).to(device)
     model_path = tmp_path / "output.mdlus"

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -22,7 +22,7 @@ configured in config.yaml in the data_processing tab.
 """
 
 from openfoam_datapipe import OpenFoamDataset
-from physicsnemo.utils.domino.utils import *
+from physicsnemo.models.domino.utils import *
 import multiprocessing
 import hydra, time, os
 from hydra.utils import to_absolute_path

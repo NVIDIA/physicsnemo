@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,7 +17,6 @@
 import numpy as np
 import pytest
 import torch
-from pytest_utils import import_or_fail
 
 from physicsnemo.metrics.cae.cfd import (
     compute_force_coefficients,
@@ -25,6 +24,7 @@ from physicsnemo.metrics.cae.cfd import (
     compute_tke_spectrum,
     dominant_freq_calc,
 )
+from test.conftest import requires_module
 
 pv = pytest.importorskip("pyvista")
 
@@ -47,7 +47,7 @@ def generate_box(level=500):
     return box
 
 
-@import_or_fail(["pyvista", "shapely"])
+@requires_module(["pyvista", "shapely"])
 def test_frontal_area(generate_sphere, pytestconfig):
     from physicsnemo.metrics.cae.cfd import compute_frontal_area
 
@@ -58,7 +58,7 @@ def test_frontal_area(generate_sphere, pytestconfig):
     assert np.allclose(area, np.pi, rtol=1e-3)
 
 
-@import_or_fail(["pyvista"])
+@requires_module(["pyvista"])
 def test_force_coeffs(generate_box, pytestconfig):
     box = generate_box
     box = box.compute_normals()

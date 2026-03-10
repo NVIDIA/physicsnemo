@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,8 +17,8 @@
 import hydra
 from omegaconf import OmegaConf
 
-from physicsnemo.launch.logging import LaunchLogger
-from physicsnemo.launch.logging.mlflow import initialize_mlflow
+from physicsnemo.utils.logging import LaunchLogger
+from physicsnemo.utils.logging.mlflow import initialize_mlflow
 
 from diagnostic import data, distribute, loss, models, precip, train
 

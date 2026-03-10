@@ -30,12 +30,10 @@ from generate_dataset import generate_normalized_graphs
 from generate_dataset import train_test_split
 from generate_dataset import Bloodflow1DDataset
 
-from physicsnemo.launch.logging import (
+from physicsnemo.utils.logging import (
     PythonLogger,
-    RankZeroLoggingWrapper,
 )
-from physicsnemo.launch.logging.wandb import initialize_wandb
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils import load_checkpoint, save_checkpoint
 import json
 from omegaconf import DictConfig
 
@@ -126,7 +124,7 @@ class MGNTrainer:
         )
 
         if cfg.performance.jit:
-            self.model = torch.jit.script(self.model).to(self.device)
+            self.model = torch.compile(self.model).to(self.device)
         else:
             self.model = self.model.to(self.device)
 

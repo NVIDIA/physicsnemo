@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,19 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
+import warnings
 from pathlib import Path
 from typing import Any, Callable
 
+from physicsnemo.core.version_check import check_version_spec
+
 from .core import PhysicsNeMoProfilerWrapper, _Profiler_Singleton
 
-try:
-    from line_profiler import LineProfiler
-
-    lp_avail = True
-except ImportError:
-    lp_avail = False
-
-import warnings
+LINE_PROFILER_AVAILABLE = check_version_spec("line_profiler", hard_fail=False)
 
 
 class LineProfileWrapper(PhysicsNeMoProfilerWrapper, metaclass=_Profiler_Singleton):
@@ -55,7 +52,8 @@ class LineProfileWrapper(PhysicsNeMoProfilerWrapper, metaclass=_Profiler_Singlet
         Sets up the LineProfiler if available, otherwise disables profiling functionality
         with a warning.
         """
-        if lp_avail:
+        if LINE_PROFILER_AVAILABLE:
+            LineProfiler = importlib.import_module("line_profiler").LineProfiler
             self._profiler = LineProfiler()
         else:
             warnings.warn(
@@ -72,7 +70,7 @@ class LineProfileWrapper(PhysicsNeMoProfilerWrapper, metaclass=_Profiler_Singlet
         Args:
             output_top: Path to the directory where profiling results should be saved
         """
-        if not lp_avail:
+        if not LINE_PROFILER_AVAILABLE:
             return
 
         if not self.enabled:
@@ -103,7 +101,7 @@ class LineProfileWrapper(PhysicsNeMoProfilerWrapper, metaclass=_Profiler_Singlet
         Returns:
             The profiled function wrapped with LineProfiler
         """
-        if not lp_avail:
+        if not LINE_PROFILER_AVAILABLE:
             return fn
         f = self._profiler(fn)
         return f

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -20,14 +20,11 @@ import torch
 from .utils import validate_output_shape_and_values
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("activation", ["relu", "gelu"])
 def test_aggregation_model(device, activation):
     """Test AggregationModel"""
     from physicsnemo.models.domino.mlps import AggregationModel
     from physicsnemo.models.domino.model import get_activation
-
-    torch.manual_seed(0)
 
     model = AggregationModel(
         input_features=100,
@@ -42,14 +39,11 @@ def test_aggregation_model(device, activation):
     validate_output_shape_and_values(output, (2, 30, 1))
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("activation", ["relu", "gelu"])
 def test_local_point_conv(device, activation):
     """Test LocalPointConv"""
     from physicsnemo.models.domino.mlps import LocalPointConv
     from physicsnemo.models.domino.model import get_activation
-
-    torch.manual_seed(0)
 
     model = LocalPointConv(
         input_features=50,

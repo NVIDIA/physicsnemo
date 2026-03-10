@@ -1,6 +1,6 @@
 torchinfo
 warp-lang
 tensorboard
-cuml
+cuml-cu13==25.10.*
 einops
 tensorstore

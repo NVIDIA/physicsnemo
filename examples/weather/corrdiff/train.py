@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -30,13 +30,15 @@ import nvtx
 import wandb
 
 from physicsnemo import Module
-from physicsnemo.models.diffusion import UNet, EDMPrecondSuperResolution
+from physicsnemo.models.diffusion_unets import CorrDiffRegressionUNet
+from physicsnemo.diffusion.preconditioners import EDMPrecondSuperResolution
+
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.metrics.diffusion import RegressionLoss, ResidualLoss, RegressionLossCE
-from physicsnemo.utils.patching import RandomPatching2D
-from physicsnemo.launch.logging.wandb import initialize_wandb
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
-from physicsnemo.launch.utils import (
+from physicsnemo.diffusion.metrics import RegressionLoss, ResidualLoss, RegressionLossCE
+from physicsnemo.diffusion.multi_diffusion import RandomPatching2D
+from physicsnemo.utils.logging.wandb import initialize_wandb
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils import (
     load_checkpoint,
     save_checkpoint,
     get_checkpoint_dir,
@@ -297,7 +299,7 @@ def main(cfg: DictConfig) -> None:
         model_args["amp_mode"] = enable_amp
 
     if cfg.model.name == "regression":
-        model = UNet(
+        model = CorrDiffRegressionUNet(
             img_in_channels=img_in_channels + model_args["N_grid_channels"],
             **model_args,
         )
@@ -305,7 +307,7 @@ def main(cfg: DictConfig) -> None:
         cfg.model.name == "lt_aware_ce_regression"
         or cfg.model.name == "lt_aware_regression"
     ):
-        model = UNet(
+        model = CorrDiffRegressionUNet(
             img_in_channels=img_in_channels
             + model_args["N_grid_channels"]
             + model_args["lead_time_channels"],

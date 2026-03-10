@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -20,11 +20,11 @@ import warnings
 from pathlib import Path
 
 import pytest
-from pytest_utils import import_or_fail
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 from physicsnemo.distributed import DistributedManager
+from test.conftest import requires_module
 
 omegaconf = pytest.importorskip("omegaconf")
 np = pytest.importorskip("numpy")
@@ -90,8 +90,9 @@ def scaling_double_dict():
     return omegaconf.DictConfig(scaling)
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
+@requires_module("omegaconf")
+@requires_module("dask")
+@requires_module("netCDF4")
 def test_open_time_series_on_the_fly(create_path, pytestconfig):
     from physicsnemo.datapipes.healpix.data_modules import (
         open_time_series_dataset_classic_on_the_fly,
@@ -117,7 +118,7 @@ def test_open_time_series_on_the_fly(create_path, pytestconfig):
     base.close()
 
 
-@import_or_fail("omegaconf")
+@requires_module("omegaconf")
 def test_open_time_series(data_dir, dataset_name, pytestconfig):
     # check for failure of non-existant dataset
     from physicsnemo.datapipes.healpix.data_modules import (
@@ -132,9 +133,10 @@ def test_open_time_series(data_dir, dataset_name, pytestconfig):
     ds.close()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@import_or_fail("numpy")
+@requires_module("omegaconf")
+@requires_module("dask")
+@requires_module("netCDF4")
+@requires_module("numpy")
 def test_create_time_series(data_dir, dataset_name, create_path, pytestconfig):
     from physicsnemo.datapipes.healpix.data_modules import (
         create_time_series_dataset_classic,
@@ -196,8 +198,9 @@ def test_create_time_series(data_dir, dataset_name, create_path, pytestconfig):
     delete_dataset(create_path, dataset_name)
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
+@requires_module("omegaconf")
+@requires_module("dask")
+@requires_module("netCDF4")
 def test_TimeSeriesDataset_initialization(
     data_dir, dataset_name, scaling_dict, pytestconfig
 ):
@@ -291,9 +294,9 @@ def test_TimeSeriesDataset_initialization(
     zarr_ds.close()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@import_or_fail("numpy")
+@requires_module("omegaconf")
+@requires_module("netCDF4")
+@requires_module("numpy")
 def test_TimeSeriesDataset_get_constants(
     data_dir, dataset_name, scaling_dict, pytestconfig
 ):
@@ -318,8 +321,8 @@ def test_TimeSeriesDataset_get_constants(
     zarr_ds.close()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
+@requires_module("omegaconf")
+@requires_module("netCDF4")
 def test_TimeSeriesDataset_len(data_dir, dataset_name, scaling_dict, pytestconfig):
     from physicsnemo.datapipes.healpix.timeseries_dataset import TimeSeriesDataset
 
@@ -361,9 +364,9 @@ def test_TimeSeriesDataset_len(data_dir, dataset_name, scaling_dict, pytestconfi
     zarr_ds.close()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@import_or_fail("numpy")
+@requires_module("omegaconf")
+@requires_module("netCDF4")
+@requires_module("numpy")
 def test_TimeSeriesDataset_get(
     data_dir, dataset_name, scaling_double_dict, pytestconfig
 ):
@@ -471,8 +474,9 @@ def test_TimeSeriesDataset_get(
     zarr_ds.close()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
+@requires_module("omegaconf")
+@requires_module("dask")
+@requires_module("netCDF4")
 def test_TimeSeriesDataModule_initialization(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
@@ -558,9 +562,9 @@ def test_TimeSeriesDataModule_initialization(
     DistributedManager.cleanup()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@import_or_fail("numpy")
+@requires_module("omegaconf")
+@requires_module("netCDF4")
+@requires_module("numpy")
 def test_TimeSeriesDataModule_get_constants(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
@@ -637,7 +641,7 @@ def test_TimeSeriesDataModule_get_constants(
     DistributedManager.cleanup()
 
 
-@import_or_fail("omegaconf")
+@requires_module("omegaconf")
 def test_TimeSeriesDataModule_get_dataloaders(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):

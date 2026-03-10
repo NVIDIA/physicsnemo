@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -31,7 +31,7 @@ from dataset import ProcessedVTPDataset
 from model import MoEGatingNet
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils import load_checkpoint, save_checkpoint
 
 # Configure logging
 logging.basicConfig(

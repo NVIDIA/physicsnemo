@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,31 +14,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ruff: noqa: E402
-import os
-import sys
-
 import numpy as np
 import pytest
 import torch
 
-script_path = os.path.abspath(__file__)
-sys.path.append(os.path.join(os.path.dirname(script_path), ".."))
+pytest.importorskip("torch_geometric")
 
-import common
-from pytest_utils import import_or_fail
-
-dgl = pytest.importorskip("dgl")
+from test import common
+from test.conftest import requires_module
 
 
-@import_or_fail("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@requires_module("torch_geometric")
 def test_hybrid_meshgraphnet_forward(device, pytestconfig, set_physicsnemo_force_te):
     """Test hybrid meshgraphnet forward pass"""
+
+    import torch_geometric as pyg
 
     from physicsnemo.models.meshgraphnet import HybridMeshGraphNet
 
     torch.manual_seed(0)
-    dgl.seed(0)
     np.random.seed(0)
     # Construct MGN model
     model = HybridMeshGraphNet(
@@ -48,18 +42,25 @@ def test_hybrid_meshgraphnet_forward(device, pytestconfig, set_physicsnemo_force
     ).to(device)
 
     num_nodes, num_mesh_edges, num_world_edges = 20, 10, 10
-    # NOTE dgl's random graph generator does not behave consistently even after fixing dgl's random seed.
-    # Instead, numpy adj matrices are created in COO format and are then converted to dgl graphs.
-    src = torch.tensor([np.random.randint(num_nodes) for _ in range(num_mesh_edges)])
-    dst = torch.tensor([np.random.randint(num_nodes) for _ in range(num_mesh_edges)])
-    graph = dgl.graph((src, dst)).to(device)
-    src = torch.tensor(
+    # Create mesh edges.
+    mesh_src = torch.tensor(
+        [np.random.randint(num_nodes) for _ in range(num_mesh_edges)]
+    )
+    mesh_dst = torch.tensor(
+        [np.random.randint(num_nodes) for _ in range(num_mesh_edges)]
+    )
+    mesh_edge_index = torch.stack([mesh_src, mesh_dst], dim=0)
+    # Create world edges.
+    world_src = torch.tensor(
         [np.random.randint(num_nodes) for _ in range(num_world_edges)]
-    ).to(device)
-    dst = torch.tensor(
+    )
+    world_dst = torch.tensor(
         [np.random.randint(num_nodes) for _ in range(num_world_edges)]
-    ).to(device)
-    graph = dgl.add_edges(graph, src, dst)
+    )
+    world_edge_index = torch.stack([world_src, world_dst], dim=0)
+    # Combine edges and create graph.
+    edge_index = torch.cat([mesh_edge_index, world_edge_index], dim=1)
+    graph = pyg.data.Data(edge_index=edge_index, num_nodes=num_nodes).to(device)
 
     node_features = torch.randn(num_nodes, 4).to(device)
     mesh_edge_features = torch.randn(num_mesh_edges, 3).to(device)
@@ -69,23 +70,24 @@ def test_hybrid_meshgraphnet_forward(device, pytestconfig, set_physicsnemo_force
         (node_features, mesh_edge_features, world_edge_features, graph),
         rtol=1e-2,
         atol=1e-2,
+        file_name="models/meshgraphnet/data/hybridmeshgraphnet_output.pth",
     )
 
 
-@import_or_fail("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@requires_module("torch_geometric")
 def test_hybrid_meshgraphnet_constructor(
     device, pytestconfig, set_physicsnemo_force_te
 ):
     """Test hybrid meshgraphnet constructor options"""
 
+    import torch_geometric as pyg
+
     from physicsnemo.models.meshgraphnet import HybridMeshGraphNet
 
     torch.manual_seed(0)
-    dgl.seed(0)
     np.random.seed(0)
 
-    # Define dictionary of constructor args - simplified
+    # Define dictionary of constructor args - simplified.
     arg_list = [
         {
             "input_dim_nodes": 4,
@@ -101,26 +103,29 @@ def test_hybrid_meshgraphnet_constructor(
     ]
 
     for kw_args in arg_list:
-        # Construct hybrid meshgraphnet model
+        # Construct hybrid meshgraphnet model.
         model = HybridMeshGraphNet(**kw_args).to(device)
 
         num_nodes, num_mesh_edges, num_world_edges = 15, 8, 8
-        # Create mesh edges
-        src = torch.tensor(
+        # Create mesh edges.
+        mesh_src = torch.tensor(
             [np.random.randint(num_nodes) for _ in range(num_mesh_edges)]
         )
-        dst = torch.tensor(
+        mesh_dst = torch.tensor(
             [np.random.randint(num_nodes) for _ in range(num_mesh_edges)]
         )
-        graph = dgl.graph((src, dst)).to(device)
-        # Add world edges with proper device handling
-        src = torch.tensor(
+        mesh_edge_index = torch.stack([mesh_src, mesh_dst], dim=0)
+        # Create world edges.
+        world_src = torch.tensor(
             [np.random.randint(num_nodes) for _ in range(num_world_edges)]
-        ).to(device)
-        dst = torch.tensor(
+        )
+        world_dst = torch.tensor(
             [np.random.randint(num_nodes) for _ in range(num_world_edges)]
-        ).to(device)
-        graph = dgl.add_edges(graph, src, dst)
+        )
+        world_edge_index = torch.stack([world_src, world_dst], dim=0)
+        # Combine edges and create graph.
+        edge_index = torch.cat([mesh_edge_index, world_edge_index], dim=1)
+        graph = pyg.data.Data(edge_index=edge_index, num_nodes=num_nodes).to(device)
 
         node_features = torch.randn(num_nodes, kw_args["input_dim_nodes"]).to(device)
         mesh_edge_features = torch.randn(num_mesh_edges, kw_args["input_dim_edges"]).to(
@@ -133,18 +138,30 @@ def test_hybrid_meshgraphnet_constructor(
         outvar = model(node_features, mesh_edge_features, world_edge_features, graph)
         assert outvar.shape == (num_nodes, kw_args["output_dim"])
 
+        # Check public attributes reflect constructor args
+        assert model.input_dim_nodes == kw_args["input_dim_nodes"]
+        assert model.input_dim_edges == kw_args["input_dim_edges"]
+        assert model.output_dim == kw_args["output_dim"]
 
-@import_or_fail("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+        # Check key submodules exist
+        assert hasattr(model, "mesh_edge_encoder")
+        assert hasattr(model, "world_edge_encoder")
+        assert hasattr(model, "node_encoder")
+        assert hasattr(model, "processor")
+        assert hasattr(model, "node_decoder")
+
+
+@requires_module("torch_geometric")
 def test_hybrid_meshgraphnet_optims(device, pytestconfig, set_physicsnemo_force_te):
     """Test hybrid meshgraphnet optimizations"""
+
+    import torch_geometric as pyg
 
     from physicsnemo.models.meshgraphnet import HybridMeshGraphNet
 
     def setup_model():
-        """Set up fresh model and inputs for each optim test"""
+        """Set up fresh model and inputs for each optim test."""
         torch.manual_seed(0)
-        dgl.seed(0)
         np.random.seed(0)
 
         model = HybridMeshGraphNet(
@@ -154,27 +171,32 @@ def test_hybrid_meshgraphnet_optims(device, pytestconfig, set_physicsnemo_force_
         ).to(device)
 
         num_nodes, num_mesh_edges, num_world_edges = 15, 8, 8
-        src = torch.tensor(
+        # Create mesh edges.
+        mesh_src = torch.tensor(
             [np.random.randint(num_nodes) for _ in range(num_mesh_edges)]
         )
-        dst = torch.tensor(
+        mesh_dst = torch.tensor(
             [np.random.randint(num_nodes) for _ in range(num_mesh_edges)]
         )
-        graph = dgl.graph((src, dst)).to(device)
-        src = torch.tensor(
+        mesh_edge_index = torch.stack([mesh_src, mesh_dst], dim=0)
+        # Create world edges.
+        world_src = torch.tensor(
             [np.random.randint(num_nodes) for _ in range(num_world_edges)]
-        ).to(device)
-        dst = torch.tensor(
+        )
+        world_dst = torch.tensor(
             [np.random.randint(num_nodes) for _ in range(num_world_edges)]
-        ).to(device)
-        graph = dgl.add_edges(graph, src, dst)
+        )
+        world_edge_index = torch.stack([world_src, world_dst], dim=0)
+        # Combine edges and create graph.
+        edge_index = torch.cat([mesh_edge_index, world_edge_index], dim=1)
+        graph = pyg.data.Data(edge_index=edge_index, num_nodes=num_nodes).to(device)
 
         node_features = torch.randn(num_nodes, 4).to(device)
         mesh_edge_features = torch.randn(num_mesh_edges, 3).to(device)
         world_edge_features = torch.randn(num_world_edges, 3).to(device)
         return model, [node_features, mesh_edge_features, world_edge_features, graph]
 
-    # Check optimizations
+    # Check optimizations.
     model, invar = setup_model()
     assert common.validate_cuda_graphs(model, (*invar,))
     model, invar = setup_model()
@@ -185,15 +207,15 @@ def test_hybrid_meshgraphnet_optims(device, pytestconfig, set_physicsnemo_force_
     assert common.validate_combo_optims(model, (*invar,))
 
 
-@import_or_fail("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@requires_module("torch_geometric")
 def test_hybrid_meshgraphnet_checkpoint(device, pytestconfig, set_physicsnemo_force_te):
     """Test hybrid meshgraphnet checkpoint save/load"""
+
+    import torch_geometric as pyg
 
     from physicsnemo.models.meshgraphnet import HybridMeshGraphNet
 
     torch.manual_seed(0)
-    dgl.seed(0)
     np.random.seed(0)
 
     model_1 = HybridMeshGraphNet(
@@ -209,16 +231,25 @@ def test_hybrid_meshgraphnet_checkpoint(device, pytestconfig, set_physicsnemo_fo
     ).to(device)
 
     num_nodes, num_mesh_edges, num_world_edges = 15, 8, 8
-    src = torch.tensor([np.random.randint(num_nodes) for _ in range(num_mesh_edges)])
-    dst = torch.tensor([np.random.randint(num_nodes) for _ in range(num_mesh_edges)])
-    graph = dgl.graph((src, dst)).to(device)
-    src = torch.tensor(
+    # Create mesh edges.
+    mesh_src = torch.tensor(
+        [np.random.randint(num_nodes) for _ in range(num_mesh_edges)]
+    )
+    mesh_dst = torch.tensor(
+        [np.random.randint(num_nodes) for _ in range(num_mesh_edges)]
+    )
+    mesh_edge_index = torch.stack([mesh_src, mesh_dst], dim=0)
+    # Create world edges.
+    world_src = torch.tensor(
         [np.random.randint(num_nodes) for _ in range(num_world_edges)]
-    ).to(device)
-    dst = torch.tensor(
+    )
+    world_dst = torch.tensor(
         [np.random.randint(num_nodes) for _ in range(num_world_edges)]
-    ).to(device)
-    graph = dgl.add_edges(graph, src, dst)
+    )
+    world_edge_index = torch.stack([world_src, world_dst], dim=0)
+    # Combine edges and create graph.
+    edge_index = torch.cat([mesh_edge_index, world_edge_index], dim=1)
+    graph = pyg.data.Data(edge_index=edge_index, num_nodes=num_nodes).to(device)
 
     node_features = torch.randn(num_nodes, 4).to(device)
     mesh_edge_features = torch.randn(num_mesh_edges, 3).to(device)
@@ -231,16 +262,16 @@ def test_hybrid_meshgraphnet_checkpoint(device, pytestconfig, set_physicsnemo_fo
     )
 
 
-@import_or_fail("dgl")
+@requires_module("torch_geometric")
 @common.check_ort_version()
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_hybrid_meshgraphnet_deploy(device, pytestconfig, set_physicsnemo_force_te):
     """Test hybrid meshgraphnet deployment support"""
+
+    import torch_geometric as pyg
 
     from physicsnemo.models.meshgraphnet import HybridMeshGraphNet
 
     torch.manual_seed(0)
-    dgl.seed(0)
     np.random.seed(0)
 
     model = HybridMeshGraphNet(
@@ -250,16 +281,25 @@ def test_hybrid_meshgraphnet_deploy(device, pytestconfig, set_physicsnemo_force_
     ).to(device)
 
     num_nodes, num_mesh_edges, num_world_edges = 10, 6, 6
-    src = torch.tensor([np.random.randint(num_nodes) for _ in range(num_mesh_edges)])
-    dst = torch.tensor([np.random.randint(num_nodes) for _ in range(num_mesh_edges)])
-    graph = dgl.graph((src, dst)).to(device)
-    src = torch.tensor(
+    # Create mesh edges.
+    mesh_src = torch.tensor(
+        [np.random.randint(num_nodes) for _ in range(num_mesh_edges)]
+    )
+    mesh_dst = torch.tensor(
+        [np.random.randint(num_nodes) for _ in range(num_mesh_edges)]
+    )
+    mesh_edge_index = torch.stack([mesh_src, mesh_dst], dim=0)
+    # Create world edges.
+    world_src = torch.tensor(
         [np.random.randint(num_nodes) for _ in range(num_world_edges)]
-    ).to(device)
-    dst = torch.tensor(
+    )
+    world_dst = torch.tensor(
         [np.random.randint(num_nodes) for _ in range(num_world_edges)]
-    ).to(device)
-    graph = dgl.add_edges(graph, src, dst)
+    )
+    world_edge_index = torch.stack([world_src, world_dst], dim=0)
+    # Combine edges and create graph.
+    edge_index = torch.cat([mesh_edge_index, world_edge_index], dim=1)
+    graph = pyg.data.Data(edge_index=edge_index, num_nodes=num_nodes).to(device)
 
     node_features = torch.randn(num_nodes, 4).to(device)
     mesh_edge_features = torch.randn(num_mesh_edges, 3).to(device)
@@ -268,3 +308,80 @@ def test_hybrid_meshgraphnet_deploy(device, pytestconfig, set_physicsnemo_force_
     invar = (node_features, mesh_edge_features, world_edge_features, graph)
     assert common.validate_onnx_export(model, invar)
     assert common.validate_onnx_runtime(model, invar)
+
+
+@requires_module("torch_geometric")
+def test_hybrid_meshgraphnet_shape_validation(
+    device, pytestconfig, set_physicsnemo_force_te
+):
+    """Test shape validation errors for HybridMeshGraphNet.forward"""
+    import torch_geometric as pyg
+
+    from physicsnemo.models.meshgraphnet import HybridMeshGraphNet
+
+    model = HybridMeshGraphNet(
+        input_dim_nodes=4,
+        input_dim_edges=3,
+        output_dim=2,
+    ).to(device)
+
+    num_nodes, num_mesh_edges, num_world_edges = 12, 10, 10
+    # Build a simple combined graph for hybrid edges
+    mesh_src = torch.tensor(
+        [np.random.randint(num_nodes) for _ in range(num_mesh_edges)]
+    )
+    mesh_dst = torch.tensor(
+        [np.random.randint(num_nodes) for _ in range(num_mesh_edges)]
+    )
+    mesh_edge_index = torch.stack([mesh_src, mesh_dst], dim=0)
+    world_src = torch.tensor(
+        [np.random.randint(num_nodes) for _ in range(num_world_edges)]
+    )
+    world_dst = torch.tensor(
+        [np.random.randint(num_nodes) for _ in range(num_world_edges)]
+    )
+    world_edge_index = torch.stack([world_src, world_dst], dim=0)
+    edge_index = torch.cat([mesh_edge_index, world_edge_index], dim=1)
+    graph = pyg.data.Data(edge_index=edge_index, num_nodes=num_nodes).to(device)
+
+    good_node = torch.randn(num_nodes, 4).to(device)
+    good_mesh_edge = torch.randn(num_mesh_edges, 3).to(device)
+    good_world_edge = torch.randn(num_world_edges, 3).to(device)
+
+    # Wrong node feature dimension
+    bad_node = torch.randn(num_nodes, 5).to(device)
+    with pytest.raises(ValueError, match=r"Expected tensor of shape \(N_nodes, 4\)"):
+        _ = model(bad_node, good_mesh_edge, good_world_edge, graph)
+
+    # Wrong mesh edge feature dimension
+    bad_mesh_edge = torch.randn(num_mesh_edges, 2).to(device)
+    with pytest.raises(
+        ValueError, match=r"Expected tensor of shape \(N_mesh_edges, 3\)"
+    ):
+        _ = model(good_node, bad_mesh_edge, good_world_edge, graph)
+
+    # Wrong world edge feature dimension
+    bad_world_edge = torch.randn(num_world_edges, 2).to(device)
+    with pytest.raises(
+        ValueError, match=r"Expected tensor of shape \(N_world_edges, 3\)"
+    ):
+        _ = model(good_node, good_mesh_edge, bad_world_edge, graph)
+
+    # Wrong node feature rank (ndim)
+    bad_node_rank = torch.randn(2, num_nodes, 4).to(device)
+    with pytest.raises(ValueError, match=r"Expected tensor of shape \(N_nodes, 4\)"):
+        _ = model(bad_node_rank, good_mesh_edge, good_world_edge, graph)
+
+    # Wrong mesh edge feature rank (ndim)
+    bad_mesh_rank = torch.randn(2, num_mesh_edges, 3).to(device)
+    with pytest.raises(
+        ValueError, match=r"Expected tensor of shape \(N_mesh_edges, 3\)"
+    ):
+        _ = model(good_node, bad_mesh_rank, good_world_edge, graph)
+
+    # Wrong world edge feature rank (ndim)
+    bad_world_rank = torch.randn(2, num_world_edges, 3).to(device)
+    with pytest.raises(
+        ValueError, match=r"Expected tensor of shape \(N_world_edges, 3\)"
+    ):
+        _ = model(good_node, good_mesh_edge, bad_world_rank, graph)

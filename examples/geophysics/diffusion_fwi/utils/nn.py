@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -25,9 +25,9 @@ from einops import rearrange
 
 from timm.layers import Mlp
 
-from physicsnemo.models.diffusion.song_unet import SongUNetPosEmbd
-from physicsnemo.models.meta import ModelMetaData
-from physicsnemo.models.module import Module
+from physicsnemo.models.diffusion_unets import SongUNetPosEmbd
+from physicsnemo.core.meta import ModelMetaData
+from physicsnemo.core.module import Module
 
 
 class AttentionPool(nn.Module):
@@ -275,7 +275,6 @@ class DiffusionFWINetMetaData(ModelMetaData):
     Metadata for the DiffusionFWINet model.
     """
 
-    name: str = "DiffusionFWINet"
     # Optimization
     jit: bool = False
     cuda_graphs: bool = False
@@ -366,7 +365,7 @@ class DiffusionFWINet(Module):
 
     Notes
     -----
-    This model uses :class:`physicsnemo.models.diffusion.song_unet.SongUNetPosEmbd` as its
+    This model uses :class:`~physicsnemo.models.diffusion_unets.SongUNetPosEmbd` as its
     diffusion UNet. For more details on the diffusion model parameters, refer
     to its documentation.
     """

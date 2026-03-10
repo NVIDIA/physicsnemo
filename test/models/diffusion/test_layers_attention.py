@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,8 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import sys
 from pathlib import Path
 from typing import Dict
 
@@ -23,12 +21,7 @@ import pytest
 import torch
 
 import physicsnemo
-from physicsnemo.models.diffusion.layers import Attention
-
-script_path: str = os.path.abspath(__file__)
-sys.path.append(os.path.join(os.path.dirname(script_path), ".."))
-
-# import common  # noqa: E402
+from physicsnemo.nn import UNetAttention as Attention
 
 
 def _err(x: torch.Tensor, y: torch.Tensor) -> str:
@@ -41,7 +34,7 @@ def _instantiate_model(cls, seed: int = 0, **kwargs):
     """
     Helper function to instantiate a model with reproducible random parameters.
     """
-    model: physicsnemo.Module = cls(**kwargs)
+    model: physicsnemo.core.Module = cls(**kwargs)
     gen: torch.Generator = torch.Generator(device="cpu")
     gen.manual_seed(seed)
     with torch.no_grad():
@@ -56,7 +49,7 @@ def _instantiate_model(cls, seed: int = 0, **kwargs):
     return model
 
 
-class AttentionModule(physicsnemo.Module):
+class AttentionModule(physicsnemo.core.Module):
     """
     A wrapper around Attention that has a factory method to
     create a model with reproducible random parameters.
@@ -105,32 +98,23 @@ def generate_data(device: str) -> torch.Tensor:
     return x
 
 
-@pytest.mark.parametrize(
-    ("device", "use_apex_gn"),
-    [
-        ("cuda:0", False),
-        ("cuda:0", True),
-        ("cpu", False),
-    ],
-    ids=["gpu", "gpu-apexgn", "cpu"],
-)
+@pytest.mark.parametrize("use_apex_gn", [False, True], ids=["no-apexgn", "apexgn"])
 @pytest.mark.parametrize("fused_conv_bias", [False, True], ids=["non_fused", "fused"])
 @pytest.mark.parametrize(
     "arch_type",
     ["attention_type_1", "attention_type_2"],
     ids=["arch1", "arch2"],
 )
-def test_attention_non_regression(arch_type, device, use_apex_gn, fused_conv_bias):
+def test_attention_non_regression(arch_type, apex_device, use_apex_gn, fused_conv_bias):
     """
     Test that Attention can be instantiated and compare the output with a
     reference output.
     """
-
     model: AttentionModule = AttentionModule.factory(
         arch_type=arch_type,
         use_apex_gn=use_apex_gn,
         fused_conv_bias=fused_conv_bias,
-    ).to(device)
+    ).to(apex_device)
 
     # Check that the model is instantiated correctly
     if arch_type == "attention_type_1":
@@ -140,32 +124,22 @@ def test_attention_non_regression(arch_type, device, use_apex_gn, fused_conv_bia
 
     # Load reference data
     file_name: str = str(
-        Path(__file__).parents[1].resolve()
-        / Path("data")
-        / Path(f"output_diffusion_{arch_type}.pth")
+        Path(__file__).parent / Path(f"data/output_diffusion_{arch_type}.pth")
     )
     loaded_data: Dict[str, torch.Tensor] = torch.load(file_name)
-    x, out_ref = loaded_data["x"].to(device), loaded_data["out"].to(device)
+    x, out_ref = loaded_data["x"].to(apex_device), loaded_data["out"].to(apex_device)
     out: torch.Tensor = model(x)
 
     # NOTE: this test needs very large tolerances to pass (seems hardware
     # dependent)
-    if device == "cpu":
+    if apex_device == "cpu":
         atol, rtol = 0.005, 1e-3
-    elif device == "cuda:0":
+    elif apex_device == "cuda:0":
         atol, rtol = 5.0, 1e-3
     assert torch.allclose(out, out_ref, atol=atol, rtol=rtol), _err(out, out_ref)
 
 
-@pytest.mark.parametrize(
-    ("device", "use_apex_gn"),
-    [
-        ("cuda:0", False),
-        ("cuda:0", True),
-        ("cpu", False),
-    ],
-    ids=["gpu", "gpu-apexgn", "cpu"],
-)
+@pytest.mark.parametrize("use_apex_gn", [False, True], ids=["no-apexgn", "apexgn"])
 @pytest.mark.parametrize("fused_conv_bias", [False, True], ids=["non_fused", "fused"])
 @pytest.mark.parametrize(
     "arch_type",
@@ -173,27 +147,24 @@ def test_attention_non_regression(arch_type, device, use_apex_gn, fused_conv_bia
     ids=["arch1", "arch2"],
 )
 def test_attention_non_regression_from_checkpoint(
-    device, use_apex_gn, fused_conv_bias, arch_type
+    apex_device, use_apex_gn, fused_conv_bias, arch_type
 ):
     """
     Tests loading and non-regression of a checkpoint generated with the
     Attention class. Also tests the API to override ``use_apex_gn``
     and ``fused_conv_bias`` when loading the checkpoint.
     """
-
     file_name: str = str(
-        Path(__file__).parents[1].resolve()
-        / Path("data")
-        / Path(f"checkpoint_diffusion_{arch_type}.mdlus")
+        Path(__file__).parent / Path(f"data/checkpoint_diffusion_{arch_type}.mdlus")
     )
 
-    model: physicsnemo.Module = physicsnemo.Module.from_checkpoint(
+    model: physicsnemo.core.Module = physicsnemo.core.Module.from_checkpoint(
         file_name=file_name,
         override_args={
             "use_apex_gn": use_apex_gn,
             "fused_conv_bias": fused_conv_bias,
         },
-    ).to(device)
+    ).to(apex_device)
 
     # Check that the model is instantiated correctly
     if arch_type == "attention_type_1":
@@ -203,17 +174,15 @@ def test_attention_non_regression_from_checkpoint(
 
     # Load reference data
     file_name: str = str(
-        Path(__file__).parents[1].resolve()
-        / Path("data")
-        / Path(f"output_diffusion_{arch_type}.pth")
+        Path(__file__).parent / Path(f"data/output_diffusion_{arch_type}.pth")
     )
     loaded_data: Dict[str, torch.Tensor] = torch.load(file_name)
-    x, out_ref = loaded_data["x"].to(device), loaded_data["out"].to(device)
+    x, out_ref = loaded_data["x"].to(apex_device), loaded_data["out"].to(apex_device)
     out: torch.Tensor = model(x)
 
-    if device == "cpu":
+    if apex_device == "cpu":
         atol, rtol = 0.005, 1e-3
-    elif device == "cuda:0":
+    elif apex_device == "cuda:0":
         atol, rtol = 5.0, 1e-3
     assert torch.allclose(out, out_ref, atol=atol, rtol=rtol), _err(out, out_ref)
 

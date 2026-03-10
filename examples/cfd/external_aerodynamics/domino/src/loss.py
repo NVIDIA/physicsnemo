@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,13 +17,13 @@
 import torch
 from typing import Literal, Any
 
-from physicsnemo.utils.domino.utils import unnormalize
+from physicsnemo.models.domino.utils import unnormalize
 
 from typing import Literal, Any
 
 import torch.cuda.nvtx as nvtx
 
-from physicsnemo.utils.domino.utils import *
+from physicsnemo.models.domino.utils import *
 
 
 def compute_physics_loss(

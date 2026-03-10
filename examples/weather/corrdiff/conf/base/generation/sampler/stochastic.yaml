@@ -1,6 +1,6 @@
 # @package _global_.sampler
 
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,4 +17,5 @@
 # limitations under the License.
 
 type: stochastic
-#overlap_pix has to be no less than 2*boundary_pix
+num_steps: 18
+# Number of denoising steps

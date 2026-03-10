@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -16,9 +16,9 @@
 
 import numpy as np
 import pytest
-from pytest_utils import import_or_fail
 
 from physicsnemo.metrics.cae.integral import line_integral, surface_integral
+from test.conftest import requires_module
 
 pv = pytest.importorskip("pyvista")
 
@@ -74,7 +74,7 @@ def test_line_integral(generate_circle):
     assert np.allclose(integral, 0)
 
 
-@import_or_fail(["pyvista"])
+@requires_module(["pyvista"])
 def test_surface_integral(generate_sphere, pytestconfig):
     sphere = generate_sphere
 

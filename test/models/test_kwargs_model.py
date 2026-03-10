@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -19,10 +19,20 @@ from pathlib import Path
 import pytest
 import torch
 
-import physicsnemo
+from physicsnemo.core import ModelRegistry, Module
 
 
-class MockModel(physicsnemo.Module):
+# Fixture to clear registry between tests to avoid naming conflicts
+@pytest.fixture(autouse=True)
+def clear_registry():
+    """Clear and restore the model registry before and after each test"""
+    registry = ModelRegistry()
+    registry.__clear_registry__()
+    yield
+    registry.__restore_registry__()
+
+
+class MockModel(Module):
     """Fake model"""
 
     def __init__(self, input_size=16, output_size=16, **other_kwargs):
@@ -33,7 +43,6 @@ class MockModel(physicsnemo.Module):
         self.layer = torch.nn.Linear(input_size, output_size)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("LoadModel", [MockModel])
 def test_kwargs(device, LoadModel):
     """Test checkpointing custom physicsnemo module"""

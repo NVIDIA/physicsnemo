@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -18,20 +18,16 @@ import torch
 import torch.nn as nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LinearLR
-from tqdm import trange
 import numpy as np
-import time, os
 
 
 import hydra
-from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
 
 from physicsnemo.models.topodiff import Diffusion
 from physicsnemo.models.topodiff import UNetEncoder
-from physicsnemo.launch.logging import PythonLogger
-from physicsnemo.launch.logging.wandb import initialize_wandb
-from utils import load_data_topodiff, load_data_regressor
+from physicsnemo.utils.logging import PythonLogger
+from utils import load_data_regressor
 
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")

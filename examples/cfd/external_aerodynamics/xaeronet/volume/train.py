@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -35,7 +35,7 @@ import torch
 import numpy as np
 import torch.optim as optim
 import matplotlib.pyplot as plt
-from physicsnemo.launch.logging.wandb import initialize_wandb
+from physicsnemo.utils.logging.wandb import initialize_wandb
 import json
 import wandb as wb
 import hydra

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -21,8 +21,8 @@ import numpy as np
 import torch
 from hydra.utils import to_absolute_path
 from physicsnemo.datapipes.gnn.stokes_dataset import StokesDataset
-from physicsnemo.launch.logging import PythonLogger
-from physicsnemo.launch.utils import load_checkpoint
+from physicsnemo.utils.logging import PythonLogger
+from physicsnemo.utils import load_checkpoint
 from physicsnemo.models.meshgraphnet import MeshGraphNet
 from omegaconf import DictConfig
 from torch_geometric.loader import DataLoader as PyGDataLoader

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -16,7 +16,8 @@
 
 import pytest
 import torch
-from pytest_utils import import_or_fail
+
+from test.conftest import requires_module
 
 from . import common
 
@@ -28,7 +29,7 @@ def data_dir(nfs_data_dir):
     return nfs_data_dir.joinpath("datasets/ahmed_body")
 
 
-@import_or_fail(["vtk", "pyvista", "torch_geometric", "torch_scatter"])
+@requires_module(["vtk", "pyvista", "torch_geometric", "torch_scatter"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_ahmed_body_constructor(data_dir, device, pytestconfig):
     from physicsnemo.datapipes.gnn.ahmed_body_dataset import AhmedBodyDataset

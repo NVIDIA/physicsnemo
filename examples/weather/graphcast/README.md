@@ -100,7 +100,7 @@ the model architecture. The above image is taken from the reference paper.
 
     ```bash
     # If installing from the PhysicsNeMo repository
-    pip install .[launch]
+    pip install .[gnns,datapipes-extras]
     ```
 
 2. Install additional dependencies:

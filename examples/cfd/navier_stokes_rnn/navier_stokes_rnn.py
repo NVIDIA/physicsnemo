@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -29,8 +29,8 @@ from physicsnemo.models.rnn.rnn_seq2seq import Seq2SeqRNN
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from typing import Union
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-from physicsnemo.launch.logging import PythonLogger, LaunchLogger
+from physicsnemo.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging import PythonLogger, LaunchLogger
 from hydra.utils import to_absolute_path
 
 
@@ -53,13 +53,12 @@ def prepare_data(
             arrays[k] = np.array(v)
 
         invar = arrays["u"][
-            input_nr_tsteps : input_nr_tsteps + predict_nr_tsteps,
+            0:input_nr_tsteps,
             ...,
             start_idx : start_idx + num_samples,
         ]
         outvar = arrays["u"][
-            input_nr_tsteps + predict_nr_tsteps : input_nr_tsteps
-            + 2 * predict_nr_tsteps,
+            input_nr_tsteps : input_nr_tsteps + predict_nr_tsteps,
             ...,
             start_idx : start_idx + num_samples,
         ]

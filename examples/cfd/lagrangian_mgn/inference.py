@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -34,7 +34,7 @@ from torch import Tensor
 from torch_geometric.loader import DataLoader as PyGDataLoader
 
 from physicsnemo.datapipes.gnn.lagrangian_dataset import graph_update
-from physicsnemo.launch.utils import load_checkpoint
+from physicsnemo.utils import load_checkpoint
 
 from loggers import get_gpu_info, init_python_logging
 

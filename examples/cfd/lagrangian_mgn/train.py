@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -29,7 +29,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torch_geometric.loader import DataLoader as PyGDataLoader
 
 from physicsnemo.distributed.manager import DistributedManager
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils import load_checkpoint, save_checkpoint
 
 from loggers import CompositeLogger, ExperimentLogger, get_gpu_info, init_python_logging
 

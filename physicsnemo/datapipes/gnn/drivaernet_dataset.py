@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -20,23 +20,19 @@ from typing import Iterable
 
 import pandas as pd
 import torch
-import torch_geometric as pyg
 import yaml
 from torch import Tensor
 from torch.utils.data import Dataset
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
-from physicsnemo.models.gnn_layers.utils import PyGData
+from physicsnemo.nn.module.gnn_layers.utils import PyGData
 
-try:
-    import pyvista as pv
-    import vtk
-except ImportError:
-    raise ImportError(
-        "DrivAerNet Dataset requires the vtk and pyvista libraries. "
-        "Install with pip install vtk pyvista"
-    )
+# Lazy imports for optional dependencies
+pyg = OptionalImport("torch_geometric")
+pv = OptionalImport("pyvista")
+vtk = OptionalImport("vtk")
 
 
 @dataclass
@@ -258,7 +254,7 @@ class DrivAerNetDataset(Dataset, Datapipe):
             The PyG graph.
         """
 
-        def extract_edges(mesh: pv.PolyData) -> list[tuple[int, int]]:
+        def extract_edges(mesh: "pv.PolyData") -> list[tuple[int, int]]:
             # Extract connectivity information from the mesh.
             # Traversal API is faster comparing to iterating over mesh.cell.
             polys = mesh.GetPolys()

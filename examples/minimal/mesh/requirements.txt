@@ -1,0 +1,7 @@
+nvidia-physicsnemo
+pyvista[all,trame]
+matplotlib
+pyacvd
+jupyter
+ipykernel
+ipywidgets

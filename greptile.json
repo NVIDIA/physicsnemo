@@ -51,8 +51,8 @@
     "files": [
       {
         "scope": [],
-        "path": "",
-        "description": ""
+        "path": "CODING_STANDARDS/MODELS_IMPLEMENTATION.md",
+        "description": "List of coding standards and rules when editing any model code (new or existing). Typically applies to any model classes definition in python module file."
       }
     ]
   }

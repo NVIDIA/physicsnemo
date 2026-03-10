@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,32 +14,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ruff: noqa: E402
-import os
 import random
-import sys
 
 import numpy as np
 import pytest
 import torch
 
-script_path = os.path.abspath(__file__)
-sys.path.append(os.path.join(os.path.dirname(script_path), ".."))
+pytest.importorskip("torch_geometric")
 
-import common
-from pytest_utils import import_or_fail
-
-dgl = pytest.importorskip("dgl")
+from test import common
+from test.conftest import requires_module
+from test.models.meshgraphnet.utils import rand_graph
 
 
-@import_or_fail("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@requires_module("torch_geometric")
 def test_meshgraphnet_forward(device, pytestconfig, set_physicsnemo_force_te):
     """Test mehsgraphnet forward pass"""
+
+    import torch_geometric as pyg
 
     from physicsnemo.models.meshgraphnet import MeshGraphNet
 
     torch.manual_seed(0)
-    dgl.seed(0)
     np.random.seed(0)
     # Construct MGN model
     model = MeshGraphNet(
@@ -56,19 +52,26 @@ def test_meshgraphnet_forward(device, pytestconfig, set_physicsnemo_force_te):
     for _ in range(bsize):
         src = torch.tensor([np.random.randint(num_nodes) for _ in range(num_edges)])
         dst = torch.tensor([np.random.randint(num_nodes) for _ in range(num_edges)])
-        graphs.append(dgl.graph((src, dst)).to(device))
-    graph = dgl.batch(graphs)
-    node_features = torch.randn(graph.num_nodes(), 4).to(device)
-    edge_features = torch.randn(graph.num_edges(), 3).to(device)
+        graphs.append(
+            pyg.data.Data(
+                edge_index=torch.stack([src, dst], dim=0),
+                num_nodes=num_nodes,
+            ).to(device)
+        )
+    graph = pyg.data.Batch.from_data_list(graphs)
+    node_features = torch.randn(graph.num_nodes, 4).to(device)
+    edge_features = torch.randn(graph.num_edges, 3).to(device)
     assert common.validate_forward_accuracy(
-        model, (node_features, edge_features, graph)
+        model,
+        (node_features, edge_features, graph),
+        file_name="models/meshgraphnet/data/meshgraphnet_output.pth",
     )
 
 
-@import_or_fail("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@requires_module("torch_geometric")
 def test_mehsgraphnet_constructor(device, pytestconfig, set_physicsnemo_force_te):
     """Test mehsgraphnet constructor options"""
+    import torch_geometric as pyg
 
     # Define dictionary of constructor args
     arg_list = [
@@ -110,8 +113,8 @@ def test_mehsgraphnet_constructor(device, pytestconfig, set_physicsnemo_force_te
 
         bsize = random.randint(1, 16)
         num_nodes, num_edges = random.randint(10, 25), random.randint(10, 20)
-        graph = dgl.batch(
-            [dgl.rand_graph(num_nodes, num_edges).to(device) for _ in range(bsize)]
+        graph = pyg.data.Batch.from_data_list(
+            [rand_graph(num_nodes, num_edges, device) for _ in range(bsize)]
         )
         node_features = torch.randn(bsize * num_nodes, kw_args["input_dim_nodes"]).to(
             device
@@ -122,11 +125,23 @@ def test_mehsgraphnet_constructor(device, pytestconfig, set_physicsnemo_force_te
         outvar = model(node_features, edge_features, graph)
         assert outvar.shape == (bsize * num_nodes, kw_args["output_dim"])
 
+        # Check public attributes reflect constructor args
+        assert model.input_dim_nodes == kw_args["input_dim_nodes"]
+        assert model.input_dim_edges == kw_args["input_dim_edges"]
+        assert model.output_dim == kw_args["output_dim"]
 
-@import_or_fail("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+        # Check key submodules exist
+        assert hasattr(model, "edge_encoder")
+        assert hasattr(model, "node_encoder")
+        assert hasattr(model, "processor")
+        assert hasattr(model, "node_decoder")
+
+
+@requires_module("torch_geometric")
 def test_meshgraphnet_optims(device, pytestconfig, set_physicsnemo_force_te):
     """Test meshgraphnet optimizations"""
+
+    import torch_geometric as pyg
 
     from physicsnemo.models.meshgraphnet import MeshGraphNet
 
@@ -141,8 +156,8 @@ def test_meshgraphnet_optims(device, pytestconfig, set_physicsnemo_force_te):
 
         bsize = random.randint(1, 8)
         num_nodes, num_edges = random.randint(15, 30), random.randint(15, 25)
-        graph = dgl.batch(
-            [dgl.rand_graph(num_nodes, num_edges).to(device) for _ in range(bsize)]
+        graph = pyg.data.Batch.from_data_list(
+            [rand_graph(num_nodes, num_edges, device) for _ in range(bsize)]
         )
         node_features = torch.randn(bsize * num_nodes, 2).to(device)
         edge_features = torch.randn(bsize * num_edges, 2).to(device)
@@ -162,10 +177,11 @@ def test_meshgraphnet_optims(device, pytestconfig, set_physicsnemo_force_te):
     assert common.validate_combo_optims(model, (*invar,))
 
 
-@import_or_fail("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@requires_module("torch_geometric")
 def test_meshgraphnet_checkpoint(device, pytestconfig, set_physicsnemo_force_te):
     """Test meshgraphnet checkpoint save/load"""
+
+    import torch_geometric as pyg
 
     from physicsnemo.models.meshgraphnet import MeshGraphNet
 
@@ -184,8 +200,8 @@ def test_meshgraphnet_checkpoint(device, pytestconfig, set_physicsnemo_force_te)
 
     bsize = random.randint(1, 8)
     num_nodes, num_edges = random.randint(5, 15), random.randint(10, 25)
-    graph = dgl.batch(
-        [dgl.rand_graph(num_nodes, num_edges).to(device) for _ in range(bsize)]
+    graph = pyg.data.Batch.from_data_list(
+        [rand_graph(num_nodes, num_edges, device) for _ in range(bsize)]
     )
     node_features = torch.randn(bsize * num_nodes, 4).to(device)
     edge_features = torch.randn(bsize * num_edges, 3).to(device)
@@ -200,11 +216,12 @@ def test_meshgraphnet_checkpoint(device, pytestconfig, set_physicsnemo_force_te)
     )
 
 
-@import_or_fail("dgl")
+@requires_module("torch_geometric")
 @common.check_ort_version()
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_meshgraphnet_deploy(device, pytestconfig, set_physicsnemo_force_te):
     """Test mesh-graph net deployment support"""
+
+    import torch_geometric as pyg
 
     from physicsnemo.models.meshgraphnet import MeshGraphNet
 
@@ -217,8 +234,8 @@ def test_meshgraphnet_deploy(device, pytestconfig, set_physicsnemo_force_te):
 
     bsize = random.randint(1, 8)
     num_nodes, num_edges = random.randint(5, 10), random.randint(10, 15)
-    graph = dgl.batch(
-        [dgl.rand_graph(num_nodes, num_edges).to(device) for _ in range(bsize)]
+    graph = pyg.data.Batch.from_data_list(
+        [rand_graph(num_nodes, num_edges, device) for _ in range(bsize)]
     )
     node_features = torch.randn(bsize * num_nodes, 4).to(device)
     edge_features = torch.randn(bsize * num_edges, 3).to(device)
@@ -229,3 +246,38 @@ def test_meshgraphnet_deploy(device, pytestconfig, set_physicsnemo_force_te):
     )
     assert common.validate_onnx_export(model, invar)
     assert common.validate_onnx_runtime(model, invar)
+
+
+@requires_module("torch_geometric")
+def test_meshgraphnet_shape_validation(device, pytestconfig, set_physicsnemo_force_te):
+    """Test shape validation errors for MeshGraphNet.forward"""
+    import torch_geometric as pyg
+
+    from physicsnemo.models.meshgraphnet import MeshGraphNet
+
+    model = MeshGraphNet(
+        input_dim_nodes=4,
+        input_dim_edges=3,
+        output_dim=2,
+    ).to(device)
+
+    # Single graph
+    num_nodes, num_edges = 12, 16
+    graph = pyg.data.Batch.from_data_list([rand_graph(num_nodes, num_edges, device)])
+
+    # Wrong node feature dimension (second dim)
+    bad_node = torch.randn(graph.num_nodes, 5).to(device)
+    good_edge = torch.randn(graph.num_edges, 3).to(device)
+    with pytest.raises(ValueError, match=r"Expected tensor of shape \(N_nodes, 4\)"):
+        _ = model(bad_node, good_edge, graph)
+
+    # Wrong edge feature dimension (second dim)
+    good_node = torch.randn(graph.num_nodes, 4).to(device)
+    bad_edge = torch.randn(graph.num_edges, 2).to(device)
+    with pytest.raises(ValueError, match=r"Expected tensor of shape \(N_edges, 3\)"):
+        _ = model(good_node, bad_edge, graph)
+
+    # Wrong node feature rank (ndim)
+    bad_node_rank = torch.randn(2, graph.num_nodes, 4).to(device)
+    with pytest.raises(ValueError, match=r"Expected tensor of shape \(N_nodes, 4\)"):
+        _ = model(bad_node_rank, good_edge, graph)

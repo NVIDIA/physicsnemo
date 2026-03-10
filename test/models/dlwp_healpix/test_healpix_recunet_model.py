@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,31 +14,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ruff: noqa: E402
-import os
-import sys
 
-script_path = os.path.abspath(__file__)
-sys.path.append(os.path.join(os.path.dirname(script_path), ".."))
-
-import common
+import omegaconf
 import pytest
 import torch
-from graphcast.utils import fix_random_seeds
-from pytest_utils import import_or_fail
 
 from physicsnemo.models.dlwp_healpix import HEALPixRecUNet
-
-omegaconf = pytest.importorskip("omegaconf")
+from test import common
+from test.models.graphcast.utils import fix_random_seeds
 
 
 @pytest.fixture
 def conv_next_block_dict(in_channels=3, out_channels=1):
     activation_block = {
-        "_target_": "physicsnemo.models.layers.activations.CappedGELU",
+        "_target_": "physicsnemo.nn.CappedGELU",
         "cap_value": 10,
     }
     conv_block = {
-        "_target_": "physicsnemo.models.dlwp_healpix_layers.ConvNeXtBlock",
+        "_target_": "physicsnemo.models.dlwp_healpix.layers.ConvNeXtBlock",
         "in_channels": in_channels,
         "out_channels": out_channels,
         "activation": activation_block,
@@ -53,7 +46,7 @@ def conv_next_block_dict(in_channels=3, out_channels=1):
 @pytest.fixture
 def down_sampling_block_dict():
     down_sampling_block = {
-        "_target_": "physicsnemo.models.dlwp_healpix_layers.AvgPool",
+        "_target_": "physicsnemo.nn.HEALPixAvgPool",
         "pooling": 2,
     }
     return down_sampling_block
@@ -62,7 +55,7 @@ def down_sampling_block_dict():
 @pytest.fixture
 def encoder_dict(conv_next_block_dict, down_sampling_block_dict, recurrent_block_dict):
     encoder = {
-        "_target_": "physicsnemo.models.dlwp_healpix_layers.UNetEncoder",
+        "_target_": "physicsnemo.models.dlwp_healpix.layers.UNetEncoder",
         "conv_block": conv_next_block_dict,
         "down_sampling_block": down_sampling_block_dict,
         "recurrent_block": recurrent_block_dict,
@@ -77,11 +70,11 @@ def encoder_dict(conv_next_block_dict, down_sampling_block_dict, recurrent_block
 def up_sampling_block_dict(in_channels=3, out_channels=1):
     """Block dict fixture."""
     activation_block = {
-        "_target_": "physicsnemo.models.layers.activations.CappedGELU",
+        "_target_": "physicsnemo.nn.CappedGELU",
         "cap_value": 10,
     }
     up_sampling_block = {
-        "_target_": "physicsnemo.models.dlwp_healpix_layers.TransposedConvUpsample",
+        "_target_": "physicsnemo.models.dlwp_healpix.layers.TransposedConvUpsample",
         "in_channels": in_channels,
         "out_channels": out_channels,
         "activation": activation_block,
@@ -93,7 +86,7 @@ def up_sampling_block_dict(in_channels=3, out_channels=1):
 @pytest.fixture
 def output_layer_dict(in_channels=3, out_channels=2):
     output_layer = {
-        "_target_": "physicsnemo.models.dlwp_healpix_layers.BasicConvBlock",
+        "_target_": "physicsnemo.models.dlwp_healpix.layers.BasicConvBlock",
         "in_channels": in_channels,
         "out_channels": out_channels,
         "kernel_size": 1,
@@ -106,7 +99,7 @@ def output_layer_dict(in_channels=3, out_channels=2):
 @pytest.fixture
 def recurrent_block_dict(in_channels=3):
     recurrent_block = {
-        "_target_": "physicsnemo.models.dlwp_healpix_layers.ConvGRUBlock",
+        "_target_": "physicsnemo.models.dlwp_healpix.layers.ConvGRUBlock",
         "in_channels": in_channels,
         "kernel_size": 1,
         "_recursive_": False,
@@ -122,7 +115,7 @@ def decoder_dict(
     recurrent_block_dict,
 ):
     decoder = {
-        "_target_": "physicsnemo.models.dlwp_healpix_layers.UNetDecoder",
+        "_target_": "physicsnemo.models.dlwp_healpix.layers.UNetDecoder",
         "conv_block": conv_next_block_dict,
         "up_sampling_block": up_sampling_block_dict,
         "recurrent_block": recurrent_block_dict,
@@ -169,8 +162,6 @@ def insolation_data():
     return generate_insolation_data
 
 
-@import_or_fail("omegaconf")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_HEALPixRecUNet_initialize(device, encoder_dict, decoder_dict, pytestconfig):
     in_channels = 3
     out_channels = 3
@@ -274,8 +265,6 @@ def test_HEALPixRecUNet_initialize(device, encoder_dict, decoder_dict, pytestcon
     torch.cuda.empty_cache()
 
 
-@import_or_fail("omegaconf")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_HEALPixRecUNet_integration_steps(
     device, encoder_dict, decoder_dict, pytestconfig
 ):
@@ -302,8 +291,6 @@ def test_HEALPixRecUNet_integration_steps(
     torch.cuda.empty_cache()
 
 
-@import_or_fail("omegaconf")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @torch.no_grad()
 def test_HEALPixRecUNet_reset(
     device,
@@ -355,8 +342,6 @@ def test_HEALPixRecUNet_reset(
     torch.cuda.empty_cache()
 
 
-@import_or_fail("omegaconf")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @torch.no_grad()
 def test_HEALPixRecUNet_forward(
     device,
@@ -417,7 +402,7 @@ def test_HEALPixRecUNet_forward(
     assert common.validate_forward_accuracy(
         model,
         (inputs,),
-        file_name="dlwp_healpix.pth",
+        file_name="models/dlwp_healpix/data/dlwp_healpix.pth",
         rtol=1e-2,
     )
 
@@ -446,7 +431,7 @@ def test_HEALPixRecUNet_forward(
     assert common.validate_forward_accuracy(
         model,
         (inputs,),
-        file_name="dlwp_healpix_const.pth",
+        file_name="models/dlwp_healpix/data/dlwp_healpix_const.pth",
         rtol=1e-2,
     )
 
@@ -471,7 +456,7 @@ def test_HEALPixRecUNet_forward(
     assert common.validate_forward_accuracy(
         model,
         (inputs,),
-        file_name="dlwp_healpix_decoder.pth",
+        file_name="models/dlwp_healpix/data/dlwp_healpix_decoder.pth",
         rtol=1e-2,
     )
 

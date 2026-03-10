@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -18,14 +18,15 @@
 import os
 from pathlib import Path
 
-import zarr
-from pytest_utils import import_or_fail
+from test.conftest import requires_module
 
 
 # Verifies that a Zarr file in a publicly accessible S3 bucket can be read using MSC (Multi-Storage Client).
 # See the [Multi-Storage Client README](/examples/multi_storage_client/README.md) for further information.
-@import_or_fail(["multistorageclient"])
+@requires_module(["multistorageclient", "zarr"])
 def test_msc_read(pytestconfig):
+    import zarr
+
     # Point at the MSC config file which specifies access information for the S3 bucket
     current_file = Path(__file__).resolve()
     current_dir = current_file.parent

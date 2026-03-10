@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -22,11 +22,11 @@ from pathlib import Path
 
 import pytest
 import torch as th
-from pytest_utils import import_or_fail
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 from physicsnemo.distributed import DistributedManager
+from test.conftest import requires_module
 
 omegaconf = pytest.importorskip("omegaconf")
 np = pytest.importorskip("numpy")
@@ -101,10 +101,10 @@ def scaling_double_dict():
     return omegaconf.DictConfig(scaling)
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@import_or_fail("pandas")
-@import_or_fail("xarray")
+@requires_module("omegaconf")
+@requires_module("netCDF4")
+@requires_module("pandas")
+@requires_module("xarray")
 def test_ConstantCoupler(data_dir, dataset_name, scaling_dict, pytestconfig):
     from physicsnemo.datapipes.healpix.couplers import (
         ConstantCoupler,
@@ -248,10 +248,10 @@ def test_ConstantCoupler(data_dir, dataset_name, scaling_dict, pytestconfig):
     DistributedManager.cleanup()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@import_or_fail("pandas")
-@import_or_fail("xarray")
+@requires_module("omegaconf")
+@requires_module("netCDF4")
+@requires_module("pandas")
+@requires_module("xarray")
 def test_TrailingAverageCoupler(data_dir, dataset_name, scaling_dict, pytestconfig):
     from physicsnemo.datapipes.healpix.couplers import (
         TrailingAverageCoupler,
@@ -413,9 +413,9 @@ def test_TrailingAverageCoupler(data_dir, dataset_name, scaling_dict, pytestconf
     DistributedManager.cleanup()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@import_or_fail("xarray")
+@requires_module("omegaconf")
+@requires_module("netCDF4")
+@requires_module("xarray")
 def test_CoupledTimeSeriesDataset_initialization(
     data_dir, dataset_name, scaling_dict, pytestconfig
 ):
@@ -523,9 +523,9 @@ def test_CoupledTimeSeriesDataset_initialization(
     DistributedManager.cleanup()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@import_or_fail("xarray")
+@requires_module("omegaconf")
+@requires_module("netCDF4")
+@requires_module("xarray")
 def test_CoupledTimeSeriesDataset_get_constants(
     data_dir, dataset_name, scaling_dict, pytestconfig
 ):
@@ -572,9 +572,9 @@ def test_CoupledTimeSeriesDataset_get_constants(
     DistributedManager.cleanup()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@import_or_fail("xarray")
+@requires_module("omegaconf")
+@requires_module("netCDF4")
+@requires_module("xarray")
 def test_CoupledTimeSeriesDataset_len(
     data_dir, dataset_name, scaling_dict, pytestconfig
 ):
@@ -659,9 +659,9 @@ def test_CoupledTimeSeriesDataset_len(
     DistributedManager.cleanup()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@import_or_fail("xarray")
+@requires_module("omegaconf")
+@requires_module("netCDF4")
+@requires_module("xarray")
 def test_CoupledTimeSeriesDataset_get(
     data_dir, dataset_name, scaling_double_dict, pytestconfig
 ):
@@ -834,9 +834,10 @@ def test_CoupledTimeSeriesDataset_get(
     DistributedManager.cleanup()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@import_or_fail("xarray")
+@requires_module("omegaconf")
+@requires_module("dask")
+@requires_module("netCDF4")
+@requires_module("xarray")
 def test_CoupledTimeSeriesDataModule_initialization(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
@@ -942,9 +943,9 @@ def test_CoupledTimeSeriesDataModule_initialization(
     DistributedManager.cleanup()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@import_or_fail("xarray")
+@requires_module("omegaconf")
+@requires_module("netCDF4")
+@requires_module("xarray")
 def test_CoupledTimeSeriesDataModule_get_constants(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
@@ -1039,7 +1040,7 @@ def test_CoupledTimeSeriesDataModule_get_constants(
     DistributedManager.cleanup()
 
 
-@import_or_fail("omegaconf")
+@requires_module("omegaconf")
 def test_CoupledTimeSeriesDataModule_get_dataloaders(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
@@ -1115,7 +1116,7 @@ def test_CoupledTimeSeriesDataModule_get_dataloaders(
     DistributedManager.cleanup()
 
 
-@import_or_fail("omegaconf")
+@requires_module("omegaconf")
 def test_CoupledTimeSeriesDataModule_get_coupled_vars(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
@@ -1194,9 +1195,9 @@ def test_CoupledTimeSeriesDataModule_get_coupled_vars(
     DistributedManager.cleanup()
 
 
-@import_or_fail("omegaconf")
-@import_or_fail("netCDF4")
-@import_or_fail("xarray")
+@requires_module("omegaconf")
+@requires_module("netCDF4")
+@requires_module("xarray")
 def test_CoupledTimeSeriesDataset_next_integration(
     data_dir, dataset_name, scaling_dict, pytestconfig
 ):

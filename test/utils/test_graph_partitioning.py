@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -26,7 +26,7 @@ try:
 except ImportError:
     pass
 
-from pytest_utils import import_or_fail
+from test.conftest import requires_module
 
 
 def create_simple_graph():
@@ -79,7 +79,7 @@ def create_simple_graph():
     return edge_index, node_coords, node_features, edge_features
 
 
-@import_or_fail(["dgl", "torch_geometric", "pyg_lib"])
+@requires_module(["dgl", "torch_geometric", "pyg_lib"])
 def test_graph_partitioning_comparison(pytestconfig):
     """Compares DGL metis_partition with PyG ClusterData partitioning.
 
@@ -157,7 +157,7 @@ def test_graph_partitioning_comparison(pytestconfig):
         assert (subgraph.x == pyg_data.x[partition_nodes]).all()
 
 
-@import_or_fail(["dgl", "torch_geometric", "pyg_lib"])
+@requires_module(["dgl", "torch_geometric", "pyg_lib"])
 def test_graph_partitioning_comparison_with_halo(pytestconfig):
     """Compares DGL metis_partition with PyG ClusterData partitioning.
 

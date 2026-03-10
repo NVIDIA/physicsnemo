@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -23,12 +23,12 @@ import PIL.Image
 import torch
 import tqdm
 from omegaconf import DictConfig
-from physicsnemo.utils.diffusion.utils import StackedRandomGenerator
+from physicsnemo.diffusion.utils import StackedRandomGenerator
 
 from misc import open_url
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 
 def sampler(

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -18,7 +18,6 @@ import os
 
 import pytest
 import torch
-from pytest_utils import import_or_fail
 
 from physicsnemo.distributed import DistributedManager
 
@@ -127,23 +126,28 @@ def run_test_distributed_graph(
     partition_scheme: str,
     use_torchrun: bool = False,
 ):
-    from physicsnemo.models.gnn_layers import (
-        DistributedGraph,
-        partition_graph_by_coordinate_bbox,
-    )
     from physicsnemo.models.graphcast.graph_cast_net import (
         get_lat_lon_partition_separators,
     )
+    from physicsnemo.nn.module.gnn_layers import (
+        DistributedGraph,
+        partition_graph_by_coordinate_bbox,
+    )
 
-    if not use_torchrun:
-        os.environ["RANK"] = f"{rank}"
-        os.environ["WORLD_SIZE"] = f"{world_size}"
-        os.environ["MASTER_ADDR"] = "localhost"
-        os.environ["MASTER_PORT"] = str(12355)
-        DistributedManager.initialize()
+    print(f"Rank {rank} checking in")
+
+    os.environ["RANK"] = f"{rank}"
+    os.environ["WORLD_SIZE"] = f"{world_size}"
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = str(12355)
+    os.environ["LOCAL_RANK"] = f"{rank % torch.cuda.device_count()}"
+
+    DistributedManager.initialize()
 
     manager = DistributedManager()
     assert manager.is_initialized() and manager._distributed
+
+    print(f"Rank {rank} device: {manager.device}")
 
     # actual test
     num_channels = 64
@@ -334,15 +338,7 @@ def run_test_distributed_graph(
                     )
                     assert torch.allclose(grad_local, torch.ones_like(local_edge_feat))
 
-    if not use_torchrun:
-        DistributedManager.cleanup()
-        del os.environ["RANK"]
-        del os.environ["WORLD_SIZE"]
-        del os.environ["MASTER_ADDR"]
-        del os.environ["MASTER_PORT"]
 
-
-@import_or_fail("dgl")
 @pytest.mark.multigpu_dynamic
 @pytest.mark.parametrize("partition_scheme", ["lat_lon_bbox", "default"])
 def test_distributed_graph(partition_scheme, pytestconfig):

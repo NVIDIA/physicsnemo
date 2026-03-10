@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -22,14 +22,11 @@ import torch
 from .utils import validate_output_shape_and_values
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("fourier_features", [True, False])
 @pytest.mark.parametrize("num_modes", [3, 5, 10])
 def test_fourier_mlp(device, fourier_features, num_modes):
     """Test FourierMLP with various configurations"""
-    from physicsnemo.models.layers import FourierMLP
-
-    torch.manual_seed(0)
+    from physicsnemo.nn import FourierMLP
 
     model = FourierMLP(
         input_features=3,
@@ -45,12 +42,9 @@ def test_fourier_mlp(device, fourier_features, num_modes):
     validate_output_shape_and_values(output, (2, 100, 64))
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_fourier_encode_vectorized(device):
     """Test fourier encoding function"""
-    from physicsnemo.models.layers import fourier_encode
-
-    torch.manual_seed(0)
+    from physicsnemo.nn import fourier_encode
 
     coords = torch.randn(4, 20, 3).to(device)
     freqs = torch.exp(torch.linspace(0, math.pi, 5)).to(device)
@@ -61,15 +55,12 @@ def test_fourier_encode_vectorized(device):
     validate_output_shape_and_values(output, (4, 20, 30))
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_local_geometry_encoding(device):
     """Test LocalGeometryEncoding"""
     from physicsnemo.models.domino.encodings import LocalGeometryEncoding
-    from physicsnemo.models.domino.model import get_activation
+    from physicsnemo.nn import get_activation
 
     BATCH_SIZE = 1
-
-    torch.manual_seed(0)
 
     N_ENCODING_CHANNELS = 3
     N_NEIGHBORS = 32
@@ -96,14 +87,11 @@ def test_local_geometry_encoding(device):
     validate_output_shape_and_values(output, (BATCH_SIZE, N_MESH_POINTS, 32))
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("geo_encoding_type", ["both", "stl", "sdf"])
 def test_multi_geometry_encoding(device, geo_encoding_type):
     """Test MultiGeometryEncoding with different encoding types"""
     from physicsnemo.models.domino.encodings import MultiGeometryEncoding
     from physicsnemo.models.domino.model import get_activation
-
-    torch.manual_seed(0)
 
     BATCH_SIZE = 1
     N_MESH_POINTS = 50

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -13,21 +13,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import os
-import sys
-
-script_path = os.path.abspath(__file__)
-sys.path.append(os.path.join(os.path.dirname(script_path), ".."))
-
-import common  # noqa: E402
-import numpy as np  # noqa: E402
-import pytest  # noqa: E402
-import torch  # noqa: E402
-from pytest_utils import import_or_fail  # noqa: E402
-from utils import fix_random_seeds  # noqa: E402
 
 
-@import_or_fail("dgl")
+import numpy as np
+import pytest
+import torch
+from utils import fix_random_seeds
+
+from test import common
+from test.conftest import requires_module
+
+
+@requires_module(["torch_geometric", "torch_sparse"])
 @pytest.mark.parametrize("recomp_act", [False, True])
 def test_concat_trick(pytestconfig, recomp_act, num_channels=2, res_h=11, res_w=20):
     """Test concat trick"""
@@ -52,7 +49,7 @@ def test_concat_trick(pytestconfig, recomp_act, num_channels=2, res_h=11, res_w=
 
     # Instantiate the model
     model = GraphCastNet(
-        multimesh_level=1,
+        mesh_level=1,
         input_res=(res_h, res_w),
         input_dim_grid_nodes=num_channels,
         input_dim_mesh_nodes=3,
@@ -69,7 +66,7 @@ def test_concat_trick(pytestconfig, recomp_act, num_channels=2, res_h=11, res_w=
 
     # Instantiate the model with concat trick enabled
     model_ct = GraphCastNet(
-        multimesh_level=1,
+        mesh_level=1,
         input_res=(res_h, res_w),
         input_dim_grid_nodes=num_channels,
         input_dim_mesh_nodes=3,

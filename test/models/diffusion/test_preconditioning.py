@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -16,16 +16,16 @@
 
 import pytest
 import torch
-from pytest_utils import import_or_fail
 
-from physicsnemo.models.diffusion.preconditioning import (
+from physicsnemo.core.module import Module
+from physicsnemo.diffusion.preconditioners import (
     EDMPrecond,
     EDMPrecondSR,
     EDMPrecondSuperResolution,
     VEPrecond_dfsr,
     VEPrecond_dfsr_cond,
 )
-from physicsnemo.models.module import Module
+from test.conftest import requires_module
 
 
 def test_EDMPrecondSuperResolution_forward():
@@ -103,9 +103,9 @@ def test_EDMPrecondSuperResolution_fp16_forward():
     )
 
 
-@import_or_fail("termcolor")
+@requires_module("termcolor")
 def test_EDMPrecondSuperResolution_serialization(tmp_path, pytestconfig):
-    from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+    from physicsnemo.utils.checkpoint import load_checkpoint, save_checkpoint
 
     module = EDMPrecondSuperResolution(8, 1, 1)
     model_path = tmp_path / "output.mdlus"
@@ -307,9 +307,9 @@ def test_EDMPrecondSR_forward():
     assert output.shape == (b, c_target, x, y)
 
 
-@import_or_fail("termcolor")
+@requires_module("termcolor")
 def test_EDMPrecondSR_serialization(tmp_path, pytestconfig):
-    from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+    from physicsnemo.utils.checkpoint import load_checkpoint, save_checkpoint
 
     module = EDMPrecondSR(
         8, 1, 1, 1

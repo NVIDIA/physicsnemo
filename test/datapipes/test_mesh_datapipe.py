@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -18,7 +18,8 @@ import os
 import random
 
 import pytest
-from pytest_utils import import_or_fail
+
+from test.conftest import requires_module
 
 
 @pytest.fixture
@@ -26,14 +27,14 @@ def cgns_data_dir(nfs_data_dir):
     return nfs_data_dir.joinpath("datasets/sample_formats")
 
 
-@import_or_fail(["vtk", "warp"])
+@requires_module(["vtk", "warp"])
 @pytest.mark.parametrize("device", ["cuda", "cpu"])
 def test_mesh_datapipe(device, tmp_path, pytestconfig):
     """Tests the MeshDatapipe class with VTP and VTU files."""
 
     import vtk
 
-    from physicsnemo.datapipes.cae import MeshDatapipe
+    from physicsnemo.datapipes.cae.mesh_datapipe import MeshDatapipe
 
     def _create_random_vtp_vtu_mesh(
         num_points: int, num_triangles: int, dir: str
@@ -153,7 +154,7 @@ def test_mesh_datapipe(device, tmp_path, pytestconfig):
         assert data[0]["x"].shape == (1, 10, 1)
 
 
-# @import_or_fail(["vtk"])
+# @requires_module(["vtk"])
 # @pytest.mark.parametrize("device", ["cuda", "cpu"])
 # def test_mesh_datapipe_cgns(device, cgns_data_dir, pytestconfig):
 #     """Tests the mesh datapipe for CGNS file format."""

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -24,8 +24,8 @@ import torch
 import hydra
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-from physicsnemo.launch.logging import PythonLogger, LaunchLogger
+from physicsnemo.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging import PythonLogger, LaunchLogger
 from hydra.utils import to_absolute_path
 from torch.nn.parallel import DistributedDataParallel
 from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
@@ -46,6 +46,9 @@ def reshape_fortran(x, shape):
 
 
 def generate_mask(points, sample):
+    """
+    Generate a mask
+    """
     num_racks, width, gap, translate, length, height = (
         sample[1],
         sample[2],

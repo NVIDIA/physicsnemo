@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -24,6 +24,12 @@ from physicsnemo.distributed.autograd import (
     indexed_all_to_all_v,
     scatter_v,
 )
+
+
+@pytest.fixture(autouse=True)
+def skip_on_cpu(device):
+    if device == "cpu":
+        pytest.skip("Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu")
 
 
 @pytest.mark.multigpu_static

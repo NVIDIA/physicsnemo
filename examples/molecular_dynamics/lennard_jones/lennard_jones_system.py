@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -26,8 +26,8 @@ from omegaconf import DictConfig
 import torch.nn.functional as F
 from physicsnemo.models.meshgraphnet import MeshGraphNet
 import matplotlib.pyplot as plt
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-from physicsnemo.launch.logging import LaunchLogger
+from physicsnemo.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging import LaunchLogger
 from torch.nn.parallel import DistributedDataParallel
 from physicsnemo.distributed import DistributedManager
 
@@ -132,7 +132,7 @@ def main(cfg: DictConfig) -> None:
         mlp_activation_fn=cfg.model.mlp_activation_fn,
         num_layers_node_processor=cfg.model.num_layers_node_processor,
         num_layers_edge_processor=cfg.model.num_layers_edge_processor,
-        num_layers_node_encoder=None,  # No node encoder
+        num_layers_node_encoder=1,
         num_layers_node_decoder=cfg.model.num_layers_node_decoder,
         hidden_dim_edge_encoder=cfg.model.hidden_dim_edge_encoder,
     ).to(dist.device)
@@ -194,7 +194,7 @@ def main(cfg: DictConfig) -> None:
                 g = pyg.data.Data(edge_index=edge_index).to(dist.device)
 
                 node_fea = torch.ones(
-                    size=(pos.shape[0], cfg.model.hidden_dim_edge_encoder)
+                    size=(pos.shape[0], cfg.model.input_dim_nodes)
                 ).to(dist.device)
                 edge_fea = (
                     torch.tensor(np.array(edge_features), dtype=torch.float32)
@@ -255,7 +255,7 @@ def main(cfg: DictConfig) -> None:
                         )
                         g = pyg.data.Data(edge_index=edge_index).to(dist.device)
                         node_fea = torch.ones(
-                            size=(pos.shape[0], cfg.model.hidden_dim_edge_encoder)
+                            size=(pos.shape[0], cfg.model.input_dim_nodes)
                         ).to(dist.device)
                         edge_fea = (
                             torch.tensor(np.array(edge_features), dtype=torch.float32)

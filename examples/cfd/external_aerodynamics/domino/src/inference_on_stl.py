@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -31,12 +31,8 @@ is largely the same.  As an overview:
 """
 
 import time
-import os
-import re
 from typing import Literal, Any
 
-import apex
-import numpy as np
 import hydra
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
@@ -46,18 +42,11 @@ import torch
 from physicsnemo.utils.memory import unified_gpu_memory
 
 import torchinfo
-import torch.distributed as dist
-from torch.amp import GradScaler, autocast
-from torch.nn.parallel import DistributedDataParallel
-from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from torch.utils.tensorboard import SummaryWriter
-from nvtx import annotate as nvtx_annotate
-import torch.cuda.nvtx as nvtx
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils import load_checkpoint
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 from physicsnemo.datapipes.cae.domino_datapipe import (
     DoMINODataPipe,
@@ -66,7 +55,7 @@ from physicsnemo.datapipes.cae.domino_datapipe import (
 
 
 from physicsnemo.models.domino.model import DoMINO
-from physicsnemo.utils.domino.utils import sample_points_on_mesh
+from physicsnemo.models.domino.utils import sample_points_on_mesh
 
 from utils import ScalingFactors, get_keys_to_read, coordinate_distributed_environment
 

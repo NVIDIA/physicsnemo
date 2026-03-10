@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -35,7 +35,6 @@ from torch import distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 
-from physicsnemo import Module
 from physicsnemo import __version__ as physicsnemo_version
 from physicsnemo.active_learning import protocols as p
 from physicsnemo.active_learning.config import (
@@ -47,6 +46,7 @@ from physicsnemo.active_learning.logger import (
     ActiveLearningLoggerAdapter,
     setup_active_learning_logger,
 )
+from physicsnemo.core import Module
 from physicsnemo.distributed import DistributedManager
 
 
@@ -61,6 +61,36 @@ class ActiveLearningCheckpoint:
     for example, training should be able to continue from an epoch,
     while for querying/sampling, etc. we continue from a pre-existing
     queue.
+
+    Attributes
+    ----------
+    driver_config: :class:`DriverConfig`
+        Infrastructure and orchestration configuration.
+    strategies_config: :class:`StrategiesConfig`
+        Active learning strategies configuration.
+    active_learning_step_idx: int
+        Current iteration index of the active learning loop.
+    active_learning_phase: :class:`~physicsnemo.active_learning.protocols.ActiveLearningPhase`
+        Current phase of the active learning workflow.
+    physicsnemo_version: str
+        Version of PhysicsNeMo used to create the checkpoint.
+    training_config: :class:`TrainingConfig` or None
+        Training components configuration, if training is used.
+    optimizer_state: dict or None
+        Optimizer state dictionary for checkpointing.
+    lr_scheduler_state: dict or None
+        Learning rate scheduler state dictionary for checkpointing.
+    has_query_queue: bool
+        Whether the checkpoint includes a query queue.
+    has_label_queue: bool
+        Whether the checkpoint includes a label queue.
+
+    See Also
+    --------
+    Driver : Uses this dataclass for checkpointing
+    DriverConfig : Driver configuration
+    StrategiesConfig : Strategies configuration
+    TrainingConfig : Training configuration
     """
 
     driver_config: DriverConfig
@@ -77,42 +107,49 @@ class ActiveLearningCheckpoint:
 
 class Driver(p.DriverProtocol):
     """
-    Provides a simple implementation of the ``DriverProtocol`` used to
+    Provides a simple implementation of the :class:`~physicsnemo.active_learning.protocols.DriverProtocol` used to
     orchestrate an active learning process within PhysicsNeMo.
 
     At a high level, the active learning process is broken down into four
     phases: training, metrology, query, and labeling.
 
     To understand the orchestration, start by inspecting the
-    ``active_learning_step`` method, which defines a single iteration of
-    the active learning loop, which is dispatched by the ``run`` method.
+    :meth:`active_learning_step` method, which defines a single iteration of
+    the active learning loop, which is dispatched by the :meth:`run` method.
     From there, it should be relatively straightforward to trace the
     remaining components.
 
     Attributes
     ----------
-    config: DriverConfig
+    config: :class:`DriverConfig`
         Infrastructure and orchestration configuration.
-    learner: Module | p.LearnerProtocol
+    learner: :class:`~physicsnemo.Module` or :class:`~physicsnemo.active_learning.protocols.LearnerProtocol`
         The learner module for the active learning process.
-    strategies_config: StrategiesConfig
+    strategies_config: :class:`StrategiesConfig`
         Active learning strategies (query, label, metrology).
-    training_config: TrainingConfig | None
+    training_config: :class:`TrainingConfig` or None
         Training components. None if training is skipped.
-    inference_fn: p.InferenceProtocol | None
+    inference_fn: :class:`~physicsnemo.active_learning.protocols.InferenceProtocol` or None
         Custom inference function.
     active_learning_step_idx: int
         Current iteration index of the active learning loop.
-    query_queue: p.AbstractQueue
+    query_queue: :class:`~physicsnemo.active_learning.protocols.AbstractQueue`
         Queue populated with data by query strategies.
-    label_queue: p.AbstractQueue
+    label_queue: :class:`~physicsnemo.active_learning.protocols.AbstractQueue`
         Queue populated with labeled data by the label strategy.
-    optimizer: torch.optim.Optimizer | None
+    optimizer: `torch.optim.Optimizer` or None
         Configured optimizer (set after configure_optimizer is called).
-    lr_scheduler: torch.optim.lr_scheduler._LRScheduler | None
+    lr_scheduler: `torch.optim.lr_scheduler._LRScheduler` or None
         Configured learning rate scheduler.
-    logger: logging.Logger
+    logger: :class:`logging.Logger`
         Persistent logger for the active learning process.
+
+    See Also
+    --------
+    DriverProtocol : Protocol specification for active learning drivers
+    DriverConfig : Configuration for the driver
+    StrategiesConfig : Configuration for active learning strategies
+    TrainingConfig : Configuration for training
     """
 
     # Phase execution order for active learning step (immutable)
@@ -140,17 +177,17 @@ class Driver(p.DriverProtocol):
 
         Parameters
         ----------
-        config: DriverConfig
+        config: :class:`DriverConfig`
             Orchestration and infrastructure configuration, for example
             the batch size, the log directory, the distributed manager, etc.
-        learner: Module | p.LearnerProtocol
+        learner: :class:`~physicsnemo.Module` or :class:`~physicsnemo.active_learning.protocols.LearnerProtocol`
             The model to use for active learning.
-        strategies_config: StrategiesConfig
+        strategies_config: :class:`StrategiesConfig`
             Container for active learning strategies (query, label, metrology).
-        training_config: TrainingConfig | None
+        training_config: :class:`TrainingConfig` or None
             Training components. Required if ``skip_training`` is False in
-            the ``DriverConfig``.
-        inference_fn: p.InferenceProtocol | None
+            the :class:`DriverConfig`.
+        inference_fn: :class:`~physicsnemo.active_learning.protocols.InferenceProtocol` or None
             Custom inference function. If None, uses ``learner.__call__``.
             This is not actually called by the driver, but is stored as an
             attribute for attached strategies to use as needed.
@@ -611,22 +648,14 @@ class Driver(p.DriverProtocol):
 
         # Save model weights (separate from training state)
         if isinstance(self.learner, Module):
-            model_name = (
-                self.learner.meta.name
-                if self.learner.meta
-                else self.learner.__class__.__name__
-            )
+            model_name = self.learner.__class__.__name__
             model_path = checkpoint_dir / f"{model_name}.mdlus"
             self.learner.save(str(model_path))
         elif hasattr(self.learner, "module") and isinstance(
             self.learner.module, Module
         ):
             # Unwrap DDP
-            model_name = (
-                self.learner.module.meta.name
-                if self.learner.module.meta
-                else self.learner.module.__class__.__name__
-            )
+            model_name = self.learner.module.__class__.__name__
             model_path = checkpoint_dir / f"{model_name}.mdlus"
             self.learner.module.save(str(model_path))
         else:
@@ -748,9 +777,7 @@ class Driver(p.DriverProtocol):
             # Load model weights into provided learner
             # Determine expected model filename based on learner type
             if isinstance(learner, Module):
-                model_name = (
-                    learner.meta.name if learner.meta else learner.__class__.__name__
-                )
+                model_name = learner.__class__.__name__
                 model_path = checkpoint_path / f"{model_name}.mdlus"
                 if model_path.exists():
                     learner.load(str(model_path))
@@ -761,11 +788,7 @@ class Driver(p.DriverProtocol):
                         learner.load(str(mdlus_files[0]))
             elif hasattr(learner, "module") and isinstance(learner.module, Module):
                 # Unwrap DDP
-                model_name = (
-                    learner.module.meta.name
-                    if learner.module.meta
-                    else learner.module.__class__.__name__
-                )
+                model_name = learner.module.__class__.__name__
                 model_path = checkpoint_path / f"{model_name}.mdlus"
                 if model_path.exists():
                     learner.module.load(str(model_path))

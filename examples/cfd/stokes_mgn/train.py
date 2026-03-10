@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -35,12 +35,12 @@ except:
 
 from physicsnemo.datapipes.gnn.stokes_dataset import StokesDataset
 from physicsnemo.distributed.manager import DistributedManager
-from physicsnemo.launch.logging import (
+from physicsnemo.utils.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from physicsnemo.launch.logging.wandb import initialize_wandb
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging.wandb import initialize_wandb
+from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.models.meshgraphnet import MeshGraphNet
 
 from utils import relative_lp_error
@@ -105,7 +105,7 @@ class MGNTrainer:
             hidden_dim_node_decoder=cfg.hidden_dim_node_decoder,
         )
         if cfg.jit:
-            self.model = torch.jit.script(self.model).to(dist.device)
+            self.model = torch.compile(self.model.to(dist.device))
         else:
             self.model = self.model.to(dist.device)
 
