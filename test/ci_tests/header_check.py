@@ -74,11 +74,12 @@ def get_git_tracked_files(
     everything in ``.gitignore`` is automatically skipped.
     """
     repo = git.Repo(search_parent_directories=True)
+    root = Path(repo.working_dir)
     pathspecs = [f"*.{ext.lstrip('.')}" if ext.startswith(".") else ext for ext in exts]
     output = repo.git.ls_files("--cached", "--", *pathspecs)
     exclude_tuple = tuple(exclude_prefixes)
     return [
-        Path(line)
+        root / line
         for line in output.splitlines()
         if not line.startswith(exclude_tuple)
     ]
