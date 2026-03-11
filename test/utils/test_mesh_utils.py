@@ -49,6 +49,7 @@ def sphere_stl(tmp_path):
 
 
 @requires_module(["vtk", "warp", "stl"])
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_mesh_utils(tmp_path, pytestconfig):
     """Tests the utility for combining VTP files and converting tesselated files."""
 
@@ -184,6 +185,7 @@ def test_mesh_utils(tmp_path, pytestconfig):
 
 @requires_module(["warp", "skimage", "stl", "pyvista"])
 @pytest.mark.parametrize("backend", ["warp", "skimage"])
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_stl_gen(pytestconfig, backend, sphere_stl, tmp_path):
     from stl import mesh
 

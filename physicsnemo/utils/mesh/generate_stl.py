@@ -17,6 +17,7 @@
 # ruff: noqa: F401
 
 import importlib
+import warnings
 
 import numpy as np
 import warp as wp
@@ -52,6 +53,14 @@ if STL_AVAILABLE:
         filename : str, optional
             Filename for output stl file, by default "output_stl.stl"
         """
+        warnings.warn(
+            "sdf_to_stl is deprecated and will be removed in v2.2.0. "
+            "Use physicsnemo.mesh.generate.marching_cubes instead, which "
+            "returns a Mesh object. To save as STL: "
+            "marching_cubes(field).to_pyvista().save('output.stl')",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if backend == "warp":
             # Warp MarchingCubes.surface() requires wp.float32; coerce if caller passed float64
             field = np.asarray(field, dtype=np.float32)
@@ -98,6 +107,14 @@ if STL_AVAILABLE:
 else:
 
     def sdf_to_stl(*args, **kwargs):
+        warnings.warn(
+            "sdf_to_stl is deprecated and will be removed in v2.2.0. "
+            "Use physicsnemo.mesh.generate.marching_cubes instead, which "
+            "returns a Mesh object. To save as STL: "
+            "marching_cubes(field).to_pyvista().save('output.stl')",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         raise RuntimeError(
             "STL is not available, please install stl with `pip install stl`"
         )
