@@ -193,10 +193,6 @@ _PACKAGE_HINTS: Dict[str, str] = {
         "scikit-learn",
         direct_install="scikit-learn",
     ),
-    "scikit-image": _format_install_hint(  # To be removed with utils/mesh/
-        "scikit-image",
-        direct_install="scikit-image",
-    ),
     # Data format packages
     "xarray": _format_install_hint(
         "xarray",
