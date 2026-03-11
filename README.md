@@ -442,7 +442,12 @@ pip install .
 python -c "import physicsnemo; print('PhysicsNeMo version:', physicsnemo.__version__)"
 ```
 
-For editable installs, testing your changes locally, and contribution workflows, see the [Customizing PhysicsNeMo](https://docs.nvidia.com/physicsnemo/latest/resources/customization_guide.html) guide in the documentation. See also the [contributing guidelines](CONTRIBUTING.md) for pull requests, coding style, and CI, and the [developer wiki](https://github.com/NVIDIA/physicsnemo/wiki) for community and contributing overview.
+For editable installs, testing your changes locally, and contribution workflows,
+see the [Customizing PhysicsNeMo](https://docs.nvidia.com/physicsnemo/latest/resources/customization_guide.html)
+guide in the documentation. See also the [contributing guidelines](CONTRIBUTING.md)
+for pull requests, coding style, and CI, and the
+[developer wiki](https://github.com/NVIDIA/physicsnemo/wiki) for community and
+contributing overview.
 
 ### Building Docker from Source
 
@@ -504,9 +509,12 @@ PhysicsNeMo is an open-source collaboration, and its success is rooted in commun
 contributions to further the field of Physics-ML. Thank you for contributing to the
 project so others can build on top of your contributions.
 
-For guidance on contributing to PhysicsNeMo, see the [contributing guidelines](CONTRIBUTING.md) (pull requests, coding style, CI).
-For install-from-source steps, editable installs, and testing your changes, see the [Customizing PhysicsNeMo](https://docs.nvidia.com/physicsnemo/latest/resources/customization_guide.html) guide in the documentation.
-For community and contributing overview, see the [developer wiki](https://github.com/NVIDIA/physicsnemo/wiki).
+For guidance on contributing to PhysicsNeMo, see the [contributing guidelines](CONTRIBUTING.md)
+(pull requests, coding style, CI).
+For install-from-source steps, editable installs, and testing your changes, see
+the [Customizing PhysicsNeMo](https://docs.nvidia.com/physicsnemo/latest/resources/customization_guide.html)
+guide in the documentation. For community and contributing overview, see the
+[developer wiki](https://github.com/NVIDIA/physicsnemo/wiki).
 
 ## Cite PhysicsNeMo
 
