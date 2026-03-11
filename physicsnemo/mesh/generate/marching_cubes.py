@@ -57,9 +57,10 @@ def marching_cubes(
     coords : tuple of 3 torch.Tensor, optional
         Physical coordinates along each grid axis, as 1D tensors of lengths
         :math:`N_x`, :math:`N_y`, :math:`N_z` respectively (e.g. from
-        ``torch.linspace``). When provided, output vertices are linearly
-        mapped from grid-index space into the coordinate system defined by
-        these vectors. When ``None``, vertices are in grid-index space.
+        ``torch.linspace``). When provided, output vertices are mapped from
+        grid-index space into physical space via piecewise linear
+        interpolation along each axis. Both uniform and non-uniform grids
+        are supported. When ``None``, vertices are in grid-index space.
 
     Returns
     -------
@@ -129,12 +130,11 @@ def marching_cubes(
         mc.indices.numpy().reshape(-1, 3), dtype=torch.int64
     )  # (N_f, 3)
 
-    ### Map from grid-index space to physical coordinates
+    ### Map from grid-index space to physical coordinates via piecewise linear interp
     if coords is not None:
         for dim, c in enumerate(coords):
-            n = c.shape[0]
-            origin = c[0].item()
-            spacing = (c[-1].item() - origin) / (n - 1) if n > 1 else 1.0
-            points[:, dim] = origin + points[:, dim] * spacing
+            idx = points[:, dim]
+            i = idx.long().clamp(0, c.shape[0] - 2)
+            points[:, dim] = c[i] + (idx - i.float()) * (c[i + 1] - c[i])
 
     return Mesh(points=points, cells=cells)

@@ -108,6 +108,26 @@ class TestCoords:
         assert mesh.points[:, 2].min() >= 0
         assert mesh.points[:, 2].max() <= 1
 
+    def test_nonuniform_coords(self):
+        """Non-uniform coords should place vertices via piecewise linear interp."""
+        sdf, _ = _sphere_sdf(resolution=32, radius=0.5)
+        uniform = torch.linspace(-1, 1, 32)
+        # Quadratic spacing: denser near the center
+        nonuniform = torch.sign(uniform) * uniform**2
+
+        mesh_uniform = marching_cubes(sdf, coords=(uniform, uniform, uniform))
+        mesh_nonuniform = marching_cubes(
+            sdf, coords=(nonuniform, nonuniform, nonuniform)
+        )
+
+        # Both should produce valid meshes with the same topology
+        assert mesh_nonuniform.n_cells == mesh_uniform.n_cells
+        # Non-uniform vertices should be within the non-uniform coord bounds
+        assert mesh_nonuniform.points.min() >= nonuniform[0].item()
+        assert mesh_nonuniform.points.max() <= nonuniform[-1].item()
+        # Vertices should differ (the mapping is different)
+        assert not torch.allclose(mesh_uniform.points, mesh_nonuniform.points)
+
 
 class TestGeometricAccuracy:
     """Geometric validation of extracted isosurfaces."""
