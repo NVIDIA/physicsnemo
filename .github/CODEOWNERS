@@ -403,6 +403,7 @@ test/metrics/
 test/active_learning/ @laserkelvin @dallasfoster
 test/mesh/ @peterdsharpe
 test/optim/ @peterdsharpe
+test/diffusion/ @CharlelieLrt
 test/utils/
 test/experimental/
 
