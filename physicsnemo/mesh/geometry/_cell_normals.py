@@ -61,7 +61,7 @@ def compute_cell_normals(
         >>> # Edge in 2D: normal is 90-degree CCW rotation
         >>> vecs = torch.tensor([[[1.0, 0.0]]])
         >>> compute_cell_normals(vecs)
-        tensor([[0., 1.]])
+        tensor([[-0., 1.]])
 
         >>> # Triangle in XY-plane: normal is +Z
         >>> vecs = torch.tensor([[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]])
