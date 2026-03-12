@@ -1323,14 +1323,21 @@ class BarnesHutKernel(Kernel):
         device: torch.device,
     ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
         """Produce a zero-valued result TensorDict for the degenerate case."""
+        # Match the dtype that AMP autocast would produce for real activations,
+        # so downstream ops don't hit a float32-vs-half mismatch.
+        dtype = (
+            torch.get_autocast_dtype(device.type)
+            if torch.is_autocast_enabled(device.type)
+            else torch.float32
+        )
         ranks_dict = flatten_rank_spec(self.output_field_ranks)
         fields: dict[str, torch.Tensor] = {}
         for name, rank in sorted(ranks_dict.items()):
             if rank == 0:
-                fields[name] = torch.zeros(n_targets, device=device)
+                fields[name] = torch.zeros(n_targets, device=device, dtype=dtype)
             else:
                 fields[name] = torch.zeros(
-                    n_targets, self.n_spatial_dims, device=device
+                    n_targets, self.n_spatial_dims, device=device, dtype=dtype
                 )
         return TensorDict(fields, batch_size=torch.Size([n_targets]), device=device)
 
