@@ -787,9 +787,9 @@ class BarnesHutKernel(Kernel):
     cluster_tree : ClusterTree or None, optional, default=None
         Precomputed spatial tree over source points. If ``None``, built
         from ``source_points`` on each call.
-    interaction_plan : InteractionPlan or None, optional, default=None
-        Precomputed traversal result. If ``None``, computed from the tree
-        and target points on each call.
+    dual_plan : DualInteractionPlan or None, optional, default=None
+        Precomputed dual traversal plan. If ``None``, computed from the
+        trees and target points on each call.
     source_areas : Float[torch.Tensor, "n_sources"] or None, optional, default=None
         Per-source areas for aggregate weighting. Defaults to ones.
     source_aggregates : SourceAggregates or None, optional, default=None
