@@ -76,10 +76,10 @@ def wave_trainer(cfg: DictConfig) -> None:
         cfl=cfg.wave.cfl,
         device=dist.device,
     )
-    validator = WaveValidator(loss_fun=MSELoss(reduction="mean"))
+    validator = WaveValidator(loss_fun=loss_fun)
 
     ckpt_args = {
-        "path": f"./checkpoints",
+        "path": "./checkpoints",
         "optimizer": optimizer,
         "scheduler": scheduler,
         "models": model,

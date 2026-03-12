@@ -32,7 +32,7 @@ def generate_wave_batch(
     target_time: float = 0.5,
     nr_modes: int = 5,
     cfl: float = 0.25,
-    device: str = "cuda",
+    device: str | torch.device = "cpu",
     seed: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Generate a batch of 2D wave equation initial conditions and solutions.
@@ -51,8 +51,8 @@ def generate_wave_batch(
         Number of Fourier modes per axis for random initial conditions
     cfl : float
         CFL number (dt = cfl * dx / c)
-    device : str
-        Device to return tensors on
+    device : str or torch.device
+        Device to return tensors on (default: ``"cpu"``)
     seed : int or None
         Random seed for reproducibility
 
@@ -61,6 +61,17 @@ def generate_wave_batch(
     tuple[torch.Tensor, torch.Tensor]
         (initial_condition, target_solution) each of shape (batch, 1, N, N)
     """
+    if resolution <= 0:
+        raise ValueError(f"resolution must be positive, got {resolution}")
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be positive, got {batch_size}")
+    if wave_speed <= 0:
+        raise ValueError(f"wave_speed must be positive, got {wave_speed}")
+    if cfl <= 0:
+        raise ValueError(f"cfl must be positive, got {cfl}")
+    if target_time <= 0:
+        raise ValueError(f"target_time must be positive, got {target_time}")
+
     rng = np.random.default_rng(seed)
     dx = 1.0 / resolution
     dt = cfl * dx / wave_speed
@@ -72,11 +83,13 @@ def generate_wave_batch(
     y = np.linspace(0, 1, resolution, endpoint=False)
     xx, yy = np.meshgrid(x, y, indexing="ij")
 
-    c2_ratio = (wave_speed * dt / dx) ** 2
-
     u0_all = np.zeros((batch_size, resolution, resolution), dtype=np.float32)
     uT_all = np.zeros((batch_size, resolution, resolution), dtype=np.float32)
 
+    # NOTE: The per-sample loop is intentional — each sample draws a different
+    # random mode set, and the leapfrog time-stepper keeps a small memory
+    # footprint.  For high throughput a fully vectorized or GPU-based solver
+    # would be preferable, but this keeps the example dependency-free.
     for b in range(batch_size):
         # Random superposition of Fourier modes
         u = np.zeros((resolution, resolution), dtype=np.float64)
@@ -143,8 +156,10 @@ class WaveDataLoader:
         CFL number for time stepping
     normaliser : dict or None
         Normalisation parameters {"input": (mean, std), "output": (mean, std)}
-    device : str
-        Device for output tensors
+    device : str or torch.device
+        Device for output tensors (default: ``"cpu"``)
+    seed : int or None
+        Base random seed; incremented each batch for reproducibility
     """
 
     def __init__(
@@ -156,7 +171,8 @@ class WaveDataLoader:
         nr_modes: int = 5,
         cfl: float = 0.25,
         normaliser: dict | None = None,
-        device: str = "cuda",
+        device: str | torch.device = "cpu",
+        seed: int | None = None,
     ):
         self.resolution = resolution
         self.batch_size = batch_size
@@ -166,11 +182,18 @@ class WaveDataLoader:
         self.cfl = cfl
         self.normaliser = normaliser
         self.device = device
+        self.seed = seed
+        self._batch_counter = 0
 
     def __iter__(self):
         return self
 
     def __next__(self) -> dict[str, torch.Tensor]:
+        batch_seed = None
+        if self.seed is not None:
+            batch_seed = self.seed + self._batch_counter
+            self._batch_counter += 1
+
         initial, target = generate_wave_batch(
             batch_size=self.batch_size,
             resolution=self.resolution,
@@ -179,6 +202,7 @@ class WaveDataLoader:
             nr_modes=self.nr_modes,
             cfl=self.cfl,
             device=self.device,
+            seed=batch_seed,
         )
         if self.normaliser is not None:
             im, isd = self.normaliser.get("input", (0.0, 1.0))
