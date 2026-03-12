@@ -46,6 +46,7 @@ repos:
       name: license
       entry: python test/ci_tests/header_check.py
       language: python
+      additional_dependencies: ['GitPython']
       files: \.(py|yaml|ci|release)$|Dockerfile$
       exclude: ^(physicsnemo/internal/|docs/)
 

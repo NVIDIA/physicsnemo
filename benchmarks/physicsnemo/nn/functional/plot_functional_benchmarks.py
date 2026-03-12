@@ -227,7 +227,9 @@ def main() -> int:
         description="Generate functional benchmark bar plots from ASV results."
     )
     parser.add_argument("--results-dir", type=Path, default=Path(".asv/results"))
-    parser.add_argument("--output-root", type=Path, default=Path("docs/nn/functional"))
+    parser.add_argument(
+        "--output-root", type=Path, default=Path("docs/img/nn/functional")
+    )
     args = parser.parse_args()
 
     # Load the newest ASV result payload.
