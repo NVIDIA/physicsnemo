@@ -1,169 +1,415 @@
 # PHYSICSNEMO CODEOWNERS
-
+#
 # The owners file is organized as follows:
-# First, customer-facing locations with high priority (docs, readme.md)
+# 1. Top-level files and CI/CD configuration
+# 2. Documentation
+# 3. Core framework (physicsnemo/core/, physicsnemo/nn/)
+# 4. Infrastructure (distributed, domain_parallel, datapipes, utils)
+# 5. Models (alphabetical)
+# 6. Metrics
+# 7. Experimental code
+# 8. Examples (by domain)
+# 9. Tests (matching source structure)
+#
+# Currently using specific people. TODO: Create GitHub teams for ownership.
 
-# Next, core utilities (not attached to specific models)
+# ==============================================================================
+# TOP-LEVEL FILES
+# ==============================================================================
 
-# Next, most active models (most likely to get a PR)
-# Model-specific utilities are included here, and relevant examples
-
-# Currently, the code owners is using specific people: however, we could
-# and probably should make teams in the NVIDIA org, assign people to those
-# teams, and use org teams instead.  Let's do that in an update.
-
-
-# Top level markdown files:
-# Keep CHANGELOG separate - don't require specific people to approve updates to it.
-./CHANGELOG.md
+# Top-level markdown files
 ./*.md @ram-cherukuri @megnvidia
 
-.github/workflows @ktangsali @coreyjadams @nickgeneva
-.github/workflows/merge-queue-blossom-passthrough.yml @coreyjadams
+# Keep CHANGELOG separate - don't require specific people to approve updates
+./CHANGELOG.md
 
-# All changes to documentation, except images:
+# CI/CD Configuration
+.gitlab/ @ktangsali @coreyjadams @nickgeneva
+.github/ @ktangsali @coreyjadams @nickgeneva
+.github/workflows/merge-queue-blossom-passthrough.yml @coreyjadams
+.pre-commit-config.yaml @ktangsali @coreyjadams @nickgeneva
+
+# Core release/build files
+Dockerfile @ktangsali @nickgeneva
+pyproject.toml @ktangsali @coreyjadams
+Makefile @ktangsali @coreyjadams
+asv.conf.json @loliverhennigh
+
+# Coding standards
+CODING_STANDARDS/ @CharlelieLrt @coreyjadams @loliverhennigh
+
+# ==============================================================================
+# DOCUMENTATION
+# ==============================================================================
+
+# All changes to documentation, except images
 docs/ @megnvidia @ktangsali
 docs/img/
 
+# ==============================================================================
+# BENCHMARKS
+# ==============================================================================
 
-# Core release files
-Dockerfile @ktangsali
-pyproject.toml @ktangsali
+benchmarks/ @loliverhennigh
 
-# CORE UTILITIES not attached to specific models:
-physicsnemo/utils/profiling @coreyjadams
-physicsnemo/utils/neighbors @coreyjadams @peterdsharpe
-physicsnemo/utils/version_check.py @coreyjadams
-physicsnemo/utils/capture.py @nickgeneva @ktangsali
+# ==============================================================================
+# CORE FRAMEWORK - physicsnemo/core/
+# ==============================================================================
 
-physicsnemo/registry/ @loliverhennigh
+# The core module system (Module base class, serialization, versioning)
+physicsnemo/core/ @coreyjadams @CharlelieLrt @ktangsali
 
-physicsnemo/models/module.py @CharlelieLrt
+# ==============================================================================
+# NEURAL NETWORK LAYERS - physicsnemo/nn/
+# ==============================================================================
 
-# METRICS that are general:
-physicsnemo/metrics/cae @RishikeshRanade @mnabian @peterdsharpe
-physicsnemo/metrics/general @dallasfoster @nickgeneva
-physicsnemo/metrics/climate @dallasfoster @nickgeneva
+# Reusable neural network building blocks
+physicsnemo/nn/ @loliverhennigh
 
-# Active learning components
-physicsnemo/active_learning @laserkelvin @dallasfoster
+# Functional operations (KNN, radius search, SDF)
+physicsnemo/nn/functional/ @loliverhennigh
+physicsnemo/nn/functional/knn/ @coreyjadams @peterdsharpe @loliverhennigh
+physicsnemo/nn/functional/radius_search/ @coreyjadams @peterdsharpe @loliverhennigh
+physicsnemo/nn/functional/sdf.py @RishikeshRanade @loliverhennigh
 
-# LAUNCH and DEPLOY TOOLS
-# NEEDSOWNER
-physicsnemo/launch
-physicsnemo/deploy
+# Module layers
+physicsnemo/nn/module/ @loliverhennigh
+physicsnemo/nn/module/gnn_layers/ @mnabian
+physicsnemo/nn/module/attention_layers.py @pzharrington @CharlelieLrt
+physicsnemo/nn/module/conv_layers.py @mnabian @CharlelieLrt
+physicsnemo/nn/module/embedding_layers.py @CharlelieLrt
+physicsnemo/nn/module/fourier_layers.py
+physicsnemo/nn/module/fully_connected_layers.py
+physicsnemo/nn/module/transformer_layers.py
+physicsnemo/nn/module/unet_layers.py @CharlelieLrt
 
-# Mesh
-physicsnemo/mesh @peterdsharpe
+# ==============================================================================
+# DISTRIBUTED & DOMAIN PARALLELISM
+# ==============================================================================
 
+# Distributed training utilities
+physicsnemo/distributed/ @coreyjadams
+
+# Domain parallelism (ShardTensor, shard utilities)
+physicsnemo/domain_parallel/ @coreyjadams
+physicsnemo/domain_parallel/shard_utils/ @coreyjadams
+
+# ==============================================================================
 # DATAPIPES
-physicsnemo/datapipes/core @coreyjadams
-physicsnemo/datapipes/climate @dallasfoster @nickgeneva @pzharrington
+# ==============================================================================
+
+physicsnemo/datapipes/ @coreyjadams
+physicsnemo/datapipes/benchmarks/
+physicsnemo/datapipes/readers/ @coreyjadams
+physicsnemo/datapipes/transforms/ @coreyjadams
+
 physicsnemo/datapipes/cae/domino_datapipe.py @RishikeshRanade @coreyjadams
 physicsnemo/datapipes/cae/mesh_datapipe.py @mnabian
 physicsnemo/datapipes/cae/readers.py @mnabian
+physicsnemo/datapipes/cae/transolver_datapipe.py @coreyjadams
 
-physicsnemo/datapipes/gnn @mnabian
-physicsnemo/datapipes/healpix @pzharrington
-examples/minimal/datapipes @coreyjadams
-test/datapipes/core @coreyjadams
+physicsnemo/datapipes/climate/ @dallasfoster @nickgeneva @pzharrington
+physicsnemo/datapipes/gnn/ @mnabian
+physicsnemo/datapipes/healpix/ @pzharrington
 
-# Distributed tools
-physicsnemo/distributed @coreyjadams
+# ==============================================================================
+# UTILITIES
+# ==============================================================================
 
-# MODEL SPECIFIC OWNERSHIP.  These are in roughly the same order as the code repo.
-# They are grouped "logically" together, though.
-# For example, gnn_layers, graphcast, and meshgraphnet are together.
+physicsnemo/utils/capture.py @nickgeneva @ktangsali
+physicsnemo/utils/checkpoint.py @CharlelieLrt
+physicsnemo/utils/insolation.py @pzharrington
+physicsnemo/utils/memory.py @coreyjadams
+physicsnemo/utils/zenith_angle.py @pzharrington
+
+# Logging utilities
+physicsnemo/utils/logging/
+
+# Mesh utilities
+physicsnemo/utils/mesh/ @mnabian
+
+# Profiling utilities
+physicsnemo/utils/profiling/ @coreyjadams
+
+# ==============================================================================
+# MESH MODULE
+# ==============================================================================
+
+physicsnemo/mesh/ @peterdsharpe
+
+# ==============================================================================
+# METRICS
+# ==============================================================================
+
+physicsnemo/metrics/cae/ @RishikeshRanade @mnabian @peterdsharpe
+physicsnemo/metrics/climate/ @dallasfoster @nickgeneva
+physicsnemo/metrics/general/ @dallasfoster @nickgeneva
+
+# ==============================================================================
+# OPTIMIZATION
+# ==============================================================================
+
+physicsnemo/optim/ @peterdsharpe
+
+# ==============================================================================
+# ACTIVE LEARNING
+# ==============================================================================
+
+physicsnemo/active_learning/ @laserkelvin @dallasfoster
+
+# ==============================================================================
+# DEPLOY & LAUNCH
+# ==============================================================================
+
+physicsnemo/deploy/
+
+# ==============================================================================
+# DIFFUSION MODULE (top-level diffusion framework)
+# ==============================================================================
+
+physicsnemo/diffusion/ @CharlelieLrt
+
+# ==============================================================================
+# MODELS (alphabetical)
+# ==============================================================================
 
 # AFNO
-# NEEDSOWNER
+physicsnemo/models/afno/ @ktangsali
 
-# CorrDiff and Diffusion
-physicsnemo/models/diffusion @CharlelieLrt
-physicsnemo/utils/corrdiff @CharlelieLrt
-physicsnemo/utils/diffusion @CharlelieLrt
-physicsnemo/utils/generative @CharlelieLrt
-physicsnemo/utils/patching.py @CharlelieLrt
-physicsnemo/metrics/diffusion @CharlelieLrt
+# Diffusion UNets
+physicsnemo/models/diffusion_unets/ @CharlelieLrt
 
+# DiT (Diffusion Transformer)
+physicsnemo/models/dit/ @pzharrington
 
 # DLWP
-# NEEDSOWNER
-physicsnemo/models/dlwp @pzharrington
-physicsnemo/models/dlwp_healpix @pzharrington
-physicsnemo/models/dlwp_healpix_layers @pzharrington
-physicsnemo/utils/insolation.py @pzharrington
+physicsnemo/models/dlwp/ @pzharrington
+physicsnemo/models/dlwp_healpix/ @pzharrington
 
 # DoMINO
-physicsnemo/models/domino @RishikeshRanade
-physicsnemo/utils/domino @RishikeshRanade
-physicsnemo/utils/sdf.py @RishikeshRanade @peterdsharpe
-examples/cfd/external_aerodynamics/domino @RishikeshRanade
+physicsnemo/models/domino/ @RishikeshRanade @coreyjadams @peterdsharpe
 
+# DPOT
+physicsnemo/models/dpot/ @mnabian
 
-# fengwu, pangu, swinrnn
-# NEEDSOWNER
-physicsnemo/models/fengu @dallasfoster
-physicsnemo/models/pangu @dallasfoster
-physicsnemo/models/swinvrnn @dallasfoster
+# FengWu
+physicsnemo/models/fengwu/ @dallasfoster @mnabian
 
-# figconvnet
-physicsnemo/models/figconvnet @coreyjadams
+# FIGConvNet
+physicsnemo/models/figconvnet/ @coreyjadams
 
 # FNO
-# NEEDSOWNER
+physicsnemo/models/fno/ @ktangsali
 
-# GLOBE
-physicsnemo/models/globe @peterdsharpe
+# GraphCast and GNN
+physicsnemo/models/graphcast/ @mnabian
+physicsnemo/models/mesh_reduced/ @mnabian
+physicsnemo/models/meshgraphnet/ @mnabian
 
-# GNN layers, mesh graphnet, graphcast
-physicsnemo/models/gnn_layers @mnabian
-physicsnemo/models/meshgraphnet @mnabian
-physicsnemo/models/graphcast @mnabian
-physicsnemo/models/mesh_reduced @mnabian
-physicsnemo/utils/mesh @mnabian
+# MLP
+physicsnemo/models/mlp/ @peterdsharpe
 
-# pix2pix
-# NEEDSOWNER
-physicsnemo/models/pix2pix
+# Pangu
+physicsnemo/models/pangu/ @dallasfoster @mnabian
 
-# rnn, srnn
-physicsnemo/models/rnn @ktangsali
-physicsnemo/models/srnn @ktangsali
+# Pix2Pix
+physicsnemo/models/pix2pix/ @dallasfoster
 
-# topodiff
-# NEEDSOWNER
-physicsnemo/models/topodiff
+# RNN
+physicsnemo/models/rnn/ @ktangsali
 
-# transolver
-physicsnemo/models/transolver @coreyjadams
+# SRRN (Super Resolution)
+physicsnemo/models/srrn/ @ktangsali
 
-# unet
-physicsnemo/models/unet @mnabian @peterdsharpe
+# SwinVRNN
+physicsnemo/models/swinvrnn/ @dallasfoster @mnabian
 
-# vfgn
-physicsnemo/models/vfgn @mnabian
+# TopoDiff
+physicsnemo/models/topodiff/ @mnabian
 
-# EXAMPLE SPECIFIC OWNERSHIP
+# Transolver
+physicsnemo/models/transolver/ @coreyjadams
 
-# GLOBE
-examples/cfd/external_aerodynamics/globe @peterdsharpe
+# UNet
+physicsnemo/models/unet/ @mnabian @peterdsharpe
 
-# corrdiff
-examples/weather/corrdiff @CharlelieLrt
-examples/active_learning @laserkelvin @dallasfoster
+# VFGN
+physicsnemo/models/vfgn/ @mnabian
 
-# TEST SPECIFIC OWNERSHIP
+# ==============================================================================
+# EXPERIMENTAL
+# ==============================================================================
 
-# CorrDiff and diffusion
-test/models/diffusion @CharlelieLrt
-test/metrics/diffusion @CharlelieLrt
-test/utils/generative @CharlelieLrt
-test/utils/corrdiff @CharlelieLrt
-test/active_learning @laserkelvin @dallasfoster
+# Experimental deliberately has no codeowner
+physicsnemo/experimental/
 
-# GLOBE
-test/models/globe @peterdsharpe
+# ==============================================================================
+# EXAMPLES - Active Learning
+# ==============================================================================
 
-# Mesh
-test/mesh @peterdsharpe
+examples/active_learning/ @laserkelvin @dallasfoster
+
+# ==============================================================================
+# EXAMPLES - Additive Manufacturing
+# ==============================================================================
+
+examples/additive_manufacturing/
+
+# ==============================================================================
+# EXAMPLES - CFD
+# ==============================================================================
+
+examples/cfd/darcy_fno/
+examples/cfd/darcy_nested_fnos/
+examples/cfd/darcy_physics_informed/
+examples/cfd/darcy_transolver/ @coreyjadams
+examples/cfd/datacenter/
+examples/cfd/external_aerodynamics/aero_graph_net/ @mnabian
+examples/cfd/external_aerodynamics/domino/ @RishikeshRanade @coreyjadams
+examples/cfd/external_aerodynamics/domino_nim_finetuning/ @RishikeshRanade @peterdsharpe
+examples/cfd/external_aerodynamics/figconvnet/ @coreyjadams
+examples/cfd/external_aerodynamics/globe/ @peterdsharpe
+examples/cfd/external_aerodynamics/moe/ @mnabian
+examples/cfd/external_aerodynamics/transformer_models/ @coreyjadams @RishikeshRanade
+examples/cfd/external_aerodynamics/xaeronet/ @mnabian
+examples/cfd/flow_reconstruction_diffusion/
+examples/cfd/gray_scott_rnn/
+examples/cfd/lagrangian_mgn/ @mnabian
+examples/cfd/ldc_pinns/
+examples/cfd/mhd_pino/
+examples/cfd/navier_stokes_dpot/
+examples/cfd/navier_stokes_rnn/
+examples/cfd/stokes_mgn/ @mnabian
+examples/cfd/swe_distributed_gnn/ @mnabian
+examples/cfd/swe_nonlinear_pino/
+examples/cfd/transient_conjugate_heat_transfer_tank_fill/
+examples/cfd/vortex_shedding_mesh_reduced/ @mnabian
+examples/cfd/vortex_shedding_mgn/ @mnabian
+
+# ==============================================================================
+# EXAMPLES - Generative
+# ==============================================================================
+
+examples/generative/ @CharlelieLrt @pzharrington
+
+# ==============================================================================
+# EXAMPLES - Geophysics
+# ==============================================================================
+
+examples/geophysics/ @CharlelieLrt
+examples/geophysics/diffusion_fwi/
+
+# ==============================================================================
+# EXAMPLES - Healthcare
+# ==============================================================================
+
+examples/healthcare/
+examples/healthcare/bloodflow_1d_mgn/ @mnabian
+examples/healthcare/brain_anomaly_detection/
+
+# ==============================================================================
+# EXAMPLES - Minimal / Tutorials
+# ==============================================================================
+
+examples/minimal/
+examples/minimal/datapipes/ @coreyjadams
+examples/minimal/mesh/ @peterdsharpe
+examples/minimal/neighbor_list/ @coreyjadams @peterdsharpe
+examples/minimal/ShardTensorExamples/ @coreyjadams
+
+# ==============================================================================
+# EXAMPLES - Molecular Dynamics
+# ==============================================================================
+
+examples/molecular_dynamics/
+
+# ==============================================================================
+# EXAMPLES - Multi Storage Client
+# ==============================================================================
+
+examples/multi_storage_client/
+
+# ==============================================================================
+# EXAMPLES - Reservoir Simulation
+# ==============================================================================
+
+examples/reservoir_simulation/
+
+# ==============================================================================
+# EXAMPLES - Structural Mechanics
+# ==============================================================================
+
+examples/structural_mechanics/
+examples/structural_mechanics/crash/ @coreyjadams
+examples/structural_mechanics/deforming_plate/
+
+# ==============================================================================
+# EXAMPLES - Weather
+# ==============================================================================
+
+examples/weather/corrdiff/ @CharlelieLrt
+examples/weather/dataset_download/
+examples/weather/diagnostic/
+examples/weather/dlwp/ @pzharrington
+examples/weather/dlwp_healpix/ @pzharrington
+examples/weather/fcn_afno/
+examples/weather/flood_modeling/
+examples/weather/graphcast/ @mnabian
+examples/weather/mixture_of_experts/
+examples/weather/pangu_weather/ @dallasfoster
+examples/weather/regen/
+examples/weather/stormcast/
+examples/weather/temporal_interpolation/
+examples/weather/unified_recipe/
+
+# ==============================================================================
+# TESTS - Core Framework
+# ==============================================================================
+
+test/core/ @coreyjadams
+test/nn/
+
+# ==============================================================================
+# TESTS - Infrastructure
+# ==============================================================================
+
+test/distributed/ @coreyjadams
+test/domain_parallel/ @coreyjadams
+test/datapipes/core/ @coreyjadams
+test/datapipes/ @coreyjadams
+
+# ==============================================================================
+# TESTS - Models
+# ==============================================================================
+
+test/models/diffusion/ @CharlelieLrt
+test/models/dit/ @pzharrington
+test/models/domino/ @RishikeshRanade
+test/models/figconvnet/ @coreyjadams
+test/models/globe/ @peterdsharpe
+test/models/graphcast/ @mnabian
+test/models/meshgraphnet/ @mnabian
+test/models/transolver/ @coreyjadams
+
+# ==============================================================================
+# TESTS - Metrics
+# ==============================================================================
+
+test/metrics/
+
+# ==============================================================================
+# TESTS - Other
+# ==============================================================================
+
+test/active_learning/ @laserkelvin @dallasfoster
+test/mesh/ @peterdsharpe
+test/optim/ @peterdsharpe
+test/diffusion/ @CharlelieLrt
+test/utils/
+test/experimental/
+
+# ==============================================================================
+# TESTS - CI
+# ==============================================================================
+
+test/ci_tests/ @ktangsali @coreyjadams
