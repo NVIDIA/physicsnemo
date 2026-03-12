@@ -83,13 +83,15 @@ def compute_cell_areas(
     """
     n_manifold_dims = relative_vectors.shape[-2]
 
-    if n_manifold_dims == 1:
-        return _edge_lengths(relative_vectors)
-    if n_manifold_dims == 2:
-        return _triangle_areas(relative_vectors)
-    if n_manifold_dims == 3:
-        return _tetrahedron_volumes(relative_vectors)
-    return _gram_det_volumes(relative_vectors)
+    match n_manifold_dims:
+        case 1:
+            return _edge_lengths(relative_vectors)
+        case 2:
+            return _triangle_areas(relative_vectors)
+        case 3:
+            return _tetrahedron_volumes(relative_vectors)
+        case _:
+            return _gram_det_volumes(relative_vectors)
 
 
 # ---------------------------------------------------------------------------

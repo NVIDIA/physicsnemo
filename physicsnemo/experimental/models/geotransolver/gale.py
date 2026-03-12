@@ -457,7 +457,7 @@ class GALE_block(nn.Module):
         attn = self.Attn(tuple(normed_inputs), global_context)
 
         # Residual connection after attention
-        fx_out = [attn[i] + normed_inputs[i] for i in range(len(normed_inputs))]
+        fx_out = [attn[i] + fx[i] for i in range(len(fx))]
 
         # Feed-forward network with residual connection
         fx_out = [self.ln_mlp1(_fx) + _fx for _fx in fx_out]
