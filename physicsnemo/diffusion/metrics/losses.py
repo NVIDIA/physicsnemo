@@ -45,12 +45,12 @@ class MSEDSMLoss:
     :class:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler` protocol.
     At each training step the noise scheduler provides:
 
-    - **Time sampling** via :meth:`~NoiseScheduler.sample_time`: draws
+    - **Time sampling** via :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.sample_time`: draws
       random diffusion times :math:`t`.
-    - **Noise injection** via :meth:`~NoiseScheduler.add_noise`: produces
+    - **Noise injection** via :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.add_noise`: produces
       the noisy state :math:`\mathbf{x}_t` from clean data
       :math:`\mathbf{x}_0`.
-    - **Loss weighting** via :meth:`~NoiseScheduler.loss_weight`: returns
+    - **Loss weighting** via :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.loss_weight`: returns
       the per-sample weight :math:`w(t)`.
 
     The model can be trained to either directly predict the clean data
@@ -102,9 +102,10 @@ class MSEDSMLoss:
     noise_scheduler : NoiseScheduler
         Noise scheduler implementing the
         :class:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler`
-        protocol, providing the methods: :meth:`~NoiseScheduler.sample_time`,
-        :meth:`~NoiseScheduler.add_noise`, and
-        :meth:`~NoiseScheduler.loss_weight`.
+        protocol, providing the methods:
+        :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.sample_time`,
+        :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.add_noise`, and
+        :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.loss_weight`.
     prediction_type : Literal["x0", "score"], default="x0"
         Type of prediction the model outputs. Use ``"x0"`` when the model
         directly predicts clean data (the most common case with standard

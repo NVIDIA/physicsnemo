@@ -37,11 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed bug in Pangu, FengWu attention window shift for asymmetric longitudes
+
 ### Security
 
 ### Dependencies
 
-## [2.0.0] - 2026-XX-YY
+## [2.0.0] - 2026-03-09
 
 ### Added
 

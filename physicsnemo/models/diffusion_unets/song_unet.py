@@ -212,11 +212,11 @@ class SongUNet(Module):
         The noise labels of shape :math:`(B,)`. Used for conditioning on
         the diffusion noise level.
     class_labels : torch.Tensor
-        The class labels of shape :math:`(B, \text{label_dim})`. Used for
+        The class labels of shape :math:`(B, \text{label\_dim})`. Used for
         conditioning on any vector-valued quantity. Can pass ``None`` when
         ``label_dim`` is 0.
     augment_labels : torch.Tensor, optional, default=None
-        The augmentation labels of shape :math:`(B, \text{augment_dim})`. Used
+        The augmentation labels of shape :math:`(B, \text{augment\_dim})`. Used
         for conditioning on any additional vector-valued quantity. Can pass
         ``None`` when ``augment_dim`` is 0.
 
@@ -804,7 +804,7 @@ class SongUNetPosEmbd(SongUNet):
         The noise labels of shape :math:`(B,)`. Used for conditioning on
         the diffusion noise level.
     class_labels : torch.Tensor
-        The class labels of shape :math:`(B, \text{label_dim})`. Used for
+        The class labels of shape :math:`(B, \text{label\_dim})`. Used for
         conditioning on any vector-valued quantity. Can pass ``None`` when
         ``label_dim`` is 0.
     global_index : torch.Tensor, optional, default=None
@@ -817,7 +817,7 @@ class SongUNetPosEmbd(SongUNet):
         A function that selects the positional embeddings to use. See
         :meth:`positional_embedding_selector` for details.
     augment_labels : torch.Tensor, optional, default=None
-        The augmentation labels of shape :math:`(B, \text{augment_dim})`. Used
+        The augmentation labels of shape :math:`(B, \text{augment\_dim})`. Used
         for conditioning on any additional vector-valued quantity. Can pass
         ``None`` when ``augment_dim`` is 0.
 
@@ -1387,7 +1387,7 @@ class SongUNetPosLtEmbd(SongUNetPosEmbd):
     The mechanism to condition on lead-time labels is implemented by:
 
     • First generating a grid of learnable lead-time embeddings of shape
-      :math:`(\text{lead_time_steps}, C_{LT}, H, W)`. The spatial resolution of
+      :math:`(\text{lead\_time\_steps}, C_{LT}, H, W)`. The spatial resolution of
       the lead-time embeddings is the same as the input/output image.
 
     • Then, given an input ``x``, select the lead-time embeddings that
@@ -1431,7 +1431,7 @@ class SongUNetPosLtEmbd(SongUNetPosEmbd):
         The noise labels of shape :math:`(B,)`. Used for conditioning on
         the diffusion noise level.
     class_labels : torch.Tensor
-        The class labels of shape :math:`(B, \text{label_dim})`. Used for
+        The class labels of shape :math:`(B, \text{label\_dim})`. Used for
         conditioning on any vector-valued quantity. Can pass ``None`` when
         ``label_dim`` is 0.
     global_index : torch.Tensor, optional, default=None
@@ -1443,7 +1443,7 @@ class SongUNetPosLtEmbd(SongUNetPosEmbd):
         A function that selects the positional embeddings to use. See
         :meth:`positional_embedding_selector` for details.
     augment_labels : torch.Tensor, optional, default=None
-        The augmentation labels of shape :math:`(B, \text{augment_dim})`. Used
+        The augmentation labels of shape :math:`(B, \text{augment\_dim})`. Used
         for conditioning on any additional vector-valued quantity.
     lead_time_label : torch.Tensor, optional, default=None
         The lead-time labels of shape :math:`(B,)`. Used for selecting
