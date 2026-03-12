@@ -70,11 +70,13 @@ def compute_cell_normals(
     """
     n_spatial_dims = relative_vectors.shape[-1]
 
-    if n_spatial_dims == 2:
-        return _normals_2d(relative_vectors)
-    if n_spatial_dims == 3:
-        return _normals_3d(relative_vectors)
-    return _normals_general(relative_vectors)
+    match n_spatial_dims:
+        case 2:
+            return _normals_2d(relative_vectors)
+        case 3:
+            return _normals_3d(relative_vectors)
+        case _:
+            return _normals_general(relative_vectors)
 
 
 # ---------------------------------------------------------------------------
