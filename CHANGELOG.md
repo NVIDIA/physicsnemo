@@ -25,15 +25,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
+- `physicsnemo.utils.mesh` is deprecated and will be removed in v2.2.0. For
+  isosurface extraction, use `physicsnemo.mesh.generate.marching_cubes` instead
+  of `sdf_to_stl`. For VTP/OBJ/STL file conversion (`combine_vtp_files`,
+  `convert_tesselated_files_in_directory`), use VTK or PyVista directly.
+
 ### Removed
 
 ### Fixed
+
+- Fixed bug in Pangu, FengWu attention window shift for asymmetric longitudes
 
 ### Security
 
 ### Dependencies
 
-## [2.0.0] - 2026-XX-YY
+## [2.0.0] - 2026-03-09
 
 ### Added
 

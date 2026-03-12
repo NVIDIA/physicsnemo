@@ -7,16 +7,19 @@ API Reference
    :name: API Reference
 
    api_models
+   api/mesh/index
    api/physicsnemo.nn.layers.rst
    api/physicsnemo.nn.functionals.rst
 
-   api/physicsnemo.datapipes.rst
-   api/physicsnemo.metrics.rst
-   api/physicsnemo.deploy.rst
+   .. This is a comment: These should be in alphabetical order.
+
+   api/physicsnemo.active_learning.rst
+   api/physicsnemo.core.rst
+   api/datapipes/physicsnemo.datapipes.rst
+   api_diffusion
    api/physicsnemo.distributed.rst
-   api/physicsnemo.distributed.shardtensor.rst
+   api/physicsnemo.domain_parallel.rst
+   api/physicsnemo.metrics.rst
+   api/physicsnemo.nn.rst
    api/physicsnemo.optim.rst
    api/physicsnemo.utils.rst
-   api/physicsnemo.launch.logging.rst
-   api/physicsnemo.launch.utils.rst 
-   api/physicsnemo.active_learning.rst
