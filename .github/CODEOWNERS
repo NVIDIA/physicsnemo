@@ -313,6 +313,7 @@ examples/healthcare/brain_anomaly_detection/
 
 examples/minimal/
 examples/minimal/datapipes/ @coreyjadams
+examples/minimal/mesh/ @peterdsharpe
 examples/minimal/neighbor_list/ @coreyjadams @peterdsharpe
 examples/minimal/ShardTensorExamples/ @coreyjadams
 
