@@ -57,8 +57,8 @@ if TYPE_CHECKING:
 
 @dataclass
 class MetaData(ModelMetaData):
-    jit: bool = True
-    cuda_graphs: bool = True
+    jit: bool = False  # Refers to torch.compile compatibility - this is compatible.
+    cuda_graphs: bool = False  # Computational graph changes depending on inputs due to tree traversals
     amp: bool = True
     torch_fx: bool = False
     onnx: bool = False
