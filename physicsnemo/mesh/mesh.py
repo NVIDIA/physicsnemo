@@ -22,6 +22,8 @@ import torch
 import torch.nn.functional as F
 from tensordict import TensorDict, tensorclass
 
+from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
+from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
     scale,
@@ -445,14 +447,16 @@ class Mesh:
 
     @property
     def cell_areas(self) -> torch.Tensor:
-        """Compute volumes (areas) of n-simplices using the Gram determinant method.
+        """Compute volumes (areas) of n-simplices.
 
         This works for simplices of any manifold dimension embedded in any spatial dimension.
         For example: edges in 2D/3D, triangles in 2D/3D/4D, tetrahedra in 3D/4D, etc.
 
-        The volume of an n-simplex with vertices (v0, v1, ..., vn) is:
-            Volume = (1/n!) * sqrt(det(E^T @ E))
-        where E is the matrix with columns (v1-v0, v2-v0, ..., vn-v0).
+        Uses dimension-specific closed-form expressions for n <= 3 (Lagrange
+        identity, scalar triple product, etc.) and falls back to the Gram
+        determinant for higher dimensions.  See
+        :func:`~physicsnemo.mesh.geometry._cell_areas.compute_cell_areas` for
+        details.
 
         Returns
         -------
@@ -461,27 +465,10 @@ class Mesh:
         """
         cached = self._cache.get(("cell", "areas"), None)
         if cached is None:
-            ### Compute relative vectors from first vertex to all others
-            # Shape: (n_cells, n_manifold_dims, n_spatial_dims)
             relative_vectors = (
                 self.points[self.cells[:, 1:]] - self.points[self.cells[:, [0]]]
             )
-
-            ### Compute Gram matrix: G = E^T @ E
-            # E conceptually has shape (n_spatial_dims, n_manifold_dims) per cell
-            # Gram matrix has shape (n_manifold_dims, n_manifold_dims) per cell
-            # In batch form: (n_cells, n_manifold_dims, n_spatial_dims) @ (n_cells, n_spatial_dims, n_manifold_dims)
-            gram_matrix = torch.matmul(
-                relative_vectors,  # (n_cells, n_manifold_dims, n_spatial_dims)
-                relative_vectors.transpose(
-                    -2, -1
-                ),  # (n_cells, n_spatial_dims, n_manifold_dims)
-            )  # Result: (n_cells, n_manifold_dims, n_manifold_dims)
-
-            ### Compute volume: sqrt(|det(G)|) / n!
-            factorial = math.factorial(self.n_manifold_dims)
-
-            cached = gram_matrix.det().abs().sqrt() / factorial
+            cached = compute_cell_areas(relative_vectors)
             self._cache["cell", "areas"] = cached
 
         return cached
@@ -490,25 +477,14 @@ class Mesh:
     def cell_normals(self) -> torch.Tensor:
         """Compute unit normal vectors for codimension-1 cells.
 
-        Normal vectors are uniquely defined (up to orientation) only for codimension-1
-        manifolds, where n_manifold_dims = n_spatial_dims - 1. This is because the
-        perpendicular subspace to an (n-1)-dimensional manifold in n-dimensional space
-        is 1-dimensional, yielding a unique normal direction.
+        Normal vectors are uniquely defined (up to orientation) only for
+        codimension-1 manifolds, where ``n_manifold_dims = n_spatial_dims - 1``.
 
-        Examples of valid codimension-1 manifolds:
-        - Edges (1-simplices) in 2D space: normal is a 2D vector
-        - Triangles (2-simplices) in 3D space: normal is a 3D vector
-        - Tetrahedron cells (3-simplices) in 4D space: normal is a 4D vector
-
-        Examples of invalid higher-codimension cases:
-        - Edges in 3D space: perpendicular space is 2D (no unique normal)
-        - Points in 2D/3D space: perpendicular space is 2D/3D (no unique normal)
-
-        The implementation uses the generalized cross product (Hodge star operator),
-        computed via signed minor determinants. This generalizes:
-        - 2D: 90° counterclockwise rotation of edge vector
-        - 3D: Standard cross product of two edge vectors
-        - nD: Determinant-based formula for (n-1) edge vectors in n-space
+        Uses dimension-specific closed-form expressions for d=2 (rotation)
+        and d=3 (cross product), falling back to signed minor determinants
+        for higher dimensions.  See
+        :func:`~physicsnemo.mesh.geometry._cell_normals.compute_cell_normals`
+        for details.
 
         Returns
         -------
@@ -522,7 +498,6 @@ class Mesh:
         """
         cached = self._cache.get(("cell", "normals"), None)
         if cached is None:
-            ### Validate codimension-1 requirement
             if self.codimension != 1:
                 raise ValueError(
                     f"cell normals are only defined for codimension-1 manifolds.\n"
@@ -530,40 +505,10 @@ class Mesh:
                     f"Required: n_manifold_dims = n_spatial_dims - 1 (codimension-1).\n"
                     f"Current codimension: {self.codimension}"
                 )
-
-            ### Compute relative vectors from first vertex to all others
-            # Shape: (n_cells, n_manifold_dims, n_spatial_dims)
-            # These form the rows of matrix E for each cell
             relative_vectors = (
                 self.points[self.cells[:, 1:]] - self.points[self.cells[:, [0]]]
             )
-
-            ### Compute normal using generalized cross product (Hodge star)
-            # For (n-1) vectors in R^n represented as rows of matrix E,
-            # the perpendicular vector has components:
-            #   n_i = (-1)^(n-1+i) * det(E with column i removed)
-            # This generalizes 2D rotation and 3D cross product.
-            normal_components = []
-
-            for i in range(self.n_spatial_dims):
-                ### Select all columns except the i-th to form (n-1)×(n-1) submatrix
-                # Uses slice concatenation instead of boolean mask indexing to avoid
-                # aten.nonzero (a dynamic shape op that causes torch.compile graph breaks).
-                submatrix = torch.cat(
-                    [relative_vectors[:, :, :i], relative_vectors[:, :, i + 1 :]],
-                    dim=-1,
-                )  # (n_cells, n_manifold_dims, n_manifold_dims)
-
-                ### Compute signed minor: (-1)^(n_manifold_dims + i) * det(submatrix)
-                det = submatrix.det()  # (n_cells,)
-                sign = (-1) ** (self.n_manifold_dims + i)
-                normal_components.append(sign * det)
-
-            ### Stack components and normalize to unit length
-            normals = torch.stack(
-                normal_components, dim=-1
-            )  # (n_cells, n_spatial_dims)
-            cached = F.normalize(normals, dim=-1)
+            cached = compute_cell_normals(relative_vectors)
             self._cache["cell", "normals"] = cached
 
         return cached
@@ -1906,6 +1851,20 @@ class Mesh:
                 batch_size=torch.Size([target_n_cells]),
             ),
             global_data=self.global_data,
+            _cache=TensorDict(
+                {
+                    "cell": self._cache["cell"].apply(
+                        lambda x: _pad_with_value(x, target_n_cells, 0.0),
+                        batch_size=torch.Size([target_n_cells]),
+                    ),
+                    "point": self._cache["point"].apply(
+                        lambda x: _pad_with_value(x, target_n_points, 0.0),
+                        batch_size=torch.Size([target_n_points]),
+                    ),
+                },
+                batch_size=[],
+                device=self.points.device,
+            ),
         )
 
     def pad_to_next_power(
@@ -2553,26 +2512,42 @@ class Mesh:
         remove_duplicate_cells: bool = True,
         remove_unused_points: bool = True,
     ) -> "Mesh":
-        """Clean and repair this mesh.
+        r"""Clean and repair this mesh.
 
-        Performs various cleaning operations to fix common mesh issues:
-        1. Merge duplicate points within tolerance
-        2. Remove duplicate cells
-        3. Remove unused points
+        Performs up to three cleaning operations in sequence:
 
-        This is useful after mesh operations that may introduce duplicate geometry
-        or after importing meshes from external sources that may have redundant data.
+        1. **Merge duplicate points** (``merge_points``): Finds points
+           within ``tolerance`` L2 distance using BVH spatial queries and
+           merges them into a single representative.  Point data values
+           are averaged across merged groups.  Cost: :math:`O(N \log N)`
+           where *N* is the number of points.  This is the most expensive
+           step - on meshes with millions of points it can take tens of
+           seconds.
+        2. **Remove duplicate cells** (``remove_duplicate_cells``): Sorts
+           vertex indices within each cell and removes cells that share
+           the same vertex set.  Cost: :math:`O(C \log C)` where *C* is
+           the number of cells.  Typically fast.
+        3. **Remove unused points** (``remove_unused_points``): Drops
+           points not referenced by any cell and compacts the point
+           array.  Cost: :math:`O(N + C \cdot V)` where *V* is vertices
+           per cell.  Very fast (linear scatter + mask).
+
+        This is useful after importing meshes from external sources (VTK,
+        STL, CAD) that may have redundant geometry.  For programmatic mesh
+        operations like ``slice_cells`` that don't create duplicates, you
+        can disable the expensive steps and only keep
+        ``remove_unused_points=True`` for a large speedup.
 
         Parameters
         ----------
         tolerance : float, optional
             Absolute L2 distance threshold for merging duplicate points.
         merge_points : bool, optional
-            Whether to merge duplicate points (default True).
+            Whether to merge spatially-duplicate points (default True).
         remove_duplicate_cells : bool, optional
-            Whether to remove duplicate cells (default True).
+            Whether to remove cells with identical vertex sets (default True).
         remove_unused_points : bool, optional
-            Whether to remove unused points (default True).
+            Whether to drop points not referenced by any cell (default True).
 
         Returns
         -------
@@ -2590,13 +2565,12 @@ class Mesh:
         >>> cleaned = mesh.clean()
         >>> assert cleaned.n_points == 3  # points 0 and 2 merged
         >>>
-        >>> # Adjust tolerance for coarser merging
-        >>> mesh_loose = mesh.clean(tolerance=1e-6)
-        >>>
-        >>> # Only merge points, keep duplicate cells
-        >>> mesh_partial = mesh.clean(
-        ...     merge_points=True,
-        ...     remove_duplicate_cells=False
+        >>> # Fast path: only remove unreferenced points (after slice_cells, etc.)
+        >>> subset = mesh.slice_cells(torch.tensor([0]))
+        >>> compacted = subset.clean(
+        ...     merge_points=False,
+        ...     remove_duplicate_cells=False,
+        ...     remove_unused_points=True,
         ... )
         """
         from physicsnemo.mesh.repair import clean_mesh
