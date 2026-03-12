@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import gc
 import logging
 import time
@@ -23,14 +25,16 @@ from typing import Optional, Sequence, Union
 import numpy as np
 import pandas as pd
 import torch
-import xarray as xr
 from omegaconf import DictConfig, OmegaConf
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.meta import DatapipeMetaData
 from physicsnemo.utils.insolation import insolation
 
 from . import couplers
 from .timeseries_dataset import TimeSeriesDataset
+
+xr = OptionalImport("xarray")
 
 logger = logging.getLogger(__name__)
 

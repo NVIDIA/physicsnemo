@@ -19,6 +19,7 @@ import random
 import pytest
 import torch
 
+from physicsnemo.core.module import Module
 from physicsnemo.models.transolver import Transolver
 from test.common import (
     check_ort_version,
@@ -32,6 +33,65 @@ from test.common import (
     validate_onnx_runtime,
 )
 from test.conftest import requires_module
+
+
+@pytest.mark.parametrize(
+    "config",
+    ["default_structured", "custom_irregular"],
+    ids=["with_defaults_structured", "with_custom_irregular"],
+)
+def test_transolver_constructor(config):
+    """Test Transolver model constructor and attributes per MOD-008a."""
+    if config == "default_structured":
+        # Test with structured 2D data and default parameters
+        model = Transolver(
+            functional_dim=3,
+            out_dim=1,
+            structured_shape=(64, 64),
+            unified_pos=True,
+            use_te=False,
+        )
+        # Verify default attribute values
+        assert model.n_hidden == 256, "Default n_hidden should be 256"
+        assert model.time_input is False, "Default time_input should be False"
+        assert model.unified_pos is True
+        assert model.structured_shape == (64, 64)
+        assert model.embedding_dim == 64  # ref * ref = 8 * 8 = 64
+        assert len(model.blocks) == 4, "Default n_layers should be 4"
+    else:
+        # Test with irregular mesh data and custom parameters
+        model = Transolver(
+            functional_dim=2,
+            out_dim=4,
+            embedding_dim=3,
+            n_layers=8,
+            n_hidden=64,
+            dropout=0.1,
+            n_head=4,
+            act="gelu",
+            mlp_ratio=2,
+            slice_num=16,
+            unified_pos=False,
+            structured_shape=None,
+            use_te=False,
+            time_input=True,
+            plus=True,
+        )
+        # Verify custom attribute values
+        assert model.n_hidden == 64
+        assert model.time_input is True
+        assert model.unified_pos is False
+        assert model.structured_shape is None
+        assert model.embedding_dim == 3
+        assert len(model.blocks) == 8
+
+    # Common assertions for all configurations
+    assert isinstance(model, Module), (
+        "Transolver should inherit from physicsnemo.Module"
+    )
+    assert hasattr(model, "preprocess"), "Model should have preprocess MLP"
+    assert hasattr(model, "blocks"), "Model should have transformer blocks"
+    assert hasattr(model, "meta"), "Model should have metadata"
 
 
 def test_transolver2d_forward(device):

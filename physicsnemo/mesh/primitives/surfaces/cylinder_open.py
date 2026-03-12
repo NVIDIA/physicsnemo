@@ -56,29 +56,29 @@ def load(
     if n_height < 2:
         raise ValueError(f"n_height must be at least 2, got {n_height=}")
 
-    # Create cylindrical points
+    # Vectorized cylindrical point generation
     theta = torch.linspace(0, 2 * torch.pi, n_circ + 1, device=device)[:-1]
-    z = torch.linspace(-height / 2, height / 2, n_height, device=device)
+    z_vals = torch.linspace(-height / 2, height / 2, n_height, device=device)
 
-    points = []
-    for z_val in z:
-        for theta_val in theta:
-            x = radius * torch.cos(theta_val)
-            y = radius * torch.sin(theta_val)
-            points.append([x.item(), y.item(), z_val.item()])
+    Z, THETA = torch.meshgrid(z_vals, theta, indexing="ij")
+    x = radius * torch.cos(THETA)
+    y = radius * torch.sin(THETA)
+    points = torch.stack([x, y, Z], dim=-1).reshape(-1, 3).to(dtype=torch.float32)
 
-    points = torch.tensor(points, dtype=torch.float32, device=device)
+    # Vectorized cell generation (periodic in theta, open in z)
+    i_idx = torch.arange(n_height - 1, device=device)
+    j_idx = torch.arange(n_circ, device=device)
+    ii, jj = torch.meshgrid(i_idx, j_idx, indexing="ij")
+    ii_flat = ii.reshape(-1)
+    jj_flat = jj.reshape(-1)
 
-    # Create cells
-    cells = []
-    for i in range(n_height - 1):
-        for j in range(n_circ):
-            idx = i * n_circ + j
-            next_j = (j + 1) % n_circ
+    p00 = ii_flat * n_circ + jj_flat
+    p01 = ii_flat * n_circ + (jj_flat + 1) % n_circ
+    p10 = (ii_flat + 1) * n_circ + jj_flat
+    p11 = (ii_flat + 1) * n_circ + (jj_flat + 1) % n_circ
 
-            # Two triangles per quad
-            cells.append([idx, idx + next_j - j, idx + n_circ])
-            cells.append([idx + next_j - j, idx + n_circ + next_j - j, idx + n_circ])
+    tri1 = torch.stack([p00, p01, p10], dim=1)
+    tri2 = torch.stack([p01, p11, p10], dim=1)
+    cells = torch.cat([tri1, tri2], dim=0)
 
-    cells = torch.tensor(cells, dtype=torch.int64, device=device)
     return Mesh(points=points, cells=cells)

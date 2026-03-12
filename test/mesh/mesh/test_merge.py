@@ -109,15 +109,18 @@ class TestMergeBasic:
         assert merged.n_points == 5 + 7 + 9
         assert merged.n_cells == 3 + 4 + 6
 
-    def test_merge_single_mesh_returns_same(self):
-        """Test that merging a single mesh returns the same mesh."""
+    def test_merge_single_mesh_returns_clone(self):
+        """Test that merging a single mesh returns an equal but distinct copy."""
         mesh = create_simple_mesh(
             n_points=10, n_cells=5, n_spatial_dims=3, n_manifold_dims=2
         )
 
         merged = Mesh.merge([mesh])
 
-        assert merged is mesh
+        # Should be equal but not the same object (no aliasing)
+        assert merged is not mesh
+        assert torch.equal(merged.points, mesh.points)
+        assert torch.equal(merged.cells, mesh.cells)
 
     def test_merge_preserves_points(self):
         """Test that merged points are correctly concatenated."""

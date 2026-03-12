@@ -54,38 +54,55 @@ def load(
         raise ValueError(f"n_angular must be at least 3, got {n_angular=}")
 
     # Center point
-    points = [torch.tensor([0.0, 0.0, 0.0], device=device)]
+    center = torch.zeros(1, 3, dtype=torch.float32, device=device)
 
-    # Radial rings
-    for i in range(1, n_radial + 1):
-        r = radius * i / n_radial
-        theta = torch.linspace(0, 2 * torch.pi, n_angular + 1, device=device)[:-1]
-        for theta_val in theta:
-            x = r * torch.cos(theta_val)
-            y = r * torch.sin(theta_val)
-            points.append(torch.tensor([x.item(), y.item(), 0.0], device=device))
+    # Vectorized radial ring point generation
+    r_vals = (
+        radius
+        * torch.arange(1, n_radial + 1, device=device, dtype=torch.float32)
+        / n_radial
+    )
+    theta = torch.linspace(0, 2 * torch.pi, n_angular + 1, device=device)[:-1]
+    R, THETA = torch.meshgrid(r_vals, theta, indexing="ij")
+    x = R * torch.cos(THETA)
+    y = R * torch.sin(THETA)
+    z = torch.zeros_like(x)
+    ring_points = torch.stack([x, y, z], dim=-1).reshape(-1, 3).to(dtype=torch.float32)
 
-    points = torch.stack(points, dim=0)
+    points = torch.cat([center, ring_points], dim=0)
 
-    # Create cells
-    cells = []
-
+    # Vectorized cell generation
     # Innermost ring connected to center
-    for j in range(n_angular):
-        next_j = (j + 1) % n_angular
-        cells.append([0, 1 + next_j, 1 + j])
+    j_idx = torch.arange(n_angular, device=device)
+    next_j = (j_idx + 1) % n_angular
+    inner_cells = torch.stack(
+        [
+            torch.zeros(n_angular, dtype=torch.int64, device=device),
+            1 + next_j,
+            1 + j_idx,
+        ],
+        dim=1,
+    )
+
+    cells_parts = [inner_cells]
 
     # Outer rings
-    for i in range(n_radial - 1):
-        for j in range(n_angular):
-            idx = 1 + i * n_angular + j
-            next_j = 1 + i * n_angular + (j + 1) % n_angular
-            idx_outer = 1 + (i + 1) * n_angular + j
-            next_j_outer = 1 + (i + 1) * n_angular + (j + 1) % n_angular
+    if n_radial > 1:
+        i_idx = torch.arange(n_radial - 1, device=device)
+        j_idx_outer = torch.arange(n_angular, device=device)
+        ii, jj = torch.meshgrid(i_idx, j_idx_outer, indexing="ij")
+        ii_flat = ii.reshape(-1)
+        jj_flat = jj.reshape(-1)
 
-            # Two triangles per quad
-            cells.append([idx, next_j, idx_outer])
-            cells.append([next_j, next_j_outer, idx_outer])
+        idx = 1 + ii_flat * n_angular + jj_flat
+        next_j_o = 1 + ii_flat * n_angular + (jj_flat + 1) % n_angular
+        idx_outer = 1 + (ii_flat + 1) * n_angular + jj_flat
+        next_j_outer = 1 + (ii_flat + 1) * n_angular + (jj_flat + 1) % n_angular
 
-    cells = torch.tensor(cells, dtype=torch.int64, device=device)
+        tri1 = torch.stack([idx, next_j_o, idx_outer], dim=1)
+        tri2 = torch.stack([next_j_o, next_j_outer, idx_outer], dim=1)
+        cells_parts.extend([tri1, tri2])
+
+    cells = torch.cat(cells_parts, dim=0)
+
     return Mesh(points=points, cells=cells)

@@ -18,12 +18,16 @@ import os
 
 import numpy as np
 import torch
-import torch_geometric as pyg
 from torch.utils.data import Dataset
-from torch_geometric.loader import DataLoader as PyGDataLoader
 from tqdm import tqdm
 
+from physicsnemo.core.version_check import OptionalImport
+
 from .utils import load_json, save_json
+
+# Lazy imports for optional dependencies
+pyg = OptionalImport("torch_geometric")
+pyg_loader = OptionalImport("torch_geometric.loader")
 
 
 class LatentDataset(Dataset):
@@ -113,7 +117,7 @@ class LatentDataset(Dataset):
                 name="vortex_shedding_train", split="test"
             )
 
-        dataloader = PyGDataLoader(
+        dataloader = pyg_loader.DataLoader(
             dataset, batch_size=1, shuffle=False, drop_last=False, pin_memory=True
         )
         record_z = []

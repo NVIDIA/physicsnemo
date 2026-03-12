@@ -17,35 +17,32 @@
 
 import json
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from itertools import chain
+from pathlib import Path
+from typing import TYPE_CHECKING, Callable, Iterable, List, Mapping, Tuple, Union
 
 import h5py
-import netCDF4 as nc
 import numpy as np
 import torch
 
-try:
-    import nvidia.dali as dali
-    import nvidia.dali.plugin.pytorch as dali_pth
-except ImportError:
-    raise ImportError(
-        "DALI dataset requires NVIDIA DALI package to be installed. "
-        + "The package can be installed at:\n"
-        + "https://docs.nvidia.com/deeplearning/dali/user-guide/docs/installation.html"
-    )
-
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, Iterable, List, Mapping, Tuple, Union
-
-from scipy.io import netcdf_file
-
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.climate.utils.invariant import latlon_grid
 from physicsnemo.datapipes.climate.utils.zenith_angle import cos_zenith_angle
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
 from physicsnemo.utils.logging import PythonLogger
+
+if TYPE_CHECKING:
+    from scipy.io import netcdf_file
+
+# Lazy imports for optional dependencies
+dali = OptionalImport("nvidia.dali")
+dali_pth = OptionalImport("nvidia.dali.plugin.pytorch")
+nc = OptionalImport("netCDF4")
+scipy_io = OptionalImport("scipy.io")
+
 
 Tensor = torch.Tensor
 
@@ -569,7 +566,7 @@ class ClimateDatapipe(Datapipe):
                 inv = self._crop_to_window(inv)
             yield dali.types.Constant(inv)
 
-    def _create_pipeline(self) -> dali.Pipeline:
+    def _create_pipeline(self) -> "dali.Pipeline":
         """Create DALI pipeline
 
         Returns
@@ -708,7 +705,9 @@ class ClimateDaliExternalSource(ABC):
         """Write data from year index `year_idx` and sample index `idx` to output"""
         pass
 
-    def __call__(self, sample_info: dali.types.SampleInfo) -> Tuple[Tensor, np.ndarray]:
+    def __call__(
+        self, sample_info: "dali.types.SampleInfo"
+    ) -> Tuple[Tensor, np.ndarray]:
         if sample_info.iteration >= self.num_batches:
             raise StopIteration()
 
@@ -776,7 +775,7 @@ class ClimateHDF5DaliExternalSource(ClimateDaliExternalSource):
 class ClimateNetCDF4DaliExternalSource(ClimateDaliExternalSource):
     """DALI source for reading NetCDF4 formatted climate data files."""
 
-    def _get_data_file(self, year_idx: int) -> netcdf_file:
+    def _get_data_file(self, year_idx: int) -> "netcdf_file":
         """Return the opened file for year `year_idx`."""
         if self.data_files[year_idx] is None:
             # This will be called once per worker. Workers are persistent,
@@ -787,7 +786,9 @@ class ClimateNetCDF4DaliExternalSource(ClimateDaliExternalSource):
             # causes crashes.
             reader = self.backend_kwargs.get("reader", "netcdf4")
             if reader == "scipy":
-                self.data_files[year_idx] = netcdf_file(self.data_paths[year_idx])
+                self.data_files[year_idx] = scipy_io.netcdf_file(
+                    self.data_paths[year_idx]
+                )
             elif reader == "netcdf4":
                 self.data_files[year_idx] = nc.Dataset(self.data_paths[year_idx], "r")
                 self.data_files[year_idx].set_auto_maskandscale(False)

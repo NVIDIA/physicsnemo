@@ -28,8 +28,8 @@ from physicsnemo.mesh import Mesh
 matplotlib = pytest.importorskip("matplotlib")
 pv = pytest.importorskip("pyvista")
 
-plt = matplotlib.pyplot
 matplotlib.use("Agg")  # Use non-interactive backend for testing
+import matplotlib.pyplot as plt  # noqa: E402 — must be after backend selection
 
 
 def create_0d_point_cloud(n_points: int = 10) -> Mesh:
@@ -69,13 +69,9 @@ def create_3d_surface_mesh() -> Mesh:
 
 def create_3d_tetrahedral_mesh() -> Mesh:
     """Create a simple 3D tetrahedral mesh."""
-    # Single tetrahedron
-    points = torch.tensor(
-        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-        dtype=torch.float32,
-    )
-    cells = torch.tensor([[0, 1, 2, 3]], dtype=torch.long)
-    return Mesh(points=points, cells=cells)
+    from physicsnemo.mesh.primitives.basic import single_tetrahedron
+
+    return single_tetrahedron.load()
 
 
 ### Tests for backend selection

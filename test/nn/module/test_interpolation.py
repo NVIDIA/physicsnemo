@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 import torch
 
-from physicsnemo.nn.module.interpolation import interpolation
+from physicsnemo.nn.functional import interpolation
 
 
 @pytest.mark.parametrize("mem_speed_trade", [True, False])

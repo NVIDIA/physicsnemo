@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .losses import MultiDiffusionMSEDSMLoss, MultiDiffusionWeightedMSEDSMLoss
+from .models import MultiDiffusionModel2D
 from .patching import (
     BasePatching2D,
     GridPatching2D,

@@ -165,15 +165,10 @@ class UNetAttention(torch.nn.Module):
         # w = AttentionOp.apply(q, k)
         # attn = torch.einsum("nqk,nck->ncq", w, v)
 
-        q, k, v = (
-            (
-                x1.reshape(
-                    x.shape[0], self.num_heads, x.shape[1] // self.num_heads, 3, -1
-                )
-            )
-            .permute(0, 1, 4, 3, 2)
-            .unbind(-2)
-        )
+        qkv = (
+            x1.reshape(x.shape[0], self.num_heads, x.shape[1] // self.num_heads, 3, -1)
+        ).permute(0, 1, 4, 3, 2)
+        (q, k, v) = (qkv[..., i, :] for i in range(3))
         attn = torch.nn.functional.scaled_dot_product_attention(
             q, k, v, scale=1 / math.sqrt(k.shape[-1])
         )

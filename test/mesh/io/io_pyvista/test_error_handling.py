@@ -125,14 +125,14 @@ class TestFromPyvistaMixedGeometry:
 class TestFromPyvista3DErrors:
     """Tests for 3D mesh conversion error handling."""
 
-    def test_polydata_3d_no_cells_dict_raises(self):
-        """Test that PolyData without cells_dict for 3D raises ValueError."""
+    def test_polydata_3d_no_celltypes_raises(self):
+        """Test that PolyData without celltypes for 3D raises ValueError."""
         # Create a simple PolyData (surface mesh)
         pv_mesh = pv.Sphere()
 
-        # Trying to convert as 3D should fail because PolyData doesn't have cells_dict
-        # (it's a surface, not a volume)
-        with pytest.raises(ValueError, match="cells_dict"):
+        # Trying to convert as 3D should fail because PolyData doesn't have
+        # celltypes (it's a surface, not a volume)
+        with pytest.raises(ValueError, match="UnstructuredGrid"):
             from_pyvista(pv_mesh, manifold_dim=3)
 
 

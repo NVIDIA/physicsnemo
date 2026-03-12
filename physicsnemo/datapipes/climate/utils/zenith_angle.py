@@ -31,14 +31,11 @@ import datetime
 
 import numpy as np
 
-try:
-    import nvidia.dali as dali
-except ImportError:
-    raise ImportError(
-        "DALI dataset requires NVIDIA DALI package to be installed. "
-        + "The package can be installed at:\n"
-        + "https://docs.nvidia.com/deeplearning/dali/user-guide/docs/installation.html"
-    )
+from physicsnemo.core.version_check import OptionalImport
+
+# Lazy import for optional dependency
+dali = OptionalImport("nvidia.dali")
+
 
 RAD_PER_DEG = np.pi / 180.0
 DATETIME_2000 = datetime.datetime(2000, 1, 1, 12, 0, 0, tzinfo=datetime.UTC).timestamp()
@@ -49,9 +46,9 @@ def _dali_mod(a, b):
 
 
 def cos_zenith_angle(
-    time: dali.types.DALIDataType,
-    latlon: dali.types.DALIDataType,
-):
+    time: "dali.types.DALIDataType",
+    latlon: "dali.types.DALIDataType",
+) -> "dali.types.DALIDataType":
     """
     Dali datapipe for computing Cosine of sun-zenith angle for lon, lat at time (UTC).
 
@@ -197,7 +194,6 @@ def _star_cos_zenith(model_time, lat, lon):
         Zenith:
             https://en.wikipedia.org/wiki/Solar_zenith_angle
     """
-
     ra, dec = _right_ascension_declination(model_time)
     h_angle = _local_hour_angle(model_time, lon, ra)
 

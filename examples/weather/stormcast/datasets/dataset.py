@@ -57,6 +57,10 @@ class StormCastDataset(torch.utils.data.Dataset, ABC):
         """Metadata for the state channels. A list of channel names, one for each channel"""
         pass
 
+    def scalar_condition_channels(self) -> list[str]:
+        """Metadata for the scalar condition channels. A list of channel names, one for each channel"""
+        return []
+
     @abstractmethod
     def image_shape(self) -> tuple[int, int]:
         """Get the (height, width) of the data."""

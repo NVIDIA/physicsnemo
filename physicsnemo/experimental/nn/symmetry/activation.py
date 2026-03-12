@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -228,6 +228,12 @@ class GateActivation(Module):
 
         # Extract main features (i.e. not the gate channels)
         x_features = x[..., : self.channels]  # [batch, lmax+1, mmax+1, 2, channels]
+
+        # Zero out m=0 imaginary component before processing
+        x_features = x_features * self.m0_imag_mask
+
+        # Zero out m=0 imaginary component before processing
+        x_features = x_features * self.m0_imag_mask
 
         # Process gates: [batch, lmax * channels] -> [batch, lmax, channels]
         gates = gates.view(batch, self.lmax, self.channels)

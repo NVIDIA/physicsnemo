@@ -23,7 +23,6 @@ from typing import List, Literal, Optional, Sequence
 import numpy as np
 import pytest
 import torch
-import zarr
 
 from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.datapipes.cae.cae_dataset import CAEDataset
@@ -33,6 +32,14 @@ from physicsnemo.datapipes.cae.domino_datapipe import (
     DoMINODataPipe,
 )
 from test.conftest import requires_module
+
+if not check_version_spec("zarr", hard_fail=False):
+    pytest.skip(
+        "These tests require zarr >= 3.0.0",
+        allow_module_level=True,
+    )
+else:
+    import zarr
 
 if not check_version_spec("scipy", hard_fail=False):
     pytest.skip(

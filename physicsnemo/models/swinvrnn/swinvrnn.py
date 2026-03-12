@@ -17,6 +17,7 @@
 from dataclasses import dataclass
 
 import torch
+from jaxtyping import Float
 from torch import nn
 
 from physicsnemo.core.meta import ModelMetaData
@@ -45,31 +46,61 @@ class MetaData(ModelMetaData):
 
 
 class SwinRNN(Module):
-    """
-    Implementation of SwinRNN https://arxiv.org/abs/2205.13158
-    Args:
-        img_size (Sequence[int], optional): Image size [T, Lat, Lon].
-        patch_size (Sequence[int], optional): Patch token size [T, Lat, Lon].
-        in_chans (int, optional): number of input channels.
-        out_chans (int, optional): number of output channels.
-        embed_dim (int, optional): number of embed channels.
-        num_groups (Sequence[int] | int, optional): number of groups to separate the channels into.
-        num_heads (int, optional): Number of attention heads.
-        window_size (int | tuple[int], optional): Local window size.
+    r"""
+    SwinRNN weather forecasting model.
+
+    This implementation follows `SwinRNN
+    <https://arxiv.org/abs/2205.13158>`_.
+
+    Parameters
+    ----------
+    img_size : tuple[int, int, int], optional, default=(2, 721, 1440)
+        Input size as :math:`(T, H, W)`, where :math:`T` is the number of
+        input timesteps.
+    patch_size : tuple[int, int, int], optional, default=(2, 4, 4)
+        Patch size as :math:`(p_t, p_h, p_w)` for cube embedding.
+    in_chans : int, optional, default=70
+        Number of input channels.
+    out_chans : int, optional, default=70
+        Number of output channels.
+    embed_dim : int, optional, default=1536
+        Embedding channel size used by Swin blocks.
+    num_groups : int, optional, default=32
+        Number of channel groups for convolutional blocks.
+    num_heads : int, optional, default=8
+        Number of attention heads.
+    window_size : int, optional, default=7
+        Local window size of Swin transformer blocks.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, C_{in}, T, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Predicted tensor of shape :math:`(B, C_{out}, H, W)`.
     """
 
     def __init__(
         self,
-        img_size=(2, 721, 1440),
-        patch_size=(2, 4, 4),
-        in_chans=70,
-        out_chans=70,
-        embed_dim=1536,
-        num_groups=32,
-        num_heads=8,
-        window_size=7,
-    ):
+        img_size: tuple[int, int, int] = (2, 721, 1440),
+        patch_size: tuple[int, int, int] = (2, 4, 4),
+        in_chans: int = 70,
+        out_chans: int = 70,
+        embed_dim: int = 1536,
+        num_groups: int = 32,
+        num_heads: int = 8,
+        window_size: int = 7,
+    ) -> None:
         super().__init__(meta=MetaData())
+        self.img_size = tuple(img_size)
+        self.patch_size = tuple(patch_size)
+        self.in_chans = in_chans
+        self.out_chans = out_chans
+        self.embed_dim = embed_dim
+
         input_resolution = img_size[1:]
         self.cube_embedding = CubeEmbedding(img_size, patch_size, in_chans, embed_dim)
         self.swin_block1 = SwinTransformer(
@@ -114,16 +145,43 @@ class SwinRNN(Module):
         self.up1x = ConvBlock(embed_dim * 2, embed_dim, num_groups, upsample=1)
         self.pred = ConvBlock(embed_dim * 2, out_chans, out_chans, upsample=0)
 
-        self.patch_size = patch_size
         self.input_resolution = input_resolution
-        self.out_chans = out_chans
-        self.img_size = img_size
-        self.embed_dim = embed_dim
 
-    def forward(self, x: torch.Tensor):
-        B, Cin, _, _, _ = x.shape
-        _, patch_lat, patch_lon = self.patch_size
-        Lat, Lon = self.input_resolution
+    def forward(
+        self,
+        x: Float[torch.Tensor, "batch in_chans time lat lon"],
+    ) -> Float[torch.Tensor, "batch out_chans lat lon"]:
+        r"""
+        Run SwinRNN forward prediction.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input tensor of shape :math:`(B, C_{in}, T, H, W)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Prediction tensor of shape :math:`(B, C_{out}, H, W)`.
+        """
+        if not torch.compiler.is_compiling():
+            if x.ndim != 5:
+                raise ValueError(
+                    f"Expected 'x' to be a 5D tensor, got {x.ndim}D tensor with shape {tuple(x.shape)}"
+                )
+            if x.shape[1] != self.in_chans:
+                raise ValueError(
+                    f"Expected 'x' to have {self.in_chans} channels, got tensor with shape {tuple(x.shape)}"
+                )
+            if x.shape[2] != self.img_size[0]:
+                raise ValueError(
+                    f"Expected 'x' time dimension {self.img_size[0]}, got tensor with shape {tuple(x.shape)}"
+                )
+            if x.shape[3:] != self.img_size[1:]:
+                raise ValueError(
+                    f"Expected 'x' spatial shape {self.img_size[1:]}, got tensor with shape {tuple(x.shape)}"
+                )
+
         xT = x[:, :, -1, :, :]
         x = self.cube_embedding(x).squeeze(2)  # B C Lat Lon
         h1 = self.swin_block1(x)

@@ -26,7 +26,7 @@ from physicsnemo.mesh.mesh import Mesh
 
 def load(
     side_length: float = 1.0,
-    n_subdivisions: int = 0,
+    subdivisions: int = 0,
     device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create an equilateral triangle in 2D space.
@@ -35,8 +35,9 @@ def load(
     ----------
     side_length : float
         Length of each side.
-    n_subdivisions : int
-        Number of subdivision levels.
+    subdivisions : int
+        Number of subdivision levels. Each level quadruples the number of
+        triangles: 0 → 1, 1 → 4, 2 → 16, etc.
     device : str
         Compute device ('cpu' or 'cuda').
 
@@ -45,8 +46,8 @@ def load(
     Mesh
         Mesh with n_manifold_dims=2, n_spatial_dims=2.
     """
-    if n_subdivisions < 0:
-        raise ValueError(f"n_subdivisions must be non-negative, got {n_subdivisions=}")
+    if subdivisions < 0:
+        raise ValueError(f"subdivisions must be non-negative, got {subdivisions=}")
 
     # Create vertices of equilateral triangle
     height = side_length * (3**0.5) / 2
@@ -60,7 +61,7 @@ def load(
     mesh = Mesh(points=points, cells=cells)
 
     # Apply subdivisions if requested
-    if n_subdivisions > 0:
-        mesh = mesh.subdivide(levels=n_subdivisions, filter="linear")
+    if subdivisions > 0:
+        mesh = mesh.subdivide(levels=subdivisions, filter="linear")
 
     return mesh

@@ -21,12 +21,14 @@ import pytest
 import torch
 
 import physicsnemo.datapipes as dp
+from test.conftest import requires_module
 
 # ============================================================================
 # ZarrReader Coordinated Subsampling Tests
 # ============================================================================
 
 
+@requires_module("zarr>=3.0.0")
 class TestZarrReaderCoordinatedSubsampling:
     """Tests for ZarrReader coordinated subsampling feature."""
 
@@ -140,6 +142,7 @@ class TestZarrReaderCoordinatedSubsampling:
 # ============================================================================
 
 
+@requires_module("zarr>=3.0.0")
 class TestZarrReaderAttributes:
     """Tests for ZarrReader attribute loading feature."""
 
@@ -255,6 +258,7 @@ class TestZarrReaderAttributes:
 # ============================================================================
 
 
+@requires_module("zarr>=3.0.0")
 class TestZarrReaderDefaultValues:
     """Tests for ZarrReader default values feature."""
 
@@ -321,6 +325,7 @@ class TestZarrReaderDefaultValues:
 # ============================================================================
 
 
+@requires_module("zarr>=3.0.0")
 class TestZarrReaderCacheAndClose:
     """Tests for ZarrReader caching and close functionality."""
 
@@ -387,6 +392,7 @@ class TestZarrReaderCacheAndClose:
 # ============================================================================
 
 
+@requires_module("zarr>=3.0.0")
 class TestZarrReaderSingleGroupMode:
     """Tests for ZarrReader single group mode."""
 
@@ -451,6 +457,7 @@ class TestZarrReaderSingleGroupMode:
 # ============================================================================
 
 
+@requires_module("zarr>=3.0.0")
 class TestZarrReaderRepr:
     """Tests for ZarrReader string representation."""
 

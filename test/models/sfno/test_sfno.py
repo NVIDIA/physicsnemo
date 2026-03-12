@@ -24,11 +24,16 @@ from physicsnemo.core.version_check import check_version_spec
 from test import common
 from test.conftest import requires_module
 
-MAKANI_AVAILABLE = check_version_spec("makani", "0.2.0", hard_fail=False)
+# TODO: Makani will have to switch to PhysicsNeMo 2.0. Since we don't have a
+# wheel released yet, this is not possible and this breaks this circular dependency
+# A workaround is to have it check for a future version, that will make the test skip.
+# We will have to come back and update the version here once Makani updates to use
+# latest PNeMo.
+MAKANI_AVAILABLE = check_version_spec("makani", "0.3.0", hard_fail=False)
 
 if not MAKANI_AVAILABLE:
     pytest.skip(
-        "makani not installed at the minimum version (0.2.0)", allow_module_level=True
+        "makani not installed at the minimum version (0.3.0)", allow_module_level=True
     )
 
 IN_OUT_SHAPE = [32, 32]
@@ -65,7 +70,7 @@ def test_sfno_forward(pytestconfig, device):
     # Check output size.
     # Use different checkpoints for different device types due to
     # SFNO implementation differences CPU vs GPU.
-    model_file_name = f"models/sfno/data/{model.meta.name}_{device.type}_output.pth"
+    model_file_name = f"models/sfno/data/sfno_{device.type}_output.pth"
     assert common.validate_forward_accuracy(
         model, (invar,), file_name=model_file_name, atol=0.01
     )

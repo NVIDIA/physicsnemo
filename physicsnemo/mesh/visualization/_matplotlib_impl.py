@@ -41,6 +41,7 @@ def draw_mesh_matplotlib(
     point_scalar_values: torch.Tensor | None,
     cell_scalar_values: torch.Tensor | None,
     active_scalar_source: Literal["points", "cells", None],
+    scalar_label: str | None,
     show: bool,
     cmap: str,
     vmin: float | None,
@@ -65,6 +66,8 @@ def draw_mesh_matplotlib(
         Processed cell scalar values (1D tensor or None).
     active_scalar_source : {"points", "cells", None}
         Which scalar source is active ("points", "cells", or None).
+    scalar_label : str or None
+        Human-readable label for the colorbar.
     show : bool
         Whether to call plt.show().
     cmap : str
@@ -89,9 +92,42 @@ def draw_mesh_matplotlib(
     matplotlib.axes.Axes
         Matplotlib axes object.
     """
+    ### For volume meshes (3D+ manifold), reduce to a surface mesh.
+    ### Matplotlib can only render 2D facets (polygons), not volumetric cells
+    ### like tetrahedra. Extract boundary facets for clean surface visualization.
+    if mesh.n_manifold_dims >= 3:
+        _VIZ_KEY = "_viz_cell_scalars"
+
+        ### If cell scalars are active, inject them into a cloned cell_data so
+        ### get_facet_mesh can propagate them to boundary facets via averaging.
+        ### We clone to avoid mutating the caller's mesh.
+        if cell_scalar_values is not None:
+            from physicsnemo.mesh import Mesh
+
+            augmented_cell_data = mesh.cell_data.clone()
+            augmented_cell_data[_VIZ_KEY] = cell_scalar_values
+            mesh = Mesh(
+                points=mesh.points,
+                cells=mesh.cells,
+                point_data=mesh.point_data,
+                cell_data=augmented_cell_data,
+                global_data=mesh.global_data,
+            )
+
+        mesh = mesh.get_facet_mesh(
+            manifold_codimension=mesh.n_manifold_dims - 2,
+            data_source="cells",
+            data_aggregation="mean",
+            target_counts="boundary",
+        )
+
+        ### Extract propagated cell scalars from the facet mesh
+        if cell_scalar_values is not None:
+            cell_scalar_values = mesh.cell_data[_VIZ_KEY]
+
     ### Convert mesh data to numpy
-    points_np = mesh.points.cpu().numpy()
-    cells_np = mesh.cells.cpu().numpy()
+    points_np = mesh.points.cpu().detach().numpy()
+    cells_np = mesh.cells.cpu().detach().numpy()
 
     ### Determine neutral colors based on active_scalar_source
     point_neutral_color = "black"
@@ -195,7 +231,7 @@ def draw_mesh_matplotlib(
 
     ### Add colorbar if we have active scalars
     if scalar_mapper is not None:
-        plt.colorbar(scalar_mapper, ax=ax, label="Scalar Value")
+        plt.colorbar(scalar_mapper, ax=ax, label=scalar_label or "")
 
     ### Set labels and make axes equal
     if mesh.n_spatial_dims == 1:
@@ -338,6 +374,13 @@ def _draw_2d(
 
         if active_scalar_source == "cells" and cell_scalar_values is not None:
             facecolors = scalar_mapper.to_rgba(cell_scalar_values.cpu().numpy())
+        elif active_scalar_source == "points" and point_scalar_values is not None:
+            # Map per-vertex scalars to per-face colors by averaging each
+            # face's vertex RGBA values (same approach as _draw_3d).
+            vertex_colors = scalar_mapper.to_rgba(
+                point_scalar_values.cpu().numpy()
+            )  # (n_points, 4)
+            facecolors = vertex_colors[cells_np].mean(axis=1)  # (n_faces, 4)
         else:
             facecolors = cell_neutral_color
 
@@ -363,7 +406,17 @@ def _draw_2d(
         ax.add_collection(pc)
 
     ### Draw points
-    if alpha_points > 0:
+    # When point scalars have been mapped onto face colors (above), suppress the
+    # scatter overlay - the faces already carry the vertex color information and
+    # overlaid dots would be redundant. This matches _draw_3d behavior.
+    has_colored_surface = (
+        cells_np.shape[0] > 0
+        and alpha_cells > 0
+        and active_scalar_source == "points"
+        and point_scalar_values is not None
+    )
+
+    if alpha_points > 0 and not has_colored_surface:
         if active_scalar_source == "points" and point_scalar_values is not None:
             colors = scalar_mapper.to_rgba(point_scalar_values.cpu().numpy())
         else:
@@ -433,6 +486,15 @@ def _draw_3d(
 
             if active_scalar_source == "cells" and cell_scalar_values is not None:
                 facecolors = scalar_mapper.to_rgba(cell_scalar_values.cpu().numpy())
+            elif active_scalar_source == "points" and point_scalar_values is not None:
+                # Map per-vertex scalars to per-face colors by averaging each
+                # face's vertex RGBA values.  This avoids a separate scatter
+                # overlay that matplotlib cannot correctly depth-sort against
+                # Poly3DCollection faces (painter's algorithm limitation).
+                vertex_colors = scalar_mapper.to_rgba(
+                    point_scalar_values.cpu().numpy()
+                )  # (n_points, 4)
+                facecolors = vertex_colors[cells_np].mean(axis=1)  # (n_faces, 4)
             else:
                 facecolors = cell_neutral_color
 
@@ -440,7 +502,7 @@ def _draw_3d(
                 edgecolors = [(0, 0, 0, alpha_edges)] * len(verts)
                 linewidths = 0.25
             else:
-                edgecolors = "none"
+                edgecolors = None
                 linewidths = 0
 
             pc = Poly3DCollection(
@@ -449,19 +511,30 @@ def _draw_3d(
                 edgecolors=edgecolors,
                 linewidths=linewidths,
                 alpha=alpha_cells,
+                shade=True,
                 zorder=1,
             )
             ax.add_collection3d(pc)
 
-        elif n_manifold_dims == 3:
-            # 3D manifold (tetrahedra) in 3D: extract surface triangles
-            # For solid tetrahedra, we need to draw the 4 triangular faces
-            # This is complex; for now, we'll just show the vertices
-            # A proper implementation would extract the boundary surface
-            pass  # Handle tetrahedra by extracting surface in future version
+        else:
+            # Volume meshes (3D+ manifold) are reduced to surface meshes in
+            # draw_mesh_matplotlib() before reaching this function.
+            raise ValueError(
+                f"Cannot render {n_manifold_dims}D cells directly in matplotlib. "
+                f"Volume meshes should be converted to surface meshes via "
+                f"get_facet_mesh() before calling _draw_3d."
+            )
 
     ### Draw points
-    if alpha_points > 0:
+    # For 3D surface meshes, skip the scatter overlay: matplotlib cannot
+    # depth-sort scatter points against Poly3DCollection faces (painter's
+    # algorithm limitation).  Vertices are visible at face corners via edges,
+    # and point scalars are mapped onto face colors above.
+    has_opaque_surface = (
+        cells_np.shape[0] > 0 and cells_np.shape[1] - 1 == 2 and alpha_cells > 0
+    )
+
+    if alpha_points > 0 and not has_opaque_surface:
         if active_scalar_source == "points" and point_scalar_values is not None:
             colors = scalar_mapper.to_rgba(point_scalar_values.cpu().numpy())
         else:

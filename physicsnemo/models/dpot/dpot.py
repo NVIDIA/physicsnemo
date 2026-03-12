@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 import torch
 import torch.nn as nn
@@ -62,23 +63,23 @@ def get_activation(name: str) -> nn.Module:
 # AFNO2D Spectral Layer
 # ---------------------------------------------------------------------------
 class DPOT2DLayer(nn.Module):
-    """Adaptive Fourier Neural Operator 2D spectral mixing layer.
+    r"""Adaptive Fourier Neural Operator 2D spectral mixing layer.
 
     Parameters
     ----------
     width : int
         Channel dimension (must be divisible by ``num_blocks``).
-    num_blocks : int, optional
+    num_blocks : int, optional, default=8
         Number of block-diagonal partitions in frequency mixing weights.
-    sparsity_threshold : float, optional
+    sparsity_threshold : float, optional, default=0.01
         Lambda for optional soft-shrinkage (currently disabled, kept for ablation).
-    modes : int, optional
+    modes : int, optional, default=32
         Number of (low-frequency) Fourier modes to keep along each spatial dimension.
-    hidden_size_factor : int, optional
+    hidden_size_factor : int, optional, default=1
         Expansion factor for intermediate spectral channel dimension.
-    channel_first : bool, optional
-        If True expects input as ``(B, C, H, W)`` else ``(B, H, W, C)``.
-    activation : str, optional
+    channel_first : bool, optional, default=False
+        If ``True`` expects input as :math:`(B, C, H, W)` else :math:`(B, H, W, C)`.
+    activation : str, optional, default="gelu"
         Activation name.
     """
 
@@ -128,14 +129,17 @@ class DPOT2DLayer(nn.Module):
         self.b2 = nn.Parameter(scale * torch.rand(2, num_blocks, self.block_size))
 
     def forward(self, x: Tensor) -> Tensor:  # noqa: D401
-        """Forward pass.
+        r"""Forward pass.
 
         Parameters
         ----------
         x : Tensor
-            Input tensor of shape ``(B, C, H, W)`` or ``(B, H, W, C)`` depending on
-            ``channel_first``.
+            Input tensor of shape :math:`(B, C, H, W)` or :math:`(B, H, W, C)`
+            depending on ``channel_first``.
         """
+        if not torch.compiler.is_compiling():
+            if x.ndim != 4:
+                raise ValueError(f"Expected 4D tensor, got shape {tuple(x.shape)}")
         if self.channel_first:
             b, c, h, w = x.shape
             x = x.permute(0, 2, 3, 1)  # -> (B, H, W, C)
@@ -202,7 +206,7 @@ class DPOT2DLayer(nn.Module):
 # MLP (Conv style inside block)
 # ---------------------------------------------------------------------------
 class ConvMlp(nn.Module):
-    """1x1 Convolutional MLP used inside each mixing Block."""
+    r"""1x1 Convolutional MLP used inside each mixing Block."""
 
     def __init__(
         self, width: int, mlp_ratio: float = 1.0, activation: str = "gelu"
@@ -224,7 +228,7 @@ class ConvMlp(nn.Module):
 # Block
 # ---------------------------------------------------------------------------
 class Block(nn.Module):
-    """AFNO Block: Spectral mixing + (conv) MLP with residual connections.
+    r"""AFNO Block: Spectral mixing + (conv) MLP with residual connections.
 
     Parameters
     ----------
@@ -236,10 +240,10 @@ class Block(nn.Module):
         Hidden ratio for MLP.
     modes : int
         Number of spectral modes kept.
-    activation : str
+    activation : str, optional, default="gelu"
         Activation name.
-    double_skip : bool
-        If True apply two residual merges (as in reference AFNO design).
+    double_skip : bool, optional, default=True
+        If ``True`` apply two residual merges (as in reference AFNO design).
     """
 
     def __init__(
@@ -282,7 +286,7 @@ class Block(nn.Module):
 # Patch Embedding
 # ---------------------------------------------------------------------------
 class PatchEmbed(nn.Module):
-    """Patch embedding with two-step conv (patchify + projection).
+    r"""Patch embedding with two-step conv (patchify + projection).
 
     Parameters
     ----------
@@ -296,7 +300,7 @@ class PatchEmbed(nn.Module):
         Intermediate embedding dimension.
     out_dim : int
         Output embedding dimension.
-    activation : str
+    activation : str, optional, default="gelu"
         Activation name.
     """
 
@@ -342,18 +346,29 @@ class PatchEmbed(nn.Module):
 # Temporal Aggregator
 # ---------------------------------------------------------------------------
 class TimeAggregator(nn.Module):
-    """Temporal aggregation over input time dimension using learned per-time MLP.
+    r"""Temporal aggregation over input time dimension using learned per-time MLP.
 
     Parameters
     ----------
     in_channels : int
-        Number of *feature* channels of the raw input (spatial channels only).
+        Number of feature channels of the raw input (spatial channels only).
     in_timesteps : int
         Number of input timesteps.
     embed_dim : int
         Target embedding dimension after aggregation.
-    mode : {"mlp", "exp_mlp"}
-        Aggregation strategy.
+    mode : Literal["mlp", "exp_mlp"], optional, default="exp_mlp"
+        Aggregation strategy. Allowed values are ``"mlp"`` and ``"exp_mlp"``.
+
+    Forward
+    -------
+    x : Tensor
+        Input tensor of shape :math:`(B, H, W, T, C)`, where :math:`T` is the
+        time dimension to aggregate and :math:`C` is the feature dimension.
+
+    Returns
+    -------
+    Tensor
+        Aggregated tensor of shape :math:`(B, H, W, C)`.
     """
 
     def __init__(
@@ -361,7 +376,7 @@ class TimeAggregator(nn.Module):
         in_channels: int,
         in_timesteps: int,
         embed_dim: int,
-        mode: str = "exp_mlp",
+        mode: Literal["mlp", "exp_mlp"] = "exp_mlp",
     ) -> None:
         super().__init__()
         self.mode = mode
@@ -374,7 +389,9 @@ class TimeAggregator(nn.Module):
             raise ValueError("Unsupported TimeAggregator mode: {mode}")
 
     def forward(self, x: Tensor) -> Tensor:  # noqa: D401
-        # x: (B, H, W, T, C)
+        if not torch.compiler.is_compiling():
+            if x.ndim != 5:
+                raise ValueError(f"Expected 5D tensor, got shape {tuple(x.shape)}")
         if self.mode == "mlp":
             x = torch.einsum("tij,...ti->...j", self.w, x)
         else:  # exp_mlp
@@ -386,9 +403,6 @@ class TimeAggregator(nn.Module):
         return x
 
 
-# ---------------------------------------------------------------------------
-# Model Meta (placeholder for integration)
-# ---------------------------------------------------------------------------
 @dataclass
 class DPOTMeta:
     name: str = "DPOTNet"
@@ -398,11 +412,8 @@ class DPOTMeta:
     # Extend with additional model-zoo metadata fields as needed.
 
 
-# ---------------------------------------------------------------------------
-# Main Model
-# ---------------------------------------------------------------------------
 class DPOTNet(Module):
-    """DPOTNet with AFNO spectral mixing.
+    r"""DPOTNet with AFNO spectral mixing.
 
     Parameters
     ----------
@@ -411,7 +422,7 @@ class DPOTNet(Module):
     patch_size : int
         Patch size.
     mixing_type : str
-        Currently only 'afno' supported (reserved for future mixers).
+        Currently only ``"afno"`` supported (reserved for future mixers).
     in_channels : int
         Number of input feature channels.
     out_channels : int
@@ -435,17 +446,49 @@ class DPOTNet(Module):
     n_classes : int
         Number of classes for auxiliary classification head.
     normalize : bool
-        If True apply adaptive instance normalization based on input stats.
+        If ``True`` apply adaptive instance normalization based on input stats.
     activation : str
         Activation name.
-    time_agg : str
-        Temporal aggregation mode ("mlp" or "exp_mlp").
+    time_agg : Literal["mlp", "exp_mlp"], optional, default="exp_mlp"
+        Temporal aggregation mode. Allowed values are ``"mlp"`` and ``"exp_mlp"``.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, H, W, T, C)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Prediction tensor of shape :math:`(B, H, W, T_{out}, C_{out})`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.models.dpot.dpot import DPOTNet
+    >>> x = torch.rand(4, 20, 20, 6, 3)  # (B,H,W,T,C)
+    >>> net = DPOTNet(
+    ...     inp_shape=(20, 20),
+    ...     patch_size=(5, 10),
+    ...     in_channels=3,
+    ...     out_channels=3,
+    ...     in_timesteps=6,
+    ...     out_timesteps=1,
+    ...     embed_dim=32,
+    ...     normalize=True,
+    ...     depth=4,
+    ...     num_blocks=4,
+    ... )
+    >>> y = net(x)
+    >>> tuple(y.shape)
+    (4, 20, 20, 1, 3)
     """
 
     def __init__(
         self,
         inp_shape: int = 224,
         patch_size: int = 16,
+        mixing_type: Literal["afno"] = "afno",
         in_channels: int = 1,
         out_channels: int = 4,
         in_timesteps: int = 1,
@@ -458,10 +501,13 @@ class DPOTNet(Module):
         mlp_ratio: float = 1.0,
         normalize: bool = False,
         activation: str = "gelu",
-        time_agg: str = "exp_mlp",
+        time_agg: Literal["mlp", "exp_mlp"] = "exp_mlp",
         norm_groups: int = 8,
     ) -> None:
         super().__init__(meta=DPOTMeta())
+
+        if mixing_type != "afno":
+            raise ValueError("Currently only 'afno' mixing_type is supported.")
 
         self.inp_shape = (
             (inp_shape, inp_shape) if isinstance(inp_shape, int) else inp_shape
@@ -536,7 +582,6 @@ class DPOTNet(Module):
         nn.init.trunc_normal_(self.pos_embed, std=0.02)
         self.apply(self._init_weights)
 
-    # ------------------------------------------------------------------ utils
     def _init_weights(self, m: nn.Module) -> None:
         if isinstance(m, (nn.Linear, nn.Conv2d, nn.ConvTranspose2d)):
             nn.init.trunc_normal_(m.weight, std=0.02)
@@ -566,20 +611,7 @@ class DPOTNet(Module):
         )
         return torch.cat([grid_x, grid_y, grid_t], dim=-1)  # (B,H,W,T,3)
 
-    # ---------------------------------------------------------------- forward
-    def forward(self, x: Tensor) -> Tensor:  # noqa: D401
-        """Forward pass.
-
-        Parameters
-        ----------
-        x : Tensor
-            Input tensor of shape ``(B, H, W, T, C)``.
-
-        Returns
-        -------
-        Tensor
-            Prediction tensor of shape ``(B, H, W, out_timesteps, out_channels)``.
-        """
+    def forward(self, x: Tensor) -> Tensor:
         b, h, w, t, c = x.shape
         if t != self.in_timesteps or c != self.in_channels:
             raise ValueError(
@@ -673,24 +705,3 @@ def checkpoint_filter_fn(state_dict: dict, model: DPOTNet) -> dict:
             v = resize_pos_embed(v, model.pos_embed)
         out[k] = v
     return out
-
-
-# ---------------------------------------------------------------------------
-# Example usage
-# ---------------------------------------------------------------------------
-if __name__ == "__main__":
-    x = torch.rand(4, 20, 20, 6, 3)  # (B,H,W,T,C)
-    net = DPOTNet(
-        inp_shape=(20, 20),
-        patch_size=(5, 10),
-        in_channels=3,
-        out_channels=3,
-        in_timesteps=6,
-        out_timesteps=1,
-        embed_dim=32,
-        normalize=True,
-        depth=4,
-        num_blocks=4,
-    )
-    y = net(x)
-    print("Output:", y.shape)

@@ -28,15 +28,11 @@ from typing import Any, Optional
 import numpy as np
 import torch
 
-try:
-    import zarr
-
-    HAS_ZARR = True
-except ImportError:
-    HAS_ZARR = False
-
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
+
+zarr = OptionalImport("zarr")
 
 
 @register()
@@ -133,10 +129,8 @@ class ZarrReader(Reader):
         ValueError
             If no Zarr groups found in directory.
         """
-        if not HAS_ZARR:
-            raise ImportError(
-                "zarr is required for ZarrReader. Install with: pip install zarr"
-            )
+        if not zarr.available:
+            zarr._get_module()  # Raises RuntimeError with install hint
 
         super().__init__(
             pin_memory=pin_memory,

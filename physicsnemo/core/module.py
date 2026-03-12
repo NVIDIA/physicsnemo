@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import inspect
 import io
 import json
@@ -35,7 +36,8 @@ import torch
 
 from physicsnemo.core.filesystem import _download_cached, _get_fs
 from physicsnemo.core.meta import ModelMetaData
-from physicsnemo.core.registry import ModelRegistry
+from physicsnemo.core.registry import _ENTRYPOINT_TYPES, ModelRegistry
+from physicsnemo.core.version_check import get_physicsnemo_pkg_info
 
 # Used for saving checkpoints of nested modules
 _BASE_CKPT_PREFIX = "__physicsnemo.Module__"
@@ -369,11 +371,8 @@ class Module(torch.nn.Module):
                 # Cross fingers and hope for the best (maybe the class name changed)
                 _cls = cls
 
-        # This works with the importlib.metadata.EntryPoint
-        # if isinstance(_cls, importlib.metadata.EntryPoint):
-        if "EntryPoint" in str(type(_cls)):
-            # I hate myself for this.  Somehow, we've got crossvoer pollution from
-            # importlib_metadata.EntryPoint.
+        # This works with both importlib.metadata.EntryPoint and importlib_metadata.EntryPoint
+        if isinstance(_cls, _ENTRYPOINT_TYPES):
             _cls = _cls.load()
 
         return _cls
@@ -401,6 +400,8 @@ class Module(torch.nn.Module):
 
         Examples
         --------
+        >>> import warnings
+        >>> warnings.filterwarnings("ignore")
         >>> from physicsnemo.core.module import Module
         >>> # Define the argument dictionary with the three required keys
         >>> arg_dict = {
@@ -435,7 +436,7 @@ class Module(torch.nn.Module):
 
     def save(
         self,
-        file_name: Union[str, None] = None,
+        file_name: Path | str | None = None,
         verbose: bool = False,
         legacy_format: bool = False,
     ) -> None:
@@ -444,7 +445,7 @@ class Module(torch.nn.Module):
 
         Parameters
         ----------
-        file_name : Union[str,None], optional, default=None
+        file_name : Path | str | None, optional, default=None
             File name to save the model checkpoint to. When ``None`` is provided it will default to
             the model's class name.
         verbose : bool, optional, default=False
@@ -537,30 +538,25 @@ class Module(torch.nn.Module):
 
             return
 
-        if file_name is not None and not file_name.endswith(self._file_extension):
-            raise ValueError(
-                f"File name must end with {self._file_extension} extension"
-            )
+        if file_name is not None:
+            file_name = str(file_name)
+            if not file_name.endswith(self._file_extension):
+                raise ValueError(
+                    f"File name must end with {self._file_extension} extension"
+                )
 
         # Strip out torch dynamo wrapper
         if isinstance(self, torch._dynamo.eval_frame.OptimizedModule):
             self._orig_mod.save(file_name, verbose)
             return
 
-        # Save the physicsnemo version and git hash (if available)
+        pkg_info = get_physicsnemo_pkg_info()
         metadata_info = {
-            "physicsnemo_version": importlib.metadata.version("nvidia-physicsnemo"),
+            "physicsnemo_version": pkg_info["version"],
             "mdlus_file_version": self.__model_checkpoint_version__,
         }
-
         if verbose:
-            import git
-
-            try:
-                repo = git.Repo(search_parent_directories=True)
-                metadata_info["git_hash"] = repo.head.object.hexsha
-            except git.InvalidGitRepositoryError:
-                metadata_info["git_hash"] = None
+            metadata_info["git_hash"] = pkg_info["git_hash"]
 
         # Copy self._args to avoid side effects
         _args = self._args.copy()
@@ -673,7 +669,7 @@ class Module(torch.nn.Module):
 
     def load(
         self,
-        file_name: str,
+        file_name: Path | str,
         map_location: Union[None, str, torch.device] = None,
         strict: bool = True,
     ) -> None:
@@ -686,7 +682,7 @@ class Module(torch.nn.Module):
 
         Parameters
         ----------
-        file_name : str
+        file_name : Path | str
             Checkpoint file name. Must be a valid '.mdlus' checkpoint file.
         map_location : Union[None, str, torch.device], optional, default=None
             Map location for loading the model weights, ``None`` will use the model's device.
@@ -727,6 +723,7 @@ class Module(torch.nn.Module):
             # Or load to a specific GPU
             model.load("FullyConnected.mdlus", map_location=torch.device("cuda:0"))
         """
+        file_name = str(file_name)
 
         # Download and cache the checkpoint file if needed
         cached_file_name = _download_cached(file_name)
@@ -785,7 +782,7 @@ class Module(torch.nn.Module):
     @classmethod
     def from_checkpoint(
         cls,
-        file_name: str,
+        file_name: Path | str,
         override_args: Optional[Dict[str, Any]] = None,
         strict: bool = True,
     ) -> "Module":
@@ -795,7 +792,7 @@ class Module(torch.nn.Module):
 
         Parameters
         ----------
-        file_name : str
+        file_name : Path | str
             Checkpoint file name. Must be a valid '.mdlus' checkpoint file.
         override_args : Optional[Dict[str, Any]], optional, default=None
             Dictionary of arguments to override the ``__init__`` method's
@@ -1018,6 +1015,8 @@ class Module(torch.nn.Module):
             # Instantiate the module
             model = cls_in.instantiate(args_ptr)
             return model
+
+        file_name = str(file_name)
 
         # Download and cache the checkpoint file if needed
         cached_file_name = _download_cached(file_name)
@@ -1275,29 +1274,10 @@ class Module(torch.nn.Module):
             def forward(self, x):
                 return self.inner_model(x)
 
-        # Get the argument names and default values of the PyTorch model's init
-        # method
-        init_argspec = inspect.getfullargspec(torch_model_class.__init__)
-        model_argnames = init_argspec.args[1:]  # Exclude 'self'
-        model_defaults = init_argspec.defaults or []
-        defaults_dict = dict(
-            zip(model_argnames[-len(model_defaults) :], model_defaults)
+        # Get the signature of the PyTorch model's init method
+        PhysicsNeMoModel.__init__.__signature__ = inspect.signature(
+            torch_model_class.__init__
         )
-
-        # Define the signature of new init
-        params = [inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
-        params += [
-            inspect.Parameter(
-                argname,
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                default=defaults_dict.get(argname, inspect.Parameter.empty),
-            )
-            for argname in model_argnames
-        ]
-        init_signature = inspect.Signature(params)
-
-        # Replace PhysicsNeMoModel.__init__ signature with new init signature
-        PhysicsNeMoModel.__init__.__signature__ = init_signature
 
         # Generate a unique name for the created class
         new_class_name = f"{torch_model_class.__name__}" if name is None else name

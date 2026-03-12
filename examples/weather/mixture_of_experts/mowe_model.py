@@ -17,7 +17,7 @@
 from typing import Tuple, Union, Optional, Literal
 import torch
 
-from physicsnemo.experimental.models.dit import DiT
+from physicsnemo.models.dit import DiT
 
 
 class MoWE(DiT):
@@ -50,9 +50,9 @@ class MoWE(DiT):
     mlp_ratio (float, optional):
         The ratio of the MLP hidden dimension to the embedding dimension. Defaults to 4.0.
     attention_backend (str, optional):
-        Backend for the attention module in underlying DiT model. See physicsnemo.experimental.models.dit.DiT for more details.
+        Backend for the attention module in underlying DiT model. See physicsnemo.models.dit.DiT for more details.
     layernorm_backend (str, optional):
-        Backend for the layer norm module in underlying DiT model. See physicsnemo.experimental.models.dit.DiT for more details.
+        Backend for the layer norm module in underlying DiT model. See physicsnemo.models.dit.DiT for more details.
     noise_dim (int, optional):
         Dimensionality of noise. If None, the model is deterministic. Defaults to None.
     return_probabilities (bool, optional):

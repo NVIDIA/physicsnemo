@@ -24,13 +24,6 @@ from tensordict import TensorDict
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 
-# TODO: once noise schedulers are implemeneted, some of the methods they define
-# can be reused here, e.g. preconditioner.sigma = noise_scheduler.sigma for the
-# noise schedule. This would allow to avoid duplicate code between the
-# preconditioners and the noise schedulers. Particularly for the iDDPM
-# preconditioner, that requires more computations than the other
-# preconditioners.
-
 
 class BaseAffinePreconditioner(Module, ABC):
     r"""
@@ -117,37 +110,36 @@ class BaseAffinePreconditioner(Module, ABC):
         Preconditioned model output with the same shape as the original model
         output.
 
-    .. note::
+    Note
+    ----
+    To implement a new preconditioner, a subclass of
+    :class:`BaseAffinePreconditioner` must be defined, and some methods
+    have to be implemented:
 
-        To implement a new preconditioner, a subclass of
-        :class:`BaseAffinePreconditioner` must be defined, and some methods
-        have to be implemented:
+    - Subclasses must implement the :meth:`compute_coefficients` method to
+      define the specific preconditioning scheme.
 
-        - Subclasses must implement the :meth:`compute_coefficients` method to
-          define the specific preconditioning scheme.
+    - A :meth:`sigma` method can optionally be implemented.
+      If a subclass implements the :meth:`sigma` method, the diffusion time
+      :math:`t` is first transformed to a noise level :math:`\sigma(t)`
+      before being passed to :meth:`compute_coefficients`. This allows
+      implementing preconditioners for different time-to-noise-level
+      mappings while keeping the same preconditioning interface, in
+      particular for
+      preconditioning schemes based on noise level (that is
+      :math:`c_{\text{in}}(\sigma)`,
+      :math:`c_{\text{noise}}(\sigma)`, :math:`c_{\text{out}}(\sigma)`,
+      :math:`c_{\text{skip}}(\sigma)` instead of :math:`c_{\text{in}}(t)`,
+      :math:`c_{\text{noise}}(t)`, :math:`c_{\text{out}}(t)`,
+      :math:`c_{\text{skip}}(t)`).
 
-        - A :meth:`sigma` method can optionally be implemented.
-          If a subclass implements the :meth:`sigma` method, the diffusion time
-          :math:`t` is first transformed to a noise level :math:`\sigma(t)`
-          before being passed to :meth:`compute_coefficients`. This allows
-          implementing preconditioners for different noise schedules while
-          keeping the same preconditioning interface, in particular for
-          preconditioning schemes based on noise level (that is
-          :math:`c_{\text{in}}(\sigma)`,
-          :math:`c_{\text{noise}}(\sigma)`, :math:`c_{\text{out}}(\sigma)`,
-          :math:`c_{\text{skip}}(\sigma)` instead of :math:`c_{\text{in}}(t)`,
-          :math:`c_{\text{noise}}(t)`, :math:`c_{\text{out}}(t)`,
-          :math:`c_{\text{skip}}(t)`).
+    - The ``forward`` method of the preconditioner *should not* be
+      overriden.
 
-        - The ``forward`` method of the preconditioner *should not* be
-          overriden.
-
-    .. note::
-
-        The arguments ``t`` of the preconditioner forward method is always
-        assumed to be the diffusion time. For preconditioning schemes based
-        on noise level the noise level :math:`\sigma(t)` is computed internally
-        using the :meth:`sigma` method.
+    The argument ``t`` of the preconditioner forward method is always
+    assumed to be the diffusion time. For preconditioning schemes based
+    on noise level, the noise level :math:`\sigma(t)` is computed
+    internally using the :meth:`sigma` method.
 
     Examples
     --------
@@ -208,7 +200,7 @@ class BaseAffinePreconditioner(Module, ABC):
     ...         super().__init__(model)
     ...
     ...     def sigma(self, t: torch.Tensor) -> torch.Tensor:
-    ...         # Override sigma to implement VE noise schedule
+    ...         # Override sigma for VE time-to-noise-level mapping
     ...         return t.sqrt()
     ...
     ...     def compute_coefficients(self, sigma: torch.Tensor):
@@ -281,12 +273,12 @@ class BaseAffinePreconditioner(Module, ABC):
 
     **Example: Wrapping DiT**
 
-    The :class:`~physicsnemo.experimental.models.dit.DiT` model has
+    The :class:`~physicsnemo.models.dit.DiT` model has
     the signature ``forward(x, t, condition, ...)``. We wrap it to support
     both image conditioning (via channel concatenation) and vector
     conditioning:
 
-    >>> from physicsnemo.experimental.models.dit import DiT
+    >>> from physicsnemo.models.dit import DiT
     >>> class DiTWrapper(Module):
     ...     def __init__(self, img_channels, cond_channels, cond_dim, **kwargs):
     ...         super().__init__()
@@ -321,6 +313,33 @@ class BaseAffinePreconditioner(Module, ABC):
     >>> out = wrapped_dit(x, t, condition)
     >>> out.shape
     torch.Size([1, 2, 8, 8])
+
+    **Example: Using ConcatConditionWrapper with a preconditioner**
+
+    The pattern in the previous example, where (spatially-varying) conditioning
+    is concatenated to the noised latent state (and possibly vector conditioning
+    is also passed as a separate argument) is common across several diffusion
+    use-cases.
+    Thus for convenience, we provide the wrapper class :class:`~physicsnemo.diffusion.utils.ConcatConditionWrapper`
+    to save you the trouble of writing your own wrapper for this common pattern:
+
+    >>> from physicsnemo.diffusion.preconditioners import EDMPreconditioner
+    >>> from physicsnemo.diffusion.utils import ConcatConditionWrapper
+    >>> base_model = SongUNet(img_resolution=8, in_channels=4, out_channels=3, label_dim=4)
+    >>> wrapped_model = ConcatConditionWrapper(base_model)
+    >>> precond = EDMPreconditioner(wrapped_model, sigma_data=0.5)
+    >>> x = torch.rand(1, 3, 8, 8)
+    >>> t = torch.rand(1)
+    >>> condition = TensorDict({
+    ...     "cond_concat": torch.rand(1, 1, 8, 8),  # image condition
+    ...     "cond_vec": torch.rand(1, 4),           # vector condition
+    ... }, batch_size=[1])
+    >>> out = precond(x, t, condition)
+    >>> out.shape
+    torch.Size([1, 3, 8, 8])
+
+    The same wrapper can be used with :class:`~physicsnemo.models.dit.DiT`
+    backbones as well, with ``cond_vec`` passed to the model's ``condition`` argument.
     """
 
     def __init__(
@@ -372,7 +391,7 @@ class BaseAffinePreconditioner(Module, ABC):
 
         By default, this is the identity function :math:`\sigma(t) = t`.
         Subclasses can override this to implement preconditioners for different
-        noise schedules.
+        time-to-noise-level mappings.
 
         When overridden, the output of this method is passed to
         :meth:`compute_coefficients` instead of the raw time ``t``.
@@ -450,7 +469,7 @@ class VPPreconditioner(BaseAffinePreconditioner):
     Implements the preconditioning scheme from the VP formulation of
     score-based generative models.
 
-    The noise schedule is:
+    The time-to-noise-level mapping is:
 
     .. math::
 
@@ -465,6 +484,16 @@ class VPPreconditioner(BaseAffinePreconditioner):
         c_{\text{out}} &= -\sigma \\
         c_{\text{in}} &= \frac{1}{\sqrt{\sigma^2 + 1}} \\
         c_{\text{noise}} &= (M - 1) \cdot \sigma^{-1}(\sigma)
+    
+    With these coefficients, the preconditioned model output is expected to be
+    an :math:`\mathbf{x}_0`-prediction (clean data estimate).
+    This preconditioner is not directly compatible for score-prediction
+    training or others.
+    
+    For training, it is usually paired with
+    :class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss`
+    (``prediction_type="x0"``) and
+    :class:`~physicsnemo.diffusion.noise_schedulers.VPNoiseScheduler`.
 
     Parameters
     ----------
@@ -590,7 +619,8 @@ class VEPreconditioner(BaseAffinePreconditioner):
     Implements the preconditioning scheme from the VE formulation of
     score-based generative models.
 
-    For VE, the noise schedule is identity: :math:`\sigma(t) = t`.
+    For VE, the time-to-noise-level mapping is the identity:
+    :math:`\sigma(t) = t`.
 
     The preconditioning coefficients are:
 
@@ -600,6 +630,15 @@ class VEPreconditioner(BaseAffinePreconditioner):
         c_{\text{out}} &= \sigma \\
         c_{\text{in}} &= 1 \\
         c_{\text{noise}} &= \log(0.5 \cdot \sigma)
+    
+    With these coefficients, the preconditioned model output is expected to be an
+    :math:`\mathbf{x}_0`-prediction (clean data estimate). This preconditioner
+    is not directly compatible for score-prediction training or others.
+    
+    For training, it is usually paired with
+    :class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss`
+    (``prediction_type="x0"``) and
+    :class:`~physicsnemo.diffusion.noise_schedulers.VENoiseScheduler`.
 
     Parameters
     ----------
@@ -686,7 +725,7 @@ class IDDPMPreconditioner(BaseAffinePreconditioner):
 
     Implements the preconditioning scheme from the improved DDPM
     formulation.
-
+    
     The preconditioning coefficients are:
 
     .. math::
@@ -696,8 +735,18 @@ class IDDPMPreconditioner(BaseAffinePreconditioner):
         c_{\text{in}} &= \frac{1}{\sqrt{\sigma^2 + 1}} \\
         c_{\text{noise}} &= M - 1 - \text{argmin}|\sigma - u_j|
 
-    where :math:`u_j, j = 0, ..., M` are the precomputed noise levels in the
-    noise schedule.
+    where :math:`u_j, j = 0, ..., M` are the precomputed noise levels from
+    the iDDPM discretization.
+
+    With these coefficients, the preconditioned model output is expected to be
+    an :math:`\mathbf{x}_0`-prediction (clean data estimate). This
+    preconditioner is not directly compatible for score-prediction training or
+    others.
+    
+    For training, it is usually paired with
+    :class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss`
+    (``prediction_type="x0"``) and
+    :class:`~physicsnemo.diffusion.noise_schedulers.IDDPMNoiseScheduler`.
 
     Parameters
     ----------
@@ -819,7 +868,8 @@ class EDMPreconditioner(BaseAffinePreconditioner):
     Implements the improved preconditioning scheme proposed in the EDM
     paper.
 
-    For EDM, the noise schedule is identity: :math:`\sigma(t) = t`.
+    For EDM, the time-to-noise-level mapping is the identity:
+    :math:`\sigma(t) = t`.
 
     The preconditioning coefficients are:
 
@@ -832,6 +882,15 @@ class EDMPreconditioner(BaseAffinePreconditioner):
         c_{\text{in}} &= \frac{1}
             {\sqrt{\sigma_{\text{data}}^2 + \sigma^2}} \\
         c_{\text{noise}} &= \frac{\log(\sigma)}{4}
+
+    With these coefficients, the preconditioned model output is expected to be an
+    :math:`\mathbf{x}_0`-prediction (clean data estimate). This preconditioner
+    is not directly compatible for score-prediction training or others.
+    
+    For training, it is usually paired with
+    :class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss`
+    (``prediction_type="x0"``) and
+    :class:`~physicsnemo.diffusion.noise_schedulers.EDMNoiseScheduler`.
 
     Parameters
     ----------

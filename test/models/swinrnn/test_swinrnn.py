@@ -19,6 +19,7 @@ import random
 import pytest
 import torch
 
+import physicsnemo
 from physicsnemo.models.swinvrnn import SwinRNN
 from test import common
 
@@ -75,6 +76,11 @@ def test_swinrnn_constructor(device):
     for kw_args in arg_list:
         # Construct FC model
         model = SwinRNN(**kw_args).to(device)
+        assert model.img_size == kw_args["img_size"]
+        assert model.patch_size == kw_args["patch_size"]
+        assert model.in_chans == kw_args["in_chans"]
+        assert model.out_chans == kw_args["out_chans"]
+        assert model.embed_dim == kw_args["embed_dim"]
 
         bsize = random.randint(1, 5)
         invar = torch.randn(
@@ -165,6 +171,41 @@ def test_swinrnn_checkpoint(device):
     invar = torch.randn(bsize, 13, 6, 32, 64).to(device)
     assert common.validate_checkpoint(model_1, model_2, (invar,))
     del model_1, model_2, invar
+    torch.cuda.empty_cache()
+
+
+def test_swinrnn_load_checkpoint(device, tmp_path):
+    """Test loading SwinRNN from a saved checkpoint path."""
+    if device == "cpu":
+        pytest.skip("CUDA only")
+
+    model_kwds = {
+        "img_size": (6, 32, 64),
+        "patch_size": (6, 1, 1),
+        "in_chans": 13,
+        "out_chans": 13,
+        "embed_dim": 128,
+        "num_groups": 32,
+        "num_heads": 8,
+        "window_size": 8,
+    }
+    model = SwinRNN(**model_kwds).to(device).eval()
+    checkpoint_path = tmp_path / "swinrnn_checkpoint.mdlus"
+    model.save(str(checkpoint_path))
+
+    loaded = physicsnemo.Module.from_checkpoint(str(checkpoint_path)).to(device).eval()
+    assert loaded.img_size == model_kwds["img_size"]
+    assert loaded.patch_size == model_kwds["patch_size"]
+    assert loaded.in_chans == model_kwds["in_chans"]
+    assert loaded.out_chans == model_kwds["out_chans"]
+    assert loaded.embed_dim == model_kwds["embed_dim"]
+
+    invar = torch.randn(2, 13, 6, 32, 64).to(device)
+    with torch.no_grad():
+        out_model = model(invar)
+        out_loaded = loaded(invar)
+    assert common.compare_output(out_model, out_loaded, rtol=1e-5, atol=1e-5)
+    del model, loaded, invar
     torch.cuda.empty_cache()
 
 

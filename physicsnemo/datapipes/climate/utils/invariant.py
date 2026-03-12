@@ -18,7 +18,10 @@ from abc import ABC, abstractmethod
 from typing import List, Tuple
 
 import numpy as np
-import xarray as xr
+
+from physicsnemo.core.version_check import OptionalImport
+
+xr = OptionalImport("xarray")
 
 
 def latlon_grid(

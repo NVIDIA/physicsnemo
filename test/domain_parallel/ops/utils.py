@@ -388,6 +388,8 @@ def numerical_shard_tensor_check(
     atol: float = 1e-5,
     rtol: float = 1e-5,
     group: Optional[dist.ProcessGroup] = None,
+    amp: bool = False,
+    amp_dtype: torch.dtype = torch.float16,
 ) -> None:
     r"""Numerically validate a ShardTensor operation against local computation.
 
@@ -416,6 +418,12 @@ def numerical_shard_tensor_check(
         Relative tolerance for comparisons.
     group : Optional[dist.ProcessGroup], optional
         Process group for collective assertions.
+    amp : bool, default=False
+        If ``True``, wrap forward and backward passes in
+        ``torch.amp.autocast("cuda")`` for automatic mixed precision testing.
+    amp_dtype : torch.dtype, default=torch.float16
+        The dtype to use for autocast when ``amp=True``.  Common choices are
+        ``torch.float16`` and ``torch.bfloat16``.
 
     Raises
     ------
@@ -434,20 +442,21 @@ def numerical_shard_tensor_check(
     local_input_args = sharded_to_local(input_args)
     local_input_kwargs = sharded_to_local(input_kwargs)
 
-    # Run the module on the local data:
-    output = module(*local_input_args, **local_input_kwargs)
-
-    # Run the distributed module on the distributed data:
-    d_output = d_module(*input_args, **input_kwargs)
+    with torch.amp.autocast("cuda", enabled=amp, dtype=amp_dtype):
+        # Run the module on the local data:
+        output = module(*local_input_args, **local_input_kwargs)
+        # Run the distributed module on the distributed data:
+        d_output = d_module(*input_args, **input_kwargs)
 
     fwd_comparison_fn(output, d_output, atol, rtol, group)
 
     if check_grads:
-        # single device grads:
-        default_loss_fn(output).backward()
+        with torch.amp.autocast("cuda", enabled=amp, dtype=amp_dtype):
+            # single device grads:
+            default_loss_fn(output).backward()
 
-        # distributed grads:
-        default_loss_fn(d_output).backward()
+            # distributed grads:
+            default_loss_fn(d_output).backward()
 
         # compare the grads:
         for param, d_param in zip(module.parameters(), d_module.parameters()):
@@ -456,7 +465,6 @@ def numerical_shard_tensor_check(
             )
 
         # Check the input grads, if they are required:
-
         for input_arg, d_input_arg in zip(local_input_args, input_args):
             if d_input_arg.requires_grad:
                 default_tensor_comparison(

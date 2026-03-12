@@ -20,18 +20,15 @@ from typing import Any, List
 
 import numpy as np
 import torch
-import torch_geometric as pyg
 from torch.utils.data import Dataset
+
+from physicsnemo.core.version_check import OptionalImport
 
 from .utils import load_json, read_vtp_file, save_json
 
-try:
-    import vtk
-except ImportError:
-    raise ImportError(
-        "Stokes flow Dataset requires the vtk and pyvista libraries. Install with "
-        + "pip install vtk pyvista"
-    )
+# Lazy imports for optional dependencies
+pyg = OptionalImport("torch_geometric")
+vtk = OptionalImport("vtk")
 
 
 class StokesDataset(Dataset):
@@ -235,7 +232,7 @@ class StokesDataset(Dataset):
         outvar_keys: List[str],
         to_bidirected: bool = True,
         add_self_loop: bool = False,
-    ) -> pyg.data.Data:
+    ) -> "pyg.data.Data":
         """
         Create a PyG graph from vtkPolyData.
 

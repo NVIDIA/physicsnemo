@@ -29,6 +29,16 @@ import torch
 ### Pytest Hooks ###
 
 
+def pytest_configure(config):
+    """Register custom pytest markers used in mesh tests."""
+    config.addinivalue_line(
+        "markers", "cuda: mark test as requiring CUDA (skipped if unavailable)"
+    )
+    config.addinivalue_line(
+        "markers", "slow: mark test as slow-running (for optional exclusion)"
+    )
+
+
 def pytest_collection_modifyitems(config, items):
     """Skip tests marked with 'cuda' if CUDA is not available.
 

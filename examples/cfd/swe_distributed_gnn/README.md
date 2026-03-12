@@ -1,5 +1,12 @@
 # Shallow Water Equations - Distributed GraphCast
 
+> **Note**: This example is currently not functional. Distributed mode
+(partition_size > 1) is not supported with the PyG backend.
+Support for distributed message passing using PyG
+backend will likely be included in a future release.
+Until then, this example will raise a `NotImplementedError` when
+attempting to use distributed mode.
+
 This example demonstrates how to leverage a distributed version of GraphCast to scale
 to larger Graph Neural Network (GNN) workloads.
 
@@ -243,12 +250,24 @@ uses the following.
     )
 ```
 
+## Requirements
+
+This example requires the `gnns` optional dependency group to be installed. This includes
+`torch_geometric`, `torch_scatter`, `torch_sparse`, and `torch_cluster` which are needed
+for the distributed GraphCast model.
+
+To install the required dependencies, run:
+
+```bash
+pip install nvidia-physicsnemo[gnns]
+```
+
 ## Getting Started
 
 To get started with this example for a run e.g. using 4 GPUs on a single node, simply run,
 
 ```bash
-torchrun --nodes=1 --nproc-per-node=4 train.py
+torchrun --nnodes=1 --nproc-per-node=4 train.py
 ```
 
 In case you are running on a SLURM cluster and have started a batch job e.g. using 4 GPUs,

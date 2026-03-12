@@ -14,13 +14,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+r"""Distributed AFNO layer implementations.
+
+This module provides distributed versions of AFNO building blocks for
+model-parallel training across multiple GPUs.
+"""
+
+from __future__ import annotations
+
 import math
 import warnings
+from typing import Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from jaxtyping import Float
+from torch import Tensor
 
+import physicsnemo
 from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.distributed.mappings import (
     copy_to_parallel_region,
@@ -70,78 +82,184 @@ def _no_grad_trunc_normal_(tensor, mean, std, a, b):
         return tensor
 
 
-def trunc_normal_(tensor, mean=0.0, std=1.0, a=-2.0, b=2.0):
-    r"""Fills the input Tensor with values drawn from a truncated
-    normal distribution. The values are effectively drawn from the
-    normal distribution :math:`\mathcal{N}(\text{mean}, \text{std}^2)`
-    with values outside :math:`[a, b]` redrawn until they are within
-    the bounds. The method used for generating the random values works
-    best when :math:`a \leq \text{mean} \leq b`.
-    Args:
-    tensor: an n-dimensional `torch.Tensor`
-    mean: the mean of the normal distribution
-    std: the standard deviation of the normal distribution
-    a: the minimum cutoff value
-    b: the maximum cutoff value
-    Examples:
+def _trunc_normal_(
+    tensor: Tensor,
+    mean: float = 0.0,
+    std: float = 1.0,
+    a: float = -2.0,
+    b: float = 2.0,
+) -> Tensor:
+    r"""Fill the input tensor with values from a truncated normal distribution.
+
+    The values are drawn from :math:`\mathcal{N}(\text{mean}, \text{std}^2)`
+    with values outside :math:`[a, b]` redrawn until they are within the bounds.
+    The method works best when :math:`a \leq \text{mean} \leq b`.
+
+    Parameters
+    ----------
+    tensor : torch.Tensor
+        An n-dimensional tensor to fill.
+    mean : float, optional, default=0.0
+        Mean of the normal distribution.
+    std : float, optional, default=1.0
+        Standard deviation of the normal distribution.
+    a : float, optional, default=-2.0
+        Minimum cutoff value.
+    b : float, optional, default=2.0
+        Maximum cutoff value.
+
+    Returns
+    -------
+    torch.Tensor
+        The input tensor filled with truncated normal values.
+
+    Examples
+    --------
     >>> w = torch.empty(3, 5)
-    >>> o = nn.init.trunc_normal_(w)
+    >>> o = _trunc_normal_(w)
     """
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
 
 
 @torch.compile
 def drop_path(
-    x: torch.Tensor, drop_prob: float = 0.0, training: bool = False
-) -> torch.Tensor:
-    """
-    Drop paths (Stochastic Depth) per sample (when applied in main path of
-    residual blocks).
-    This is the same as the DropConnect implfor EfficientNet, etc networks, however,
-    the original name is misleading as 'Drop Connect' is a different form of dropout in
-    a separate paper.
-    See discussion: https://github.com/tensorflow/tpu/issues/494#issuecomment-532968956
-    Opted for changing the layer and argument names to 'drop path' rather than mix
-    DropConnect as a layer name and use 'survival rate' as the argument.
+    x: Float[Tensor, "*dims"], drop_prob: float = 0.0, training: bool = False
+) -> Float[Tensor, "*dims"]:
+    r"""Drop paths (Stochastic Depth) per sample.
+
+    When applied in the main path of residual blocks, this implements
+    stochastic depth regularization. Note that this is different from
+    DropConnect despite some naming confusion in literature.
+
+    See `TPU discussion <https://github.com/tensorflow/tpu/issues/494#issuecomment-532968956>`_
+    for more details. Opted for changing the layer and argument names to 'drop path' rather
+    than mix DropConnect as a layer name and use 'survival rate' as the argument.
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        Input tensor of any shape.
+    drop_prob : float, optional, default=0.0
+        Probability of dropping a path.
+    training : bool, optional, default=False
+        Whether model is in training mode.
+
+    Returns
+    -------
+    torch.Tensor
+        Output tensor with same shape as input.
     """
     if drop_prob == 0.0 or not training:
         return x
     keep_prob = 1.0 - drop_prob
-    shape = (x.shape[0],) + (1,) * (
-        x.ndim - 1
-    )  # work with diff dim tensors, not just 2D ConvNets
+    # Work with different dimensional tensors, not just 2D ConvNets
+    shape = (x.shape[0],) + (1,) * (x.ndim - 1)
     random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
     random_tensor.floor_()  # binarize
     output = x.div(keep_prob) * random_tensor
     return output
 
 
-class DropPath(nn.Module):
-    """
-    Drop paths (Stochastic Depth) per sample (when applied in main path of
-    residual blocks).
+class DropPath(physicsnemo.Module):
+    r"""Drop paths (Stochastic Depth) per sample.
+
+    When applied in the main path of residual blocks, this implements
+    stochastic depth regularization.
+
+    Parameters
+    ----------
+    drop_prob : float, optional
+        Probability of dropping a path during training.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of any shape.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor with same shape as input.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.models.afno.distributed.layers import DropPath
+    >>> layer = DropPath(drop_prob=0.1)
+    >>> x = torch.randn(2, 64, 8, 8)
+    >>> out = layer(x)
+    >>> out.shape
+    torch.Size([2, 64, 8, 8])
     """
 
-    def __init__(self, drop_prob=None):
-        super(DropPath, self).__init__()
+    def __init__(self, drop_prob: float = None):
+        super().__init__()
         self.drop_prob = drop_prob
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
+        r"""Forward pass applying stochastic depth."""
         return drop_path(x, self.drop_prob, self.training)
 
 
-class DistributedMLP(nn.Module):
+class DistributedMLP(physicsnemo.Module):
+    r"""Distributed MLP layer for model-parallel training.
+
+    This MLP distributes the hidden layer computation across the model parallel
+    group for memory efficiency.
+
+    Parameters
+    ----------
+    in_features : int
+        Size of input features.
+    hidden_features : int, optional
+        Size of hidden features. Defaults to ``in_features``.
+    out_features : int, optional
+        Size of output features. Defaults to ``in_features``.
+    act_layer : type, optional, default=nn.GELU
+        Activation layer class.
+    drop : float, optional, default=0.0
+        Dropout rate.
+    input_is_matmul_parallel : bool, optional, default=False
+        Whether input is already sharded across model parallel group.
+    output_is_matmul_parallel : bool, optional, default=False
+        Whether output should be sharded across model parallel group.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, C, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(B, C_{out}, H, W)`.
+
+    Examples
+    --------
+    Requires a distributed environment with model parallel group initialized.
+
+    >>> import torch  # doctest: +SKIP
+    >>> from physicsnemo.models.afno.distributed.layers import DistributedMLP  # doctest: +SKIP
+    >>> from physicsnemo.distributed.manager import DistributedManager  # doctest: +SKIP
+    >>> DistributedManager.initialize()  # doctest: +SKIP
+    >>> mlp = DistributedMLP(in_features=256, hidden_features=1024, out_features=256)  # doctest: +SKIP
+    >>> x = torch.randn(2, 256, 4, 4)  # doctest: +SKIP
+    >>> out = mlp(x)  # doctest: +SKIP
+    >>> out.shape  # doctest: +SKIP
+    torch.Size([2, 256, 4, 4])
+    """
+
     def __init__(
         self,
-        in_features,
-        hidden_features=None,
-        out_features=None,
-        act_layer=nn.GELU,
-        drop=0.0,
-        input_is_matmul_parallel=False,
-        output_is_matmul_parallel=False,
+        in_features: int,
+        hidden_features: int | None = None,
+        out_features: int | None = None,
+        act_layer: type = nn.GELU,
+        drop: float = 0.0,
+        input_is_matmul_parallel: bool = False,
+        output_is_matmul_parallel: bool = False,
     ):
-        super(DistributedMLP, self).__init__()
+        super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
         self.input_is_matmul_parallel = input_is_matmul_parallel
@@ -174,19 +292,22 @@ class DistributedMLP(nn.Module):
         # init weights
         self._init_weights()
 
-    def _init_weights(self):
-        trunc_normal_(self.w1, std=0.02)
+    def _init_weights(self) -> None:
+        r"""Initialize weights using truncated normal distribution."""
+        _trunc_normal_(self.w1, std=0.02)
         nn.init.constant_(self.b1, 0.0)
-        trunc_normal_(self.w2, std=0.02)
+        _trunc_normal_(self.w2, std=0.02)
         nn.init.constant_(self.b2, 0.0)
 
-    def forward(self, x):
-        # gather if input is MP
+    def forward(self, x: Float[Tensor, "B C H W"]) -> Float[Tensor, "B C_out H W"]:
+        r"""Forward pass of the distributed MLP."""
+        # Gather if input is model parallel
         if self.input_is_matmul_parallel:
             x = gather_from_parallel_region(
                 x, dim=1, shapes=self.gather_shapes, group="model_parallel"
             )
 
+        # Distribute computation across model parallel group
         x = copy_to_parallel_region(x, group="model_parallel")
         x = F.conv2d(x, self.w1, bias=self.b1)
         x = self.act(x)
@@ -196,24 +317,73 @@ class DistributedMLP(nn.Module):
         x = x + torch.reshape(self.b2, (1, -1, 1, 1))
         x = self.drop(x)
 
-        # scatter if output is MP
+        # Scatter if output should be model parallel
         if self.output_is_matmul_parallel:
             x = scatter_to_parallel_region(x, dim=1, group="model_parallel")
 
         return x
 
 
-class DistributedPatchEmbed(nn.Module):
+class DistributedPatchEmbed(physicsnemo.Module):
+    r"""Distributed patch embedding layer for model-parallel training.
+
+    Converts 2D patches into a 1D vector sequence, distributed across
+    the model parallel group.
+
+    Parameters
+    ----------
+    inp_shape : Tuple[int, int], optional, default=(224, 224)
+        Input image dimensions as ``(height, width)``.
+    patch_size : Tuple[int, int], optional, default=(16, 16)
+        Patch size as ``(patch_height, patch_width)``.
+    in_chans : int, optional, default=3
+        Number of input channels.
+    embed_dim : int, optional, default=768
+        Embedding dimension.
+    input_is_matmul_parallel : bool, optional, default=False
+        Whether input is already sharded across model parallel group.
+    output_is_matmul_parallel : bool, optional, default=True
+        Whether output should be sharded across model parallel group.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, C_{in}, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(B, C_{embed}, N)` where :math:`N` is
+        the number of patches.
+
+    Examples
+    --------
+    Requires a distributed environment with model parallel group initialized.
+
+    >>> import torch  # doctest: +SKIP
+    >>> from physicsnemo.models.afno.distributed.layers import DistributedPatchEmbed  # doctest: +SKIP
+    >>> from physicsnemo.distributed.manager import DistributedManager  # doctest: +SKIP
+    >>> DistributedManager.initialize()  # doctest: +SKIP
+    >>> embed = DistributedPatchEmbed(  # doctest: +SKIP
+    ...     inp_shape=(64, 64), in_chans=2, embed_dim=256,
+    ...     output_is_matmul_parallel=False,
+    ... )
+    >>> x = torch.randn(2, 2, 64, 64)  # doctest: +SKIP
+    >>> out = embed(x)  # doctest: +SKIP
+    >>> out.shape  # doctest: +SKIP
+    torch.Size([2, 256, 16])  # 16 = num_patches
+    """
+
     def __init__(
         self,
-        inp_shape=(224, 224),
-        patch_size=(16, 16),
-        in_chans=3,
-        embed_dim=768,
-        input_is_matmul_parallel=False,
-        output_is_matmul_parallel=True,
+        inp_shape: Tuple[int, int] = (224, 224),
+        patch_size: Tuple[int, int] = (16, 16),
+        in_chans: int = 3,
+        embed_dim: int = 768,
+        input_is_matmul_parallel: bool = False,
+        output_is_matmul_parallel: bool = True,
     ):
-        super(DistributedPatchEmbed, self).__init__()
+        super().__init__()
 
         # store params
         self.input_parallel = input_is_matmul_parallel
@@ -256,29 +426,60 @@ class DistributedPatchEmbed(nn.Module):
         self.proj.weight.is_shared_spatial = True
         self.proj.bias.is_shared_spatial = True
 
-    def forward(self, x):
+    def forward(self, x: Float[Tensor, "B C_in H W"]) -> Float[Tensor, "B C N"]:
+        r"""Forward pass of the distributed patch embedding."""
+        # Gather input if model parallel
         if self.input_parallel:
             x = gather_from_parallel_region(
                 x, dim=1, shapes=self.in_shapes, group="model_parallel"
             )
 
+        # Copy to parallel region if output should be distributed
         if self.output_parallel:
             x = copy_to_parallel_region(x, group="model_parallel")
 
-        B, C, H, W = x.shape
-        if not (H == self.inp_shape[0] and W == self.inp_shape[1]):
-            raise ValueError(
-                f"Input input size ({H}*{W}) doesn't match model ({self.inp_shape[0]}*{self.inp_shape[1]})."
-            )
-        # new: B, C, H*W
+        # Input validation (single check: shape must match expected)
+        if not torch.compiler.is_compiling():
+            expected_spatial = (self.inp_shape[0], self.inp_shape[1])
+            expected_chans = self.proj.in_channels
+            if (
+                x.ndim != 4
+                or x.shape[1] != expected_chans
+                or (x.shape[2], x.shape[3]) != expected_spatial
+            ):
+                raise ValueError(
+                    f"Expected input shape (B, {expected_chans}, {expected_spatial[0]}, "
+                    f"{expected_spatial[1]}), got {tuple(x.shape)}"
+                )
+
+        # Apply patch embedding: (B, C_in, H, W) -> (B, C_embed, num_patches)
         x = self.proj(x).flatten(2)
         return x
 
 
 @torch.compile
-def compl_mul_add_fwd(
+def _compl_mul_add_fwd(
     a: torch.Tensor, b: torch.Tensor, c: torch.Tensor
 ) -> torch.Tensor:
+    r"""Complex multiplication and addition using real representation.
+
+    Computes ``einsum(a, b) + c`` where tensors represent complex numbers
+    as real-valued tensors with a trailing dimension of size 2.
+
+    Parameters
+    ----------
+    a : torch.Tensor
+        First input tensor with complex values in real representation.
+    b : torch.Tensor
+        Second input tensor (weights) with complex values in real representation.
+    c : torch.Tensor
+        Bias tensor with complex values in real representation.
+
+    Returns
+    -------
+    torch.Tensor
+        Result tensor with complex values in real representation.
+    """
     tmp = torch.einsum("bkixys,kiot->stbkoxy", a, b)
     res = (
         torch.stack(
@@ -290,9 +491,27 @@ def compl_mul_add_fwd(
 
 
 @torch.compile
-def compl_mul_add_fwd_c(
+def _compl_mul_add_fwd_c(
     a: torch.Tensor, b: torch.Tensor, c: torch.Tensor
 ) -> torch.Tensor:
+    r"""Complex multiplication and addition using native complex tensors.
+
+    Computes ``einsum(a, b) + c`` using PyTorch's native complex tensor support.
+
+    Parameters
+    ----------
+    a : torch.Tensor
+        First input tensor with complex values in real representation.
+    b : torch.Tensor
+        Second input tensor (weights) with complex values in real representation.
+    c : torch.Tensor
+        Bias tensor with complex values in real representation.
+
+    Returns
+    -------
+    torch.Tensor
+        Result tensor with complex values in real representation.
+    """
     ac = torch.view_as_complex(a)
     bc = torch.view_as_complex(b)
     cc = torch.view_as_complex(c)
@@ -301,18 +520,65 @@ def compl_mul_add_fwd_c(
     return torch.view_as_real(res)
 
 
-class DistributedAFNO2D(nn.Module):
+class DistributedAFNO2D(physicsnemo.Module):
+    r"""Distributed AFNO 2D spectral convolution layer.
+
+    This layer performs spectral mixing using block-diagonal weight matrices
+    in the Fourier domain, distributed across the model parallel group.
+
+    Parameters
+    ----------
+    hidden_size : int
+        Feature dimensionality.
+    num_blocks : int, optional, default=8
+        Number of blocks in the block diagonal weight matrix.
+    sparsity_threshold : float, optional, default=0.01
+        Sparsity threshold for soft shrinkage.
+    hard_thresholding_fraction : float, optional, default=1
+        Fraction of modes to keep, in range ``[0, 1]``.
+    hidden_size_factor : int, optional, default=1
+        Factor to increase spectral features by after weight multiplication.
+    input_is_matmul_parallel : bool, optional, default=False
+        Whether input is already sharded across model parallel group.
+    output_is_matmul_parallel : bool, optional, default=False
+        Whether output should be sharded across model parallel group.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, C, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(B, C, H, W)`.
+
+    Examples
+    --------
+    Requires a distributed environment with model parallel group initialized.
+
+    >>> import torch  # doctest: +SKIP
+    >>> from physicsnemo.models.afno.distributed.layers import DistributedAFNO2D  # doctest: +SKIP
+    >>> from physicsnemo.distributed.manager import DistributedManager  # doctest: +SKIP
+    >>> DistributedManager.initialize()  # doctest: +SKIP
+    >>> layer = DistributedAFNO2D(hidden_size=256, num_blocks=8)  # doctest: +SKIP
+    >>> x = torch.randn(2, 256, 4, 4)  # doctest: +SKIP
+    >>> out = layer(x)  # doctest: +SKIP
+    >>> out.shape  # doctest: +SKIP
+    torch.Size([2, 256, 4, 4])
+    """
+
     def __init__(
         self,
-        hidden_size,
-        num_blocks=8,
-        sparsity_threshold=0.01,
-        hard_thresholding_fraction=1,
-        hidden_size_factor=1,
-        input_is_matmul_parallel=False,
-        output_is_matmul_parallel=False,
+        hidden_size: int,
+        num_blocks: int = 8,
+        sparsity_threshold: float = 0.01,
+        hard_thresholding_fraction: float = 1,
+        hidden_size_factor: int = 1,
+        input_is_matmul_parallel: bool = False,
+        output_is_matmul_parallel: bool = False,
     ):
-        super(DistributedAFNO2D, self).__init__()
+        super().__init__()
         if not (hidden_size % num_blocks == 0):
             raise ValueError(
                 f"hidden_size {hidden_size} should be divisible by num_blocks {num_blocks}"
@@ -337,8 +603,8 @@ class DistributedAFNO2D(nn.Module):
         self.hidden_size_factor = hidden_size_factor
         self.scale = 0.02
         use_complex_mult = False
-        self.mult_handle = (
-            compl_mul_add_fwd_c if use_complex_mult else compl_mul_add_fwd
+        self._mult_handle = (
+            _compl_mul_add_fwd_c if use_complex_mult else _compl_mul_add_fwd
         )
 
         # model parallelism
@@ -385,13 +651,14 @@ class DistributedAFNO2D(nn.Module):
         self.w2.is_shared_spatial = True
         self.b2.is_shared_spatial = True
 
-    def forward(self, x):
+    def forward(self, x: Float[Tensor, "B C H W"]) -> Float[Tensor, "B C H W"]:
+        r"""Forward pass of the distributed AFNO spectral layer."""
+        # Scatter input across model parallel group if needed
         if not self.input_is_matmul_parallel:
-            # distribute data
             num_chans = x.shape[1]
             x = scatter_to_parallel_region(x, dim=1, group="model_parallel")
 
-        # bias
+        # Store for skip connection
         bias = x
 
         dtype = x.dtype
@@ -400,15 +667,17 @@ class DistributedAFNO2D(nn.Module):
         total_modes = H // 2 + 1
         kept_modes = int(total_modes * self.hard_thresholding_fraction)
 
+        # Apply 2D FFT to spatial dimensions
         x = self.fft_handle(x, (H, W), (-2, -1), "ortho")
         x = x.view(B, self.num_blocks_local, self.block_size, H, W // 2 + 1)
 
-        # new
+        # Convert to real representation for block-diagonal operations
         x = torch.view_as_real(x)
         o2 = torch.zeros(x.shape, device=x.device)
 
+        # Apply first block-diagonal weight matrix with ReLU
         o1 = F.relu(
-            self.mult_handle(
+            self._mult_handle(
                 x[
                     :,
                     :,
@@ -421,18 +690,20 @@ class DistributedAFNO2D(nn.Module):
                 self.b1,
             )
         )
+
+        # Apply second block-diagonal weight matrix
         o2[
             :, :, :, total_modes - kept_modes : total_modes + kept_modes, :kept_modes, :
-        ] = self.mult_handle(o1, self.w2, self.b2)
+        ] = self._mult_handle(o1, self.w2, self.b2)
 
-        # finalize
+        # Apply soft shrinkage for sparsity and inverse FFT
         x = F.softshrink(o2, lambd=self.sparsity_threshold)
         x = torch.view_as_complex(x)
         x = x.reshape(B, C, H, W // 2 + 1)
         x = self.ifft_handle(x, (H, W), (-2, -1), "ortho")
         x = x.type(dtype) + bias
 
-        # gather
+        # Gather output if not model parallel
         if not self.output_is_matmul_parallel:
             gather_shapes = compute_split_shapes(
                 num_chans, DistributedManager().group_size("model_parallel")

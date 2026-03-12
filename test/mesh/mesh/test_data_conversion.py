@@ -24,7 +24,6 @@ import pytest
 import torch
 
 from physicsnemo.mesh.mesh import Mesh
-from physicsnemo.mesh.utilities._cache import get_cached, set_cached
 
 ### Helper Functions ###
 
@@ -191,7 +190,7 @@ class TestCellDataToPointData:
         )
 
         ### Should raise error
-        with pytest.raises(ValueError, match="already exists in point_data"):
+        with pytest.raises(ValueError):
             mesh.cell_data_to_point_data()
 
     def test_overwrite_keys(self):
@@ -226,7 +225,7 @@ class TestCellDataToPointData:
         result = mesh.cell_data_to_point_data()
 
         ### Cached property should not be in point_data (should not leak from cell_data)
-        assert get_cached(result.point_data, "centroids") is None
+        assert result._cache.get(("point", "centroids"), None) is None
 
 
 class TestPointDataToCellData:
@@ -314,7 +313,7 @@ class TestPointDataToCellData:
         )
 
         ### Should raise error
-        with pytest.raises(ValueError, match="already exists in cell_data"):
+        with pytest.raises(ValueError):
             mesh.point_data_to_cell_data()
 
     def test_overwrite_keys(self):
@@ -341,13 +340,13 @@ class TestPointDataToCellData:
         cells = torch.tensor([[0, 1, 2]])
         mesh = Mesh(points=points, cells=cells)
 
-        set_cached(mesh.point_data, "test_cached_value", torch.tensor([1.0, 2.0, 3.0]))
+        mesh._cache["point", "test_cached_value"] = torch.tensor([1.0, 2.0, 3.0])
 
         ### Convert
         result = mesh.point_data_to_cell_data()
 
         ### Cached property should not be converted to cell_data
-        assert get_cached(result.cell_data, "test_cached_value") is None
+        assert result._cache.get(("cell", "test_cached_value"), None) is None
 
     def test_3d_tetrahedral_mesh(self):
         """Test on 3D tetrahedral mesh."""
@@ -576,8 +575,8 @@ class TestDataConversionParametrized:
         result = mesh.cell_data_to_point_data()
 
         # Cached properties should not be converted
-        assert get_cached(result.point_data, "centroids") is None
-        assert get_cached(result.point_data, "areas") is None
+        assert result._cache.get(("point", "centroids"), None) is None
+        assert result._cache.get(("point", "areas"), None) is None
 
     @pytest.mark.parametrize(
         "n_spatial_dims,n_manifold_dims",

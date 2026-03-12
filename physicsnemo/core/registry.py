@@ -20,6 +20,24 @@ import warnings
 from importlib.metadata import EntryPoint, entry_points
 from typing import TYPE_CHECKING, Dict, List, Union
 
+# Handle both stdlib and backport EntryPoint classes for isinstance checks.
+# Some packages (e.g., mlflow, opentelemetry) import importlib_metadata which
+# can cause entry points to be instances of importlib_metadata.EntryPoint
+# instead of importlib.metadata.EntryPoint.
+
+# For future maintainers who think, "I could clean this up ..."
+# As much as I WANT to remove this, it is not worth it. If there is any
+# usage of importlib_metadata in other packages it could break.  It certainly
+# breaks docstring testing in CI.  And it was very difficult to debug,
+# since the breaking import that changes the EntryPoint definition typically
+# shows up OUTSIDE of the physicsnemo code base, you'll go crazy trying to debug.
+try:
+    import importlib_metadata
+
+    _ENTRYPOINT_TYPES: tuple = (EntryPoint, importlib_metadata.EntryPoint)
+except ImportError:
+    _ENTRYPOINT_TYPES = (EntryPoint,)
+
 if TYPE_CHECKING:
     from physicsnemo.core.module import Module
 
@@ -143,7 +161,7 @@ class ModelRegistry:
 
         model = self._model_registry.get(name)
         if model is not None:
-            if isinstance(model, EntryPoint):
+            if isinstance(model, _ENTRYPOINT_TYPES):
                 model = model.load()
                 # Update the registry with the loaded object:
                 self._model_registry[name] = model

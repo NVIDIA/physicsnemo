@@ -57,111 +57,108 @@ def test_song_unet_forward(device):
     )
 
 
-def test_song_unet_constructor(device):
-    """Test the Song UNet constructor options"""
+@pytest.mark.parametrize(
+    "config",
+    ["default", "custom"],
+    ids=["with_defaults", "with_custom_args"],
+)
+def test_song_unet_constructor(device, config):
+    """Test SongUNet model constructor and attributes (MOD-008a).
 
-    # DDM++
-    img_resolution = 16
-    in_channels = 2
-    out_channels = 2
-    model = UNet(
-        img_resolution=img_resolution,
-        in_channels=in_channels,
-        out_channels=out_channels,
-    ).to(device)
-    noise_labels = torch.randn([1]).to(device)
-    class_labels = torch.randint(0, 1, (1, 1)).to(device)
-    input_image = torch.ones([1, 2, 16, 16]).to(device)
-    output_image = model(input_image, noise_labels, class_labels)
-    assert output_image.shape == (1, out_channels, img_resolution, img_resolution)
-
-    # DDM++ with additive pos embed
-    model_channels = 64
-    model = UNet(
-        img_resolution=img_resolution,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        model_channels=model_channels,
-        additive_pos_embed=True,
-    ).to(device)
-    noise_labels = torch.randn([1]).to(device)
-    class_labels = torch.randint(0, 1, (1, 1)).to(device)
-    input_image = torch.ones([1, 2, 16, 16]).to(device)
-    output_image = model(input_image, noise_labels, class_labels)
-    assert model.spatial_emb.shape == (
-        1,
-        model_channels,
-        img_resolution,
-        img_resolution,
-    )
-
-    # NCSN++
-    model = UNet(
-        img_resolution=img_resolution,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        embedding_type="fourier",
-        channel_mult_noise=2,
-        encoder_type="residual",
-        resample_filter=[1, 3, 3, 1],
-    ).to(device)
-    noise_labels = torch.randn([1]).to(device)
-    class_labels = torch.randint(0, 1, (1, 1)).to(device)
-    input_image = torch.ones([1, 2, 16, 16]).to(device)
-    output_image = model(input_image, noise_labels, class_labels)
-    assert output_image.shape == (1, out_channels, img_resolution, img_resolution)
-
-    # test rectangular shape
-    model = UNet(
-        img_resolution=[img_resolution, img_resolution * 2],
-        in_channels=in_channels,
-        out_channels=out_channels,
-        embedding_type="fourier",
-        channel_mult_noise=2,
-        encoder_type="residual",
-        resample_filter=[1, 3, 3, 1],
-    ).to(device)
-    noise_labels = torch.randn([1]).to(device)
-    class_labels = torch.randint(0, 1, (1, 1)).to(device)
-    input_image = torch.ones([1, out_channels, img_resolution, img_resolution * 2]).to(
-        device
-    )
-    output_image = model(input_image, noise_labels, class_labels)
-    assert output_image.shape == (1, out_channels, img_resolution, img_resolution * 2)
-
-    # Also test failure cases
-    try:
+    This test verifies:
+    1. Model can be instantiated with default arguments
+    2. Model can be instantiated with custom arguments
+    3. All public attributes have expected values
+    """
+    if config == "default":
         model = UNet(
-            img_resolution=img_resolution,
-            in_channels=in_channels,
-            out_channels=out_channels,
-            embedding_type=None,
+            img_resolution=16,
+            in_channels=2,
+            out_channels=2,
         ).to(device)
-        raise AssertionError("Failed to error for invalid argument")
-    except ValueError:
-        pass
 
-    try:
-        model = UNet(
-            img_resolution=img_resolution,
-            in_channels=in_channels,
-            out_channels=out_channels,
-            encoder_type=None,
-        ).to(device)
-        raise AssertionError("Failed to error for invalid argument")
-    except ValueError:
-        pass
+        # Verify default attribute values
+        assert model.img_resolution == 16
+        assert model.img_shape_y == 16
+        assert model.img_shape_x == 16
+        assert model.label_dim == 0
+        assert model.augment_dim == 0
+        assert model.label_dropout == 0.0
+        assert model.embedding_type == "positional"
+        assert model.emb_channels == 128 * 4  # model_channels * channel_mult_emb
+        assert model.additive_pos_embed is False
+        assert model.use_apex_gn is False
+        assert model.profile_mode is False
+        assert model.amp_mode is False
 
-    try:
+        # Verify forward pass shape
+        noise_labels = torch.randn([1]).to(device)
+        class_labels = torch.randint(0, 1, (1, 1)).to(device)
+        input_image = torch.ones([1, 2, 16, 16]).to(device)
+        output_image = model(input_image, noise_labels, class_labels)
+        assert output_image.shape == (1, 2, 16, 16)
+    else:
+        model_channels = 64
         model = UNet(
-            img_resolution=img_resolution,
-            in_channels=in_channels,
-            out_channels=out_channels,
-            decoder_type=None,
+            img_resolution=[16, 32],
+            in_channels=2,
+            out_channels=2,
+            label_dim=10,
+            augment_dim=5,
+            model_channels=model_channels,
+            channel_mult=[1, 2, 2],
+            channel_mult_emb=2,
+            num_blocks=2,
+            attn_resolutions=[8],
+            dropout=0.05,
+            label_dropout=0.1,
+            embedding_type="fourier",
+            channel_mult_noise=2,
+            encoder_type="residual",
+            decoder_type="standard",
+            resample_filter=[1, 3, 3, 1],
+            additive_pos_embed=True,
+            bottleneck_attention=False,
         ).to(device)
-        raise AssertionError("Failed to error for invalid argument")
-    except ValueError:
-        pass
+
+        # Verify custom attribute values
+        assert model.img_resolution == [16, 32]
+        assert model.img_shape_y == 16
+        assert model.img_shape_x == 32
+        assert model.label_dim == 10
+        assert model.augment_dim == 5
+        assert model.label_dropout == 0.1
+        assert model.embedding_type == "fourier"
+        assert model.emb_channels == model_channels * 2
+        assert model.additive_pos_embed is True
+        assert model.spatial_emb.shape == (1, model_channels, 16, 32)
+        assert model.profile_mode is False
+        assert model.amp_mode is False
+
+        # Verify forward pass shape
+        noise_labels = torch.randn([1]).to(device)
+        class_labels = torch.randn(1, 10).to(device)
+        input_image = torch.ones([1, 2, 16, 32]).to(device)
+        output_image = model(input_image, noise_labels, class_labels)
+        assert output_image.shape == (1, 2, 16, 32)
+
+    # Common assertions
+    assert isinstance(model, UNet)
+    assert hasattr(model, "enc")
+    assert hasattr(model, "dec")
+    assert hasattr(model, "meta")
+
+
+def test_song_unet_constructor_failure_cases():
+    """Test SongUNet constructor with invalid arguments."""
+    with pytest.raises(ValueError):
+        UNet(img_resolution=16, in_channels=2, out_channels=2, embedding_type=None)
+
+    with pytest.raises(ValueError):
+        UNet(img_resolution=16, in_channels=2, out_channels=2, encoder_type=None)
+
+    with pytest.raises(ValueError):
+        UNet(img_resolution=16, in_channels=2, out_channels=2, decoder_type=None)
 
 
 def test_song_unet_optims(device):

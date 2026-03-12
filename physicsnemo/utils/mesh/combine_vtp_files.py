@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import importlib
+import warnings
 from typing import List
 
 from physicsnemo.core.version_check import check_version_spec
@@ -36,6 +37,13 @@ if VTK_AVAILABLE:
         - input_files (list[str]): List of paths to the input VTP files to be combined.
         - output_file (str): Path to save the combined VTP file.
         """
+        warnings.warn(
+            "combine_vtp_files is deprecated and will be removed in v2.2.0. "
+            "Use PyVista instead: "
+            "pyvista.merge([pyvista.read(f) for f in files]).save(output_file)",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         reader = vtkXMLPolyDataReader()
         append = vtkAppendPolyData()
 
@@ -56,6 +64,13 @@ if VTK_AVAILABLE:
 else:
 
     def combine_vtp_files(*args, **kwargs):
+        warnings.warn(
+            "combine_vtp_files is deprecated and will be removed in v2.2.0. "
+            "Use PyVista instead: "
+            "pyvista.merge([pyvista.read(f) for f in files]).save(output_file)",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         raise RuntimeError(
             "combine_vtp_files: VTK is not available, please install vtk with `pip install vtk`"
         )

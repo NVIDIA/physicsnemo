@@ -15,18 +15,20 @@
 # limitations under the License.
 
 
-r"""Unary operation helpers and dispatch wrappers for ShardTensor.
+r"""Unary operation helpers and functional intercept wrappers for ShardTensor.
 
 This module provides:
 
-- A dispatch-level wrapper for ``torch.unsqueeze`` that preserves and adjusts
+- A functional-level wrapper for ``torch.unsqueeze`` that preserves and adjusts
   sharding metadata for ``ShardTensor``.
+- Handlers for ``aten.unsqueeze.default`` at both ``__torch_function__`` and
+  ``__torch_dispatch__`` so that direct ATen calls use the same sharding logic.
 - Small utility helpers for normalizing dimensions and constructing shapes.
 """
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Any, Callable, Sequence
 
 import torch
 from torch.distributed.tensor.placement_types import (
@@ -82,8 +84,13 @@ def normalize_dim(dim: int, tensor_rank: int) -> int:
     return dim if dim >= 0 else (dim % (tensor_rank + 1))
 
 
-def unsqueeze_wrapper(input: ShardTensor, dim: int) -> ShardTensor:
-    r"""Dispatch-level wrapper for ``aten.unsqueeze`` on ShardTensor.
+def unsqueeze_wrapper(
+    func: Callable,
+    types: tuple[Any, ...],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> ShardTensor:
+    r"""Functional-level wrapper for ``torch.unsqueeze`` on ShardTensor.
 
     Ensures the output ShardTensor has correct placements and sharding shapes
     after inserting a singleton dimension. Replicated placements stay replicated.
@@ -92,11 +99,16 @@ def unsqueeze_wrapper(input: ShardTensor, dim: int) -> ShardTensor:
 
     Parameters
     ----------
-    input : ShardTensor
-        The input ShardTensor.
-    dim : int
-        The dimension index at which to insert a singleton dimension.
-        May be negative.
+    func : Callable
+        The original function being wrapped (``torch.unsqueeze`` or
+        ``torch.Tensor.unsqueeze``).
+    types : tuple[Any, ...]
+        Types of the input arguments (unused).
+    args : tuple[Any, ...]
+        Positional arguments. Expected to contain ``(input, dim)`` for
+        ``torch.unsqueeze`` and ``(self, dim)`` for ``Tensor.unsqueeze``.
+    kwargs : dict[str, Any]
+        Keyword arguments (unused).
 
     Returns
     -------
@@ -104,10 +116,15 @@ def unsqueeze_wrapper(input: ShardTensor, dim: int) -> ShardTensor:
         A new ShardTensor with the local tensor unsqueezed and sharding
         metadata adjusted.
     """
-    # This is a _dispatch_level_ wrapper, so we're intercepting aten.unsqueeze
+    # This is a _functional_level_ wrapper, so we're intercepting
+    # torch.unsqueeze / Tensor.unsqueeze before they reach aten dispatch.
 
     # The reason we have this intercept is to ensure we get the output
     # sharding shapes correct on irregular data.
+
+    # Unpack args from the __torch_function__ signature:
+    input: ShardTensor = args[0]
+    dim: int = args[1] if len(args) > 1 else kwargs.get("dim", 0)
 
     # Unsqueeze the underlying tensor:
     local_input = input.to_local()
@@ -128,7 +145,7 @@ def unsqueeze_wrapper(input: ShardTensor, dim: int) -> ShardTensor:
         # Replicated placements stay replicated
 
         # Sharded placements stay sharded, but if the unsqueeze
-        # dim is before the sharded dim, the sharded dim is shifted by
+        # dim is before the sharded dim, the sharded dim is shifted by one
         if p.is_shard() and p.dim >= dim:
             output_placements.append(Shard(p.dim + 1))
         else:
@@ -152,6 +169,33 @@ def unsqueeze_wrapper(input: ShardTensor, dim: int) -> ShardTensor:
     return output
 
 
-ShardTensor.register_dispatch_handler(
-    torch.ops.aten.unsqueeze.default, unsqueeze_wrapper
-)
+def _unsqueeze_dispatch(tensor: ShardTensor, dim: int) -> ShardTensor:
+    r"""Dispatch handler for ``aten.unsqueeze.default`` on :class:`ShardTensor`.
+
+    Called at the ``__torch_dispatch__`` level so that direct ATen calls
+    (e.g. from internal PyTorch or DTensor code) use the same sharding logic
+    as the Python-level ``torch.unsqueeze`` / ``Tensor.unsqueeze``.
+
+    Parameters
+    ----------
+    tensor : ShardTensor
+        Input sharded tensor.
+    dim : int
+        Dimension at which to insert the singleton dimension.
+
+    Returns
+    -------
+    ShardTensor
+        Unsqueezed ShardTensor with correct placements and sharding shapes.
+    """
+    return unsqueeze_wrapper(aten.unsqueeze.default, (type(tensor),), (tensor, dim), {})
+
+
+# Python-level function handlers (__torch_function__).
+ShardTensor.register_function_handler(torch.unsqueeze, unsqueeze_wrapper)
+ShardTensor.register_function_handler(torch.Tensor.unsqueeze, unsqueeze_wrapper)
+
+# ATen op: can be invoked via __torch_function__ (e.g. PyTorch 2.6+ internal
+# or DTensor codepaths) or via __torch_dispatch__.
+ShardTensor.register_function_handler(aten.unsqueeze.default, unsqueeze_wrapper)
+ShardTensor.register_dispatch_handler(aten.unsqueeze.default, _unsqueeze_dispatch)

@@ -39,7 +39,7 @@ from einops import rearrange
 from jaxtyping import Float
 
 from physicsnemo.core.version_check import check_version_spec
-from physicsnemo.models.transolver.Physics_Attention import gumbel_softmax
+from physicsnemo.nn import gumbel_softmax
 from physicsnemo.nn import BQWarp
 from physicsnemo.nn import Mlp
 

@@ -19,25 +19,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import physicsnemo  # noqa: F401 for docs
+from physicsnemo.nn.functional import weight_fact
 
 Tensor = torch.Tensor
-
-
-def weight_fact(w, mean=1.0, stddev=0.1):
-    """
-    Randomly factorize the weight matrix into a product of vectors and a matrix
-
-    Parameters
-    ----------
-    w : torch.Tensor
-    mean : float, optional, default=1.0, mean of the normal distribution to sample the random scale factor
-    stddev: float, optional, default=0.1, standard deviation of the normal distribution to sample the random scale factor
-    """
-
-    g = torch.normal(mean, stddev, size=(w.shape[0], 1))
-    g = torch.exp(g)
-    v = w / g
-    return g, v
 
 
 class WeightFactLinear(nn.Module):

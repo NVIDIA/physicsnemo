@@ -29,3 +29,6 @@ echo -e "\033[0;32mRunning ASV benchmarks from: $REPO_ROOT_DIR\033[0m"
 
 # Run ASV with spawn method for CUDA compatibility.
 asv run --launch-method spawn "$@"
+
+# Generate functional benchmark plots if results exist.
+python benchmarks/physicsnemo/nn/functional/plot_functional_benchmarks.py

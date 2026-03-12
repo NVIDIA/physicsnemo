@@ -17,11 +17,11 @@
 # TOP-LEVEL FILES
 # ==============================================================================
 
-# Keep CHANGELOG separate - don't require specific people to approve updates
-./CHANGELOG.md
-
 # Top-level markdown files
 ./*.md @ram-cherukuri @megnvidia
+
+# Keep CHANGELOG separate - don't require specific people to approve updates
+./CHANGELOG.md
 
 # CI/CD Configuration
 .gitlab/ @ktangsali @coreyjadams @nickgeneva
@@ -70,10 +70,10 @@ physicsnemo/nn/ @loliverhennigh
 physicsnemo/nn/functional/ @loliverhennigh
 physicsnemo/nn/functional/knn/ @coreyjadams @peterdsharpe @loliverhennigh
 physicsnemo/nn/functional/radius_search/ @coreyjadams @peterdsharpe @loliverhennigh
-physicsnemo/nn/functional/sdf.py @RishikeshRanade @loliverhennigh @loliverhennigh
+physicsnemo/nn/functional/sdf.py @RishikeshRanade @loliverhennigh
 
 # Module layers
-physicsnemo/nn/module/ @loliverhennigh 
+physicsnemo/nn/module/ @loliverhennigh
 physicsnemo/nn/module/gnn_layers/ @mnabian
 physicsnemo/nn/module/attention_layers.py @pzharrington @CharlelieLrt
 physicsnemo/nn/module/conv_layers.py @mnabian @CharlelieLrt
@@ -179,6 +179,9 @@ physicsnemo/models/afno/ @ktangsali
 # Diffusion UNets
 physicsnemo/models/diffusion_unets/ @CharlelieLrt
 
+# DiT (Diffusion Transformer)
+physicsnemo/models/dit/ @pzharrington
+
 # DLWP
 physicsnemo/models/dlwp/ @pzharrington
 physicsnemo/models/dlwp_healpix/ @pzharrington
@@ -199,13 +202,12 @@ physicsnemo/models/figconvnet/ @coreyjadams
 physicsnemo/models/fno/ @ktangsali
 
 # GraphCast and GNN
-physicsnemo/models/gnn_layers/ @mnabian
 physicsnemo/models/graphcast/ @mnabian
 physicsnemo/models/mesh_reduced/ @mnabian
 physicsnemo/models/meshgraphnet/ @mnabian
 
 # MLP
-physicsnemo/models/mlp/ @peterdsharpe 
+physicsnemo/models/mlp/ @peterdsharpe
 
 # Pangu
 physicsnemo/models/pangu/ @dallasfoster @mnabian
@@ -266,6 +268,7 @@ examples/cfd/external_aerodynamics/aero_graph_net/ @mnabian
 examples/cfd/external_aerodynamics/domino/ @RishikeshRanade @coreyjadams
 examples/cfd/external_aerodynamics/domino_nim_finetuning/ @RishikeshRanade @peterdsharpe
 examples/cfd/external_aerodynamics/figconvnet/ @coreyjadams
+examples/cfd/external_aerodynamics/globe/ @peterdsharpe
 examples/cfd/external_aerodynamics/moe/ @mnabian
 examples/cfd/external_aerodynamics/transformer_models/ @coreyjadams @RishikeshRanade
 examples/cfd/external_aerodynamics/xaeronet/ @mnabian
@@ -363,7 +366,7 @@ examples/weather/unified_recipe/
 # ==============================================================================
 
 test/core/ @coreyjadams
-test/nn/ 
+test/nn/
 
 # ==============================================================================
 # TESTS - Infrastructure
@@ -379,8 +382,10 @@ test/datapipes/ @coreyjadams
 # ==============================================================================
 
 test/models/diffusion/ @CharlelieLrt
+test/models/dit/ @pzharrington
 test/models/domino/ @RishikeshRanade
 test/models/figconvnet/ @coreyjadams
+test/models/globe/ @peterdsharpe
 test/models/graphcast/ @mnabian
 test/models/meshgraphnet/ @mnabian
 test/models/transolver/ @coreyjadams
@@ -398,11 +403,11 @@ test/metrics/
 test/active_learning/ @laserkelvin @dallasfoster
 test/mesh/ @peterdsharpe
 test/optim/ @peterdsharpe
-test/utils/ 
+test/utils/
 test/experimental/
 
 # ==============================================================================
-# CI Tests
+# TESTS - CI
 # ==============================================================================
 
 test/ci_tests/ @ktangsali @coreyjadams

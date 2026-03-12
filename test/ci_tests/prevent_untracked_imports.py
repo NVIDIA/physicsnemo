@@ -26,17 +26,17 @@ from importlinter import Contract, ContractCheck, fields, output
 from packaging.requirements import Requirement
 
 """
-This is a script meant to be used in import-linter as a pre-commit hook to 
+This is a script meant to be used in import-linter as a pre-commit hook to
 prevent unlisted / not-required imports as a bare import in physicsnemo.
 
 It will do the following:
-- Scan the entire "container" (configured in .importlinter) for 
+- Scan the entire "container" (configured in .importlinter) for
   imports, using import-linter and grimp.  Automatic.
 - Extract all the "upstream" modules: things that go "import ABC"
 - From that list, remove all the upstream modules from the standard library.
 - Scan pyproject.toml for the requirements listed in `[project.dependencies]`
 - From the upstream list, Remove all the modules listed as a requirement.
-- From the remaining list,  find all the importers but exclude anything in 
+- From the remaining list,  find all the importers but exclude anything in
   `container.e for e in exclude`.
 - Pass if all upstream modules are standard or hard requirements.
 - Fail otherwise, and report which modules and from what files.
@@ -93,13 +93,14 @@ class ForbiddenImportContract(Contract):
             local_violations = graph.find_modules_that_directly_import(broken_import)
 
             # Remove violations that start with any exclusions:
-
+            if self.exclude is not None:
+                exclusions = [self.container + "." + ex for ex in self.exclude]
+            else:
+                exclusions = []
             local_violations = set[str](
                 lv
                 for lv in local_violations
-                if not any(
-                    lv.startswith(self.container + "." + ex) for ex in self.exclude
-                )
+                if not any(lv.startswith(ex) for ex in exclusions)
             )
 
             if len(local_violations) > 0:
@@ -173,7 +174,9 @@ def resolve_core_dependencies(pyproject_path: str | Path) -> Set[str]:
     resolved: List[str] = []
     for item in dependency_list:
         requirement = Requirement(item)
-        resolved.append(dep_to_import_name.get(requirement.name, requirement.name))
+        # PyPI names use hyphens; import names use underscores (PEP 503).
+        default_import_name = requirement.name.replace("-", "_")
+        resolved.append(dep_to_import_name.get(requirement.name, default_import_name))
 
     seen: Set[str] = set()
     ordered_unique: List[str] = []

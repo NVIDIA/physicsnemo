@@ -14,33 +14,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import concurrent.futures as cf
 import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Iterable, Optional
 
 import numpy as np
 import torch
-import torch_geometric as pyg
 import yaml
 from torch import Tensor
 from torch.utils.data import Dataset
-from torch_geometric.data import Data as PyGData
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.meta import DatapipeMetaData
 
 from .utils import load_json, read_vtp_file, save_json
 
-try:
-    import pyvista as pv
-    import vtk
-except ImportError:
-    raise ImportError(
-        "Ahmed Body Dataset requires the vtk and pyvista libraries. Install with "
-        + "pip install vtk pyvista"
-    )
+if TYPE_CHECKING:
+    from torch_geometric.data import Data as PyGData
+
+# Lazy imports for optional dependencies
+pyg = OptionalImport("torch_geometric")
+pyg_data = OptionalImport("torch_geometric.data")
+pv = OptionalImport("pyvista")
+vtk = OptionalImport("vtk")
+
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +100,15 @@ class AhmedBodyDataset(Dataset):
     """
 
     def __init__(
+        self,
+        data_dir: str,
+        split: str = "train",
+        *args,
+        **kwargs,
+    ):
+        self._init_impl(data_dir, split, *args, **kwargs)
+
+    def _init_impl(
         self,
         data_dir: str,
         split: str = "train",
@@ -562,7 +573,7 @@ class AhmedBodyDataset(Dataset):
             edges = pyg.utils.to_undirected(edges)
         if add_self_loop:
             edges, _ = pyg.utils.add_self_loops(edges)
-        graph = PyGData(edge_index=edges)
+        graph = pyg_data.Data(edge_index=edges)
 
         # Assign node features using the vertex data
         graph.pos = torch.tensor(vertices, dtype=torch.float32)

@@ -43,3 +43,4 @@ if ST_AVAILABLE:
         from .pooling_patches import generic_avg_pool_nd_wrapper
         from .unary_ops import unsqueeze_wrapper
         from .unpooling_patches import generic_interpolate_wrapper
+        from .view_ops import reshape_wrapper, view_wrapper

@@ -27,7 +27,7 @@ def process_scalars(
     data_dict: TensorDict,
     n_expected: int,
     name: str,
-) -> tuple[torch.Tensor | None, Literal["points", "cells", None]]:
+) -> tuple[torch.Tensor | None, Literal["points", "cells", None], str | None]:
     """Process scalar specification into concrete tensor values.
 
     Parameters
@@ -47,9 +47,10 @@ def process_scalars(
     Returns
     -------
     tuple
-        Tuple of (scalar_values, source_type) where:
+        Tuple of (scalar_values, source_type, label) where:
         - scalar_values is None if scalar_spec is None, otherwise a 1D tensor
         - source_type indicates whether this is "points", "cells", or None
+        - label is a human-readable name for the colorbar (or None)
 
     Raises
     ------
@@ -59,7 +60,7 @@ def process_scalars(
         If specified key is not found in data_dict.
     """
     if scalar_spec is None:
-        return None, None
+        return None, None, None
 
     ### Case 1: Direct tensor specification
     if isinstance(scalar_spec, torch.Tensor):
@@ -78,8 +79,11 @@ def process_scalars(
             # Flatten all trailing dimensions and compute norm
             scalar_tensor = scalar_tensor.reshape(n_expected, -1)
             scalar_tensor = torch.norm(scalar_tensor, dim=-1)
+            label = "Magnitude"
+        else:
+            label = "Scalars"
 
-        return scalar_tensor, name + "s"  # "points" or "cells"
+        return scalar_tensor, name + "s", label  # "points" or "cells"
 
     ### Case 2: Key lookup in TensorDict (str or tuple[str, ...])
     if isinstance(scalar_spec, (str, tuple)):
@@ -99,12 +103,16 @@ def process_scalars(
                 f"Full shape: {scalar_tensor.shape}"
             )
 
+        # Determine label: use key name, but append " (magnitude)" if we take norm
+        label = str(scalar_spec)
+
         # If multi-dimensional, compute L2 norm across trailing dimensions
         if scalar_tensor.ndim > 1:
             scalar_tensor = scalar_tensor.reshape(n_expected, -1)
             scalar_tensor = torch.norm(scalar_tensor, dim=-1)
+            label = f"{label} (magnitude)"
 
-        return scalar_tensor, name + "s"  # "points" or "cells"
+        return scalar_tensor, name + "s", label  # "points" or "cells"
 
     raise TypeError(
         f"{name}_scalars must be None, torch.Tensor, str, or tuple[str, ...], "
@@ -123,6 +131,7 @@ def validate_and_process_scalars(
     torch.Tensor | None,
     torch.Tensor | None,
     Literal["points", "cells", None],
+    str | None,
 ]:
     """Validate and process both point and cell scalars.
 
@@ -144,7 +153,8 @@ def validate_and_process_scalars(
     Returns
     -------
     tuple
-        Tuple of (point_scalar_values, cell_scalar_values, active_scalar_source).
+        Tuple of (point_scalar_values, cell_scalar_values, active_scalar_source,
+        scalar_label) where scalar_label is the human-readable name for the colorbar.
 
     Raises
     ------
@@ -159,14 +169,17 @@ def validate_and_process_scalars(
         )
 
     ### Process point scalars
-    point_values, point_source = process_scalars(
+    point_values, point_source, point_label = process_scalars(
         point_scalars, point_data, n_points, "point"
     )
 
     ### Process cell scalars
-    cell_values, cell_source = process_scalars(cell_scalars, cell_data, n_cells, "cell")
+    cell_values, cell_source, cell_label = process_scalars(
+        cell_scalars, cell_data, n_cells, "cell"
+    )
 
-    ### Determine active scalar source
+    ### Determine active scalar source and label
     active_scalar_source = point_source or cell_source
+    scalar_label = point_label or cell_label
 
-    return point_values, cell_values, active_scalar_source
+    return point_values, cell_values, active_scalar_source, scalar_label

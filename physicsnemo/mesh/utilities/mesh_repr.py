@@ -20,15 +20,13 @@ import torch
 from tensordict import TensorDict
 
 
-def format_mesh_repr(mesh, exclude_cache: bool = False) -> str:
+def format_mesh_repr(mesh) -> str:
     """Format a complete Mesh representation.
 
     Parameters
     ----------
     mesh : Mesh
         The Mesh instance to format.
-    exclude_cache : bool
-        If True, exclude _cache subdictionaries from output.
 
     Returns
     -------
@@ -67,7 +65,6 @@ def format_mesh_repr(mesh, exclude_cache: bool = False) -> str:
             td,
             batch_dims=len(td.batch_size) if hasattr(td, "batch_size") else 0,
             indent_level=1,
-            exclude_cache=exclude_cache,
         )
 
         # Add the field line with aligned colon
@@ -77,35 +74,22 @@ def format_mesh_repr(mesh, exclude_cache: bool = False) -> str:
     return "\n".join(lines)
 
 
-def _count_tensordict_fields(td: TensorDict, exclude_cache: bool = False) -> int:
+def _count_tensordict_fields(td: TensorDict) -> int:
     """Recursively count total number of fields in a TensorDict.
+
+    Counts both leaf tensors and intermediate (nested) TensorDict entries.
 
     Parameters
     ----------
     td : TensorDict
         TensorDict to count fields in.
-    exclude_cache : bool
-        If True, skip _cache keys.
 
     Returns
     -------
     int
         Total number of fields including nested fields.
     """
-    count = 0
-
-    for key, value in td.items():
-        # Skip _cache if requested
-        if exclude_cache and key == "_cache":
-            continue
-
-        count += 1
-
-        # If the value is a TensorDict, recursively count its fields
-        if isinstance(value, TensorDict):
-            count += _count_tensordict_fields(value, exclude_cache=exclude_cache)
-
-    return count
+    return len(list(td.keys(include_nested=True)))
 
 
 def _get_trailing_shape(tensor: torch.Tensor, batch_dims: int) -> tuple:
@@ -129,7 +113,7 @@ def _get_trailing_shape(tensor: torch.Tensor, batch_dims: int) -> tuple:
 
 
 def _format_tensordict_repr(
-    td: TensorDict, batch_dims: int, indent_level: int = 0, exclude_cache: bool = False
+    td: TensorDict, batch_dims: int, indent_level: int = 0
 ) -> str:
     """Format a TensorDict with proper indentation and colon alignment.
 
@@ -141,27 +125,19 @@ def _format_tensordict_repr(
         Number of batch dimensions (for computing trailing shapes).
     indent_level : int
         Current indentation level.
-    exclude_cache : bool
-        If True, skip _cache entries.
 
     Returns
     -------
     str
         Formatted string representation.
     """
-    # Get all keys, excluding _cache if requested
-    all_keys = [k for k in td.keys() if not (exclude_cache and k == "_cache")]
+    keys = sorted(list(td.keys()))
 
-    if len(all_keys) == 0:
+    if len(keys) == 0:
         return "{}"
 
-    # Sort alphabetically, but always put _cache at the end
-    regular_keys = sorted([k for k in all_keys if k != "_cache"])
-    cache_keys = [k for k in all_keys if k == "_cache"]
-    keys = regular_keys + cache_keys
-
     # Count total fields to decide on single-line vs multi-line
-    total_fields = _count_tensordict_fields(td, exclude_cache=exclude_cache)
+    total_fields = _count_tensordict_fields(td)
     use_multiline = total_fields > 3
 
     if not use_multiline:
@@ -177,7 +153,6 @@ def _format_tensordict_repr(
                     if hasattr(value, "batch_size")
                     else batch_dims,
                     indent_level=indent_level + 1,
-                    exclude_cache=exclude_cache,
                 )
                 items.append(f"{key}: {nested_repr}")
             else:
@@ -211,7 +186,6 @@ def _format_tensordict_repr(
                 if hasattr(value, "batch_size")
                 else batch_dims,
                 indent_level=indent_level + 1,
-                exclude_cache=exclude_cache,
             )
 
             # Check if nested repr is multiline

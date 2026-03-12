@@ -20,285 +20,65 @@ from typing import List
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from jaxtyping import Float
 
 import physicsnemo  # noqa: F401 for docs
-import physicsnemo.nn.module.fft as fft
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 
+# Import AFNO layers from physicsnemo.nn
+from physicsnemo.nn import AFNO2DLayer, AFNOMlp, AFNOPatchEmbed
+
 Tensor = torch.Tensor
 
-
-class AFNOMlp(nn.Module):
-    """Fully-connected Multi-layer perception used inside AFNO
-
-    Parameters
-    ----------
-    in_features : int
-        Input feature size
-    latent_features : int
-        Latent feature size
-    out_features : int
-        Output feature size
-    activation_fn :  nn.Module, optional
-        Activation function, by default nn.GELU
-    drop : float, optional
-        Drop out rate, by default 0.0
-    """
-
-    def __init__(
-        self,
-        in_features: int,
-        latent_features: int,
-        out_features: int,
-        activation_fn: nn.Module = nn.GELU(),
-        drop: float = 0.0,
-    ):
-        super().__init__()
-        self.fc1 = nn.Linear(in_features, latent_features)
-        self.act = activation_fn
-        self.fc2 = nn.Linear(latent_features, out_features)
-        self.drop = nn.Dropout(drop)
-
-    def forward(self, x: Tensor) -> Tensor:
-        x = self.fc1(x)
-        x = self.act(x)
-        x = self.drop(x)
-        x = self.fc2(x)
-        x = self.drop(x)
-        return x
+# Backward compatibility alias
+PatchEmbed = AFNOPatchEmbed
 
 
-class AFNO2DLayer(nn.Module):
-    """AFNO spectral convolution layer
-
-    Parameters
-    ----------
-    hidden_size : int
-        Feature dimensionality
-    num_blocks : int, optional
-        Number of blocks used in the block diagonal weight matrix, by default 8
-    sparsity_threshold : float, optional
-        Sparsity threshold (softshrink) of spectral features, by default 0.01
-    hard_thresholding_fraction : float, optional
-        Threshold for limiting number of modes used [0,1], by default 1
-    hidden_size_factor : int, optional
-        Factor to increase spectral features by after weight multiplication, by default 1
-    """
-
-    def __init__(
-        self,
-        hidden_size: int,
-        num_blocks: int = 8,
-        sparsity_threshold: float = 0.01,
-        hard_thresholding_fraction: float = 1,
-        hidden_size_factor: int = 1,
-    ):
-        super().__init__()
-        if not (hidden_size % num_blocks == 0):
-            raise ValueError(
-                f"hidden_size {hidden_size} should be divisible by num_blocks {num_blocks}"
-            )
-
-        self.hidden_size = hidden_size
-        self.sparsity_threshold = sparsity_threshold
-        self.num_blocks = num_blocks
-        self.block_size = self.hidden_size // self.num_blocks
-        self.hard_thresholding_fraction = hard_thresholding_fraction
-        self.hidden_size_factor = hidden_size_factor
-        self.scale = 0.02
-
-        self.w1 = nn.Parameter(
-            self.scale
-            * torch.randn(
-                2,
-                self.num_blocks,
-                self.block_size,
-                self.block_size * self.hidden_size_factor,
-            )
-        )
-        self.b1 = nn.Parameter(
-            self.scale
-            * torch.randn(2, self.num_blocks, self.block_size * self.hidden_size_factor)
-        )
-        self.w2 = nn.Parameter(
-            self.scale
-            * torch.randn(
-                2,
-                self.num_blocks,
-                self.block_size * self.hidden_size_factor,
-                self.block_size,
-            )
-        )
-        self.b2 = nn.Parameter(
-            self.scale * torch.randn(2, self.num_blocks, self.block_size)
-        )
-
-    def forward(self, x: Tensor) -> Tensor:
-        bias = x
-
-        dtype = x.dtype
-        x = x.float()
-        B, H, W, C = x.shape
-        # Using ONNX friendly FFT functions
-        x = fft.rfft2(x, dim=(1, 2), norm="ortho")
-        x_real, x_imag = fft.real(x), fft.imag(x)
-        x_real = x_real.reshape(B, H, W // 2 + 1, self.num_blocks, self.block_size)
-        x_imag = x_imag.reshape(B, H, W // 2 + 1, self.num_blocks, self.block_size)
-
-        o1_real = torch.zeros(
-            [
-                B,
-                H,
-                W // 2 + 1,
-                self.num_blocks,
-                self.block_size * self.hidden_size_factor,
-            ],
-            device=x.device,
-        )
-        o1_imag = torch.zeros(
-            [
-                B,
-                H,
-                W // 2 + 1,
-                self.num_blocks,
-                self.block_size * self.hidden_size_factor,
-            ],
-            device=x.device,
-        )
-        o2 = torch.zeros(x_real.shape + (2,), device=x.device)
-
-        total_modes = H // 2 + 1
-        kept_modes = int(total_modes * self.hard_thresholding_fraction)
-
-        o1_real[:, total_modes - kept_modes : total_modes + kept_modes, :kept_modes] = (
-            F.relu(
-                torch.einsum(
-                    "nyxbi,bio->nyxbo",
-                    x_real[
-                        :,
-                        total_modes - kept_modes : total_modes + kept_modes,
-                        :kept_modes,
-                    ],
-                    self.w1[0],
-                )
-                - torch.einsum(
-                    "nyxbi,bio->nyxbo",
-                    x_imag[
-                        :,
-                        total_modes - kept_modes : total_modes + kept_modes,
-                        :kept_modes,
-                    ],
-                    self.w1[1],
-                )
-                + self.b1[0]
-            )
-        )
-
-        o1_imag[:, total_modes - kept_modes : total_modes + kept_modes, :kept_modes] = (
-            F.relu(
-                torch.einsum(
-                    "nyxbi,bio->nyxbo",
-                    x_imag[
-                        :,
-                        total_modes - kept_modes : total_modes + kept_modes,
-                        :kept_modes,
-                    ],
-                    self.w1[0],
-                )
-                + torch.einsum(
-                    "nyxbi,bio->nyxbo",
-                    x_real[
-                        :,
-                        total_modes - kept_modes : total_modes + kept_modes,
-                        :kept_modes,
-                    ],
-                    self.w1[1],
-                )
-                + self.b1[1]
-            )
-        )
-
-        o2[
-            :, total_modes - kept_modes : total_modes + kept_modes, :kept_modes, ..., 0
-        ] = (
-            torch.einsum(
-                "nyxbi,bio->nyxbo",
-                o1_real[
-                    :, total_modes - kept_modes : total_modes + kept_modes, :kept_modes
-                ],
-                self.w2[0],
-            )
-            - torch.einsum(
-                "nyxbi,bio->nyxbo",
-                o1_imag[
-                    :, total_modes - kept_modes : total_modes + kept_modes, :kept_modes
-                ],
-                self.w2[1],
-            )
-            + self.b2[0]
-        )
-
-        o2[
-            :, total_modes - kept_modes : total_modes + kept_modes, :kept_modes, ..., 1
-        ] = (
-            torch.einsum(
-                "nyxbi,bio->nyxbo",
-                o1_imag[
-                    :, total_modes - kept_modes : total_modes + kept_modes, :kept_modes
-                ],
-                self.w2[0],
-            )
-            + torch.einsum(
-                "nyxbi,bio->nyxbo",
-                o1_real[
-                    :, total_modes - kept_modes : total_modes + kept_modes, :kept_modes
-                ],
-                self.w2[1],
-            )
-            + self.b2[1]
-        )
-
-        x = F.softshrink(o2, lambd=self.sparsity_threshold)
-        x = fft.view_as_complex(x)
-        # TODO(akamenev): replace the following branching with
-        # a one-liner, something like x.reshape(..., -1).squeeze(-1),
-        # but this currently fails during ONNX export.
-        if torch.onnx.is_in_onnx_export():
-            x = x.reshape(B, H, W // 2 + 1, C, 2)
-        else:
-            x = x.reshape(B, H, W // 2 + 1, C)
-        # Using ONNX friendly FFT functions
-        x = fft.irfft2(x, s=(H, W), dim=(1, 2), norm="ortho")
-        x = x.type(dtype)
-
-        return x + bias
-
-
-class Block(nn.Module):
-    """AFNO block, spectral convolution and MLP
+class Block(Module):
+    r"""AFNO block consisting of spectral convolution and MLP.
 
     Parameters
     ----------
     embed_dim : int
-        Embedded feature dimensionality
-    num_blocks : int, optional
-        Number of blocks used in the block diagonal weight matrix, by default 8
-    mlp_ratio : float, optional
-        Ratio of MLP latent variable size to input feature size, by default 4.0
-    drop : float, optional
-        Drop out rate in MLP, by default 0.0
-    activation_fn: nn.Module, optional
-        Activation function used in MLP, by default nn.GELU
-    norm_layer : nn.Module, optional
-        Normalization function, by default nn.LayerNorm
-    double_skip : bool, optional
-        Residual, by default True
-    sparsity_threshold : float, optional
-        Sparsity threshold (softshrink) of spectral features, by default 0.01
-    hard_thresholding_fraction : float, optional
-        Threshold for limiting number of modes used [0,1], by default 1
+        Embedded feature dimensionality.
+    num_blocks : int, optional, default=8
+        Number of blocks used in the block diagonal weight matrix.
+    mlp_ratio : float, optional, default=4.0
+        Ratio of MLP latent variable size to input feature size.
+    drop : float, optional, default=0.0
+        Drop out rate in MLP.
+    activation_fn : nn.Module, optional, default=nn.GELU()
+        Activation function used in MLP.
+    norm_layer : nn.Module, optional, default=nn.LayerNorm
+        Normalization function.
+    double_skip : bool, optional, default=True
+        Whether to use double skip connections.
+    sparsity_threshold : float, optional, default=0.01
+        Sparsity threshold (softshrink) of spectral features.
+    hard_thresholding_fraction : float, optional, default=1.0
+        Threshold for limiting number of modes used, in range ``[0, 1]``.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, H, W, C)` where :math:`B` is batch size,
+        :math:`H, W` are spatial dimensions, and :math:`C` is ``embed_dim``.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(B, H, W, C)`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.models.afno.afno import Block
+    >>> block = Block(embed_dim=64, num_blocks=8)
+    >>> x = torch.randn(2, 8, 8, 64)  # (B, H, W, C)
+    >>> out = block(x)
+    >>> out.shape
+    torch.Size([2, 8, 8, 64])
     """
 
     def __init__(
@@ -318,7 +98,6 @@ class Block(nn.Module):
         self.filter = AFNO2DLayer(
             embed_dim, num_blocks, sparsity_threshold, hard_thresholding_fraction
         )
-        # self.drop_path = nn.Identity()
         self.norm2 = norm_layer(embed_dim)
         mlp_latent_dim = int(embed_dim * mlp_ratio)
         self.mlp = AFNOMlp(
@@ -330,7 +109,8 @@ class Block(nn.Module):
         )
         self.double_skip = double_skip
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Float[Tensor, "B H W C"]) -> Float[Tensor, "B H W C"]:
+        r"""Forward pass of the AFNO block."""
         residual = x
         x = self.norm1(x)
         x = self.filter(x)
@@ -342,54 +122,6 @@ class Block(nn.Module):
         x = self.norm2(x)
         x = self.mlp(x)
         x = x + residual
-        return x
-
-
-class PatchEmbed(nn.Module):
-    """Patch embedding layer
-
-    Converts 2D patch into a 1D vector for input to AFNO
-
-    Parameters
-    ----------
-    inp_shape : List[int]
-        Input image dimensions [height, width]
-    in_channels : int
-        Number of input channels
-    patch_size : List[int], optional
-        Size of image patches, by default [16, 16]
-    embed_dim : int, optional
-        Embedded channel size, by default 256
-    """
-
-    def __init__(
-        self,
-        inp_shape: List[int],
-        in_channels: int,
-        patch_size: List[int] = [16, 16],
-        embed_dim: int = 256,
-    ):
-        super().__init__()
-        if len(inp_shape) != 2:
-            raise ValueError("inp_shape should be a list of length 2")
-        if len(patch_size) != 2:
-            raise ValueError("patch_size should be a list of length 2")
-
-        num_patches = (inp_shape[1] // patch_size[1]) * (inp_shape[0] // patch_size[0])
-        self.inp_shape = inp_shape
-        self.patch_size = patch_size
-        self.num_patches = num_patches
-        self.proj = nn.Conv2d(
-            in_channels, embed_dim, kernel_size=patch_size, stride=patch_size
-        )
-
-    def forward(self, x: Tensor) -> Tensor:
-        B, C, H, W = x.shape
-        if not (H == self.inp_shape[0] and W == self.inp_shape[1]):
-            raise ValueError(
-                f"Input image size ({H}*{W}) doesn't match model ({self.inp_shape[0]}*{self.inp_shape[1]})."
-            )
-        x = self.proj(x).flatten(2).transpose(1, 2)
         return x
 
 
@@ -410,39 +142,53 @@ class MetaData(ModelMetaData):
 
 
 class AFNO(Module):
-    """Adaptive Fourier neural operator (AFNO) model.
+    r"""Adaptive Fourier neural operator (AFNO) model.
 
-    Note
-    ----
-    AFNO is a model that is designed for 2D images only.
+    AFNO is a model that is designed for 2D images only. It combines patch
+    embedding with spectral convolution blocks in the Fourier domain.
 
     Parameters
     ----------
     inp_shape : List[int]
-        Input image dimensions [height, width]
+        Input image dimensions as ``[height, width]``.
     in_channels : int
-        Number of input channels
-    out_channels: int
-        Number of output channels
-    patch_size : List[int], optional
-        Size of image patches, by default [16, 16]
-    embed_dim : int, optional
-        Embedded channel size, by default 256
-    depth : int, optional
-        Number of AFNO layers, by default 4
-    mlp_ratio : float, optional
-        Ratio of layer MLP latent variable size to input feature size, by default 4.0
-    drop_rate : float, optional
-        Drop out rate in layer MLPs, by default 0.0
-    num_blocks : int, optional
-        Number of blocks in the block-diag frequency weight matrices, by default 16
-    sparsity_threshold : float, optional
-        Sparsity threshold (softshrink) of spectral features, by default 0.01
-    hard_thresholding_fraction : float, optional
-        Threshold for limiting number of modes used [0,1], by default 1
+        Number of input channels.
+    out_channels : int
+        Number of output channels.
+    patch_size : List[int], optional, default=[16, 16]
+        Size of image patches as ``[patch_height, patch_width]``.
+    embed_dim : int, optional, default=256
+        Embedded channel size.
+    depth : int, optional, default=4
+        Number of AFNO layers.
+    mlp_ratio : float, optional, default=4.0
+        Ratio of layer MLP latent variable size to input feature size.
+    drop_rate : float, optional, default=0.0
+        Drop out rate in layer MLPs.
+    num_blocks : int, optional, default=16
+        Number of blocks in the block-diag frequency weight matrices.
+    sparsity_threshold : float, optional, default=0.01
+        Sparsity threshold (softshrink) of spectral features.
+    hard_thresholding_fraction : float, optional, default=1.0
+        Threshold for limiting number of modes used, in range ``[0, 1]``.
 
-    Example
+    Forward
     -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, C_{in}, H, W)` where :math:`B` is batch
+        size, :math:`C_{in}` is the number of input channels, and :math:`H, W` are
+        spatial dimensions matching ``inp_shape``.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(B, C_{out}, H, W)` where :math:`C_{out}` is
+        ``out_channels``.
+
+    Examples
+    --------
+    >>> import torch
+    >>> import physicsnemo
     >>> model = physicsnemo.models.afno.AFNO(
     ...     inp_shape=[32, 32],
     ...     in_channels=2,
@@ -452,15 +198,17 @@ class AFNO(Module):
     ...     depth=2,
     ...     num_blocks=2,
     ... )
-    >>> input = torch.randn(32, 2, 32, 32) #(N, C, H, W)
+    >>> input = torch.randn(32, 2, 32, 32)  # (N, C, H, W)
     >>> output = model(input)
     >>> output.size()
     torch.Size([32, 1, 32, 32])
 
-    Note
-    ----
-    Reference: Guibas, John, et al. "Adaptive fourier neural operators:
-    Efficient token mixers for transformers." arXiv preprint arXiv:2111.13587 (2021).
+    See Also
+    --------
+    :class:`~physicsnemo.models.afno.distributed.DistributedAFNO` :
+        Distributed (model-parallel) AFNO for multi-GPU training.
+    `Adaptive Fourier Neural Operator (AFNO) <https://arxiv.org/abs/2111.13587>`_ :
+        Original AFNO paper.
     """
 
     def __init__(
@@ -498,7 +246,7 @@ class AFNO(Module):
         self.num_blocks = num_blocks
         norm_layer = partial(nn.LayerNorm, eps=1e-6)
 
-        self.patch_embed = PatchEmbed(
+        self.patch_embed = AFNOPatchEmbed(
             inp_shape=inp_shape,
             in_channels=self.in_chans,
             patch_size=self.patch_size,
@@ -536,8 +284,14 @@ class AFNO(Module):
         torch.nn.init.trunc_normal_(self.pos_embed, std=0.02)
         self.apply(self._init_weights)
 
-    def _init_weights(self, m):
-        """Init model weights"""
+    def _init_weights(self, m: nn.Module) -> None:
+        r"""Initialize model weights.
+
+        Parameters
+        ----------
+        m : nn.Module
+            Module to initialize.
+        """
         if isinstance(m, nn.Linear):
             torch.nn.init.trunc_normal_(m.weight, std=0.02)
             if isinstance(m, nn.Linear) and m.bias is not None:
@@ -546,34 +300,60 @@ class AFNO(Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    # What is this for
-    # @torch.jit.ignore
-    # def no_weight_decay(self):
-    #     return {"pos_embed", "cls_token"}
+    def _forward_features(
+        self, x: Float[Tensor, "B C H W"]
+    ) -> Float[Tensor, "B H W D"]:
+        r"""Forward pass of core AFNO feature extraction.
 
-    def forward_features(self, x: Tensor) -> Tensor:
-        """Forward pass of core AFNO"""
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input tensor of shape :math:`(B, C_{in}, H, W)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Features of shape :math:`(B, h, w, D)` where :math:`h, w` are patch
+            grid dimensions and :math:`D` is ``embed_dim``.
+        """
         B = x.shape[0]
+
+        # Embed patches and add positional encoding
         x = self.patch_embed(x)
         x = x + self.pos_embed
         x = self.pos_drop(x)
 
+        # Reshape to 2D grid and apply blocks
         x = x.reshape(B, self.h, self.w, self.embed_dim)
         for blk in self.blocks:
             x = blk(x)
 
         return x
 
-    def forward(self, x: Tensor) -> Tensor:
-        x = self.forward_features(x)
+    def forward(self, x: Float[Tensor, "B C_in H W"]) -> Float[Tensor, "B C_out H W"]:
+        r"""Forward pass of the AFNO model."""
+        # Input validation: single check against expected shape (B, in_chans, H, W)
+        if not torch.compiler.is_compiling():
+            expected = (
+                self.in_chans,
+                self.inp_shape[0],
+                self.inp_shape[1],
+            )
+            if x.ndim != 4 or (x.shape[1], x.shape[2], x.shape[3]) != expected:
+                raise ValueError(
+                    f"Expected input shape (B, {expected[0]}, {expected[1]}, {expected[2]}), "
+                    f"got {tuple(x.shape)}"
+                )
+
+        # Extract features through AFNO blocks
+        x = self._forward_features(x)
+
+        # Project to output channels
         x = self.head(x)
 
-        # Correct tensor shape back into [B, C, H, W]
-        # [b h w (p1 p2 c_out)]
+        # Reshape tensor back into [B, C, H, W]
         out = x.view(list(x.shape[:-1]) + [self.patch_size[0], self.patch_size[1], -1])
-        # [b h w p1 p2 c_out]
         out = torch.permute(out, (0, 5, 1, 3, 2, 4))
-        # [b c_out, h, p1, w, p2]
         out = out.reshape(list(out.shape[:2]) + [self.inp_shape[0], self.inp_shape[1]])
-        # [b c_out, (h*p1), (w*p2)]
+
         return out

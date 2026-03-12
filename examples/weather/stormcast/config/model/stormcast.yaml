@@ -24,7 +24,15 @@ diffusion_conditions: ["state", "regression", "invariant"] # list consisting of 
 
 # Model hyperparameters
 spatial_pos_embed: False # Whether or not to add an additive position embed after the first conv in the U-Net
-attn_resolutions: [] # Internal resolutions within the U-Net to apply self-attention (empty list == no self-attention)
+model_type: "SongUNetPosEmbd" # Model class to use
+# Example overrides for architecture hyperparameters (uncomment to customize)
+# hyperparameters:
+#   channel_mult: [1, 2, 2]
+#   num_blocks: 2
+#   model_channels: 128
+#   attn_resolutions: [] # Internal resolutions within the U-Net to apply self-attention
+#   bottleneck_attention: false
+#   checkpoint_level: 0
 
 # Pretrained regression model
 regression_weights: "stormcast_checkpoints/regression/UNet.0.0.mdlus" # Path to pretrained regression network,

@@ -14,18 +14,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 import os
+
+# Set before any import that might load HDF5 to avoid [Errno -101] NetCDF: HDF
+# error when opening .nc on bind-mounted /workspace.
+if "HDF5_USE_FILE_LOCKING" not in os.environ:
+    os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+
+# Import netCDF4 before h5py (or other HDF5-using packages) so they share the
+# same HDF5 linkage and avoid library version conflict -101 errors.
+try:
+    import netCDF4  # noqa: F401
+except ImportError:
+    pass
+
+import importlib
+import importlib.util
 import pathlib
 import random
 from collections import defaultdict
+from importlib import metadata
 
 import numpy as np
 import pytest
 import torch
+from packaging.requirements import Requirement
+from packaging.version import Version
 
 NFS_DATA_PATH = "/data/nfs/modulus-data"
-
 
 # Total time per file
 file_timings = defaultdict(float)
@@ -72,10 +88,15 @@ def pytest_addoption(parser):
 
 @pytest.fixture(scope="session")
 def nfs_data_dir(request):
-    data_dir = pathlib.Path(
-        request.config.getoption("--nfs-data-dir")
-        or os.environ.get("TEST_DATA_DIR", NFS_DATA_PATH)
-    )
+    nfs_data_dir_opt = request.config.getoption("--nfs-data-dir")
+    test_data_dir_env = os.environ.get("TEST_DATA_DIR")
+    if nfs_data_dir_opt:
+        data_dir = pathlib.Path(nfs_data_dir_opt)
+    elif test_data_dir_env:
+        # get-data clones into $(TEST_DATA_DIR)/modulus-data
+        data_dir = pathlib.Path(test_data_dir_env) / "modulus-data"
+    else:
+        data_dir = pathlib.Path(NFS_DATA_PATH)
     if not data_dir.exists():
         pytest.skip(
             "NFS volumes not set up with CI data repo. Run `make get-data` from the root directory of the repo"
@@ -151,22 +172,42 @@ def pytest_collection_modifyitems(config, items):
                 item.add_marker(skip_all)
 
 
+def _check_requirement(spec):
+    """
+    Return True if the requirement is satisfied, False otherwise.
+
+    Spec may be a plain module name (e.g. "zarr") or a name with version
+    specifier (e.g. "zarr>=3.0.0"). Uses packaging.requirements.Requirement
+    for parsing and importlib.metadata for the installed version.
+    """
+    req = Requirement(spec)
+    module_name = req.name
+    if importlib.util.find_spec(module_name) is None:
+        return False
+    if req.specifier:
+        try:
+            installed = metadata.version(module_name)
+        except Exception:
+            return False
+        if Version(installed) not in req.specifier:
+            return False
+    return True
+
+
 def requires_module(names):
     """
-    Decorator to skip a test if *any* of the given modules are missing.
-    Accepts a single module name or a list/tuple of names.
+    Decorator to skip a test if *any* of the given modules are missing
+    or do not satisfy the requested version.
+
+    Accepts a single spec or a list/tuple of specs. Each spec may be a
+    module name (e.g. ``"zarr"``) or a name with version specifier
+    (e.g. ``"zarr>=3.0.0"``).
     """
     if isinstance(names, str):
         names = [names]
 
-    missing = [n for n in names if importlib.util.find_spec(n) is None]
-
-    if missing:
-        reason = f"Missing dependencies: {', '.join(missing)}"
-        return pytest.mark.skipif(True, reason=reason)
-    else:
-        # No missing dependencies → no skip mark
-        return pytest.mark.skipif(False, reason="")
+    skip = not all(_check_requirement(spec) for spec in names)
+    return pytest.mark.skipif(skip, reason="")
 
 
 @pytest.fixture(params=["cpu"] + (["cuda:0"] if torch.cuda.is_available() else []))

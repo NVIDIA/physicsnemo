@@ -25,6 +25,68 @@ we will get back to you.
 
 ## Contribute to PhysicsNeMo-Core
 
+### Codebase Structure
+
+- [physicsnemo](physicsnemo) The core python components of the framework live
+here.  They are listed below not alphabetically but in hierarchical order
+(foundational layers first)
+  - [core](physicsnemo/core) Core utilities for `physicsnemo`, including
+  tools for model registration, filesystems, warnings, and optional imports.
+  - [distributed](physicsnemo/distributed) Basic distributed utilities to
+  enable data parallel training, and some advanced functionality such as
+  distributed FFTs and more sophisticated functional calls with autograd enabled.
+  - [utils](physicsnemo/utils) Utility tools common across physicsnemo.
+  Includes profiling tools, logging tools, model checkpointing and restoration
+  tools.  Note that model-specific tools should *not* go here.  Several
+  classes here are slowly being migrated to other locations or deprecated.
+  - [nn](physicsnemo/nn) `physicsnemo` offers a number of GPU-optimized,
+  standalone layers and functions through `physicsnemo.nn` and
+  `physicsnemo.nn.functional`, with a similar interface to `torch.nn`.
+  These layers are meant to be compatible with `torch` modules and you
+  should feel free to mix and match them into your models.  We offer,
+  for several functional calls, highly optimized and custom backends with
+  significant speedups over pytorch - see our documentation to learn more.
+  - [models](physicsnemo/models) Our model repository contains a set of
+  popular scientific AI models implemented with performance enhancements or
+  other features not easily available elsewhere. Many models are also
+  featured in training recipes in [examples](examples).
+  - [datapipes](physicsnemo/datapipes) offers GPU-accelerated datapipes for
+  scientific AI datasets.  We offer both bespoke datapipes for specific
+  problems, as well as a generic, GPU-focused data pipe abstraction similar
+  to `torchvision`.  This is designed to enable GPU preprocessing of high
+  resolution scientific data needed for AI for Science.
+  - [metrics](physicsnemo/metrics) A collection of general as well as domain
+  specific metrics for AI for Science model training and inference.
+  - [domain_parallel](physicsnemo/domain_parallel) Unique to PhysicsNeMo, the
+  `ShardTensor` abstraction provides a generic interface for domain
+  parallelism enabling extremely high resolution data training on batch size
+  per GPU < 1.  Read our
+  [documentation](https://docs.nvidia.com/physicsnemo/latest/user-guide/domain_parallelism_entry_point.html)
+  to find out more.
+  - [active_learning](physicsnemo/active_learning) The Active Learning module
+  provides scaffolding for building automated and end-to-end workflows using
+  active learning techniques.
+  - [diffusion](physicsnemo/diffusion) `physicsnemo` diffusion offers a
+  powerful, yet abstracted, collection of diffusion tools to build, train,
+  and inference a diffusion workflow for scientific problems.
+  - [experimental](physicsnemo/experimental) New functionality that may not
+  yet be API-stable is introduced through the experimental layer.  The
+  experimental folder mimics the physicsnemo structure under it's own
+  namespace, though only in places actively under development.  Models
+  especially are always introduced through experimental.
+- [test](test) `physicsnemo` tests live here.  New functionality in the core
+repository must include test coverage here.  Example code can not be tested
+from this folder but must be tested in examples.
+- [benchmarks](benchmarks) We have automated benchmarking tools for several
+components in the library - it's not expected that external contributions will
+need to know what's in this folder, though you're welcome to explore and
+investigate as you like.
+- [docs](docs) Our core documentation folder for the `physicsnemo` API.
+If you submit changes to the API, we welcome you to update the docs as well.
+- [examples](examples) We have a variety of examples to demonstrate the
+functionality of `physicsnemo` to explore.  Please visit the examples folder
+and README to learn more.
+
 ### Coding Style
 
 Beyond using standard tools for formatting and linting, we document and enforce

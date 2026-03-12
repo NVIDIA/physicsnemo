@@ -26,20 +26,17 @@ import numpy as np
 
 # distributed stuff
 import torch
-import xarray as xr
-
-# Internal modules
-from dask.diagnostics import ProgressBar
-
-# External modules
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.distributed import DistributedManager
 
 from .coupledtimeseries_dataset import CoupledTimeSeriesDataset
 from .timeseries_dataset import TimeSeriesDataset
+
+xr = OptionalImport("xarray")
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +72,7 @@ def open_time_series_dataset_classic_on_the_fly(
     suffix: Optional[str] = None,
     batch_size: int = 32,
     scaling: Optional[DictConfig] = None,
-) -> xr.Dataset:
+) -> "xr.Dataset":
     """
     Opens and merges multiple datasets that that contain individual variables
     into a single dataset
@@ -187,7 +184,7 @@ def open_time_series_dataset_classic_on_the_fly(
 
 def open_time_series_dataset_classic_prebuilt(
     directory: str, dataset_name: str, constants: bool = False, batch_size: int = 32
-) -> xr.Dataset:
+) -> "xr.Dataset":
     """
     Opens an existing dataset
 
@@ -228,7 +225,7 @@ def create_time_series_dataset_classic(
     batch_size: int = 32,
     scaling: Optional[DictConfig] = None,
     overwrite: bool = False,
-) -> xr.Dataset:
+) -> "xr.Dataset":
     """
     Opens and merges multiple datasets that that contain individual variables
     into a single dataset
@@ -355,9 +352,8 @@ def create_time_series_dataset_classic(
     # writing out
     def _write_zarr(data, path):
         write_job = data.to_zarr(path, compute=False, mode="w")
-        with ProgressBar():
-            logger.info(f"writing dataset to {path}")
-            write_job.compute()
+        logger.info(f"writing dataset to {path}")
+        write_job.compute()
 
     _write_zarr(data=result, path=dst_zarr)
 

@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""DPOT models (2D/3D AFNO variants)."""
+
 from .dpot import DPOTNet
 
 __all__ = ["DPOTNet"]

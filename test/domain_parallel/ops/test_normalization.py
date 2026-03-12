@@ -37,7 +37,8 @@ from .utils import generate_image_like_data, numerical_shard_tensor_check
 @pytest.mark.multigpu_static
 @pytest.mark.parametrize("affine", [True, False])
 @pytest.mark.parametrize("backward", [False])
-def test_layer_norm_1d(distributed_mesh, affine, backward):
+@pytest.mark.parametrize("amp", [False, True])
+def test_layer_norm_1d(distributed_mesh, affine, backward, amp):
     if affine:
         pytest.xfail("LayerNorm with affine=True is currently failing tests")
 
@@ -56,8 +57,17 @@ def test_layer_norm_1d(distributed_mesh, affine, backward):
 
     module = torch.nn.LayerNorm(normalized_shape=H, elementwise_affine=affine)
 
+    atol, rtol = (1e-2, 1e-2) if amp else (1e-5, 1e-5)
+
     numerical_shard_tensor_check(
-        distributed_mesh, module, [sharded_image], {}, check_grads=backward
+        distributed_mesh,
+        module,
+        [sharded_image],
+        {},
+        check_grads=backward,
+        atol=atol,
+        rtol=rtol,
+        amp=amp,
     )
 
 
@@ -70,9 +80,10 @@ def test_layer_norm_1d(distributed_mesh, affine, backward):
     ],
 )
 @pytest.mark.parametrize("affine", [True, False])
-@pytest.mark.parametrize("backward", [False, True])
-def test_group_norm_1d(distributed_mesh, num_groups, affine, backward):
-    H = 256
+@pytest.mark.parametrize("backward", [True, False])
+@pytest.mark.parametrize("amp", [True, False])
+def test_group_norm_1d(distributed_mesh, num_groups, affine, backward, amp):
+    H = 257
     C_in = 256
 
     dm = DistributedManager()
@@ -95,12 +106,15 @@ def test_group_norm_1d(distributed_mesh, num_groups, affine, backward):
 
     module = torch.nn.GroupNorm(num_groups=num_groups, num_channels=C_in, affine=affine)
 
+    atol, rtol = (1e-3, 1e-3) if amp else (1e-5, 1e-5)
+
     numerical_shard_tensor_check(
         distributed_mesh,
         module,
         [sharded_image],
         {},
         check_grads=backward,
-        atol=1e-5,
-        rtol=1e-5,
+        atol=atol,
+        rtol=rtol,
+        amp=amp,
     )

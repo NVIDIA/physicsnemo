@@ -15,30 +15,24 @@
 # limitations under the License.
 
 
-import numpy as np
-import torch
-import vtk
-
-try:
-    import nvidia.dali as dali
-    import nvidia.dali.plugin.pytorch as dali_pth
-except ImportError:
-    raise ImportError(
-        "DALI dataset requires NVIDIA DALI package to be installed. "
-        + "The package can be installed at:\n"
-        + "https://docs.nvidia.com/deeplearning/dali/user-guide/docs/installation.html"
-    )
-
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Tuple, Union
 
+import numpy as np
+import torch
 from torch import Tensor
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
 
 from .readers import read_cgns, read_vtp, read_vtu
+
+# Lazy imports for optional dependencies
+dali = OptionalImport("nvidia.dali")
+dali_pth = OptionalImport("nvidia.dali.plugin.pytorch")
+vtk = OptionalImport("vtk")
 
 
 @dataclass
