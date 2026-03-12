@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Adds GLOBE model (`physicsnemo.experimental.models.globe.model.GLOBE`),
   including new variant that uses a dual tree traversal algorithm to
-  fundamentally reduce the complexity of the kernel evaluations from O(n^2) to
+  fundamentally reduce the complexity of the kernel evaluations from O(N^2) to
   O(N).
 - Adds GLOBE AirFRANS example case (`examples/cfd/external_aerodynamics/globe/airfrans`)
 - PhysicsNeMo-Mesh now supports conversion from PyVista/VTK/VTU meshes that may
