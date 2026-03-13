@@ -33,12 +33,156 @@ from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.nn import Mlp
 from physicsnemo.nn.module.physics_attention import (
     PhysicsAttentionIrregularMesh,
+    PhysicsAttentionStructuredMesh2D,
+    PhysicsAttentionStructuredMesh3D,
 )
 
 # Check optional dependency availability
 TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
 if TE_AVAILABLE:
     import transformer_engine.pytorch as te
+
+
+def _gale_compute_slice_attention_cross(
+    module: nn.Module,
+    slice_tokens: list[Float[torch.Tensor, "batch heads slices dim"]],
+    context: Float[torch.Tensor, "batch heads context_slices context_dim"],
+) -> list[Float[torch.Tensor, "batch heads slices dim"]]:
+    r"""Shared cross-attention between slice tokens and context.
+
+    Used by :class:`GALE` and :class:`_GALEStructuredForwardMixin` so the
+    cross-attention implementation lives in one place. Projects queries from
+    concatenated slice tokens, keys and values from context; runs Transformer
+    Engine or SDPA attention; splits the result back to one tensor per input.
+
+    Parameters
+    ----------
+    module : nn.Module
+        Module with ``cross_q``, ``cross_k``, ``cross_v``, ``use_te``,
+        ``heads``, ``dim_head``, and (if ``use_te``) ``attn_fn``.
+    slice_tokens : list[torch.Tensor]
+        One tensor per input, each of shape :math:`(B, H, S, D)`.
+    context : torch.Tensor
+        Context tensor of shape :math:`(B, H, S_c, D_c)`.
+
+    Returns
+    -------
+    list[torch.Tensor]
+        One cross-attention output per element of ``slice_tokens``, each
+        of shape :math:`(B, H, S, D)`.
+    """
+    q_input = torch.cat(slice_tokens, dim=-2)
+    q = module.cross_q(q_input)
+    k = module.cross_k(context)
+    v = module.cross_v(context)
+    if module.use_te:
+        q = rearrange(q, "b h s d -> b s h d")
+        k = rearrange(k, "b h s d -> b s h d")
+        v = rearrange(v, "b h s d -> b s h d")
+        cross_attention = module.attn_fn(q, k, v)
+        cross_attention = rearrange(
+            cross_attention,
+            "b s (h d) -> b h s d",
+            h=module.heads,
+            d=module.dim_head,
+        )
+    else:
+        cross_attention = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, is_causal=False
+        )
+    cross_attention = torch.split(
+        cross_attention, slice_tokens[0].shape[-2], dim=-2
+    )
+    return list(cross_attention)
+
+
+def _gale_forward_impl(
+    module: nn.Module,
+    x: tuple[Float[torch.Tensor, "batch tokens channels"], ...],
+    context: Float[torch.Tensor, "batch heads context_slices context_dim"]
+    | None,
+) -> list[Float[torch.Tensor, "batch tokens channels"]]:
+    r"""Single implementation of the GALE forward pipeline.
+
+    Shared by :class:`GALE` and :class:`_GALEStructuredForwardMixin`. Steps:
+    validate inputs; project onto slices; compute slice weights and tokens;
+    apply self-attention on slices; optionally cross-attend to context and
+    mix with ``state_mixing``; project attention outputs back to token space.
+
+    Parameters
+    ----------
+    module : nn.Module
+        GALE-like module with ``project_input_onto_slices``,
+        ``in_project_slice``, ``_compute_slices_from_projections``,
+        ``_compute_slice_attention_te``, ``_compute_slice_attention_sdpa``,
+        ``compute_slice_attention_cross``, ``_project_attention_outputs``,
+        plus attributes ``use_te``, ``plus``, ``state_mixing``.
+    x : tuple[torch.Tensor, ...]
+        Input tensors, each of shape :math:`(B, N, C)`; must be non-empty.
+    context : torch.Tensor or None
+        Optional context of shape :math:`(B, H, S_c, D_c)` for cross-attention.
+        If ``None``, only self-attention is applied.
+
+    Returns
+    -------
+    list[torch.Tensor]
+        One output tensor per input, each of shape :math:`(B, N, C)`.
+
+    Raises
+    ------
+    ValueError
+        If ``x`` is empty or any element is not 3D.
+    """
+    if not torch.compiler.is_compiling():
+        if len(x) == 0:
+            raise ValueError("Expected non-empty tuple of input tensors")
+        for i, tensor in enumerate(x):
+            if tensor.ndim != 3:
+                raise ValueError(
+                    f"Expected 3D input tensor (B, N, C) at index {i}, "
+                    f"got {tensor.ndim}D tensor with shape {tuple(tensor.shape)}"
+                )
+    if module.plus:
+        x_mid = [module.project_input_onto_slices(_x) for _x in x]
+        fx_mid = [_x_mid for _x_mid in x_mid]
+    else:
+        x_mid, fx_mid = zip(
+            *[module.project_input_onto_slices(_x) for _x in x]
+        )
+    slice_projections = [module.in_project_slice(_x_mid) for _x_mid in x_mid]
+    slice_weights, slice_tokens = zip(
+        *[
+            module._compute_slices_from_projections(proj, _fx_mid)
+            for proj, _fx_mid in zip(slice_projections, fx_mid)
+        ]
+    )
+    if module.use_te:
+        self_slice_token = [
+            module._compute_slice_attention_te(_slice_token)
+            for _slice_token in slice_tokens
+        ]
+    else:
+        self_slice_token = [
+            module._compute_slice_attention_sdpa(_slice_token)
+            for _slice_token in slice_tokens
+        ]
+    if context is not None:
+        cross_slice_token = [
+            module.compute_slice_attention_cross([_slice_token], context)[0]
+            for _slice_token in slice_tokens
+        ]
+        mixing_weight = torch.sigmoid(module.state_mixing)
+        out_slice_token = [
+            mixing_weight * sst + (1 - mixing_weight) * cst
+            for sst, cst in zip(self_slice_token, cross_slice_token)
+        ]
+    else:
+        out_slice_token = self_slice_token
+    outputs = [
+        module._project_attention_outputs(ost, sw)
+        for ost, sw in zip(out_slice_token, slice_weights)
+    ]
+    return outputs
 
 
 class GALE(PhysicsAttentionIrregularMesh):
@@ -121,7 +265,7 @@ class GALE(PhysicsAttentionIrregularMesh):
     ) -> None:
         super().__init__(dim, heads, dim_head, dropout, slice_num, use_te, plus)
 
-        linear_layer = te.Linear if self.use_te else nn.Linear
+        linear_layer = te.Linear if (self.use_te and TE_AVAILABLE) else nn.Linear
 
         # Cross-attention projection layers for context integration
         self.cross_q = linear_layer(dim_head, dim_head)
@@ -154,38 +298,9 @@ class GALE(PhysicsAttentionIrregularMesh):
         list[torch.Tensor]
             List of cross-attention outputs, each of shape :math:`(B, H, S, D)`.
         """
-        # Concatenate all slice tokens for batched projection
-        q_input = torch.cat(slice_tokens, dim=-2)  # (B, H, total_slices, D)
-
-        # Project queries from slice tokens
-        q = self.cross_q(q_input)  # (B, H, total_slices, D)
-
-        # Project keys and values from context
-        k = self.cross_k(context)  # (B, H, S_c, D)
-        v = self.cross_v(context)  # (B, H, S_c, D)
-
-        # Compute cross-attention using appropriate backend
-        if self.use_te:
-            # Transformer Engine expects (B, S, H, D) format
-            q = rearrange(q, "b h s d -> b s h d")
-            k = rearrange(k, "b h s d -> b s h d")
-            v = rearrange(v, "b h s d -> b s h d")
-            cross_attention = self.attn_fn(q, k, v)
-            cross_attention = rearrange(
-                cross_attention, "b s (h d) -> b h s d", h=self.heads, d=self.dim_head
-            )
-        else:
-            # Use PyTorch's scaled dot-product attention
-            cross_attention = torch.nn.functional.scaled_dot_product_attention(
-                q, k, v, is_causal=False
-            )
-
-        # Split back into individual slice token outputs
-        cross_attention = torch.split(
-            cross_attention, slice_tokens[0].shape[-2], dim=-2
+        return _gale_compute_slice_attention_cross(
+            self, slice_tokens, context
         )
-
-        return list(cross_attention)
 
     def forward(
         self,
@@ -216,74 +331,102 @@ class GALE(PhysicsAttentionIrregularMesh):
             List of output tensors, each of shape :math:`(B, N, C)``, same shape
             as inputs.
         """
-        ### Input validation
-        if not torch.compiler.is_compiling():
-            if len(x) == 0:
-                raise ValueError("Expected non-empty tuple of input tensors")
-            for i, tensor in enumerate(x):
-                if tensor.ndim != 3:
-                    raise ValueError(
-                        f"Expected 3D input tensor (B, N, C) at index {i}, "
-                        f"got {tensor.ndim}D tensor with shape {tuple(tensor.shape)}"
-                    )
+        return _gale_forward_impl(self, x, context)
 
-        # Project inputs onto learned latent spaces
-        if self.plus:
-            x_mid = [self.project_input_onto_slices(_x) for _x in x]
-            # In Transolver++, x_mid is reused for both projections
-            fx_mid = [_x_mid for _x_mid in x_mid]
-        else:
-            x_mid, fx_mid = zip(
-                *[self.project_input_onto_slices(_x) for _x in x]
-            )
 
-        # Project latent representations onto physical state slices
-        slice_projections = [self.in_project_slice(_x_mid) for _x_mid in x_mid]
+def _gale_cross_init(
+    self: nn.Module,
+    dim_head: int,
+    context_dim: int,
+    use_te: bool,
+) -> None:
+    # Match GALE: TE linear only when TE is installed (GALE_block already errors if use_te without TE)
+    linear_layer = te.Linear if (use_te and TE_AVAILABLE) else nn.Linear
+    self.cross_q = linear_layer(dim_head, dim_head)
+    self.cross_k = linear_layer(context_dim, dim_head)
+    self.cross_v = linear_layer(context_dim, dim_head)
+    self.state_mixing = nn.Parameter(torch.tensor(0.0))
 
-        # Compute slice weights and aggregated slice tokens
-        slice_weights, slice_tokens = zip(
-            *[
-                self._compute_slices_from_projections(proj, _fx_mid)
-                for proj, _fx_mid in zip(slice_projections, fx_mid)
-            ]
+
+class _GALEStructuredForwardMixin:
+    """Shared cross-attention and forward for structured GALE (2D/3D conv projection)."""
+
+    def compute_slice_attention_cross(
+        self,
+        slice_tokens: list[Float[torch.Tensor, "batch heads slices dim"]],
+        context: Float[torch.Tensor, "batch heads context_slices context_dim"],
+    ) -> list[Float[torch.Tensor, "batch heads slices dim"]]:
+        return _gale_compute_slice_attention_cross(
+            self, slice_tokens, context
         )
 
-        # Apply self-attention to slice tokens
-        if self.use_te:
-            self_slice_token = [
-                self._compute_slice_attention_te(_slice_token)
-                for _slice_token in slice_tokens
-            ]
-        else:
-            self_slice_token = [
-                self._compute_slice_attention_sdpa(_slice_token)
-                for _slice_token in slice_tokens
-            ]
+    def forward(
+        self,
+        x: tuple[Float[torch.Tensor, "batch tokens channels"], ...],
+        context: Float[torch.Tensor, "batch heads context_slices context_dim"]
+        | None = None,
+    ) -> list[Float[torch.Tensor, "batch tokens channels"]]:
+        return _gale_forward_impl(self, x, context)
 
-        # Apply cross-attention with context if provided
-        if context is not None:
-            cross_slice_token = [
-                self.compute_slice_attention_cross([_slice_token], context)[0]
-                for _slice_token in slice_tokens
-            ]
 
-            # Blend self-attention and cross-attention with learnable mixing weight
-            mixing_weight = torch.sigmoid(self.state_mixing)
-            out_slice_token = [
-                mixing_weight * sst + (1 - mixing_weight) * cst
-                for sst, cst in zip(self_slice_token, cross_slice_token)
-            ]
-        else:
-            # Use only self-attention when no context is provided
-            out_slice_token = self_slice_token
+class GALEStructuredMesh2D(_GALEStructuredForwardMixin, PhysicsAttentionStructuredMesh2D):
+    r"""GALE with Conv2d slice projection for 2D structured grids (see :class:`GALE`)."""
 
-        # Project attention outputs back to original space using slice weights
-        outputs = [
-            self._project_attention_outputs(ost, sw)
-            for ost, sw in zip(out_slice_token, slice_weights)
-        ]
+    def __init__(
+        self,
+        dim: int,
+        spatial_shape: tuple[int, int],
+        heads: int = 8,
+        dim_head: int = 64,
+        dropout: float = 0.0,
+        slice_num: int = 64,
+        kernel: int = 3,
+        use_te: bool = True,
+        plus: bool = False,
+        context_dim: int = 0,
+    ) -> None:
+        super().__init__(
+            dim,
+            spatial_shape,
+            heads,
+            dim_head,
+            dropout,
+            slice_num,
+            kernel,
+            use_te,
+            plus,
+        )
+        _gale_cross_init(self, dim_head, context_dim, use_te)
 
-        return outputs
+
+class GALEStructuredMesh3D(_GALEStructuredForwardMixin, PhysicsAttentionStructuredMesh3D):
+    r"""GALE with Conv3d slice projection for 3D structured grids (see :class:`GALE`)."""
+
+    def __init__(
+        self,
+        dim: int,
+        spatial_shape: tuple[int, int, int],
+        heads: int = 8,
+        dim_head: int = 64,
+        dropout: float = 0.0,
+        slice_num: int = 64,
+        kernel: int = 3,
+        use_te: bool = True,
+        plus: bool = False,
+        context_dim: int = 0,
+    ) -> None:
+        super().__init__(
+            dim,
+            spatial_shape,
+            heads,
+            dim_head,
+            dropout,
+            slice_num,
+            kernel,
+            use_te,
+            plus,
+        )
+        _gale_cross_init(self, dim_head, context_dim, use_te)
 
 
 class GALE_block(nn.Module):
@@ -317,6 +460,10 @@ class GALE_block(nn.Module):
         Whether to use Transolver++ features. Default is ``False``.
     context_dim : int, optional
         Dimension of the context vector for cross-attention. Default is 0.
+    spatial_shape : tuple[int, ...] | None, optional
+        If ``None``, uses irregular-mesh GALE. Length-2 tuple enables 2D Conv2d
+        projection; length-3 tuple enables 3D Conv3d projection (flattened
+        :math:`N = H \times W` or :math:`H \times W \times D`). Default is ``None``.
 
     Forward
     -------
@@ -369,6 +516,7 @@ class GALE_block(nn.Module):
         use_te: bool = True,
         plus: bool = False,
         context_dim: int = 0,
+        spatial_shape: tuple[int, ...] | None = None,
     ) -> None:
         super().__init__()
 
@@ -386,17 +534,50 @@ class GALE_block(nn.Module):
         else:
             self.ln_1 = nn.LayerNorm(hidden_dim)
 
-        # GALE attention layer
-        self.Attn = GALE(
-            hidden_dim,
-            heads=num_heads,
-            dim_head=hidden_dim // num_heads,
-            dropout=dropout,
-            slice_num=slice_num,
-            use_te=use_te,
-            plus=plus,
-            context_dim=context_dim,
-        )
+        dim_head = hidden_dim // num_heads
+        if spatial_shape is None:
+            self.Attn = GALE(
+                hidden_dim,
+                heads=num_heads,
+                dim_head=dim_head,
+                dropout=dropout,
+                slice_num=slice_num,
+                use_te=use_te,
+                plus=plus,
+                context_dim=context_dim,
+            )
+        elif len(spatial_shape) == 2:
+            self.Attn = GALEStructuredMesh2D(
+                hidden_dim,
+                spatial_shape=(int(spatial_shape[0]), int(spatial_shape[1])),
+                heads=num_heads,
+                dim_head=dim_head,
+                dropout=dropout,
+                slice_num=slice_num,
+                use_te=use_te,
+                plus=plus,
+                context_dim=context_dim,
+            )
+        elif len(spatial_shape) == 3:
+            self.Attn = GALEStructuredMesh3D(
+                hidden_dim,
+                spatial_shape=(
+                    int(spatial_shape[0]),
+                    int(spatial_shape[1]),
+                    int(spatial_shape[2]),
+                ),
+                heads=num_heads,
+                dim_head=dim_head,
+                dropout=dropout,
+                slice_num=slice_num,
+                use_te=use_te,
+                plus=plus,
+                context_dim=context_dim,
+            )
+        else:
+            raise ValueError(
+                f"spatial_shape must be None, length-2, or length-3; got {spatial_shape!r}"
+            )
 
         # Feed-forward network with layer normalization
         if use_te:

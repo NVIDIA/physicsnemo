@@ -51,8 +51,12 @@ Basic usage:
 torch.Size([2, 1000, 3])
 """
 
-from .context_projector import ContextProjector, GlobalContextBuilder
-from .gale import GALE, GALE_block
+from .context_projector import (
+    ContextProjector,
+    GlobalContextBuilder,
+    StructuredContextProjector,
+)
+from .gale import GALE, GALE_block, GALEStructuredMesh2D, GALEStructuredMesh3D
 from .geotransolver import GeoTransolver, GeoTransolverMetaData
 
 __all__ = [
@@ -60,6 +64,9 @@ __all__ = [
     "GeoTransolverMetaData",
     "GALE",
     "GALE_block",
+    "GALEStructuredMesh2D",
+    "GALEStructuredMesh3D",
     "ContextProjector",
     "GlobalContextBuilder",
+    "StructuredContextProjector",
 ]

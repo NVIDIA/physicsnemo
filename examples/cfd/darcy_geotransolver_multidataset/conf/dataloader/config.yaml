@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# DataLoader: references root-level multi_dataset only.
+# Dataset definitions (dataset_numpy, dataset_hdf5, multi_dataset) live in config.yaml
+# to avoid recursive interpolation. See conf/dataloader/numpy/ and hdf5/ for structure reference.
+
+_target_: physicsnemo.datapipes.DataLoader
+batch_size: 12
+shuffle: true
+drop_last: false
+prefetch_factor: 2
+num_streams: 4
+use_streams: false
+collate_metadata: true
+
+dataset: ${multi_dataset}

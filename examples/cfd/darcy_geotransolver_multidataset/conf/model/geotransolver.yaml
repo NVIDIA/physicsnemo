@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# GeoTransolver model config for 2D Darcy (permeability -> pressure).
+# Geometry: normalized 2D grid coordinates (x, y) per token.
+# structured_shape: set to [H, W] to match the training grid so GALE uses Conv2d
+# slice projection (same idea as Transolver). Omit for flattened mesh-style runs.
+
+_target_: physicsnemo.experimental.models.geotransolver.GeoTransolver
+
+functional_dim: 1
+out_dim: 1
+geometry_dim: 2   # 2D grid coords (x, y) as geometry
+global_dim: null
+# Must match root config target_size / grid (same as Transolver structured_shape)
+structured_shape: ${target_size}
+
+n_layers: 6
+n_hidden: 128
+dropout: 0.0
+n_head: 8
+act: gelu
+mlp_ratio: 4
+slice_num: 32
+use_te: false
+time_input: false
+plus: false
+include_local_features: false

@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Training config for Darcy Transolver multi-dataset.
+# Optimizer and scheduler are built in train.py (need model.parameters()).
+# Muon (pytorch>=2.9) is used for 2D weight params; Adam for the rest when use_muon=true.
+
+batch_size: 16
+max_epochs: 100
+validation_every_epochs: 4
+checkpoint_every_epochs: 8
+
+optimizer:
+  name: Adam
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+# Muon for matrix (2D) parameters; requires pytorch>=2.9
+use_muon: true
+
+scheduler:
+  name: CosineAnnealingLR
+  T_max: 100
+
+loss: mse  # mse | l1
+
+# torch.compile; set compile=true to enable (modes: default | reduce-overhead | max-autotune)
+compile: true
+compile_mode: default

@@ -1,0 +1,90 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Darcy GeoTransolver multi-dataset example — main config.
+# Compose dataloader (numpy + hdf5). Model and training configs added later.
+#
+# Run: python load_and_visualize_data.py (or train.py when implemented)
+# Override paths: data.numpy_path=... data.hdf5_path=...
+#
+# Both datasets are defined at root (dataset_numpy, dataset_hdf5) so that
+# multi_dataset and dataloader never reference dataloader.* — avoiding recursive interpolation.
+
+defaults:
+  - _self_
+  - dataloader/config
+  - model/geotransolver
+  - training/default
+
+# Transolver spatial shape must match data target_size (e.g. [256, 256])
+model:
+  structured_shape: ${target_size}
+
+# Shared data paths (override from CLI)
+data:
+  numpy_path: /lustre/fsw/portfolios/coreai/users/coreya/datasets/darcy_fix/example_data/piececonst_r421_N1024_smooth1.npz  # path to .npz file or directory of .npz (Darcy: permeability, darcy)
+  hdf5_path: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/pde_bench/2D/DarcyFlow/2D_DarcyFlow_beta10.0_Train.hdf5  # path to .h5 file or directory of .h5 (same keys for output_strict)
+
+target_size: [256, 256]
+
+# MultiDataset: list of Dataset configs (no wrapper keys per item).
+# Each item is one config dict with _target_: Dataset so Hydra instantiates a Sequence[Dataset].
+multi_dataset:
+  _target_: physicsnemo.datapipes.MultiDataset
+  datasets:
+    - _target_: physicsnemo.datapipes.Dataset
+      reader:
+        # Read the numpy files
+        _target_: physicsnemo.datapipes.readers.NumpyReader
+        path: ${data.numpy_path}
+        fields:
+        - "coeff"
+        - "sol"
+        file_pattern: "*.npz"
+        index_key: null
+        pin_memory: true
+        include_index_in_metadata: true
+        preload_to_cpu: true
+      transforms:
+        - _target_: ${dp:Resize}
+          input_keys:
+            - "coeff"
+            - "sol"
+          size: ${target_size}
+          mode: bilinear
+        - _target_: ${dp:Rename}
+          mapping:
+            coeff: x
+            sol: y
+      device: auto
+      num_workers: 2
+    - _target_: physicsnemo.datapipes.Dataset
+      reader:
+        _target_: physicsnemo.datapipes.readers.HDF5Reader
+        path: ${data.hdf5_path}
+        fields:
+        - "nu"
+        - "tensor"
+        file_pattern: "*.h5"
+        index_key: null
+        pin_memory: false
+        include_index_in_metadata: true
+      transforms:
+        - _target_: ${dp:Resize}
+          input_keys:
+            - "nu"
+            - "tensor"
+          size: ${target_size}
+          mode: bilinear
+        - _target_: ${dp:Rename}
+          mapping:
+            nu: x
+            tensor: y
+        - _target_: ${dp:Reshape}
+          keys:
+            - y
+          shape: ${target_size}
+      device: auto
+      num_workers: 2
+  output_strict: true
