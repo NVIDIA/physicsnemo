@@ -8,8 +8,11 @@
 
 batch_size: 16
 max_epochs: 100
-validation_every_epochs: 4
-checkpoint_every_epochs: 8
+validation_every_epochs: 1
+checkpoint_every_epochs: 1
+# Train/val split via sampler (same dataset, different indices)
+val_fraction: 0.2
+split_seed: 42
 
 optimizer:
   name: Adam

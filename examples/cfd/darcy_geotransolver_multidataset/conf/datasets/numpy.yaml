@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Darcy NPZ dataset: permeability (coeff) -> pressure (sol).
+# Path comes from config.yaml data.numpy_path.
+# @package _global_
+
+_target_: physicsnemo.datapipes.Dataset
+reader:
+  _target_: physicsnemo.datapipes.readers.NumpyReader
+  path: ${data.numpy_path}
+  fields:
+    - "coeff"
+    - "sol"
+  file_pattern: "*.npz"
+  index_key: null
+  pin_memory: true
+  include_index_in_metadata: true
+  preload_to_cpu: true
+transforms:
+  - _target_: ${dp:Resize}
+    input_keys:
+      - "coeff"
+      - "sol"
+    size: ${target_size}
+    mode: bilinear
+  - _target_: ${dp:Rename}
+    mapping:
+      coeff: x
+      sol: y
+device: auto
+num_workers: 2

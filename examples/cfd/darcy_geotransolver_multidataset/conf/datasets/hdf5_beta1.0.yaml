@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# PDEBench Darcy HDF5, beta=1.0. Path: data.pde_bench_darcy_flow_dir.
+
+_target_: physicsnemo.datapipes.Dataset
+reader:
+  _target_: physicsnemo.datapipes.readers.HDF5Reader
+  path: ${data.pde_bench_darcy_flow_dir}/2D_DarcyFlow_beta1.0_Train.hdf5
+  fields:
+    - "nu"
+    - "tensor"
+  file_pattern: "*.h5"
+  index_key: null
+  pin_memory: false
+  include_index_in_metadata: true
+transforms:
+  - _target_: ${dp:Resize}
+    input_keys:
+      - "nu"
+      - "tensor"
+    size: ${target_size}
+    mode: bilinear
+  - _target_: ${dp:Rename}
+    mapping:
+      nu: x
+      tensor: y
+  - _target_: ${dp:Reshape}
+    keys:
+      - y
+    shape: ${target_size}
+device: auto
+num_workers: 2

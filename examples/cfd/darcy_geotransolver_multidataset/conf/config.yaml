@@ -6,16 +6,26 @@
 # Compose dataloader (numpy + hdf5). Model and training configs added later.
 #
 # Run: python load_and_visualize_data.py (or train.py when implemented)
-# Override paths: data.numpy_path=... data.hdf5_path=...
+# Override paths: data.numpy_path=... data.pde_bench_darcy_flow_dir=...
 #
-# Both datasets are defined at root (dataset_numpy, dataset_hdf5) so that
-# multi_dataset and dataloader never reference dataloader.* — avoiding recursive interpolation.
+# Dataset configs live in conf/datasets/*.yaml. PDEBench Darcy betas can be
+# mixed by commenting in/out lines in multi_dataset.datasets below.
 
 defaults:
   - _self_
   - dataloader/config
-  - model/geotransolver
+  - model/transolver
+  # - model/geotransolver
   - training/default
+  - datasets/numpy@darcy_fno
+  - datasets/hdf5_beta0.01@dataset_pdebench_0.01
+  - datasets/hdf5_beta0.1@dataset_pdebench_0.1
+  - datasets/hdf5_beta1.0@dataset_pdebench_1.0
+  - datasets/hdf5_beta10.0@dataset_pdebench_10.0
+  - datasets/hdf5_beta100.0@dataset_pdebench_100.0
+
+target_size: [128, 128]
+
 
 # Transolver spatial shape must match data target_size (e.g. [256, 256])
 model:
@@ -23,68 +33,19 @@ model:
 
 # Shared data paths (override from CLI)
 data:
-  numpy_path: /lustre/fsw/portfolios/coreai/users/coreya/datasets/darcy_fix/example_data/piececonst_r421_N1024_smooth1.npz  # path to .npz file or directory of .npz (Darcy: permeability, darcy)
-  hdf5_path: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/pde_bench/2D/DarcyFlow/2D_DarcyFlow_beta10.0_Train.hdf5  # path to .h5 file or directory of .h5 (same keys for output_strict)
+  numpy_path: /lustre/fsw/portfolios/coreai/users/coreya/datasets/darcy_fix/example_data/piececonst_r421_N1024_smooth1.npz  # path to .npz file or directory (Darcy: permeability, darcy)
+  # Directory containing 2D_DarcyFlow_beta*_Train.hdf5 (PDEBench). Used by datasets/hdf5_beta*.yaml.
+  pde_bench_darcy_flow_dir: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/pde_bench/2D/DarcyFlow
 
-target_size: [256, 256]
 
-# MultiDataset: list of Dataset configs (no wrapper keys per item).
-# Each item is one config dict with _target_: Dataset so Hydra instantiates a Sequence[Dataset].
+# MultiDataset: enable/disable PDEBench Darcy betas by commenting in or out lines below.
 multi_dataset:
   _target_: physicsnemo.datapipes.MultiDataset
   datasets:
-    - _target_: physicsnemo.datapipes.Dataset
-      reader:
-        # Read the numpy files
-        _target_: physicsnemo.datapipes.readers.NumpyReader
-        path: ${data.numpy_path}
-        fields:
-        - "coeff"
-        - "sol"
-        file_pattern: "*.npz"
-        index_key: null
-        pin_memory: true
-        include_index_in_metadata: true
-        preload_to_cpu: true
-      transforms:
-        - _target_: ${dp:Resize}
-          input_keys:
-            - "coeff"
-            - "sol"
-          size: ${target_size}
-          mode: bilinear
-        - _target_: ${dp:Rename}
-          mapping:
-            coeff: x
-            sol: y
-      device: auto
-      num_workers: 2
-    - _target_: physicsnemo.datapipes.Dataset
-      reader:
-        _target_: physicsnemo.datapipes.readers.HDF5Reader
-        path: ${data.hdf5_path}
-        fields:
-        - "nu"
-        - "tensor"
-        file_pattern: "*.h5"
-        index_key: null
-        pin_memory: false
-        include_index_in_metadata: true
-      transforms:
-        - _target_: ${dp:Resize}
-          input_keys:
-            - "nu"
-            - "tensor"
-          size: ${target_size}
-          mode: bilinear
-        - _target_: ${dp:Rename}
-          mapping:
-            nu: x
-            tensor: y
-        - _target_: ${dp:Reshape}
-          keys:
-            - y
-          shape: ${target_size}
-      device: auto
-      num_workers: 2
+    - ${darcy_fno}
+    - ${dataset_pdebench_0.01}
+    # - ${dataset_pdebench_0.1}
+    # - ${dataset_pdebench_1.0}
+    # - ${dataset_pdebench_10.0}
+    # - ${dataset_pdebench_100.0}
   output_strict: true

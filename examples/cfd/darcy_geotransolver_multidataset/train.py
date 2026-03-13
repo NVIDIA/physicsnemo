@@ -10,17 +10,17 @@ import hydra
 import torch
 from omegaconf import DictConfig, OmegaConf
 from torch.nn import L1Loss, MSELoss
+from torch.utils.data import random_split, SubsetRandomSampler
+from torch.utils.tensorboard import SummaryWriter
 
 # This is needed for datapipe registry via hydra instantiation
 from physicsnemo import datapipes
+from physicsnemo.datapipes import DataLoader
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.optim import CombinedOptimizer
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, LaunchLogger
-
-# Muon is available in PyTorch >= 2.9
-_Muon = getattr(torch.optim, "Muon", None)
 
 
 def make_spatial_positions(
@@ -64,6 +64,29 @@ def make_spatial_positions(
     return grid_hw2.unsqueeze(0).expand(batch_size, -1, -1, -1)
 
 
+def _normalize_for_image(t: torch.Tensor) -> torch.Tensor:
+    """Min-max normalize a tensor to [0, 1] for TensorBoard image logging."""
+    t_min, t_max = t.min(), t.max()
+    if t_max - t_min < 1e-8:
+        return torch.zeros_like(t)
+    return (t - t_min) / (t_max - t_min)
+
+
+def _log_sample_images(
+    writer: SummaryWriter,
+    tag_prefix: str,
+    x: torch.Tensor,
+    y: torch.Tensor,
+    pred: torch.Tensor,
+    epoch: int,
+) -> None:
+    """Log the first sample's x, y, and pred as grayscale images."""
+    # x, y, pred arrive as (B, H, W, 1); take first sample -> (H, W, 1) -> (1, H, W)
+    for name, tensor in [("x", x), ("y_true", y), ("y_pred", pred)]:
+        img = _normalize_for_image(tensor[0].detach().squeeze(-1))  # (H, W)
+        writer.add_image(f"{tag_prefix}/{name}", img.unsqueeze(0), epoch)
+
+
 @hydra.main(version_base=None, config_path="./conf", config_name="config")
 def main(cfg: DictConfig) -> None:
     OmegaConf.resolve(cfg)
@@ -75,6 +98,41 @@ def main(cfg: DictConfig) -> None:
 
     # Multi-dataset Data Loader Instantiated from hydra:
     dataloader = hydra.utils.instantiate(cfg.dataloader)
+    dataset = dataloader.dataset
+    n = len(dataset)
+    val_fraction = getattr(cfg.training, "val_fraction", 0.2)
+    split_seed = getattr(cfg.training, "split_seed", 42)
+    n_val = max(1, int(n * val_fraction))
+    n_train = n - n_val
+    train_subset, val_subset = random_split(
+        dataset, [n_train, n_val], generator=torch.Generator().manual_seed(split_seed)
+    )
+    train_sampler = SubsetRandomSampler(train_subset.indices)
+    val_sampler = SubsetRandomSampler(val_subset.indices)
+    loader_kw = {
+        "batch_size": dataloader.batch_size,
+        "collate_fn": dataloader.collate_fn,
+        "prefetch_factor": dataloader.prefetch_factor,
+        "num_streams": dataloader.num_streams,
+        "use_streams": dataloader.use_streams,
+    }
+    train_dataloader = DataLoader(
+        dataset,
+        shuffle=False,
+        sampler=train_sampler,
+        drop_last=True,
+        **loader_kw,
+    )
+    val_dataloader = DataLoader(
+        dataset,
+        shuffle=False,
+        sampler=val_sampler,
+        drop_last=True,
+        **loader_kw,
+    )
+    log.info(
+        f"Train/val split: {n_train} train, {n_val} val (val_fraction={val_fraction}, seed={split_seed})"
+    )
 
     h, w = int(cfg.target_size[0]), int(cfg.target_size[1])
     batch_size = int(cfg.dataloader.batch_size)
@@ -86,22 +144,41 @@ def main(cfg: DictConfig) -> None:
     log.info(f"Spatial positions grid shape {tuple(spatial_positions.shape)} on {dist.device}")
 
     # Model (structured_shape from config matches target_size)
-    model = hydra.utils.instantiate(cfg.model).to(dist.device)
+    model_cfg = OmegaConf.to_container(cfg.model, resolve=True)
+    model = hydra.utils.instantiate(model_cfg, _convert_="all").to(dist.device)
+
+    def _compute_metrics(pred, y):
+        loss = loss_fn(pred, y)
+        with torch.no_grad():
+            l2_err_sq = (pred - y).pow(2).sum()
+            l2_ref_sq = y.pow(2).sum()
+        return {"loss": loss, "l2_err_sq": l2_err_sq, "l2_ref_sq": l2_ref_sq}
 
     # Resolve forward call from config so the training loop never branches on
     # model type (isinstance); required for torch.compile.
     _model_target = OmegaConf.select(cfg, "model._target_", default="")
+    model_name = _model_target.rsplit(".", 1)[-1] if _model_target else "unknown"
     if "geotransolver" in _model_target.lower():
-        def _forward(model, x, positions):
-            return model(local_embedding=x, geometry=positions)
+        def _forward(model, batch, positions):
+            x = batch['x'].unsqueeze(-1)
+            y = batch['y'].unsqueeze(-1)
+            pred = model(local_embedding=x, geometry=positions)
+            return _compute_metrics(pred, y), pred, x, y
     elif "transolver" in _model_target.lower():
-        def _forward(model, x, positions):
-            return model(fx=x, embedding=positions)
+        def _forward(model, batch, positions):
+            x = batch['x'].unsqueeze(-1)
+            y = batch['y'].unsqueeze(-1)
+            pred = model(fx=x, embedding=positions)
+            return _compute_metrics(pred, y), pred, x, y
     else:
         raise ValueError(
             f"Unsupported model _target_ {_model_target!r}; "
             "expected a class path containing 'Transolver' or 'GeoTransolver'."
         )
+
+    tb_log_dir = f"runs/{model_name}_{h}x{w}"
+    writer = SummaryWriter(log_dir=tb_log_dir)
+    log.info(f"TensorBoard logging to {tb_log_dir}")
 
     if getattr(cfg.training, "compile", False):
         compile_mode = getattr(cfg.training, "compile_mode", "default")
@@ -110,16 +187,14 @@ def main(cfg: DictConfig) -> None:
 
     # Optimizer and scheduler
     opt_cfg = cfg.training.optimizer
-    use_muon = getattr(cfg.training, "use_muon", False) and _Muon is not None
-    if getattr(cfg.training, "use_muon", False) and _Muon is None:
-        log.warning("use_muon=true but torch.optim.Muon not available (pytorch>=2.9); using Adam.")
+    use_muon = getattr(cfg.training, "use_muon", False)
     if use_muon:
         muon_params = [p for p in model.parameters() if p.ndim == 2]
         other_params = [p for p in model.parameters() if p.ndim != 2]
         weight_decay = getattr(opt_cfg, "weight_decay", 0.0)
         optimizer = CombinedOptimizer(
             optimizers=[
-                _Muon(
+                torch.optim.Muon(
                     muon_params,
                     lr=opt_cfg.lr,
                     weight_decay=weight_decay,
@@ -152,15 +227,15 @@ def main(cfg: DictConfig) -> None:
     loss_fn = MSELoss() if loss_name == "mse" else L1Loss()
 
     ckpt_args = {
-        "path": "./checkpoints",
+        "path": f"./checkpoints/{model_name}",
         "optimizer": optimizer,
         "scheduler": scheduler,
-        "models": model,
+        "models": [model],
     }
     loaded_epoch = load_checkpoint(device=dist.device, **ckpt_args)
     start_epoch = max(1, loaded_epoch + 1) if loaded_epoch else 1
 
-    n_batches = len(dataloader)
+    n_batches = len(train_dataloader)
     val_every = cfg.training.validation_every_epochs
     ckpt_every = cfg.training.checkpoint_every_epochs
 
@@ -169,35 +244,75 @@ def main(cfg: DictConfig) -> None:
     else:
         log.warning(f"Resuming from epoch {start_epoch}.")
 
+    tb_tag = f"{model_name}_{h}x{w}"
+
     for epoch in range(start_epoch, cfg.training.max_epochs + 1):
         model.train()
+        _zero = torch.tensor(0.0, device=dist.device)
+        train_loss_sum = _zero.clone()
+        train_l2_err_sq = _zero.clone()
+        train_l2_ref_sq = _zero.clone()
+        train_n = 0
+        train_sample = None
         with LaunchLogger("train", num_mini_batch=n_batches, epoch_alert_freq=1, epoch=epoch) as logger:
-            for batch, meta in dataloader:
-                x, y = batch['x'], batch['y']
-                
-                x = x.unsqueeze(-1)
-                y = y.unsqueeze(-1)
+            for batch, meta in train_dataloader:
 
-                # Match batch size in case last batch is smaller (e.g. drop_last=False)
-                b = x.shape[0]
-
-                pred = _forward(model, x, spatial_positions)
-
-                # pred (B, H, W, 1); y (B, H, W, 1) for loss
-                
-                loss = loss_fn(pred, y)
+                metrics, pred, x, y = _forward(model, batch, spatial_positions)
 
                 optimizer.zero_grad()
-                loss.backward()
+                metrics["loss"].backward()
                 optimizer.step()
-                logger.log_minibatch({"loss": loss.detach()})
+
+                b = x.shape[0]
+                train_loss_sum += metrics["loss"].detach() * b
+                train_l2_err_sq += metrics["l2_err_sq"]
+                train_l2_ref_sq += metrics["l2_ref_sq"]
+                train_n += b
+                train_sample = (x, y, pred)
+
+                logger.log_minibatch({"loss": metrics["loss"].detach()})
 
             logger.log_epoch({"lr": optimizer.param_groups[0]["lr"]})
         scheduler.step()
 
+        if train_n > 0:
+            avg_train_loss = (train_loss_sum / train_n).item()
+            train_rel_l2 = (train_l2_err_sq.sqrt() / train_l2_ref_sq.sqrt()).item()
+            writer.add_scalar(f"{tb_tag}/train/loss", avg_train_loss, epoch)
+            writer.add_scalar(f"{tb_tag}/train/rel_l2", train_rel_l2, epoch)
+        if train_sample is not None:
+            _log_sample_images(writer, f"{tb_tag}/train", *train_sample, epoch)
+
+        if epoch % val_every == 0:
+            model.eval()
+            val_loss_sum = _zero.clone()
+            val_l2_err_sq = _zero.clone()
+            val_l2_ref_sq = _zero.clone()
+            val_n = 0
+            val_sample = None
+            with torch.no_grad():
+                for batch, meta in val_dataloader:
+                    metrics, pred, x, y = _forward(model, batch, spatial_positions)
+                    b = x.shape[0]
+                    val_loss_sum += metrics["loss"] * b
+                    val_l2_err_sq += metrics["l2_err_sq"]
+                    val_l2_ref_sq += metrics["l2_ref_sq"]
+                    val_n += b
+                    val_sample = (x, y, pred)
+            if val_n > 0:
+                avg_val_loss = (val_loss_sum / val_n).item()
+                val_rel_l2 = (val_l2_err_sq.sqrt() / val_l2_ref_sq.sqrt()).item()
+                writer.add_scalar(f"{tb_tag}/val/loss", avg_val_loss, epoch)
+                writer.add_scalar(f"{tb_tag}/val/rel_l2", val_rel_l2, epoch)
+                log.info(f"Epoch {epoch} val_loss={avg_val_loss:.6f} val_rel_l2={val_rel_l2:.6f}")
+            if val_sample is not None:
+                _log_sample_images(writer, f"{tb_tag}/val", *val_sample, epoch)
+            model.train()
+
         if epoch % ckpt_every == 0:
             save_checkpoint(**ckpt_args, epoch=epoch)
 
+    writer.close()
     save_checkpoint(**ckpt_args, epoch=cfg.training.max_epochs)
     log.success("Training completed.")
 

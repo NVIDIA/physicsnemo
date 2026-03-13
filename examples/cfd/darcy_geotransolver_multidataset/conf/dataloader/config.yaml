@@ -3,8 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # DataLoader: references root-level multi_dataset only.
-# Dataset definitions (dataset_numpy, dataset_hdf5, multi_dataset) live in config.yaml
-# to avoid recursive interpolation. See conf/dataloader/numpy/ and hdf5/ for structure reference.
+# Dataset definitions live in conf/datasets/*.yaml; multi_dataset composes them in config.yaml.
 
 _target_: physicsnemo.datapipes.DataLoader
 batch_size: 12
