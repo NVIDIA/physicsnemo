@@ -14,8 +14,7 @@ layers =
    experimental
    active_learning : diffusion
    models : datapipes : metrics : domain_parallel : optim
-   mesh
-   nn
+   mesh : nn
    utils
    distributed 
    core
