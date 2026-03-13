@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.to_dual_graph()` methods. These allow Mesh conversion to 0D point clouds, 1D
   edge graphs, and 1D dual graphs, respectively, when connectivity information
   is not needed.
+- Adds `physicsnemo.mesh.generate` subpackage with `marching_cubes` for
+  isosurface extraction from 3D scalar fields, returning a `Mesh` object.
+  Supports the NVIDIA Warp backend.
 
 ### Changed
 
