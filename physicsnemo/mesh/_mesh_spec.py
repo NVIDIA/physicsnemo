@@ -184,11 +184,8 @@ class MeshDims:
         the expected codimension is ``spatial_offset - manifold_offset``.
         Different variables impose no constraint.
         """
-        assert isinstance(self.n_manifold_dims, str) and isinstance(
-            self.n_spatial_dims, str
-        )
-        m_var, m_off = _parse_dim_expr(self.n_manifold_dims)
-        s_var, s_off = _parse_dim_expr(self.n_spatial_dims)
+        m_var, m_off = _parse_dim_expr(self.n_manifold_dims)  # type: ignore[arg-type]
+        s_var, s_off = _parse_dim_expr(self.n_spatial_dims)  # type: ignore[arg-type]
         if m_var != s_var:
             return True
         expected_codim = s_off - m_off
