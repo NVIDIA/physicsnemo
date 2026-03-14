@@ -14,8 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any, Self
+from collections.abc import Callable, Iterator
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 import torch
 from tensordict import TensorDict, tensorclass
@@ -248,6 +248,30 @@ class DomainMesh:
             MeshDims(n_manifold_dims=n_manifold_dims, n_spatial_dims=n_spatial_dims)
         )
 
+    def _map_meshes(self, fn: Callable[[Mesh], Mesh]) -> "DomainMesh":
+        r"""Apply a Mesh-to-Mesh function to interior and all boundaries.
+
+        Produces a new :class:`DomainMesh` whose ``interior`` is
+        ``fn(self.interior)`` and whose ``boundaries`` are each individually
+        transformed by ``fn``.  The domain-level ``global_data`` is preserved
+        unchanged.
+
+        Parameters
+        ----------
+        fn : Callable[[Mesh], Mesh]
+            A function that takes a :class:`Mesh` and returns a :class:`Mesh`.
+
+        Returns
+        -------
+        DomainMesh
+            New domain with the transformed meshes.
+        """
+        return DomainMesh(
+            interior=fn(self.interior),
+            boundaries=self.boundaries.apply(fn, call_on_nested=True),
+            global_data=self.global_data,
+        )
+
     if TYPE_CHECKING:
 
         def to(self, *args: Any, **kwargs: Any) -> Self:
@@ -295,6 +319,404 @@ class DomainMesh:
             TensorDict structure are independent copies.
             """
             ...
+
+    ### Geometric Transforms
+
+    def translate(
+        self,
+        offset: torch.Tensor | list | tuple,
+    ) -> "DomainMesh":
+        r"""Translate all meshes in the domain by a constant offset.
+
+        Delegates to :meth:`Mesh.translate` for each mesh.
+
+        Parameters
+        ----------
+        offset : torch.Tensor or list or tuple
+            Translation vector, shape :math:`(S,)` where *S* is
+            ``n_spatial_dims``.
+
+        Returns
+        -------
+        DomainMesh
+            New domain with translated geometry.
+        """
+        return self._map_meshes(lambda m: m.translate(offset=offset))
+
+    def rotate(
+        self,
+        angle: float,
+        axis: torch.Tensor | list | tuple | Literal["x", "y", "z"] | None = None,
+        center: torch.Tensor | list | tuple | None = None,
+        transform_point_data: bool = False,
+        transform_cell_data: bool = False,
+        transform_global_data: bool = False,
+    ) -> "DomainMesh":
+        r"""Rotate all meshes in the domain about an axis.
+
+        Delegates to :meth:`Mesh.rotate` for each mesh.  The
+        ``transform_*_data`` flags control whether vector/tensor fields in
+        each :class:`Mesh`'s data are also rotated.  The domain-level
+        :attr:`global_data` (scalar simulation parameters) is never affected.
+
+        Parameters
+        ----------
+        angle : float
+            Rotation angle in radians.
+        axis : torch.Tensor or list or tuple or {"x", "y", "z"}, optional
+            Rotation axis vector (3D) or ``None`` (2D).
+        center : torch.Tensor or list or tuple, optional
+            Center point for rotation.
+        transform_point_data : bool
+            If ``True``, rotate vector/tensor fields in ``point_data``.
+        transform_cell_data : bool
+            If ``True``, rotate vector/tensor fields in ``cell_data``.
+        transform_global_data : bool
+            If ``True``, rotate vector/tensor fields in each mesh's
+            ``global_data``.
+
+        Returns
+        -------
+        DomainMesh
+            New domain with rotated geometry.
+        """
+        return self._map_meshes(
+            lambda m: m.rotate(
+                angle=angle,
+                axis=axis,
+                center=center,
+                transform_point_data=transform_point_data,
+                transform_cell_data=transform_cell_data,
+                transform_global_data=transform_global_data,
+            )
+        )
+
+    def scale(
+        self,
+        factor: float | torch.Tensor,
+        center: torch.Tensor | None = None,
+        transform_point_data: bool = False,
+        transform_cell_data: bool = False,
+        transform_global_data: bool = False,
+        assume_invertible: bool | None = None,
+    ) -> "DomainMesh":
+        r"""Scale all meshes in the domain by specified factor(s).
+
+        Delegates to :meth:`Mesh.scale` for each mesh.
+
+        Parameters
+        ----------
+        factor : float or torch.Tensor
+            Scale factor (scalar) or per-dimension factors.
+        center : torch.Tensor, optional
+            Center point for scaling.
+        transform_point_data : bool
+            If ``True``, scale vector/tensor fields in ``point_data``.
+        transform_cell_data : bool
+            If ``True``, scale vector/tensor fields in ``cell_data``.
+        transform_global_data : bool
+            If ``True``, scale vector/tensor fields in each mesh's
+            ``global_data``.
+        assume_invertible : bool or None, optional
+            Controls cache propagation.  See :meth:`Mesh.scale`.
+
+        Returns
+        -------
+        DomainMesh
+            New domain with scaled geometry.
+        """
+        return self._map_meshes(
+            lambda m: m.scale(
+                factor=factor,
+                center=center,
+                transform_point_data=transform_point_data,
+                transform_cell_data=transform_cell_data,
+                transform_global_data=transform_global_data,
+                assume_invertible=assume_invertible,
+            )
+        )
+
+    def transform(
+        self,
+        matrix: torch.Tensor,
+        transform_point_data: bool = False,
+        transform_cell_data: bool = False,
+        transform_global_data: bool = False,
+        assume_invertible: bool | None = None,
+    ) -> "DomainMesh":
+        r"""Apply a linear transformation to all meshes in the domain.
+
+        Delegates to :meth:`Mesh.transform` for each mesh.
+
+        Parameters
+        ----------
+        matrix : torch.Tensor
+            Transformation matrix, shape :math:`(S', S)`.
+        transform_point_data : bool
+            If ``True``, transform vector/tensor fields in ``point_data``.
+        transform_cell_data : bool
+            If ``True``, transform vector/tensor fields in ``cell_data``.
+        transform_global_data : bool
+            If ``True``, transform vector/tensor fields in each mesh's
+            ``global_data``.
+        assume_invertible : bool or None, optional
+            Controls cache propagation.  See :meth:`Mesh.transform`.
+
+        Returns
+        -------
+        DomainMesh
+            New domain with transformed geometry.
+        """
+        return self._map_meshes(
+            lambda m: m.transform(
+                matrix=matrix,
+                transform_point_data=transform_point_data,
+                transform_cell_data=transform_cell_data,
+                transform_global_data=transform_global_data,
+                assume_invertible=assume_invertible,
+            )
+        )
+
+    ### Cleanup / Refinement
+
+    def clean(
+        self,
+        tolerance: float = 1e-12,
+        merge_points: bool = True,
+        remove_duplicate_cells: bool = True,
+        remove_unused_points: bool = True,
+    ) -> "DomainMesh":
+        r"""Clean and repair all meshes in the domain.
+
+        Delegates to :meth:`Mesh.clean` for each mesh independently.
+
+        Parameters
+        ----------
+        tolerance : float, optional
+            L2 distance threshold for merging duplicate points.
+        merge_points : bool, optional
+            Whether to merge spatially-duplicate points.
+        remove_duplicate_cells : bool, optional
+            Whether to remove cells with identical vertex sets.
+        remove_unused_points : bool, optional
+            Whether to drop points not referenced by any cell.
+
+        Returns
+        -------
+        DomainMesh
+            New domain with cleaned meshes.
+        """
+        return self._map_meshes(
+            lambda m: m.clean(
+                tolerance=tolerance,
+                merge_points=merge_points,
+                remove_duplicate_cells=remove_duplicate_cells,
+                remove_unused_points=remove_unused_points,
+            )
+        )
+
+    def strip_caches(self) -> "DomainMesh":
+        r"""Remove cached geometry from all meshes in the domain.
+
+        Delegates to :meth:`Mesh.strip_caches` for each mesh.
+
+        Returns
+        -------
+        DomainMesh
+            New domain with all cached values cleared.
+        """
+        return self._map_meshes(lambda m: m.strip_caches())
+
+    def subdivide(
+        self,
+        levels: int = 1,
+        filter: Literal["linear", "butterfly", "loop"] = "linear",
+    ) -> "DomainMesh":
+        r"""Subdivide all meshes in the domain.
+
+        Delegates to :meth:`Mesh.subdivide` for each mesh.
+
+        Parameters
+        ----------
+        levels : int, optional
+            Number of subdivision iterations.
+        filter : {"linear", "butterfly", "loop"}, optional
+            Subdivision scheme.  See :meth:`Mesh.subdivide`.
+
+        Returns
+        -------
+        DomainMesh
+            New domain with subdivided meshes.
+        """
+        return self._map_meshes(lambda m: m.subdivide(levels=levels, filter=filter))
+
+    ### Data Operations
+
+    def cell_data_to_point_data(
+        self, overwrite_keys: bool = False
+    ) -> "DomainMesh":
+        r"""Convert cell data to point data on all meshes in the domain.
+
+        Delegates to :meth:`Mesh.cell_data_to_point_data` for each mesh.
+
+        Parameters
+        ----------
+        overwrite_keys : bool
+            If ``True``, silently overwrite existing ``point_data`` keys.
+
+        Returns
+        -------
+        DomainMesh
+            New domain with converted data on all meshes.
+        """
+        return self._map_meshes(
+            lambda m: m.cell_data_to_point_data(overwrite_keys=overwrite_keys)
+        )
+
+    def point_data_to_cell_data(
+        self, overwrite_keys: bool = False
+    ) -> "DomainMesh":
+        r"""Convert point data to cell data on all meshes in the domain.
+
+        Delegates to :meth:`Mesh.point_data_to_cell_data` for each mesh.
+
+        Parameters
+        ----------
+        overwrite_keys : bool
+            If ``True``, silently overwrite existing ``cell_data`` keys.
+
+        Returns
+        -------
+        DomainMesh
+            New domain with converted data on all meshes.
+        """
+        return self._map_meshes(
+            lambda m: m.point_data_to_cell_data(overwrite_keys=overwrite_keys)
+        )
+
+    def compute_point_derivatives(
+        self,
+        keys: str | tuple[str, ...] | list[str | tuple[str, ...]] | None = None,
+        method: Literal["lsq", "dec"] = "lsq",
+        gradient_type: Literal["intrinsic", "extrinsic", "both"] = "intrinsic",
+    ) -> "DomainMesh":
+        r"""Compute gradients of point_data fields on all meshes.
+
+        Delegates to :meth:`Mesh.compute_point_derivatives` for each mesh.
+
+        Parameters
+        ----------
+        keys : str or tuple or list or None, optional
+            Fields to differentiate.  ``None`` for all non-cached fields.
+        method : {"lsq", "dec"}, optional
+            Discretization method.
+        gradient_type : {"intrinsic", "extrinsic", "both"}, optional
+            Type of gradient to compute.
+
+        Returns
+        -------
+        DomainMesh
+            Domain with gradient fields added to each mesh's ``point_data``.
+        """
+        return self._map_meshes(
+            lambda m: m.compute_point_derivatives(
+                keys=keys, method=method, gradient_type=gradient_type
+            )
+        )
+
+    def compute_cell_derivatives(
+        self,
+        keys: str | tuple[str, ...] | list[str | tuple[str, ...]] | None = None,
+        method: Literal["lsq", "dec"] = "lsq",
+        gradient_type: Literal["intrinsic", "extrinsic", "both"] = "intrinsic",
+    ) -> "DomainMesh":
+        r"""Compute gradients of cell_data fields on all meshes.
+
+        Delegates to :meth:`Mesh.compute_cell_derivatives` for each mesh.
+
+        Parameters
+        ----------
+        keys : str or tuple or list or None, optional
+            Fields to differentiate.  ``None`` for all non-cached fields.
+        method : {"lsq", "dec"}, optional
+            Discretization method.
+        gradient_type : {"intrinsic", "extrinsic", "both"}, optional
+            Type of gradient to compute.
+
+        Returns
+        -------
+        DomainMesh
+            Domain with gradient fields added to each mesh's ``cell_data``.
+        """
+        return self._map_meshes(
+            lambda m: m.compute_cell_derivatives(
+                keys=keys, method=method, gradient_type=gradient_type
+            )
+        )
+
+    ### Validation
+
+    def validate(
+        self,
+        check_degenerate_cells: bool = True,
+        check_duplicate_vertices: bool = True,
+        check_inverted_cells: bool = False,
+        check_out_of_bounds: bool = True,
+        check_manifoldness: bool = False,
+        tolerance: float = 1e-10,
+        raise_on_error: bool = False,
+    ) -> dict:
+        r"""Validate all meshes in the domain and aggregate results.
+
+        Delegates to :meth:`Mesh.validate` for the interior and each boundary
+        mesh, then aggregates the results into a domain-level report.
+
+        Parameters
+        ----------
+        check_degenerate_cells : bool, optional
+            Check for zero/negative area cells.
+        check_duplicate_vertices : bool, optional
+            Check for coincident vertices.
+        check_inverted_cells : bool, optional
+            Check for negative orientation.
+        check_out_of_bounds : bool, optional
+            Check cell indices are valid.
+        check_manifoldness : bool, optional
+            Check manifold topology.
+        tolerance : float, optional
+            Tolerance for geometric checks.
+        raise_on_error : bool, optional
+            Raise ``ValueError`` on first error vs return report.
+
+        Returns
+        -------
+        dict
+            Aggregated validation report with keys:
+
+            - ``"interior"``: validation report for the interior mesh.
+            - ``"boundaries"``: ``dict[str, dict]`` of per-boundary reports.
+            - ``"valid"``: ``True`` only if all meshes pass validation.
+        """
+        kwargs = dict(
+            check_degenerate_cells=check_degenerate_cells,
+            check_duplicate_vertices=check_duplicate_vertices,
+            check_inverted_cells=check_inverted_cells,
+            check_out_of_bounds=check_out_of_bounds,
+            check_manifoldness=check_manifoldness,
+            tolerance=tolerance,
+            raise_on_error=raise_on_error,
+        )
+        interior_report = self.interior.validate(**kwargs)
+        boundary_reports = {
+            name: self.boundaries[name].validate(**kwargs)
+            for name in self.boundary_names
+        }
+        return {
+            "interior": interior_report,
+            "boundaries": boundary_reports,
+            "valid": interior_report["valid"]
+            and all(r["valid"] for r in boundary_reports.values()),
+        }
 
     ### Properties
 
