@@ -153,6 +153,29 @@ the ``Dataset`` is responsible for the threaded execution of ``Reader``s and
     :members:
     :show-inheritance:
 
+MultiDataset
+^^^^^^^^^^^^
+
+The ``MultiDataset`` composes two or more ``Dataset`` instances behind a single
+index space (concatenation). Each sub-dataset can have its own Reader and
+transforms. Global indices are mapped to the owning sub-dataset and local index;
+metadata is enriched with ``dataset_index`` so batches can identify the source.
+Use ``MultiDataset`` when you want to train on multiple datasets with the same
+DataLoader, optionally enforcing that all outputs share the same TensorDict keys
+for  collation. See :const:`physicsnemo.datapipes.multi_dataset.DATASET_INDEX_METADATA_KEY`
+for the metadata key added to each sample.
+
+Note that to properly collate and stack outputs from different datasets, you
+can set ``output_strict=True`` in the constructor of a ``MultiDataset``.  Upon
+construction, it will load the first batch from every passed dataset and test
+that the tensordict produced by the ``Reader`` and ``Transform`` pipeline has
+consistent keys.  Because the exact collation details differ by dataset, the
+``MultiDataset`` does not check more aggressively than output key consistency.
+
+.. autoclass:: physicsnemo.datapipes.multi_dataset.MultiDataset
+    :members:
+    :show-inheritance:
+
 
 Readers
 ^^^^^^^
