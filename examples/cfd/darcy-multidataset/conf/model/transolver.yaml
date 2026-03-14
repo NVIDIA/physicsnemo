@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Transolver model config for 2D Darcy (permeability -> pressure).
+# structured_shape is set in config.yaml from target_size so it matches data spatial shape.
+
+_target_: physicsnemo.models.transolver.Transolver
+
+functional_dim: 1
+out_dim: 1
+embedding_dim: 2
+# structured_shape set in config.yaml as ${target_size} to match data
+unified_pos: true
+ref: 8
+
+n_layers: 4
+n_hidden: 128
+dropout: 0.0
+n_head: 4
+act: gelu
+mlp_ratio: 4
+slice_num: 64
+use_te: false
+time_input: false
+plus: false
+
+
