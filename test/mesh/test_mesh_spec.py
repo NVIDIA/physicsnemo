@@ -137,6 +137,18 @@ class TestClassGetitemSyntax:
         with pytest.raises(TypeError, match="int, str, or None"):
             Mesh[2.5, 3]
 
+    def test_symbolic_manifold_with_ellipsis_raises(self):
+        with pytest.raises(TypeError, match="requires a paired n_spatial_dims"):
+            Mesh["n-1", ...]
+
+    def test_symbolic_spatial_with_ellipsis_raises(self):
+        with pytest.raises(TypeError, match="requires a paired n_manifold_dims"):
+            Mesh[..., "n"]
+
+    def test_symbolic_with_concrete_int_works(self):
+        spec = Mesh["n", 3]
+        assert repr(spec) == "Mesh['n', 3]"
+
 
 ### Caching and identity
 

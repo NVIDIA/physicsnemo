@@ -134,11 +134,31 @@ class MeshDims:
                 f"n_spatial_dims ({self.n_spatial_dims})"
             )
 
-        # Validate symbolic expressions eagerly to catch typos at spec-creation time
-        if isinstance(self.n_manifold_dims, str):
-            _parse_dim_expr(self.n_manifold_dims)
-        if isinstance(self.n_spatial_dims, str):
-            _parse_dim_expr(self.n_spatial_dims)
+        # Validate symbolic expressions eagerly and cache parsed results.
+        # A symbolic dimension paired with None is meaningless (no codimension
+        # constraint can be derived), so reject it early.
+        m_is_sym = isinstance(self.n_manifold_dims, str)
+        s_is_sym = isinstance(self.n_spatial_dims, str)
+        if m_is_sym and self.n_spatial_dims is None:
+            raise TypeError(
+                f"Symbolic n_manifold_dims={self.n_manifold_dims!r} requires a "
+                f"paired n_spatial_dims (got None). Use both symbolic dims, "
+                f"e.g. Mesh['{self.n_manifold_dims}', 'n']."
+            )
+        if s_is_sym and self.n_manifold_dims is None:
+            raise TypeError(
+                f"Symbolic n_spatial_dims={self.n_spatial_dims!r} requires a "
+                f"paired n_manifold_dims (got None). Use both symbolic dims, "
+                f"e.g. Mesh['n', '{self.n_spatial_dims}']."
+            )
+        if m_is_sym:
+            object.__setattr__(
+                self, "_m_parsed", _parse_dim_expr(self.n_manifold_dims)  # type: ignore[arg-type]
+            )
+        if s_is_sym:
+            object.__setattr__(
+                self, "_s_parsed", _parse_dim_expr(self.n_spatial_dims)  # type: ignore[arg-type]
+            )
 
     def matches(self, mesh: "Mesh") -> bool:
         r"""Check whether a mesh instance satisfies this dimension spec.
@@ -180,8 +200,8 @@ class MeshDims:
         the expected codimension is ``spatial_offset - manifold_offset``.
         Different variables impose no constraint.
         """
-        m_var, m_off = _parse_dim_expr(self.n_manifold_dims)  # type: ignore[arg-type]
-        s_var, s_off = _parse_dim_expr(self.n_spatial_dims)  # type: ignore[arg-type]
+        m_var, m_off = self._m_parsed  # type: ignore[attr-defined]
+        s_var, s_off = self._s_parsed  # type: ignore[attr-defined]
         if m_var != s_var:
             return True
         expected_codim = s_off - m_off
