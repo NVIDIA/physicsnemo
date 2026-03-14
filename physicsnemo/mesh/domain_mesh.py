@@ -25,7 +25,7 @@ from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 
 
-@tensorclass(tensor_only=True, shadow=True)
+@tensorclass
 class DomainMesh:
     r"""A simulation domain represented as an interior mesh with named boundary meshes.
 
@@ -110,9 +110,8 @@ class DomainMesh:
     >>> dm_gpu = dm.to("cuda")  # doctest: +SKIP
     """
 
-    interior: Mesh
-    boundaries: TensorDict  # [str, Mesh], TODO: add this as the type hint after upstream tensordict fix
-    # https://github.com/pytorch/tensordict/issues/1658
+    interior: Mesh[" m", " s"]
+    boundaries: TensorDict[str, Mesh[" m-1", " s"]]
     global_data: TensorDict
 
     def __init__(
