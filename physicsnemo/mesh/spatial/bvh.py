@@ -348,7 +348,6 @@ class BVH:
                 leaf_start=empty_long,
                 leaf_count=empty_long,
                 sorted_cell_order=empty_long,
-                batch_size=torch.Size([]),
             )
 
         ### Compute per-cell bounding boxes and centroids
@@ -476,9 +475,8 @@ class BVH:
             node_right_child=node_right_child[:node_count],
             leaf_start=leaf_start_buf[:node_count],
             leaf_count=leaf_count_buf[:node_count],
-            sorted_cell_order=sorted_order,
-            batch_size=torch.Size([]),
-        )
+                sorted_cell_order=sorted_order,
+            )
 
     def point_in_aabb(
         self,

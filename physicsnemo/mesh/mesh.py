@@ -1107,7 +1107,6 @@ class Mesh:
                 "cell": self._cache["cell"][indices],
                 "point": self._cache["point"],
             },
-            batch_size=[],
             device=self.points.device,
         )
         return Mesh(
@@ -1916,7 +1915,6 @@ class Mesh:
                         batch_size=torch.Size([target_n_points]),
                     ),
                 },
-                batch_size=[],
                 device=self.points.device,
             ),
         )
