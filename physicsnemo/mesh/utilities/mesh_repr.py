@@ -40,7 +40,7 @@ def format_mesh_repr(mesh: "Mesh") -> str:
     """
     ### Build the first line: Mesh[manifold, spatial](n_points=..., n_cells=..., ...)
     class_name = mesh.__class__.__name__
-    dim_sig = f"[{mesh.n_manifold_dims}, {mesh.n_spatial_dims}]"
+    dim_sig = f"[n_manifold_dims={mesh.n_manifold_dims}, n_spatial_dims={mesh.n_spatial_dims}]"
 
     parts = [
         f"n_points={mesh.n_points}",

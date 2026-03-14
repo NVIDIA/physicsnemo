@@ -366,9 +366,12 @@ class Mesh:
 
         Examples
         --------
-        >>> isinstance(mesh, Mesh[2, 3])   # surface in 3D
-        >>> isinstance(mesh, Mesh[1, ...]) # curve in any space
-        >>> Mesh[2, 3].boundary            # -> Mesh[1, 3]
+        >>> Mesh[2, 3]
+        Mesh[2, 3]
+        >>> Mesh[1, ...]
+        Mesh[1, ...]
+        >>> Mesh[2, 3].boundary
+        Mesh[1, 3]
         """
         from physicsnemo.mesh._mesh_spec import MeshDims, _get_mesh_spec
 
