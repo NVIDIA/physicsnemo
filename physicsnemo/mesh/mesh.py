@@ -294,7 +294,6 @@ class Mesh:
         else:
             self.global_data = TensorDict(
                 {} if self.global_data is None else dict(self.global_data),
-                batch_size=torch.Size([]),
                 device=self.points.device,
             )
 
@@ -308,8 +307,8 @@ class Mesh:
                     "point": TensorDict(
                         {}, batch_size=[self.n_points], device=self.points.device
                     ),
+                    "topology": TensorDict({}, device=self.points.device),
                 },
-                batch_size=[],
                 device=self.points.device,
             )
 
@@ -1319,6 +1318,7 @@ class Mesh:
             point_data=new_point_data,
             cell_data=self.cell_data,
             global_data=self.global_data,
+            _cache=self._cache,
         )
 
     def point_data_to_cell_data(self, overwrite_keys: bool = False) -> "Mesh":
@@ -1377,6 +1377,7 @@ class Mesh:
             point_data=self.point_data,
             cell_data=new_cell_data,
             global_data=self.global_data,
+            _cache=self._cache,
         )
 
     def get_facet_mesh(
