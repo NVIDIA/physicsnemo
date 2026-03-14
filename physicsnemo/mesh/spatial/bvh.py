@@ -475,8 +475,8 @@ class BVH:
             node_right_child=node_right_child[:node_count],
             leaf_start=leaf_start_buf[:node_count],
             leaf_count=leaf_count_buf[:node_count],
-                sorted_cell_order=sorted_order,
-            )
+            sorted_cell_order=sorted_order,
+        )
 
     def point_in_aabb(
         self,
