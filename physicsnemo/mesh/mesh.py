@@ -297,20 +297,18 @@ class Mesh:
                 device=self.points.device,
             )
 
-        ### _cache: default empty cache structure
-        if self._cache is None:
-            self._cache = TensorDict(
-                {
-                    "cell": TensorDict(
-                        {}, batch_size=[self.n_cells], device=self.points.device
-                    ),
-                    "point": TensorDict(
-                        {}, batch_size=[self.n_points], device=self.points.device
-                    ),
-                    "topology": TensorDict({}, device=self.points.device),
-                },
-                device=self.points.device,
-            )
+        ### _cache: build default structure, then overlay any provided cache
+        _default_cache = TensorDict(
+            {
+                "cell": TensorDict({}, batch_size=[self.n_cells]),
+                "point": TensorDict({}, batch_size=[self.n_points]),
+                "topology": TensorDict({}),
+            },
+            device=self.points.device,
+        )
+        if self._cache is not None:
+            _default_cache.update(self._cache)
+        self._cache = _default_cache
 
         ### Validate shapes and dtypes
         if not torch.compiler.is_compiling():
@@ -1105,6 +1103,7 @@ class Mesh:
             {
                 "cell": self._cache["cell"][indices],
                 "point": self._cache["point"],
+                "topology": TensorDict({}),
             },
             device=self.points.device,
         )
@@ -1725,11 +1724,51 @@ class Mesh:
 
         return is_manifold(self, check_level=check_level)
 
+    def _cached_adjacency(self, cache_key: str, compute_fn, **kwargs):
+        r"""Look up or compute-and-cache a topological adjacency.
+
+        All four ``get_*_adjacency`` methods delegate here. The
+        ``offsets`` and ``indices`` tensors are stored as a sub-TensorDict
+        under ``_cache["topology", "{cache_key}"]``.
+
+        Parameters
+        ----------
+        cache_key : str
+            Key under ``"topology"``, e.g. ``"point_to_points"`` or
+            ``"cell_to_cells_codim_1"``.
+        compute_fn : callable
+            ``(mesh, **kwargs) -> Adjacency`` invoked on cache miss.
+        **kwargs
+            Forwarded to *compute_fn*.
+
+        Returns
+        -------
+        Adjacency
+            Cached or freshly computed adjacency.
+        """
+        from physicsnemo.mesh.neighbors import Adjacency
+
+        cached = self._cache.get(("topology", cache_key), None)
+        if cached is not None:
+            return Adjacency(
+                offsets=cached["offsets"],
+                indices=cached["indices"],
+            )
+        result = compute_fn(self, **kwargs)
+        self._cache["topology", cache_key] = TensorDict(
+            {"offsets": result.offsets, "indices": result.indices},
+        )
+        return result
+
     def get_point_to_cells_adjacency(self):
         """Compute the star of each vertex (all cells containing each point).
 
         For each point in the mesh, finds all cells that contain that point. This
         is the graph-theoretic "star" operation on vertices.
+
+        The result is cached in ``_cache["topology", ...]`` for efficiency.
+        Adjacency depends only on topology (cells), not geometry (points), so
+        the cache is preserved through geometric transforms.
 
         Returns
         -------
@@ -1747,13 +1786,17 @@ class Mesh:
         """
         from physicsnemo.mesh.neighbors import get_point_to_cells_adjacency
 
-        return get_point_to_cells_adjacency(self)
+        return self._cached_adjacency("point_to_cells", get_point_to_cells_adjacency)
 
     def get_point_to_points_adjacency(self):
         """Compute point-to-point adjacency (graph edges of the mesh).
 
         For each point, finds all other points that share a cell with it. In simplicial
         meshes, this is equivalent to finding all points connected by an edge.
+
+        The result is cached in ``_cache["topology", ...]`` for efficiency.
+        Adjacency depends only on topology (cells), not geometry (points), so
+        the cache is preserved through geometric transforms.
 
         Returns
         -------
@@ -1771,12 +1814,17 @@ class Mesh:
         """
         from physicsnemo.mesh.neighbors import get_point_to_points_adjacency
 
-        return get_point_to_points_adjacency(self)
+        return self._cached_adjacency("point_to_points", get_point_to_points_adjacency)
 
     def get_cell_to_cells_adjacency(self, adjacency_codimension: int = 1):
         """Compute cell-to-cells adjacency based on shared facets.
 
         Two cells are considered adjacent if they share a k-codimension facet.
+
+        The result is cached in ``_cache["topology", ...]`` for efficiency,
+        keyed by ``adjacency_codimension``. Adjacency depends only on topology
+        (cells), not geometry (points), so the cache is preserved through
+        geometric transforms.
 
         Parameters
         ----------
@@ -1804,8 +1852,10 @@ class Mesh:
         """
         from physicsnemo.mesh.neighbors import get_cell_to_cells_adjacency
 
-        return get_cell_to_cells_adjacency(
-            self, adjacency_codimension=adjacency_codimension
+        return self._cached_adjacency(
+            f"cell_to_cells_codim_{adjacency_codimension}",
+            get_cell_to_cells_adjacency,
+            adjacency_codimension=adjacency_codimension,
         )
 
     def get_cell_to_points_adjacency(self):
@@ -1813,6 +1863,8 @@ class Mesh:
 
         This is a simple wrapper around the cells array that returns it in the
         standard Adjacency format for consistency with other neighbor queries.
+
+        The result is cached in ``_cache["topology", ...]`` for efficiency.
 
         Returns
         -------
@@ -1831,7 +1883,7 @@ class Mesh:
         """
         from physicsnemo.mesh.neighbors import get_cell_to_points_adjacency
 
-        return get_cell_to_points_adjacency(self)
+        return self._cached_adjacency("cell_to_points", get_cell_to_points_adjacency)
 
     def pad(
         self,
@@ -1915,6 +1967,7 @@ class Mesh:
                         lambda x: _pad_with_value(x, target_n_points, 0.0),
                         batch_size=torch.Size([target_n_points]),
                     ),
+                    "topology": TensorDict({}),
                 },
                 device=self.points.device,
             ),
