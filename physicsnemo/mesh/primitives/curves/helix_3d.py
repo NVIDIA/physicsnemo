@@ -30,7 +30,7 @@ def load(
     n_turns: float = 3.0,
     n_points: int = 100,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[1, 3]:
     """Create a helical curve in 3D space.
 
     Parameters
@@ -48,7 +48,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[1, 3]
         Mesh with n_manifold_dims=1, n_spatial_dims=3, n_cells=n_points-1.
     """
     if n_points < 2:
