@@ -153,11 +153,15 @@ class MeshDims:
             )
         if m_is_sym:
             object.__setattr__(
-                self, "_m_parsed", _parse_dim_expr(self.n_manifold_dims)  # type: ignore[arg-type]
+                self,
+                "_m_parsed",
+                _parse_dim_expr(self.n_manifold_dims),  # type: ignore[arg-type]
             )
         if s_is_sym:
             object.__setattr__(
-                self, "_s_parsed", _parse_dim_expr(self.n_spatial_dims)  # type: ignore[arg-type]
+                self,
+                "_s_parsed",
+                _parse_dim_expr(self.n_spatial_dims),  # type: ignore[arg-type]
             )
 
     def matches(self, mesh: "Mesh") -> bool:
