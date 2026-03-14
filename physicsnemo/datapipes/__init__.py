@@ -71,6 +71,7 @@ from physicsnemo.datapipes.transforms import (
     NormalizeVectors,
     Purge,
     Rename,
+    Resize,
     Scale,
     SubsamplePoints,
     Transform,
@@ -109,6 +110,7 @@ __all__ = [
     "CreateGrid",
     "KNearestNeighbors",
     "CenterOfMass",
+    "Resize",
     # Transforms - Utility
     "Rename",
     "Purge",

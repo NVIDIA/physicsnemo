@@ -23,7 +23,7 @@ and creating constant-filled tensors.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 
 import torch
 from tensordict import TensorDict
@@ -487,3 +487,93 @@ class ConstantField(Transform):
             f"fill_value={self.fill_value}, "
             f"output_dim={self.output_dim}"
         )
+
+
+@register()
+class Reshape(Transform):
+    r"""
+    Reshape specified TensorDict fields to target shapes.
+
+    Applies :func:`torch.reshape` so each specified field gets the given shape.
+    At most one dimension in the shape may be ``-1``, which is inferred from
+    the tensor's element count. Useful to unify layouts across datasets (e.g.
+    :math:`(1, H, W)` to :math:`(H, W)`) or to flatten/spread dimensions.
+
+    Parameters
+    ----------
+    keys : list[str]
+        TensorDict keys to reshape. Only these keys are modified; others are
+        left unchanged.
+    shape : tuple[int, ...] or list[int]
+        Target shape for all specified keys. Use ``-1`` for at most one
+        dimension to infer from the tensor size.
+
+    Examples
+    --------
+    Drop a leading singleton dimension (e.g. single-channel image):
+
+    >>> transform = Reshape(keys=["y"], shape=(256, 256))
+    >>> data = TensorDict({"x": torch.randn(256, 256), "y": torch.randn(1, 256, 256)})
+    >>> result = transform(data)
+    >>> result["y"].shape
+    torch.Size([256, 256])
+
+    Flatten spatial dimensions:
+
+    >>> transform = Reshape(keys=["features"], shape=(-1,))
+    >>> data = TensorDict({"features": torch.randn(4, 8, 8)})
+    >>> transform(data)["features"].shape
+    torch.Size([256])
+    """
+
+    def __init__(
+        self,
+        keys: list[str],
+        shape: Sequence[int],
+    ) -> None:
+        """
+        Initialize the reshape transform.
+
+        Parameters
+        ----------
+        keys : list[str]
+            TensorDict keys to reshape.
+        shape : tuple or list of int
+            Target shape. At most one entry may be -1 (inferred).
+        """
+        super().__init__()
+        self.keys = list(keys)
+        self.shape = tuple(int(s) for s in shape)
+
+    def __call__(self, data: TensorDict) -> TensorDict:
+        """
+        Reshape specified fields in the TensorDict.
+
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict.
+
+        Returns
+        -------
+        TensorDict
+            TensorDict with reshaped tensors for the specified keys.
+            Keys not present in the data are skipped.
+        """
+        out = data.clone()
+        for key in self.keys:
+            if key not in out.keys():
+                continue
+            out[key] = out[key].reshape(self.shape)
+        return out
+
+    def extra_repr(self) -> str:
+        """
+        Return extra information for repr.
+
+        Returns
+        -------
+        str
+            String with transform parameters.
+        """
+        return f"keys={self.keys}, shape={self.shape}"

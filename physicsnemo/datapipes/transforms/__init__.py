@@ -45,6 +45,7 @@ from physicsnemo.datapipes.transforms.spatial import (
     CenterOfMass,
     CreateGrid,
     KNearestNeighbors,
+    Resize,
 )
 from physicsnemo.datapipes.transforms.subsample import (
     SubsamplePoints,
@@ -55,6 +56,7 @@ from physicsnemo.datapipes.transforms.utility import (
     ConstantField,
     Purge,
     Rename,
+    Reshape,
 )
 
 __all__ = [
@@ -83,8 +85,10 @@ __all__ = [
     "CreateGrid",
     "KNearestNeighbors",
     "CenterOfMass",
+    "Resize",
     # Utility
     "Rename",
     "Purge",
     "ConstantField",
+    "Reshape",
 ]

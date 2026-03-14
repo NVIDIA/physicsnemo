@@ -14,13 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for utility transforms: Rename, Purge, ConstantField, and ZeroLike."""
+"""Tests for utility transforms: Rename, Purge, ConstantField, Reshape, and ZeroLike."""
 
 import pytest
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.datapipes.transforms import ConstantField, Purge, Rename
+from physicsnemo.datapipes.transforms import ConstantField, Purge, Rename, Reshape
 
 
 class TestRename:
@@ -842,3 +842,64 @@ class TestConstantField:
         assert "output_key" in repr_str
         assert "fill_value" in repr_str
         assert "output_dim" in repr_str
+
+
+class TestReshape:
+    """Tests for the Reshape transform."""
+
+    def test_reshape_basic(self):
+        """Test basic reshape from (1, H, W) to (H, W)."""
+        data = TensorDict({"y": torch.randn(1, 256, 256)})
+        transform = Reshape(keys=["y"], shape=(256, 256))
+
+        result = transform(data)
+        assert result["y"].shape == torch.Size([256, 256])
+
+    def test_reshape_with_inferred_dim(self):
+        """Test reshape with -1 for inferred dimension."""
+        data = TensorDict({"features": torch.randn(4, 8, 8)})
+        transform = Reshape(keys=["features"], shape=(-1,))
+
+        result = transform(data)
+        assert result["features"].shape == torch.Size([256])
+
+    def test_reshape_missing_key_skipped(self):
+        """Test that missing keys are silently skipped."""
+        data = TensorDict({"x": torch.randn(10, 3)})
+        transform = Reshape(keys=["missing"], shape=(30,))
+
+        result = transform(data)
+        assert "x" in result
+        assert result["x"].shape == (10, 3)
+
+    def test_reshape_preserves_other_fields(self):
+        """Test that non-target fields are untouched."""
+        original = torch.randn(50, 3)
+        data = TensorDict({"target": torch.randn(1, 50, 3), "other": original.clone()})
+        transform = Reshape(keys=["target"], shape=(50, 3))
+
+        result = transform(data)
+        assert result["target"].shape == torch.Size([50, 3])
+        torch.testing.assert_close(result["other"], original)
+
+    def test_reshape_multiple_keys(self):
+        """Test reshaping multiple keys."""
+        data = TensorDict(
+            {
+                "a": torch.randn(1, 64, 64),
+                "b": torch.randn(1, 64, 64),
+            }
+        )
+        transform = Reshape(keys=["a", "b"], shape=(64, 64))
+
+        result = transform(data)
+        assert result["a"].shape == torch.Size([64, 64])
+        assert result["b"].shape == torch.Size([64, 64])
+
+    def test_reshape_extra_repr(self):
+        """Test extra_repr output."""
+        transform = Reshape(keys=["y"], shape=(256, 256))
+        repr_str = transform.extra_repr()
+
+        assert "keys" in repr_str
+        assert "shape" in repr_str

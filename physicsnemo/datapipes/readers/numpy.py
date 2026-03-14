@@ -18,6 +18,8 @@
 NumpyReader - Read data from NumPy .npz files.
 
 Supports reading from single .npz files or directories of .npz files.
+In single-file mode, optional ``preload_to_cpu=True`` loads the entire
+dataset into RAM at init for faster iteration with no per-sample I/O.
 """
 
 from __future__ import annotations
@@ -38,8 +40,12 @@ class NumpyReader(Reader):
     Read samples from NumPy .npz files.
 
     Supports two modes:
-    1. Single .npz file: samples indexed along first dimension of each array
-    2. Directory of .npz files: one sample per file
+
+    1. **Single .npz file**: Samples are indexed along the first dimension
+       of each array. Optionally, ``preload_to_cpu=True`` loads all arrays
+       into RAM at init so iteration does no disk I/O.
+    2. **Directory of .npz files**: One sample per file; each file is opened
+       on demand.
 
     Example (single .npz):
         >>> # data.npz with arrays "positions" (N, 100, 3), "features" (N, 100)
@@ -52,6 +58,10 @@ class NumpyReader(Reader):
         >>> # Directory with sample_0.npz, sample_1.npz, ...
         >>> reader = NumpyReader("data_dir/", file_pattern="sample_*.npz")  # doctest: +SKIP
         >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple  # doctest: +SKIP
+
+    Example (single .npz with preload):
+        >>> reader = NumpyReader("data.npz", preload_to_cpu=True)  # doctest: +SKIP
+        >>> # All arrays loaded into RAM at init; no disk I/O during iteration
     """
 
     def __init__(
@@ -65,6 +75,7 @@ class NumpyReader(Reader):
         pin_memory: bool = False,
         include_index_in_metadata: bool = True,
         coordinated_subsampling: Optional[dict[str, Any]] = None,
+        preload_to_cpu: bool = False,
     ) -> None:
         """
         Initialize the NumPy reader.
@@ -93,6 +104,11 @@ class NumpyReader(Reader):
             Optional dict to configure coordinated subsampling (directory mode
             only). If provided, must contain ``n_points`` (int) and
             ``target_keys`` (list of str).
+        preload_to_cpu : bool, default=False
+            If True, in single-file mode the reader loads all requested
+            arrays into RAM at init, closes the file, and serves samples
+            from memory. Use when the dataset fits in RAM and you want
+            to avoid disk I/O during training. Ignored in directory mode.
 
         Raises
         ------
@@ -100,6 +116,9 @@ class NumpyReader(Reader):
             If path doesn't exist.
         ValueError
             If no files found in directory or unsupported file type.
+        KeyError
+            If preload_to_cpu is True and a required field is missing
+            from the file (and not in default_values).
         """
         super().__init__(
             pin_memory=pin_memory,
@@ -112,14 +131,17 @@ class NumpyReader(Reader):
         self.default_values = default_values or {}
         self.file_pattern = file_pattern
         self.index_key = index_key
+        self.preload_to_cpu = preload_to_cpu
 
         if not self.path.exists():
             raise FileNotFoundError(f"Path not found: {self.path}")
 
-        # Determine mode based on path
-        self._mode: str  # "single" or "directory"
+        # Mode: "single" (one .npz, samples along first dim) or "directory"
+        self._mode: str
         self._files: Optional[list[Path]] = None
         self._data: Optional[np.lib.npyio.NpzFile] = None
+        # When preload_to_cpu: in-memory arrays keyed by field name (single-file only)
+        self._preloaded: Optional[dict[str, np.ndarray]] = None
         self._available_fields: list[str] = []
 
         if self.path.is_dir():
@@ -147,18 +169,36 @@ class NumpyReader(Reader):
             self._available_fields = list(npz.files)
 
     def _setup_single_file_mode(self) -> None:
-        """Set up reader for single .npz file."""
+        """Set up reader for a single .npz file; optionally preload all arrays to RAM."""
         self._mode = "single"
         self._data = np.load(self.path)
         self._available_fields = list(self._data.files)
 
-        # Determine length from index_key or first field
+        # Sample count is the first dimension of index_key or of the first array
         if self.index_key is not None:
             self._length = self._data[self.index_key].shape[0]
         elif self._available_fields:
             self._length = self._data[self._available_fields[0]].shape[0]
         else:
             self._length = 0
+
+        # Optional: load entire dataset into RAM and close the file
+        if self.preload_to_cpu:
+            required = set(self.fields) - set(self.default_values.keys())
+            missing = required - set(self._data.files)
+            if missing:
+                raise KeyError(
+                    f"Required fields {missing} not found in {self.path}. "
+                    f"Available: {list(self._data.files)}"
+                )
+            self._preloaded = {}
+            for field in self.fields:
+                if field in self._data.files:
+                    # .copy() forces a real array; np.array() ensures contiguous
+                    self._preloaded[field] = np.array(self._data[field].copy())
+            if hasattr(self._data, "close"):
+                self._data.close()
+            self._data = None
 
     @property
     def fields(self) -> list[str]:
@@ -275,20 +315,66 @@ class NumpyReader(Reader):
                     # Directory mode: load full array
                     arr = arr[:]
 
-                data[field] = torch.from_numpy(np.array(arr))
+                data[field] = torch.from_numpy(np.asarray(arr, dtype=np.float32))
 
             elif field in self.default_values:
-                data[field] = self.default_values[field].clone()
+                data[field] = self.default_values[field].clone().float()
 
         return data
 
+    def _load_sample_from_preloaded(self, index: int) -> dict[str, torch.Tensor]:
+        """
+        Load a single sample by indexing into preloaded in-memory arrays.
+
+        Used only when ``preload_to_cpu=True`` in single-file mode. Applies
+        coordinated subsampling (random contiguous slice) when configured.
+
+        Parameters
+        ----------
+        index : int
+            Sample index along the first dimension of each preloaded array.
+
+        Returns
+        -------
+        dict[str, torch.Tensor]
+            Dictionary mapping field names to CPU tensors for this sample.
+        """
+        data = {}
+        fields_to_load = self.fields
+        target_keys_set = set()
+        subsample_slice = None
+
+        # If subsampling is enabled, pick one random contiguous slice for this sample
+        if self._coordinated_subsampling_config is not None:
+            n_points = self._coordinated_subsampling_config["n_points"]
+            target_keys_set = set(self._coordinated_subsampling_config["target_keys"])
+            for field in target_keys_set:
+                if field in self._preloaded:
+                    arr = self._preloaded[field][index]
+                    subsample_slice = self._select_random_sections_from_slice(
+                        0, arr.shape[0], n_points
+                    )
+                    break
+
+        for field in fields_to_load:
+            if field in self._preloaded:
+                arr = np.array(self._preloaded[field][index], copy=False)
+                if subsample_slice is not None and field in target_keys_set:
+                    arr = arr[subsample_slice]
+                data[field] = torch.from_numpy(np.asarray(arr, dtype=np.float32))
+            elif field in self.default_values:
+                data[field] = self.default_values[field].clone().float()
+        return data
+
     def _load_sample(self, index: int) -> dict[str, torch.Tensor]:
-        """Load a single sample."""
+        """Load a single sample from disk or from preloaded RAM."""
         if self._mode == "directory":
             file_path = self._files[index]
             with np.load(file_path) as npz:
                 return self._load_from_npz(npz, index=None, file_path=file_path)
-        else:  # single
+        elif self._preloaded is not None:
+            return self._load_sample_from_preloaded(index)
+        else:
             return self._load_from_npz(self._data, index=index)
 
     def __len__(self) -> int:
@@ -318,12 +404,13 @@ class NumpyReader(Reader):
         return self._mode == "directory"
 
     def close(self) -> None:
-        """Close file handles."""
+        """Close file handles and release preloaded in-memory arrays (if any)."""
         super().close()
         if self._data is not None:
             if hasattr(self._data, "close"):
                 self._data.close()
             self._data = None
+        self._preloaded = None
 
     def __repr__(self) -> str:
         subsample_info = ""
@@ -331,11 +418,13 @@ class NumpyReader(Reader):
             cfg = self._coordinated_subsampling_config
             subsample_info = f", subsampling={cfg['n_points']} points"
 
+        preload_info = ", preload_to_cpu=True" if self._preloaded is not None else ""
         return (
             f"NumpyReader("
             f"path={self.path}, "
             f"mode={self._mode}, "
             f"len={len(self)}, "
             f"fields={self.fields}"
-            f"{subsample_info})"
+            f"{subsample_info}"
+            f"{preload_info})"
         )

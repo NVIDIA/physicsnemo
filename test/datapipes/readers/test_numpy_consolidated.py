@@ -283,5 +283,232 @@ class TestNumpyReaderMemoryManagement:
         reader2.close()
 
 
+class TestNumpyReaderPreload:
+    """Tests for preload_to_cpu functionality."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.temp_path = Path(self.temp_dir)
+
+    def teardown_method(self):
+        """Clean up temporary files."""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_preload_basic(self):
+        """Test that preload_to_cpu loads data into RAM and closes the file."""
+        coords = np.random.randn(15, 3).astype(np.float32)
+        features = np.random.randn(15, 4).astype(np.float32)
+
+        npz_path = self.temp_path / "data.npz"
+        np.savez(npz_path, coords=coords, features=features)
+
+        reader = NumpyReader(
+            npz_path, fields=["coords", "features"], preload_to_cpu=True
+        )
+
+        assert reader._data is None
+        assert reader._preloaded is not None
+        assert "coords" in reader._preloaded
+        assert "features" in reader._preloaded
+        assert len(reader) == 15
+
+        data, metadata = reader[0]
+        assert data["coords"].shape == (3,)
+        assert data["features"].shape == (4,)
+        torch.testing.assert_close(
+            data["coords"], torch.from_numpy(coords[0]), atol=1e-6, rtol=1e-6
+        )
+
+    def test_preload_matches_non_preloaded(self):
+        """Test that preloaded data matches non-preloaded data."""
+        np.random.seed(42)
+        coords = np.random.randn(10, 3).astype(np.float32)
+        features = np.random.randn(10, 5).astype(np.float32)
+
+        npz_path = self.temp_path / "data.npz"
+        np.savez(npz_path, coords=coords, features=features)
+
+        reader_disk = NumpyReader(
+            npz_path, fields=["coords", "features"], preload_to_cpu=False
+        )
+        reader_ram = NumpyReader(
+            npz_path, fields=["coords", "features"], preload_to_cpu=True
+        )
+
+        for i in range(len(reader_disk)):
+            data_disk, _ = reader_disk[i]
+            data_ram, _ = reader_ram[i]
+            torch.testing.assert_close(data_disk["coords"], data_ram["coords"])
+            torch.testing.assert_close(data_disk["features"], data_ram["features"])
+
+        reader_disk.close()
+        reader_ram.close()
+
+    def test_preload_with_default_values(self):
+        """Test preload with default values for missing fields."""
+        coords = np.random.randn(10, 100, 3).astype(np.float32)
+
+        npz_path = self.temp_path / "data.npz"
+        np.savez(npz_path, coords=coords)
+
+        default_normals = torch.ones(100, 3, dtype=torch.float64)
+        reader = NumpyReader(
+            npz_path,
+            fields=["coords", "normals"],
+            default_values={"normals": default_normals},
+            preload_to_cpu=True,
+        )
+
+        data, _ = reader[0]
+        assert "normals" in data
+        assert data["normals"].dtype == torch.float32
+        reader.close()
+
+    def test_preload_missing_required_field_raises(self):
+        """Test that preload raises KeyError for missing required fields."""
+        coords = np.random.randn(10, 3).astype(np.float32)
+
+        npz_path = self.temp_path / "data.npz"
+        np.savez(npz_path, coords=coords)
+
+        with pytest.raises(KeyError, match="Required fields"):
+            NumpyReader(
+                npz_path,
+                fields=["coords", "missing_field"],
+                preload_to_cpu=True,
+            )
+
+    def test_preload_ignored_in_directory_mode(self):
+        """Test that preload_to_cpu is ignored in directory mode."""
+        for i in range(3):
+            coords = np.random.randn(50, 3).astype(np.float32)
+            npz_path = self.temp_path / f"sample_{i:03d}.npz"
+            np.savez(npz_path, coords=coords)
+
+        reader = NumpyReader(
+            self.temp_path,
+            file_pattern="sample_*.npz",
+            fields=["coords"],
+            preload_to_cpu=True,
+        )
+
+        assert reader._preloaded is None
+        assert len(reader) == 3
+
+        data, _ = reader[0]
+        assert data["coords"].shape == (50, 3)
+        reader.close()
+
+    def test_preload_with_coordinated_subsampling(self):
+        """Test preloaded reader with coordinated subsampling."""
+        n_samples = 5
+        n_points = 1000
+        subsample_points = 100
+
+        coords = np.random.randn(n_samples, n_points, 3).astype(np.float32)
+        features = np.random.randn(n_samples, n_points, 4).astype(np.float32)
+
+        npz_path = self.temp_path / "data.npz"
+        np.savez(npz_path, coords=coords, features=features)
+
+        reader = NumpyReader(
+            npz_path,
+            fields=["coords", "features"],
+            preload_to_cpu=True,
+            coordinated_subsampling={
+                "n_points": subsample_points,
+                "target_keys": ["coords", "features"],
+            },
+        )
+
+        assert reader._preloaded is not None
+        data, _ = reader[0]
+        assert data["coords"].shape == (subsample_points, 3)
+        assert data["features"].shape == (subsample_points, 4)
+        reader.close()
+
+    def test_preload_close_releases_memory(self):
+        """Test that close() releases preloaded arrays."""
+        coords = np.random.randn(10, 3).astype(np.float32)
+
+        npz_path = self.temp_path / "data.npz"
+        np.savez(npz_path, coords=coords)
+
+        reader = NumpyReader(npz_path, fields=["coords"], preload_to_cpu=True)
+        assert reader._preloaded is not None
+
+        reader.close()
+        assert reader._preloaded is None
+
+    def test_preload_repr(self):
+        """Test that repr includes preload_to_cpu info."""
+        coords = np.random.randn(10, 3).astype(np.float32)
+
+        npz_path = self.temp_path / "data.npz"
+        np.savez(npz_path, coords=coords)
+
+        reader = NumpyReader(npz_path, fields=["coords"], preload_to_cpu=True)
+        assert "preload_to_cpu=True" in repr(reader)
+        reader.close()
+
+
+class TestNumpyReaderFloat32:
+    """Tests for float32 conversion behavior."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.temp_path = Path(self.temp_dir)
+
+    def teardown_method(self):
+        """Clean up temporary files."""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_float64_converted_to_float32(self):
+        """Test that float64 numpy arrays are returned as float32 tensors."""
+        coords = np.random.randn(10, 3).astype(np.float64)
+
+        npz_path = self.temp_path / "data.npz"
+        np.savez(npz_path, coords=coords)
+
+        reader = NumpyReader(npz_path, fields=["coords"])
+        data, _ = reader[0]
+        assert data["coords"].dtype == torch.float32
+        reader.close()
+
+    def test_float64_converted_to_float32_directory_mode(self):
+        """Test float64 conversion in directory mode."""
+        for i in range(3):
+            coords = np.random.randn(50, 3).astype(np.float64)
+            npz_path = self.temp_path / f"sample_{i:03d}.npz"
+            np.savez(npz_path, coords=coords)
+
+        reader = NumpyReader(
+            self.temp_path, file_pattern="sample_*.npz", fields=["coords"]
+        )
+        data, _ = reader[0]
+        assert data["coords"].dtype == torch.float32
+        reader.close()
+
+    def test_default_values_converted_to_float32(self):
+        """Test that default values are returned as float32."""
+        coords = np.random.randn(10, 100, 3).astype(np.float32)
+
+        npz_path = self.temp_path / "data.npz"
+        np.savez(npz_path, coords=coords)
+
+        default_normals = torch.zeros(100, 3, dtype=torch.float64)
+        reader = NumpyReader(
+            npz_path,
+            fields=["coords", "normals"],
+            default_values={"normals": default_normals},
+        )
+
+        data, _ = reader[0]
+        assert data["normals"].dtype == torch.float32
+        reader.close()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

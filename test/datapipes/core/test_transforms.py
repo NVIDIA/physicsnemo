@@ -807,6 +807,23 @@ def test_normalize_repr():
 #     assert "100" in repr(ds)
 
 
+def test_normalize_accepts_ordered_dict_stats():
+    """Test that Normalize accepts collections.abc.Mapping (e.g. OrderedDict) for stats."""
+    from collections import OrderedDict
+
+    sample = TensorDict({"x": torch.tensor([10.0, 20.0, 30.0])})
+    norm = dp.Normalize(
+        input_keys=["x"],
+        method="mean_std",
+        means=OrderedDict([("x", 20.0)]),
+        stds=OrderedDict([("x", 10.0)]),
+    )
+
+    result = norm(sample)
+    expected = torch.tensor([-1.0, 0.0, 1.0])
+    torch.testing.assert_close(result["x"], expected, atol=1e-6, rtol=1e-6)
+
+
 def test_compose_repr():
     pipeline = dp.Compose(
         [

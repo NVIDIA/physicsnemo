@@ -23,9 +23,10 @@ filtering, grid creation, k-NN neighbor computation, and center of mass calculat
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 from tensordict import TensorDict
 
 from physicsnemo.datapipes.registry import register
@@ -522,4 +523,141 @@ class CenterOfMass(Transform):
         """
         return (
             f"CenterOfMass(coords_key={self.coords_key}, output_key={self.output_key})"
+        )
+
+
+@register()
+class Resize(Transform):
+    r"""
+    Resize a set of grid tensors via interpolation.
+
+    Applies spatial resizing to tensors identified by ``input_keys`` using
+    :func:`torch.nn.functional.interpolate`. Transforms operate on
+    single-sample data (no batch dimension). Supports 2D tensors
+    :math:`(C, H, W)` and 3D tensors :math:`(C, D, H, W)`.
+
+    Parameters
+    ----------
+    input_keys : list[str]
+        Keys of tensors to resize. Each tensor must have shape
+        :math:`(C, H, W)` for 2D or :math:`(C, D, H, W)` for 3D.
+    size : tuple[int, ...]
+        Target spatial size. For 2D use :math:`(H, W)`, for 3D use
+        :math:`(D, H, W)`.
+    mode : str, optional
+        Interpolation mode. One of ``"nearest"``, ``"bilinear"``,
+        ``"bicubic"`` (2D only), ``"trilinear"`` (3D only), ``"area"``.
+        Default is ``"bilinear"`` for 2D and ``"trilinear"`` for 3D.
+    align_corners : bool, optional
+        Used for ``"bilinear"``, ``"bicubic"``, ``"trilinear"``.
+        See :func:`torch.nn.functional.interpolate`. Default is ``False``.
+
+    Examples
+    --------
+    >>> transform = Resize(
+    ...     input_keys=["pressure", "velocity"],
+    ...     size=(64, 64),
+    ...     mode="bilinear",
+    ... )
+    >>> sample = TensorDict({
+    ...     "pressure": torch.randn(1, 128, 128),
+    ...     "velocity": torch.randn(2, 128, 128),
+    ... })
+    >>> result = transform(sample)
+    >>> result["pressure"].shape
+    torch.Size([1, 64, 64])
+    >>> result["velocity"].shape
+    torch.Size([2, 64, 64])
+    """
+
+    def __init__(
+        self,
+        input_keys: list[str],
+        size: Tuple[int, ...],
+        *,
+        mode: Optional[str] = None,
+        align_corners: bool = False,
+    ) -> None:
+        """
+        Initialize the resize transform.
+
+        Parameters
+        ----------
+        input_keys : list[str]
+            Keys of tensors to resize.
+        size : tuple[int, ...]
+            Target spatial size, e.g. :math:`(H, W)` or :math:`(D, H, W)`.
+        mode : str, optional
+            Interpolation mode. Defaults by spatial dims: ``"bilinear"`` (2D),
+            ``"trilinear"`` (3D).
+        align_corners : bool, optional
+            Passed to :func:`torch.nn.functional.interpolate`. Default ``False``.
+        """
+        super().__init__()
+        self.input_keys = input_keys
+        self.size = tuple(size)
+        ndim = len(self.size)
+        if ndim == 2:
+            self._default_mode: str = "bilinear"
+        elif ndim == 3:
+            self._default_mode = "trilinear"
+        else:
+            raise ValueError(f"size must have 2 or 3 spatial dimensions, got {ndim}")
+        self.mode = mode if mode is not None else self._default_mode
+        self.align_corners = align_corners
+
+    def __call__(self, data: TensorDict) -> TensorDict:
+        """
+        Resize each tensor in ``input_keys`` to the target spatial size.
+
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict containing grid tensors to resize.
+
+        Returns
+        -------
+        TensorDict
+            TensorDict with resized tensors in place of originals.
+        """
+        n_spatial = len(self.size)
+        # Single-sample only: (C, H, W) or (C, D, H, W); also accept (H, W) / (D, H, W) as single-channel
+        expected_ndim_with_channel = n_spatial + 1  # channel + spatial
+
+        interp_kw: dict = {"size": self.size, "mode": self.mode}
+        if self.mode not in ("nearest", "area"):
+            interp_kw["align_corners"] = self.align_corners
+
+        updates = {}
+        for key in self.input_keys:
+            if key not in data:
+                continue
+            t = data[key]
+            if not isinstance(t, torch.Tensor) or not t.is_floating_point():
+                continue
+            ndim = t.ndim
+            if ndim == n_spatial:
+                # (H, W) or (D, H, W): treat as single-channel for interpolate
+                t = t.unsqueeze(0)
+            elif ndim != expected_ndim_with_channel:
+                continue
+            # Add batch dim for F.interpolate, then remove; restore to original ndim if we added channel
+            out = F.interpolate(t.unsqueeze(0), **interp_kw).squeeze(0)
+            if ndim == n_spatial:
+                out = out.squeeze(0)
+            updates[key] = out
+        return data.update(updates)
+
+    def __repr__(self) -> str:
+        """
+        Return string representation.
+
+        Returns
+        -------
+        str
+            String representation of the transform.
+        """
+        return (
+            f"Resize(input_keys={self.input_keys}, size={self.size}, "
+            f"mode={self.mode!r})"
         )

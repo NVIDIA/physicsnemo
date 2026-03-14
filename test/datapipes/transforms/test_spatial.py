@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for spatial transforms (BoundingBoxFilter, CreateGrid, KNearestNeighbors, CenterOfMass)."""
+"""Tests for spatial transforms (BoundingBoxFilter, CreateGrid, KNearestNeighbors, CenterOfMass, Resize)."""
 
 import pytest
 import torch
@@ -25,6 +25,7 @@ from physicsnemo.datapipes.transforms.spatial import (
     CenterOfMass,
     CreateGrid,
     KNearestNeighbors,
+    Resize,
 )
 
 # ============================================================================
@@ -602,6 +603,125 @@ class TestCenterOfMass:
         assert "CenterOfMass" in repr_str
         assert "stl_centers" in repr_str
         assert "center_of_mass" in repr_str
+
+
+# ============================================================================
+# Resize Tests
+# ============================================================================
+
+
+class TestResize:
+    """Tests for Resize transform."""
+
+    def test_resize_2d_basic(self):
+        """Test basic 2D resizing of (C, H, W) tensor."""
+        transform = Resize(input_keys=["pressure"], size=(32, 32))
+        data = TensorDict({"pressure": torch.randn(1, 128, 128)})
+
+        result = transform(data)
+        assert result["pressure"].shape == (1, 32, 32)
+
+    def test_resize_3d_basic(self):
+        """Test basic 3D resizing of (C, D, H, W) tensor."""
+        transform = Resize(input_keys=["field"], size=(8, 16, 16))
+        data = TensorDict({"field": torch.randn(3, 32, 64, 64)})
+
+        result = transform(data)
+        assert result["field"].shape == (3, 8, 16, 16)
+
+    def test_resize_no_channel_dim(self):
+        """Test resizing an (H, W) tensor without channel dimension."""
+        transform = Resize(input_keys=["image"], size=(16, 16))
+        data = TensorDict({"image": torch.randn(64, 64)})
+
+        result = transform(data)
+        assert result["image"].shape == (16, 16)
+
+    def test_resize_default_mode_2d(self):
+        """Test that default mode for 2D size is bilinear."""
+        transform = Resize(input_keys=["x"], size=(32, 32))
+        assert transform.mode == "bilinear"
+
+    def test_resize_default_mode_3d(self):
+        """Test that default mode for 3D size is trilinear."""
+        transform = Resize(input_keys=["x"], size=(8, 8, 8))
+        assert transform.mode == "trilinear"
+
+    def test_resize_nearest_mode(self):
+        """Test explicit nearest mode (no align_corners needed)."""
+        transform = Resize(input_keys=["x"], size=(16, 16), mode="nearest")
+        data = TensorDict({"x": torch.randn(2, 64, 64)})
+
+        result = transform(data)
+        assert result["x"].shape == (2, 16, 16)
+
+    def test_resize_align_corners(self):
+        """Test align_corners=True with bilinear mode."""
+        transform = Resize(
+            input_keys=["x"], size=(16, 16), mode="bilinear", align_corners=True
+        )
+        data = TensorDict({"x": torch.randn(1, 64, 64)})
+
+        result = transform(data)
+        assert result["x"].shape == (1, 16, 16)
+
+    def test_resize_missing_key_skipped(self):
+        """Test that missing keys are silently skipped."""
+        transform = Resize(input_keys=["missing"], size=(16, 16))
+        original = torch.randn(1, 64, 64)
+        data = TensorDict({"present": original.clone()})
+
+        result = transform(data)
+        assert "present" in result
+        torch.testing.assert_close(result["present"], original)
+
+    def test_resize_non_float_skipped(self):
+        """Test that integer tensors are skipped."""
+        transform = Resize(input_keys=["mask"], size=(16, 16))
+        int_tensor = torch.randint(0, 2, (1, 64, 64))
+        data = TensorDict({"mask": int_tensor})
+
+        result = transform(data)
+        assert result["mask"].shape == (1, 64, 64)
+
+    def test_resize_invalid_size_dims(self):
+        """Test that invalid size dimensions raise ValueError."""
+        with pytest.raises(ValueError, match="2 or 3 spatial dimensions"):
+            Resize(input_keys=["x"], size=(16,))
+
+        with pytest.raises(ValueError, match="2 or 3 spatial dimensions"):
+            Resize(input_keys=["x"], size=(4, 8, 16, 32))
+
+    def test_resize_preserves_other_fields(self):
+        """Test that non-input fields are untouched."""
+        transform = Resize(input_keys=["field"], size=(16, 16))
+        other = torch.randn(50, 3)
+        data = TensorDict({"field": torch.randn(1, 64, 64), "other": other.clone()})
+
+        result = transform(data)
+        assert result["field"].shape == (1, 16, 16)
+        torch.testing.assert_close(result["other"], other)
+
+    def test_resize_multiple_keys(self):
+        """Test resizing multiple input keys."""
+        transform = Resize(input_keys=["pressure", "velocity"], size=(32, 32))
+        data = TensorDict(
+            {
+                "pressure": torch.randn(1, 128, 128),
+                "velocity": torch.randn(2, 128, 128),
+            }
+        )
+
+        result = transform(data)
+        assert result["pressure"].shape == (1, 32, 32)
+        assert result["velocity"].shape == (2, 32, 32)
+
+    def test_resize_repr(self):
+        """Test string representation."""
+        transform = Resize(input_keys=["pressure"], size=(64, 64), mode="bilinear")
+        repr_str = repr(transform)
+        assert "Resize" in repr_str
+        assert "bilinear" in repr_str
 
 
 # ============================================================================
