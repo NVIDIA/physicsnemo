@@ -92,7 +92,7 @@ class MultiDataset:
     Parameters
     ----------
     datasets : Sequence[Dataset]
-        Two or more Dataset instances (Reader + transforms each). Order defines
+        One or more Dataset instances (Reader + transforms each). Order defines
         index mapping: first dataset occupies 0..len(ds0)-1, etc.
     output_strict : bool, default=True
         If True, require all datasets to produce the same TensorDict keys (output
@@ -106,7 +106,7 @@ class MultiDataset:
     Raises
     ------
     ValueError
-        If ``len(datasets) < 2`` or if ``output_strict=True`` and output keys differ.
+        If ``len(datasets) < 1`` or if ``output_strict=True`` and output keys differ.
 
     Notes
     -----
@@ -160,9 +160,9 @@ class MultiDataset:
         *,
         output_strict: bool = True,
     ) -> None:
-        if len(datasets) < 2:
+        if len(datasets) < 1:
             raise ValueError(
-                f"MultiDataset requires at least two datasets, got {len(datasets)}"
+                f"MultiDataset requires at least one dataset, got {len(datasets)}"
             )
         for i, ds in enumerate(datasets):
             if not isinstance(ds, Dataset):

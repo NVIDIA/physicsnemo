@@ -20,6 +20,7 @@ Normalize - Standardize tensor values by mean and standard deviation or min-max 
 
 from __future__ import annotations
 
+import collections.abc
 import warnings
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -196,7 +197,7 @@ class Normalize(Transform):
         """Process statistics into dict of tensors for each field."""
         result: dict[str, torch.Tensor] = {}
 
-        if isinstance(stats, dict):
+        if isinstance(stats, collections.abc.Mapping):
             for key in self.input_keys:
                 if key not in stats:
                     raise ValueError(
