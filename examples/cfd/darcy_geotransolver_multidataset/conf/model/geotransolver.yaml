@@ -9,9 +9,9 @@
 
 _target_: physicsnemo.experimental.models.geotransolver.GeoTransolver
 
-functional_dim: 1
+functional_dim: 2
 out_dim: 1
-geometry_dim: 2   # 2D grid coords (x, y) as geometry
+geometry_dim: 1   # 2D grid coords (x, y) as geometry
 global_dim: null
 # Must match root config target_size / grid (same as Transolver structured_shape)
 structured_shape: ${target_size}

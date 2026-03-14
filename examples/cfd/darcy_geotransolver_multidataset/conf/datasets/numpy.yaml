@@ -4,7 +4,6 @@
 #
 # Darcy NPZ dataset: permeability (coeff) -> pressure (sol).
 # Path comes from config.yaml data.numpy_path.
-# @package _global_
 
 _target_: physicsnemo.datapipes.Dataset
 reader:
@@ -29,5 +28,16 @@ transforms:
     mapping:
       coeff: x
       sol: y
+  - _target_: ${dp:Normalize}
+    input_keys:
+      - "x"
+      - "y"
+    method: mean_std
+    means:
+      x: 7.5348
+      y: 0.00567372
+    stds:
+      x: 4.49987
+      y: 0.00377293
 device: auto
 num_workers: 2

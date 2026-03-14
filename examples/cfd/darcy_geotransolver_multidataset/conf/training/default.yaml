@@ -16,7 +16,7 @@ split_seed: 42
 
 optimizer:
   name: Adam
-  lr: 1.0e-3
+  lr: 3.0e-3
   weight_decay: 1.0e-4
 # Muon for matrix (2D) parameters; requires pytorch>=2.9
 use_muon: true
@@ -24,8 +24,6 @@ use_muon: true
 scheduler:
   name: CosineAnnealingLR
   T_max: 100
-
-loss: mse  # mse | l1
 
 # torch.compile; set compile=true to enable (modes: default | reduce-overhead | max-autotune)
 compile: true

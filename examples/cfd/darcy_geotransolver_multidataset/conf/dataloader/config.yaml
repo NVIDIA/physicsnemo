@@ -6,7 +6,7 @@
 # Dataset definitions live in conf/datasets/*.yaml; multi_dataset composes them in config.yaml.
 
 _target_: physicsnemo.datapipes.DataLoader
-batch_size: 12
+batch_size: 36
 shuffle: true
 drop_last: false
 prefetch_factor: 2

@@ -16,12 +16,6 @@ reader:
   pin_memory: false
   include_index_in_metadata: true
 transforms:
-  - _target_: ${dp:Resize}
-    input_keys:
-      - "nu"
-      - "tensor"
-    size: ${target_size}
-    mode: bilinear
   - _target_: ${dp:Rename}
     mapping:
       nu: x
@@ -30,5 +24,16 @@ transforms:
     keys:
       - y
     shape: ${target_size}
+  - _target_: ${dp:Normalize}
+    input_keys:
+      - "x"
+      - "y"
+    method: mean_std
+    means:
+      x: 0.536271
+      y: 0.162347
+    stds:
+      x: 0.449791
+      y: 0.139494
 device: auto
 num_workers: 2

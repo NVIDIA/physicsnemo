@@ -9,7 +9,6 @@
 import hydra
 import torch
 from omegaconf import DictConfig, OmegaConf
-from torch.nn import L1Loss, MSELoss
 from torch.utils.data import random_split, SubsetRandomSampler
 from torch.utils.tensorboard import SummaryWriter
 
@@ -21,6 +20,16 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.optim import CombinedOptimizer
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, LaunchLogger
+
+
+class RelativeL2Loss:
+    """Scale-invariant relative L2 loss: mean( ||pred - y||_2 / ||y||_2 )."""
+
+    def __call__(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        B = pred.shape[0]
+        diff = torch.norm(pred.reshape(B, -1) - target.reshape(B, -1), dim=1)
+        ref = torch.norm(target.reshape(B, -1), dim=1)
+        return torch.mean(diff / ref)
 
 
 def make_spatial_positions(
@@ -162,7 +171,7 @@ def main(cfg: DictConfig) -> None:
         def _forward(model, batch, positions):
             x = batch['x'].unsqueeze(-1)
             y = batch['y'].unsqueeze(-1)
-            pred = model(local_embedding=x, geometry=positions)
+            pred = model(local_embedding=positions, geometry=x)
             return _compute_metrics(pred, y), pred, x, y
     elif "transolver" in _model_target.lower():
         def _forward(model, batch, positions):
@@ -177,7 +186,9 @@ def main(cfg: DictConfig) -> None:
         )
 
     tb_log_dir = f"runs/{model_name}_{h}x{w}"
-    writer = SummaryWriter(log_dir=tb_log_dir)
+    tb_tag = f"{model_name}_{h}x{w}"
+    train_writer = SummaryWriter(log_dir=tb_log_dir + f"/{tb_tag}/train/")
+    val_writer = SummaryWriter(log_dir=tb_log_dir + f"/{tb_tag}/val/")
     log.info(f"TensorBoard logging to {tb_log_dir}")
 
     if getattr(cfg.training, "compile", False):
@@ -223,8 +234,7 @@ def main(cfg: DictConfig) -> None:
     else:
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda _: 1.0)
 
-    loss_name = getattr(cfg.training, "loss", "mse").lower()
-    loss_fn = MSELoss() if loss_name == "mse" else L1Loss()
+    loss_fn = RelativeL2Loss()
 
     ckpt_args = {
         "path": f"./checkpoints/{model_name}",
@@ -244,7 +254,6 @@ def main(cfg: DictConfig) -> None:
     else:
         log.warning(f"Resuming from epoch {start_epoch}.")
 
-    tb_tag = f"{model_name}_{h}x{w}"
 
     for epoch in range(start_epoch, cfg.training.max_epochs + 1):
         model.train()
@@ -278,10 +287,10 @@ def main(cfg: DictConfig) -> None:
         if train_n > 0:
             avg_train_loss = (train_loss_sum / train_n).item()
             train_rel_l2 = (train_l2_err_sq.sqrt() / train_l2_ref_sq.sqrt()).item()
-            writer.add_scalar(f"{tb_tag}/train/loss", avg_train_loss, epoch)
-            writer.add_scalar(f"{tb_tag}/train/rel_l2", train_rel_l2, epoch)
+            train_writer.add_scalar(f"train/loss", avg_train_loss, epoch)
+            train_writer.add_scalar(f"train/rel_l2", train_rel_l2, epoch)
         if train_sample is not None:
-            _log_sample_images(writer, f"{tb_tag}/train", *train_sample, epoch)
+            _log_sample_images(train_writer, f"train", *train_sample, epoch)
 
         if epoch % val_every == 0:
             model.eval()
@@ -302,17 +311,18 @@ def main(cfg: DictConfig) -> None:
             if val_n > 0:
                 avg_val_loss = (val_loss_sum / val_n).item()
                 val_rel_l2 = (val_l2_err_sq.sqrt() / val_l2_ref_sq.sqrt()).item()
-                writer.add_scalar(f"{tb_tag}/val/loss", avg_val_loss, epoch)
-                writer.add_scalar(f"{tb_tag}/val/rel_l2", val_rel_l2, epoch)
+                val_writer.add_scalar(f"val/loss", avg_val_loss, epoch)
+                val_writer.add_scalar(f"val/rel_l2", val_rel_l2, epoch)
                 log.info(f"Epoch {epoch} val_loss={avg_val_loss:.6f} val_rel_l2={val_rel_l2:.6f}")
             if val_sample is not None:
-                _log_sample_images(writer, f"{tb_tag}/val", *val_sample, epoch)
+                _log_sample_images(val_writer, f"val", *val_sample, epoch)
             model.train()
 
         if epoch % ckpt_every == 0:
             save_checkpoint(**ckpt_args, epoch=epoch)
 
-    writer.close()
+    train_writer.close()
+    val_writer.close()
     save_checkpoint(**ckpt_args, epoch=cfg.training.max_epochs)
     log.success("Training completed.")
 

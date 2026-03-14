@@ -14,13 +14,15 @@ embedding_dim: 2
 unified_pos: true
 ref: 8
 
-n_layers: 6
+n_layers: 4
 n_hidden: 128
 dropout: 0.0
-n_head: 8
+n_head: 4
 act: gelu
 mlp_ratio: 4
-slice_num: 32
+slice_num: 64
 use_te: false
 time_input: false
 plus: false
+
+

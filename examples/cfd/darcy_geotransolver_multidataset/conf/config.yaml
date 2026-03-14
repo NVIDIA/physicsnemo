@@ -44,8 +44,8 @@ multi_dataset:
   datasets:
     - ${darcy_fno}
     - ${dataset_pdebench_0.01}
-    # - ${dataset_pdebench_0.1}
-    # - ${dataset_pdebench_1.0}
-    # - ${dataset_pdebench_10.0}
-    # - ${dataset_pdebench_100.0}
+    - ${dataset_pdebench_0.1}
+    - ${dataset_pdebench_1.0}
+    - ${dataset_pdebench_10.0}
+    - ${dataset_pdebench_100.0}
   output_strict: true
