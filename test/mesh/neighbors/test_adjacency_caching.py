@@ -235,6 +235,7 @@ class TestPropagation:
         adj_after = translated.get_point_to_points_adjacency()
 
         _assert_adjacency_equal(adj_before, adj_after)
+        assert adj_before.offsets.data_ptr() == adj_after.offsets.data_ptr()
 
     def test_rotate_preserves(self, triangle_mesh_2d):
         triangle_mesh_2d.get_cell_to_cells_adjacency()
@@ -269,6 +270,7 @@ class TestPropagation:
 
         adj_final = result.get_point_to_points_adjacency()
         _assert_adjacency_equal(adj_original, adj_final)
+        assert adj_original.offsets.data_ptr() == adj_final.offsets.data_ptr()
 
     def test_all_four_adjacencies_propagate_through_translate(
         self, triangle_mesh_2d
