@@ -24,7 +24,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(device: torch.device | str = "cpu") -> Mesh:
+def load(device: torch.device | str = "cpu") -> Mesh[2, 2]:
     """Create a mesh with two triangles in 2D space.
 
     The triangles share a common edge, forming a simple quadrilateral
@@ -37,7 +37,7 @@ def load(device: torch.device | str = "cpu") -> Mesh:
 
     Returns
     -------
-    Mesh
+    Mesh[2, 2]
         Mesh with n_manifold_dims=2, n_spatial_dims=2, n_cells=2.
     """
     points = torch.tensor(

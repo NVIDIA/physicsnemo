@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds `physicsnemo.mesh.generate` subpackage with `marching_cubes` for
   isosurface extraction from 3D scalar fields, returning a `Mesh` object.
   Supports the NVIDIA Warp backend.
+- Adds a type system to PhysicsNeMo-Mesh, allowing annotation of Mesh dimensions
+  using notation like `Mesh[2, 3]` for a 2D manifold in 3D space.
+- Adds adjacency caching to PhysicsNeMo-Mesh `Mesh` objects, allowing efficient
+  reuse of neighbor information.
 
 ### Changed
 

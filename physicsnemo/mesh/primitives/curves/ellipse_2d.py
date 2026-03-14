@@ -29,7 +29,7 @@ def load(
     semi_minor_axis: float = 1.0,
     n_points: int = 48,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[1, 2]:
     """Create a closed ellipse curve in 2D space.
 
     Parameters
@@ -45,7 +45,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[1, 2]
         Mesh with n_manifold_dims=1, n_spatial_dims=2, n_cells=n_points.
     """
     if n_points < 3:

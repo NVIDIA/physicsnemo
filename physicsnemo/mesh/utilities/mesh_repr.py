@@ -16,11 +16,16 @@
 
 """Utility functions for string-formatting Mesh representations."""
 
+from typing import TYPE_CHECKING
+
 import torch
 from tensordict import TensorDict
 
+if TYPE_CHECKING:
+    from physicsnemo.mesh.mesh import Mesh
 
-def format_mesh_repr(mesh) -> str:
+
+def format_mesh_repr(mesh: "Mesh") -> str:
     """Format a complete Mesh representation.
 
     Parameters
@@ -33,18 +38,20 @@ def format_mesh_repr(mesh) -> str:
     str
         Formatted string representation of the mesh.
     """
-    ### Build the first line with class name and key properties
+    ### Build the first line: Mesh[manifold, spatial](n_points=..., n_cells=..., ...)
     class_name = mesh.__class__.__name__
+    dim_sig = f"[n_manifold_dims={mesh.n_manifold_dims}, n_spatial_dims={mesh.n_spatial_dims}]"
+
     parts = [
-        f"manifold_dim={mesh.n_manifold_dims}",
-        f"spatial_dim={mesh.n_spatial_dims}",
         f"n_points={mesh.n_points}",
         f"n_cells={mesh.n_cells}",
     ]
+
     device = mesh.device
     if device is not None:
         parts.append(f"device={device}")
-    first_line = f"{class_name}({', '.join(parts)})"
+
+    first_line = f"{class_name}{dim_sig}({', '.join(parts)})"
 
     ### Format non-empty data fields with proper alignment
     data_fields = ["point_data", "cell_data", "global_data"]

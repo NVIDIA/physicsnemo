@@ -142,10 +142,8 @@ class TestRename:
                         "old_name": torch.randn(10, 2),
                         "other": torch.randn(10, 1),
                     },
-                    batch_size=[],
                 ),
             },
-            batch_size=[],
         )
 
         transform = Rename(mapping={"nested.old_name": "nested.new_name"})
@@ -169,13 +167,10 @@ class TestRename:
                             {
                                 "y": torch.randn(10, 1),
                             },
-                            batch_size=[],
                         ),
                     },
-                    batch_size=[],
                 ),
             },
-            batch_size=[],
         )
 
         transform = Rename(
@@ -201,10 +196,8 @@ class TestRename:
                     {
                         "original": original_tensor.clone(),
                     },
-                    batch_size=[],
                 ),
             },
-            batch_size=[],
         )
 
         transform = Rename(mapping={"nested.original": "nested.renamed"})
@@ -220,10 +213,8 @@ class TestRename:
                     {
                         "existing": torch.randn(10, 2),
                     },
-                    batch_size=[],
                 ),
             },
-            batch_size=[],
         )
 
         transform = Rename(mapping={"nested.missing": "nested.new_name"}, strict=True)
@@ -239,10 +230,8 @@ class TestRename:
                     {
                         "existing": torch.randn(10, 2),
                     },
-                    batch_size=[],
                 ),
             },
-            batch_size=[],
         )
 
         transform = Rename(
@@ -270,13 +259,10 @@ class TestRename:
                             {
                                 "e": torch.randn(5, 1),
                             },
-                            batch_size=[],
                         ),
                     },
-                    batch_size=[],
                 ),
             },
-            batch_size=[],
         )
 
         transform = Rename(mapping={"b.d.e": "b.d.renamed_e"})
@@ -519,10 +505,8 @@ class TestPurge:
                         "keep": torch.randn(10, 2),
                         "drop_me": torch.randn(10, 1),
                     },
-                    batch_size=[],
                 ),
             },
-            batch_size=[],
         )
 
         transform = Purge(drop_only=["nested.drop_me"])
@@ -547,13 +531,10 @@ class TestPurge:
                                 "z": torch.randn(10, 1),
                                 "w": torch.randn(10, 1),
                             },
-                            batch_size=[],
                         ),
                     },
-                    batch_size=[],
                 ),
             },
-            batch_size=[],
         )
 
         transform = Purge(drop_only=["level1.y", "level1.level2.w"])
@@ -575,10 +556,8 @@ class TestPurge:
                         "keep": torch.randn(10, 2),
                         "remove": torch.randn(10, 1),
                     },
-                    batch_size=[],
                 ),
             },
-            batch_size=[],
         )
 
         transform = Purge(keep_only=["nested.keep"])
@@ -603,13 +582,10 @@ class TestPurge:
                                 "z": torch.randn(10, 1),
                                 "w": torch.randn(10, 1),
                             },
-                            batch_size=[],
                         ),
                     },
-                    batch_size=[],
                 ),
             },
-            batch_size=[],
         )
 
         transform = Purge(keep_only=["a", "level1.x", "level1.level2.z"])
@@ -629,10 +605,8 @@ class TestPurge:
                     {
                         "existing": torch.randn(10, 2),
                     },
-                    batch_size=[],
                 ),
             },
-            batch_size=[],
         )
 
         transform = Purge(drop_only=["nested.missing"], strict=True)
@@ -649,10 +623,8 @@ class TestPurge:
                         "existing": torch.randn(10, 2),
                         "drop": torch.randn(10, 1),
                     },
-                    batch_size=[],
                 ),
             },
-            batch_size=[],
         )
 
         transform = Purge(drop_only=["nested.missing", "nested.drop"], strict=False)
@@ -671,10 +643,8 @@ class TestPurge:
                         "keep": original_tensor.clone(),
                         "drop": torch.randn(20, 2),
                     },
-                    batch_size=[],
                 ),
             },
-            batch_size=[],
         )
 
         transform = Purge(drop_only=["nested.drop"])
@@ -695,13 +665,10 @@ class TestPurge:
                                 "e": torch.randn(5, 1),
                                 "f": torch.randn(5, 1),
                             },
-                            batch_size=[],
                         ),
                     },
-                    batch_size=[],
                 ),
             },
-            batch_size=[],
         )
 
         transform = Purge(drop_only=["b.d.f"])
