@@ -230,11 +230,10 @@ class TestMultiDatasetPrefetchAndClose:
 class TestMultiDatasetErrors:
     """Error cases."""
 
-    def test_requires_at_least_two_datasets(self, numpy_data_dir):
-        """MultiDataset requires at least two datasets."""
-        ds = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        with pytest.raises(ValueError, match="at least two"):
-            dp.MultiDataset([ds], output_strict=True)
+    def test_requires_at_least_one_datasets(self, numpy_data_dir):
+        """MultiDataset requires at least one datasets."""
+        with pytest.raises(ValueError, match="at least one"):
+            dp.MultiDataset([], output_strict=True)
 
     def test_requires_dataset_instances(self, numpy_data_dir):
         """All elements must be Dataset instances."""
