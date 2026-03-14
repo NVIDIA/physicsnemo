@@ -19,7 +19,7 @@
 import pytest
 import torch
 
-from physicsnemo.mesh import Graph, Mesh, PointCloud
+from physicsnemo.mesh import Mesh
 from physicsnemo.mesh._mesh_spec import MeshDims, _parse_dim_expr
 
 ### Fixtures
@@ -161,9 +161,9 @@ class TestCaching:
         assert Mesh[2, 3] is not Mesh[1, 3]
         assert Mesh[2, 3] is not Mesh[2, ...]
 
-    def test_alias_identity(self):
-        assert PointCloud is Mesh[0, ...]
-        assert Graph is Mesh[1, ...]
+    def test_equivalent_specs_are_identical(self):
+        assert Mesh[0, ...] is Mesh[0, ...]
+        assert Mesh[1, ...] is Mesh[1, ...]
 
 
 ### isinstance checks
@@ -202,13 +202,13 @@ class TestIsinstance:
         assert not isinstance("not a mesh", Mesh[2, 3])
         assert not isinstance(42, Mesh[..., ...])
 
-    def test_pointcloud_alias(self, point_cloud_3d, surface_3d):
-        assert isinstance(point_cloud_3d, PointCloud)
-        assert not isinstance(surface_3d, PointCloud)
+    def test_point_cloud_spec(self, point_cloud_3d, surface_3d):
+        assert isinstance(point_cloud_3d, Mesh[0, ...])
+        assert not isinstance(surface_3d, Mesh[0, ...])
 
-    def test_graph_alias(self, curve_3d, surface_3d):
-        assert isinstance(curve_3d, Graph)
-        assert not isinstance(surface_3d, Graph)
+    def test_graph_spec(self, curve_3d, surface_3d):
+        assert isinstance(curve_3d, Mesh[1, ...])
+        assert not isinstance(surface_3d, Mesh[1, ...])
 
     def test_same_manifold_different_spatial(self, surface_3d, surface_2d):
         assert isinstance(surface_3d, Mesh[2, 3])

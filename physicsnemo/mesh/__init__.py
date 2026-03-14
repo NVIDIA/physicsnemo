@@ -15,6 +15,3 @@
 # limitations under the License.
 
 from physicsnemo.mesh.mesh import Mesh
-
-PointCloud = Mesh[0, ...]
-Graph = Mesh[1, ...]

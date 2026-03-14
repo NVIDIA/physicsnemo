@@ -27,15 +27,11 @@ checks:
 
     assert isinstance(mesh, Mesh[2, 3])  # True for a triangle mesh in 3D
 
-Two convenience aliases are provided in :mod:`physicsnemo.mesh`:
-
-- ``PointCloud = Mesh[0, ...]``  (0-manifold in any space)
-- ``Graph = Mesh[1, ...]``  (1-manifold in any space)
 """
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -199,7 +195,7 @@ class MeshDims:
         )
 
     @property
-    def boundary(self) -> Self:
+    def boundary(self) -> "MeshDims":
         r"""Derive the boundary dimension spec (manifold dim decremented by 1).
 
         For concrete dimensions, ``MeshDims(2, 3).boundary`` gives

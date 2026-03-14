@@ -1535,7 +1535,7 @@ class Mesh:
             target_counts="boundary",
         )
 
-    def to_edge_graph(self) -> "Mesh":
+    def to_edge_graph(self) -> "Mesh[1, ...]":
         r"""Return a 1D Mesh whose cells are the unique edges of this mesh.
 
         Each edge (pair of vertices connected in a cell) appears exactly once.
@@ -1547,8 +1547,8 @@ class Mesh:
 
         Returns
         -------
-        Mesh
-            A 1D Mesh (``n_manifold_dims == 1``) with edge cells.
+        Mesh[1, ...]
+            A 1D mesh (``n_manifold_dims == 1``) with edge cells.
 
         Examples
         --------
@@ -1558,13 +1558,13 @@ class Mesh:
         >>> cells = torch.tensor([[0, 1, 2]])
         >>> mesh = Mesh(points=points, cells=cells)
         >>> edge_graph = mesh.to_edge_graph()
-        >>> assert edge_graph.n_manifold_dims == 1
+        >>> assert isinstance(edge_graph, Mesh[1, ...])
         >>> assert edge_graph.n_cells == 3  # triangle has 3 edges
         """
         codim = self.n_manifold_dims - 1
         return self.get_facet_mesh(manifold_codimension=codim, target_counts="all")
 
-    def to_dual_graph(self) -> "Mesh":
+    def to_dual_graph(self) -> "Mesh[1, ...]":
         r"""Return a 1D Mesh representing the cell-adjacency (dual) graph.
 
         Points are the cell centroids of this mesh.  Cells are
@@ -1575,8 +1575,8 @@ class Mesh:
 
         Returns
         -------
-        Mesh
-            A 1D Mesh (``n_manifold_dims == 1``) whose points are cell
+        Mesh[1, ...]
+            A 1D mesh (``n_manifold_dims == 1``) whose points are cell
             centroids and whose cells encode the cell-neighbor adjacency.
 
         Examples
@@ -1588,7 +1588,7 @@ class Mesh:
         >>> cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
         >>> mesh = Mesh(points=points, cells=cells)
         >>> dual = mesh.to_dual_graph()
-        >>> assert dual.n_manifold_dims == 1
+        >>> assert isinstance(dual, Mesh[1, ...])
         >>> assert dual.n_cells == 1  # 1 shared edge -> 1 dual edge
         """
         adj = self.get_cell_to_cells_adjacency(adjacency_codimension=1)
@@ -1608,7 +1608,7 @@ class Mesh:
 
     def to_point_cloud(
         self, point_source: "Literal['vertices', 'cell_centroids']" = "vertices"
-    ) -> "Mesh":
+    ) -> "Mesh[0, ...]":
         r"""Return a 0D Mesh (point cloud) with no cell connectivity.
 
         Parameters
@@ -1623,8 +1623,8 @@ class Mesh:
 
         Returns
         -------
-        Mesh
-            A 0D Mesh (``n_manifold_dims == 0``) with no cells.
+        Mesh[0, ...]
+            A 0D mesh (``n_manifold_dims == 0``) with no cells.
 
         Examples
         --------
@@ -1634,9 +1634,8 @@ class Mesh:
         >>> cells = torch.tensor([[0, 1, 2]])
         >>> mesh = Mesh(points=points, cells=cells)
         >>> pc = mesh.to_point_cloud()
-        >>> assert pc.n_manifold_dims == 0
+        >>> assert isinstance(pc, Mesh[0, ...])
         >>> assert pc.n_points == 3
-        >>> assert pc.n_cells == 0
         """
         if point_source == "vertices":
             return Mesh(
