@@ -33,7 +33,6 @@ from physicsnemo.mesh.transformations.geometric import (
     translate,
 )
 
-
 ### Fixtures
 
 
@@ -120,20 +119,14 @@ class TestCacheHit:
         assert adj1.offsets.data_ptr() == adj2.offsets.data_ptr()
         assert adj1.indices.data_ptr() == adj2.indices.data_ptr()
 
-    def test_cell_to_cells_different_codimensions_cached_independently(
-        self, tet_mesh
-    ):
+    def test_cell_to_cells_different_codimensions_cached_independently(self, tet_mesh):
         """Different codimension values get independent cache entries."""
         adj_codim1 = tet_mesh.get_cell_to_cells_adjacency(adjacency_codimension=1)
         adj_codim2 = tet_mesh.get_cell_to_cells_adjacency(adjacency_codimension=2)
 
         # Both should be cached now
-        adj_codim1_again = tet_mesh.get_cell_to_cells_adjacency(
-            adjacency_codimension=1
-        )
-        adj_codim2_again = tet_mesh.get_cell_to_cells_adjacency(
-            adjacency_codimension=2
-        )
+        adj_codim1_again = tet_mesh.get_cell_to_cells_adjacency(adjacency_codimension=1)
+        adj_codim2_again = tet_mesh.get_cell_to_cells_adjacency(adjacency_codimension=2)
 
         assert adj_codim1.offsets.data_ptr() == adj_codim1_again.offsets.data_ptr()
         assert adj_codim2.offsets.data_ptr() == adj_codim2_again.offsets.data_ptr()
@@ -272,9 +265,7 @@ class TestPropagation:
         _assert_adjacency_equal(adj_original, adj_final)
         assert adj_original.offsets.data_ptr() == adj_final.offsets.data_ptr()
 
-    def test_all_four_adjacencies_propagate_through_translate(
-        self, triangle_mesh_2d
-    ):
+    def test_all_four_adjacencies_propagate_through_translate(self, triangle_mesh_2d):
         """All four adjacency types survive a translate."""
         triangle_mesh_2d.get_point_to_cells_adjacency()
         triangle_mesh_2d.get_point_to_points_adjacency()
