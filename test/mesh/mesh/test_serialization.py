@@ -98,7 +98,7 @@ class TestMemmapRoundTrip:
         loaded = Mesh.load(tmp_path / "pc.pt")
 
         result = repr(loaded)
-        assert "manifold_dim=0" in result
+        assert "[0, 2]" in result
         assert "n_cells=0" in result
 
     def test_points_preserved(self, tmp_path):
