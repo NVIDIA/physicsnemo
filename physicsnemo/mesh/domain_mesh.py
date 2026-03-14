@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any, Literal, Self
 import torch
 from tensordict import TensorDict, tensorclass
 
-from physicsnemo.mesh._mesh_spec import MeshDims, _get_mesh_spec
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 
@@ -44,11 +43,6 @@ class DomainMesh:
     like :meth:`to`, :meth:`clone`, and :meth:`pin_memory` propagate to
     ``interior``, all ``boundaries``, and ``global_data`` automatically.
 
-    Supports parametric dimension syntax via ``DomainMesh[m, s]``, which
-    constrains the interior to ``Mesh[m, s]`` and boundaries to
-    ``Mesh[m-1, s]``. This enables dimension-aware type annotations and
-    runtime ``isinstance`` checks (see :meth:`__class_getitem__`).
-
     Parameters
     ----------
     interior : Mesh
@@ -71,8 +65,7 @@ class DomainMesh:
         ``boundaries`` is not a :class:`Mesh`.
     ValueError
         If any boundary mesh has a different ``n_spatial_dims`` than
-        ``interior``, or (when the interior has cells) a different
-        ``n_manifold_dims`` than ``interior.n_manifold_dims - 1``.
+        ``interior``.
 
     Examples
     --------
@@ -161,7 +154,6 @@ class DomainMesh:
                     f"`interior` must be a Mesh, got {type(self.interior).__name__}."
                 )
             expected_spatial_dims = self.interior.n_spatial_dims
-            interior_manifold_dims = self.interior.n_manifold_dims
             for name in self.boundaries.keys():
                 bc_mesh = self.boundaries[name]
                 if not isinstance(bc_mesh, Mesh):
@@ -175,78 +167,6 @@ class DomainMesh:
                         f"({expected_spatial_dims}), but boundaries[{name!r}] "
                         f"has n_spatial_dims={bc_mesh.n_spatial_dims}."
                     )
-                if (
-                    interior_manifold_dims > 0
-                    and bc_mesh.n_manifold_dims != interior_manifold_dims - 1
-                ):
-                    raise ValueError(
-                        f"Boundary meshes must have n_manifold_dims="
-                        f"{interior_manifold_dims - 1} "
-                        f"(interior.n_manifold_dims - 1), but "
-                        f"boundaries[{name!r}] has "
-                        f"n_manifold_dims={bc_mesh.n_manifold_dims}."
-                    )
-
-    @classmethod
-    def __class_getitem__(cls, params: tuple) -> type:
-        r"""Parametrize DomainMesh by interior manifold and spatial dimensions.
-
-        Returns a synthetic type usable in type annotations and ``isinstance``
-        checks. The spec ``DomainMesh[m, s]`` constrains the interior to
-        ``Mesh[m, s]`` and all boundary meshes to ``Mesh[m-1, s]``.
-        Always requires exactly two parameters; use ``...`` (Ellipsis) to
-        leave a dimension unconstrained.
-
-        Parameters
-        ----------
-        params : tuple
-            A 2-tuple of ``(manifold_dims, spatial_dims)`` where each element
-            is an ``int`` (concrete), ``str`` (symbolic, e.g. ``"n-1"``), or
-            ``...`` (unconstrained).
-
-        Returns
-        -------
-        type
-            A parametrized DomainMesh type supporting ``isinstance`` checks,
-            with ``.interior_type`` and ``.boundary_type`` navigation
-            properties.
-
-        Raises
-        ------
-        TypeError
-            If not exactly 2 parameters, or if parameter types are invalid.
-        ValueError
-            If concrete dimensions are negative or manifold exceeds spatial.
-
-        Examples
-        --------
-        >>> DomainMesh[3, 3]
-        DomainMesh[3, 3]
-        >>> DomainMesh[2, ...]
-        DomainMesh[2, ...]
-        >>> DomainMesh[3, 3].interior_type
-        Mesh[3, 3]
-        >>> DomainMesh[3, 3].boundary_type
-        Mesh[2, 3]
-        """
-        if not isinstance(params, tuple):
-            raise TypeError(
-                f"DomainMesh[...] requires exactly 2 parameters "
-                f"(e.g. DomainMesh[3, 3] or DomainMesh[2, ...]), "
-                f"got single parameter {params!r}"
-            )
-        if len(params) != 2:
-            raise TypeError(
-                f"DomainMesh[...] requires exactly 2 parameters, "
-                f"got {len(params)}"
-            )
-
-        n_manifold_dims = None if params[0] is ... else params[0]
-        n_spatial_dims = None if params[1] is ... else params[1]
-
-        return _get_domain_mesh_spec(
-            MeshDims(n_manifold_dims=n_manifold_dims, n_spatial_dims=n_spatial_dims)
-        )
 
     def _map_meshes(self, fn: Callable[[Mesh], Mesh]) -> "DomainMesh":
         r"""Apply a Mesh-to-Mesh function to interior and all boundaries.
@@ -844,78 +764,3 @@ class DomainMesh:
 
         lines.append(")")
         return "\n".join(lines)
-
-
-### Metaclass for parametrized DomainMesh types
-
-
-class _DomainMeshSpecMeta(type):
-    r"""Metaclass enabling ``isinstance(dm, DomainMesh[3, 3])`` checks.
-
-    Each instance of this metaclass is a synthetic type representing a
-    dimension-constrained DomainMesh. The constraint applies to the interior
-    mesh (must satisfy ``Mesh[m, s]``) and all boundary meshes (must satisfy
-    ``Mesh[m-1, s]``). It is not a subclass of DomainMesh and cannot be
-    instantiated - it exists purely for ``isinstance`` checks, ``repr``,
-    and derived-type navigation.
-    """
-
-    _mesh_dims: MeshDims
-
-    def __instancecheck__(cls, instance: object) -> bool:
-        if not type.__instancecheck__(DomainMesh, instance):
-            return False
-        dm: DomainMesh = instance  # type: ignore[assignment]
-        interior_spec = _get_mesh_spec(cls._mesh_dims)
-        if not isinstance(dm.interior, interior_spec):
-            return False
-        try:
-            boundary_spec = _get_mesh_spec(cls._mesh_dims.boundary)
-        except (ValueError, TypeError):
-            # m=0 or m=None: boundary dims can't be derived, skip check
-            return True
-        for name in dm.boundary_names:
-            if not isinstance(dm.boundaries[name], boundary_spec):
-                return False
-        return True
-
-    def __repr__(cls) -> str:
-        return f"DomainMesh[{cls._mesh_dims}]"
-
-    @property
-    def interior_type(cls) -> type:
-        """``DomainMesh[m, s].interior_type`` gives ``Mesh[m, s]``."""
-        return _get_mesh_spec(cls._mesh_dims)
-
-    @property
-    def boundary_type(cls) -> type:
-        """``DomainMesh[m, s].boundary_type`` gives ``Mesh[m-1, s]``."""
-        return _get_mesh_spec(cls._mesh_dims.boundary)
-
-
-### Cached factory
-
-_domain_mesh_spec_cache: dict[MeshDims, type] = {}
-
-
-def _get_domain_mesh_spec(dims: MeshDims) -> type:
-    r"""Get or create a parametrized DomainMesh type for the given dimension spec.
-
-    Results are cached so that ``DomainMesh[3, 3] is DomainMesh[3, 3]`` holds.
-
-    Parameters
-    ----------
-    dims : MeshDims
-        The dimension specification for the interior mesh.
-
-    Returns
-    -------
-    type
-        A ``_DomainMeshSpecMeta`` instance usable with ``isinstance`` and as a
-        type annotation.
-    """
-    if dims not in _domain_mesh_spec_cache:
-        _domain_mesh_spec_cache[dims] = _DomainMeshSpecMeta(
-            f"DomainMesh[{dims}]", (), {"_mesh_dims": dims}
-        )
-    return _domain_mesh_spec_cache[dims]
