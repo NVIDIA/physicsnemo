@@ -110,8 +110,8 @@ class DomainMesh:
     >>> dm_gpu = dm.to("cuda")  # doctest: +SKIP
     """
 
-    interior: Mesh[" m", " s"]
-    boundaries: TensorDict[str, Mesh[" m-1", " s"]]
+    interior: Mesh
+    boundaries: TensorDict[str, Mesh]
     global_data: TensorDict
 
     def __init__(
