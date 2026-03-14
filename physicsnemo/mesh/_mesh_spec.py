@@ -171,7 +171,9 @@ class MeshDims:
             and mesh.n_spatial_dims != self.n_spatial_dims
         ):
             return False
-        if isinstance(self.n_manifold_dims, str) and isinstance(self.n_spatial_dims, str):
+        if isinstance(self.n_manifold_dims, str) and isinstance(
+            self.n_spatial_dims, str
+        ):
             return self._check_symbolic_constraint(mesh)
         return True
 
