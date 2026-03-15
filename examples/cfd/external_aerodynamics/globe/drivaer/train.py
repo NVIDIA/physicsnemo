@@ -452,6 +452,9 @@ def main(
                 for k, v in batch_loss_components.items():
                     all_batch_loss_components[k].append(v.detach().clone())
 
+            if training and profiler is not None:
+                profiler.step()
+
         ### [Distributed comms]
         keys = ["loss", *all_batch_loss_components.keys()]
         all_values = torch.stack(
@@ -536,8 +539,6 @@ def main(
 
             scheduler.step(loss["train"])
 
-            if profiler is not None:
-                profiler.step()
             if dist.world_size > 1:
                 barrier()
 
