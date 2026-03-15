@@ -650,7 +650,7 @@ class Kernel(Module):
                     object.__setattr__(
                         self,
                         "_compiled_network",
-                        torch.compile(self.network, dynamic=True, mode="default"),
+                        torch.compile(self.network, dynamic=True, mode="max-autotune-no-cudagraphs"),
                     )
                 network = self._compiled_network
             flattened_output = network(flattened_input)
