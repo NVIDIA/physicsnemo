@@ -486,6 +486,15 @@ class ClusterTree:
     sorted_source_order: torch.Tensor
     source_points: torch.Tensor
     max_depth: torch.Tensor
+    internal_level_ids: torch.Tensor
+    internal_level_offsets: torch.Tensor
+    # internal_level_ids and internal_level_offsets store the tree's
+    # internal node IDs in CSR-packed level order (shallowest first).
+    # Computed once during from_points() and reused by all bottom-up
+    # propagation routines (_propagate_centroids_bottom_up,
+    # _compute_node_strengths) to avoid recomputing the BFS traversal
+    # that discovers this ordering.  Stored as tensors (not a Python
+    # list) so they participate in tensorclass .to(device) moves.
 
     @property
     def n_nodes(self) -> int:
@@ -501,6 +510,20 @@ class ClusterTree:
     def n_spatial_dims(self) -> int:
         """Spatial dimensionality."""
         return self.node_aabb_min.shape[1]
+
+    @property
+    def internal_nodes_per_level(self) -> list[torch.Tensor]:
+        """Internal node IDs grouped by tree depth, shallowest first.
+
+        Reconstructed from CSR-packed ``internal_level_ids`` and
+        ``internal_level_offsets`` tensors that are computed once during
+        tree construction in :meth:`from_points`.
+        """
+        offsets = self.internal_level_offsets
+        return [
+            self.internal_level_ids[offsets[i] : offsets[i + 1]]
+            for i in range(len(offsets) - 1)
+        ]
 
     @classmethod
     def from_points(
@@ -557,6 +580,8 @@ class ClusterTree:
                 sorted_source_order=empty_long,
                 source_points=points,
                 max_depth=torch.tensor(0, dtype=torch.long, device=device),
+                internal_level_ids=empty_long,
+                internal_level_offsets=torch.tensor([0], dtype=torch.long, device=device),
                 batch_size=torch.Size([]),
             )
 
@@ -703,6 +728,23 @@ class ClusterTree:
             n_points, node_count, n_leaves, actual_depth, leaf_size,
         )
 
+        ### Pack the per-level internal node IDs into CSR tensors so they
+        ### survive as tensorclass attributes (device-safe, no BFS needed later).
+        _level_ids = (
+            torch.cat(internal_nodes_per_level)
+            if internal_nodes_per_level
+            else torch.empty(0, dtype=torch.long, device=device)
+        )
+        _level_lengths = torch.tensor(
+            [len(t) for t in internal_nodes_per_level],
+            dtype=torch.long,
+            device=device,
+        )
+        _level_offsets = torch.cat([
+            torch.zeros(1, dtype=torch.long, device=device),
+            _level_lengths.cumsum(0),
+        ])
+
         return cls(
             node_aabb_min=aabb_min_trimmed,
             node_aabb_max=aabb_max_trimmed,
@@ -717,6 +759,8 @@ class ClusterTree:
             sorted_source_order=sorted_order,
             source_points=points,
             max_depth=torch.tensor(actual_depth, dtype=torch.long, device=device),
+            internal_level_ids=_level_ids,
+            internal_level_offsets=_level_offsets,
             batch_size=torch.Size([]),
         )
 
@@ -813,7 +857,7 @@ class ClusterTree:
                 self.node_left_child,
                 self.node_right_child,
                 self.node_total_area,
-                n_nodes,
+                self.internal_nodes_per_level,
             )
 
         return SourceAggregates(
@@ -1238,58 +1282,44 @@ def _aggregate_source_data_leaves(
     return sorted_source_data.apply(_aggregate_leaf, batch_size=[n_nodes])
 
 
+### Disabled for torch.compile: this function iterates over a
+### variable-length list (depth_levels), whose length equals the tree
+### depth. Dynamo unrolls this loop and specializes on the length,
+### causing recompilation every time a new tree depth is encountered
+### (each airfoil mesh produces a different-depth tree). Disabling
+### compilation here produces one clean graph break at the function
+### boundary instead of per-depth-level recompilation storms.
+@torch.compiler.disable
 def _propagate_centroids_bottom_up(
     centroid_buf: Float[torch.Tensor, "n_nodes n_dims"],
     node_source_data: TensorDict | None,
     left_child: Int[torch.Tensor, " n_nodes"],
     right_child: Int[torch.Tensor, " n_nodes"],
     total_area: Float[torch.Tensor, " n_nodes"],
-    n_nodes: int,
+    depth_levels: list[torch.Tensor],
 ) -> None:
     """Propagate centroids and source data from leaves to root (in-place).
 
     Internal node centroid = area-weighted average of its children's centroids.
     Internal node source data = area-weighted average of its children's data.
+
+    Parameters
+    ----------
+    centroid_buf : Float[torch.Tensor, "n_nodes n_dims"]
+        Buffer of per-node centroids (leaf values pre-filled, internal values
+        written by this function).
+    node_source_data : TensorDict or None
+        Per-node source data to propagate (same structure as centroid_buf).
+    left_child : Int[torch.Tensor, "n_nodes"]
+        Left child index per node (-1 for leaves).
+    right_child : Int[torch.Tensor, "n_nodes"]
+        Right child index per node (-1 for leaves).
+    total_area : Float[torch.Tensor, "n_nodes"]
+        Total source area in each node's subtree.
+    depth_levels : list[torch.Tensor]
+        Internal node IDs grouped by tree depth (shallowest first),
+        from :attr:`ClusterTree.internal_nodes_per_level`.
     """
-    # Identify internal nodes: those with valid children
-    is_internal = left_child[:n_nodes] >= 0
-    internal_ids = torch.where(is_internal)[0]
-
-    if internal_ids.numel() == 0:
-        return
-
-    # BFS from root discovers which internal nodes live at each depth.
-    # We then process reversed(depth_levels) so the deepest internal
-    # nodes (whose children are leaves with known values) are computed
-    # first, and each shallower level can read correct children.
-    device = centroid_buf.device
-    depth_levels: list[torch.Tensor] = []
-    current_level = torch.tensor([0], dtype=torch.long, device=device)
-
-    while current_level.numel() > 0:
-        # Filter to internal nodes at this level
-        mask = is_internal[current_level]
-        internal_at_level = current_level[mask]
-        if internal_at_level.numel() > 0:
-            depth_levels.append(internal_at_level)
-
-        # Expand to children
-        next_parts: list[torch.Tensor] = []
-        if internal_at_level.numel() > 0:
-            left = left_child[internal_at_level]
-            right = right_child[internal_at_level]
-            valid_l = left >= 0
-            valid_r = right >= 0
-            if valid_l.any():
-                next_parts.append(left[valid_l])
-            if valid_r.any():
-                next_parts.append(right[valid_r])
-
-        current_level = torch.cat(next_parts) if next_parts else torch.empty(
-            0, dtype=torch.long, device=device
-        )
-
-    # Process from deepest level to root
     for level_ids in reversed(depth_levels):
         left = left_child[level_ids]
         right = right_child[level_ids]
