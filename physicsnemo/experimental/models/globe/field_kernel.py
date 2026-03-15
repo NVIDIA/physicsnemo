@@ -633,13 +633,18 @@ class Kernel(Module):
         interaction_dims = cat_input_tensors.shape[:-1]
         flattened_input = cat_input_tensors.reshape(prod(interaction_dims), self.network_in_features)
 
-        ### Lazy-compile the MLP on first call. This fuses linear+activation
-        ### layers, giving ~12% speedup on memory-bound H100 workloads.
+        ### Lazy-compile the MLP on first call.
+        ###
+        ### When called from BarnesHutKernel, _evaluate_interactions is
+        ### itself compiled (via _compiled_evaluate_interactions in
+        ### _gather_and_evaluate), so is_compiling() is True and the MLP
+        ### is captured as part of that wider graph - this fallback is not
+        ### used.  The fallback exists for the dense Kernel.forward() path,
+        ### which calls _evaluate_interactions directly from eager code.
+        ###
         ### Deferred from __init__ so that torchinfo and other introspection
-        ### tools can inspect the uncompiled module tree. Skipped when an
-        ### outer torch.compile is already tracing (it handles fusion itself).
-        ### Uses dynamic=True so that varying chunk sizes (batch dimension)
-        ### share one compiled graph per kernel, avoiding repeated recompilation.
+        ### tools can inspect the uncompiled module tree.  Uses dynamic=True
+        ### so that varying chunk sizes share one compiled graph per kernel.
         ### Stored via object.__setattr__ to bypass nn.Module submodule
         ### registration, keeping self.network (and thus state_dict) unmodified.
         with record_function("kernel::network"):
@@ -1370,10 +1375,18 @@ class BarnesHutKernel(Kernel):
         vectors["r"] = chunk_r
 
         ### Lazy-compile the full evaluation pipeline on first call.
-        ### Fuses feature engineering + MLP + postprocessing into fewer,
-        ### larger GPU kernels.  Compiled INSIDE _gather_and_evaluate
-        ### (not around it) so that checkpoint() sees an uncompiled outer
-        ### function and can track tensors correctly during replay.
+        ### Fuses feature engineering + MLP + postprocessing into a single
+        ### compiled graph, reducing ~25 eager kernel launches per call to
+        ### a handful of fused Triton kernels (including the backward).
+        ###
+        ### The compile boundary is here (around _evaluate_interactions)
+        ### rather than around _gather_and_evaluate itself because
+        ### _gather_and_evaluate is wrapped by checkpoint() at each call
+        ### site in BarnesHutKernel.forward.  checkpoint(use_reentrant=False)
+        ### validates intermediate tensor metadata during backward replay,
+        ### and torch.compile may reorder operations - causing a metadata
+        ### mismatch that raises an error.  Keeping the compile boundary
+        ### inside the checkpoint boundary avoids this interaction.
         if torch.compiler.is_compiling():
             evaluate = self._evaluate_interactions
         else:

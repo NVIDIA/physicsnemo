@@ -488,6 +488,13 @@ class ClusterTree:
     max_depth: torch.Tensor
     internal_level_ids: torch.Tensor
     internal_level_offsets: torch.Tensor
+    # internal_level_ids and internal_level_offsets store the tree's
+    # internal node IDs in CSR-packed level order (shallowest first).
+    # Computed once during from_points() and reused by all bottom-up
+    # propagation routines (_propagate_centroids_bottom_up,
+    # _compute_node_strengths) to avoid recomputing the BFS traversal
+    # that discovers this ordering.  Stored as tensors (not a Python
+    # list) so they participate in tensorclass .to(device) moves.
 
     @property
     def n_nodes(self) -> int:
@@ -1275,6 +1282,13 @@ def _aggregate_source_data_leaves(
     return sorted_source_data.apply(_aggregate_leaf, batch_size=[n_nodes])
 
 
+### Disabled for torch.compile: this function iterates over a
+### variable-length list (depth_levels), whose length equals the tree
+### depth. Dynamo unrolls this loop and specializes on the length,
+### causing recompilation every time a new tree depth is encountered
+### (each airfoil mesh produces a different-depth tree). Disabling
+### compilation here produces one clean graph break at the function
+### boundary instead of per-depth-level recompilation storms.
 @torch.compiler.disable
 def _propagate_centroids_bottom_up(
     centroid_buf: Float[torch.Tensor, "n_nodes n_dims"],
