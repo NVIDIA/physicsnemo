@@ -247,7 +247,7 @@ def transform(
         {
             "cell": TensorDict({}, batch_size=[mesh.n_cells]),
             "point": TensorDict({}, batch_size=[mesh.n_points]),
-            "topology": mesh._cache["topology"],
+            "topology": mesh._cache.get("topology", TensorDict({})),
         },
         device=device,
     )
@@ -367,7 +367,7 @@ def translate(
         {
             "cell": TensorDict({}, batch_size=[mesh.n_cells]),
             "point": TensorDict({}, batch_size=[mesh.n_points]),
-            "topology": mesh._cache["topology"],
+            "topology": mesh._cache.get("topology", TensorDict({})),
         },
         device=device,
     )

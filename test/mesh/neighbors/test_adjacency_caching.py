@@ -80,7 +80,8 @@ def tet_mesh():
 
 def _topology_cache_keys(mesh: Mesh) -> set[str]:
     """Return the set of keys currently stored in the topology cache."""
-    return set(mesh._cache["topology"].keys())
+    topo = mesh._cache.get("topology", None)
+    return set(topo.keys()) if topo is not None else set()
 
 
 def _assert_adjacency_equal(adj_a, adj_b):
@@ -299,9 +300,7 @@ class TestBackwardCompat:
         )
         mesh = Mesh(points=points, cells=cells, _cache=old_cache)
 
-        # __post_init__ should have added the topology key
-        assert "topology" in mesh._cache.keys()
-
-        # Adjacency computation should work normally
+        # Adjacency computation should work normally (topology key is
+        # lazily created on first write, not eagerly backfilled)
         adj = mesh.get_point_to_points_adjacency()
         assert adj.n_sources == 4
