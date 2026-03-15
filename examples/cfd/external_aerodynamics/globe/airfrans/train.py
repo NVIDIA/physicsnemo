@@ -441,8 +441,10 @@ def main(
             """
             with record_function("data_subsampling"):
                 n_points = min(n_prediction_points, sample.prediction_mesh.n_points)
-                mask = torch.randperm(sample.prediction_mesh.n_points)[:n_points]
-                sample.prediction_mesh = sample.prediction_mesh.slice_points(mask)
+                mask = torch.randint(sample.prediction_mesh.n_points, (n_points,))
+                sample.prediction_mesh = (
+                    sample.prediction_mesh.to_point_cloud().slice_points(mask)
+                )
 
                 for mesh in sample.boundary_meshes.values():
                     if training and train_randomize_face_centers:
