@@ -27,12 +27,24 @@ import numpy as np
 import torch
 import yaml
 from mlflow.tracking.fluent import active_run, log_params
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 from physicsnemo.utils.logging import PythonLogger
 
 logger = PythonLogger("globe.airfrans.utilities")
 
 ### [torch.compile helpers] ###############################################
+
+
+### [Resilient MLflow helpers] ############################################
+
+resilient = retry(
+    stop=stop_after_attempt(2),
+    wait=wait_fixed(2),
+    retry_error_callback=lambda rs: logger.warning(
+        f"{rs.fn.__name__}() failed after {rs.attempt_number} attempts, skipping."
+    ),
+)
 
 
 def disable_autotune_printing() -> None:

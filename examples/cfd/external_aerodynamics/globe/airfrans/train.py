@@ -48,6 +48,7 @@ from tqdm import tqdm
 from utilities import (
     disable_autotune_printing,
     log_hyperparameters,
+    resilient,
     sanitize_metric_name,
 )
 
@@ -59,10 +60,13 @@ from physicsnemo.utils.checkpoint import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 mpl.use("agg")  # Allows headless plotting
-disable_autotune_printing()  # Silences the verbose output of `torch.compile(..., mode="max-autotune")`.
+disable_autotune_printing()
 
 Split = Literal["train", "test"]
 splits: list[Split] = ["train", "test"]
+
+log_artifact = resilient(log_artifact)
+log_metrics = resilient(log_metrics)
 
 def main(
     data_dir: Path | None = None,
@@ -357,7 +361,7 @@ def main(
         set_experiment(experiment_name=mlflow_experiment)
         if mlflow_run_id:
             try:
-                mlflow_run_ctx = start_run(run_id=mlflow_run_id)
+                mlflow_run_ctx = start_run(run_id=mlflow_run_id, log_system_metrics=True)
                 logger0.info(f"Resumed MLflow run {mlflow_run_id}")
             except Exception:
                 warnings.warn(
@@ -371,6 +375,7 @@ def main(
                     "airfrans_task": airfrans_task,
                     "output_name": output_name,
                 },
+                log_system_metrics=True,
             )
 
     ### [Hyperparameter Logging]
