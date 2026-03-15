@@ -77,7 +77,7 @@ def main(
     data_dir: Path | None = None,
     output_name: str | None = None,
     amp: bool = True,
-    use_compile: bool = False,
+    use_compile: bool = True,
     compile_mode: Literal[
         "default",
         "max-autotune-no-cudagraphs",

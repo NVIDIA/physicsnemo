@@ -64,7 +64,6 @@ disable_autotune_printing()  # Silences the verbose output of `torch.compile(...
 Split = Literal["train", "test"]
 splits: list[Split] = ["train", "test"]
 
-
 def main(
     data_dir: Path | None = None,
     output_name: str | None = None,
@@ -86,9 +85,12 @@ def main(
     n_latent_scalars: int = 12,
     n_latent_vectors: int = 6,
     n_spherical_harmonics: int = 1,
+    theta: float = 1.0,
+    leaf_size: int = 1,
     airfrans_task: Literal["full", "scarce", "reynolds", "aoa"] = "full",
     use_profiler: bool = True,
     make_images: bool = True,
+    save_every: int = 25,
     use_mlflow: bool = True,
     mlflow_experiment: str = "GLOBE_AirFRANS",
 ):
@@ -113,9 +115,12 @@ def main(
         n_latent_scalars: Number of scalar latent channels propagated between hyperlayers.
         n_latent_vectors: Number of vector latent channels propagated between hyperlayers.
         n_spherical_harmonics: Number of Legendre polynomial terms for angle features.
+        theta: Barnes-Hut opening angle. Larger = more aggressive approximation.
+        leaf_size: Maximum sources per leaf node in the Barnes-Hut tree.
         airfrans_task: Which AirFRANS dataset task to train on.
         use_profiler: Enable PyTorch profiler for performance analysis.
         make_images: Whether to make images for visualization.
+        save_every: Save a checkpoint every this many epochs.
         use_mlflow: Enable MLflow experiment tracking. Requires MLFLOW_TRACKING_URI to be set
             in the environment (see run.sh). When False, training still logs to console and
             saves hyperparameters to YAML, but skips all MLflow calls.
@@ -161,6 +166,12 @@ def main(
 
     if dist.rank == 0:
         logging.basicConfig(level=logging.INFO)
+        ### Enable debug logging for GLOBE internals during the first epoch.
+        # Captures tree construction stats, interaction pair counts,
+        # chunk sizing decisions, and checkpoint enable/disable choices.
+        # Reverted to INFO after epoch 1 (see the training loop below).
+        _globe_logger = logging.getLogger("globe")
+        _globe_logger.setLevel(logging.DEBUG)
     else:
         logging.disable(logging.ERROR)
         warnings.filterwarnings("ignore")
@@ -233,8 +244,8 @@ def main(
         n_latent_scalars=n_latent_scalars,
         n_latent_vectors=n_latent_vectors,
         n_spherical_harmonics=n_spherical_harmonics,
-        theta=1.0,
-        leaf_size=1,
+        theta=theta,
+        leaf_size=leaf_size,
     ).to(device)
 
     if dist.rank == 0:
@@ -451,15 +462,18 @@ def main(
             ):
                 if training:
                     optimizer.zero_grad()
-                batch_loss, batch_loss_components = run_batch(sample)
+
+                with record_function("forward"):
+                    batch_loss, batch_loss_components = run_batch(sample)
+
                 if training:
                     if torch.isnan(batch_loss):
-                        warnings.warn(
-                            f"{batch_loss=} at: {dist.rank=}, {epoch=}, {training=}"
-                        )
-                    scaler.scale(batch_loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
+                        warnings.warn(f"{batch_loss=} at: {dist.rank=}, {epoch=}")
+                    with record_function("backward"):
+                        scaler.scale(batch_loss).backward()
+                    with record_function("optimizer_step"):
+                        scaler.step(optimizer)
+                        scaler.update()
                 all_batch_losses.append(batch_loss.detach().clone())
                 for k, v in batch_loss_components.items():
                     all_batch_loss_components[k].append(v.detach().clone())
@@ -526,7 +540,23 @@ def main(
                 ),
             }
 
+        def save_ckpt() -> None:
+            save_checkpoint(
+                checkpoint_dir,
+                models=base_model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                scaler=scaler,
+                epoch=epoch,
+                metadata=checkpoint_metadata(),
+            )
+
+        _first_epoch = True
         for epoch in count(start=epoch + 1):
+            if _first_epoch and dist.rank == 0:
+                _globe_logger.setLevel(logging.INFO)
+                _first_epoch = False
+
             loss = {}
             loss_components = {}
             for split in splits:
@@ -541,16 +571,8 @@ def main(
             ### [Logging and Checkpointing]
             if dist.rank == 0:
                 ### [Checkpointing]
-                if epoch % (25 * dist.world_size) == 0:
-                    save_checkpoint(
-                        checkpoint_dir,
-                        models=base_model,
-                        optimizer=optimizer,
-                        scheduler=scheduler,
-                        scaler=scaler,
-                        epoch=epoch,
-                        metadata=checkpoint_metadata(),
-                    )
+                if epoch % save_every == 0:
+                    save_ckpt()
                 if loss["test"] < best_loss:
                     best_loss = loss["test"]
                     base_model.save(best_model_path)
@@ -582,15 +604,7 @@ def main(
             if shutdown_file.exists():
                 logger0.info("Quitting due to shutdown request.")
                 if dist.rank == 0:
-                    save_checkpoint(
-                        checkpoint_dir,
-                        models=base_model,
-                        optimizer=optimizer,
-                        scheduler=scheduler,
-                        scaler=scaler,
-                        epoch=epoch,
-                        metadata=checkpoint_metadata(),
-                    )
+                    save_ckpt()
                 break
 
             ### [MLflow Image Logging]
