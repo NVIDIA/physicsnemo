@@ -10,8 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Adds GLOBE model (`physicsnemo.experimental.models.globe.model.GLOBE`)
+- Adds GLOBE model (`physicsnemo.experimental.models.globe.model.GLOBE`),
+  including new variant that uses a dual tree traversal algorithm to
+  fundamentally reduce the complexity of the kernel evaluations from O(N^2) to
+  O(N).
 - Adds GLOBE AirFRANS example case (`examples/cfd/external_aerodynamics/globe/airfrans`)
+- Adds GLOBE DrivAerML example case (`examples/cfd/external_aerodynamics/globe/drivaer`)
 - PhysicsNeMo-Mesh now supports conversion from PyVista/VTK/VTU meshes that may
   contain polyhedral cells.
 - In PhysicsNeMo-Mesh, adds `Mesh.to_point_cloud()`, `.to_edge_graph()`, and
@@ -38,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Fixed bug in Pangu, FengWu attention window shift for asymmetric longitudes
+- Fixed a bug in `mesh.sampling.find_nearest_cells`, where a mixup between L2 and L-inf norms
+  could cause slightly incorrect nearest-neighbor assignments in highly skewed meshes.
 
 ### Security
 
