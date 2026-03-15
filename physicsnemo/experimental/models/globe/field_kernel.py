@@ -1371,8 +1371,9 @@ class BarnesHutKernel(Kernel):
 
         ### Lazy-compile the full evaluation pipeline on first call.
         ### Fuses feature engineering + MLP + postprocessing into fewer,
-        ### larger GPU kernels. Same lazy pattern as the MLP-only compile
-        ### at _evaluate_interactions:646, but at a wider scope.
+        ### larger GPU kernels.  Compiled INSIDE _gather_and_evaluate
+        ### (not around it) so that checkpoint() sees an uncompiled outer
+        ### function and can track tensors correctly during replay.
         if torch.compiler.is_compiling():
             evaluate = self._evaluate_interactions
         else:
