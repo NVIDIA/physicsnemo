@@ -21,7 +21,6 @@ OUTPUT_DIR="${SCRIPT_DIR}/output/${OUTPUT_NAME}"
 TRAIN_ARGS=(
     --output-name "${OUTPUT_NAME}"
     --airfrans-task "scarce"
-    --no-use-compile
     --amp
 )
 
