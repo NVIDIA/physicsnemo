@@ -87,6 +87,8 @@ def main(
     n_latent_scalars: int = 12,
     n_latent_vectors: int = 6,
     n_spherical_harmonics: int = 1,
+    theta: float = 1.0,
+    leaf_size: int = 1,
     airfrans_task: Literal["full", "scarce", "reynolds", "aoa"] = "full",
     use_profiler: bool = True,
     make_images: bool = True,
@@ -115,6 +117,8 @@ def main(
         n_latent_scalars: Number of scalar latent channels propagated between hyperlayers.
         n_latent_vectors: Number of vector latent channels propagated between hyperlayers.
         n_spherical_harmonics: Number of Legendre polynomial terms for angle features.
+        theta: Barnes-Hut opening angle. Larger = more aggressive approximation.
+        leaf_size: Maximum sources per leaf node in the Barnes-Hut tree.
         airfrans_task: Which AirFRANS dataset task to train on.
         use_profiler: Enable PyTorch profiler for performance analysis.
         make_images: Whether to make images for visualization.
@@ -235,8 +239,8 @@ def main(
         n_latent_scalars=n_latent_scalars,
         n_latent_vectors=n_latent_vectors,
         n_spherical_harmonics=n_spherical_harmonics,
-        theta=1.0,
-        leaf_size=1,
+        theta=theta,
+        leaf_size=leaf_size,
     ).to(device)
 
     if dist.rank == 0:
