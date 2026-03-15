@@ -547,66 +547,78 @@ def _find_nearest_cells_bvh(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """BVH-accelerated nearest-centroid search with expanding radius.
 
+    Doubles the L-inf search tolerance each round.  A query is considered
+    *resolved* only when ``tolerance >= sqrt(best_dist_sq)`` - at that point
+    the L-inf search ball is large enough to contain any point closer in L2
+    (because L-inf <= L2 for any pair of points).
+
     Returns
     -------
     cell_indices : torch.Tensor
-        Shape (n_queries,). Best cell index found so far (-1 if unresolved).
+        Shape ``(n_queries,)``.  Best cell index found so far (``-1`` if
+        unresolved after all rounds).
     resolved : torch.Tensor
-        Shape (n_queries,) bool. True for queries with at least one candidate.
+        Shape ``(n_queries,)`` bool.  ``True`` for queries whose nearest
+        cell is guaranteed to have been found.
     """
     n_queries = query_points.shape[0]
     device = query_points.device
+    dtype = query_points.dtype
 
     cell_indices = torch.full((n_queries,), -1, dtype=torch.long, device=device)
+    best_dist_sq = torch.full((n_queries,), float("inf"), dtype=dtype, device=device)
     resolved = torch.zeros(n_queries, dtype=torch.bool, device=device)
 
     ### Estimate initial search tolerance from BVH root extent
     root_extent = bvh.node_aabb_max[0] - bvh.node_aabb_min[0]
-    # Typical cell diameter ~ total extent / n_cells^(1/d)
     tolerance = root_extent.max().item() / max(n_cells ** (1.0 / n_spatial_dims), 1.0)
 
     ### Expanding-radius search: double tolerance each round until all resolved
-    max_rounds = 20  # tolerance doubles each round → covers 2^20 ~ 1M× initial
+    max_rounds = 25  # tolerance doubles each round → covers 2^25 ~ 33M× initial
     for _ in range(max_rounds):
-        remaining_mask = ~resolved
-        remaining_idx = torch.where(remaining_mask)[0]
+        remaining_idx = torch.where(~resolved)[0]
         if len(remaining_idx) == 0:
             break
 
         candidates = bvh.find_candidate_cells(
             query_points[remaining_idx],
             aabb_tolerance=tolerance,
-            max_candidates_per_point=64,
+            max_candidates_per_point=None,
         )
 
         if candidates.n_total_neighbors > 0:
             src, tgt = candidates.expand_to_pairs()
-            # src indexes into the remaining subset; map to global query indices
             global_query = remaining_idx[src]
 
-            ### Compute squared centroid distances for all (query, candidate) pairs
             dists_sq = ((query_points[global_query] - cell_centroids[tgt]) ** 2).sum(
                 dim=-1
             )
 
-            ### Per-query minimum via scatter
-            best_dist = torch.full(
-                (n_queries,), float("inf"), dtype=dists_sq.dtype, device=device
+            ### Per-query minimum via scatter_reduce (handles duplicate indices)
+            round_best = torch.full(
+                (n_queries,), float("inf"), dtype=dtype, device=device
             )
-            best_dist.scatter_reduce_(0, global_query, dists_sq, reduce="amin")
+            round_best.scatter_reduce_(
+                0, global_query, dists_sq, reduce="amin", include_self=True
+            )
 
-            # Identify which pair achieved the minimum for each query
-            is_best = dists_sq == best_dist[global_query]
-            # Among ties, take the first occurrence per query
+            ### Update global best where this round found something closer
+            improved = round_best < best_dist_sq
+            best_dist_sq[improved] = round_best[improved]
+
+            ### Find which (query, candidate) pair achieved the new best
+            is_best = dists_sq == best_dist_sq[global_query]
             first_best = torch.zeros(n_queries, dtype=torch.bool, device=device)
             first_best.scatter_(0, global_query[is_best], True)
-            best_mask = is_best & first_best[global_query]
+            update_mask = is_best & first_best[global_query] & improved[global_query]
 
-            cell_indices[global_query[best_mask]] = tgt[best_mask]
+            cell_indices[global_query[update_mask]] = tgt[update_mask]
 
-            # Mark queries that received at least one candidate as resolved
-            has_candidate = candidates.counts > 0
-            resolved[remaining_idx[has_candidate]] = True
+        # Resolve when the L-inf search radius guarantees no closer cell was missed
+        newly_resolved = (
+            (best_dist_sq < float("inf")) & ~resolved & (tolerance**2 >= best_dist_sq)
+        )
+        resolved |= newly_resolved
 
         tolerance *= 2.0
 
