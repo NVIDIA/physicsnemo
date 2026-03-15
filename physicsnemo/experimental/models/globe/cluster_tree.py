@@ -36,7 +36,6 @@ stored as flat tensors for GPU compatibility.
 
 import logging
 from dataclasses import dataclass
-from math import ceil
 
 import torch
 from jaxtyping import Float, Int
