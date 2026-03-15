@@ -40,6 +40,7 @@ from physicsnemo.experimental.models.globe.utilities.cached_dataset import (
 )
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.io import from_pyvista
+from physicsnemo.mesh.remeshing import partition_cells
 from physicsnemo.utils.logging import PythonLogger
 
 logger = PythonLogger("globe.drivaer.dataset")
@@ -130,11 +131,13 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
     def _subsample_mesh(
         mesh: Mesh, n_cells: int, *, geometry_only: bool = True
     ) -> Mesh:
-        """Randomly subsample cells from a mesh.
+        """Randomly subsample cells and compute Voronoi-corrected areas/normals.
 
-        Selects ``n_cells`` random cells, compacts away unreferenced vertices,
-        and rescales cell areas so that the subsampled mesh has the same total
-        surface area as the original.
+        Selects ``n_cells`` random cells, then uses :func:`partition_cells` to
+        assign every original cell to its nearest subsampled centroid and
+        accumulate areas and normals.  This gives locally-correct effective
+        areas that approximate the surface Voronoi diagram of the subsampled
+        centroids, rather than a single global rescaling factor.
 
         Args:
             mesh: Source Mesh to subsample from.
@@ -145,9 +148,8 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
                 (used for visualization).
 
         Returns:
-            Mesh with ``n_cells`` cells and area-scaled cache.
+            Mesh with ``n_cells`` cells and Voronoi-corrected cache.
         """
-        total_area = mesh.cell_areas.sum()
         indices = torch.randperm(mesh.n_cells)[:n_cells]
         boundary = mesh.slice_cells(indices).clean(
             merge_points=False,
@@ -157,8 +159,10 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
 
         if geometry_only:
             boundary = Mesh(points=boundary.points, cells=boundary.cells)
-        raw_areas = boundary.cell_areas
-        boundary._cache["cell", "areas"] = raw_areas * (total_area / raw_areas.sum())
+
+        partition = partition_cells(mesh, seeds=boundary.cell_centroids)
+        boundary._cache["cell", "areas"] = partition.cluster_areas
+        boundary._cache["cell", "normals"] = partition.cluster_normals
         return boundary
 
     @classmethod
