@@ -472,9 +472,7 @@ class DomainMesh:
 
     ### Data Operations
 
-    def cell_data_to_point_data(
-        self, overwrite_keys: bool = False
-    ) -> "DomainMesh":
+    def cell_data_to_point_data(self, overwrite_keys: bool = False) -> "DomainMesh":
         r"""Convert cell data to point data on all meshes in the domain.
 
         Delegates to :meth:`Mesh.cell_data_to_point_data` for each mesh.
@@ -493,9 +491,7 @@ class DomainMesh:
             lambda m: m.cell_data_to_point_data(overwrite_keys=overwrite_keys)
         )
 
-    def point_data_to_cell_data(
-        self, overwrite_keys: bool = False
-    ) -> "DomainMesh":
+    def point_data_to_cell_data(self, overwrite_keys: bool = False) -> "DomainMesh":
         r"""Convert point data to cell data on all meshes in the domain.
 
         Delegates to :meth:`Mesh.point_data_to_cell_data` for each mesh.

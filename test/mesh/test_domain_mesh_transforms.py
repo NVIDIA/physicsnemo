@@ -94,12 +94,13 @@ class TestMapMeshes:
 
 
 class TestTranslate:
-
     def test_shifts_all_points(self, tet_domain):
         offset = [2.0, -1.0, 0.5]
         dm2 = tet_domain.translate(offset)
         offset_t = torch.tensor(offset)
-        assert torch.allclose(dm2.interior.points, tet_domain.interior.points + offset_t)
+        assert torch.allclose(
+            dm2.interior.points, tet_domain.interior.points + offset_t
+        )
         for name in tet_domain.boundary_names:
             assert torch.allclose(
                 dm2.boundaries[name].points,
@@ -116,7 +117,6 @@ class TestTranslate:
 
 
 class TestRotate:
-
     def test_2d_rotation(self):
         """Rotate a 2D domain by 90 degrees; verify point (1,0) -> (0,1)."""
         dm = DomainMesh(
@@ -132,11 +132,12 @@ class TestRotate:
         """Rotating and un-rotating recovers original points."""
         dm2 = tet_domain.rotate(angle=math.pi / 4, axis="z")
         dm3 = dm2.rotate(angle=-math.pi / 4, axis="z")
-        assert torch.allclose(dm3.interior.points, tet_domain.interior.points, atol=1e-6)
+        assert torch.allclose(
+            dm3.interior.points, tet_domain.interior.points, atol=1e-6
+        )
 
 
 class TestScale:
-
     def test_uniform_scale(self, tet_domain):
         dm2 = tet_domain.scale(factor=2.0)
         assert torch.allclose(dm2.interior.points, tet_domain.interior.points * 2.0)
@@ -152,7 +153,6 @@ class TestScale:
 
 
 class TestTransform:
-
     def test_identity(self, tet_domain):
         dm2 = tet_domain.transform(torch.eye(3))
         assert torch.allclose(dm2.interior.points, tet_domain.interior.points)
@@ -166,14 +166,11 @@ class TestTransform:
 
 
 class TestClean:
-
     def test_cleans_all_meshes(self):
         """clean() merges duplicate points in interior; boundary unchanged."""
         # Interior with intentional duplicate points (no primitive has this)
         interior = Mesh(
-            points=torch.tensor(
-                [[0.0, 0.0], [1.0, 0.0], [0.0, 0.0], [1.0, 1.0]]
-            ),
+            points=torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 0.0], [1.0, 1.0]]),
             cells=torch.tensor([[0, 1, 3], [2, 1, 3]]),
         )
         boundary = single_edge_2d.load()
@@ -189,7 +186,6 @@ class TestClean:
 
 
 class TestStripCaches:
-
     def test_clears_cached_geometry(self):
         """Accessing cell_normals populates cache; strip_caches clears it."""
         dm = DomainMesh(interior=single_triangle_3d.load())
@@ -200,7 +196,6 @@ class TestStripCaches:
 
 
 class TestSubdivide:
-
     def test_increases_cell_count(self):
         """Linear subdivision: tet -> 8 child tets, tri -> 4 child tris."""
         dm = DomainMesh(
@@ -216,7 +211,6 @@ class TestSubdivide:
 
 
 class TestCellDataToPointData:
-
     def test_converts_all_meshes(self, tet_domain):
         dm2 = tet_domain.cell_data_to_point_data()
         assert "pressure" in dm2.interior.point_data.keys()
@@ -229,7 +223,6 @@ class TestCellDataToPointData:
 
 
 class TestPointDataToCellData:
-
     def test_converts_all_meshes(self, tet_domain):
         dm2 = tet_domain.point_data_to_cell_data()
         assert "temperature" in dm2.interior.cell_data.keys()
@@ -239,7 +232,6 @@ class TestPointDataToCellData:
 
 
 class TestValidate:
-
     def test_report_structure(self, tet_domain):
         report = tet_domain.validate()
         assert "interior" in report
@@ -272,7 +264,6 @@ class TestValidate:
 
 
 class TestChaining:
-
     def test_translate_scale_clean(self, tet_domain):
         dm2 = tet_domain.translate([1, 0, 0]).scale(2.0).clean(merge_points=False)
         assert isinstance(dm2, DomainMesh)
@@ -286,5 +277,7 @@ class TestChaining:
     def test_chain_with_no_boundaries(self, no_boundary_domain):
         dm2 = no_boundary_domain.translate([1, 0, 0]).scale(3.0)
         assert dm2.n_boundaries == 0
-        expected = (no_boundary_domain.interior.points + torch.tensor([1.0, 0.0, 0.0])) * 3.0
+        expected = (
+            no_boundary_domain.interior.points + torch.tensor([1.0, 0.0, 0.0])
+        ) * 3.0
         assert torch.allclose(dm2.interior.points, expected)
