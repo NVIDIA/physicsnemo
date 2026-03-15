@@ -1369,9 +1369,25 @@ class BarnesHutKernel(Kernel):
         )
         vectors["r"] = chunk_r
 
-        return self._evaluate_interactions(
-            scalars=scalars, vectors=vectors, device=device,
-        )
+        ### Lazy-compile the full evaluation pipeline on first call.
+        ### Fuses feature engineering + MLP + postprocessing into fewer,
+        ### larger GPU kernels. Same lazy pattern as the MLP-only compile
+        ### at _evaluate_interactions:646, but at a wider scope.
+        if torch.compiler.is_compiling():
+            evaluate = self._evaluate_interactions
+        else:
+            if not hasattr(self, "_compiled_evaluate_interactions"):
+                object.__setattr__(
+                    self,
+                    "_compiled_evaluate_interactions",
+                    torch.compile(
+                        self._evaluate_interactions,
+                        dynamic=True,
+                        mode="max-autotune-no-cudagraphs",
+                    ),
+                )
+            evaluate = self._compiled_evaluate_interactions
+        return evaluate(scalars=scalars, vectors=vectors, device=device)
 
     def _auto_chunk_size(self, n_total_pairs: int, device: torch.device) -> int:
         """Determine chunk size for pair-batched kernel evaluation.
