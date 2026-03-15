@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds `physicsnemo.mesh.generate` subpackage with `marching_cubes` for
   isosurface extraction from 3D scalar fields, returning a `Mesh` object.
   Supports the NVIDIA Warp backend.
+- Adds `physicsnemo.mesh.remeshing` subpackage with `partition_cells()` for
+  creating Voronoi regions around seed points. BVH-accelerated.
 
 ### Changed
 
