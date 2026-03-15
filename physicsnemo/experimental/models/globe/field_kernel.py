@@ -1287,29 +1287,8 @@ class BarnesHutKernel(Kernel):
             leaf_sums.scatter_add_(0, seg_ids, sorted_strengths)
             node_strengths[leaf_ids] = leaf_sums
 
-        ### Bottom-up propagation via BFS level ordering
-        is_internal = tree.node_left_child[:n_nodes] >= 0
-
-        depth_levels: list[torch.Tensor] = []
-        current_level = torch.tensor([0], dtype=torch.long, device=device)
-        while current_level.numel() > 0:
-            mask = is_internal[current_level]
-            internal_at_level = current_level[mask]
-            if internal_at_level.numel() > 0:
-                depth_levels.append(internal_at_level)
-            next_parts: list[torch.Tensor] = []
-            if internal_at_level.numel() > 0:
-                left = tree.node_left_child[internal_at_level]
-                right = tree.node_right_child[internal_at_level]
-                if (valid_l := left >= 0).any():
-                    next_parts.append(left[valid_l])
-                if (valid_r := right >= 0).any():
-                    next_parts.append(right[valid_r])
-            current_level = torch.cat(next_parts) if next_parts else torch.empty(
-                0, dtype=torch.long, device=device
-            )
-
-        for level_ids in reversed(depth_levels):
+        ### Bottom-up propagation using cached level ordering
+        for level_ids in reversed(tree.internal_nodes_per_level):
             node_strengths[level_ids] = (
                 node_strengths[tree.node_left_child[level_ids]]
                 + node_strengths[tree.node_right_child[level_ids]]
