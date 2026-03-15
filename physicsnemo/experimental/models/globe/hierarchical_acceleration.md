@@ -240,21 +240,31 @@ The output is a `DualInteractionPlan` containing four index arrays:
 - `(far_target_node_ids, far_source_node_ids)`: node-to-node pairs using the
   monopole approximation with target-side broadcast.
 
-### 4.4 Self-Interaction
+### 4.4 Self-Interaction and Cross-BC Interaction
 
-For communication layers (where targets = sources), the same `ClusterTree` is
-used for both sides.  The traversal starts with `(root, root)` and proceeds
-normally.  The splitting rule defaults to splitting both nodes when diameters
-are equal, which is always the case for self-interaction (both sides reference
-the same tree).
+For communication layers with a single BC type (or the self-interaction
+portion of a multi-BC model), the same `ClusterTree` is used for both the
+source and target sides.  The traversal starts with `(root, root)` and
+proceeds normally.  The splitting rule defaults to splitting both nodes when
+diameters are equal, which is always the case for self-interaction (both sides
+reference the same tree).
+
+When multiple BC types are present, communication layers also evaluate
+cross-BC interactions: source BC "A" contributes to destination BC "B" and
+vice versa.  For cross-BC pairs, the source tree and target tree are different
+objects (built from different point sets), and a separate
+`DualInteractionPlan` is computed for each (source BC, destination BC) pair.
+This produces B^2 plans for B BC types.  Since B is small in practice (1-4),
+the additional traversal cost is negligible.
 
 ### 4.5 Caching Interaction Plans
 
 The interaction plan depends only on the geometric positions of sources and
-targets, not on the source data or strengths.  For communication hyperlayers
-(where targets = sources), the same plan is reused across all layers.  For the
-final prediction evaluation, a separate plan is computed (different target
-points).  This eliminates redundant traversals.
+targets, not on the source data or strengths.  For communication hyperlayers,
+all B^2 plans (covering both self-interaction and cross-BC pairs) are computed
+once and reused across all layers.  For the final prediction evaluation,
+separate plans are computed from each source BC tree to the prediction-point
+target tree.  This eliminates redundant traversals.
 
 ---
 
@@ -370,16 +380,18 @@ Within a single `GLOBE.forward()` call:
 
 1. **Phase 1 (init)**: Build one `ClusterTree` per boundary condition type
    from the cell centroids.  Compute `DualInteractionPlan`s for communication
-   (target tree = source tree, i.e. self-interaction).  Both are cached for
-   the duration of the forward pass.
+   covering all (source BC, destination BC) pairs - B^2 plans for B BC types.
+   For self-interaction pairs (source == destination), the target tree is the
+   same object as the source tree.  All trees and plans are cached for the
+   duration of the forward pass.
 
 2. **Phase 2 (communication)**: For each communication hyperlayer, reuse the
    cached trees and plans.  Only source aggregates are recomputed (the latent
    features change between layers).
 
-3. **Phase 3 (prediction)**: Build target trees for prediction points and
-   compute new interaction plans (sources = boundary, targets = prediction
-   points).  Source trees are reused from Phase 1.
+3. **Phase 3 (prediction)**: Build a single target tree for prediction points
+   and compute one interaction plan per source BC type (B plans total).
+   Source trees are reused from Phase 1.
 
 Tree construction and plan finding are decorated with
 `@torch.compiler.disable` because they involve irregular control flow (Morton
@@ -487,8 +499,8 @@ interaction count (from 10 billion to ~2 million at theta=1.0).
 GLOBE.forward()
   |
   +-- _build_trees_and_plans()              [outside torch.compile]
-  |     Build ClusterTree per BC type
-  |     Find DualInteractionPlan (comm: target_tree = source_tree)
+  |     Build ClusterTree per BC type (B trees)
+  |     Find DualInteractionPlan for all (src, dst) BC pairs (B^2 plans)
   |
   +-- Phase 2: Communication hyperlayers (repeat n_comm times)
   |     |
