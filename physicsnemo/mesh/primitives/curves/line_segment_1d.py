@@ -26,7 +26,7 @@ from physicsnemo.mesh.mesh import Mesh
 
 def load(
     length: float = 1.0, n_points: int = 2, device: torch.device | str = "cpu"
-) -> Mesh:
+) -> Mesh[1, 1]:
     """Create a line segment in 1D space.
 
     Parameters
@@ -40,7 +40,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[1, 1]
         Mesh with n_manifold_dims=1, n_spatial_dims=1, n_cells=n_points-1.
     """
     if n_points < 2:

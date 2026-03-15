@@ -29,7 +29,7 @@ def load(
     n_radial: int = 10,
     n_angular: int = 32,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[2, 3]:
     """Create a flat disk in 3D space (lying in xy-plane).
 
     Parameters
@@ -45,7 +45,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[2, 3]
         Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     if n_radial < 1:

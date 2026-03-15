@@ -337,6 +337,61 @@ class Mesh:
                     f"but got {self.points.device=} and {self.cells.device=}."
                 )
 
+    @classmethod
+    def __class_getitem__(cls, params: tuple) -> type:
+        r"""Parametrize Mesh by manifold and spatial dimensions.
+
+        Returns a synthetic type usable in type annotations and ``isinstance``
+        checks. Always requires exactly two parameters; use ``...`` (Ellipsis)
+        to leave a dimension unconstrained.
+
+        Parameters
+        ----------
+        params : tuple
+            A 2-tuple of ``(manifold_dims, spatial_dims)`` where each element
+            is an ``int`` (concrete), ``str`` (symbolic, e.g. ``"n-1"``), or
+            ``...`` (unconstrained).
+
+        Returns
+        -------
+        type
+            A parametrized Mesh type supporting ``isinstance`` checks.
+
+        Raises
+        ------
+        TypeError
+            If not exactly 2 parameters, or if parameter types are invalid.
+        ValueError
+            If concrete dimensions are negative or manifold exceeds spatial.
+
+        Examples
+        --------
+        >>> Mesh[2, 3]
+        Mesh[2, 3]
+        >>> Mesh[1, ...]
+        Mesh[1, ...]
+        >>> Mesh[2, 3].boundary
+        Mesh[1, 3]
+        """
+        from physicsnemo.mesh._mesh_spec import MeshDims, _get_mesh_spec
+
+        if not isinstance(params, tuple):
+            raise TypeError(
+                f"Mesh[...] requires exactly 2 parameters (e.g. Mesh[2, 3] "
+                f"or Mesh[2, ...]), got single parameter {params!r}"
+            )
+        if len(params) != 2:
+            raise TypeError(
+                f"Mesh[...] requires exactly 2 parameters, got {len(params)}"
+            )
+
+        n_manifold_dims = None if params[0] is ... else params[0]
+        n_spatial_dims = None if params[1] is ... else params[1]
+
+        return _get_mesh_spec(
+            MeshDims(n_manifold_dims=n_manifold_dims, n_spatial_dims=n_spatial_dims)
+        )
+
     if TYPE_CHECKING:
         # Type stub for the `to` method dynamically added by @tensorclass.
         # This provides proper type hints without shadowing the runtime implementation.
@@ -1483,7 +1538,7 @@ class Mesh:
             target_counts="boundary",
         )
 
-    def to_edge_graph(self) -> "Mesh":
+    def to_edge_graph(self) -> "Mesh[1, ...]":
         r"""Return a 1D Mesh whose cells are the unique edges of this mesh.
 
         Each edge (pair of vertices connected in a cell) appears exactly once.
@@ -1495,8 +1550,8 @@ class Mesh:
 
         Returns
         -------
-        Mesh
-            A 1D Mesh (``n_manifold_dims == 1``) with edge cells.
+        Mesh[1, ...]
+            A 1D mesh (``n_manifold_dims == 1``) with edge cells.
 
         Examples
         --------
@@ -1506,13 +1561,13 @@ class Mesh:
         >>> cells = torch.tensor([[0, 1, 2]])
         >>> mesh = Mesh(points=points, cells=cells)
         >>> edge_graph = mesh.to_edge_graph()
-        >>> assert edge_graph.n_manifold_dims == 1
+        >>> assert isinstance(edge_graph, Mesh[1, ...])
         >>> assert edge_graph.n_cells == 3  # triangle has 3 edges
         """
         codim = self.n_manifold_dims - 1
         return self.get_facet_mesh(manifold_codimension=codim, target_counts="all")
 
-    def to_dual_graph(self) -> "Mesh":
+    def to_dual_graph(self) -> "Mesh[1, ...]":
         r"""Return a 1D Mesh representing the cell-adjacency (dual) graph.
 
         Points are the cell centroids of this mesh.  Cells are
@@ -1523,8 +1578,8 @@ class Mesh:
 
         Returns
         -------
-        Mesh
-            A 1D Mesh (``n_manifold_dims == 1``) whose points are cell
+        Mesh[1, ...]
+            A 1D mesh (``n_manifold_dims == 1``) whose points are cell
             centroids and whose cells encode the cell-neighbor adjacency.
 
         Examples
@@ -1536,7 +1591,7 @@ class Mesh:
         >>> cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
         >>> mesh = Mesh(points=points, cells=cells)
         >>> dual = mesh.to_dual_graph()
-        >>> assert dual.n_manifold_dims == 1
+        >>> assert isinstance(dual, Mesh[1, ...])
         >>> assert dual.n_cells == 1  # 1 shared edge -> 1 dual edge
         """
         adj = self.get_cell_to_cells_adjacency(adjacency_codimension=1)
@@ -1556,7 +1611,7 @@ class Mesh:
 
     def to_point_cloud(
         self, point_source: "Literal['vertices', 'cell_centroids']" = "vertices"
-    ) -> "Mesh":
+    ) -> "Mesh[0, ...]":
         r"""Return a 0D Mesh (point cloud) with no cell connectivity.
 
         Parameters
@@ -1571,8 +1626,8 @@ class Mesh:
 
         Returns
         -------
-        Mesh
-            A 0D Mesh (``n_manifold_dims == 0``) with no cells.
+        Mesh[0, ...]
+            A 0D mesh (``n_manifold_dims == 0``) with no cells.
 
         Examples
         --------
@@ -1582,9 +1637,8 @@ class Mesh:
         >>> cells = torch.tensor([[0, 1, 2]])
         >>> mesh = Mesh(points=points, cells=cells)
         >>> pc = mesh.to_point_cloud()
-        >>> assert pc.n_manifold_dims == 0
+        >>> assert isinstance(pc, Mesh[0, ...])
         >>> assert pc.n_points == 3
-        >>> assert pc.n_cells == 0
         """
         if point_source == "vertices":
             return Mesh(

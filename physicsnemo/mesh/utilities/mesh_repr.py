@@ -16,11 +16,16 @@
 
 """Utility functions for string-formatting Mesh representations."""
 
+from typing import TYPE_CHECKING
+
 import torch
 from tensordict import TensorDict
 
+if TYPE_CHECKING:
+    from physicsnemo.mesh.mesh import Mesh
 
-def format_mesh_repr(mesh) -> str:
+
+def format_mesh_repr(mesh: "Mesh") -> str:
     """Format a complete Mesh representation.
 
     Parameters
@@ -33,23 +38,20 @@ def format_mesh_repr(mesh) -> str:
     str
         Formatted string representation of the mesh.
     """
-    ### Build the first line with class name and key properties
-    # These properties are guaranteed by __post_init__
+    ### Build the first line: Mesh[manifold, spatial](n_points=..., n_cells=..., ...)
     class_name = mesh.__class__.__name__
+    dim_sig = f"[n_manifold_dims={mesh.n_manifold_dims}, n_spatial_dims={mesh.n_spatial_dims}]"
+
     parts = [
-        f"manifold_dim={mesh.n_manifold_dims}",
-        f"spatial_dim={mesh.n_spatial_dims}",
         f"n_points={mesh.n_points}",
         f"n_cells={mesh.n_cells}",
     ]
 
-    # Add device if it's explicitly set (not None)
-    # mesh.device is None by default and only set when user calls .to(device)
     device = mesh.device
     if device is not None:
         parts.append(f"device={device}")
 
-    first_line = f"{class_name}({', '.join(parts)})"
+    first_line = f"{class_name}{dim_sig}({', '.join(parts)})"
 
     ### Format the data fields with proper alignment
     # We need to align the colons for point_data, cell_data, and global_data

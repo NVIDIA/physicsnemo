@@ -30,7 +30,7 @@ def load(
     n_radial: int = 5,
     n_angular: int = 32,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[2, 2]:
     """Create an annulus (ring) triangulated in 2D space.
 
     Parameters
@@ -48,7 +48,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[2, 2]
         Mesh with n_manifold_dims=2, n_spatial_dims=2.
 
     Examples
