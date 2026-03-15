@@ -56,6 +56,7 @@ from utilities import (
 from physicsnemo.core import get_physicsnemo_pkg_info
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.experimental.models.globe.model import GLOBE
+from physicsnemo.experimental.models.globe.utilities import prefetch_map
 from physicsnemo.optim import CombinedOptimizer
 from physicsnemo.utils.checkpoint import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
@@ -401,20 +402,17 @@ def main(
         all_batch_losses: list[torch.Tensor] = []
         all_batch_loss_components: dict[str, list[torch.Tensor]] = defaultdict(list)
 
-        for sample in tqdm(
-            dataloaders[split],
-            desc=f"{epoch:d} {split.title()}",
-            unit=" samples",
-            disable=dist.rank != 0 or epoch > 10,
-        ):
-            torch.compiler.cudagraph_mark_step_begin()
+        def prepare_sample(sample: DrivAerMLSample) -> DrivAerMLSample:
+            """Subsample prediction points, precompute cell geometry, transfer to GPU.
+
+            Runs in a background thread via prefetch_map so that CPU-bound
+            preparation of sample N+1 overlaps with GPU processing of sample N.
+            """
             with record_function("data_subsampling"):
-                ### Subsample surface prediction points
                 n_points = min(n_prediction_points, sample.prediction_mesh.n_points)
                 mask = torch.randperm(sample.prediction_mesh.n_points)[:n_points]
                 sample.prediction_mesh = sample.prediction_mesh.slice_points(mask)
 
-                ### Precompute boundary mesh geometry (lazy properties)
                 for mesh in sample.boundary_meshes.values():
                     if training and train_randomize_face_centers:
                         mesh._cache["cell", "centroids"] = (
@@ -427,6 +425,16 @@ def main(
 
             with record_function("data_transfer"):
                 sample = sample.to(device)
+
+            return sample
+
+        for sample in tqdm(
+            prefetch_map(dataloaders[split], prepare_sample),
+            desc=f"{epoch:d} {split.title()}",
+            unit=" samples",
+            disable=dist.rank != 0 or epoch > 10,
+        ):
+            torch.compiler.cudagraph_mark_step_begin()
 
             with (
                 autocast_ctx,

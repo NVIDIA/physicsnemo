@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from physicsnemo.experimental.models.globe.utilities.prefetch import prefetch_map
 from physicsnemo.experimental.models.globe.utilities.rank_spec import (
     RankSpecDict,
     flatten_rank_spec,
@@ -33,6 +34,7 @@ __all__ = [
     "concatenate_leaves",
     "concatenated_length",
     "flatten_rank_spec",
+    "prefetch_map",
     "rank_counts",
     "ranks_from_tensordict",
     "split_by_leaf_rank",
