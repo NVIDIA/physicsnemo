@@ -29,7 +29,7 @@ def load(
     amplitude: float = 0.5,
     wavelength: float = 1.0,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[1, 2]:
     """Create a zigzag polyline in 2D space.
 
     Parameters
@@ -45,7 +45,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[1, 2]
         Mesh with n_manifold_dims=1, n_spatial_dims=2, n_cells=n_segments.
     """
     if n_segments < 1:

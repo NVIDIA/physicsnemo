@@ -187,6 +187,7 @@ def compute_point_derivatives(
         point_data=new_point_data,
         cell_data=mesh.cell_data,
         global_data=mesh.global_data,
+        _cache=mesh._cache,
     )
 
 
@@ -282,4 +283,5 @@ def compute_cell_derivatives(
         point_data=mesh.point_data,
         cell_data=new_cell_data,
         global_data=mesh.global_data,
+        _cache=mesh._cache,
     )

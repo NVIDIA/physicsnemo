@@ -39,7 +39,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(n_points: int = 1000, device: torch.device | str = "cpu") -> Mesh:
+def load(n_points: int = 1000, device: torch.device | str = "cpu") -> Mesh[1, 3]:
     """Create a 3D spiral curve.
 
     The curve is a parametric spiral where the radius varies with z-coordinate,
@@ -55,7 +55,7 @@ def load(n_points: int = 1000, device: torch.device | str = "cpu") -> Mesh:
 
     Returns
     -------
-    Mesh
+    Mesh[1, 3]
         Mesh with n_manifold_dims=1, n_spatial_dims=3, n_cells=n_points-1.
 
     Examples

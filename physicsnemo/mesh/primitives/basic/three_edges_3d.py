@@ -24,7 +24,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(device: torch.device | str = "cpu") -> Mesh:
+def load(device: torch.device | str = "cpu") -> Mesh[1, 3]:
     """Create a polyline with three edges in 3D space.
 
     Parameters
@@ -34,7 +34,7 @@ def load(device: torch.device | str = "cpu") -> Mesh:
 
     Returns
     -------
-    Mesh
+    Mesh[1, 3]
         Mesh with n_manifold_dims=1, n_spatial_dims=3, n_cells=3.
     """
     points = torch.tensor(

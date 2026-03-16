@@ -26,7 +26,7 @@ from physicsnemo.mesh.mesh import Mesh
 
 def load(
     n_sides: int = 6, radius: float = 1.0, device: torch.device | str = "cpu"
-) -> Mesh:
+) -> Mesh[2, 2]:
     """Create a regular polygon triangulated in 2D space.
 
     The polygon is triangulated by connecting all vertices to the center point.
@@ -42,7 +42,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[2, 2]
         Mesh with n_manifold_dims=2, n_spatial_dims=2.
     """
     if n_sides < 3:

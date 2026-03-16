@@ -26,7 +26,7 @@ from physicsnemo.mesh.mesh import Mesh
 
 
 @require_version_spec("pyvista")
-def load(device: torch.device | str = "cpu") -> Mesh:
+def load(device: torch.device | str = "cpu") -> Mesh[2, 3]:
     """Load Stanford bunny surface mesh from PyVista examples.
 
     The Stanford bunny is a classic test model in computer graphics.
@@ -39,7 +39,7 @@ def load(device: torch.device | str = "cpu") -> Mesh:
 
     Returns
     -------
-    Mesh
+    Mesh[2, 3]
         Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     import importlib

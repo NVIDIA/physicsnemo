@@ -31,7 +31,7 @@ def load(
     height: float = 2.0,
     resolution: int = 20,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[3, 3]:
     """Create a tetrahedral volume mesh of a cylinder.
 
     The cylinder is filled with tetrahedra using PyVista's delaunay_3d filter.
@@ -49,7 +49,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[3, 3]
         Mesh with n_manifold_dims=3, n_spatial_dims=3.
     """
     import importlib
