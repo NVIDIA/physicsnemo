@@ -108,7 +108,7 @@ The following produces analyses for all of 2022. See `inference_helpers.py` to c
 
 ```bash
 python inference.py \
-    /path/to/checkpoint.pt \
+    /path/to/checkpoint.mdlus \
     --output_path /path/to/da_output.zarr \
     --context_start -21 \
     --context_end 3 \
