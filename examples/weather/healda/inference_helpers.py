@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -15,63 +15,22 @@
 # limitations under the License.
 
 import dataclasses
-import enum
 import warnings
-from typing import TypedDict
 
 import numpy as np
 import pandas as pd
 import torch
 import zarr
-from datasets.dataset import VARIABLE_CONFIGS
 from datasets.dataset import (
+    VARIABLE_CONFIGS,
     get_dataset as get_dataset_ufs,
+    get_sensors_for_config,
 )
 from datasets.transform import TransformV2
-from torch.utils.data import Dataset
 from utils import distributed as dist
-from utils.checkpointing import Checkpoint
 from utils.dataclass_parser import Help, a
-
-from physicsnemo.experimental.models.healda import UnifiedObservation
+from physicsnemo.experimental.models.healda import HealDA
 from config.model_config import ObsConfig
-
-
-class Rolling(Dataset):
-    """Returns window_size consecutive frames from dataset."""
-
-    def __init__(self, dataset, window_size, stride=1, step=1):
-        self.dataset = dataset
-        self.window_size = window_size
-        self.stride = stride
-        self.step = step
-        self.max_start = len(dataset) - (window_size - 1) * step
-        if self.max_start <= 0:
-            raise ValueError("Dataset too small for given window size and step.")
-
-    def __len__(self):
-        return (self.max_start + self.stride - 1) // self.stride
-
-    @property
-    def times(self):
-        return self.dataset.times[: self.max_start : self.stride]
-
-    def __getitem__(self, idx):
-        start = idx * self.stride
-        indices = [start + i * self.step for i in range(self.window_size)]
-        return [self.dataset[i] for i in indices]
-
-
-class Batch(TypedDict):
-    """Input batch structure of DA model"""
-
-    target: torch.Tensor
-    condition: torch.Tensor
-    second_of_day: torch.Tensor
-    day_of_year: torch.Tensor
-    labels: torch.Tensor
-    timestamp: torch.Tensor
-    unified_obs: UnifiedObservation
 
 
 warnings.filterwarnings("ignore", message="Cannot do a zero-copy NCHW to NHWC.")
@@ -96,22 +55,11 @@ def _to_batch(x, device, non_blocking=True):
         raise NotImplementedError(x)
 
 
-class InnovationType(enum.Enum):
-    """Observation-minus-background (innovation) type"""
-
-    NONE = "none"
-    ADJUSTED = "adjusted"
-    UNADJUSTED = "unadjusted"
-
-
 @dataclasses.dataclass
 class DAConfig:
-    checkpoint_path: a[str, Help("Path to the checkpoint file")]
+    checkpoint_path: a[str, Help("Path to the .mdlus checkpoint file")]
     output_path: a[str, Help("Output zarr file path")] = "healda_analysis.zarr"
     dataset: a[str, Help("Dataset to use (ufs or era5)")] = "era5"
-    innovation_type: a[InnovationType, Help("Obs-minus-background type")] = (
-        InnovationType.NONE
-    )
     num_samples: a[int, Help("Number of samples (-1 for all)")] = 32
     time_frequency: a[str, Help("Spacing to sample times from")] = "6h"
     use_infrared: a[bool, Help("Use infrared observations")] = False
@@ -143,9 +91,9 @@ def scoring_times(
 class DAModel:
     def __init__(self, args: DAConfig):
         self.args = args
-        with Checkpoint(args.checkpoint_path, mode="r") as ckpt:
-            model = ckpt.read_model(map_location="cuda")
-        model.eval().cuda()
+
+        model = HealDA.from_checkpoint(args.checkpoint_path)
+        model.cuda().eval()
 
         self.model = model
         self.split = args.split
@@ -153,7 +101,6 @@ class DAModel:
         # channel/emb dims are for the model and do not matter here
         self.obs_config = ObsConfig(
             use_obs=True,  # Always use observations for DA
-            innovation_type=args.innovation_type.value,
             context_start=args.context_start,
             context_end=args.context_end,
             use_infrared=args.use_infrared,
@@ -169,6 +116,18 @@ class DAModel:
             if args.dataset == "ufs"
             else VARIABLE_CONFIGS["era5"]
         )
+        self.sensor_names = list(self.model.obs_embedder.sensor_names)
+        configured_sensors = get_sensors_for_config(self.obs_config)
+        if configured_sensors != self.sensor_names:
+            raise ValueError(
+                "Observation config sensors do not match the checkpoint sensor order. "
+                f"Configured sensors: {configured_sensors}. "
+                f"Checkpoint sensors: {self.sensor_names}."
+            )
+        self.transform = TransformV2(
+            variable_config=self.variable_config,
+            sensors=self.sensor_names,
+        )
 
     def get_dataset(
         self,
@@ -182,13 +141,9 @@ class DAModel:
 
         dist.print0(f"Loading {args.dataset} dataset...")
 
-        transform = TransformV2(
-            variable_config=self.variable_config,
-        )
-
         ds = get_dataset_ufs(
             dataset=args.dataset,
-            batch_transform=transform.transform,
+            batch_transform=self.transform.transform,
             split=split,
             shuffle=False,
             obs_config=self.obs_config,
@@ -211,9 +166,12 @@ class DAModel:
         return next(self.model.parameters()).device
 
     def get_state(self, batch):
-        batch = _to_batch(batch, self.device)
+        if isinstance(batch.get("obs"), tuple):
+            batch = self.transform.device_transform(batch, self.device)
+        else:
+            batch = _to_batch(batch, self.device)
         target = batch["target"]
-        b, c, t, x = target.shape
+        b = target.shape[0]
         noise_labels = torch.zeros([b], device=target.device)
         class_labels = batch["labels"]
 
@@ -221,18 +179,11 @@ class DAModel:
             class_labels = torch.empty([b, 0], device=target.device)
 
         condition = batch["condition"]
-        obs = batch["unified_obs"]
-        # TODO generalize this logic in train_regression.py:_step it is like this
-        # time_step = self.time_step * 3600
-        time_step = 0
-        timestamp = (
-            batch["timestamp"].unsqueeze(1)
-            + torch.arange(t, device=target.device) * time_step
-        )
+        obs = batch["obs"]
+        timestamp = batch["timestamp"]
         second_of_day = batch["second_of_day"]
         day_of_year = batch["day_of_year"]
 
-        # Get predictions
         with torch.autocast("cuda", dtype=torch.bfloat16):
             return {
                 "timestamp": timestamp,
@@ -240,28 +191,13 @@ class DAModel:
                 "day_of_year": day_of_year,
                 "target": self.model(
                     condition,
-                    noise_labels=noise_labels,
-                    class_labels=class_labels,
+                    noise_labels,
+                    **obs,
                     second_of_day=second_of_day,
                     day_of_year=day_of_year,
-                    unified_obs=obs,
-                    timestamp=timestamp,
-                ).out,
+                    class_labels=class_labels,
+                ),
             }
-
-
-def time_length(batch):
-    return batch["target"].shape[2]
-
-
-def find_matching_indices(targets, available):
-    indices = available.get_indexer(targets)
-    valid = indices != -1
-    return indices[valid], available[indices[valid]]
-
-
-def enumerate_to_dict(array):
-    return {int(val): i for i, val in enumerate(array)}
 
 
 def write_to_zarr(group, channels, index, data):

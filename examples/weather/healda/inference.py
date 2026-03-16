@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -21,7 +21,7 @@ import torch
 import zarr
 from datasets import samplers
 from datasets.prefetch_map import prefetch_map
-from datasets.transform import TransformV2, collate
+from datasets.transform import collate
 from inference_helpers import (
     DAConfig,
     DAModel,
@@ -44,7 +44,6 @@ def main():
     dist.init(timeout_infinite=True)
     dist.print0("Inference configuration:")
     dist.print0(f"  Dataset: {args.dataset}")
-    dist.print0(f"  Innovation type: {args.innovation_type.value}")
     dist.print0(f"  Number of samples: {args.num_samples}")
     dist.print0(f"  Output: {args.output_path}")
 
@@ -82,11 +81,10 @@ def main():
         multiprocessing_context="spawn",
     )
 
-    transform = TransformV2(variable_config=da_model.variable_config)
     dataloader = prefetch_map(
         dataloader,
         functools.partial(
-            _device_transform, transform=transform, device=da_model.device
+            _device_transform, transform=da_model.transform, device=da_model.device
         ),
         queue_size=2,
     )
@@ -144,9 +142,6 @@ def main():
 
     if dist.get_world_size() > 1:
         torch.distributed.barrier()
-
-        if torch.distributed.is_initialized():
-            torch.distributed.destroy_process_group()
 
     dist.print0("Inference completed.")
 
