@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,6 +17,13 @@
 _target_: datapipe.CrashPointCloudDataset
 _convert_: all
 data_dir: ${training.raw_data_dir}
+global_features_filepath: ${training.global_features_filepath}
 num_samples: ${training.num_training_samples}
 num_steps: ${training.num_time_steps}
-features: [thickness]
+sample_type: all_time_steps
+
+static_features: []
+dynamic_features: []
+dynamic_targets: []    # Override per experiment (e.g. [effective_plastic_strain, stress_vm])
+global_features: null  # Override per experiment (e.g. [velocity_x, thickness_scale])
+stats_dir: stats        # Directory for normalization statistics

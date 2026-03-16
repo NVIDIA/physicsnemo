@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -31,6 +31,7 @@ from physicsnemo.mesh.primitives.surfaces import (
     mobius_strip,
     octahedron_surface,
     plane,
+    sphere_icosahedral,
     sphere_uv,
     tetrahedron_surface,
     torus,

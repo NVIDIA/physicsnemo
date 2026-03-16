@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -18,6 +18,12 @@ from .function_spec import FunctionSpec
 from .meta import ModelMetaData
 from .module import Module
 from .registry import ModelRegistry
-from .version_check import check_version_spec
+from .version_check import check_version_spec, get_physicsnemo_pkg_info
 
-__all__ = ["ModelMetaData", "Module", "ModelRegistry", "FunctionSpec"]
+__all__ = [
+    "ModelMetaData",
+    "Module",
+    "ModelRegistry",
+    "FunctionSpec",
+    "get_physicsnemo_pkg_info",
+]

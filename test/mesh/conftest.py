@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -27,6 +27,16 @@ import pytest
 import torch
 
 ### Pytest Hooks ###
+
+
+def pytest_configure(config):
+    """Register custom pytest markers used in mesh tests."""
+    config.addinivalue_line(
+        "markers", "cuda: mark test as requiring CUDA (skipped if unavailable)"
+    )
+    config.addinivalue_line(
+        "markers", "slow: mark test as slow-running (for optional exclusion)"
+    )
 
 
 def pytest_collection_modifyitems(config, items):

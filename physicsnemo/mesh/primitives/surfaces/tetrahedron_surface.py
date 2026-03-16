@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -24,7 +24,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(side_length: float = 1.0, device: torch.device | str = "cpu") -> Mesh:
+def load(side_length: float = 1.0, device: torch.device | str = "cpu") -> Mesh[2, 3]:
     """Create a regular tetrahedron surface in 3D space.
 
     Parameters
@@ -36,7 +36,7 @@ def load(side_length: float = 1.0, device: torch.device | str = "cpu") -> Mesh:
 
     Returns
     -------
-    Mesh
+    Mesh[2, 3]
         Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     # Regular tetrahedron vertices

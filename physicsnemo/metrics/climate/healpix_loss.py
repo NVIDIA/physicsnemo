@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -18,7 +18,10 @@ from typing import Sequence
 
 import numpy as np
 import torch as th
-import xarray as xr
+
+from physicsnemo.core.version_check import OptionalImport
+
+xr = OptionalImport("xarray")
 
 """
 Custom dlwp compatible loss classes that allow for more sophisticated training optimization.

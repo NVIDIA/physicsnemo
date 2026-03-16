@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -685,10 +685,14 @@ def ring_sdpa(
     )
 
     # First, get the tensors locally and perform halos:
-    lq, lk, lv = q.to_local(), k.to_local(), v.to_local()
+    lq, lk, lv = (
+        q.to_local().contiguous(),
+        k.to_local().contiguous(),
+        v.to_local().contiguous(),
+    )
 
     if attn_mask is not None:
-        latn_mask = attn_mask.to_local()
+        latn_mask = attn_mask.to_local().contiguous()
     else:
         latn_mask = None
 

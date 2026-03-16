@@ -60,6 +60,7 @@ This document is structured in two main sections:
 | [`FNC-004`](#fnc-004-optional-dependency-handling) | Optional dependency handling | Using optional backends |
 | [`FNC-005`](#fnc-005-benchmarking-hooks) | Benchmarking hooks | Implementing `make_inputs`/`compare` |
 | [`FNC-006`](#fnc-006-testing-functionals) | Testing functionals | Adding functional tests |
+| [`FNC-007`](#fnc-007-benchmark-registry) | Benchmark registry | Adding a functional to ASV |
 
 ---
 
@@ -149,8 +150,9 @@ class Identity(FunctionSpec):
     @classmethod
     def make_inputs(cls, device: torch.device | str = "cpu"):
         device = torch.device(device)
-        for size in (1024, 4096):
-            yield (torch.randn(size, device=device),)
+        yield ("small", (torch.randn(1024, device=device),), {})
+        yield ("medium", (torch.randn(4096, device=device),), {})
+        yield ("large", (torch.randn(16384, device=device),), {})
 
     @classmethod
     def compare(cls, output: torch.Tensor, reference: torch.Tensor) -> None:
@@ -307,18 +309,24 @@ import missing_dep  # raises at import time
 **Description:**
 
 Implement `make_inputs` and `compare` for every functional. `make_inputs` should
-yield representative inputs; `compare` should validate output consistency.
+yield labeled inputs ordered from smaller to larger cases. Labels do not have to
+be exactly "small/medium/large", and you can provide more than three cases.
+`compare` should validate output consistency. Labels are used for benchmark
+plots and summaries.
 
 **Rationale:**
 
-This enables automated benchmarking and correctness testing across backends.
+This enables automated benchmarking, labeling, and correctness testing across
+backends.
 
 **Example:**
 
 ```python
 @classmethod
 def make_inputs(cls, device="cpu"):
-    yield (torch.randn(1024, device=device),)
+    yield ("small", (torch.randn(1024, device=device),), {})
+    yield ("medium", (torch.randn(4096, device=device),), {})
+    yield ("large", (torch.randn(16384, device=device),), {})
 ```
 
 **Anti-pattern:**
@@ -354,4 +362,36 @@ def test_knn_cpu():
 
 ```python
 # No tests for a new functional.
+```
+
+---
+
+### FNC-007: Benchmark registry
+
+**Description:**
+
+Functionals that should be benchmarked must be added to
+`benchmarks/physicsnemo/nn/functional/registry.py`. Only add a functional once
+its `make_inputs` implementation yields labeled inputs.
+
+**Rationale:**
+
+Centralizing the benchmark list keeps ASV configuration minimal and ensures
+every benchmarked functional provides the inputs and labels needed for
+consistent plotting across small-to-large cases.
+
+**Example:**
+
+```python
+from physicsnemo.nn.functional.knn.knn import KNN
+from physicsnemo.nn.functional.radius_search.radius_search import RadiusSearch
+
+FUNCTIONAL_SPECS = (KNN, RadiusSearch)
+```
+
+**Anti-pattern:**
+
+```python
+# Adding a functional before make_inputs is implemented.
+FUNCTIONAL_SPECS = (MyFunctionalWithoutInputs,)
 ```

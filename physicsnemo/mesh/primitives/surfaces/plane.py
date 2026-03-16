@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -26,18 +26,19 @@ from physicsnemo.mesh.mesh import Mesh
 
 def load(
     size: float = 2.0,
-    n_subdivisions: int = 10,
+    subdivisions: int = 10,
     normal: tuple[float, float, float] = (0.0, 0.0, 1.0),
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[2, 3]:
     """Create a flat triangulated plane in 3D space.
 
     Parameters
     ----------
     size : float
         Size of the plane (length of each side).
-    n_subdivisions : int
-        Number of subdivisions per edge.
+    subdivisions : int
+        Number of subdivisions per edge. Creates (subdivisions+1)^2 vertices
+        and 2*subdivisions^2 triangles.
     normal : tuple[float, float, float]
         Normal vector to the plane (will be normalized).
     device : str
@@ -45,13 +46,13 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[2, 3]
         Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
-    if n_subdivisions < 1:
-        raise ValueError(f"n_subdivisions must be at least 1, got {n_subdivisions=}")
+    if subdivisions < 1:
+        raise ValueError(f"subdivisions must be at least 1, got {subdivisions=}")
 
-    n = n_subdivisions + 1
+    n = subdivisions + 1
 
     # Create grid of points in xy-plane
     x = torch.linspace(-size / 2, size / 2, n, device=device)
@@ -99,8 +100,8 @@ def load(
 
     # Create triangular cells
     cells = []
-    for i in range(n_subdivisions):
-        for j in range(n_subdivisions):
+    for i in range(subdivisions):
+        for j in range(subdivisions):
             idx = i * n + j
             # Two triangles per quad
             cells.append([idx, idx + 1, idx + n])

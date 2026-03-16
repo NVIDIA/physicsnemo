@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -19,250 +19,259 @@ import pytest
 import torch
 
 from physicsnemo.experimental.models.healda import (
-    ModelSensorConfig,
-    MultiSensorObsEmbedding,
-    SensorEmbedderConfig,
-    UnifiedObservation,
+    MultiSensorObsEmbedder,
+    SensorEmbedder,
 )
-from physicsnemo.experimental.models.healda.point_embed import SensorEmbedder
-
-from .utils.obs_test_utils import create_unified_observation
-
-# ============================================================================
-# Test Utilities
-# ============================================================================
+from physicsnemo.experimental.models.healda.point_embed import _split_by_sensor
+from test import common
 
 
 def check_all_params_have_gradients(model: torch.nn.Module) -> tuple[bool, list[str]]:
-    """
-    Check that all parameters in a model have gradients.
-
-    Returns:
-        (all_have_grads, params_without_grads)
-    """
+    """Return whether all trainable params got gradients and list missing names."""
     params_without_grads = []
     for name, param in model.named_parameters():
         if param.requires_grad and param.grad is None:
             params_without_grads.append(name)
-
     return len(params_without_grads) == 0, params_without_grads
 
 
-# ============================================================================
-# SensorEmbedder Tests
-# ============================================================================
+def _build_flattened_obs(
+    counts: list[list[list[int]]],
+    *,
+    nchannel_per_sensor: list[int],
+    nplatform_per_sensor: list[int],
+    npix: int,
+    meta_dim: int = 4,
+    device: str | None = None,
+):
+    """Build deterministic flattened tensors and cumulative-end offsets in ``(S, B, T)``."""
+    counts_t = torch.as_tensor(counts, dtype=torch.long)
+    if counts_t.ndim != 3:
+        raise ValueError(
+            f"counts must have shape (S, B, T), got {tuple(counts_t.shape)}"
+        )
+
+    s, b, t = counts_t.shape
+    offsets = torch.cumsum(counts_t.reshape(-1), dim=0).reshape(s, b, t)
+    nobs = int(offsets[-1, -1, -1].item()) if offsets.numel() > 0 else 0
+    obs = torch.arange(nobs, dtype=torch.float32)
+    float_metadata = torch.randn((nobs, meta_dim), dtype=torch.float32)
+    pix = torch.randint(0, npix, (nobs,), dtype=torch.long)
+    local_channel = torch.zeros((nobs,), dtype=torch.long)
+    local_platform = torch.zeros((nobs,), dtype=torch.long)
+    obs_type = torch.randint(0, 256, (nobs,), dtype=torch.long)
+
+    row = 0
+    for sensor_idx in range(s):
+        for batch_idx in range(b):
+            for time_idx in range(t):
+                n = int(counts_t[sensor_idx, batch_idx, time_idx].item())
+                if n == 0:
+                    continue
+
+                sl = slice(row, row + n)
+                local_channel[sl] = torch.randint(
+                    0, nchannel_per_sensor[sensor_idx], (n,), dtype=torch.long
+                )
+                local_platform[sl] = torch.randint(
+                    0, nplatform_per_sensor[sensor_idx], (n,), dtype=torch.long
+                )
+                row += n
+
+    if device is not None:
+        obs = obs.to(device)
+        float_metadata = float_metadata.to(device)
+        pix = pix.to(device)
+        local_channel = local_channel.to(device)
+        local_platform = local_platform.to(device)
+        obs_type = obs_type.to(device)
+        offsets = offsets.to(device)
+
+    return obs, float_metadata, pix, local_channel, local_platform, obs_type, offsets
 
 
-@pytest.mark.parametrize("nobs", [0, 100])
-def test_sensor_embedder(nobs):
-    """Test SensorEmbedder shapes, values, and gradients (includes empty obs for DDP compatibility)."""
-    torch.manual_seed(42)
+def test_split_by_sensor():
+    counts = [
+        [[2, 1], [0, 3]],  # sensor 0
+        [[0, 0], [0, 0]],  # sensor 1 (no observations)
+        [[1, 0], [2, 1]],  # sensor 2
+    ]
+    obs, float_metadata, pix, local_channel, local_platform, obs_type, offsets = (
+        _build_flattened_obs(
+            counts,
+            nchannel_per_sensor=[4, 3, 2],
+            nplatform_per_sensor=[3, 2, 1],
+            npix=12 * 4**3,
+            meta_dim=4,
+        )
+    )
 
-    sensor_embed_dim = 16
-    output_dim = 32
-    hpx_level = 5
-    meta_dim = 8
-    nchannel = 10
-    nplatform = 5
-    batch_size = 2
+    split = _split_by_sensor(
+        obs=obs,
+        float_metadata=float_metadata,
+        pix=pix,
+        local_channel=local_channel,
+        local_platform=local_platform,
+        obs_type=obs_type,
+        offsets=offsets,
+    )
+    assert len(split) == len(counts)
+
+    expected_lens = [sum(sum(window) for window in sensor) for sensor in counts]
+    for sensor_slice, expected_len in zip(split, expected_lens):
+        assert sensor_slice[0].shape[0] == expected_len
+        assert sensor_slice[-1][-1, -1].item() == expected_len
+
+    # Re-assemble split tensors and verify exact round-trip on the row axis.
+    reconstructed_obs = torch.cat([sensor_slice[0] for sensor_slice in split], dim=0)
+    reconstructed_meta = torch.cat([sensor_slice[1] for sensor_slice in split], dim=0)
+    assert torch.equal(reconstructed_obs, obs)
+    assert torch.equal(reconstructed_meta, float_metadata)
+
+
+@pytest.mark.parametrize("nobs", [0, 64])
+def test_sensor_embedder_forward_and_gradients(device, nobs):
+    torch.manual_seed(0)
+    b, t = 2, 1
+    npix = 12 * 4**3
+    out_dim = 32
+    meta_dim = 4
+    nchannel = 8
+    nplatform = 3
+
+    if nobs == 0:
+        counts = [[[0], [0]]]
+    else:
+        counts = [[[nobs // 2], [nobs - nobs // 2]]]
+
+    obs, float_metadata, pix, local_channel, local_platform, obs_type, offsets = (
+        _build_flattened_obs(
+            counts,
+            nchannel_per_sensor=[nchannel],
+            nplatform_per_sensor=[nplatform],
+            npix=npix,
+            meta_dim=meta_dim,
+            device=device,
+        )
+    )
 
     embedder = SensorEmbedder(
-        platform_ids=list(
-            range(nplatform)
-        ),  # Simple case: platform IDs = [0, 1, ..., nplatform-1]
-        sensor_embed_dim=sensor_embed_dim,
-        output_dim=output_dim,
-        meta_dim=meta_dim,
-        n_embed=100,
-        hpx_level=hpx_level,
-        nchannel=nchannel,
-    )
-    embedder.train()
-
-    # Create observation
-    obs = create_unified_observation(
-        nobs=nobs,
-        batch_size=batch_size,
-        time_steps=1,
-        hpx_level=hpx_level + 1,
-        meta_dim=meta_dim,
-        nchannel=nchannel,
         nplatform=nplatform,
-        n_embed=100,
-    )
-
-    # Forward pass
-    output = embedder(obs)
-
-    # Check output shape and values
-    npix = 12 * 4**hpx_level
-    assert output.shape == (batch_size, 1, npix, output_dim)
-    assert torch.isfinite(output).all()
-
-    # Check gradients
-    loss = output.sum()
-    loss.backward()
-    all_have_grads, missing = check_all_params_have_gradients(embedder)
-    assert all_have_grads, f"Parameters without gradients (nobs={nobs}): {missing}"
-
-
-def test_sensor_embedder_no_batching():
-    """Test SensorEmbedder with offsets=None (no explicit batching)."""
-    torch.manual_seed(42)
-
-    sensor_embed_dim = 16
-    output_dim = 128
-    hpx_level = 5
-    nobs = 50
-    nplatform = 5
-
-    embedder = SensorEmbedder(
-        platform_ids=list(range(nplatform)),
-        sensor_embed_dim=sensor_embed_dim,
-        output_dim=output_dim,
-        meta_dim=8,
-        n_embed=100,
-        hpx_level=hpx_level,
-    )
-
-    # Create observation without offsets
-    obs = create_unified_observation(
-        nobs=nobs,
-        batch_size=1,
-        time_steps=1,
-        hpx_level=hpx_level + 1,
-        meta_dim=8,
-        n_embed=100,
-    )
-    obs = UnifiedObservation(
-        obs=obs.obs,
-        time=obs.time,
-        float_metadata=obs.float_metadata,
-        int_metadata=obs.int_metadata,
-        offsets=None,  # No explicit batching
-        hpx_level=obs.hpx_level,
-    )
-
-    # Forward pass
-    with torch.no_grad():
-        output = embedder(obs)
-
-    # Check output shape (should be 2D: npix x output_dim)
-    npix = 12 * 4**hpx_level
-    assert output.shape == (npix, output_dim)
-
-
-# ============================================================================
-# MultiSensorObsEmbedding Tests
-# ============================================================================
-
-
-@pytest.mark.parametrize("num_sensors", [1, 2])
-def test_multisensor_obs_embedding(num_sensors):
-    """Test MultiSensorObsEmbedding with different sensor counts."""
-    torch.manual_seed(42)
-
-    sensor_embed_dim = 16
-    fusion_dim = 32
-    hpx_level = 5
-    meta_dim = 8
-
-    # Build sensor configs
-    all_sensor_configs = {
-        "test_sensor_0": ModelSensorConfig(
-            sensor_id=0, nchannel=10, platform_ids=tuple(range(5))
-        ),
-        "test_sensor_1": ModelSensorConfig(
-            sensor_id=1, nchannel=10, platform_ids=tuple(range(5))
-        ),
-    }
-    sensor_config = dict(list(all_sensor_configs.items())[:num_sensors])
-
-    sensor_embedder_config = SensorEmbedderConfig(
-        embed_dim=sensor_embed_dim,
+        nchannel=nchannel,
+        sensor_embed_dim=16,
+        output_dim=out_dim,
         meta_dim=meta_dim,
-        fusion_dim=fusion_dim,
-    )
-
-    embedder = MultiSensorObsEmbedding(
-        sensor_embedder_config=sensor_embedder_config,
-        sensors=sensor_config,
-        hpx_level=hpx_level,
-    )
-
-    # Create observation
-    obs = create_unified_observation(
-        nobs=100,
-        batch_size=2,
-        time_steps=1,
-        hpx_level=hpx_level + 1,
-        meta_dim=meta_dim,
-        sensor_config=sensor_config,
-        n_embed=100,
-        ensure_all_sensors=True,  # Ensure all obs are assigned to defined sensors
-    )
-
-    # Forward pass
-    with torch.no_grad():
-        output = embedder(obs)
-
-    # Check output shape and values
-    npix = 12 * 4**hpx_level
-    assert output.shape == (2, fusion_dim, 1, npix)
-    assert torch.isfinite(output).all()
-    assert not torch.allclose(output, torch.zeros_like(output))
-
-
-@pytest.mark.parametrize("nobs", [0, 50])
-def test_multisensor_gradients(nobs):
-    """Test gradient flow through MultiSensorObsEmbedding (includes empty obs for DDP compatibility)."""
-    torch.manual_seed(42)
-
-    sensor_embed_dim = 16
-    fusion_dim = 32
-    hpx_level = 5
-    meta_dim = 8
-
-    sensor_config = {
-        "test_sensor_0": ModelSensorConfig(
-            sensor_id=0, nchannel=10, platform_ids=tuple(range(5))
-        ),
-        "test_sensor_1": ModelSensorConfig(
-            sensor_id=1, nchannel=10, platform_ids=tuple(range(5))
-        ),
-    }
-
-    sensor_embedder_config = SensorEmbedderConfig(
-        embed_dim=sensor_embed_dim,
-        meta_dim=meta_dim,
-        fusion_dim=fusion_dim,
-    )
-
-    embedder = MultiSensorObsEmbedding(
-        sensor_embedder_config=sensor_embedder_config,
-        sensors=sensor_config,
-        hpx_level=hpx_level,
-    )
+        n_embed=256,
+    ).to(device)
     embedder.train()
-    embedder.zero_grad()
-
-    obs = create_unified_observation(
-        nobs=nobs,
-        batch_size=2,
-        time_steps=1,
-        hpx_level=hpx_level + 1,
-        meta_dim=meta_dim,
-        sensor_config=sensor_config,
-        n_embed=100,
-        ensure_all_sensors=True,
+    # SensorEmbedder expects 2D offsets (B, T); squeeze the single-sensor dim
+    out = embedder(
+        obs=obs,
+        float_metadata=float_metadata,
+        pix=pix,
+        local_channel=local_channel,
+        local_platform=local_platform,
+        obs_type=obs_type,
+        offsets=offsets.squeeze(0),
+        npix=npix,
     )
+    assert out.shape == (b, t, npix, out_dim)
+    assert torch.isfinite(out).all()
 
-    # Forward + backward
-    output = embedder(obs)
-    assert torch.isfinite(output).all()
-    loss = output.sum()
+    loss = out.sum()
     loss.backward()
-
-    # Check gradients (critical for DDP - must work with empty obs)
     all_have_grads, missing = check_all_params_have_gradients(embedder)
     assert all_have_grads, f"Parameters without gradients (nobs={nobs}): {missing}"
+
+
+@pytest.mark.parametrize("counts", [[[[3], [2]], [[1], [4]]], [[[0], [0]], [[0], [0]]]])
+def test_multisensor_obs_embedding_forward_and_gradients(device, counts):
+    torch.manual_seed(0)
+    npix = 12 * 4**3
+    meta_dim = 4
+    fusion_dim = 32
+    nchannel_per_sensor = [7, 5]
+    nplatform_per_sensor = [3, 2]
+
+    obs, float_metadata, pix, local_channel, local_platform, obs_type, offsets = (
+        _build_flattened_obs(
+            counts,
+            nchannel_per_sensor=nchannel_per_sensor,
+            nplatform_per_sensor=nplatform_per_sensor,
+            npix=npix,
+            meta_dim=meta_dim,
+            device=device,
+        )
+    )
+
+    model = MultiSensorObsEmbedder(
+        nchannel_per_sensor=nchannel_per_sensor,
+        nplatform_per_sensor=nplatform_per_sensor,
+        embed_dim=16,
+        meta_dim=meta_dim,
+        fusion_dim=fusion_dim,
+        torch_compile=False,
+    ).to(device)
+    model.train()
+    out = model(
+        obs=obs,
+        float_metadata=float_metadata,
+        pix=pix,
+        local_channel=local_channel,
+        local_platform=local_platform,
+        obs_type=obs_type,
+        offsets=offsets,
+        npix=npix,
+    )
+    assert out.shape == (2, fusion_dim, 1, npix)
+    assert torch.isfinite(out).all()  # verify no NaNs
+
+    loss = out.sum()
+    loss.backward()
+    all_have_grads, missing = check_all_params_have_gradients(model)
+    assert all_have_grads, f"Parameters without gradients: {missing}"
+
+
+def test_multisensor_obs_embedding_forward_accuracy(device):
+    """Regression test for MultiSensorObsEmbedder forward output."""
+    torch.manual_seed(0)
+    npix = 12 * 4**3
+    meta_dim = 4
+    fusion_dim = 32
+    nchannel_per_sensor = [7, 5]
+    nplatform_per_sensor = [3, 2]
+    counts = [[[3], [2]], [[1], [4]]]
+    obs, float_metadata, pix, local_channel, local_platform, obs_type, offsets = (
+        _build_flattened_obs(
+            counts,
+            nchannel_per_sensor=nchannel_per_sensor,
+            nplatform_per_sensor=nplatform_per_sensor,
+            npix=npix,
+            meta_dim=meta_dim,
+            device=device,
+        )
+    )
+
+    model = MultiSensorObsEmbedder(
+        nchannel_per_sensor=nchannel_per_sensor,
+        nplatform_per_sensor=nplatform_per_sensor,
+        embed_dim=16,
+        meta_dim=meta_dim,
+        fusion_dim=fusion_dim,
+    ).to(device)
+    model.eval()
+
+    assert common.validate_forward_accuracy(
+        model,
+        (
+            obs,
+            float_metadata,
+            pix,
+            local_channel,
+            local_platform,
+            obs_type,
+            offsets,
+            npix,
+        ),
+        file_name="models/healda/data/point_embed_multisensor_output.pth",
+    )

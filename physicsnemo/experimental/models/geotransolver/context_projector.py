@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -39,7 +39,7 @@ from einops import rearrange
 from jaxtyping import Float
 
 from physicsnemo.core.version_check import check_version_spec
-from physicsnemo.models.transolver.Physics_Attention import gumbel_softmax
+from physicsnemo.nn import gumbel_softmax
 from physicsnemo.nn import BQWarp
 from physicsnemo.nn import Mlp
 

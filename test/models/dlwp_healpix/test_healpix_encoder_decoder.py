@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -21,7 +21,7 @@ from test import common
 
 def test_UNetEncoder_initialize(device, pytestconfig):
     from physicsnemo.models.dlwp_healpix.layers import ConvNeXtBlock, UNetEncoder
-    from physicsnemo.nn import HEALPixMaxPool
+    from physicsnemo.nn.module.hpx import HEALPixMaxPool
 
     channels = 2
     n_channels = (16, 32, 64)
@@ -60,7 +60,7 @@ def test_UNetEncoder_initialize(device, pytestconfig):
 
 def test_UNetEncoder_forward(device, pytestconfig):
     from physicsnemo.models.dlwp_healpix.layers import ConvNeXtBlock, UNetEncoder
-    from physicsnemo.nn import HEALPixMaxPool
+    from physicsnemo.nn.module.hpx import HEALPixMaxPool
 
     channels = 2
     hw_size = 16
@@ -104,7 +104,7 @@ def test_UNetEncoder_forward(device, pytestconfig):
 
 def test_UNetEncoder_reset(device, pytestconfig):
     from physicsnemo.models.dlwp_healpix.layers import ConvNeXtBlock, UNetEncoder
-    from physicsnemo.nn import HEALPixMaxPool
+    from physicsnemo.nn.module.hpx import HEALPixMaxPool
 
     channels = 2
     n_channels = (16, 32, 64)

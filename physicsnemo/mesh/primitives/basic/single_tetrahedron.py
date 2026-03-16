@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -24,7 +24,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(device: torch.device | str = "cpu") -> Mesh:
+def load(device: torch.device | str = "cpu") -> Mesh[3, 3]:
     """Create a mesh with a single tetrahedron in 3D space.
 
     Parameters
@@ -34,7 +34,7 @@ def load(device: torch.device | str = "cpu") -> Mesh:
 
     Returns
     -------
-    Mesh
+    Mesh[3, 3]
         Mesh with n_manifold_dims=3, n_spatial_dims=3, n_cells=1.
     """
     points = torch.tensor(

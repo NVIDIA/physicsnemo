@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -64,6 +64,9 @@ class PythonLogger:
     def error(self, message: str):
         """Log error"""
         self.logger.error(colored(message, "light_red"))
+
+    def __getattr__(self, name: str):
+        return getattr(self.logger, name)
 
 
 class RankZeroLoggingWrapper:

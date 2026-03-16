@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -304,10 +304,10 @@ def build_data_dict(
 
     # Add flow parameters
     data_dict["air_density"] = torch.tensor(
-        [air_density], device=device, dtype=torch.float32
+        air_density, device=device, dtype=torch.float32
     )
     data_dict["stream_velocity"] = torch.tensor(
-        [stream_velocity], device=device, dtype=torch.float32
+        stream_velocity, device=device, dtype=torch.float32
     )
 
     return data_dict

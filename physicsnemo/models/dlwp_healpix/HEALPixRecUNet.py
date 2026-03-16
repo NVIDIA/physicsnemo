@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -25,7 +25,7 @@ from omegaconf import DictConfig
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.nn import HEALPixFoldFaces, HEALPixUnfoldFaces
+from physicsnemo.nn.module.hpx import HEALPixFoldFaces, HEALPixUnfoldFaces
 
 from .layers import _legacy_hydra_targets_warning, _remap_obj
 

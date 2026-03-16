@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -35,9 +35,9 @@ class KNN(FunctionSpec):
     Parameters
     ----------
     points : torch.Tensor
-        Tensor of shape (N, 3) containing the points to search from.
+        Tensor of shape (N, D) containing the points to search from.
     queries : torch.Tensor
-        Tensor of shape (M, 3) containing the points to search for.
+        Tensor of shape (M, D) containing the points to search for.
     k : int
         Number of nearest neighbors to return for each query point.
     implementation : {"cuml", "torch", "scipy"} or None
@@ -77,8 +77,20 @@ class KNN(FunctionSpec):
 
     @classmethod
     def make_inputs(cls, device: torch.device | str = "cpu"):
-        # TODO(ASV): Populate benchmark inputs in a follow-up PR.
-        raise NotImplementedError
+        device = torch.device(device)
+        cases = [
+            ("small", 1024, 256, 16),
+            ("medium", 4096, 1024, 32),
+            ("large", 8192, 2048, 32),
+        ]
+        for label, num_points, num_queries, k in cases:
+            points = torch.rand(num_points, 3, device=device)
+            queries = torch.rand(num_queries, 3, device=device)
+            yield (
+                f"{label}-points{num_points}-queries{num_queries}-k{k}",
+                (points, queries, k),
+                {},
+            )
 
     @classmethod
     def compare(

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -28,7 +28,7 @@ from physicsnemo.mesh.mesh import Mesh
 @require_version_spec("pyvista")
 def load(
     radius: float = 1.0, resolution: int = 20, device: torch.device | str = "cpu"
-) -> Mesh:
+) -> Mesh[3, 3]:
     """Create a tetrahedral volume mesh of a sphere.
 
     The sphere is filled with tetrahedra using PyVista's delaunay_3d filter.
@@ -44,7 +44,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[3, 3]
         Mesh with n_manifold_dims=3, n_spatial_dims=3.
     """
     import importlib

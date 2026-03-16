@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -56,6 +56,10 @@ class StormCastDataset(torch.utils.data.Dataset, ABC):
     def state_channels(self) -> list[str]:
         """Metadata for the state channels. A list of channel names, one for each channel"""
         pass
+
+    def scalar_condition_channels(self) -> list[str]:
+        """Metadata for the scalar condition channels. A list of channel names, one for each channel"""
+        return []
 
     @abstractmethod
     def image_shape(self) -> tuple[int, int]:

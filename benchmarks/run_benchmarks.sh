@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -29,3 +29,6 @@ echo -e "\033[0;32mRunning ASV benchmarks from: $REPO_ROOT_DIR\033[0m"
 
 # Run ASV with spawn method for CUDA compatibility.
 asv run --launch-method spawn "$@"
+
+# Generate functional benchmark plots if results exist.
+python benchmarks/physicsnemo/nn/functional/plot_functional_benchmarks.py

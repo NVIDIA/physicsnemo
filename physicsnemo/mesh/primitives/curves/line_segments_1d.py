@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -26,7 +26,7 @@ from physicsnemo.mesh.mesh import Mesh
 
 def load(
     n_segments: int = 3, gap: float = 0.2, device: torch.device | str = "cpu"
-) -> Mesh:
+) -> Mesh[1, 1]:
     """Create multiple disconnected line segments in 1D space.
 
     Parameters
@@ -40,7 +40,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[1, 1]
         Mesh with n_manifold_dims=1, n_spatial_dims=1, n_cells=n_segments.
     """
     if n_segments < 1:

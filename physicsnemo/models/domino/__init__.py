@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,4 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+r"""
+DoMINO Model Package.
+
+This package contains the DoMINO (Decomposable Multi-scale Iterative Neural Operator)
+model architecture for predicting both surface and
+volume physical quantities in aerodynamic simulations.
+
+The main model class is :class:`~physicsnemo.models.domino.model.DoMINO`.
+"""
+
 from .model import DoMINO
+
+__all__ = ["DoMINO"]

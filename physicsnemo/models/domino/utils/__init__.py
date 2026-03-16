@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,12 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+r"""
+DoMINO Utility Functions.
+
+This module provides utility functions for the DoMINO model, including
+data preprocessing, normalization, grid creation, and sampling utilities.
+"""
+
 from .utils import (
     area_weighted_shuffle_array,
     calculate_center_of_mass,
     calculate_normal_positional_encoding,
     calculate_pos_encoding,
     combine_dict,
+    create_directory,
     create_grid,
     get_filenames,
     mean_std_sampling,

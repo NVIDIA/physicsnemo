@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -402,9 +402,7 @@ class TestCaching:
         normals1 = mesh.point_normals
 
         # Check cache exists
-        from physicsnemo.mesh.utilities._cache import get_cached
-
-        cached = get_cached(mesh.point_data, "normals")
+        cached = mesh._cache.get(("point", "normals"), None)
         assert cached is not None
         assert torch.equal(cached, normals1)
 

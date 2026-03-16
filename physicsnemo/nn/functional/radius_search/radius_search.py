@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -116,8 +116,24 @@ class RadiusSearch(FunctionSpec):
         cls,
         device: torch.device | str = "cpu",
     ):
-        # TODO(ASV): Populate benchmark inputs in a follow-up PR.
-        raise NotImplementedError
+        device = torch.device(device)
+        cases = [
+            ("small", 1024, 512, 0.1, 32),
+            ("medium", 4096, 2048, 0.1, 32),
+            ("large", 8192, 4096, 0.1, 32),
+        ]
+        for label, num_points, num_queries, radius, max_points in cases:
+            points = torch.rand(num_points, 3, device=device)
+            queries = torch.rand(num_queries, 3, device=device)
+            yield (
+                f"{label}-points{num_points}-queries{num_queries}-radius{radius}",
+                (points, queries, radius),
+                {
+                    "max_points": max_points,
+                    "return_dists": True,
+                    "return_points": True,
+                },
+            )
 
     @classmethod
     def compare(
