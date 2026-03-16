@@ -87,10 +87,10 @@ def draw_mesh_pyvista(
     ### Add scalar data to PyVista mesh based on active_scalar_source
     scalar_name = None
     if active_scalar_source == "points" and point_scalar_values is not None:
-        pv_mesh.point_data["_viz_scalars"] = point_scalar_values.cpu().numpy()
+        pv_mesh.point_data["_viz_scalars"] = point_scalar_values.float().cpu().numpy()
         scalar_name = "_viz_scalars"
     elif active_scalar_source == "cells" and cell_scalar_values is not None:
-        pv_mesh.cell_data["_viz_scalars"] = cell_scalar_values.cpu().numpy()
+        pv_mesh.cell_data["_viz_scalars"] = cell_scalar_values.float().cpu().numpy()
         scalar_name = "_viz_scalars"
 
     ### Create plotter
@@ -164,7 +164,9 @@ def draw_mesh_pyvista(
 
         # Add point scalar data if present
         if active_scalar_source == "points" and point_scalar_values is not None:
-            point_cloud.point_data["_viz_scalars"] = point_scalar_values.cpu().numpy()
+            point_cloud.point_data["_viz_scalars"] = (
+                point_scalar_values.float().cpu().numpy()
+            )
             point_scalars = "_viz_scalars"
             point_color = None
         else:

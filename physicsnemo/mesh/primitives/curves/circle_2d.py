@@ -26,7 +26,7 @@ from physicsnemo.mesh.mesh import Mesh
 
 def load(
     radius: float = 1.0, n_points: int = 32, device: torch.device | str = "cpu"
-) -> Mesh:
+) -> Mesh[1, 2]:
     """Create a closed circle curve in 2D space.
 
     Parameters
@@ -40,7 +40,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[1, 2]
         Mesh with n_manifold_dims=1, n_spatial_dims=2, n_cells=n_points.
     """
     if n_points < 3:

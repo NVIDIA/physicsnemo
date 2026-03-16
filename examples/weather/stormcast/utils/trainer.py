@@ -344,6 +344,13 @@ class Trainer:
         else:
             self.invariant_tensor = None
 
+        if (
+            self.cfg.model.architecture != "dit"
+        ) and self.dataset_train.scalar_condition_channels():
+            raise ValueError(
+                "Scalar conditions are only supported for the 'dit' architecture."
+            )
+
     # =========================================================================
     # Model Setup
     # =========================================================================
@@ -497,7 +504,7 @@ class Trainer:
         r"""
         Create optimizer and scheduler.
 
-        Builds optimizer using configuration (Adam, AdamW, or StableAdamW).
+        Builds optimizer using configuration (Adam or AdamW).
         Optionally initializes a learning rate scheduler for decay after warmup.
 
         Parameters
@@ -843,7 +850,9 @@ class Trainer:
             outputs = diffusion_model_forward(
                 self.net,
                 condition,
-                state[1].shape,
+                shape=state[1].shape,
+                dtype=state[1].dtype,
+                device=state[1].device,
                 sampler_args=self.cfg.sampler.args.__dict__.copy(),
                 lead_time_label=lead_time_label,
             )

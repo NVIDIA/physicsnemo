@@ -184,7 +184,7 @@ class ConcatConditionWrapper(Module):
                 cond_concat = condition[self.image_cond_key]
             if self.vector_cond_key in condition:
                 cond_vec = condition[self.vector_cond_key]
-            if cond_concat is None or cond_vec is None:
+            if cond_concat is None and cond_vec is None:
                 raise ValueError(
                     "Condition TensorDict must include at least one of "
                     f"'{self.image_cond_key}' and '{self.vector_cond_key}'."

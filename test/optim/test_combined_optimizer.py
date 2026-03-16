@@ -23,22 +23,27 @@ from physicsnemo.optim.combined_optimizer import CombinedOptimizer
 
 
 class SimpleModel(nn.Module):
+    """Two-layer linear model used as a test fixture for CombinedOptimizer."""
+
     def __init__(self):
         super().__init__()
         self.layer1 = nn.Linear(10, 10)
         self.layer2 = nn.Linear(10, 10)
 
     def forward(self, x):
+        """Run a forward pass through both layers with ReLU activation."""
         return self.layer2(nn.functional.relu(self.layer1(x)))
 
 
 @pytest.fixture
 def model():
+    """Create a SimpleModel instance with two linear layers."""
     return SimpleModel()
 
 
 @pytest.fixture
 def optimizers(model):
+    """Create an SGD + Adam optimizer pair, one per model layer."""
     opt1 = SGD(model.layer1.parameters(), lr=0.01)
     opt2 = Adam(model.layer2.parameters(), lr=0.001)
     return [opt1, opt2]
@@ -46,15 +51,20 @@ def optimizers(model):
 
 @pytest.fixture
 def combined_optimizer(optimizers):
+    """Create a CombinedOptimizer wrapping the SGD + Adam pair."""
     return CombinedOptimizer(optimizers)
 
 
 class TestInitialization:
+    """Tests for CombinedOptimizer construction and configuration."""
+
     def test_init_requires_optimizers(self):
+        """Verify that an empty optimizer list raises ValueError."""
         with pytest.raises(ValueError, match="must contain at least one optimizer"):
             CombinedOptimizer([])
 
     def test_init_with_compile_kwargs(self, model):
+        """Verify torch.compile is called on step functions when kwargs are provided."""
         opt = SGD(model.layer1.parameters(), lr=0.1)
         # We just check it doesn't crash and sets up step_fns
 
@@ -80,6 +90,7 @@ class TestInitialization:
                 torch.compile = original_compile
 
     def test_init_aggregates_param_groups(self, combined_optimizer, model):
+        """Verify param_groups contains all parameters from all optimizers."""
         # opt1 has 1 group, opt2 has 1 group
         assert len(combined_optimizer.param_groups) == 2
 
@@ -92,12 +103,14 @@ class TestInitialization:
         assert all_params == model_params
 
     def test_repr(self, combined_optimizer):
+        """Verify __repr__ includes the class name and constituent optimizer types."""
         s = repr(combined_optimizer)
         assert "CombinedOptimizer" in s
         assert "SGD" in s
         assert "Adam" in s
 
     def test_add_param_group_raises(self, combined_optimizer):
+        """Verify add_param_group raises NotImplementedError after init."""
         with pytest.raises(
             NotImplementedError, match="does not support add_param_group"
         ):
@@ -116,7 +129,10 @@ class TestInitialization:
 
 
 class TestStep:
+    """Tests for CombinedOptimizer.step and zero_grad behavior."""
+
     def test_step_calls_all_optimizers(self, model):
+        """Verify that step delegates to every underlying optimizer's step."""
         # Mock optimizers to verify calls
         opt1 = torch.optim.SGD(model.layer1.parameters(), lr=0.1)
         opt2 = torch.optim.SGD(model.layer2.parameters(), lr=0.1)
@@ -249,13 +265,17 @@ class TestStep:
 
 
 class TestStateDict:
+    """Tests for CombinedOptimizer serialization and deserialization."""
+
     def test_state_dict_structure(self, combined_optimizer):
+        """Verify state_dict contains an 'optimizers' key with one entry per optimizer."""
         state = combined_optimizer.state_dict()
         assert "optimizers" in state
         assert len(state["optimizers"]) == 2
         assert isinstance(state["optimizers"][0], dict)
 
     def test_load_state_dict(self, combined_optimizer, model):
+        """Verify a saved state_dict can be loaded into a new CombinedOptimizer."""
         # Save state
         state = combined_optimizer.state_dict()
 
@@ -274,6 +294,7 @@ class TestStateDict:
         assert len(new_state["optimizers"]) == len(state["optimizers"])
 
     def test_load_state_dict_mismatch_raises(self, combined_optimizer):
+        """Verify ValueError when state_dict has wrong number of optimizers."""
         state = combined_optimizer.state_dict()
         state["optimizers"].pop()  # Remove one
 
@@ -281,6 +302,7 @@ class TestStateDict:
             combined_optimizer.load_state_dict(state)
 
     def test_load_state_dict_missing_key(self, combined_optimizer):
+        """Verify KeyError when state_dict is missing the 'optimizers' key."""
         bad_state = {"wrong_key": []}
         with pytest.raises(
             KeyError, match="Expected state_dict to contain 'optimizers' key"
@@ -359,7 +381,10 @@ class TestStateDict:
 
 
 class TestIntegration:
+    """Tests for CombinedOptimizer interoperability with PyTorch utilities."""
+
     def test_lr_scheduler(self, combined_optimizer):
+        """Verify StepLR correctly adjusts learning rates across all param groups."""
         scheduler = torch.optim.lr_scheduler.StepLR(
             combined_optimizer, step_size=1, gamma=0.1
         )

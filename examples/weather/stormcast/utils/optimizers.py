@@ -24,13 +24,6 @@ from collections.abc import Iterable
 
 import torch
 
-try:
-    from optimi import StableAdamW
-
-    IS_OPTIMI_AVAILABLE = True
-except ImportError:
-    IS_OPTIMI_AVAILABLE = False
-
 from utils.config import OptimizerConfig
 
 
@@ -44,9 +37,8 @@ def build_optimizer(params: Iterable, cfg: OptimizerConfig) -> torch.optim.Optim
         Model parameters to optimize (typically ``model.parameters()``).
     cfg : OptimizerConfig
         Optimizer configuration with keys:
-
         - ``name`` : str
-            Optimizer type: "adam", "adamw", or "stableadamw".
+            Optimizer type: "adam", "adamw".
         - ``lr`` : float, optional
             Learning rate (overrides default_lr if specified).
         - ``betas`` : list of float, optional
@@ -99,18 +91,6 @@ def build_optimizer(params: Iterable, cfg: OptimizerConfig) -> torch.optim.Optim
             weight_decay=cfg.weight_decay,
             fused=cfg.fused,
             amsgrad=False,
-        )
-    elif name == "stableadamw":  # TODO: StableAdamW doesn't work with DTensor
-        if not IS_OPTIMI_AVAILABLE:
-            raise ImportError(
-                "Selected 'stableadamw' optimizer but optimi is not installed."
-            )
-        return StableAdamW(
-            params,
-            lr=cfg.lr,
-            betas=cfg.betas,
-            eps=cfg.eps,
-            weight_decay=cfg.weight_decay,
         )
     elif isinstance(name, tuple):
         # if you know what you're doing, you can pass the name and kwargs or any torch optimizer

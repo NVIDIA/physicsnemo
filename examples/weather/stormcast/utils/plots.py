@@ -60,7 +60,8 @@ def validation_plot(generated, truth, input_state, variable, background=None):
 
     yield ("generated", _make_fig(generated, f"Generated {variable}"))
     yield ("truth", _make_fig(truth, "Truth"))
-    yield ("input", _make_fig(input_state, "Input"))
+    if input_state is not None:
+        yield ("input", _make_fig(input_state, "Input"))
 
     backgrounds = _normalize_backgrounds(background)
     num_panels = 3 + max(len(backgrounds), 1)
@@ -186,7 +187,9 @@ def save_validation_plots(trainer, plot_outputs, plot_state, plot_background):
             validation_figs = validation_plot(
                 image[f_idx],
                 plot_state[1][i, f_idx].cpu().numpy(),
-                plot_state[0][i, f_idx].cpu().numpy(),
+                plot_state[0][i, f_idx].cpu().numpy()
+                if plot_state[0] is not None
+                else None,
                 f_,
                 bg_panels,
             )

@@ -324,7 +324,7 @@ def to_pyvista(
     pv = importlib.import_module("pyvista")
 
     ### Convert points to numpy and pad to 3D if needed (PyVista requires 3D points)
-    points_np = mesh.points.cpu().numpy()
+    points_np = mesh.points.float().cpu().numpy()
 
     if mesh.n_spatial_dims < 3:
         # Pad with zeros to make 3D
@@ -373,19 +373,19 @@ def to_pyvista(
 
     ### Convert data dictionaries (flatten high-rank tensors for VTK compatibility)
     for k, v in mesh.point_data.items(include_nested=True, leaves_only=True):
-        arr = v.cpu().numpy()
+        arr = v.float().cpu().numpy()
         pv_mesh.point_data[str(k)] = (
             arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
         )
 
     for k, v in mesh.cell_data.items(include_nested=True, leaves_only=True):
-        arr = v.cpu().numpy()
+        arr = v.float().cpu().numpy()
         pv_mesh.cell_data[str(k)] = (
             arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
         )
 
     for k, v in mesh.global_data.items(include_nested=True, leaves_only=True):
-        arr = v.cpu().numpy()
+        arr = v.float().cpu().numpy()
         pv_mesh.field_data[str(k)] = (
             arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
         )
