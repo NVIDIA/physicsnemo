@@ -56,6 +56,14 @@ from physicsnemo.datapipes.transforms.utility import (
     Purge,
     Rename,
 )
+from physicsnemo.datapipes.transforms.mesh import (
+    MeshTransform,
+    apply_to_tensordict_mesh,
+    ScaleMesh,
+    TranslateMesh,
+    RandomScaleMesh,
+    RandomTranslateMesh,
+)
 
 __all__ = [
     # Base
@@ -87,4 +95,11 @@ __all__ = [
     "Rename",
     "Purge",
     "ConstantField",
+    # Mesh
+    "MeshTransform",
+    "apply_to_tensordict_mesh",
+    "ScaleMesh",
+    "TranslateMesh",
+    "RandomScaleMesh",
+    "RandomTranslateMesh",
 ]

@@ -41,8 +41,11 @@ from physicsnemo.datapipes.collate import (
 from physicsnemo.datapipes.dataloader import DataLoader
 from physicsnemo.datapipes.dataset import Dataset
 from physicsnemo.datapipes.multi_dataset import MultiDataset
+from physicsnemo.datapipes.mesh_dataset import MeshDataset
 from physicsnemo.datapipes.readers import (
     HDF5Reader,
+    MeshReader,
+    MultiMeshReader,
     NumpyReader,
     Reader,
     TensorStoreZarrReader,
@@ -67,14 +70,20 @@ from physicsnemo.datapipes.transforms import (
     CreateGrid,
     FieldSlice,
     KNearestNeighbors,
+    MeshTransform,
     Normalize,
     NormalizeVectors,
     Purge,
+    RandomScaleMesh,
+    RandomTranslateMesh,
     Rename,
     Scale,
+    ScaleMesh,
     SubsamplePoints,
     Transform,
     Translate,
+    TranslateMesh,
+    apply_to_tensordict_mesh,
 )
 
 # Auto-register OmegaConf resolvers so ${dp:ComponentName} works in Hydra configs
@@ -84,6 +93,7 @@ __all__ = [
     #
     "TensorDict",  # Re-export from tensordict
     "Dataset",
+    "MeshDataset",
     "DataLoader",
     "MultiDataset",
     # Transforms - Base
@@ -113,6 +123,13 @@ __all__ = [
     "Rename",
     "Purge",
     "ConstantField",
+    # Transforms - Mesh
+    "MeshTransform",
+    "apply_to_tensordict_mesh",
+    "ScaleMesh",
+    "TranslateMesh",
+    "RandomScaleMesh",
+    "RandomTranslateMesh",
     # Readers
     "Reader",
     "HDF5Reader",
@@ -120,6 +137,8 @@ __all__ = [
     "NumpyReader",
     "VTKReader",
     "TensorStoreZarrReader",
+    "MeshReader",
+    "MultiMeshReader",
     # Collation
     "Collator",
     "DefaultCollator",
