@@ -452,6 +452,8 @@ def find_nearest_cells(
     query_points: torch.Tensor,
     chunk_size: int = 10000,
     bvh: BVH | None = None,
+    max_rounds: int = 25,
+    max_candidates_per_point: int = 1024,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Find the nearest cell for each query point (by centroid distance).
 
@@ -472,6 +474,14 @@ def find_nearest_cells(
     bvh : BVH or None, optional
         Pre-built Bounding Volume Hierarchy. When provided, enables
         O(n_queries * log(n_cells)) search for most queries.
+    max_rounds : int
+        Maximum number of expanding-radius BVH rounds. Tolerance doubles
+        each round, so 25 rounds covers ~33M times the initial estimate.
+        Only used when *bvh* is provided.
+    max_candidates_per_point : int
+        Maximum BVH candidates per query point per round. Prevents memory
+        explosion for dense meshes or large search radii. Only used when
+        *bvh* is provided.
 
     Returns
     -------
@@ -490,6 +500,8 @@ def find_nearest_cells(
             bvh,
             mesh.n_cells,
             mesh.n_spatial_dims,
+            max_rounds=max_rounds,
+            max_candidates_per_point=max_candidates_per_point,
         )
 
         ### Fall back to brute force for any queries without BVH candidates
@@ -544,6 +556,8 @@ def _find_nearest_cells_bvh(
     bvh: BVH,
     n_cells: int,
     n_spatial_dims: int,
+    max_rounds: int = 25,
+    max_candidates_per_point: int = 1024,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """BVH-accelerated nearest-centroid search with expanding radius.
 
@@ -551,6 +565,27 @@ def _find_nearest_cells_bvh(
     *resolved* only when ``tolerance >= sqrt(best_dist_sq)`` - at that point
     the L-inf search ball is large enough to contain any point closer in L2
     (because L-inf <= L2 for any pair of points).
+
+    Parameters
+    ----------
+    query_points : torch.Tensor
+        Query point locations, shape (n_queries, n_spatial_dims).
+    cell_centroids : torch.Tensor
+        Cell centroid locations, shape (n_cells, n_spatial_dims).
+    bvh : BVH
+        Bounding Volume Hierarchy for the mesh.
+    n_cells : int
+        Number of cells in the mesh.
+    n_spatial_dims : int
+        Number of spatial dimensions.
+    max_rounds : int
+        Maximum number of expanding-radius rounds. Tolerance doubles each
+        round, so *max_rounds* of 25 covers 2^25 ~ 33M times the initial
+        tolerance estimate.
+    max_candidates_per_point : int
+        Maximum BVH candidates per query point per round. Prevents memory
+        explosion for dense meshes or large search radii. Queries that miss
+        their nearest cell due to truncation fall back to brute-force.
 
     Returns
     -------
@@ -574,7 +609,6 @@ def _find_nearest_cells_bvh(
     tolerance = root_extent.max().item() / max(n_cells ** (1.0 / n_spatial_dims), 1.0)
 
     ### Expanding-radius search: double tolerance each round until all resolved
-    max_rounds = 25  # tolerance doubles each round → covers 2^25 ~ 33M× initial
     for _ in range(max_rounds):
         remaining_idx = torch.where(~resolved)[0]
         if len(remaining_idx) == 0:
@@ -583,7 +617,7 @@ def _find_nearest_cells_bvh(
         candidates = bvh.find_candidate_cells(
             query_points[remaining_idx],
             aabb_tolerance=tolerance,
-            max_candidates_per_point=None,
+            max_candidates_per_point=max_candidates_per_point,
         )
 
         if candidates.n_total_neighbors > 0:
@@ -618,7 +652,7 @@ def _find_nearest_cells_bvh(
         newly_resolved = (
             (best_dist_sq < float("inf")) & ~resolved & (tolerance**2 >= best_dist_sq)
         )
-        resolved |= newly_resolved
+        resolved |= newly_resolved  # in-place OR: mark newly-resolved queries
 
         tolerance *= 2.0
 
