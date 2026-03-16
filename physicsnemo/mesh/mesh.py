@@ -297,18 +297,16 @@ class Mesh:
                 device=self.points.device,
             )
 
-        ### _cache: build default structure, then overlay any provided cache
-        _default_cache = TensorDict(
-            {
-                "cell": TensorDict({}, batch_size=[self.n_cells]),
-                "point": TensorDict({}, batch_size=[self.n_points]),
-                "topology": TensorDict({}),
-            },
-            device=self.points.device,
-        )
-        if self._cache is not None:
-            _default_cache.update(self._cache)
-        self._cache = _default_cache
+        ### _cache: default empty cache structure
+        if self._cache is None:
+            self._cache = TensorDict(
+                {
+                    "cell": TensorDict({}, batch_size=[self.n_cells]),
+                    "point": TensorDict({}, batch_size=[self.n_points]),
+                    "topology": TensorDict({}),
+                },
+                device=self.points.device,
+            )
 
         ### Validate shapes and dtypes
         if not torch.compiler.is_compiling():
