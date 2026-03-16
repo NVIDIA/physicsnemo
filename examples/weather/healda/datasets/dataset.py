@@ -67,11 +67,6 @@ DATASET_METADATA: dict[str, DatasetMetadata] = {
 }
 
 
-def frame_dropout(x, p_dropout):
-    gate = torch.rand_like(x[..., :1, :1]) < p_dropout
-    return x * gate.to(x)
-
-
 def shift_time(x, shift):
     if shift < 0:
         raise ValueError(f"shift must be non-negative, got {shift}")
@@ -127,12 +122,6 @@ def get_sensors_for_config(config: ObsConfig):
 def _get_ufs_obs_loaders(
     obs_config: ObsConfig,
 ):
-    if obs_config.innovation_type != "none":
-        raise ValueError(
-            f"innovation_type must be 'none' for UFS obs loaders, "
-            f"got '{obs_config.innovation_type}'"
-        )
-
     return [
         UFSUnifiedLoader(
             config.UFS_OBS_PATH,
@@ -161,19 +150,10 @@ def _get_splits(
     if obs_config is not None and obs_config.use_obs:
         obs_metadata = DATASET_METADATA["ufs_obs"]
 
-        if obs_config.innovation_type != "none":
-            # ufs obs anl files are missing for these dates
-            dropouts = [
-                ("2018-12-19", "2020-07-10"),
-                ("2022-05-05", "2022-10-01"),
-            ]
-        else:
-            dropouts = []
-
         aligned_times = get_chunk_aligned_times(
             base_metadata=metadata,
             obs_metadata=obs_metadata,
-            dropouts=dropouts,
+            dropouts=[],
             chunk_size=24,
         )
 
