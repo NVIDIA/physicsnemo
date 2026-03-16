@@ -29,20 +29,26 @@ classifies (target_node, source_node) pairs as near-field or far-field:
 This reduces far-field kernel evaluations from O(N log N) (single-tree) to
 O(N) (dual-tree), which is critical at large mesh scales (800k+ faces).
 
-Construction uses a morton-code-based Linear BVH (LBVH) algorithm identical in
-structure to :mod:`physicsnemo.mesh.spatial.bvh`, producing a binary radix tree
-stored as flat tensors for GPU compatibility.
+Construction uses the same morton-code-based Linear BVH (LBVH) algorithm as
+:mod:`physicsnemo.mesh.spatial.bvh` (morton sort, midpoint splits, bottom-up
+AABB propagation), but the resulting data structure differs: ClusterTree stores
+additional per-node fields (diameter, subtree ranges, area-weighted aggregates)
+needed for the Barnes-Hut opening criterion, dual-tree traversal, and
+far-field monopole approximation. The two classes share
+:func:`~physicsnemo.mesh.spatial.bvh._compute_morton_codes` and
+:func:`~physicsnemo.mesh.spatial._ragged._ragged_arange` but are otherwise
+independent.
 """
 
 import logging
 from dataclasses import dataclass
-from math import ceil
 
 import torch
 from jaxtyping import Float, Int
 from tensordict import TensorDict, tensorclass
 from torch.profiler import record_function
 
+from physicsnemo.mesh.spatial._ragged import _ragged_arange
 from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
 
 logger = logging.getLogger("globe.cluster_tree")
@@ -119,52 +125,6 @@ class DualInteractionPlan:
 # ---------------------------------------------------------------------------
 
 
-def _ragged_arange(
-    starts: Int[torch.Tensor, " n_segments"],
-    counts: Int[torch.Tensor, " n_segments"],
-) -> tuple[Int[torch.Tensor, " total"], Int[torch.Tensor, " total"]]:
-    r"""Expand segment descriptors ``(start, count)`` into flat index arrays.
-
-    Given *N* segments where segment *i* spans positions
-    ``[starts[i], starts[i] + counts[i])``, produces two flat tensors of
-    length ``sum(counts)``:
-
-    - ``positions[k]``: the absolute index for element *k*
-    - ``seg_ids[k]``: the segment (``0..N-1``) that element *k* belongs to
-
-    Conceptually, this concatenates ``arange(s, s+c)`` for each ``(s, c)``
-    pair, along with the corresponding segment labels.
-
-    Parameters
-    ----------
-    starts : torch.Tensor
-        Start offset per segment, shape ``(N,)``, int64.
-    counts : torch.Tensor
-        Element count per segment, shape ``(N,)``, int64.
-
-    Returns
-    -------
-    tuple[torch.Tensor, torch.Tensor]
-        ``(positions, seg_ids)`` each with shape ``(sum(counts),)``.
-    """
-    total = int(counts.sum())
-    device = starts.device
-    n_segments = starts.shape[0]
-
-    seg_ids = torch.repeat_interleave(
-        torch.arange(n_segments, dtype=torch.long, device=device),
-        counts,
-    )
-    # Within-segment offsets: [0, 1, ..., c0-1, 0, 1, ..., c1-1, ...]
-    cum = counts.cumsum(0)
-    offsets = torch.arange(total, dtype=torch.long, device=device)
-    offsets = offsets - torch.repeat_interleave(cum - counts, counts)
-
-    positions = torch.repeat_interleave(starts, counts) + offsets
-
-    return positions, seg_ids
-
-
 def _segmented_weighted_sum(
     values: Float[torch.Tensor, "n *features"],
     weights: Float[torch.Tensor, " n"],
@@ -198,54 +158,6 @@ def _segmented_weighted_sum(
     idx = seg_ids.unsqueeze(-1).expand_as(weighted) if weighted.ndim > 1 else seg_ids
     out.scatter_add_(0, idx, weighted)
     return out
-
-
-def _expand_leaf_hits(
-    leaf_query_indices: Int[torch.Tensor, " n_hits"],
-    leaf_node_indices: Int[torch.Tensor, " n_hits"],
-    leaf_start: Int[torch.Tensor, " n_nodes"],
-    leaf_count: Int[torch.Tensor, " n_nodes"],
-    sorted_order: Int[torch.Tensor, " n_sources"],
-) -> tuple[Int[torch.Tensor, " n_expanded"], Int[torch.Tensor, " n_expanded"]]:
-    """Expand ``(query, leaf_node)`` hits into ``(query, source)`` pairs.
-
-    Each leaf node contains a contiguous range of sources in morton-sorted
-    order. This performs a ragged expand to produce one pair per source in
-    every hit leaf.
-
-    Parameters
-    ----------
-    leaf_query_indices : torch.Tensor
-        Query indices for leaf hits, shape ``(n_hits,)``.
-    leaf_node_indices : torch.Tensor
-        Node indices for leaf hits, shape ``(n_hits,)``.
-    leaf_start : torch.Tensor
-        Per-node start offset into ``sorted_order``, shape ``(n_nodes,)``.
-    leaf_count : torch.Tensor
-        Per-node source count, shape ``(n_nodes,)``.
-    sorted_order : torch.Tensor
-        Morton-sorted source permutation, shape ``(n_sources,)``.
-
-    Returns
-    -------
-    tuple[torch.Tensor, torch.Tensor]
-        ``(expanded_query_ids, expanded_source_ids)``
-    """
-    starts = leaf_start[leaf_node_indices]
-    counts = leaf_count[leaf_node_indices]
-    total = int(counts.sum())
-    device = leaf_query_indices.device
-
-    if total == 0:
-        empty = torch.empty(0, dtype=torch.long, device=device)
-        return empty, empty.clone()
-
-    expanded_queries = torch.repeat_interleave(leaf_query_indices, counts)
-
-    sorted_positions, _ = _ragged_arange(starts, counts)
-    expanded_sources = sorted_order[sorted_positions]
-
-    return expanded_queries, expanded_sources
 
 
 def _expand_dual_leaf_hits(

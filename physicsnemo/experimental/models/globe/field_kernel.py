@@ -916,8 +916,8 @@ class BarnesHutKernel(Kernel):
             ClusterTree,
             DualInteractionPlan,
             SourceAggregates,
-            _ragged_arange,
         )
+        from physicsnemo.mesh.spatial._ragged import _ragged_arange
 
         n_sources = source_points.shape[0]
         n_targets = target_points.shape[0]
@@ -1282,9 +1282,7 @@ class BarnesHutKernel(Kernel):
         n_leaves = leaf_ids.shape[0]
 
         if int(leaf_counts.sum()) > 0:
-            from physicsnemo.experimental.models.globe.cluster_tree import (
-                _ragged_arange,
-            )
+            from physicsnemo.mesh.spatial._ragged import _ragged_arange
 
             positions, seg_ids = _ragged_arange(leaf_starts, leaf_counts)
             sorted_strengths = source_strengths[tree.sorted_source_order[positions]]
