@@ -5,7 +5,7 @@
 <img src="../../../docs/img/healda.png" width="800"/>
 </p>
 
-[📄 arXiv](https://arxiv.org/abs/2601.17636) · 📦 Checkpoints (coming soon)
+[📄 arXiv](https://arxiv.org/abs/2601.17636) · [📦 Checkpoints](https://huggingface.co/nvidia/healda)
 
 ---
 
@@ -110,7 +110,8 @@ This uses the paper configuration defined in `train.py`. See `python train.py --
 
 ### Step 1: Generate DA Analysis (Initial Conditions)
 
-The following produces analyses for all of 2022. `See inference_helpers.py` to configure inference. Inference only requires ~20GB of memory and can produce an analysis in under 1 second on a single H100.
+The following produces analyses for all of 2022. See `inference_helpers.py` to configure inference. Inference only requires ~20GB of memory and can produce an analysis in under 1 second on a single H100.
+
 ```bash
 python inference.py \
     /path/to/checkpoint.pt \
@@ -185,6 +186,8 @@ python scripts/plot_panel.py \
 ```
 
 See `python inference.py --help` and `python scripts/forecast.py --help` for full options.
+
+> **Pre-trained checkpoint inference:** A pre-trained checkpoint is available on [Hugging Face](https://huggingface.co/nvidia/healda). For inference using the published checkpoint, see the [HealDA example](https://nvidia.github.io/earth2studio/examples/22_healda.html) in [Earth2Studio](https://nvidia.github.io/earth2studio/).
 
 ---
 
