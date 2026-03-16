@@ -274,7 +274,7 @@ class TestNonSurfaceMesh:
 
 class TestScaling:
     def test_many_cells_matches_brute_force(self):
-        """On a larger mesh, BVH assignments match brute-force exactly."""
+        """On a larger mesh, assignments match brute-force exactly."""
         torch.manual_seed(0)
         m = plane.load(subdivisions=19)  # 722 triangles
         mesh = Mesh(points=m.points.double(), cells=m.cells)
@@ -290,3 +290,65 @@ class TestScaling:
         assert result.cluster_areas.sum().item() == pytest.approx(
             mesh.cell_areas.sum().item()
         )
+
+
+### Grid nearest-neighbor robustness ###
+
+
+class TestGridRobustness:
+    def test_queries_outside_seed_bbox(self):
+        """Queries far from all seeds must still find their true nearest seed.
+
+        Exercises the brute-force fallback and guards against cell-ID hash
+        collisions from out-of-range grid coordinates.
+        """
+        mesh_pts = torch.tensor(
+            [
+                [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0],
+                [50.0, 50.0, 50.0], [51.0, 50.0, 50.0], [50.0, 51.0, 50.0],
+            ],
+            dtype=torch.float64,
+        )
+        mesh = Mesh(points=mesh_pts, cells=torch.tensor([[0, 1, 2], [3, 4, 5]]))
+        seeds = torch.tensor(
+            [[0.3, 0.3, 0.0], [0.7, 0.7, 0.0]], dtype=torch.float64
+        )
+        result = partition_cells(mesh, seeds)
+        expected = _brute_force_assignments(mesh.cell_centroids, seeds)
+        assert torch.equal(result.assignments, expected)
+
+    def test_3d_seeds_not_coplanar(self):
+        """Seeds scattered in full 3D, not confined to a plane."""
+        torch.manual_seed(99)
+        m = plane.load(subdivisions=10)
+        mesh = Mesh(points=m.points.double(), cells=m.cells)
+        seeds = torch.rand(20, 3, dtype=torch.float64) * 2 - 1  # [-1, 1]^3
+        result = partition_cells(mesh, seeds)
+        expected = _brute_force_assignments(mesh.cell_centroids, seeds)
+        assert torch.equal(result.assignments, expected)
+
+    def test_nonuniform_seed_spacing(self):
+        """Tight seed cluster plus a distant outlier seed."""
+        torch.manual_seed(11)
+        m = plane.load(subdivisions=8)
+        mesh = Mesh(points=m.points.double(), cells=m.cells)
+        tight = torch.rand(15, 3, dtype=torch.float64) * 0.1
+        tight[:, 2] = 0.0
+        outlier = torch.tensor([[5.0, 5.0, 0.0]], dtype=torch.float64)
+        seeds = torch.cat([tight, outlier])
+        result = partition_cells(mesh, seeds)
+        expected = _brute_force_assignments(mesh.cell_centroids, seeds)
+        assert torch.equal(result.assignments, expected)
+
+    def test_chunk_size_invariance(self):
+        """Results must be identical regardless of internal chunk_size."""
+        torch.manual_seed(5)
+        m = plane.load(subdivisions=12)
+        mesh = Mesh(points=m.points.double(), cells=m.cells)
+        seeds = torch.rand(30, 3, dtype=torch.float64)
+        seeds[:, 2] = 0.0
+        r1 = partition_cells(mesh, seeds)
+        from physicsnemo.mesh.remeshing._partition import _assign_nearest_grid
+
+        a2 = _assign_nearest_grid(mesh.cell_centroids, seeds, chunk_size=7)
+        assert torch.equal(r1.assignments, a2)
