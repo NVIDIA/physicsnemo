@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -454,9 +454,6 @@ def main(argv=None):
         torch.distributed.barrier()
 
     logger.info(f"Forecast complete. Output: {zarr_path}")
-
-    if torch.distributed.is_initialized():
-        torch.distributed.destroy_process_group()
 
 
 if __name__ == "__main__":
