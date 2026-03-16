@@ -35,9 +35,15 @@ from datasets.analysis_loaders import (
 from datasets.base import (
     VariableConfig,
 )
+from datasets.sensors import (
+    NPLATFORMS,
+    PLATFORM_NAME_TO_ID,
+    SENSOR_CONFIGS,
+    SENSOR_ID_TO_NAME,
+    SENSOR_NAME_TO_ID,
+)
 from datasets.variable_configs import VARIABLE_CONFIGS
 from utils import profiling
-from physicsnemo.experimental.models.healda import types
 
 warnings.filterwarnings(
     "ignore",
@@ -139,6 +145,61 @@ def _get_static_condition(HPX_LEVEL, variable_config) -> torch.Tensor:
     return array.unsqueeze(1)
 
 
+@functools.lru_cache(maxsize=1)
+def _build_platform_luts() -> dict[str, torch.Tensor]:
+    r"""Build per-sensor lookup tables from global to local platform IDs."""
+    luts: dict[str, torch.Tensor] = {}
+    for sensor_name, config in SENSOR_CONFIGS.items():
+        lut = torch.zeros(NPLATFORMS, dtype=torch.long)
+        for local_platform_id, platform_name in enumerate(config.platforms):
+            lut[PLATFORM_NAME_TO_ID[platform_name]] = local_platform_id
+        luts[sensor_name] = lut
+    return luts
+
+
+def _map_global_platform_to_local(
+    global_platform: torch.Tensor,
+    offsets: torch.Tensor,
+    sensor_names: list[str],
+    device: torch.device,
+) -> torch.Tensor:
+    r"""Map global platform IDs to per-sensor local platform indices.
+
+    Parameters
+    ----------
+    global_platform : torch.Tensor
+        Flattened global platform IDs for all observations.
+    offsets : torch.Tensor
+        Cumulative observation offsets of shape :math:`(S, B, T)`.
+    sensor_names : list[str]
+        Sensor ordering corresponding to the first dimension of ``offsets``.
+    device : torch.device
+        Device on which the lookup tensors should be materialized.
+
+    Returns
+    -------
+    torch.Tensor
+        Tensor of local platform indices with the same shape as ``global_platform``.
+    """
+    luts = _build_platform_luts()
+    local_platform = torch.zeros_like(global_platform)
+
+    prev_end = 0
+    for sensor_index, sensor_name in enumerate(sensor_names):
+        end = offsets[sensor_index, -1, -1].item()
+        if end <= prev_end:
+            continue
+
+        lut = luts[sensor_name].to(device)
+        sensor_platform = (
+            global_platform[prev_end:end].long().clamp_(0, lut.shape[0] - 1)
+        )
+        local_platform[prev_end:end] = lut[sensor_platform]
+        prev_end = end
+
+    return local_platform
+
+
 @dataclasses.dataclass
 class TransformV2:
     """Batch transform for normalizing state data and preparing observations for training.
@@ -149,31 +210,30 @@ class TransformV2:
 
     Stage 1 - ``transform()`` returns dict with:
         - ``target``: Normalized state tensor (B, C, T, X).
-        - ``unified_obs``: Tuple of (obs_tensors, offsets_3d, sensor_id_to_local).
+        - ``obs``: Tuple of (obs_tensors, offsets_3d, sensor_names).
         - ``condition``: Static conditioning features (1, C_cond, X).
         - ``second_of_day``, ``day_of_year``, ``timestamp``: Time encodings (B, T).
 
-    Intermediate ``unified_obs`` tuple structure:
+    Intermediate ``obs`` tuple structure:
         - ``obs_tensors``: Dict of 1D tensors (N_obs,) - latitude, longitude,
           observation, global_channel_id, sensor_id, platform_id, etc.
         - ``offsets_3d``: Shape (S, B, T) cumulative end indices per sensor/batch/time.
-        - ``sensor_id_to_local``: Maps sensor_id to local index in offsets_3d.
+        - ``sensor_names``: Sensor ordering matching the first dimension of ``offsets_3d``.
 
-    Stage 2 - ``device_transform()`` converts ``unified_obs`` to ``UnifiedObservation``:
+    Stage 2 - ``device_transform()`` converts ``obs`` to an observation dict:
         - Moves tensors to GPU
         - Computes ``float_metadata`` via ``features.compute_unified_metadata()``
           (encodes lat/lon, time deltas, zenith angles, etc.)
-        - Builds ``int_metadata`` tensor (N_obs, 6) with columns:
-          [sensor_id, hpx_pixel, local_channel, platform_id, obs_type, global_channel]
-        - Returns ``types.UnifiedObservation`` dataclass ready for model input.
+        - Returns keys ``obs``, ``float_metadata``, ``pix``, ``local_channel``,
+          ``local_platform``, ``obs_type``, and ``offsets``.
 
     Sensor grouping: Observations sorted by sensor_id with offsets_3d enabling
-    efficient (sensor, batch, time) slicing (see ``split_by_sensor`` in
-    ``physicsnemo.experimental.models.healda.types``).
+    efficient (sensor, batch, time) slicing.
     """
 
     variable_config: VariableConfig = VARIABLE_CONFIGS["era5"]
-    hpx_level: int = 10  # pixel level of the observations
+    sensors: list[str] = dataclasses.field(default_factory=list)
+    hpx_level: int = 6  # pixel level of the observations
     hpx_level_condition: int = 6
 
     def __post_init__(self):
@@ -185,7 +245,8 @@ class TransformV2:
     @functools.cached_property
     def _grid(self):
         return earth2grid.healpix.Grid(
-            self.hpx_level, pixel_order=earth2grid.healpix.NEST
+            self.hpx_level,
+            pixel_order=earth2grid.healpix.HEALPIX_PAD_XY,
         )
 
     @staticmethod
@@ -224,7 +285,6 @@ class TransformV2:
         b_idx_chunks = []
         t_idx_chunks = []
         time_chunks = []
-
         for chunk in ref_col.chunks:
             L = len(chunk)
             if L == 0:
@@ -252,12 +312,15 @@ class TransformV2:
         return out
 
     @staticmethod
-    def _build_observation_offsets_3d(obs_table: pa.Table, frame_times):
+    def _build_observation_offsets_3d(
+        obs_table: pa.Table,
+        frame_times: list[list[cftime.datetime]],
+        sensors: list[str],
+    ):
         B, T = len(frame_times), len(frame_times[0])
 
-        sensor_ids = set()
-        counts_map = {}  # sensor_id -> (b, t) array of num obs in that sensor, batch, time
-
+        counts_map = {}
+        discovered_ids = set()
         for batch in obs_table.to_batches():
             if batch.num_rows == 0:
                 continue
@@ -265,44 +328,33 @@ class TransformV2:
             s_id = int(batch["sensor_id"][0].as_py())
             b_id = int(batch["batch_idx"][0].as_py())
             t_id = int(batch["time_idx"][0].as_py())
-            n = batch.num_rows
-
-            sensor_ids.add(s_id)
-
+            discovered_ids.add(s_id)
             if s_id not in counts_map:
                 counts_map[s_id] = torch.zeros((B, T), dtype=torch.int32)
+            counts_map[s_id][b_id, t_id] += batch.num_rows
 
-            counts_map[s_id][b_id, t_id] += n
+        if sensors:
+            ordered_sensor_names = sensors
+            ordered_ids = [SENSOR_NAME_TO_ID[name] for name in sensors]
+        else:
+            ordered_ids = sorted(discovered_ids)
+            ordered_sensor_names = [SENSOR_ID_TO_NAME[s_id] for s_id in ordered_ids]
 
-        # build per-sensor cumulative ends in row-major (b,t) order
-        # use only active sensors and maintain map, as all possible sensor ids unknown here
-        active_sensor_ids = sorted(sensor_ids)
-        S = len(active_sensor_ids)
-
-        # Handle empty case: no observations in entire batch
-        if not sensor_ids:
-            offsets_3d = torch.zeros((0, B, T), dtype=torch.int32)
-            sensor_id_to_local = torch.zeros((0,), dtype=torch.int32)
-            return offsets_3d, sensor_id_to_local
-
-        max_sensor_id = max(sensor_ids)
-
+        S = len(ordered_ids)
         offsets_3d = torch.zeros((S, B, T), dtype=torch.int32)
 
         prev_count = 0
-        for s_local, s_id in enumerate(active_sensor_ids):
-            counts_bt = counts_map[s_id]  # [B,T]
-            flat_counts = counts_bt.reshape(-1)  # len = B*T
-            flat_cumsum = torch.cumsum(flat_counts, dim=0)  # cumulative ends
+        for s_local, s_id in enumerate(ordered_ids):
+            if s_id not in counts_map:
+                offsets_3d[s_local].fill_(prev_count)
+                continue
+
+            flat_counts = counts_map[s_id].reshape(-1)
+            flat_cumsum = torch.cumsum(flat_counts, dim=0)
             offsets_3d[s_local] = prev_count + flat_cumsum.reshape(B, T)
             prev_count += flat_cumsum[-1].item()
 
-        # Create sensor_id -> local_idx map
-        sensor_id_to_local = torch.full((max_sensor_id + 1,), -1, dtype=torch.int32)
-        for local_idx, sensor_id in enumerate(active_sensor_ids):
-            sensor_id_to_local[sensor_id] = local_idx
-
-        return offsets_3d, sensor_id_to_local
+        return offsets_3d, ordered_sensor_names
 
     @profiling.nvtx
     def _process_obs(self, target_times: list[list[cftime.datetime]], frames):
@@ -323,8 +375,10 @@ class TransformV2:
 
         obs = self._sort_by_record_batch(obs, "sensor_id")
 
-        offsets_3d, sensor_id_to_local = self._build_observation_offsets_3d(
-            obs, target_times
+        offsets_3d, ordered_sensor_names = self._build_observation_offsets_3d(
+            obs,
+            target_times,
+            self.sensors,
         )
 
         # Extract columns into dictionary of torch tensors
@@ -362,7 +416,7 @@ class TransformV2:
         return (
             obs_tensors,
             offsets_3d,
-            sensor_id_to_local,
+            ordered_sensor_names,
         )
 
     def _get_target(self, frames) -> torch.Tensor:
@@ -396,7 +450,7 @@ class TransformV2:
             return torch.from_numpy(np.vectorize(func)(times))
 
         if "obs_v2" in frames[0][0].keys():
-            out["unified_obs"] = self._process_obs(times, frames)
+            out["obs"] = self._process_obs(times, frames)
         out["target"] = self._get_target(frames).float()
         out["second_of_day"] = _apply_time_func(_compute_second_of_day).float()
         out["day_of_year"] = _apply_time_func(_compute_day_of_year).float()
@@ -415,19 +469,17 @@ class TransformV2:
         out = {}
 
         for key in batch:
-            if key == "unified_obs":
-                obs_tensors, offsets, sensor_id_to_local = batch["unified_obs"]
-                out[key] = self._device_transform_unified_obs(
-                    obs_tensors, offsets, sensor_id_to_local, device
+            if key == "obs":
+                obs_tensors, offsets, sensor_names = batch["obs"]
+                out[key] = self._device_transform_obs(
+                    obs_tensors, offsets, sensor_names, device
                 )
             else:
                 out[key] = batch[key].to(device, non_blocking=True)
         return out
 
     @profiling.nvtx
-    def _device_transform_unified_obs(
-        self, obs_tensors, offsets, sensor_id_to_local, device
-    ):
+    def _device_transform_obs(self, obs_tensors, offsets, sensor_names, device):
         # Move all tensors to device efficiently
         def _to_device(tensor, non_blocking=True):
             if isinstance(tensor, torch.Tensor):
@@ -436,6 +488,7 @@ class TransformV2:
                 return torch.from_numpy(tensor).to(device, non_blocking=non_blocking)
 
         obs_tensors = {key: _to_device(val) for key, val in obs_tensors.items()}
+        offsets = _to_device(offsets)
 
         obs_time_ns = obs_tensors["absolute_obs_time"]
         lat_tensor = obs_tensors["latitude"]
@@ -447,10 +500,8 @@ class TransformV2:
         sol_zenith_tensor = obs_tensors["sol_zenith_angle"]
         platform_id_tensor = obs_tensors["platform_id"].int()
         obs_type_tensor = obs_tensors["observation_type"].int()
-        sensor_id_tensor = obs_tensors["sensor_id"].int()
         pix = self._grid.ang2pix(lon_tensor, lat_tensor).int()
         local_channel_id_tensor = obs_tensors["local_channel_id"].int()
-        global_channel_id_tensor = obs_tensors["global_channel_id"].int()
         observation_tensor = obs_tensors["observation"]
 
         # Compute metadata
@@ -466,29 +517,22 @@ class TransformV2:
             sol_zenith_angle=sol_zenith_tensor,
         )
 
-        # Build index tensor
-        index = torch.stack(
-            [
-                sensor_id_tensor,
-                pix,
-                local_channel_id_tensor,
-                platform_id_tensor,
-                obs_type_tensor,
-                global_channel_id_tensor,
-            ],
-            dim=1,  # Stack along dimension 1 to get (n_obs, 6) instead of (6, n_obs)
+        local_platform = _map_global_platform_to_local(
+            global_platform=platform_id_tensor,
+            offsets=offsets,
+            sensor_names=sensor_names,
+            device=device,
         )
 
-        # Create UnifiedObservation object
-        out = types.UnifiedObservation(
-            obs=observation_tensor,
-            time=obs_time_ns,
-            float_metadata=meta,
-            int_metadata=index,
-            hpx_level=self.hpx_level,
-            offsets=_to_device(offsets),
-            sensor_id_to_local=_to_device(sensor_id_to_local),
-        )
+        out = {
+            "obs": observation_tensor,
+            "float_metadata": meta,
+            "pix": pix,
+            "local_channel": local_channel_id_tensor,
+            "local_platform": local_platform,
+            "obs_type": obs_type_tensor,
+            "offsets": offsets,
+        }
         return out
 
 

@@ -18,8 +18,8 @@ UFS Unified Loader for the new combined schema data format.
 
 This loader handles both satellite and conventional observations using the
 unified schema produced by etl_unified.py. It provides an async interface
-compatible with TimeMergedDataset and includes quality control filtering,
-normalization, and innovation filtering.
+compatible with TimeMergedDataset and includes quality control filtering
+and normalization.
 """
 
 import functools
@@ -78,9 +78,7 @@ class UFSUnifiedLoader:
         filesystem_type: Literal["s3", "local"] = "local",
         remote_name: str = "pdx",
         normalization: Literal["minmax", "zscore"] = "minmax",
-        innovation_type: Literal["none", "adjusted", "unadjusted"] = "none",
         qc_filter: bool = False,
-        filter_innovation: bool = False,
         check_corrected: bool = True,
         obs_context_hours: tuple[int, int] = (-24, 0),
         data_spacing: int = 3,  # hours
@@ -97,9 +95,7 @@ class UFSUnifiedLoader:
             filesystem_type: Type of filesystem ('s3' or 'local')
             remote_name: Remote storage name for S3
             normalization: Normalization method ('minmax' or 'zscore')
-            innovation_type: Innovation type to use ('none', 'adjusted', 'unadjusted')
             qc_filter: Whether to apply quality control filtering
-            filter_innovation: Whether to filter based on innovation values
             check_corrected: Whether to validate corrected observation values
             obs_context_hours: Hours relative to target time for observation context
             data_spacing: Hours between data points
@@ -112,9 +108,7 @@ class UFSUnifiedLoader:
         self.filesystem_type = filesystem_type
         self.remote_name = remote_name
         self.normalization = normalization
-        self.innovation_type = innovation_type
         self.qc_filter = qc_filter
-        self.filter_innovation = filter_innovation
         self.check_corrected = check_corrected
         self.obs_context_hours = obs_context_hours
         self.data_spacing = data_spacing
