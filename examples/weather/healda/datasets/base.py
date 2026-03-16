@@ -22,8 +22,6 @@ from typing import Any, Protocol
 import numpy as np
 import torch
 
-from physicsnemo.experimental.models.healda import Domain
-
 
 class TimeUnit(Enum):
     """Time units supported by the dataset.
@@ -147,7 +145,7 @@ class SpatioTemporalDataset(Protocol):
     """Protocol for time-indexed gridded datasets."""
 
     @property
-    def domain(self) -> Domain:
+    def domain(self) -> Any:
         pass
 
     def __len__(self) -> int:
@@ -189,7 +187,7 @@ class SpatioTemporalDataset(Protocol):
         """
         return {}
 
-    def __getitem__(self, idx) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def __getitem__(self, idx) -> Any:
         """
 
         Returns:
