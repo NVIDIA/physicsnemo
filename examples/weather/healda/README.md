@@ -9,7 +9,7 @@
 
 ---
 
-## Problem Overview
+## Problem overview
 
 Machine-learning (ML) weather models now rival leading numerical weather prediction (NWP) systems in medium-range skill. However, almost all still rely on NWP data assimilation (DA) to provide initial conditions, tying them to expensive infrastructure and limiting the practical speed and accuracy gains of ML.
 
@@ -17,9 +17,11 @@ Machine-learning (ML) weather models now rival leading numerical weather predict
 
 ---
 
-## Installation
+## Getting started
 
-### Using uv
+### Installation
+
+#### Using uv
 
 ```bash
 # 1. From PhysicsNeMo root directory
@@ -40,7 +42,7 @@ uv pip install --no-build-isolation \
 uv pip install -r examples/weather/healda/requirements.txt
 ```
 
-### Using pip
+#### Using pip
 
 ```bash
 # 1. Install PhysicsNeMo
@@ -56,9 +58,7 @@ pip install -r requirements.txt
 
 > **Warning:** Include `--no-build-isolation` when installing earth2grid to avoid building against the wrong PyTorch version.
 
----
-
-## Configuration
+### Configuration
 
 Create a `.env` file in the `examples/weather/healda/` directory with the following:
 
@@ -84,15 +84,11 @@ UFS_LAND_DATA_ZARR=/path/to/land_frac.zarr
 
 > **Note:** The `*_PROFILE` variables configure [rclone](https://rclone.org/) S3 profiles for cloud storage access. Leave empty for local paths.
 
----
-
-## Data Preparation
+## Data preparation
 
 HealDA requires preprocessed observation data and ERA5 target fields. We source observational data from the [NOAA Unified Forecast System (UFS) GEFSv13 Replay dataset](https://psl.noaa.gov/data/ufs_replay/) (NOAA, 2024).
 
 See [`datasets/etl/`](datasets/etl/) for ETL scripts to prepare observation data into a parquet data format.
-
----
 
 ## Training
 
@@ -103,8 +99,6 @@ python train.py --name era5-v2-dense-noInfill-10M-fusion512-lrObs1e-4
 This uses the paper configuration defined in `train.py`. See `python train.py --help` for options.
 
 > **Resource Requirements:** Training takes approximately **8.3 days on 1 H100 node** (8 GPUs total) with batch size 1 per GPU.
-
----
 
 ## Inference
 
@@ -187,11 +181,9 @@ python scripts/plot_panel.py \
 
 See `python inference.py --help` and `python scripts/forecast.py --help` for full options.
 
-> **Pre-trained checkpoint inference:** A pre-trained checkpoint is available on [Hugging Face](https://huggingface.co/nvidia/healda). For inference using the published checkpoint, see the [HealDA example](https://nvidia.github.io/earth2studio/examples/22_healda.html) in [Earth2Studio](https://nvidia.github.io/earth2studio/).
+> **Quickstart (no data setup required):** To run inference with the [published checkpoint](https://huggingface.co/nvidia/healda) without preparing any local data or configuration, see the [HealDA example](https://nvidia.github.io/earth2studio/examples/22_healda.html) in [Earth2Studio](https://nvidia.github.io/earth2studio/). It handles checkpoint download and observation fetching from the NOAA UFS Replay automatically.
 
----
-
-## Citation
+## References
 
 ```bibtex
 @misc{gupta2026healdahighlightingimportanceinitial,
