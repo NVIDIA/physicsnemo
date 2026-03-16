@@ -131,7 +131,7 @@ def partition_cells(
     """
     n_seeds = len(seeds)
     device = seeds.device
-    dtype = seeds.dtype
+    dtype = mesh.points.dtype
 
     ### Read source geometry (cached on Mesh)
     n_dims = mesh.n_spatial_dims
