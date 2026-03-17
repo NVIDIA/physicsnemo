@@ -336,7 +336,7 @@ class TrainingLoop(loop.TrainingLoopBase):
         return self._data_transform.device_transform(batch, device=self.device)
 
     def _stage_dict_batch(self, batch):
-        if isinstance(batch.get("obs"), tuple):
+        if isinstance(batch.get("obs_table"), tuple):
             return self._device_transform(batch)
         return super()._stage_dict_batch(batch)
 

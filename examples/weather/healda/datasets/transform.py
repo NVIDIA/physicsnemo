@@ -471,7 +471,7 @@ class TransformV2:
         for key in batch:
             if key == "obs_table":
                 obs_tensors, offsets, sensor_names = batch["obs_table"]
-                out[key] = self._device_transform_obs(
+                out["obs"] = self._device_transform_obs(
                     obs_tensors, offsets, sensor_names, device
                 )
             else:
@@ -525,7 +525,7 @@ class TransformV2:
         )
 
         out = {
-            "obs_table": observation_tensor,
+            "obs": observation_tensor,
             "float_metadata": meta,
             "pix": pix,
             "local_channel": local_channel_id_tensor,

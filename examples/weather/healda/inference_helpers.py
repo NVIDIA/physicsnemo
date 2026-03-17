@@ -166,7 +166,7 @@ class DAModel:
         return next(self.model.parameters()).device
 
     def get_state(self, batch):
-        if isinstance(batch.get("obs"), tuple):
+        if isinstance(batch.get("obs_table"), tuple):
             batch = self.transform.device_transform(batch, self.device)
         else:
             batch = _to_batch(batch, self.device)
