@@ -199,11 +199,10 @@ and all built-in transforms.
 Collation
 ^^^^^^^^^
 
-Combining a set of TensorDict objects into a batch of data can, at times,
-result in difficulties or errors.
-
-Some datasets, like graph datasets, require special care.  For
-this reason, PhysicsNeMo datapipes offers custom collation functions 
+Combining a set of TensorDict objects into a batch of data can, at times, 
+require special care.  For example, collating graph datasets for Graph Neural 
+Networks requires different merging of batches than concatenation along a batch
+dimension.  For this reason, PhysicsNeMo datapipes offers custom collation functions 
 as well as an interface to write your own collator.  If the dataset you are
 trying to collate can not be accommodated here, open an issue on github.
 
