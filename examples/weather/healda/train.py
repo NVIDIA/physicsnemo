@@ -80,7 +80,7 @@ def build_sensor_lists(
     nplatform_per_sensor = []
     for name in sensor_names:
         nchannel_per_sensor.append(SENSOR_CONFIGS[name].channels)
-        nplatform_per_sensor.append(len(SENSOR_CONFIGS[name].platforms))
+        nplatform_per_sensor.append(max(len(SENSOR_CONFIGS[name].platforms), 1))
     return nchannel_per_sensor, nplatform_per_sensor, list(sensor_names)
 
 
