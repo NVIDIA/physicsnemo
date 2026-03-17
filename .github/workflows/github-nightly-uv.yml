@@ -114,7 +114,7 @@ jobs:
     - name: Delete old uv package cache
       if: steps.setup-uv-env.outputs.uv_cache_hit != 'true' || steps.setup-uv-env.outputs.venv_cache_hit != 'true'
       run: |
-        gh cache delete "${{ env.UV_CACHE_KEY_PREFIX }}-latest" || true
+        gh cache delete "${{ env.UV_CACHE_KEY_PREFIX }}-latest" --repo ${{ github.repository }} || true
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
