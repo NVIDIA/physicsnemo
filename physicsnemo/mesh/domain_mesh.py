@@ -656,7 +656,7 @@ class DomainMesh:
         int
             The number of entries in ``boundaries``.
         """
-        return len(list(self.boundaries.keys()))
+        return len(self.boundaries)
 
     ### Methods
 
