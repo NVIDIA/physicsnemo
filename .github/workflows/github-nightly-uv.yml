@@ -34,13 +34,22 @@ on:
 
 permissions:
   contents: read
-  actions: read
+  actions: write
   checks: write
 
 env:
   PYTHON_VERSION: "3.12"
+  # uv download cache (~/.cache/uv): uses a static "-latest" suffix so it
+  # survives lock-file changes.  Refreshed via delete-before-save whenever
+  # uv sync runs.  This is purely a download-speed and build optimisation.
+  # We do need to update and nuke it when we change things like the container.
   UV_CACHE_KEY_PREFIX: uv-cache-nightly-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12
+  # Realised virtualenv (.venv): keyed on hash(uv.lock, pyproject.toml) so it
+  # invalidates automatically whenever dependencies change.
+  # It _also_ keys on the cuda version, container, etc.
   VENV_CACHE_KEY_PREFIX: uv-env-nightly-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12
+  # Testmon and coverage caches: keyed on the same lock-file hash.  These are
+  # consumed by PR workflows to skip unchanged tests and bootstrap coverage.
   TESTMON_CACHE_KEY_PREFIX: testmon-nightly
   COVERAGE_CACHE_KEY_PREFIX: coverage-nightly
   PYVISTA_OFF_SCREEN: "true"
@@ -68,20 +77,57 @@ jobs:
       with:
         uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
         venv-cache-key-prefix: ${{ env.VENV_CACHE_KEY_PREFIX }}
-        cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml') }}
+        venv-cache-key-suffix: ${{ hashFiles('uv.lock', 'pyproject.toml') }}
+        # uv-cache-key-suffix overrides the uv cache key to be static;
+        # the uv download cache is not sensitive to lock-file content.
+        uv-cache-key-suffix: latest
 
     - name: Report setup action outputs
       run: |
         echo "setup-uv-env.uv_cache_hit=${{ steps.setup-uv-env.outputs.uv_cache_hit }}"
         echo "setup-uv-env.venv_cache_hit=${{ steps.setup-uv-env.outputs.venv_cache_hit }}"
 
+    # --- uv download cache (static key, delete-before-save) ---
+    #
+    # GitHub Actions caches are immutable: actions/cache/save silently skips
+    # if the key already exists.  Because the uv cache uses a fixed "-latest"
+    # key, we must delete the old entry before saving a new one.
+    #
+    # The condition fires in two cases:
+    #   1. uv_cache_hit is false  -- cache doesn't exist yet (first run or
+    #      after manual purge).  Need to create it.
+    #   2. venv_cache_hit is false -- lock file changed, uv sync ran and may
+    #      have downloaded new packages.  Need to replace the stale cache.
+    #
+    # When both are true (steady-state, nothing changed) these steps are
+    # skipped entirely -- no wasted work.
+    #
+    # The "|| true" on gh cache delete guards against the first-ever run
+    # where no cache exists to delete.
+    - name: Prune uv cache
+      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true' || steps.setup-uv-env.outputs.venv_cache_hit != 'true'
+      run: |
+        uv cache prune
+        echo "uv cache after prune:"
+        du -sh ~/.cache/uv 2>/dev/null || echo "  (not present)"
+
+    - name: Delete old uv package cache
+      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true' || steps.setup-uv-env.outputs.venv_cache_hit != 'true'
+      run: |
+        gh cache delete "${{ env.UV_CACHE_KEY_PREFIX }}-latest" || true
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Save uv package cache
-      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true'
+      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true' || steps.setup-uv-env.outputs.venv_cache_hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: ~/.cache/uv
-        key: ${{ env.UV_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+        key: ${{ env.UV_CACHE_KEY_PREFIX }}-latest
 
+    # --- .venv cache (lock-file-dependent key) ---
+    # Must free disk first: the uv download cache can be several GB and we
+    # need room to upload the .venv.
     - name: Free disk space before caching
       if: steps.setup-uv-env.outputs.venv_cache_hit != 'true'
       run: |
@@ -121,7 +167,7 @@ jobs:
 
     - name: Validate environment
       run: |
-        .venv/bin/python --version
+        uv run python --version
         uv run python -c "import torch; print(torch.__version__)"
 
     - name: Run core tests (collect all for testmon)

@@ -7,8 +7,11 @@ inputs:
   venv-cache-key-prefix:
     description: Prefix for virtual environment cache key
     required: true
-  cache-key-suffix:
-    description: Deterministic suffix appended to cache key prefixes
+  venv-cache-key-suffix:
+    description: Deterministic suffix appended to venv cache key prefix
+    required: true
+  uv-cache-key-suffix:
+    description: Suffix for uv cache key (e.g. "latest" for a static key)
     required: true
 outputs:
   uv_cache_hit:
@@ -25,7 +28,7 @@ runs:
       uses: actions/cache/restore@v4
       with:
         path: ~/.cache/uv
-        key: ${{ inputs.uv-cache-key-prefix }}-${{ inputs.cache-key-suffix }}
+        key: ${{ inputs.uv-cache-key-prefix }}-${{ inputs.uv-cache-key-suffix }}
         fail-on-cache-miss: false
         restore-keys: |
           ${{ inputs.uv-cache-key-prefix }}-
@@ -35,7 +38,7 @@ runs:
       uses: actions/cache/restore@v4
       with:
         path: .venv
-        key: ${{ inputs.venv-cache-key-prefix }}-${{ inputs.cache-key-suffix }}
+        key: ${{ inputs.venv-cache-key-prefix }}-${{ inputs.venv-cache-key-suffix }}
         fail-on-cache-miss: false
         restore-keys: |
           ${{ inputs.venv-cache-key-prefix }}-
@@ -45,8 +48,8 @@ runs:
       run: |
         set -euo pipefail
         echo "::group::setup-uv-env debug context"
-        echo "uv cache key: ${{ inputs.uv-cache-key-prefix }}-${{ inputs.cache-key-suffix }}"
-        echo "venv cache key: ${{ inputs.venv-cache-key-prefix }}-${{ inputs.cache-key-suffix }}"
+        echo "uv cache key: ${{ inputs.uv-cache-key-prefix }}-${{ inputs.uv-cache-key-suffix }}"
+        echo "venv cache key: ${{ inputs.venv-cache-key-prefix }}-${{ inputs.venv-cache-key-suffix }}"
         echo "uv cache exact hit: ${{ steps.restore-uv-cache.outputs.cache-hit }}"
         echo "venv cache exact hit: ${{ steps.restore-venv-cache.outputs.cache-hit }}"
         echo "workspace: $GITHUB_WORKSPACE"
@@ -66,4 +69,15 @@ runs:
           --extra cu12
         echo "::endgroup::"
         uv run python -c "import torch; print(f'torch={torch.__version__} cuda={torch.version.cuda}')"
+
+    - name: Report cache sizes
+      shell: bash
+      run: |
+        echo "::group::cache sizes"
+        echo "uv package cache:"
+        du -sh ~/.cache/uv 2>/dev/null || echo "  (not present)"
+        echo ".venv:"
+        du -sh .venv 2>/dev/null || echo "  (not present)"
+        df -h
+        echo "::endgroup::"
 
