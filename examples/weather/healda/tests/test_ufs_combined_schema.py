@@ -116,7 +116,7 @@ async def test_ufs_unified_loader(temp_data_dir, normalization):
     times = pd.DatetimeIndex([datetime(2020, 1, 1, 12)])
     result = await loader.sel_time(times)
 
-    for result in result["obs_v2"]:
+    for result in result["obs_table"]:
         # Validate schema matches expected output schema
         expected_schema = loader.output_schema
         assert result.schema.equals(expected_schema)
@@ -152,7 +152,7 @@ async def test_ufs_unified_loader_empty_dataset(normalization):
         times = pd.DatetimeIndex([datetime(2020, 1, 1, 12)])
         result = await loader.sel_time(times)
 
-        result = result["obs_v2"][0]
+        result = result["obs_table"][0]
 
         # Check result structure - should return empty table with proper schema
         assert isinstance(result, pa.Table)

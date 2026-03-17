@@ -51,10 +51,16 @@ class MockLoop(loop.TrainingLoopBase):
 @requires_cuda
 def test_loop_save_load(tmp_path):
     rundir = tmp_path
-    loop = MockLoop(rundir.as_posix(), batch_gpu=1)
-    loop.setup()
-    loop.save_training_state(0)
+    loop_a = MockLoop(rundir.as_posix(), batch_gpu=1)
+    loop_a.setup()
+    loop_a.save_training_state()
 
-    loop = MockLoop.loads((rundir / "loop.json").read_text())
-    loop.setup()
-    loop.resume_from_rundir(rundir)
+    handler = loop.CheckpointHandler(rundir.as_posix())
+    result = handler.latest_checkpoint()
+    assert result is not None
+    checkpoint_dir, nimg, metadata = result
+
+    loop_b = MockLoop(rundir.as_posix(), batch_gpu=1)
+    loop_b.setup()
+    loop_b.cur_nimg = nimg
+    loop_b.resume_from_state(checkpoint_dir)

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,13 +17,10 @@ import abc
 import contextlib
 import dataclasses
 import gc
-import glob
 import itertools
 import json
 import logging
 import os
-import re
-import shutil
 import signal
 import time
 import warnings
@@ -38,11 +35,11 @@ import torch.utils.tensorboard
 import torchmetrics
 from config.training import loop
 from datasets.base import BatchInfo, SpatioTemporalDataset
-from utils import checkpointing
 from utils import distributed as dist
 from utils.signals import QuitEarly, finish_before_quitting, handler
 
 from config.model_config import ModelConfigV1
+from physicsnemo.utils import get_checkpoint_dir, load_checkpoint, save_checkpoint
 from utils import profiling
 
 from . import training_stats
@@ -122,30 +119,30 @@ def _format_time(seconds: Union[int, float]) -> str:
 
 
 class CheckpointHandler:
-    """Manages checkpoint file naming and paths."""
+    """Thin wrapper around a PNM checkpoint directory.
 
-    def __init__(self, run_dir, filename: str = "training-state-{}.checkpoint"):
-        self.filename = filename
+    The checkpoint directory lives at ``{run_dir}/checkpoints_{checkpoint_name}/``
+    and contains numbered ``.mdlus`` (model) and ``.pt`` (training state) files
+    managed by :func:`physicsnemo.utils.checkpoint.save_checkpoint`.
+    """
+
+    def __init__(self, run_dir, checkpoint_name: str = "training_state"):
         self.run_dir = run_dir
+        self.checkpoint_name = checkpoint_name
+        self.checkpoint_dir = get_checkpoint_dir(run_dir, checkpoint_name)
 
-    def get_filename(self, nimg):
-        """Return checkpoint filename for given image count."""
-        return self.filename.format("%09d" % nimg)
-
-    def get_path(self, nimg):
-        """Return full checkpoint path for given image count."""
-        return os.path.join(self.run_dir, self.get_filename(nimg))
-
-    def list_checkpoints(self, run_dir=None):
-        run_dir = run_dir or self.run_dir
-        files = glob.glob(self.filename.format("*"), root_dir=run_dir)
-        pattern = self.filename.format(r"(\d{9})")
-        files = sorted(files)
-        for file in files:
-            m = re.match(pattern, file)
-            if m:
-                nimg = int(m.group(1))
-                yield os.path.join(run_dir, file), nimg
+    def latest_checkpoint(self):
+        """Return ``(checkpoint_dir, nimg, metadata)`` for the newest checkpoint."""
+        metadata = {}
+        # PNM stores our nimg counter in its ``epoch`` field
+        nimg = load_checkpoint(
+            self.checkpoint_dir,
+            metadata_dict=metadata,
+            device="cpu",
+        )
+        if nimg == 0 and not metadata:
+            return None
+        return self.checkpoint_dir, nimg, metadata
 
 
 @dataclasses.dataclass
@@ -285,58 +282,63 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
     def print_network_info(net, device):
         pass
 
-    def _load_iterator_state(self, checkpoint):
-        with checkpoint.open("iterator_state.json") as f:
-            iterator_state = json.loads(f.read())
-            if iterator_state:
-                self.epoch_idx = iterator_state["epoch_idx"]
-                self.samples_processed_this_epoch_per_rank = iterator_state[
-                    "samples_processed_this_epoch_per_rank"
-                ]
+    def _checkpoint_metadata(self):
+        metadata = {
+            "loop_config": self.dumps(),
+            "iterator_state": {
+                "epoch_idx": self.epoch_idx,
+                "samples_processed_this_epoch_per_rank": self.samples_processed_this_epoch_per_rank,
+            },
+        }
+        if self.batch_info is not None:
+            bi = self.batch_info
+            batch_info_dict = {
+                "channels": bi.channels,
+                "time_step": bi.time_step,
+                "time_unit": bi.time_unit.name,
+            }
+            if bi.scales is not None:
+                batch_info_dict["scales"] = list(bi.scales)
+            if bi.center is not None:
+                batch_info_dict["center"] = list(bi.center)
+            metadata["batch_info"] = batch_info_dict
+        if self.model_config is not None:
+            metadata["model_config"] = self.model_config.dumps()
+        return metadata
 
     def resume_from_state(
         self,
-        resume_state_dump,
+        checkpoint_path,
         optimizer=True,
-        require_all=True,
         wandb=False,
         iterator_state=True,
     ):
-        dist.print0(f'Loading training state from "{resume_state_dump}"...')
+        """Load model weights, optimizer, and metadata from a PNM checkpoint directory."""
+        checkpoint_path = str(checkpoint_path)
 
-        with checkpointing.Checkpoint(resume_state_dump, "r") as checkpoint:
-            self._load_net_state(checkpoint, require_all)
-            gc.collect()
-            if optimizer and self.optimizer is not None:
-                self._load_optimizer_state(checkpoint)
+        metadata = {}
+        epoch = load_checkpoint(
+            checkpoint_path,
+            models=self.net,
+            optimizer=self.optimizer if optimizer else None,
+            metadata_dict=metadata,
+            device="cpu",
+        )
+        if epoch == 0 and not metadata:
+            raise FileNotFoundError(f"No checkpoint file found in {checkpoint_path}.")
+        gc.collect()
 
-            with checkpoint.open("loop.json") as f:
-                old_loop = self.loads(f.read())
+        old_loop = self.loads(metadata["loop_config"])
 
-            # Restore iterator state if available (for backward compatibility)
-            if iterator_state:
-                try:
-                    self._load_iterator_state(checkpoint)
-                except FileNotFoundError as e:
-                    logger.warning(
-                        f"Iterator state not found in checkpoint (backward compatibility): {e}. "
-                        "Using defaults (epoch_idx=0, samples_processed_this_epoch_per_rank=0)"
-                    )
+        if iterator_state and "iterator_state" in metadata:
+            iter_state = metadata["iterator_state"]
+            self.epoch_idx = iter_state["epoch_idx"]
+            self.samples_processed_this_epoch_per_rank = iter_state[
+                "samples_processed_this_epoch_per_rank"
+            ]
 
-            # handle wandb
-            if wandb:
-                self.wandb_id = old_loop.wandb_id
-
-    def _load_net_state(self, checkpoint, require_all):
-        with checkpoint.open("net_state.pth", "r") as f:
-            net_state = torch.load(f, weights_only=True, map_location="cpu")
-            self.net.load_state_dict(net_state, strict=require_all)
-
-    def _load_optimizer_state(self, checkpoint):
-        with checkpoint.open("optimizer_state.pth", "r") as f:
-            # load to cpu to avoid copies in gpu memory
-            optimizer_state = torch.load(f, map_location="cpu")
-            self.optimizer.load_state_dict(optimizer_state)
+        if wandb:
+            self.wandb_id = old_loop.wandb_id
 
     def train_step(
         self, *, condition=None, target, labels, augment_labels=None, **kwargs
@@ -578,52 +580,35 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
 
     @profiling.nvtx
     @finish_before_quitting
-    def _save_checkpoint(self, path, optimizer: bool):
-        # ensure that file updates are atomic to avoid faulty
-        # restart files
-        tmppath = path + ".tmp" + str(os.getpid())
-        with checkpointing.Checkpoint(tmppath, "w") as checkpoint:
-            checkpoint.write_model(self.net)
-            if self.batch_info is not None:
-                checkpoint.write_batch_info(self.batch_info)
-
-            if optimizer:
-                with checkpoint.open("optimizer_state.pth", "w") as f:
-                    torch.save(self.optimizer.state_dict(), f)
-
-            with checkpoint.open("loop.json", "w") as f:
-                f.write(self.dumps().encode())
-
-            # Save iterator state for resuming
-            with checkpoint.open("iterator_state.json", "w") as f:
-                iterator_state = {
-                    "epoch_idx": self.epoch_idx,
-                    "samples_processed_this_epoch_per_rank": self.samples_processed_this_epoch_per_rank,
-                }
-                f.write(json.dumps(iterator_state).encode())
-
-            if self.model_config is not None:
-                checkpoint.write_model_config(self.model_config)
-        shutil.move(tmppath, path)
+    def _save_checkpoint(self, checkpoint_dir, optimizer: bool):
+        save_checkpoint(
+            checkpoint_dir,
+            models=self.net,
+            optimizer=self.optimizer if optimizer else None,
+            epoch=self.cur_nimg,
+            metadata=self._checkpoint_metadata(),
+        )
 
     @profiling.nvtx
-    def save_training_state(self, cur_nimg):
+    def save_training_state(self):
         if dist.get_rank() != 0:
             return
 
-        state_filename = self._state_checkpoint_handler.get_path(cur_nimg)
-        dist.print0(f"Saving checkpoint to {state_filename}")
-        self._save_checkpoint(state_filename, optimizer=True)
-        dist.print0(f"Checkpoint saved to {state_filename}")
+        checkpoint_dir = self._state_checkpoint_handler.checkpoint_dir
+        dist.print0(f"Saving checkpoint to {checkpoint_dir} at nimg={self.cur_nimg}")
+        self._save_checkpoint(checkpoint_dir, optimizer=True)
+        dist.print0(f"Checkpoint saved to {checkpoint_dir}")
 
     @profiling.nvtx
-    def save_network_snapshot(self, cur_nimg):
+    def save_network_snapshot(self):
         if dist.get_rank() != 0:
             return
 
-        filename = self._snapshot_checkpoint_handler.get_path(cur_nimg)
-        dist.print0(f"Saving network snapshot to {filename}")
-        self._save_checkpoint(filename, optimizer=False)
+        checkpoint_dir = self._snapshot_checkpoint_handler.checkpoint_dir
+        dist.print0(
+            f"Saving network snapshot to {checkpoint_dir} at nimg={self.cur_nimg}"
+        )
+        self._save_checkpoint(checkpoint_dir, optimizer=False)
 
     def flush_training_stats(self):
         logger = logging.getLogger(__name__)
@@ -704,9 +689,11 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
         self.print_network_info(self.net, self.device)
         self.setup_batching()
         self._setup_optimizer()
-        self._state_checkpoint_handler = CheckpointHandler(self.run_dir)
+        self._state_checkpoint_handler = CheckpointHandler(
+            self.run_dir, "training_state"
+        )
         self._snapshot_checkpoint_handler = CheckpointHandler(
-            self.run_dir, "network-snapshot-{}.checkpoint"
+            self.run_dir, "network_snapshot"
         )
 
     def _setup_optimizer(self):
@@ -735,19 +722,6 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
             dist.print0("WANDB_API_KEY not set. Cannot use wandb")
             pass
 
-    def resume_from_rundir(self, run_dir=None, require_all=True):
-        checkpoint_info = None
-        for checkpoint_info in self._state_checkpoint_handler.list_checkpoints(run_dir):
-            pass
-        # now training_state and nimg are the final checkpoints
-        if checkpoint_info is None:
-            raise FileNotFoundError("No checkpoint file found.")
-
-        path, nimg = checkpoint_info
-
-        self.cur_nimg = nimg
-        self.resume_from_state(path, require_all=require_all, wandb=True)
-
     def log_debug(self, msg):
         if dist.get_rank() != 0:
             return
@@ -764,7 +738,7 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
             self._train()
         except QuitEarly as e:
             dist.print0(f"Caught {e}. Quitting early.")
-            self.save_training_state(self.cur_nimg)
+            self.save_training_state()
             try:
                 del self.train_loader
                 del self.valid_loader
@@ -832,11 +806,11 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
             if (self.snapshot_ticks is not None) and (
                 cur_tick % self.snapshot_ticks == 0
             ):
-                self.save_network_snapshot(self.cur_nimg)
+                self.save_network_snapshot()
             if (self.state_dump_ticks is not None) and (
                 cur_tick % self.state_dump_ticks == 0
             ):
-                self.save_training_state(self.cur_nimg)
+                self.save_training_state()
 
             self.net.eval()
             logger.info("Validating...")
@@ -854,5 +828,5 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
             maintenance_time = tick_start_time - tick_end_time
 
         # Done.
-        self.save_training_state(self.cur_nimg)
+        self.save_training_state()
         dist.print0("Exiting...")

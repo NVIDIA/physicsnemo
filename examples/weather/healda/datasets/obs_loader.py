@@ -355,7 +355,7 @@ class UFSUnifiedLoader:
             return table.cast(self.output_schema)
 
         empty = self._get_empty_table()
-        return {"obs_v2": [process(t) for t in times]}
+        return {"obs_table": [process(t) for t in times]}
 
     def _get_empty_table(self):
         # Return empty table with proper schema

@@ -362,7 +362,7 @@ class TransformV2:
         all_obs_with_indices = []
         for b_idx, sample_frames in enumerate(frames):
             for t_idx, frame_dict in enumerate(sample_frames):
-                table = frame_dict["obs_v2"]
+                table = frame_dict["obs_table"]
                 table_with_indices = self._append_batch_time_info_chunked(
                     table,
                     b_idx,
@@ -441,7 +441,7 @@ class TransformV2:
     @profiling.nvtx
     def transform(self, times, frames):
         """
-        frames: [[{state: (c, x), obs_v2: Obs}]]
+        frames: [[{state: (c, x), obs: Obs}]]
         times: [[cftime]]
         """
         out = {}
@@ -449,8 +449,8 @@ class TransformV2:
         def _apply_time_func(func):
             return torch.from_numpy(np.vectorize(func)(times))
 
-        if "obs_v2" in frames[0][0].keys():
-            out["obs"] = self._process_obs(times, frames)
+        if "obs_table" in frames[0][0].keys():
+            out["obs_table"] = self._process_obs(times, frames)
         out["target"] = self._get_target(frames).float()
         out["second_of_day"] = _apply_time_func(_compute_second_of_day).float()
         out["day_of_year"] = _apply_time_func(_compute_day_of_year).float()
@@ -469,8 +469,8 @@ class TransformV2:
         out = {}
 
         for key in batch:
-            if key == "obs":
-                obs_tensors, offsets, sensor_names = batch["obs"]
+            if key == "obs_table":
+                obs_tensors, offsets, sensor_names = batch["obs_table"]
                 out[key] = self._device_transform_obs(
                     obs_tensors, offsets, sensor_names, device
                 )
@@ -525,7 +525,7 @@ class TransformV2:
         )
 
         out = {
-            "obs": observation_tensor,
+            "obs_table": observation_tensor,
             "float_metadata": meta,
             "pix": pix,
             "local_channel": local_channel_id_tensor,

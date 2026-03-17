@@ -41,7 +41,7 @@ def _device_transform(batch, transform, device):
 def main():
     args = parse_args(DAConfig, convert_underscore_to_hyphen=False)
 
-    dist.init(timeout_infinite=True)
+    dist.init()
     dist.print0("Inference configuration:")
     dist.print0(f"  Dataset: {args.dataset}")
     dist.print0(f"  Number of samples: {args.num_samples}")

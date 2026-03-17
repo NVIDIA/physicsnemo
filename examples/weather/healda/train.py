@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -34,7 +34,6 @@ import config.environment as config
 import matplotlib.pyplot as plt
 import models
 import torch
-import torch.distributed
 import torch.utils
 import torch.utils.data
 import training.loop
@@ -56,40 +55,33 @@ from datasets.sensors import (
     SENSOR_NAME_TO_ID,
 )
 from datasets.transform import TransformV2, collate
+from physicsnemo.utils import load_checkpoint
 from training import loop
 from utils import distributed as dist
 from utils.dataclass_parser import parse_args, parse_dict
 from utils.signals import finish_before_quitting
 from utils.visualizations import visualize
 
-from physicsnemo.experimental.models.healda import (
-    ModelSensorConfig,
-    SensorEmbedderConfig,
-)
 from config.model_config import ModelConfigV1, ObsConfig
 from utils import profiling
 
 logger = logging.getLogger(__name__)
 
 
-def build_sensor_config(sensor_names: list[str]) -> dict[str, ModelSensorConfig]:
-    """
-    Args:
-        sensor_names: List of sensor names to include in the model
+def build_sensor_lists(
+    sensor_names: list[str],
+) -> tuple[list[int], list[int], list[str]]:
+    """Build list-based sensor config from sensor names.
 
     Returns:
-        dict mapping sensor_name to ModelSensorConfig
+        (nchannel_per_sensor, nplatform_per_sensor, sensor_names)
     """
-    return {
-        name: ModelSensorConfig(
-            sensor_id=SENSOR_NAME_TO_ID[name],
-            nchannel=SENSOR_CONFIGS[name].channels,
-            platform_ids=tuple(
-                PLATFORM_NAME_TO_ID[p] for p in SENSOR_CONFIGS[name].platforms
-            ),
-        )
-        for name in sensor_names
-    }
+    nchannel_per_sensor = []
+    nplatform_per_sensor = []
+    for name in sensor_names:
+        nchannel_per_sensor.append(SENSOR_CONFIGS[name].channels)
+        nplatform_per_sensor.append(len(SENSOR_CONFIGS[name].platforms))
+    return nchannel_per_sensor, nplatform_per_sensor, list(sensor_names)
 
 
 @dataclasses.dataclass
@@ -118,23 +110,15 @@ class TrainingLoop(loop.TrainingLoopBase):
     dataloader_prefetch_factor: int = 8
     prefetch_to_gpu: bool = True
 
-    # data options
-    embed_v2: bool = True  # DEPRECATED: ignored, derived from obs_config.use_obs
-
     label_dropout: float = 0.0
-    legacy_label_bias: bool = (
-        False  # For loading old checkpoints with trained label bias
-    )
     era5_chunk_size: int = 48
     start_year: int = -1  # Filter training data to >= this year
     obs_config: ObsConfig = ObsConfig()
 
     # model configuration
-    model_channels: int = 256
     opt: str = "adamw"
     adam_eps: float = 1e-8
     adam_beta2: float = 0.95
-    group_norm_eps: float = 1e-6
     lr_obs: float = 1e-4
     weight_decay: float = 0.1
     weight_decay_biases: bool = True
@@ -143,8 +127,6 @@ class TrainingLoop(loop.TrainingLoopBase):
     architecture: str = "dit-l_reg_hpx6_per_sensor"
     as_vit: bool = False
     gradient_checkpointing: bool = False
-    pos_emb_gains: bool = False
-    compile_dit: bool = False  # Enable torch.compile for DiT _forward_DiT
     dit_qk_rms_norm: bool = False
     emb_channels: int | None = None
     noise_channels: int | None = None
@@ -154,10 +136,10 @@ class TrainingLoop(loop.TrainingLoopBase):
     # first 50k images, then keeps it at 0.015 afterwards.
     use_gradient_clip_schedule: bool = False
 
-    sensor_embedder_config: SensorEmbedderConfig | None = SensorEmbedderConfig()
-
-    finetune_from: str = ""
-    finetune_optimizer: bool = False
+    # Obs embedder settings
+    embed_dim: int = 32
+    meta_dim: int = 28
+    fusion_dim: int = 512
     freeze_obs_embed: bool = False
     freeze_transformer_blocks: bool = False
     freeze_decoder: bool = False
@@ -183,10 +165,8 @@ class TrainingLoop(loop.TrainingLoopBase):
             time_unit=TimeUnit.HOUR,
         )
 
-    def resume_from_state(
-        self, resume_state_dump, optimizer=True, require_all=True, wandb=False
-    ):
-        super().resume_from_state(resume_state_dump, optimizer, require_all, wandb)
+    def resume_from_state(self, resume_state_dump, optimizer=True, wandb=False):
+        super().resume_from_state(resume_state_dump, optimizer, wandb=wandb)
         self._load_wandb_id()
         dist.print0(f"Loaded checkpoint from {resume_state_dump}.")
 
@@ -202,16 +182,16 @@ class TrainingLoop(loop.TrainingLoopBase):
         except FileNotFoundError:
             pass
 
-    def save_training_state(self, cur_nimg):
+    def save_training_state(self):
         if dist.get_rank() != 0:
             return
-        super().save_training_state(cur_nimg)
+        super().save_training_state()
         self._save_wandb_id()
 
-    def save_network_snapshot(self, cur_nimg):
+    def save_network_snapshot(self):
         if dist.get_rank() != 0:
             return
-        super().save_network_snapshot(cur_nimg)
+        super().save_network_snapshot()
 
     @property
     def out_channels(self):
@@ -247,7 +227,12 @@ class TrainingLoop(loop.TrainingLoopBase):
         """Get the appropriate data transform."""
         return TransformV2(
             variable_config=self.variable_config,
+            sensors=self._sensor_names,
         )
+
+    @functools.cached_property
+    def _sensor_names(self) -> list[str]:
+        return get_sensors_for_config(self.obs_config)
 
     def get_dataset(self, train: bool):
         """Returns the dataset for training or validation."""
@@ -350,6 +335,11 @@ class TrainingLoop(loop.TrainingLoopBase):
         """Transformations to occur on device in a separate thread. including device movement"""
         return self._data_transform.device_transform(batch, device=self.device)
 
+    def _stage_dict_batch(self, batch):
+        if isinstance(batch.get("obs"), tuple):
+            return self._device_transform(batch)
+        return super()._stage_dict_batch(batch)
+
     def get_data_loaders(self, batch_gpu):
         """Create train and test DataLoaders"""
         dataset = self.get_dataset(train=True)
@@ -369,25 +359,23 @@ class TrainingLoop(loop.TrainingLoopBase):
         condition,
         second_of_day,
         day_of_year,
-        unified_obs=None,
+        obs,
         labels=None,
         return_both=False,
-        timestamp,
+        timestamp=None,
         **batch,
     ):
         b, c, t, x = target.shape
         noise_labels = torch.zeros([b], device=target.device)
 
-        prediction = self.ddp(
+        pred = self.ddp(
             condition,
-            noise_labels=noise_labels,
-            class_labels=labels,
+            noise_labels,
+            **obs,
             second_of_day=second_of_day,
             day_of_year=day_of_year,
-            unified_obs=unified_obs,
-            timestamp=timestamp,
+            class_labels=labels,
         )
-        pred = prediction.out
 
         train_tag = "train" if train else "test"
 
@@ -463,47 +451,31 @@ class TrainingLoop(loop.TrainingLoopBase):
 
     @classmethod
     def loads(cls, s):
-        fields = json.loads(s)
-        # remove augment_kwargs if present
-        # this is in some older checkpoint
-        fields.pop("split_weight_decay", None)
-        fields.pop("patch_embed_lr", None)
-        return parse_dict(cls, fields)
-
-    def _load_net_state(self, checkpoint, require_all):
-        self.net.load_from_checkpoint(checkpoint)
+        return parse_dict(cls, json.loads(s))
 
     @property
     def model_config(self) -> ModelConfigV1:
-        out_channels = self.out_channels
-        label_dim = 0  # labels not used
-
         condition_channels = 2  # orog and lfrac static variables
-
-        sensor_embedder_config = None
-        sensors_dict = None
-        if self.obs_config.use_obs and ("per_sensor" in self.architecture):
-            sensor_names = get_sensors_for_config(self.obs_config)
-            sensors_dict = build_sensor_config(sensor_names)
-            sensor_embedder_config = self.sensor_embedder_config
+        nchannel_per_sensor, nplatform_per_sensor, sensor_names_list = (
+            build_sensor_lists(self._sensor_names)
+        )
 
         return models.ModelConfigV1(
             architecture=self.architecture,
             condition_channels=condition_channels,
-            out_channels=out_channels,
-            label_dim=label_dim,
+            out_channels=self.out_channels,
+            label_dim=0,
             label_dropout=self.label_dropout,
-            legacy_label_bias=self.legacy_label_bias,
             obs_config=self.obs_config,
             p_dropout=self.p_dropout,
             drop_path=self.drop_path,
-            group_norm_eps=self.group_norm_eps,
-            pos_emb_gains=self.pos_emb_gains,
-            sensor_embedder_config=sensor_embedder_config,
-            sensors=sensors_dict,
+            nchannel_per_sensor=nchannel_per_sensor,
+            nplatform_per_sensor=nplatform_per_sensor,
+            sensor_names=sensor_names_list,
+            embed_dim=self.embed_dim,
+            meta_dim=self.meta_dim,
+            fusion_dim=self.fusion_dim,
             qk_rms_norm=self.dit_qk_rms_norm,
-            allow_nans_condition=False,
-            compile_dit=self.compile_dit,
             as_vit=self.as_vit,
             emb_channels=self.emb_channels,
             noise_channels=self.noise_channels,
@@ -517,17 +489,17 @@ class TrainingLoop(loop.TrainingLoopBase):
         net.to(self.device)
 
         if self.freeze_obs_embed:
-            net.embed_obs.requires_grad_(False)
+            net.obs_embedder.requires_grad_(False)
 
         if self.freeze_transformer_blocks:
-            for block in net.transformer_blocks:
+            for block in net.dit.blocks:
                 block.requires_grad_(False)
 
         if self.freeze_pos_embedding:
-            net.pos_embed.pos_embed.requires_grad_(False)
+            net.dit.tokenizer.requires_grad_(False)
 
         if self.freeze_decoder:
-            net.patch_decode.requires_grad_(False)
+            net.dit.detokenizer.requires_grad_(False)
 
         self.net = net
         if dist.get_world_size() > 1:
@@ -544,7 +516,7 @@ class TrainingLoop(loop.TrainingLoopBase):
         named_params = list(named_parameters)
         # Separate the obs embedding and transformer parameters to apply
         # lower learning rate to the obs embedding
-        obs_param_prefix = "embed_v2_patch"
+        obs_param_prefix = "obs_embedder."
 
         def _get_param_groups(params, lr):
             if self.weight_decay_biases:
@@ -624,16 +596,31 @@ class TrainingLoop(loop.TrainingLoopBase):
 
 @dataclasses.dataclass
 class CLI:
-    """Command-line interface config"""
+    """Command-line interface config.
+
+    Attributes
+    ----------
+    name : str
+        Preset name (selects from ``LOOPS`` dict) or empty for custom config.
+    output_dir : str
+        Root directory for run outputs (checkpoints, logs).
+    resume_dir : str
+        Path to an existing run directory to resume training from. The code
+        looks for a ``checkpoints_training_state/`` subdirectory and restores
+        model weights, optimizer state, and training progress.
+    finetune_from : str
+        Path to a ``.mdlus`` file to initialize model weights from. Unlike
+        ``resume_dir``, this starts a fresh optimizer and resets training
+        progress -- only the model weights are loaded.
+    """
 
     name: str = ""
     output_dir: str = config.CHECKPOINT_ROOT
-    finetune_from: str = ""
     resume_dir: str = ""
+    finetune_from: str = ""
     loop: TrainingLoop = dataclasses.field(
         default_factory=lambda: TrainingLoop(
             architecture="dit-l_reg_hpx6_per_sensor",
-            legacy_label_bias=True,
             batch_size=8,
             batch_gpu=1,
             lr=0.0005,
@@ -657,24 +644,17 @@ class CLI:
             weight_decay=0.05,
             drop_path=0.1,
             p_dropout=0.05,
-            compile_dit=True,
             obs_config=ObsConfig(
                 use_obs=True,
-                innovation_type="none",
                 context_start=-21,
                 context_end=3,
                 use_conv=True,
-                dropout=0.0,
                 conv_uv_in_situ_only=False,
                 conv_gps_level1_only=False,
             ),
-            embed_v2=True,
             dit_qk_rms_norm=True,
-            sensor_embedder_config=SensorEmbedderConfig(
-                embed_dim=32,
-                fusion_dim=512,
-                use_channel_platform_embedding_table=False,
-            ),
+            embed_dim=32,
+            fusion_dim=512,
         )
     )
 
@@ -687,7 +667,6 @@ LOOPS = {}
 # HealDA v1 configuration: ERA5 observation-to-state training
 LOOPS["era5-v2-dense-noInfill-10M-fusion512-lrObs1e-4"] = TrainingLoop(
     architecture="dit-l_reg_hpx6_per_sensor",
-    legacy_label_bias=True,
     batch_size=8,
     batch_gpu=1,
     lr=0.0005,
@@ -711,24 +690,17 @@ LOOPS["era5-v2-dense-noInfill-10M-fusion512-lrObs1e-4"] = TrainingLoop(
     weight_decay=0.05,
     drop_path=0.1,
     p_dropout=0.05,
-    compile_dit=True,
     obs_config=ObsConfig(
         use_obs=True,
-        innovation_type="none",
         context_start=-21,
         context_end=3,
         use_conv=True,
-        dropout=0.0,
         conv_uv_in_situ_only=False,
         conv_gps_level1_only=False,
     ),
-    embed_v2=True,
     dit_qk_rms_norm=True,
-    sensor_embedder_config=SensorEmbedderConfig(
-        embed_dim=32,
-        fusion_dim=512,
-        use_channel_platform_embedding_table=False,
-    ),
+    embed_dim=32,
+    fusion_dim=512,
 )
 
 
@@ -754,36 +726,35 @@ def main():
     if dist.get_rank() == 0:
         config.print_config()
 
-    new_training = True
-    # attempt resuming from output-dir, and then try the resume_dir CLI
-    # this behavoir makes it easy to submit multiple segments of the run using
-    # the same CLI arguments
-    resume_dirs_in_priority = [loop.run_dir, cli.resume_dir]
-    for rundir in resume_dirs_in_priority:
-        try:
-            loop.resume_from_rundir(rundir, require_all=False)
-            new_training = False
+    # Three mutually exclusive initialization paths:
+    #
+    # 1. Resume: load from a checkpoint *directory* (model weights + optimizer
+    #    + training progress).  Used to continue an interrupted run.
+    # 2. Finetune: load from a single .mdlus *file* (model weights only).
+    #    Optimizer and nimg start fresh.
+    # 3. From scratch: random initialization, nothing to load.
+    resumed = False
+    for rundir in [loop.run_dir, cli.resume_dir]:
+        if not rundir:
+            continue
+        handler = training.loop.CheckpointHandler(rundir)
+        result = handler.latest_checkpoint()
+        if result is not None:
+            checkpoint_dir, nimg, _ = result
+            loop.cur_nimg = nimg
+            loop.resume_from_state(checkpoint_dir, wandb=True)
+            resumed = True
             break
-        except FileNotFoundError:
-            pass
 
-    if new_training and loop.finetune_from:
-        loop.resume_from_state(
-            loop.finetune_from, optimizer=loop.finetune_optimizer, require_all=False
-        )
-
-    if new_training:
+    if not resumed:
         loop.wandb_id = None
+        if cli.finetune_from:
+            dist.print0(f'Loading pretrained weights from "{cli.finetune_from}"')
+            loop.net.load(cli.finetune_from)
         dist.print0("Starting new training")
-
-        try:
-            loop.cur_nimg = loop._cur_nimg_start
-        except AttributeError:
-            pass
 
     loop.setup_wandb(name=cli.name)
     loop.train()
-    torch.distributed.destroy_process_group()
 
 
 if __name__ == "__main__":
