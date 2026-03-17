@@ -128,6 +128,10 @@ class TrainingLoop(loop.TrainingLoopBase):
     as_vit: bool = False
     gradient_checkpointing: bool = False
     dit_qk_rms_norm: bool = False
+    # Original model was trained with the HealDA defaults (4*hidden_size /
+    # hidden_size = 4096/1024), but this puts >60% of total parameters in
+    # the adaLN modulation MLPs.  Setting both to 128 yields equally fast
+    # convergence and comparable skill at a fraction of the parameter cost.
     emb_channels: int | None = None
     noise_channels: int | None = None
 

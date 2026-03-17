@@ -65,4 +65,5 @@ def _build_healda(
         condition_embed_dim=condition_embed_dim,
         noise_channels=config.noise_channels,
         condition_dropout=config.label_dropout,
+        compile_obs_embedder=config.compile_obs_embedder,
     )

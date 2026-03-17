@@ -73,6 +73,7 @@ class ModelConfigV1:
     embed_dim: int = 32
     meta_dim: int = 28
     fusion_dim: int = 512
+    compile_obs_embedder: bool = True
 
     def dumps(self) -> str:
         """Serialize config to JSON string for checkpointing."""
