@@ -39,6 +39,18 @@ from physicsnemo.datapipes.transforms.geometric import (
     Scale,
     Translate,
 )
+from physicsnemo.datapipes.transforms.mesh import (
+    CenterMesh,
+    MeshTransform,
+    RandomRotateMesh,
+    RandomScaleMesh,
+    RandomTranslateMesh,
+    RotateMesh,
+    ScaleMesh,
+    SubsampleMesh,
+    TranslateMesh,
+    apply_to_tensordict_mesh,
+)
 from physicsnemo.datapipes.transforms.normalize import Normalize
 from physicsnemo.datapipes.transforms.spatial import (
     BoundingBoxFilter,
@@ -55,14 +67,6 @@ from physicsnemo.datapipes.transforms.utility import (
     ConstantField,
     Purge,
     Rename,
-)
-from physicsnemo.datapipes.transforms.mesh import (
-    MeshTransform,
-    apply_to_tensordict_mesh,
-    ScaleMesh,
-    TranslateMesh,
-    RandomScaleMesh,
-    RandomTranslateMesh,
 )
 
 __all__ = [
@@ -100,6 +104,10 @@ __all__ = [
     "apply_to_tensordict_mesh",
     "ScaleMesh",
     "TranslateMesh",
+    "RotateMesh",
+    "CenterMesh",
+    "SubsampleMesh",
     "RandomScaleMesh",
     "RandomTranslateMesh",
+    "RandomRotateMesh",
 ]

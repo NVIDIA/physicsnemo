@@ -42,6 +42,7 @@ from physicsnemo.datapipes.dataloader import DataLoader
 from physicsnemo.datapipes.dataset import Dataset
 from physicsnemo.datapipes.multi_dataset import MultiDataset
 from physicsnemo.datapipes.mesh_dataset import MeshDataset
+from physicsnemo.datapipes.protocols import DatasetBase
 from physicsnemo.datapipes.readers import (
     HDF5Reader,
     MeshReader,
@@ -61,6 +62,7 @@ from physicsnemo.datapipes.registry import (
 from physicsnemo.datapipes.transforms import (
     BoundingBoxFilter,
     BroadcastGlobalFeatures,
+    CenterMesh,
     CenterOfMass,
     Compose,
     ComputeNormals,
@@ -74,11 +76,14 @@ from physicsnemo.datapipes.transforms import (
     Normalize,
     NormalizeVectors,
     Purge,
+    RandomRotateMesh,
     RandomScaleMesh,
     RandomTranslateMesh,
     Rename,
+    RotateMesh,
     Scale,
     ScaleMesh,
+    SubsampleMesh,
     SubsamplePoints,
     Transform,
     Translate,
@@ -92,6 +97,7 @@ register_resolvers()
 __all__ = [
     #
     "TensorDict",  # Re-export from tensordict
+    "DatasetBase",
     "Dataset",
     "MeshDataset",
     "DataLoader",
@@ -128,8 +134,12 @@ __all__ = [
     "apply_to_tensordict_mesh",
     "ScaleMesh",
     "TranslateMesh",
+    "RotateMesh",
+    "CenterMesh",
+    "SubsampleMesh",
     "RandomScaleMesh",
     "RandomTranslateMesh",
+    "RandomRotateMesh",
     # Readers
     "Reader",
     "HDF5Reader",

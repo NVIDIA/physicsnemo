@@ -22,6 +22,7 @@ Type-based only; no key-based filtering.
 """
 
 from physicsnemo.datapipes.transforms.mesh.augmentations import (
+    RandomRotateMesh,
     RandomScaleMesh,
     RandomTranslateMesh,
 )
@@ -30,7 +31,10 @@ from physicsnemo.datapipes.transforms.mesh.base import (
     apply_to_tensordict_mesh,
 )
 from physicsnemo.datapipes.transforms.mesh.transforms import (
+    CenterMesh,
+    RotateMesh,
     ScaleMesh,
+    SubsampleMesh,
     TranslateMesh,
 )
 
@@ -39,6 +43,10 @@ __all__ = [
     "apply_to_tensordict_mesh",
     "ScaleMesh",
     "TranslateMesh",
+    "RotateMesh",
+    "CenterMesh",
+    "SubsampleMesh",
     "RandomScaleMesh",
     "RandomTranslateMesh",
+    "RandomRotateMesh",
 ]

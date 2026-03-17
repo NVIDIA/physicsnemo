@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Ahmed body dataset configuration.
+# Adjust data_dir to point to your PNM mesh dataset root.
+
+data_dir: ???
+
+# Substring patterns to identify surface vs volume mesh files within each sample
+surface_mesh_pattern: "boundary"
+volume_mesh_pattern: "volume"
+
+# Glob pattern for mesh files in each sample subdirectory
+mesh_pattern: "*.pt"
+
+# Path to precomputed stats.npz (from compute_stats.py). Set to null to skip normalization.
+stats_path: null
+
+# Explicit field names. Set to null to auto-discover from data.
+surface_target_fields: null
+volume_target_fields: null
+
+# Train/validation split
+train_split: 0.8
+split_seed: 42
+
+# physicsnemo DataLoader settings
+batch_size: 1
+prefetch_factor: 0
+use_streams: false

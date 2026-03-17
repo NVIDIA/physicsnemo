@@ -32,7 +32,7 @@ from tensordict import TensorDict
 from torch.utils.data import RandomSampler, Sampler, SequentialSampler
 
 from physicsnemo.datapipes.collate import Collator, get_collator
-from physicsnemo.datapipes.dataset import Dataset
+from physicsnemo.datapipes.protocols import DatasetBase
 from physicsnemo.datapipes.registry import register
 
 
@@ -79,7 +79,7 @@ class DataLoader:
 
     def __init__(
         self,
-        dataset: Dataset,
+        dataset: DatasetBase,
         *,
         batch_size: int = 1,
         shuffle: bool = False,
@@ -102,8 +102,9 @@ class DataLoader:
 
         Parameters
         ----------
-        dataset : Dataset
-            Dataset to load from.
+        dataset : DatasetBase
+            Dataset to load from. Any subclass of :class:`DatasetBase`
+            (e.g. :class:`Dataset`, :class:`MeshDataset`).
         batch_size : int, default=1
             Number of samples per batch.
         shuffle : bool, default=False

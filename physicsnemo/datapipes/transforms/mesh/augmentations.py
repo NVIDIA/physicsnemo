@@ -20,12 +20,14 @@ Random mesh augmentations (on-the-fly randomizations). Mesh -> Mesh.
 
 from __future__ import annotations
 
+import math
+from typing import Literal
+
 import torch
 
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.transformations.geometric import scale, translate
 
 
 @register()
@@ -49,11 +51,12 @@ class RandomScaleMesh(MeshTransform):
 
     def __call__(self, mesh: Mesh) -> Mesh:
         low, high = self.scale_range
-        factor = low + (high - low) * torch.rand(
-            1, device=mesh.points.device, generator=self._generator
-        ).item()
-        return scale(
-            mesh,
+        factor = (
+            low
+            + (high - low)
+            * torch.rand(1, device=mesh.points.device, generator=self._generator).item()
+        )
+        return mesh.scale(
             factor,
             transform_point_data=self.transform_point_data,
             transform_cell_data=self.transform_cell_data,
@@ -93,7 +96,47 @@ class RandomTranslateMesh(MeshTransform):
             device=mesh.points.device,
             dtype=mesh.points.dtype,
         )
-        return translate(mesh, offset)
+        return mesh.translate(offset)
 
     def extra_repr(self) -> str:
         return f"max_offset={self.max_offset}"
+
+
+@register()
+class RandomRotateMesh(MeshTransform):
+    r"""Random rotation of mesh. Axis and angle are sampled per __call__."""
+
+    def __init__(
+        self,
+        axes: list[Literal["x", "y", "z"]] | None = None,
+        angle_range: tuple[float, float] = (-math.pi, math.pi),
+        transform_point_data: bool = False,
+        transform_cell_data: bool = False,
+        transform_global_data: bool = False,
+        generator: torch.Generator | None = None,
+    ) -> None:
+        super().__init__()
+        self.axes = axes if axes is not None else ["x", "y", "z"]
+        self.angle_range = angle_range
+        self.transform_point_data = transform_point_data
+        self.transform_cell_data = transform_cell_data
+        self.transform_global_data = transform_global_data
+        self._generator = generator
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        axis_idx = torch.randint(len(self.axes), (1,), generator=self._generator).item()
+        axis = self.axes[axis_idx]
+
+        low, high = self.angle_range
+        angle = low + (high - low) * torch.rand(1, generator=self._generator).item()
+
+        return mesh.rotate(
+            angle,
+            axis=axis,
+            transform_point_data=self.transform_point_data,
+            transform_cell_data=self.transform_cell_data,
+            transform_global_data=self.transform_global_data,
+        )
+
+    def extra_repr(self) -> str:
+        return f"axes={self.axes}, angle_range={self.angle_range}"

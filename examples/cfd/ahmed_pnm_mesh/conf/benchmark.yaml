@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Benchmark configuration for PNM mesh datapipe.
+# Defines two separate pipelines (surface + volume) built from MeshReader.
+#
+# Usage:
+#   python benchmark_datapipe.py --config-name benchmark data_dir=/path/to/data
+
+defaults:
+  - _self_
+
+data_dir: ???
+max_samples: 50
+
+surface:
+  reader:
+    _target_: ${dp:MeshReader}
+    path: ${data_dir}
+    pattern: "**/boundary*.pt"
+  transforms:
+    - _target_: ${dp:CenterMesh}
+    - _target_: ${dp:RandomRotateMesh}
+      axes: ["y"]
+    - _target_: ${dp:RandomScaleMesh}
+    - _target_: ${dp:RandomTranslateMesh}
+    - _target_: ${dp:SubsampleMesh}
+      n_cells: 50000
+  batch_size: 1
+
+volume:
+  reader:
+    _target_: ${dp:MeshReader}
+    path: ${data_dir}
+    pattern: "**/volume*.pt"
+  transforms: []
+  batch_size: 1
