@@ -488,7 +488,7 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
                     g["base_lr"] = self.optimizer.defaults["lr"]
             lr = g["base_lr"] * scale
             self.log_debug(
-                f"Learning rate: {lr} from base: {g['base_lr']} with scale factor: {scale} (would normally be {default_scale(self.cur_nimg)})"
+                f"Learning rate: {lr} from base: {g['base_lr']} with scale factor: {scale}"
             )
 
             g["lr"] = lr

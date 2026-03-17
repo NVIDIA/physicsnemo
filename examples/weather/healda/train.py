@@ -637,7 +637,7 @@ class CLI:
             steps_per_tick=2500,
             snapshot_ticks=100,
             state_dump_ticks=2,
-            print_steps=1,
+            print_steps=50,
             loss_type="huber",
             loss_reduction="v1",
             huber_delta=0.1,
