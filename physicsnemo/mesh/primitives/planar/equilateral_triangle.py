@@ -28,7 +28,7 @@ def load(
     side_length: float = 1.0,
     subdivisions: int = 0,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[2, 2]:
     """Create an equilateral triangle in 2D space.
 
     Parameters
@@ -43,7 +43,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[2, 2]
         Mesh with n_manifold_dims=2, n_spatial_dims=2.
     """
     if subdivisions < 0:

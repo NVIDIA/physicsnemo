@@ -29,7 +29,7 @@ def load(
     theta_resolution: int = 30,
     phi_resolution: int = 30,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[2, 3]:
     """Create a UV sphere using latitude/longitude parameterization.
 
     The sphere is generated using spherical coordinates:
@@ -51,7 +51,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[2, 3]
         Mesh with n_manifold_dims=2, n_spatial_dims=3.
 
     Examples
