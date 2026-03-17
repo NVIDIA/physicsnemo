@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds `physicsnemo.mesh.generate` subpackage with `marching_cubes` for
   isosurface extraction from 3D scalar fields, returning a `Mesh` object.
   Supports the NVIDIA Warp backend.
+- Adds a type system to PhysicsNeMo-Mesh, allowing annotation of Mesh dimensions
+  using notation like `Mesh[2, 3]` for a 2D manifold in 3D space.
+- Adds adjacency caching to PhysicsNeMo-Mesh `Mesh` objects, allowing efficient
+  reuse of neighbor information.
 
 ### Changed
 
@@ -38,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Fixed bug in Pangu, FengWu attention window shift for asymmetric longitudes
+- Fixed a bug in `mesh.sampling.find_nearest_cells`, where a mixup between L2 and L-inf norms
+  could cause slightly incorrect nearest-neighbor assignments in highly skewed meshes.
 
 ### Security
 
