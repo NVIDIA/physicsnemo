@@ -220,7 +220,10 @@ def _build_rotation_matrix(
 
 
 def _resolve_rotation_axis(
-    axis: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | Literal["x", "y", "z"] | None,
+    axis: Float[torch.Tensor, " n_spatial_dims"]
+    | Sequence[float]
+    | Literal["x", "y", "z"]
+    | None,
     n_spatial_dims: int,
     device: torch.device,
 ) -> Float[torch.Tensor, " n_spatial_dims"] | None:
@@ -340,13 +343,9 @@ def scale_matrix(
     factor_t = torch.as_tensor(factor, device=device, dtype=dtype)
     if factor_t.ndim == 0:
         factor_t = factor_t.expand(n_spatial_dims)
-    elif (
-        not torch.compiler.is_compiling()
-        and factor_t.shape[-1] != n_spatial_dims
-    ):
+    elif not torch.compiler.is_compiling() and factor_t.shape[-1] != n_spatial_dims:
         raise ValueError(
-            f"factor must be scalar or shape ({n_spatial_dims},), "
-            f"got {factor_t.shape}"
+            f"factor must be scalar or shape ({n_spatial_dims},), got {factor_t.shape}"
         )
     return torch.diag(factor_t)
 
@@ -402,7 +401,10 @@ def _maybe_transform_data(
         return data
     cloned = data.clone()
     _transform_tensordict(
-        cloned, matrix, n_spatial_dims, label,
+        cloned,
+        matrix,
+        n_spatial_dims,
+        label,
         mask=_normalize_transform_mask(spec),
     )
     return cloned
@@ -530,7 +532,11 @@ def transform(
         mesh.cell_data, transform_cell_data, matrix, mesh.n_spatial_dims, "cell_data"
     )
     new_global_data = _maybe_transform_data(
-        mesh.global_data, transform_global_data, matrix, mesh.n_spatial_dims, "global_data"
+        mesh.global_data,
+        transform_global_data,
+        matrix,
+        mesh.n_spatial_dims,
+        "global_data",
     )
 
     from physicsnemo.mesh.mesh import Mesh
@@ -617,7 +623,10 @@ def translate(
 def rotate(
     mesh: "Mesh",
     angle: float,
-    axis: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | Literal["x", "y", "z"] | None = None,
+    axis: Float[torch.Tensor, " n_spatial_dims"]
+    | Sequence[float]
+    | Literal["x", "y", "z"]
+    | None = None,
     center: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
     transform_point_data: bool | TensorDict = False,
     transform_cell_data: bool | TensorDict = False,
@@ -658,8 +667,11 @@ def rotate(
         - normals: Rotated
     """
     R = rotation_matrix(
-        angle=angle, axis=axis, n_spatial_dims=mesh.n_spatial_dims,
-        device=mesh.points.device, dtype=mesh.points.dtype,
+        angle=angle,
+        axis=axis,
+        n_spatial_dims=mesh.n_spatial_dims,
+        device=mesh.points.device,
+        dtype=mesh.points.dtype,
     )
 
     ### Handle center by translate-rotate-translate
@@ -736,8 +748,10 @@ def scale(
         - normals: Transformed by inverse-transpose (direction adjusted, magnitude normalized)
     """
     M = scale_matrix(
-        factor=factor, n_spatial_dims=mesh.n_spatial_dims,
-        device=mesh.points.device, dtype=mesh.points.dtype,
+        factor=factor,
+        n_spatial_dims=mesh.n_spatial_dims,
+        device=mesh.points.device,
+        dtype=mesh.points.dtype,
     )
 
     ### Handle center by translate-scale-translate

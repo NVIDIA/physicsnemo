@@ -279,9 +279,7 @@ class TestComputeCellDerivatives:
             ],
             dtype=torch.float32,
         )
-        cells = torch.tensor(
-            [[0, 1, 2, 4], [0, 1, 3, 4], [0, 2, 3, 4], [1, 2, 3, 4]]
-        )
+        cells = torch.tensor([[0, 1, 2, 4], [0, 1, 3, 4], [0, 2, 3, 4], [1, 2, 3, 4]])
         interior = Mesh(points=points, cells=cells)
         interior.cell_data["pressure"] = torch.randn(interior.n_cells)
         dm = DomainMesh(interior=interior)
@@ -385,9 +383,7 @@ class TestDomainGlobalDataTransform:
 
     def test_rotate_transforms_domain_velocity_3d(self, domain_3d):
         """90-degree rotation about z: [1, 0, 0] -> [0, 1, 0]."""
-        dm2 = domain_3d.rotate(
-            angle=math.pi / 2, axis="z", transform_global_data=True
-        )
+        dm2 = domain_3d.rotate(angle=math.pi / 2, axis="z", transform_global_data=True)
         assert dm2.global_data["velocity"][0].item() == pytest.approx(0.0, abs=1e-6)
         assert dm2.global_data["velocity"][1].item() == pytest.approx(1.0, abs=1e-6)
         assert dm2.global_data["velocity"][2].item() == pytest.approx(0.0, abs=1e-6)
@@ -400,7 +396,9 @@ class TestDomainGlobalDataTransform:
     def test_rotate_default_preserves_domain_global_data(self, domain_2d):
         """Default transform_global_data=False leaves domain global_data unchanged."""
         dm2 = domain_2d.rotate(angle=math.pi / 2)
-        assert torch.equal(dm2.global_data["velocity"], domain_2d.global_data["velocity"])
+        assert torch.equal(
+            dm2.global_data["velocity"], domain_2d.global_data["velocity"]
+        )
 
     def test_scale_transforms_domain_velocity(self, domain_2d):
         """Uniform scale by 2: [1, 0] -> [2, 0]."""
@@ -427,7 +425,9 @@ class TestDomainGlobalDataTransform:
         """Default transform_global_data=False leaves domain global_data unchanged."""
         R = torch.tensor([[0.0, -1.0], [1.0, 0.0]])
         dm2 = domain_2d.transform(matrix=R)
-        assert torch.equal(dm2.global_data["velocity"], domain_2d.global_data["velocity"])
+        assert torch.equal(
+            dm2.global_data["velocity"], domain_2d.global_data["velocity"]
+        )
 
     def test_selective_domain_global_data(self, domain_2d):
         """Dict mask transforms only named keys, leaves others unchanged."""
@@ -440,9 +440,7 @@ class TestDomainGlobalDataTransform:
 
     def test_selective_skips_unmentioned_domain_keys(self, domain_2d):
         """Keys not in the mask dict are not transformed."""
-        dm2 = domain_2d.rotate(
-            angle=math.pi / 2, transform_global_data={"Re": False}
-        )
+        dm2 = domain_2d.rotate(angle=math.pi / 2, transform_global_data={"Re": False})
         assert torch.equal(
             dm2.global_data["velocity"], domain_2d.global_data["velocity"]
         )
