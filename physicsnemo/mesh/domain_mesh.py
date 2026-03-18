@@ -681,8 +681,26 @@ class DomainMesh:
         no_slip: 3 points
         """
         yield "interior", self.interior
-        for name in self.boundary_names:
-            yield name, self.boundaries[name]
+        for name, mesh in self.boundaries.items():
+            yield name, mesh
+
+    def __iter__(self) -> Iterator[tuple[str, Mesh]]:
+        r"""Iterate over all meshes in the domain.
+
+        Equivalent to :meth:`all_meshes`; yields the interior mesh first
+        (keyed ``"interior"``), then each boundary mesh in sorted key order.
+
+        Yields
+        ------
+        tuple[str, Mesh]
+            ``(name, mesh)`` pairs.
+
+        Examples
+        --------
+        >>> for name, mesh in dm:
+        ...     print(f"{name}: {mesh.n_points} points")  # doctest: +SKIP
+        """
+        yield from self.all_meshes()
 
     def merge_boundaries(self) -> Mesh:
         """Merge all boundary meshes into a single :class:`Mesh`.
