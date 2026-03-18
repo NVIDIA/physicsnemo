@@ -27,7 +27,7 @@ from physicsnemo.distributed import DistributedManager
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 # Imports for Domain Parallelism
-from physicsnemo.distributed import DistributedManager, scatter_tensor
+from physicsnemo.domain_parallel import scatter_tensor
 from torch.distributed.tensor import distribute_module, distribute_tensor
 
 # FSDP instead of DDP
@@ -189,7 +189,12 @@ def main():
             if args.ddp_size > 1:
                 # This step goes in the other axis on the mesh: every rank "i" of
                 # each domain will sync up here.
-                model = FSDP(model, device_mesh=ddp_mesh, use_orig_params=False)
+                model = FSDP(
+                    model,
+                    device_mesh=ddp_mesh,
+                    use_orig_params=False,
+                    sync_module_states=True,
+                )
 
         results.append(
             end_to_end_benchmark(

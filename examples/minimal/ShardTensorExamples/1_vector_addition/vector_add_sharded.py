@@ -17,7 +17,8 @@
 import torch
 import time
 
-from physicsnemo.distributed import DistributedManager, scatter_tensor
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.domain_parallel import scatter_tensor
 from torch.distributed.tensor.placement_types import Shard
 
 # Another really big tensor:

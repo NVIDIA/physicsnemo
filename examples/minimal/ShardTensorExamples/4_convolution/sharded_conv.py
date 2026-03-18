@@ -22,11 +22,8 @@ from torch.distributed.tensor import (
 )
 
 
-from physicsnemo.distributed import (
-    DistributedManager,
-    ShardTensor,
-    scatter_tensor,
-)
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.domain_parallel import ShardTensor, scatter_tensor
 
 DistributedManager.initialize()
 dm = DistributedManager()

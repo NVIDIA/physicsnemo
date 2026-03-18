@@ -111,7 +111,7 @@ def get_preconditioned_natten_dit(
     patch_size: int = 4,
     attn_kernel_size: int = 31,
     lead_time_steps: int = 0,
-    layernorm_backend: Literal["torch", "apex"] = "apex",
+    layernorm_backend: Literal["torch", "apex"] = "torch",
     conditioning_embedder: Literal["dit", "edm", "zero"] = "dit",
     **model_kwargs,
 ) -> EDMPreconditioner:
