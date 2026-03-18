@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Improved crash recipe with configurable stats directory.
+- `natten` is now no longer required for the `nn-extras` group.
 
 ### Deprecated
 
