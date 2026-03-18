@@ -94,6 +94,8 @@ class TestMapMeshes:
 
 
 class TestTranslate:
+    """Tests for DomainMesh.translate passthrough."""
+
     def test_shifts_all_points(self, tet_domain):
         offset = [2.0, -1.0, 0.5]
         dm2 = tet_domain.translate(offset)
@@ -117,6 +119,8 @@ class TestTranslate:
 
 
 class TestRotate:
+    """Tests for DomainMesh.rotate passthrough."""
+
     def test_2d_rotation(self):
         """Rotate a 2D domain by 90 degrees; verify point (1,0) -> (0,1)."""
         dm = DomainMesh(
@@ -138,6 +142,8 @@ class TestRotate:
 
 
 class TestScale:
+    """Tests for DomainMesh.scale passthrough."""
+
     def test_uniform_scale(self, tet_domain):
         dm2 = tet_domain.scale(factor=2.0)
         assert torch.allclose(dm2.interior.points, tet_domain.interior.points * 2.0)
@@ -153,6 +159,8 @@ class TestScale:
 
 
 class TestTransform:
+    """Tests for DomainMesh.transform passthrough."""
+
     def test_identity(self, tet_domain):
         dm2 = tet_domain.transform(torch.eye(3))
         assert torch.allclose(dm2.interior.points, tet_domain.interior.points)
@@ -166,6 +174,8 @@ class TestTransform:
 
 
 class TestClean:
+    """Tests for DomainMesh.clean passthrough."""
+
     def test_cleans_all_meshes(self):
         """clean() merges duplicate points in interior; boundary unchanged."""
         # Interior with intentional duplicate points (no primitive has this)
@@ -186,6 +196,8 @@ class TestClean:
 
 
 class TestStripCaches:
+    """Tests for DomainMesh.strip_caches passthrough."""
+
     def test_clears_cached_geometry(self):
         """Accessing cell_normals populates cache; strip_caches clears it."""
         dm = DomainMesh(interior=single_triangle_3d.load())
@@ -196,6 +208,8 @@ class TestStripCaches:
 
 
 class TestSubdivide:
+    """Tests for DomainMesh.subdivide passthrough."""
+
     def test_increases_cell_count(self):
         """Linear subdivision: tet -> 8 child tets, tri -> 4 child tris."""
         dm = DomainMesh(
@@ -211,6 +225,8 @@ class TestSubdivide:
 
 
 class TestCellDataToPointData:
+    """Tests for DomainMesh.cell_data_to_point_data passthrough."""
+
     def test_converts_all_meshes(self, tet_domain):
         dm2 = tet_domain.cell_data_to_point_data()
         assert "pressure" in dm2.interior.point_data.keys()
@@ -223,6 +239,8 @@ class TestCellDataToPointData:
 
 
 class TestPointDataToCellData:
+    """Tests for DomainMesh.point_data_to_cell_data passthrough."""
+
     def test_converts_all_meshes(self, tet_domain):
         dm2 = tet_domain.point_data_to_cell_data()
         assert "temperature" in dm2.interior.cell_data.keys()
@@ -232,6 +250,8 @@ class TestPointDataToCellData:
 
 
 class TestValidate:
+    """Tests for DomainMesh.validate passthrough."""
+
     def test_report_structure(self, tet_domain):
         report = tet_domain.validate()
         assert "interior" in report
@@ -264,6 +284,8 @@ class TestValidate:
 
 
 class TestChaining:
+    """Tests for chaining multiple DomainMesh transforms."""
+
     def test_translate_scale_clean(self, tet_domain):
         dm2 = tet_domain.translate([1, 0, 0]).scale(2.0).clean(merge_points=False)
         assert isinstance(dm2, DomainMesh)
