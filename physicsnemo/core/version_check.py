@@ -269,7 +269,7 @@ _PACKAGE_HINTS: Dict[str, str] = {
     # Neural network extras
     "natten": _format_install_hint(
         "natten",
-        group="nn-extras",
+        group="model-extras",
     ),
     "earth2grid": _format_install_hint(
         "earth2grid",
