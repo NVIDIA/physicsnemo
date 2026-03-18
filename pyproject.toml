@@ -207,12 +207,12 @@ mesh-extras = [
     "vtk>=9.6.0",
 ]
 nn-extras = [
-    "scipy",
-    "natten",
     "nvidia-physicsnemo[utils-extras]",
+    "scipy",
 ]
 model-extras = [
     "nvidia-physicsnemo[nn-extras]",
+    "natten",
     "pyvista>=0.46.4",
     "vtk",
 ]
