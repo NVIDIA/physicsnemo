@@ -29,7 +29,7 @@ class TestMultiDatasetBasic:
         """MultiDataset with two datasets has combined length."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
 
         assert len(multi) == len(ds_a) + len(ds_b)
 
@@ -38,7 +38,7 @@ class TestMultiDatasetBasic:
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_c = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b, ds_c], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, ds_c, output_strict=True)
 
         assert len(multi) == len(ds_a) + len(ds_b) + len(ds_c)
         assert multi[0][1][DATASET_INDEX_METADATA_KEY] == 0
@@ -49,7 +49,7 @@ class TestMultiDatasetBasic:
         """Indices 0..len0-1 from first dataset, then second."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
 
         # First 10 from ds_a (dataset_index 0)
         data0, meta0 = multi[0]
@@ -70,7 +70,7 @@ class TestMultiDatasetBasic:
         """Metadata from sub-dataset (e.g. index) is preserved alongside dataset_index."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
 
         data0, meta0 = multi[0]
         assert meta0["index"] == 0
@@ -84,7 +84,7 @@ class TestMultiDatasetBasic:
         """Negative indices work as expected."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
 
         data_last, meta_last = multi[-1]
         assert meta_last[DATASET_INDEX_METADATA_KEY] == 1
@@ -95,7 +95,7 @@ class TestMultiDatasetBasic:
         """output_strict=True returns common output keys (TensorDict keys)."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
 
         assert "positions" in multi.field_names
         assert "features" in multi.field_names
@@ -104,7 +104,7 @@ class TestMultiDatasetBasic:
         """Iteration yields all samples in order with dataset_index in metadata."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
 
         seen_indices = []
         seen_dataset_indices = []
@@ -120,7 +120,7 @@ class TestMultiDatasetBasic:
         """MultiDataset as context manager closes sub-datasets."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        with dp.MultiDataset([ds_a, ds_b], output_strict=True) as multi:
+        with dp.MultiDataset(ds_a, ds_b, output_strict=True) as multi:
             data, meta = multi[0]
             assert meta[DATASET_INDEX_METADATA_KEY] == 0
 
@@ -134,14 +134,14 @@ class TestMultiDatasetStrictValidation:
         ds_pos_only = dp.Dataset(dp.NumpyReader(numpy_data_dir, fields=["positions"]))
 
         with pytest.raises(ValueError, match="output keys"):
-            dp.MultiDataset([ds_full, ds_pos_only], output_strict=True)
+            dp.MultiDataset(ds_full, ds_pos_only, output_strict=True)
 
     def test_non_strict_accepts_different_fields(self, numpy_data_dir):
         """output_strict=False does not validate output keys; field_names is first dataset's."""
         ds_full = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_pos_only = dp.Dataset(dp.NumpyReader(numpy_data_dir, fields=["positions"]))
 
-        multi = dp.MultiDataset([ds_full, ds_pos_only], output_strict=False)
+        multi = dp.MultiDataset(ds_full, ds_pos_only, output_strict=False)
         assert len(multi) == 20
         assert set(multi.field_names) == set(ds_full.field_names)
 
@@ -149,7 +149,7 @@ class TestMultiDatasetStrictValidation:
         """output_strict compares TensorDict keys after transforms, not reader field_names."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
         assert len(multi.field_names) >= 2  # positions, features
 
 
@@ -160,7 +160,7 @@ class TestMultiDatasetPrefetchAndClose:
         """Prefetch delegates to correct sub-dataset."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
 
         multi.prefetch(0)
         multi.prefetch(10)
@@ -173,7 +173,7 @@ class TestMultiDatasetPrefetchAndClose:
         """cancel_prefetch(None) clears all sub-datasets."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
 
         multi.prefetch(0)
         multi.prefetch(10)
@@ -186,7 +186,7 @@ class TestMultiDatasetPrefetchAndClose:
         """cancel_prefetch(out-of-range index) does not raise (matches Dataset)."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
 
         multi.prefetch(0)
         multi.cancel_prefetch(999)  # out of range, should no-op
@@ -198,7 +198,7 @@ class TestMultiDatasetPrefetchAndClose:
         """prefetch_batch delegates to sub-datasets by global index."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
 
         multi.prefetch_batch([0, 1, 10, 11])
         for idx in [0, 1, 10, 11]:
@@ -210,7 +210,7 @@ class TestMultiDatasetPrefetchAndClose:
         """prefetch_count is sum of sub-dataset prefetch counts."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
 
         assert multi.prefetch_count == 0
         multi.prefetch_batch([0, 1, 2, 3])
@@ -222,7 +222,7 @@ class TestMultiDatasetPrefetchAndClose:
         """close() closes all sub-datasets."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
         multi.close()
         # After close, sub-datasets are closed (no-op to call again)
 
@@ -233,19 +233,19 @@ class TestMultiDatasetErrors:
     def test_requires_at_least_one_datasets(self, numpy_data_dir):
         """MultiDataset requires at least one datasets."""
         with pytest.raises(ValueError, match="at least one"):
-            dp.MultiDataset([], output_strict=True)
+            dp.MultiDataset(output_strict=True)
 
     def test_requires_dataset_instances(self, numpy_data_dir):
         """All elements must be Dataset instances."""
         ds = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         with pytest.raises(TypeError, match="must be a Dataset"):
-            dp.MultiDataset([ds, dp.NumpyReader(numpy_data_dir)], output_strict=False)
+            dp.MultiDataset(ds, dp.NumpyReader(numpy_data_dir), output_strict=False)
 
     def test_index_out_of_range(self, numpy_data_dir):
         """Index out of range raises IndexError."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
 
         with pytest.raises(IndexError, match="out of range"):
             _ = multi[20]
@@ -256,7 +256,7 @@ class TestMultiDatasetErrors:
         """prefetch with out-of-range index raises IndexError."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
 
         with pytest.raises(IndexError, match="out of range"):
             multi.prefetch(20)
@@ -269,7 +269,7 @@ class TestMultiDatasetWithDataLoader:
         """DataLoader iterates over MultiDataset and collates batches."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
 
         loader = dp.DataLoader(multi, batch_size=4, shuffle=False)
         assert len(loader) == 5  # 20 / 4
@@ -283,7 +283,7 @@ class TestMultiDatasetWithDataLoader:
         """Collate metadata includes dataset_index from MultiDataset."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
 
         loader = dp.DataLoader(
             multi, batch_size=5, shuffle=False, collate_metadata=True
@@ -307,7 +307,7 @@ class TestMultiDatasetWithDataLoader:
         """Shuffled DataLoader over MultiDataset yields all indices."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
 
         loader = dp.DataLoader(multi, batch_size=4, shuffle=True, collate_metadata=True)
         all_dataset_indices = []
@@ -326,7 +326,7 @@ class TestMultiDatasetRepr:
         """Repr includes output_strict and datasets."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset([ds_a, ds_b], output_strict=True)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
 
         r = repr(multi)
         assert "MultiDataset" in r

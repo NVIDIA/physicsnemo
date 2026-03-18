@@ -91,9 +91,10 @@ class MultiDataset:
 
     Parameters
     ----------
-    datasets : Sequence[Dataset]
-        One or more Dataset instances (Reader + transforms each). Order defines
-        index mapping: first dataset occupies 0..len(ds0)-1, etc.
+    *datasets : Dataset
+        One or more Dataset instances passed as positional arguments
+        (Reader + transforms each). Order defines index mapping: first
+        dataset occupies 0..len(ds0)-1, etc.
     output_strict : bool, default=True
         If True, require all datasets to produce the same TensorDict keys (output
         keys after transforms) so :class:`DefaultCollator` can stack batches. If
@@ -106,7 +107,7 @@ class MultiDataset:
     Raises
     ------
     ValueError
-        If ``len(datasets) < 1`` or if ``output_strict=True`` and output keys differ.
+        If no datasets are provided or if ``output_strict=True`` and output keys differ.
 
     Notes
     -----
@@ -147,7 +148,7 @@ class MultiDataset:
     >>> from physicsnemo.datapipes import Dataset, MultiDataset, HDF5Reader, Normalize
     >>> ds_a = Dataset(HDF5Reader("a.h5", fields=["x", "y"]), transforms=None)  # doctest: +SKIP
     >>> ds_b = Dataset(HDF5Reader("b.h5", fields=["x", "y"]), transforms=None)   # doctest: +SKIP
-    >>> multi = MultiDataset([ds_a, ds_b], output_strict=True)                   # doctest: +SKIP
+    >>> multi = MultiDataset(ds_a, ds_b, output_strict=True)                     # doctest: +SKIP
     >>> len(multi) == len(ds_a) + len(ds_b)                                      # doctest: +SKIP
     True
     >>> data, meta = multi[0]   # from ds_a                                      # doctest: +SKIP
@@ -156,8 +157,7 @@ class MultiDataset:
 
     def __init__(
         self,
-        datasets: Sequence[Dataset],
-        *,
+        *datasets: Dataset,
         output_strict: bool = True,
     ) -> None:
         if len(datasets) < 1:
