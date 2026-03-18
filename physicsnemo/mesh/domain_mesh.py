@@ -268,16 +268,16 @@ class DomainMesh:
         angle: float,
         axis: torch.Tensor | list | tuple | Literal["x", "y", "z"] | None = None,
         center: torch.Tensor | list | tuple | None = None,
-        transform_point_data: bool = False,
-        transform_cell_data: bool = False,
-        transform_global_data: bool = False,
+        transform_point_data: bool | TensorDict = False,
+        transform_cell_data: bool | TensorDict = False,
+        transform_global_data: bool | TensorDict = False,
     ) -> "DomainMesh":
         r"""Rotate all meshes in the domain about an axis.
 
-        Delegates to :meth:`Mesh.rotate` for each mesh.  The
-        ``transform_*_data`` flags control whether vector/tensor fields in
-        each :class:`Mesh`'s data are also rotated.  The domain-level
-        :attr:`global_data` (scalar simulation parameters) is never affected.
+        Builds a rotation matrix and delegates to :meth:`transform`.
+        Center handling uses translate-rotate-translate at the domain
+        level, so domain-level :attr:`global_data` vectors are correctly
+        rotated but not translated (vectors are translation-invariant).
 
         Parameters
         ----------
@@ -287,42 +287,71 @@ class DomainMesh:
             Rotation axis vector (3D) or ``None`` (2D).
         center : torch.Tensor or list or tuple, optional
             Center point for rotation.
-        transform_point_data : bool
-            If ``True``, rotate vector/tensor fields in ``point_data``.
-        transform_cell_data : bool
-            If ``True``, rotate vector/tensor fields in ``cell_data``.
-        transform_global_data : bool
-            If ``True``, rotate vector/tensor fields in each mesh's
-            ``global_data``.
+        transform_point_data : bool or TensorDict
+            Controls transformation of ``point_data`` fields. ``True``
+            transforms all compatible fields; a ``TensorDict`` (or
+            ``dict``) with scalar bool leaves selects specific fields.
+        transform_cell_data : bool or TensorDict
+            Same semantics, for ``cell_data``.
+        transform_global_data : bool or TensorDict
+            Same semantics, for each mesh's ``global_data`` and the
+            domain-level :attr:`global_data`.
 
         Returns
         -------
         DomainMesh
             New domain with rotated geometry.
         """
-        return self._map_meshes(
-            lambda m: m.rotate(
-                angle=angle,
-                axis=axis,
-                center=center,
-                transform_point_data=transform_point_data,
-                transform_cell_data=transform_cell_data,
-                transform_global_data=transform_global_data,
+        if center is not None:
+            c = torch.as_tensor(
+                center,
+                device=self.interior.points.device,
+                dtype=self.interior.points.dtype,
             )
+            return (
+                self.translate(-c)
+                .rotate(
+                    angle=angle,
+                    axis=axis,
+                    center=None,
+                    transform_point_data=transform_point_data,
+                    transform_cell_data=transform_cell_data,
+                    transform_global_data=transform_global_data,
+                )
+                .translate(c)
+            )
+
+        from physicsnemo.mesh.transformations.geometric import rotation_matrix
+
+        R = rotation_matrix(
+            angle=angle,
+            axis=axis,
+            n_spatial_dims=self.interior.n_spatial_dims,
+            device=self.interior.points.device,
+            dtype=self.interior.points.dtype,
+        )
+        return self.transform(
+            matrix=R,
+            transform_point_data=transform_point_data,
+            transform_cell_data=transform_cell_data,
+            transform_global_data=transform_global_data,
+            assume_invertible=True,
         )
 
     def scale(
         self,
         factor: float | torch.Tensor,
         center: torch.Tensor | None = None,
-        transform_point_data: bool = False,
-        transform_cell_data: bool = False,
-        transform_global_data: bool = False,
+        transform_point_data: bool | TensorDict = False,
+        transform_cell_data: bool | TensorDict = False,
+        transform_global_data: bool | TensorDict = False,
         assume_invertible: bool | None = None,
     ) -> "DomainMesh":
         r"""Scale all meshes in the domain by specified factor(s).
 
-        Delegates to :meth:`Mesh.scale` for each mesh.
+        Builds a scale matrix and delegates to :meth:`transform`.
+        Center handling uses translate-scale-translate at the domain
+        level.
 
         Parameters
         ----------
@@ -330,13 +359,15 @@ class DomainMesh:
             Scale factor (scalar) or per-dimension factors.
         center : torch.Tensor, optional
             Center point for scaling.
-        transform_point_data : bool
-            If ``True``, scale vector/tensor fields in ``point_data``.
-        transform_cell_data : bool
-            If ``True``, scale vector/tensor fields in ``cell_data``.
-        transform_global_data : bool
-            If ``True``, scale vector/tensor fields in each mesh's
-            ``global_data``.
+        transform_point_data : bool or TensorDict
+            Controls transformation of ``point_data`` fields. ``True``
+            transforms all compatible fields; a ``TensorDict`` (or
+            ``dict``) with scalar bool leaves selects specific fields.
+        transform_cell_data : bool or TensorDict
+            Same semantics, for ``cell_data``.
+        transform_global_data : bool or TensorDict
+            Same semantics, for each mesh's ``global_data`` and the
+            domain-level :attr:`global_data`.
         assume_invertible : bool or None, optional
             Controls cache propagation.  See :meth:`Mesh.scale`.
 
@@ -345,40 +376,68 @@ class DomainMesh:
         DomainMesh
             New domain with scaled geometry.
         """
-        return self._map_meshes(
-            lambda m: m.scale(
-                factor=factor,
-                center=center,
-                transform_point_data=transform_point_data,
-                transform_cell_data=transform_cell_data,
-                transform_global_data=transform_global_data,
-                assume_invertible=assume_invertible,
+        if center is not None:
+            c = torch.as_tensor(
+                center,
+                device=self.interior.points.device,
+                dtype=self.interior.points.dtype,
             )
+            return (
+                self.translate(-c)
+                .scale(
+                    factor=factor,
+                    center=None,
+                    transform_point_data=transform_point_data,
+                    transform_cell_data=transform_cell_data,
+                    transform_global_data=transform_global_data,
+                    assume_invertible=assume_invertible,
+                )
+                .translate(c)
+            )
+
+        from physicsnemo.mesh.transformations.geometric import scale_matrix
+
+        M = scale_matrix(
+            factor=factor,
+            n_spatial_dims=self.interior.n_spatial_dims,
+            device=self.interior.points.device,
+            dtype=self.interior.points.dtype,
+        )
+        return self.transform(
+            matrix=M,
+            transform_point_data=transform_point_data,
+            transform_cell_data=transform_cell_data,
+            transform_global_data=transform_global_data,
+            assume_invertible=assume_invertible,
         )
 
     def transform(
         self,
         matrix: torch.Tensor,
-        transform_point_data: bool = False,
-        transform_cell_data: bool = False,
-        transform_global_data: bool = False,
+        transform_point_data: bool | TensorDict = False,
+        transform_cell_data: bool | TensorDict = False,
+        transform_global_data: bool | TensorDict = False,
         assume_invertible: bool | None = None,
     ) -> "DomainMesh":
         r"""Apply a linear transformation to all meshes in the domain.
 
-        Delegates to :meth:`Mesh.transform` for each mesh.
+        This is the single point of contact for domain-level
+        :attr:`global_data` transformation. Both :meth:`rotate` and
+        :meth:`scale` delegate here after building their matrix.
 
         Parameters
         ----------
         matrix : torch.Tensor
             Transformation matrix, shape :math:`(S', S)`.
-        transform_point_data : bool
-            If ``True``, transform vector/tensor fields in ``point_data``.
-        transform_cell_data : bool
-            If ``True``, transform vector/tensor fields in ``cell_data``.
-        transform_global_data : bool
-            If ``True``, transform vector/tensor fields in each mesh's
-            ``global_data``.
+        transform_point_data : bool or TensorDict
+            Controls transformation of ``point_data`` fields. ``True``
+            transforms all compatible fields; a ``TensorDict`` (or
+            ``dict``) with scalar bool leaves selects specific fields.
+        transform_cell_data : bool or TensorDict
+            Same semantics, for ``cell_data``.
+        transform_global_data : bool or TensorDict
+            Same semantics, for each mesh's ``global_data`` and the
+            domain-level :attr:`global_data`.
         assume_invertible : bool or None, optional
             Controls cache propagation.  See :meth:`Mesh.transform`.
 
@@ -387,7 +446,7 @@ class DomainMesh:
         DomainMesh
             New domain with transformed geometry.
         """
-        return self._map_meshes(
+        result = self._map_meshes(
             lambda m: m.transform(
                 matrix=matrix,
                 transform_point_data=transform_point_data,
@@ -396,6 +455,20 @@ class DomainMesh:
                 assume_invertible=assume_invertible,
             )
         )
+        if transform_global_data is not False:
+            from physicsnemo.mesh.transformations.geometric import (
+                _normalize_transform_mask,
+                _transform_tensordict,
+            )
+
+            _transform_tensordict(
+                result.global_data,
+                matrix,
+                self.interior.n_spatial_dims,
+                "global_data",
+                mask=_normalize_transform_mask(transform_global_data),
+            )
+        return result
 
     ### Cleanup / Refinement
 

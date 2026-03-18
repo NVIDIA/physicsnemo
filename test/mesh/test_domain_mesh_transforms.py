@@ -346,3 +346,111 @@ class TestChaining:
             no_boundary_domain.interior.points + torch.tensor([1.0, 0.0, 0.0])
         ) * 3.0
         assert torch.allclose(dm2.interior.points, expected)
+
+
+### Domain-Level global_data Transformation
+
+
+class TestDomainGlobalDataTransform:
+    """Tests for domain-level global_data transformation via transform_global_data."""
+
+    @pytest.fixture
+    def domain_2d(self):
+        """2D domain with a directional vector and a scalar in global_data."""
+        return DomainMesh(
+            interior=single_triangle_2d.load(),
+            boundaries={"edge": single_edge_2d.load()},
+            global_data={
+                "velocity": torch.tensor([1.0, 0.0]),
+                "Re": torch.tensor(1e6),
+            },
+        )
+
+    @pytest.fixture
+    def domain_3d(self):
+        """3D domain with a directional vector and a scalar in global_data."""
+        return DomainMesh(
+            interior=single_triangle_3d.load(),
+            global_data={
+                "velocity": torch.tensor([1.0, 0.0, 0.0]),
+                "Re": torch.tensor(1e6),
+            },
+        )
+
+    def test_rotate_transforms_domain_velocity_2d(self, domain_2d):
+        """90-degree CCW rotation: [1, 0] -> [0, 1]."""
+        dm2 = domain_2d.rotate(angle=math.pi / 2, transform_global_data=True)
+        assert dm2.global_data["velocity"][0].item() == pytest.approx(0.0, abs=1e-6)
+        assert dm2.global_data["velocity"][1].item() == pytest.approx(1.0, abs=1e-6)
+
+    def test_rotate_transforms_domain_velocity_3d(self, domain_3d):
+        """90-degree rotation about z: [1, 0, 0] -> [0, 1, 0]."""
+        dm2 = domain_3d.rotate(
+            angle=math.pi / 2, axis="z", transform_global_data=True
+        )
+        assert dm2.global_data["velocity"][0].item() == pytest.approx(0.0, abs=1e-6)
+        assert dm2.global_data["velocity"][1].item() == pytest.approx(1.0, abs=1e-6)
+        assert dm2.global_data["velocity"][2].item() == pytest.approx(0.0, abs=1e-6)
+
+    def test_rotate_preserves_domain_scalars(self, domain_2d):
+        """Scalars in global_data are invariant under rotation."""
+        dm2 = domain_2d.rotate(angle=math.pi / 2, transform_global_data=True)
+        assert dm2.global_data["Re"].item() == pytest.approx(1e6)
+
+    def test_rotate_default_preserves_domain_global_data(self, domain_2d):
+        """Default transform_global_data=False leaves domain global_data unchanged."""
+        dm2 = domain_2d.rotate(angle=math.pi / 2)
+        assert torch.equal(dm2.global_data["velocity"], domain_2d.global_data["velocity"])
+
+    def test_scale_transforms_domain_velocity(self, domain_2d):
+        """Uniform scale by 2: [1, 0] -> [2, 0]."""
+        dm2 = domain_2d.scale(factor=2.0, transform_global_data=True)
+        assert dm2.global_data["velocity"][0].item() == pytest.approx(2.0)
+        assert dm2.global_data["velocity"][1].item() == pytest.approx(0.0)
+
+    def test_scale_nonuniform_transforms_domain_velocity(self, domain_2d):
+        """Non-uniform scale [3, 0.5]: [1, 0] -> [3, 0]."""
+        dm2 = domain_2d.scale(
+            factor=torch.tensor([3.0, 0.5]), transform_global_data=True
+        )
+        assert dm2.global_data["velocity"][0].item() == pytest.approx(3.0)
+        assert dm2.global_data["velocity"][1].item() == pytest.approx(0.0)
+
+    def test_transform_transforms_domain_velocity(self, domain_2d):
+        """Apply 90-degree rotation matrix via transform(): [1, 0] -> [0, 1]."""
+        R = torch.tensor([[0.0, -1.0], [1.0, 0.0]])
+        dm2 = domain_2d.transform(matrix=R, transform_global_data=True)
+        assert dm2.global_data["velocity"][0].item() == pytest.approx(0.0, abs=1e-6)
+        assert dm2.global_data["velocity"][1].item() == pytest.approx(1.0, abs=1e-6)
+
+    def test_transform_default_preserves_domain_global_data(self, domain_2d):
+        """Default transform_global_data=False leaves domain global_data unchanged."""
+        R = torch.tensor([[0.0, -1.0], [1.0, 0.0]])
+        dm2 = domain_2d.transform(matrix=R)
+        assert torch.equal(dm2.global_data["velocity"], domain_2d.global_data["velocity"])
+
+    def test_selective_domain_global_data(self, domain_2d):
+        """Dict mask transforms only named keys, leaves others unchanged."""
+        dm2 = domain_2d.rotate(
+            angle=math.pi / 2, transform_global_data={"velocity": True}
+        )
+        assert dm2.global_data["velocity"][0].item() == pytest.approx(0.0, abs=1e-6)
+        assert dm2.global_data["velocity"][1].item() == pytest.approx(1.0, abs=1e-6)
+        assert dm2.global_data["Re"].item() == pytest.approx(1e6)
+
+    def test_selective_skips_unmentioned_domain_keys(self, domain_2d):
+        """Keys not in the mask dict are not transformed."""
+        dm2 = domain_2d.rotate(
+            angle=math.pi / 2, transform_global_data={"Re": False}
+        )
+        assert torch.equal(
+            dm2.global_data["velocity"], domain_2d.global_data["velocity"]
+        )
+
+    def test_rotate_with_center_transforms_domain_global_data(self, domain_2d):
+        """Rotation about a center still transforms domain global_data correctly."""
+        dm2 = domain_2d.rotate(
+            angle=math.pi / 2, center=[1.0, 0.0], transform_global_data=True
+        )
+        assert dm2.global_data["velocity"][0].item() == pytest.approx(0.0, abs=1e-6)
+        assert dm2.global_data["velocity"][1].item() == pytest.approx(1.0, abs=1e-6)
