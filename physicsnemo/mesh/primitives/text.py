@@ -409,7 +409,7 @@ def text_1d_2d(
     samples_per_unit: float = 10,
     max_segment_length: float = 0.25,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[1, 2]:
     """Render text as 1D curve in 2D space (boundary path only).
 
     Converts text to a polyline mesh representing the outline of each letter.
@@ -429,7 +429,7 @@ def text_1d_2d(
 
     Returns
     -------
-    Mesh
+    Mesh[1, 2]
         Mesh with n_manifold_dims=1, n_spatial_dims=2 (polyline in 2D)
 
     Examples
@@ -457,7 +457,7 @@ def text_2d_2d(
     samples_per_unit: float = 10,
     max_segment_length: float = 0.25,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[2, 2]:
     """Render text as 2D triangulated surface in 2D space (filled letters).
 
     Converts text to a filled mesh with proper hole handling for letters
@@ -479,7 +479,7 @@ def text_2d_2d(
 
     Returns
     -------
-    Mesh
+    Mesh[2, 2]
         Mesh with n_manifold_dims=2, n_spatial_dims=2 (filled text in 2D plane)
 
     Examples
@@ -509,7 +509,7 @@ def text_3d_3d(
     max_segment_length: float = 0.25,
     extrusion_height: float = 2.0,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[3, 3]:
     """Render text as 3D tetrahedral volume (solid extruded text).
 
     Creates solid 3D text by triangulating in 2D, embedding to 3D, and
@@ -532,7 +532,7 @@ def text_3d_3d(
 
     Returns
     -------
-    Mesh
+    Mesh[3, 3]
         Mesh with n_manifold_dims=3, n_spatial_dims=3 (solid tetrahedral volume)
 
     Examples
@@ -579,7 +579,7 @@ def text_2d_3d(
     max_segment_length: float = 0.25,
     extrusion_height: float = 2.0,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[2, 3]:
     """Render text as 2D boundary surface in 3D space (hollow extruded text).
 
     Creates the surface of 3D text by extracting the boundary from an
@@ -602,7 +602,7 @@ def text_2d_3d(
 
     Returns
     -------
-    Mesh
+    Mesh[2, 3]
         Mesh with n_manifold_dims=2, n_spatial_dims=3 (triangulated surface in 3D)
 
     Examples

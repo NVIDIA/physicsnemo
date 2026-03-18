@@ -37,7 +37,7 @@ def test_repr_simple_case():
 
     result = repr(mesh)
 
-    expected = r"""Mesh(manifold_dim=2, spatial_dim=3, n_points=4842, n_cells=19147)
+    expected = r"""Mesh[n_manifold_dims=2, n_spatial_dims=3](n_points=4842, n_cells=19147)
     point_data : {}
     cell_data  : {noise: ()}
     global_data: {}"""
@@ -65,7 +65,7 @@ def test_repr_many_fields():
     result = repr(mesh)
 
     # Keys are alphabetically sorted: pressure, stress, temperature, velocity
-    expected = r"""Mesh(manifold_dim=2, spatial_dim=3, n_points=100, n_cells=50)
+    expected = r"""Mesh[n_manifold_dims=2, n_spatial_dims=3](n_points=100, n_cells=50)
     point_data : {
         pressure   : (),
         stress     : (3, 3),
@@ -112,7 +112,7 @@ def test_repr_deeply_nested():
     # Keys are alphabetically sorted at all levels
     # Top level point_data: flow, temperature
     # Nested flow: pressure, turbulence, velocity
-    expected = r"""Mesh(manifold_dim=2, spatial_dim=3, n_points=100, n_cells=50)
+    expected = r"""Mesh[n_manifold_dims=2, n_spatial_dims=3](n_points=100, n_cells=50)
     point_data : {
         flow       : {pressure: (), turbulence: (3, 3), velocity: (3,)},
         temperature: ()}
@@ -160,7 +160,7 @@ def test_repr_complex_nested():
     # state: mechanical, thermal (alphabetically)
     # mechanical: strain, stress
     # thermal: heat_flux, temperature
-    expected = r"""Mesh(manifold_dim=1, spatial_dim=2, n_points=100, n_cells=50)
+    expected = r"""Mesh[n_manifold_dims=1, n_spatial_dims=2](n_points=100, n_cells=50)
     point_data : {position: (2,)}
     cell_data  : {
         state: {
@@ -185,7 +185,7 @@ def test_repr_empty_mesh():
 
     result = repr(mesh)
 
-    expected = r"""Mesh(manifold_dim=2, spatial_dim=3, n_points=10, n_cells=5)
+    expected = r"""Mesh[n_manifold_dims=2, n_spatial_dims=3](n_points=10, n_cells=5)
     point_data : {}
     cell_data  : {}
     global_data: {}"""
@@ -214,7 +214,7 @@ def test_repr_with_device():
     result = repr(mesh)
 
     # Device should be shown since it was explicitly set
-    expected = r"""Mesh(manifold_dim=2, spatial_dim=3, n_points=100, n_cells=50, device=cpu)
+    expected = r"""Mesh[n_manifold_dims=2, n_spatial_dims=3](n_points=100, n_cells=50, device=cpu)
     point_data : {}
     cell_data  : {pressure: (), velocity: (3,)}
     global_data: {}"""
@@ -244,7 +244,7 @@ def test_repr_with_cuda_device():
     result = repr(mesh)
 
     # Device should show cuda:0
-    expected = r"""Mesh(manifold_dim=2, spatial_dim=3, n_points=100, n_cells=50, device=cuda:0)
+    expected = r"""Mesh[n_manifold_dims=2, n_spatial_dims=3](n_points=100, n_cells=50, device=cuda:0)
     point_data : {}
     cell_data  : {pressure: (), velocity: (3,)}
     global_data: {}"""
@@ -299,7 +299,7 @@ def test_repr_cache_always_last():
 
     # Cache is now in a separate _cache field, not inside cell_data.
     # cell_data should show only user fields.
-    expected = r"""Mesh(manifold_dim=2, spatial_dim=3, n_points=10, n_cells=5)
+    expected = r"""Mesh[n_manifold_dims=2, n_spatial_dims=3](n_points=10, n_cells=5)
     point_data : {}
     cell_data  : {alpha: (), beta: (), zebra: ()}
     global_data: {}"""

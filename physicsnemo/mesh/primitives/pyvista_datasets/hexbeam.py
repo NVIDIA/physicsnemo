@@ -26,7 +26,7 @@ from physicsnemo.mesh.mesh import Mesh
 
 
 @require_version_spec("pyvista")
-def load(device: torch.device | str = "cpu") -> Mesh:
+def load(device: torch.device | str = "cpu") -> Mesh[3, 3]:
     """Load hexahedral beam mesh from PyVista examples.
 
     The hexahedral cells are automatically tessellated into
@@ -39,7 +39,7 @@ def load(device: torch.device | str = "cpu") -> Mesh:
 
     Returns
     -------
-    Mesh
+    Mesh[3, 3]
         Mesh with n_manifold_dims=3, n_spatial_dims=3.
     """
     import importlib

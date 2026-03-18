@@ -30,7 +30,7 @@ def load(
     n_circ: int = 32,
     n_height: int = 10,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[2, 3]:
     """Create a cylinder surface (with caps) in 3D space.
 
     Parameters
@@ -48,7 +48,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[2, 3]
         Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     if n_circ < 3:

@@ -29,7 +29,7 @@ def load(
     spacing: float = 0.5,
     n_points: int = 100,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[1, 2]:
     """Create an Archimedean spiral in 2D space.
 
     The spiral follows r = spacing * theta.
@@ -47,7 +47,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[1, 2]
         Mesh with n_manifold_dims=1, n_spatial_dims=2, n_cells=n_points-1.
     """
     if n_points < 2:

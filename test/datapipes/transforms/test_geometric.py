@@ -50,7 +50,6 @@ class TestTranslate:
 
         data = TensorDict(
             {"positions": torch.tensor([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]])},
-            batch_size=[],
         )
 
         result = transform(data)
@@ -69,7 +68,6 @@ class TestTranslate:
 
         data = TensorDict(
             {"positions": torch.tensor([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]])},
-            batch_size=[],
         )
 
         result = transform(data)
@@ -90,7 +88,6 @@ class TestTranslate:
                 "positions": torch.tensor([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
                 "offset": torch.tensor([5.0, 10.0, 15.0]),
             },
-            batch_size=[],
         )
 
         result = transform(data)
@@ -111,7 +108,6 @@ class TestTranslate:
                 "positions": torch.tensor([[0.0, 0.0, 0.0], [2.0, 2.0, 2.0]]),
                 "center_of_mass": torch.tensor([1.0, 1.0, 1.0]),
             },
-            batch_size=[],
         )
 
         result = transform(data)
@@ -134,7 +130,6 @@ class TestTranslate:
                 "positions": torch.tensor([[0.0, 0.0, 0.0]]),
                 "surface_points": torch.tensor([[5.0, 5.0, 5.0]]),
             },
-            batch_size=[],
         )
 
         result = transform(data)
@@ -154,7 +149,6 @@ class TestTranslate:
                 "positions": torch.tensor([[0.0, 0.0, 0.0]]),
                 "velocities": torch.tensor([[1.0, 2.0, 3.0]]),
             },
-            batch_size=[],
         )
 
         result = transform(data)
@@ -171,7 +165,6 @@ class TestTranslate:
 
         data = TensorDict(
             {"positions": torch.tensor([[0.0, 0.0, 0.0]])},
-            batch_size=[],
         )
 
         with pytest.raises(KeyError, match="nonexistent_key"):
@@ -187,7 +180,6 @@ class TestTranslate:
 
         data = TensorDict(
             {"positions": torch.tensor([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]])},
-            batch_size=[],
         )
 
         result = transform(data)
@@ -205,7 +197,6 @@ class TestTranslate:
 
         data = TensorDict(
             {"positions": torch.tensor([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]])},
-            batch_size=[],
         )
 
         result = transform(data)
@@ -248,7 +239,6 @@ class TestTranslate:
 
         data = TensorDict(
             {"positions": torch.tensor([[0.0, 0.0, 0.0]])},
-            batch_size=[],
         )
 
         # Should not raise, just skip the missing key
@@ -270,7 +260,7 @@ class TestTranslate:
         )
 
         original = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
-        data = TensorDict({"positions": original.clone()}, batch_size=[])
+        data = TensorDict({"positions": original.clone()})
 
         # Add then subtract should return to original
         result = add_transform(data)
@@ -300,7 +290,6 @@ class TestScale:
 
         data = TensorDict(
             {"positions": torch.tensor([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0]])},
-            batch_size=[],
         )
 
         result = transform(data)
@@ -318,7 +307,6 @@ class TestScale:
 
         data = TensorDict(
             {"positions": torch.tensor([[2.0, 4.0, 6.0], [4.0, 8.0, 12.0]])},
-            batch_size=[],
         )
 
         result = transform(data)
@@ -339,7 +327,6 @@ class TestScale:
                 "positions": torch.tensor([[1.0, 2.0, 3.0]]),
                 "velocities": torch.tensor([[2.0, 4.0, 6.0]]),
             },
-            batch_size=[],
         )
 
         result = transform(data)
@@ -359,7 +346,6 @@ class TestScale:
                 "positions": torch.tensor([[1.0, 2.0, 3.0]]),
                 "labels": torch.tensor([1, 2, 3]),
             },
-            batch_size=[],
         )
 
         result = transform(data)
@@ -376,7 +362,6 @@ class TestScale:
 
         data = TensorDict(
             {"positions": torch.tensor([[1.0, 1.0, 1.0]])},
-            batch_size=[],
         )
 
         result = transform(data)
@@ -394,7 +379,6 @@ class TestScale:
 
         data = TensorDict(
             {"positions": torch.tensor([[1.0, 2.0, 4.0]])},
-            batch_size=[],
         )
 
         result = transform(data)
@@ -438,7 +422,6 @@ class TestScale:
 
         data = TensorDict(
             {"positions": torch.tensor([[1.0, 1.0, 1.0], [2.0, 2.0, 2.0]])},
-            batch_size=[],
         )
 
         result = transform(data)
@@ -456,7 +439,6 @@ class TestScale:
 
         data = TensorDict(
             {"positions": torch.tensor([[1.0, 1.0, 1.0], [2.0, 2.0, 2.0]])},
-            batch_size=[],
         )
 
         result = transform(data)
@@ -473,7 +455,6 @@ class TestScale:
 
         data = TensorDict(
             {"positions": torch.tensor([[1.0, 1.0, 1.0]])},
-            batch_size=[],
         )
 
         # Should not raise, just skip the missing key
@@ -495,7 +476,7 @@ class TestScale:
         )
 
         original = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
-        data = TensorDict({"positions": original.clone()}, batch_size=[])
+        data = TensorDict({"positions": original.clone()})
 
         # Multiply then divide should return to original
         result = multiply_transform(data)
@@ -526,7 +507,6 @@ class TestReScaleBackwardsCompatibility:
 
         data = TensorDict(
             {"positions": torch.tensor([[2.0, 4.0, 6.0], [4.0, 8.0, 12.0]])},
-            batch_size=[],
         )
 
         result = transform(data)

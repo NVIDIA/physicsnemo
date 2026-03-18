@@ -29,7 +29,7 @@ def load(
     theta_resolution: int = 30,
     phi_resolution: int = 15,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[2, 3]:
     """Create a hemisphere surface in 3D space.
 
     Parameters
@@ -45,7 +45,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[2, 3]
         Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     if theta_resolution < 3:

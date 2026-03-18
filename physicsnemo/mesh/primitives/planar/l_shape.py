@@ -26,7 +26,7 @@ from physicsnemo.mesh.mesh import Mesh
 
 def load(
     size: float = 1.0, subdivisions: int = 5, device: torch.device | str = "cpu"
-) -> Mesh:
+) -> Mesh[2, 2]:
     """Create an L-shaped non-convex domain in 2D space.
 
     The L-shape consists of:
@@ -48,7 +48,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[2, 2]
         Mesh with n_manifold_dims=2, n_spatial_dims=2.
     """
     if subdivisions < 1:
