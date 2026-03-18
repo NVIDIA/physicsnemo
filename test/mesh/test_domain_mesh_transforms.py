@@ -80,6 +80,13 @@ class TestMapMeshes:
         assert torch.equal(dm2.global_data["Re"], tet_domain.global_data["Re"])
         assert torch.equal(dm2.global_data["AoA"], tet_domain.global_data["AoA"])
 
+    def test_global_data_is_independent_copy(self, tet_domain):
+        """Mutating transformed domain's global_data must not affect original."""
+        original_re = tet_domain.global_data["Re"].clone()
+        dm2 = tet_domain._map_meshes(lambda m: m.translate([1, 0, 0]))
+        dm2.global_data["Re"].fill_(0.0)
+        assert torch.equal(tet_domain.global_data["Re"], original_re)
+
     def test_works_with_no_boundaries(self, no_boundary_domain):
         dm2 = no_boundary_domain._map_meshes(lambda m: m.translate([1, 0, 0]))
         assert dm2.n_boundaries == 0
@@ -244,6 +251,42 @@ class TestPointDataToCellData:
     def test_converts_all_meshes(self, tet_domain):
         dm2 = tet_domain.point_data_to_cell_data()
         assert "temperature" in dm2.interior.cell_data.keys()
+
+
+class TestComputePointDerivatives:
+    """Tests for DomainMesh.compute_point_derivatives passthrough."""
+
+    def test_gradient_keys_appear_in_interior(self, tet_domain):
+        dm2 = tet_domain.compute_point_derivatives()
+        assert "temperature_gradient" in dm2.interior.point_data.keys()
+
+    def test_preserves_boundary_structure(self, tet_domain):
+        dm2 = tet_domain.compute_point_derivatives()
+        assert set(dm2.boundary_names) == set(tet_domain.boundary_names)
+
+
+class TestComputeCellDerivatives:
+    """Tests for DomainMesh.compute_cell_derivatives passthrough."""
+
+    def test_gradient_keys_appear_in_interior(self):
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.5, 0.5, 0.5],
+            ],
+            dtype=torch.float32,
+        )
+        cells = torch.tensor(
+            [[0, 1, 2, 4], [0, 1, 3, 4], [0, 2, 3, 4], [1, 2, 3, 4]]
+        )
+        interior = Mesh(points=points, cells=cells)
+        interior.cell_data["pressure"] = torch.randn(interior.n_cells)
+        dm = DomainMesh(interior=interior)
+        dm2 = dm.compute_cell_derivatives()
+        assert "pressure_gradient" in dm2.interior.cell_data.keys()
 
 
 ### Validation
