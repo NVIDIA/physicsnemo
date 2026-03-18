@@ -189,7 +189,7 @@ class DomainMesh:
         return DomainMesh(
             interior=fn(self.interior),
             boundaries=self.boundaries.apply(fn, call_on_nested=True),
-            global_data=self.global_data,
+            global_data=self.global_data.clone(),
         )
 
     if TYPE_CHECKING:
