@@ -17,9 +17,9 @@
 """Tests for partition_cells (discrete restricted Voronoi partition).
 
 Validates assignment correctness, area/normal/centroid accumulation, edge
-cases (single seed, empty clusters, non-surface meshes), and verifies that
-the BVH-accelerated path produces identical results to brute-force nearest
-neighbor.
+cases (single seed, empty clusters, non-surface meshes), input validation
+(device/dtype mismatch), and verifies that the kNN-accelerated path produces
+identical results to brute-force nearest neighbor across devices.
 """
 
 import pytest
@@ -350,3 +350,91 @@ class TestGridRobustness:
         r1 = partition_cells(mesh, seeds)
         r2 = partition_cells(mesh, seeds)
         assert torch.equal(r1.assignments, r2.assignments)
+
+
+### Input validation ###
+
+
+def assert_on_device(tensor: torch.Tensor, expected_device: str) -> None:
+    """Assert tensor is on expected device."""
+    actual_device = tensor.device.type
+    assert actual_device == expected_device, (
+        f"Device mismatch: tensor is on {actual_device!r}, expected {expected_device!r}"
+    )
+
+
+class TestInputValidation:
+    def test_dtype_mismatch_raises(self):
+        """Mismatched seeds/mesh dtypes must raise ValueError."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]],
+            dtype=torch.float64,
+        )
+        cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+        mesh = Mesh(points=points, cells=cells)
+        seeds = torch.tensor(
+            [[0.3, 0.3, 0.0], [0.7, 0.7, 0.0]], dtype=torch.float32
+        )
+        with pytest.raises(ValueError, match="dtype"):
+            partition_cells(mesh, seeds)
+
+    @pytest.mark.cuda
+    def test_device_mismatch_raises(self):
+        """Mismatched seeds/mesh devices must raise ValueError."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]],
+            dtype=torch.float64,
+        )
+        cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+        mesh = Mesh(points=points, cells=cells)  # CPU
+        seeds = torch.tensor(
+            [[0.3, 0.3, 0.0], [0.7, 0.7, 0.0]], dtype=torch.float64, device="cuda"
+        )
+        with pytest.raises(ValueError, match="device"):
+            partition_cells(mesh, seeds)
+
+
+### Device compatibility ###
+
+
+class TestDeviceCompat:
+    """Verify partition_cells works correctly on all available devices."""
+
+    def test_assignments_and_area_conservation(self, device):
+        """Assignment correctness and area conservation on target device."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]],
+            dtype=torch.float64,
+            device=device,
+        )
+        cells = torch.tensor([[0, 1, 2], [1, 3, 2]], device=device)
+        mesh = Mesh(points=points, cells=cells)
+        seeds = torch.tensor(
+            [[0.25, 0.25, 0.0], [0.75, 0.75, 0.0]], dtype=torch.float64, device=device
+        )
+
+        result = partition_cells(mesh, seeds)
+
+        assert result.assignments.tolist() == [0, 1]
+        assert result.cluster_areas.sum().item() == pytest.approx(
+            mesh.cell_areas.sum().item()
+        )
+        for field in result:
+            assert_on_device(field, device)
+
+    def test_normals_on_surface(self, device):
+        """Coplanar surface normals point along z on target device."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]],
+            dtype=torch.float64,
+            device=device,
+        )
+        cells = torch.tensor([[0, 1, 2], [1, 3, 2]], device=device)
+        mesh = Mesh(points=points, cells=cells)
+        seeds = torch.tensor(
+            [[0.5, 0.5, 0.0]], dtype=torch.float64, device=device
+        )
+
+        result = partition_cells(mesh, seeds)
+
+        assert abs(result.cluster_normals[0, 2].abs().item() - 1.0) < 1e-10
