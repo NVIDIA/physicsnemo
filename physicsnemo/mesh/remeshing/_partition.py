@@ -129,6 +129,19 @@ def partition_cells(
       centroid falls back to the seed position.
     """
     n_seeds = len(seeds)
+
+    ### Validate that seeds and mesh share the same device and dtype
+    if seeds.device != mesh.points.device:
+        raise ValueError(
+            f"`seeds` and `mesh` must be on the same device, "
+            f"got {seeds.device=} and {mesh.points.device=}"
+        )
+    if seeds.dtype != mesh.points.dtype:
+        raise ValueError(
+            f"`seeds` and `mesh` must have the same dtype, "
+            f"got {seeds.dtype=} and {mesh.points.dtype=}"
+        )
+
     device = seeds.device
     dtype = mesh.points.dtype
 
