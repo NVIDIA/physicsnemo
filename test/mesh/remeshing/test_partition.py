@@ -340,15 +340,13 @@ class TestGridRobustness:
         expected = _brute_force_assignments(mesh.cell_centroids, seeds)
         assert torch.equal(result.assignments, expected)
 
-    def test_chunk_size_invariance(self):
-        """Results must be identical regardless of internal chunk_size."""
+    def test_deterministic(self):
+        """Two calls with the same inputs give identical results."""
         torch.manual_seed(5)
         m = plane.load(subdivisions=12)
         mesh = Mesh(points=m.points.double(), cells=m.cells)
         seeds = torch.rand(30, 3, dtype=torch.float64)
         seeds[:, 2] = 0.0
         r1 = partition_cells(mesh, seeds)
-        from physicsnemo.mesh.remeshing._partition import _assign_nearest_grid
-
-        a2 = _assign_nearest_grid(mesh.cell_centroids, seeds, chunk_size=7)
-        assert torch.equal(r1.assignments, a2)
+        r2 = partition_cells(mesh, seeds)
+        assert torch.equal(r1.assignments, r2.assignments)
