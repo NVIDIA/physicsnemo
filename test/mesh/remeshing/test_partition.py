@@ -304,15 +304,17 @@ class TestGridRobustness:
         """
         mesh_pts = torch.tensor(
             [
-                [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0],
-                [50.0, 50.0, 50.0], [51.0, 50.0, 50.0], [50.0, 51.0, 50.0],
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [50.0, 50.0, 50.0],
+                [51.0, 50.0, 50.0],
+                [50.0, 51.0, 50.0],
             ],
             dtype=torch.float64,
         )
         mesh = Mesh(points=mesh_pts, cells=torch.tensor([[0, 1, 2], [3, 4, 5]]))
-        seeds = torch.tensor(
-            [[0.3, 0.3, 0.0], [0.7, 0.7, 0.0]], dtype=torch.float64
-        )
+        seeds = torch.tensor([[0.3, 0.3, 0.0], [0.7, 0.7, 0.0]], dtype=torch.float64)
         result = partition_cells(mesh, seeds)
         expected = _brute_force_assignments(mesh.cell_centroids, seeds)
         assert torch.equal(result.assignments, expected)
@@ -372,9 +374,7 @@ class TestInputValidation:
         )
         cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
         mesh = Mesh(points=points, cells=cells)
-        seeds = torch.tensor(
-            [[0.3, 0.3, 0.0], [0.7, 0.7, 0.0]], dtype=torch.float32
-        )
+        seeds = torch.tensor([[0.3, 0.3, 0.0], [0.7, 0.7, 0.0]], dtype=torch.float32)
         with pytest.raises(ValueError, match="dtype"):
             partition_cells(mesh, seeds)
 
@@ -431,9 +431,7 @@ class TestDeviceCompat:
         )
         cells = torch.tensor([[0, 1, 2], [1, 3, 2]], device=device)
         mesh = Mesh(points=points, cells=cells)
-        seeds = torch.tensor(
-            [[0.5, 0.5, 0.0]], dtype=torch.float64, device=device
-        )
+        seeds = torch.tensor([[0.5, 0.5, 0.0]], dtype=torch.float64, device=device)
 
         result = partition_cells(mesh, seeds)
 
