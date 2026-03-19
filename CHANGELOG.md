@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Adds GLOBE model (`physicsnemo.experimental.models.globe.model.GLOBE`)
 - Adds GLOBE AirFRANS example case (`examples/cfd/external_aerodynamics/globe/airfrans`)
+- Adds automatic support for `FSDP` and/or `ShardTensor` models in checkpoint save/load
+  functionality
 - PhysicsNeMo-Mesh now supports conversion from PyVista/VTK/VTU meshes that may
   contain polyhedral cells.
 - In PhysicsNeMo-Mesh, adds `Mesh.to_point_cloud()`, `.to_edge_graph()`, and
@@ -25,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   using notation like `Mesh[2, 3]` for a 2D manifold in 3D space.
 - Adds adjacency caching to PhysicsNeMo-Mesh `Mesh` objects, allowing efficient
   reuse of neighbor information.
+- Adds `DomainMesh` class for grouping an interior mesh with named boundary
+  meshes and domain-level metadata, with passthrough geometric transforms
+  (translate, rotate, scale, transform) and data operations.
+- Allows selective per-field transformation of `Mesh` objects: `transform_point_data`,
+  `transform_cell_data`, and `transform_global_data` now accept `bool | TensorDict`
+  (or plain `dict` for convenience).
 - Adds `physicsnemo.mesh.remeshing` subpackage with `partition_cells()` for
   creating Voronoi regions around seed points. BVH-accelerated.
 
@@ -50,6 +58,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 ### Dependencies
+
+- Increments minimum viable PyTorch version to `torch>=2.5.0` to support FSDP better
 
 ## [2.0.0] - 2026-03-09
 

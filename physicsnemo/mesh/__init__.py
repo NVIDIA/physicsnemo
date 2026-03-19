@@ -14,4 +14,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from physicsnemo.mesh.domain_mesh import DomainMesh
 from physicsnemo.mesh.mesh import Mesh

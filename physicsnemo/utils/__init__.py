@@ -18,6 +18,11 @@ from .capture import (
     StaticCaptureEvaluateNoGrad,
     StaticCaptureTraining,
 )
-from .checkpoint import get_checkpoint_dir, load_checkpoint, save_checkpoint
+from .checkpoint import (
+    get_checkpoint_dir,
+    load_checkpoint,
+    load_model_weights,
+    save_checkpoint,
+)
 from .logging import LaunchLogger, PythonLogger, RankZeroLoggingWrapper
 from .profiling import Profiler

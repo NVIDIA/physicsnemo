@@ -2178,9 +2178,9 @@ class Mesh:
         angle: float,
         axis: torch.Tensor | list | tuple | Literal["x", "y", "z"] | None = None,
         center: torch.Tensor | list | tuple | None = None,
-        transform_point_data: bool = False,
-        transform_cell_data: bool = False,
-        transform_global_data: bool = False,
+        transform_point_data: bool | TensorDict = False,
+        transform_cell_data: bool | TensorDict = False,
+        transform_global_data: bool | TensorDict = False,
     ) -> "Mesh":
         """Rotate the mesh about an axis by a specified angle.
 
@@ -2222,9 +2222,9 @@ class Mesh:
         self,
         factor: float | torch.Tensor,
         center: torch.Tensor | None = None,
-        transform_point_data: bool = False,
-        transform_cell_data: bool = False,
-        transform_global_data: bool = False,
+        transform_point_data: bool | TensorDict = False,
+        transform_cell_data: bool | TensorDict = False,
+        transform_global_data: bool | TensorDict = False,
         assume_invertible: bool | None = None,
     ) -> "Mesh":
         """Scale the mesh by specified factor(s).
@@ -2267,9 +2267,9 @@ class Mesh:
     def transform(
         self,
         matrix: torch.Tensor,
-        transform_point_data: bool = False,
-        transform_cell_data: bool = False,
-        transform_global_data: bool = False,
+        transform_point_data: bool | TensorDict = False,
+        transform_cell_data: bool | TensorDict = False,
+        transform_global_data: bool | TensorDict = False,
         assume_invertible: bool | None = None,
     ) -> "Mesh":
         """Apply a linear transformation to the mesh.

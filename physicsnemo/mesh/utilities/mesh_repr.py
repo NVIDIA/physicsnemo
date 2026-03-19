@@ -53,23 +53,26 @@ def format_mesh_repr(mesh: "Mesh") -> str:
 
     first_line = f"{class_name}{dim_sig}({', '.join(parts)})"
 
-    ### Format the data fields with proper alignment
-    # We need to align the colons for point_data, cell_data, and global_data
+    ### Format non-empty data fields with proper alignment
     data_fields = ["point_data", "cell_data", "global_data"]
-    max_field_len = max(len(field) for field in data_fields)
+    populated = [
+        (name, getattr(mesh, name))
+        for name in data_fields
+        if len(list(getattr(mesh, name).keys())) > 0
+    ]
 
+    if not populated:
+        return first_line
+
+    max_field_len = max(len(name) for name, _ in populated)
     lines = [first_line]
 
-    for field_name in data_fields:
-        td = getattr(mesh, field_name)
-        # Format the field with proper alignment
+    for field_name, td in populated:
         formatted_td = _format_tensordict_repr(
             td,
             batch_dims=len(td.batch_size) if hasattr(td, "batch_size") else 0,
             indent_level=1,
         )
-
-        # Add the field line with aligned colon
         padded_field = field_name.ljust(max_field_len)
         lines.append(f"    {padded_field}: {formatted_td}")
 
