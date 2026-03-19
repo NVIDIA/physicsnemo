@@ -101,6 +101,11 @@ def partition_cells(
         Named tuple with ``assignments``, ``cluster_areas``,
         ``cluster_normals``, and ``cluster_centroids``.
 
+    Raises
+    ------
+    ValueError
+        If ``seeds`` and ``mesh`` have different devices or dtypes.
+
     Examples
     --------
     >>> import torch
