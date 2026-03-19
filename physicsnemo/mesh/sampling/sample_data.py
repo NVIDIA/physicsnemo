@@ -29,6 +29,7 @@ from tensordict import TensorDict
 
 from physicsnemo.mesh.neighbors._adjacency import Adjacency, build_adjacency_from_pairs
 from physicsnemo.mesh.spatial import BVH
+from physicsnemo.nn.functional.knn import knn
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -491,8 +492,6 @@ def find_nearest_cells(
         - projected_points: centroids of nearest cells, shape
           ``(n_queries, n_spatial_dims)``
     """
-    from physicsnemo.nn.functional.knn import knn
-
     cell_centroids = mesh.cell_centroids  # (n_cells, n_spatial_dims)
     cell_indices, _ = knn(cell_centroids, query_points, k=1)
     cell_indices = cell_indices.squeeze(1)
