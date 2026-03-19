@@ -39,8 +39,7 @@ import torch.nn.functional as F
 from jaxtyping import Float, Int
 
 from physicsnemo.mesh.mesh import Mesh
-from physicsnemo.mesh.sampling.sample_data import find_nearest_cells
-from physicsnemo.mesh.spatial import BVH
+from physicsnemo.nn.functional.knn import knn
 
 
 class CellPartition(NamedTuple):
@@ -83,9 +82,9 @@ def partition_cells(
     approximates the Voronoi partition.  The approximation is exact when the
     original mesh is infinitely fine relative to the seed spacing.
 
-    The nearest-neighbor search uses a BVH (bounding volume hierarchy) built
-    over the seed points, giving O(N log N) construction + O(M log N) query
-    complexity rather than O(M * N) brute force.
+    The nearest-neighbor search uses :func:`~physicsnemo.nn.functional.knn.knn`
+    which auto-dispatches to the optimal backend (cuML on GPU, scipy KDTree
+    on CPU) for O(M log N) query complexity.
 
     Parameters
     ----------
@@ -139,16 +138,10 @@ def partition_cells(
     cell_areas = mesh.cell_areas  # (M,)
     has_normals = mesh.codimension == 1
 
-    ### Assign each cell to its nearest seed via BVH-accelerated search.
-    # Wrap seeds as a point cloud Mesh (single-vertex cells) so the existing
-    # LBVH + expanding-radius search can be reused.
-    # Complexity: O(N log N) build + O(M log N) query.
-    seed_mesh = Mesh(
-        points=seeds,
-        cells=torch.arange(n_seeds, device=device).unsqueeze(1),
-    )
-    bvh = BVH.from_mesh(seed_mesh)
-    assignments, _ = find_nearest_cells(seed_mesh, cell_centroids, bvh=bvh)
+    ### Assign each cell to its nearest seed via kNN search (k=1).
+    # Auto-dispatches: cuML on GPU, scipy KDTree on CPU.
+    assignments, _ = knn(seeds, cell_centroids, k=1)
+    assignments = assignments.squeeze(1)
 
     ### Accumulate areas per cluster
     cluster_areas = torch.zeros(n_seeds, dtype=cell_areas.dtype, device=device)
