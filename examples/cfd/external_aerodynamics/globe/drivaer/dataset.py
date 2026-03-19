@@ -129,15 +129,30 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
 
     @staticmethod
     def _subsample_mesh(
-        mesh: Mesh, n_cells: int, *, geometry_only: bool = True
+        mesh: Mesh,
+        n_cells: int,
+        *,
+        geometry_only: bool = True,
+        voronoi: bool = False,
     ) -> Mesh:
-        """Randomly subsample cells and compute Voronoi-corrected areas/normals.
+        """Randomly subsample cells with area correction.
 
-        Selects ``n_cells`` random cells, then uses :func:`partition_cells` to
-        assign every original cell to its nearest subsampled centroid and
-        accumulate areas and normals.  This gives locally-correct effective
-        areas that approximate the surface Voronoi diagram of the subsampled
-        centroids, rather than a single global rescaling factor.
+        Selects ``n_cells`` random cells, compacts away unreferenced vertices,
+        and corrects cell areas so that the subsampled mesh better represents
+        the original surface.
+
+        Two area-correction strategies are available:
+
+        * **Voronoi** (``voronoi=True``): uses :func:`partition_cells` to
+          assign every original cell to its nearest subsampled centroid and
+          accumulate areas and normals.  This gives locally-correct effective
+          areas that approximate the surface Voronoi diagram of the subsampled
+          centroids, at the cost of an O(N) nearest-neighbour pass over the
+          full mesh each time a sample is loaded.
+        * **Uniform** (``voronoi=False``): rescales all subsampled cell areas
+          by a single global factor so that total area is conserved.  Much
+          faster, but every subsampled cell gets the same scale factor
+          regardless of local density.
 
         Args:
             mesh: Source Mesh to subsample from.
@@ -146,9 +161,12 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
                 return a geometry-only Mesh (used for GLOBE boundary input).
                 If ``False``, preserve ``point_data`` and ``cell_data``
                 (used for visualization).
+            voronoi: If ``True``, use Voronoi-corrected areas and normals
+                via :func:`partition_cells`.  If ``False`` (default), use
+                uniform area rescaling (faster, but less accurate).
 
         Returns:
-            Mesh with ``n_cells`` cells and Voronoi-corrected cache.
+            Mesh with ``n_cells`` cells and corrected area cache.
         """
         indices = torch.randperm(mesh.n_cells)[:n_cells]
         boundary = mesh.slice_cells(indices).clean(
@@ -160,9 +178,17 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         if geometry_only:
             boundary = Mesh(points=boundary.points, cells=boundary.cells)
 
-        partition = partition_cells(mesh, seeds=boundary.cell_centroids)
-        boundary._cache["cell", "areas"] = partition.cluster_areas
-        boundary._cache["cell", "normals"] = partition.cluster_normals
+        if voronoi:
+            partition = partition_cells(mesh, seeds=boundary.cell_centroids)
+            boundary._cache["cell", "areas"] = partition.cluster_areas
+            boundary._cache["cell", "normals"] = partition.cluster_normals
+        else:
+            total_area = mesh.cell_areas.sum()
+            raw_areas = boundary.cell_areas
+            boundary._cache["cell", "areas"] = raw_areas * (
+                total_area / raw_areas.sum()
+            )
+
         return boundary
 
     @classmethod
