@@ -256,6 +256,7 @@ def test_checkpoint_integrity(
     cfg_diffusion.training.domain_parallel_size = 2
     cfg_diffusion.training.batch_size = 2
     cfg_diffusion.training.rundir = _setup_rundir(tmp_path, dist.world_size)
+    cfg_diffusion.training.seed = 0
 
     # create trainer, train a bit and save checkpoint
     t0 = trainer.Trainer(cfg_diffusion.copy())
@@ -337,6 +338,124 @@ def test_checkpoint_integrity(
                         )
 
         torch.distributed.barrier()
+
+
+@pytest.mark.parametrize(
+    "domain_parallel_size, batch_size",
+    [(1, 4), (2, 2)],
+    ids=["fsdp_only", "fsdp_shard_tensor"],
+)
+def test_seeding(
+    tmp_path: Path,
+    cfg_diffusion: DictConfig,
+    *,
+    domain_parallel_size: int,
+    batch_size: int,
+):
+    """Verify sigma seeding under FSDP and FSDP+ShardTensor.
+
+    In FSDP+ShardTensor (domain_parallel_size > 1) with a (2, 2) mesh of
+    ranks ``[[0, 1], [2, 3]]``:
+
+      - Domain (model-parallel) groups are {0, 1} and {2, 3}.
+        Ranks within the same domain group must see **identical** sigma
+        (enforced by ``replicate_in_mesh`` broadcast).
+      - DDP (data-parallel) groups are {0, 2} and {1, 3}.
+        Ranks in different DDP groups must see **different** sigma
+        (they process different data and have distinct RNG seeds).
+
+    In FSDP-only (domain_parallel_size == 1):
+
+      - Every rank is its own data-parallel replica with a unique RNG seed,
+        so all sigma values must be distinct.
+
+    The check is run once at the start, then again after several training
+    steps, a validation pass, and a checkpoint save, to confirm that none of
+    those operations silently reset the seeding behaviour.
+    """
+    dist = DistributedManager()
+    if dist.world_size != 4:
+        pytest.skip(
+            f"Skipping: test_seeding requires exactly 4 processes, "
+            f"current: {dist.world_size}."
+        )
+
+    cfg = cfg_diffusion.copy()
+    cfg.training.domain_parallel_size = domain_parallel_size
+    cfg.training.batch_size = batch_size
+    cfg.training.seed = 42
+    cfg.training.total_train_steps = 20
+    cfg.training.rundir = _setup_rundir(tmp_path, dist.world_size)
+    if "regression" in cfg.model.diffusion_conditions:
+        cfg.model.diffusion_conditions.remove("regression")
+
+    t = trainer.Trainer(cfg)
+
+    # -- instrument the loss to capture post-broadcast sigma values ----------
+    captured_sigmas: list[torch.Tensor] = []
+    _orig_replicate = t.loss_fn.replicate_in_mesh
+
+    def _capturing_replicate(x, y):
+        result = _orig_replicate(x, y)
+        local = result.to_local() if hasattr(result, "to_local") else result
+        captured_sigmas.append(local.detach().cpu())
+        return result
+
+    t.loss_fn.replicate_in_mesh = _capturing_replicate
+
+    # -- helper: gather sigmas and assert the expected pattern ---------------
+    def _check_sigma_pattern(label: str) -> None:
+        assert captured_sigmas, f"[{label}] No sigma was captured"
+        sigma_val = captured_sigmas[-1].flatten()[0].item()
+
+        buf = torch.tensor([sigma_val], device=dist.device)
+        gathered = [torch.zeros(1, device=dist.device) for _ in range(dist.world_size)]
+        torch.distributed.all_gather(gathered, buf)
+        sigmas = [g.item() for g in gathered]
+
+        if domain_parallel_size > 1:
+            # domain groups {0,1} and {2,3} must agree internally
+            assert sigmas[0] == sigmas[1], (
+                f"[{label}] Domain group {{0,1}} sigma mismatch: "
+                f"{sigmas[0]} vs {sigmas[1]}"
+            )
+            assert sigmas[2] == sigmas[3], (
+                f"[{label}] Domain group {{2,3}} sigma mismatch: "
+                f"{sigmas[2]} vs {sigmas[3]}"
+            )
+            # DDP groups {0,2} and {1,3} must differ
+            assert sigmas[0] != sigmas[2], (
+                f"[{label}] DDP groups should differ: rank 0 = rank 2 = {sigmas[0]}"
+            )
+        else:
+            # pure FSDP: every rank is a distinct data-parallel replica
+            for i in range(dist.world_size):
+                for j in range(i + 1, dist.world_size):
+                    assert sigmas[i] != sigmas[j], (
+                        f"[{label}] Ranks {i} and {j} should differ: both = {sigmas[i]}"
+                    )
+
+    # ---- Phase 1: check sigma pattern at the very first step ----
+    captured_sigmas.clear()
+    t.train_step()
+    t.total_steps += 1
+    _check_sigma_pattern("initial step")
+
+    # ---- Phase 2: train, validate, and save a checkpoint ----
+    captured_sigmas.clear()
+    for _ in range(4):
+        t.train_step()
+        t.total_steps += 1
+    t.validate()
+    t.save_checkpoint()
+
+    # ---- Phase 3: re-check sigma pattern after the round-trip ----
+    captured_sigmas.clear()
+    t.train_step()
+    t.total_steps += 1
+    _check_sigma_pattern("after training/validation/checkpoint")
+
+    torch.distributed.barrier()
 
 
 @pytest.mark.parametrize("net_architecture", ["unet", "dit"])

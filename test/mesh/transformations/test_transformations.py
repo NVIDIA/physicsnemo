@@ -33,7 +33,9 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.transformations.geometric import (
     rotate,
+    rotation_matrix,
     scale,
+    scale_matrix,
     transform,
     translate,
 )
@@ -1536,6 +1538,207 @@ class TestEdgeCases:
             mesh._cache.get(("cell", "areas"), None) * 4.0,
             atol=1e-6,
         )
+
+
+class TestMatrixHelpers:
+    """Tests for rotation_matrix() and scale_matrix() public helpers."""
+
+    def test_rotation_matrix_2d(self):
+        R = rotation_matrix(
+            angle=np.pi / 2,
+            axis=None,
+            n_spatial_dims=2,
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+        )
+        assert R.shape == (2, 2)
+        expected = torch.tensor([[0.0, -1.0], [1.0, 0.0]])
+        assert torch.allclose(R, expected, atol=1e-6)
+
+    def test_rotation_matrix_3d_string_axis(self):
+        R = rotation_matrix(
+            angle=np.pi / 2,
+            axis="z",
+            n_spatial_dims=3,
+            device=torch.device("cpu"),
+            dtype=torch.float64,
+        )
+        assert R.shape == (3, 3)
+        assert R.dtype == torch.float64
+
+    def test_scale_matrix_uniform(self):
+        M = scale_matrix(
+            factor=2.0,
+            n_spatial_dims=3,
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+        )
+        assert torch.equal(M, torch.eye(3) * 2.0)
+
+    def test_scale_matrix_nonuniform(self):
+        M = scale_matrix(
+            factor=[1.0, 2.0, 3.0],
+            n_spatial_dims=3,
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+        )
+        assert torch.equal(M, torch.diag(torch.tensor([1.0, 2.0, 3.0])))
+
+
+class TestSelectiveTransform:
+    """Tests for selective field transformation via dict/TensorDict masks."""
+
+    @pytest.fixture
+    def mesh_with_mixed_data(self):
+        """3D mesh with both spatial (velocity) and non-spatial (features) point_data."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            dtype=torch.float32,
+        )
+        cells = torch.tensor([[0, 1, 2, 3]])
+        mesh = Mesh(points=points, cells=cells)
+        mesh.point_data["velocity"] = torch.tensor(
+            [[1.0, 0.0, 0.0]] * 4,
+            dtype=torch.float32,
+        )
+        mesh.point_data["features"] = torch.tensor(
+            [[1.0, 2.0, 3.0]] * 4,
+            dtype=torch.float32,
+        )
+        mesh.point_data["pressure"] = torch.tensor(
+            [100.0, 200.0, 300.0, 400.0],
+            dtype=torch.float32,
+        )
+        return mesh
+
+    def test_selective_transforms_named_key_only(self, mesh_with_mixed_data):
+        """Only the named key in the dict mask is transformed."""
+        mesh2 = rotate(
+            mesh_with_mixed_data,
+            angle=np.pi / 2,
+            axis="z",
+            transform_point_data={"velocity": True},
+        )
+        assert mesh2.point_data["velocity"][0, 0].item() == pytest.approx(0.0, abs=1e-6)
+        assert mesh2.point_data["velocity"][0, 1].item() == pytest.approx(1.0, abs=1e-6)
+        assert torch.equal(
+            mesh2.point_data["features"], mesh_with_mixed_data.point_data["features"]
+        )
+
+    def test_selective_skips_unmentioned_keys(self, mesh_with_mixed_data):
+        """Keys absent from the mask are not transformed."""
+        mesh2 = rotate(
+            mesh_with_mixed_data,
+            angle=np.pi / 2,
+            axis="z",
+            transform_point_data={"velocity": True},
+        )
+        assert torch.equal(
+            mesh2.point_data["features"], mesh_with_mixed_data.point_data["features"]
+        )
+        assert torch.equal(
+            mesh2.point_data["pressure"], mesh_with_mixed_data.point_data["pressure"]
+        )
+
+    def test_backward_compat_true(self, mesh_with_mixed_data):
+        """transform_point_data=True still transforms all compatible fields."""
+        mesh2 = rotate(
+            mesh_with_mixed_data,
+            angle=np.pi / 2,
+            axis="z",
+            transform_point_data=True,
+        )
+        assert not torch.equal(
+            mesh2.point_data["velocity"], mesh_with_mixed_data.point_data["velocity"]
+        )
+        assert not torch.equal(
+            mesh2.point_data["features"], mesh_with_mixed_data.point_data["features"]
+        )
+
+    def test_backward_compat_false(self, mesh_with_mixed_data):
+        """transform_point_data=False still transforms nothing."""
+        mesh2 = rotate(
+            mesh_with_mixed_data,
+            angle=np.pi / 2,
+            axis="z",
+            transform_point_data=False,
+        )
+        assert torch.equal(
+            mesh2.point_data["velocity"], mesh_with_mixed_data.point_data["velocity"]
+        )
+
+    def test_selective_scale(self, mesh_with_mixed_data):
+        """Selective scale transforms only named keys."""
+        mesh2 = scale(
+            mesh_with_mixed_data,
+            factor=2.0,
+            transform_point_data={"velocity": True},
+        )
+        expected = mesh_with_mixed_data.point_data["velocity"] * 2.0
+        assert torch.allclose(mesh2.point_data["velocity"], expected)
+        assert torch.equal(
+            mesh2.point_data["features"], mesh_with_mixed_data.point_data["features"]
+        )
+
+    def test_selective_transform_with_matrix(self, mesh_with_mixed_data):
+        """Selective transform via matrix transforms only named keys."""
+        R = torch.tensor(
+            [
+                [0.0, -1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ]
+        )
+        mesh2 = transform(
+            mesh_with_mixed_data,
+            R,
+            transform_point_data={"velocity": True},
+        )
+        assert mesh2.point_data["velocity"][0, 0].item() == pytest.approx(0.0, abs=1e-6)
+        assert mesh2.point_data["velocity"][0, 1].item() == pytest.approx(1.0, abs=1e-6)
+        assert torch.equal(
+            mesh2.point_data["features"], mesh_with_mixed_data.point_data["features"]
+        )
+
+    def test_nested_mask(self):
+        """Selective mask works with nested TensorDict point_data."""
+        from tensordict import TensorDict as TD
+
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            dtype=torch.float32,
+        )
+        cells = torch.tensor([[0, 1, 2, 3]])
+        mesh = Mesh(points=points, cells=cells)
+        mesh.point_data["flow"] = TD(
+            {
+                "velocity": torch.tensor([[1.0, 0.0, 0.0]] * 4),
+                "density": torch.tensor([[1.0, 2.0, 3.0]] * 4),
+            },
+            batch_size=[4],
+        )
+        mesh.point_data["label"] = torch.tensor([0.0, 1.0, 2.0, 3.0])
+
+        mesh2 = rotate(
+            mesh,
+            angle=np.pi / 2,
+            axis="z",
+            transform_point_data={"flow": {"velocity": True}},
+        )
+        ### velocity inside nested "flow" should be rotated
+        assert mesh2.point_data["flow", "velocity"][0, 0].item() == pytest.approx(
+            0.0, abs=1e-6
+        )
+        assert mesh2.point_data["flow", "velocity"][0, 1].item() == pytest.approx(
+            1.0, abs=1e-6
+        )
+        ### density inside nested "flow" should be unchanged
+        assert torch.equal(
+            mesh2.point_data["flow", "density"],
+            mesh.point_data["flow", "density"],
+        )
+        ### top-level "label" should be unchanged
+        assert torch.equal(mesh2.point_data["label"], mesh.point_data["label"])
 
 
 if __name__ == "__main__":
