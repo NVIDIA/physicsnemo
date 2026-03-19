@@ -144,7 +144,7 @@ def partition_cells(
     assignments = assignments.squeeze(1)
 
     ### Accumulate areas per cluster
-    cluster_areas = torch.zeros(n_seeds, dtype=cell_areas.dtype, device=device)
+    cluster_areas = torch.zeros(n_seeds, dtype=dtype, device=device)
     cluster_areas.scatter_add_(0, assignments, cell_areas)
 
     ### Accumulate area-weighted normals, then normalize to unit length
