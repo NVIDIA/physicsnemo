@@ -1,3 +1,4 @@
 pyproj
 pydantic
 torch>=2.10
+tensorboard
