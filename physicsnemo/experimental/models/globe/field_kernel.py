@@ -1757,6 +1757,7 @@ class MultiscaleKernel(Module):
             },
             device=device,
         )
+        global_data = global_data.copy()
         global_data["log_reference_length_ratios"] = log_ratios
 
         ### Precompute near-field chunk sizes outside the checkpoint boundary.
