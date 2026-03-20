@@ -15,11 +15,11 @@
 # limitations under the License.
 
 """
-Mesh readers - Load physicsnemo Mesh from physicsnemo mesh format (e.g. .pt).
+Mesh readers - Load physicsnemo Mesh / DomainMesh from physicsnemo mesh format (.pt).
 
 MeshReader returns (Mesh, metadata) per sample.
-MultiMeshReader returns (TensorDict[str, Mesh], metadata) per sample.
-Both use Mesh.load(path) directly; no conversion from other formats.
+DomainMeshReader returns (DomainMesh, metadata) per sample.
+Both use tensorclass .load(path) directly; no conversion from other formats.
 """
 
 from __future__ import annotations
@@ -28,10 +28,8 @@ import logging
 from pathlib import Path
 from typing import Any, Iterator
 
-from tensordict import TensorDict
-
 from physicsnemo.datapipes.registry import register
-from physicsnemo.mesh import Mesh
+from physicsnemo.mesh import DomainMesh, Mesh
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +77,7 @@ class MeshReader:
 
         self._paths = sorted(self._root.glob(pattern))
         if not self._paths:
-            raise ValueError(
-                f"No paths matching {pattern!r} found in {self._root}"
-            )
+            raise ValueError(f"No paths matching {pattern!r} found in {self._root}")
         self._length = len(self._paths)
 
     def _load_sample(self, index: int) -> Mesh:
@@ -116,36 +112,37 @@ class MeshReader:
 
 
 @register()
-class MultiMeshReader:
+class DomainMeshReader:
     r"""
-    Read multi-mesh samples: one sample per subdirectory, each with multiple mesh files.
+    Read DomainMesh samples from a directory of physicsnemo mesh files.
 
-    Each sample is a TensorDict[str, Mesh]. Returns (TensorDict[str, Mesh], metadata).
-    Uses Mesh.load(path) for physicsnemo mesh format (currently .pt).
+    Each sample is one DomainMesh (interior + named boundaries + global_data).
+    Returns (DomainMesh, metadata) per index.
+    Uses DomainMesh.load(path) for physicsnemo mesh format (currently .pt).
     """
 
     def __init__(
         self,
         path: Path | str,
         *,
-        mesh_pattern: str = f"*{DEFAULT_MESH_EXTENSION}",
+        pattern: str = f"**/*{DEFAULT_MESH_EXTENSION}",
         include_index_in_metadata: bool = True,
     ) -> None:
         """
-        Initialize the multi-mesh reader.
+        Initialize the domain mesh reader.
 
         Parameters
         ----------
         path : Path or str
-            Root directory; each direct subdirectory is one sample.
-        mesh_pattern : str, optional
-            Glob pattern for mesh files inside each sample subdirectory.
-            Default matches ``*.pt``.
+            Root directory containing DomainMesh files (e.g. .pt archives).
+        pattern : str, optional
+            Glob pattern for DomainMesh paths under ``path``.
+            Default matches ``**/*.pt``.
         include_index_in_metadata : bool, default=True
             If True, include sample index in metadata.
         """
         self._root = Path(path)
-        self._mesh_pattern = mesh_pattern
+        self._pattern = pattern
         self.include_index_in_metadata = include_index_in_metadata
 
         if not self._root.exists():
@@ -153,52 +150,29 @@ class MultiMeshReader:
         if not self._root.is_dir():
             raise ValueError(f"Path must be a directory: {self._root}")
 
-        self._sample_dirs = sorted(
-            d for d in self._root.iterdir() if d.is_dir()
-        )
-        if not self._sample_dirs:
-            raise ValueError(
-                f"No subdirectories found in {self._root}"
-            )
-        self._length = len(self._sample_dirs)
+        self._paths = sorted(self._root.glob(pattern))
+        if not self._paths:
+            raise ValueError(f"No paths matching {pattern!r} found in {self._root}")
+        self._length = len(self._paths)
 
-    def _load_sample(self, index: int) -> TensorDict:
-        """Load all meshes in the sample subdirectory as TensorDict[str, Mesh]."""
-        sample_dir = self._sample_dirs[index]
-        mesh_paths = sorted(sample_dir.glob(self._mesh_pattern))
-        if not mesh_paths:
-            raise ValueError(
-                f"No mesh files matching {self._mesh_pattern!r} in {sample_dir}"
-            )
-        out = {}
-        for p in mesh_paths:
-            # Use stem (filename without extension) as key
-            key = p.stem
-            out[key] = Mesh.load(p)
-        return TensorDict(out, batch_size=[])
-
-    def _get_sample_metadata(self, index: int) -> dict[str, Any]:
-        """Return metadata for the sample (e.g. source dir and mesh names)."""
-        sample_dir = self._sample_dirs[index]
-        mesh_paths = sorted(sample_dir.glob(self._mesh_pattern))
-        return {
-            "source_dir": str(sample_dir),
-            "mesh_names": [p.stem for p in mesh_paths],
-        }
+    def _load_sample(self, index: int) -> DomainMesh:
+        """Load a single DomainMesh from disk."""
+        return DomainMesh.load(self._paths[index])
 
     def __len__(self) -> int:
         return self._length
 
-    def __getitem__(
-        self, index: int
-    ) -> tuple[TensorDict, dict[str, Any]]:
-        data = self._load_sample(index)
-        metadata = self._get_sample_metadata(index)
+    def __getitem__(self, index: int) -> tuple[DomainMesh, dict[str, Any]]:
+        dm = self._load_sample(index)
+        metadata: dict[str, Any] = {
+            "source_path": str(self._paths[index]),
+            "boundary_names": dm.boundary_names,
+        }
         if self.include_index_in_metadata:
             metadata["index"] = index
-        return data, metadata
+        return dm, metadata
 
-    def __iter__(self) -> Iterator[tuple[TensorDict, dict[str, Any]]]:
+    def __iter__(self) -> Iterator[tuple[DomainMesh, dict[str, Any]]]:
         for i in range(len(self)):
             try:
                 yield self[i]
@@ -207,4 +181,4 @@ class MultiMeshReader:
                 raise RuntimeError(f"Sample {i} failed: {e}") from e
 
     def __repr__(self) -> str:
-        return f"MultiMeshReader(path={self._root!r}, len={len(self)})"
+        return f"DomainMeshReader(path={self._root!r}, len={len(self)})"

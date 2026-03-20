@@ -26,7 +26,7 @@ from typing import Optional
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.mesh import Mesh
+from physicsnemo.mesh import DomainMesh, Mesh
 
 
 def apply_to_tensordict_mesh(
@@ -78,6 +78,29 @@ class MeshTransform(ABC):
             Transformed mesh.
         """
         raise NotImplementedError
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Apply this transform to a DomainMesh.
+
+        Default: broadcasts ``__call__`` to interior and all boundaries
+        via :meth:`DomainMesh._map_meshes`, leaving domain-level
+        ``global_data`` unchanged.
+
+        Override in subclasses that need domain-aware behavior (e.g.
+        transforms that modify ``global_data``, random augmentations
+        that must sample parameters once, or centering transforms).
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh.
+
+        Returns
+        -------
+        DomainMesh
+            Transformed domain mesh.
+        """
+        return domain._map_meshes(self)
 
     def to(self, device: torch.device | str) -> MeshTransform:
         """Move any internal tensors to the specified device."""

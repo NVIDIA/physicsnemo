@@ -26,7 +26,7 @@ Readers are responsible for:
 
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.readers.hdf5 import HDF5Reader
-from physicsnemo.datapipes.readers.mesh import MeshReader, MultiMeshReader
+from physicsnemo.datapipes.readers.mesh import DomainMeshReader, MeshReader
 from physicsnemo.datapipes.readers.numpy import NumpyReader
 from physicsnemo.datapipes.readers.tensorstore_zarr import TensorStoreZarrReader
 from physicsnemo.datapipes.readers.vtk import VTKReader
@@ -40,5 +40,5 @@ __all__ = [
     "VTKReader",
     "TensorStoreZarrReader",
     "MeshReader",
-    "MultiMeshReader",
+    "DomainMeshReader",
 ]

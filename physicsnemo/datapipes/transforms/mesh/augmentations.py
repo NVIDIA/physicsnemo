@@ -27,7 +27,7 @@ import torch
 
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
-from physicsnemo.mesh import Mesh
+from physicsnemo.mesh import DomainMesh, Mesh
 
 
 @register()
@@ -49,14 +49,26 @@ class RandomScaleMesh(MeshTransform):
         self.transform_global_data = transform_global_data
         self._generator = generator
 
-    def __call__(self, mesh: Mesh) -> Mesh:
+    def _sample_factor(self, device: torch.device) -> float:
         low, high = self.scale_range
-        factor = (
+        return (
             low
             + (high - low)
-            * torch.rand(1, device=mesh.points.device, generator=self._generator).item()
+            * torch.rand(1, device=device, generator=self._generator).item()
         )
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        factor = self._sample_factor(mesh.points.device)
         return mesh.scale(
+            factor,
+            transform_point_data=self.transform_point_data,
+            transform_cell_data=self.transform_cell_data,
+            transform_global_data=self.transform_global_data,
+        )
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        factor = self._sample_factor(domain.interior.points.device)
+        return domain.scale(
             factor,
             transform_point_data=self.transform_point_data,
             transform_cell_data=self.transform_cell_data,
@@ -82,21 +94,35 @@ class RandomTranslateMesh(MeshTransform):
         self.max_offset = max_offset
         self._generator = generator
 
-    def __call__(self, mesh: Mesh) -> Mesh:
-        n = mesh.n_spatial_dims
+    def _sample_offset(
+        self, n_spatial_dims: int, device: torch.device, dtype: torch.dtype
+    ) -> torch.Tensor:
         if isinstance(self.max_offset, (int, float)):
-            scales = (self.max_offset,) * n
+            scales = (self.max_offset,) * n_spatial_dims
         else:
-            scales = tuple(self.max_offset[i] for i in range(n))
-        offset = torch.tensor(
+            scales = tuple(self.max_offset[i] for i in range(n_spatial_dims))
+        return torch.tensor(
             [
                 (torch.rand(1, generator=self._generator).item() * 2 - 1) * s
                 for s in scales
             ],
-            device=mesh.points.device,
-            dtype=mesh.points.dtype,
+            device=device,
+            dtype=dtype,
+        )
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        offset = self._sample_offset(
+            mesh.n_spatial_dims, mesh.points.device, mesh.points.dtype
         )
         return mesh.translate(offset)
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        offset = self._sample_offset(
+            domain.interior.n_spatial_dims,
+            domain.interior.points.device,
+            domain.interior.points.dtype,
+        )
+        return domain.translate(offset)
 
     def extra_repr(self) -> str:
         return f"max_offset={self.max_offset}"
@@ -123,14 +149,26 @@ class RandomRotateMesh(MeshTransform):
         self.transform_global_data = transform_global_data
         self._generator = generator
 
-    def __call__(self, mesh: Mesh) -> Mesh:
+    def _sample_axis_and_angle(self) -> tuple[str, float]:
         axis_idx = torch.randint(len(self.axes), (1,), generator=self._generator).item()
         axis = self.axes[axis_idx]
-
         low, high = self.angle_range
         angle = low + (high - low) * torch.rand(1, generator=self._generator).item()
+        return axis, angle
 
+    def __call__(self, mesh: Mesh) -> Mesh:
+        axis, angle = self._sample_axis_and_angle()
         return mesh.rotate(
+            angle,
+            axis=axis,
+            transform_point_data=self.transform_point_data,
+            transform_cell_data=self.transform_cell_data,
+            transform_global_data=self.transform_global_data,
+        )
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        axis, angle = self._sample_axis_and_angle()
+        return domain.rotate(
             angle,
             axis=axis,
             transform_point_data=self.transform_point_data,

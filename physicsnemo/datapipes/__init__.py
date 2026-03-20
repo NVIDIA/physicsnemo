@@ -40,13 +40,13 @@ from physicsnemo.datapipes.collate import (
 )
 from physicsnemo.datapipes.dataloader import DataLoader
 from physicsnemo.datapipes.dataset import Dataset
-from physicsnemo.datapipes.multi_dataset import MultiDataset
 from physicsnemo.datapipes.mesh_dataset import MeshDataset
+from physicsnemo.datapipes.multi_dataset import MultiDataset
 from physicsnemo.datapipes.protocols import DatasetBase
 from physicsnemo.datapipes.readers import (
+    DomainMeshReader,
     HDF5Reader,
     MeshReader,
-    MultiMeshReader,
     NumpyReader,
     Reader,
     TensorStoreZarrReader,
@@ -72,6 +72,7 @@ from physicsnemo.datapipes.transforms import (
     CreateGrid,
     FieldSlice,
     KNearestNeighbors,
+    MeshToTensorDict,
     MeshTransform,
     Normalize,
     NormalizeVectors,
@@ -131,6 +132,7 @@ __all__ = [
     "ConstantField",
     # Transforms - Mesh
     "MeshTransform",
+    "MeshToTensorDict",
     "apply_to_tensordict_mesh",
     "ScaleMesh",
     "TranslateMesh",
@@ -148,7 +150,7 @@ __all__ = [
     "VTKReader",
     "TensorStoreZarrReader",
     "MeshReader",
-    "MultiMeshReader",
+    "DomainMeshReader",
     # Collation
     "Collator",
     "DefaultCollator",

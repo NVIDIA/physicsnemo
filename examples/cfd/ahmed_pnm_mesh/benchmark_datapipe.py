@@ -34,7 +34,29 @@ import time
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
+from tensordict import TensorDict
+
 from physicsnemo.datapipes import DataLoader, FunctionCollator, MeshDataset
+
+
+def _print_data_summary(data, indent: int = 0) -> None:
+    """Recursively print tensor shapes in a data object."""
+    prefix = " " * indent
+    if isinstance(data, TensorDict):
+        for key in data.keys():
+            val = data[key]
+            if isinstance(val, TensorDict):
+                print(f"{prefix}{key}/")
+                _print_data_summary(val, indent + 2)
+            elif hasattr(val, "shape"):
+                print(f"{prefix}{key}: {tuple(val.shape)}")
+    elif hasattr(data, "points"):
+        print(
+            f"{prefix}points={tuple(data.points.shape)}, "
+            f"cells={tuple(data.cells.shape)}, "
+            f"point_data={list(data.point_data.keys())}, "
+            f"cell_data={list(data.cell_data.keys())}"
+        )
 
 
 def _report_times(times: list[float], label: str) -> None:
@@ -79,21 +101,9 @@ def benchmark_pipeline(name: str, dataloader: DataLoader, max_samples: int) -> N
     for i, batch in enumerate(dataloader):
         dt = time.perf_counter() - t0
         times.append(dt)
-
+        data, metadata = batch
         if i == 0:
-            data = batch[0] if isinstance(batch, tuple) else batch
-            if hasattr(data, "points"):
-                print(
-                    f"  points={tuple(data.points.shape)}, "
-                    f"cells={tuple(data.cells.shape)}, "
-                    f"point_data={list(data.point_data.keys())}, "
-                    f"cell_data={list(data.cell_data.keys())}"
-                )
-            elif hasattr(data, "keys"):
-                for key in data.keys():
-                    val = data[key]
-                    if hasattr(val, "shape"):
-                        print(f"  {key}: shape={tuple(val.shape)}")
+            _print_data_summary(data, indent=2)
 
         if i + 1 >= max_samples:
             break

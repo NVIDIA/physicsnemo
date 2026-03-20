@@ -39,6 +39,7 @@ surface:
     - _target_: ${dp:RandomTranslateMesh}
     - _target_: ${dp:SubsampleMesh}
       n_cells: 50000
+    - _target_: ${dp:MeshToTensorDict}
   batch_size: 1
 
 volume:
@@ -46,5 +47,13 @@ volume:
     _target_: ${dp:MeshReader}
     path: ${data_dir}
     pattern: "**/volume*.pt"
-  transforms: []
+  transforms:
+    - _target_: ${dp:CenterMesh}
+    - _target_: ${dp:RandomRotateMesh}
+      axes: ["y"]
+    - _target_: ${dp:RandomScaleMesh}
+    - _target_: ${dp:RandomTranslateMesh}
+    - _target_: ${dp:SubsampleMesh}
+      n_points: 100000
+    - _target_: ${dp:MeshToTensorDict}
   batch_size: 1

@@ -15,9 +15,9 @@
 # limitations under the License.
 
 """
-MeshDataset - Combines a mesh reader (MeshReader or MultiMeshReader) with mesh transforms.
+MeshDataset - Combines a mesh reader (MeshReader or DomainMeshReader) with mesh transforms.
 
-Returns (Mesh, metadata) or (TensorDict[str, Mesh], metadata). No key-based filtering.
+Returns (Mesh, metadata) or (DomainMesh, metadata). No key-based filtering.
 """
 
 from __future__ import annotations
@@ -28,18 +28,10 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.datapipes.protocols import DatasetBase
-from physicsnemo.datapipes.readers.mesh import MeshReader, MultiMeshReader
+from physicsnemo.datapipes.readers.mesh import DomainMeshReader, MeshReader
 from physicsnemo.datapipes.registry import register
-from physicsnemo.datapipes.transforms.mesh.base import (
-    MeshTransform,
-    apply_to_tensordict_mesh,
-)
-from physicsnemo.mesh import Mesh
-
-
-def _is_tensordict_mesh(data: Union[Mesh, TensorDict]) -> bool:
-    """Return True if data is a TensorDict (of Mesh)."""
-    return isinstance(data, TensorDict)
+from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
+from physicsnemo.mesh import DomainMesh, Mesh
 
 
 @register()
@@ -47,17 +39,22 @@ class MeshDataset(DatasetBase):
     r"""
     Dataset for mesh readers and mesh-only transforms.
 
-    Accepts MeshReader (single-mesh) or MultiMeshReader (multi-mesh).
-    Applies a sequence of MeshTransform. Single-mesh: each transform is
-    Mesh -> Mesh. Multi-mesh: each transform is applied to every value
-    in the TensorDict (TensorDict[str, Mesh] -> TensorDict[str, Mesh]).
+    Accepts :class:`MeshReader` (single-mesh) or :class:`DomainMeshReader`
+    (domain mesh with interior + boundaries).
+
+    Applies a sequence of :class:`MeshTransform` (Mesh -> Mesh).
+    For single-mesh data each transform is called directly.
+    For :class:`DomainMesh` data each transform is applied via
+    :meth:`MeshTransform.apply_to_domain`, which handles domain-level
+    ``global_data``, consistent random parameter sampling, and
+    proper centering semantics.
 
     Inherits thread-based prefetching from :class:`DatasetBase`.
     """
 
     def __init__(
         self,
-        reader: MeshReader | MultiMeshReader,
+        reader: MeshReader | DomainMeshReader,
         *,
         transforms: Sequence[MeshTransform] | None = None,
         device: str | torch.device | None = None,
@@ -66,8 +63,8 @@ class MeshDataset(DatasetBase):
         """
         Parameters
         ----------
-        reader : MeshReader or MultiMeshReader
-            Mesh reader; returns (Mesh, metadata) or (TensorDict[str, Mesh], metadata).
+        reader : MeshReader or DomainMeshReader
+            Mesh reader; returns (Mesh, metadata) or (DomainMesh, metadata).
         transforms : sequence of MeshTransform, optional
             Transforms to apply in order. None means no transforms.
         device : str or torch.device, optional
@@ -80,21 +77,17 @@ class MeshDataset(DatasetBase):
         self.transforms = list(transforms) if transforms else []
         self._device = torch.device(device) if isinstance(device, str) else device
 
-    def _load(self, index: int) -> tuple[Mesh | TensorDict, dict[str, Any]]:
+    def _load(
+        self, index: int
+    ) -> tuple[Union[Mesh, DomainMesh, TensorDict], dict[str, Any]]:
         data, metadata = self.reader[index]
 
         if self._device is not None:
-            if _is_tensordict_mesh(data):
-                data = TensorDict(
-                    {k: v.to(self._device) for k, v in data.items()},
-                    batch_size=[],
-                )
-            else:
-                data = data.to(self._device)
+            data = data.to(self._device)
 
         for t in self.transforms:
-            if _is_tensordict_mesh(data):
-                data = apply_to_tensordict_mesh(data, t)
+            if isinstance(data, DomainMesh):
+                data = t.apply_to_domain(data)
             else:
                 data = t(data)
 

@@ -41,6 +41,7 @@ from physicsnemo.datapipes.transforms.geometric import (
 )
 from physicsnemo.datapipes.transforms.mesh import (
     CenterMesh,
+    MeshToTensorDict,
     MeshTransform,
     RandomRotateMesh,
     RandomScaleMesh,
@@ -107,6 +108,7 @@ __all__ = [
     "RotateMesh",
     "CenterMesh",
     "SubsampleMesh",
+    "MeshToTensorDict",
     "RandomScaleMesh",
     "RandomTranslateMesh",
     "RandomRotateMesh",
