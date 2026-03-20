@@ -103,6 +103,7 @@ class EDMLoss:
         labels: torch.Tensor | None = None,
         augment_pipe: Callable | None = None,
         lead_time_label: torch.Tensor | None = None,
+        return_sigma: bool = False,
     ) -> torch.Tensor:
         """
         Calculate and return the loss corresponding to the EDM formulation.
@@ -167,6 +168,8 @@ class EDMLoss:
         else:
             D_yn = net(y + n, sigma.flatten(), labels, **optional_args)
         loss = weight * ((D_yn - y) ** 2)
+        if return_sigma:
+            return (loss, sigma)
         return loss
 
 
@@ -203,3 +206,167 @@ class EDMLossLogUniform(EDMLoss):
         rnd_uniform = torch.rand(shape, device=y.device)
         sigma = (self.log_sigma_min + rnd_uniform * self.log_sigma_diff).exp()
         return sigma
+
+
+def regression_loss_fn(
+    net,
+    images: torch.Tensor,
+    condition: torch.Tensor,
+    class_labels=None,
+    lead_time_label: torch.Tensor | None = None,
+    augment_pipe=None,
+    return_model_outputs: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+    """MSE loss for the StormCast regression model.
+
+    Shares call signature with EDMLoss so the same training loop works for both.
+
+    Args:
+        net: regression network (e.g. StormCastUNet).
+        images: target data, shape ``[B, C, H, W]``.
+        condition: model input, shape ``[B, C_cond, H, W]``.
+        class_labels: unused (present for EDMLoss call-signature parity).
+        lead_time_label: optional lead-time label, shape ``(B,)``.
+        augment_pipe: optional data augmentation callable.
+        return_model_outputs: if True, return ``(loss, prediction)``.
+
+    Returns:
+        Per-pixel squared error ``[B, C, H, W]``, or ``(loss, prediction)``
+        when *return_model_outputs* is True.
+    """
+    y, augment_labels = (
+        augment_pipe(images) if augment_pipe is not None else (images, None)
+    )
+    labels = {} if lead_time_label is None else {"lead_time_label": lead_time_label}
+    D_yn = net(x=condition, **labels)
+    loss = (D_yn - y) ** 2
+    if return_model_outputs:
+        return loss, D_yn
+    return loss
+
+
+class SigmaBinTracker:
+    """Track per-sigma-bin loss and bias for diffusion training diagnostics.
+
+    Accumulates sample-level L2 loss and signed denoising bias into
+    equal-probability sigma bins, then logs per-bin means via an
+    experiment logger.
+
+    Parameters
+    ----------
+    loss_cfg : object
+        Loss config with attributes: ``track_sigma_bin_loss``, ``sigma_bin_count``,
+        ``sigma_bin_edges``, ``sigma_distribution``, ``sigma_min``, ``sigma_max``,
+        ``P_mean``, ``P_std``.
+    device : torch.device
+        Device for accumulator tensors.
+    loss_type : str
+        ``"regression"`` or ``"edm"``.  Tracking is disabled for regression.
+    """
+
+    def __init__(self, loss_cfg, device: torch.device, loss_type: str = "edm"):
+        self.enabled = loss_type != "regression" and bool(loss_cfg.track_sigma_bin_loss)
+        self.device = device
+        self._edges: torch.Tensor | None = None
+        self._loss_sum: torch.Tensor | None = None
+        self._bias_sum: torch.Tensor | None = None
+        self._count: torch.Tensor | None = None
+        if not self.enabled:
+            return
+
+        if len(loss_cfg.sigma_bin_edges) >= 2:
+            edges = np.asarray(loss_cfg.sigma_bin_edges, dtype=np.float64)
+        else:
+            n_edges = int(loss_cfg.sigma_bin_count) + 1
+            if loss_cfg.sigma_distribution == "loguniform":
+                q = np.linspace(0.0, 1.0, n_edges, dtype=np.float64)
+                log_lo = float(np.log(loss_cfg.sigma_min))
+                log_hi = float(np.log(loss_cfg.sigma_max))
+                edges = np.exp(log_lo + q * (log_hi - log_lo))
+            else:
+                q = torch.linspace(0.0, 1.0, n_edges, dtype=torch.float64)
+                q = q.clamp(1e-6, 1.0 - 1e-6)
+                z = torch.distributions.Normal(0.0, 1.0).icdf(q)
+                log_edges = float(loss_cfg.P_mean) + float(loss_cfg.P_std) * z
+                edges = torch.exp(log_edges).cpu().numpy()
+        self._edges = torch.as_tensor(edges, dtype=torch.float32, device=device)
+
+    @property
+    def edges(self) -> list[float] | None:
+        """Bin edges as a Python list, or None if disabled."""
+        if self._edges is None:
+            return None
+        return self._edges.detach().cpu().tolist()
+
+    def reset(self) -> None:
+        """Zero accumulators at the start of each training step."""
+        if not self.enabled:
+            return
+        n = int(self._edges.numel() - 1)
+        self._loss_sum = torch.zeros(n, device=self.device, dtype=torch.float32)
+        self._bias_sum = torch.zeros(n, device=self.device, dtype=torch.float32)
+        self._count = torch.zeros(n, device=self.device, dtype=torch.float32)
+
+    def update(
+        self,
+        loss: torch.Tensor,
+        sigma: torch.Tensor | None,
+        bias: torch.Tensor | None = None,
+    ) -> None:
+        """Accumulate one micro-batch of per-sample loss/bias into bins.
+
+        Parameters
+        ----------
+        loss : torch.Tensor
+            Per-pixel loss, shape ``[B, C, H, W]``.
+        sigma : torch.Tensor | None
+            Sampled sigma values, shape ``[B, 1, 1, 1]`` or ``[B]``.
+        bias : torch.Tensor | None
+            Per-sample mean signed error ``[B]`` (from EDMLoss ``return_sigma``).
+        """
+        if not self.enabled or sigma is None:
+            return
+        sample_loss = loss.detach().mean(dim=(1, 2, 3))
+        sample_sigma = sigma.detach().reshape(-1).to(torch.float32)
+        bin_idx = torch.bucketize(sample_sigma, self._edges) - 1
+        n_bins = int(self._edges.numel() - 1)
+        valid = (bin_idx >= 0) & (bin_idx < n_bins)
+        if not torch.any(valid):
+            return
+        idx = bin_idx[valid]
+        self._loss_sum.index_add_(0, idx, sample_loss[valid])
+        self._count.index_add_(
+            0, idx, torch.ones_like(sample_loss[valid], dtype=torch.float32)
+        )
+        if bias is not None:
+            self._bias_sum.index_add_(0, idx, bias.detach().to(torch.float32)[valid])
+
+    def log(self, logger, world_size: int = 1) -> None:
+        """All-reduce across ranks and log per-bin means.
+
+        Parameters
+        ----------
+        logger : ExperimentLogger
+            Must have a ``log_value(tag, value)`` method.
+        world_size : int
+            Number of distributed ranks (1 = single GPU).
+        """
+        if not self.enabled or self._count is None:
+            return
+        if world_size > 1:
+            for t in (self._loss_sum, self._bias_sum, self._count):
+                torch.distributed.all_reduce(t, op=torch.distributed.ReduceOp.SUM)
+        edges = self._edges.detach().cpu().tolist()
+        for b in range(int(self._edges.numel() - 1)):
+            count = float(self._count[b].item())
+            if count <= 0:
+                continue
+            tag = f"[{edges[b]:.3e},{edges[b + 1]:.3e})"
+            logger.log_value(
+                f"loss/train_sigma_bin/{tag}",
+                float((self._loss_sum[b] / self._count[b]).item()),
+            )
+            logger.log_value(
+                f"bias/train_sigma_bin/{tag}",
+                float((self._bias_sum[b] / self._count[b]).item()),
+            )

@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Improved crash recipe with configurable stats directory.
+- `physicsnemo.mesh.sampling.find_nearest_cells` uses a KNN-backed
+  implementation, and no longer accepts the `bvh=`, `chunk_size=`,
+  `max_rounds=`, or `max_candidates_per_point=` parameters.
 
 ### Deprecated
 

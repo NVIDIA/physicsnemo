@@ -463,6 +463,7 @@ def test_seeding(
     "model_type", ["hybrid", "nowcasting", "downscaling", "unconditional"]
 )
 @pytest.mark.parametrize("num_scalar_cond_channels", [0, 2])
+@pytest.mark.parametrize("num_invariant_channels", [0, 2])
 def test_model_types(
     tmp_path: Path,
     cfg_diffusion: DictConfig,
@@ -471,6 +472,7 @@ def test_model_types(
     net_architecture: Literal["unet", "dit"],
     model_type: Literal["hybrid", "nowcasting", "downscaling", "unconditional"],
     num_scalar_cond_channels: int,
+    num_invariant_channels: int,
 ):
     """Test that training runs with different model configurations."""
     dist = DistributedManager()
@@ -490,19 +492,23 @@ def test_model_types(
     cfg_diffusion.training.rundir = rundir
     cfg_diffusion.dataset.model_type = model_type
     cfg_diffusion.dataset.num_scalar_cond_channels = num_scalar_cond_channels
+    cfg_diffusion.dataset.num_invariant_channels = num_invariant_channels
 
     if model_type == "hybrid":
-        cfg_diffusion.model.diffusion_conditions = ["state", "background", "invariant"]
+        cfg_diffusion.model.diffusion_conditions = ["state", "background"]
     elif model_type == "nowcasting":
-        cfg_diffusion.model.diffusion_conditions = ["state", "invariant"]
+        cfg_diffusion.model.diffusion_conditions = ["state"]
     elif model_type == "downscaling":
-        cfg_diffusion.model.diffusion_conditions = ["background", "invariant"]
+        cfg_diffusion.model.diffusion_conditions = ["background"]
     elif model_type == "unconditional":
-        cfg_diffusion.model.diffusion_conditions = ["invariant"]
+        cfg_diffusion.model.diffusion_conditions = []
     else:
         raise ValueError(
             "Model_type must be one of ['hybrid', 'nowcasting', 'downscaling', 'unconditional']."
         )
+
+    if num_invariant_channels > 0:
+        cfg_diffusion.model.diffusion_conditions.append("invariant")
 
     unsupported_scalar_conds = (
         num_scalar_cond_channels > 0 and net_architecture != "dit"
