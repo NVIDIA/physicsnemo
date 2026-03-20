@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Allows selective per-field transformation of `Mesh` objects: `transform_point_data`,
   `transform_cell_data`, and `transform_global_data` now accept `bool | TensorDict`
   (or plain `dict` for convenience).
+- Adds `physicsnemo.mesh.remeshing` subpackage with `partition_cells()` for
+  creating Voronoi regions around seed points. BVH-accelerated.
 
 ### Changed
 
