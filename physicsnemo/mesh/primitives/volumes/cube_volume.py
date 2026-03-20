@@ -26,7 +26,7 @@ from physicsnemo.mesh.mesh import Mesh
 
 def load(
     size: float = 1.0, subdivisions: int = 5, device: torch.device | str = "cpu"
-) -> Mesh:
+) -> Mesh[3, 3]:
     """Create a tetrahedral volume mesh of a cube.
 
     The cube is divided into a regular grid of smaller cubes, and each small
@@ -45,7 +45,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[3, 3]
         Mesh with n_manifold_dims=3, n_spatial_dims=3.
     """
     if subdivisions < 1:

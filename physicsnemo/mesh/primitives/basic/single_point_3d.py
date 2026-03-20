@@ -24,7 +24,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(device: torch.device | str = "cpu") -> Mesh:
+def load(device: torch.device | str = "cpu") -> Mesh[0, 3]:
     """Create a mesh with a single point in 3D space.
 
     Parameters
@@ -34,7 +34,7 @@ def load(device: torch.device | str = "cpu") -> Mesh:
 
     Returns
     -------
-    Mesh
+    Mesh[0, 3]
         Mesh with n_manifold_dims=0, n_spatial_dims=3, n_cells=1.
     """
     points = torch.tensor([[0.5, 0.5, 0.5]], dtype=torch.float32, device=device)

@@ -26,7 +26,7 @@ from physicsnemo.mesh.mesh import Mesh
 
 
 @require_version_spec("pyvista")
-def load(device: torch.device | str = "cpu") -> Mesh:
+def load(device: torch.device | str = "cpu") -> Mesh[3, 3]:
     """Load tetrahedral beam volume mesh from PyVista examples.
 
     A classic finite element test case consisting of tetrahedral elements.
@@ -38,7 +38,7 @@ def load(device: torch.device | str = "cpu") -> Mesh:
 
     Returns
     -------
-    Mesh
+    Mesh[3, 3]
         Mesh with n_manifold_dims=3, n_spatial_dims=3.
     """
     import importlib

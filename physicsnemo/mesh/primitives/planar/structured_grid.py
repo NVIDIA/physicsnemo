@@ -32,7 +32,7 @@ def load(
     n_x: int = 11,
     n_y: int = 11,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[2, 2]:
     """Create a structured triangular grid in 2D space.
 
     Parameters
@@ -54,7 +54,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[2, 2]
         Mesh with n_manifold_dims=2, n_spatial_dims=2.
     """
     if n_x < 2:

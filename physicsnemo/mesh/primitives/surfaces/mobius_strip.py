@@ -30,7 +30,7 @@ def load(
     n_circ: int = 48,
     n_width: int = 5,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[2, 3]:
     """Create a Möbius strip surface in 3D space.
 
     Parameters
@@ -48,7 +48,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[2, 3]
         Mesh with n_manifold_dims=2, n_spatial_dims=3 (non-orientable).
     """
     if n_circ < 3:
