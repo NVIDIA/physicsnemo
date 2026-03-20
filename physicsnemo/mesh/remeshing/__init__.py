@@ -14,25 +14,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Uniform mesh remeshing via clustering.
+"""Mesh remeshing and cell partitioning.
 
-This module provides dimension-agnostic uniform remeshing based on the ACVD
-(Approximate Centroidal Voronoi Diagram) clustering algorithm. It works for
-arbitrary n-dimensional simplicial manifolds.
+This module provides two complementary algorithms for mesh coarsening:
 
-The algorithm:
-1. Weights vertices by incident cell areas
-2. Initializes clusters via area-based region growing
-3. Removes spatially isolated cluster regions
-4. Reconstructs a simplified mesh from cluster adjacency
+**Cell partitioning** (:func:`partition_cells`):
+    Assigns each cell of a fine mesh to its nearest seed point (by Euclidean
+    centroid distance) and accumulates area, normal, and centroid per cluster.
+    This is a single-step discrete approximation to the restricted Voronoi
+    diagram on the surface.  Pure PyTorch, no external dependencies.
 
-The output mesh has approximately uniform cell distribution with ~0.5% non-manifold
-edges (multiple faces sharing an edge), which is inherent to the face-mapping approach.
+**ACVD remeshing** (:func:`remesh`):
+    Iterative Approximate Centroidal Voronoi Diagram clustering that creates
+    a new mesh topology with approximately uniform cell distribution.
+    Requires the ``pyacvd`` package.
 
-Current limitations:
-- Energy minimization is disabled (made topology worse; needs investigation)
-- Small percentage (~0.5-1%) of edges may be non-manifold with moderate cluster counts
-- Higher cluster counts relative to mesh resolution produce better manifold quality
+``partition_cells`` is also a natural building block for a pure-PyTorch CVT
+(Lloyd's algorithm iterates: partition -> move seeds to cluster centroids ->
+repeat).
 
 Example:
     >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
@@ -42,4 +41,5 @@ Example:
     >>> assert remeshed.n_cells > 0
 """
 
+from physicsnemo.mesh.remeshing._partition import CellPartition, partition_cells
 from physicsnemo.mesh.remeshing._remeshing import remesh
