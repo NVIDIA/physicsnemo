@@ -96,11 +96,11 @@ def _solve_barycentric_system(
     n_manifold_dims = relative_vectors.shape[-2]
     n_spatial_dims = relative_vectors.shape[-1]
 
+    A = relative_vectors.transpose(-2, -1)
+    b = query_relative.unsqueeze(-1)
+
     if n_spatial_dims == n_manifold_dims:
         ### Square system: use torch.linalg.solve
-        A = relative_vectors.transpose(-2, -1)
-        b = query_relative.unsqueeze(-1)
-
         try:
             weights_1_to_n = torch.linalg.solve(A, b).squeeze(-1)
         except torch.linalg.LinAlgError:
@@ -114,8 +114,6 @@ def _solve_barycentric_system(
 
     else:
         ### Over-determined or under-determined system: use least squares
-        A = relative_vectors.transpose(-2, -1)
-        b = query_relative.unsqueeze(-1)
         weights_1_to_n = torch.linalg.lstsq(A, b).solution.squeeze(-1)
 
         reconstructed = torch.einsum(
@@ -387,82 +385,8 @@ def find_all_containing_cells(
 
 
 # ---------------------------------------------------------------------------
-# Projection / nearest-cell helpers
+# Nearest-cell helpers
 # ---------------------------------------------------------------------------
-
-
-def project_point_onto_cell(
-    query_point: Float[torch.Tensor, " n_spatial_dims"],
-    cell_vertices: Float[torch.Tensor, "n_vertices n_spatial_dims"],
-) -> tuple[Float[torch.Tensor, " n_spatial_dims"], Float[torch.Tensor, ""]]:
-    """Project a query point onto a simplex (cell).
-
-    Uses iterative barycentric clipping to find the closest point on the simplex.
-
-    Parameters
-    ----------
-    query_point : torch.Tensor
-        Point to project, shape (n_spatial_dims,).
-    cell_vertices : torch.Tensor
-        Vertices of the simplex, shape (n_vertices, n_spatial_dims).
-
-    Returns
-    -------
-    tuple[torch.Tensor, torch.Tensor]
-        (projected_point, squared_distance):
-        - projected_point: shape (n_spatial_dims,)
-        - squared_distance: scalar tensor
-    """
-    n_vertices = cell_vertices.shape[0]
-
-    if n_vertices == 1:
-        projected = cell_vertices[0]
-        dist_sq = ((query_point - projected) ** 2).sum()
-        return projected, dist_sq
-
-    bary, _ = compute_barycentric_coordinates(
-        query_point.unsqueeze(0), cell_vertices.unsqueeze(0)
-    )
-    bary = bary.squeeze(0).squeeze(0)
-
-    if (bary >= 0).all():
-        projected = (bary.unsqueeze(-1) * cell_vertices).sum(dim=0)
-        dist_sq = ((query_point - projected) ** 2).sum()
-        return projected, dist_sq
-
-    # Iterative clipping to the active face
-    for _ in range(n_vertices):
-        active_mask = bary > 0
-
-        if not active_mask.any():
-            dists = ((cell_vertices - query_point.unsqueeze(0)) ** 2).sum(dim=-1)
-            nearest_idx = dists.argmin()
-            return cell_vertices[nearest_idx], dists[nearest_idx]
-
-        active_vertices = cell_vertices[active_mask]
-
-        if active_vertices.shape[0] == 1:
-            projected = active_vertices[0]
-            dist_sq = ((query_point - projected) ** 2).sum()
-            return projected, dist_sq
-
-        bary_active, _ = compute_barycentric_coordinates(
-            query_point.unsqueeze(0), active_vertices.unsqueeze(0)
-        )
-        bary_active = bary_active.squeeze(0).squeeze(0)
-
-        if (bary_active >= 0).all():
-            projected = (bary_active.unsqueeze(-1) * active_vertices).sum(dim=0)
-            dist_sq = ((query_point - projected) ** 2).sum()
-            return projected, dist_sq
-
-        bary = torch.zeros_like(bary)
-        bary[active_mask] = bary_active
-
-    # Fallback: nearest vertex
-    dists = ((cell_vertices - query_point.unsqueeze(0)) ** 2).sum(dim=-1)
-    nearest_idx = dists.argmin()
-    return cell_vertices[nearest_idx], dists[nearest_idx]
 
 
 def find_nearest_cells(
@@ -553,41 +477,29 @@ def _accumulate_sampled_data(
             point_idx = cells[cell_indices]
             point_vals = values[point_idx]
 
-            if values.ndim == 1:
-                pair_values = (bary_coords * point_vals).sum(dim=1)
-            else:
-                bary_expanded = bary_coords.view(
-                    bary_coords.shape[0],
-                    bary_coords.shape[1],
-                    *([1] * (values.ndim - 1)),
-                )
-                pair_values = (bary_expanded * point_vals).sum(dim=1)
+            bary_expanded = bary_coords.view(
+                bary_coords.shape[0],
+                bary_coords.shape[1],
+                *([1] * (values.ndim - 1)),
+            )
+            pair_values = (bary_expanded * point_vals).sum(dim=1)
         else:
             raise ValueError(f"Invalid {data_source=!r}. Must be 'cells' or 'points'.")
 
         ### Scatter-accumulate into output
         if multiple_cells_strategy == "mean":
-            if values.ndim == 1:
-                output_sum = torch.zeros(n_queries, dtype=values.dtype, device=device)
-                output_sum.scatter_add_(0, query_indices, pair_values)
-            else:
-                output_sum = torch.zeros(
-                    output_shape, dtype=values.dtype, device=device
-                )
-                idx_expanded = query_indices.view(
-                    -1, *([1] * (values.ndim - 1))
-                ).expand_as(pair_values)
-                output_sum.scatter_add_(0, idx_expanded, pair_values)
+            output_sum = torch.zeros(
+                output_shape, dtype=values.dtype, device=device
+            )
+            idx_expanded = query_indices.view(
+                -1, *([1] * (values.ndim - 1))
+            ).expand_as(pair_values)
+            output_sum.scatter_add_(0, idx_expanded, pair_values)
 
             valid = query_containment_count > 0
-            if values.ndim == 1:
-                output[valid] = output_sum[valid] / query_containment_count[valid].to(
-                    values.dtype
-                )
-            else:
-                output[valid] = output_sum[valid] / query_containment_count[valid].to(
-                    values.dtype
-                ).view(-1, *([1] * (values.ndim - 1)))
+            output[valid] = output_sum[valid] / query_containment_count[valid].to(
+                values.dtype
+            ).view(-1, *([1] * (values.ndim - 1)))
 
         elif multiple_cells_strategy == "nan":
             single_cell_mask = query_containment_count == 1
