@@ -69,14 +69,25 @@ def load(
 
     points = torch.stack([xx.flatten(), yy.flatten()], dim=1)
 
-    # Create triangular cells
-    cells = []
-    for i in range(n_x - 1):
-        for j in range(n_y - 1):
-            idx = i * n_y + j
-            # Two triangles per quad
-            cells.append([idx, idx + 1, idx + n_y])
-            cells.append([idx + 1, idx + n_y + 1, idx + n_y])
+    ### Triangulate: two triangles per grid quad, fully vectorized
+    ii, jj = torch.meshgrid(
+        torch.arange(n_x - 1, device=device),
+        torch.arange(n_y - 1, device=device),
+        indexing="ij",
+    )
+    ii, jj = ii.reshape(-1), jj.reshape(-1)
 
-    cells = torch.tensor(cells, dtype=torch.int64, device=device)
+    v00 = ii * n_y + jj
+    v01 = v00 + 1
+    v10 = v00 + n_y
+    v11 = v10 + 1
+
+    cells = torch.stack(
+        [
+            torch.stack([v00, v01, v10], dim=-1),
+            torch.stack([v01, v11, v10], dim=-1),
+        ],
+        dim=1,
+    ).reshape(-1, 3)
+
     return Mesh(points=points, cells=cells)
