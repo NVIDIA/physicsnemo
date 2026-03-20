@@ -488,12 +488,10 @@ def _accumulate_sampled_data(
 
         ### Scatter-accumulate into output
         if multiple_cells_strategy == "mean":
-            output_sum = torch.zeros(
-                output_shape, dtype=values.dtype, device=device
+            output_sum = torch.zeros(output_shape, dtype=values.dtype, device=device)
+            idx_expanded = query_indices.view(-1, *([1] * (values.ndim - 1))).expand_as(
+                pair_values
             )
-            idx_expanded = query_indices.view(
-                -1, *([1] * (values.ndim - 1))
-            ).expand_as(pair_values)
             output_sum.scatter_add_(0, idx_expanded, pair_values)
 
             valid = query_containment_count > 0
