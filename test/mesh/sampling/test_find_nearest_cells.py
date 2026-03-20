@@ -124,5 +124,3 @@ class TestExactCentroidQueries:
         assert torch.equal(idx, torch.arange(seed_mesh.n_cells))
         dists = (projected - seed_mesh.cell_centroids).norm(dim=1)
         assert dists.max().item() < 1e-12
-
-
