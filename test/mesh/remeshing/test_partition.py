@@ -66,6 +66,8 @@ def _brute_force_assignments(
 
 
 class TestReturnType:
+    """Verify partition_cells returns a CellPartition that supports structured unpacking."""
+
     def test_returns_cell_partition(self, two_triangles_3d: Mesh):
         seeds = torch.tensor([[0.3, 0.3, 0.0], [0.7, 0.7, 0.0]], dtype=torch.float64)
         result = partition_cells(two_triangles_3d, seeds)
@@ -86,6 +88,8 @@ class TestReturnType:
 
 
 class TestAssignments:
+    """Verify each cell is assigned to its nearest seed by centroid distance."""
+
     def test_two_triangles_two_seeds(self, two_triangles_3d: Mesh):
         """Each triangle should be assigned to its nearest seed."""
         seeds = torch.tensor(
@@ -115,6 +119,8 @@ class TestAssignments:
 
 
 class TestAreaConservation:
+    """Verify that the sum of cluster areas equals total mesh surface area."""
+
     def test_total_area_preserved(self, two_triangles_3d: Mesh):
         seeds = torch.tensor(
             [[0.25, 0.25, 0.0], [0.75, 0.75, 0.0]], dtype=torch.float64
@@ -154,6 +160,8 @@ class TestAreaConservation:
 
 
 class TestNormals:
+    """Verify area-weighted normal accumulation and unit-normalization per cluster."""
+
     def test_coplanar_normals_are_z_axis(self, two_triangles_3d: Mesh):
         """For coplanar triangles in z=0, all cluster normals point along z."""
         seeds = torch.tensor(
@@ -195,6 +203,8 @@ class TestNormals:
 
 
 class TestCentroids:
+    """Verify area-weighted centroid computation per cluster."""
+
     def test_single_seed_centroid_is_area_weighted_mean(self, two_triangles_3d: Mesh):
         seeds = torch.tensor([[0.5, 0.5, 0.0]], dtype=torch.float64)
         result = partition_cells(two_triangles_3d, seeds)
@@ -218,6 +228,8 @@ class TestCentroids:
 
 
 class TestEmptyClusters:
+    """Verify graceful handling of seeds that receive no cells."""
+
     def test_far_seed_gets_zero_area(self, two_triangles_3d: Mesh):
         """A seed far from all cells should get zero area."""
         seeds = torch.tensor(
@@ -250,6 +262,8 @@ class TestEmptyClusters:
 
 
 class TestNonSurfaceMesh:
+    """Verify partitioning of meshes that are not codimension-1 surfaces."""
+
     def test_2d_triangles_give_zero_normals(self):
         """Triangles in 2D (codimension 0) should produce zero normals."""
         points = torch.tensor(
@@ -273,6 +287,8 @@ class TestNonSurfaceMesh:
 
 
 class TestScaling:
+    """Verify correctness and area conservation on a larger mesh (722 triangles)."""
+
     def test_many_cells_matches_brute_force(self):
         """On a larger mesh, assignments match brute-force exactly."""
         torch.manual_seed(0)
@@ -296,6 +312,8 @@ class TestScaling:
 
 
 class TestGridRobustness:
+    """Stress the grid-accelerated nearest neighbor with adversarial seed layouts."""
+
     def test_queries_outside_seed_bbox(self):
         """Queries far from all seeds must still find their true nearest seed.
 
@@ -366,6 +384,8 @@ def assert_on_device(tensor: torch.Tensor, expected_device: str) -> None:
 
 
 class TestInputValidation:
+    """Verify that mismatched device or dtype between mesh and seeds raises ValueError."""
+
     def test_dtype_mismatch_raises(self):
         """Mismatched seeds/mesh dtypes must raise ValueError."""
         points = torch.tensor(
