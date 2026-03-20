@@ -152,6 +152,21 @@ Similar to regression, diffusion training can be tested using a single GPU using
 
 Note that the full training pipeline for StormCast diffusion model is fairly lengthy, requiring about 120 hours on 64 NVIDIA H100 GPUs. However, more lightweight training runs can still produce decent models if the diffusion model is not trained for as long. The example `regression` and `diffusion` configs use the configuration used in the StormCast paper. New configs can be easily added [as described above](#configuration-basics).
 
+#### Sigma-bin loss tracking
+
+For diffusion models, you can enable per-sigma-bin loss logging to diagnose which noise levels the model struggles with. This logs the mean training loss for equal-probability bins of the sampled sigma values to TensorBoard (under `loss/train_sigma_bin/`).
+
+To enable it, add the following to your diffusion training config:
+```yaml
+training:
+  loss:
+    track_sigma_bin_loss: true
+    sigma_bin_count: 8  # number of equal-probability bins (default: 8)
+    # sigma_bin_edges: []  # optional: explicit strictly-increasing bin edges
+```
+
+When `sigma_bin_edges` is not provided, bins are computed automatically so that each bin has equal probability mass under the configured sigma distribution (`lognormal` or `loguniform`). This feature is ignored for regression models.
+
 ### Distributed training
 
 Both regression and diffusion training can be distributed easily with data parallelism via `torchrun` or other launchers (e.g., SLURM `srun`). As long as GPU memory is sufficient, the same configuration file can be used regardless of the number of GPUs. One just needs to ensure the configuration being run has a batch size that is divisible by the number of available GPUs/processes. For example, distributed training of the regression model over 8 GPUs on one node would look something like:

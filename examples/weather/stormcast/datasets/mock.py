@@ -35,6 +35,7 @@ class _MockDataset(StormCastDataset):
         self,
         num_state_channels: int = 3,
         num_background_channels: int = 4,
+        num_invariant_channels: int = 2,
         num_scalar_cond_channels: int = 2,
         image_size: tuple[int, int] = (256, 128),
         num_samples: int = 100,
@@ -45,6 +46,7 @@ class _MockDataset(StormCastDataset):
     ):
         self._num_state_channels = num_state_channels
         self._num_background_channels = num_background_channels
+        self._num_invariant_channels = num_invariant_channels
         self._num_scalar_cond_channels = num_scalar_cond_channels
         self._image_size = image_size
         self._num_samples = num_samples
@@ -110,6 +112,20 @@ class _MockDataset(StormCastDataset):
     def image_shape(self) -> tuple[int, int]:
         """Return the (height, width) of the data."""
         return self._image_size
+
+    def get_invariants(self) -> np.ndarray | None:
+        """Return invariants used for training."""
+        if self._num_invariant_channels > 0:
+            rng = np.random.default_rng(seed=42)
+            return rng.normal(
+                size=(
+                    self._num_invariant_channels,
+                    self._image_size[0],
+                    self._image_size[1],
+                )
+            ).astype(np.float32)
+        else:
+            return None
 
 
 class MockDataset(_MockDataset):
