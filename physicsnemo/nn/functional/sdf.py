@@ -314,9 +314,7 @@ class SignedDistanceField(FunctionSpec):
             j = torch.arange(n_segments, device=device)
             j_next = (j + 1) % n_segments
 
-            north_fan = torch.stack(
-                [torch.zeros_like(j), 1 + j, 1 + j_next], dim=1
-            )
+            north_fan = torch.stack([torch.zeros_like(j), 1 + j, 1 + j_next], dim=1)
 
             r = torch.arange(n_rings - 1, device=device).unsqueeze(1)  # (R, 1)
             base = 1 + r * n_segments
