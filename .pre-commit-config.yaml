@@ -30,7 +30,7 @@ repos:
       entry: python test/ci_tests/check_docstring_coverage.py
       language: python
       types: [python]
-      additional_dependencies: ['interrogate>=1.7.0']
+      additional_dependencies: ['interrogate==1.7.0']
       exclude: ^docs/|^physicsnemo/experimental/|^test/
 
 -   repo: https://github.com/igorshubovych/markdownlint-cli
