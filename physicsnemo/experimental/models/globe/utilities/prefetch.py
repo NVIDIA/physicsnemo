@@ -47,8 +47,17 @@ def prefetch_map(iterable: Iterable[_T], fn: Callable[[_T], _U]) -> Iterator[_U]
     ------
     U
         Prepared items, one step behind the background thread.
+
+    Notes
+    -----
+    If the iterator is not fully consumed (e.g., due to an early ``break``
+    or an exception in the caller), the in-flight background task is not
+    forcibly interrupted but the main thread will not block waiting for it.
+    The background thread runs to completion on its own and is joined at
+    interpreter shutdown.
     """
-    with ThreadPoolExecutor(max_workers=1) as pool:
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
         it = iter(iterable)
         try:
             future = pool.submit(fn, next(it))
@@ -61,3 +70,5 @@ def prefetch_map(iterable: Iterable[_T], fn: Callable[[_T], _U]) -> Iterator[_U]
             future = next_future
 
         yield future.result()
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
