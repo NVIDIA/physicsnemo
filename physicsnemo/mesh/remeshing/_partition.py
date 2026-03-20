@@ -101,6 +101,11 @@ def partition_cells(
         Named tuple with ``assignments``, ``cluster_areas``,
         ``cluster_normals``, and ``cluster_centroids``.
 
+    Raises
+    ------
+    ValueError
+        If ``seeds`` and ``mesh`` have different devices or dtypes.
+
     Examples
     --------
     >>> import torch
@@ -129,8 +134,21 @@ def partition_cells(
       centroid falls back to the seed position.
     """
     n_seeds = len(seeds)
+
+    ### Validate that seeds and mesh share the same device and dtype
+    if seeds.device != mesh.points.device:
+        raise ValueError(
+            f"`seeds` and `mesh` must be on the same device, "
+            f"got {seeds.device=} and {mesh.points.device=}"
+        )
+    if seeds.dtype != mesh.points.dtype:
+        raise ValueError(
+            f"`seeds` and `mesh` must have the same dtype, "
+            f"got {seeds.dtype=} and {mesh.points.dtype=}"
+        )
+
     device = seeds.device
-    dtype = seeds.dtype
+    dtype = mesh.points.dtype
 
     ### Read source geometry (cached on Mesh)
     n_dims = mesh.n_spatial_dims
@@ -144,7 +162,7 @@ def partition_cells(
     assignments = assignments.squeeze(1)
 
     ### Accumulate areas per cluster
-    cluster_areas = torch.zeros(n_seeds, dtype=cell_areas.dtype, device=device)
+    cluster_areas = torch.zeros(n_seeds, dtype=dtype, device=device)
     cluster_areas.scatter_add_(0, assignments, cell_areas)
 
     ### Accumulate area-weighted normals, then normalize to unit length

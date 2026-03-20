@@ -39,7 +39,9 @@ def _make_point_cloud_mesh(n: int = 100) -> Mesh:
 ### knn matches brute-force ###
 
 
-class TestMatchesBruteForce:
+class TestBvhMatchesBruteForce:
+    """Verify BVH-accelerated assignments match brute-force on varied mesh topologies."""
+
     def test_triangle_mesh(self):
         """knn assignments match brute-force cdist on a regular triangle mesh."""
         m = plane.load(subdivisions=14)  # 392 triangles
@@ -99,6 +101,8 @@ class TestMatchesBruteForce:
 
 
 class TestExactCentroidQueries:
+    """Verify that querying at exact cell centroids yields identity mapping at zero distance."""
+
     def test_query_at_centroid_gives_distance_zero(self):
         """Querying at a cell's own centroid should find that cell at distance 0."""
         m = plane.load(subdivisions=4)
@@ -120,3 +124,68 @@ class TestExactCentroidQueries:
         assert torch.equal(idx, torch.arange(seed_mesh.n_cells))
         dists = (projected - seed_mesh.cell_centroids).norm(dim=1)
         assert dists.max().item() < 1e-12
+
+
+### Resolution completeness ###
+
+
+class TestResolutionCompleteness:
+    """Verify all queries resolve via BVH without falling back to brute-force."""
+
+    def test_all_queries_resolve_triangle_mesh(self):
+        """No queries should fall through to brute-force on a well-behaved mesh."""
+        m = plane.load(subdivisions=9)
+        mesh = Mesh(points=m.points.double(), cells=m.cells)
+        torch.manual_seed(4)
+        query = torch.rand(500, 3, dtype=torch.float64)
+        query[:, 2] = 0.0
+
+        bvh = BVH.from_mesh(mesh)
+        # Call the internal BVH function to check resolution directly
+        from physicsnemo.mesh.sampling.sample_data import _find_nearest_cells_bvh
+
+        _, resolved = _find_nearest_cells_bvh(
+            query, mesh.cell_centroids, bvh, mesh.n_cells, mesh.n_spatial_dims
+        )
+        assert resolved.all()
+
+    def test_all_queries_resolve_point_cloud(self):
+        """Point cloud queries should all resolve via BVH (no brute-force fallback)."""
+        seed_mesh = _make_point_cloud_mesh(300)
+        torch.manual_seed(5)
+        query = torch.randn(1000, 3, dtype=torch.float64)
+        query = query / query.norm(dim=1, keepdim=True)
+
+        bvh = BVH.from_mesh(seed_mesh)
+        from physicsnemo.mesh.sampling.sample_data import _find_nearest_cells_bvh
+
+        _, resolved = _find_nearest_cells_bvh(
+            query,
+            seed_mesh.cell_centroids,
+            bvh,
+            seed_mesh.n_cells,
+            seed_mesh.n_spatial_dims,
+        )
+        assert resolved.all()
+
+
+### Without BVH (brute-force path) ###
+
+
+class TestBruteForce:
+    """Verify the brute-force fallback path (bvh=None) produces correct results."""
+
+    def test_no_bvh_gives_correct_results(self):
+        """find_nearest_cells without BVH should use brute-force and be correct."""
+        m = plane.load(subdivisions=7)
+        mesh = Mesh(points=m.points.double(), cells=m.cells)
+        torch.manual_seed(6)
+        query = torch.rand(100, 3, dtype=torch.float64)
+        query[:, 2] = 0.0
+
+        idx_no_bvh, _ = find_nearest_cells(mesh, query, bvh=None)
+
+        bvh = BVH.from_mesh(mesh)
+        idx_bvh, _ = find_nearest_cells(mesh, query, bvh=bvh)
+
+        assert torch.equal(idx_no_bvh, idx_bvh)
