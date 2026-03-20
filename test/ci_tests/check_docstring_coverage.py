@@ -66,7 +66,7 @@ INTERROGATE_ARGS = [
     "--ignore-private",
     "--ignore-semiprivate",
     "--ignore-magic",
-    "--ignore-nested-functions",
+    "--ignore-nested-functions",  # not in original config; added per #1485
     *[arg for p in _IGNORE_REGEX_PATTERNS for arg in ("--ignore-regex", p)],
 ]
 
@@ -90,6 +90,7 @@ def _parse_interrogate_output(output: str, repo_root: Path) -> list[str]:
         m = re.match(r"={5,}\s+Coverage for (.+?)\s*={5,}", line)
         if m:
             current_dir = m.group(1).rstrip("/")
+            current_file = ""
             continue
 
         if not line.startswith("|"):
@@ -115,6 +116,18 @@ def _parse_interrogate_output(output: str, repo_root: Path) -> list[str]:
             full_path = f"{current_dir}/{m.group(1)}"
             current_file = os.path.relpath(full_path, repo_root)
             continue
+
+    ### Sanity check: if interrogate reported MISSED items but we parsed
+    ### nothing, the output format may have changed. Fail hard rather than
+    ### silently passing with an empty result (which is the exact class of
+    ### bug this script exists to prevent).
+    if not results and re.search(r"MISSED", output):
+        print(
+            "FAILED: interrogate output contains MISSED items but the parser "
+            "found none. The -vv output format may have changed.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     return results
 
