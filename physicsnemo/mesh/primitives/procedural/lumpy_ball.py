@@ -35,7 +35,7 @@ def load(
     noise_amplitude: float = 0.5,
     seed: int = 0,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[3, 3]:
     """Create a lumpy ball volume mesh.
 
     Builds a solid ball from concentric icosahedral shells connected by
@@ -63,7 +63,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[3, 3]
         Mesh with n_manifold_dims=3, n_spatial_dims=3.
 
     Examples

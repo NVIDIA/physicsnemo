@@ -29,8 +29,6 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.models.mlp import FullyConnected
 from test.conftest import requires_module
 
-mock_aws = pytest.importorskip("moto.mock_aws")
-
 
 @pytest.fixture(params=["./checkpoints", "msc://checkpoint-test/checkpoints"])
 def checkpoint_folder(request) -> str:
@@ -62,7 +60,6 @@ def model_generator(request) -> Callable:
     return model
 
 
-@mock_aws
 @requires_module(["wandb", "mlflow", "boto3"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_model_checkpointing(
@@ -76,83 +73,88 @@ def test_model_checkpointing(
     """Test checkpointing util for model"""
 
     import boto3
+
+    pytest.importorskip("moto")
     from moto import mock_aws
 
-    from physicsnemo.utils import load_checkpoint, save_checkpoint
+    with mock_aws():
+        from physicsnemo.utils import load_checkpoint, save_checkpoint
 
-    # Set up the mock with IAM credentials for access. These should match those in
-    # the MSC Config file (./msc_config_checkpoint.yaml).
-    os.environ["AWS_ACCESS_KEY_ID"] = "access-key-id"
-    # Credentials for testing only
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "secret-access-key"  # noqa: S105
+        # Set up the mock with IAM credentials for access. These should match those in
+        # the MSC Config file (./msc_config_checkpoint.yaml).
+        os.environ["AWS_ACCESS_KEY_ID"] = "access-key-id"
+        # Credentials for testing only
+        os.environ["AWS_SECRET_ACCESS_KEY"] = "secret-access-key"  # noqa: S105
 
-    # Ensure default region is set to match the MSC Config file.
-    os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
+        # Ensure default region is set to match the MSC Config file.
+        os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
 
-    current_file = Path(__file__).resolve()
-    current_dir = current_file.parent
-    os.environ["MSC_CONFIG"] = f"{current_dir}/msc_config_checkpoint.yaml"
+        current_file = Path(__file__).resolve()
+        current_dir = current_file.parent
+        os.environ["MSC_CONFIG"] = f"{current_dir}/msc_config_checkpoint.yaml"
 
-    # Create a bucket using the mock directly to ensure that MSC accesses the correct location.
-    conn = boto3.resource("s3", region_name="us-east-1")
-    conn.create_bucket(Bucket="checkpoint-test-bucket")
+        # Create a bucket using the mock directly to ensure that MSC accesses the correct location.
+        conn = boto3.resource("s3", region_name="us-east-1")
+        conn.create_bucket(Bucket="checkpoint-test-bucket")
 
-    # Initialize DistributedManager first since save_checkpoint instantiates it
-    DistributedManager.initialize()
+        # Initialize DistributedManager first since save_checkpoint instantiates it
+        DistributedManager.initialize()
 
-    mlp_model_1 = model_generator(8).to(device)
-    mlp_model_2 = model_generator(4).to(device)
+        mlp_model_1 = model_generator(8).to(device)
+        mlp_model_2 = model_generator(4).to(device)
 
-    input_1 = torch.randn(4, 8).to(device)
-    input_2 = torch.randn(4, 4).to(device)
+        input_1 = torch.randn(4, 8).to(device)
+        input_2 = torch.randn(4, 4).to(device)
 
-    output_1 = mlp_model_1(input_1)
-    output_2 = mlp_model_2(input_2)
-    # Save model weights to checkpoint
-    save_checkpoint(
-        checkpoint_folder,
-        models=[mlp_model_1, mlp_model_2],
-        metadata={"model_type": "MLP"},
-    )
+        output_1 = mlp_model_1(input_1)
+        output_2 = mlp_model_2(input_2)
+        # Save model weights to checkpoint
+        save_checkpoint(
+            checkpoint_folder,
+            models=[mlp_model_1, mlp_model_2],
+            metadata={"model_type": "MLP"},
+        )
 
-    # Load twin set of models for importing weights
-    mlp_model_1 = model_generator(8).to(device)
-    mlp_model_2 = model_generator(4).to(device)
+        # Load twin set of models for importing weights
+        mlp_model_1 = model_generator(8).to(device)
+        mlp_model_2 = model_generator(4).to(device)
 
-    new_output_1 = mlp_model_1(input_1)
-    new_output_2 = mlp_model_2(input_2)
-    # Assert models are now different
-    assert not torch.allclose(output_1, new_output_1, rtol, atol)
-    assert not torch.allclose(output_2, new_output_2, rtol, atol)
+        new_output_1 = mlp_model_1(input_1)
+        new_output_2 = mlp_model_2(input_2)
+        # Assert models are now different
+        assert not torch.allclose(output_1, new_output_1, rtol, atol)
+        assert not torch.allclose(output_2, new_output_2, rtol, atol)
 
-    # Load model weights from checkpoint
-    load_checkpoint(checkpoint_folder, models=[mlp_model_1, mlp_model_2], device=device)
+        # Load model weights from checkpoint
+        load_checkpoint(
+            checkpoint_folder, models=[mlp_model_1, mlp_model_2], device=device
+        )
 
-    loaded_output_1 = mlp_model_1(input_1)
-    loaded_output_2 = mlp_model_2(input_2)
+        loaded_output_1 = mlp_model_1(input_1)
+        loaded_output_2 = mlp_model_2(input_2)
 
-    assert torch.allclose(output_1, loaded_output_1, rtol, atol)
-    assert torch.allclose(output_2, loaded_output_2, rtol, atol)
+        assert torch.allclose(output_1, loaded_output_1, rtol, atol)
+        assert torch.allclose(output_2, loaded_output_2, rtol, atol)
 
-    # Also load the model with metadata
-    metadata_dict = {}
-    epoch = load_checkpoint(
-        checkpoint_folder,
-        models=[mlp_model_1, mlp_model_2],
-        metadata_dict=metadata_dict,
-        device=device,
-    )
+        # Also load the model with metadata
+        metadata_dict = {}
+        epoch = load_checkpoint(
+            checkpoint_folder,
+            models=[mlp_model_1, mlp_model_2],
+            metadata_dict=metadata_dict,
+            device=device,
+        )
 
-    assert epoch == 0
-    assert metadata_dict["model_type"] == "MLP"
+        assert epoch == 0
+        assert metadata_dict["model_type"] == "MLP"
 
-    # Clean up if writing to local file system (no need with object storage - files will disappear along with the mock).
-    if fsspec.utils.get_protocol(checkpoint_folder) == "file":
-        shutil.rmtree(checkpoint_folder)
-    else:
-        # if writing to object, the local cache must be cleared to allow multiple test runs
-        local_cache = os.environ["HOME"] + "/.cache/physicsnemo"
-        shutil.rmtree(local_cache)
+        # Clean up if writing to local file system (no need with object storage - files will disappear along with the mock).
+        if fsspec.utils.get_protocol(checkpoint_folder) == "file":
+            shutil.rmtree(checkpoint_folder)
+        else:
+            # if writing to object, the local cache must be cleared to allow multiple test runs
+            local_cache = os.environ["HOME"] + "/.cache/physicsnemo"
+            shutil.rmtree(local_cache)
 
 
 def test_get_checkpoint_dir():
@@ -174,6 +176,59 @@ def test_get_checkpoint_dir():
         get_checkpoint_dir("msc://test_profile/bucket/", "model")
         == "msc://test_profile/bucket/checkpoints_model"
     )
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+@pytest.mark.parametrize("model_type", ["physicsnemo", "pytorch"])
+def test_load_model_weights(
+    tmp_path, device, model_type, rtol: float = 1e-3, atol: float = 1e-3
+):
+    """load_model_weights restores weights from a single file for non-distributed models."""
+
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        pytest.skip("CUDA not available in the test environment")
+
+    from physicsnemo.utils import load_model_weights
+
+    DistributedManager.initialize()
+
+    in_feats = 8
+
+    if model_type == "physicsnemo":
+        model = FullyConnected(
+            in_features=in_feats, out_features=in_feats, num_layers=2, layer_size=8
+        ).to(device)
+        weights_file = str(tmp_path / "model.mdlus")
+        model.save(weights_file)
+    else:
+        model = nn.Sequential(
+            nn.Linear(in_feats, 8), nn.ReLU(), nn.Linear(8, in_feats)
+        ).to(device)
+        weights_file = str(tmp_path / "model.pt")
+        torch.save(model.state_dict(), weights_file)
+
+    x = torch.randn(4, in_feats, device=device)
+    with torch.no_grad():
+        ref_output = model(x).clone()
+
+    # Build a fresh model with different weights
+    if model_type == "physicsnemo":
+        model2 = FullyConnected(
+            in_features=in_feats, out_features=in_feats, num_layers=2, layer_size=8
+        ).to(device)
+    else:
+        model2 = nn.Sequential(
+            nn.Linear(in_feats, 8), nn.ReLU(), nn.Linear(8, in_feats)
+        ).to(device)
+
+    with torch.no_grad():
+        assert not torch.allclose(ref_output, model2(x), rtol=rtol, atol=atol)
+
+    load_model_weights(model2, weights_file, device=device)
+
+    with torch.no_grad():
+        loaded_output = model2(x)
+    assert torch.allclose(ref_output, loaded_output, rtol=rtol, atol=atol)
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda:0"])

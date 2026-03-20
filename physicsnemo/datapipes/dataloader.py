@@ -168,7 +168,9 @@ class DataLoader:
         int
             Number of batches in the dataloader.
         """
-        n_samples = len(self.dataset)
+        n_samples = (
+            len(self.sampler) if hasattr(self.sampler, "__len__") else len(self.dataset)
+        )
         if self.drop_last:
             return n_samples // self.batch_size
         return (n_samples + self.batch_size - 1) // self.batch_size

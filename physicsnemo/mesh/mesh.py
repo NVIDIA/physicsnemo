@@ -294,7 +294,6 @@ class Mesh:
         else:
             self.global_data = TensorDict(
                 {} if self.global_data is None else dict(self.global_data),
-                batch_size=torch.Size([]),
                 device=self.points.device,
             )
 
@@ -302,14 +301,10 @@ class Mesh:
         if self._cache is None:
             self._cache = TensorDict(
                 {
-                    "cell": TensorDict(
-                        {}, batch_size=[self.n_cells], device=self.points.device
-                    ),
-                    "point": TensorDict(
-                        {}, batch_size=[self.n_points], device=self.points.device
-                    ),
+                    "cell": TensorDict({}, batch_size=[self.n_cells]),
+                    "point": TensorDict({}, batch_size=[self.n_points]),
+                    "topology": TensorDict({}),
                 },
-                batch_size=[],
                 device=self.points.device,
             )
 
@@ -336,6 +331,61 @@ class Mesh:
                     f"`points` and `cells` must be on the same device, "
                     f"but got {self.points.device=} and {self.cells.device=}."
                 )
+
+    @classmethod
+    def __class_getitem__(cls, params: tuple) -> type:
+        r"""Parametrize Mesh by manifold and spatial dimensions.
+
+        Returns a synthetic type usable in type annotations and ``isinstance``
+        checks. Always requires exactly two parameters; use ``...`` (Ellipsis)
+        to leave a dimension unconstrained.
+
+        Parameters
+        ----------
+        params : tuple
+            A 2-tuple of ``(manifold_dims, spatial_dims)`` where each element
+            is an ``int`` (concrete), ``str`` (symbolic, e.g. ``"n-1"``), or
+            ``...`` (unconstrained).
+
+        Returns
+        -------
+        type
+            A parametrized Mesh type supporting ``isinstance`` checks.
+
+        Raises
+        ------
+        TypeError
+            If not exactly 2 parameters, or if parameter types are invalid.
+        ValueError
+            If concrete dimensions are negative or manifold exceeds spatial.
+
+        Examples
+        --------
+        >>> Mesh[2, 3]
+        Mesh[2, 3]
+        >>> Mesh[1, ...]
+        Mesh[1, ...]
+        >>> Mesh[2, 3].boundary
+        Mesh[1, 3]
+        """
+        from physicsnemo.mesh._mesh_spec import MeshDims, _get_mesh_spec
+
+        if not isinstance(params, tuple):
+            raise TypeError(
+                f"Mesh[...] requires exactly 2 parameters (e.g. Mesh[2, 3] "
+                f"or Mesh[2, ...]), got single parameter {params!r}"
+            )
+        if len(params) != 2:
+            raise TypeError(
+                f"Mesh[...] requires exactly 2 parameters, got {len(params)}"
+            )
+
+        n_manifold_dims = None if params[0] is ... else params[0]
+        n_spatial_dims = None if params[1] is ... else params[1]
+
+        return _get_mesh_spec(
+            MeshDims(n_manifold_dims=n_manifold_dims, n_spatial_dims=n_spatial_dims)
+        )
 
     if TYPE_CHECKING:
         # Type stub for the `to` method dynamically added by @tensorclass.
@@ -1051,8 +1101,8 @@ class Mesh:
             {
                 "cell": self._cache["cell"][indices],
                 "point": self._cache["point"],
+                "topology": TensorDict({}),
             },
-            batch_size=[],
             device=self.points.device,
         )
         return Mesh(
@@ -1265,6 +1315,7 @@ class Mesh:
             point_data=new_point_data,
             cell_data=self.cell_data,
             global_data=self.global_data,
+            _cache=self._cache,
         )
 
     def point_data_to_cell_data(self, overwrite_keys: bool = False) -> "Mesh":
@@ -1323,6 +1374,7 @@ class Mesh:
             point_data=self.point_data,
             cell_data=new_cell_data,
             global_data=self.global_data,
+            _cache=self._cache,
         )
 
     def get_facet_mesh(
@@ -1483,7 +1535,7 @@ class Mesh:
             target_counts="boundary",
         )
 
-    def to_edge_graph(self) -> "Mesh":
+    def to_edge_graph(self) -> "Mesh[1, ...]":
         r"""Return a 1D Mesh whose cells are the unique edges of this mesh.
 
         Each edge (pair of vertices connected in a cell) appears exactly once.
@@ -1495,8 +1547,8 @@ class Mesh:
 
         Returns
         -------
-        Mesh
-            A 1D Mesh (``n_manifold_dims == 1``) with edge cells.
+        Mesh[1, ...]
+            A 1D mesh (``n_manifold_dims == 1``) with edge cells.
 
         Examples
         --------
@@ -1506,13 +1558,13 @@ class Mesh:
         >>> cells = torch.tensor([[0, 1, 2]])
         >>> mesh = Mesh(points=points, cells=cells)
         >>> edge_graph = mesh.to_edge_graph()
-        >>> assert edge_graph.n_manifold_dims == 1
+        >>> assert isinstance(edge_graph, Mesh[1, ...])
         >>> assert edge_graph.n_cells == 3  # triangle has 3 edges
         """
         codim = self.n_manifold_dims - 1
         return self.get_facet_mesh(manifold_codimension=codim, target_counts="all")
 
-    def to_dual_graph(self) -> "Mesh":
+    def to_dual_graph(self) -> "Mesh[1, ...]":
         r"""Return a 1D Mesh representing the cell-adjacency (dual) graph.
 
         Points are the cell centroids of this mesh.  Cells are
@@ -1523,8 +1575,8 @@ class Mesh:
 
         Returns
         -------
-        Mesh
-            A 1D Mesh (``n_manifold_dims == 1``) whose points are cell
+        Mesh[1, ...]
+            A 1D mesh (``n_manifold_dims == 1``) whose points are cell
             centroids and whose cells encode the cell-neighbor adjacency.
 
         Examples
@@ -1536,7 +1588,7 @@ class Mesh:
         >>> cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
         >>> mesh = Mesh(points=points, cells=cells)
         >>> dual = mesh.to_dual_graph()
-        >>> assert dual.n_manifold_dims == 1
+        >>> assert isinstance(dual, Mesh[1, ...])
         >>> assert dual.n_cells == 1  # 1 shared edge -> 1 dual edge
         """
         adj = self.get_cell_to_cells_adjacency(adjacency_codimension=1)
@@ -1556,7 +1608,7 @@ class Mesh:
 
     def to_point_cloud(
         self, point_source: "Literal['vertices', 'cell_centroids']" = "vertices"
-    ) -> "Mesh":
+    ) -> "Mesh[0, ...]":
         r"""Return a 0D Mesh (point cloud) with no cell connectivity.
 
         Parameters
@@ -1571,8 +1623,8 @@ class Mesh:
 
         Returns
         -------
-        Mesh
-            A 0D Mesh (``n_manifold_dims == 0``) with no cells.
+        Mesh[0, ...]
+            A 0D mesh (``n_manifold_dims == 0``) with no cells.
 
         Examples
         --------
@@ -1582,9 +1634,8 @@ class Mesh:
         >>> cells = torch.tensor([[0, 1, 2]])
         >>> mesh = Mesh(points=points, cells=cells)
         >>> pc = mesh.to_point_cloud()
-        >>> assert pc.n_manifold_dims == 0
+        >>> assert isinstance(pc, Mesh[0, ...])
         >>> assert pc.n_points == 3
-        >>> assert pc.n_cells == 0
         """
         if point_source == "vertices":
             return Mesh(
@@ -1671,11 +1722,51 @@ class Mesh:
 
         return is_manifold(self, check_level=check_level)
 
+    def _cached_adjacency(self, cache_key: str, compute_fn, **kwargs):
+        r"""Look up or compute-and-cache a topological adjacency.
+
+        All four ``get_*_adjacency`` methods delegate here. The
+        ``offsets`` and ``indices`` tensors are stored as a sub-TensorDict
+        under ``_cache["topology", "{cache_key}"]``.
+
+        Parameters
+        ----------
+        cache_key : str
+            Key under ``"topology"``, e.g. ``"point_to_points"`` or
+            ``"cell_to_cells_codim_1"``.
+        compute_fn : callable
+            ``(mesh, **kwargs) -> Adjacency`` invoked on cache miss.
+        **kwargs
+            Forwarded to *compute_fn*.
+
+        Returns
+        -------
+        Adjacency
+            Cached or freshly computed adjacency.
+        """
+        from physicsnemo.mesh.neighbors import Adjacency
+
+        cached = self._cache.get(("topology", cache_key), None)
+        if cached is not None:
+            return Adjacency(
+                offsets=cached["offsets"],
+                indices=cached["indices"],
+            )
+        result = compute_fn(self, **kwargs)
+        self._cache["topology", cache_key] = TensorDict(
+            {"offsets": result.offsets, "indices": result.indices},
+        )
+        return result
+
     def get_point_to_cells_adjacency(self):
         """Compute the star of each vertex (all cells containing each point).
 
         For each point in the mesh, finds all cells that contain that point. This
         is the graph-theoretic "star" operation on vertices.
+
+        The result is cached in ``_cache["topology", ...]`` for efficiency.
+        Adjacency depends only on topology (cells), not geometry (points), so
+        the cache is preserved through geometric transforms.
 
         Returns
         -------
@@ -1693,13 +1784,17 @@ class Mesh:
         """
         from physicsnemo.mesh.neighbors import get_point_to_cells_adjacency
 
-        return get_point_to_cells_adjacency(self)
+        return self._cached_adjacency("point_to_cells", get_point_to_cells_adjacency)
 
     def get_point_to_points_adjacency(self):
         """Compute point-to-point adjacency (graph edges of the mesh).
 
         For each point, finds all other points that share a cell with it. In simplicial
         meshes, this is equivalent to finding all points connected by an edge.
+
+        The result is cached in ``_cache["topology", ...]`` for efficiency.
+        Adjacency depends only on topology (cells), not geometry (points), so
+        the cache is preserved through geometric transforms.
 
         Returns
         -------
@@ -1717,12 +1812,17 @@ class Mesh:
         """
         from physicsnemo.mesh.neighbors import get_point_to_points_adjacency
 
-        return get_point_to_points_adjacency(self)
+        return self._cached_adjacency("point_to_points", get_point_to_points_adjacency)
 
     def get_cell_to_cells_adjacency(self, adjacency_codimension: int = 1):
         """Compute cell-to-cells adjacency based on shared facets.
 
         Two cells are considered adjacent if they share a k-codimension facet.
+
+        The result is cached in ``_cache["topology", ...]`` for efficiency,
+        keyed by ``adjacency_codimension``. Adjacency depends only on topology
+        (cells), not geometry (points), so the cache is preserved through
+        geometric transforms.
 
         Parameters
         ----------
@@ -1750,8 +1850,10 @@ class Mesh:
         """
         from physicsnemo.mesh.neighbors import get_cell_to_cells_adjacency
 
-        return get_cell_to_cells_adjacency(
-            self, adjacency_codimension=adjacency_codimension
+        return self._cached_adjacency(
+            f"cell_to_cells_codim_{adjacency_codimension}",
+            get_cell_to_cells_adjacency,
+            adjacency_codimension=adjacency_codimension,
         )
 
     def get_cell_to_points_adjacency(self):
@@ -1759,6 +1861,8 @@ class Mesh:
 
         This is a simple wrapper around the cells array that returns it in the
         standard Adjacency format for consistency with other neighbor queries.
+
+        The result is cached in ``_cache["topology", ...]`` for efficiency.
 
         Returns
         -------
@@ -1777,7 +1881,7 @@ class Mesh:
         """
         from physicsnemo.mesh.neighbors import get_cell_to_points_adjacency
 
-        return get_cell_to_points_adjacency(self)
+        return self._cached_adjacency("cell_to_points", get_cell_to_points_adjacency)
 
     def pad(
         self,
@@ -1861,8 +1965,8 @@ class Mesh:
                         lambda x: _pad_with_value(x, target_n_points, 0.0),
                         batch_size=torch.Size([target_n_points]),
                     ),
+                    "topology": TensorDict({}),
                 },
-                batch_size=[],
                 device=self.points.device,
             ),
         )
@@ -2074,9 +2178,9 @@ class Mesh:
         angle: float,
         axis: torch.Tensor | list | tuple | Literal["x", "y", "z"] | None = None,
         center: torch.Tensor | list | tuple | None = None,
-        transform_point_data: bool = False,
-        transform_cell_data: bool = False,
-        transform_global_data: bool = False,
+        transform_point_data: bool | TensorDict = False,
+        transform_cell_data: bool | TensorDict = False,
+        transform_global_data: bool | TensorDict = False,
     ) -> "Mesh":
         """Rotate the mesh about an axis by a specified angle.
 
@@ -2118,9 +2222,9 @@ class Mesh:
         self,
         factor: float | torch.Tensor,
         center: torch.Tensor | None = None,
-        transform_point_data: bool = False,
-        transform_cell_data: bool = False,
-        transform_global_data: bool = False,
+        transform_point_data: bool | TensorDict = False,
+        transform_cell_data: bool | TensorDict = False,
+        transform_global_data: bool | TensorDict = False,
         assume_invertible: bool | None = None,
     ) -> "Mesh":
         """Scale the mesh by specified factor(s).
@@ -2163,9 +2267,9 @@ class Mesh:
     def transform(
         self,
         matrix: torch.Tensor,
-        transform_point_data: bool = False,
-        transform_cell_data: bool = False,
-        transform_global_data: bool = False,
+        transform_point_data: bool | TensorDict = False,
+        transform_cell_data: bool | TensorDict = False,
+        transform_global_data: bool | TensorDict = False,
         assume_invertible: bool | None = None,
     ) -> "Mesh":
         """Apply a linear transformation to the mesh.
