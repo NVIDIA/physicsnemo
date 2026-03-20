@@ -47,6 +47,8 @@ def _make_point_cloud_mesh(n: int = 100) -> Mesh:
 
 
 class TestBvhMatchesBruteForce:
+    """Verify BVH-accelerated assignments match brute-force on varied mesh topologies."""
+
     def test_triangle_mesh(self):
         """BVH assignments match brute-force on a regular triangle mesh."""
         m = plane.load(subdivisions=14)  # 392 triangles
@@ -124,6 +126,8 @@ class TestBvhMatchesBruteForce:
 
 
 class TestExactCentroidQueries:
+    """Verify that querying at exact cell centroids yields identity mapping at zero distance."""
+
     def test_query_at_centroid_gives_distance_zero(self):
         """Querying at a cell's own centroid should find that cell at distance 0."""
         m = plane.load(subdivisions=4)
@@ -155,6 +159,8 @@ class TestExactCentroidQueries:
 
 
 class TestResolutionCompleteness:
+    """Verify all queries resolve via BVH without falling back to brute-force."""
+
     def test_all_queries_resolve_triangle_mesh(self):
         """No queries should fall through to brute-force on a well-behaved mesh."""
         m = plane.load(subdivisions=9)
@@ -196,6 +202,8 @@ class TestResolutionCompleteness:
 
 
 class TestBruteForce:
+    """Verify the brute-force fallback path (bvh=None) produces correct results."""
+
     def test_no_bvh_gives_correct_results(self):
         """find_nearest_cells without BVH should use brute-force and be correct."""
         m = plane.load(subdivisions=7)
