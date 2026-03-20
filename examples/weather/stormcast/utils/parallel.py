@@ -219,8 +219,11 @@ class ParallelHelper:
         ShardTensor
             Sharded or replicated tensor on domain mesh.
         """
-        source_rank = self.get_domain_group_zero_rank()
-        return self.nested_scatter(x, source_rank)
+        if self.use_shard_tensor:
+            source_rank = self.get_domain_group_zero_rank()
+            return self.nested_scatter(x, source_rank)
+        else:
+            return x
 
     def distribute_model(self, model: torch.nn.Module) -> FSDP:
         """Shard model parameters across the domain mesh and wrap with FSDP.
@@ -291,7 +294,7 @@ class ParallelHelper:
 
             placement = (
                 Shard(shard_dim)
-                if (x.ndim >= 3 and shard_dim is not None)
+                if (x.ndim >= 3 and shard_dim is not None and x.shape[shard_dim] > 1)
                 else Replicate()
             )
             x = scatter_tensor(
