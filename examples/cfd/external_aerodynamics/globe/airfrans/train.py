@@ -153,8 +153,7 @@ def main(
     output_dir = Path(__file__).parent / "output" / output_name
     cache_dir = Path(__file__).parent / "cache"
 
-    # Parse error scales
-    error_scales = {
+    error_scale_config = {
         "ΔU/|U_inf|": 1.0,
         "C_p": 1.0,
         "C_pt": 1.0,
@@ -186,7 +185,7 @@ def main(
     logger0.info(f"{dist.world_size = }")
 
     error_scales: TensorDict[str, Float[torch.Tensor, ""]] = TensorDict(
-        error_scales,  # ty: ignore[invalid-argument-type]
+        error_scale_config,
         device=device,
     )
     if dist.rank == 0:
@@ -292,7 +291,8 @@ def main(
     # so the optimal LR scales as sqrt(batch_size).  The denominator 2048
     # is the reference point count per iteration (not samples) at which the
     # base `learning_rate` applies.
-    learning_rate *= (dist.world_size * n_prediction_points / 2048) ** 0.5
+    # The scaling is applied after checkpoint load (see [World-size LR
+    # portability] below) so that checkpoints are portable across GPU counts.
     if use_muon:
         # Muon is designed for matrix-shaped parameters (2D weight tensors
         # of linear layers); biases, norms, and other non-matrix parameters
@@ -334,7 +334,6 @@ def main(
     scaler = torch.amp.GradScaler(device=device.type, enabled=amp)
 
     ### [Checkpoint Save/Load]
-    mlflow_run_id: str | None = None
     metadata_dict: dict[str, Any] = {}
     epoch = load_checkpoint(
         checkpoint_dir,
@@ -345,17 +344,26 @@ def main(
         metadata_dict=metadata_dict,
         device=dist.device,
     )
-    if epoch > 0:
-        logger0.info(f"Resuming training from epoch {epoch}")
-        best_loss = metadata_dict.get("best_loss", float("inf"))
-        last_image_epoch = metadata_dict.get("last_image_epoch", -float("inf"))
-        last_image_loss = metadata_dict.get("last_image_loss", float("inf"))
-        mlflow_run_id = metadata_dict.get("mlflow_run_id")
-    else:
-        logger0.info("Starting training from scratch.")
-        best_loss = float("inf")
-        last_image_epoch = -float("inf")
-        last_image_loss = float("inf")
+    logger0.info(
+        f"Resuming training from epoch {epoch}"
+        if epoch > 0
+        else "Starting training from scratch."
+    )
+    best_loss = metadata_dict.get("best_loss", float("inf"))
+    last_image_epoch = metadata_dict.get("last_image_epoch", -float("inf"))
+    last_image_loss = metadata_dict.get("last_image_loss", float("inf"))
+    mlflow_run_id: str | None = metadata_dict.get("mlflow_run_id")
+
+    ### [World-size LR portability]
+    loaded_world_size = metadata_dict.get("world_size", 1)
+    loaded_n_prediction_points = metadata_dict.get("n_prediction_points", 2048)
+    lr_ratio = (
+        dist.world_size * n_prediction_points
+        / (loaded_world_size * loaded_n_prediction_points)
+    ) ** 0.5
+    for pg in optimizer.param_groups:
+        pg["lr"] *= lr_ratio
+    scheduler.min_lrs = [m * lr_ratio for m in scheduler.min_lrs]
 
     ### [MLflow Setup]
     mlflow_run_ctx: contextlib.AbstractContextManager = contextlib.nullcontext()
@@ -555,6 +563,8 @@ def main(
                 "mlflow_run_id": (
                     _run.info.run_id if use_mlflow and (_run := active_run()) else None
                 ),
+                "world_size": dist.world_size,
+                "n_prediction_points": n_prediction_points,
             }
 
         def save_ckpt() -> None:
@@ -570,15 +580,15 @@ def main(
 
         _first_epoch = True
         for epoch in count(start=epoch + 1):
-            if _first_epoch and dist.rank == 0:
-                _globe_logger.setLevel(logging.INFO)
-                _first_epoch = False
-
             loss = {}
             loss_components = {}
             for split in splits:
                 with record_function(f"epoch_{epoch}_{split}"):
                     loss[split], loss_components[split] = run_epoch(split)
+
+            if _first_epoch and dist.rank == 0:
+                _globe_logger.setLevel(logging.INFO)
+                _first_epoch = False
 
             scheduler.step(loss["train"])
 

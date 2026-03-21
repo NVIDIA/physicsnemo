@@ -98,9 +98,9 @@ def main(
     n_latent_scalars: int = 8,
     n_latent_vectors: int = 4,
     n_spherical_harmonics: int = 4,
-    theta: float = 1.0,
+    theta: float = 2.0,
     leaf_size: int = 1,
-    n_faces_per_boundary: int = 40_000,
+    n_faces_per_boundary: int = 80_000,
     use_profiler: bool = True,
     make_images: bool = True,
     save_every: int = 1,
@@ -234,19 +234,17 @@ def main(
 
     ### [Model]
     # Reference area: constant aRefRef = 2.170 m² from the DrivAerML spec
-    n_spatial_dims = 3
-    boundary_source_data_ranks: dict[str, dict] = {
-        "vehicle": {},
-        "no_slip_floor": {},
-        "slip_floor": {},
-    }
     model = GLOBE(
-        n_spatial_dims=n_spatial_dims,
+        n_spatial_dims=3,
         output_field_ranks={
             "C_p": 0,
             "C_f": 1,
         },
-        boundary_source_data_ranks=boundary_source_data_ranks,
+        boundary_source_data_ranks={
+            "vehicle": {},
+            "no_slip_floor": {},
+            "slip_floor": {},
+        },
         reference_length_names=["L_ref", "delta_turb"],
         reference_area=2.170,
         global_data_ranks=None,
@@ -282,7 +280,6 @@ def main(
         )
 
     ### [Optimizer and Scheduler Setup]
-    learning_rate *= (dist.world_size) ** 0.5
     if use_muon:
         optimizer = CombinedOptimizer(
             optimizers=[
@@ -339,6 +336,18 @@ def main(
     last_image_epoch = metadata_dict.get("last_image_epoch", -float("inf"))
     last_image_loss = metadata_dict.get("last_image_loss", float("inf"))
     mlflow_run_id: str | None = metadata_dict.get("mlflow_run_id")
+
+    ### [World-size LR portability]
+    loaded_world_size = metadata_dict.get("world_size", 1)
+    lr_ratio = (dist.world_size / loaded_world_size) ** 0.5
+    for pg in optimizer.param_groups:
+        pg["lr"] *= lr_ratio
+    scheduler.min_lrs = [m * lr_ratio for m in scheduler.min_lrs]
+    if lr_ratio != 1.0:
+        logger0.info(
+            f"Adjusted LR for world_size change: "
+            f"{loaded_world_size} -> {dist.world_size} (ratio={lr_ratio:.4f})"
+        )
 
     ### [MLflow Setup]
     mlflow_run_ctx: contextlib.AbstractContextManager = contextlib.nullcontext()
@@ -507,6 +516,7 @@ def main(
                 "mlflow_run_id": (
                     _run.info.run_id if use_mlflow and (_run := active_run()) else None
                 ),
+                "world_size": dist.world_size,
             }
 
         def save_ckpt() -> None:
