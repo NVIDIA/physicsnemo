@@ -284,13 +284,10 @@ def main(
         )
 
     ### [Optimizer and Scheduler Setup]
-    # Square-root batch-size scaling: when the effective batch size grows
-    # (more GPUs or more points), gradient variance decreases proportionally,
-    # so the optimal LR scales as sqrt(batch_size).  The denominator 80_000
-    # is the reference point count per iteration (not samples) at which the
-    # base `learning_rate` applies.
-    # The scaling is applied after checkpoint load (see [World-size LR
-    # portability] below) so that checkpoints are portable across GPU counts.
+    # No automatic LR scaling for batch size / world_size.  Muon
+    # orthogonalizes the gradient, fixing the update norm independent of
+    # batch size, so the maximum safe LR is determined by loss-landscape
+    # curvature, not gradient noise.  See arXiv:2502.16982 Sec 2.2.
     if use_muon:
         optimizer = CombinedOptimizer(
             optimizers=[
@@ -349,18 +346,15 @@ def main(
     last_image_loss = metadata_dict.get("last_image_loss", float("inf"))
     mlflow_run_id: str | None = metadata_dict.get("mlflow_run_id")
 
-    ### [World-size portability]
-    loaded_world_size = metadata_dict.get("world_size", 1)
-    loaded_n_prediction_points = metadata_dict.get("n_prediction_points", n_prediction_points)
-    ws_ratio = dist.world_size / loaded_world_size
-
-    lr_ratio = (ws_ratio * n_prediction_points / loaded_n_prediction_points) ** 0.5
-    for pg in optimizer.param_groups:
-        pg["lr"] *= lr_ratio
-    scheduler.min_lrs = [m * lr_ratio for m in scheduler.min_lrs]
-
+    ### [Scheduler patience normalization]
+    # ReduceLROnPlateau measures patience in epochs.  When world_size
+    # changes, epoch length changes (fewer steps per epoch with more
+    # GPUs), so we recompute patience in epochs from the step-based
+    # target and rescale the bad-epoch counter accordingly.
     scheduler.patience = patience_epochs
-    if "world_size" in metadata_dict and metadata_dict["world_size"] != dist.world_size:
+    loaded_world_size = metadata_dict.get("world_size")
+    if loaded_world_size is not None and loaded_world_size != dist.world_size:
+        ws_ratio = dist.world_size / loaded_world_size
         scheduler.num_bad_epochs = round(scheduler.num_bad_epochs * ws_ratio)
 
     ### [First-Launch Diagnostics]
@@ -493,7 +487,8 @@ def main(
 
             ### Disable all first-launch diagnostics after the first batch.
             if _compile_collector is not None and _compile_collector.active:
-                _globe_logger.setLevel(logging.INFO)
+                if _globe_logger is not None:
+                    _globe_logger.setLevel(logging.INFO)
                 torch._logging.set_logs(graph_breaks=False, recompiles=False)
                 _compile_collector.uninstall()
                 logger0.info(
@@ -558,7 +553,6 @@ def main(
                     _run.info.run_id if use_mlflow and (_run := active_run()) else None
                 ),
                 "world_size": dist.world_size,
-                "n_prediction_points": n_prediction_points,
             }
 
         def save_ckpt() -> None:
