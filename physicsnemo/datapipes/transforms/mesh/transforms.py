@@ -239,6 +239,246 @@ class SubsampleMesh(MeshTransform):
         return ", ".join(parts)
 
 
+def _rename_td_keys(td: TensorDict, mapping: dict[str, str]) -> TensorDict:
+    """Rename keys in a TensorDict, returning a new TensorDict."""
+    out = td.clone()
+    for old_key, new_key in mapping.items():
+        if old_key in out.keys():
+            out[new_key] = out.pop(old_key)
+    return out
+
+
+@register()
+class DropMeshFields(MeshTransform):
+    r"""Remove fields from a Mesh's point_data, cell_data, or global_data.
+
+    Useful for dropping fields that would interfere with downstream
+    transforms (e.g. removing a scalar ``TimeValue`` from ``global_data``
+    before a rotation that expects all global fields to be 3-vectors).
+    """
+
+    def __init__(
+        self,
+        point_data: list[str] | None = None,
+        cell_data: list[str] | None = None,
+        global_data: list[str] | None = None,
+    ) -> None:
+        super().__init__()
+        self._point_data_keys = point_data or []
+        self._cell_data_keys = cell_data or []
+        self._global_data_keys = global_data or []
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        new_pd = mesh.point_data
+        if self._point_data_keys:
+            new_pd = new_pd.clone()
+            for k in self._point_data_keys:
+                if k in new_pd.keys():
+                    del new_pd[k]
+
+        new_cd = mesh.cell_data
+        if self._cell_data_keys:
+            new_cd = new_cd.clone()
+            for k in self._cell_data_keys:
+                if k in new_cd.keys():
+                    del new_cd[k]
+
+        new_gd = mesh.global_data
+        if self._global_data_keys:
+            new_gd = new_gd.clone()
+            for k in self._global_data_keys:
+                if k in new_gd.keys():
+                    del new_gd[k]
+
+        return Mesh(
+            points=mesh.points,
+            cells=mesh.cells,
+            point_data=new_pd,
+            cell_data=new_cd,
+            global_data=new_gd,
+        )
+
+    def extra_repr(self) -> str:
+        parts = []
+        if self._point_data_keys:
+            parts.append(f"point_data={self._point_data_keys}")
+        if self._cell_data_keys:
+            parts.append(f"cell_data={self._cell_data_keys}")
+        if self._global_data_keys:
+            parts.append(f"global_data={self._global_data_keys}")
+        return ", ".join(parts)
+
+
+@register()
+class RenameMeshFields(MeshTransform):
+    r"""Rename fields in a Mesh's point_data, cell_data, or global_data.
+
+    Useful for harmonizing field names across datasets that store
+    the same physical quantity under different keys (e.g.
+    ``pMeanTrim`` vs ``pressure_average``).
+    """
+
+    def __init__(
+        self,
+        point_data: dict[str, str] | None = None,
+        cell_data: dict[str, str] | None = None,
+        global_data: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__()
+        self._point_data_map = point_data or {}
+        self._cell_data_map = cell_data or {}
+        self._global_data_map = global_data or {}
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        new_pd = (
+            _rename_td_keys(mesh.point_data, self._point_data_map)
+            if self._point_data_map
+            else mesh.point_data
+        )
+        new_cd = (
+            _rename_td_keys(mesh.cell_data, self._cell_data_map)
+            if self._cell_data_map
+            else mesh.cell_data
+        )
+        new_gd = (
+            _rename_td_keys(mesh.global_data, self._global_data_map)
+            if self._global_data_map
+            else mesh.global_data
+        )
+        return Mesh(
+            points=mesh.points,
+            cells=mesh.cells,
+            point_data=new_pd,
+            cell_data=new_cd,
+            global_data=new_gd,
+        )
+
+    def extra_repr(self) -> str:
+        parts = []
+        if self._point_data_map:
+            parts.append(f"point_data={self._point_data_map}")
+        if self._cell_data_map:
+            parts.append(f"cell_data={self._cell_data_map}")
+        if self._global_data_map:
+            parts.append(f"global_data={self._global_data_map}")
+        return ", ".join(parts)
+
+
+@register()
+class SetGlobalField(MeshTransform):
+    r"""Inject constant tensor fields into a Mesh's global_data.
+
+    Fields are set on every call, overwriting any existing field with
+    the same key.  Tensors are moved to the mesh's device automatically.
+
+    Typical use: inject a per-dataset inlet velocity vector so that
+    downstream rotation transforms (with ``transform_global_data=True``)
+    rotate it consistently with the mesh geometry.
+    """
+
+    def __init__(
+        self,
+        fields: dict[str, torch.Tensor | list[float]],
+    ) -> None:
+        super().__init__()
+        self._fields: dict[str, torch.Tensor] = {}
+        for k, v in fields.items():
+            if not isinstance(v, torch.Tensor):
+                v = torch.tensor(v, dtype=torch.float32)
+            self._fields[k] = v
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        new_gd = mesh.global_data.clone()
+        for k, v in self._fields.items():
+            new_gd[k] = v.to(device=mesh.points.device, dtype=mesh.points.dtype)
+        return Mesh(
+            points=mesh.points,
+            cells=mesh.cells,
+            point_data=mesh.point_data,
+            cell_data=mesh.cell_data,
+            global_data=new_gd,
+        )
+
+    def extra_repr(self) -> str:
+        shapes = {k: tuple(v.shape) for k, v in self._fields.items()}
+        return f"fields={shapes}"
+
+
+def _get_mesh_section(mesh: Mesh, section: str) -> TensorDict:
+    """Look up a Mesh data section by name."""
+    if section == "point_data":
+        return mesh.point_data
+    if section == "cell_data":
+        return mesh.cell_data
+    if section == "global_data":
+        return mesh.global_data
+    raise ValueError(f"Unknown mesh section: {section!r}")
+
+
+@register()
+class NonDimensionalizeFields(MeshTransform):
+    r"""Non-dimensionalize fields by a dynamic pressure q derived per-sample.
+
+    Computes q from the ratio of two co-located fields -- one dimensional,
+    one already non-dimensional -- and divides target fields by q.  Uses
+    the median ratio for robustness against surface points where the
+    denominator passes through zero.
+
+    Typical use: given ``pMeanTrim`` (Pa) and ``CpMeanTrim`` (dimensionless)
+    in ``point_data``, compute ``q = median(pMeanTrim / CpMeanTrim)`` and
+    divide ``wallShearStressMeanTrim`` by q to obtain the skin-friction
+    coefficient Cf.
+    """
+
+    def __init__(
+        self,
+        dimensional_field: str,
+        nondimensional_field: str,
+        section: str = "point_data",
+        target_fields: list[str] | None = None,
+        target_section: str | None = None,
+        min_denominator: float = 0.01,
+    ) -> None:
+        super().__init__()
+        self._dim_field = dimensional_field
+        self._nondim_field = nondimensional_field
+        self._section = section
+        self._target_fields = target_fields or []
+        self._target_section = target_section or section
+        self._min_denom = min_denominator
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        ref_td = _get_mesh_section(mesh, self._section)
+        dim_vals = ref_td[self._dim_field].float().reshape(-1)
+        nondim_vals = ref_td[self._nondim_field].float().reshape(-1)
+
+        mask = nondim_vals.abs() > self._min_denom
+        q = (dim_vals[mask] / nondim_vals[mask]).median()
+
+        target_td = _get_mesh_section(mesh, self._target_section)
+        new_td = target_td.clone()
+        for field_name in self._target_fields:
+            new_td[field_name] = new_td[field_name].float() / q
+
+        kwargs: dict = {
+            "points": mesh.points,
+            "cells": mesh.cells,
+            "point_data": mesh.point_data,
+            "cell_data": mesh.cell_data,
+            "global_data": mesh.global_data,
+        }
+        kwargs[self._target_section] = new_td
+        return Mesh(**kwargs)
+
+    def extra_repr(self) -> str:
+        targets = [f"{self._target_section}.{f}" for f in self._target_fields]
+        return (
+            f"q={self._section}.{self._dim_field}"
+            f"/{self._section}.{self._nondim_field}, "
+            f"targets={targets}"
+        )
+
+
 def _mesh_to_tensordict(mesh: Mesh) -> TensorDict:
     """Convert a single Mesh into a flat TensorDict (no cache, no tensorclass)."""
     out: dict = {
@@ -302,3 +542,74 @@ class MeshToTensorDict(MeshTransform):
         if domain.global_data.keys():
             out["global_data"] = domain.global_data.clone()
         return TensorDict(out, batch_size=[])
+
+
+def _resolve_td_path(td: TensorDict, dotted_key: str) -> torch.Tensor:
+    """Resolve a dot-separated key path into a tensor from a TensorDict."""
+    parts = dotted_key.split(".")
+    current = td
+    for part in parts:
+        current = current[part]
+    return current
+
+
+@register()
+class ComputeCellCentroids(MeshTransform):
+    r"""Compute cell centroids from points and cells in a TensorDict.
+
+    Placed after :class:`MeshToTensorDict`, this adds a ``cell_centroids``
+    key of shape :math:`(N_c, D_s)` computed as the mean of each cell's
+    vertex positions.  Requires ``points`` and ``cells`` to be present.
+    """
+
+    def __call__(self, td: TensorDict) -> TensorDict:  # type: ignore[override]
+        points = td["points"]
+        cells = td["cells"]
+        centroids = points[cells].mean(dim=1)
+        td = td.clone()
+        td["cell_centroids"] = centroids
+        return td
+
+
+@register()
+class RestructureTensorDict(MeshTransform):
+    r"""Reorganize a flat TensorDict into named groups.
+
+    Placed after :class:`MeshToTensorDict`, this transform picks fields
+    from the flat layout and assembles them into a structured dict
+    (e.g. separate ``input`` and ``output`` groups for model training).
+
+    Each group is defined as ``{dest_key: source_path}`` where
+    ``source_path`` uses dots for nesting (e.g. ``point_data.pressure``).
+
+    Example YAML::
+
+        - _target_: ${dp:RestructureTensorDict}
+          groups:
+            input:
+              points: points
+              inlet_velocity: global_data.inlet_velocity
+            output:
+              pressure: point_data.pressure
+              wss: point_data.wss
+    """
+
+    def __init__(self, groups: dict[str, dict[str, str]]) -> None:
+        super().__init__()
+        self._groups = groups
+
+    def __call__(self, td: TensorDict) -> TensorDict:  # type: ignore[override]
+        out: dict = {}
+        for group_name, mapping in self._groups.items():
+            group: dict = {}
+            for dest_key, source_path in mapping.items():
+                group[dest_key] = _resolve_td_path(td, source_path)
+            out[group_name] = TensorDict(group, batch_size=[])
+        return TensorDict(out, batch_size=[])
+
+    def extra_repr(self) -> str:
+        lines = []
+        for group, mapping in self._groups.items():
+            sources = ", ".join(f"{k}<-{v}" for k, v in mapping.items())
+            lines.append(f"{group}: {{{sources}}}")
+        return "; ".join(lines)

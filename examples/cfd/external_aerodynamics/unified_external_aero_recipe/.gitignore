@@ -1,0 +1,6 @@
+outputs/
+stats/
+checkpoints/
+*.mdlus
+*.tfevents*
+*.parquet

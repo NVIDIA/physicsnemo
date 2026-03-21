@@ -30,14 +30,14 @@ from typing import Any, Iterator, Optional, Sequence
 
 from tensordict import TensorDict
 
-from physicsnemo.datapipes.dataset import Dataset
+from physicsnemo.datapipes.protocols import DatasetBase
 from physicsnemo.datapipes.registry import register
 
 # Metadata key added by MultiDataset to identify which sub-dataset produced the sample.
 DATASET_INDEX_METADATA_KEY = "dataset_index"
 
 
-def _validate_strict_outputs(datasets: Sequence[Dataset]) -> list[str]:
+def _validate_strict_outputs(datasets: Sequence[DatasetBase]) -> list[str]:
     """
     Check that all non-empty datasets produce the same TensorDict keys; return them.
 
@@ -46,7 +46,7 @@ def _validate_strict_outputs(datasets: Sequence[Dataset]) -> list[str]:
 
     Parameters
     ----------
-    datasets : Sequence[Dataset]
+    datasets : Sequence[DatasetBase]
         Datasets to validate.
 
     Returns
@@ -76,25 +76,30 @@ def _validate_strict_outputs(datasets: Sequence[Dataset]) -> list[str]:
                 "output_strict=True requires identical output keys (TensorDict keys) "
                 f"across datasets: dataset {ref_index} has {ref_keys}, dataset {i} has {keys}"
             )
-    return list(ref_keys) if ref_keys is not None else list(datasets[0].field_names)
+    if ref_keys is not None:
+        return list(ref_keys)
+    first = datasets[0]
+    return list(first.field_names) if hasattr(first, "field_names") else []
 
 
 @register()
 class MultiDataset:
     r"""
-    A dataset that composes multiple :class:`Dataset` instances behind one index space.
+    A dataset that composes multiple :class:`DatasetBase` instances behind one index space.
 
-    Global indices are mapped to (dataset_index, local_index) by concatenation:
-    indices 0..len0-1 come from the first dataset, len0..len0+len1-1 from the second,
-    and so on. Each constituent can have its own Reader and transforms. Metadata
-    is enriched with ``dataset_index`` so batches can identify the source.
+    Accepts both :class:`Dataset` (TensorDict pipelines) and :class:`MeshDataset`
+    (Mesh pipelines) as sub-datasets. Global indices are mapped to
+    (dataset_index, local_index) by concatenation: indices 0..len0-1 come from the
+    first dataset, len0..len0+len1-1 from the second, and so on. Each constituent
+    can have its own Reader and transforms. Metadata is enriched with
+    ``dataset_index`` so batches can identify the source.
 
     Parameters
     ----------
-    *datasets : Dataset
-        One or more Dataset instances passed as positional arguments
-        (Reader + transforms each). Order defines index mapping: first
-        dataset occupies 0..len(ds0)-1, etc.
+    *datasets : DatasetBase
+        One or more Dataset or MeshDataset instances passed as positional
+        arguments (Reader + transforms each). Order defines index mapping:
+        first dataset occupies 0..len(ds0)-1, etc.
     output_strict : bool, default=True
         If True, require all datasets to produce the same TensorDict keys (output
         keys after transforms) so :class:`DefaultCollator` can stack batches. If
@@ -157,7 +162,7 @@ class MultiDataset:
 
     def __init__(
         self,
-        *datasets: Dataset,
+        *datasets: DatasetBase,
         output_strict: bool = True,
     ) -> None:
         if len(datasets) < 1:
@@ -165,9 +170,10 @@ class MultiDataset:
                 f"MultiDataset requires at least one dataset, got {len(datasets)}"
             )
         for i, ds in enumerate(datasets):
-            if not isinstance(ds, Dataset):
+            if not isinstance(ds, DatasetBase):
                 raise TypeError(
-                    f"datasets[{i}] must be a Dataset instance, got {type(ds).__name__}"
+                    f"datasets[{i}] must be a Dataset or MeshDataset instance, "
+                    f"got {type(ds).__name__}"
                 )
 
         self._datasets = list(datasets)
@@ -183,7 +189,11 @@ class MultiDataset:
         if output_strict:
             self._field_names = _validate_strict_outputs(self._datasets)
         else:
-            self._field_names = list(self._datasets[0].field_names)
+            first = self._datasets[0]
+            if hasattr(first, "field_names"):
+                self._field_names = list(first.field_names)
+            else:
+                self._field_names = []
 
     def _index_to_dataset_and_local(self, index: int) -> tuple[int, int]:
         """
