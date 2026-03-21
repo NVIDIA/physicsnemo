@@ -191,6 +191,13 @@ def main(
     if dist.rank == 0:
         logging.basicConfig(level=logging.INFO)
         warnings.resetwarnings()  # undo module-level suppression for rank 0
+        # MLflow's SQLAlchemy store and system-metrics monitor emit verbose
+        # tracebacks on transient SQLite "database is locked" errors.  Our
+        # resilient() wrapper reports final failures as one-liners.
+        logging.getLogger("mlflow.store.db.utils").setLevel(logging.CRITICAL)
+        logging.getLogger("mlflow.system_metrics.system_metrics_monitor").setLevel(
+            logging.CRITICAL
+        )
     else:
         logging.disable(logging.ERROR)
     logger = PythonLogger("globe.drivaer.train")
@@ -371,9 +378,9 @@ def main(
         torchinfo.summary(base_model, depth=4)
         _globe_logger = logging.getLogger("globe")
         _globe_logger.setLevel(logging.DEBUG)
+        torch._logging.set_logs(graph_breaks=True, recompiles=True)
         _compile_collector = CompileDiagnosticsCollector()
         _compile_collector.install()
-        torch._logging.set_logs(graph_breaks=True, recompiles=True)
 
     ### [MLflow Setup]
     mlflow_run_ctx: contextlib.AbstractContextManager = contextlib.nullcontext()
