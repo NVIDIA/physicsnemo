@@ -247,7 +247,7 @@ def main(
             "C_f": 1,
         },
         boundary_source_data_ranks=boundary_source_data_ranks,
-        reference_length_names=["L_ref", "sqrt_A_ref"],
+        reference_length_names=["L_ref", "delta_turb"],
         reference_area=2.170,
         global_data_ranks=None,
         n_communication_hyperlayers=n_communication_hyperlayers,

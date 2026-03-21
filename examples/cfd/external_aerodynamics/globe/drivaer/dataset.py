@@ -136,7 +136,7 @@ class DrivAerMLSample:
             The domain floor meshes are created during preprocessing via
             :func:`create_domain_boundaries` and cached alongside the sample.
         reference_lengths: Per-sample reference lengths (``L_ref``,
-            ``sqrt_A_ref``) used for GLOBE multiscale kernel construction.
+            ``delta_turb``) used for GLOBE multiscale kernel construction.
         dimensional_constants: ``U_inf``, ``q_inf`` for re-dimensionalization.
         aero_coefficients: Ground-truth ``Cd``, ``Cl``, ``Cs`` from the
             simulation, for evaluation of integrated force predictions.
@@ -467,6 +467,13 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         l_ref = float(geo_ref["lRef"])
         a_ref = float(geo_ref["aRef"])
 
+        ### Turbulent boundary layer thickness at x = L_ref (flat-plate estimate)
+        # δ_turb = 0.37 * L * Re_L^(-1/5), where Re_L = U_inf * L / ν.
+        # This physics-derived small scale gives the kernel an O(1)
+        # nondimensionalization for near-wall and near-ground interactions.
+        re_l = U_INF * l_ref / NU
+        delta_turb = 0.37 * l_ref * re_l ** (-0.2)
+
         ### Parse force/moment CSV
         force_mom_path = sample_dir / f"force_mom_{run_idx}.csv"
         force_mom = _read_single_row_csv(force_mom_path)
@@ -481,13 +488,14 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
             reference_lengths=TensorDict(
                 {
                     "L_ref": torch.as_tensor(l_ref),
-                    "sqrt_A_ref": torch.as_tensor(a_ref**0.5),
+                    "delta_turb": torch.as_tensor(delta_turb),
                 },
             ),
             dimensional_constants=TensorDict(
                 {
                     "U_inf": torch.as_tensor(U_INF),
                     "q_inf": torch.as_tensor(Q_INF),
+                    "A_ref": torch.as_tensor(a_ref),
                 },
             ),
             aero_coefficients=TensorDict(
@@ -553,7 +561,7 @@ def postprocess(
             ``point_data``.
         sample: The preprocessed sample.  ``sample.prediction_mesh`` provides
             the ground-truth fields and cell connectivity;
-            ``sample.reference_lengths["sqrt_A_ref"]`` is used for
+            ``sample.dimensional_constants["A_ref"]`` is used for
             normalization; ``sample.aero_coefficients`` provides the
             authoritative CSV ground-truth force coefficients.
         fields: Which field names to compare.  If ``None``, uses the sorted
@@ -593,7 +601,7 @@ def postprocess(
     ### Compute integrated force coefficients on predictions
     # pred_mesh is a point cloud (no cells), so we construct a surface
     # mesh with true_mesh's cell connectivity for integration.
-    a_ref = float(sample.reference_lengths["sqrt_A_ref"]) ** 2
+    a_ref = float(sample.dimensional_constants["A_ref"])
     pred_surface = Mesh(
         points=true_mesh.points,
         cells=true_mesh.cells,
