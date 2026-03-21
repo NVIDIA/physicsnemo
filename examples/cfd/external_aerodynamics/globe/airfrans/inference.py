@@ -23,7 +23,7 @@ from pathlib import Path
 import torch
 import yaml
 from dataset import AirFRANSDataSet
-from utilities import disable_autotune_printing
+from physicsnemo.experimental.utils import disable_autotune_printing
 
 from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.utils.logging import PythonLogger

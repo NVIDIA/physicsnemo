@@ -34,9 +34,7 @@ from tensordict import TensorDict, tensorclass
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
-from physicsnemo.experimental.models.globe.utilities.cached_dataset import (
-    CachedPreprocessingDataset,
-)
+from physicsnemo.experimental.utils import CachedPreprocessingDataset
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.primitives.planar import structured_grid
