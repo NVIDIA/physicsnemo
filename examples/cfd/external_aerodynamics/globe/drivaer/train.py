@@ -101,6 +101,7 @@ def main(
     theta: float = 2.0,
     leaf_size: int = 1,
     n_faces_per_boundary: int = 80_000,
+    patience_steps: int = 1600,
     use_profiler: bool = True,
     make_images: bool = True,
     save_every: int = 10,
@@ -136,6 +137,8 @@ def main(
             aggressive (more approximation, faster). 0 = exact.
         leaf_size: Maximum sources per leaf node in the Barnes-Hut tree.
         n_faces_per_boundary: Target boundary mesh face count after decimation.
+        patience_steps: ReduceLROnPlateau patience expressed in gradient
+            steps (world-size independent).  Converted to epochs internally.
         use_profiler: Enable PyTorch profiler (rank 0 only).
         make_images: Generate visualization images during training.
         save_every: Save a checkpoint every this many epochs.
@@ -313,11 +316,12 @@ def main(
             decoupled_weight_decay=True,
             foreach=True,
         )
+    patience_epochs = patience_steps // len(dataloaders["train"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode="min",
         factor=0.5,
-        patience=400,
+        patience=patience_epochs,
         min_lr=learning_rate / 64,
         threshold=1e-3,
     )
@@ -344,16 +348,19 @@ def main(
     last_image_loss = metadata_dict.get("last_image_loss", float("inf"))
     mlflow_run_id: str | None = metadata_dict.get("mlflow_run_id")
 
-    ### [World-size LR portability]
+    ### [World-size portability]
     loaded_world_size = metadata_dict.get("world_size", 1)
     loaded_n_prediction_points = metadata_dict.get("n_prediction_points", n_prediction_points)
-    lr_ratio = (
-        dist.world_size * n_prediction_points
-        / (loaded_world_size * loaded_n_prediction_points)
-    ) ** 0.5
+    ws_ratio = dist.world_size / loaded_world_size
+
+    lr_ratio = (ws_ratio * n_prediction_points / loaded_n_prediction_points) ** 0.5
     for pg in optimizer.param_groups:
         pg["lr"] *= lr_ratio
     scheduler.min_lrs = [m * lr_ratio for m in scheduler.min_lrs]
+
+    scheduler.patience = patience_epochs
+    if "world_size" in metadata_dict and metadata_dict["world_size"] != dist.world_size:
+        scheduler.num_bad_epochs = round(scheduler.num_bad_epochs * ws_ratio)
 
     ### [MLflow Setup]
     mlflow_run_ctx: contextlib.AbstractContextManager = contextlib.nullcontext()
