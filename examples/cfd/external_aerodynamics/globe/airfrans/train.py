@@ -271,6 +271,7 @@ def main(
     # Without this, Dynamo guards on parameter shapes and recompiles for each
     # kernel branch, quickly exhausting the recompile limit.
     torch._dynamo.config.force_parameter_static_shapes = False
+    torch._dynamo.config.capture_scalar_outputs = True
 
     # The GLOBE model stores latent channels as individually-named TensorDict
     # entries (18 keys for 12 scalar + 6 vector channels).  Dynamo specializes

@@ -726,7 +726,9 @@ class ClusterTree:
                 leaf_starts = self.leaf_start[leaf_node_ids]
                 leaf_counts = self.leaf_count[leaf_node_ids]
                 n_leaves = leaf_node_ids.shape[0]
-                positions, compact_ids = _ragged_arange(leaf_starts, leaf_counts)
+                positions, compact_ids = _ragged_arange(
+                    leaf_starts, leaf_counts, total=self.n_sources,
+                )
 
                 seg_ids_compact = torch.zeros(
                     self.n_sources, dtype=torch.long, device=device

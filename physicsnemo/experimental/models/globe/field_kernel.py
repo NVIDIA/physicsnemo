@@ -1221,6 +1221,7 @@ class BarnesHutKernel(Kernel):
                 positions, pair_ids = _ragged_arange(
                     dual_plan.fn_broadcast_starts,
                     dual_plan.fn_broadcast_counts,
+                    total=dual_plan.fn_broadcast_targets.shape[0],
                 )
                 expanded_tgt_ids = dual_plan.fn_broadcast_targets[positions]
 
@@ -1284,7 +1285,9 @@ class BarnesHutKernel(Kernel):
         if int(leaf_counts.sum()) > 0:
             from physicsnemo.mesh.spatial._ragged import _ragged_arange
 
-            positions, seg_ids = _ragged_arange(leaf_starts, leaf_counts)
+            positions, seg_ids = _ragged_arange(
+                leaf_starts, leaf_counts, total=tree.n_sources,
+            )
             sorted_strengths = source_strengths[tree.sorted_source_order[positions]]
             leaf_sums = torch.zeros(n_leaves, dtype=source_strengths.dtype, device=device)
             leaf_sums.scatter_add_(0, seg_ids, sorted_strengths)

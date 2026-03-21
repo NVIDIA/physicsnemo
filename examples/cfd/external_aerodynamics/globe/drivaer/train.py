@@ -270,6 +270,7 @@ def main(
         torch.compiler.load_cache_artifacts(torch_compile_cache.read_bytes())
 
     torch._dynamo.config.force_parameter_static_shapes = False
+    torch._dynamo.config.capture_scalar_outputs = True
     torch._dynamo.config.cache_size_limit = 64
 
     ### [Distribute the model across GPUs]
