@@ -16,13 +16,43 @@
 
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from typing import TypeVar
+from typing import Generic, TypeVar
 
 _T = TypeVar("_T")
 _U = TypeVar("_U")
 
 
-def prefetch_map(iterable: Iterable[_T], fn: Callable[[_T], _U]) -> Iterator[_U]:
+class _PrefetchMap(Generic[_U]):
+    """Iterable that applies a function with one-step lookahead prefetching.
+
+    Preserves ``__len__`` from the source iterable so that progress bars
+    (tqdm) can display a total count.
+    """
+
+    def __init__(self, iterable: Iterable, fn: Callable[..., _U]) -> None:
+        self._iterable = iterable
+        self._fn = fn
+
+    def __iter__(self) -> Iterator[_U]:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            it = iter(self._iterable)
+            try:
+                future = pool.submit(self._fn, next(it))
+            except StopIteration:
+                return
+
+            for item in it:
+                next_future = pool.submit(self._fn, item)
+                yield future.result()
+                future = next_future
+
+            yield future.result()
+
+    def __len__(self) -> int:
+        return len(self._iterable)  # type: ignore[arg-type]
+
+
+def prefetch_map(iterable: Iterable[_T], fn: Callable[[_T], _U]) -> _PrefetchMap[_U]:
     """Apply *fn* to each element, overlapping ``fn(next)`` with consumption of current.
 
     Submits ``fn(element)`` to a single background thread one step ahead
@@ -48,16 +78,4 @@ def prefetch_map(iterable: Iterable[_T], fn: Callable[[_T], _U]) -> Iterator[_U]
     U
         Prepared items, one step behind the background thread.
     """
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        it = iter(iterable)
-        try:
-            future = pool.submit(fn, next(it))
-        except StopIteration:
-            return
-
-        for item in it:
-            next_future = pool.submit(fn, item)
-            yield future.result()
-            future = next_future
-
-        yield future.result()
+    return _PrefetchMap(iterable, fn)
