@@ -32,6 +32,8 @@ import torchinfo
 from dataset import (
     DrivAerMLDataSet,
     DrivAerMLSample,
+    postprocess,
+    visualize_comparison,
 )
 from jaxtyping import Float
 from mlflow.tracking.fluent import (
@@ -160,7 +162,7 @@ def main(
     if n_prediction_points is None:
         n_prediction_points = n_faces_per_boundary
 
-    error_scales = {
+    error_scale_config = {
         "C_p": 1.0,
         "C_f": 0.01,
     } | ({} if error_scales is None else error_scales)
@@ -189,7 +191,7 @@ def main(
     logger0.info(f"{dist.world_size = }")
 
     error_scales: TensorDict[str, Float[torch.Tensor, ""]] = TensorDict(
-        error_scales,
+        error_scale_config,
         device=device,
     )
     if dist.rank == 0:
@@ -406,40 +408,15 @@ def main(
         all_batch_losses: list[torch.Tensor] = []
         all_batch_loss_components: dict[str, list[torch.Tensor]] = defaultdict(list)
 
-        def prepare_sample(sample: DrivAerMLSample) -> DrivAerMLSample:
-            """Subsample prediction points, precompute cell geometry, transfer to GPU.
-
-            Runs in a background thread via prefetch_map so that CPU-bound
-            preparation of sample N+1 overlaps with GPU processing of sample N.
-            """
-            with record_function("data_subsampling"):
-                n_points = min(n_prediction_points, sample.prediction_mesh.n_points)
-                mask = torch.randint(sample.prediction_mesh.n_points, (n_points,))
-                sample.prediction_mesh = (
-                    sample.prediction_mesh.to_point_cloud().slice_points(mask)
-                )
-
-                for bc_type, mesh in sample.boundary_meshes.items():
-                    if (
-                        bc_type == "vehicle"
-                        and training
-                        and train_randomize_face_centers
-                    ):
-                        mesh._cache["cell", "centroids"] = (
-                            mesh.sample_random_points_on_cells()
-                        )
-                    else:
-                        _ = mesh.cell_centroids
-                    _ = mesh.cell_areas
-                    _ = mesh.cell_normals
-
-            with record_function("data_transfer"):
-                sample = sample.to(device)
-
-            return sample
-
         for sample in tqdm(
-            prefetch_map(dataloaders[split], prepare_sample),
+            prefetch_map(
+                dataloaders[split],
+                lambda s: s.prepare(
+                    n_prediction_points,
+                    device,
+                    randomize_vehicle=training and train_randomize_face_centers,
+                ),
+            ),
             desc=f"{epoch:d} {split.title()}",
             unit=" samples",
             disable=dist.rank != 0 or epoch > 10,
@@ -597,7 +574,7 @@ def main(
                     save_ckpt()
                 break
 
-            ### [MLflow Image Logging]
+            ### [Visualization]
             if (
                 make_images
                 and (loss["train"] / last_image_loss < 0.9)
@@ -606,66 +583,18 @@ def main(
                 if dist.rank == 0:
                     logger0.info("Generating visualization images...")
                     for split in splits:
-                        viz_sample = dataloaders[split].dataset[0]
-
-                        ### Subsample prediction surface for speed
-                        if viz_sample.prediction_mesh.n_cells > n_faces_per_boundary:
-                            viz_sample.prediction_mesh = (
-                                DrivAerMLDataSet.subsample_mesh(
-                                    viz_sample.prediction_mesh,
-                                    n_faces_per_boundary,
-                                    geometry_only=False,
-                                )
-                            )
-
-                        viz_sample = viz_sample.to(device)
-                        with torch.no_grad(), autocast_ctx:
-                            base_model.eval()
-                            pred_mesh = base_model(
-                                **viz_sample.model_input_kwargs,
-                            )
-                        combined = DrivAerMLDataSet.postprocess(
-                            pred_mesh=pred_mesh.to(device="cpu"),
-                            sample=viz_sample.to(device="cpu"),
+                        generate_visualization(
+                            model=base_model,
+                            dataset=dataloaders[split].dataset,
+                            n_faces_per_boundary=n_faces_per_boundary,
+                            device=device,
+                            autocast_ctx=autocast_ctx,
+                            output_dir=output_dir,
+                            split=split,
+                            epoch=epoch,
+                            use_mlflow=use_mlflow,
+                            logger=logger0,
                         )
-
-                        save_path = output_dir / f"viz_{split}_epoch_{epoch}.png"
-                        DrivAerMLDataSet.visualize_comparison(
-                            combined,
-                            save_path=save_path,
-                            backend="matplotlib",
-                        )
-                        if use_mlflow:
-                            log_artifact(
-                                str(save_path),
-                                artifact_path="visualization",
-                            )
-
-                        ### [Surface Force Coefficients]
-                        pred_coeffs = combined.global_data["pred"].to_dict()  # ty: ignore[unresolved-attribute]
-                        true_coeffs = combined.global_data["true"].to_dict()  # ty: ignore[unresolved-attribute]
-
-                        logger0.info(
-                            f"Force coefficients ({split}):"
-                            + "".join(
-                                f"\n  {k}: pred={pred_coeffs[k]:.5f}"
-                                f"  true={true_coeffs[k]:.5f}"
-                                f"  err={pred_coeffs[k] - true_coeffs[k]:+.5f}"
-                                for k in ("Cd", "Cl", "Cs")
-                            )
-                        )
-                        if use_mlflow:
-                            log_metrics(
-                                {
-                                    f"force_coeffs/{split}_{k}_{src}": coeffs[k]
-                                    for src, coeffs in [
-                                        ("pred", pred_coeffs),
-                                        ("true", true_coeffs),
-                                    ]
-                                    for k in pred_coeffs
-                                },
-                                step=epoch,
-                            )
 
                 last_image_epoch, last_image_loss = epoch, loss["train"]
                 if dist.world_size > 1:
@@ -704,6 +633,88 @@ def field_loss_fn(
     if error.ndim > 1:
         error = error.norm(dim=-1)
     return 2 * F.huber_loss(error, torch.zeros_like(error), reduction="none", delta=1.0)
+
+
+def generate_visualization(
+    model: torch.nn.Module,
+    dataset: DrivAerMLDataSet,
+    *,
+    n_faces_per_boundary: int,
+    device: torch.device,
+    autocast_ctx: contextlib.AbstractContextManager,
+    output_dir: Path,
+    split: str,
+    epoch: int,
+    use_mlflow: bool,
+    logger: Any,
+) -> None:
+    """Run inference on sample 0 of a split and produce comparison visualizations.
+
+    Generates a pred/true/error image, computes integrated force coefficients,
+    and logs both to MLflow (if enabled) and the console.
+
+    Args:
+        model: Trained GLOBE model (will be set to eval mode).
+        dataset: Dataset to draw sample 0 from.
+        n_faces_per_boundary: Face count for subsampling the prediction mesh.
+        device: Device to run inference on.
+        autocast_ctx: Autocast context for mixed precision.
+        output_dir: Directory for saving visualization images.
+        split: Split name (for labeling output files and log messages).
+        epoch: Current epoch (for labeling output files and MLflow steps).
+        use_mlflow: Whether to log artifacts and metrics to MLflow.
+        logger: Logger instance for console output.
+    """
+    viz_sample = dataset[0]
+
+    ### Subsample prediction surface for speed
+    if viz_sample.prediction_mesh.n_cells > n_faces_per_boundary:
+        viz_sample.prediction_mesh = DrivAerMLDataSet.subsample_mesh(
+            viz_sample.prediction_mesh,
+            n_faces_per_boundary,
+            geometry_only=False,
+        )
+
+    viz_sample = viz_sample.to(device)
+    with torch.no_grad(), autocast_ctx:
+        model.eval()
+        pred_mesh = model(**viz_sample.model_input_kwargs)
+
+    combined = postprocess(
+        pred_mesh=pred_mesh.to(device="cpu"),
+        sample=viz_sample.to(device="cpu"),
+    )
+
+    save_path = output_dir / f"viz_{split}_epoch_{epoch}.png"
+    visualize_comparison(combined, save_path=save_path, backend="matplotlib")
+    if use_mlflow:
+        log_artifact(str(save_path), artifact_path="visualization")
+
+    ### Log force coefficients
+    pred_coeffs = combined.global_data["pred"].to_dict()  # ty: ignore[unresolved-attribute]
+    true_coeffs = combined.global_data["true"].to_dict()  # ty: ignore[unresolved-attribute]
+
+    logger.info(
+        f"Force coefficients ({split}):"
+        + "".join(
+            f"\n  {k}: pred={pred_coeffs[k]:.5f}"
+            f"  true={true_coeffs[k]:.5f}"
+            f"  err={pred_coeffs[k] - true_coeffs[k]:+.5f}"
+            for k in ("Cd", "Cl", "Cs")
+        )
+    )
+    if use_mlflow:
+        log_metrics(
+            {
+                f"force_coeffs/{split}_{k}_{src}": coeffs[k]
+                for src, coeffs in [
+                    ("pred", pred_coeffs),
+                    ("true", true_coeffs),
+                ]
+                for k in pred_coeffs
+            },
+            step=epoch,
+        )
 
 
 if __name__ == "__main__":

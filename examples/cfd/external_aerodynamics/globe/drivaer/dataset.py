@@ -158,6 +158,47 @@ class DrivAerMLSample:
             "global_data": None,
         }
 
+    def prepare(
+        self,
+        n_prediction_points: int,
+        device: torch.device | str,
+        *,
+        randomize_vehicle: bool = False,
+    ) -> Self:
+        """Subsample prediction points, precompute boundary geometry, transfer to device.
+
+        This consolidates the per-sample preparation that runs between cache
+        loading and model forward.  Designed to be called from a prefetch
+        worker thread (CPU-bound) so preparation of sample N+1 overlaps with
+        GPU processing of sample N.
+
+        Args:
+            n_prediction_points: Maximum number of prediction points to keep.
+                If the mesh has fewer points, all are kept.
+            device: Target device for the returned sample.
+            randomize_vehicle: If True, sample random points inside each
+                vehicle boundary cell instead of using centroids. Typically
+                enabled during training for data augmentation.
+
+        Returns:
+            This sample, modified in-place and moved to *device*.
+        """
+        n_points = min(n_prediction_points, self.prediction_mesh.n_points)
+        mask = torch.randint(self.prediction_mesh.n_points, (n_points,))
+        self.prediction_mesh = self.prediction_mesh.to_point_cloud().slice_points(mask)
+
+        for bc_type, mesh in self.boundary_meshes.items():
+            if bc_type == "vehicle" and randomize_vehicle:
+                mesh._cache["cell", "centroids"] = (
+                    mesh.sample_random_points_on_cells()
+                )
+            else:
+                _ = mesh.cell_centroids
+            _ = mesh.cell_areas
+            _ = mesh.cell_normals
+
+        return self.to(device)
+
     if TYPE_CHECKING:
 
         def to(self, *args: Any, **kwargs: Any) -> Self: ...
@@ -458,147 +499,175 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
             ),
         )
 
-    # ------------------------------------------------------------------
-    # Postprocessing / visualization
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def postprocess(
-        pred_mesh: Mesh,
-        sample: DrivAerMLSample,
+    @classmethod
+    def load_single_sample(
+        cls,
+        sample_path: Path,
         *,
-        fields: Sequence[str] | None = None,
-    ) -> Mesh:
-        """Build a combined pred/true/error Mesh with integrated force coefficients.
+        n_faces_per_boundary: int = 20_000,
+        device: torch.device | str = "cpu",
+    ) -> DrivAerMLSample:
+        """Load, preprocess, and fully populate a single sample (no cache).
 
-        Assembles a single Mesh whose ``point_data`` contains nested
-        ``"true"``, ``"pred"``, and ``"error"`` TensorDicts for the selected
-        fields, and whose ``global_data`` contains integrated surface force
-        coefficients for the prediction and CSV ground-truth coefficients.
-
-        This method performs no visualization.  Pass the returned Mesh to
-        :meth:`visualize_comparison` to render a subplot grid.
+        Convenience method for inference and visualization scripts that need
+        a complete sample without going through the DataLoader.  Equivalent
+        to calling ``preprocess`` + adding the vehicle boundary + device
+        transfer.
 
         Args:
-            pred_mesh: Point-cloud Mesh with predicted field values in
-                ``point_data``.
-            sample: The preprocessed sample.  ``sample.prediction_mesh`` provides
-                the ground-truth fields and cell connectivity;
-                ``sample.reference_lengths["sqrt_A_ref"]`` is used for
-                normalization; ``sample.aero_coefficients`` provides the
-                authoritative CSV ground-truth force coefficients.
-            fields: Which field names to compare.  If ``None``, uses the sorted
-                intersection of pred and true ``point_data`` keys.
+            sample_path: Path to a ``run_N/`` directory.
+            n_faces_per_boundary: Number of vehicle surface cells to randomly
+                subsample.
+            device: Target device.
 
         Returns:
-            Combined Mesh with ``point_data["true"]``, ``point_data["pred"]``,
-            ``point_data["error"]`` for the selected fields, and
-            ``global_data["pred"]`` (integrated from predictions) /
-            ``global_data["true"]`` (CSV ground truth) each containing
-            scalar force coefficient tensors (Cd, Cl, Cs).
-
-        Raises:
-            ValueError: If pred_mesh and the sample surface mesh have
-                different numbers of points.
+            Fully populated :class:`DrivAerMLSample` on *device*.
         """
-        true_mesh = sample.prediction_mesh
+        sample = cls.preprocess(sample_path)
+        sample.boundary_meshes["vehicle"] = cls.subsample_mesh(
+            sample.prediction_mesh, n_faces_per_boundary
+        )
+        return sample.to(device)
 
-        if pred_mesh.n_points != true_mesh.n_points:
-            raise ValueError(
-                f"Point count mismatch: {pred_mesh.n_points=} vs {true_mesh.n_points=}"
-            )
 
-        if fields is None:
-            fields = sorted(
-                set(pred_mesh.point_data.keys(include_nested=True, leaves_only=True))
-                & set(true_mesh.point_data.keys(include_nested=True, leaves_only=True))
-            )
+# ---------------------------------------------------------------------------
+# Postprocessing / visualization
+# ---------------------------------------------------------------------------
 
-        ### Build combined point_data
-        pred_selected = pred_mesh.point_data.select(*fields)
-        true_selected = true_mesh.point_data.select(*fields)
-        error_data: TensorDict = pred_selected.apply(  # ty: ignore[invalid-assignment]
-            lambda p, t: p - t, true_selected
+
+def postprocess(
+    pred_mesh: Mesh,
+    sample: DrivAerMLSample,
+    *,
+    fields: Sequence[str] | None = None,
+) -> Mesh:
+    """Build a combined pred/true/error Mesh with integrated force coefficients.
+
+    Assembles a single Mesh whose ``point_data`` contains nested
+    ``"true"``, ``"pred"``, and ``"error"`` TensorDicts for the selected
+    fields, and whose ``global_data`` contains integrated surface force
+    coefficients for the prediction and CSV ground-truth coefficients.
+
+    Args:
+        pred_mesh: Point-cloud Mesh with predicted field values in
+            ``point_data``.
+        sample: The preprocessed sample.  ``sample.prediction_mesh`` provides
+            the ground-truth fields and cell connectivity;
+            ``sample.reference_lengths["sqrt_A_ref"]`` is used for
+            normalization; ``sample.aero_coefficients`` provides the
+            authoritative CSV ground-truth force coefficients.
+        fields: Which field names to compare.  If ``None``, uses the sorted
+            intersection of pred and true ``point_data`` keys.
+
+    Returns:
+        Combined Mesh with ``point_data["true"]``, ``point_data["pred"]``,
+        ``point_data["error"]`` for the selected fields, and
+        ``global_data["pred"]`` (integrated from predictions) /
+        ``global_data["true"]`` (CSV ground truth) each containing
+        scalar force coefficient tensors (Cd, Cl, Cs).
+
+    Raises:
+        ValueError: If pred_mesh and the sample surface mesh have
+            different numbers of points.
+    """
+    true_mesh = sample.prediction_mesh
+
+    if pred_mesh.n_points != true_mesh.n_points:
+        raise ValueError(
+            f"Point count mismatch: {pred_mesh.n_points=} vs {true_mesh.n_points=}"
         )
 
-        ### Compute integrated force coefficients on predictions
-        # pred_mesh is a point cloud (no cells), so we construct a surface
-        # mesh with true_mesh's cell connectivity for integration.
-        a_ref = float(sample.reference_lengths["sqrt_A_ref"]) ** 2
-        pred_surface = Mesh(
-            points=true_mesh.points,
-            cells=true_mesh.cells,
-            point_data=pred_mesh.point_data,
+    if fields is None:
+        fields = sorted(
+            set(pred_mesh.point_data.keys(include_nested=True, leaves_only=True))
+            & set(true_mesh.point_data.keys(include_nested=True, leaves_only=True))
         )
 
-        return Mesh(
-            points=true_mesh.points,
-            cells=true_mesh.cells,
-            point_data=TensorDict(
-                {
-                    "true": true_selected,
-                    "pred": pred_selected,
-                    "error": error_data,
-                },
-                batch_size=[true_mesh.n_points],
-            ),
-            global_data=TensorDict(
-                {
-                    "pred": compute_surface_force_coefficients(
-                        surface_mesh=pred_surface, a_ref=a_ref
-                    ),
-                    "true": sample.aero_coefficients,
-                }
-            ),
+    ### Build combined point_data
+    pred_selected = pred_mesh.point_data.select(*fields)
+    true_selected = true_mesh.point_data.select(*fields)
+    error_data: TensorDict = pred_selected.apply(  # ty: ignore[invalid-assignment]
+        lambda p, t: p - t, true_selected
+    )
+
+    ### Compute integrated force coefficients on predictions
+    # pred_mesh is a point cloud (no cells), so we construct a surface
+    # mesh with true_mesh's cell connectivity for integration.
+    a_ref = float(sample.reference_lengths["sqrt_A_ref"]) ** 2
+    pred_surface = Mesh(
+        points=true_mesh.points,
+        cells=true_mesh.cells,
+        point_data=pred_mesh.point_data,
+    )
+
+    return Mesh(
+        points=true_mesh.points,
+        cells=true_mesh.cells,
+        point_data=TensorDict(
+            {
+                "true": true_selected,
+                "pred": pred_selected,
+                "error": error_data,
+            },
+            batch_size=[true_mesh.n_points],
+        ),
+        global_data=TensorDict(
+            {
+                "pred": compute_surface_force_coefficients(
+                    surface_mesh=pred_surface, a_ref=a_ref
+                ),
+                "true": sample.aero_coefficients,
+            }
+        ),
+    )
+
+
+def visualize_comparison(
+    combined: Mesh,
+    *,
+    save_path: Path | None = None,
+    show: bool = False,
+    backend: Literal["matplotlib", "pyvista"] = "pyvista",
+) -> None:
+    """Render a 3D comparison of predicted vs. true surface fields.
+
+    Takes the combined Mesh returned by :func:`postprocess` and draws
+    truth / prediction / error rows for each field.
+
+    Args:
+        combined: Mesh returned by :func:`postprocess`, with
+            ``point_data["true"]``, ``point_data["pred"]``, and
+            ``point_data["error"]``.
+        save_path: File path for the rendered screenshot.  Defaults to
+            ``drivaer_comparison.png`` in the current directory.
+        show: Whether to display interactively (requires a display).
+        backend: Rendering backend.  ``"pyvista"`` gives high-quality
+            GPU-accelerated rendering but needs EGL or OSMesa on
+            headless nodes.  ``"matplotlib"`` works everywhere via
+            ``mpl_toolkits.mplot3d`` (lower fidelity, but no GPU
+            rendering dependency).
+    """
+    if save_path is None:
+        save_path = Path("drivaer_comparison.png")
+
+    ### Flatten nested keys to dot-separated strings for display
+    kind_data: dict[str, TensorDict] = {
+        key: combined.point_data[key].flatten_keys(".")  # ty: ignore[unresolved-attribute]
+        for key in ("true", "pred", "error")
+    }
+    fields = sorted(kind_data["true"].keys())
+    kinds = {"true": "Truth", "pred": "Prediction", "error": "Error"}
+
+    from visualization import visualize_matplotlib, visualize_pyvista
+
+    if backend == "pyvista":
+        visualize_pyvista(combined, kind_data, kinds, fields, save_path, show)
+    elif backend == "matplotlib":
+        visualize_matplotlib(combined, kind_data, kinds, fields, save_path, show)
+    else:
+        raise ValueError(
+            f"Unsupported {backend=!r}. Must be 'matplotlib' or 'pyvista'."
         )
-
-    @staticmethod
-    def visualize_comparison(
-        combined: Mesh,
-        *,
-        save_path: Path | None = None,
-        show: bool = False,
-        backend: Literal["matplotlib", "pyvista"] = "pyvista",
-    ) -> None:
-        """Render a 3D comparison of predicted vs. true surface fields.
-
-        Takes the combined Mesh returned by :meth:`postprocess` and draws
-        truth / prediction / error rows for each field.
-
-        Args:
-            combined: Mesh returned by :meth:`postprocess`, with
-                ``point_data["true"]``, ``point_data["pred"]``, and
-                ``point_data["error"]``.
-            save_path: File path for the rendered screenshot.  Defaults to
-                ``drivaer_comparison.png`` in the current directory.
-            show: Whether to display interactively (requires a display).
-            backend: Rendering backend.  ``"pyvista"`` gives high-quality
-                GPU-accelerated rendering but needs EGL or OSMesa on
-                headless nodes.  ``"matplotlib"`` works everywhere via
-                ``mpl_toolkits.mplot3d`` (lower fidelity, but no GPU
-                rendering dependency).
-        """
-        if save_path is None:
-            save_path = Path("drivaer_comparison.png")
-
-        ### Flatten nested keys to dot-separated strings for display
-        kind_data: dict[str, TensorDict] = {
-            key: combined.point_data[key].flatten_keys(".")  # ty: ignore[unresolved-attribute]
-            for key in ("true", "pred", "error")
-        }
-        fields = sorted(kind_data["true"].keys())
-        kinds = {"true": "Truth", "pred": "Prediction", "error": "Error"}
-
-        from visualization import visualize_matplotlib, visualize_pyvista
-
-        if backend == "pyvista":
-            visualize_pyvista(combined, kind_data, kinds, fields, save_path, show)
-        elif backend == "matplotlib":
-            visualize_matplotlib(combined, kind_data, kinds, fields, save_path, show)
-        else:
-            raise ValueError(
-                f"Unsupported {backend=!r}. Must be 'matplotlib' or 'pyvista'."
-            )
 
 
 # ---------------------------------------------------------------------------

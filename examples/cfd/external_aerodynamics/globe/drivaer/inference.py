@@ -27,7 +27,7 @@ from pathlib import Path
 
 import torch
 import yaml
-from dataset import DrivAerMLDataSet
+from dataset import DrivAerMLDataSet, postprocess, visualize_comparison
 from utilities import disable_autotune_printing
 
 from physicsnemo.experimental.models.globe.model import GLOBE
@@ -70,17 +70,12 @@ torch.set_float32_matmul_precision("high")
 ### Load hyperparameters and model
 hyperparameters = yaml.safe_load((output_dir / "hyperparameters.yaml").read_text())
 
-### Preprocess sample and populate vehicle boundary mesh
-# preprocess() caches the domain floor boundaries but leaves the vehicle
-# body boundary empty (subsampling depends on n_faces_per_boundary and is
-# normally done by __getitem__), so we replicate it here for standalone
-# inference.
-sample = DrivAerMLDataSet.preprocess(sample_path)
-sample.boundary_meshes["vehicle"] = DrivAerMLDataSet.subsample_mesh(
-    sample.prediction_mesh,
-    n_cells=hyperparameters.get("n_faces_per_boundary", 20_000),
+### Load and prepare sample
+sample = DrivAerMLDataSet.load_single_sample(
+    sample_path,
+    n_faces_per_boundary=hyperparameters.get("n_faces_per_boundary", 20_000),
+    device=device,
 )
-sample = sample.to(device)
 
 model = GLOBE(**hyperparameters["model"]).to(device)
 
@@ -97,14 +92,14 @@ with torch.no_grad():
     pred_mesh = model(**sample.model_input_kwargs)
 
 # %%
-combined = DrivAerMLDataSet.postprocess(
+combined = postprocess(
     pred_mesh=pred_mesh.to(device="cpu"),
     sample=sample.to(device="cpu"),
 )
 
 ### Visualize predictions vs ground truth
 save_path = output_dir / f"inference_{sample_path.name}.png"
-DrivAerMLDataSet.visualize_comparison(combined, save_path=save_path)
+visualize_comparison(combined, save_path=save_path)
 
 ### Log force coefficients
 for src in ("pred", "true"):
