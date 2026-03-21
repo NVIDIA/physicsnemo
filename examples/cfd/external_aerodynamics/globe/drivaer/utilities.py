@@ -59,6 +59,7 @@ class CompileDiagnosticsCollector(logging.Filter):
 
     def __init__(self) -> None:
         super().__init__()
+        self.active = True
         self.graph_breaks: dict[str, str] = {}
         self.recompiles: dict[str, str] = {}
         self._pending_break_loc: str | None = None
@@ -100,9 +101,10 @@ class CompileDiagnosticsCollector(logging.Filter):
             handler.addFilter(self)
 
     def uninstall(self) -> None:
-        """Remove this filter from all handlers on the root logger."""
+        """Remove this filter from all handlers on the root logger and deactivate."""
         for handler in logging.getLogger().handlers:
             handler.removeFilter(self)
+        self.active = False
 
     @staticmethod
     def _shorten_path(loc: str) -> str:
