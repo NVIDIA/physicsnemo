@@ -56,8 +56,6 @@ from torch.profiler import record_function
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from utilities import (
-    CompileDiagnosticsCollector,
-    disable_autotune_printing,
     log_hyperparameters,
     resilient,
     sanitize_metric_name,
@@ -66,7 +64,11 @@ from utilities import (
 from physicsnemo.core import get_physicsnemo_pkg_info
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.experimental.models.globe.model import GLOBE
-from physicsnemo.experimental.models.globe.utilities import prefetch_map
+from physicsnemo.experimental.utils import (
+    CompileDiagnosticsCollector,
+    disable_autotune_printing,
+    prefetch_map,
+)
 from physicsnemo.optim import CombinedOptimizer
 from physicsnemo.utils.checkpoint import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
