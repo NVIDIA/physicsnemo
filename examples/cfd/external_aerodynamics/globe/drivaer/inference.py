@@ -76,7 +76,7 @@ hyperparameters = yaml.safe_load((output_dir / "hyperparameters.yaml").read_text
 # normally done by __getitem__), so we replicate it here for standalone
 # inference.
 sample = DrivAerMLDataSet.preprocess(sample_path)
-sample.boundary_meshes["vehicle"] = DrivAerMLDataSet._subsample_mesh(
+sample.boundary_meshes["vehicle"] = DrivAerMLDataSet.subsample_mesh(
     sample.prediction_mesh,
     n_cells=hyperparameters.get("n_faces_per_boundary", 20_000),
 )

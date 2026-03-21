@@ -611,7 +611,7 @@ def main(
                         ### Subsample prediction surface for speed
                         if viz_sample.prediction_mesh.n_cells > n_faces_per_boundary:
                             viz_sample.prediction_mesh = (
-                                DrivAerMLDataSet._subsample_mesh(
+                                DrivAerMLDataSet.subsample_mesh(
                                     viz_sample.prediction_mesh,
                                     n_faces_per_boundary,
                                     geometry_only=False,
