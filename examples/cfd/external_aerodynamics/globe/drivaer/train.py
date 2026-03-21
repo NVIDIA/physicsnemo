@@ -233,7 +233,11 @@ def main(
     ### [Model]
     # Reference area: constant aRefRef = 2.170 m² from the DrivAerML spec
     n_spatial_dims = 3
-    boundary_source_data_ranks: dict[str, dict] = {"no_slip": {}}
+    boundary_source_data_ranks: dict[str, dict] = {
+        "vehicle": {},
+        "no_slip_floor": {},
+        "slip_floor": {},
+    }
     model = GLOBE(
         n_spatial_dims=n_spatial_dims,
         output_field_ranks={
@@ -415,8 +419,12 @@ def main(
                     sample.prediction_mesh.to_point_cloud().slice_points(mask)
                 )
 
-                for mesh in sample.boundary_meshes.values():
-                    if training and train_randomize_face_centers:
+                for bc_type, mesh in sample.boundary_meshes.items():
+                    if (
+                        bc_type == "vehicle"
+                        and training
+                        and train_randomize_face_centers
+                    ):
                         mesh._cache["cell", "centroids"] = (
                             mesh.sample_random_points_on_cells()
                         )

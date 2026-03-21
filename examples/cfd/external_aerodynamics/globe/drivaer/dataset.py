@@ -40,6 +40,8 @@ from physicsnemo.experimental.models.globe.utilities.cached_dataset import (
 )
 from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.io import from_pyvista
+from physicsnemo.mesh.primitives.planar import structured_grid
+from physicsnemo.mesh.projections import embed
 from physicsnemo.mesh.remeshing import partition_cells
 from physicsnemo.utils.logging import PythonLogger
 
@@ -52,7 +54,68 @@ U_INF = 38.89  # m/s  (140 km/h freestream velocity)
 Q_INF = 0.5 * U_INF**2  # ~756 m²/s²  (kinematic dynamic pressure)
 NU = 1.5e-5  # m²/s  (kinematic viscosity of air)
 
+### DrivAerML CFD domain geometry (constant across all 500 runs)
+# The ground boundary layer starts at X_BL in the CFD setup (see Ashton et al.,
+# "DrivAerML", arXiv:2408.11969v2, Sect. 3.3 / Fig. 11).  Upstream of X_BL the
+# floor is inviscid ("slip"); downstream it is a viscous wall ("no-slip").
+X_BL = -2.339  # m  (slip-to-noslip floor transition)
+
 Split = Literal["train", "validation"]
+
+
+def create_domain_boundaries(
+    ground_z: float,
+    *,
+    x_bl: float = X_BL,
+    x_upstream: float = -10,
+    x_downstream: float = 10,
+    y_half_width: float = 11,
+    n_x: int = 20,
+    n_y: int = 20,
+) -> dict[str, Mesh]:
+    """Create triangulated ground-plane boundary meshes for the CFD domain.
+
+    Returns two horizontal Mesh[2, 3] patches at ``z = ground_z``:
+
+    - ``"slip_floor"``: inviscid upstream ground, from *x_upstream* to *x_bl*.
+    - ``"no_slip_floor"``: viscous ground wall, from *x_bl* to *x_downstream*.
+
+    These encode the CFD domain floor boundary conditions so that GLOBE's
+    boundary-to-boundary communication can learn ground-proximity effects
+    (underbody flow, front lift, diffuser behavior).
+
+    Args:
+        ground_z: z-coordinate of the ground plane (tire contact level).
+        x_bl: Streamwise location of the slip-to-noslip transition.
+        x_upstream: Upstream extent of the slip floor.
+        x_downstream: Downstream extent of the no-slip floor.
+        y_half_width: Half-width of each ground patch in the y direction.
+        n_x: Number of grid points in the x direction per patch.
+        n_y: Number of grid points in the y direction per patch.
+
+    Returns:
+        ``{"slip_floor": Mesh, "no_slip_floor": Mesh}``
+    """
+
+    def _ground_patch(x_min: float, x_max: float) -> Mesh:
+        mesh = embed(
+            structured_grid.load(
+                x_min=x_min,
+                x_max=x_max,
+                y_min=-y_half_width,
+                y_max=y_half_width,
+                n_x=n_x,
+                n_y=n_y,
+            ),
+            target_n_spatial_dims=3,
+        ).translate([0.0, 0.0, ground_z])
+        # Flip cell winding so normals point upward (+z, into the fluid domain)
+        return Mesh(points=mesh.points, cells=mesh.cells[:, [0, 2, 1]])
+
+    return {
+        "slip_floor": _ground_patch(x_upstream, x_bl),
+        "no_slip_floor": _ground_patch(x_bl, x_downstream),
+    }
 
 
 @tensorclass
@@ -64,9 +127,15 @@ class DrivAerMLSample:
             Contains ``point_data`` with nondimensional targets (``C_p``,
             ``C_f``) and cell connectivity for visualization and force
             integration.
-        boundary_meshes: ``{"no_slip": Mesh}`` - randomly subsampled car body
-            cells used as GLOBE boundary input (geometry only, no field data).
-            Populated at load time by :meth:`DrivAerMLDataSet.__getitem__`.
+        boundary_meshes: Boundary condition meshes keyed by BC type:
+
+            - ``"vehicle"``: car body surface (randomly subsampled at load
+              time by :meth:`DrivAerMLDataSet.__getitem__`).
+            - ``"no_slip_floor"``: viscous ground plane downstream of X_BL.
+            - ``"slip_floor"``: inviscid ground plane upstream of X_BL.
+
+            The domain floor meshes are created during preprocessing via
+            :func:`create_domain_boundaries` and cached alongside the sample.
         reference_lengths: Per-sample reference lengths (``L_ref``,
             ``sqrt_A_ref``) used for GLOBE multiscale kernel construction.
         dimensional_constants: ``U_inf``, ``q_inf`` for re-dimensionalization.
@@ -122,7 +191,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
 
     def __getitem__(self, index) -> DrivAerMLSample:  # ty: ignore[invalid-method-override]
         sample: DrivAerMLSample = super().__getitem__(index)
-        sample.boundary_meshes["no_slip"] = self._subsample_mesh(
+        sample.boundary_meshes["vehicle"] = self._subsample_mesh(
             sample.prediction_mesh, self.n_faces_per_boundary
         )
         return sample
@@ -287,17 +356,19 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
             3. Interpolate cell-centered data to mesh vertices.
             4. Parse geometry reference CSV for per-sample reference lengths.
             5. Parse force/moment CSV for ground-truth aero coefficients.
+            6. Create CFD domain floor boundaries via
+               :func:`create_domain_boundaries`.
 
-        Boundary mesh creation (random cell subsampling, which depends on
-        ``n_faces_per_boundary``) is NOT performed here; it runs post-cache-load
-        in :meth:`DrivAerMLDataSet.__getitem__`.
+        The vehicle body boundary mesh (random cell subsampling, which depends
+        on ``n_faces_per_boundary``) is NOT performed here; it runs
+        post-cache-load in :meth:`DrivAerMLDataSet.__getitem__`.
 
         Args:
             sample_path: Path to a ``run_N/`` directory.
 
         Returns:
-            :class:`DrivAerMLSample` with ``boundary_meshes`` empty (populated
-            later by ``__getitem__``).
+            :class:`DrivAerMLSample` with domain floor boundaries cached and
+            ``"vehicle"`` boundary populated later by ``__getitem__``.
         """
         sample_dir = Path(sample_path)
         run_idx = sample_dir.name.removeprefix("run_")
@@ -360,9 +431,13 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         force_mom_path = sample_dir / f"force_mom_{run_idx}.csv"
         force_mom = _read_single_row_csv(force_mom_path)
 
+        ### Create CFD domain floor boundaries
+        ground_z = float(prediction_mesh.points[:, 2].min())
+        domain_boundaries = create_domain_boundaries(ground_z)
+
         return DrivAerMLSample(
             prediction_mesh=prediction_mesh,
-            boundary_meshes=TensorDict({}),
+            boundary_meshes=TensorDict(domain_boundaries),  # ty: ignore[invalid-argument-type]
             reference_lengths=TensorDict(
                 {
                     "L_ref": torch.as_tensor(l_ref),
@@ -927,3 +1002,5 @@ if __name__ == "__main__":
     logger.info(f"Output keys: {list(sample.prediction_mesh.point_data.keys())}")
     logger.info(f"Reference lengths: {sample.reference_lengths.to_dict()}")
     logger.info(f"Aero coefficients: {sample.aero_coefficients.to_dict()}")
+    for bc_name, bc_mesh in sample.boundary_meshes.items():
+        logger.info(f"Boundary '{bc_name}': {bc_mesh.n_points} pts, {bc_mesh.n_cells} cells")

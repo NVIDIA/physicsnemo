@@ -70,12 +70,13 @@ torch.set_float32_matmul_precision("high")
 ### Load hyperparameters and model
 hyperparameters = yaml.safe_load((output_dir / "hyperparameters.yaml").read_text())
 
-### Preprocess sample and populate boundary meshes
-# preprocess() returns boundary_meshes empty (the cached representation is
-# hyperparameter-invariant); boundary subsampling is normally done by
-# __getitem__, so we replicate it here for standalone inference.
+### Preprocess sample and populate vehicle boundary mesh
+# preprocess() caches the domain floor boundaries but leaves the vehicle
+# body boundary empty (subsampling depends on n_faces_per_boundary and is
+# normally done by __getitem__), so we replicate it here for standalone
+# inference.
 sample = DrivAerMLDataSet.preprocess(sample_path)
-sample.boundary_meshes["no_slip"] = DrivAerMLDataSet._subsample_mesh(
+sample.boundary_meshes["vehicle"] = DrivAerMLDataSet._subsample_mesh(
     sample.prediction_mesh,
     n_cells=hyperparameters.get("n_faces_per_boundary", 20_000),
 )
