@@ -80,7 +80,7 @@ if [ "${SLURM_NNODES:-1}" -gt 1 ]; then
     srun uv run --no-sync torchrun \
       --nnodes $SLURM_NNODES \
       --nproc-per-node $NUM_GPUS_PER_NODE \
-      --rdzv_id $SLURM_JOB_ID \  # globally unique; $RANDOM can collide across concurrent jobs
+      --rdzv_id $RANDOM \
       --rdzv_backend c10d \
       --rdzv_endpoint $head_node_ip:29500 \
       train.py \
