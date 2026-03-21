@@ -375,7 +375,7 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
             batch_size=None,
             collate_fn=lambda x: x,
             num_workers=num_workers,
-            prefetch_factor=4 if num_workers > 0 else None,
+            prefetch_factor=1 if num_workers > 0 else None,
             persistent_workers=num_workers > 0,
             pin_memory=True,
         )
