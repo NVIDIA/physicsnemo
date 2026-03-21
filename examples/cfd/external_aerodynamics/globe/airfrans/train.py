@@ -356,7 +356,7 @@ def main(
 
     ### [World-size LR portability]
     loaded_world_size = metadata_dict.get("world_size", 1)
-    loaded_n_prediction_points = metadata_dict.get("n_prediction_points", 2048)
+    loaded_n_prediction_points = metadata_dict.get("n_prediction_points", n_prediction_points)
     lr_ratio = (
         dist.world_size * n_prediction_points
         / (loaded_world_size * loaded_n_prediction_points)

@@ -280,6 +280,13 @@ def main(
         )
 
     ### [Optimizer and Scheduler Setup]
+    # Square-root batch-size scaling: when the effective batch size grows
+    # (more GPUs or more points), gradient variance decreases proportionally,
+    # so the optimal LR scales as sqrt(batch_size).  The denominator 80_000
+    # is the reference point count per iteration (not samples) at which the
+    # base `learning_rate` applies.
+    # The scaling is applied after checkpoint load (see [World-size LR
+    # portability] below) so that checkpoints are portable across GPU counts.
     if use_muon:
         optimizer = CombinedOptimizer(
             optimizers=[
@@ -339,15 +346,14 @@ def main(
 
     ### [World-size LR portability]
     loaded_world_size = metadata_dict.get("world_size", 1)
-    lr_ratio = (dist.world_size / loaded_world_size) ** 0.5
+    loaded_n_prediction_points = metadata_dict.get("n_prediction_points", n_prediction_points)
+    lr_ratio = (
+        dist.world_size * n_prediction_points
+        / (loaded_world_size * loaded_n_prediction_points)
+    ) ** 0.5
     for pg in optimizer.param_groups:
         pg["lr"] *= lr_ratio
     scheduler.min_lrs = [m * lr_ratio for m in scheduler.min_lrs]
-    if lr_ratio != 1.0:
-        logger0.info(
-            f"Adjusted LR for world_size change: "
-            f"{loaded_world_size} -> {dist.world_size} (ratio={lr_ratio:.4f})"
-        )
 
     ### [MLflow Setup]
     mlflow_run_ctx: contextlib.AbstractContextManager = contextlib.nullcontext()
@@ -517,6 +523,7 @@ def main(
                     _run.info.run_id if use_mlflow and (_run := active_run()) else None
                 ),
                 "world_size": dist.world_size,
+                "n_prediction_points": n_prediction_points,
             }
 
         def save_ckpt() -> None:
