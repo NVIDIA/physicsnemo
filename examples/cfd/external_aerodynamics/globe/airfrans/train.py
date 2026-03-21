@@ -14,10 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
+
+warnings.filterwarnings("ignore")
+
 import contextlib
 import logging
 import os
-import warnings
 from collections import defaultdict
 from datetime import datetime
 from itertools import count
