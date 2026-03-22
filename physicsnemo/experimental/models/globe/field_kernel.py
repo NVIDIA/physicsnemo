@@ -1811,29 +1811,51 @@ class MultiscaleKernel(Module):
         results_pieces: list[TensorDict[str, Float[torch.Tensor, "n_targets ..."]]] = []
         for name in self.reference_length_names:
             with record_function(f"multiscale_kernel::branch/{name}"):
-                branch_kwargs = dict(
-                    reference_length=reference_lengths[name]
-                    * torch.exp(self.log_scalefactors[name]),
-                    source_points=source_points,
-                    target_points=target_points,
-                    source_strengths=source_strengths[name],
-                    source_data=source_data,
-                    global_data=global_data,
-                    theta=theta,
-                    cluster_tree=cluster_tree,
-                    target_tree=target_tree,
-                    dual_plan=dual_plan,
-                    source_areas=source_areas,
-                    source_aggregates=source_aggregates,
-                    near_chunk_size=near_chunk_sizes[name],
+                ref_length = (
+                    reference_lengths[name]
+                    * torch.exp(self.log_scalefactors[name])
                 )
+                strengths = source_strengths[name]
+                chunk_size = near_chunk_sizes[name]
+                kernel = self.kernels[name]
                 if use_branch_ckpt:
-                    kernel = self.kernels[name]
                     results_pieces.append(
-                        checkpoint(kernel, use_reentrant=False, **branch_kwargs)
+                        checkpoint(
+                            kernel,
+                            use_reentrant=False,
+                            reference_length=ref_length,
+                            source_points=source_points,
+                            target_points=target_points,
+                            source_strengths=strengths,
+                            source_data=source_data,
+                            global_data=global_data,
+                            theta=theta,
+                            cluster_tree=cluster_tree,
+                            target_tree=target_tree,
+                            dual_plan=dual_plan,
+                            source_areas=source_areas,
+                            source_aggregates=source_aggregates,
+                            near_chunk_size=chunk_size,
+                        )
                     )
                 else:
-                    results_pieces.append(self.kernels[name](**branch_kwargs))
+                    results_pieces.append(
+                        kernel(
+                            reference_length=ref_length,
+                            source_points=source_points,
+                            target_points=target_points,
+                            source_strengths=strengths,
+                            source_data=source_data,
+                            global_data=global_data,
+                            theta=theta,
+                            cluster_tree=cluster_tree,
+                            target_tree=target_tree,
+                            dual_plan=dual_plan,
+                            source_areas=source_areas,
+                            source_aggregates=source_aggregates,
+                            near_chunk_size=chunk_size,
+                        )
+                    )
 
         result: TensorDict[str, Float[torch.Tensor, "n_targets ..."]] = reduce(
             operator.add, results_pieces
