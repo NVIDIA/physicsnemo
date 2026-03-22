@@ -29,6 +29,7 @@ import torch.nn.functional as F
 from tensordict import TensorDict
 
 from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
+from physicsnemo.mesh.spatial._ragged import _ragged_arange
 from physicsnemo.experimental.models.globe.field_kernel import (
     BarnesHutKernel,
     Kernel,
@@ -376,6 +377,97 @@ class TestClusterTree:
         )
         torch.testing.assert_close(
             agg.node_source_data["v"][0], expected_v, atol=1e-5, rtol=1e-5
+        )
+
+    # -- Precomputed leaf field consistency tests ----------------------------
+
+    @pytest.mark.parametrize(
+        "n_points, leaf_size, n_dims",
+        [
+            (50, 4, 3),
+            (1, 4, 2),
+            (10, 100, 2),
+            (20, 1, 3),
+        ],
+        ids=["normal", "single_point", "root_only_leaf", "one_per_leaf"],
+    )
+    def test_precomputed_leaf_node_ids(
+        self, n_points: int, leaf_size: int, n_dims: int,
+    ):
+        """Precomputed leaf_node_ids matches torch.where(leaf_count > 0)."""
+        torch.manual_seed(DEFAULT_SEED)
+        points = torch.randn(n_points, n_dims)
+        tree = ClusterTree.from_points(points, leaf_size=leaf_size)
+
+        expected = torch.where(tree.leaf_count > 0)[0]
+        assert torch.equal(tree.leaf_node_ids, expected)
+        assert tree.n_leaves == expected.shape[0]
+
+    @pytest.mark.parametrize(
+        "n_points, leaf_size, n_dims",
+        [
+            (50, 4, 3),
+            (1, 4, 2),
+            (10, 100, 2),
+            (20, 1, 3),
+        ],
+        ids=["normal", "single_point", "root_only_leaf", "one_per_leaf"],
+    )
+    def test_precomputed_leaf_seg_ids(
+        self, n_points: int, leaf_size: int, n_dims: int,
+    ):
+        """Precomputed leaf_seg_ids matches on-the-fly _ragged_arange computation."""
+        torch.manual_seed(DEFAULT_SEED)
+        points = torch.randn(n_points, n_dims)
+        tree = ClusterTree.from_points(points, leaf_size=leaf_size)
+
+        assert tree.leaf_seg_ids.shape == (n_points,)
+        assert tree.leaf_seg_ids.dtype == torch.long
+        if n_points > 0:
+            assert tree.leaf_seg_ids.max() < tree.n_leaves
+
+        # Rebuild seg_ids from scratch and compare
+        leaf_starts = tree.leaf_start[tree.leaf_node_ids]
+        leaf_counts = tree.leaf_count[tree.leaf_node_ids]
+        positions, compact_ids = _ragged_arange(
+            leaf_starts, leaf_counts, total=n_points,
+        )
+        expected = torch.zeros(n_points, dtype=torch.long)
+        expected[positions] = compact_ids
+
+        assert torch.equal(tree.leaf_seg_ids, expected)
+
+    def test_precomputed_leaf_fields_empty_tree(self):
+        """Empty tree has empty leaf_node_ids and leaf_seg_ids."""
+        tree = ClusterTree.from_points(torch.empty(0, 2), leaf_size=4)
+
+        assert tree.leaf_node_ids.numel() == 0
+        assert tree.leaf_seg_ids.numel() == 0
+        assert tree.n_leaves == 0
+
+    def test_compute_source_aggregates_single_point(self):
+        """Single-point tree centroid equals the point itself."""
+        point = torch.tensor([[3.0, -1.0, 7.0]])
+        area = torch.tensor([2.5])
+        tree = ClusterTree.from_points(point, leaf_size=4, areas=area)
+        agg = tree.compute_source_aggregates(point, area)
+
+        torch.testing.assert_close(agg.node_centroid[0], point[0])
+
+    def test_compute_source_aggregates_root_only_leaf(self):
+        """Root-is-only-leaf centroid matches brute-force area-weighted mean."""
+        torch.manual_seed(DEFAULT_SEED)
+        n = 10
+        points = torch.randn(n, 3)
+        areas = torch.rand(n) + 0.1
+        tree = ClusterTree.from_points(points, leaf_size=100, areas=areas)
+
+        assert tree.n_leaves == 1, "Expected single leaf (root)"
+        agg = tree.compute_source_aggregates(points, areas)
+
+        expected = (points * areas.unsqueeze(-1)).sum(0) / areas.sum()
+        torch.testing.assert_close(
+            agg.node_centroid[0], expected, atol=1e-5, rtol=1e-5,
         )
 
 
