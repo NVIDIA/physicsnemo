@@ -119,6 +119,71 @@ class DualInteractionPlan:
         """Number of (far,near) target-node-to-source-point pairs."""
         return self.fn_target_node_ids.shape[0]
 
+    def validate(self) -> None:
+        """Check internal consistency of the interaction plan.
+
+        Verifies shape pairing, non-negativity, and fn_broadcast bounds.
+        Raises ``ValueError`` on any inconsistency.  Intended to be called
+        behind a ``not torch.compiler.is_compiling()`` guard so it is
+        zero-cost under ``torch.compile``.
+
+        Raises
+        ------
+        ValueError
+            If any internal consistency check fails.
+        """
+        ### Shape pairing: matched tensor pairs must have identical lengths
+        pairs: list[tuple[str, torch.Tensor, str, torch.Tensor]] = [
+            ("near_target_ids", self.near_target_ids,
+             "near_source_ids", self.near_source_ids),
+            ("far_target_node_ids", self.far_target_node_ids,
+             "far_source_node_ids", self.far_source_node_ids),
+            ("nf_target_ids", self.nf_target_ids,
+             "nf_source_node_ids", self.nf_source_node_ids),
+            ("fn_target_node_ids", self.fn_target_node_ids,
+             "fn_source_ids", self.fn_source_ids),
+        ]
+        for name_a, a, name_b, b in pairs:
+            if a.shape != b.shape:
+                raise ValueError(
+                    f"Shape mismatch: {name_a}.shape={a.shape!r} != "
+                    f"{name_b}.shape={b.shape!r}"
+                )
+
+        ### fn_broadcast tensors must be consistently sized
+        n_fn = self.fn_source_ids.shape[0]
+        for name, tensor in [
+            ("fn_broadcast_starts", self.fn_broadcast_starts),
+            ("fn_broadcast_counts", self.fn_broadcast_counts),
+        ]:
+            if tensor.shape != (n_fn,):
+                raise ValueError(
+                    f"{name}.shape={tensor.shape!r}, expected ({n_fn},)"
+                )
+
+        ### Non-negativity
+        for name, tensor in [
+            ("fn_broadcast_starts", self.fn_broadcast_starts),
+            ("fn_broadcast_counts", self.fn_broadcast_counts),
+        ]:
+            if tensor.numel() > 0 and (tensor < 0).any():
+                raise ValueError(f"{name} contains negative values")
+
+        ### fn_broadcast bounds: every (start, count) range with count > 0
+        ### must fit within fn_broadcast_targets.  Zero-count entries are
+        ### no-ops whose starts are never dereferenced.
+        if n_fn > 0:
+            nonzero = self.fn_broadcast_counts > 0
+            if nonzero.any():
+                ends = self.fn_broadcast_starts[nonzero] + self.fn_broadcast_counts[nonzero]
+                max_end = ends.max().item()
+                bcast_len = self.fn_broadcast_targets.shape[0]
+                if max_end > bcast_len:
+                    raise ValueError(
+                        f"fn_broadcast out of bounds: max(starts + counts)="
+                        f"{max_end} > fn_broadcast_targets.shape[0]={bcast_len}"
+                    )
+
 
 # ---------------------------------------------------------------------------
 # Segmented reduction helpers
@@ -274,10 +339,21 @@ def _expand_dual_leaf_hits(
     # ==================================================================
     # Group survivors by leaf pair so each fn source can look up its
     # broadcast targets (all survivors from the same leaf pair).
-    surv_sort = surv_lp_ids.argsort(stable=True)
-    fn_broadcast_targets = surv_point_ids[surv_sort]
+    # Only include survivors from leaf pairs that have fn sources;
+    # survivors from all-close leaf pairs are not referenced by any
+    # fn_broadcast_starts/counts entry.
+    has_fn_source = torch.zeros(n_pairs, dtype=torch.bool, device=device)
+    if fn_lp_ids.numel() > 0:
+        has_fn_source[fn_lp_ids] = True
+    fn_active_mask = has_fn_source[surv_lp_ids]
 
-    surv_counts_per_lp = torch.bincount(surv_lp_ids, minlength=n_pairs)
+    active_surv_ids = surv_point_ids[fn_active_mask]
+    active_surv_lp_ids = surv_lp_ids[fn_active_mask]
+
+    surv_sort = active_surv_lp_ids.argsort(stable=True)
+    fn_broadcast_targets = active_surv_ids[surv_sort]
+
+    surv_counts_per_lp = torch.bincount(active_surv_lp_ids, minlength=n_pairs)
     surv_starts_per_lp = surv_counts_per_lp.cumsum(0) - surv_counts_per_lp
 
     fn_broadcast_starts = surv_starts_per_lp[fn_lp_ids]
@@ -1087,6 +1163,9 @@ class ClusterTree:
             fn_broadcast_starts=fn_bstarts,
             fn_broadcast_counts=fn_bcounts,
         )
+
+        if not torch.compiler.is_compiling():
+            plan.validate()
 
         is_self = target_tree is self
         logger.debug(
