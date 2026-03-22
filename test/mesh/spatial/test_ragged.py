@@ -31,6 +31,14 @@ from physicsnemo.mesh.spatial._ragged import _ragged_arange
         pytest.param([0, 1, 2, 3], [1, 1, 1, 1], id="all_ones"),
         pytest.param([0, 10], [10, 3], id="unequal"),
         pytest.param([100, 200, 300], [1, 1, 1], id="large_starts"),
+        pytest.param([10, 20, 30], [2, 0, 3], id="zero_middle"),
+        pytest.param([10, 20, 30], [0, 0, 3], id="zero_leading"),
+        pytest.param([10, 20, 30], [3, 0, 0], id="zero_trailing"),
+        pytest.param([10, 20, 30, 40, 50], [2, 0, 0, 3, 0], id="zero_interleaved"),
+        pytest.param([10, 20, 30], [0, 0, 0], id="zero_all"),
+        pytest.param([10], [0], id="zero_single"),
+        pytest.param([10, 20, 30], [1, 0, 1], id="zero_between_units"),
+        pytest.param([], [], id="empty"),
     ],
 )
 def test_ragged_arange_correctness(starts: list[int], counts: list[int]):
@@ -41,12 +49,12 @@ def test_ragged_arange_correctness(starts: list[int], counts: list[int]):
     positions, seg_ids = _ragged_arange(starts_t, counts_t)
 
     # Build expected output the obvious way
-    expected_pos = torch.cat(
-        [torch.arange(s, s + c) for s, c in zip(starts, counts)]
-    )
-    expected_seg = torch.cat(
-        [torch.full((c,), i, dtype=torch.long) for i, c in enumerate(counts)]
-    )
+    pos_parts = [torch.arange(s, s + c) for s, c in zip(starts, counts)]
+    seg_parts = [
+        torch.full((c,), i, dtype=torch.long) for i, c in enumerate(counts)
+    ]
+    expected_pos = torch.cat(pos_parts) if pos_parts else torch.empty(0, dtype=torch.long)
+    expected_seg = torch.cat(seg_parts) if seg_parts else torch.empty(0, dtype=torch.long)
 
     assert torch.equal(positions, expected_pos)
     assert torch.equal(seg_ids, expected_seg)
@@ -64,19 +72,28 @@ def test_ragged_arange_explicit_total():
     assert torch.equal(seg1, seg2)
 
 
-def test_ragged_arange_no_graph_break_with_explicit_total():
-    """Cumsum implementation + explicit total should produce zero graph breaks."""
-    def fn(starts, counts, total_holder):
-        pos, seg = _ragged_arange(starts, counts, total=total_holder.shape[0])
+@pytest.mark.parametrize(
+    "starts, counts",
+    [
+        pytest.param([0, 5, 10], [3, 2, 4], id="no_zeros"),
+        pytest.param([10, 20, 30], [2, 0, 3], id="with_zeros"),
+    ],
+)
+def test_ragged_arange_no_graph_break_with_explicit_total(
+    starts: list[int], counts: list[int],
+):
+    """searchsorted implementation + explicit total should produce zero graph breaks."""
+    def fn(starts_t, counts_t, total_holder):
+        pos, seg = _ragged_arange(starts_t, counts_t, total=total_holder.shape[0])
         return pos.sum() + seg.sum()
 
-    starts = torch.tensor([0, 5, 10])
-    counts = torch.tensor([3, 2, 4])
-    total_holder = torch.empty(int(counts.sum()))  # shape[0] == 9
+    starts_t = torch.tensor(starts)
+    counts_t = torch.tensor(counts)
+    total_holder = torch.empty(int(counts_t.sum()))
 
     counters.clear()
     compiled = torch.compile(fn, dynamic=True, backend="eager")
-    compiled(starts, counts, total_holder)
+    compiled(starts_t, counts_t, total_holder)
 
     n_breaks = sum(counters["graph_break"].values()) if counters.get("graph_break") else 0
     assert n_breaks == 0, f"Expected 0 graph breaks, got {n_breaks}"
