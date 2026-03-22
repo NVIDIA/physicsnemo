@@ -1321,15 +1321,27 @@ class BarnesHutKernel(Kernel):
         checkpointed call, the autograd graph saves only the int64 index
         tensors (~8 bytes/pair) and references to the shared source data
         (O(1)), instead of the gathered float features (~300 bytes/pair).
+
+        Source scalars and vectors are pre-flattened via
+        ``concatenate_leaves`` before indexing, reducing K per-leaf index
+        ops to 1 cat + 1 index each.  Vectors are split back into
+        individual named leaves afterward because the feature engineering
+        pipeline in ``_evaluate_interactions`` processes each vector
+        separately (magnitudes, dot products, basis construction).
         """
         n_pairs = tgt_ids.shape[0]
         chunk_r = (
             target_positions[tgt_ids] - source_positions[src_ids]
         ) / reference_length
 
+        ### Flatten source scalars into one tensor, gather once.
+        # concatenate_leaves: 1 GPU kernel (torch.cat)
+        # [src_ids]: 1 GPU kernel (aten::index)
+        # Total: 2 kernels instead of K (one per TensorDict leaf).
+        gathered_src_scalars = concatenate_leaves(source_scalars)[src_ids]
         scalars = TensorDict(
             {
-                "source_scalars": source_scalars[src_ids],
+                "source_scalars": gathered_src_scalars,
                 "global_scalars": global_scalars.expand(
                     n_pairs, *global_scalars.batch_size
                 ),
@@ -1337,9 +1349,27 @@ class BarnesHutKernel(Kernel):
             batch_size=torch.Size([n_pairs]),
             device=device,
         )
+
+        ### Flatten source vectors, gather once, split back into named leaves.
+        # The split-back is required because _evaluate_interactions processes
+        # each vector leaf separately for magnitude/direction extraction and
+        # rotationally-equivariant basis construction.  Integer indexing
+        # along the last dimension creates non-contiguous views (zero copies).
+        src_vector_keys = list(
+            source_vectors.keys(include_nested=True, leaves_only=True)
+        )
+        gathered_src_vectors = concatenate_leaves(source_vectors)[src_ids]
+        gathered_vector_leaves = {
+            k: gathered_src_vectors[..., i]
+            for i, k in enumerate(src_vector_keys)
+        }
         vectors = TensorDict(
             {
-                "source_vectors": source_vectors[src_ids],
+                "source_vectors": TensorDict(
+                    gathered_vector_leaves,
+                    batch_size=torch.Size([n_pairs, self.n_spatial_dims]),
+                    device=device,
+                ),
                 "global_vectors": global_vectors.expand(
                     torch.Size([n_pairs]) + global_vectors.batch_size
                 ),
