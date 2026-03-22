@@ -383,6 +383,15 @@ class ClusterTree:
         Original source point coordinates, shape ``(n_sources, D)``.
     max_depth : torch.Tensor
         Scalar tensor storing the tree depth (for fixed-iteration traversal).
+    leaf_node_ids : torch.Tensor
+        Indices of leaf nodes, shape ``(n_leaves,)``.  Precomputed during
+        tree construction so ``compute_source_aggregates`` avoids a
+        data-dependent ``torch.where`` that would break ``torch.compile``.
+    leaf_seg_ids : torch.Tensor
+        Per-source compact leaf segment ID in sorted order, shape
+        ``(n_sources,)``.  Maps each source to the index of its
+        containing leaf within ``leaf_node_ids``, used for segmented
+        reductions in ``compute_source_aggregates``.
     """
 
     node_aabb_min: torch.Tensor
@@ -407,6 +416,8 @@ class ClusterTree:
     # _compute_node_strengths) to avoid recomputing the BFS traversal
     # that discovers this ordering.  Stored as tensors (not a Python
     # list) so they participate in tensorclass .to(device) moves.
+    leaf_node_ids: torch.Tensor
+    leaf_seg_ids: torch.Tensor
 
     @property
     def n_nodes(self) -> int:
@@ -422,6 +433,11 @@ class ClusterTree:
     def n_spatial_dims(self) -> int:
         """Spatial dimensionality."""
         return self.node_aabb_min.shape[1]
+
+    @property
+    def n_leaves(self) -> int:
+        """Number of leaf nodes in the tree."""
+        return self.leaf_node_ids.shape[0]
 
     @property
     def internal_nodes_per_level(self) -> list[torch.Tensor]:
@@ -494,6 +510,8 @@ class ClusterTree:
                 max_depth=torch.tensor(0, dtype=torch.long, device=device),
                 internal_level_ids=empty_long,
                 internal_level_offsets=torch.tensor([0], dtype=torch.long, device=device),
+                leaf_node_ids=empty_long,
+                leaf_seg_ids=empty_long,
                 batch_size=torch.Size([]),
             )
 
@@ -633,11 +651,24 @@ class ClusterTree:
         aabb_max_trimmed = aabb_max_buf[:node_count]
         diameter_sq = (aabb_max_trimmed - aabb_min_trimmed).pow(2).sum(dim=-1)
 
-        n_leaves = int((leaf_count_buf[:node_count] > 0).sum())
+        ### Precompute leaf indices and per-source segment IDs so that
+        ### compute_source_aggregates() avoids a data-dependent
+        ### torch.where() that would break torch.compile tracing.
+        leaf_count_trimmed = leaf_count_buf[:node_count]
+        _leaf_node_ids = torch.where(leaf_count_trimmed > 0)[0]
+        _leaf_starts = leaf_start_buf[_leaf_node_ids]
+        _leaf_counts = leaf_count_trimmed[_leaf_node_ids]
+        _positions, _compact_ids = _ragged_arange(
+            _leaf_starts, _leaf_counts, total=n_points,
+        )
+        _leaf_seg_ids = torch.zeros(n_points, dtype=torch.long, device=device)
+        _leaf_seg_ids[_positions] = _compact_ids
+
         logger.debug(
             "ClusterTree: %d points -> %d nodes (%d leaves), "
             "depth %d, leaf_size=%d",
-            n_points, node_count, n_leaves, actual_depth, leaf_size,
+            n_points, node_count, _leaf_node_ids.shape[0], actual_depth,
+            leaf_size,
         )
 
         ### Pack the per-level internal node IDs into CSR tensors so they
@@ -664,7 +695,7 @@ class ClusterTree:
             node_left_child=left_child[:node_count],
             node_right_child=right_child[:node_count],
             leaf_start=leaf_start_buf[:node_count],
-            leaf_count=leaf_count_buf[:node_count],
+            leaf_count=leaf_count_trimmed,
             node_range_start=range_start_buf[:node_count],
             node_range_count=range_count_buf[:node_count],
             node_total_area=total_area_buf[:node_count],
@@ -673,6 +704,8 @@ class ClusterTree:
             max_depth=torch.tensor(actual_depth, dtype=torch.long, device=device),
             internal_level_ids=_level_ids,
             internal_level_offsets=_level_offsets,
+            leaf_node_ids=_leaf_node_ids,
+            leaf_seg_ids=_leaf_seg_ids,
             batch_size=torch.Size([]),
         )
 
@@ -717,40 +750,30 @@ class ClusterTree:
         D = source_points.shape[1]
         n_nodes = self.n_nodes
 
-        ### Leaf aggregation: compute per-leaf centroids and source data
+        ### Leaf aggregation: compute per-leaf centroids and source data.
+        ### leaf_node_ids and leaf_seg_ids were precomputed during tree
+        ### construction (from_points) to avoid data-dependent torch.where
+        ### and _ragged_arange calls that would break torch.compile.
         with record_function("cluster_tree::leaf_aggregation"):
-            is_leaf = self.leaf_count > 0
-            leaf_node_ids = torch.where(is_leaf)[0]
-
-            if leaf_node_ids.numel() > 0:
-                leaf_starts = self.leaf_start[leaf_node_ids]
-                leaf_counts = self.leaf_count[leaf_node_ids]
-                n_leaves = leaf_node_ids.shape[0]
-                positions, compact_ids = _ragged_arange(
-                    leaf_starts, leaf_counts, total=self.n_sources,
-                )
-
-                seg_ids_compact = torch.zeros(
-                    self.n_sources, dtype=torch.long, device=device
-                )
-                seg_ids_compact[positions] = compact_ids
+            leaf_node_ids = self.leaf_node_ids
+            n_leaves = leaf_node_ids.shape[0]
+            seg_ids_compact = self.leaf_seg_ids
 
             sorted_points = source_points[self.sorted_source_order]
             sorted_areas = areas[self.sorted_source_order]
 
             centroid_buf = torch.zeros(n_nodes, D, dtype=dtype, device=device)
 
-            if leaf_node_ids.numel() > 0:
-                leaf_centroids = _segmented_weighted_sum(
-                    sorted_points, sorted_areas, seg_ids_compact, n_leaves
-                )
-                leaf_total_areas = self.node_total_area[leaf_node_ids]
-                safe_areas = leaf_total_areas.clamp(min=1e-30)
-                leaf_centroids = leaf_centroids / safe_areas.unsqueeze(-1)
-                centroid_buf[leaf_node_ids] = leaf_centroids
+            leaf_centroids = _segmented_weighted_sum(
+                sorted_points, sorted_areas, seg_ids_compact, n_leaves
+            )
+            leaf_total_areas = self.node_total_area[leaf_node_ids]
+            safe_areas = leaf_total_areas.clamp(min=1e-30)
+            leaf_centroids = leaf_centroids / safe_areas.unsqueeze(-1)
+            centroid_buf[leaf_node_ids] = leaf_centroids
 
             node_source_data: TensorDict | None = None
-            if source_data is not None and leaf_node_ids.numel() > 0:
+            if source_data is not None:
                 sorted_source_data = source_data[self.sorted_source_order]
                 node_source_data = _aggregate_source_data_leaves(
                     sorted_source_data,
