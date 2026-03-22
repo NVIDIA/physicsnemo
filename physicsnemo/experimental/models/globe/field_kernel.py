@@ -1221,7 +1221,6 @@ class BarnesHutKernel(Kernel):
                 positions, pair_ids = _ragged_arange(
                     dual_plan.fn_broadcast_starts,
                     dual_plan.fn_broadcast_counts,
-                    total=dual_plan.fn_broadcast_targets.shape[0],
                 )
                 expanded_tgt_ids = dual_plan.fn_broadcast_targets[positions]
 
