@@ -17,7 +17,20 @@
 """Utilities for taming ``torch.compile`` verbosity in training scripts."""
 
 import logging
+import re
+from dataclasses import dataclass
 from pathlib import Path
+
+_FRAME_RE = re.compile(r'File "(.+?)", line (\d+), in (.+)')
+
+
+@dataclass
+class _BreakRecord:
+    """Internal record for a single graph-break event."""
+
+    reason: str
+    user_caller: str
+    raw_message: str
 
 
 class CompileDiagnosticsCollector(logging.Filter):
@@ -30,62 +43,77 @@ class CompileDiagnosticsCollector(logging.Filter):
 
     Usage::
 
+        torch._logging.set_logs(graph_breaks=True, recompiles=True)
         collector = CompileDiagnosticsCollector()
         collector.install()
-        torch._logging.set_logs(graph_breaks=True, recompiles=True)
         # ... run one training batch ...
         torch._logging.set_logs(graph_breaks=False, recompiles=False)
         collector.uninstall()
         print(collector.summary())
+        # For full stack traces when investigating:
+        # print(collector.detailed_summary())
     """
 
     def __init__(self) -> None:
         super().__init__()
         self.active = True
-        self.graph_breaks: dict[str, str] = {}
+        self.graph_breaks: dict[str, _BreakRecord] = {}
         self.recompiles: dict[str, str] = {}
-        self._pending_break_loc: str | None = None
-        self._pending_recompile_loc: str | None = None
 
     def filter(self, record: logging.LogRecord) -> bool:
         if not record.name.startswith("torch._dynamo"):
             return True
-        if record.levelno >= logging.DEBUG:
+        if record.levelno >= logging.WARNING:
             return True
 
+        # Each graph break / recompile is a single multi-line log record.
         msg = record.getMessage()
+        lines = msg.splitlines()
 
-        ### Graph breaks
         if "Graph break in user code at" in msg:
-            self._pending_break_loc = msg.split(
-                "Graph break in user code at "
-            )[-1].strip()
-        elif self._pending_break_loc and "Graph Break Reason:" in msg:
-            reason = msg.split("Graph Break Reason: ")[-1].strip()
-            self.graph_breaks.setdefault(self._pending_break_loc, reason)
-            self._pending_break_loc = None
+            loc = ""
+            for line in lines:
+                if "Graph break in user code at" in line:
+                    loc = line.split("Graph break in user code at ")[-1].strip()
+                    break
+            reason = ""
+            for line in lines:
+                if "Graph Break Reason:" in line:
+                    reason = line.split("Graph Break Reason: ")[-1].strip()
+                    break
+            user_caller = self._extract_user_caller(loc, lines)
+            self.graph_breaks.setdefault(
+                loc, _BreakRecord(reason=reason, user_caller=user_caller, raw_message=msg)
+            )
 
-        ### Recompiles
-        if "Recompiling function" in msg:
-            self._pending_recompile_loc = msg.split(
-                "Recompiling function "
-            )[-1].strip()
-        elif self._pending_recompile_loc and "triggered by" not in msg:
-            guard = msg.strip().lstrip("- ")
-            self.recompiles.setdefault(self._pending_recompile_loc, guard)
-            self._pending_recompile_loc = None
+        elif "Recompiling function" in msg:
+            loc = lines[0].split("Recompiling function ")[-1].strip()
+            reason = ""
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith("- "):
+                    reason = stripped[2:].strip()
+                    break
+            self.recompiles.setdefault(loc, reason)
 
         return False
 
+    # torch._dynamo sets propagate=False and uses its own StreamHandler,
+    # so filters on the root logger never see its records. We install on
+    # every handler across the relevant logger hierarchy.
+    _LOGGER_NAMES = ("torch._dynamo", "torch", "")
+
     def install(self) -> None:
-        """Add this filter to all handlers on the root logger."""
-        for handler in logging.getLogger().handlers:
-            handler.addFilter(self)
+        """Add this filter to handlers on torch._dynamo, torch, and root loggers."""
+        for name in self._LOGGER_NAMES:
+            for handler in logging.getLogger(name).handlers:
+                handler.addFilter(self)
 
     def uninstall(self) -> None:
-        """Remove this filter from all handlers on the root logger and deactivate."""
-        for handler in logging.getLogger().handlers:
-            handler.removeFilter(self)
+        """Remove this filter from all installed handlers and deactivate."""
+        for name in self._LOGGER_NAMES:
+            for handler in logging.getLogger(name).handlers:
+                handler.removeFilter(self)
         self.active = False
 
     @staticmethod
@@ -94,15 +122,49 @@ class CompileDiagnosticsCollector(logging.Filter):
         parts = loc.rsplit(":", 1)
         return Path(parts[0]).name + ":" + parts[1] if len(parts) == 2 else loc
 
+    @classmethod
+    def _extract_user_caller(cls, break_loc: str, lines: list[str]) -> str:
+        """Find the nearest user-code caller from the "User code traceback" section.
+
+        Parses standard ``File "path", line N, in func`` frames from the
+        Dynamo log message.  Returns the deepest frame whose ``file:line``
+        differs from ``break_loc`` (i.e. the caller, not the break itself).
+        Falls back to the deepest frame if all frames match.
+        """
+        # Collect all traceback frames from the message.
+        frames: list[tuple[str, str, str]] = []  # (path, line, func)
+        for line in lines:
+            m = _FRAME_RE.search(line)
+            if m:
+                frames.append((m.group(1), m.group(2), m.group(3)))
+        if not frames:
+            return ""
+
+        break_short = cls._shorten_path(break_loc)
+
+        # Walk frames from deepest (last) to shallowest, looking for a
+        # frame that is NOT the break location itself.
+        for path, lineno, func in reversed(frames):
+            frame_short = cls._shorten_path(f"{path}:{lineno}")
+            if frame_short != break_short:
+                return f"{frame_short} in {func}"
+
+        # All frames match the break location; return the deepest with
+        # its function name (still useful as context).
+        path, lineno, func = frames[-1]
+        return f"{cls._shorten_path(f'{path}:{lineno}')} in {func}"
+
     def summary(self) -> str:
         """Format collected diagnostics as a compact multi-line string."""
         sections: list[str] = []
 
         if self.graph_breaks:
             lines = ["torch.compile graph breaks:"]
-            for loc, reason in self.graph_breaks.items():
-                short_reason = reason.split("\n")[0][:80]
+            for loc, rec in self.graph_breaks.items():
+                short_reason = rec.reason.split("\n")[0][:80]
                 lines.append(f"  {self._shorten_path(loc):<40s} {short_reason}")
+                if rec.user_caller:
+                    lines.append(f"    <- {rec.user_caller}")
             sections.append("\n".join(lines))
         else:
             sections.append("torch.compile graph breaks: (none)")
@@ -114,6 +176,17 @@ class CompileDiagnosticsCollector(logging.Filter):
                 lines.append(f"    reason: {guard[:100]}")
             sections.append("\n".join(lines))
 
+        return "\n".join(sections)
+
+    def detailed_summary(self) -> str:
+        """Full Dynamo log messages for each graph break, for deep investigations."""
+        if not self.graph_breaks:
+            return "No graph breaks recorded."
+        sections: list[str] = []
+        for loc, rec in self.graph_breaks.items():
+            sections.append(f"=== Graph break: {self._shorten_path(loc)} ===")
+            sections.append(rec.raw_message)
+            sections.append("")
         return "\n".join(sections)
 
 
