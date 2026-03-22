@@ -114,7 +114,7 @@ def main(
     patience_steps: int = 1600,
     use_profiler: bool = True,
     make_images: bool = True,
-    save_every: int = 10,
+    save_every: int = 1,
     use_mlflow: bool = True,
     mlflow_experiment: str = "GLOBE_DrivAerML",
 ):
