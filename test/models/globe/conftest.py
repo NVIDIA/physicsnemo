@@ -38,3 +38,16 @@ def disable_tf32():
     yield
     torch.backends.cuda.matmul.allow_tf32 = orig_matmul
     torch.backends.cudnn.allow_tf32 = orig_cudnn
+
+
+@pytest.fixture(autouse=True)
+def _disable_torch_compile(monkeypatch):
+    """Disable torch.compile to avoid per-test compilation overhead.
+
+    Each test creates fresh kernel instances that lazily trigger
+    torch.compile(..., mode="max-autotune-no-cudagraphs") on first
+    forward call.  With dynamo disabled, torch.compile returns a
+    transparent wrapper that calls the original function directly -
+    identical numerical behavior, zero compilation cost.
+    """
+    monkeypatch.setattr("torch._dynamo.config.disable", True)
