@@ -194,30 +194,6 @@ class TestMultiDatasetPrefetchAndClose:
         data0, _ = multi[0]
         assert "positions" in data0
 
-    def test_prefetch_batch(self, numpy_data_dir):
-        """prefetch_batch delegates to sub-datasets by global index."""
-        ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
-
-        multi.prefetch_batch([0, 1, 10, 11])
-        for idx in [0, 1, 10, 11]:
-            data, meta = multi[idx]
-            assert meta[DATASET_INDEX_METADATA_KEY] == (0 if idx < 10 else 1)
-            assert "positions" in data
-
-    def test_prefetch_count(self, numpy_data_dir):
-        """prefetch_count is sum of sub-dataset prefetch counts."""
-        ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
-
-        assert multi.prefetch_count == 0
-        multi.prefetch_batch([0, 1, 2, 3])
-        assert multi.prefetch_count >= 0  # may complete quickly
-        multi.cancel_prefetch()
-        assert multi.prefetch_count == 0
-
     def test_close_closes_all(self, numpy_data_dir):
         """close() closes all sub-datasets."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))

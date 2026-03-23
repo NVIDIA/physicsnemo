@@ -37,16 +37,16 @@ model:
   out_dim: 4              # pressure (1) + wss (3)
   geometry_dim: 3         # point coordinates
   global_dim: 3           # inlet velocity (3)
-  n_layers: 4
+  n_layers: 8
   n_hidden: 128
   dropout: 0.0
   n_head: 8
   act: "gelu"
-  mlp_ratio: 2
-  slice_num: 32
+  mlp_ratio: 4
+  slice_num: 128
   use_te: false
   plus: false
-  include_local_features: true
+  include_local_features: false
   radii: [0.1, 0.5, 2.0]
   neighbors_in_radius: [16, 32, 64]
   n_hidden_local: 32
@@ -61,7 +61,7 @@ dataset:
 
 # -- Training ----------------------------------------------------------------
 training:
-  num_epochs: 100
+  num_epochs: 500
   save_interval: 10
   loss_type: "huber"
   batch_size: 1
@@ -69,24 +69,21 @@ training:
   scheduler_update_mode: "epoch"
 
   optimizer:
-    _target_: torch.optim.AdamW
-    lr: 1.0e-4
+    lr: 1.0e-3
     weight_decay: 1.0e-4
     betas: [0.9, 0.999]
     eps: 1.0e-8
 
   scheduler:
-    _target_: torch.optim.lr_scheduler.CosineAnnealingLR
-    T_max: ${training.num_epochs}
-    eta_min: 1.0e-6
+    _target_: torch.optim.lr_scheduler.StepLR
+    step_size: 100
+    gamma: 0.1
 
 # -- Data paths (override per-machine) --------------------------------------
 data:
   drivaer_ml:
-    train_dir: /Users/coreya/data/drivaer_ml_pnm_mesh
-    val_dir: /Users/coreya/data/drivaer_ml_pnm_mesh
     config: conf/dataset/drivaer_ml_surface.yaml
-  shift_suv:
-    train_dir: /Users/coreya/data/shift_suv_pnm_mesh/estate/
-    val_dir: /Users/coreya/data/shift_suv_pnm_mesh/estate/
-    config: conf/dataset/shift_suv_estate.yaml
+  # shift_suv:
+  #   train_dir: /Users/coreya/data/shift_suv_pnm_mesh/estate/
+  #   val_dir: /Users/coreya/data/shift_suv_pnm_mesh/estate/
+  #   config: conf/dataset/shift_suv_estate.yaml

@@ -19,8 +19,14 @@
 
 name: drivaer_ml_surface
 
-train_datadir: /Users/coreya/data/drivaer_ml_pnm_mesh
-val_datadir: /Users/coreya/data/drivaer_ml_pnm_mesh
+train_datadir: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae//datasets/drivaer_aws/drivaer_data_pnm_mesh/train/
+val_datadir: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae//datasets/drivaer_aws/drivaer_data_pnm_mesh/val/
+
+metadata:
+  U_inf:  [30.0, 0.0, 0.0] # freestream velocity
+  p_inf: 0.0 # reference pressure, drivaerml is gauge pressure
+  rho_inf: 1.225 # freestream density
+  nu: 1
 
 pipeline:
   reader:
@@ -28,36 +34,40 @@ pipeline:
     path: ${train_datadir}
     pattern: "**/boundary*.vtp.pt"
   transforms:
-    - _target_: ${dp:SetGlobalField}
-      fields:
-        inlet_velocity: [30.0, 0.0, 0.0]
+    - _target_: ${dp:InjectMetadata}
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]
     - _target_: ${dp:CenterMesh}
       use_area_weighting: false
-    - _target_: ${dp:RandomRotateMesh}
-      axes: ["z"]
-      transform_point_data: true
-      transform_global_data: true
-    - _target_: ${dp:RandomTranslateMesh}
-      max_offset: [1.0, 1.0, 0.0]
-    - _target_: ${dp:NonDimensionalizeFields}
-      dimensional_field: pMeanTrim
-      nondimensional_field: CpMeanTrim
+    # - _target_: ${dp:RandomRotateMesh}
+    #   axes: ["z"]
+    #   transform_point_data: true
+    #   transform_global_data: true
+    # - _target_: ${dp:RandomTranslateMesh}
+    #   max_offset: [1.0, 1.0, 0.0]
+    - _target_: ${dp:NonDimensionalizeByMetadata}
+      fields:
+        pMeanTrim: pressure
+        wallShearStressMeanTrim: stress
       section: point_data
-      target_fields: [wallShearStressMeanTrim]
     - _target_: ${dp:RenameMeshFields}
       point_data:
-        CpMeanTrim: pressure
+        pMeanTrim: pressure
         wallShearStressMeanTrim: wss
+    - _target_: ${dp:NormalizeMeshFields}
+      section: point_data
+      stats_parquet: stats/drivaer_ml_surface_transformed_aggregate.parquet
+      field_types:
+        pressure: scalar
+        wss: vector
     - _target_: ${dp:SubsampleMesh}
-      n_points: 50000
+      n_points: 200000
     - _target_: ${dp:MeshToTensorDict}
     - _target_: ${dp:RestructureTensorDict}
       groups:
         input:
           points: points
-          inlet_velocity: global_data.inlet_velocity
+          U_inf: global_data.U_inf
         output:
           pressure: point_data.pressure
           wss: point_data.wss

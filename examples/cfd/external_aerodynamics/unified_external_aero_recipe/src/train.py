@@ -38,7 +38,7 @@ from pathlib import Path
 
 import hydra
 import omegaconf
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 import torch
 from torch.amp import autocast, GradScaler
@@ -52,11 +52,13 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.profiling import profile, Profiler
 
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
+from physicsnemo.datapipes import DataLoader
 
 from datasets import build_surface_dataset, load_dataset_config
 from collate import surface_collate
 from metrics import MetricCalculator
 from loss import LossCalculator
+from utils import build_muon_optimizer
 
 from physicsnemo.core.version_check import check_version_spec
 
@@ -163,13 +165,16 @@ def train_epoch(
     cfg: DictConfig,
     dist_manager: DistributedManager,
     scaler: GradScaler | None = None,
-) -> float:
+) -> tuple[float, dict[str, float]]:
     model.train()
     total_loss = 0.0
     total_metrics: dict[str, float] = {}
     precision = getattr(cfg, "precision", "float32")
     n_batches = 0
+    num_steps = len(dataloader)
+    epoch_t0 = time.perf_counter()
 
+    step_t0 = time.perf_counter()
     for i, batch in enumerate(dataloader):
         batch = {k: v.to(dist_manager.device) for k, v in batch.items()}
 
@@ -198,10 +203,17 @@ def train_epoch(
                 v if isinstance(v, float) else v.item()
             )
 
+        step_dt = time.perf_counter() - step_t0
+
         mem_gb = (
             torch.cuda.memory_reserved() / 1024**3 if torch.cuda.is_available() else 0
         )
-        logger.info(f"Epoch {epoch} [{i}] Loss: {this_loss:.6f} Mem: {mem_gb:.2f}GB")
+        logger.info(
+            f"Epoch {epoch} [{i + 1}/{num_steps}] "
+            f"Loss: {this_loss:.6f} "
+            f"Step: {step_dt:.3f}s "
+            f"Mem: {mem_gb:.2f}GB"
+        )
 
         if dist_manager.rank == 0 and writer is not None:
             step = i + n_batches * epoch
@@ -210,22 +222,23 @@ def train_epoch(
 
         if cfg.profile and i >= 10:
             break
+        step_t0 = time.perf_counter()
 
+    epoch_dt = time.perf_counter() - epoch_t0
     avg_loss = total_loss / max(n_batches, 1)
     avg_metrics = {k: v / max(n_batches, 1) for k, v in total_metrics.items()}
+
+    logger.info(
+        f"Epoch {epoch} train done in {epoch_dt:.1f}s "
+        f"({n_batches} steps, {epoch_dt / max(n_batches, 1):.3f}s/step avg)"
+    )
 
     if dist_manager.rank == 0 and writer is not None:
         writer.add_scalar("epoch/train_loss", avg_loss, epoch)
         for k, v in avg_metrics.items():
             writer.add_scalar(f"epoch/{k}", v, epoch)
-        table = tabulate(
-            [[k, f"{v:.6f}"] for k, v in avg_metrics.items()],
-            headers=["Metric", "Value"],
-            tablefmt="pretty",
-        )
-        logger.info(f"\nEpoch {epoch} Train Metrics:\n{table}\n")
 
-    return avg_loss
+    return avg_loss, avg_metrics
 
 
 @profile
@@ -239,14 +252,17 @@ def val_epoch(
     epoch: int,
     cfg: DictConfig,
     dist_manager: DistributedManager,
-) -> float:
+) -> tuple[float, dict[str, float]]:
     model.eval()
     total_loss = 0.0
     total_metrics: dict[str, float] = {}
     precision = getattr(cfg, "precision", "float32")
     n_batches = 0
+    num_steps = len(dataloader)
+    epoch_t0 = time.perf_counter()
 
     with torch.no_grad():
+        step_t0 = time.perf_counter()
         for i, batch in enumerate(dataloader):
             batch = {k: v.to(dist_manager.device) for k, v in batch.items()}
 
@@ -254,6 +270,7 @@ def val_epoch(
                 batch, model, precision, loss_calculator, metric_calculator
             )
 
+            step_dt = time.perf_counter() - step_t0
             total_loss += loss.item()
             n_batches += 1
             for k, v in metrics.items():
@@ -261,33 +278,57 @@ def val_epoch(
                     v if isinstance(v, float) else v.item()
                 )
 
+            logger.info(
+                f"Val Epoch {epoch} [{i + 1}/{num_steps}] "
+                f"Loss: {loss.item():.6f} "
+                f"Step: {step_dt:.3f}s"
+            )
+
             if cfg.profile and i >= 10:
                 break
+            step_t0 = time.perf_counter()
 
+    epoch_dt = time.perf_counter() - epoch_t0
     avg_loss = total_loss / max(n_batches, 1)
     avg_metrics = {k: v / max(n_batches, 1) for k, v in total_metrics.items()}
+
+    logger.info(
+        f"Epoch {epoch} val done in {epoch_dt:.1f}s "
+        f"({n_batches} steps, {epoch_dt / max(n_batches, 1):.3f}s/step avg)"
+    )
 
     if dist_manager.rank == 0 and writer is not None:
         writer.add_scalar("epoch/val_loss", avg_loss, epoch)
         for k, v in avg_metrics.items():
             writer.add_scalar(f"epoch/val_{k}", v, epoch)
-        table = tabulate(
-            [[k, f"{v:.6f}"] for k, v in avg_metrics.items()],
-            headers=["Metric", "Value"],
-            tablefmt="pretty",
-        )
-        logger.info(f"\nEpoch {epoch} Val Metrics:\n{table}\n")
 
-    return avg_loss
+    return avg_loss, avg_metrics
+
+
+def _extract_norm_stats(datasets: list) -> dict | None:
+    """Find NormalizeMeshFields in the transform chains and return its stats.
+
+    Returns the stats dict from the first NormalizeMeshFields found, or
+    None if no normalization is used.
+    """
+    from physicsnemo.datapipes.transforms.mesh import NormalizeMeshFields
+
+    for ds in datasets:
+        for t in getattr(ds, "transforms", []):
+            if isinstance(t, NormalizeMeshFields):
+                return t.stats
+    return None
 
 
 def build_dataloaders(cfg: DictConfig):
     """Build train and val dataloaders from dataset configs."""
     recipe_root = Path(__file__).resolve().parent.parent
     batch_size = cfg.training.get("batch_size", 1)
-    num_workers = cfg.training.get("num_workers", 0)
+    dist_manager = DistributedManager()
+    use_distributed = dist_manager.world_size > 1
 
-    datasets = []
+    train_datasets = []
+    val_datasets = []
     for ds_key in cfg.data:
         ds_cfg_block = cfg.data[ds_key]
         config_path = recipe_root / ds_cfg_block.config
@@ -297,39 +338,64 @@ def build_dataloaders(cfg: DictConfig):
         if train_dir and not Path(train_dir).exists():
             continue
         ds_yaml = load_dataset_config(config_path)
-        datasets.append(build_surface_dataset(ds_yaml))
+        train_datasets.append(build_surface_dataset(ds_yaml))
 
-    if not datasets:
+        val_datadir = OmegaConf.select(ds_yaml, "val_datadir", default=None)
+        if val_datadir and Path(val_datadir).exists():
+            val_yaml = OmegaConf.merge(ds_yaml, {"train_datadir": val_datadir})
+            val_datasets.append(build_surface_dataset(val_yaml))
+
+    if not train_datasets:
         raise RuntimeError("No valid datasets found. Check data paths in config.")
 
-    if len(datasets) == 1:
-        train_dataset = datasets[0]
+    norm_stats = _extract_norm_stats(train_datasets)
+
+    if len(train_datasets) == 1:
+        train_dataset = train_datasets[0]
     else:
         from physicsnemo.datapipes import MultiDataset
 
-        train_dataset = MultiDataset(*datasets, output_strict=False)
+        train_dataset = MultiDataset(*train_datasets, output_strict=False)
 
-    train_loader = torch.utils.data.DataLoader(
+    if val_datasets:
+        if len(val_datasets) == 1:
+            val_dataset = val_datasets[0]
+        else:
+            from physicsnemo.datapipes import MultiDataset
+
+            val_dataset = MultiDataset(*val_datasets, output_strict=False)
+    else:
+        val_dataset = train_dataset
+
+    train_sampler = None
+    val_sampler = None
+    if use_distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(
+            train_dataset, shuffle=True, drop_last=True
+        )
+        val_sampler = torch.utils.data.distributed.DistributedSampler(
+            val_dataset, shuffle=False, drop_last=False
+        )
+
+    train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers,
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
         collate_fn=surface_collate,
         drop_last=True,
-        pin_memory=torch.cuda.is_available(),
     )
 
-    val_loader = torch.utils.data.DataLoader(
-        train_dataset,
+    val_loader = DataLoader(
+        val_dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=num_workers,
+        sampler=val_sampler,
         collate_fn=surface_collate,
-        drop_last=True,
-        pin_memory=torch.cuda.is_available(),
+        drop_last=False,
     )
 
-    return train_loader, val_loader
+    return train_loader, val_loader, norm_stats
 
 
 @profile
@@ -368,28 +434,16 @@ def main(cfg: DictConfig):
             output_device=dist_manager.device,
         )
 
-    train_loader, val_loader = build_dataloaders(cfg)
+    train_loader, val_loader, norm_stats = build_dataloaders(cfg)
     logger.info(f"Train samples: {len(train_loader.dataset)}")
-
-    if dist_manager.world_size > 1:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(
-            train_loader.dataset, shuffle=True, drop_last=True
+    logger.info(f"Val samples: {len(val_loader.dataset)}")
+    if norm_stats is not None:
+        logger.info(
+            f"Normalization: {', '.join(f'{k}({v["type"]})' for k, v in norm_stats.items())}"
         )
-        train_loader = torch.utils.data.DataLoader(
-            train_loader.dataset,
-            batch_size=cfg.training.get("batch_size", 1),
-            sampler=train_sampler,
-            num_workers=cfg.training.get("num_workers", 0),
-            collate_fn=surface_collate,
-            drop_last=True,
-            pin_memory=torch.cuda.is_available(),
-        )
-    else:
-        train_sampler = None
 
-    optimizer = hydra.utils.instantiate(
-        cfg.training.optimizer, params=model.parameters()
-    )
+    optimizer = build_muon_optimizer(model, cfg)
+    logger.info(f"Optimizer: {optimizer}")
     scheduler = hydra.utils.instantiate(cfg.training.scheduler, optimizer=optimizer)
 
     precision = cfg.precision
@@ -423,12 +477,13 @@ def main(cfg: DictConfig):
     if cfg.compile:
         model = torch.compile(model)
 
-    logger.info("Starting training...")
-    for epoch in range(loaded_epoch, cfg.training.num_epochs):
-        if train_sampler is not None:
-            train_sampler.set_epoch(epoch)
+    num_epochs = cfg.training.num_epochs
+    logger.info(f"Starting training for {num_epochs} epochs...")
+    for epoch in range(loaded_epoch, num_epochs):
+        logger.info(f"--- Epoch {epoch + 1}/{num_epochs} ---")
+        train_loader.set_epoch(epoch)
 
-        train_loss = train_epoch(
+        train_loss, train_metrics = train_epoch(
             train_loader,
             model,
             optimizer,
@@ -443,7 +498,7 @@ def main(cfg: DictConfig):
             scaler,
         )
 
-        val_loss = val_epoch(
+        val_loss, val_metrics = val_epoch(
             val_loader,
             model,
             loss_calculator,
@@ -455,13 +510,32 @@ def main(cfg: DictConfig):
             dist_manager,
         )
 
-        logger.info(
-            f"Epoch [{epoch}/{cfg.training.num_epochs}] "
-            f"Train: {train_loss:.6f}  Val: {val_loss:.6f}"
-        )
+        if dist_manager.rank == 0:
+            all_keys = list(dict.fromkeys(list(train_metrics) + list(val_metrics)))
+            rows = [
+                [
+                    k,
+                    f"{train_metrics.get(k, float('nan')):.6f}",
+                    f"{val_metrics.get(k, float('nan')):.6f}",
+                ]
+                for k in all_keys
+            ]
+            table = tabulate(
+                rows,
+                headers=["Metric", "Train", "Val"],
+                tablefmt="pretty",
+            )
+            logger.info(
+                f"\nEpoch [{epoch}/{cfg.training.num_epochs}] "
+                f"Train Loss: {train_loss:.6f}  Val Loss: {val_loss:.6f}\n"
+                f"{table}\n"
+            )
 
         if epoch % cfg.training.save_interval == 0 and dist_manager.rank == 0:
             save_checkpoint(**ckpt_args, epoch=epoch + 1)
+            if norm_stats is not None:
+                norm_path = os.path.join(ckpt_args["path"], "norm_stats.pt")
+                torch.save(norm_stats, norm_path)
 
         if cfg.training.get("scheduler_update_mode", "epoch") == "epoch":
             scheduler.step()

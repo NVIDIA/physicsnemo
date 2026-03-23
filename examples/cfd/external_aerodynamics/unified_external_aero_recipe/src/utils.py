@@ -25,6 +25,67 @@ from typing import Literal
 import torch
 import functools
 
+from omegaconf import DictConfig
+from physicsnemo.optim import CombinedOptimizer
+
+
+def build_muon_optimizer(
+    model: torch.nn.Module, cfg: DictConfig
+) -> torch.optim.Optimizer:
+    """Build Muon + AdamW combined optimizer.
+
+    Muon handles 2-D parameters (linear/attention weight matrices) while AdamW
+    handles everything else (biases, layer-norm, embeddings, etc.).
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The model (may be DDP-wrapped).
+    cfg : DictConfig
+        Full Hydra config.  Reads ``cfg.training.optimizer.*`` for lr,
+        weight_decay, betas, and eps.
+    """
+    base_model = model.module if hasattr(model, "module") else model
+    muon_params = [p for p in base_model.parameters() if p.ndim == 2]
+    other_params = [p for p in base_model.parameters() if p.ndim != 2]
+
+    opt_cfg = cfg.training.optimizer
+    lr = opt_cfg.lr
+    weight_decay = opt_cfg.get("weight_decay", 1e-4)
+    betas = tuple(opt_cfg.get("betas", [0.9, 0.999]))
+    eps = opt_cfg.get("eps", 1e-8)
+
+    if muon_params and other_params:
+        return CombinedOptimizer(
+            [
+                torch.optim.Muon(
+                    muon_params,
+                    lr=lr,
+                    weight_decay=weight_decay,
+                    adjust_lr_fn="match_rms_adamw",
+                ),
+                torch.optim.AdamW(
+                    other_params,
+                    lr=lr,
+                    weight_decay=weight_decay,
+                    betas=betas,
+                    eps=eps,
+                ),
+            ]
+        )
+    elif muon_params:
+        return torch.optim.Muon(
+            muon_params,
+            lr=lr,
+            weight_decay=weight_decay,
+            adjust_lr_fn="match_rms_adamw",
+        )
+    else:
+        return torch.optim.AdamW(
+            other_params, lr=lr, weight_decay=weight_decay, betas=betas, eps=eps
+        )
+
+
 _SEQUENCE_BLOCKLIST = (torch.Tensor, str, bytes)
 
 

@@ -22,23 +22,32 @@ name: shift_suv_estate
 train_datadir: /Users/coreya/data/shift_suv_pnm_mesh/estate/
 val_datadir: /Users/coreya/data/shift_suv_pnm_mesh/estate/
 
+metadata:
+  U_inf: [30.0, 0.0, 0.0]  # freestream velocity
+  p_inf: 0.0                # reference pressure (gauge)
+  rho_inf: 1.225            # freestream density
+  nu: 1.5e-5                # kinematic viscosity
+
 pipeline:
   reader:
     _target_: ${dp:MeshReader}
     path: ${train_datadir}
     pattern: "**/merged_surfaces.vtp.pt"
   transforms:
-    - _target_: ${dp:SetGlobalField}
-      fields:
-        inlet_velocity: [30.0, 0.0, 0.0]
+    - _target_: ${dp:InjectMetadata}
     - _target_: ${dp:CenterMesh}
       use_area_weighting: true
-    - _target_: ${dp:RandomRotateMesh}
-      axes: ["z"]
-      transform_cell_data: true
-      transform_global_data: true
-    - _target_: ${dp:RandomTranslateMesh}
-      max_offset: [1.0, 1.0, 0.0]
+    # - _target_: ${dp:RandomRotateMesh}
+    #   axes: ["z"]
+    #   transform_cell_data: true
+    #   transform_global_data: true
+    # - _target_: ${dp:RandomTranslateMesh}
+    #   max_offset: [1.0, 1.0, 0.0]
+    - _target_: ${dp:NonDimensionalizeByMetadata}
+      fields:
+        pressure_average: pressure
+        wall_shear_stress_average: stress
+      section: cell_data
     - _target_: ${dp:RenameMeshFields}
       cell_data:
         pressure_average: pressure
@@ -51,7 +60,7 @@ pipeline:
       groups:
         input:
           points: cell_centroids
-          inlet_velocity: global_data.inlet_velocity
+          U_inf: global_data.U_inf
         output:
           pressure: cell_data.pressure
           wss: cell_data.wss

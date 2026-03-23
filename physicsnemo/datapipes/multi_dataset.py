@@ -117,7 +117,7 @@ class MultiDataset:
     Notes
     -----
     MultiDataset implements the same interface as :class:`Dataset` (``__len__``,
-    ``__getitem__``, ``prefetch``, ``prefetch_batch``, ``prefetch_count``,
+    ``__getitem__``, ``prefetch``,
     ``cancel_prefetch``, ``close``, ``field_names``) and can be passed to
     :class:`DataLoader` in place of a single dataset. Prefetch and close are
     delegated to the sub-dataset that owns the index. When ``output_strict=True``,
@@ -292,31 +292,6 @@ class MultiDataset:
         ds_id, local_i = self._index_to_dataset_and_local(index)
         self._datasets[ds_id].prefetch(local_i, stream=stream)
 
-    def prefetch_batch(
-        self,
-        indices: Sequence[int],
-        streams: Optional[Sequence[Any]] = None,
-    ) -> None:
-        """
-        Start prefetching multiple samples by global index.
-
-        Delegates to the sub-dataset that owns each index. Streams are cycled
-        if shorter than indices.
-
-        Parameters
-        ----------
-        indices : Sequence[int]
-            Global sample indices to prefetch.
-        streams : Sequence[Any], optional
-            Optional CUDA streams, one per index. If shorter than indices,
-            streams are cycled. If None, no streams used.
-        """
-        for i, idx in enumerate(indices):
-            stream = None
-            if streams:
-                stream = streams[i % len(streams)]
-            self.prefetch(idx, stream=stream)
-
     def cancel_prefetch(self, index: Optional[int] = None) -> None:
         """
         Cancel prefetch for the given index or all sub-datasets.
@@ -337,18 +312,6 @@ class MultiDataset:
             if mapped is not None:
                 ds_id, local_i = mapped
                 self._datasets[ds_id].cancel_prefetch(local_i)
-
-    @property
-    def prefetch_count(self) -> int:
-        """
-        Number of items currently being prefetched across all sub-datasets.
-
-        Returns
-        -------
-        int
-            Sum of in-flight prefetch counts from each sub-dataset.
-        """
-        return sum(ds.prefetch_count for ds in self._datasets)
 
     def __iter__(self) -> Iterator[tuple[TensorDict, dict[str, Any]]]:
         """Iterate over all samples in global index order."""

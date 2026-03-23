@@ -19,7 +19,14 @@ Collect per-field statistics from surface mesh datasets and write to parquet.
 
 Thin CLI wrapper around :class:`~physicsnemo.datapipes.statistics.FieldStatisticsCollector`.
 Loads dataset configs from YAML, instantiates the reader via Hydra, iterates
-raw meshes (no augmentation), and writes cached parquet files.
+meshes, and writes cached parquet files.
+
+By default, statistics are collected on **raw** meshes (no transforms).  Use
+``--with-transforms`` to apply the deterministic portion of the pipeline
+(e.g. ``InjectMetadata``, ``NonDimensionalizeByMetadata``, ``RenameMeshFields``)
+so that the resulting statistics describe the non-dimensionalized fields that
+the model actually sees.  Stochastic augmentations and terminal conversion
+transforms are automatically skipped.
 
 Usage::
 
@@ -27,6 +34,7 @@ Usage::
     python -m src.collect_stats --output stats/
     python -m src.collect_stats --force
     python -m src.collect_stats --configs conf/dataset/drivaer_ml_surface.yaml
+    python -m src.collect_stats --with-transforms
 """
 
 from __future__ import annotations
@@ -44,6 +52,8 @@ import physicsnemo.datapipes  # noqa: F401  (registers ${dp:...} resolvers)
 from physicsnemo.datapipes import MeshDataset
 from physicsnemo.datapipes.statistics import FieldStatisticsCollector
 
+import nondim  # noqa: F401  (registers InjectMetadata, NonDimensionalizeByMetadata)
+
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "conf" / "dataset"
@@ -52,6 +62,43 @@ DEFAULT_CONFIGS = [
     CONFIG_DIR / "drivaer_ml_surface.yaml",
     CONFIG_DIR / "shift_suv_estate.yaml",
 ]
+
+# Transforms to skip when running with --with-transforms.
+# Stochastic augmentations would change stats on every run; terminal
+# transforms convert Mesh -> TensorDict which the collector can't handle;
+# NormalizeMeshFields would be self-referential.
+_SKIP_TRANSFORMS = {
+    "RandomRotateMesh",
+    "RandomTranslateMesh",
+    "RandomScaleMesh",
+    "SubsampleMesh",
+    "MeshToTensorDict",
+    "RestructureTensorDict",
+    "ComputeCellCentroids",
+    "NormalizeMeshFields",
+}
+
+
+def _build_deterministic_transforms(cfg) -> list:
+    """Instantiate only the deterministic, non-terminal transforms from a config."""
+    from datasets import _inject_metadata_into_transform
+
+    metadata = OmegaConf.to_container(
+        OmegaConf.select(cfg, "metadata", default=OmegaConf.create({})),
+        resolve=True,
+    )
+    transforms = []
+    if "transforms" not in cfg.pipeline or not cfg.pipeline.transforms:
+        return transforms
+    for t_cfg in cfg.pipeline.transforms:
+        target = t_cfg.get("_target_", "")
+        class_name = target.split(":")[-1] if ":" in target else target.split(".")[-1]
+        if class_name in _SKIP_TRANSFORMS:
+            continue
+        if metadata:
+            t_cfg = _inject_metadata_into_transform(t_cfg, metadata)
+        transforms.append(hydra.utils.instantiate(t_cfg))
+    return transforms
 
 
 def main() -> None:
@@ -76,10 +123,21 @@ def main() -> None:
         default=None,
         help="YAML config file paths (default: all in conf/dataset/)",
     )
+    parser.add_argument(
+        "--with-transforms",
+        action="store_true",
+        help=(
+            "Apply deterministic pipeline transforms (e.g. "
+            "InjectMetadata, NonDimensionalizeByMetadata, RenameMeshFields) "
+            "before collecting stats.  Stochastic augmentations and terminal "
+            "transforms are automatically skipped."
+        ),
+    )
     args = parser.parse_args()
 
     config_paths = [Path(p) for p in args.configs] if args.configs else DEFAULT_CONFIGS
     output_dir = Path(args.output)
+    suffix = "_transformed" if args.with_transforms else ""
 
     t0 = time.perf_counter()
 
@@ -97,9 +155,20 @@ def main() -> None:
             continue
 
         reader = hydra.utils.instantiate(cfg.pipeline.reader)
-        dataset = MeshDataset(reader)
 
-        parquet_path = output_dir / f"{name}.parquet"
+        transforms = None
+        if args.with_transforms:
+            transforms = _build_deterministic_transforms(cfg)
+            skipped = [
+                t.get("_target_", "").split(":")[-1]
+                for t in (cfg.pipeline.transforms or [])
+                if t.get("_target_", "").split(":")[-1] in _SKIP_TRANSFORMS
+            ]
+            print(f"  Applying transforms (skipped: {skipped})")
+
+        dataset = MeshDataset(reader, transforms=transforms)
+
+        parquet_path = output_dir / f"{name}{suffix}.parquet"
         collector = FieldStatisticsCollector(
             output_path=parquet_path,
             force=args.force,

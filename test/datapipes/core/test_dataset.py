@@ -277,25 +277,9 @@ class TestDatasetPrefetching:
         # Prefetch index 0
         dataset.prefetch(0)
 
-        # Should have 1 prefetch in flight (may complete quickly)
-        assert dataset.prefetch_count >= 0
-
         # Get should use prefetched result
         data, metadata = dataset[0]
         assert "positions" in data
-
-    def test_prefetch_batch(self, numpy_data_dir):
-        """Test prefetching multiple samples."""
-        reader = dp.NumpyReader(numpy_data_dir)
-        dataset = dp.Dataset(reader)
-
-        # Prefetch multiple indices
-        dataset.prefetch_batch([0, 1, 2, 3])
-
-        # Get samples
-        for i in range(4):
-            data, metadata = dataset[i]
-            assert metadata["index"] == i
 
     def test_prefetch_non_prefetched_index(self, numpy_data_dir):
         """Test getting a non-prefetched index loads synchronously."""
@@ -316,10 +300,10 @@ class TestDatasetPrefetching:
 
         # Prefetch same index twice
         dataset.prefetch(0)
-        initial_count = dataset.prefetch_count
+        initial_count = len(dataset._prefetch_futures)
 
         dataset.prefetch(0)  # Should be a no-op
-        assert dataset.prefetch_count == initial_count
+        assert len(dataset._prefetch_futures) == initial_count
 
         # Still should be able to get the data
         data, metadata = dataset[0]
@@ -356,7 +340,7 @@ class TestDatasetPrefetching:
             assert metadata["index"] == i
 
         # Prefetch count should be 0 after retrieving all
-        assert dataset.prefetch_count == 0
+        assert len(dataset._prefetch_futures) == 0
 
 
 # ============================================================================
@@ -378,39 +362,6 @@ class TestDatasetPrefetchWithStreams:
 
         data, metadata = dataset[0]
         assert data["positions"].device.type == "cuda"
-
-        torch.cuda.synchronize()
-
-    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-    def test_prefetch_batch_with_streams(self, numpy_data_dir):
-        """Test prefetch_batch with multiple CUDA streams."""
-        reader = dp.NumpyReader(numpy_data_dir, pin_memory=True)
-        dataset = dp.Dataset(reader, device="cuda:0")
-
-        streams = [torch.cuda.Stream() for _ in range(4)]
-        dataset.prefetch_batch([0, 1, 2, 3], streams=streams)
-
-        for i in range(4):
-            data, metadata = dataset[i]
-            assert data["positions"].device.type == "cuda"
-
-        torch.cuda.synchronize()
-
-    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-    def test_prefetch_batch_with_stream_cycling(self, numpy_data_dir):
-        """Test prefetch_batch cycles through streams correctly."""
-        reader = dp.NumpyReader(numpy_data_dir, pin_memory=True)
-        dataset = dp.Dataset(reader, device="cuda:0")
-
-        # Use fewer streams than indices to test cycling
-        streams = [torch.cuda.Stream() for _ in range(2)]
-        dataset.prefetch_batch([0, 1, 2, 3, 4], streams=streams)
-
-        # All samples should be retrievable
-        for i in range(5):
-            data, metadata = dataset[i]
-            assert metadata["index"] == i
-            assert data["positions"].device.type == "cuda"
 
         torch.cuda.synchronize()
 
@@ -474,11 +425,11 @@ class TestDatasetCancelPrefetch:
         reader = dp.NumpyReader(numpy_data_dir)
         dataset = dp.Dataset(reader)
 
-        dataset.prefetch_batch([0, 1, 2, 3])
+        for i in range(4):
+            dataset.prefetch(i)
         dataset.cancel_prefetch()
 
-        # Prefetch count should be 0 after cancel
-        assert dataset.prefetch_count == 0
+        assert len(dataset._prefetch_futures) == 0
 
     def test_prefetch_cancel_specific(self, numpy_data_dir):
         """Test canceling a specific prefetch."""
@@ -525,11 +476,11 @@ class TestDatasetClose:
         reader = dp.NumpyReader(numpy_data_dir)
         dataset = dp.Dataset(reader)
 
-        dataset.prefetch_batch([0, 1, 2, 3])
+        for i in range(4):
+            dataset.prefetch(i)
         dataset.close()
 
-        # Should not raise, prefetch should be stopped
-        assert dataset.prefetch_count == 0
+        assert len(dataset._prefetch_futures) == 0
 
     def test_close_shuts_down_executor(self, numpy_data_dir):
         """Test that close shuts down the executor."""
@@ -566,7 +517,7 @@ class TestDatasetClose:
 
         # After context exit, executor should be shut down
         assert dataset._executor is None
-        assert dataset.prefetch_count == 0
+        assert len(dataset._prefetch_futures) == 0
 
 
 # ============================================================================
@@ -679,7 +630,8 @@ class TestDatasetIntegration:
 
         # Prefetch with streams
         streams = [torch.cuda.Stream() for _ in range(2)]
-        dataset.prefetch_batch([0, 1, 2, 3], streams=streams)
+        for i in range(4):
+            dataset.prefetch(i, stream=streams[i % len(streams)])
 
         # Retrieve results
         for i in range(4):

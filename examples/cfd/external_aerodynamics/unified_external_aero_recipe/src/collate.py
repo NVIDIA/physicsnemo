@@ -22,7 +22,7 @@ forward signature::
 
     {
         "geometry":         (B, N, 3),   # point positions
-        "global_embedding": (B, 1, 3),   # inlet velocity
+        "global_embedding": (B, 1, 3),   # freestream velocity (U_inf)
         "fields":           (B, N, C),   # concatenated target fields
     }
 """
@@ -40,7 +40,7 @@ def surface_collate(samples: list[tuple[TensorDict, dict]]) -> dict[str, torch.T
     with ``input/`` and ``output/`` groups produced by
     :class:`~physicsnemo.datapipes.transforms.mesh.RestructureTensorDict`.
 
-    The ``input`` group must contain ``points`` and ``inlet_velocity``.
+    The ``input`` group must contain ``points`` and ``U_inf``.
     The ``output`` group must contain ``pressure`` (scalar) and ``wss`` (3-vector).
 
     Parameters
@@ -63,7 +63,7 @@ def surface_collate(samples: list[tuple[TensorDict, dict]]) -> dict[str, torch.T
         out = data["output"]
 
         pts = inp["points"]  # (N, 3)
-        vel = inp["inlet_velocity"]  # (1, 3) or (3,)
+        vel = inp["U_inf"]  # (1, 3) or (3,)
 
         pressure = out["pressure"]  # (N,) or (N, 1)
         wss = out["wss"]  # (N, 3)

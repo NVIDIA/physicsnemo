@@ -25,10 +25,13 @@ from typing import Literal
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.datapipes.transforms.subsample import poisson_sample_indices_fixed
 from physicsnemo.mesh import DomainMesh, Mesh
+
+pq = OptionalImport("pyarrow.parquet")
 
 
 @register()
@@ -416,49 +419,167 @@ def _get_mesh_section(mesh: Mesh, section: str) -> TensorDict:
 
 
 @register()
-class NonDimensionalizeFields(MeshTransform):
-    r"""Non-dimensionalize fields by a dynamic pressure q derived per-sample.
+class NormalizeMeshFields(MeshTransform):
+    r"""Standardize mesh data fields with direction-preserving vector support.
 
-    Computes q from the ratio of two co-located fields -- one dimensional,
-    one already non-dimensional -- and divides target fields by q.  Uses
-    the median ratio for robustness against surface points where the
-    denominator passes through zero.
+    For **scalar** fields: ``(x - mean) / std``.
 
-    Typical use: given ``pMeanTrim`` (Pa) and ``CpMeanTrim`` (dimensionless)
-    in ``point_data``, compute ``q = median(pMeanTrim / CpMeanTrim)`` and
-    divide ``wallShearStressMeanTrim`` by q to obtain the skin-friction
-    coefficient Cf.
+    For **vector** fields: ``(x - mean_vec) / std_shared`` where
+    ``mean_vec`` is a per-component mean and ``std_shared`` is a single
+    scalar applied uniformly to all components.  This preserves relative
+    component magnitudes (and therefore vector direction) while bringing
+    the overall field scale to O(1).
+
+    Statistics may come from three sources (checked in order):
+
+    1. **stats_parquet** — path to an aggregate parquet file produced by
+       :class:`~physicsnemo.datapipes.statistics.FieldStatisticsCollector`.
+       Requires *field_types* to distinguish scalars from vectors.
+    2. **stats_file** — path to a ``.pt`` file mapping field names to
+       dicts with keys ``type``, ``mean``, ``std``.
+    3. **fields** — inline dict supplied directly in YAML.
+
+    Example YAML (from aggregate parquet)::
+
+        - _target_: ${dp:NormalizeMeshFields}
+          section: point_data
+          stats_parquet: /path/to/stats_aggregate.parquet
+          field_types:
+            pressure: scalar
+            wss: vector
+
+    Example YAML (inline)::
+
+        - _target_: ${dp:NormalizeMeshFields}
+          section: point_data
+          fields:
+            pressure: {type: scalar, mean: -0.15, std: 0.45}
+            wss: {type: vector, mean: [0.003, 0.0, 0.0], std: 0.005}
+
+    Example YAML (from .pt file)::
+
+        - _target_: ${dp:NormalizeMeshFields}
+          section: point_data
+          stats_file: /path/to/norm_stats.pt
     """
 
     def __init__(
         self,
-        dimensional_field: str,
-        nondimensional_field: str,
         section: str = "point_data",
-        target_fields: list[str] | None = None,
-        target_section: str | None = None,
-        min_denominator: float = 0.01,
+        fields: dict[str, dict] | None = None,
+        stats_file: str | None = None,
+        stats_parquet: str | None = None,
+        field_types: dict[str, str] | None = None,
+        eps: float = 1e-8,
     ) -> None:
         super().__init__()
-        self._dim_field = dimensional_field
-        self._nondim_field = nondimensional_field
         self._section = section
-        self._target_fields = target_fields or []
-        self._target_section = target_section or section
-        self._min_denom = min_denominator
+        self._eps = eps
+
+        if stats_parquet is not None:
+            if field_types is None:
+                raise ValueError(
+                    "'field_types' is required when using 'stats_parquet' "
+                    "(e.g. {pressure: scalar, wss: vector})"
+                )
+            self._stats = self._load_from_parquet(stats_parquet, field_types)
+        elif stats_file is not None:
+            self._stats: dict[str, dict[str, torch.Tensor | str]] = torch.load(
+                stats_file, weights_only=False
+            )
+        elif fields is not None:
+            self._stats = {}
+            for name, cfg in fields.items():
+                self._stats[name] = {
+                    "type": cfg["type"],
+                    "mean": torch.as_tensor(cfg["mean"], dtype=torch.float32),
+                    "std": torch.as_tensor(cfg["std"], dtype=torch.float32),
+                }
+        else:
+            raise ValueError(
+                "Provide one of 'stats_parquet', 'stats_file', or 'fields'"
+            )
+
+    # -- parquet loader -------------------------------------------------------
+
+    def _load_from_parquet(
+        self,
+        parquet_path: str,
+        field_types: dict[str, str],
+    ) -> dict[str, dict]:
+        """Build normalization stats from a FieldStatisticsCollector aggregate parquet.
+
+        For scalar fields (component == -1) the mean and std are taken
+        directly.  For vector fields the per-component means are
+        assembled into a vector, and the shared std is
+        ``sqrt(mean(var_0, var_1, ...))``.
+        """
+        table = pq.read_table(parquet_path)
+        field_keys = table.column("field_key").to_pylist()
+        components = table.column("component").to_pylist()
+        means = table.column("mean").to_pylist()
+        variances = table.column("var").to_pylist()
+
+        stats: dict[str, dict] = {}
+        for name, ftype in field_types.items():
+            parquet_key = f"{self._section}.{name}"
+
+            if ftype == "scalar":
+                idx = None
+                for i, (fk, comp) in enumerate(zip(field_keys, components)):
+                    if fk == parquet_key and comp == -1:
+                        idx = i
+                        break
+                if idx is None:
+                    raise KeyError(
+                        f"Scalar field '{parquet_key}' (component=-1) "
+                        f"not found in {parquet_path}"
+                    )
+                stats[name] = {
+                    "type": "scalar",
+                    "mean": torch.tensor(means[idx], dtype=torch.float32),
+                    "std": torch.tensor(variances[idx] ** 0.5, dtype=torch.float32),
+                }
+
+            elif ftype == "vector":
+                comp_means = {}
+                comp_vars = {}
+                for i, (fk, comp) in enumerate(zip(field_keys, components)):
+                    if fk == parquet_key and comp >= 0:
+                        comp_means[comp] = means[i]
+                        comp_vars[comp] = variances[i]
+                if not comp_means:
+                    raise KeyError(
+                        f"Vector field '{parquet_key}' not found in {parquet_path}"
+                    )
+                n_comp = max(comp_means.keys()) + 1
+                mean_vec = torch.tensor(
+                    [comp_means[c] for c in range(n_comp)], dtype=torch.float32
+                )
+                shared_var = sum(comp_vars[c] for c in range(n_comp)) / n_comp
+                stats[name] = {
+                    "type": "vector",
+                    "mean": mean_vec,
+                    "std": torch.tensor(shared_var**0.5, dtype=torch.float32),
+                }
+            else:
+                raise ValueError(f"Unknown field type '{ftype}' for '{name}'")
+
+        return stats
+
+    # -- forward / inverse ---------------------------------------------------
 
     def __call__(self, mesh: Mesh) -> Mesh:
-        ref_td = _get_mesh_section(mesh, self._section)
-        dim_vals = ref_td[self._dim_field].float().reshape(-1)
-        nondim_vals = ref_td[self._nondim_field].float().reshape(-1)
+        td = _get_mesh_section(mesh, self._section)
+        new_td = td.clone()
 
-        mask = nondim_vals.abs() > self._min_denom
-        q = (dim_vals[mask] / nondim_vals[mask]).median()
-
-        target_td = _get_mesh_section(mesh, self._target_section)
-        new_td = target_td.clone()
-        for field_name in self._target_fields:
-            new_td[field_name] = new_td[field_name].float() / q
+        for field_name, stats in self._stats.items():
+            if field_name not in new_td.keys():
+                continue
+            val = new_td[field_name].float()
+            mean = stats["mean"].to(dtype=val.dtype, device=val.device)
+            std = stats["std"].to(dtype=val.dtype, device=val.device)
+            new_td[field_name] = (val - mean) / (std + self._eps)
 
         kwargs: dict = {
             "points": mesh.points,
@@ -467,16 +588,51 @@ class NonDimensionalizeFields(MeshTransform):
             "cell_data": mesh.cell_data,
             "global_data": mesh.global_data,
         }
-        kwargs[self._target_section] = new_td
+        kwargs[self._section] = new_td
         return Mesh(**kwargs)
 
+    def inverse_tensor(
+        self, tensor: torch.Tensor, field_order: list[str]
+    ) -> torch.Tensor:
+        """Un-normalize a concatenated output tensor back to physical units.
+
+        Parameters
+        ----------
+        tensor : Tensor
+            Shape ``(*, C)`` where channels are ordered according to
+            *field_order*.
+        field_order : list[str]
+            Ordered field names matching the channel layout, e.g.
+            ``["pressure", "wss"]``.
+
+        Returns
+        -------
+        Tensor
+            Same shape, with each field's channels un-normalized.
+        """
+        out = tensor.clone()
+        idx = 0
+        for name in field_order:
+            stats = self._stats[name]
+            mean = stats["mean"].to(dtype=tensor.dtype, device=tensor.device)
+            std = stats["std"].to(dtype=tensor.dtype, device=tensor.device)
+            dim = 1 if mean.ndim == 0 else mean.shape[0]
+            out[..., idx : idx + dim] = (
+                out[..., idx : idx + dim] * (std + self._eps) + mean
+            )
+            idx += dim
+        return out
+
+    @property
+    def stats(self) -> dict:
+        """Normalization statistics dict (for serialization)."""
+        return self._stats
+
     def extra_repr(self) -> str:
-        targets = [f"{self._target_section}.{f}" for f in self._target_fields]
-        return (
-            f"q={self._section}.{self._dim_field}"
-            f"/{self._section}.{self._nondim_field}, "
-            f"targets={targets}"
-        )
+        parts = []
+        for name, s in self._stats.items():
+            parts.append(f"{name}({s['type']}): mean={s['mean']}, std={s['std']}")
+        return f"section={self._section}, " + ", ".join(parts)
 
 
 def _mesh_to_tensordict(mesh: Mesh) -> TensorDict:

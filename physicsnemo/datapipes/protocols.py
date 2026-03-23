@@ -27,9 +27,25 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, field
 from typing import Any, Iterator, Optional
 
 import torch
+
+
+@dataclass
+class _PrefetchResult:
+    """Result of a stream-aware prefetch operation.
+
+    Used by :class:`Dataset` and :class:`MeshDataset` to carry data,
+    metadata, and an optional CUDA event through the prefetch pipeline.
+    """
+
+    index: int
+    data: Any = None
+    metadata: Optional[dict[str, Any]] = field(default=None)
+    error: Optional[Exception] = field(default=None)
+    event: Optional[torch.cuda.Event] = field(default=None)
 
 
 class DatasetBase(ABC):
@@ -40,9 +56,9 @@ class DatasetBase(ABC):
     cache lookup, thread-pool prefetching, cancellation, cleanup — is
     provided here.
 
-    :class:`Dataset` overrides :meth:`prefetch` to add CUDA-stream
-    support; :class:`MeshDataset` inherits the default thread-based
-    prefetch as-is.
+    Both :class:`Dataset` and :class:`MeshDataset` override
+    :meth:`prefetch` and :meth:`__getitem__` to add CUDA-stream
+    support via :class:`_PrefetchResult`.
     """
 
     def __init__(self, *, num_workers: int = 2) -> None:

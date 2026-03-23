@@ -25,29 +25,17 @@ and automatic device transfer when device parameter is specified.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.datapipes.protocols import DatasetBase
+from physicsnemo.datapipes.protocols import DatasetBase, _PrefetchResult
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
 from physicsnemo.datapipes.transforms.compose import Compose
 from physicsnemo.distributed import DistributedManager
-
-
-@dataclass
-class _PrefetchResult:
-    """Result of a stream-aware prefetch operation."""
-
-    index: int
-    data: Optional[TensorDict] = None
-    metadata: Optional[dict[str, Any]] = None
-    error: Optional[Exception] = None
-    event: Optional[torch.cuda.Event] = None
 
 
 @register()
@@ -309,28 +297,6 @@ class Dataset(DatasetBase):
 
         return self._load(index)
 
-    def prefetch_batch(
-        self,
-        indices: Sequence[int],
-        streams: Optional[Sequence[torch.cuda.Stream]] = None,
-    ) -> None:
-        """
-        Start prefetching multiple samples.
-
-        Parameters
-        ----------
-        indices : Sequence[int]
-            Sample indices to prefetch.
-        streams : Sequence[torch.cuda.Stream], optional
-            Optional CUDA streams, one per index. If shorter than
-            indices, streams are cycled. If None, no streams used.
-        """
-        for i, idx in enumerate(indices):
-            stream = None
-            if streams:
-                stream = streams[i % len(streams)]
-            self.prefetch(idx, stream=stream)
-
     @property
     def field_names(self) -> list[str]:
         """
@@ -342,18 +308,6 @@ class Dataset(DatasetBase):
             Field names available in samples.
         """
         return self.reader.field_names
-
-    @property
-    def prefetch_count(self) -> int:
-        """
-        Number of items currently being prefetched.
-
-        Returns
-        -------
-        int
-            Count of in-flight prefetch operations.
-        """
-        return len(self._prefetch_futures)
 
     def close(self) -> None:
         """
