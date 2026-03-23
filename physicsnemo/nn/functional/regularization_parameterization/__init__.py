@@ -14,18 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
+from .drop_path import DropPath, drop_path
+from .weight_fact import WeightFact, weight_fact
 
-from physicsnemo.core.version_check import check_version_spec
-
-if not check_version_spec("torch", "2.6.0", hard_fail=False):
-    pytest.skip(
-        "These tests require torch >= 2.6.0",
-        allow_module_level=True,
-    )
-
-
-@pytest.fixture(autouse=True)
-def skip_on_cpu(device):
-    if device == "cpu":
-        pytest.skip("Skip tests on cpu")
+__all__ = [
+    "DropPath",
+    "drop_path",
+    "WeightFact",
+    "weight_fact",
+]

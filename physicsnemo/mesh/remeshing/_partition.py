@@ -39,7 +39,7 @@ import torch.nn.functional as F
 from jaxtyping import Float, Int
 
 from physicsnemo.mesh.mesh import Mesh
-from physicsnemo.nn.functional.knn import knn
+from physicsnemo.nn.functional.neighbors import knn
 
 
 class CellPartition(NamedTuple):
@@ -82,7 +82,7 @@ def partition_cells(
     approximates the Voronoi partition.  The approximation is exact when the
     original mesh is infinitely fine relative to the seed spacing.
 
-    The nearest-neighbor search uses :func:`~physicsnemo.nn.functional.knn.knn`
+    The nearest-neighbor search uses :func:`~physicsnemo.nn.functional.neighbors.knn`
     which auto-dispatches to the optimal backend (cuML on GPU, scipy KDTree
     on CPU) for O(M log N) query complexity.
 

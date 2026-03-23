@@ -34,9 +34,7 @@ if ST_AVAILABLE:
         )
         from .knn import knn_sharded_wrapper
         from .mesh_ops import sharded_signed_distance_field_wrapper
-
-        # Currently disabled until wrapt is removed
-        # from .natten_patches import na2d_wrapper
+        from .natten_patches import na1d_wrapper, na2d_wrapper, na3d_wrapper
         from .normalization_patches import group_norm_wrapper
         from .padding import generic_pad_nd_wrapper
         from .point_cloud_ops import radius_search_wrapper

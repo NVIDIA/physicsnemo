@@ -14,18 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
+from .knn import KNN, knn
+from .radius_search import RadiusSearch, radius_search
 
-from physicsnemo.core.version_check import check_version_spec
-
-if not check_version_spec("torch", "2.6.0", hard_fail=False):
-    pytest.skip(
-        "These tests require torch >= 2.6.0",
-        allow_module_level=True,
-    )
-
-
-@pytest.fixture(autouse=True)
-def skip_on_cpu(device):
-    if device == "cpu":
-        pytest.skip("Skip tests on cpu")
+__all__ = [
+    "KNN",
+    "knn",
+    "RadiusSearch",
+    "radius_search",
+]

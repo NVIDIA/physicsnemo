@@ -16,6 +16,7 @@
 
 import torch
 import warp as wp
+from jaxtyping import Float
 
 from physicsnemo.core.function_spec import FunctionSpec
 
@@ -261,16 +262,22 @@ class SignedDistanceField(FunctionSpec):
     ... )
     """
 
+    _BENCHMARK_CASES = (
+        ("small", 8, 20, 4096),
+        ("medium", 16, 40, 16384),
+        ("large", 32, 80, 65536),
+    )
+
     @FunctionSpec.register(
         name="warp", required_imports=("warp>=0.6.0",), rank=0, baseline=True
     )
     def warp_forward(
-        mesh_vertices: torch.Tensor,
+        mesh_vertices: Float[torch.Tensor, "num_vertices 3"],
         mesh_indices: torch.Tensor,
-        input_points: torch.Tensor,
+        input_points: Float[torch.Tensor, "... 3"],
         max_dist: float = 1e8,
         use_sign_winding_number: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[Float[torch.Tensor, "..."], Float[torch.Tensor, "... 3"]]:
         return signed_distance_field_impl(
             mesh_vertices,
             mesh_indices,
@@ -280,23 +287,16 @@ class SignedDistanceField(FunctionSpec):
         )
 
     @classmethod
-    def make_inputs(cls, device: torch.device | str = "cpu"):
+    def make_inputs_forward(cls, device: torch.device | str = "cpu"):
         device = torch.device(device)
-
-        # (label, n_rings, n_segments, n_query_points)
-        cases = [
-            ("small", 8, 20, 4096),
-            ("medium", 16, 40, 16384),
-            ("large", 32, 80, 65536),
-        ]
-        for label, n_rings, n_segments, num_points in cases:
-            ### UV sphere vertex positions
+        for label, n_rings, n_segments, num_points in cls._BENCHMARK_CASES:
+            # Build UV-sphere vertex positions.
             phi = torch.linspace(0, torch.pi, n_rings + 2, device=device)[1:-1]
             theta = torch.linspace(0, 2 * torch.pi, n_segments + 1, device=device)[:-1]
             phi_g, theta_g = torch.meshgrid(phi, theta, indexing="ij")
 
             sin_phi = phi_g.sin()
-            ring_pts = torch.stack(
+            ring_points = torch.stack(
                 [sin_phi * theta_g.cos(), sin_phi * theta_g.sin(), phi_g.cos()],
                 dim=-1,
             ).reshape(-1, 3)
@@ -304,19 +304,19 @@ class SignedDistanceField(FunctionSpec):
             mesh_vertices = torch.cat(
                 [
                     torch.tensor([[0.0, 0.0, 1.0]], device=device),
-                    ring_pts,
+                    ring_points,
                     torch.tensor([[0.0, 0.0, -1.0]], device=device),
                 ]
-            )
+            ).to(torch.float32)
 
-            ### UV sphere triangle connectivity (vectorized)
+            # Build UV-sphere triangle connectivity (vectorized).
             south_idx = n_rings * n_segments + 1
             j = torch.arange(n_segments, device=device)
             j_next = (j + 1) % n_segments
 
             north_fan = torch.stack([torch.zeros_like(j), 1 + j, 1 + j_next], dim=1)
 
-            r = torch.arange(n_rings - 1, device=device).unsqueeze(1)  # (R, 1)
+            r = torch.arange(n_rings - 1, device=device).unsqueeze(1)
             base = 1 + r * n_segments
             p00, p01 = base + j, base + j_next
             p10, p11 = base + n_segments + j, base + n_segments + j_next
@@ -337,24 +337,14 @@ class SignedDistanceField(FunctionSpec):
                 torch.cat([north_fan, body_tris, south_fan]).to(torch.int32).reshape(-1)
             )
 
-            # Sample query points uniformly in [-1.5, 1.5]^3 (unit sphere + 50% padding).
+            # Sample query points in a padded box around the unit sphere.
             input_points = 3.0 * torch.rand(num_points, 3, device=device) - 1.5
 
-            n_tris = 2 * n_rings * n_segments
             yield (
-                f"{label}-uv-sphere-tris{n_tris}-query-points{num_points}",
+                f"{label}-uv-sphere-tris{2 * n_rings * n_segments}-query-points{num_points}",
                 (mesh_vertices, mesh_indices, input_points),
                 {"max_dist": 10.0, "use_sign_winding_number": False},
             )
-
-    @classmethod
-    def compare(
-        cls,
-        output: tuple[torch.Tensor, torch.Tensor],
-        reference: tuple[torch.Tensor, torch.Tensor],
-    ) -> None:
-        # TODO(ASV): Populate output comparison in a follow-up PR.
-        raise NotImplementedError
 
 
 signed_distance_field = SignedDistanceField.make_function("signed_distance_field")
