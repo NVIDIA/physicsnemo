@@ -99,3 +99,6 @@ loss:
   # Loguniform distribution parameters (used when sigma_distribution: "loguniform")
   # sigma_min: 0.002 # Minimum noise level
   # sigma_max: 80.0 # Maximum noise level
+  # track_sigma_bin_loss: true # Log per-sigma-bin diffusion loss to TensorBoard
+  # sigma_bin_count: 8 # Number of equal-probability bins if sigma_bin_edges is not provided
+  # sigma_bin_edges: [] # Optional explicit strictly increasing edges (>0), e.g. [1e-3,1e-2,...,80.0]

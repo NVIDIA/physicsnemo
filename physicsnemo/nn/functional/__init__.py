@@ -25,6 +25,7 @@ from .equivariant_ops import (
 from .fft import imag, irfft, irfft2, real, rfft, rfft2, view_as_complex
 from .interpolation import interpolation
 from .knn import knn
+from .natten import na1d, na2d, na3d
 from .radius_search import radius_search
 from .sdf import signed_distance_field
 from .weight_fact import weight_fact
@@ -37,6 +38,9 @@ __all__ = [
     "interpolation",
     "knn",
     "legendre_polynomials",
+    "na1d",
+    "na2d",
+    "na3d",
     "polar_and_dipole_basis",
     "radius_search",
     "real",
