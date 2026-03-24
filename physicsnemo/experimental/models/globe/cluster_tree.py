@@ -41,7 +41,6 @@ independent.
 """
 
 import logging
-from dataclasses import dataclass
 
 import torch
 from jaxtyping import Float, Int
@@ -59,7 +58,7 @@ logger = logging.getLogger("globe.cluster_tree")
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@tensorclass
 class DualInteractionPlan:
     r"""Result of a dual-tree Barnes-Hut traversal: four categories of
     interactions that together cover all source contributions for every
@@ -1079,7 +1078,7 @@ class ClusterTree:
 # ---------------------------------------------------------------------------
 
 
-@dataclass
+@tensorclass
 class SourceAggregates:
     """Per-node aggregated source data for far-field monopole approximation.
 
