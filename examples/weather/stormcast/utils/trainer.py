@@ -29,13 +29,12 @@ from physicsnemo.core import Module
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import load_checkpoint, load_model_weights, save_checkpoint
 
-from utils.loss import EDMLoss, EDMLossLogUniform
+from utils.loss import EDMLoss, EDMLossLogUniform, SigmaBinTracker, regression_loss_fn
 
 from utils.config import MainConfig
 from utils.logging import ExperimentLogger
 from utils.nn import (
     diffusion_model_forward,
-    regression_loss_fn,
     get_preconditioned_natten_dit,
     get_preconditioned_unet,
     build_network_condition_and_target,
@@ -159,6 +158,13 @@ class Trainer:
 
         # Loss function
         self.loss_fn = self._setup_loss()
+        self.sigma_bin_tracker = SigmaBinTracker(
+            self.cfg.training.loss, self.device, self.loss_type
+        )
+        if self.sigma_bin_tracker.enabled:
+            self.logger.info(
+                f"Sigma-bin tracking enabled with edges: {self.sigma_bin_tracker.edges}"
+            )
 
         # Training state
         self.train_steps = 0
@@ -332,6 +338,13 @@ class Trainer:
             )
         else:
             self.invariant_tensor = None
+            if (
+                "invariant" in self.cfg.model.diffusion_conditions
+                or "invariant" in self.cfg.model.regression_conditions
+            ):
+                self.logger.info(
+                    "Invariant conditions specified in model configuration, but dataset provides no invariants. Ignoring invariant conditions."
+                )
 
         if (
             self.cfg.model.architecture != "dit"
@@ -383,10 +396,9 @@ class Trainer:
                 img_resolution=self.dataset_train.image_shape(),
                 target_channels=len(self.state_channels),
                 conditional_channels=num_condition_channels,
-                spatial_embedding=model_cfg.spatial_pos_embed,
-                attn_resolutions=model_cfg.attn_resolutions,
                 lead_time_steps=self.lead_time_steps,
                 amp_mode=self.enable_amp,
+                use_apex_gn=self.use_apex_gn,
                 **model_cfg.hyperparameters,
             )
         elif model_cfg.architecture == "dit":
@@ -590,6 +602,7 @@ class Trainer:
         self.optimizer.zero_grad(set_to_none=True)
         loss = None
         channelwise_loss = torch.zeros((), device=self.device, requires_grad=False)
+        self.sigma_bin_tracker.reset()
 
         for _ in range(self.num_accumulation_rounds):
             batch = next(self.dataset_iterator)
@@ -609,20 +622,31 @@ class Trainer:
                     regression_condition_list=self.cfg.model.regression_conditions,
                 )
                 del background, state, scalar_conditions
-                # Only pass lead_time_label if the model supports it
+
                 loss_kwargs = {}
                 if lead_time_label is not None:
                     loss_kwargs["lead_time_label"] = lead_time_label
-                loss = self.loss_fn(
+
+                sigma_kwargs = (
+                    {"return_sigma": True} if self.sigma_bin_tracker.enabled else {}
+                )
+                loss_result = self.loss_fn(
                     net=self.net,
                     images=target,
                     condition=condition,
                     augment_pipe=self.augment_pipe,
+                    **sigma_kwargs,
                     **loss_kwargs,
                 )
+                if self.sigma_bin_tracker.enabled:
+                    loss, sampled_sigma = loss_result
+                else:
+                    loss, sampled_sigma = loss_result, None
 
                 if mask is not None:
                     loss = loss * mask
+
+                self.sigma_bin_tracker.update(loss, sampled_sigma)
 
             channelwise_loss_step = loss.detach().mean(dim=(0, 2, 3))
             if self.use_shard_tensor:
@@ -636,6 +660,8 @@ class Trainer:
             self.logger.log_value(
                 f"loss/train/{ch}", value / self.num_accumulation_rounds
             )
+
+        self.sigma_bin_tracker.log(self.logger, world_size=self.dist.world_size)
 
         # Gradient clipping
         if self.cfg.training.clip_grad_norm > 0:

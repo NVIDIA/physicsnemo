@@ -33,10 +33,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Allows selective per-field transformation of `Mesh` objects: `transform_point_data`,
   `transform_cell_data`, and `transform_global_data` now accept `bool | TensorDict`
   (or plain `dict` for convenience).
+- Adds `physicsnemo.mesh.remeshing` subpackage with `partition_cells()` for
+  creating Voronoi regions around seed points. BVH-accelerated.
+- Added support for 1D, 2D, and 3D neighborhood attention (natten) via
+  `physicsnemo.nn.functional` interface, with full `ShardTensor` support.
 
 ### Changed
 
 - Improved crash recipe with configurable stats directory.
+- `physicsnemo.mesh.sampling.find_nearest_cells` uses a KNN-backed
+  implementation, and no longer accepts the `bvh=`, `chunk_size=`,
+  `max_rounds=`, or `max_candidates_per_point=` parameters.
+- &#9888;&#65039; **BC-impact (deep imports):** internal `physicsnemo.nn.functional`
+  modules were reorganized by category. Public top-level functional imports are
+  unchanged, but code importing internal module paths directly (for example
+  `physicsnemo.nn.functional.knn` or
+  `physicsnemo.nn.functional.radius_search`) should migrate to
+  `physicsnemo.nn.functional.neighbors.*`.
 
 ### Deprecated
 
@@ -49,6 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed graph break caused by `FunctionSpec` dispatch (`max(key=)` is not supported by `torch.compile`)
 - Fixed bug in Pangu, FengWu attention window shift for asymmetric longitudes
 - Fixed a bug in `mesh.sampling.find_nearest_cells`, where a mixup between L2 and L-inf norms
   could cause slightly incorrect nearest-neighbor assignments in highly skewed meshes.

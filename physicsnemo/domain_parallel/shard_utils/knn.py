@@ -30,7 +30,7 @@ from physicsnemo.domain_parallel.shard_utils.ring import (
     RingPassingConfig,
     perform_ring_iteration,
 )
-from physicsnemo.nn.functional.knn._cuml_impl import knn_impl
+from physicsnemo.nn.functional.neighbors.knn._cuml_impl import knn_impl
 
 
 def ring_knn(

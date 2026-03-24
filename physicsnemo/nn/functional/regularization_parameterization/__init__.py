@@ -14,12 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: mock.MockDataset
+from .drop_path import DropPath, drop_path
+from .weight_fact import WeightFact, weight_fact
 
-num_state_channels: 3
-num_background_channels: 4
-num_invariant_channels: 2
-num_scalar_cond_channels: 2
-image_size: [256, 128]
-num_samples: 100
-model_type: "hybrid"
+__all__ = [
+    "DropPath",
+    "drop_path",
+    "WeightFact",
+    "weight_fact",
+]

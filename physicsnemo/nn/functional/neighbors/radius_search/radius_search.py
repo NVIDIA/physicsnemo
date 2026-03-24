@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import torch
+from jaxtyping import Float
 
 from physicsnemo.core.function_spec import FunctionSpec
 
@@ -40,7 +41,7 @@ class RadiusSearch(FunctionSpec):
     and return a statically sized array of indices, (optionally) distances, and (optionally) points.
     The indices will have a shape of (queries.shape[0], max_points).  Each row i of the indices will be
     neighbors of queries[i]. If there are fewer points than max_points, then the unused indices will be
-    set to -1 and the distances and points will be set to 0 for unused points.
+    set to 0 and the distances and points will be set to 0 for unused points.
 
     Because the shape when max_points=None is dynamic, this function is incompatible with torch.compile
     in that case.  When max_points is set, this function is compatible with torch.compile regardless of
@@ -73,11 +74,12 @@ class RadiusSearch(FunctionSpec):
             Defaults to None, which selects by rank.
 
     Returns:
-        tuple: A tuple containing:
-            - indices (torch.Tensor): Indices of neighbor points for each query point
-            - counts (torch.Tensor): Number of neighbors found for each query point
-            - distances (torch.Tensor, optional): Distances to neighbor points if return_dists=True
-            - neighbor_points (torch.Tensor, optional): Actual neighbor points if return_points=True
+        tuple | torch.Tensor:
+            Neighbor indices are always returned first. Additional tensors are
+            appended when requested:
+            - ``indices`` (always): Neighbor indices
+            - ``points`` (optional): Neighbor points when ``return_points=True``
+            - ``distances`` (optional): Neighbor distances when ``return_dists=True``
 
     Raises:
         KeyError: If an explicit implementation name is not registered.
@@ -85,48 +87,53 @@ class RadiusSearch(FunctionSpec):
 
     """
 
+    _BENCHMARK_CASES = (
+        ("small-p1024-q512-r0p1-m32", 1024, 512, 0.1, 32),
+        ("medium-p4096-q2048-r0p1-m32", 4096, 2048, 0.1, 32),
+        ("large-p8192-q4096-r0p1-m32", 8192, 4096, 0.1, 32),
+    )
+    _BACKWARD_BENCHMARK_CASES = (
+        ("small-bwd-p1024-q512-r0p1-m32", 1024, 512, 0.1, 32),
+        ("medium-bwd-p4096-q2048-r0p1-m32", 4096, 2048, 0.1, 32),
+    )
+
     @FunctionSpec.register(name="warp", required_imports=("warp>=0.6.0",), rank=0)
     def warp_forward(
-        points: torch.Tensor,
-        queries: torch.Tensor,
+        points: Float[torch.Tensor, "num_points 3"],
+        queries: Float[torch.Tensor, "num_queries 3"],
         radius: float,
         max_points: int | None = None,
         return_dists: bool = False,
         return_points: bool = False,
-    ):
+    ) -> tuple[torch.Tensor, ...]:
         return radius_search_warp(
             points, queries, radius, max_points, return_dists, return_points
         )
 
     @FunctionSpec.register(name="torch", rank=1, baseline=True)
     def torch_forward(
-        points: torch.Tensor,
-        queries: torch.Tensor,
+        points: Float[torch.Tensor, "num_points 3"],
+        queries: Float[torch.Tensor, "num_queries 3"],
         radius: float,
         max_points: int | None = None,
         return_dists: bool = False,
         return_points: bool = False,
-    ):
+    ) -> tuple[torch.Tensor, ...]:
         return radius_search_torch(
             points, queries, radius, max_points, return_dists, return_points
         )
 
     @classmethod
-    def make_inputs(
+    def make_inputs_forward(
         cls,
         device: torch.device | str = "cpu",
     ):
         device = torch.device(device)
-        cases = [
-            ("small", 1024, 512, 0.1, 32),
-            ("medium", 4096, 2048, 0.1, 32),
-            ("large", 8192, 4096, 0.1, 32),
-        ]
-        for label, num_points, num_queries, radius, max_points in cases:
+        for label, num_points, num_queries, radius, max_points in cls._BENCHMARK_CASES:
             points = torch.rand(num_points, 3, device=device)
             queries = torch.rand(num_queries, 3, device=device)
             yield (
-                f"{label}-points{num_points}-queries{num_queries}-radius{radius}",
+                label,
                 (points, queries, radius),
                 {
                     "max_points": max_points,
@@ -136,13 +143,95 @@ class RadiusSearch(FunctionSpec):
             )
 
     @classmethod
-    def compare(
+    def make_inputs_backward(
         cls,
-        output,
-        reference,
-    ) -> None:
-        # TODO(ASV): Populate output comparison in a follow-up PR.
-        raise NotImplementedError
+        device: torch.device | str = "cpu",
+    ):
+        device = torch.device(device)
+        for (
+            label,
+            num_points,
+            num_queries,
+            radius,
+            max_points,
+        ) in cls._BACKWARD_BENCHMARK_CASES:
+            points = torch.rand(num_points, 3, device=device, requires_grad=True)
+            queries = torch.rand(num_queries, 3, device=device, requires_grad=True)
+            yield (
+                label,
+                (points, queries, radius),
+                {
+                    "max_points": max_points,
+                    "return_dists": False,
+                    "return_points": True,
+                },
+            )
+
+    @classmethod
+    def compare_forward(cls, output: tuple, reference: tuple) -> None:
+        # Radius-search backends can return neighbors in different orders.
+        if len(output) != len(reference):
+            raise AssertionError("output and reference tuples must have equal length")
+
+        dynamic_output = (
+            len(output) > 0
+            and output[0].ndim == 2
+            and output[0].shape[0] == 2
+            and output[0].dtype in (torch.int32, torch.int64)
+        )
+
+        for output_tensor, reference_tensor in zip(output, reference):
+            if output_tensor.dtype in (torch.int32, torch.int64):
+                if output_tensor.ndim == 2 and output_tensor.shape[0] == 2:
+                    torch.testing.assert_close(
+                        output_tensor.sum(dim=1).to(torch.int64),
+                        reference_tensor.sum(dim=1).to(torch.int64),
+                    )
+                elif output_tensor.ndim >= 2:
+                    torch.testing.assert_close(
+                        output_tensor.sum(dim=1).to(torch.int64),
+                        reference_tensor.sum(dim=1).to(torch.int64),
+                    )
+                else:
+                    torch.testing.assert_close(
+                        output_tensor.sum().to(torch.int64),
+                        reference_tensor.sum().to(torch.int64),
+                    )
+                continue
+
+            if (
+                dynamic_output
+                and output_tensor.ndim == 2
+                and output_tensor.shape[1] == 3
+            ):
+                torch.testing.assert_close(
+                    output_tensor.sum(dim=0),
+                    reference_tensor.sum(dim=0),
+                )
+            elif dynamic_output and output_tensor.ndim == 1:
+                torch.testing.assert_close(
+                    output_tensor.sum(),
+                    reference_tensor.sum(),
+                )
+            elif output_tensor.ndim == 2 and output_tensor.shape[0] == 2:
+                torch.testing.assert_close(
+                    output_tensor.sum(dim=0),
+                    reference_tensor.sum(dim=0),
+                )
+            elif output_tensor.ndim >= 2:
+                torch.testing.assert_close(
+                    output_tensor.sum(dim=1),
+                    reference_tensor.sum(dim=1),
+                )
+            else:
+                torch.testing.assert_close(
+                    output_tensor.sum(),
+                    reference_tensor.sum(),
+                )
+
+    @classmethod
+    def compare_backward(cls, output: torch.Tensor, reference: torch.Tensor) -> None:
+        torch.testing.assert_close(output, reference, atol=1e-5, rtol=1e-5)
 
 
 radius_search = RadiusSearch.make_function("radius_search")

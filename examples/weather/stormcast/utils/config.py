@@ -107,6 +107,9 @@ class LossConfig:
     # Loguniform distribution parameters (used when sigma_distribution: "loguniform")
     sigma_min: float = Field(default=0.002, gt=0.0)  # Minimum noise level
     sigma_max: float = Field(default=80.0, gt=0.0)  # Maximum noise level
+    track_sigma_bin_loss: bool = False
+    sigma_bin_count: int = Field(default=8, ge=1)
+    sigma_bin_edges: list[float] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_sigmas(self):
@@ -117,6 +120,16 @@ class LossConfig:
         )
         if any(sigma <= 0 for sigma in sigma_data):
             raise ValueError("sigma_data must be > 0")
+        if self.sigma_bin_edges:
+            if len(self.sigma_bin_edges) < 2:
+                raise ValueError("sigma_bin_edges must contain at least 2 values")
+            if any(edge <= 0 for edge in self.sigma_bin_edges):
+                raise ValueError("sigma_bin_edges values must be > 0")
+            if any(
+                self.sigma_bin_edges[i] >= self.sigma_bin_edges[i + 1]
+                for i in range(len(self.sigma_bin_edges) - 1)
+            ):
+                raise ValueError("sigma_bin_edges must be strictly increasing")
         return self
 
 

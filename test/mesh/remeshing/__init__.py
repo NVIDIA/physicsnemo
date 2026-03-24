@@ -13,13 +13,3 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-name: mock.MockDataset
-
-num_state_channels: 3
-num_background_channels: 4
-num_invariant_channels: 2
-num_scalar_cond_channels: 2
-image_size: [256, 128]
-num_samples: 100
-model_type: "hybrid"

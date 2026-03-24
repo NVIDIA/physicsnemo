@@ -37,8 +37,8 @@ defaults:
 model:
   use_regression_net: True
   regression_weights: "stormcast_checkpoints/regression/StormCastUNet.0.0.mdlus"
-  previous_step_conditioning: True
-  spatial_pos_embed: True
+  hyperparameters:
+    additive_pos_embed: True
 
 training:
   loss:

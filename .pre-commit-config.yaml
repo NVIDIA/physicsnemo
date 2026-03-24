@@ -23,17 +23,15 @@ repos:
         exclude: ^examples/
       - id: ruff-format
 
--   repo: https://github.com/econchick/interrogate
-    rev: 1.7.0
+-   repo: local
     hooks:
     - id: interrogate
-      args: [
-          "-vv", "--ignore-init-method", "--ignore-init-module", 
-          "--ignore-module", "--ignore-private", "--ignore-semiprivate", 
-          "--ignore-magic", "--fail-under=99", "--exclude=['setup.py', 'test', 'build', 'docs']",  
-          "--ignore-regex=['forward', 'backward', 'reset_parameters', 'extra_repr', 'MetaData', 'apply_activation','exec_activation']", 
-          "--color", "--"]
-      exclude: ^docs/|^physicsnemo/experimental/
+      name: interrogate
+      entry: python test/ci_tests/check_docstring_coverage.py
+      language: python
+      types: [python]
+      additional_dependencies: ['interrogate==1.7.0']
+      exclude: ^docs/|^physicsnemo/experimental/|^test/
 
 -   repo: https://github.com/igorshubovych/markdownlint-cli
     rev: v0.35.0

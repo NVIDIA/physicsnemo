@@ -181,7 +181,6 @@ class CustomDetokenizer(DetokenizerModuleBase):
         pass
 
 
-@requires_module("transformer_engine")
 @pytest.mark.parametrize(
     "tokenizer",
     [CustomTokenizer(in_channels=3, hidden_size=64, patch_size=4), "patch_embed_2d"],

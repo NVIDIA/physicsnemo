@@ -65,6 +65,10 @@ conflicts = [
         { extra = "cu12" },
         { extra = "cu13" },
     ],
+    [
+        { extra = "natten-cu12" },
+        { extra = "natten-cu13" },
+    ],
 ]
 
 [tool.uv.extra-build-dependencies]
@@ -96,6 +100,25 @@ name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
+# NATTEN pre-built wheel indexes (flat HTML pages), split by CUDA version AND
+# torch version.  The full path is required because natten encodes both CUDA
+# and torch versions in local version identifiers (e.g. 0.21.5+torch2100cu128)
+# and uv compares local segments lexicographically — without the torch pin,
+# "torch290" sorts above "torch2100" and the wrong wheel gets installed.
+# >>> UPDATE the torch version component when bumping the torch pin. <<<
+# See https://natten.org/install/ for available builds.
+[[tool.uv.index]]
+name = "natten-cu128-whl"
+url = "https://whl.natten.org/cu128/torch2.10.0"
+format = "flat"
+explicit = true
+
+[[tool.uv.index]]
+name = "natten-cu130-whl"
+url = "https://whl.natten.org/cu130/torch2.10.0"
+format = "flat"
+explicit = true
+
 [tool.uv.sources]
 # When cu12 is active, torch/torchvision come from the CUDA 12.8 index.
 # When cu13 is active, they come from the CUDA 13.0 index.
@@ -115,6 +138,12 @@ pylibraft-cu13 = { index = "nvidia" }
 pylibraft-cu12 = { index = "nvidia" }
 nvidia-dali-cuda130 = { index = "nvidia" }
 nvidia-dali-cuda120 = { index = "nvidia" }
+# When natten-cu12 or natten-cu13 extras are active, pull natten from
+# the pre-built wheel index instead of building from source via PyPI.
+natten = [
+    { index = "natten-cu128-whl", extra = "natten-cu12" },
+    { index = "natten-cu130-whl", extra = "natten-cu13" },
+]
 
 #####################################################################
 # Flags Controlling the local build of physicsnemo
@@ -193,6 +222,19 @@ cu12 = [
     "cupy-cuda12x",
     "nvidia-dali-cuda120",
 ]
+# NATTEN pre-built wheel extras (mutually exclusive via [tool.uv] conflicts).
+# Pair with the matching CUDA backend extra, e.g.:
+#   pip install nvidia-physicsnemo[cu12,natten-cu12]
+#   pip install nvidia-physicsnemo[cu13,natten-cu13]
+# The flat wheel index at https://whl.natten.org hosts wheels for the two most
+# recent PyTorch releases.  Without these extras, natten must be installed
+# separately — see https://natten.org/install/ for details.
+natten-cu12 = [
+    "natten>=0.21.5",
+]
+natten-cu13 = [
+    "natten>=0.21.5",
+]
 utils-extras = [
     "wandb",
     "mlflow",
@@ -208,7 +250,6 @@ mesh-extras = [
 ]
 nn-extras = [
     "scipy",
-    "natten",
     "nvidia-physicsnemo[utils-extras]",
 ]
 model-extras = [

@@ -27,9 +27,8 @@ from timm.layers import RmsNorm
 
 from physicsnemo.core import Module
 from physicsnemo.core.version_check import OptionalImport, check_version_spec
-from physicsnemo.domain_parallel import ShardTensor
-from physicsnemo.domain_parallel.shard_utils.natten_patches import partial_na2d
 from physicsnemo.nn import DropPath, Mlp
+from physicsnemo.nn.functional.natten import na2d as _na2d_func
 from physicsnemo.nn.module.hpx.tokenizer import (
     HEALPixPatchDetokenizer,
     HEALPixPatchTokenizer,
@@ -45,11 +44,9 @@ else:
 
 te = OptionalImport("transformer_engine.pytorch")
 apex_normalization = OptionalImport("apex.normalization")
-natten_functional = OptionalImport("natten.functional")
 
 TE_AVAILABLE = te.available
 APEX_AVAILABLE = apex_normalization.available
-NATTEN_AVAILABLE = natten_functional.available
 
 
 def get_layer_norm(
@@ -367,7 +364,7 @@ class Natten2DSelfAttention(AttentionModuleBase):
     norm_layer : Literal["apex", "torch"], optional, default="torch"
         The layer normalization backend for QK norm when ``qk_norm=True``. When used inside :class:`~physicsnemo.models.dit.layers.DiTBlock` with ``attention_backend="natten2d"``, this is set from the block's ``layernorm_backend``.
     na2d_kwargs : Dict[str, Any], optional, default=None
-        Optional keyword arguments forwarded to :func:`natten.functional.na2d` for performance tuning (e.g. ``dilation``, ``is_causal``, ``scale``). If ``None``, an empty dict is used.
+        Optional keyword arguments forwarded to :func:`physicsnemo.nn.functional.na2d` for performance tuning (e.g. ``dilation``, ``is_causal``, ``scale``). If ``None``, an empty dict is used.
 
     References
     ----------
@@ -410,11 +407,6 @@ class Natten2DSelfAttention(AttentionModuleBase):
         na2d_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
-        if not NATTEN_AVAILABLE:
-            raise ImportError(
-                "Natten is not installed. Please install it into your environment."
-            )
-
         if hidden_size % num_heads != 0:
             raise ValueError("hidden_size should be divisible by num_heads")
 
@@ -466,26 +458,7 @@ class Natten2DSelfAttention(AttentionModuleBase):
             lambda x: rearrange(x, "b head (h w) c -> b h w head c", h=h),
             [q, k, v],
         )
-        if isinstance(q, ShardTensor):
-            # Use automatic halo padding for sharded tensors
-
-            # Pop out dilation from na2d_kwargs and pass explicitly to partial_na2d
-            dilation = self.na2d_kwargs.get("dilation", 1)
-            na2d_kwargs = {k: v for k, v in self.na2d_kwargs.items() if k != "dilation"}
-
-            x = partial_na2d(
-                q,
-                k,
-                v,
-                kernel_size=self.attn_kernel,
-                dilation=dilation,
-                base_func=natten_functional.na2d,
-                **na2d_kwargs,
-            )
-        else:
-            x = natten_functional.na2d(
-                q, k, v, kernel_size=self.attn_kernel, **self.na2d_kwargs
-            )
+        x = _na2d_func(q, k, v, kernel_size=self.attn_kernel, **self.na2d_kwargs)
         x = self.attn_drop(x)
         x = rearrange(x, "b h w head c -> b (h w) (head c)")
 
