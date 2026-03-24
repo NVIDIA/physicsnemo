@@ -311,6 +311,6 @@ def test_dispatch_compatible_with_torch_compile():
             return x + 1
 
     fn = AddOne.make_function()
-    compiled = torch.compile(fn)
+    compiled = torch.compile(fn, fullgraph=True)
     result = compiled(torch.zeros(4))
     assert torch.allclose(result, torch.ones(4))
