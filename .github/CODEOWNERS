@@ -38,6 +38,9 @@ asv.conf.json @loliverhennigh
 # Coding standards
 CODING_STANDARDS/ @CharlelieLrt @coreyjadams @loliverhennigh
 
+# Interrogate "grandfathered exceptions" list
+./test/ci_tests/interrogate_baseline.txt @ktangsali @coreyjadams @nickgeneva @peterdsharpe
+
 # ==============================================================================
 # DOCUMENTATION
 # ==============================================================================
