@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, v2.0-refactor]
+    branches: [main]
   schedule:
     - cron: '0 6 * * *'  # 6 AM UTC daily
   workflow_dispatch:  # Allows manual triggering from GitHub UI
@@ -23,9 +23,9 @@ jobs:
         python-version: ["3.13"]
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@v6
       with:
         python-version: ${{ matrix.python-version }}
 
@@ -58,22 +58,27 @@ jobs:
               && fromJSON('[
                 {"os": "ubuntu-latest", "python-version": "3.11"},
                 {"os": "ubuntu-latest", "python-version": "3.12"},
-                {"os": "ubuntu-latest", "python-version": "3.13"}
+                {"os": "ubuntu-latest", "python-version": "3.13"},
+                {"os": "ubuntu-latest", "python-version": "3.14"}
               ]')
             || fromJSON('[
                 {"os": "ubuntu-latest",    "python-version": "3.11"},
                 {"os": "ubuntu-latest",    "python-version": "3.12"},
                 {"os": "ubuntu-latest",    "python-version": "3.13"},
+                {"os": "ubuntu-latest",    "python-version": "3.14"},
                 {"os": "ubuntu-24.04-arm", "python-version": "3.13"},
+                {"os": "ubuntu-24.04-arm", "python-version": "3.14"},
                 {"os": "macos-latest",     "python-version": "3.13"},
-                {"os": "windows-latest",   "python-version": "3.13"}
+                {"os": "macos-latest",     "python-version": "3.14"},
+                {"os": "windows-latest",   "python-version": "3.13"},
+                {"os": "windows-latest",   "python-version": "3.14"}
               ]')
           }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@v6
       with:
         python-version: ${{ matrix.python-version }}
 
