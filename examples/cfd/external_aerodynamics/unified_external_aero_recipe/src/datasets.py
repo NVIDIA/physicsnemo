@@ -25,7 +25,10 @@ list with ``_target_: ${dp:ComponentName}`` entries, instantiated via
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -43,6 +46,7 @@ def load_dataset_config(yaml_path: str | Path) -> DictConfig:
 
 _PATH_KEYS = {"stats_parquet", "stats_file"}
 _INJECT_METADATA_SUFFIX = "InjectMetadata"
+_CENTER_MESH_SUFFIX = "CenterMesh"
 
 
 def _resolve_transform_paths(t_cfg: DictConfig, base_dir: Path) -> DictConfig:
@@ -75,21 +79,32 @@ def _inject_metadata_into_transform(
     return t_cfg
 
 
-def build_surface_dataset(cfg: DictConfig, base_dir: Path | None = None) -> MeshDataset:
+def build_surface_dataset(
+    cfg: DictConfig,
+    base_dir: Path | None = None,
+    augment: bool = False,
+) -> MeshDataset:
     """Build a single MeshDataset from a Hydra-style pipeline config.
 
     Parameters
     ----------
     cfg : DictConfig
         Dataset config with a ``pipeline:`` block containing ``reader:``
-        and ``transforms:`` entries.  An optional top-level ``metadata:``
-        block is automatically injected into any ``InjectMetadata``
-        transform that does not already specify its own ``metadata``
-        parameter.
+        and ``transforms:`` entries.  An optional ``pipeline.augmentations``
+        list defines stochastic augmentation transforms (e.g.
+        ``RandomRotateMesh``, ``RandomTranslateMesh``) that are inserted
+        after ``CenterMesh`` when *augment* is ``True``.  An optional
+        top-level ``metadata:`` block is automatically injected into any
+        ``InjectMetadata`` transform that does not already specify its own
+        ``metadata`` parameter.
     base_dir : Path, optional
         Root directory for resolving relative paths in transform configs
         (e.g. ``stats_parquet``).  Defaults to the recipe root
         (two levels above this file).
+    augment : bool, optional
+        When ``True``, ``pipeline.augmentations`` transforms are inserted
+        into the pipeline after ``CenterMesh``.  Should be ``False`` for
+        validation / test datasets.  Default ``False``.
 
     Returns
     -------
@@ -112,6 +127,19 @@ def build_surface_dataset(cfg: DictConfig, base_dir: Path | None = None) -> Mesh
             if metadata:
                 t = _inject_metadata_into_transform(t, metadata)
             resolved.append(hydra.utils.instantiate(t))
+
+        if augment and "augmentations" in cfg.pipeline and cfg.pipeline.augmentations:
+            aug = [hydra.utils.instantiate(a) for a in cfg.pipeline.augmentations]
+            insert_idx = next(
+                (
+                    i + 1
+                    for i, t_cfg in enumerate(cfg.pipeline.transforms)
+                    if t_cfg.get("_target_", "").endswith(_CENTER_MESH_SUFFIX)
+                ),
+                len(resolved),
+            )
+            resolved[insert_idx:insert_idx] = aug
+
         transforms = resolved
     return MeshDataset(reader, transforms=transforms)
 

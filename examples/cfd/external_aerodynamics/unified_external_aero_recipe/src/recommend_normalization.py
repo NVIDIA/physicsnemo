@@ -264,6 +264,137 @@ def _print_fallback_report(df: pd.DataFrame) -> None:
     print()
 
 
+_GEOM_FIELD_KEYS = {
+    "points",
+    "pos",
+    "coord",
+    "coordinates",
+    "centroids",
+    "cell_centroids",
+}
+
+
+def _collect_scale_rows(df: pd.DataFrame, use_welford: bool) -> list[dict]:
+    """Build per-(field, component) scale rows from aggregate or per-sample data."""
+    rows: list[dict] = []
+    for (field_key, comp), group in df.groupby(["field_key", "component"]):
+        gmin = group["min"].min()
+        gmax = group["max"].max()
+
+        if use_welford:
+            counts = group["count"].values.astype(float)
+            means = group["mean"].values
+            varis = group["var"].values
+            total = counts.sum()
+            gmean = (counts * means).sum() / total
+            gvar = (counts * varis).sum() / total + (
+                counts * (means - gmean) ** 2
+            ).sum() / total
+            gstd = gvar**0.5
+        else:
+            n_vals = group["n_spatial"].values
+            within_var = (group["std"].values ** 2 * n_vals).sum() / n_vals.sum()
+            between_var = group["mean"].values.var()
+            gstd = (within_var + between_var) ** 0.5
+
+        rows.append(
+            {
+                "field_key": field_key,
+                "component": comp,
+                "range": gmax - gmin,
+                "std": gstd,
+                "min": gmin,
+                "max": gmax,
+            }
+        )
+    return rows
+
+
+def _print_length_scales_summary(
+    agg_df: pd.DataFrame | None, per_sample_df: pd.DataFrame
+) -> None:
+    """Print a compact summary of characteristic length scales for all fields."""
+    print(f"\n{'=' * 82}")
+    print(f"  Characteristic Length Scales")
+    print(f"{'=' * 82}")
+
+    if agg_df is not None:
+        rows = _collect_scale_rows(agg_df, use_welford=True)
+    else:
+        rows = _collect_scale_rows(per_sample_df, use_welford=False)
+
+    if not rows:
+        print("  No field data available.")
+        return
+
+    geom_rows = [r for r in rows if r["field_key"] in _GEOM_FIELD_KEYS]
+    ref_rows = [r for r in rows if "global_data" in r["field_key"]]
+    data_rows = [
+        r
+        for r in rows
+        if r["field_key"] not in _GEOM_FIELD_KEYS
+        and "global_data" not in r["field_key"]
+    ]
+
+    # -- Geometry / bounding box --
+    if geom_rows:
+        print("\n  Geometry bounding box:")
+        axis_map = {0: "x", 1: "y", 2: "z"}
+        extents = []
+        for r in sorted(geom_rows, key=lambda r: r["component"]):
+            axis = axis_map.get(r["component"], str(r["component"]))
+            extent = r["range"]
+            extents.append(extent)
+            print(
+                f"    {axis}: [{_fmt(r['min'])}, {_fmt(r['max'])}]"
+                f"  extent={_fmt(extent)}"
+            )
+        if len(extents) >= 2:
+            diag = sum(e**2 for e in extents) ** 0.5
+            print(f"    diagonal = {_fmt(diag)}")
+            print(f"    extents  = " + " x ".join(_fmt(e).strip() for e in extents))
+    else:
+        print(
+            "\n  [no geometry fields found in stats -- "
+            "re-run collect_stats with --force to include mesh points]"
+        )
+
+    # -- Reference quantities --
+    if ref_rows:
+        print("\n  Reference quantities (global_data):")
+        for r in ref_rows:
+            comp_str = _comp_suffix(r["component"])
+            fname = r["field_key"].replace("global_data.", "")
+            if r["range"] == 0:
+                print(f"    {fname}{comp_str} = {_fmt(r['min'])}")
+            else:
+                print(
+                    f"    {fname}{comp_str}: "
+                    f"range={_fmt(r['range'])}  "
+                    f"[{_fmt(r['min'])}, {_fmt(r['max'])}]"
+                )
+
+    # -- Field scales --
+    if data_rows:
+        print(
+            f"\n  {'field':<35} {'comp':>4} {'range':>12} {'std':>12} {'range/std':>10}"
+        )
+        print(f"  {'-' * 77}")
+        for r in data_rows:
+            comp_label = (
+                COMP_LABELS.get(r["component"], str(r["component"]))
+                if r["component"] >= 0
+                else "-"
+            )
+            rng = r["range"]
+            std = r["std"]
+            ratio_str = _fmt(rng / std, 10) if std > 0 else f"{'inf':>10}"
+            print(
+                f"  {r['field_key']:<35} {comp_label:>4} "
+                f"{_fmt(rng, 12)} {_fmt(std, 12)} {ratio_str}"
+            )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Recommend normalization parameters from collected statistics"
@@ -308,6 +439,11 @@ def main() -> None:
         _print_aggregate_report(agg_df, per_sample_df)
     else:
         _print_fallback_report(per_sample_df)
+
+    _print_length_scales_summary(
+        agg_df if (agg_df is not None and not agg_df.empty) else None,
+        per_sample_df,
+    )
 
     print()
 

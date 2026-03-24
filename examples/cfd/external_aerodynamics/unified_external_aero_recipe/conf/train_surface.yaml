@@ -22,11 +22,12 @@
 
 output_dir: "runs"
 checkpoint_dir: null
-run_id: "surface_geotransolver"
+run_id: "surface_geotransolver_shift_suv_estate"
 
-precision: "float32"
-compile: false
+precision: "bfloat16"
+compile: true
 profile: false
+augment: true
 
 model_type: "surface"
 
@@ -37,8 +38,8 @@ model:
   out_dim: 4              # pressure (1) + wss (3)
   geometry_dim: 3         # point coordinates
   global_dim: 3           # inlet velocity (3)
-  n_layers: 8
-  n_hidden: 128
+  n_layers: 12
+  n_hidden: 256
   dropout: 0.0
   n_head: 8
   act: "gelu"
@@ -54,6 +55,7 @@ model:
 # -- Dataset -----------------------------------------------------------------
 dataset:
   name: drivaer_ml_surface
+  sampling_resolution: 50000   # override SubsampleMesh n_cells/n_points in all dataset configs
   targets:
     pressure: scalar
     wss: vector
@@ -65,7 +67,7 @@ training:
   save_interval: 10
   loss_type: "huber"
   batch_size: 1
-  num_workers: 2
+  num_workers: 1
   scheduler_update_mode: "epoch"
 
   optimizer:
@@ -83,7 +85,7 @@ training:
 data:
   drivaer_ml:
     config: conf/dataset/drivaer_ml_surface.yaml
-  # shift_suv:
-  #   train_dir: /Users/coreya/data/shift_suv_pnm_mesh/estate/
-  #   val_dir: /Users/coreya/data/shift_suv_pnm_mesh/estate/
-  #   config: conf/dataset/shift_suv_estate.yaml
+  shift_suv_estate:
+    config: conf/dataset/shift_suv_estate.yaml
+  shift_suv_fastback:
+    config: conf/dataset/shift_suv_fastback.yaml

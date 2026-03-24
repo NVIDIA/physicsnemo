@@ -48,6 +48,12 @@ import hydra
 import torch
 from omegaconf import OmegaConf
 
+import sys
+
+# Ensure sibling modules (nondim, datasets) are importable regardless of
+# how this script is launched (python -m src.collect_stats, python src/collect_stats.py, etc.)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import physicsnemo.datapipes  # noqa: F401  (registers ${dp:...} resolvers)
 from physicsnemo.datapipes import MeshDataset
 from physicsnemo.datapipes.statistics import FieldStatisticsCollector

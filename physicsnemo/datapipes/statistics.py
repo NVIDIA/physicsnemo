@@ -188,6 +188,8 @@ def _field_stats(tensor: torch.Tensor) -> list[dict[str, float | int]]:
     Returns one dict per component. Scalars get a single row with
     ``component=-1``. Vectors get one row per component (0, 1, 2, ...).
     """
+    if tensor.ndim == 0:
+        tensor = tensor.unsqueeze(0)
     n_spatial = int(tensor.shape[0])
     n_components = int(tensor.shape[1]) if tensor.ndim > 1 else 1
 
@@ -232,6 +234,8 @@ def _update_accumulators(
     tensor: torch.Tensor,
 ) -> None:
     """Feed a field tensor into the appropriate Welford accumulators."""
+    if tensor.ndim == 0:
+        tensor = tensor.unsqueeze(0)
     n_components = int(tensor.shape[1]) if tensor.ndim > 1 else 1
     if n_components == 1:
         key = (field_key, -1)
@@ -248,6 +252,9 @@ def _update_accumulators(
 
 def _extract_fields_from_mesh(mesh, sections: Sequence[str] | None):
     """Yield (dotted_key, tensor) pairs from a Mesh object."""
+    if hasattr(mesh, "points") and mesh.points is not None:
+        yield "points", mesh.points
+
     if sections is None:
         sections = ["point_data", "cell_data", "global_data"]
     for section_name in sections:

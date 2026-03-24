@@ -252,23 +252,37 @@ def val_epoch(
     epoch: int,
     cfg: DictConfig,
     dist_manager: DistributedManager,
-) -> tuple[float, dict[str, float]]:
+    phys_metric_calculator: MetricCalculator | None = None,
+    target_config: dict[str, str] | None = None,
+    norm_stats: dict | None = None,
+    metadata: dict | None = None,
+) -> tuple[float, dict[str, float], dict[str, float]]:
     model.eval()
     total_loss = 0.0
     total_metrics: dict[str, float] = {}
+    total_phys_metrics: dict[str, float] = {}
     precision = getattr(cfg, "precision", "float32")
     n_batches = 0
     num_steps = len(dataloader)
     epoch_t0 = time.perf_counter()
+    compute_phys = phys_metric_calculator is not None and metadata
 
     with torch.no_grad():
         step_t0 = time.perf_counter()
         for i, batch in enumerate(dataloader):
             batch = {k: v.to(dist_manager.device) for k, v in batch.items()}
 
-            loss, metrics, _ = forward_pass(
+            loss, metrics, (outputs, targets) = forward_pass(
                 batch, model, precision, loss_calculator, metric_calculator
             )
+
+            if compute_phys:
+                phys_out = _to_physical(outputs, target_config, norm_stats, metadata)
+                phys_tgt = _to_physical(targets, target_config, norm_stats, metadata)
+                phys_metrics = phys_metric_calculator(phys_out, phys_tgt)
+                for k, v in phys_metrics.items():
+                    val = v if isinstance(v, float) else v.item()
+                    total_phys_metrics[k] = total_phys_metrics.get(k, 0.0) + val
 
             step_dt = time.perf_counter() - step_t0
             total_loss += loss.item()
@@ -291,6 +305,7 @@ def val_epoch(
     epoch_dt = time.perf_counter() - epoch_t0
     avg_loss = total_loss / max(n_batches, 1)
     avg_metrics = {k: v / max(n_batches, 1) for k, v in total_metrics.items()}
+    avg_phys_metrics = {k: v / max(n_batches, 1) for k, v in total_phys_metrics.items()}
 
     logger.info(
         f"Epoch {epoch} val done in {epoch_dt:.1f}s "
@@ -301,8 +316,10 @@ def val_epoch(
         writer.add_scalar("epoch/val_loss", avg_loss, epoch)
         for k, v in avg_metrics.items():
             writer.add_scalar(f"epoch/val_{k}", v, epoch)
+        for k, v in avg_phys_metrics.items():
+            writer.add_scalar(f"epoch/val_{k}", v, epoch)
 
-    return avg_loss, avg_metrics
+    return avg_loss, avg_metrics, avg_phys_metrics
 
 
 def _extract_norm_stats(datasets: list) -> dict | None:
@@ -324,11 +341,14 @@ def build_dataloaders(cfg: DictConfig):
     """Build train and val dataloaders from dataset configs."""
     recipe_root = Path(__file__).resolve().parent.parent
     batch_size = cfg.training.get("batch_size", 1)
+    sampling_resolution = cfg.dataset.get("sampling_resolution", None)
+    augment = cfg.get("augment", False)
     dist_manager = DistributedManager()
     use_distributed = dist_manager.world_size > 1
 
     train_datasets = []
     val_datasets = []
+    first_metadata = None
     for ds_key in cfg.data:
         ds_cfg_block = cfg.data[ds_key]
         config_path = recipe_root / ds_cfg_block.config
@@ -338,12 +358,21 @@ def build_dataloaders(cfg: DictConfig):
         if train_dir and not Path(train_dir).exists():
             continue
         ds_yaml = load_dataset_config(config_path)
-        train_datasets.append(build_surface_dataset(ds_yaml))
+        if sampling_resolution is not None:
+            ds_yaml = OmegaConf.merge(
+                ds_yaml, {"sampling_resolution": sampling_resolution}
+            )
+        if first_metadata is None:
+            first_metadata = OmegaConf.to_container(
+                OmegaConf.select(ds_yaml, "metadata", default=OmegaConf.create({})),
+                resolve=True,
+            )
+        train_datasets.append(build_surface_dataset(ds_yaml, augment=augment))
 
         val_datadir = OmegaConf.select(ds_yaml, "val_datadir", default=None)
         if val_datadir and Path(val_datadir).exists():
             val_yaml = OmegaConf.merge(ds_yaml, {"train_datadir": val_datadir})
-            val_datasets.append(build_surface_dataset(val_yaml))
+            val_datasets.append(build_surface_dataset(val_yaml, augment=False))
 
     if not train_datasets:
         raise RuntimeError("No valid datasets found. Check data paths in config.")
@@ -384,6 +413,7 @@ def build_dataloaders(cfg: DictConfig):
         sampler=train_sampler,
         collate_fn=surface_collate,
         drop_last=True,
+        use_streams=False,
     )
 
     val_loader = DataLoader(
@@ -393,9 +423,57 @@ def build_dataloaders(cfg: DictConfig):
         sampler=val_sampler,
         collate_fn=surface_collate,
         drop_last=False,
+        use_streams=False,
     )
 
-    return train_loader, val_loader, norm_stats
+    return train_loader, val_loader, norm_stats, first_metadata or {}
+
+
+def _to_physical(
+    tensor: torch.Tensor,
+    target_config: dict[str, str],
+    norm_stats: dict | None,
+    metadata: dict,
+) -> torch.Tensor:
+    """Convert a model-space tensor (normalized + non-dim) back to physical units.
+
+    Chains two inverse operations:
+    1. Un-normalize: multiply fields by their std (undo NormalizeMeshFields)
+    2. Re-dimensionalize: Cp * q_inf + p_inf for pressure,
+       Cf * q_inf for stress (undo NonDimensionalizeByMetadata)
+
+    Assumes scalars are pressure-type and vectors are stress-type,
+    matching the surface recipe's target convention.
+    """
+    if not metadata:
+        return tensor
+
+    out = tensor.clone()
+    device, dtype = tensor.device, tensor.dtype
+
+    U_inf = torch.tensor(metadata["U_inf"], dtype=dtype, device=device)
+    rho_inf = torch.tensor(metadata["rho_inf"], dtype=dtype, device=device)
+    p_inf = torch.tensor(metadata["p_inf"], dtype=dtype, device=device)
+    q_inf = 0.5 * rho_inf * (U_inf * U_inf).sum()
+
+    idx = 0
+    for name, ftype in target_config.items():
+        dim = 1 if ftype == "scalar" else 3
+        sl = out[..., idx : idx + dim]
+
+        if norm_stats and name in norm_stats:
+            std = torch.tensor(norm_stats[name]["std"], dtype=dtype, device=device)
+            sl = sl * std
+
+        if ftype == "scalar":
+            sl = sl * q_inf + p_inf
+        else:
+            sl = sl * q_inf
+
+        out[..., idx : idx + dim] = sl
+        idx += dim
+
+    return out
 
 
 @profile
@@ -434,7 +512,7 @@ def main(cfg: DictConfig):
             output_device=dist_manager.device,
         )
 
-    train_loader, val_loader, norm_stats = build_dataloaders(cfg)
+    train_loader, val_loader, norm_stats, ds_metadata = build_dataloaders(cfg)
     logger.info(f"Train samples: {len(train_loader.dataset)}")
     logger.info(f"Val samples: {len(val_loader.dataset)}")
     if norm_stats is not None:
@@ -455,13 +533,31 @@ def main(cfg: DictConfig):
         ds_cfg.get("metrics", ["l1", "l2", "mae"]), resolve=True
     )
 
+    active_data_keys = list(cfg.data.keys())
+    if len(active_data_keys) > 1:
+        prefix = cfg.get("model_type", "merged")
+        logger.info(
+            f"Multiple datasets active ({', '.join(active_data_keys)}); "
+            f"using prefix '{prefix}' for metrics"
+        )
+    else:
+        prefix = active_data_keys[0]
+
     metric_calculator = MetricCalculator(
-        target_config=targets, metrics=metrics_list, prefix=ds_cfg.name
+        target_config=targets, metrics=metrics_list, prefix=prefix
+    )
+    use_phys_metrics = len(active_data_keys) == 1
+    phys_metric_calculator = (
+        MetricCalculator(
+            target_config=targets, metrics=metrics_list, prefix=f"phys/{prefix}"
+        )
+        if use_phys_metrics
+        else None
     )
     loss_calculator = LossCalculator(
         target_config=targets,
         loss_type=cfg.training.get("loss_type", "huber"),
-        prefix=ds_cfg.name,
+        prefix=prefix,
     )
     logger.info(f"Loss: {loss_calculator}")
     logger.info(f"Metrics: {metric_calculator}")
@@ -498,7 +594,7 @@ def main(cfg: DictConfig):
             scaler,
         )
 
-        val_loss, val_metrics = val_epoch(
+        val_loss, val_metrics, val_phys_metrics = val_epoch(
             val_loader,
             model,
             loss_calculator,
@@ -508,23 +604,37 @@ def main(cfg: DictConfig):
             epoch,
             cfg,
             dist_manager,
+            phys_metric_calculator=phys_metric_calculator,
+            target_config=targets,
+            norm_stats=norm_stats,
+            metadata=ds_metadata,
         )
 
         if dist_manager.rank == 0:
             all_keys = list(dict.fromkeys(list(train_metrics) + list(val_metrics)))
-            rows = [
-                [
+            phys_by_base = {}
+            for k, v in val_phys_metrics.items():
+                base = k.removeprefix("phys/")
+                phys_by_base[base] = v
+
+            headers = ["Metric", "Train", "Val"]
+            if use_phys_metrics:
+                headers.append("Val (phys)")
+
+            rows = []
+            for k in all_keys:
+                row = [
                     k,
                     f"{train_metrics.get(k, float('nan')):.6f}",
                     f"{val_metrics.get(k, float('nan')):.6f}",
                 ]
-                for k in all_keys
-            ]
-            table = tabulate(
-                rows,
-                headers=["Metric", "Train", "Val"],
-                tablefmt="pretty",
-            )
+                if use_phys_metrics and not k.startswith("loss/"):
+                    row.append(f"{phys_by_base.get(k, float('nan')):.6f}")
+                elif use_phys_metrics:
+                    row.append("")
+                rows.append(row)
+
+            table = tabulate(rows, headers=headers, tablefmt="pretty")
             logger.info(
                 f"\nEpoch [{epoch}/{cfg.training.num_epochs}] "
                 f"Train Loss: {train_loss:.6f}  Val Loss: {val_loss:.6f}\n"

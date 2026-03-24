@@ -282,7 +282,6 @@ class LossCalculator:
             total_loss = total_loss + field_loss
             loss_dict.update(field_dict)
 
-        # Normalize by total channels if requested
         if self.normalize_by_channels:
             total_loss = total_loss / self.total_channels
 

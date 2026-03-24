@@ -106,7 +106,7 @@ _FIELD_TYPES = frozenset({"pressure", "stress", "velocity"})
 
 @register()
 class NonDimensionalizeByMetadata(MeshTransform):
-    r"""Non-dimensionalize fields using freestream conditions from ``global_data``.
+    r"""Non-dimensionalize fields and geometry using freestream conditions from ``global_data``.
 
     Expects ``U_inf``, ``rho_inf``, and ``p_inf`` to be present in
     ``global_data`` (typically injected by ``InjectMetadata``).  Computes
@@ -116,6 +116,10 @@ class NonDimensionalizeByMetadata(MeshTransform):
     - **pressure**: ``(p - p_inf) / q_inf`` (pressure coefficient Cp)
     - **stress**: ``tau / q_inf`` (skin-friction coefficient Cf)
     - **velocity**: ``U / |U_inf|``
+
+    If ``L_ref`` is present in ``global_data``, mesh points are divided
+    by it to produce non-dimensional coordinates: ``x* = x / L_ref``.
+    This normalises point clouds and cell centroids computed downstream.
 
     Parameters
     ----------
@@ -169,8 +173,12 @@ class NonDimensionalizeByMetadata(MeshTransform):
             elif ftype == "velocity":
                 new_td[field_name] = val / U_inf_mag
 
+        points = mesh.points
+        if "L_ref" in gd:
+            points = points / gd["L_ref"].float()
+
         kwargs: dict = {
-            "points": mesh.points,
+            "points": points,
             "cells": mesh.cells,
             "point_data": mesh.point_data,
             "cell_data": mesh.cell_data,
@@ -183,7 +191,8 @@ class NonDimensionalizeByMetadata(MeshTransform):
         """Re-dimensionalize: reverse the non-dimensionalization.
 
         Uses the same ``global_data`` metadata (``U_inf``, ``rho_inf``,
-        ``p_inf``) to convert non-dimensional fields back to physical units.
+        ``p_inf``, and optionally ``L_ref``) to convert non-dimensional
+        fields and geometry back to physical units.
 
         Parameters
         ----------
@@ -213,8 +222,12 @@ class NonDimensionalizeByMetadata(MeshTransform):
             elif ftype == "velocity":
                 new_td[field_name] = val * U_inf_mag
 
+        points = mesh.points
+        if "L_ref" in gd:
+            points = points * gd["L_ref"].float()
+
         kwargs: dict = {
-            "points": mesh.points,
+            "points": points,
             "cells": mesh.cells,
             "point_data": mesh.point_data,
             "cell_data": mesh.cell_data,
@@ -226,7 +239,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
     def inverse_tensor(
         self,
         tensor: torch.Tensor,
-        field_order: list[str],
+        field_types: dict[str, str],
         q_inf: torch.Tensor,
         p_inf: torch.Tensor,
         U_inf_mag: torch.Tensor,
@@ -234,15 +247,18 @@ class NonDimensionalizeByMetadata(MeshTransform):
         """Re-dimensionalize a concatenated output tensor.
 
         Operates on model output tensors (shape ``(*, C)``) where channels
-        are ordered according to *field_order*.  This is useful at inference
+        are ordered according to *field_types*.  This is useful at inference
         time when you have a raw model prediction rather than a Mesh.
 
         Parameters
         ----------
         tensor : Tensor
-            Shape ``(*, C)`` with channels ordered by *field_order*.
-        field_order : list[str]
-            Ordered field names matching the channel layout.
+            Shape ``(*, C)`` with channels ordered by *field_types*.
+        field_types : dict[str, str]
+            Ordered mapping of ``{field_name: nondim_type}`` where
+            *nondim_type* is one of ``"pressure"``, ``"stress"``, or
+            ``"velocity"``.  Uses the model's output field names (e.g.
+            after renaming), not the original mesh field names.
         q_inf, p_inf, U_inf_mag : Tensor
             Reference quantities (scalars or broadcastable).
 
@@ -253,8 +269,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
         """
         out = tensor.clone()
         idx = 0
-        for name in field_order:
-            ftype = self._fields[name]
+        for name, ftype in field_types.items():
             if ftype == "pressure":
                 out[..., idx] = out[..., idx] * q_inf + p_inf
                 idx += 1

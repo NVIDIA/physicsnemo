@@ -592,34 +592,45 @@ class NormalizeMeshFields(MeshTransform):
         return Mesh(**kwargs)
 
     def inverse_tensor(
-        self, tensor: torch.Tensor, field_order: list[str]
+        self,
+        tensor: torch.Tensor,
+        target_config: dict[str, str],
+        vector_dim: int = 3,
     ) -> torch.Tensor:
         """Un-normalize a concatenated output tensor back to physical units.
+
+        Fields present in ``target_config`` but absent from the stored
+        normalization stats are passed through unchanged (their channels
+        are skipped).  This allows partial normalization (e.g. only WSS)
+        without requiring every field to have stats.
 
         Parameters
         ----------
         tensor : Tensor
             Shape ``(*, C)`` where channels are ordered according to
-            *field_order*.
-        field_order : list[str]
-            Ordered field names matching the channel layout, e.g.
-            ``["pressure", "wss"]``.
+            *target_config*.
+        target_config : dict[str, str]
+            Ordered mapping of ``{field_name: field_type}`` matching the
+            channel layout, e.g. ``{"pressure": "scalar", "wss": "vector"}``.
+        vector_dim : int, optional
+            Dimensionality of vector fields. Default is 3.
 
         Returns
         -------
         Tensor
-            Same shape, with each field's channels un-normalized.
+            Same shape, with each normalized field's channels un-normalized.
         """
         out = tensor.clone()
         idx = 0
-        for name in field_order:
-            stats = self._stats[name]
-            mean = stats["mean"].to(dtype=tensor.dtype, device=tensor.device)
-            std = stats["std"].to(dtype=tensor.dtype, device=tensor.device)
-            dim = 1 if mean.ndim == 0 else mean.shape[0]
-            out[..., idx : idx + dim] = (
-                out[..., idx : idx + dim] * (std + self._eps) + mean
-            )
+        for name, ftype in target_config.items():
+            dim = 1 if ftype == "scalar" else vector_dim
+            if name in self._stats:
+                stats = self._stats[name]
+                mean = stats["mean"].to(dtype=tensor.dtype, device=tensor.device)
+                std = stats["std"].to(dtype=tensor.dtype, device=tensor.device)
+                out[..., idx : idx + dim] = (
+                    out[..., idx : idx + dim] * (std + self._eps) + mean
+                )
             idx += dim
         return out
 
