@@ -70,6 +70,7 @@ physicsnemo/nn/ @loliverhennigh
 physicsnemo/nn/functional/ @loliverhennigh
 physicsnemo/nn/functional/knn/ @coreyjadams @peterdsharpe @loliverhennigh
 physicsnemo/nn/functional/radius_search/ @coreyjadams @peterdsharpe @loliverhennigh
+physicsnemo/nn/functional/natten/ @pzharrington
 physicsnemo/nn/functional/sdf.py @RishikeshRanade @loliverhennigh
 
 # Module layers

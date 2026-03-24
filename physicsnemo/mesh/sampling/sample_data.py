@@ -29,7 +29,7 @@ from tensordict import TensorDict
 
 from physicsnemo.mesh.neighbors._adjacency import Adjacency, build_adjacency_from_pairs
 from physicsnemo.mesh.spatial import BVH
-from physicsnemo.nn.functional.knn import knn
+from physicsnemo.nn.functional.neighbors import knn
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -398,7 +398,7 @@ def find_nearest_cells(
 ]:
     """Find the nearest cell for each query point (by centroid distance).
 
-    Uses :func:`~physicsnemo.nn.functional.knn.knn` which auto-dispatches
+    Uses :func:`~physicsnemo.nn.functional.neighbors.knn` which auto-dispatches
     to the optimal backend (cuML on GPU, scipy KDTree on CPU).
 
     Parameters

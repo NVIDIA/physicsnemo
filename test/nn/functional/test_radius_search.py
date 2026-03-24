@@ -18,7 +18,7 @@ import pytest
 import torch
 
 from physicsnemo.nn.functional import radius_search
-from physicsnemo.nn.functional.radius_search._warp_impl import (
+from physicsnemo.nn.functional.neighbors.radius_search._warp_impl import (
     radius_search_impl as radius_search_warp,
 )
 

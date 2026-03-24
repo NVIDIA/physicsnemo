@@ -35,7 +35,7 @@ from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.calculus import compute_point_derivatives
 from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.projections import project
-from physicsnemo.nn.functional.knn import knn
+from physicsnemo.nn.functional.neighbors import knn
 from physicsnemo.utils.logging import PythonLogger
 
 logger = PythonLogger("globe.airfrans.dataset")

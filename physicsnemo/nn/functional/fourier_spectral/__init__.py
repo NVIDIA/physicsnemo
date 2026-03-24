@@ -14,18 +14,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
+from .fft import (
+    IRFFT,
+    IRFFT2,
+    RFFT,
+    RFFT2,
+    Imag,
+    Real,
+    ViewAsComplex,
+    imag,
+    irfft,
+    irfft2,
+    real,
+    rfft,
+    rfft2,
+    view_as_complex,
+)
 
-from physicsnemo.core.version_check import check_version_spec
-
-if not check_version_spec("torch", "2.6.0", hard_fail=False):
-    pytest.skip(
-        "These tests require torch >= 2.6.0",
-        allow_module_level=True,
-    )
-
-
-@pytest.fixture(autouse=True)
-def skip_on_cpu(device):
-    if device == "cpu":
-        pytest.skip("Skip tests on cpu")
+__all__ = [
+    "RFFT",
+    "RFFT2",
+    "IRFFT",
+    "IRFFT2",
+    "ViewAsComplex",
+    "Real",
+    "Imag",
+    "rfft",
+    "rfft2",
+    "irfft",
+    "irfft2",
+    "view_as_complex",
+    "real",
+    "imag",
+]
