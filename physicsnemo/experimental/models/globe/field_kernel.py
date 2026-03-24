@@ -633,32 +633,8 @@ class Kernel(Module):
         interaction_dims = cat_input_tensors.shape[:-1]
         flattened_input = cat_input_tensors.reshape(prod(interaction_dims), self.network_in_features)
 
-        ### Lazy-compile the MLP on first call.
-        ###
-        ### When called from BarnesHutKernel, _evaluate_interactions is
-        ### itself compiled (via _compiled_evaluate_interactions in
-        ### _gather_and_evaluate), so is_compiling() is True and the MLP
-        ### is captured as part of that wider graph - this fallback is not
-        ### used.  The fallback exists for the dense Kernel.forward() path,
-        ### which calls _evaluate_interactions directly from eager code.
-        ###
-        ### Deferred from __init__ so that torchinfo and other introspection
-        ### tools can inspect the uncompiled module tree.  Uses dynamic=True
-        ### so that varying chunk sizes share one compiled graph per kernel.
-        ### Stored via object.__setattr__ to bypass nn.Module submodule
-        ### registration, keeping self.network (and thus state_dict) unmodified.
         with record_function("kernel::network"):
-            if torch.compiler.is_compiling():
-                network = self.network
-            else:
-                if not hasattr(self, "_compiled_network"):
-                    object.__setattr__(
-                        self,
-                        "_compiled_network",
-                        torch.compile(self.network, dynamic=True, mode="max-autotune-no-cudagraphs"),
-                    )
-                network = self._compiled_network
-            flattened_output = network(flattened_input)
+            flattened_output = self.network(flattened_input)
 
         output = flattened_output.reshape(*interaction_dims, self.network_out_features)
 
@@ -837,7 +813,6 @@ class BarnesHutKernel(Kernel):
         )
         self.leaf_size = leaf_size
 
-    @torch.compiler.disable
     def forward(
         self,
         *,
@@ -1284,7 +1259,9 @@ class BarnesHutKernel(Kernel):
         if int(leaf_counts.sum()) > 0:
             from physicsnemo.mesh.spatial._ragged import _ragged_arange
 
-            positions, seg_ids = _ragged_arange(leaf_starts, leaf_counts)
+            positions, seg_ids = _ragged_arange(
+                leaf_starts, leaf_counts, total=tree.n_sources,
+            )
             sorted_strengths = source_strengths[tree.sorted_source_order[positions]]
             leaf_sums = torch.zeros(n_leaves, dtype=source_strengths.dtype, device=device)
             leaf_sums.scatter_add_(0, seg_ids, sorted_strengths)
@@ -1344,6 +1321,13 @@ class BarnesHutKernel(Kernel):
         checkpointed call, the autograd graph saves only the int64 index
         tensors (~8 bytes/pair) and references to the shared source data
         (O(1)), instead of the gathered float features (~300 bytes/pair).
+
+        Source scalars and vectors are pre-flattened via
+        ``concatenate_leaves`` before indexing, reducing K per-leaf index
+        ops to 1 cat + 1 index each.  Vectors are split back into
+        individual named leaves afterward because the feature engineering
+        pipeline in ``_evaluate_interactions`` processes each vector
+        separately (magnitudes, dot products, basis construction).
         """
         n_pairs = tgt_ids.shape[0]
         chunk_r = (
@@ -1372,34 +1356,7 @@ class BarnesHutKernel(Kernel):
         )
         vectors["r"] = chunk_r
 
-        ### Lazy-compile the full evaluation pipeline on first call.
-        ### Fuses feature engineering + MLP + postprocessing into a single
-        ### compiled graph, reducing ~25 eager kernel launches per call to
-        ### a handful of fused Triton kernels (including the backward).
-        ###
-        ### The compile boundary is here (around _evaluate_interactions)
-        ### rather than around _gather_and_evaluate itself because
-        ### _gather_and_evaluate is wrapped by checkpoint() at each call
-        ### site in BarnesHutKernel.forward.  checkpoint(use_reentrant=False)
-        ### validates intermediate tensor metadata during backward replay,
-        ### and torch.compile may reorder operations - causing a metadata
-        ### mismatch that raises an error.  Keeping the compile boundary
-        ### inside the checkpoint boundary avoids this interaction.
-        if torch.compiler.is_compiling():
-            evaluate = self._evaluate_interactions
-        else:
-            if not hasattr(self, "_compiled_evaluate_interactions"):
-                object.__setattr__(
-                    self,
-                    "_compiled_evaluate_interactions",
-                    torch.compile(
-                        self._evaluate_interactions,
-                        dynamic=True,
-                        mode="max-autotune-no-cudagraphs",
-                    ),
-                )
-            evaluate = self._compiled_evaluate_interactions
-        return evaluate(scalars=scalars, vectors=vectors, device=device)
+        return self._evaluate_interactions(scalars=scalars, vectors=vectors, device=device)
 
     def _auto_chunk_size(self, n_total_pairs: int, device: torch.device) -> int:
         """Determine chunk size for pair-batched kernel evaluation.
