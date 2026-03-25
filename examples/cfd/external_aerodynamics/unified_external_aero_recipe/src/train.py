@@ -166,6 +166,46 @@ def train_epoch(
     dist_manager: DistributedManager,
     scaler: GradScaler | None = None,
 ) -> tuple[float, dict[str, float]]:
+    """Run one training epoch over the dataloader.
+
+    Iterates through all batches, computes forward pass, back-propagates
+    gradients, and logs per-step and per-epoch statistics to TensorBoard.
+
+    Parameters
+    ----------
+    dataloader : DataLoader
+        Training dataloader yielding ``dict[str, Tensor]`` batches.
+    model : torch.nn.Module
+        The model to train (already on ``dist_manager.device``).
+    optimizer : torch.optim.Optimizer
+        Optimizer instance.
+    scheduler : torch.optim.lr_scheduler._LRScheduler
+        Learning-rate scheduler.  Updated per step or per epoch depending
+        on ``cfg.training.scheduler_update_mode``.
+    loss_calculator : LossCalculator
+        Computes the training loss from model outputs and targets.
+    metric_calculator : MetricCalculator
+        Computes evaluation metrics (L1, L2, MAE, etc.).
+    logger : RankZeroLoggingWrapper
+        Logger for console output.
+    writer : SummaryWriter or None
+        TensorBoard writer for training scalars (rank-0 only).
+    epoch : int
+        Current epoch index (0-based).
+    cfg : DictConfig
+        Full Hydra config; uses ``cfg.profile`` and ``cfg.training``.
+    dist_manager : DistributedManager
+        Distributed training manager.
+    scaler : torch.amp.GradScaler or None, optional
+        Gradient scaler for mixed-precision (float16) training.
+
+    Returns
+    -------
+    avg_loss : float
+        Mean training loss over all batches.
+    avg_metrics : dict[str, float]
+        Mean per-metric values over all batches.
+    """
     model.train()
     total_loss = 0.0
     total_metrics: dict[str, float] = {}
@@ -234,7 +274,7 @@ def train_epoch(
     )
 
     if dist_manager.rank == 0 and writer is not None:
-        writer.add_scalar("epoch/train_loss", avg_loss, epoch)
+        writer.add_scalar("epoch/loss", avg_loss, epoch)
         for k, v in avg_metrics.items():
             writer.add_scalar(f"epoch/{k}", v, epoch)
 
@@ -248,15 +288,64 @@ def val_epoch(
     loss_calculator: LossCalculator,
     metric_calculator: MetricCalculator,
     logger,
-    writer,
+    val_writer,
     epoch: int,
     cfg: DictConfig,
     dist_manager: DistributedManager,
     phys_metric_calculator: MetricCalculator | None = None,
     target_config: dict[str, str] | None = None,
-    norm_stats: dict | None = None,
+    normalizer=None,
+    nondim_transform=None,
     metadata: dict | None = None,
 ) -> tuple[float, dict[str, float], dict[str, float]]:
+    """Run one validation epoch and optionally compute physical-space metrics.
+
+    When ``phys_metric_calculator`` and ``metadata`` are both provided,
+    model outputs and targets are converted back to physical units via
+    :func:`_to_physical` and a second set of metrics is computed.
+
+    Parameters
+    ----------
+    dataloader : DataLoader
+        Validation dataloader yielding ``dict[str, Tensor]`` batches.
+    model : torch.nn.Module
+        The model to evaluate (already on ``dist_manager.device``).
+    loss_calculator : LossCalculator
+        Computes the validation loss.
+    metric_calculator : MetricCalculator
+        Computes normalised-space metrics.
+    logger : RankZeroLoggingWrapper
+        Logger for console output.
+    val_writer : SummaryWriter or None
+        TensorBoard writer for validation scalars (rank-0 only).
+    epoch : int
+        Current epoch index (0-based).
+    cfg : DictConfig
+        Full Hydra config; uses ``cfg.profile`` and ``cfg.precision``.
+    dist_manager : DistributedManager
+        Distributed training manager.
+    phys_metric_calculator : MetricCalculator or None, optional
+        If provided, computes metrics in physical (dimensional) space.
+    target_config : dict[str, str] or None, optional
+        Maps target field names to their types (``"scalar"`` / ``"vector"``).
+        Required when ``phys_metric_calculator`` is given.
+    normalizer : NormalizeMeshFields or None, optional
+        The z-score normalizer extracted from the training pipeline.
+    nondim_transform : NonDimensionalizeByMetadata or None, optional
+        The non-dimensionalization transform from the training pipeline.
+    metadata : dict or None, optional
+        Freestream conditions (``U_inf``, ``rho_inf``, ``p_inf``, etc.)
+        needed to invert non-dimensionalization.
+
+    Returns
+    -------
+    avg_loss : float
+        Mean validation loss over all batches.
+    avg_metrics : dict[str, float]
+        Mean normalised-space metrics.
+    avg_phys_metrics : dict[str, float]
+        Mean physical-space metrics (empty dict if not computed).
+    """
     model.eval()
     total_loss = 0.0
     total_metrics: dict[str, float] = {}
@@ -277,8 +366,12 @@ def val_epoch(
             )
 
             if compute_phys:
-                phys_out = _to_physical(outputs, target_config, norm_stats, metadata)
-                phys_tgt = _to_physical(targets, target_config, norm_stats, metadata)
+                phys_out = _to_physical(
+                    outputs, target_config, normalizer, nondim_transform, metadata
+                )
+                phys_tgt = _to_physical(
+                    targets, target_config, normalizer, nondim_transform, metadata
+                )
                 phys_metrics = phys_metric_calculator(phys_out, phys_tgt)
                 for k, v in phys_metrics.items():
                     val = v if isinstance(v, float) else v.item()
@@ -312,29 +405,35 @@ def val_epoch(
         f"({n_batches} steps, {epoch_dt / max(n_batches, 1):.3f}s/step avg)"
     )
 
-    if dist_manager.rank == 0 and writer is not None:
-        writer.add_scalar("epoch/val_loss", avg_loss, epoch)
+    if dist_manager.rank == 0 and val_writer is not None:
+        val_writer.add_scalar("epoch/loss", avg_loss, epoch)
         for k, v in avg_metrics.items():
-            writer.add_scalar(f"epoch/val_{k}", v, epoch)
+            val_writer.add_scalar(f"epoch/{k}", v, epoch)
         for k, v in avg_phys_metrics.items():
-            writer.add_scalar(f"epoch/val_{k}", v, epoch)
+            base = k.removeprefix("phys/")
+            val_writer.add_scalar(f"epoch/phys/{base}", v, epoch)
 
     return avg_loss, avg_metrics, avg_phys_metrics
 
 
-def _extract_norm_stats(datasets: list) -> dict | None:
-    """Find NormalizeMeshFields in the transform chains and return its stats.
+def _extract_pipeline_transforms(datasets: list) -> tuple:
+    """Find NormalizeMeshFields and NonDimensionalizeByMetadata in transform chains.
 
-    Returns the stats dict from the first NormalizeMeshFields found, or
-    None if no normalization is used.
+    Returns (normalizer, nondim) instances from the first dataset that has them,
+    or (None, None) if not found.
     """
     from physicsnemo.datapipes.transforms.mesh import NormalizeMeshFields
+    from nondim import NonDimensionalizeByMetadata
 
+    normalizer = None
+    nondim = None
     for ds in datasets:
         for t in getattr(ds, "transforms", []):
-            if isinstance(t, NormalizeMeshFields):
-                return t.stats
-    return None
+            if isinstance(t, NormalizeMeshFields) and normalizer is None:
+                normalizer = t
+            if isinstance(t, NonDimensionalizeByMetadata) and nondim is None:
+                nondim = t
+    return normalizer, nondim
 
 
 def build_dataloaders(cfg: DictConfig):
@@ -377,7 +476,7 @@ def build_dataloaders(cfg: DictConfig):
     if not train_datasets:
         raise RuntimeError("No valid datasets found. Check data paths in config.")
 
-    norm_stats = _extract_norm_stats(train_datasets)
+    normalizer, nondim_transform = _extract_pipeline_transforms(train_datasets)
 
     if len(train_datasets) == 1:
         train_dataset = train_datasets[0]
@@ -426,58 +525,74 @@ def build_dataloaders(cfg: DictConfig):
         use_streams=False,
     )
 
-    return train_loader, val_loader, norm_stats, first_metadata or {}
+    return train_loader, val_loader, normalizer, nondim_transform, first_metadata or {}
+
+
+_NONDIM_TYPE_MAP = {"scalar": "pressure", "vector": "stress"}
 
 
 def _to_physical(
     tensor: torch.Tensor,
     target_config: dict[str, str],
-    norm_stats: dict | None,
+    normalizer,
+    nondim_transform,
     metadata: dict,
 ) -> torch.Tensor:
     """Convert a model-space tensor (normalized + non-dim) back to physical units.
 
-    Chains two inverse operations:
-    1. Un-normalize: multiply fields by their std (undo NormalizeMeshFields)
-    2. Re-dimensionalize: Cp * q_inf + p_inf for pressure,
-       Cf * q_inf for stress (undo NonDimensionalizeByMetadata)
-
-    Assumes scalars are pressure-type and vectors are stress-type,
-    matching the surface recipe's target convention.
+    Chains two inverse operations using the existing transform instances:
+    1. ``NormalizeMeshFields.inverse_tensor`` -- undo z-score normalization
+    2. ``NonDimensionalizeByMetadata.inverse_tensor`` -- undo non-dimensionalization
     """
     if not metadata:
         return tensor
 
-    out = tensor.clone()
+    out = tensor
     device, dtype = tensor.device, tensor.dtype
 
-    U_inf = torch.tensor(metadata["U_inf"], dtype=dtype, device=device)
-    rho_inf = torch.tensor(metadata["rho_inf"], dtype=dtype, device=device)
-    p_inf = torch.tensor(metadata["p_inf"], dtype=dtype, device=device)
-    q_inf = 0.5 * rho_inf * (U_inf * U_inf).sum()
+    # Step 1: undo z-score normalization
+    if normalizer is not None:
+        out = normalizer.inverse_tensor(out, target_config)
 
-    idx = 0
-    for name, ftype in target_config.items():
-        dim = 1 if ftype == "scalar" else 3
-        sl = out[..., idx : idx + dim]
-
-        if norm_stats and name in norm_stats:
-            std = torch.tensor(norm_stats[name]["std"], dtype=dtype, device=device)
-            sl = sl * std
-
-        if ftype == "scalar":
-            sl = sl * q_inf + p_inf
-        else:
-            sl = sl * q_inf
-
-        out[..., idx : idx + dim] = sl
-        idx += dim
+    # Step 2: undo non-dimensionalization
+    if nondim_transform is not None:
+        nondim_fields = {
+            name: _NONDIM_TYPE_MAP.get(ftype, ftype)
+            for name, ftype in target_config.items()
+        }
+        U_inf = torch.tensor(metadata["U_inf"], dtype=dtype, device=device)
+        rho_inf = torch.tensor(metadata["rho_inf"], dtype=dtype, device=device)
+        p_inf = torch.tensor(metadata["p_inf"], dtype=dtype, device=device)
+        q_inf = 0.5 * rho_inf * (U_inf * U_inf).sum()
+        U_inf_mag = (U_inf * U_inf).sum().sqrt()
+        out = nondim_transform.inverse_tensor(
+            out, nondim_fields, q_inf, p_inf, U_inf_mag
+        )
 
     return out
 
 
 @profile
 def main(cfg: DictConfig):
+    """Run the full training loop: build model, data, optimizer, then train.
+
+    Orchestrates the complete training workflow:
+
+    1. Initialise distributed training and TensorBoard writers.
+    2. Instantiate the model and wrap with DDP if multi-GPU.
+    3. Build train/val dataloaders and extract pipeline transforms.
+    4. Set up optimizer, scheduler, loss, and metric calculators.
+    5. Optionally resume from a checkpoint.
+    6. Loop over epochs calling :func:`train_epoch` and :func:`val_epoch`.
+    7. Periodically save checkpoints and normalization statistics.
+
+    Parameters
+    ----------
+    cfg : DictConfig
+        Hydra config containing ``model``, ``training``, ``dataset``,
+        ``data``, ``output_dir``, ``run_id``, ``precision``, ``compile``,
+        ``profile``, and related keys.
+    """
     DistributedManager.initialize()
     dist_manager = DistributedManager()
     logger = RankZeroLoggingWrapper(PythonLogger(name="training"), dist_manager)
@@ -512,12 +627,14 @@ def main(cfg: DictConfig):
             output_device=dist_manager.device,
         )
 
-    train_loader, val_loader, norm_stats, ds_metadata = build_dataloaders(cfg)
+    train_loader, val_loader, normalizer, nondim_transform, ds_metadata = (
+        build_dataloaders(cfg)
+    )
     logger.info(f"Train samples: {len(train_loader.dataset)}")
     logger.info(f"Val samples: {len(val_loader.dataset)}")
-    if norm_stats is not None:
+    if normalizer is not None:
         logger.info(
-            f"Normalization: {', '.join(f'{k}({v["type"]})' for k, v in norm_stats.items())}"
+            f"Normalization: {', '.join(f'{k}({v["type"]})' for k, v in normalizer.stats.items())}"
         )
 
     optimizer = build_muon_optimizer(model, cfg)
@@ -541,15 +658,16 @@ def main(cfg: DictConfig):
             f"using prefix '{prefix}' for metrics"
         )
     else:
-        prefix = active_data_keys[0]
+        prefix = ""
 
+    phys_prefix = f"phys/{prefix}" if prefix else "phys"
     metric_calculator = MetricCalculator(
         target_config=targets, metrics=metrics_list, prefix=prefix
     )
     use_phys_metrics = len(active_data_keys) == 1
     phys_metric_calculator = (
         MetricCalculator(
-            target_config=targets, metrics=metrics_list, prefix=f"phys/{prefix}"
+            target_config=targets, metrics=metrics_list, prefix=phys_prefix
         )
         if use_phys_metrics
         else None
@@ -606,7 +724,8 @@ def main(cfg: DictConfig):
             dist_manager,
             phys_metric_calculator=phys_metric_calculator,
             target_config=targets,
-            norm_stats=norm_stats,
+            normalizer=normalizer,
+            nondim_transform=nondim_transform,
             metadata=ds_metadata,
         )
 
@@ -643,18 +762,32 @@ def main(cfg: DictConfig):
 
         if epoch % cfg.training.save_interval == 0 and dist_manager.rank == 0:
             save_checkpoint(**ckpt_args, epoch=epoch + 1)
-            if norm_stats is not None:
+            if normalizer is not None:
                 norm_path = os.path.join(ckpt_args["path"], "norm_stats.pt")
-                torch.save(norm_stats, norm_path)
+                torch.save(normalizer.stats, norm_path)
 
         if cfg.training.get("scheduler_update_mode", "epoch") == "epoch":
             scheduler.step()
+
+    if dist_manager.rank == 0:
+        if writer is not None:
+            writer.close()
+        if val_writer is not None:
+            val_writer.close()
 
     logger.info("Training completed!")
 
 
 @hydra.main(version_base=None, config_path="../conf", config_name="train_surface")
 def launch(cfg: DictConfig):
+    """Hydra entry point: configure profiling and delegate to :func:`main`.
+
+    Parameters
+    ----------
+    cfg : DictConfig
+        Hydra-composed config loaded from ``conf/train_surface.yaml``.
+        When ``cfg.profile`` is truthy, torch profiling is enabled.
+    """
     profiler = Profiler()
     if cfg.profile:
         profiler.enable("torch")

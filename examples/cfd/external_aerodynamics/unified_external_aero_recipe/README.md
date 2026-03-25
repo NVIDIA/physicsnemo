@@ -22,16 +22,10 @@ cd examples/cfd/external_aerodynamics/unified_external_aero_recipe
 # 1. Inspect raw data (sanity-check fields, coordinate ranges, vertical axis)
 python -m src.inspect_data
 
-# 2. Collect field statistics (needed for normalization)
-python -m src.collect_stats --with-transforms --force
-
-# 3. Review normalization recommendations
-python -m src.recommend_normalization
-
-# 4. Train (single GPU)
+# 2. Train (single GPU)
 python src/train.py
 
-# 4b. Train (multi-GPU)
+# 2b. Train (multi-GPU)
 torchrun --nproc_per_node=N src/train.py
 ```
 
@@ -82,9 +76,9 @@ via `MultiDataset`.
           │                                                            │
           │  MeshReader               Load raw Mesh from .pt files     │
           │       │                                                    │
-          │  InjectMetadata           Write U_inf, rho_inf, p_inf, nu  │
+          │  (metadata injection)     Write U_inf, rho_inf, p_inf, nu  │
           │       │                   from YAML metadata into          │
-          │       │                   global_data                      │
+          │       │                   global_data (done by builder)     │
           │       │                                                    │
           │  DropMeshFields           Remove unwanted fields           │
           │       │                   (e.g. TimeValue)                 │
@@ -93,10 +87,10 @@ via `MultiDataset`.
           │       │                   to origin                        │
           │       │                                                    │
           │ (RandomRotateMesh)        Random yaw around vertical axis  │
-          │       │                   (currently commented out)         │
+          │       │                   (training only)                   │
           │       │                                                    │
           │ (RandomTranslateMesh)     Random horizontal shift           │
-          │       │                   (currently commented out)         │
+          │       │                   (training only)                   │
           │       │                                                    │
           │  NonDimensionalizeByMeta  Convert to Cp and Cf using       │
           │       │                   q_inf = ½ρ|U∞|²                  │
@@ -105,8 +99,7 @@ via `MultiDataset`.
           │       │                   canonical names (pressure, wss)  │
           │       │                                                    │
           │  NormalizeMeshFields      z-score normalize using          │
-          │       │                   precomputed parquet stats         │
-          │       │                   (DrivaerML only, currently)       │
+          │       │                   inline stats from YAML            │
           │       │                                                    │
           │  SubsampleMesh            Downsample to fixed point/cell   │
           │       │                   count for batching                │
@@ -137,12 +130,11 @@ via `MultiDataset`.
 
 ### Why each step exists
 
-- **InjectMetadata** — Writes freestream conditions (`U_inf`, `rho_inf`,
-  `p_inf`, `nu`) from the YAML config's `metadata:` block into the mesh's
-  `global_data`. This makes physical reference quantities available to
-  downstream transforms without hardcoding them in Python. The dataset
-  builder automatically passes the metadata dict to any `InjectMetadata`
-  transform that doesn't already specify its own.
+- **Metadata injection** — The dataset builder writes freestream conditions
+  (`U_inf`, `rho_inf`, `p_inf`, `nu`) from the YAML config's `metadata:`
+  block into each mesh's `global_data`. This makes physical reference
+  quantities available to downstream transforms without hardcoding them
+  in Python.
 
 - **DropMeshFields** — Removes fields that are not needed for training
   (e.g. `TimeValue` in DrivaerML) to reduce memory and avoid schema
@@ -171,10 +163,9 @@ via `MultiDataset`.
   convention.
 
 - **NormalizeMeshFields** — Applies z-score normalization using
-  precomputed statistics from a parquet file (produced by
-  `src/collect_stats.py --with-transforms`). Handles scalar and vector
-  fields differently. The normalization stats are saved alongside model
-  checkpoints for use at inference time.
+  inline statistics declared in the YAML config or loaded from a `.pt`
+  file. Handles scalar and vector fields differently.  The normalization
+  stats are saved alongside model checkpoints for use at inference time.
 
 - **SubsampleMesh** — Randomly downsamples each mesh to a fixed size
   (200k points for DrivaerML, 50k cells for SHIFT SUV) so that samples
@@ -212,10 +203,9 @@ The pipeline applies two layers of field conditioning:
    per-dataset in the YAML config.
 
 2. **Statistical normalization** (`NormalizeMeshFields`) applies z-score
-   scaling based on precomputed statistics so that all field values fed
-   to the model have roughly zero mean and unit variance. Statistics are
-   collected by `src/collect_stats.py --with-transforms` and stored as
-   parquet files in `stats/`.
+   scaling so that all field values fed to the model have roughly zero
+   mean and unit variance.  Statistics are specified inline in the dataset
+   YAML config or loaded from a `.pt` file.
 
 ## Model and training
 
@@ -270,43 +260,6 @@ Prints coordinate ranges (min/max/mean per axis), field names, shapes, and
 value statistics for one sample from each dataset. Use the output to confirm
 which axis is vertical and to understand the raw data layout.
 
-### Collect field statistics
-
-```bash
-python -m src.collect_stats
-python -m src.collect_stats --output stats/ --force
-python -m src.collect_stats --configs conf/dataset/drivaer_ml_surface.yaml
-python -m src.collect_stats --with-transforms
-```
-
-Iterates over meshes using `FieldStatisticsCollector` and writes per-sample
-and aggregate statistics to parquet files (one per dataset).
-
-- Without `--with-transforms`: collects stats on **raw** meshes (no
-  pipeline transforms applied).
-- With `--with-transforms`: applies the deterministic portion of the
-  pipeline (InjectMetadata, NonDimensionalizeByMetadata, RenameMeshFields,
-  etc.) before collecting. Stochastic augmentations, subsampling, and
-  terminal transforms are automatically skipped. The resulting parquet
-  files describe the non-dimensionalized fields that the model will
-  actually see, and are used by `NormalizeMeshFields`.
-
-The collector uses Welford's online algorithm for numerically stable
-global aggregates. Results are cached; use `--force` to recompute.
-
-### Recommend normalization
-
-```bash
-python -m src.recommend_normalization
-python -m src.recommend_normalization --fields pressure wss
-```
-
-Reads the parquet statistics and prints a report with exact global moments
-(mean, std, skewness, kurtosis) and recommended normalization parameters
-for three schemes: z-score, min-max, and max-abs. When aggregate parquet
-files are present (produced by `collect_stats`), uses exact Welford
-aggregates; otherwise falls back to sample-level approximations.
-
 ### Benchmark datapipe throughput
 
 ```bash
@@ -356,7 +309,7 @@ name: drivaer_ml_surface
 train_datadir: /path/to/train/data
 val_datadir: /path/to/val/data
 
-# Freestream conditions (injected into global_data by InjectMetadata)
+# Freestream conditions (injected into global_data by the dataset builder)
 metadata:
   U_inf: [30.0, 0.0, 0.0]
   p_inf: 0.0
@@ -370,7 +323,6 @@ pipeline:
     path: ${train_datadir}
     pattern: "**/boundary*.vtp.pt"
   transforms:
-    - _target_: ${dp:InjectMetadata}
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]
     - _target_: ${dp:CenterMesh}
@@ -386,10 +338,8 @@ pipeline:
         wallShearStressMeanTrim: wss
     - _target_: ${dp:NormalizeMeshFields}
       section: point_data
-      stats_parquet: stats/drivaer_ml_surface_transformed_aggregate.parquet
-      field_types:
-        pressure: scalar
-        wss: vector
+      fields:
+        wss: {type: vector, mean: [0.0, 0.0, 0.0], std: 0.00313}
     - _target_: ${dp:SubsampleMesh}
       n_points: 200000
     - _target_: ${dp:MeshToTensorDict}
@@ -423,11 +373,10 @@ entry's keys are passed directly as constructor kwargs.
    `NonDimensionalizeByMetadata` and `RenameMeshFields`.
 5. For cell-based data, add `ComputeCellCentroids` after `MeshToTensorDict`
    and use `cell_centroids` as the point source in `RestructureTensorDict`.
-6. Add an entry in `conf/train_surface.yaml` under `data:` pointing to
+6. Add inline normalization stats to `NormalizeMeshFields` (or point
+   `stats_file` at a `.pt` file with precomputed statistics).
+7. Add an entry in `conf/train_surface.yaml` under `data:` pointing to
    your new config.
-7. Run `collect_stats --with-transforms` to generate normalization
-   statistics, then point `NormalizeMeshFields.stats_parquet` at the
-   resulting aggregate parquet.
 
 No Python code changes are needed.
 
@@ -435,15 +384,13 @@ No Python code changes are needed.
 
 | Module | Purpose |
 |---|---|
-| `src/datasets.py` | Factory functions: `build_surface_dataset`, `build_multi_surface_dataset`, `load_dataset_config`. Hydra-instantiates readers and transforms from YAML. |
-| `src/nondim.py` | Recipe-local transforms: `InjectMetadata` and `NonDimensionalizeByMetadata`. Registered into the global datapipe registry. |
+| `src/datasets.py` | Factory functions: `build_surface_dataset`, `build_multi_surface_dataset`, `load_dataset_config`. Hydra-instantiates readers and transforms from YAML; injects metadata into `global_data`. |
+| `src/nondim.py` | Recipe-local transform: `NonDimensionalizeByMetadata`. Registered into the global datapipe registry. |
 | `src/collate.py` | `surface_collate` — stacks datapipe `(TensorDict, metadata)` tuples into batched model inputs. |
 | `src/loss.py` | `LossCalculator` — config-driven loss for mixed scalar/vector fields. Supports Huber, MSE, relative MSE. |
 | `src/metrics.py` | `MetricCalculator` — config-driven metrics (relative L1, relative L2, MAE) with optional distributed all-reduce. |
-| `src/utils.py` | `build_muon_optimizer` (Muon+AdamW), `parse_target_config`, `FieldSpec` dataclass, `tensorwise` decorator. |
+| `src/utils.py` | `build_muon_optimizer` (Muon+AdamW), `parse_target_config`, `FieldSpec` dataclass. |
 | `src/train.py` | Training loop with DDP, mixed precision, checkpointing, TensorBoard, and profiling. |
-| `src/collect_stats.py` | CLI for `FieldStatisticsCollector`. Supports raw and transformed statistics. |
-| `src/recommend_normalization.py` | Reads parquet stats and prints normalization recommendations with exact Welford moments. |
 | `src/inspect_data.py` | Loads one sample per dataset and prints geometry/field summaries. |
 | `src/benchmark.py` | Measures datapipe throughput and prints output shapes with value statistics. |
 
@@ -470,8 +417,8 @@ The freestream conditions are not stored in the converted mesh files.
 Rather than modifying the data conversion pipeline, we inject them at
 runtime from the config. This keeps the `.pt` files format-agnostic and
 makes it trivial to change conditions without reconverting data. The
-`InjectMetadata` transform is automatically wired up by the dataset
-builder — you just declare the values in the `metadata:` block.
+dataset builder reads the `metadata:` block and prepends an injection
+step automatically.
 
 **Why output_strict=False in MultiDataset?**
 With strict mode, MultiDataset checks that all sub-datasets produce
@@ -494,9 +441,8 @@ transform order is a YAML-only change. The factory code in `src/datasets.py`
 is compact and generic. The configs are self-documenting: you can read a
 single YAML file and see exactly what transforms run and in what order.
 
-**Why parquet for statistics?**
-Parquet is columnar, compressed, and readable by pandas, polars, DuckDB,
-and most dashboard tools without any custom parsing code. The
-`FieldStatisticsCollector` embeds dataset metadata (sample count, tracked
-keys, timestamp) in Arrow file-level metadata for automatic cache
-invalidation.
+**Why inline normalization stats?**
+Specifying normalization statistics directly in the YAML config (or in a
+`.pt` file) keeps the pipeline self-contained and avoids a separate
+statistics collection step. The values are easy to inspect, update, and
+version-control alongside the rest of the configuration.

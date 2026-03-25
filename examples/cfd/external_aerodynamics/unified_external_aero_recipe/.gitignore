@@ -1,3 +1,5 @@
+*.err
+*.out
 outputs/
 stats/
 checkpoints/

@@ -59,10 +59,6 @@ from physicsnemo.datapipes.registry import (
     register,
     register_resolvers,
 )
-from physicsnemo.datapipes.statistics import (
-    FieldStatisticsCollector,
-    WelfordAccumulator,
-)
 from physicsnemo.datapipes.transforms import (
     BoundingBoxFilter,
     BroadcastGlobalFeatures,
@@ -173,9 +169,6 @@ __all__ = [
     "default_collate",
     "concat_collate",
     "get_collator",
-    # Statistics
-    "FieldStatisticsCollector",
-    "WelfordAccumulator",
     # Registry
     "ComponentRegistry",
     "COMPONENT_REGISTRY",

@@ -30,13 +30,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import torch
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
 import physicsnemo.datapipes  # noqa: F401  (registers ${dp:...} resolvers)
 from physicsnemo.datapipes import MeshDataset, MultiDataset
+from physicsnemo.mesh import Mesh
 
-import nondim  # noqa: F401  (registers InjectMetadata, NonDimensionalizeByMetadata)
+import nondim  # noqa: F401  (registers NonDimensionalizeByMetadata)
 
 
 def load_dataset_config(yaml_path: str | Path) -> DictConfig:
@@ -44,18 +46,17 @@ def load_dataset_config(yaml_path: str | Path) -> DictConfig:
     return OmegaConf.load(yaml_path)
 
 
-_PATH_KEYS = {"stats_parquet", "stats_file"}
-_INJECT_METADATA_SUFFIX = "InjectMetadata"
+_PATH_KEYS = {"stats_file"}
 _CENTER_MESH_SUFFIX = "CenterMesh"
 
 
 def _resolve_transform_paths(t_cfg: DictConfig, base_dir: Path) -> DictConfig:
     """Resolve relative file paths in a transform config against *base_dir*.
 
-    Transforms like ``NormalizeMeshFields`` accept ``stats_parquet`` or
-    ``stats_file`` parameters that may be relative.  When Hydra changes
-    the working directory these would break, so we resolve them to
-    absolute paths before instantiation.
+    Transforms like ``NormalizeMeshFields`` accept ``stats_file``
+    parameters that may be relative.  When Hydra changes the working
+    directory these would break, so we resolve them to absolute paths
+    before instantiation.
     """
     for key in _PATH_KEYS:
         val = OmegaConf.select(t_cfg, key, default=None)
@@ -66,17 +67,36 @@ def _resolve_transform_paths(t_cfg: DictConfig, base_dir: Path) -> DictConfig:
     return t_cfg
 
 
-def _inject_metadata_into_transform(
-    t_cfg: DictConfig,
-    metadata: dict,
-) -> DictConfig:
-    """If *t_cfg* targets ``InjectMetadata`` and has no explicit ``metadata``
-    parameter, merge in the dataset-level metadata from the YAML config."""
-    target = OmegaConf.select(t_cfg, "_target_", default="")
-    if target.endswith(_INJECT_METADATA_SUFFIX):
-        if OmegaConf.select(t_cfg, "metadata", default=None) is None:
-            t_cfg = OmegaConf.merge(t_cfg, {"metadata": metadata})
-    return t_cfg
+def _make_metadata_injector(metadata: dict):
+    """Create a callable that injects dataset metadata into ``mesh.global_data``.
+
+    This replaces the former ``InjectMetadata`` transform class.  The
+    returned callable is prepended to the transform list so that
+    downstream transforms like ``NonDimensionalizeByMetadata`` can read
+    freestream quantities from ``global_data``.
+    """
+    fields: dict[str, torch.Tensor] = {}
+    for k, v in metadata.items():
+        if isinstance(v, torch.Tensor):
+            fields[k] = v.float()
+        elif isinstance(v, (list, tuple)):
+            fields[k] = torch.tensor(v, dtype=torch.float32)
+        else:
+            fields[k] = torch.tensor(v, dtype=torch.float32)
+
+    def inject(mesh: Mesh) -> Mesh:
+        new_gd = mesh.global_data.clone()
+        for k, v in fields.items():
+            new_gd[k] = v.to(device=mesh.points.device, dtype=mesh.points.dtype)
+        return Mesh(
+            points=mesh.points,
+            cells=mesh.cells,
+            point_data=mesh.point_data,
+            cell_data=mesh.cell_data,
+            global_data=new_gd,
+        )
+
+    return inject
 
 
 def build_surface_dataset(
@@ -93,13 +113,12 @@ def build_surface_dataset(
         and ``transforms:`` entries.  An optional ``pipeline.augmentations``
         list defines stochastic augmentation transforms (e.g.
         ``RandomRotateMesh``, ``RandomTranslateMesh``) that are inserted
-        after ``CenterMesh`` when *augment* is ``True``.  An optional
-        top-level ``metadata:`` block is automatically injected into any
-        ``InjectMetadata`` transform that does not already specify its own
-        ``metadata`` parameter.
+        after ``CenterMesh`` when *augment* is ``True``.  If a top-level
+        ``metadata:`` block is present, its values are injected into
+        ``mesh.global_data`` as the first transform step.
     base_dir : Path, optional
         Root directory for resolving relative paths in transform configs
-        (e.g. ``stats_parquet``).  Defaults to the recipe root
+        (e.g. ``stats_file``).  Defaults to the recipe root
         (two levels above this file).
     augment : bool, optional
         When ``True``, ``pipeline.augmentations`` transforms are inserted
@@ -119,20 +138,24 @@ def build_surface_dataset(
     )
 
     reader = hydra.utils.instantiate(cfg.pipeline.reader)
-    transforms = None
+    resolved = []
+
+    # Inject dataset metadata into global_data as the first transform
+    if metadata:
+        resolved.append(_make_metadata_injector(metadata))
+
     if "transforms" in cfg.pipeline and cfg.pipeline.transforms:
-        resolved = []
         for t in cfg.pipeline.transforms:
             t = _resolve_transform_paths(t, base_dir)
-            if metadata:
-                t = _inject_metadata_into_transform(t, metadata)
             resolved.append(hydra.utils.instantiate(t))
 
         if augment and "augmentations" in cfg.pipeline and cfg.pipeline.augmentations:
             aug = [hydra.utils.instantiate(a) for a in cfg.pipeline.augmentations]
+            # +1 for the metadata injector prepended above
+            offset = 1 if metadata else 0
             insert_idx = next(
                 (
-                    i + 1
+                    offset + i + 1
                     for i, t_cfg in enumerate(cfg.pipeline.transforms)
                     if t_cfg.get("_target_", "").endswith(_CENTER_MESH_SUFFIX)
                 ),
@@ -140,7 +163,7 @@ def build_surface_dataset(
             )
             resolved[insert_idx:insert_idx] = aug
 
-        transforms = resolved
+    transforms = resolved if resolved else None
     return MeshDataset(reader, transforms=transforms)
 
 

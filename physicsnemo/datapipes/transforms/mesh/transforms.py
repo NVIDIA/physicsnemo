@@ -25,13 +25,10 @@ from typing import Literal
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.datapipes.transforms.subsample import poisson_sample_indices_fixed
 from physicsnemo.mesh import DomainMesh, Mesh
-
-pq = OptionalImport("pyarrow.parquet")
 
 
 @register()
@@ -60,6 +57,18 @@ class ScaleMesh(MeshTransform):
         )
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Apply uniform scaling to a :class:`DomainMesh`.
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh (interior + boundaries).
+
+        Returns
+        -------
+        DomainMesh
+            Scaled domain mesh.
+        """
         return domain.scale(
             self.factor,
             transform_point_data=self.transform_point_data,
@@ -85,6 +94,18 @@ class TranslateMesh(MeshTransform):
         return mesh.translate(self.vector.to(mesh.points.device))
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Apply translation to a :class:`DomainMesh`.
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh (interior + boundaries).
+
+        Returns
+        -------
+        DomainMesh
+            Translated domain mesh.
+        """
         return domain.translate(self.vector.to(domain.interior.points.device))
 
     def extra_repr(self) -> str:
@@ -123,6 +144,18 @@ class RotateMesh(MeshTransform):
         )
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Apply rotation to a :class:`DomainMesh`.
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh (interior + boundaries).
+
+        Returns
+        -------
+        DomainMesh
+            Rotated domain mesh.
+        """
         return domain.rotate(
             self.angle,
             axis=self.axis,
@@ -162,6 +195,21 @@ class CenterMesh(MeshTransform):
         return mesh.translate(-self._compute_com(mesh))
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Translate a :class:`DomainMesh` so its interior center of mass is at the origin.
+
+        The center of mass is computed from the interior mesh and the same
+        translation is applied to all boundaries to keep them consistent.
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh (interior + boundaries).
+
+        Returns
+        -------
+        DomainMesh
+            Centered domain mesh.
+        """
         com = self._compute_com(domain.interior)
         return domain.translate(-com)
 
@@ -430,23 +478,11 @@ class NormalizeMeshFields(MeshTransform):
     component magnitudes (and therefore vector direction) while bringing
     the overall field scale to O(1).
 
-    Statistics may come from three sources (checked in order):
+    Statistics may come from two sources (checked in order):
 
-    1. **stats_parquet** — path to an aggregate parquet file produced by
-       :class:`~physicsnemo.datapipes.statistics.FieldStatisticsCollector`.
-       Requires *field_types* to distinguish scalars from vectors.
-    2. **stats_file** — path to a ``.pt`` file mapping field names to
+    1. **stats_file** — path to a ``.pt`` file mapping field names to
        dicts with keys ``type``, ``mean``, ``std``.
-    3. **fields** — inline dict supplied directly in YAML.
-
-    Example YAML (from aggregate parquet)::
-
-        - _target_: ${dp:NormalizeMeshFields}
-          section: point_data
-          stats_parquet: /path/to/stats_aggregate.parquet
-          field_types:
-            pressure: scalar
-            wss: vector
+    2. **fields** — inline dict supplied directly in YAML.
 
     Example YAML (inline)::
 
@@ -468,22 +504,13 @@ class NormalizeMeshFields(MeshTransform):
         section: str = "point_data",
         fields: dict[str, dict] | None = None,
         stats_file: str | None = None,
-        stats_parquet: str | None = None,
-        field_types: dict[str, str] | None = None,
         eps: float = 1e-8,
     ) -> None:
         super().__init__()
         self._section = section
         self._eps = eps
 
-        if stats_parquet is not None:
-            if field_types is None:
-                raise ValueError(
-                    "'field_types' is required when using 'stats_parquet' "
-                    "(e.g. {pressure: scalar, wss: vector})"
-                )
-            self._stats = self._load_from_parquet(stats_parquet, field_types)
-        elif stats_file is not None:
+        if stats_file is not None:
             self._stats: dict[str, dict[str, torch.Tensor | str]] = torch.load(
                 stats_file, weights_only=False
             )
@@ -496,78 +523,7 @@ class NormalizeMeshFields(MeshTransform):
                     "std": torch.as_tensor(cfg["std"], dtype=torch.float32),
                 }
         else:
-            raise ValueError(
-                "Provide one of 'stats_parquet', 'stats_file', or 'fields'"
-            )
-
-    # -- parquet loader -------------------------------------------------------
-
-    def _load_from_parquet(
-        self,
-        parquet_path: str,
-        field_types: dict[str, str],
-    ) -> dict[str, dict]:
-        """Build normalization stats from a FieldStatisticsCollector aggregate parquet.
-
-        For scalar fields (component == -1) the mean and std are taken
-        directly.  For vector fields the per-component means are
-        assembled into a vector, and the shared std is
-        ``sqrt(mean(var_0, var_1, ...))``.
-        """
-        table = pq.read_table(parquet_path)
-        field_keys = table.column("field_key").to_pylist()
-        components = table.column("component").to_pylist()
-        means = table.column("mean").to_pylist()
-        variances = table.column("var").to_pylist()
-
-        stats: dict[str, dict] = {}
-        for name, ftype in field_types.items():
-            parquet_key = f"{self._section}.{name}"
-
-            if ftype == "scalar":
-                idx = None
-                for i, (fk, comp) in enumerate(zip(field_keys, components)):
-                    if fk == parquet_key and comp == -1:
-                        idx = i
-                        break
-                if idx is None:
-                    raise KeyError(
-                        f"Scalar field '{parquet_key}' (component=-1) "
-                        f"not found in {parquet_path}"
-                    )
-                stats[name] = {
-                    "type": "scalar",
-                    "mean": torch.tensor(means[idx], dtype=torch.float32),
-                    "std": torch.tensor(variances[idx] ** 0.5, dtype=torch.float32),
-                }
-
-            elif ftype == "vector":
-                comp_means = {}
-                comp_vars = {}
-                for i, (fk, comp) in enumerate(zip(field_keys, components)):
-                    if fk == parquet_key and comp >= 0:
-                        comp_means[comp] = means[i]
-                        comp_vars[comp] = variances[i]
-                if not comp_means:
-                    raise KeyError(
-                        f"Vector field '{parquet_key}' not found in {parquet_path}"
-                    )
-                n_comp = max(comp_means.keys()) + 1
-                mean_vec = torch.tensor(
-                    [comp_means[c] for c in range(n_comp)], dtype=torch.float32
-                )
-                shared_var = sum(comp_vars[c] for c in range(n_comp)) / n_comp
-                stats[name] = {
-                    "type": "vector",
-                    "mean": mean_vec,
-                    "std": torch.tensor(shared_var**0.5, dtype=torch.float32),
-                }
-            else:
-                raise ValueError(f"Unknown field type '{ftype}' for '{name}'")
-
-        return stats
-
-    # -- forward / inverse ---------------------------------------------------
+            raise ValueError("Provide one of 'stats_file' or 'fields'")
 
     def __call__(self, mesh: Mesh) -> Mesh:
         td = _get_mesh_section(mesh, self._section)
@@ -695,6 +651,23 @@ class MeshToTensorDict(MeshTransform):
         return _mesh_to_tensordict(mesh)
 
     def apply_to_domain(self, domain: DomainMesh) -> TensorDict:  # type: ignore[override]
+        """Convert a :class:`DomainMesh` into a nested :class:`TensorDict`.
+
+        The output contains an ``"interior"`` key with the interior mesh
+        converted via :func:`_mesh_to_tensordict`, an optional
+        ``"boundaries"`` sub-dict keyed by boundary name, and an optional
+        ``"global_data"`` entry.
+
+        Parameters
+        ----------
+        domain : DomainMesh
+            Input domain mesh (interior + boundaries).
+
+        Returns
+        -------
+        TensorDict
+            Nested TensorDict representation of the domain.
+        """
         out: dict = {
             "interior": _mesh_to_tensordict(domain.interior),
         }

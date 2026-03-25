@@ -43,7 +43,6 @@ pipeline:
     - _target_: ${dp:RandomTranslateMesh}
       max_offset: [1.0, 1.0, 0.0]
   transforms:
-    - _target_: ${dp:InjectMetadata}
     - _target_: ${dp:CenterMesh}
       use_area_weighting: true
     - _target_: ${dp:NonDimensionalizeByMetadata}

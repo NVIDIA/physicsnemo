@@ -15,18 +15,16 @@
 # limitations under the License.
 
 """
-Metadata injection and physics-based non-dimensionalization transforms.
+Physics-based non-dimensionalization transform.
 
-These are recipe-local transforms registered into the global datapipe
-component registry so they can be referenced via ``${dp:InjectMetadata}``
-and ``${dp:NonDimensionalizeByMetadata}`` in Hydra YAML configs.
+Recipe-local transform registered into the global datapipe component
+registry so it can be referenced via ``${dp:NonDimensionalizeByMetadata}``
+in Hydra YAML configs.
 
-Import this module before Hydra instantiation to register the transforms.
+Import this module before Hydra instantiation to register the transform.
 """
 
 from __future__ import annotations
-
-from typing import Any
 
 import torch
 from tensordict import TensorDict
@@ -47,52 +45,6 @@ def _get_mesh_section(mesh: Mesh, section: str) -> TensorDict:
     raise ValueError(f"Unknown mesh section: {section!r}")
 
 
-@register()
-class InjectMetadata(MeshTransform):
-    r"""Inject dataset-level metadata into a Mesh's ``global_data``.
-
-    Takes a dictionary of metadata fields (typically extracted from the
-    dataset YAML config's ``metadata:`` block by the pipeline builder)
-    and writes them as tensors into ``global_data``.  This replaces the
-    pattern of using ``SetGlobalField`` to duplicate values that are
-    already declared in the config metadata.
-
-    Downstream transforms like ``NonDimensionalizeByMetadata`` read the
-    injected values from ``global_data``.
-
-    Example YAML (metadata values are injected by ``build_surface_dataset``)::
-
-        - _target_: ${dp:InjectMetadata}
-    """
-
-    def __init__(self, metadata: dict[str, Any]) -> None:
-        super().__init__()
-        self._fields: dict[str, torch.Tensor] = {}
-        for k, v in metadata.items():
-            if isinstance(v, torch.Tensor):
-                self._fields[k] = v.float()
-            elif isinstance(v, (list, tuple)):
-                self._fields[k] = torch.tensor(v, dtype=torch.float32)
-            else:
-                self._fields[k] = torch.tensor(v, dtype=torch.float32)
-
-    def __call__(self, mesh: Mesh) -> Mesh:
-        new_gd = mesh.global_data.clone()
-        for k, v in self._fields.items():
-            new_gd[k] = v.to(device=mesh.points.device, dtype=mesh.points.dtype)
-        return Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
-            point_data=mesh.point_data,
-            cell_data=mesh.cell_data,
-            global_data=new_gd,
-        )
-
-    def extra_repr(self) -> str:
-        info = {k: list(v.shape) for k, v in self._fields.items()}
-        return f"metadata={info}"
-
-
 def _compute_q_inf(global_data: TensorDict) -> torch.Tensor:
     """Compute dynamic pressure q_inf = 0.5 * rho_inf * |U_inf|^2."""
     U_inf = global_data["U_inf"].float()
@@ -109,7 +61,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
     r"""Non-dimensionalize fields and geometry using freestream conditions from ``global_data``.
 
     Expects ``U_inf``, ``rho_inf``, and ``p_inf`` to be present in
-    ``global_data`` (typically injected by ``InjectMetadata``).  Computes
+    ``global_data`` (injected by the dataset builder).  Computes
     the dynamic pressure ``q_inf = 0.5 * rho_inf * |U_inf|^2`` and
     applies standard non-dimensionalization formulas:
 
