@@ -213,7 +213,7 @@ def main(cfg: DictConfig) -> None:
         )
 
     else:
-        raise ValueError(f"Unknown sampling method {cfg.sampling.type}")
+        raise ValueError(f"Unknown sampling method {cfg.sampler.type}")
 
     # Parse the distribution type
     distribution = getattr(cfg.generation, "distribution", None)

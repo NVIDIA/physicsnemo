@@ -102,6 +102,9 @@ def checkpoint_list(path, suffix=".mdlus"):
 
 # Define safe CUDA profiler tools that fallback to no-ops when CUDA is not available
 def cuda_profiler():
+    """
+    Safe CUDA profiler tool that falls back to no-op when CUDA is not available.
+    """
     if torch.cuda.is_available():
         return torch.cuda.profiler.profile()
     else:
@@ -109,25 +112,39 @@ def cuda_profiler():
 
 
 def cuda_profiler_start():
+    """
+    Start CUDA profiler.
+    """
     if torch.cuda.is_available():
         torch.cuda.profiler.start()
 
 
 def cuda_profiler_stop():
+    """
+    Stop CUDA profiler.
+    """
     if torch.cuda.is_available():
         torch.cuda.profiler.stop()
 
 
 def profiler_emit_nvtx():
+    """
+    Emit NVTX markers for CUDA profiler.
+    """
     if torch.cuda.is_available():
         return torch.autograd.profiler.emit_nvtx()
     else:
         return nullcontext()
 
 
-# Train the CorrDiff model using the configurations in "conf/config_training.yaml"
-@hydra.main(version_base="1.2", config_path="conf", config_name="config_distill_mini")
+# Distill the CorrDiff Diffusion model
+@hydra.main(
+    version_base="1.2", config_path="conf", config_name="config_distill_mini_diffusion"
+)
 def main(cfg: DictConfig) -> None:
+    """
+    Entry point for CorrDiff distillation training.
+    """
     # Initialize distributed environment for training
     DistributedManager.initialize()
     dist = DistributedManager()
@@ -399,6 +416,10 @@ def main(cfg: DictConfig) -> None:
             diffusion_model.to(memory_format=torch.channels_last)
         logger0.success("Loaded the pre-trained diffusion model")
     else:
+        raise ValueError(
+            "A diffusion checkpoint must be provided for distillation training. "
+            "Set cfg.distill.io.diffusion_checkpoint_path."
+        )
         diffusion_model = None
 
     if cfg.wandb.watch_model and dist.rank == 0:
@@ -431,7 +452,8 @@ def main(cfg: DictConfig) -> None:
     # Compile the teacher diffusion model and regression net if applicable
     if use_torch_compile:
         logger0.info("Compiling the diffusion model and regression net...")
-        diffusion_model = torch.compile(diffusion_model)
+        if diffusion_model:
+            diffusion_model = torch.compile(diffusion_model)
         if regression_net:
             regression_net = torch.compile(regression_net)
 

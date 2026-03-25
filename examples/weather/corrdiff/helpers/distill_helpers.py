@@ -68,6 +68,7 @@ PRECISION_MAP = {
 
 
 def change_block(module, attr, value):
+    """Set an attribute on UNetBlock modules, used to override block-level settings like dropout."""
     if isinstance(module, UNetBlock):
         assert hasattr(module, attr), f"Attribute {attr} not found in module"
         setattr(module, attr, value)
@@ -94,6 +95,7 @@ class DistillLoss:
         augment_labels=None,
         iteration=None,
     ):
+        """Compute the distillation loss by delegating to FastGen's single_train_step."""
         assert not any(p.requires_grad for p in [y, y_lr, y_lr_res])
         data = {
             "real": y,
@@ -113,6 +115,7 @@ class DistillLoss:
         return loss_map["total_loss"], loss_map, output
 
     def patching(self, y, y_lr, batch_size, patching=None):
+        """Extract patches from various input tensors"""
         global_index = None
         if patching is not None:
             # Patched residual
@@ -127,6 +130,7 @@ class DistillLoss:
         return y, y_lr, global_index
 
     def augment(self, img_clean, img_lr, augment_pipe=None):
+        """Apply data augmentation jointly to the clean and low-res images."""
         img_tot = torch.cat((img_clean, img_lr), dim=1)
         y_tot, augment_labels = (
             augment_pipe(img_tot) if augment_pipe is not None else (img_tot, None)
@@ -136,6 +140,7 @@ class DistillLoss:
         return y, y_lr, augment_labels
 
     def regression(self, y_lr_res, y, lead_time_label=None, augment_labels=None):
+        """Run the regression network to produce the mean prediction."""
         if lead_time_label is not None:
             return self.regression_net(
                 torch.zeros_like(y, device=y.device),
@@ -160,6 +165,7 @@ class DistillLoss:
         iteration=None,
         use_patch_grad_acc=False,
     ):
+        """Compute the full distillation loss"""
         # Safety check: enforce patching object
         if patching and not isinstance(patching, RandomPatching2D):
             raise ValueError("patching must be a 'RandomPatching2D' object.")
@@ -458,6 +464,7 @@ class FastGenNet(FastGenNetwork):
         return_logvar=False,
         fwd_pred_type: Optional[str] = None,
     ):
+        """Forward pass with superpatch unfold/fold and optional window smoothing."""
         y_lr, y_lr_res, lead_time_label, global_index, augment_labels = condition
         # squeeze all dims after the first one and expand to batchsize
         t = t.squeeze(list(range(1, t.ndim))).expand(y_t.shape[0])
@@ -539,6 +546,7 @@ class FastGenNet(FastGenNetwork):
 
 
 def build(config: DictConfig, use_ema: bool = False):
+    """Build a FastGenNet and optional EMA copy from a distillation config."""
     # Patching
     patching = None
     if "patch_shape" in config:
@@ -588,6 +596,7 @@ class CMModel(CMBaseModel):
     """
 
     def build_model(self):
+        """Build the student, EMA, and optional teacher networks for consistency model."""
         self.net, self.ema = build(self.config, use_ema=self.use_ema)
 
         # instantiate the teacher and consistency network
@@ -597,7 +606,7 @@ class CMModel(CMBaseModel):
 
 
 class SCMModel(SCMBaseModel):
-    """-time Consistency Model with TrigFlow for CorrDiff distillation.
+    """Continuous-time Consistency Model with TrigFlow for CorrDiff distillation.
 
     A wrapper around the FastGen sCM model in FastGen framework.
     See `fastgen.methods.consistency_model.sCM.SCMModel` for more details.
@@ -607,6 +616,7 @@ class SCMModel(SCMBaseModel):
     """
 
     def build_model(self):
+        """Build the student, EMA, and optional teacher networks for sCM model."""
         self.net, self.ema = build(self.config, use_ema=self.use_ema)
 
         # instantiate the teacher and consistency network
@@ -710,6 +720,7 @@ class DMD2Model(DMD2BaseModel):
     """
 
     def build_model(self):
+        """Build the student, teacher, fake-score, and optional discriminator networks for DMD2."""
         self.net, self.ema = build(self.config, use_ema=self.use_ema)
 
         # instantiate the teacher and consistency network
@@ -856,8 +867,7 @@ def few_step_sampler(
 
         # Function to select the correct positional embedding for each patch
         def patch_embedding_selector(emb):
-            # emb: (N_pe, image_shape_y, image_shape_x)
-            # return: (batch_size * patch_num, N_pe, patch_shape_y, patch_shape_x)
+            """Select and patch positional embeddings."""
             return patching.apply(emb[None].expand(batch_size, -1, -1, -1))
     else:
         patch_embedding_selector = None
