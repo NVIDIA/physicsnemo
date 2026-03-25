@@ -19,13 +19,10 @@ loss code never need to know which dataset a sample came from.
 ```bash
 cd examples/cfd/external_aerodynamics/unified_external_aero_recipe
 
-# 1. Inspect raw data (sanity-check fields, coordinate ranges, vertical axis)
-python -m src.inspect_data
-
-# 2. Train (single GPU)
+# 1. Train (single GPU)
 python src/train.py
 
-# 2b. Train (multi-GPU)
+# 1b. Train (multi-GPU)
 torchrun --nproc_per_node=N src/train.py
 ```
 
@@ -249,17 +246,6 @@ All scripts are run from the recipe root directory:
 cd examples/cfd/external_aerodynamics/unified_external_aero_recipe
 ```
 
-### Inspect data
-
-```bash
-python -m src.inspect_data
-python -m src.inspect_data --configs conf/dataset/drivaer_ml_surface.yaml
-```
-
-Prints coordinate ranges (min/max/mean per axis), field names, shapes, and
-value statistics for one sample from each dataset. Use the output to confirm
-which axis is vertical and to understand the raw data layout.
-
 ### Benchmark datapipe throughput
 
 ```bash
@@ -391,7 +377,6 @@ No Python code changes are needed.
 | `src/metrics.py` | `MetricCalculator` — config-driven metrics (relative L1, relative L2, MAE) with optional distributed all-reduce. |
 | `src/utils.py` | `build_muon_optimizer` (Muon+AdamW), `parse_target_config`, `FieldSpec` dataclass. |
 | `src/train.py` | Training loop with DDP, mixed precision, checkpointing, TensorBoard, and profiling. |
-| `src/inspect_data.py` | Loads one sample per dataset and prints geometry/field summaries. |
 | `src/benchmark.py` | Measures datapipe throughput and prints output shapes with value statistics. |
 
 ## Design decisions
