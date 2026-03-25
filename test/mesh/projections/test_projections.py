@@ -1329,7 +1329,6 @@ class TestProject:
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
         global_data = TensorDict(
             {"freestream_dir": torch.tensor([0.6, 0.8, 0.0])},
-            batch_size=[],
         )
         mesh = Mesh(points=points, cells=cells, global_data=global_data)
 

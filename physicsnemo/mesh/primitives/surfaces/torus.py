@@ -30,7 +30,7 @@ def load(
     n_major: int = 48,
     n_minor: int = 24,
     device: torch.device | str = "cpu",
-) -> Mesh:
+) -> Mesh[2, 3]:
     """Create a torus surface in 3D space.
 
     Parameters
@@ -48,7 +48,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[2, 3]
         Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     if n_major < 3:

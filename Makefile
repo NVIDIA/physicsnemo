@@ -29,8 +29,8 @@ lint:
 	pre-commit run markdownlint -a && \
 	pre-commit run check-added-large-files -a
 
-license: 
-	python test/ci_tests/header_check.py --all-files
+license:
+	pre-commit run license -a
 
 doctest:
 	coverage run \

@@ -130,7 +130,6 @@ def make_kernel_and_input_data(
         ),
         "global_data": TensorDict(
             global_data_dict,
-            batch_size=[],
             device=device,
         ),
         "chunk_size": None,

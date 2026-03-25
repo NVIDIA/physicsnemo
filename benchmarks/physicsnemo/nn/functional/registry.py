@@ -16,12 +16,12 @@
 
 """Registry of FunctionSpec classes to benchmark with ASV."""
 
-from physicsnemo.nn.functional.drop_path import DropPath
-from physicsnemo.nn.functional.fft import IRFFT, IRFFT2, RFFT, RFFT2
+from physicsnemo.nn.functional.fourier_spectral.fft import IRFFT, IRFFT2, RFFT, RFFT2
+from physicsnemo.nn.functional.geometry.sdf import SignedDistanceField
 from physicsnemo.nn.functional.interpolation.interpolation import Interpolation
-from physicsnemo.nn.functional.knn.knn import KNN
-from physicsnemo.nn.functional.radius_search.radius_search import RadiusSearch
-from physicsnemo.nn.functional.sdf import SignedDistanceField
+from physicsnemo.nn.functional.neighbors.knn.knn import KNN
+from physicsnemo.nn.functional.neighbors.radius_search.radius_search import RadiusSearch
+from physicsnemo.nn.functional.regularization_parameterization.drop_path import DropPath
 
 # FunctionSpec classes listed here must implement ``make_inputs`` for ASV.
 FUNCTIONAL_SPECS = (

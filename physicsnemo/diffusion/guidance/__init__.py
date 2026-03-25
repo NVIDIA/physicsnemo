@@ -18,14 +18,14 @@
 
 from .dps_guidance import (
     DataConsistencyDPSGuidance,
-    DPSDenoiser,
     DPSGuidance,
+    DPSScorePredictor,
     ModelConsistencyDPSGuidance,
 )
 
 __all__ = [
     "DPSGuidance",
-    "DPSDenoiser",
+    "DPSScorePredictor",
     "ModelConsistencyDPSGuidance",
     "DataConsistencyDPSGuidance",
 ]

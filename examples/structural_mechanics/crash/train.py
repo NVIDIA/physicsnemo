@@ -311,6 +311,8 @@ def main(cfg: DictConfig) -> None:
     logger0.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
     logger0.info(f"Output directory: {cfg.training.tensorboard_log_dir}")
     logger0.info(f"Checkpoint directory: {cfg.training.ckpt_path}")
+    stats_dir = getattr(cfg.datapipe, "stats_dir")
+    logger0.info(f"Stats directory: {stats_dir}")
 
     trainer = Trainer(cfg, logger0)
     logger0.info("Training started...")

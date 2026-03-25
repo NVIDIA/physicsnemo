@@ -19,8 +19,8 @@ import torch
 
 from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.nn.functional import knn
-from physicsnemo.nn.functional.knn._cuml_impl import knn_impl as knn_cuml
-from physicsnemo.nn.functional.knn._scipy_impl import knn_impl as knn_scipy
+from physicsnemo.nn.functional.neighbors.knn._cuml_impl import knn_impl as knn_cuml
+from physicsnemo.nn.functional.neighbors.knn._scipy_impl import knn_impl as knn_scipy
 
 
 @pytest.mark.parametrize("k", [1, 5])

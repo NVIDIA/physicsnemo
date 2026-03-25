@@ -24,10 +24,12 @@ omitted, one is built automatically.
 from typing import TYPE_CHECKING, Literal
 
 import torch
+from jaxtyping import Float, Int
 from tensordict import TensorDict
 
 from physicsnemo.mesh.neighbors._adjacency import Adjacency, build_adjacency_from_pairs
 from physicsnemo.mesh.spatial import BVH
+from physicsnemo.nn.functional.neighbors import knn
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -51,9 +53,12 @@ def _ensure_bvh(mesh: "Mesh", bvh: BVH | None) -> BVH:
 
 
 def _solve_barycentric_system(
-    relative_vectors: torch.Tensor,  # shape: (..., n_manifold_dims, n_spatial_dims)
-    query_relative: torch.Tensor,  # shape: (..., n_spatial_dims)
-) -> tuple[torch.Tensor, torch.Tensor]:
+    relative_vectors: Float[torch.Tensor, "*batch n_manifold_dims n_spatial_dims"],
+    query_relative: Float[torch.Tensor, "*batch n_spatial_dims"],
+) -> tuple[
+    Float[torch.Tensor, "*batch n_vertices_per_cell"],
+    Float[torch.Tensor, " *batch"],
+]:
     """Core barycentric coordinate solver (shared by both variants).
 
     Solves the linear system to find barycentric coordinates w_1, ..., w_n such that:
@@ -91,11 +96,11 @@ def _solve_barycentric_system(
     n_manifold_dims = relative_vectors.shape[-2]
     n_spatial_dims = relative_vectors.shape[-1]
 
+    A = relative_vectors.transpose(-2, -1)
+    b = query_relative.unsqueeze(-1)
+
     if n_spatial_dims == n_manifold_dims:
         ### Square system: use torch.linalg.solve
-        A = relative_vectors.transpose(-2, -1)
-        b = query_relative.unsqueeze(-1)
-
         try:
             weights_1_to_n = torch.linalg.solve(A, b).squeeze(-1)
         except torch.linalg.LinAlgError:
@@ -109,8 +114,6 @@ def _solve_barycentric_system(
 
     else:
         ### Over-determined or under-determined system: use least squares
-        A = relative_vectors.transpose(-2, -1)
-        b = query_relative.unsqueeze(-1)
         weights_1_to_n = torch.linalg.lstsq(A, b).solution.squeeze(-1)
 
         reconstructed = torch.einsum(
@@ -127,9 +130,12 @@ def _solve_barycentric_system(
 
 
 def compute_barycentric_coordinates(
-    query_points: torch.Tensor,
-    cell_vertices: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    query_points: Float[torch.Tensor, "n_queries n_spatial_dims"],
+    cell_vertices: Float[torch.Tensor, "n_cells n_vertices_per_cell n_spatial_dims"],
+) -> tuple[
+    Float[torch.Tensor, "n_queries n_cells n_vertices_per_cell"],
+    Float[torch.Tensor, "n_queries n_cells"],
+]:
     """Compute barycentric coordinates of query points with respect to simplices.
 
     Computes the full O(n_queries x n_cells) cartesian product. For BVH-pruned
@@ -158,9 +164,12 @@ def compute_barycentric_coordinates(
 
 
 def compute_barycentric_coordinates_pairwise(
-    query_points: torch.Tensor,
-    cell_vertices: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    query_points: Float[torch.Tensor, "n_pairs n_spatial_dims"],
+    cell_vertices: Float[torch.Tensor, "n_pairs n_vertices_per_cell n_spatial_dims"],
+) -> tuple[
+    Float[torch.Tensor, "n_pairs n_vertices_per_cell"],
+    Float[torch.Tensor, " n_pairs"],
+]:
     """Compute barycentric coordinates for paired queries and cells.
 
     Unlike :func:`compute_barycentric_coordinates` which computes all
@@ -205,10 +214,14 @@ def compute_barycentric_coordinates_pairwise(
 
 def _find_containing_pairs(
     mesh: "Mesh",
-    query_points: torch.Tensor,
+    query_points: Float[torch.Tensor, "n_queries n_spatial_dims"],
     bvh: BVH,
     tolerance: float,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+) -> tuple[
+    Int[torch.Tensor, " n_containing"],
+    Int[torch.Tensor, " n_containing"],
+    Float[torch.Tensor, "n_containing n_vertices_per_cell"] | None,
+]:
     """Find (query_idx, cell_idx, bary_coords) via BVH-accelerated search.
 
     Parameters
@@ -228,7 +241,7 @@ def _find_containing_pairs(
         (query_indices, cell_indices, bary_coords):
         - query_indices: shape (n_containing,)
         - cell_indices: shape (n_containing,)
-        - bary_coords: shape (n_containing, n_verts) or None if empty
+        - bary_coords: shape (n_containing, n_vertices_per_cell) or None if empty
     """
     device = mesh.points.device
 
@@ -264,10 +277,13 @@ def _find_containing_pairs(
 
 def find_containing_cells(
     mesh: "Mesh",
-    query_points: torch.Tensor,
+    query_points: Float[torch.Tensor, "n_queries n_spatial_dims"],
     tolerance: float = 1e-6,
     bvh: BVH | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[
+    Int[torch.Tensor, " n_queries"],
+    Float[torch.Tensor, "n_queries n_vertices_per_cell"],
+]:
     """Find which cell contains each query point (first match).
 
     Parameters
@@ -333,7 +349,7 @@ def find_containing_cells(
 
 def find_all_containing_cells(
     mesh: "Mesh",
-    query_points: torch.Tensor,
+    query_points: Float[torch.Tensor, "n_queries n_spatial_dims"],
     tolerance: float = 1e-6,
     bvh: BVH | None = None,
 ) -> Adjacency:
@@ -369,248 +385,42 @@ def find_all_containing_cells(
 
 
 # ---------------------------------------------------------------------------
-# Projection / nearest-cell helpers
+# Nearest-cell helpers
 # ---------------------------------------------------------------------------
-
-
-def project_point_onto_cell(
-    query_point: torch.Tensor,
-    cell_vertices: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Project a query point onto a simplex (cell).
-
-    Uses iterative barycentric clipping to find the closest point on the simplex.
-
-    Parameters
-    ----------
-    query_point : torch.Tensor
-        Point to project, shape (n_spatial_dims,).
-    cell_vertices : torch.Tensor
-        Vertices of the simplex, shape (n_vertices, n_spatial_dims).
-
-    Returns
-    -------
-    tuple[torch.Tensor, torch.Tensor]
-        (projected_point, squared_distance):
-        - projected_point: shape (n_spatial_dims,)
-        - squared_distance: scalar tensor
-    """
-    n_vertices = cell_vertices.shape[0]
-
-    if n_vertices == 1:
-        projected = cell_vertices[0]
-        dist_sq = ((query_point - projected) ** 2).sum()
-        return projected, dist_sq
-
-    bary, _ = compute_barycentric_coordinates(
-        query_point.unsqueeze(0), cell_vertices.unsqueeze(0)
-    )
-    bary = bary.squeeze(0).squeeze(0)
-
-    if (bary >= 0).all():
-        projected = (bary.unsqueeze(-1) * cell_vertices).sum(dim=0)
-        dist_sq = ((query_point - projected) ** 2).sum()
-        return projected, dist_sq
-
-    # Iterative clipping to the active face
-    for _ in range(n_vertices):
-        active_mask = bary > 0
-
-        if not active_mask.any():
-            dists = ((cell_vertices - query_point.unsqueeze(0)) ** 2).sum(dim=-1)
-            nearest_idx = dists.argmin()
-            return cell_vertices[nearest_idx], dists[nearest_idx]
-
-        active_vertices = cell_vertices[active_mask]
-
-        if active_vertices.shape[0] == 1:
-            projected = active_vertices[0]
-            dist_sq = ((query_point - projected) ** 2).sum()
-            return projected, dist_sq
-
-        bary_active, _ = compute_barycentric_coordinates(
-            query_point.unsqueeze(0), active_vertices.unsqueeze(0)
-        )
-        bary_active = bary_active.squeeze(0).squeeze(0)
-
-        if (bary_active >= 0).all():
-            projected = (bary_active.unsqueeze(-1) * active_vertices).sum(dim=0)
-            dist_sq = ((query_point - projected) ** 2).sum()
-            return projected, dist_sq
-
-        bary = torch.zeros_like(bary)
-        bary[active_mask] = bary_active
-
-    # Fallback: nearest vertex
-    dists = ((cell_vertices - query_point.unsqueeze(0)) ** 2).sum(dim=-1)
-    nearest_idx = dists.argmin()
-    return cell_vertices[nearest_idx], dists[nearest_idx]
 
 
 def find_nearest_cells(
     mesh: "Mesh",
-    query_points: torch.Tensor,
-    chunk_size: int = 10000,
-    bvh: BVH | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    query_points: Float[torch.Tensor, "n_queries n_spatial_dims"],
+) -> tuple[
+    Int[torch.Tensor, " n_queries"],
+    Float[torch.Tensor, "n_queries n_spatial_dims"],
+]:
     """Find the nearest cell for each query point (by centroid distance).
 
-    When a *bvh* is provided the function uses an expanding-radius BVH search
-    (following the pattern in
-    :func:`~physicsnemo.mesh.utilities._duplicate_detection.find_duplicate_pairs`)
-    to avoid the O(n_queries * n_cells) brute-force computation. Queries that
-    fall outside all BVH candidate cells fall back to the brute-force path.
+    Uses :func:`~physicsnemo.nn.functional.neighbors.knn` which auto-dispatches
+    to the optimal backend (cuML on GPU, scipy KDTree on CPU).
 
     Parameters
     ----------
     mesh : Mesh
         The mesh to query.
     query_points : torch.Tensor
-        Query point locations, shape (n_queries, n_spatial_dims).
-    chunk_size : int
-        Number of queries to process at once (brute-force path only).
-    bvh : BVH or None, optional
-        Pre-built Bounding Volume Hierarchy. When provided, enables
-        O(n_queries * log(n_cells)) search for most queries.
+        Query point locations, shape ``(n_queries, n_spatial_dims)``.
 
     Returns
     -------
     tuple[torch.Tensor, torch.Tensor]
-        (cell_indices, projected_points):
-        - cell_indices: shape (n_queries,)
-        - projected_points: centroids of nearest cells, shape (n_queries, n_spatial_dims)
+        ``(cell_indices, projected_points)``:
+        - cell_indices: shape ``(n_queries,)``
+        - projected_points: centroids of nearest cells, shape
+          ``(n_queries, n_spatial_dims)``
     """
-    n_queries = query_points.shape[0]
     cell_centroids = mesh.cell_centroids  # (n_cells, n_spatial_dims)
-
-    if bvh is not None and mesh.n_cells > 0 and n_queries > 0:
-        cell_indices, resolved = _find_nearest_cells_bvh(
-            query_points,
-            cell_centroids,
-            bvh,
-            mesh.n_cells,
-            mesh.n_spatial_dims,
-        )
-
-        ### Fall back to brute force for any queries without BVH candidates
-        if not resolved.all():
-            remaining = torch.where(~resolved)[0]
-            remaining_indices = _find_nearest_cells_brute(
-                query_points[remaining],
-                cell_centroids,
-                chunk_size,
-            )
-            cell_indices[remaining] = remaining_indices
-
-        projected_points = cell_centroids[cell_indices]
-        return cell_indices, projected_points
-
-    ### Brute-force path (no BVH)
-    cell_indices = _find_nearest_cells_brute(
-        query_points,
-        cell_centroids,
-        chunk_size,
-    )
+    cell_indices, _ = knn(cell_centroids, query_points, k=1)
+    cell_indices = cell_indices.squeeze(1)
     projected_points = cell_centroids[cell_indices]
     return cell_indices, projected_points
-
-
-def _find_nearest_cells_brute(
-    query_points: torch.Tensor,
-    cell_centroids: torch.Tensor,
-    chunk_size: int,
-) -> torch.Tensor:
-    """Brute-force nearest-centroid search with chunking for memory safety."""
-    n_queries = query_points.shape[0]
-    device = query_points.device
-
-    if n_queries * len(cell_centroids) <= chunk_size * chunk_size:
-        diffs = query_points.unsqueeze(1) - cell_centroids.unsqueeze(0)
-        distances_sq = (diffs**2).sum(dim=-1)
-        return distances_sq.argmin(dim=1)
-
-    cell_indices = torch.empty(n_queries, dtype=torch.long, device=device)
-    for start in range(0, n_queries, chunk_size):
-        end = min(start + chunk_size, n_queries)
-        diffs = query_points[start:end].unsqueeze(1) - cell_centroids.unsqueeze(0)
-        distances_sq = (diffs**2).sum(dim=-1)
-        cell_indices[start:end] = distances_sq.argmin(dim=1)
-    return cell_indices
-
-
-def _find_nearest_cells_bvh(
-    query_points: torch.Tensor,
-    cell_centroids: torch.Tensor,
-    bvh: BVH,
-    n_cells: int,
-    n_spatial_dims: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """BVH-accelerated nearest-centroid search with expanding radius.
-
-    Returns
-    -------
-    cell_indices : torch.Tensor
-        Shape (n_queries,). Best cell index found so far (-1 if unresolved).
-    resolved : torch.Tensor
-        Shape (n_queries,) bool. True for queries with at least one candidate.
-    """
-    n_queries = query_points.shape[0]
-    device = query_points.device
-
-    cell_indices = torch.full((n_queries,), -1, dtype=torch.long, device=device)
-    resolved = torch.zeros(n_queries, dtype=torch.bool, device=device)
-
-    ### Estimate initial search tolerance from BVH root extent
-    root_extent = bvh.node_aabb_max[0] - bvh.node_aabb_min[0]
-    # Typical cell diameter ~ total extent / n_cells^(1/d)
-    tolerance = root_extent.max().item() / max(n_cells ** (1.0 / n_spatial_dims), 1.0)
-
-    ### Expanding-radius search: double tolerance each round until all resolved
-    max_rounds = 20  # tolerance doubles each round → covers 2^20 ~ 1M× initial
-    for _ in range(max_rounds):
-        remaining_mask = ~resolved
-        remaining_idx = torch.where(remaining_mask)[0]
-        if len(remaining_idx) == 0:
-            break
-
-        candidates = bvh.find_candidate_cells(
-            query_points[remaining_idx],
-            aabb_tolerance=tolerance,
-            max_candidates_per_point=64,
-        )
-
-        if candidates.n_total_neighbors > 0:
-            src, tgt = candidates.expand_to_pairs()
-            # src indexes into the remaining subset; map to global query indices
-            global_query = remaining_idx[src]
-
-            ### Compute squared centroid distances for all (query, candidate) pairs
-            dists_sq = ((query_points[global_query] - cell_centroids[tgt]) ** 2).sum(
-                dim=-1
-            )
-
-            ### Per-query minimum via scatter
-            best_dist = torch.full(
-                (n_queries,), float("inf"), dtype=dists_sq.dtype, device=device
-            )
-            best_dist.scatter_reduce_(0, global_query, dists_sq, reduce="amin")
-
-            # Identify which pair achieved the minimum for each query
-            is_best = dists_sq == best_dist[global_query]
-            # Among ties, take the first occurrence per query
-            first_best = torch.zeros(n_queries, dtype=torch.bool, device=device)
-            first_best.scatter_(0, global_query[is_best], True)
-            best_mask = is_best & first_best[global_query]
-
-            cell_indices[global_query[best_mask]] = tgt[best_mask]
-
-            # Mark queries that received at least one candidate as resolved
-            has_candidate = candidates.counts > 0
-            resolved[remaining_idx[has_candidate]] = True
-
-        tolerance *= 2.0
-
-    return cell_indices, resolved
 
 
 # ---------------------------------------------------------------------------
@@ -621,11 +431,11 @@ def _find_nearest_cells_bvh(
 def _accumulate_sampled_data(
     mesh: "Mesh",
     n_queries: int,
-    query_indices: torch.Tensor,
-    cell_indices: torch.Tensor,
-    bary_coords: torch.Tensor | None,
-    data_source: str,
-    multiple_cells_strategy: str,
+    query_indices: Int[torch.Tensor, " n_containing"],
+    cell_indices: Int[torch.Tensor, " n_containing"],
+    bary_coords: Float[torch.Tensor, "n_containing n_vertices_per_cell"] | None,
+    data_source: Literal["cells", "points"],
+    multiple_cells_strategy: Literal["mean", "nan"],
 ) -> TensorDict:
     """Accumulate sampled data from containing-pair arrays into a TensorDict.
 
@@ -657,7 +467,7 @@ def _accumulate_sampled_data(
         ### Compute per-pair values
         if data_source == "cells":
             pair_values = values[cell_indices]
-        else:
+        elif data_source == "points":
             if (
                 bary_coords is None
             ):  # pragma: no cover — guaranteed when len(query_indices) > 0
@@ -667,45 +477,37 @@ def _accumulate_sampled_data(
             point_idx = cells[cell_indices]
             point_vals = values[point_idx]
 
-            if values.ndim == 1:
-                pair_values = (bary_coords * point_vals).sum(dim=1)
-            else:
-                bary_expanded = bary_coords.view(
-                    bary_coords.shape[0],
-                    bary_coords.shape[1],
-                    *([1] * (values.ndim - 1)),
-                )
-                pair_values = (bary_expanded * point_vals).sum(dim=1)
+            bary_expanded = bary_coords.view(
+                bary_coords.shape[0],
+                bary_coords.shape[1],
+                *([1] * (values.ndim - 1)),
+            )
+            pair_values = (bary_expanded * point_vals).sum(dim=1)
+        else:
+            raise ValueError(f"Invalid {data_source=!r}. Must be 'cells' or 'points'.")
 
         ### Scatter-accumulate into output
         if multiple_cells_strategy == "mean":
-            if values.ndim == 1:
-                output_sum = torch.zeros(n_queries, dtype=values.dtype, device=device)
-                output_sum.scatter_add_(0, query_indices, pair_values)
-            else:
-                output_sum = torch.zeros(
-                    output_shape, dtype=values.dtype, device=device
-                )
-                idx_expanded = query_indices.view(
-                    -1, *([1] * (values.ndim - 1))
-                ).expand_as(pair_values)
-                output_sum.scatter_add_(0, idx_expanded, pair_values)
+            output_sum = torch.zeros(output_shape, dtype=values.dtype, device=device)
+            idx_expanded = query_indices.view(-1, *([1] * (values.ndim - 1))).expand_as(
+                pair_values
+            )
+            output_sum.scatter_add_(0, idx_expanded, pair_values)
 
             valid = query_containment_count > 0
-            if values.ndim == 1:
-                output[valid] = output_sum[valid] / query_containment_count[valid].to(
-                    values.dtype
-                )
-            else:
-                output[valid] = output_sum[valid] / query_containment_count[valid].to(
-                    values.dtype
-                ).view(-1, *([1] * (values.ndim - 1)))
+            output[valid] = output_sum[valid] / query_containment_count[valid].to(
+                values.dtype
+            ).view(-1, *([1] * (values.ndim - 1)))
 
-        else:  # "nan" strategy
+        elif multiple_cells_strategy == "nan":
             single_cell_mask = query_containment_count == 1
             if single_cell_mask.any():
                 has_single = single_cell_mask[query_indices]
                 output[query_indices[has_single]] = pair_values[has_single]
+        else:
+            raise ValueError(
+                f"Invalid {multiple_cells_strategy=!r}. Must be 'mean' or 'nan'."
+            )
 
         return output
 
@@ -729,7 +531,7 @@ def _accumulate_sampled_data(
 
 def sample_data_at_points(
     mesh: "Mesh",
-    query_points: torch.Tensor,
+    query_points: Float[torch.Tensor, "n_queries n_spatial_dims"],
     data_source: Literal["cells", "points"] = "cells",
     multiple_cells_strategy: Literal["mean", "nan"] = "mean",
     project_onto_nearest_cell: bool = False,
@@ -812,7 +614,7 @@ def sample_data_at_points(
 
     ### Handle projection onto nearest cell
     if project_onto_nearest_cell:
-        _, projected_points = find_nearest_cells(mesh, query_points, bvh=bvh)
+        _, projected_points = find_nearest_cells(mesh, query_points)
         query_points = projected_points
     query_indices, cell_indices, bary_coords = _find_containing_pairs(
         mesh, query_points, bvh, tolerance

@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -35,16 +35,22 @@ class _MockDataset(StormCastDataset):
         self,
         num_state_channels: int = 3,
         num_background_channels: int = 4,
+        num_invariant_channels: int = 2,
         num_scalar_cond_channels: int = 2,
         image_size: tuple[int, int] = (256, 128),
         num_samples: int = 100,
         train: bool = True,
+        model_type: Literal[
+            "hybrid", "nowcasting", "downscaling", "unconditional"
+        ] = "hybrid",
     ):
         self._num_state_channels = num_state_channels
         self._num_background_channels = num_background_channels
+        self._num_invariant_channels = num_invariant_channels
         self._num_scalar_cond_channels = num_scalar_cond_channels
         self._image_size = image_size
         self._num_samples = num_samples
+        self._model_type = model_type
 
     def __len__(self) -> int:
         return self._num_samples
@@ -68,10 +74,20 @@ class _MockDataset(StormCastDataset):
             size=(self._num_state_channels, height, width)
         ).astype(np.float32)
 
-        item = {
-            "background": background,
-            "state": [state_input, state_target],
-        }
+        if self._model_type == "hybrid":
+            item = {
+                "background": background,
+                "state": [state_input, state_target],
+            }
+        elif self._model_type == "nowcasting":
+            item = {"state": [state_input, state_target]}
+        elif self._model_type == "downscaling":
+            item = {
+                "background": background,
+                "state": state_target,
+            }
+        elif self._model_type == "unconditional":
+            item = {"state": state_target}
 
         # Generate scalar conditions
         if self._num_scalar_cond_channels:
@@ -96,6 +112,20 @@ class _MockDataset(StormCastDataset):
     def image_shape(self) -> tuple[int, int]:
         """Return the (height, width) of the data."""
         return self._image_size
+
+    def get_invariants(self) -> np.ndarray | None:
+        """Return invariants used for training."""
+        if self._num_invariant_channels > 0:
+            rng = np.random.default_rng(seed=42)
+            return rng.normal(
+                size=(
+                    self._num_invariant_channels,
+                    self._image_size[0],
+                    self._image_size[1],
+                )
+            ).astype(np.float32)
+        else:
+            return None
 
 
 class MockDataset(_MockDataset):

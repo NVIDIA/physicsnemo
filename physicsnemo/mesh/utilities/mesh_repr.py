@@ -16,11 +16,16 @@
 
 """Utility functions for string-formatting Mesh representations."""
 
+from typing import TYPE_CHECKING
+
 import torch
 from tensordict import TensorDict
 
+if TYPE_CHECKING:
+    from physicsnemo.mesh.mesh import Mesh
 
-def format_mesh_repr(mesh) -> str:
+
+def format_mesh_repr(mesh: "Mesh") -> str:
     """Format a complete Mesh representation.
 
     Parameters
@@ -33,41 +38,41 @@ def format_mesh_repr(mesh) -> str:
     str
         Formatted string representation of the mesh.
     """
-    ### Build the first line with class name and key properties
-    # These properties are guaranteed by __post_init__
+    ### Build the first line: Mesh[manifold, spatial](n_points=..., n_cells=..., ...)
     class_name = mesh.__class__.__name__
+    dim_sig = f"[n_manifold_dims={mesh.n_manifold_dims}, n_spatial_dims={mesh.n_spatial_dims}]"
+
     parts = [
-        f"manifold_dim={mesh.n_manifold_dims}",
-        f"spatial_dim={mesh.n_spatial_dims}",
         f"n_points={mesh.n_points}",
         f"n_cells={mesh.n_cells}",
     ]
 
-    # Add device if it's explicitly set (not None)
-    # mesh.device is None by default and only set when user calls .to(device)
     device = mesh.device
     if device is not None:
         parts.append(f"device={device}")
 
-    first_line = f"{class_name}({', '.join(parts)})"
+    first_line = f"{class_name}{dim_sig}({', '.join(parts)})"
 
-    ### Format the data fields with proper alignment
-    # We need to align the colons for point_data, cell_data, and global_data
+    ### Format non-empty data fields with proper alignment
     data_fields = ["point_data", "cell_data", "global_data"]
-    max_field_len = max(len(field) for field in data_fields)
+    populated = [
+        (name, getattr(mesh, name))
+        for name in data_fields
+        if len(list(getattr(mesh, name).keys())) > 0
+    ]
 
+    if not populated:
+        return first_line
+
+    max_field_len = max(len(name) for name, _ in populated)
     lines = [first_line]
 
-    for field_name in data_fields:
-        td = getattr(mesh, field_name)
-        # Format the field with proper alignment
+    for field_name, td in populated:
         formatted_td = _format_tensordict_repr(
             td,
             batch_dims=len(td.batch_size) if hasattr(td, "batch_size") else 0,
             indent_level=1,
         )
-
-        # Add the field line with aligned colon
         padded_field = field_name.ljust(max_field_len)
         lines.append(f"    {padded_field}: {formatted_td}")
 

@@ -40,6 +40,7 @@ from physicsnemo.datapipes.collate import (
 )
 from physicsnemo.datapipes.dataloader import DataLoader
 from physicsnemo.datapipes.dataset import Dataset
+from physicsnemo.datapipes.multi_dataset import MultiDataset
 from physicsnemo.datapipes.readers import (
     HDF5Reader,
     NumpyReader,
@@ -84,6 +85,7 @@ __all__ = [
     "TensorDict",  # Re-export from tensordict
     "Dataset",
     "DataLoader",
+    "MultiDataset",
     # Transforms - Base
     "Transform",
     "Compose",

@@ -100,7 +100,7 @@ def _apply_wrapper_select(
 def deterministic_sampler(
     net: torch.nn.Module,
     latents: torch.Tensor,
-    img_lr: torch.Tensor,
+    img_lr: torch.Tensor | None,
     class_labels: Optional[torch.Tensor] = None,
     randn_like: Callable = torch.randn_like,
     patching: Optional[GridPatching2D] = None,
@@ -258,7 +258,7 @@ def deterministic_sampler(
     """
     if isinstance(img_lr, TensorDict):
         cond_vec = img_lr["cond_vec"]
-        img_lr = img_lr["cond_concat"]
+        img_lr = img_lr.get("cond_concat", None)
     else:
         cond_vec = None
 
@@ -267,12 +267,16 @@ def deterministic_sampler(
     # conditioning = [mean_hr, img_lr, global_lr]
     x_lr = img_lr
     if mean_hr is not None:
-        if mean_hr.shape[-2:] != img_lr.shape[-2:]:
+        if img_lr is not None and mean_hr.shape[-2:] != img_lr.shape[-2:]:
             raise ValueError(
                 f"mean_hr and img_lr must have the same height and width, "
                 f"but found {mean_hr.shape[-2:]} vs {img_lr.shape[-2:]}."
             )
-        x_lr = torch.cat((mean_hr.expand(x_lr.shape[0], -1, -1, -1), x_lr), dim=1)
+        if x_lr is not None:
+            mean_hr = mean_hr.expand(x_lr.shape[0], -1, -1, -1)
+            x_lr = torch.cat((mean_hr, x_lr), dim=1)
+        else:
+            x_lr = mean_hr
 
     # Safety check on type of patching
     if patching is not None and not isinstance(patching, GridPatching2D):
@@ -282,14 +286,14 @@ def deterministic_sampler(
     # height and width, otherwise there is mismatch in the number
     # of patches extracted to form the final batch_size.
     if patching:
-        if img_lr.shape[-2:] != latents.shape[-2:]:
+        if img_lr is not None and (img_lr.shape[-2:] != latents.shape[-2:]):
             raise ValueError(
                 f"img_lr and latents must have the same height and width, "
                 f"but found {img_lr.shape[-2:]} vs {latents.shape[-2:]}. "
             )
     # img_lr and latents must also have the same batch_size, otherwise mismatch
     # when processed by the network
-    if img_lr.shape[0] != latents.shape[0]:
+    if img_lr is not None and (img_lr.shape[0] != latents.shape[0]):
         raise ValueError(
             f"img_lr and latents must have the same batch size, but found "
             f"{img_lr.shape[0]} vs {latents.shape[0]}."
@@ -340,7 +344,7 @@ def deterministic_sampler(
     sigma_min = max(sigma_min, net.sigma_min)
     sigma_max = min(sigma_max, net.sigma_max)
 
-    batch_size = img_lr.shape[0]
+    batch_size = latents.shape[0]
     # input and position padding + patching
     if patching:
         # Patched conditioning [x_lr, mean_hr]
@@ -438,7 +442,11 @@ def deterministic_sampler(
         optional_args["embedding_selector"] = patch_embedding_selector
 
     if cond_vec is not None:
-        x_lr = TensorDict({"cond_concat": x_lr, "cond_vec": cond_vec})
+        x_lr = TensorDict(
+            {"cond_concat": x_lr, "cond_vec": cond_vec}
+            if x_lr is not None
+            else {"cond_vec": cond_vec}
+        )
 
     for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])):  # 0, ..., N-1
         x_cur = x_next

@@ -16,6 +16,7 @@
 
 import importlib
 import os
+import warnings
 
 from physicsnemo.core.version_check import check_version_spec
 
@@ -74,6 +75,14 @@ if VTK_AVAILABLE:
         - input_dir (str): Path to the directory containing input files.
         - output_dir (str): Path to the directory to save the converted files.
         """
+        warnings.warn(
+            "convert_tesselated_files_in_directory is deprecated and will be "
+            "removed in v2.2.0. Use PyVista for format conversion: "
+            "pyvista.read(input_file).save(output_file) supports OBJ, VTP, "
+            "and STL formats.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
         if conversion_type == "obj2vtp":
             src_ext = ".obj"
@@ -113,4 +122,12 @@ else:
         raise_vtk_not_available()
 
     def convert_tesselated_files_in_directory(*args, **kwargs):
+        warnings.warn(
+            "convert_tesselated_files_in_directory is deprecated and will be "
+            "removed in v2.2.0. Use PyVista for format conversion: "
+            "pyvista.read(input_file).save(output_file) supports OBJ, VTP, "
+            "and STL formats.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         raise_vtk_not_available()
