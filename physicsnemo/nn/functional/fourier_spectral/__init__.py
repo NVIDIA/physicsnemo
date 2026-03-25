@@ -14,12 +14,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: mock.MockDataset
+from .fft import (
+    IRFFT,
+    IRFFT2,
+    RFFT,
+    RFFT2,
+    Imag,
+    Real,
+    ViewAsComplex,
+    imag,
+    irfft,
+    irfft2,
+    real,
+    rfft,
+    rfft2,
+    view_as_complex,
+)
 
-num_state_channels: 3
-num_background_channels: 4
-num_invariant_channels: 2
-num_scalar_cond_channels: 2
-image_size: [256, 128]
-num_samples: 100
-model_type: "hybrid"
+__all__ = [
+    "RFFT",
+    "RFFT2",
+    "IRFFT",
+    "IRFFT2",
+    "ViewAsComplex",
+    "Real",
+    "Imag",
+    "rfft",
+    "rfft2",
+    "irfft",
+    "irfft2",
+    "view_as_complex",
+    "real",
+    "imag",
+]

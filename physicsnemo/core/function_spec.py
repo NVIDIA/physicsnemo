@@ -361,7 +361,7 @@ class FunctionSpec:
         # Prefer the lowest-rank registered implementation to reflect default dispatch.
         impls = cls._get_impls()
         if impls:
-            preferred_impl = min(impls.values(), key=lambda impl: impl.rank)
+            preferred_impl = sorted(impls.values(), key=lambda impl: impl.rank)[0]
             _function.__signature__ = inspect.signature(preferred_impl.func)
             _function.__annotations__ = dict(
                 getattr(preferred_impl.func, "__annotations__", {})
@@ -420,10 +420,10 @@ class FunctionSpec:
             raise ImportError(f"No available implementations found for {cls.__name__}")
 
         # Select the lowest-rank implementation
-        selected = min(available, key=lambda impl: impl.rank)
+        selected = sorted(available, key=lambda impl: impl.rank)[0]
 
         # Get the preferred implementation
-        preferred = min(impls.values(), key=lambda impl: impl.rank)
+        preferred = sorted(impls.values(), key=lambda impl: impl.rank)[0]
 
         # Emit a one-time warning if we had to fall back from the preferred impl.
         cls._warn_fallback(preferred, selected)

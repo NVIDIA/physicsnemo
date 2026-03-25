@@ -300,3 +300,17 @@ def test_warp_launch_context_missing_warp(monkeypatch):
     monkeypatch.setattr(function_spec.importlib, "import_module", _raise)
     with pytest.raises(ImportError):
         FunctionSpec.warp_launch_context(torch.tensor([1.0]))
+
+
+def test_dispatch_compatible_with_torch_compile():
+    # Regression: dispatch used min(..., key=...) which dynamo does not support.
+    # Replacing with sorted(...)[0] fixes the warning/graph break.
+    class AddOne(FunctionSpec):
+        @FunctionSpec.register(name="torch", rank=0, baseline=True)
+        def torch_impl(x):
+            return x + 1
+
+    fn = AddOne.make_function()
+    compiled = torch.compile(fn, fullgraph=True)
+    result = compiled(torch.zeros(4))
+    assert torch.allclose(result, torch.ones(4))

@@ -17,6 +17,7 @@
 from typing import Literal
 
 import torch
+from jaxtyping import Float, Int
 
 from physicsnemo.core.function_spec import FunctionSpec
 
@@ -55,60 +56,82 @@ class KNN(FunctionSpec):
         neighbors for each query point.
     """
 
+    _BENCHMARK_CASES = (
+        ("small-p1024-q256-k16", 1024, 256, 16),
+        ("medium-p4096-q1024-k32", 4096, 1024, 32),
+        ("large-p8192-q2048-k32", 8192, 2048, 32),
+    )
+
     @FunctionSpec.register(
         name="cuml", required_imports=("cuml>=24.0.0", "cupy>=13.0.0"), rank=0
     )
     def cuml_forward(
-        points: torch.Tensor, queries: torch.Tensor, k: int
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        points: Float[torch.Tensor, "num_points dim"],
+        queries: Float[torch.Tensor, "num_queries dim"],
+        k: int,
+    ) -> tuple[
+        Int[torch.Tensor, "num_queries k"], Float[torch.Tensor, "num_queries k"]
+    ]:
         return knn_cuml(points, queries, k)
 
     @FunctionSpec.register(name="scipy", required_imports=("scipy>=1.7.0",), rank=1)
     def scipy_forward(
-        points: torch.Tensor, queries: torch.Tensor, k: int
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        points: Float[torch.Tensor, "num_points dim"],
+        queries: Float[torch.Tensor, "num_queries dim"],
+        k: int,
+    ) -> tuple[
+        Int[torch.Tensor, "num_queries k"], Float[torch.Tensor, "num_queries k"]
+    ]:
         return knn_scipy(points, queries, k)
 
     @FunctionSpec.register(name="torch", rank=2, baseline=True)
     def torch_forward(
-        points: torch.Tensor, queries: torch.Tensor, k: int
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        points: Float[torch.Tensor, "num_points dim"],
+        queries: Float[torch.Tensor, "num_queries dim"],
+        k: int,
+    ) -> tuple[
+        Int[torch.Tensor, "num_queries k"], Float[torch.Tensor, "num_queries k"]
+    ]:
         return knn_torch(points, queries, k)
 
     @classmethod
-    def make_inputs(cls, device: torch.device | str = "cpu"):
+    def make_inputs_forward(cls, device: torch.device | str = "cpu"):
         device = torch.device(device)
-        cases = [
-            ("small", 1024, 256, 16),
-            ("medium", 4096, 1024, 32),
-            ("large", 8192, 2048, 32),
-        ]
-        for label, num_points, num_queries, k in cases:
+        for label, num_points, num_queries, k in cls._BENCHMARK_CASES:
             points = torch.rand(num_points, 3, device=device)
             queries = torch.rand(num_queries, 3, device=device)
             yield (
-                f"{label}-points{num_points}-queries{num_queries}-k{k}",
+                label,
                 (points, queries, k),
                 {},
             )
 
     @classmethod
-    def compare(
+    def compare_forward(
         cls,
         output: tuple[torch.Tensor, torch.Tensor],
         reference: tuple[torch.Tensor, torch.Tensor],
     ) -> None:
-        # TODO(ASV): Populate output comparison in a follow-up PR.
-        raise NotImplementedError
+        # Neighbor ordering can differ for equal-distance ties across backends.
+        _, distances = output
+        _, reference_distances = reference
+        torch.testing.assert_close(
+            torch.sort(distances, dim=1)[0],
+            torch.sort(reference_distances, dim=1)[0],
+            atol=1e-5,
+            rtol=1e-5,
+        )
 
     @classmethod
     def dispatch(
         cls,
-        points: torch.Tensor,
-        queries: torch.Tensor,
+        points: Float[torch.Tensor, "num_points dim"],
+        queries: Float[torch.Tensor, "num_queries dim"],
         k: int,
         implementation: Literal["cuml", "torch", "scipy"] | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[
+        Int[torch.Tensor, "num_queries k"], Float[torch.Tensor, "num_queries k"]
+    ]:
         # Lookup the implementation registry for this FunctionSpec.
         impls = cls._get_impls()
 
