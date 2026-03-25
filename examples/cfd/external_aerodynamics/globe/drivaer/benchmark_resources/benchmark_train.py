@@ -195,7 +195,7 @@ def time_fn(
 
 def time_training_step(
     model: GLOBE,
-    boundary_meshes: dict[str, Mesh],
+    boundary_meshes: dict[str, Mesh[2, 3]],
     prediction_points: torch.Tensor,
     reference_lengths: dict[str, torch.Tensor],
     *,
@@ -280,7 +280,7 @@ def time_training_step(
 
 def _time_compiled_step(
     model: GLOBE,
-    boundary_meshes: dict[str, Mesh],
+    boundary_meshes: dict[str, Mesh[2, 3]],
     prediction_points: torch.Tensor,
     reference_lengths: dict[str, torch.Tensor],
     *,
@@ -519,7 +519,7 @@ def prepare_case_data(
     n_prediction_points: int,
     device: torch.device,
     seed: int = 0,
-) -> tuple[dict[str, Mesh], torch.Tensor, dict[str, torch.Tensor]]:
+) -> tuple[dict[str, Mesh[2, 3]], torch.Tensor, dict[str, torch.Tensor]]:
     """Create boundary mesh and prediction points for one benchmark case.
 
     Subsamples the full-resolution prediction mesh to create boundary
@@ -536,7 +536,7 @@ def prepare_case_data(
     _ = boundary.cell_centroids
     _ = boundary.cell_areas
     _ = boundary.cell_normals
-    boundary_meshes: dict[str, Mesh] = {"no_slip": boundary.to(device)}
+    boundary_meshes: dict[str, Mesh[2, 3]] = {"no_slip": boundary.to(device)}
 
     n_pts = min(n_prediction_points, raw_sample.prediction_mesh.n_points)
     mask = torch.randperm(raw_sample.prediction_mesh.n_points)[:n_pts]
@@ -550,7 +550,7 @@ def prepare_case_data(
 
 
 def collect_tree_stats(
-    boundary_meshes: dict[str, Mesh],
+    boundary_meshes: dict[str, Mesh[2, 3]],
     theta: float,
     leaf_size: int,
 ) -> dict:

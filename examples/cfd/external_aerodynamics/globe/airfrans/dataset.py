@@ -351,11 +351,11 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
 
     @staticmethod
     def postprocess(
-        pred_mesh: Mesh,
+        pred_mesh: Mesh[0, 2],
         sample: AirFRANSSample,
         *,
         fields: Sequence[str | tuple[str, ...]] | None = None,
-    ) -> Mesh:
+    ) -> Mesh[2, 2]:
         """Build a combined pred/true/error Mesh with integrated force coefficients.
 
         Assembles a single Mesh whose ``point_data`` contains nested
@@ -410,7 +410,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         )
 
         ### Compute integrated surface force coefficients
-        airfoil_mesh: Mesh = sample.boundary_meshes["no_slip"]
+        airfoil_mesh: Mesh[1, 2] = sample.boundary_meshes["no_slip"]
         chord = float(sample.reference_lengths["chord"])
 
         return Mesh(
@@ -438,7 +438,7 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
 
     @staticmethod
     def visualize_comparison(
-        combined: Mesh,
+        combined: Mesh[2, 2],
         *,
         show: bool = True,
         show_error: bool = True,
@@ -817,8 +817,8 @@ def compute_max_mesh_sizes(
 
 
 def compute_surface_force_coefficients(
-    volume_mesh: Mesh,
-    airfoil_mesh: Mesh,
+    volume_mesh: Mesh[2, 2],
+    airfoil_mesh: Mesh[1, 2],
     chord: float,
 ) -> TensorDict:
     """Integrate predicted surface fields to obtain section force coefficients.

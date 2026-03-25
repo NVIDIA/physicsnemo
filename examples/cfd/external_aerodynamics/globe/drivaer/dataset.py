@@ -69,7 +69,7 @@ def create_domain_boundaries(
     y_half_width: float = 11,
     n_x: int = 20,
     n_y: int = 20,
-) -> dict[str, Mesh]:
+) -> dict[str, Mesh[2, 3]]:
     """Create triangulated ground-plane boundary meshes for the CFD domain.
 
     Returns two horizontal Mesh[2, 3] patches at ``z = ground_z``:
@@ -94,7 +94,7 @@ def create_domain_boundaries(
         ``{"slip_floor": Mesh, "no_slip_floor": Mesh}``
     """
 
-    def _ground_patch(x_min: float, x_max: float) -> Mesh:
+    def _ground_patch(x_min: float, x_max: float) -> Mesh[2, 3]:
         mesh = embed(
             structured_grid.load(
                 x_min=x_min,
@@ -236,12 +236,12 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
 
     @staticmethod
     def subsample_mesh(
-        mesh: Mesh,
+        mesh: Mesh[2, 3],
         n_cells: int,
         *,
         geometry_only: bool = True,
         voronoi: bool = False,
-    ) -> Mesh:
+    ) -> Mesh[2, 3]:
         """Randomly subsample cells with area correction.
 
         Selects ``n_cells`` random cells, compacts away unreferenced vertices,
@@ -542,11 +542,11 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
 
 
 def postprocess(
-    pred_mesh: Mesh,
+    pred_mesh: Mesh[0, 3],
     sample: DrivAerMLSample,
     *,
     fields: Sequence[str] | None = None,
-) -> Mesh:
+) -> Mesh[2, 3]:
     """Build a combined pred/true/error Mesh with integrated force coefficients.
 
     Assembles a single Mesh whose ``point_data`` contains nested
@@ -629,7 +629,7 @@ def postprocess(
 
 
 def visualize_comparison(
-    combined: Mesh,
+    combined: Mesh[2, 3],
     *,
     save_path: Path | None = None,
     show: bool = False,
@@ -689,7 +689,7 @@ def _read_single_row_csv(path: Path) -> dict[str, str]:
 
 
 def compute_surface_force_coefficients(
-    surface_mesh: Mesh,
+    surface_mesh: Mesh[2, 3],
     a_ref: float,
 ) -> TensorDict:
     """Integrate predicted surface fields to obtain force coefficients.

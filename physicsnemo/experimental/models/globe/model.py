@@ -131,7 +131,7 @@ class GLOBE(Module):
     -------
     prediction_points : Float[torch.Tensor, "n_points n_dims"]
         Target points for field evaluation of shape :math:`(N_{points}, D)`.
-    boundary_meshes : dict[str, Mesh]
+    boundary_meshes : dict[str, Mesh["n-1", "n"]]
         Dictionary mapping boundary condition type names to
         :class:`~physicsnemo.mesh.Mesh` objects. Keys must be a subset of the
         model's boundary condition names (from ``boundary_source_data_ranks``).
@@ -143,7 +143,7 @@ class GLOBE(Module):
 
     Outputs
     -------
-    Mesh
+    Mesh[0, "n"]
         A point-cloud :class:`~physicsnemo.mesh.Mesh` (0-dimensional manifold)
         whose ``.points`` attribute equals the input ``prediction_points``. The
         predicted fields are in ``.point_data``, keyed by the names from
@@ -163,6 +163,11 @@ class GLOBE(Module):
     - Cell areas are automatically normalized by ``reference_area`` to preserve
       discretization-invariance.
     - The cell normal vector is automatically added to source data for each mesh.
+    - The ``Mesh["n-1", "n"]`` type annotations assume the PDE domain fills the
+      full ambient space (domain manifold dim = spatial dim), so boundary meshes
+      are codimension-1 in the ambient space. For a PDE on a ``d``-dimensional
+      manifold embedded in ``n``-dimensional space (``d < n``), the boundary
+      type would be ``Mesh[d-1, n]`` instead.
 
     Examples
     --------
@@ -322,7 +327,7 @@ class GLOBE(Module):
     @torch.compiler.disable
     def _build_trees_and_plans(
         self,
-        boundary_meshes: dict[str, Mesh],
+        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
     ) -> tuple[
         dict[str, ClusterTree],
         dict[str, torch.Tensor],
@@ -429,7 +434,7 @@ class GLOBE(Module):
         self,
         layer_idx: int,
         target_points: Float[torch.Tensor, "n_targets n_dims"],
-        source_meshes: dict[str, Mesh],
+        source_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None,
         cluster_trees: dict[str, ClusterTree],
@@ -449,7 +454,7 @@ class GLOBE(Module):
             Index into ``self.kernel_layers``.
         target_points : Float[torch.Tensor, "n_targets n_dims"]
             Target points of shape :math:`(N_{targets}, D)`.
-        source_meshes : dict[str, Mesh]
+        source_meshes : dict[str, Mesh["n-1", "n"]]
             Enriched boundary meshes with cell_data containing physical
             features, strengths, and (after layer 0) latent state.
         reference_lengths : dict[str, Float[torch.Tensor, ""]]
@@ -507,13 +512,13 @@ class GLOBE(Module):
     def _evaluate_communication_hyperlayer(
         self,
         layer_idx: int,
-        boundary_meshes: dict[str, Mesh],
+        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None,
         cluster_trees: dict[str, ClusterTree],
         comm_plans: dict[str, dict[str, DualInteractionPlan]],
         source_areas: dict[str, torch.Tensor],
-    ) -> dict[str, Mesh]:
+    ) -> dict[str, Mesh["n-1", "n"]]:  # ty: ignore[unresolved-reference]
         r"""Run one boundary-to-boundary communication step.
 
         For each destination BC type, evaluates :meth:`_evaluate_hyperlayer`
@@ -524,11 +529,11 @@ class GLOBE(Module):
 
         Returns
         -------
-        dict[str, Mesh]
+        dict[str, Mesh["n-1", "n"]]
             Updated boundary meshes with evaluation results merged into
             each mesh's ``cell_data``.
         """
-        new_meshes: dict[str, Mesh] = {}
+        new_meshes: dict[str, Mesh["n-1", "n"]] = {}  # ty: ignore[unresolved-reference]
         for bc_type, mesh in boundary_meshes.items():
             result_td = self._evaluate_hyperlayer(
                 layer_idx=layer_idx,
@@ -558,10 +563,10 @@ class GLOBE(Module):
     def forward(
         self,
         prediction_points: Float[torch.Tensor, "n_points n_dims"],
-        boundary_meshes: dict[str, Mesh],
+        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
         reference_lengths: dict[str, torch.Tensor],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None = None,
-    ) -> Mesh:
+    ) -> Mesh[0, "n"]:  # ty: ignore[unresolved-reference]
         r"""Evaluate GLOBE model to predict fields at target points.
 
         Runs the full GLOBE forward pass in three phases:
@@ -578,7 +583,7 @@ class GLOBE(Module):
         ----------
         prediction_points : Float[torch.Tensor, "n_points n_dims"]
             Target points of shape :math:`(N_{points}, D)`.
-        boundary_meshes : dict[str, Mesh]
+        boundary_meshes : dict[str, Mesh["n-1", "n"]]
             Dictionary mapping BC type names to pre-merged
             :class:`~physicsnemo.mesh.Mesh` objects.
         reference_lengths : dict[str, torch.Tensor]
@@ -589,7 +594,7 @@ class GLOBE(Module):
 
         Returns
         -------
-        Mesh
+        Mesh[0, "n"]
             A point-cloud Mesh (0-dimensional manifold) with predicted fields.
         """
         device = prediction_points.device

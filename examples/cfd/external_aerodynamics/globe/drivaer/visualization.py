@@ -34,7 +34,7 @@ logger = PythonLogger("globe.drivaer.visualization")
 
 
 def visualize_pyvista(
-    combined: Mesh,
+    combined: Mesh[2, 3],
     kind_data: dict[str, TensorDict],
     kinds: dict[str, str],
     fields: list[str],
@@ -117,7 +117,7 @@ def visualize_pyvista(
 
 def draw_disk_cells(
     ax,
-    mesh: Mesh,
+    mesh: Mesh[2, 3],
     cell_scalars: np.ndarray,
     *,
     cmap: str = "turbo",
@@ -225,7 +225,7 @@ def draw_disk_cells(
 
 
 def visualize_matplotlib(
-    combined: Mesh,
+    combined: Mesh[2, 3],
     kind_data: dict[str, TensorDict],
     kinds: dict[str, str],
     fields: list[str],

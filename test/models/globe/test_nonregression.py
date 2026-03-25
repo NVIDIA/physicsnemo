@@ -100,7 +100,7 @@ def _make_globe_and_inputs(
     return model, forward_kwargs
 
 
-def _save_reference(output_mesh: Mesh, path: Path) -> None:
+def _save_reference(output_mesh: Mesh[0, 3], path: Path) -> None:
     """Save output mesh point_data as a flat dict of tensors."""
     data = {k: v.detach().cpu() for k, v in output_mesh.point_data.items()}
     path.parent.mkdir(parents=True, exist_ok=True)

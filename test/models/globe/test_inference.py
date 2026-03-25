@@ -64,7 +64,7 @@ def test_globe_inference(device: str) -> None:
     ### Validate Mesh structure
     from physicsnemo.mesh import Mesh
 
-    assert isinstance(output_mesh, Mesh)
+    assert isinstance(output_mesh, Mesh[0, 3])
     assert output_mesh.points.shape == (N_PREDICTION_POINTS, 3)
 
     ### Validate output fields and shapes
