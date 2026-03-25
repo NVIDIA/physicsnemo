@@ -27,6 +27,10 @@ Usage::
 
     # Multi-GPU with torchrun
     torchrun --nproc_per_node=N src/train.py
+
+    # I/O benchmark: iterate dataloaders without model logic
+    python src/train.py benchmark_io=true profile=true
+    python src/train.py benchmark_io=true training.benchmark_max_steps=20
 """
 
 import os
@@ -120,7 +124,7 @@ def forward_pass(
     Parameters
     ----------
     batch : dict
-        Keys: ``geometry`` (B,N,3), ``local_embedding`` (B,N,3),
+        Keys: ``geometry`` (B,N,3), ``local_embedding`` (B,N,6),
         ``global_embedding`` (B,1,3), ``fields`` (B,N,4).
     model : torch.nn.Module
         Point-cloud model with forward(local_embedding, geometry, global_embedding, ...).
@@ -254,11 +258,6 @@ def train_epoch(
             f"Step: {step_dt:.3f}s "
             f"Mem: {mem_gb:.2f}GB"
         )
-
-        if dist_manager.rank == 0 and writer is not None:
-            step = i + n_batches * epoch
-            writer.add_scalar("batch/loss", this_loss, step)
-            writer.add_scalar("batch/lr", optimizer.param_groups[0]["lr"], step)
 
         if cfg.profile and i >= 10:
             break
@@ -416,6 +415,66 @@ def val_epoch(
     return avg_loss, avg_metrics, avg_phys_metrics
 
 
+@profile
+def benchmark_io_epoch(
+    dataloader,
+    label: str,
+    logger,
+    max_steps: int | None = None,
+) -> None:
+    """Iterate a dataloader without any model logic and report I/O timing.
+
+    Parameters
+    ----------
+    dataloader : DataLoader
+        Dataloader to benchmark.
+    label : str
+        Human-readable label for logging (e.g. ``"train"`` or ``"val"``).
+    logger : RankZeroLoggingWrapper
+        Logger for console output.
+    max_steps : int or None, optional
+        Stop after this many batches.  ``None`` means exhaust the loader.
+    """
+    import statistics
+
+    num_steps = len(dataloader)
+    times: list[float] = []
+
+    step_t0 = time.perf_counter()
+    for i, batch in enumerate(dataloader):
+        dt = time.perf_counter() - step_t0
+        times.append(dt)
+
+        mem_gb = (
+            torch.cuda.memory_reserved() / 1024**3 if torch.cuda.is_available() else 0
+        )
+        shapes = "  ".join(f"{k}:{tuple(v.shape)}" for k, v in batch.items())
+        logger.info(
+            f"  [{label}] [{i + 1}/{num_steps}] "
+            f"dt={dt:.4f}s  Mem={mem_gb:.2f}GB  {shapes}"
+        )
+
+        if max_steps is not None and i + 1 >= max_steps:
+            break
+        step_t0 = time.perf_counter()
+
+    if not times:
+        logger.info(f"  [{label}] empty dataloader")
+        return
+
+    total = sum(times)
+    mean = statistics.mean(times)
+    med = statistics.median(times)
+    std = statistics.stdev(times) if len(times) > 1 else 0.0
+    p95 = sorted(times)[int(len(times) * 0.95)] if len(times) > 1 else times[0]
+
+    logger.info(
+        f"  [{label}] {len(times)} batches in {total:.2f}s  "
+        f"mean={mean:.4f}s  median={med:.4f}s  std={std:.4f}s  p95={p95:.4f}s  "
+        f"throughput={len(times) / total:.2f} batches/sec"
+    )
+
+
 def _extract_pipeline_transforms(datasets: list) -> tuple:
     """Find NormalizeMeshFields and NonDimensionalizeByMetadata in transform chains.
 
@@ -445,6 +504,15 @@ def build_dataloaders(cfg: DictConfig):
     dist_manager = DistributedManager()
     use_distributed = dist_manager.world_size > 1
 
+    # DataLoader / MeshDataset performance tuning from cfg.dataloader
+    dl_cfg = cfg.get("dataloader", {})
+    prefetch_factor = dl_cfg.get("prefetch_factor", 2)
+    num_streams = dl_cfg.get("num_streams", 4)
+    use_streams = dl_cfg.get("use_streams", False)
+    num_workers = dl_cfg.get("num_workers", 1)
+    pin_memory = dl_cfg.get("pin_memory", False)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     train_datasets = []
     val_datasets = []
     first_metadata = None
@@ -466,12 +534,28 @@ def build_dataloaders(cfg: DictConfig):
                 OmegaConf.select(ds_yaml, "metadata", default=OmegaConf.create({})),
                 resolve=True,
             )
-        train_datasets.append(build_surface_dataset(ds_yaml, augment=augment))
+        train_datasets.append(
+            build_surface_dataset(
+                ds_yaml,
+                augment=augment,
+                device=device,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+            )
+        )
 
         val_datadir = OmegaConf.select(ds_yaml, "val_datadir", default=None)
         if val_datadir and Path(val_datadir).exists():
             val_yaml = OmegaConf.merge(ds_yaml, {"train_datadir": val_datadir})
-            val_datasets.append(build_surface_dataset(val_yaml, augment=False))
+            val_datasets.append(
+                build_surface_dataset(
+                    val_yaml,
+                    augment=False,
+                    device=device,
+                    num_workers=num_workers,
+                    pin_memory=pin_memory,
+                )
+            )
 
     if not train_datasets:
         raise RuntimeError("No valid datasets found. Check data paths in config.")
@@ -512,7 +596,9 @@ def build_dataloaders(cfg: DictConfig):
         sampler=train_sampler,
         collate_fn=surface_collate,
         drop_last=True,
-        use_streams=False,
+        prefetch_factor=prefetch_factor,
+        num_streams=num_streams,
+        use_streams=use_streams,
     )
 
     val_loader = DataLoader(
@@ -522,7 +608,9 @@ def build_dataloaders(cfg: DictConfig):
         sampler=val_sampler,
         collate_fn=surface_collate,
         drop_last=False,
-        use_streams=False,
+        prefetch_factor=prefetch_factor,
+        num_streams=num_streams,
+        use_streams=use_streams,
     )
 
     return train_loader, val_loader, normalizer, nondim_transform, first_metadata or {}
@@ -574,24 +662,23 @@ def _to_physical(
 
 @profile
 def main(cfg: DictConfig):
-    """Run the full training loop: build model, data, optimizer, then train.
+    """Run the full training loop, or I/O-only benchmark when ``benchmark_io=true``.
 
     Orchestrates the complete training workflow:
 
     1. Initialise distributed training and TensorBoard writers.
-    2. Instantiate the model and wrap with DDP if multi-GPU.
-    3. Build train/val dataloaders and extract pipeline transforms.
-    4. Set up optimizer, scheduler, loss, and metric calculators.
-    5. Optionally resume from a checkpoint.
-    6. Loop over epochs calling :func:`train_epoch` and :func:`val_epoch`.
-    7. Periodically save checkpoints and normalization statistics.
+    2. Build train/val dataloaders and extract pipeline transforms.
+    3. If ``cfg.benchmark_io`` is true, iterate dataloaders to measure
+       I/O throughput and return early (no model, no optimizer).
+    4. Otherwise, instantiate the model, optimizer, and run the normal
+       train/val epoch loop with checkpointing.
 
     Parameters
     ----------
     cfg : DictConfig
         Hydra config containing ``model``, ``training``, ``dataset``,
         ``data``, ``output_dir``, ``run_id``, ``precision``, ``compile``,
-        ``profile``, and related keys.
+        ``profile``, ``benchmark_io``, and related keys.
     """
     DistributedManager.initialize()
     dist_manager = DistributedManager()
@@ -613,6 +700,30 @@ def main(cfg: DictConfig):
 
     logger.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
 
+    train_loader, val_loader, normalizer, nondim_transform, ds_metadata = (
+        build_dataloaders(cfg)
+    )
+    logger.info(f"Train samples: {len(train_loader.dataset)}")
+    logger.info(f"Val samples: {len(val_loader.dataset)}")
+
+    # -- I/O benchmark mode: iterate dataloaders, skip model entirely -----------
+    if cfg.get("benchmark_io", False):
+        num_epochs = cfg.training.num_epochs
+        max_steps = cfg.training.get("benchmark_max_steps", None)
+        logger.info(
+            f"benchmark_io=True  — benchmarking dataloader I/O only "
+            f"({num_epochs} epoch(s), max_steps={max_steps})"
+        )
+        with torch.no_grad(), Profiler():
+            for epoch in range(num_epochs):
+                logger.info(f"--- Epoch {epoch + 1}/{num_epochs} ---")
+                train_loader.set_epoch(epoch)
+                benchmark_io_epoch(train_loader, "train", logger, max_steps=max_steps)
+                benchmark_io_epoch(val_loader, "val", logger, max_steps=max_steps)
+        logger.info("benchmark_io complete!")
+        return
+
+    # -- Normal training path ---------------------------------------------------
     model = hydra.utils.instantiate(cfg.model, _convert_="partial")
     logger.info(f"Model: {model.__class__.__name__}")
     num_params = sum(p.numel() for p in model.parameters())
@@ -627,17 +738,12 @@ def main(cfg: DictConfig):
             output_device=dist_manager.device,
         )
 
-    train_loader, val_loader, normalizer, nondim_transform, ds_metadata = (
-        build_dataloaders(cfg)
-    )
-    logger.info(f"Train samples: {len(train_loader.dataset)}")
-    logger.info(f"Val samples: {len(val_loader.dataset)}")
     if normalizer is not None:
         logger.info(
             f"Normalization: {', '.join(f'{k}({v["type"]})' for k, v in normalizer.stats.items())}"
         )
 
-    optimizer = build_muon_optimizer(model, cfg)
+    optimizer = build_muon_optimizer(model, cfg, compile_optimizer=cfg.compile)
     logger.info(f"Optimizer: {optimizer}")
     scheduler = hydra.utils.instantiate(cfg.training.scheduler, optimizer=optimizer)
 
@@ -693,81 +799,84 @@ def main(cfg: DictConfig):
 
     num_epochs = cfg.training.num_epochs
     logger.info(f"Starting training for {num_epochs} epochs...")
-    for epoch in range(loaded_epoch, num_epochs):
-        logger.info(f"--- Epoch {epoch + 1}/{num_epochs} ---")
-        train_loader.set_epoch(epoch)
 
-        train_loss, train_metrics = train_epoch(
-            train_loader,
-            model,
-            optimizer,
-            scheduler,
-            loss_calculator,
-            metric_calculator,
-            logger,
-            writer,
-            epoch,
-            cfg,
-            dist_manager,
-            scaler,
-        )
+    # Unless profiling is enabled, this is a null context:
+    with Profiler():
+        for epoch in range(loaded_epoch, num_epochs):
+            logger.info(f"--- Epoch {epoch + 1}/{num_epochs} ---")
+            train_loader.set_epoch(epoch)
 
-        val_loss, val_metrics, val_phys_metrics = val_epoch(
-            val_loader,
-            model,
-            loss_calculator,
-            metric_calculator,
-            logger,
-            val_writer,
-            epoch,
-            cfg,
-            dist_manager,
-            phys_metric_calculator=phys_metric_calculator,
-            target_config=targets,
-            normalizer=normalizer,
-            nondim_transform=nondim_transform,
-            metadata=ds_metadata,
-        )
-
-        if dist_manager.rank == 0:
-            all_keys = list(dict.fromkeys(list(train_metrics) + list(val_metrics)))
-            phys_by_base = {}
-            for k, v in val_phys_metrics.items():
-                base = k.removeprefix("phys/")
-                phys_by_base[base] = v
-
-            headers = ["Metric", "Train", "Val"]
-            if use_phys_metrics:
-                headers.append("Val (phys)")
-
-            rows = []
-            for k in all_keys:
-                row = [
-                    k,
-                    f"{train_metrics.get(k, float('nan')):.6f}",
-                    f"{val_metrics.get(k, float('nan')):.6f}",
-                ]
-                if use_phys_metrics and not k.startswith("loss/"):
-                    row.append(f"{phys_by_base.get(k, float('nan')):.6f}")
-                elif use_phys_metrics:
-                    row.append("")
-                rows.append(row)
-
-            table = tabulate(rows, headers=headers, tablefmt="pretty")
-            logger.info(
-                f"\nEpoch [{epoch}/{cfg.training.num_epochs}] "
-                f"Train Loss: {train_loss:.6f}  Val Loss: {val_loss:.6f}\n"
-                f"{table}\n"
+            train_loss, train_metrics = train_epoch(
+                train_loader,
+                model,
+                optimizer,
+                scheduler,
+                loss_calculator,
+                metric_calculator,
+                logger,
+                writer,
+                epoch,
+                cfg,
+                dist_manager,
+                scaler,
             )
 
-        if epoch % cfg.training.save_interval == 0 and dist_manager.rank == 0:
-            save_checkpoint(**ckpt_args, epoch=epoch + 1)
-            if normalizer is not None:
-                norm_path = os.path.join(ckpt_args["path"], "norm_stats.pt")
-                torch.save(normalizer.stats, norm_path)
+            val_loss, val_metrics, val_phys_metrics = val_epoch(
+                val_loader,
+                model,
+                loss_calculator,
+                metric_calculator,
+                logger,
+                val_writer,
+                epoch,
+                cfg,
+                dist_manager,
+                phys_metric_calculator=phys_metric_calculator,
+                target_config=targets,
+                normalizer=normalizer,
+                nondim_transform=nondim_transform,
+                metadata=ds_metadata,
+            )
 
-        if cfg.training.get("scheduler_update_mode", "epoch") == "epoch":
-            scheduler.step()
+            if dist_manager.rank == 0:
+                all_keys = list(dict.fromkeys(list(train_metrics) + list(val_metrics)))
+                phys_by_base = {}
+                for k, v in val_phys_metrics.items():
+                    base = k.removeprefix("phys/")
+                    phys_by_base[base] = v
+
+                headers = ["Metric", "Train", "Val"]
+                if use_phys_metrics:
+                    headers.append("Val (phys)")
+
+                rows = []
+                for k in all_keys:
+                    row = [
+                        k,
+                        f"{train_metrics.get(k, float('nan')):.6f}",
+                        f"{val_metrics.get(k, float('nan')):.6f}",
+                    ]
+                    if use_phys_metrics and not k.startswith("loss/"):
+                        row.append(f"{phys_by_base.get(k, float('nan')):.6f}")
+                    elif use_phys_metrics:
+                        row.append("")
+                    rows.append(row)
+
+                table = tabulate(rows, headers=headers, tablefmt="pretty")
+                logger.info(
+                    f"\nEpoch [{epoch}/{cfg.training.num_epochs}] "
+                    f"Train Loss: {train_loss:.6f}  Val Loss: {val_loss:.6f}\n"
+                    f"{table}\n"
+                )
+
+            if epoch % cfg.training.save_interval == 0 and dist_manager.rank == 0:
+                save_checkpoint(**ckpt_args, epoch=epoch + 1)
+                if normalizer is not None:
+                    norm_path = os.path.join(ckpt_args["path"], "norm_stats.pt")
+                    torch.save(normalizer.stats, norm_path)
+
+            if cfg.training.get("scheduler_update_mode", "epoch") == "epoch":
+                scheduler.step()
 
     if dist_manager.rank == 0:
         if writer is not None:

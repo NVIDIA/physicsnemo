@@ -103,6 +103,9 @@ def build_surface_dataset(
     cfg: DictConfig,
     base_dir: Path | None = None,
     augment: bool = False,
+    device: str | torch.device | None = "auto",
+    num_workers: int = 1,
+    pin_memory: bool = False,
 ) -> MeshDataset:
     """Build a single MeshDataset from a Hydra-style pipeline config.
 
@@ -124,6 +127,14 @@ def build_surface_dataset(
         When ``True``, ``pipeline.augmentations`` transforms are inserted
         into the pipeline after ``CenterMesh``.  Should be ``False`` for
         validation / test datasets.  Default ``False``.
+    device : str or torch.device, optional
+        Device to transfer mesh data to before transforms.  When ``None``,
+        data stays on CPU.
+    num_workers : int, default=1
+        Number of worker threads for the MeshDataset prefetch pool.
+    pin_memory : bool, default=False
+        If True, the reader places tensors in pinned (page-locked) memory
+        for faster async CPU-to-GPU transfers.
 
     Returns
     -------
@@ -137,7 +148,7 @@ def build_surface_dataset(
         resolve=True,
     )
 
-    reader = hydra.utils.instantiate(cfg.pipeline.reader)
+    reader = hydra.utils.instantiate(cfg.pipeline.reader, pin_memory=pin_memory)
     resolved = []
 
     # Inject dataset metadata into global_data as the first transform
@@ -164,7 +175,9 @@ def build_surface_dataset(
             resolved[insert_idx:insert_idx] = aug
 
     transforms = resolved if resolved else None
-    return MeshDataset(reader, transforms=transforms)
+    return MeshDataset(
+        reader, transforms=transforms, device=device, num_workers=num_workers
+    )
 
 
 def build_multi_surface_dataset(*cfgs: DictConfig) -> MultiDataset:

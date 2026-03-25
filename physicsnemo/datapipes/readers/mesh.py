@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 # Default extension for physicsnemo mesh format (tensordict/tensorclass layout).
 # Do not hardcode elsewhere so format can evolve.
-DEFAULT_MESH_EXTENSION = ".pt"
+DEFAULT_MESH_EXTENSION = ".pmsh"
 
 
 @register()
@@ -52,6 +52,7 @@ class MeshReader:
         path: Path | str,
         *,
         pattern: str = f"**/*{DEFAULT_MESH_EXTENSION}",
+        pin_memory: bool = False,
         include_index_in_metadata: bool = True,
     ) -> None:
         """
@@ -63,11 +64,15 @@ class MeshReader:
             Root directory containing mesh files (e.g. .pt directories).
         pattern : str, optional
             Glob pattern for mesh paths under ``path``. Default matches ``**/*.pt``.
+        pin_memory : bool, default=False
+            If True, place tensors in pinned (page-locked) memory for faster
+            async CPU→GPU transfers.
         include_index_in_metadata : bool, default=True
             If True, include sample index in metadata.
         """
         self._root = Path(path)
         self._pattern = pattern
+        self.pin_memory = pin_memory
         self.include_index_in_metadata = include_index_in_metadata
 
         if not self._root.exists():
@@ -94,6 +99,8 @@ class MeshReader:
 
     def __getitem__(self, index: int) -> tuple[Mesh, dict[str, Any]]:
         mesh = self._load_sample(index)
+        if self.pin_memory:
+            mesh = mesh.pin_memory()
         metadata = self._get_sample_metadata(index)
         if self.include_index_in_metadata:
             metadata["index"] = index
@@ -126,6 +133,7 @@ class DomainMeshReader:
         path: Path | str,
         *,
         pattern: str = f"**/*{DEFAULT_MESH_EXTENSION}",
+        pin_memory: bool = False,
         include_index_in_metadata: bool = True,
     ) -> None:
         """
@@ -138,11 +146,15 @@ class DomainMeshReader:
         pattern : str, optional
             Glob pattern for DomainMesh paths under ``path``.
             Default matches ``**/*.pt``.
+        pin_memory : bool, default=False
+            If True, place tensors in pinned (page-locked) memory for faster
+            async CPU→GPU transfers.
         include_index_in_metadata : bool, default=True
             If True, include sample index in metadata.
         """
         self._root = Path(path)
         self._pattern = pattern
+        self.pin_memory = pin_memory
         self.include_index_in_metadata = include_index_in_metadata
 
         if not self._root.exists():
@@ -164,6 +176,8 @@ class DomainMeshReader:
 
     def __getitem__(self, index: int) -> tuple[DomainMesh, dict[str, Any]]:
         dm = self._load_sample(index)
+        if self.pin_memory:
+            dm = dm.pin_memory()
         metadata: dict[str, Any] = {
             "source_path": str(self._paths[index]),
             "boundary_names": dm.boundary_names,

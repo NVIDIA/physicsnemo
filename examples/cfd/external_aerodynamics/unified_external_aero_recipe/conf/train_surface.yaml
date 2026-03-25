@@ -28,13 +28,14 @@ precision: "bfloat16"
 compile: true
 profile: false
 augment: false
+benchmark_io: false
 
 model_type: "surface"
 
 # -- Model (GeoTransolver) --------------------------------------------------
 model:
   _target_: physicsnemo.experimental.models.geotransolver.GeoTransolver
-  functional_dim: 3       # local_embedding = geometry coords (3)
+  functional_dim: 6       # local_embedding = geometry coords (3) + normals (3)
   out_dim: 4              # pressure (1) + wss (3)
   geometry_dim: 3         # point coordinates
   global_dim: 3           # inlet velocity (3)
@@ -64,10 +65,9 @@ dataset:
 # -- Training ----------------------------------------------------------------
 training:
   num_epochs: 500
-  save_interval: 10
+  save_interval: 25
   loss_type: "huber"
   batch_size: 1
-  num_workers: 1
   scheduler_update_mode: "epoch"
 
   optimizer:
@@ -80,6 +80,14 @@ training:
     _target_: torch.optim.lr_scheduler.StepLR
     step_size: 100
     gamma: 0.1
+
+# -- DataLoader / Dataset Performance Tuning --------------------------------
+dataloader:
+  prefetch_factor: 1
+  num_streams: 1
+  use_streams: true
+  num_workers: 1
+  pin_memory: true
 
 # -- Data paths (override per-machine) --------------------------------------
 data:

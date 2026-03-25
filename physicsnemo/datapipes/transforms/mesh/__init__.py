@@ -33,6 +33,7 @@ from physicsnemo.datapipes.transforms.mesh.base import (
 from physicsnemo.datapipes.transforms.mesh.transforms import (
     CenterMesh,
     ComputeCellCentroids,
+    ComputeSurfaceNormals,
     DropMeshFields,
     MeshToTensorDict,
     NormalizeMeshFields,
@@ -49,6 +50,7 @@ __all__ = [
     "MeshTransform",
     "apply_to_tensordict_mesh",
     "ComputeCellCentroids",
+    "ComputeSurfaceNormals",
     "ScaleMesh",
     "TranslateMesh",
     "RotateMesh",

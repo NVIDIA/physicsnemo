@@ -602,6 +602,69 @@ class NormalizeMeshFields(MeshTransform):
         return f"section={self._section}, " + ", ".join(parts)
 
 
+@register()
+class ComputeSurfaceNormals(MeshTransform):
+    r"""Compute surface normal vectors and store them in point_data or cell_data.
+
+    Uses the :class:`~physicsnemo.mesh.Mesh` built-in normal computation
+    (cross product for triangles in 3D, angle-area weighted averaging for
+    vertex normals).
+
+    Place this transform **before** :class:`SubsampleMesh` so that the
+    normals are subsampled along with the other fields.
+
+    Parameters
+    ----------
+    store_as : {"cell_data", "point_data"}
+        Where to store the computed normals.  ``"cell_data"`` stores one
+        normal per cell (the face normal).  ``"point_data"`` stores one
+        normal per vertex (angle-area weighted average of adjacent face
+        normals).  Both modes require the mesh to have cells.
+    field_name : str
+        Key under which to store the normals.  Default ``"normals"``.
+    """
+
+    def __init__(
+        self,
+        store_as: Literal["cell_data", "point_data"] = "cell_data",
+        field_name: str = "normals",
+    ) -> None:
+        super().__init__()
+        if store_as not in ("cell_data", "point_data"):
+            raise ValueError(
+                f"store_as must be 'cell_data' or 'point_data', got {store_as!r}"
+            )
+        self.store_as = store_as
+        self.field_name = field_name
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        if self.store_as == "cell_data":
+            normals = mesh.cell_normals
+            new_cd = mesh.cell_data.clone()
+            new_cd[self.field_name] = normals
+            return Mesh(
+                points=mesh.points,
+                cells=mesh.cells,
+                point_data=mesh.point_data,
+                cell_data=new_cd,
+                global_data=mesh.global_data,
+            )
+        else:
+            normals = mesh.point_normals
+            new_pd = mesh.point_data.clone()
+            new_pd[self.field_name] = normals
+            return Mesh(
+                points=mesh.points,
+                cells=mesh.cells,
+                point_data=new_pd,
+                cell_data=mesh.cell_data,
+                global_data=mesh.global_data,
+            )
+
+    def extra_repr(self) -> str:
+        return f"store_as={self.store_as!r}, field_name={self.field_name!r}"
+
+
 def _mesh_to_tensordict(mesh: Mesh) -> TensorDict:
     """Convert a single Mesh into a flat TensorDict (no cache, no tensorclass)."""
     out: dict = {

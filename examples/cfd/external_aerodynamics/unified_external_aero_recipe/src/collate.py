@@ -22,6 +22,7 @@ forward signature::
 
     {
         "geometry":         (B, N, 3),   # point positions
+        "local_embedding":  (B, N, 6),   # positions + surface normals
         "global_embedding": (B, 1, 3),   # freestream velocity (U_inf)
         "fields":           (B, N, C),   # concatenated target fields
     }
@@ -40,7 +41,7 @@ def surface_collate(samples: list[tuple[TensorDict, dict]]) -> dict[str, torch.T
     with ``input/`` and ``output/`` groups produced by
     :class:`~physicsnemo.datapipes.transforms.mesh.RestructureTensorDict`.
 
-    The ``input`` group must contain ``points`` and ``U_inf``.
+    The ``input`` group must contain ``points``, ``normals``, and ``U_inf``.
     The ``output`` group must contain ``pressure`` (scalar) and ``wss`` (3-vector).
 
     Parameters
@@ -55,6 +56,7 @@ def surface_collate(samples: list[tuple[TensorDict, dict]]) -> dict[str, torch.T
         ``local_embedding``, and ``fields``.
     """
     points_list = []
+    embedding_list = []
     velocity_list = []
     fields_list = []
 
@@ -63,6 +65,7 @@ def surface_collate(samples: list[tuple[TensorDict, dict]]) -> dict[str, torch.T
         out = data["output"]
 
         pts = inp["points"]  # (N, 3)
+        normals = inp["normals"]  # (N, 3)
         vel = inp["U_inf"]  # (1, 3) or (3,)
 
         pressure = out["pressure"]  # (N,) or (N, 1)
@@ -76,13 +79,14 @@ def surface_collate(samples: list[tuple[TensorDict, dict]]) -> dict[str, torch.T
         target = torch.cat([pressure, wss], dim=-1)  # (N, 4)
 
         points_list.append(pts)
+        embedding_list.append(torch.cat([pts, normals], dim=-1))  # (N, 6)
         velocity_list.append(vel)
         fields_list.append(target)
 
     stacked_points = torch.stack(points_list)
     return {
         "geometry": stacked_points,  # (B, N, 3)
-        "local_embedding": stacked_points,  # (B, N, 3) same as geometry
+        "local_embedding": torch.stack(embedding_list),  # (B, N, 6)
         "local_positions": stacked_points,  # (B, N, 3) for local feature builder
         "global_embedding": torch.stack(velocity_list),  # (B, 1, 3)
         "fields": torch.stack(fields_list),  # (B, N, 4)

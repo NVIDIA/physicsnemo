@@ -34,7 +34,7 @@ pipeline:
   reader:
     _target_: ${dp:MeshReader}
     path: ${train_datadir}
-    pattern: "**/merged_surfaces.vtp.pt"
+    pattern: "**/merged_surfaces.vtp.pmsh"
   augmentations:
     - _target_: ${dp:RandomRotateMesh}
       axes: ["z"]
@@ -58,6 +58,9 @@ pipeline:
       section: cell_data
       fields:
         wss: {type: vector, mean: [0.0, 0.0, 0.0], std: 0.00183}
+    - _target_: ${dp:ComputeSurfaceNormals}
+      store_as: cell_data
+      field_name: normals
     - _target_: ${dp:SubsampleMesh}
       n_cells: ${sampling_resolution}
     - _target_: ${dp:MeshToTensorDict}
@@ -66,6 +69,7 @@ pipeline:
       groups:
         input:
           points: cell_centroids
+          normals: cell_data.normals
           U_inf: global_data.U_inf
         output:
           pressure: cell_data.pressure

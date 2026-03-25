@@ -68,6 +68,7 @@ from physicsnemo.datapipes.transforms import (
     ComputeCellCentroids,
     ComputeNormals,
     ComputeSDF,
+    ComputeSurfaceNormals,
     ConcatFields,
     ConstantField,
     CreateGrid,
@@ -138,6 +139,7 @@ __all__ = [
     # Transforms - Mesh
     "MeshTransform",
     "ComputeCellCentroids",
+    "ComputeSurfaceNormals",
     "MeshToTensorDict",
     "apply_to_tensordict_mesh",
     "ScaleMesh",

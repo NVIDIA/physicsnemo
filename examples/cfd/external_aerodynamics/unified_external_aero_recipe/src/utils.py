@@ -28,7 +28,7 @@ from physicsnemo.optim import CombinedOptimizer
 
 
 def build_muon_optimizer(
-    model: torch.nn.Module, cfg: DictConfig
+    model: torch.nn.Module, cfg: DictConfig, *, compile_optimizer: bool = False
 ) -> torch.optim.Optimizer:
     """Build Muon + AdamW combined optimizer.
 
@@ -42,6 +42,8 @@ def build_muon_optimizer(
     cfg : DictConfig
         Full Hydra config.  Reads ``cfg.training.optimizer.*`` for lr,
         weight_decay, betas, and eps.
+    compile_optimizer : bool
+        If True, compile the optimizer step functions with ``torch.compile``.
     """
     base_model = model.module if hasattr(model, "module") else model
     muon_params = [p for p in base_model.parameters() if p.ndim == 2]
@@ -52,6 +54,8 @@ def build_muon_optimizer(
     weight_decay = opt_cfg.get("weight_decay", 1e-4)
     betas = tuple(opt_cfg.get("betas", [0.9, 0.999]))
     eps = opt_cfg.get("eps", 1e-8)
+
+    compile_kwargs = {} if compile_optimizer else None
 
     if muon_params and other_params:
         return CombinedOptimizer(
@@ -69,19 +73,26 @@ def build_muon_optimizer(
                     betas=betas,
                     eps=eps,
                 ),
-            ]
+            ],
+            torch_compile_kwargs=compile_kwargs,
         )
     elif muon_params:
-        return torch.optim.Muon(
+        opt = torch.optim.Muon(
             muon_params,
             lr=lr,
             weight_decay=weight_decay,
             adjust_lr_fn="match_rms_adamw",
         )
+        if compile_optimizer:
+            opt.step = torch.compile(opt.step)
+        return opt
     else:
-        return torch.optim.AdamW(
+        opt = torch.optim.AdamW(
             other_params, lr=lr, weight_decay=weight_decay, betas=betas, eps=eps
         )
+        if compile_optimizer:
+            opt.step = torch.compile(opt.step)
+        return opt
 
 
 # ---------------------------------------------------------------------------
