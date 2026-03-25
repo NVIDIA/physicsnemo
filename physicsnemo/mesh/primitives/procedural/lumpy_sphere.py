@@ -31,7 +31,7 @@ def load(
     noise_amplitude: float = 0.5,
     seed: int = 0,
     device: str = "cpu",
-) -> Mesh:
+) -> Mesh[2, 3]:
     """Create a lumpy sphere by adding radial noise to a sphere.
 
     Parameters
@@ -49,7 +49,7 @@ def load(
 
     Returns
     -------
-    Mesh
+    Mesh[2, 3]
         Mesh with n_manifold_dims=2, n_spatial_dims=3
     """
     mesh = icosahedron_surface.load(radius=radius, device=device)

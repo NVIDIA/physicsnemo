@@ -17,6 +17,7 @@
 from typing import List, Tuple
 
 import torch
+from jaxtyping import Float
 from torch import Tensor
 
 from physicsnemo.core.function_spec import FunctionSpec
@@ -53,12 +54,12 @@ class Interpolation(FunctionSpec):
 
     @FunctionSpec.register(name="warp", required_imports=("warp>=0.6.0",), rank=1)
     def warp_forward(
-        query_points: Tensor,
-        context_grid: Tensor,
+        query_points: Float[Tensor, "num_queries dim"],
+        context_grid: Float[Tensor, "channels ..."],
         grid: List[Tuple[float, float, int]],
         interpolation_type: str = "smooth_step_2",
         mem_speed_trade: bool = True,
-    ) -> Tensor:
+    ) -> Float[Tensor, "num_queries channels"]:
         return interpolation_warp(
             query_points,
             context_grid,
@@ -69,12 +70,12 @@ class Interpolation(FunctionSpec):
 
     @FunctionSpec.register(name="torch", rank=0, baseline=True)
     def torch_forward(
-        query_points: Tensor,
-        context_grid: Tensor,
+        query_points: Float[Tensor, "num_queries dim"],
+        context_grid: Float[Tensor, "channels ..."],
         grid: List[Tuple[float, float, int]],
         interpolation_type: str = "smooth_step_2",
         mem_speed_trade: bool = True,
-    ) -> Tensor:
+    ) -> Float[Tensor, "num_queries channels"]:
         return interpolation_torch(
             query_points,
             context_grid,

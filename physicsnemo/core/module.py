@@ -439,6 +439,7 @@ class Module(torch.nn.Module):
         file_name: Path | str | None = None,
         verbose: bool = False,
         legacy_format: bool = False,
+        _state_dict: dict | None = None,
     ) -> None:
         """
         Utility method for saving a ``Module`` instance to a '.mdlus' checkpoint file.
@@ -453,6 +454,12 @@ class Module(torch.nn.Module):
         legacy_format : bool, optional, default=False
             Whether to save the model in legacy tar format. If True, saves as tar archive.
             If False (default), saves as zip archive.
+        _state_dict : dict | None, optional, default=None
+            Internal pre-computed state dictionary to save.  When provided the model's
+            own ``state_dict()`` is **not** called and ``state_dict`` is
+            serialized directly.  This is used by
+            :func:`~physicsnemo.utils.checkpoint.save_checkpoint` to pass a
+            pre-gathered full state dictionary for FSDP / DTensor models.
 
         Raises
         ------
@@ -581,7 +588,8 @@ class Module(torch.nn.Module):
                 with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as archive:
                     # Save model state dict
                     state_dict_buffer = io.BytesIO()
-                    torch.save(self.state_dict(), state_dict_buffer)
+                    _sd = _state_dict if _state_dict is not None else self.state_dict()
+                    torch.save(_sd, state_dict_buffer)
                     archive.writestr("model.pt", state_dict_buffer.getvalue())
 
                     # Save args
@@ -604,7 +612,8 @@ class Module(torch.nn.Module):
                 local_path = Path(temp_dir)
 
                 # Save model state dict
-                torch.save(self.state_dict(), local_path / "model.pt")
+                _sd = _state_dict if _state_dict is not None else self.state_dict()
+                torch.save(_sd, local_path / "model.pt")
 
                 # Save args
                 with open(local_path / "args.json", "w") as f:

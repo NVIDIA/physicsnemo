@@ -26,3 +26,4 @@ static_features: [thickness]  # or [] for no features; override per experiment
 dynamic_features: []
 dynamic_targets: []    # Override per experiment (e.g. [effective_plastic_strain, stress_vm])
 global_features: null  # Override per experiment (e.g. [velocity_x, thickness_scale])
+stats_dir: stats        # Directory for normalization statistics

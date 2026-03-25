@@ -24,7 +24,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(subdivisions: int = 1, device: torch.device | str = "cpu") -> Mesh:
+def load(subdivisions: int = 1, device: torch.device | str = "cpu") -> Mesh[2, 2]:
     """Create a triangulated unit square in 2D space.
 
     Parameters
@@ -37,7 +37,7 @@ def load(subdivisions: int = 1, device: torch.device | str = "cpu") -> Mesh:
 
     Returns
     -------
-    Mesh
+    Mesh[2, 2]
         Mesh with n_manifold_dims=2, n_spatial_dims=2.
     """
     if subdivisions < 0:

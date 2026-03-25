@@ -24,7 +24,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(radius: float = 1.0, device: torch.device | str = "cpu") -> Mesh:
+def load(radius: float = 1.0, device: torch.device | str = "cpu") -> Mesh[2, 3]:
     """Create a regular icosahedron surface in 3D space.
 
     Parameters
@@ -36,7 +36,7 @@ def load(radius: float = 1.0, device: torch.device | str = "cpu") -> Mesh:
 
     Returns
     -------
-    Mesh
+    Mesh[2, 3]
         Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     phi = (1.0 + (5.0**0.5)) / 2.0  # Golden ratio

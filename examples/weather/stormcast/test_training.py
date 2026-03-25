@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from contextlib import nullcontext
 import os
 from pathlib import Path
 from typing import Literal
@@ -30,13 +31,6 @@ from torch.distributed.fsdp import (
     ShardedOptimStateDictConfig,
 )
 from torch.distributed.tensor import DTensor
-
-try:
-    from optimi import StableAdamW
-
-    IS_OPTIMI_AVAILABLE = True
-except ImportError:
-    IS_OPTIMI_AVAILABLE = False
 
 from physicsnemo.distributed import DistributedManager
 
@@ -94,9 +88,6 @@ def _setup_rundir(tmp_path, num_procs):
 @pytest.mark.parametrize("fp_optimizations", ["fp32", "amp-bf16"])
 # @pytest.mark.parametrize("torch_compile", [True, False])
 @pytest.mark.parametrize("torch_compile", [False])
-@pytest.mark.parametrize(
-    "optimizer", ["adamw", "stableadamw"]
-)  # deliberately skipping adam to reduce combinations
 @pytest.mark.parametrize("scheduler", [None, "CosineAnnealingLR"])
 @pytest.mark.parametrize("sigma_distribution", ["lognormal", "loguniform"])
 def test_training(
@@ -112,7 +103,6 @@ def test_training(
     force_sharding: bool,
     fp_optimizations: Literal["fp32", "amp-fp16", "amp-bf16"],
     torch_compile: bool,
-    optimizer: Literal["adam", "adamw", "stableadamw"],
     scheduler: str | None,
     sigma_distribution: Literal["lognormal", "loguniform"],
 ):
@@ -134,14 +124,6 @@ def test_training(
         pytest.skip(
             "Skipping: torch.compile is not supported with ShardTensor for now."
         )
-    if (not IS_OPTIMI_AVAILABLE) and (optimizer == "stableadamw"):
-        pytest.skip(
-            "Skipping: StableAdamW optimizer is not available because optimi is not installed."
-        )
-    if sharding and (optimizer == "stableadamw"):
-        pytest.skip(
-            "Skipping: StableAdamW optimizer is not supported with ShardTensor for now."
-        )
 
     # Set up rundir in the temporary directory
     rundir = _setup_rundir(tmp_path, dist.world_size)
@@ -159,7 +141,6 @@ def test_training(
         cfg.training.force_sharding = force_sharding
         cfg.training.perf.fp_optimizations = fp_optimizations
         cfg.training.perf.torch_compile = torch_compile
-        cfg.training.optimizer.name = optimizer
         cfg.training.scheduler.name = scheduler
         cfg.training.rundir = rundir
     cfg_diffusion.training.loss.sigma_distribution = sigma_distribution
@@ -275,6 +256,7 @@ def test_checkpoint_integrity(
     cfg_diffusion.training.domain_parallel_size = 2
     cfg_diffusion.training.batch_size = 2
     cfg_diffusion.training.rundir = _setup_rundir(tmp_path, dist.world_size)
+    cfg_diffusion.training.seed = 0
 
     # create trainer, train a bit and save checkpoint
     t0 = trainer.Trainer(cfg_diffusion.copy())
@@ -356,3 +338,190 @@ def test_checkpoint_integrity(
                         )
 
         torch.distributed.barrier()
+
+
+@pytest.mark.parametrize(
+    "domain_parallel_size, batch_size",
+    [(1, 4), (2, 2)],
+    ids=["fsdp_only", "fsdp_shard_tensor"],
+)
+def test_seeding(
+    tmp_path: Path,
+    cfg_diffusion: DictConfig,
+    *,
+    domain_parallel_size: int,
+    batch_size: int,
+):
+    """Verify sigma seeding under FSDP and FSDP+ShardTensor.
+
+    In FSDP+ShardTensor (domain_parallel_size > 1) with a (2, 2) mesh of
+    ranks ``[[0, 1], [2, 3]]``:
+
+      - Domain (model-parallel) groups are {0, 1} and {2, 3}.
+        Ranks within the same domain group must see **identical** sigma
+        (enforced by ``replicate_in_mesh`` broadcast).
+      - DDP (data-parallel) groups are {0, 2} and {1, 3}.
+        Ranks in different DDP groups must see **different** sigma
+        (they process different data and have distinct RNG seeds).
+
+    In FSDP-only (domain_parallel_size == 1):
+
+      - Every rank is its own data-parallel replica with a unique RNG seed,
+        so all sigma values must be distinct.
+
+    The check is run once at the start, then again after several training
+    steps, a validation pass, and a checkpoint save, to confirm that none of
+    those operations silently reset the seeding behaviour.
+    """
+    dist = DistributedManager()
+    if dist.world_size != 4:
+        pytest.skip(
+            f"Skipping: test_seeding requires exactly 4 processes, "
+            f"current: {dist.world_size}."
+        )
+
+    cfg = cfg_diffusion.copy()
+    cfg.training.domain_parallel_size = domain_parallel_size
+    cfg.training.batch_size = batch_size
+    cfg.training.seed = 42
+    cfg.training.total_train_steps = 20
+    cfg.training.rundir = _setup_rundir(tmp_path, dist.world_size)
+    if "regression" in cfg.model.diffusion_conditions:
+        cfg.model.diffusion_conditions.remove("regression")
+
+    t = trainer.Trainer(cfg)
+
+    # -- instrument the loss to capture post-broadcast sigma values ----------
+    captured_sigmas: list[torch.Tensor] = []
+    _orig_replicate = t.loss_fn.replicate_in_mesh
+
+    def _capturing_replicate(x, y):
+        result = _orig_replicate(x, y)
+        local = result.to_local() if hasattr(result, "to_local") else result
+        captured_sigmas.append(local.detach().cpu())
+        return result
+
+    t.loss_fn.replicate_in_mesh = _capturing_replicate
+
+    # -- helper: gather sigmas and assert the expected pattern ---------------
+    def _check_sigma_pattern(label: str) -> None:
+        assert captured_sigmas, f"[{label}] No sigma was captured"
+        sigma_val = captured_sigmas[-1].flatten()[0].item()
+
+        buf = torch.tensor([sigma_val], device=dist.device)
+        gathered = [torch.zeros(1, device=dist.device) for _ in range(dist.world_size)]
+        torch.distributed.all_gather(gathered, buf)
+        sigmas = [g.item() for g in gathered]
+
+        if domain_parallel_size > 1:
+            # domain groups {0,1} and {2,3} must agree internally
+            assert sigmas[0] == sigmas[1], (
+                f"[{label}] Domain group {{0,1}} sigma mismatch: "
+                f"{sigmas[0]} vs {sigmas[1]}"
+            )
+            assert sigmas[2] == sigmas[3], (
+                f"[{label}] Domain group {{2,3}} sigma mismatch: "
+                f"{sigmas[2]} vs {sigmas[3]}"
+            )
+            # DDP groups {0,2} and {1,3} must differ
+            assert sigmas[0] != sigmas[2], (
+                f"[{label}] DDP groups should differ: rank 0 = rank 2 = {sigmas[0]}"
+            )
+        else:
+            # pure FSDP: every rank is a distinct data-parallel replica
+            for i in range(dist.world_size):
+                for j in range(i + 1, dist.world_size):
+                    assert sigmas[i] != sigmas[j], (
+                        f"[{label}] Ranks {i} and {j} should differ: both = {sigmas[i]}"
+                    )
+
+    # ---- Phase 1: check sigma pattern at the very first step ----
+    captured_sigmas.clear()
+    t.train_step()
+    t.total_steps += 1
+    _check_sigma_pattern("initial step")
+
+    # ---- Phase 2: train, validate, and save a checkpoint ----
+    captured_sigmas.clear()
+    for _ in range(4):
+        t.train_step()
+        t.total_steps += 1
+    t.validate()
+    t.save_checkpoint()
+
+    # ---- Phase 3: re-check sigma pattern after the round-trip ----
+    captured_sigmas.clear()
+    t.train_step()
+    t.total_steps += 1
+    _check_sigma_pattern("after training/validation/checkpoint")
+
+    torch.distributed.barrier()
+
+
+@pytest.mark.parametrize("net_architecture", ["unet", "dit"])
+@pytest.mark.parametrize(
+    "model_type", ["hybrid", "nowcasting", "downscaling", "unconditional"]
+)
+@pytest.mark.parametrize("num_scalar_cond_channels", [0, 2])
+@pytest.mark.parametrize("num_invariant_channels", [0, 2])
+def test_model_types(
+    tmp_path: Path,
+    cfg_diffusion: DictConfig,
+    cfg_diffusion_unet: DictConfig,
+    *,
+    net_architecture: Literal["unet", "dit"],
+    model_type: Literal["hybrid", "nowcasting", "downscaling", "unconditional"],
+    num_scalar_cond_channels: int,
+    num_invariant_channels: int,
+):
+    """Test that training runs with different model configurations."""
+    dist = DistributedManager()
+
+    if dist.world_size > 1:
+        pytest.skip("Skipping: `test_model_types` is only run with 1 process.")
+
+    # Set up rundir in the temporary directory
+    rundir = _setup_rundir(tmp_path, dist.world_size)
+
+    cfg_diffusion = (
+        cfg_diffusion if net_architecture == "dit" else cfg_diffusion_unet
+    ).copy()
+
+    # override params from config
+    cfg_diffusion.model.architecture = net_architecture
+    cfg_diffusion.training.rundir = rundir
+    cfg_diffusion.dataset.model_type = model_type
+    cfg_diffusion.dataset.num_scalar_cond_channels = num_scalar_cond_channels
+    cfg_diffusion.dataset.num_invariant_channels = num_invariant_channels
+
+    if model_type == "hybrid":
+        cfg_diffusion.model.diffusion_conditions = ["state", "background"]
+    elif model_type == "nowcasting":
+        cfg_diffusion.model.diffusion_conditions = ["state"]
+    elif model_type == "downscaling":
+        cfg_diffusion.model.diffusion_conditions = ["background"]
+    elif model_type == "unconditional":
+        cfg_diffusion.model.diffusion_conditions = []
+    else:
+        raise ValueError(
+            "Model_type must be one of ['hybrid', 'nowcasting', 'downscaling', 'unconditional']."
+        )
+
+    if num_invariant_channels > 0:
+        cfg_diffusion.model.diffusion_conditions.append("invariant")
+
+    unsupported_scalar_conds = (
+        num_scalar_cond_channels > 0 and net_architecture != "dit"
+    )
+    context = pytest.raises(ValueError) if unsupported_scalar_conds else nullcontext()
+    with context:
+        train.main(cfg_diffusion)
+
+        if dist.world_size > 1:
+            torch.distributed.barrier()
+
+        net_cls = "EDMPrecond" if net_architecture == "unet" else "EDMPreconditioner"
+        ckpt_path = os.path.join(
+            rundir, "checkpoints_diffusion", f"{net_cls}.0.10.mdlus"
+        )
+        assert os.path.isfile(ckpt_path), "Diffusion checkpoint not found"

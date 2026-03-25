@@ -24,7 +24,7 @@ num_data_workers: 4 # Number of dataloader worker threads per proc
 log_to_wandb: False # Whether or not to log to Weights & Biases (requires wandb account)
 wandb_mode: "online" # logging mode, "online" or "offline"
 log_to_tensorboard: False # Whether to log to TensorBoard (logs saved in rundir/tensorboard)
-seed: -1 # Specify a random seed by setting this to an int > 0
+seed: 1 # Specify a random seed by setting this to an int > 0
 cudnn_benchmark: True # Enable/disable CuDNN benchmark mode
 resume_checkpoint: "latest" # epoch number to continue training from, or "latest" for the latest checkpoint
 initial_weights: null # if not null, a .mdlus checkpoint to load weights at the start of training; no effect if training continues from a checkpoint
@@ -54,7 +54,7 @@ perf:
 
 # Optimizer configuration
 optimizer:
-  name: "adam" # Optimizer type: "adam", "adamw", "stableadamw"
+  name: "adam" # Optimizer type: "adam", "adamw"
   lr: 4E-4 # Initial learning rate
   betas: [0.9, 0.999] # Adam beta parameters
   weight_decay: 0.0 # Weight decay (L2 regularization)
@@ -99,3 +99,6 @@ loss:
   # Loguniform distribution parameters (used when sigma_distribution: "loguniform")
   # sigma_min: 0.002 # Minimum noise level
   # sigma_max: 80.0 # Maximum noise level
+  # track_sigma_bin_loss: true # Log per-sigma-bin diffusion loss to TensorBoard
+  # sigma_bin_count: 8 # Number of equal-probability bins if sigma_bin_edges is not provided
+  # sigma_bin_edges: [] # Optional explicit strictly increasing edges (>0), e.g. [1e-3,1e-2,...,80.0]
