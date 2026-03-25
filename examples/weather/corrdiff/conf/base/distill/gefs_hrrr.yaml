@@ -1,0 +1,142 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+defaults:
+    - base_all
+
+# Hyperparameters
+hp:
+    total_batch_size: 512
+    # Total batch size
+    batch_size_per_gpu: 1
+    # Batch size per GPU
+    validation_batch_size_per_gpu: 1
+    # validation batch size per GPU
+    patching:
+        patch_shape_x: ???
+        patch_shape_y: ???
+        # Patch size. Patch-based sampling will be utilized if these dimensions
+        # differ from img_shape_x and img_shape_y. Needs to be overridden.
+        patch_num: ???
+        # Number of patches from a single sample. Total number of patches is
+        # patch_num * batch_size_global. Should be overridden.
+        subpatch_num: 2
+        # Number of patches to include in the super-patch for distillation.
+        overlap_pix: 32
+        # Number of overlapping pixels between adjacent patches
+        window_function: KBD
+        # Window function to use for the window smoothing in superpatch training.
+        window_alpha: 1
+        # Alpha for the window function.
+    scheduler_name: LambdaInverseSquareRootScheduler
+    optimizer:
+        fused: True
+    mode: cm
+    cm:
+        model:
+            use_ema: False
+            # multistep generation if larger than 1 (default: single-step generation)
+            student_sample_steps: 1
+            # sampling type in multistep generation ('sde', 'ode')
+            student_sample_type: 'sde'
+            # precision for model/optimizer states and data - recommended to be float32 if precision_amp is not None
+            precision: 'float32'
+            # AMP during training - if None or equal to precision, AMP is disabled during training.
+            precision_amp: null
+            # AMP during inference - if None or equal to precision, AMP is disabled during inference.
+            precision_amp_infer: null 
+            # AMP during en-/decoding (e.g., for VAEs or text encoders) - if None or equal to precision, AMP is disabled during en-/decoding.
+            precision_amp_enc: null
+            # FSDP2 precision for parameter storage and gradient reduction.
+            # If None, defaults to `precision`. Useful for storing params/grads in float32 while computing in bfloat16.
+            precision_fsdp: null
+            # whether to add the teacher model to the fsdp_dict
+            add_teacher_to_fsdp_dict: True
+            loss_config:
+                use_cd: False
+                huber_const: 0.06
+                use_squared_l2: False
+                weighting_ct_loss: 'c_out_sq'
+            sample_t_cfg:
+                train_p_mean: -0.2 # 0.0 # from fastgen: -1.1
+                train_p_std: 1.6 # 2 # from fastgen: 2.0
+                min_t: 0.002
+                t_list: null
+                max_t: 180 # 800 # from fastgen: 80
+                min_r: 0.
+                sigma_data: 0.5
+                quantize: False
+                time_dist_type: lognormal
+            block_kwargs:
+                dropout: 0.2
+        callbacks:
+            ct_schedule:
+                q: 4.0
+                ratio_limit: 0.9961
+                 # duration // (4 * 1000)
+                kimg_per_stage: 1280
+            # ema:
+            #     type: power
+            #     gamma: 16.97
+            #     beta: 0.999
+    scm:
+        model:
+            use_ema: False
+            # multistep generation if larger than 1 (default: single-step generation)
+            student_sample_steps: 1
+            # sampling type in multistep generation ('sde', 'ode')
+            student_sample_type: 'sde'
+            # precision for model/optimizer states and data - recommended to be float32 if precision_amp is not None
+            precision: 'float32'
+            # AMP during training - if None or equal to precision, AMP is disabled during training.
+            precision_amp: null
+            # AMP during inference - if None or equal to precision, AMP is disabled during inference.
+            precision_amp_infer: null 
+            # AMP during en-/decoding (e.g., for VAEs or text encoders) - if None or equal to precision, AMP is disabled during en-/decoding.
+            precision_amp_enc: null
+            # FSDP2 precision for parameter storage and gradient reduction.
+            # If None, defaults to `precision`. Useful for storing params/grads in float32 while computing in bfloat16.
+            precision_fsdp: null
+            # whether to add the teacher model to the fsdp_dict
+            add_teacher_to_fsdp_dict: True
+            loss_config:
+                # use consistency distillation
+                use_cd: False
+                # warm-up steps for tangent
+                tangent_warmup_steps: 1000 # 1/10 of original
+                # tangent normalization constant
+                tangent_warmup_const: 0.1
+                # enable prior weighting
+                prior_weighting_enabled: True
+                # enable g_norm_spatial_invariance
+                g_norm_spatial_invariance: True
+                # enable divide_x_0_spatial_dim
+                divide_x_0_spatial_dim: True
+            sample_t_cfg:
+                train_p_mean: -0.2
+                train_p_std: 1.6
+                sigma_data: 0.5
+                min_t: 0.002
+                t_list: null
+                max_t: 180
+            # TODO(jberner): change dropout?
+            block_kwargs:
+                dropout: 0.2
+        # callbacks:
+        #     ema:
+        #         type: power
+        #         gamma: 6.94 # ema_10
+        #         beta: 0.999

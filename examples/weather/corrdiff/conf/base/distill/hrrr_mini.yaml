@@ -1,0 +1,138 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+defaults:
+    - base_all
+# Hyperparameters
+hp:
+    total_batch_size: 256
+    # Total batch size
+    validation_batch_size_per_gpu: 4
+    # validation batch size per GPU
+    patching: null
+    scheduler_name: LambdaLinearScheduler
+    optimizer_name: RAdam
+    optimizer:
+        lr: 0.0001
+        eps: 1e-08
+    mode: cm
+    cm:
+        model:
+            use_ema: False
+            # multistep generation if larger than 1 (default: single-step generation)
+            student_sample_steps: 1
+            # sampling type in multistep generation ('sde', 'ode')
+            student_sample_type: 'sde'
+            # precision for model/optimizer states and data - recommended to be float32 if precision_amp is not None
+            precision: 'float32'
+            # AMP during training - if None or equal to precision, AMP is disabled during training.
+            precision_amp: null
+            # AMP during inference - if None or equal to precision, AMP is disabled during inference.
+            precision_amp_infer: null 
+            # AMP during en-/decoding (e.g., for VAEs or text encoders) - if None or equal to precision, AMP is disabled during en-/decoding.
+            precision_amp_enc: null
+            # FSDP2 precision for parameter storage and gradient reduction.
+            # If None, defaults to `precision`. Useful for storing params/grads in float32 while computing in bfloat16.
+            precision_fsdp: null
+            # whether to add the teacher model to the fsdp_dict
+            add_teacher_to_fsdp_dict: True
+            loss_config:
+                use_cd: False
+                huber_const: 1e-8
+                use_squared_l2: False
+                weighting_ct_loss: 'default'
+            sample_t_cfg:
+                train_p_mean: -0.2
+                train_p_std: 1.6
+                min_t: 0.002
+                t_list: null
+                max_t: 180
+                min_r: 0.
+                sigma_data: 0.5
+                quantize: False
+                time_dist_type: lognormal
+            block_kwargs:
+                dropout: 0.2
+        callbacks:
+            ct_schedule:
+                q: 2.0
+                ratio_limit: 0.999
+                # duration // (8 * 1000)
+                kimg_per_stage: 2000
+            # ema:
+            #     beta: 0.999
+    scm: # TODO(jberner): set betas to (0.9, 0.99)
+        model:
+            use_ema: False
+            # multistep generation if larger than 1 (default: single-step generation)
+            student_sample_steps: 1
+            # sampling type in multistep generation ('sde', 'ode')
+            student_sample_type: 'sde'
+            # precision for model/optimizer states and data - recommended to be float32 if precision_amp is not None
+            precision: 'float32'
+            # AMP during training - if None or equal to precision, AMP is disabled during training.
+            precision_amp: null
+            # AMP during inference - if None or equal to precision, AMP is disabled during inference.
+            precision_amp_infer: null 
+            # AMP during en-/decoding (e.g., for VAEs or text encoders) - if None or equal to precision, AMP is disabled during en-/decoding.
+            precision_amp_enc: null
+            # FSDP2 precision for parameter storage and gradient reduction.
+            # If None, defaults to `precision`. Useful for storing params/grads in float32 while computing in bfloat16.
+            precision_fsdp: null
+            # whether to add the teacher model to the fsdp_dict
+            add_teacher_to_fsdp_dict: True
+            loss_config:
+                # use consistency distillation
+                use_cd: False
+                # warm-up steps for tangent
+                tangent_warmup_steps: 10000
+                # tangent normalization constant
+                tangent_warmup_const: 0.1
+                # enable prior weighting
+                prior_weighting_enabled: True
+                # enable g_norm_spatial_invariance
+                g_norm_spatial_invariance: True
+                # enable divide_x_0_spatial_dim
+                divide_x_0_spatial_dim: True
+                # finite difference approx. for jvp
+                use_jvp_finite_diff: False
+            sample_t_cfg:
+                train_p_mean: 0.0
+                train_p_std: 1.2
+                sigma_data: 0.5
+                min_t: 0.002
+                t_list: null
+                max_t: 180
+            block_kwargs:
+                dropout: 0.2
+        # callbacks:
+        #     ema:
+        #         type: "halflife"
+    dmd2: # TODO(jberner): change weight decay to 0.01 and opt_name to AdamW
+        model:
+            use_ema: False
+            sample_t_cfg:
+                train_p_mean: 0.0
+                train_p_std: 1.2
+                sigma_data: 0.5
+                min_t: 0.002
+                t_list: null
+                max_t: 180
+            student_update_freq: 5
+            guidance_scale: 1.0
+            gan_loss_weight_gen: 0.001
+            block_kwargs:
+                dropout: 0.0

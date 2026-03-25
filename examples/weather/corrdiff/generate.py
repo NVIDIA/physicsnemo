@@ -43,6 +43,8 @@ from physicsnemo.diffusion.samplers import (
     deterministic_sampler,
     stochastic_sampler,
 )
+from helpers.distill_helpers import few_step_sampler
+
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.experimental.models.diffusion.preconditioning import (
     tEDMPrecondSuperRes,
@@ -197,6 +199,19 @@ def main(cfg: DictConfig) -> None:
             patching=patching,
             num_steps=getattr(cfg.sampler, "num_steps", 18),
         )
+    elif cfg.sampler.type == "few-step":
+        sigma_max = cfg.sampler.get("sigma_max", 800.0)
+        sigma_mid = cfg.sampler.get("sigma_mid", None)
+        logger0.info(
+            f"Using few-step sampler with sigma_max={sigma_max} and sigma_mid={sigma_mid}"
+        )
+        sampler_fn = partial(
+            few_step_sampler,
+            sigma_max=sigma_max,
+            sigma_mid=sigma_mid,
+            patching=patching,
+        )
+
     else:
         raise ValueError(f"Unknown sampling method {cfg.sampling.type}")
 

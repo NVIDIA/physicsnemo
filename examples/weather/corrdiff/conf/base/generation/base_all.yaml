@@ -17,6 +17,7 @@
 defaults:
     - sampler: stochastic
     # Recommended is stochastic sampler. Change to deterministic if needed.
+    # Change to `few-step` sampler if running inference with distillation checkpoint.
 
 num_ensembles: ???
 # Number of ensembles to generate per input. Should be overridden.
