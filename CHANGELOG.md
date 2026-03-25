@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Adds GLOBE model (`physicsnemo.experimental.models.globe.model.GLOBE`)
 - Adds GLOBE AirFRANS example case (`examples/cfd/external_aerodynamics/globe/airfrans`)
-- Adds automatic support for `FSDP` and/or `ShardTensor` models in checkpoint save/load functionality
+- Adds automatic support for `FSDP` and/or `ShardTensor` models in checkpoint save/load
+  functionality
 - PhysicsNeMo-Mesh now supports conversion from PyVista/VTK/VTU meshes that may
   contain polyhedral cells.
 - In PhysicsNeMo-Mesh, adds `Mesh.to_point_cloud()`, `.to_edge_graph()`, and
