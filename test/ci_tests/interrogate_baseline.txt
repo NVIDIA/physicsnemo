@@ -589,13 +589,6 @@ physicsnemo/metrics/cae/cfd.py:raise_missing_pyvista
 physicsnemo/metrics/cae/integral.py:line_integral
 physicsnemo/metrics/cae/integral.py:raise_missing_pyvista
 physicsnemo/metrics/cae/integral.py:surface_integral
-physicsnemo/models/dit/conditioning_embedders.py:DiTConditionEmbedder.output_dim
-physicsnemo/models/dit/conditioning_embedders.py:EDMConditionEmbedder.output_dim
-physicsnemo/models/dit/conditioning_embedders.py:ZeroConditioningEmbedder.output_dim
-physicsnemo/models/dit/layers.py:DetokenizerModuleBase.initialize_weights
-physicsnemo/models/dit/layers.py:PatchEmbed2DTokenizer.initialize_weights
-physicsnemo/models/dit/layers.py:ProjReshape2DDetokenizer.initialize_weights
-physicsnemo/models/dit/layers.py:TokenizerModuleBase.initialize_weights
 physicsnemo/models/dpot/dpot.py:DPOTMeta
 physicsnemo/models/dpot/dpot3d.py:DPOT3DMeta
 physicsnemo/models/dpot/dpot3d.py:checkpoint_filter_fn
