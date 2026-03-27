@@ -1,0 +1,223 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Configuration file for FloodForecaster training.
+# This file is used by Hydra to configure the training run.
+
+hydra:
+  job:
+    chdir: True  # Change directory to the job's working directory.
+  run:
+    dir: ./outputs/  # Directory to save outputs.
+
+# Distributed computing
+# Note: FloodForecaster uses physicsnemo's DistributedManager which automatically
+# detects distributed environments (torchrun, mpirun, SLURM). When running in
+# distributed mode, the device is automatically set to cuda:{local_rank} for each process.
+# The device field below is only used as a fallback for single-GPU/CPU execution.
+distributed:
+  seed: 123  # Random seed for reproducibility (integer)
+  device: 'cuda:0'  # Fallback device for non-distributed execution. Ignored when using torchrun/mpirun.
+
+# Dataset related for training and one-step evaluation
+source_data:
+  root: "C:/Users/jrj6wm/Box/Flood_Modeling/Simulations/New_Results"  # Source domain training data path
+  resolution: 48  # Spatial resolution of the dataset (integer)
+  n_history: 3  # Number of historical time steps to use as input (integer)
+  batch_size: 64  # Batch size for training (integer)
+  query_res: [48, 48]  # Query resolution for GINO model [height, width] (list of 2 integers)
+  xy_file: "M40_XY.txt"  # Filename for XY coordinates (geometry file)
+  static_files:
+    # Note: M40_XY.txt is included here as a static feature (XY coordinates as features)
+    # The xy_file parameter loads it separately for geometry, while static_files includes it as a feature
+    # This is intentional for flood modeling where XY coordinates are used both for geometry and as features
+    - "M40_XY.txt"
+    - "M40_CA.txt"
+    - "M40_CE.txt"
+    - "M40_CS.txt"
+    - "M40_FA.txt"
+    - "M40_A.txt"
+    - "M40_CU.txt"
+  dynamic_patterns:  # Filename patterns for dynamic variables ({} will be replaced with timestep)
+    WD: "M40_WD_{}.txt"  # Water depth pattern
+    VX: "M40_VX_{}.txt"  # X-velocity pattern
+    VY: "M40_VY_{}.txt"  # Y-velocity pattern
+  boundary_patterns:  # Filename patterns for boundary conditions ({} will be replaced with timestep)
+    inflow: "M40_US_InF_{}.txt"  # Inflow boundary condition pattern
+  noise_type: "none"  # Type of noise to add to data. Options: "none", "gaussian" (string)
+  noise_std: [0.01, 0.001, 0.001]  # Standard deviation for noise per channel [WD, VX, VY] (list of floats)
+  rollout_length: 78  # Number of timesteps for autoregressive rollout (integer)
+  skip_before_timestep: 12  # Number of initial timesteps to skip before starting rollout (integer)
+  dt: 1200  # Time step size in seconds (float)
+
+# Target domain dataset
+target_data:
+  root: "C:/Users/jrj6wm/Box/Flood_Modeling/Simulations/Case_4/Results_Target/Train"  # Target domain training data path (can be same as source or different)
+  resolution: 48  # Spatial resolution of the dataset (integer)
+  n_history: 3  # Number of historical time steps to use as input (integer)
+  batch_size: 64  # Batch size for domain adaptation training (integer)
+  query_res: [48, 48]  # Query resolution for GINO model [height, width] (list of 2 integers)
+  xy_file: "M40_XY.txt"  # Filename for XY coordinates (geometry file)
+  static_files:
+    # Note: M40_XY.txt is included here as a static feature (XY coordinates as features)
+    # The xy_file parameter loads it separately for geometry, while static_files includes it as a feature
+    # This is intentional for flood modeling where XY coordinates are used both for geometry and as features
+    - "M40_XY.txt"
+    - "M40_CA.txt"
+    - "M40_CE.txt"
+    - "M40_CS.txt"
+    - "M40_FA.txt"
+    - "M40_A.txt"
+    - "M40_CU.txt"
+  dynamic_patterns:  # Filename patterns for dynamic variables ({} will be replaced with timestep)
+    WD: "M40_WD_{}.txt"  # Water depth pattern
+    VX: "M40_VX_{}.txt"  # X-velocity pattern
+    VY: "M40_VY_{}.txt"  # Y-velocity pattern
+  boundary_patterns:  # Filename patterns for boundary conditions ({} will be replaced with timestep)
+    inflow: "M40_US_InF_{}.txt"  # Inflow boundary condition pattern
+  noise_type: "none"  # Type of noise to add to data. Options: "none", "gaussian" (string)
+  noise_std: [0.01, 0.001, 0.001]  # Standard deviation for noise per channel [WD, VX, VY] (list of floats)
+  rollout_length: 78  # Number of timesteps for autoregressive rollout (integer)
+  skip_before_timestep: 12  # Number of initial timesteps to skip before starting rollout (integer)
+  dt: 1200  # Time step size in seconds (float)
+
+# Rollout evaluation dataset
+rollout_data:
+  root: "C:/Users/jrj6wm/Box/Flood_Modeling/Simulations/New_Results/Test_20_Paper"  # Test/evaluation data path
+  xy_file: "M40_XY.txt"  # Filename for XY coordinates (geometry file)
+  static_files:
+    # Note: M40_XY.txt is included here as a static feature (XY coordinates as features)
+    # The xy_file parameter loads it separately for geometry, while static_files includes it as a feature
+    # This is intentional for flood modeling where XY coordinates are used both for geometry and as features
+    - "M40_XY.txt"
+    - "M40_CA.txt"
+    - "M40_CE.txt"
+    - "M40_CS.txt"
+    - "M40_FA.txt"
+    - "M40_A.txt"
+    - "M40_CU.txt"
+  dynamic_patterns:  # Filename patterns for dynamic variables ({} will be replaced with timestep)
+    WD: "M40_WD_{}.txt"  # Water depth pattern
+    VX: "M40_VX_{}.txt"  # X-velocity pattern
+    VY: "M40_VY_{}.txt"  # Y-velocity pattern
+  boundary_patterns:  # Filename patterns for boundary conditions ({} will be replaced with timestep)
+    inflow: "M40_US_InF_{}.txt"  # Inflow boundary condition pattern
+
+# Model configuration (for neuralop get_model compatibility)
+# Note: While model_arch is a parameter for neuralop's get_model, the FloodForecaster codebase
+# is specifically designed for the GINO architecture. Changing model_arch would require significant code modifications.
+model:
+  model_arch: 'gino'  # Model architecture (string, currently only 'gino' is supported)
+  autoregressive: true  # Enable autoregressive residual connection for time-stepping (boolean: true/false)
+  data_channels: 20  # Number of input data channels (integer)
+  out_channels: 3  # Number of output channels (integer, typically 3 for WD, VX, VY)
+  latent_feature_channels: null  # Number of latent feature channels (integer or null)
+  projection_channel_ratio: 4  # Channel expansion ratio for projection layers (float)
+  gno_coord_dim: 2  # Coordinate dimension for Graph Neural Operator (integer, 2 for 2D)
+  in_gno_radius: 0.1  # Input GNO radius for neighbor search (float)
+  out_gno_radius: 0.1  # Output GNO radius for neighbor search (float)
+  in_gno_transform_type: 'linear'  # Input GNO transform type (string: 'linear', 'nonlinear', etc.)
+  out_gno_transform_type: 'linear'  # Output GNO transform type (string: 'linear', 'nonlinear', etc.)
+  gno_weighting_function: null  # GNO weighting function (string or null)
+  gno_weight_function_scale: 1.0  # Scale factor for GNO weighting function (float)
+  in_gno_pos_embed_type: 'transformer'  # Input positional embedding type (string)
+  out_gno_pos_embed_type: 'transformer'  # Output positional embedding type (string)
+  fno_in_channels: 20  # FNO input channels (integer)
+  fno_n_modes: [16, 16]  # FNO number of Fourier modes per dimension [modes_x, modes_y] (list of integers)
+  fno_hidden_channels: 64  # FNO hidden channel dimension (integer)
+  fno_lifting_channel_ratio: 2  # FNO channel expansion ratio for lifting (float)
+  fno_n_layers: 4  # Number of FNO layers (integer)
+  gno_embed_channels: 32  # GNO embedding channel dimension (integer)
+  gno_embed_max_positions: 10000  # Maximum positions for positional embedding (integer)
+  in_gno_channel_mlp_hidden_layers: [80, 80, 80]  # Input GNO MLP hidden layer sizes (list of integers)
+  out_gno_channel_mlp_hidden_layers: [512, 256]  # Output GNO MLP hidden layer sizes (list of integers)
+  gno_use_open3d: false  # Use Open3D for neighbor search (boolean)
+  gno_use_torch_scatter: false  # Use torch_scatter for operations (boolean)
+  out_gno_tanh: null  # Apply tanh activation to output GNO (boolean or null)
+  fno_resolution_scaling_factor: null  # FNO resolution scaling factor (float or null)
+  fno_block_precision: 'full'  # FNO block precision (string: 'full', 'half', etc.)
+  fno_use_channel_mlp: true  # Use channel MLP in FNO blocks (boolean)
+  fno_channel_mlp_dropout: 0  # Dropout rate for FNO channel MLP (float, 0.0 to 1.0)
+  fno_channel_mlp_expansion: 0.5  # Channel expansion ratio for FNO MLP (float)
+  fno_norm: 'instance_norm'  # Normalization type for FNO (string: 'instance_norm', 'layer_norm', etc.)
+  fno_ada_in_features: 16  # FNO adaptive input features (integer)
+  fno_ada_in_dim: 1  # FNO adaptive input dimension (integer)
+  fno_preactivation: false  # Use preactivation in FNO blocks (boolean)
+  fno_skip: 'linear'  # FNO skip connection type (string: 'linear', 'identity', etc.)
+  fno_channel_mlp_skip: 'soft-gating'  # FNO channel MLP skip type (string)
+  fno_separable: false  # Use separable FNO (boolean)
+  fno_factorization: 'tucker'  # FNO tensor factorization type (string: 'tucker', 'cp', etc.)
+  fno_rank: 0.4  # FNO factorization rank (float, typically 0.0 to 1.0)
+  fno_fixed_rank_modes: false  # Use fixed rank modes in FNO (boolean)
+  fno_implementation: 'factorized'  # FNO implementation type (string)
+
+# Checkpoint configuration
+checkpoint:
+  save_dir: "./checkpoints_flood_forecaster"
+  # Resume training from checkpoint:
+  #   - resume_from_source: Path to pretraining checkpoint directory (e.g., "./checkpoints_flood_forecaster/pretrain")
+  #                         Used to resume pretraining stage. Set to null to start from scratch.
+  #   - resume_from_adapt: Path to domain adaptation checkpoint directory (e.g., "./checkpoints_flood_forecaster/adapt")
+  #                        Used to resume domain adaptation stage or load model for inference.
+  #                        For inference, this takes precedence over resume_from_source.
+  resume_from_source: null  # Path to pretraining checkpoint directory, or null to start from scratch
+  resume_from_adapt: null   # Path to domain adaptation checkpoint directory, or null
+  # Pretraining checkpoint saving options
+  save_best: "source_val_l2"  # Metric to monitor for best model saving (e.g., "source_val_l2")
+                              # Set to null to disable best model saving
+  save_every: null  # Save checkpoint every N epochs (e.g., 10). Set to null to disable interval saving
+                    # Note: save_best takes precedence over save_every if both are set
+
+# Rollout output directory
+rollout:
+  out_dir: "./rollout_outputs"  # Directory to save rollout evaluation outputs (string)
+
+# Optimization settings
+training:
+  n_epochs: 50  # Total epochs (fallback if n_epochs_source not specified)
+  n_epochs_source: 30  # Number of epochs for source domain pretraining (integer)
+  n_epochs_adapt: 20  # Number of epochs for domain adaptation (integer)
+  learning_rate: 1e-4  # Learning rate for pretraining (float, typically 1e-5 to 1e-3)
+  adapt_learning_rate: 1e-4  # Learning rate for domain adaptation (float, typically 1e-5 to 1e-3)
+  training_loss: 'l2'  # Training loss function. Available options: 'l1' (L1/LpLoss with p=1), 'l2' (L2/LpLoss with p=2)
+  testing_loss: 'l2'  # Testing/evaluation loss function. Available options: 'l1' (L1/LpLoss with p=1), 'l2' (L2/LpLoss with p=2)
+  weight_decay: 1e-4  # Weight decay for optimizer (float, typically 1e-5 to 1e-3)
+  amp_autocast: false  # Enable automatic mixed precision training (boolean: true/false)
+  scheduler: 'StepLR'  # Learning rate scheduler. Available options: 'StepLR', 'ReduceLROnPlateau', 'CosineAnnealingLR'
+  scheduler_T_max: 200  # Maximum number of iterations for CosineAnnealingLR (integer)
+  scheduler_patience: 5  # Patience for ReduceLROnPlateau (number of epochs with no improvement, integer)
+  step_size: 50  # Period of learning rate decay for StepLR (integer, epochs)
+  gamma: 0.5  # Multiplicative factor for learning rate decay (float, typically 0.1 to 0.9)
+  da_class_loss_weight: 0.0  # Weight for domain classification adversarial loss (float, 0.0 disables adversarial training)
+  da_lambda_max: 1.0  # Maximum lambda value for domain adaptation gradient reversal (float)
+  da_classifier:  # Domain classifier architecture for adversarial domain adaptation
+    conv_layers:  # Convolutional layers for domain classifier
+      - out_channels: 64  # Number of output channels for this conv layer (integer)
+        kernel_size: 3  # Convolution kernel size (integer)
+        pool_size: 2  # Pooling size after convolution (integer)
+    fc_dim: 1  # Fully connected layer dimension (integer, output dimension for binary classification)
+
+# Weights & Biases logging
+wandb:
+  log: false  # Enable Weights & Biases logging (boolean: true/false)
+  name: null  # Run name for W&B (string or null, null uses auto-generated name)
+  group: 'flood-experiments'  # Experiment group name for organizing runs (string)
+  project: 'Flood_GINO_NoPhysics'  # W&B project name (string)
+  entity: 'uva_mehdi'  # W&B entity/username (string)
+  sweep: false  # Enable W&B hyperparameter sweep mode (boolean: true/false)
+  log_output: true  # Log model outputs to W&B (boolean: true/false)
+  eval_interval: 1  # Evaluation logging interval in epochs (integer)
+
