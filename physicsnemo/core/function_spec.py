@@ -88,14 +88,17 @@ class FunctionSpec:
        ``@FunctionSpec.register``. Provide a ``name`` and a ``rank`` (lower
        wins). Optionally set ``baseline=True`` for the reference implementation
        used in benchmarking. The decorator must be used inside the class body.
-    3. Implement :meth:`make_inputs` and :meth:`compare` for benchmarking and
-       correctness checks. These are optional for basic usage, but highly
-       encouraged and required for benchmarking/validation workflows.
-       ``make_inputs`` should yield ``(label, args, kwargs)`` items in roughly
-       increasing workload order (for example from smaller to larger cases).
-       Labels use a descriptive naming scheme that will be used for benchmarking
-       and plotting. ``compare`` should validate
-       that outputs from two implementations match.
+    3. Implement :meth:`make_inputs_forward` for every functional so it can be
+       benchmarked. Implement :meth:`compare_forward` when a functional has
+       multiple implementations and needs cross-backend forward parity checks.
+       Implement :meth:`make_inputs_backward` only for functionals with a
+       meaningful backward pass (for example differentiable functionals).
+       Implement :meth:`compare_backward` when backward support exists and
+       multiple implementations need backward parity checks.
+       Each input generator should yield ``(label, args, kwargs)`` items in
+       roughly increasing workload order (for example from smaller to larger
+       cases). Labels do not need to be exactly ``small/medium/large`` and are
+       used in benchmark plots and summaries.
     4. Expose a functional entry point with :meth:`make_function`.
 
     Dispatch rules
@@ -114,52 +117,41 @@ class FunctionSpec:
 
     .. code-block:: python
 
-        import importlib
         import torch
+        import warp as wp
 
         from physicsnemo.core.function_spec import FunctionSpec
-        from physicsnemo.core.version_check import check_version_spec
 
-        WARP_AVAILABLE = check_version_spec("warp", "0.6.0", hard_fail=False)
+        wp.init()
+        wp.config.quiet = True
 
-        if WARP_AVAILABLE:
-            wp = importlib.import_module("warp")
-            wp.init()
-            wp.config.quiet = True
+        @wp.kernel
+        def _identity_kernel(
+            x: wp.array(dtype=wp.float32),
+            y: wp.array(dtype=wp.float32),
+        ):
+            i = wp.tid()
+            y[i] = x[i]
 
-            @wp.kernel
-            def _identity_kernel(
-                x: wp.array(dtype=wp.float32),
-                y: wp.array(dtype=wp.float32),
-            ):
-                i = wp.tid()
-                y[i] = x[i]
-
-            @torch.library.custom_op("physicsnemo::identity_warp", mutates_args=())
-            def identity_impl(x: torch.Tensor) -> torch.Tensor:
-                out = torch.empty_like(x)
-                device, stream = FunctionSpec.warp_launch_context(x)
-                wp_x = wp.from_torch(x, dtype=wp.float32, return_ctype=True)
-                wp_y = wp.from_torch(out, dtype=wp.float32, return_ctype=True)
-                with wp.ScopedStream(stream):
-                    wp.launch(
-                        kernel=_identity_kernel,
-                        dim=x.numel(),
-                        inputs=[wp_x, wp_y],
-                        device=device,
-                        stream=stream,
-                    )
-                return out
-
-            @identity_impl.register_fake
-            def identity_impl_fake(x: torch.Tensor) -> torch.Tensor:
-                return torch.empty_like(x)
-        else:
-
-            def identity_impl(*args, **kwargs) -> torch.Tensor:
-                raise ImportError(
-                    "warp>=0.6.0 is required for the Warp identity implementation"
+        @torch.library.custom_op("physicsnemo::identity_warp", mutates_args=())
+        def identity_impl(x: torch.Tensor) -> torch.Tensor:
+            out = torch.empty_like(x)
+            device, stream = FunctionSpec.warp_launch_context(x)
+            wp_x = wp.from_torch(x, dtype=wp.float32, return_ctype=True)
+            wp_y = wp.from_torch(out, dtype=wp.float32, return_ctype=True)
+            with wp.ScopedStream(stream):
+                wp.launch(
+                    kernel=_identity_kernel,
+                    dim=x.numel(),
+                    inputs=[wp_x, wp_y],
+                    device=device,
+                    stream=stream,
                 )
+            return out
+
+        @identity_impl.register_fake
+        def identity_impl_fake(x: torch.Tensor) -> torch.Tensor:
+            return torch.empty_like(x)
 
         def identity_torch(x: torch.Tensor) -> torch.Tensor:
             return x.clone()
@@ -180,14 +172,34 @@ class FunctionSpec:
                 return identity_torch(x)
 
             @classmethod
-            def make_inputs(cls, device: torch.device | str = "cpu"):
+            def make_inputs_forward(cls, device: torch.device | str = "cpu"):
                 device = torch.device(device)
                 yield ("small", (torch.randn(1024, device=device),), {})
                 yield ("medium", (torch.randn(4096, device=device),), {})
                 yield ("large", (torch.randn(16384, device=device),), {})
 
             @classmethod
-            def compare(
+            def make_inputs_backward(cls, device: torch.device | str = "cpu"):
+                device = torch.device(device)
+                yield (
+                    "small_grad",
+                    (torch.randn(1024, device=device, requires_grad=True),),
+                    {},
+                )
+                yield (
+                    "medium_grad",
+                    (torch.randn(4096, device=device, requires_grad=True),),
+                    {},
+                )
+
+            @classmethod
+            def compare_forward(
+                cls, output: torch.Tensor, reference: torch.Tensor
+            ) -> None:
+                torch.testing.assert_close(output, reference)
+
+            @classmethod
+            def compare_backward(
                 cls, output: torch.Tensor, reference: torch.Tensor
             ) -> None:
                 torch.testing.assert_close(output, reference)
@@ -283,13 +295,15 @@ class FunctionSpec:
         return decorator
 
     @classmethod
-    def make_inputs(
-        cls, device: torch.device
+    def make_inputs_forward(
+        cls, device: torch.device | str
     ) -> Iterable[tuple[str, tuple[Any, ...], dict[str, Any]]]:
-        """Generator for labeled inputs to the function.
-        This method is used for benchmarking and testing. Generated inputs
-        should be representative of expected usage and suitable for both code
-        coverage and performance measurement.
+        """Generator for labeled forward-pass benchmark inputs.
+
+        This method is used for benchmarking and testing and should be
+        implemented for every functional. Generated inputs should be
+        representative of expected usage and suitable for both code coverage
+        and performance measurement.
 
         Yield each case as ``(label, args, kwargs)`` in roughly increasing
         workload order (for example from smaller to larger inputs). Labels should
@@ -297,21 +311,46 @@ class FunctionSpec:
 
         Parameters
         ----------
-        device : torch.device
+        device : torch.device | str
             Device for generated tensors.
 
         Returns
         -------
         Iterable[tuple[str, tuple[Any, ...], dict[str, Any]]]
-            Iterable of labeled input cases.
+            Iterable of labeled forward input cases.
         """
-        raise NotImplementedError(f"{cls.__name__}.make_inputs must be implemented")
+        raise NotImplementedError(
+            f"{cls.__name__}.make_inputs_forward must be implemented"
+        )
 
     @classmethod
-    def compare(cls, output: object, reference: object) -> None:
-        """Compare implementation outputs for validation.
-        This is used to validate different implementations of the same function
-        against a baseline implementation.
+    def make_inputs_backward(
+        cls, device: torch.device | str
+    ) -> Iterable[tuple[str, tuple[Any, ...], dict[str, Any]]]:
+        """Generator for labeled backward-pass benchmark inputs.
+
+        Backward benchmarks are optional. Functionals with a meaningful
+        backward pass should override this method and yield ``(label, args,
+        kwargs)`` items that exercise representative backward workloads.
+        By default, no backward benchmark cases are provided.
+
+        Parameters
+        ----------
+        device : torch.device | str
+            Device for generated tensors.
+
+        Returns
+        -------
+        Iterable[tuple[str, tuple[Any, ...], dict[str, Any]]]
+            Iterable of labeled backward input cases.
+        """
+        return ()
+
+    @classmethod
+    def compare_forward(cls, output: object, reference: object) -> None:
+        """Compare forward outputs for validation.
+        This is typically implemented when a functional has multiple
+        implementations and needs forward parity validation against a baseline.
 
         Parameters
         ----------
@@ -320,7 +359,26 @@ class FunctionSpec:
         reference : object
             Reference output to compare against.
         """
-        raise NotImplementedError(f"{cls.__name__}.compare must be implemented")
+        raise NotImplementedError(f"{cls.__name__}.compare_forward must be implemented")
+
+    @classmethod
+    def compare_backward(cls, output: object, reference: object) -> None:
+        """Compare backward outputs for validation.
+
+        By default this method raises ``NotImplementedError``. Functionals
+        should implement this when they provide backward support across
+        multiple implementations and need backward parity checks.
+
+        Parameters
+        ----------
+        output : object
+            Backward result from the implementation to compare.
+        reference : object
+            Reference backward result to compare against.
+        """
+        raise NotImplementedError(
+            f"{cls.__name__}.compare_backward must be implemented"
+        )
 
     def __call__(self, *args, **kwargs):
         """Dispatch to the selected implementation.

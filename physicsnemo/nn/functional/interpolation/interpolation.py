@@ -84,19 +84,21 @@ class Interpolation(FunctionSpec):
             mem_speed_trade=mem_speed_trade,
         )
 
+    _BENCHMARK_CASES = (
+        ("1d-nearest", 1, 2048, 8192, "nearest_neighbor"),
+        ("1d-linear", 1, 2048, 8192, "linear"),
+        ("2d-smooth1", 2, 128, 1024, "smooth_step_1"),
+        ("2d-smooth2", 2, 128, 1024, "smooth_step_2"),
+        ("3d-linear", 3, 32, 512, "linear"),
+        ("3d-smooth2", 3, 32, 512, "smooth_step_2"),
+        ("3d-gaussian", 3, 32, 512, "gaussian"),
+    )
+
     @classmethod
-    def make_inputs(cls, device: torch.device | str = "cpu"):
+    def make_inputs_forward(cls, device: torch.device | str = "cpu"):
+        """Yield labeled forward benchmark inputs from 1D to 3D cases."""
         device = torch.device(device)
-        cases = [
-            ("1d-nearest", 1, 2048, 8192, "nearest_neighbor"),
-            ("1d-linear", 1, 2048, 8192, "linear"),
-            ("2d-smooth1", 2, 128, 1024, "smooth_step_1"),
-            ("2d-smooth2", 2, 128, 1024, "smooth_step_2"),
-            ("3d-linear", 3, 32, 512, "linear"),
-            ("3d-smooth2", 3, 32, 512, "smooth_step_2"),
-            ("3d-gaussian", 3, 32, 512, "gaussian"),
-        ]
-        for label, dims, grid_size, num_points, interp_name in cases:
+        for label, dims, grid_size, num_points, interp_name in cls._BENCHMARK_CASES:
             grid = [(-1.0, 2.0, grid_size)] * dims
             linspace = [torch.linspace(x[0], x[1], x[2], device=device) for x in grid]
             mesh_grid = torch.meshgrid(linspace, indexing="ij")
@@ -117,6 +119,42 @@ class Interpolation(FunctionSpec):
                 (query_points, context_grid, grid),
                 {"interpolation_type": interp_name, "mem_speed_trade": True},
             )
+
+    @classmethod
+    def make_inputs_backward(cls, device: torch.device | str = "cpu"):
+        """Yield labeled backward benchmark inputs with differentiable tensors."""
+        device = torch.device(device)
+        for label, dims, grid_size, num_points, interp_name in cls._BENCHMARK_CASES:
+            grid = [(-1.0, 2.0, grid_size)] * dims
+            linspace = [torch.linspace(x[0], x[1], x[2], device=device) for x in grid]
+            mesh_grid = torch.meshgrid(linspace, indexing="ij")
+            mesh_grid = torch.stack(mesh_grid, dim=0)
+            context_grid = torch.zeros_like(mesh_grid[0:1])
+            for power, coord in enumerate(mesh_grid, start=1):
+                context_grid = context_grid + coord.unsqueeze(0) ** power
+            context_grid = torch.sin(context_grid).requires_grad_(True)
+            query_points = torch.stack(
+                [
+                    torch.linspace(0.0, 1.0, num_points, device=device)
+                    for _ in range(dims)
+                ],
+                axis=-1,
+            ).requires_grad_(True)
+            yield (
+                f"{label}-grad-g{grid_size}-n{num_points}",
+                (query_points, context_grid, grid),
+                {"interpolation_type": interp_name, "mem_speed_trade": True},
+            )
+
+    @classmethod
+    def compare_forward(cls, output: torch.Tensor, reference: torch.Tensor) -> None:
+        """Compare forward outputs between two interpolation backends."""
+        torch.testing.assert_close(output, reference, atol=5e-5, rtol=1e-4)
+
+    @classmethod
+    def compare_backward(cls, output: torch.Tensor, reference: torch.Tensor) -> None:
+        """Compare backward gradients between two interpolation backends."""
+        torch.testing.assert_close(output, reference, atol=5e-5, rtol=1e-4)
 
 
 interpolation = Interpolation.make_function("interpolation")
