@@ -830,6 +830,7 @@ class BarnesHutKernel(Kernel):
         source_aggregates: "SourceAggregates | None" = None,
         target_centroids: Float[torch.Tensor, "n_target_nodes n_dims"] | None = None,
         near_chunk_size: int | None = None,
+        expand_far_targets: bool = False,
     ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
         r"""Evaluate the kernel with dual-tree Barnes-Hut acceleration.
 
@@ -881,6 +882,11 @@ class BarnesHutKernel(Kernel):
             to ensure deterministic chunking inside ``torch.utils.checkpoint``
             replay (free GPU memory changes between forward and backward,
             so ``_auto_chunk_size`` would return different values).
+        expand_far_targets : bool, optional, default=False
+            If ``True``, far-field node pairs are expanded to individual
+            target points during plan construction, eliminating the
+            target-side centroid broadcast.  Passed through to
+            :meth:`ClusterTree.find_dual_interaction_pairs`.
 
         Returns
         -------
@@ -921,7 +927,8 @@ class BarnesHutKernel(Kernel):
         ### Find dual interaction pairs if not precomputed
         if dual_plan is None:
             dual_plan = cluster_tree.find_dual_interaction_pairs(
-                target_tree=target_tree, theta=theta
+                target_tree=target_tree, theta=theta,
+                expand_far_targets=expand_far_targets,
             )
 
         ### Compute source aggregates for far-field clusters.
@@ -1627,6 +1634,7 @@ class MultiscaleKernel(Module):
         target_tree: "ClusterTree | None" = None,
         dual_plan: "DualInteractionPlan | None" = None,
         source_areas: Float[torch.Tensor, " n_sources"] | None = None,
+        expand_far_targets: bool = False,
     ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
         r"""Evaluates the multiscale kernel by combining results from multiple scales.
 
@@ -1658,6 +1666,11 @@ class MultiscaleKernel(Module):
             Precomputed dual traversal plan. Computed if ``None``.
         source_areas : Float[torch.Tensor, "n_sources"] or None, optional
             Per-source areas for aggregate weighting. Defaults to ones.
+        expand_far_targets : bool, optional, default=False
+            If ``True``, eliminates target-side centroid broadcast by
+            expanding far-field node pairs to individual target points.
+            Passed through to
+            :meth:`ClusterTree.find_dual_interaction_pairs`.
 
         Returns
         -------
@@ -1716,7 +1729,8 @@ class MultiscaleKernel(Module):
                 )
             if dual_plan is None:
                 dual_plan = cluster_tree.find_dual_interaction_pairs(
-                    target_tree=target_tree, theta=theta
+                    target_tree=target_tree, theta=theta,
+                    expand_far_targets=expand_far_targets,
                 )
         with record_function("multiscale_kernel::compute_aggregates"):
             source_aggregates = cluster_tree.compute_source_aggregates(

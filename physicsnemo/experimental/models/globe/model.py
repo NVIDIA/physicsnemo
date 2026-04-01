@@ -126,6 +126,22 @@ class GLOBE(Module):
     n_spherical_harmonics : int, optional, default=4
         Number of Legendre polynomial terms used for angle-dependent features in
         kernel functions.
+    theta : float, optional, default=1.0
+        Barnes-Hut opening angle controlling the near/far-field split in the
+        dual-tree traversal. The criterion is
+        :math:`(D_T + D_S) / r < \theta`, where :math:`D_T` and :math:`D_S`
+        are AABB diagonals and :math:`r` is the minimum inter-AABB distance.
+        Larger values approximate more aggressively; ``0`` forces all
+        interactions to be exact (no far-field approximation).
+    leaf_size : int, optional, default=1
+        Maximum number of source points per leaf node in the cluster tree.
+        Larger values produce shallower trees (fewer traversal iterations) at
+        the cost of more exact near-field interactions per leaf hit.
+    expand_far_targets : bool, optional, default=False
+        If ``True``, far-field target nodes are expanded to individual points,
+        converting ``(far, far)`` pairs into ``(near, far)`` pairs. This
+        eliminates the target-side approximation at the cost of more kernel
+        evaluations.
 
     Forward
     -------
@@ -206,6 +222,7 @@ class GLOBE(Module):
         n_spherical_harmonics: int = 4,
         theta: float = 1.0,
         leaf_size: int = 1,
+        expand_far_targets: bool = False,
     ):
         if hidden_layer_sizes is None:
             hidden_layer_sizes = [64, 64, 64]
@@ -245,6 +262,7 @@ class GLOBE(Module):
         self.n_spherical_harmonics = n_spherical_harmonics
         self.theta = theta
         self.leaf_size = leaf_size
+        self.expand_far_targets = expand_far_targets
 
         ### Build the intermediate output-field rank spec for communication
         # hyperlayers. Only the final hyperlayer emits output_field_ranks.
@@ -366,7 +384,8 @@ class GLOBE(Module):
         for dst_bc in boundary_meshes:
             comm_plans[dst_bc] = {
                 src_bc: cluster_trees[src_bc].find_dual_interaction_pairs(
-                    target_tree=cluster_trees[dst_bc], theta=self.theta
+                    target_tree=cluster_trees[dst_bc], theta=self.theta,
+                    expand_far_targets=self.expand_far_targets,
                 )
                 for src_bc in boundary_meshes
             }
@@ -413,7 +432,8 @@ class GLOBE(Module):
         )
         pred_plans = {
             bc_type: tree.find_dual_interaction_pairs(
-                target_tree=pred_target_tree, theta=self.theta
+                target_tree=pred_target_tree, theta=self.theta,
+                expand_far_targets=self.expand_far_targets,
             )
             for bc_type, tree in cluster_trees.items()
         }
