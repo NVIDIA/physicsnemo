@@ -16,7 +16,7 @@
 
 """MLflow and hyperparameter logging utilities for the GLOBE DrivAerML example."""
 
-import inspect
+
 from pathlib import Path
 from typing import Any
 
@@ -110,14 +110,12 @@ def log_hyperparameters(
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    constructor_params: list[str] = list(
-        inspect.signature(type(model).__init__).parameters.keys()
-    )[1:]
-
+    ### Use the canonical constructor args captured by Module.__new__,
+    ### which is the same source-of-truth that Module.save() serializes.
+    ### This avoids the fragile pattern of checking hasattr(model, param),
+    ### which silently drops any constructor arg not stored as self.xxx.
     model_hyperparameters = {
-        param: to_serializable(getattr(model, param))
-        for param in constructor_params
-        if hasattr(model, param)
+        k: to_serializable(v) for k, v in model._args["__args__"].items()
     }
     other_hyperparameters = {
         k: to_serializable(v) for k, v in other_hyperparameters.items()
