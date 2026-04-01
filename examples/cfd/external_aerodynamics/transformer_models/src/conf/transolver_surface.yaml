@@ -28,6 +28,10 @@ precision: float32 # float32, float16, bfloat16, or float8
 compile: true
 profile: false
 
+# Domain parallelism: number of GPUs collaborating on one sample.
+# world_size must be divisible by this. Set to 1 to disable.
+domain_parallel_size: 1
+
 data:
   include_sdf: false
 
