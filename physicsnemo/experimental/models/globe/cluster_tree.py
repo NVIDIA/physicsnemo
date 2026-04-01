@@ -881,6 +881,8 @@ class ClusterTree:
         self,
         target_tree: "ClusterTree",
         theta: float = 1.0,
+        *,
+        expand_far_targets: bool = False,
     ) -> DualInteractionPlan:
         r"""Find near-field and far-field pairs via dual-tree traversal.
 
@@ -904,6 +906,13 @@ class ClusterTree:
         theta : float
             Barnes-Hut opening angle.  Larger = more aggressive.
             ``theta = 0`` forces all interactions to be exact.
+        expand_far_targets : bool, optional, default=False
+            If ``True``, far-field node pairs are expanded to individual
+            target points, converting ``(far, far)`` entries into
+            ``(near, far)`` entries.  This eliminates the target-side
+            centroid approximation (and the blocky spatial artifacts it
+            produces) at the cost of more kernel evaluations while
+            preserving the source-side monopole speedup.
 
         Returns
         -------
@@ -982,8 +991,21 @@ class ClusterTree:
 
                 ### 1. Far-field: well-separated node pairs
                 if is_far.any():
-                    far_tgt_node_list.append(active_tgt_nodes[is_far])
-                    far_src_node_list.append(active_src_nodes[is_far])
+                    if expand_far_targets:
+                        # Expand target nodes to individual points,
+                        # converting (far,far) → (near,far).
+                        far_tgt_nids = active_tgt_nodes[is_far]
+                        far_src_nids = active_src_nodes[is_far]
+                        starts = target_tree.node_range_start[far_tgt_nids]
+                        counts = target_tree.node_range_count[far_tgt_nids]
+                        positions, pair_ids = _ragged_arange(starts, counts)
+                        nf_target_list.append(
+                            target_tree.sorted_source_order[positions]
+                        )
+                        nf_source_node_list.append(far_src_nids[pair_ids])
+                    else:
+                        far_tgt_node_list.append(active_tgt_nodes[is_far])
+                        far_src_node_list.append(active_src_nodes[is_far])
 
                 ### 2. Near-field, both leaves: two-stage filtered expansion.
                 # Stage 1 (per-target) -> (near,far).
