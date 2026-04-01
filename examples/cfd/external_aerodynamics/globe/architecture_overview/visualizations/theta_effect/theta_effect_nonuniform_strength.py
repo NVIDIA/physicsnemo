@@ -36,24 +36,42 @@ X_MIN, X_MAX = -6.0, 6.0
 Y_MIN, Y_MAX = -6.0, 6.0
 
 
-### [Source points: curve with normals for kernel evaluation]
-t = torch.linspace(0, 1, N_SOURCE_POINTS, device=device)
-source_points = torch.stack(
-    [2 * (t - 0.5), torch.sin((t - 0.5) * 5) / 5 - t / 3], dim=1
+### [Source points: asymmetric blobby boundary with outward normals]
+theta_boundary = np.linspace(0, 2 * np.pi, N_SOURCE_POINTS + 1)
+r = (
+    1
+    + 0.25 * np.cos(2 * theta_boundary + 0.3)
+    + 0.15 * np.cos(3 * theta_boundary + 1.7)
+    + 0.10 * np.cos(5 * theta_boundary + 0.8)
 )
-n_source = N_SOURCE_POINTS
-source_strengths = torch.ones(n_source, device=device) * 1e2 / n_source
+boundary_coords = np.column_stack([
+    r * np.cos(theta_boundary),
+    r * np.sin(theta_boundary),
+])
+# Cell centroids and outward normals from consecutive coordinate pairs
+src_centroids_np = (boundary_coords[:-1] + boundary_coords[1:]) / 2
+tangents = boundary_coords[1:] - boundary_coords[:-1]
+lengths = np.linalg.norm(tangents, axis=1, keepdims=True)
+tangents /= np.clip(lengths, 1e-12, None)
+src_normals_np = np.column_stack([tangents[:, 1], -tangents[:, 0]])
+
+n_source = len(src_centroids_np)
+source_points = torch.as_tensor(src_centroids_np, device=device, dtype=torch.float32)
+# Sinusoidal strength variation around the boundary breaks field uniformity
+theta_mid = (theta_boundary[:-1] + theta_boundary[1:]) / 2
+strength_variation = 1 * np.sin(7 * theta_mid + 0.5)
+source_strengths = torch.as_tensor(
+    strength_variation * 1e2 / n_source, device=device, dtype=torch.float32
+)
 source_data = TensorDict(
     {
-        "normal": torch.stack(
-            [torch.sin((t - 0.5 + 1) / 2), torch.cos((t - 0.5 + 1) / 2)], dim=1
-        ),
-        "other": torch.zeros_like(source_points),
+        "normal": torch.as_tensor(src_normals_np, device=device, dtype=torch.float32),
+        "other": torch.zeros(n_source, 2, device=device),
     },
     batch_size=torch.Size([n_source]),
     device=device,
 )
-src_np = source_points.cpu().numpy()
+src_np = src_centroids_np
 
 
 ### [Kernel: single BarnesHutKernel, using theta=0 as the exact baseline]
