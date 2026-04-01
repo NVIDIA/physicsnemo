@@ -16,7 +16,7 @@
 import pytest
 import torch
 
-from physicsnemo.models.dit import (
+from physicsnemo.nn.module.conditioning_embedders import (
     DiTConditionEmbedder,
     EDMConditionEmbedder,
     ZeroConditioningEmbedder,
@@ -45,7 +45,7 @@ def test_dit_condition_embedder_forward(device):
 
     assert common.validate_tensor_accuracy(
         output,
-        file_name="models/dit/data/dit_condition_embedder_output.pth",
+        file_name="nn/module/data/dit_condition_embedder_output.pth",
     )
 
     out_none = model(t, condition=None)
@@ -102,7 +102,7 @@ def test_edm_condition_embedder_forward(device):
 
     assert common.validate_tensor_accuracy(
         output,
-        file_name="models/dit/data/edm_condition_embedder_output.pth",
+        file_name="nn/module/data/edm_condition_embedder_output.pth",
     )
 
 
