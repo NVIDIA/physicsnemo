@@ -23,28 +23,44 @@ from utils import tensorwise
 
 
 def all_reduce_dict(
-    metrics: dict[str, torch.Tensor], dm: DistributedManager
+    metrics: dict[str, torch.Tensor],
+    dm: DistributedManager,
+    data_mesh=None,
 ) -> dict[str, torch.Tensor]:
     """
-    Reduces a dictionary of metrics across all distributed processes.
+    Reduces a dictionary of metrics across data-parallel replicas.
+
+    When *data_mesh* is provided the reduction runs only over the
+    data-parallel dimension (so domain-parallel ranks are not
+    double-counted).  Otherwise falls back to the full world.
 
     Args:
         metrics: Dictionary of metric names to torch.Tensor values.
         dm: DistributedManager instance for distributed context.
+        data_mesh: Optional DeviceMesh for the data-parallel dimension.
 
     Returns:
         Dictionary of reduced metrics.
     """
-    # TODO - update this to use domains and not the full world
+    if data_mesh is not None:
+        num_replicas = data_mesh.size()
+    else:
+        num_replicas = dm.world_size
 
-    if dm.world_size == 1:
+    if num_replicas <= 1:
         return metrics
 
     # Pack the metrics together:
     merged_metrics = torch.stack(list(metrics.values()), dim=-1)
 
-    dist.all_reduce(merged_metrics)
-    merged_metrics = merged_metrics / dm.world_size
+    # ShardTensors (from domain parallelism) must be materialised before
+    # the plain dist.all_reduce call.
+    if isinstance(merged_metrics, ShardTensor):
+        merged_metrics = merged_metrics.full_tensor()
+
+    group = data_mesh.get_group() if data_mesh is not None else None
+    dist.all_reduce(merged_metrics, group=group)
+    merged_metrics = merged_metrics / num_replicas
 
     # Unstack metrics:
     metrics = {key: merged_metrics[i] for i, key in enumerate(metrics.keys())}
@@ -57,6 +73,7 @@ def metrics_fn(
     target: torch.Tensor,
     dm: DistributedManager,
     mode: str,
+    data_mesh=None,
 ) -> dict[str, torch.Tensor]:
     """
     Computes metrics for either surface or volume data.
@@ -67,6 +84,7 @@ def metrics_fn(
         others: Dictionary containing normalization statistics.
         dm: DistributedManager instance for distributed context.
         mode: Either "surface" or "volume".
+        data_mesh: Optional DeviceMesh for the data-parallel dimension.
 
     Returns:
         Dictionary of computed metrics.
@@ -79,7 +97,7 @@ def metrics_fn(
         else:
             raise ValueError(f"Unknown data mode: {mode}")
 
-        metrics = all_reduce_dict(metrics, dm)
+        metrics = all_reduce_dict(metrics, dm, data_mesh=data_mesh)
         return metrics
 
 

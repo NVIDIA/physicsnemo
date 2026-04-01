@@ -15,14 +15,14 @@
 # limitations under the License.
 
 # Core python imports:
+import json
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Any, Callable, Sequence
+from typing import Literal, Any
 import collections
 from contextlib import nullcontext
-
-from collections.abc import Sequence
 
 # Configuration:
 import hydra
@@ -31,7 +31,6 @@ from omegaconf import DictConfig
 
 # Pytorch imports:
 import torch
-from torch.optim import Optimizer
 from torch.amp import autocast, GradScaler
 from torch.utils.tensorboard import SummaryWriter
 
@@ -53,6 +52,11 @@ from physicsnemo.datapipes.cae.transolver_datapipe import (
     create_transolver_dataset,
     TransolverDataPipe,
 )
+
+# Domain parallelism imports:
+from torch.distributed.fsdp import fully_shard
+from torch.distributed.tensor import distribute_module
+from physicsnemo.domain_parallel import ShardTensor
 
 # Local folder imports for this example
 from metrics import metrics_fn
@@ -85,64 +89,56 @@ torch.serialization.add_safe_globals([omegaconf.nodes.AnyNode])
 torch.serialization.add_safe_globals([omegaconf.base.Metadata])
 
 
-class CombinedOptimizer(Optimizer):
-    """Combine multiple PyTorch optimizers into a single Optimizer-like interface.
+def _append_jsonl(path, records):
+    """Append a list of dicts as JSON Lines to *path*."""
+    with open(path, "a") as f:
+        for rec in records:
+            f.write(json.dumps(rec, default=str) + "\n")
 
-    The wrapper concatenates the *param_groups* from all contained optimizers so
-    that learning-rate schedulers (e.g., ReduceLROnPlateau, CosineAnnealingLR)
-    operate transparently across every parameter. Only a minimal subset of the
-    *torch.optim.Optimizer* API is implemented—extend as needed.
 
-    Note:
-        This will get upstreamed to physicsnemo shortly.  Don't count on this
-        class existing here in the future!
+def setup_domain_parallelism(
+    cfg: DictConfig,
+    dist_manager: DistributedManager,
+    logger,
+):
+    """Set up a 2D DeviceMesh for domain + data parallelism.
 
-        In other words, this is already marked for deprecation!
+    The mesh has shape ``(data_parallel_size, domain_parallel_size)`` with
+    dimension names ``("ddp", "domain")``.  When ``domain_parallel_size``
+    is 1 (or single-GPU), both returned meshes are ``None`` and the caller
+    should fall back to standard DDP.
+
+    Returns
+    -------
+    domain_mesh : DeviceMesh | None
+        Sub-mesh for the domain-parallel dimension.
+    data_mesh : DeviceMesh | None
+        Sub-mesh for the data-parallel (DDP/FSDP) dimension.
     """
+    domain_parallel_size = getattr(cfg, "domain_parallel_size", 1)
 
-    def __init__(
-        self,
-        optimizers: Sequence[Optimizer],
-        torch_compile_kwargs: dict[str, Any] | None = None,
-    ):
-        if not optimizers:
-            raise ValueError("`optimizers` must contain at least one optimizer.")
+    if domain_parallel_size <= 1 or dist_manager.world_size <= 1:
+        return None, None
 
-        self.optimizers = optimizers
+    if dist_manager.world_size % domain_parallel_size != 0:
+        raise ValueError(
+            f"world_size ({dist_manager.world_size}) must be divisible "
+            f"by domain_parallel_size ({domain_parallel_size})"
+        )
 
-        # Collect parameter groups from all optimizers. We pass an empty
-        # *defaults* dict because hyper-parameters are managed by the inner
-        # optimizers, not this wrapper.
-        param_groups = [g for opt in optimizers for g in opt.param_groups]
-        super().__init__(param_groups, defaults={})
+    mesh = dist_manager.initialize_mesh(
+        mesh_shape=(-1, domain_parallel_size),
+        mesh_dim_names=("ddp", "domain"),
+    )
+    domain_mesh = mesh["domain"]
+    data_mesh = mesh["ddp"]
 
-        if torch_compile_kwargs is None:
-            self.step_fns: list[Callable] = [opt.step for opt in optimizers]
-        else:
-            self.step_fns: list[Callable] = [
-                torch.compile(opt.step, **torch_compile_kwargs) for opt in optimizers
-            ]
+    logger.info(
+        f"Domain parallelism enabled: domain_size={domain_parallel_size}, "
+        f"data_parallel_size={data_mesh.size()}"
+    )
 
-    def zero_grad(self, *args, **kwargs) -> None:
-        """Nullify gradients"""
-        for opt in self.optimizers:
-            opt.zero_grad(*args, **kwargs)
-
-    def step(self, closure=None) -> None:
-        for step_fn in self.step_fns:
-            if closure is None:
-                step_fn()
-            else:
-                step_fn(closure)
-
-    def state_dict(self):
-        return {"optimizers": [opt.state_dict() for opt in self.optimizers]}
-
-    def load_state_dict(self, state_dict):
-        for opt, sd in zip(self.optimizers, state_dict["optimizers"]):
-            opt.load_state_dict(sd)
-
-        self.param_groups = [g for opt in self.optimizers for g in opt.param_groups]
+    return domain_mesh, data_mesh
 
 
 def get_autocast_context(precision: str) -> nullcontext:
@@ -260,6 +256,7 @@ def forward_pass(
     dist_manager: DistributedManager,
     data_mode: Literal["surface", "volume"],
     datapipe: TransolverDataPipe,
+    data_mesh=None,
 ):
     """
     Run the forward pass of the model for one batch, including metrics and loss calculation.
@@ -271,9 +268,23 @@ def forward_pass(
 
     """
 
-    features = batch["fx"]
     embeddings = batch["embeddings"]
     targets = batch["fields"]
+
+    # Hack: sharded reads in CAEDataset drop Zarr attributes, so the datapipe
+    # may not build "fx".  Reconstruct it from the raw scalars if needed.
+    if "fx" in batch:
+        features = batch["fx"]
+    elif "air_density" in batch and "stream_velocity" in batch:
+        features = torch.stack(
+            [batch["air_density"], batch["stream_velocity"]], dim=-1
+        )
+        features = features.broadcast_to(*embeddings.shape[:-1], -1)
+    else:
+        raise KeyError(
+            f"Batch has neither 'fx' nor 'air_density'/'stream_velocity'. "
+            f"Keys: {list(batch.keys())}"
+        )
 
     # Cast precisions:
     features = cast_precisions(features, precision=precision)
@@ -325,7 +336,7 @@ def forward_pass(
             # This is the Transolver path
             outputs = model(fx=features, embedding=embeddings)
             outputs = unpad_output_for_fp8(outputs, output_pad_size)
-            full_loss = torch.nn.functional.mse_loss(outputs, targets)
+            full_loss = ((outputs - targets) ** 2).mean()
 
             all_metrics[f"loss/{modes[0]}"] = full_loss
 
@@ -346,7 +357,7 @@ def forward_pass(
         stream_velocity=stream_velocity,
         factor_type=modes,
     )
-    metrics = metrics_fn(unscaled_outputs, unscaled_targets, dist_manager, modes)
+    metrics = metrics_fn(unscaled_outputs, unscaled_targets, dist_manager, modes, data_mesh=data_mesh)
 
     # In the combined mode, this is a list of dicts.  Merge them.
     metrics = (
@@ -355,6 +366,13 @@ def forward_pass(
         else metrics
     )
     all_metrics.update(metrics)
+
+    # Materialise any ShardTensor scalars so downstream code (TensorBoard,
+    # tabulate, etc.) sees plain tensors.
+    all_metrics = {
+        k: v.full_tensor() if isinstance(v, ShardTensor) else v
+        for k, v in all_metrics.items()
+    }
 
     return full_loss, all_metrics, (unscaled_outputs, unscaled_targets)
 
@@ -373,6 +391,8 @@ def train_epoch(
     cfg: DictConfig,
     dist_manager: DistributedManager,
     scaler: GradScaler | None = None,
+    data_mesh=None,
+    metrics_log_path: str | None = None,
 ) -> float:
     """
     Train the model for one epoch.
@@ -396,13 +416,12 @@ def train_epoch(
     model.train()
     total_loss = 0
     total_metrics = {}
+    step_records: list[dict] = []
 
     precision = getattr(cfg, "precision", "float32")
     start_time = time.time()
 
     for i, batch in enumerate(dataloader):
-        # TransolverX has a different forward pass:
-
         loss, metrics, _ = forward_pass(
             batch,
             model,
@@ -411,6 +430,7 @@ def train_epoch(
             dist_manager,
             cfg.data.mode,
             dataloader,
+            data_mesh=data_mesh,
         )
 
         optimizer.zero_grad()
@@ -460,6 +480,20 @@ def train_epoch(
                     f"batch/{metric_name}", metric_value, i + epoch_len * epoch
                 )
 
+            step_records.append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "phase": "train",
+                "epoch": epoch,
+                "iteration": i,
+                "global_step": i + epoch_len * epoch,
+                "loss": this_loss,
+                "learning_rate": optimizer.param_groups[0]["lr"],
+                "duration_s": duration,
+                "throughput_per_gpu": images_per_second,
+                "memory_reserved_gb": mem_usage,
+                **{k: float(v) if hasattr(v, "item") else v for k, v in metrics.items()},
+            })
+
         if cfg.profile and i >= 10:
             break  # Stop profiling after 10 batches
 
@@ -476,6 +510,10 @@ def train_epoch(
             tablefmt="pretty",
         )
         print(f"\nEpoch {epoch} Average Metrics:\n{metrics_table}\n")
+
+        if metrics_log_path:
+            _append_jsonl(metrics_log_path, step_records)
+
     return avg_loss
 
 
@@ -490,6 +528,8 @@ def val_epoch(
     epoch: int,
     cfg: DictConfig,
     dist_manager: DistributedManager,
+    data_mesh=None,
+    metrics_log_path: str | None = None,
 ) -> float:
     """
     Run validation for one epoch.
@@ -511,6 +551,7 @@ def val_epoch(
     model.eval()  # Set model to evaluation mode
     total_loss = 0
     total_metrics = {}
+    step_records: list[dict] = []
 
     precision = getattr(cfg.training, "precision", "float32")
 
@@ -525,6 +566,7 @@ def val_epoch(
                 dist_manager,
                 cfg.data.mode,
                 dataloader,
+                data_mesh=data_mesh,
             )
 
             if i == 0:
@@ -542,10 +584,25 @@ def val_epoch(
             duration = end_time - start_time
             start_time = end_time
 
+            mem_usage = torch.cuda.memory_reserved() / 1024**3
+
             logger.info(
                 f"Val [{i}/{epoch_len}] Loss: {this_loss:.6f} Duration: {duration:.2f}s"
             )
             # We don't add individual loss measurements to tensorboard in the validation loop.
+
+            if dist_manager.rank == 0:
+                step_records.append({
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "phase": "val",
+                    "epoch": epoch,
+                    "iteration": i,
+                    "global_step": i + epoch_len * epoch,
+                    "loss": this_loss,
+                    "duration_s": duration,
+                    "memory_reserved_gb": mem_usage,
+                    **{k: float(v) if hasattr(v, "item") else v for k, v in metrics.items()},
+                })
 
             if cfg.profile and i >= 10:
                 break  # Stop profiling after 10 batches
@@ -563,6 +620,10 @@ def val_epoch(
             tablefmt="pretty",
         )
         print(f"\nEpoch {epoch} Validation Average Metrics:\n{metrics_table}\n")
+
+        if metrics_log_path:
+            _append_jsonl(metrics_log_path, step_records)
+
     return avg_loss
 
 
@@ -623,8 +684,34 @@ def main(cfg: DictConfig):
     # Set up distributed training
     dist_manager = DistributedManager()
 
+    # Debug: show rank, local rank, device, and node info for each process
+    import socket
+    hostname = socket.gethostname()
+    device = dist_manager.device
+    rank = dist_manager.rank
+    local_rank = dist_manager.local_rank
+    world_size = dist_manager.world_size
+    gpu_name = torch.cuda.get_device_name(device) if torch.cuda.is_available() else "N/A"
+    print(
+        f"[DEBUG] Rank {rank}/{world_size - 1} | "
+        f"Local Rank {local_rank} | "
+        f"Node: {hostname} | "
+        f"Device: {device} | "
+        f"GPU: {gpu_name}"
+    )
+    if torch.cuda.is_available():
+        mem_total = torch.cuda.get_device_properties(device).total_memory / (1024**3)
+        print(
+            f"[DEBUG] Rank {rank} | GPU Memory: {mem_total:.1f} GB | "
+            f"CUDA Version: {torch.version.cuda}"
+        )
+    torch.distributed.barrier()
+
     # Set up logging
     logger = RankZeroLoggingWrapper(PythonLogger(name="training"), dist_manager)
+
+    # Set up domain parallelism (2D mesh: data-parallel x domain-parallel)
+    domain_mesh, data_mesh = setup_domain_parallelism(cfg, dist_manager, logger)
 
     # Set checkpoint directory - defaults to output_dir if not specified
     checkpoint_dir = getattr(cfg, "checkpoint_dir", None)
@@ -644,9 +731,13 @@ def main(cfg: DictConfig):
                 cfg.output_dir + "/" + cfg.run_id + "/val",
             )
         )
+        metrics_log_path = os.path.join(
+            cfg.output_dir, cfg.run_id, "step_metrics.jsonl"
+        )
     else:
         writer = None
         val_writer = None
+        metrics_log_path = None
 
     logger.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
     logger.info(f"Output directory: {cfg.output_dir}/{cfg.run_id}")
@@ -661,11 +752,18 @@ def main(cfg: DictConfig):
 
     model.to(dist_manager.device)
 
-    model = torch.nn.parallel.DistributedDataParallel(
-        model,
-        device_ids=[dist_manager.local_rank],
-        output_device=dist_manager.device,
-    )
+    if domain_mesh is not None:
+        # Domain parallelism: distribute_module makes the model
+        # ShardTensor-aware on the domain mesh; fully_shard handles
+        # gradient sync across data-parallel replicas (FSDP2).
+        model = distribute_module(model, device_mesh=domain_mesh)
+        model = fully_shard(model, mesh=data_mesh)
+    else:
+        model = torch.nn.parallel.DistributedDataParallel(
+            model,
+            device_ids=[dist_manager.local_rank],
+            output_device=dist_manager.device,
+        )
 
     num_params = sum(p.numel() for p in model.parameters())
     logger.info(f"Number of parameters: {num_params}")
@@ -698,19 +796,26 @@ def main(cfg: DictConfig):
         phase="train",
         surface_factors=surface_factors,
         volume_factors=volume_factors,
+        device_mesh=domain_mesh,
     )
 
     # Validation dataset
-
     val_dataloader = create_transolver_dataset(
         cfg.data,
         phase="val",
         surface_factors=surface_factors,
         volume_factors=volume_factors,
+        device_mesh=domain_mesh,
     )
 
-    num_replicas = dist_manager.world_size
-    data_rank = dist_manager.rank
+    # With domain parallelism, only the data-parallel dimension
+    # determines which samples each group sees.
+    if data_mesh is not None:
+        num_replicas = data_mesh.size()
+        data_rank = data_mesh.get_local_rank()
+    else:
+        num_replicas = dist_manager.world_size
+        data_rank = dist_manager.rank
 
     # Set up distributed samplers
     train_sampler = torch.utils.data.distributed.DistributedSampler(
@@ -729,23 +834,8 @@ def main(cfg: DictConfig):
         drop_last=True,
     )
 
-    muon_params = [p for p in model.parameters() if p.ndim == 2]
-    other_params = [p for p in model.parameters() if p.ndim != 2]
-
     # Set up optimizer and scheduler
-    optimizer = hydra.utils.instantiate(cfg.training.optimizer, params=other_params)
-
-    optimizer = CombinedOptimizer(
-        optimizers=[
-            torch.optim.Muon(
-                muon_params,
-                lr=cfg.training.optimizer.lr,
-                weight_decay=cfg.training.optimizer.weight_decay,
-                adjust_lr_fn="match_rms_adamw",
-            ),
-            optimizer,
-        ],
-    )
+    optimizer = hydra.utils.instantiate(cfg.training.optimizer, params=model.parameters())
 
     # Set up learning rate scheduler based on config
     scheduler_cfg = cfg.training.scheduler
@@ -799,6 +889,8 @@ def main(cfg: DictConfig):
                 cfg,
                 dist_manager,
                 scaler,
+                data_mesh=data_mesh,
+                metrics_log_path=metrics_log_path,
             )
             end_time = time.time()
             train_duration = end_time - start_time
@@ -815,6 +907,8 @@ def main(cfg: DictConfig):
                 epoch,
                 cfg,
                 dist_manager,
+                data_mesh=data_mesh,
+                metrics_log_path=metrics_log_path,
             )
             end_time = time.time()
             val_duration = end_time - start_time
@@ -824,8 +918,28 @@ def main(cfg: DictConfig):
             f"Epoch [{epoch}/{cfg.training.num_epochs}] Train Loss: {train_loss:.6f} [duration: {train_duration:.2f}s] Val Loss: {val_loss:.6f} [duration: {val_duration:.2f}s]"
         )
 
-        # save checkpoint
-        if epoch % cfg.training.save_interval == 0 and dist_manager.rank == 0:
+        # Write epoch-level summary records
+        if dist_manager.rank == 0 and metrics_log_path:
+            _append_jsonl(metrics_log_path, [
+                {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "phase": "train_epoch",
+                    "epoch": epoch,
+                    "avg_loss": train_loss,
+                    "duration_s": train_duration,
+                },
+                {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "phase": "val_epoch",
+                    "epoch": epoch,
+                    "avg_loss": val_loss,
+                    "duration_s": val_duration,
+                },
+            ])
+
+        # save checkpoint (all ranks must participate for FSDP/DTensor gathers;
+        # save_checkpoint internally gates file I/O to rank 0)
+        if epoch % cfg.training.save_interval == 0:
             save_checkpoint(**ckpt_args, epoch=epoch + 1)
 
         if scheduler_name == "StepLR":

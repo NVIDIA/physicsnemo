@@ -44,7 +44,9 @@ from physicsnemo.models.domino.utils import (
     unnormalize,
     unstandardize,
 )
+from physicsnemo.domain_parallel import ShardTensor
 from physicsnemo.nn.functional import signed_distance_field
+from torch.distributed.tensor.placement_types import Replicate
 
 
 @dataclass
@@ -177,17 +179,36 @@ class TransolverDataPipe(Dataset):
         scale_factor: torch.Tensor | None = None,
     ):
         positions = data_dict["surface_mesh_centers"]
+        _is_sharded = isinstance(positions, ShardTensor)
 
         if self.config.resolution is not None:
-            idx = torch.multinomial(
-                torch.ones(data_dict["surface_mesh_centers"].shape[0]),
-                self.config.resolution,
-            )
+            if _is_sharded:
+                _mesh = positions._spec.mesh
+                _placements = positions._spec.placements
+                _domain_size = _mesh.size()
+                _local_res = self.config.resolution // _domain_size
+                local_pos = positions.to_local()
+                idx = torch.multinomial(
+                    torch.ones(local_pos.shape[0]),
+                    _local_res,
+                )
+                positions = ShardTensor.from_local(
+                    local_pos[idx], device_mesh=_mesh, placements=_placements,
+                )
+            else:
+                idx = torch.multinomial(
+                    torch.ones(data_dict["surface_mesh_centers"].shape[0]),
+                    self.config.resolution,
+                )
+                positions = positions[idx]
         else:
             idx = None
 
-        if idx is not None:
-            positions = positions[idx]
+        if _is_sharded:
+            if scale_factor is not None:
+                scale_factor = self._promote_to_replicated(scale_factor, positions)
+            if center_of_mass is not None:
+                center_of_mass = self._promote_to_replicated(center_of_mass, positions)
 
         # This is a center of mass computation for the stl surface,
         # using the size of each mesh point as weight.
@@ -203,7 +224,12 @@ class TransolverDataPipe(Dataset):
         if self.config.include_normals:
             normals = data_dict["surface_normals"]
             if idx is not None:
-                normals = normals[idx]
+                if _is_sharded:
+                    normals = ShardTensor.from_local(
+                        normals.to_local()[idx], device_mesh=_mesh, placements=_placements,
+                    )
+                else:
+                    normals = normals[idx]
             normals = normals / torch.norm(normals, dim=-1, keepdim=True)
             embeddings_inputs.append(normals)
 
@@ -211,7 +237,12 @@ class TransolverDataPipe(Dataset):
 
         fields = data_dict["surface_fields"]
         if idx is not None:
-            fields = fields[idx]
+            if _is_sharded:
+                fields = ShardTensor.from_local(
+                    fields.to_local()[idx], device_mesh=_mesh, placements=_placements,
+                )
+            else:
+                fields = fields[idx]
 
         if self.config.scaling_type is not None:
             fields = self.scale_model_targets(fields, self.config.surface_factors)
@@ -248,16 +279,36 @@ class TransolverDataPipe(Dataset):
         scale_factor: torch.Tensor | None = None,
     ):
         positions = data_dict["volume_mesh_centers"]
+        _is_sharded = isinstance(positions, ShardTensor)
 
         if self.config.resolution is not None:
-            idx = poisson_sample_indices_fixed(
-                positions.shape[0], self.config.resolution, device=positions.device
-            )
+            if _is_sharded:
+                _mesh = positions._spec.mesh
+                _placements = positions._spec.placements
+                _domain_size = _mesh.size()
+                _local_res = self.config.resolution // _domain_size
+                local_pos = positions.to_local()
+                idx = poisson_sample_indices_fixed(
+                    local_pos.shape[0], _local_res, device=local_pos.device
+                )
+                positions = ShardTensor.from_local(
+                    local_pos[idx], device_mesh=_mesh, placements=_placements,
+                )
+            else:
+                idx = poisson_sample_indices_fixed(
+                    positions.shape[0], self.config.resolution, device=positions.device
+                )
+                positions = positions[idx]
         else:
             idx = None
 
-        if idx is not None:
-            positions = positions[idx]
+        # When domain-parallel, promote plain tensors to replicated ShardTensors
+        # so arithmetic with sharded positions/coords doesn't hit mixed-type errors.
+        if _is_sharded:
+            if scale_factor is not None:
+                scale_factor = self._promote_to_replicated(scale_factor, positions)
+            if center_of_mass is not None:
+                center_of_mass = self._promote_to_replicated(center_of_mass, positions)
 
         # We need the CoM for some operations, regardless of translation invariance:
         if center_of_mass is None:
@@ -309,8 +360,14 @@ class TransolverDataPipe(Dataset):
             distance_to_closest_point = torch.norm(positions - closest_points, dim=-1)
             null_points = distance_to_closest_point < 1e-6
 
-            # In these cases, we update the vector to be from the center of mass
-            normals[null_points] = positions[null_points] - center_of_mass
+            # In these cases, we update the vector to be from the center of mass.
+            # Use torch.where instead of boolean indexing since DTensor
+            # doesn't support aten.nonzero (dynamic output shape).
+            normals = torch.where(
+                null_points.unsqueeze(-1),
+                positions - center_of_mass,
+                normals,
+            )
 
             norm = torch.norm(normals, dim=-1, keepdim=True) + 1e-6
             normals = normals / norm
@@ -321,7 +378,12 @@ class TransolverDataPipe(Dataset):
 
         fields = data_dict["volume_fields"]
         if idx is not None:
-            fields = fields[idx]
+            if _is_sharded:
+                fields = ShardTensor.from_local(
+                    fields.to_local()[idx], device_mesh=_mesh, placements=_placements,
+                )
+            else:
+                fields = fields[idx]
 
         if self.config.scaling_type is not None:
             fields = self.scale_model_targets(fields, self.config.volume_factors)
@@ -525,6 +587,14 @@ class TransolverDataPipe(Dataset):
 
         return outputs
 
+    def _promote_to_replicated(self, tensor, ref_shard_tensor):
+        """Wrap a plain tensor as a Replicate-placed ShardTensor on the same mesh."""
+        if isinstance(tensor, ShardTensor):
+            return tensor
+        return ShardTensor.from_local(
+            tensor, device_mesh=ref_shard_tensor._spec.mesh, placements=[Replicate()],
+        )
+
     def scale_model_targets(
         self, fields: torch.Tensor, factors: torch.Tensor
     ) -> torch.Tensor:
@@ -534,10 +604,16 @@ class TransolverDataPipe(Dataset):
         if self.config.scaling_type == "mean_std_scaling":
             field_mean = factors["mean"]
             field_std = factors["std"]
+            if isinstance(fields, ShardTensor):
+                field_mean = self._promote_to_replicated(field_mean, fields)
+                field_std = self._promote_to_replicated(field_std, fields)
             return standardize(fields, field_mean, field_std)
         elif self.config.scaling_type == "min_max_scaling":
             field_min = factors["min"]
             field_max = factors["max"]
+            if isinstance(fields, ShardTensor):
+                field_min = self._promote_to_replicated(field_min, fields)
+                field_max = self._promote_to_replicated(field_max, fields)
             return normalize(fields, field_max, field_min)
 
     def unscale_model_targets(
@@ -571,10 +647,16 @@ class TransolverDataPipe(Dataset):
         if self.config.scaling_type == "mean_std_scaling":
             field_mean = factors["mean"]
             field_std = factors["std"]
+            if isinstance(fields, ShardTensor):
+                field_mean = self._promote_to_replicated(field_mean, fields)
+                field_std = self._promote_to_replicated(field_std, fields)
             fields = unstandardize(fields, field_mean, field_std)
         elif self.config.scaling_type == "min_max_scaling":
             field_min = factors["min"]
             field_max = factors["max"]
+            if isinstance(fields, ShardTensor):
+                field_min = self._promote_to_replicated(field_min, fields)
+                field_max = self._promote_to_replicated(field_max, fields)
             fields = unnormalize(fields, field_max, field_min)
 
         # if air_density is not None and stream_velocity is not None:
@@ -636,6 +718,7 @@ class TransolverDataPipe(Dataset):
 
         """
         outputs = self.process_data(data_dict)
+
         for key in outputs.keys():
             if isinstance(outputs[key], list):
                 outputs[key] = [item.unsqueeze(0) for item in outputs[key]]
@@ -724,10 +807,18 @@ def create_transolver_dataset(
         if cfg.get(optional_key, None) is not None:
             overrides[optional_key] = cfg[optional_key]
 
+    # Defaults for Zarr attributes that the sharded reader currently drops.
+    # Non-sharded reads get the real per-sample values from group attrs;
+    # sharded reads fall back to these until read_file_sharded is fixed.
+    keys_to_read_if_available = {
+        "air_density": torch.tensor(1.0, dtype=torch.float32),
+        "stream_velocity": torch.tensor(1.0, dtype=torch.float32),
+    }
+
     dataset = CAEDataset(
         data_dir=input_path,
         keys_to_read=keys_to_read,
-        keys_to_read_if_available={},
+        keys_to_read_if_available=keys_to_read_if_available,
         output_device=device,
         preload_depth=preload_depth,
         pin_memory=pin_memory,

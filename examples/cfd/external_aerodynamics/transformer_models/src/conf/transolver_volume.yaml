@@ -25,8 +25,12 @@ run_id: "volume/float32"
 
 # Performance considerations:
 precision: float32 # float32, float16, bfloat16, or float8
-compile: true
+compile: false
 profile: false
+
+# Domain parallelism: number of GPUs collaborating on one sample.
+# world_size must be divisible by this. Set to 1 to disable.
+domain_parallel_size: 1
 
 model:
   out_dim: 5
