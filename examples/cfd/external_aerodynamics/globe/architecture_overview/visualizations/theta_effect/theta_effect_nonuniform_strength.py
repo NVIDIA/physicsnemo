@@ -229,8 +229,7 @@ plt.show()
 # Figure 1b: ClusterTree AABB hierarchy (3D stacked)
 # =====================================================================
 
-fig = plt.figure(figsize=(7, 6))
-ax = fig.add_subplot(111, projection="3d")
+fig, ax = p.figure3d(box_aspect=[1, 1, 0.4], figsize=(7, 6))
 Z_SPACING = 0.7
 
 # Index nodes by ID for parent-child line drawing
@@ -279,7 +278,6 @@ ax.set_ylabel(r"$y$")
 ax.set_title("ClusterTree AABB hierarchy (3D)")
 # ax.set_zticks([i * Z_SPACING for i in range(max_depth + 1)])
 # ax.set_zticklabels([f"depth {max_depth - i}" for i in range(max_depth + 1)])
-ax.set_box_aspect([1, 1, 0.4])
 ax.view_init(elev=30, azim=-50)
 p.show_plot(show=False)
 save_figure(fig, stem="tree_hierarchy_3d")
