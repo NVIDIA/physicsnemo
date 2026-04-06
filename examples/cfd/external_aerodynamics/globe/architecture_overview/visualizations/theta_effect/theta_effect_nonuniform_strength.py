@@ -28,10 +28,10 @@ OUTPUT_DIR = Path(__file__).parent
 
 ### [Configuration]
 SEED = 39
-N_SOURCE_POINTS = 20
+N_SOURCE_POINTS = 60
 THETA_VALUES = [0.1, 0.25, 0.5, 1.0]
 THETA_SWEEP = np.geomspace(0.01, 10.0, 21)
-GRID_RES = 128
+GRID_RES = 256
 X_MIN, X_MAX = -6.0, 6.0
 Y_MIN, Y_MAX = -6.0, 6.0
 
@@ -59,7 +59,7 @@ n_source = len(src_centroids_np)
 source_points = torch.as_tensor(src_centroids_np, device=device, dtype=torch.float32)
 # Sinusoidal strength variation around the boundary breaks field uniformity
 theta_mid = (theta_boundary[:-1] + theta_boundary[1:]) / 2
-strength_variation = 1 * np.sin(7 * theta_mid + 0.5)
+strength_variation = np.sin(7 * theta_mid + 0.5)
 source_strengths = torch.as_tensor(
     strength_variation * 1e2 / n_source, device=device, dtype=torch.float32
 )
@@ -288,28 +288,43 @@ plt.show()
 # Precompute kernel results for Figures 3 and 4
 # =====================================================================
 
-EXPAND_MODES = [False, True]
-EXPAND_LABELS = {False: "Broadcast (default)", True: "Expanded targets"}
+### Mode configs: (expand_far_targets, source_leaves_only)
+MODES: list[tuple[bool, bool]] = [
+    (False, False),
+    (True, False),
+    (False, True),
+]
+MODE_LABELS = {
+    (False, False): "Broadcast (default)",
+    (True, False): "Expanded targets",
+    (False, True): "Src leaves only",
+}
+MODE_COLORS = {
+    (False, False): "C0",
+    (True, False): "C1",
+    (False, True): "C2",
+}
 
 print("Evaluating kernel on grid (theta=0, exact)...")
 exact_result = evaluate_on_grid(
     kernel, theta=0.0, cluster_tree=source_tree, target_tree=grid_target_tree,
 )
 
-grid_results: dict[bool, dict[float, dict[str, np.ndarray]]] = {}
-for expand in EXPAND_MODES:
-    grid_results[expand] = {}
+grid_results: dict[tuple[bool, bool], dict[float, dict[str, np.ndarray]]] = {}
+for expand, src_leaves in MODES:
+    grid_results[(expand, src_leaves)] = {}
     for theta in THETA_VALUES:
         print(
             f"Evaluating kernel on grid "
-            f"(theta={theta}, expand_far_targets={expand})..."
+            f"(theta={theta}, expand={expand}, src_leaves={src_leaves})..."
         )
-        grid_results[expand][theta] = evaluate_on_grid(
+        grid_results[(expand, src_leaves)][theta] = evaluate_on_grid(
             kernel,
             theta=theta,
             cluster_tree=source_tree,
             target_tree=grid_target_tree,
             expand_far_targets=expand,
+            source_leaves_only=src_leaves,
         )
 
 
@@ -319,7 +334,7 @@ for expand in EXPAND_MODES:
 
 col_labels = ["Exact"] + [rf"$\theta = {th}$" for th in THETA_VALUES]
 n_cols = len(col_labels)
-n_rows = len(EXPAND_MODES)
+n_rows = len(MODES)
 
 phi_scale = float(
     np.max(np.abs(np.percentile(exact_result["phi"], [0.1, 99.9])))
@@ -327,9 +342,9 @@ phi_scale = float(
 levels = np.linspace(-phi_scale, phi_scale, 31)
 
 fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.5 * n_cols, 3.5 * n_rows))
-for row, expand in enumerate(EXPAND_MODES):
+for row, mode in enumerate(MODES):
     phi_fields = [exact_result["phi"]] + [
-        grid_results[expand][th]["phi"] for th in THETA_VALUES
+        grid_results[mode][th]["phi"] for th in THETA_VALUES
     ]
     for col, (ax, label, phi) in enumerate(
         zip(axes[row], col_labels, phi_fields)
@@ -357,7 +372,7 @@ for row, expand in enumerate(EXPAND_MODES):
         else:
             ax.set_xticklabels([])
         if col == 0:
-            ax.set_ylabel(EXPAND_LABELS[expand] + "\n" + r"$y/\ell$")
+            ax.set_ylabel(MODE_LABELS[mode] + "\n" + r"$y/\ell$")
         else:
             ax.set_yticklabels([])
 
@@ -372,10 +387,10 @@ plt.show()
 # Figure 4: Approximation error fields (broadcast vs expanded)
 # =====================================================================
 
-# Consistent log-scale normalization across ALL panels and both modes
+# Consistent log-scale normalization across ALL panels and all modes
 all_error_arrays = [
-    np.abs(grid_results[expand][th]["phi"] - exact_result["phi"])
-    for expand in EXPAND_MODES
+    np.abs(grid_results[mode][th]["phi"] - exact_result["phi"])
+    for mode in MODES
     for th in THETA_VALUES
 ]
 positive_vals = np.concatenate([e[e > 0].ravel() for e in all_error_arrays])
@@ -385,14 +400,14 @@ vmin = (
 vmax = float(max(e.max() for e in all_error_arrays))
 
 n_cols = len(THETA_VALUES)
-n_rows = len(EXPAND_MODES)
+n_rows = len(MODES)
 fig, axes = plt.subplots(
     n_rows, n_cols, figsize=(3.5 * n_cols + 1, 3.5 * n_rows),
     gridspec_kw={"right": 0.88},
 )
-for row, expand in enumerate(EXPAND_MODES):
+for row, mode in enumerate(MODES):
     errors = [
-        np.abs(grid_results[expand][th]["phi"] - exact_result["phi"])
+        np.abs(grid_results[mode][th]["phi"] - exact_result["phi"])
         for th in THETA_VALUES
     ]
     for col, (ax, theta, err) in enumerate(
@@ -423,7 +438,7 @@ for row, expand in enumerate(EXPAND_MODES):
         else:
             ax.set_xticklabels([])
         if col == 0:
-            ax.set_ylabel(EXPAND_LABELS[expand] + "\n" + r"$y/\ell$")
+            ax.set_ylabel(MODE_LABELS[mode] + "\n" + r"$y/\ell$")
         else:
             ax.set_yticklabels([])
 
@@ -466,9 +481,9 @@ with torch.no_grad():
 
 n_dense = N_SWEEP_TARGETS * n_source
 
-### Sweep both modes
-sweep_data: dict[bool, dict] = {}
-for expand in EXPAND_MODES:
+### Sweep all modes
+sweep_data: dict[tuple[bool, bool], dict] = {}
+for expand, src_leaves in MODES:
     max_errs: list[float] = []
     mean_errs: list[float] = []
     n_evals: list[int] = []
@@ -478,6 +493,7 @@ for expand in EXPAND_MODES:
             target_tree=sweep_target_tree,
             theta=theta,
             expand_far_targets=expand,
+            source_leaves_only=src_leaves,
         )
         n_evals.append(
             plan.n_near + plan.n_nf + plan.n_fn + plan.n_far_nodes
@@ -494,13 +510,14 @@ for expand in EXPAND_MODES:
                 cluster_tree=source_tree,
                 target_tree=sweep_target_tree,
                 expand_far_targets=expand,
+                source_leaves_only=src_leaves,
             )
 
         phi_err = (result_at_sweep["phi"] - exact_at_sweep["phi"]).abs()
         max_errs.append(phi_err.max().item())
         mean_errs.append(phi_err.mean().item())
 
-    sweep_data[expand] = {
+    sweep_data[(expand, src_leaves)] = {
         "max_errors": max_errs,
         "mean_errors": mean_errs,
         "n_kernel_evals": n_evals,
@@ -508,24 +525,22 @@ for expand in EXPAND_MODES:
 
 fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 4.5))
 
-EXPAND_COLORS = {False: "C0", True: "C1"}
-
 ### Shared index for skipping theta=0 on log-scale axes
 theta_nonzero = [th for th in THETA_SWEEP if th > 0]
 idx = [i for i, th in enumerate(THETA_SWEEP) if th > 0]
 
 ### Left: error vs theta
-for expand in EXPAND_MODES:
-    c = EXPAND_COLORS[expand]
-    d = sweep_data[expand]
+for mode in MODES:
+    c = MODE_COLORS[mode]
+    d = sweep_data[mode]
     ax1.loglog(
         theta_nonzero, [d["mean_errors"][i] for i in idx], "o-",
-        color=c, label=EXPAND_LABELS[expand],
+        color=c, label=MODE_LABELS[mode],
     )
 ax1.set_xlabel(r"$\theta$")
 ax1.set_ylabel(r"Mean $|\phi_\mathrm{BH} - \phi_\mathrm{exact}|$")
 ax1.set_title(r"Error vs. $\theta$")
-ax1.legend()
+ax1.legend(fontsize=7)
 ax1.grid(True, alpha=0.3)
 
 ### Center: cost vs theta
@@ -533,12 +548,12 @@ ax2.axhline(
     n_dense, color="gray", linestyle="--", alpha=0.5,
     label=f"Dense ({n_dense:,})",
 )
-for expand in EXPAND_MODES:
-    c = EXPAND_COLORS[expand]
-    d = sweep_data[expand]
+for mode in MODES:
+    c = MODE_COLORS[mode]
+    d = sweep_data[mode]
     ax2.loglog(
         theta_nonzero, [d["n_kernel_evals"][i] for i in idx], "^-",
-        color=c, label=EXPAND_LABELS[expand],
+        color=c, label=MODE_LABELS[mode],
     )
 ax2.set_xlabel(r"$\theta$")
 ax2.set_ylabel("Kernel evaluations")
@@ -547,16 +562,15 @@ ax2.legend(fontsize=7)
 ax2.grid(True, alpha=0.3)
 
 ### Right: error vs cost (Pareto-style)
-for expand in EXPAND_MODES:
-    c = EXPAND_COLORS[expand]
-    d = sweep_data[expand]
+for mode in MODES:
+    c = MODE_COLORS[mode]
+    d = sweep_data[mode]
     evals_nz = [d["n_kernel_evals"][i] for i in idx]
     errs_nz = [d["mean_errors"][i] for i in idx]
     ax3.loglog(
         evals_nz, errs_nz, "o-",
-        color=c, label=EXPAND_LABELS[expand],
+        color=c, label=MODE_LABELS[mode],
     )
-    # Label min and max theta at the endpoints
     for j, label_idx in enumerate([0, -1]):
         th = theta_nonzero[label_idx]
         ax3.annotate(
@@ -570,7 +584,7 @@ for expand in EXPAND_MODES:
 ax3.set_xlabel("Kernel evaluations")
 ax3.set_ylabel(r"Mean $|\phi_\mathrm{BH} - \phi_\mathrm{exact}|$")
 ax3.set_title("Error vs. cost")
-ax3.legend()
+ax3.legend(fontsize=7)
 ax3.grid(True, alpha=0.3)
 
 plt.tight_layout()
