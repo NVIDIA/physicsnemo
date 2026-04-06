@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# =============================================================================
+# MIONet-FNN — Model Configuration (CO2 Sequestration)
+# =============================================================================
+# Same as vanilla MIONet but with a deeper FNN decoder
+# (merger net) after branch-trunk product.
+# Paper reference R2: sat=0.971, pres=0.979
+# =============================================================================
+
+arch:
+  dimensions: 3d
+  model: xdeeponet
+
+  xdeeponet:
+    variant: mionet
+    width: 36
+    padding: 8
+
+    branch1:
+      encoder:
+        type: linear
+        activation_fn: relu
+      layers:
+        num_fourier_layers: 0
+        num_unet_layers: 0
+        num_conv_layers: 1
+        modes1: 12
+        modes2: 12
+        kernel_size: 3
+        dropout: 0.0
+        unet_impl: custom
+        activation_fn: relu
+      internal_resolution: null
+
+    branch2:
+      encoder:
+        type: mlp
+        hidden_width: 36
+        num_layers: 3
+        activation_fn: relu
+      layers:
+        num_fourier_layers: 0
+        num_unet_layers: 0
+        num_conv_layers: 0
+
+    trunk:
+      input_type: time
+      hidden_width: 36
+      num_layers: 6
+      activation_fn: sin
+      output_activation: true
+
+    decoder_type: mlp
+    decoder_width: 128
+    decoder_layers: 2
+    decoder_activation_fn: relu
+
+loss:
+  types: [relative_l2]
+  weights: [1.0]
+
+  derivative:
+    enabled: true
+    weight: 0.5
+    dims: [dx]
+    metric: null
+
+  physics:
+    mass_conservation:
+      enabled: false
+      weight: 0.0
+      use_cell_volumes: false

@@ -1,0 +1,30 @@
+# Temporary directories
+logs/
+outputs/
+mlruns/
+visualizations/
+__pycache__/
+checkpoints/
+
+# NFS lock files
+.nfs*
+
+# Cluster-specific files
+*.sbatch
+
+# Temporary scripts
+check_gpu_memory.sh
+launch.log
+
+# Python cache
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/

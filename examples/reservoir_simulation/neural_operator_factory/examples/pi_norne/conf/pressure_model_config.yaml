@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# =============================================================================
+# PI-Norne — Pressure Fourier-DeepONet Model Configuration
+# =============================================================================
+# 4D Fourier-DeepONet for pressure prediction on the Norne field.
+# Branch: 6 Fourier layers (pure spectral processing)
+# Trunk: 12-layer deep MLP for temporal encoding
+# Feedback channel appends previous prediction as extra input.
+#
+# Norne grid: 46 x 112 x 22, 44,431 active cells (39.2%), 65 timesteps
+# Input channels: 11 + 1 feedback = 12 during AR training
+# Output: pressure (bar)
+# =============================================================================
+
+arch:
+  dimensions: 4d
+  model: xdeeponet
+
+  xdeeponet:
+    variant: fourier_deeponet
+    width: 64
+    padding: 8
+
+    # Branch1: 6 pure Fourier layers for spatial encoding
+    branch1:
+      encoder:
+        type: linear
+        activation_fn: gelu
+      layers:
+        num_fourier_layers: 6
+        num_unet_layers: 0
+        num_conv_layers: 0
+        modes1: 10
+        modes2: 10
+        modes3: 6
+        kernel_size: 3
+        dropout: 0.0
+        activation_fn: gelu
+
+    # Trunk: 12-layer deep MLP for time coordinates
+    trunk:
+      input_type: time
+      hidden_width: 128
+      num_layers: 12
+      activation_fn: tanh
+      output_activation: false
+
+    # Decoder: temporal projection for single-step output
+    decoder_type: temporal_projection
+    decoder_width: 64
+    decoder_layers: 1
+    decoder_activation_fn: relu
+
+# =============================================================================
+# Pressure Loss Configuration
+# =============================================================================
+loss:
+  types: [relative_l2]
+  weights: [1.0]
+
+  derivative:
+    enabled: true
+    weight: 0.5
+    dims: [dx, dy, dz]
+    metric: null
+
+  physics:
+    mass_conservation:
+      enabled: false

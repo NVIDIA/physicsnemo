@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# =============================================================================
+# U-FNO — Model Configuration (CO2 Sequestration)
+# =============================================================================
+# 3 Fourier layers + 3 U-Fourier layers (U-Net skip connections).
+# Flagship architecture from the paper.
+# Reference: Wen et al. (2022), arXiv:2109.03697, Table H.13 — ~33M params.
+# =============================================================================
+
+arch:
+  dimensions: 3d
+  model: xfno
+
+  xfno:
+    out_channels: 1
+    width: 36
+    padding: 8
+    activation_fn: relu
+
+    modes1: 10
+    modes2: 10
+    modes3: 10
+
+    num_fno_layers: 3
+    num_unet_layers: 3
+    num_conv_layers: 0
+
+    lifting_type: mlp
+    lifting_layers: 1
+    lifting_width: 36
+
+    decoder_type: mlp
+    decoder_layers: 2
+    decoder_width: 128
+    decoder_activation_fn: relu
+
+    unet_type: custom
+    unet_kernel_size: 3
+    unet_dropout: 0.0
+    conv_kernel_size: 3
+
+loss:
+  types: [relative_l2]
+  weights: [1.0]
+
+  derivative:
+    enabled: true
+    weight: 0.5
+    dims: [dx]
+    metric: null
+
+  physics:
+    mass_conservation:
+      enabled: false
+      weight: 0.0
+      use_cell_volumes: false

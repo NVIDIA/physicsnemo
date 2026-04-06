@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# =============================================================================
+# FNO — Pressure Buildup (CO2 Sequestration)
+# =============================================================================
+# Expected test-set results (paper Table I.14b):
+#   MRE = 0.0082 ± 0.0052,  R² = 0.989
+# =============================================================================
+
+defaults:
+  - model_config
+  - _self_
+
+hydra:
+  job:
+    chdir: False
+  run:
+    dir: ./outputs/ufno_co2/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+data:
+  data_path: /data/co2
+  variable: pressure
+  input_file: null
+  output_file: null
+  normalize: false
+  num_workers: 4
+  val_metric: mre
+  mask_enabled: true
+  mask_channel: 0
+  denormalize_fn: null
+
+training:
+  batch_size: 4
+  epochs: 140
+  initial_lr: 0.001
+  checkpoint_dir: ./checkpoints
+  validate_freq: 5
+  use_amp: false
+  resume_from_checkpoint: null
+  regime: full_mapping
+
+optimizer:
+  weight_decay: 0.0001
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+scheduler:
+  type: step
+  step_size: 10
+  gamma: 0.85
+
+logging:
+  use_mlflow: false
+  experiment_name: ufno_co2_fno_pressure
+
+seed: 42
+
+compute:
+  benchmark: true
+  deterministic: true

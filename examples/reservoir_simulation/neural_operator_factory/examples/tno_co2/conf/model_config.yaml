@@ -1,0 +1,107 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# =============================================================================
+# TNO — Model Configuration (CO2 Sequestration)
+# =============================================================================
+# Temporal Neural Operator: branch1 (input fields) + branch2/t-branch
+# (previous solution state) + trunk (time), all with U-Net processors.
+# Autoregressive with temporal bundling (L=1, K=3).
+# Temporal projection decoder: G maps latent p → K output timesteps directly.
+#
+# Reference: Diab, W. & Al Kobaisi, M. (2025). "Temporal Neural Operator
+#            for Modeling Time-Dependent Physical Phenomena."
+#            arXiv:2504.20249.  https://arxiv.org/abs/2504.20249
+#
+# Default width p=96 (saturation).
+# Pressure overrides to p=128 in pressure_training_config.yaml.
+# =============================================================================
+
+arch:
+  dimensions: 3d
+  model: xdeeponet
+
+  xdeeponet:
+    variant: tno
+    width: 96
+    padding: 8
+
+    # Branch1: processes input fields (4 spatial + 5 scalar channels)
+    # Lifting → U-Net → ReLU output
+    branch1:
+      encoder:
+        type: linear
+        activation_fn: relu
+      layers:
+        num_fourier_layers: 0
+        num_unet_layers: 1
+        num_conv_layers: 0
+        modes1: 12
+        modes2: 12
+        kernel_size: 3
+        dropout: 0.0
+        unet_impl: custom
+        activation_fn: relu
+      internal_resolution: null
+
+    # Branch2 (t-branch): processes previous solution state
+    # Lifting → U-Net → ReLU output
+    branch2:
+      encoder:
+        type: linear
+        activation_fn: relu
+      layers:
+        num_fourier_layers: 0
+        num_unet_layers: 1
+        num_conv_layers: 0
+        kernel_size: 3
+        dropout: 0.0
+        unet_impl: custom
+        activation_fn: relu
+
+    # Trunk: tanh FNN, narrow (40) but deep (14 layers), linear output.
+    # Original code: TimeNN(in_width=L, hidden_width=40, output_dim=width, num_layers=14)
+    trunk:
+      input_type: time
+      hidden_width: 40
+      num_layers: 14
+      activation_fn: tanh
+      output_activation: false
+
+    # Decoder: ReLU → Linear → Linear(→K)
+    # Original code: fc_2(relu) → fc_3(linear) → fc_4(width→K)
+    # decoder_layers=1 creates: FCLayer(relu) + FCLayer(identity) + temporal_head
+    decoder_type: temporal_projection
+    decoder_width: 96
+    decoder_layers: 1
+    decoder_activation_fn: relu
+
+# Relative L2 loss (matches original TNO code: LpLoss)
+loss:
+  types: [relative_l2]
+  weights: [1.0]
+
+  derivative:
+    enabled: false
+    weight: 0.0
+    dims: [dx]
+    metric: null
+
+  physics:
+    mass_conservation:
+      enabled: false
+      weight: 0.0
+      use_cell_volumes: false

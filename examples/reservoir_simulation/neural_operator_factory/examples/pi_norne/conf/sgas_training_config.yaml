@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# PI-Norne — Gas Saturation (Norne Field)
+
+defaults:
+  - sgas_model_config
+  - _self_
+
+hydra:
+  job:
+    chdir: False
+  run:
+    dir: ./outputs/pi_norne/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+data:
+  data_path: /data/norne
+  variable: sgas
+  input_file: norne_{mode}_a.pt
+  output_file: norne_{mode}_sgas.pt
+  normalize: false
+  num_workers: 4
+  val_metric: rmse
+  mask_enabled: true
+  mask_channel: null
+  denormalize_fn: null
+  num_timesteps: null
+
+training:
+  batch_size: 1
+  initial_lr: 0.001
+  checkpoint_dir: ./checkpoints
+  validate_freq: 5
+  use_amp: false
+  resume_from_checkpoint: null
+  regime: autoregressive
+
+  autoregressive:
+    input_window: 3
+    output_window: 1
+    teacher_forcing_epochs: 10
+    pushforward_epochs: 0
+    rollout_epochs: 90
+    max_unroll: 5
+    noise_std: 0.0
+    use_feedback_channel: true
+    lr_reset_factor: 1.0
+    rollout_mode: detached
+
+optimizer:
+  weight_decay: 0.0001
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+scheduler:
+  type: step
+  step_size: 10
+  gamma: 0.85
+
+logging:
+  use_mlflow: false
+  experiment_name: pi_norne_sgas
+
+seed: 42
+
+compute:
+  benchmark: true
+  deterministic: false

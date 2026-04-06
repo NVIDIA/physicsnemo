@@ -1,0 +1,214 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Neural Operator Factory — Training Configuration
+#
+# This is the base config for the Norne 4D TNO experiment.
+# For CO2 examples, use the self-contained configs under examples/ufno_co2/.
+#
+# Input channel ordering convention (last channels):
+#   3d: [..., grid_x, grid_y, grid_t]           channels [-3, -2, -1]
+#   4d: [..., grid_x, grid_y, grid_z, grid_t]   channels [-4, -3, -2, -1]
+# Inactive cells must be zero in all input channels and the output.
+
+defaults:
+  - model_config
+  - _self_
+
+hydra:
+  job:
+    chdir: False
+  run:
+    dir: ./outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+data:
+  # ---------------------------------------------------------------------------
+  # Dataset Configuration
+  # ---------------------------------------------------------------------------
+  # The dataset files should match the dimensions specified in arch.dimensions
+  # - 3d: expects (N, H, W, T, C) input, (N, H, W, T) output
+  # - 4d: expects (N, X, Y, Z, T, C) input, (N, X, Y, Z, T) output
+  
+  data_path: /data/norne
+  
+  # Variable name — used for checkpoint naming and metric selection, not file resolution.
+  # Choices: 'pressure', 'saturation'
+  variable: saturation
+
+  # Input/output file patterns ({mode} is replaced with train/val/test).
+  # Available Norne dataset files:
+  #   Inputs:  norne_{mode}_a.pt  (or symlink norne_{mode}_input.pt)
+  #   Outputs: norne_{mode}_pressure.pt  (pressure, single channel)
+  #            norne_{mode}_swat.pt      (water saturation, single channel)
+  #            norne_{mode}_sgas.pt      (gas saturation, single channel)
+  #            norne_{mode}_u.pt         (all 3 channels — requires multi-output support)
+  # For CO2 dataset: set input_file/output_file to null and use variable instead
+  #   (resolves to dP_{mode}_a.pt / dP_{mode}_u.pt or sg_* automatically)
+  input_file: norne_{mode}_a.pt
+  output_file: norne_{mode}_swat.pt
+
+  # z-score normalize inputs and outputs at load time.
+  # Set false if the .pt files are already pre-normalized.
+  # The dataloader computes mean/std from the training set and shares with val/test.
+  normalize: false
+
+  # Number of DataLoader worker processes per GPU for parallel data loading.
+  # Higher values speed up I/O-bound training but use more CPU memory.
+  # Recommended: 2-4 per GPU.  Set to 0 for debugging (loads in main process).
+  num_workers: 2
+
+  # ---------------------------------------------------------------------------
+  # Validation Metric Configuration (dataset-agnostic)
+  # ---------------------------------------------------------------------------
+  # val_metric: Which metric to compute during validation.
+  #   Choices: 'rmse', 'mae', 'mre', 'mpe', 'relative_l2'
+  #   Default: 'rmse' (works for any dataset without assumptions).
+  #   CO2 examples: 'mre' for pressure, 'mpe' for saturation.
+  val_metric: rmse
+
+  # mask_enabled: Exclude inactive cells from loss and metrics.
+  #   Auto-detects the best mask channel from inputs (priority order):
+  #   1) ACTNUM channel (binary {0,1}, static across time)
+  #   2) Non-zero channel fallback (static zero pattern across time)
+  #   3) No mask (all cells active)
+  #   If the mask varies across samples, it is constructed per-batch.
+  mask_enabled: true
+
+  # mask_channel: Explicit input channel index for the active-cell mask.
+  #   null = auto-detect (recommended).  Set to an integer to override.
+  #   Example: 5 for Norne ACTNUM, 0 for CO2 permeability.
+  mask_channel: null
+
+  # num_timesteps: Truncate the time axis to the first N timesteps for
+  #   train and val splits.  The test split always keeps ALL timesteps,
+  #   enabling temporal extrapolation evaluation.
+  #   null (default) = use all timesteps in the .pt files.
+  #   Example: 16 for CO2 (train on 1.8 years, test extrapolation to 30 years).
+  num_timesteps: 50
+
+
+training:
+  batch_size: 2
+  epochs: 100                   # used by full_mapping only; ignored if regime is autoregressive below 
+  initial_lr: 0.001
+  checkpoint_dir: ./checkpoints
+  validate_freq: 5
+  use_amp: false
+  # Path to a checkpoint to resume training from. null = start fresh.
+  resume_from_checkpoint: null
+
+  # ---------------------------------------------------------------------------
+  # Training Regime
+  # ---------------------------------------------------------------------------
+  # full_mapping:    Predict entire trajectory in one forward pass (default).
+  # autoregressive:  Predict K timesteps from L context timesteps.
+  #   Three-stage training: teacher forcing -> pushforward -> rollout
+  #   Works with any model type and any spatial dimensionality: 3d (CO2) and 4d (Norne)
+  regime: autoregressive
+
+  autoregressive:
+    # L: number of context timesteps fed to the model as input.
+    input_window: 1
+
+    # K: number of timesteps the model predicts per forward pass.
+    # DeepONet/TNO (mlp decoder): K trunk queries per forward pass.
+    # DeepONet/TNO (temporal_projection decoder): single trunk query,
+    #   linear head projects to K outputs (faster, set_output_window(K)).
+    # xFNO: requires L + K >= 2 * time_modes for proper spectral resolution.
+    output_window: 3
+
+    # -----------------------------------------------------------------------
+    # Stage 1 -- Teacher Forcing
+    # -----------------------------------------------------------------------
+    # Model always sees ground-truth input.  Teaches the underlying physics
+    # from clean signals.  Loss is computed per-window with gradient
+    # accumulation (memory efficient).
+    teacher_forcing_epochs: 5
+
+    # -----------------------------------------------------------------------
+    # Stage 2 -- Pushforward (optional, set to 0 to skip)
+    # -----------------------------------------------------------------------
+    # Short unrolled chains with live gradients (uses live_rollout_step).
+    # Gradually increases chain length via curriculum (1 → max_unroll) to
+    # bridge the gap between teacher forcing and free-running rollout.
+    pushforward_epochs: 0
+
+    # Maximum number of pushforward unroll steps.
+    # Curriculum linearly ramps from 1 to this value over pushforward_epochs.
+    max_unroll: 5
+
+    # -----------------------------------------------------------------------
+    # Stage 3 -- Rollout
+    # -----------------------------------------------------------------------
+    # Free-running autoregressive sweep where the model receives its own
+    # predictions as input, training it to self-correct approximation errors.
+    rollout_epochs: 175
+
+    # rollout_mode: Controls how gradients are handled during rollout.
+    #
+    #   'detached' (default):
+    #     Per-window gradient accumulation.  Predictions are detached between
+    #     windows, so each window trains independently.  Memory efficient
+    #     (one compute graph at a time).  Good default for most models.
+    #
+    #   'live_gradients':
+    #     Full-trajectory rollout with live gradients through the entire chain.
+    #     Predictions are collected, then a single loss is computed on the
+    #     concatenated trajectory.  Gradients flow from the final loss back
+    #     through all intermediate predictions, providing stronger gradient
+    #     signal for temporal coherence.  More memory intensive.  Matches the
+    #     original TNO paper training procedure.
+    rollout_mode: detached
+
+    # Noise standard deviation injected into branch2 / feedback during training.
+    # Positive values add Gaussian noise for robustness; 0 disables.
+    # Set to 0.01 to 0.05 during rollout training to regularize against error accumulation.
+    noise_std: 0.0
+
+    # Feedback channel: append previous prediction as an extra input channel.
+    # With TNO, the feedback goes through branch2 (t-branch) automatically.
+    # Set to true to enable for other models in AR training (appends to branch1).
+    use_feedback_channel: false
+
+    # Factor to reset learning rate at each stage transition.
+    # 1.0 = no reset; < 1.0 = scale LR up relative to current schedule.
+    lr_reset_factor: 1.0
+
+optimizer:
+  weight_decay: 0.0001
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+scheduler:
+  type: step
+  step_size: 10
+  gamma: 0.85
+
+logging:
+  use_mlflow: false
+  experiment_name: nof_training
+
+seed: 42
+
+compute:
+  # cudnn.benchmark: auto-tune convolution algorithms for the input
+  # size.  Faster training but non-deterministic.
+  benchmark: true
+
+  # cudnn.deterministic: force deterministic algorithms for exact
+  # reproducibility.  Slower than benchmark.  When true, benchmark
+  # is overridden to false.
+  deterministic: false

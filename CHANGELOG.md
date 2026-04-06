@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Examples: Added Neural Operator Factory for reservoir simulation in
+  `examples/reservoir_simulation/neural_operator_factory/`. Config-driven
+  framework supporting FNO, U-FNO, Conv-FNO, FNO4D, DeepONet (7 variants),
+  and TNO architectures on 2D and 3D spatial datasets. Includes physics-informed
+  losses (derivative regularization, mass conservation), three-stage
+  autoregressive training (teacher forcing, pushforward, rollout), per-sample
+  domain masking, multi-GPU DDP, and reproducible examples for U-FNO, U-DeepONet,
+  Fourier-MIONet, and TNO papers on the CO2 sequestration and Norne field
+  datasets.
 - Adds GLOBE model (`physicsnemo.experimental.models.globe.model.GLOBE`)
 - Adds GLOBE AirFRANS example case (`examples/cfd/external_aerodynamics/globe/airfrans`)
 - Adds automatic support for `FSDP` and/or `ShardTensor` models in checkpoint save/load

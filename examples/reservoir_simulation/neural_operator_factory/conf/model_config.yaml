@@ -1,0 +1,243 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# =============================================================================
+# Model Architecture Configuration
+# =============================================================================
+# This config is used with training_config.yaml (Norne 4D TNO by default).
+# For examples with self-contained configs, see examples/ufno_co2/.
+#
+# The loss section requires input channels to follow the NOF convention:
+#   3d: last 3 channels = [grid_x, grid_y, grid_t]
+#   4d: last 4 channels = [grid_x, grid_y, grid_z, grid_t]
+# See README.md for full dataset requirements.
+
+arch:
+  # ---------------------------------------------------------------------------
+  # Step 1: Problem Dimensions
+  # ---------------------------------------------------------------------------
+  # '3d' = 2D spatial + time, input shape (B, H, W, T, C) - e.g., CO2 dataset
+  # '4d' = 3D spatial + time, input shape (B, X, Y, Z, T, C) - e.g., Norne dataset
+  #
+  # IMPORTANT: This must match your dataset! The data loader will validate
+  # that the loaded data matches this dimension setting.
+  # Configure dataset files in training_config.yaml -> data section.
+  dimensions: 4d
+  
+  # ---------------------------------------------------------------------------
+  # Step 2: Model Architecture
+  # ---------------------------------------------------------------------------
+  # 'xfno'      = Fourier Neural Operator variants
+  # 'xdeeponet' = DeepONet variants
+  model: xdeeponet
+
+
+
+  # ===========================================================================
+  # xFNO Configuration
+  # ===========================================================================
+  # Active when: model = xfno
+  # 
+  # Resulting model class:
+  #   - 3d: UFNO/UFNONet (SpectralConv3d + optional UNet/Conv)
+  #   - 4d: FNO4D/FNO4DNet (SpectralConv4d, pure FNO only)
+  
+  xfno:
+    out_channels: 1
+    width: 36
+    padding: 8
+
+    # ── Encoder (lifting) ──────────────────────────────────────────────
+    # Projects raw input channels to the latent width.
+    #   type: mlp   — Linear or FullyConnected (channels-last, then permute)
+    #   type: conv  — Conv3dFCLayer pointwise convolution (channels-first)
+    # 4D only supports mlp lifting (ConvNdFCLayer used internally).
+    lifting_type: mlp         # 'mlp' or 'conv' (3d only)
+    lifting_layers: 1         # Number of layers in lifting network
+    lifting_width: 36         # Hidden width factor for multi-layer lifting
+
+    # ── Processing Layers ──────────────────────────────────────────────
+    # Fourier layers: SpectralConv + 1x1 Conv (always present)
+    # UNet layers:    Hybrid Fourier + UNet skip (3d only, >0 = U-FNO)
+    # Conv layers:    Hybrid Fourier + Conv skip (3d only, >0 = Conv-FNO)
+    num_fno_layers: 4
+    num_unet_layers: 0        # 3d only — >0 enables U-FNO
+    num_conv_layers: 0        # 3d only — >0 enables Conv-FNO
+    activation_fn: relu       # Activation for all processing layers
+
+    # Fourier modes per dimension
+    modes1: 10                # H or X dimension
+    modes2: 10                # W or Y dimension
+    modes3: 10                # T dimension (3d) or Z dimension (4d)
+    modes4: 6                 # T dimension (4d only, ignored for 3d)
+
+    # UNet / Conv settings (3d only)
+    unet_type: physicsnemo    # 'custom' or 'physicsnemo'
+    unet_kernel_size: 3
+    unet_dropout: 0.0
+    conv_kernel_size: 3
+
+    # ── Decoder ────────────────────────────────────────────────────────
+    # Projects latent width back to output channels.
+    #   type: mlp   — FullyConnected (channels-last)
+    #   type: conv  — Conv3dFCLayer pointwise convolution (channels-first)
+    decoder_type: mlp         # 'mlp' or 'conv' (3d only)
+    decoder_layers: 1         # Number of hidden layers in decoder
+    decoder_width: 128        # Hidden layer width in decoder
+    decoder_activation_fn: relu  # Activation for decoder hidden layers (last layer is linear)
+
+    # ── 4d only options ────────────────────────────────────────────────
+    coord_features: true      # Add (x, y, z, t) coordinate features
+
+
+
+
+  # ===========================================================================
+  # xDeepONet Configuration
+  # ===========================================================================
+  # Active when: model = xdeeponet
+  #
+  # Resulting model class:
+  #   - 3d: DeepONet/DeepONetWrapper (2D spatial branch)
+  #   - 4d: DeepONet3D/DeepONet3DWrapper (3D spatial branch)
+  #
+  # Variants:
+  #   - deeponet: Basic DeepONet (MLP branch only)
+  #   - u_deeponet: UNet-enhanced spatial branch
+  #   - fourier_deeponet: Fourier layers in spatial branch
+  #   - conv_deeponet: Conv layers in spatial branch
+  #   - hybrid_deeponet: Fourier + UNet + Conv combination
+  #   - mionet: Two-branch architecture
+  #   - fourier_mionet: Two-branch with Fourier layers
+  #   - tno: Temporal Neural Operator (branch2 = previous solution, AR only)
+  xdeeponet:
+    variant: tno
+    width: 128
+    padding: 8
+    
+    # Branch 1: Primary spatial encoder
+    #
+    # encoder:  How to lift raw input channels to the latent width.
+    #   type: linear  — single LazyLinear(in_channels → width). Default for spatial processing.
+    #   type: mlp     — multi-layer MLP(in_channels → hidden → width). Use alone for pure MLP branch
+    #                   (set all layers counts to 0), or as a learned encoder before Fourier/UNet layers.
+    #   type: conv    — multi-layer pointwise conv encoder (Linear layers with activations).
+    #                   Equivalent to 1x1 convolutions at each spatial point. Use for deeper
+    #                   lifting before Fourier/UNet layers.
+    #
+    # layers:  Processing layers applied after the encoder.
+    #   Fourier, UNet, and Conv layers can be combined. When num_fourier_layers > 0, UNet/Conv layers
+    #   become hybrid: each gets a parallel Fourier component added to its output.
+    #   Set all to 0 for a pure MLP branch (encoder.type must be 'mlp').
+    #
+    branch1:
+      encoder:
+        type: linear             # 'linear' or 'mlp'
+        hidden_width: 64         # mlp-only: hidden layer width
+        num_layers: 2            # mlp-only: number of layers
+        activation_fn: tanh      # mlp-only: activation function
+      layers:
+        num_fourier_layers: 1    # Number of pure Fourier (spectral conv + 1x1 conv) layers
+        num_unet_layers: 1       # Number of UNet layers (hybrid with Fourier when fourier > 0)
+        num_conv_layers: 0       # Number of Conv layers (hybrid with Fourier when fourier > 0)
+        modes1: 10               # Fourier modes in H/X direction
+        modes2: 10               # Fourier modes in W/Y direction
+        modes3: 10               # Fourier modes in Z direction (4D only)
+        kernel_size: 3           # Kernel size for UNet/Conv layers
+        dropout: 0.0             # Dropout for UNet (custom impl only)
+        unet_impl: physicsnemo   # 'custom' or 'physicsnemo'
+        activation_fn: tanh      # Activation for processing layers
+      # Adaptive pool to fixed resolution before processing, upsample back after.
+      # Decouples model complexity from grid size. null = native resolution.
+      # Set to [H, W] (3d) or [X, Y, Z] (4d).
+      internal_resolution: null
+
+    # Branch 2: Secondary encoder (for mionet/fourier_mionet/tno)
+    # Same structure as branch1. For TNO, receives the previous solution state.
+    branch2:
+      encoder:
+        type: linear
+        hidden_width: 128
+        num_layers: 1
+        activation_fn: tanh
+      layers:
+        num_fourier_layers: 1
+        num_unet_layers: 1
+        num_conv_layers: 0
+        modes1: 10
+        modes2: 10
+        modes3: 10
+        kernel_size: 3
+        dropout: 0.0
+        unet_impl: physicsnemo
+        activation_fn: tanh
+    
+    # Trunk: Temporal/coordinate encoder
+    trunk:
+      input_type: time        # 'time' (t only) or 'grid' (x,y,t for 3d / x,y,z,t for 4d)
+      hidden_width: 128
+      num_layers: 8
+      activation_fn: tanh     # activation for hidden layers (sin, tanh, relu, gelu, etc.)
+      # output_activation: whether to apply activation_fn to the trunk's output layer.
+      #   true  (default) = activated output; used by DeepONet, U-DeepONet, MIONet.
+      #   false = linear output; used by TNO — avoids squashing the Hadamard
+      #           product's dynamic range, allowing the trunk to produce
+      #           arbitrary magnitudes.
+      output_activation: true
+    
+    # Decoder: Output projection
+    # 'mlp':  per-timestep trunk query → MLP → 1.  Standard DeepONet decoding.
+    #   The trunk is queried at each target timestep separately.
+    # 'conv': per-timestep trunk query → conv decoder → 1.
+    # 'temporal_projection': single trunk query → Hadamard product → MLP →
+    #   linear head (width → K timesteps).  The trunk is queried once and a
+    #   learned linear projection produces all K output timesteps directly.
+    #   Faster inference for autoregressive bundling.  Requires
+    #   set_output_window(K) at runtime (handled automatically by train.py).
+    decoder_type: mlp
+    decoder_width: 128
+    decoder_layers: 2
+    decoder_activation_fn: relu  
+
+
+# =============================================================================
+# Loss Function Configuration
+# =============================================================================
+# When masking is enabled (training_config.yaml -> mask_enabled: true),
+# only active cells contribute to the loss.  For relative_l2, active
+# cells are selected per-sample so norms are not diluted by zeros.
+# Derivative and physics losses use a union mask across the batch.
+loss:
+  # Data losses: mse, l1, relative_l2, huber, usage exmaple: [relative_l2, l1]
+  # Multiple types can be combined with weights: [w1, w2, ...]
+  types: [relative_l2]
+  weights: [1.0]
+
+  # Spatial derivative regularization
+  # Usage: dims: [dx] or [dx, dy] (2D) or [dx, dy, dz] (3D)
+  derivative:
+    enabled: true
+    weight: 0.5
+    dims: [dx, dy, dz]
+    metric: null              # null = inherit first data loss type
+
+  # Physics-informed losses
+  physics:
+    mass_conservation:
+      enabled: true
+      weight: 0.5
+      use_cell_volumes: true
+      metric: null              # null = inherit first data loss; or mse, l1, relative_l2, huber
