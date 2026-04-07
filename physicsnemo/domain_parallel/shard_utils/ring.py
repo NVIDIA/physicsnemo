@@ -294,7 +294,10 @@ def perform_ring_iteration_async(
     )
 
     if not tensor.is_contiguous():
-        tensor = tensor.contiguous()
+        raise ValueError(
+            "perform_ring_iteration_async requires a contiguous tensor. "
+            "Call tensor.contiguous() before passing it to this function."
+        )
 
     if recv_tensor is None:
         if recv_shape is None:
