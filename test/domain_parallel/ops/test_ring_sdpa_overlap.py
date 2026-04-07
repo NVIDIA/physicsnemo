@@ -41,7 +41,6 @@ from physicsnemo.domain_parallel.shard_utils.ring import RingPassingConfig
 
 from .utils import collective_assert_close, numerical_shard_tensor_check
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -54,7 +53,9 @@ class SDPAWrapper(torch.nn.Module):
         return torch.nn.functional.scaled_dot_product_attention(q, k, v, **kwargs)
 
 
-def _generate_qkv(batch_size, num_heads, seq_len, head_dim, device, dtype=torch.float32):
+def _generate_qkv(
+    batch_size, num_heads, seq_len, head_dim, device, dtype=torch.float32
+):
     """Generate random Q, K, V tensors on the given device."""
     shape = (batch_size, num_heads, seq_len, head_dim)
     q = torch.randn(shape, device=device, dtype=dtype)
@@ -101,10 +102,22 @@ def test_ring_sdpa_forward_matches_blocking(
     attn_args = {"dropout_p": 0.0, "is_causal": False, "scale": None}
 
     out_blocking = RingSDPABlocking.apply(
-        q, k, v, None, mesh, ring_config, attn_args,
+        q,
+        k,
+        v,
+        None,
+        mesh,
+        ring_config,
+        attn_args,
     )
     out_overlap = RingSDPA.apply(
-        q, k, v, None, mesh, ring_config, attn_args,
+        q,
+        k,
+        v,
+        None,
+        mesh,
+        ring_config,
+        attn_args,
     )
 
     collective_assert_close(
@@ -153,7 +166,11 @@ def test_ring_sdpa_backward_matches_blocking(
 
     # --- Blocking path ---
     q_b, k_b, v_b = _generate_qkv(
-        batch_size, num_heads, local_seq, head_dim, dm.device,
+        batch_size,
+        num_heads,
+        local_seq,
+        head_dim,
+        dm.device,
     )
     q_b.requires_grad_(True)
     k_b.requires_grad_(True)
@@ -174,21 +191,33 @@ def test_ring_sdpa_backward_matches_blocking(
 
     # Compare outputs
     collective_assert_close(
-        out_o, out_b, atol=1e-4, rtol=1e-4,
+        out_o,
+        out_b,
+        atol=1e-4,
+        rtol=1e-4,
         msg="backward: forward output mismatch",
     )
 
     # Compare gradients
     collective_assert_close(
-        q_o.grad, q_b.grad, atol=1e-4, rtol=1e-4,
+        q_o.grad,
+        q_b.grad,
+        atol=1e-4,
+        rtol=1e-4,
         msg="backward: grad_q mismatch",
     )
     collective_assert_close(
-        k_o.grad, k_b.grad, atol=1e-4, rtol=1e-4,
+        k_o.grad,
+        k_b.grad,
+        atol=1e-4,
+        rtol=1e-4,
         msg="backward: grad_k mismatch",
     )
     collective_assert_close(
-        v_o.grad, v_b.grad, atol=1e-4, rtol=1e-4,
+        v_o.grad,
+        v_b.grad,
+        atol=1e-4,
+        rtol=1e-4,
         msg="backward: grad_v mismatch",
     )
 

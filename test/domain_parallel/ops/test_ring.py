@@ -40,10 +40,10 @@ from physicsnemo.domain_parallel.shard_utils.ring import (
 
 from .utils import collective_assert, collective_assert_close
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_rank_tensor(shape, dtype, device, rank):
     """Create a tensor filled with (rank + 1) so every rank's data is distinct."""
@@ -59,9 +59,7 @@ def _make_rank_tensor(shape, dtype, device, rank):
 @pytest.mark.parametrize("comm_method", ["p2p", "a2a"])
 @pytest.mark.parametrize("direction", ["forward", "backward"])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-def test_ring_iteration_single_step(
-    distributed_mesh, comm_method, direction, dtype
-):
+def test_ring_iteration_single_step(distributed_mesh, comm_method, direction, dtype):
     """One ring step: every rank sends its tensor and receives from its neighbor."""
     dm = DistributedManager()
     mesh = distributed_mesh
@@ -90,8 +88,10 @@ def test_ring_iteration_single_step(
 
     expected = _make_rank_tensor(shape, dtype, dm.device, expected_source)
     collective_assert_close(
-        received, expected,
-        atol=0, rtol=0,
+        received,
+        expected,
+        atol=0,
+        rtol=0,
         msg=f"ring_iteration single step ({comm_method}, {direction})",
     )
 
@@ -121,8 +121,10 @@ def test_ring_full_rotation(distributed_mesh, comm_method):
         current = perform_ring_iteration(current, mesh, config)
 
     collective_assert_close(
-        current, original,
-        atol=0, rtol=0,
+        current,
+        original,
+        atol=0,
+        rtol=0,
         msg=f"ring full rotation ({comm_method})",
     )
 
@@ -170,9 +172,7 @@ def test_ring_iteration_uneven_shapes(distributed_mesh, comm_method):
 @pytest.mark.multigpu_static
 @pytest.mark.parametrize("direction", ["forward", "backward"])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-def test_ring_iteration_async_single_step(
-    distributed_mesh, direction, dtype
-):
+def test_ring_iteration_async_single_step(distributed_mesh, direction, dtype):
     """Async variant: one ring step with explicit wait."""
     dm = DistributedManager()
     mesh = distributed_mesh
@@ -191,7 +191,9 @@ def test_ring_iteration_async_single_step(
     )
 
     recv_tensor, work_handles = perform_ring_iteration_async(
-        tensor, mesh, config,
+        tensor,
+        mesh,
+        config,
     )
 
     # Wait for completion
@@ -205,8 +207,10 @@ def test_ring_iteration_async_single_step(
 
     expected = _make_rank_tensor(shape, dtype, dm.device, expected_source)
     collective_assert_close(
-        recv_tensor, expected,
-        atol=0, rtol=0,
+        recv_tensor,
+        expected,
+        atol=0,
+        rtol=0,
         msg=f"async ring_iteration single step ({direction})",
     )
 
@@ -234,7 +238,9 @@ def test_ring_iteration_async_preallocated_buffer(distributed_mesh):
     )
 
     returned_recv, work_handles = perform_ring_iteration_async(
-        tensor, mesh, config,
+        tensor,
+        mesh,
+        config,
         recv_tensor=recv_buf,
     )
 
@@ -250,8 +256,10 @@ def test_ring_iteration_async_preallocated_buffer(distributed_mesh):
     expected_source = (local_rank - 1) % local_size
     expected = _make_rank_tensor(shape, torch.float32, dm.device, expected_source)
     collective_assert_close(
-        recv_buf, expected,
-        atol=0, rtol=0,
+        recv_buf,
+        expected,
+        atol=0,
+        rtol=0,
         msg="async preallocated buffer contents",
     )
 
@@ -283,8 +291,10 @@ def test_ring_iteration_async_full_rotation(distributed_mesh):
         current = recv
 
     collective_assert_close(
-        current, original,
-        atol=0, rtol=0,
+        current,
+        original,
+        atol=0,
+        rtol=0,
         msg="async ring full rotation",
     )
 
