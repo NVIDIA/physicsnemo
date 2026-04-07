@@ -65,6 +65,23 @@ def parse_args():
         action="store_true",
         help="Enable mixed precision training (default: False)",
     )
+    parser.add_argument(
+        "--num_warmup",
+        type=int,
+        default=2,
+        help="Number of warmup iterations (default: 2)",
+    )
+    parser.add_argument(
+        "--num_iterations",
+        type=int,
+        default=5,
+        help="Number of benchmark iterations (default: 5)",
+    )
+    parser.add_argument(
+        "--inference_only",
+        action="store_true",
+        help="Run inference benchmarks only, skip training (default: False)",
+    )
 
     args = parser.parse_args()
 

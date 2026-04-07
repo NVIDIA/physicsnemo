@@ -196,7 +196,7 @@ class RingSDPA(torch.autograd.Function):
         global_log_sumexp = None
 
         compute_stream = torch.cuda.current_stream()
-        comm_stream = torch.cuda.Stream()
+        comm_stream = ring_config.comm_stream
 
         # Pre-allocate double buffers for K and V on the default stream to
         # avoid caching-allocator cross-stream synchronization inside the loop.
@@ -224,11 +224,15 @@ class RingSDPA(torch.autograd.Function):
 
                     with torch.cuda.stream(comm_stream):
                         _, k_work = perform_ring_iteration_async(
-                            current_k, mesh, ring_config,
+                            current_k,
+                            mesh,
+                            ring_config,
                             recv_tensor=next_k_buf,
                         )
                         _, v_work = perform_ring_iteration_async(
-                            current_v, mesh, ring_config,
+                            current_v,
+                            mesh,
+                            ring_config,
                             recv_tensor=next_v_buf,
                         )
 
@@ -315,12 +319,12 @@ class RingSDPA(torch.autograd.Function):
 
         Overlaps k/v communication with the backward attention kernel.
         Each iteration:
-        1. Async-send k, v for the next iteration (overlaps with compute).
-        2. Wait for grad_k, grad_v from the previous iteration's send.
-        3. Compute block gradients and accumulate.
-        4. Wait for k, v receive to complete.
+        1. Wait for k, v from the previous iteration's async send.
+        2. Wait for grad_k, grad_v from the previous iteration's async send.
+        3. Async-send k, v for the next iteration (overlaps with compute).
+        4. Compute block gradients and accumulate.
         5. Async-send accumulated grad_k, grad_v (overlaps with next
-           iteration's k/v receive and compute start).
+           iteration's waits and k/v send).
         The final grad_k/grad_v shift uses blocking communication since
         there is no further compute to overlap with.
 
@@ -364,7 +368,7 @@ class RingSDPA(torch.autograd.Function):
         grad_attn_mask = None
 
         compute_stream = torch.cuda.current_stream()
-        comm_stream = torch.cuda.Stream()
+        comm_stream = ring_config.comm_stream
 
         # Pre-allocate double buffers on the default stream.
         k_bufs = [torch.empty_like(k), torch.empty_like(k)]
@@ -412,10 +416,16 @@ class RingSDPA(torch.autograd.Function):
                 comm_stream.wait_stream(compute_stream)
                 with torch.cuda.stream(comm_stream):
                     _, kv_work_k = perform_ring_iteration_async(
-                        k, mesh, ring_config, recv_tensor=next_k_buf,
+                        k,
+                        mesh,
+                        ring_config,
+                        recv_tensor=next_k_buf,
                     )
                     _, kv_work_v = perform_ring_iteration_async(
-                        v, mesh, ring_config, recv_tensor=next_v_buf,
+                        v,
+                        mesh,
+                        ring_config,
+                        recv_tensor=next_v_buf,
                     )
                 kv_work = kv_work_k + kv_work_v
                 k.record_stream(comm_stream)
@@ -455,10 +465,16 @@ class RingSDPA(torch.autograd.Function):
                 comm_stream.wait_stream(compute_stream)
                 with torch.cuda.stream(comm_stream):
                     _, grad_work_k = perform_ring_iteration_async(
-                        grad_k, mesh, ring_config, recv_tensor=next_grad_k_buf,
+                        grad_k,
+                        mesh,
+                        ring_config,
+                        recv_tensor=next_grad_k_buf,
                     )
                     _, grad_work_v = perform_ring_iteration_async(
-                        grad_v, mesh, ring_config, recv_tensor=next_grad_v_buf,
+                        grad_v,
+                        mesh,
+                        ring_config,
+                        recv_tensor=next_grad_v_buf,
                     )
                 grad_work = grad_work_k + grad_work_v
                 grad_k.record_stream(comm_stream)
@@ -487,8 +503,6 @@ class RingSDPABlocking(torch.autograd.Function):
     space to prevent underflow/overflow as well as precision issues. See the helper functions
     ``add_log_sumexp`` and ``stable_signed_accumulate`` for more details.
     """
-
-    # comm_stream = torch.cuda.Stream()
 
     @staticmethod
     def forward(

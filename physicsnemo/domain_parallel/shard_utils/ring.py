@@ -31,7 +31,7 @@ The module provides:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 import torch
@@ -68,6 +68,15 @@ class RingPassingConfig:
     ring_direction: Literal["forward", "backward"] = "forward"
 
     communication_method: Literal["p2p", "a2a"] = "a2a"
+
+    _comm_stream: torch.cuda.Stream | None = field(default=None, init=False, repr=False)
+
+    @property
+    def comm_stream(self) -> torch.cuda.Stream:
+        """Return a lazily-created CUDA stream for overlapping communication."""
+        if self._comm_stream is None:
+            self._comm_stream = torch.cuda.Stream()
+        return self._comm_stream
 
     def __post_init__(self) -> None:
         r"""Validate configuration parameters after initialization.
@@ -123,7 +132,14 @@ def _get_ring_comm_ranks(
     id_for_send = dist.get_global_rank(group=local_group, group_rank=local_id_for_send)
     id_for_recv = dist.get_global_rank(group=local_group, group_rank=local_id_for_recv)
 
-    return local_group, local_size, local_id_for_send, local_id_for_recv, id_for_send, id_for_recv
+    return (
+        local_group,
+        local_size,
+        local_id_for_send,
+        local_id_for_recv,
+        id_for_send,
+        id_for_recv,
+    )
 
 
 def perform_ring_iteration(
@@ -159,9 +175,14 @@ def perform_ring_iteration(
     dtype = tensor.dtype
     device = tensor.device
 
-    local_group, local_size, local_id_for_send, local_id_for_recv, id_for_send, id_for_recv = (
-        _get_ring_comm_ranks(mesh, ring_config)
-    )
+    (
+        local_group,
+        local_size,
+        local_id_for_send,
+        local_id_for_recv,
+        id_for_send,
+        id_for_recv,
+    ) = _get_ring_comm_ranks(mesh, ring_config)
 
     if not tensor.is_contiguous():
         tensor = tensor.contiguous()
