@@ -29,6 +29,7 @@ from physicsnemo.domain_parallel.shard_utils.patch_core import (
 )
 from physicsnemo.domain_parallel.shard_utils.ring import (
     RingPassingConfig,
+    get_comm_stream,
     perform_ring_iteration,
     perform_ring_iteration_async,
 )
@@ -196,7 +197,7 @@ class RingSDPA(torch.autograd.Function):
         global_log_sumexp = None
 
         compute_stream = torch.cuda.current_stream()
-        comm_stream = ring_config.comm_stream
+        comm_stream = get_comm_stream(q.device)
 
         # Pre-allocate double buffers for K and V on the default stream to
         # avoid caching-allocator cross-stream synchronization inside the loop.
@@ -368,7 +369,7 @@ class RingSDPA(torch.autograd.Function):
         grad_attn_mask = None
 
         compute_stream = torch.cuda.current_stream()
-        comm_stream = ring_config.comm_stream
+        comm_stream = get_comm_stream(q.device)
 
         # Pre-allocate double buffers on the default stream.
         k_bufs = [torch.empty_like(k), torch.empty_like(k)]

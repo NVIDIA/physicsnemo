@@ -24,6 +24,8 @@ in a circular fashion between processes, such as ring attention.
 The module provides:
 
 - ``RingPassingConfig``: Configuration dataclass for ring communication parameters
+- ``get_comm_stream``: Cached CUDA stream accessor for overlapping communication
+  with computation (one stream per device, reused across calls)
 - ``perform_ring_iteration``: Blocking single step of ring communication
 - ``perform_ring_iteration_async``: Non-blocking variant returning work handles
   for overlapping communication with computation
@@ -31,7 +33,7 @@ The module provides:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
 import torch
@@ -69,15 +71,6 @@ class RingPassingConfig:
 
     communication_method: Literal["p2p", "a2a"] = "a2a"
 
-    _comm_stream: torch.cuda.Stream | None = field(default=None, init=False, repr=False)
-
-    @property
-    def comm_stream(self) -> torch.cuda.Stream:
-        """Return a lazily-created CUDA stream for overlapping communication."""
-        if self._comm_stream is None:
-            self._comm_stream = torch.cuda.Stream()
-        return self._comm_stream
-
     def __post_init__(self) -> None:
         r"""Validate configuration parameters after initialization.
 
@@ -98,6 +91,42 @@ class RingPassingConfig:
                 f"Invalid ring direction: {self.ring_direction}. "
                 f"Must be one of {self.VALID_RING_DIRECTIONS}"
             )
+
+
+_comm_streams: dict[int, torch.cuda.Stream] = {}
+
+
+def get_comm_stream(device: torch.device | int) -> torch.cuda.Stream:
+    """Return a lazily-created CUDA stream for overlapping ring communication.
+
+    Streams are cached per device ordinal so they are reused across calls
+    rather than recreated each time a ``RingPassingConfig`` is instantiated.
+
+    Parameters
+    ----------
+    device : torch.device | int
+        Target device. Accepts a ``torch.device`` or an integer ordinal.
+
+    Returns
+    -------
+    torch.cuda.Stream
+
+    Raises
+    ------
+    RuntimeError
+        If CUDA is not available.
+    """
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "get_comm_stream() requires CUDA, but torch.cuda is not available."
+        )
+    if isinstance(device, torch.device):
+        idx = device.index if device.index is not None else torch.cuda.current_device()
+    else:
+        idx = device
+    if idx not in _comm_streams:
+        _comm_streams[idx] = torch.cuda.Stream(idx)
+    return _comm_streams[idx]
 
 
 def _get_ring_comm_ranks(
