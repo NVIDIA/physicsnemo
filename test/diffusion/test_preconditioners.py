@@ -52,7 +52,7 @@ class ConvModel(Module):
         self.channels = channels
         # Conv2d takes x concatenated with condition["y"] (same shape as x)
         in_channels = channels * 2
-        self.net = torch.nn.Conv2d(in_channels, channels, kernel_size=1)
+        self.net = torch.nn.Conv2d(in_channels, channels, kernel_size=3, padding=1)
 
     def forward(
         self,
@@ -617,3 +617,32 @@ class TestAllPreconditioners:
 
         assert x.grad is not None
         assert not torch.isnan(x.grad).any()
+
+    def test_compile(
+        self,
+        simple_model,
+        batch_data,
+        device,
+        precond_cls,
+        precond_kwargs,
+        precond_name,
+    ):
+        """Compiled forward matches eager and graph is reused on second call."""
+        torch._dynamo.config.error_on_recompile = True
+
+        precond = precond_cls(simple_model, **precond_kwargs).to(device)
+        x = batch_data["x"]
+        t = batch_data["t"]
+        condition = batch_data["condition"]
+
+        compiled_precond = torch.compile(precond, fullgraph=True)
+
+        with torch.no_grad():
+            out_eager = precond(x, t, condition=condition)
+            out_compiled = compiled_precond(x, t, condition=condition)
+        torch.testing.assert_close(out_eager, out_compiled)
+
+        # Second call — must reuse compiled graph
+        with torch.no_grad():
+            out_compiled_2 = compiled_precond(x, t, condition=condition)
+        torch.testing.assert_close(out_compiled, out_compiled_2)
