@@ -9,7 +9,7 @@
 #SBATCH -o ./sbatch_logs/%x.log
 #SBATCH -e ./sbatch_logs/%x.log
 #SBATCH --open-mode=append
-#SBATCH --signal=B:USR1@120
+#SBATCH --signal=B:USR1@600
 
 ### [Shell Setup]
 set -euo pipefail
