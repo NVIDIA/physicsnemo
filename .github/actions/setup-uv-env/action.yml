@@ -59,18 +59,22 @@ runs:
           --extra gnns \
           --preview-features extra-build-dependencies
 
-    - name: Force CUDA PyG extension wheels for cu13
+    - name: Force Hopper CUDA source builds for PyG extensions
       if: steps.restore-venv-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set -euo pipefail
-        TORCH_SERIES="$(uv run python -c 'import torch; print(".".join(torch.__version__.split("+")[0].split(".")[:2]))')"
+        export TORCH_CUDA_ARCH_LIST="9.0"
+        export FORCE_CUDA=1
+        export MAX_JOBS="$(nproc)"
+        uv pip install "ninja" "wheel" "setuptools"
+
         uv pip install \
           --reinstall \
-          --no-deps \
-          --no-index \
-          --find-links "https://data.pyg.org/whl/torch-${TORCH_SERIES}+cu130.html" \
+          --no-build-isolation \
+          --no-binary=:all: \
           torch_scatter \
           torch_sparse \
-          torch_cluster \
-          pyg_lib
+          torch_cluster
+
+        uv pip install --reinstall --no-build-isolation "git+https://github.com/pyg-team/pyg-lib.git@0.5.0"
