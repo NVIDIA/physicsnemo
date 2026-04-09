@@ -145,6 +145,7 @@ class DomainMeshReader:
             Root directory containing DomainMesh files (e.g. .pt archives).
         pattern : str, optional
             Glob pattern for DomainMesh paths under ``path``.
+            Default matches ``**/*.pmsh``.
             Default matches ``**/*.pt``.
         pin_memory : bool, default=False
             If True, place tensors in pinned (page-locked) memory for faster
