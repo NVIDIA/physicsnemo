@@ -331,6 +331,28 @@ class TestIntegrateDispatch:
         with pytest.raises(ValueError, match="data_source"):
             integrate(unit_triangle, torch.ones(3), data_source="invalid")
 
+    def test_missing_cell_key(self, unit_triangle: Mesh):
+        """String key not in cell_data gives a helpful KeyError."""
+        with pytest.raises(KeyError, match="cell.*_data"):
+            integrate(unit_triangle, "nonexistent")
+
+    def test_missing_point_key(self, unit_triangle: Mesh):
+        """String key not in point_data gives a helpful KeyError."""
+        with pytest.raises(KeyError, match="point.*_data"):
+            integrate(unit_triangle, "nonexistent", data_source="points")
+
+    def test_wrong_cell_tensor_shape(self, unit_triangle: Mesh):
+        """Tensor with wrong leading dimension for cell data raises ValueError."""
+        wrong = torch.ones(unit_triangle.n_cells + 5)
+        with pytest.raises(ValueError, match="n_cells"):
+            integrate(unit_triangle, wrong, data_source="cells")
+
+    def test_wrong_point_tensor_shape(self, unit_triangle: Mesh):
+        """Tensor with wrong leading dimension for point data raises ValueError."""
+        wrong = torch.ones(unit_triangle.n_points + 5)
+        with pytest.raises(ValueError, match="n_points"):
+            integrate(unit_triangle, wrong, data_source="points")
+
 
 ###############################################################################
 # Consistency checks
