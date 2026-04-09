@@ -36,7 +36,7 @@ class DomainMesh:
 
     The semantic contract is that the boundary meshes, if merged, form a
     watertight enclosure around the interior mesh. This is documented but not
-    enforced at construction time; call :meth:`check_boundary_watertight` to
+    enforced at construction time; call :meth:`is_boundary_watertight` to
     verify explicitly.
 
     Because ``DomainMesh`` is a tensorclass, standard TensorDict operations
@@ -832,7 +832,7 @@ class DomainMesh:
         ]
         return Mesh.merge(geometry_only)
 
-    def check_boundary_watertight(self) -> bool:
+    def is_boundary_watertight(self) -> bool:
         """Check whether the merged boundary meshes form a watertight surface.
 
         Merges all boundary meshes via :meth:`merge_boundaries`, deduplicates
