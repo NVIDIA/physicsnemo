@@ -758,7 +758,7 @@ class DomainMesh:
         int
             The number of entries in ``boundaries``.
         """
-        return len(self.boundaries)
+        return len(self.boundary_names)
 
     ### Methods
 
@@ -783,8 +783,8 @@ class DomainMesh:
         no_slip: 3 points
         """
         yield "interior", self.interior
-        for name, mesh in self.boundaries.items():
-            yield name, mesh
+        for name in self.boundary_names:
+            yield name, self.boundaries[name]
 
     def __iter__(self) -> Iterator[tuple[str, Mesh]]:
         r"""Iterate over all meshes in the domain.
@@ -822,8 +822,7 @@ class DomainMesh:
             If there are no boundary meshes to merge, or if boundary meshes
             have incompatible dimensions or ``cell_data`` keys.
         """
-        boundary_meshes = [self.boundaries[name] for name in self.boundary_names]
-        if not boundary_meshes:
+        if self.n_boundaries == 0:
             raise ValueError("No boundary meshes to merge.")
         return Mesh.merge(boundary_meshes)
 
