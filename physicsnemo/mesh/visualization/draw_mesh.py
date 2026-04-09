@@ -116,7 +116,6 @@ def draw_mesh(
         If both point_scalars and cell_scalars are specified,
         or if n_spatial_dims is not supported by the chosen backend,
         or if backend selection fails.
-        or if `ax` is provided for PyVista backend.
     ImportError
         If the requested backend is not installed.
 
