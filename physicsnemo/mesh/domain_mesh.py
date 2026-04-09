@@ -856,100 +856,63 @@ class DomainMesh:
         self,
         *,
         point_scalars: None | str | tuple[str, ...] = None,
-        cmap: str = "viridis",
-        vmin: float | None = None,
-        vmax: float | None = None,
         show_edges: bool = False,
-        xlim: tuple[float, float] | None = None,
-        ylim: tuple[float, float] | None = None,
         backend: Literal["matplotlib", "pyvista", "auto"] = "auto",
         show: bool = True,
-        ax: Any = None,
+        **kwargs,
     ):
         r"""Draw the domain: interior with optional scalar coloring, boundaries overlaid.
 
         Draws the interior mesh (optionally colored by a ``point_data`` field),
-        then overlays each boundary mesh on the same canvas. Works with both
-        matplotlib and PyVista backends.
+        then overlays each boundary mesh on the same canvas.  All rendering
+        is delegated to :meth:`Mesh.draw`, so both matplotlib and PyVista
+        backends are supported transparently.
 
         Parameters
         ----------
         point_scalars : str or tuple[str, ...], optional
             Key into ``interior.point_data`` to color the interior mesh.
-        cmap : str
-            Colormap name for scalar visualization.
-        vmin : float, optional
-            Minimum value for colormap normalization.
-        vmax : float, optional
-            Maximum value for colormap normalization.
         show_edges : bool
-            Whether to draw cell edges on the interior mesh.
-        xlim : tuple[float, float], optional
-            Clip the interior to points within ``[x_lo, x_hi]`` before
-            drawing (useful for zooming into a subregion of a large domain).
-            Matplotlib only.
-        ylim : tuple[float, float], optional
-            Clip the interior to points within ``[y_lo, y_hi]``.
-            Matplotlib only.
+            Whether to draw cell edges on the interior mesh.  Defaults to
+            ``False`` (unlike :meth:`Mesh.draw`) because dense CFD meshes
+            are typically more readable without edges.
         backend : {"auto", "matplotlib", "pyvista"}
-            Visualization backend. See :meth:`Mesh.draw`.
+            Visualization backend.  See :meth:`Mesh.draw`.
         show : bool
             Whether to display the plot immediately.
-        ax : matplotlib.axes.Axes or pyvista.Plotter, optional
-            Existing canvas to draw into. For matplotlib pass an Axes;
-            for PyVista pass a Plotter. If ``None``, a new figure/plotter
-            is created.
+        **kwargs
+            Forwarded to :meth:`Mesh.draw` for the interior mesh
+            (e.g. ``cmap``, ``vmin``, ``vmax``, ``ax``, ``backend_options``).
 
         Returns
         -------
         matplotlib.axes.Axes or pyvista.Plotter
-            The canvas object, for further customization.
+            The canvas object, for further customization when ``show=False``.
 
         Examples
         --------
         >>> dm.draw(point_scalars="p", cmap="RdBu_r", vmin=-200, vmax=200)  # doctest: +SKIP
-        """
-        interior_to_draw = self.interior
-        if xlim is not None or ylim is not None:
-            x_lo = xlim[0] if xlim else float("-inf")
-            x_hi = xlim[1] if xlim else float("inf")
-            y_lo = ylim[0] if ylim else float("-inf")
-            y_hi = ylim[1] if ylim else float("inf")
-            mask = (
-                (self.interior.points[:, 0] >= x_lo)
-                & (self.interior.points[:, 0] <= x_hi)
-                & (self.interior.points[:, 1] >= y_lo)
-                & (self.interior.points[:, 1] <= y_hi)
-            )
-            interior_to_draw = self.interior.slice_points(mask)
 
-        canvas = interior_to_draw.draw(
+        Zoom into a subregion by setting axis limits on the returned canvas:
+
+        >>> ax = dm.draw(point_scalars="p", show=False)  # doctest: +SKIP
+        >>> ax.set_xlim(-2, 4)  # doctest: +SKIP
+        >>> ax.set_ylim(-3, 3)  # doctest: +SKIP
+        """
+        has_boundaries = self.n_boundaries > 0
+        canvas = self.interior.draw(
             point_scalars=point_scalars,
-            cmap=cmap,
-            vmin=vmin,
-            vmax=vmax,
             show_edges=show_edges,
             backend=backend,
-            show=False,
-            ax=ax,
+            show=(show and not has_boundaries),
+            **kwargs,
         )
-
-        for name in self.boundary_names:
+        names = self.boundary_names
+        for i, name in enumerate(names):
             self.boundaries[name].draw(
-                backend=backend, ax=canvas, alpha_points=0, show=False,
+                ax=canvas, alpha_points=0, backend=backend,
+                show=(show and i == len(names) - 1),
             )
-
-        if hasattr(canvas, "set_aspect"):
-            canvas.set_aspect("equal")
-
-        if show:
-            if hasattr(canvas, "render"):
-                canvas.show()
-            else:
-                import matplotlib.pyplot as plt
-
-                plt.show()
-
         return canvas
 
     ### Repr is defined after the class body (see below) because
