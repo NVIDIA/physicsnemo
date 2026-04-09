@@ -873,8 +873,8 @@ class DomainMesh:
             Key into ``interior.point_data`` to color the interior mesh.
         show_edges : bool
             Whether to draw cell edges on the interior mesh.  Defaults to
-            ``False`` (unlike :meth:`Mesh.draw`) because dense CFD meshes
-            are typically more readable without edges.
+            ``False`` (unlike :meth:`Mesh.draw`) because dense meshes are
+            typically more readable without edges.
         backend : {"auto", "matplotlib", "pyvista"}
             Visualization backend.  See :meth:`Mesh.draw`.
         show : bool
