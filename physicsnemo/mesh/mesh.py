@@ -2412,6 +2412,128 @@ class Mesh:
             gradient_type=gradient_type,
         )
 
+    def integrate(
+        self,
+        field: str | tuple[str, ...] | torch.Tensor | None = None,
+        data_source: Literal["cells", "points"] = "cells",
+        method: Literal["linear", "voronoi"] = "linear",
+    ) -> torch.Tensor:
+        r"""Integrate a field over the mesh domain.
+
+        Computes :math:`\int_\Omega f\,d\Omega` using the appropriate
+        quadrature rule for the field's discretization.
+
+        The manifold dimension determines the measure automatically:
+        arc length for ``Mesh[1, ...]``, surface area for ``Mesh[2, ...]``,
+        volume for ``Mesh[3, ...]``, etc.
+
+        Parameters
+        ----------
+        field : str, tuple[str, ...], torch.Tensor, or None
+            Field to integrate:
+
+            - ``None``: integrates the constant function 1, returning
+              ``cell_areas.sum()``.
+            - ``str`` or ``tuple``: looked up in ``cell_data`` or
+              ``point_data`` according to *data_source*.
+            - ``torch.Tensor``: used directly.
+        data_source : {"cells", "points"}
+            Whether *field* is cell-centered (piecewise-constant, P0) or
+            vertex-centered.
+        method : {"linear", "voronoi"}
+            Quadrature rule for point data (ignored for cell data):
+
+            - ``"linear"``: P1 vertex-averaging rule.  Exact for fields
+              that are linear within each simplex (second-order accurate
+              for smooth fields).
+            - ``"voronoi"``: weights each vertex by its dual 0-cell
+              (Voronoi) volume.  First-order accurate; the natural DEC
+              pairing for 0-forms.
+
+        Returns
+        -------
+        torch.Tensor
+            Integral value.  Shape matches ``field.shape[1:]`` (trailing
+            dimensions are preserved: scalar -> 0-d, vector -> 1-d, etc.).
+
+        Raises
+        ------
+        ValueError
+            If the mesh has no cells.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> pts = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.]])
+        >>> cells = torch.tensor([[0, 1, 2]])
+        >>> mesh = Mesh(points=pts, cells=cells)
+        >>> mesh.integrate()  # total area
+        tensor(0.5000)
+        >>> mesh.cell_data["p"] = torch.tensor([3.0])
+        >>> mesh.integrate("p")
+        tensor(1.5000)
+        """
+        from physicsnemo.mesh.calculus.integration import (
+            integrate as _integrate,
+        )
+
+        return _integrate(
+            mesh=self,
+            field=field,
+            data_source=data_source,
+            method=method,
+        )
+
+    def integrate_flux(
+        self,
+        field: str | tuple[str, ...] | torch.Tensor,
+        data_source: Literal["cells", "points"] = "cells",
+    ) -> torch.Tensor:
+        r"""Compute the surface flux integral for codimension-1 meshes.
+
+        Computes :math:`\int_\Gamma \mathbf{F} \cdot \mathbf{n}\,d\Gamma`,
+        the oriented flux of a vector field through the mesh surface.  Only
+        defined for codimension-1 meshes where unique cell normals exist.
+
+        Parameters
+        ----------
+        field : str, tuple[str, ...], or torch.Tensor
+            Vector field with last dimension equal to ``n_spatial_dims``.
+        data_source : {"cells", "points"}
+            Whether *field* is cell-centered or vertex-centered.
+
+        Returns
+        -------
+        torch.Tensor
+            Scalar flux value (0-d tensor).
+
+        Raises
+        ------
+        ValueError
+            If the mesh is not codimension-1, or if the field's last
+            dimension does not match ``n_spatial_dims``.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+        >>> sphere = sphere_icosahedral.load(subdivisions=2)
+        >>> # Constant field through a closed surface -> zero flux
+        >>> v = torch.ones(sphere.n_cells, 3)
+        >>> sphere.integrate_flux(v).abs() < 1e-5
+        tensor(True)
+        """
+        from physicsnemo.mesh.calculus.integration import (
+            integrate_flux as _integrate_flux,
+        )
+
+        return _integrate_flux(
+            mesh=self,
+            field=field,
+            data_source=data_source,
+        )
+
     def validate(
         self,
         check_degenerate_cells: bool = True,

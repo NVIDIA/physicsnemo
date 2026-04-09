@@ -1,0 +1,348 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+r"""Integration of scalar, vector, and tensor fields over simplicial meshes.
+
+Provides quadrature rules for integrating fields discretized on simplicial
+meshes of any manifold dimension.  The manifold dimension determines the
+measure automatically: arc length for 1-manifolds, surface area for
+2-manifolds, volume for 3-manifolds, etc.
+
+Two data sources are supported:
+
+**Cell data (P0)** - piecewise-constant fields:
+
+.. math::
+    \int_\Omega f\,d\Omega = \sum_c f_c \,|\sigma_c|
+
+**Point data (P1)** - vertex-centered fields treated as nodal values of a
+piecewise-linear field interpolated via barycentric coordinates.  The
+integral of a linear function over an n-simplex equals the volume times the
+arithmetic mean of vertex values:
+
+.. math::
+    \int_\Omega f\,d\Omega
+    = \sum_c |\sigma_c| \cdot \frac{1}{n_v} \sum_{v \in c} f(v)
+
+This is exact for P1 fields and second-order accurate for smooth fields.
+"""
+
+from typing import TYPE_CHECKING, Literal
+
+import torch
+
+if TYPE_CHECKING:
+    from physicsnemo.mesh.mesh import Mesh
+
+
+def _resolve_field(
+    mesh: "Mesh",
+    field: str | tuple[str, ...] | torch.Tensor | None,
+    data_source: Literal["cells", "points"],
+) -> torch.Tensor | None:
+    r"""Resolve a field specification to a concrete tensor.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Source mesh.
+    field : str, tuple, torch.Tensor, or None
+        ``None`` returns ``None`` (caller handles the "integrate 1" case).
+        A string or tuple is looked up in ``cell_data`` or ``point_data``
+        depending on *data_source*.  A tensor is returned as-is.
+    data_source : {"cells", "points"}
+        Which data dictionary to use for string key lookups.
+
+    Returns
+    -------
+    torch.Tensor or None
+        The resolved field tensor, or ``None`` if *field* was ``None``.
+    """
+    if field is None:
+        return None
+    if isinstance(field, torch.Tensor):
+        return field
+    data = mesh.cell_data if data_source == "cells" else mesh.point_data
+    return data[field]
+
+
+def integrate_cell_data(
+    mesh: "Mesh",
+    field: torch.Tensor,
+) -> torch.Tensor:
+    r"""Integrate a cell-centered (P0) field over the mesh.
+
+    Computes the exact integral of a piecewise-constant field:
+
+    .. math::
+        \int_\Omega f\,d\Omega = \sum_c f_c \,|\sigma_c|
+
+    NaN values in *field* are excluded from the sum (treated as zero
+    contribution), which is appropriate for fields with patched-out
+    regions (e.g. non-physical points in CFD solutions).
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh with at least one cell.
+    field : torch.Tensor
+        Cell-centered values, shape ``(n_cells, *trailing)``.
+        Trailing dimensions are preserved in the output.
+
+    Returns
+    -------
+    torch.Tensor
+        Integral value.  Shape matches ``field.shape[1:]`` (the trailing
+        dimensions).  A scalar field ``(n_cells,)`` produces a 0-d tensor.
+    """
+    cell_areas = mesh.cell_areas  # (n_cells,)
+
+    ### Reshape cell_areas for broadcasting with arbitrary trailing dims
+    weights = cell_areas.reshape(-1, *([1] * (field.ndim - 1)))
+
+    return torch.nansum(field * weights, dim=0)
+
+
+def integrate_point_data(
+    mesh: "Mesh",
+    field: torch.Tensor,
+) -> torch.Tensor:
+    r"""Integrate a vertex-centered (P1) field over the mesh.
+
+    Treats vertex values as nodal values of a piecewise-linear field
+    and integrates analytically per simplex using the vertex-averaging
+    rule (second-order accurate for smooth fields).
+
+    If any vertex of a cell has NaN, that cell's contribution is NaN and
+    is excluded by ``nansum`` (the P1 interpolant is undefined on that cell).
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh with at least one cell.
+    field : torch.Tensor
+        Vertex-centered values, shape ``(n_points, *trailing)``.
+        Trailing dimensions are preserved in the output.
+
+    Returns
+    -------
+    torch.Tensor
+        Integral value with shape ``field.shape[1:]``.
+    """
+    cell_areas = mesh.cell_areas  # (n_cells,)
+
+    ### Gather vertex values for each cell: (n_cells, n_verts_per_cell, *trailing)
+    cell_vertex_values = field[mesh.cells]
+
+    ### Mean over vertices within each cell: (n_cells, *trailing)
+    cell_means = cell_vertex_values.mean(dim=1)
+
+    ### Weight by cell area and sum
+    weights = cell_areas.reshape(-1, *([1] * (cell_means.ndim - 1)))
+    return torch.nansum(cell_means * weights, dim=0)
+
+
+def integrate(
+    mesh: "Mesh",
+    field: str | tuple[str, ...] | torch.Tensor | None = None,
+    data_source: Literal["cells", "points"] = "cells",
+) -> torch.Tensor:
+    r"""Integrate a field over the mesh domain.
+
+    This is the unified entry point for mesh integration.  It dispatches to
+    :func:`integrate_cell_data` or :func:`integrate_point_data` based on
+    *data_source*, and resolves *field* from a string key, tensor, or
+    ``None`` (which integrates the constant function 1, yielding the total
+    area / volume / arc length of the mesh).
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh.
+    field : str, tuple[str, ...], torch.Tensor, or None
+        Field to integrate.
+
+        - ``None``: integrates 1 over the domain, returning
+          ``cell_areas.sum()``.
+        - ``str`` or ``tuple``: looked up in ``cell_data`` or ``point_data``
+          according to *data_source*.
+        - ``torch.Tensor``: used directly.
+    data_source : {"cells", "points"}
+        Whether *field* is cell-centered (P0) or vertex-centered (P1).
+
+    Returns
+    -------
+    torch.Tensor
+        Integral value.  Shape matches the trailing dimensions of the field
+        (scalar field -> 0-d tensor, vector field -> 1-d tensor, etc.).
+        If *field* is ``None``, returns a 0-d tensor.
+
+    Raises
+    ------
+    ValueError
+        If the mesh has no cells (integration over a point cloud is
+        undefined).
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.mesh import Mesh
+    >>> pts = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.]])
+    >>> cells = torch.tensor([[0, 1, 2]])
+    >>> mesh = Mesh(points=pts, cells=cells)
+    >>> mesh.integrate()  # total area
+    tensor(0.5000)
+    >>> mesh.cell_data["p"] = torch.tensor([3.0])
+    >>> mesh.integrate("p")  # integrate cell-centered pressure
+    tensor(1.5000)
+    >>> mesh.point_data["T"] = torch.tensor([1.0, 2.0, 3.0])
+    >>> mesh.integrate("T", data_source="points")  # P1 integral
+    tensor(1.)
+    """
+    if not torch.compiler.is_compiling():
+        if mesh.n_cells == 0:
+            raise ValueError(
+                "Cannot integrate over a mesh with no cells. "
+                "Integration requires simplicial connectivity."
+            )
+
+    resolved = _resolve_field(mesh, field, data_source)
+
+    ### field=None: integrate the constant function 1
+    if resolved is None:
+        return mesh.cell_areas.sum()
+
+    if data_source == "cells":
+        return integrate_cell_data(mesh, resolved)
+    elif data_source == "points":
+        return integrate_point_data(mesh, resolved)
+    else:
+        raise ValueError(
+            f"Invalid {data_source=!r}. Must be 'cells' or 'points'."
+        )
+
+
+def integrate_flux(
+    mesh: "Mesh",
+    field: str | tuple[str, ...] | torch.Tensor,
+    data_source: Literal["cells", "points"] = "cells",
+) -> torch.Tensor:
+    r"""Compute the surface flux integral for codimension-1 meshes.
+
+    Computes the oriented flux of a vector field through the mesh surface:
+
+    .. math::
+        \int_\Gamma \mathbf{F} \cdot \mathbf{n}\,d\Gamma
+
+    This is only defined for codimension-1 meshes (surfaces in 3D, curves
+    in 2D) where unique cell normals exist.
+
+    For cell data, the flux is:
+
+    .. math::
+        \int_\Gamma \mathbf{F} \cdot \mathbf{n}\,d\Gamma
+        = \sum_c (\mathbf{F}_c \cdot \mathbf{n}_c)\,|\sigma_c|
+
+    For point data, the P1 vertex-averaged field is dotted with the cell
+    normal (which is constant per cell):
+
+    .. math::
+        \int_\Gamma \mathbf{F} \cdot \mathbf{n}\,d\Gamma
+        = \sum_c \Bigl(\frac{1}{n_v}\sum_{v \in c} \mathbf{F}(v)\Bigr)
+          \cdot \mathbf{n}_c\,|\sigma_c|
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Codimension-1 simplicial mesh (i.e. ``n_manifold_dims ==
+        n_spatial_dims - 1``).
+    field : str, tuple[str, ...], or torch.Tensor
+        Vector field to integrate.  Must have last dimension equal to
+        ``n_spatial_dims``.
+    data_source : {"cells", "points"}
+        Whether *field* is cell-centered or vertex-centered.
+
+    Returns
+    -------
+    torch.Tensor
+        Scalar flux value (0-d tensor).
+
+    Raises
+    ------
+    ValueError
+        If the mesh is not codimension-1, or if the field does not have
+        the correct trailing dimension.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.mesh import Mesh
+    >>> # Unit square boundary in 2D (4 edges forming a closed loop)
+    >>> pts = torch.tensor([[0., 0.], [1., 0.], [1., 1.], [0., 1.]])
+    >>> cells = torch.tensor([[0, 1], [1, 2], [2, 3], [3, 0]])
+    >>> mesh = Mesh(points=pts, cells=cells)
+    >>> # Constant outward velocity field - flux through closed boundary
+    >>> mesh.cell_data["v"] = torch.zeros(4, 2)
+    >>> mesh.integrate_flux("v")
+    tensor(0.)
+    """
+    if not torch.compiler.is_compiling():
+        if mesh.codimension != 1:
+            raise ValueError(
+                f"integrate_flux requires a codimension-1 mesh "
+                f"(n_manifold_dims == n_spatial_dims - 1), but got "
+                f"{mesh.n_manifold_dims=}, {mesh.n_spatial_dims=} "
+                f"(codimension={mesh.codimension})."
+            )
+
+    resolved = _resolve_field(mesh, field, data_source)
+    if resolved is None:
+        raise TypeError("integrate_flux requires a field (got None).")
+
+    cell_normals = mesh.cell_normals  # (n_cells, n_spatial_dims)
+    cell_areas = mesh.cell_areas  # (n_cells,)
+
+    if data_source == "cells":
+        ### Cell data: dot each cell's vector with its normal
+        if not torch.compiler.is_compiling():
+            if resolved.shape[-1] != mesh.n_spatial_dims:
+                raise ValueError(
+                    f"Field last dimension ({resolved.shape[-1]}) must match "
+                    f"n_spatial_dims ({mesh.n_spatial_dims}) for flux integration."
+                )
+        # (n_cells,) dot product per cell
+        f_dot_n = (resolved * cell_normals).sum(dim=-1)
+        return torch.nansum(f_dot_n * cell_areas, dim=0)
+
+    elif data_source == "points":
+        ### Point data: P1-average vertex values, then dot with cell normal
+        if not torch.compiler.is_compiling():
+            if resolved.shape[-1] != mesh.n_spatial_dims:
+                raise ValueError(
+                    f"Field last dimension ({resolved.shape[-1]}) must match "
+                    f"n_spatial_dims ({mesh.n_spatial_dims}) for flux integration."
+                )
+        # (n_cells, n_verts_per_cell, n_spatial_dims)
+        cell_vertex_values = resolved[mesh.cells]
+        # (n_cells, n_spatial_dims) - P1 average per cell
+        cell_means = cell_vertex_values.mean(dim=1)
+        f_dot_n = (cell_means * cell_normals).sum(dim=-1)  # (n_cells,)
+        return torch.nansum(f_dot_n * cell_areas, dim=0)
+
+    else:
+        raise ValueError(
+            f"Invalid {data_source=!r}. Must be 'cells' or 'points'."
+        )
