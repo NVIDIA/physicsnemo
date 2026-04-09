@@ -805,32 +805,41 @@ class DomainMesh:
         yield from self.all_meshes()
 
     def merge_boundaries(self) -> Mesh:
-        """Merge all boundary meshes into a single :class:`Mesh`.
+        """Merge all boundary meshes into a single geometry-only :class:`Mesh`.
 
-        Delegates to :meth:`Mesh.merge`. All boundary meshes must have the
-        same manifold dimension and compatible ``cell_data`` keys.
+        Produces a mesh containing the concatenated points and cells from
+        every boundary. Point data and cell data are stripped before merging
+        because boundaries typically carry heterogeneous fields (different
+        keys per boundary), which ``Mesh.merge`` cannot concatenate.
 
         Returns
         -------
         Mesh
-            A single mesh containing the concatenated points, cells, and data
-            from every boundary mesh.
+            A single geometry-only mesh (no point_data or cell_data).
 
         Raises
         ------
         ValueError
             If there are no boundary meshes to merge, or if boundary meshes
-            have incompatible dimensions or ``cell_data`` keys.
+            have incompatible manifold dimensions.
         """
         if self.n_boundaries == 0:
             raise ValueError("No boundary meshes to merge.")
-        return Mesh.merge(boundary_meshes)
+        geometry_only = [
+            Mesh(points=self.boundaries[name].points,
+                 cells=self.boundaries[name].cells)
+            for name in self.boundary_names
+        ]
+        return Mesh.merge(geometry_only)
 
     def check_boundary_watertight(self) -> bool:
         """Check whether the merged boundary meshes form a watertight surface.
 
-        Merges all boundary meshes via :meth:`merge_boundaries` and calls
-        :meth:`Mesh.is_watertight` on the result.
+        Merges all boundary meshes via :meth:`merge_boundaries`, deduplicates
+        coincident vertices with :meth:`Mesh.clean`, and calls
+        :meth:`Mesh.is_watertight` on the result. The clean step is necessary
+        because independently-meshed boundary patches share physical vertices
+        that become duplicated during merge.
 
         Returns
         -------
@@ -841,7 +850,107 @@ class DomainMesh:
         """
         if self.n_boundaries == 0:
             return False
-        return self.merge_boundaries().is_watertight()
+        return self.merge_boundaries().clean().is_watertight()
+
+    def draw(
+        self,
+        *,
+        point_scalars: None | str | tuple[str, ...] = None,
+        cmap: str = "viridis",
+        vmin: float | None = None,
+        vmax: float | None = None,
+        show_edges: bool = False,
+        xlim: tuple[float, float] | None = None,
+        ylim: tuple[float, float] | None = None,
+        backend: Literal["matplotlib", "pyvista", "auto"] = "auto",
+        show: bool = True,
+        ax: Any = None,
+    ):
+        r"""Draw the domain: interior with optional scalar coloring, boundaries overlaid.
+
+        Draws the interior mesh (optionally colored by a ``point_data`` field),
+        then overlays each boundary mesh on the same canvas. Works with both
+        matplotlib and PyVista backends.
+
+        Parameters
+        ----------
+        point_scalars : str or tuple[str, ...], optional
+            Key into ``interior.point_data`` to color the interior mesh.
+        cmap : str
+            Colormap name for scalar visualization.
+        vmin : float, optional
+            Minimum value for colormap normalization.
+        vmax : float, optional
+            Maximum value for colormap normalization.
+        show_edges : bool
+            Whether to draw cell edges on the interior mesh.
+        xlim : tuple[float, float], optional
+            Clip the interior to points within ``[x_lo, x_hi]`` before
+            drawing (useful for zooming into a subregion of a large domain).
+            Matplotlib only.
+        ylim : tuple[float, float], optional
+            Clip the interior to points within ``[y_lo, y_hi]``.
+            Matplotlib only.
+        backend : {"auto", "matplotlib", "pyvista"}
+            Visualization backend. See :meth:`Mesh.draw`.
+        show : bool
+            Whether to display the plot immediately.
+        ax : matplotlib.axes.Axes or pyvista.Plotter, optional
+            Existing canvas to draw into. If ``None``, a new figure/plotter
+            is created. For matplotlib pass an Axes; for PyVista pass a
+            Plotter.
+
+        Returns
+        -------
+        matplotlib.axes.Axes or pyvista.Plotter
+            The canvas object, for further customization.
+
+        Examples
+        --------
+        >>> dm.draw(point_scalars="p", cmap="RdBu_r", vmin=-200, vmax=200)  # doctest: +SKIP
+        """
+        interior_to_draw = self.interior
+        if xlim is not None or ylim is not None:
+            x_lo = xlim[0] if xlim else float("-inf")
+            x_hi = xlim[1] if xlim else float("inf")
+            y_lo = ylim[0] if ylim else float("-inf")
+            y_hi = ylim[1] if ylim else float("inf")
+            mask = (
+                (self.interior.points[:, 0] >= x_lo)
+                & (self.interior.points[:, 0] <= x_hi)
+                & (self.interior.points[:, 1] >= y_lo)
+                & (self.interior.points[:, 1] <= y_hi)
+            )
+            interior_to_draw = self.interior.slice_points(mask)
+
+        canvas = interior_to_draw.draw(
+            point_scalars=point_scalars,
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
+            show_edges=show_edges,
+            backend=backend,
+            show=False,
+            ax=ax,
+        )
+
+        for name in self.boundary_names:
+            self.boundaries[name].draw(
+                backend=backend, ax=canvas, alpha_points=0, show=False,
+            )
+
+        if hasattr(canvas, "set_aspect"):
+            canvas.set_aspect("equal")
+
+        if show:
+            if hasattr(canvas, "render"):
+                canvas.show()
+            else:
+                import matplotlib.pyplot as plt
+
+                plt.show()
+
+        return canvas
 
     ### Repr is defined after the class body (see below) because
     ### @tensorclass overwrites __repr__ even when defined inline.
