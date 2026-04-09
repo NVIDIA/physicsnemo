@@ -41,6 +41,7 @@ def draw_mesh_pyvista(
     alpha_points: float,
     alpha_cells: float,
     show_edges: bool,
+    plotter=None,
     **kwargs,
 ):
     """Draw mesh using PyVista backend.
@@ -71,6 +72,9 @@ def draw_mesh_pyvista(
         Opacity for cells (0-1).
     show_edges : bool
         Whether to draw cell edges.
+    plotter : pyvista.Plotter, optional
+        Existing plotter to add the mesh to. If ``None``, a new plotter is
+        created. Use this to overlay multiple meshes on the same scene.
     **kwargs : dict
         Additional backend-specific arguments passed to PyVista.
 
@@ -93,8 +97,9 @@ def draw_mesh_pyvista(
         pv_mesh.cell_data["_viz_scalars"] = cell_scalar_values.float().cpu().numpy()
         scalar_name = "_viz_scalars"
 
-    ### Create plotter
-    plotter = pv.Plotter()
+    ### Create plotter (or reuse existing one)
+    if plotter is None:
+        plotter = pv.Plotter()
 
     ### Determine colors based on active_scalar_source
     if active_scalar_source is None:
