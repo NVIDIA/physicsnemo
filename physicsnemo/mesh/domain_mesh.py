@@ -168,27 +168,56 @@ class DomainMesh:
                         f"has n_spatial_dims={bc_mesh.n_spatial_dims}."
                     )
 
-    def _map_meshes(self, fn: Callable[[Mesh], Mesh]) -> "DomainMesh":
-        r"""Apply a Mesh-to-Mesh function to interior and all boundaries.
+    def apply(
+        self,
+        fn: Callable[[Mesh], Mesh],
+        *,
+        interior: bool = True,
+        boundaries: bool = True,
+    ) -> "DomainMesh":
+        r"""Apply a Mesh-to-Mesh function to meshes in the domain.
 
-        Produces a new :class:`DomainMesh` whose ``interior`` is
-        ``fn(self.interior)`` and whose ``boundaries`` are each individually
-        transformed by ``fn``.  The domain-level ``global_data`` is preserved
-        unchanged.
+        By default, ``fn`` is called on the ``interior`` and on each boundary
+        mesh. Use the keyword flags to apply selectively. Components that are
+        skipped are cloned unchanged. Domain-level ``global_data`` is always
+        cloned unchanged.
+
+        All built-in operations (``translate``, ``rotate``, ``subdivide``,
+        ``clean``, etc.) delegate here.
 
         Parameters
         ----------
         fn : Callable[[Mesh], Mesh]
             A function that takes a :class:`Mesh` and returns a :class:`Mesh`.
+        interior : bool
+            If ``True`` (default), apply ``fn`` to the interior mesh.
+        boundaries : bool
+            If ``True`` (default), apply ``fn`` to every boundary mesh.
 
         Returns
         -------
         DomainMesh
             New domain with the transformed meshes.
+
+        Examples
+        --------
+        Convert every mesh to a point cloud (drop connectivity):
+
+        >>> dm_cloud = dm.apply(lambda m: Mesh(points=m.points))  # doctest: +SKIP
+
+        Subdivide only the boundaries (e.g. to match a finer interior):
+
+        >>> dm2 = dm.apply(  # doctest: +SKIP
+        ...     lambda m: m.subdivide(levels=1), boundaries=True, interior=False
+        ... )
         """
         return DomainMesh(
-            interior=fn(self.interior),
-            boundaries=self.boundaries.apply(fn, call_on_nested=True),
+            interior=fn(self.interior) if interior else self.interior.clone(),
+            boundaries=(
+                self.boundaries.apply(fn, call_on_nested=True)
+                if boundaries
+                else self.boundaries.clone()
+            ),
             global_data=self.global_data.clone(),
         )
 
@@ -261,7 +290,7 @@ class DomainMesh:
         DomainMesh
             New domain with translated geometry.
         """
-        return self._map_meshes(lambda m: m.translate(offset=offset))
+        return self.apply(lambda m: m.translate(offset=offset))
 
     def rotate(
         self,
@@ -446,7 +475,7 @@ class DomainMesh:
         DomainMesh
             New domain with transformed geometry.
         """
-        result = self._map_meshes(
+        result = self.apply(
             lambda m: m.transform(
                 matrix=matrix,
                 transform_point_data=transform_point_data,
@@ -499,7 +528,7 @@ class DomainMesh:
         DomainMesh
             New domain with cleaned meshes.
         """
-        return self._map_meshes(
+        return self.apply(
             lambda m: m.clean(
                 tolerance=tolerance,
                 merge_points=merge_points,
@@ -518,7 +547,7 @@ class DomainMesh:
         DomainMesh
             New domain with all cached values cleared.
         """
-        return self._map_meshes(lambda m: m.strip_caches())
+        return self.apply(lambda m: m.strip_caches())
 
     def subdivide(
         self,
@@ -541,7 +570,7 @@ class DomainMesh:
         DomainMesh
             New domain with subdivided meshes.
         """
-        return self._map_meshes(lambda m: m.subdivide(levels=levels, filter=filter))
+        return self.apply(lambda m: m.subdivide(levels=levels, filter=filter))
 
     ### Data Operations
 
@@ -560,7 +589,7 @@ class DomainMesh:
         DomainMesh
             New domain with converted data on all meshes.
         """
-        return self._map_meshes(
+        return self.apply(
             lambda m: m.cell_data_to_point_data(overwrite_keys=overwrite_keys)
         )
 
@@ -579,7 +608,7 @@ class DomainMesh:
         DomainMesh
             New domain with converted data on all meshes.
         """
-        return self._map_meshes(
+        return self.apply(
             lambda m: m.point_data_to_cell_data(overwrite_keys=overwrite_keys)
         )
 
@@ -607,7 +636,7 @@ class DomainMesh:
         DomainMesh
             Domain with gradient fields added to each mesh's ``point_data``.
         """
-        return self._map_meshes(
+        return self.apply(
             lambda m: m.compute_point_derivatives(
                 keys=keys, method=method, gradient_type=gradient_type
             )
@@ -637,7 +666,7 @@ class DomainMesh:
         DomainMesh
             Domain with gradient fields added to each mesh's ``cell_data``.
         """
-        return self._map_meshes(
+        return self.apply(
             lambda m: m.compute_cell_derivatives(
                 keys=keys, method=method, gradient_type=gradient_type
             )
