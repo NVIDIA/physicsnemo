@@ -16,6 +16,7 @@
 
 import contextlib
 import math
+import warnings
 from dataclasses import dataclass
 from typing import Callable, List, Literal, Set, Union
 
@@ -728,8 +729,14 @@ class SongUNetPosEmbd(SongUNet):
     • linear: uses a 2D rectilinear grid over the domain :math:`[-1, 1] \times
       [-1, 1]`.
 
-    • sinusoidal: uses sinusoidal functions of the spatial coordinates, with
-      possibly multiple frequency bands.
+    • sinusoidal: (**deprecated**) uses sinusoidal functions of the spatial
+      coordinates, with possibly multiple frequency bands. This uses a legacy
+      formula that does not produce exact octave doublings. Only use this when
+      loading pre-trained checkpoints. Use ``sinusoidal_octave`` for new models.
+
+    • sinusoidal_octave: uses sinusoidal functions of the spatial coordinates
+      with octave-spaced frequency bands (exact powers of 2). This is the
+      corrected version of ``sinusoidal``.
 
     • test: uses a 2D grid of integer indices, only used for testing.
 
@@ -768,8 +775,10 @@ class SongUNetPosEmbd(SongUNet):
         :class:`~physicsnemo.models.diffusion_unets.SongUNet`, this
         parameter should also include the number of channels in the positional
         embedding grid :math:`C_{PE}`.
-    gridtype : Literal["sinusoidal", "learnable", "linear", "test"], optional, default="sinusoidal"
+    gridtype : Literal["sinusoidal", "sinusoidal_octave", "learnable", "linear", "test"], optional, default="sinusoidal"
         Type of positional embedding to use. Controls how spatial pixels locations are encoded.
+        Use ``"sinusoidal_octave"`` for new models; ``"sinusoidal"`` is kept only for
+        backward compatibility with pre-trained checkpoints (see above).
     N_grid_channels : int, optional, default=4
         Number of channels :math:`C_{PE}` in the positional embedding grid. For 'sinusoidal' must be 4 or
         multiple of 4. For 'linear' and 'test' must be 2. For 'learnable' can be any
@@ -892,7 +901,9 @@ class SongUNetPosEmbd(SongUNet):
         encoder_type: str = "standard",
         decoder_type: str = "standard",
         resample_filter: List[int] = [1, 1],
-        gridtype: Literal["sinusoidal", "learnable", "linear", "test"] = "sinusoidal",
+        gridtype: Literal[
+            "sinusoidal", "sinusoidal_octave", "learnable", "linear", "test"
+        ] = "sinusoidal",
         N_grid_channels: int = 4,
         checkpoint_level: int = 0,
         additive_pos_embed: bool = False,
@@ -1313,7 +1324,14 @@ class SongUNetPosEmbd(SongUNet):
             )  # (2, img_shape_y, img_shape_x)
             grid.requires_grad = False
         elif self.gridtype == "sinusoidal" and self.N_grid_channels == 4:
-            # print('sinusuidal grid added ......')
+            warnings.warn(
+                'gridtype="sinusoidal" uses a legacy frequency-band formula that '
+                "does not produce exact octave doublings. Use "
+                '"sinusoidal_octave" for new models. Only use "sinusoidal" '
+                "when loading pre-trained checkpoints.",
+                FutureWarning,
+                stacklevel=2,
+            )
             x1 = np.meshgrid(np.sin(np.linspace(0, 2 * np.pi, self.img_shape_x)))
             x2 = np.meshgrid(np.cos(np.linspace(0, 2 * np.pi, self.img_shape_x)))
             y1 = np.meshgrid(np.sin(np.linspace(0, 2 * np.pi, self.img_shape_y)))
@@ -1325,10 +1343,36 @@ class SongUNetPosEmbd(SongUNet):
             )
             grid.requires_grad = False
         elif self.gridtype == "sinusoidal" and self.N_grid_channels != 4:
+            warnings.warn(
+                'gridtype="sinusoidal" uses a legacy frequency-band formula that '
+                "does not produce exact octave doublings. Use "
+                '"sinusoidal_octave" for new models. Only use "sinusoidal" '
+                "when loading pre-trained checkpoints.",
+                FutureWarning,
+                stacklevel=2,
+            )
             if self.N_grid_channels % 4 != 0:
                 raise ValueError("N_grid_channels must be a factor of 4")
             num_freq = self.N_grid_channels // 4
             freq_bands = 2.0 ** np.linspace(0.0, num_freq, num=num_freq)
+            grid_list = []
+            grid_x, grid_y = np.meshgrid(
+                np.linspace(0, 2 * np.pi, self.img_shape_x),
+                np.linspace(0, 2 * np.pi, self.img_shape_y),
+            )
+            for freq in freq_bands:
+                for p_fn in [np.sin, np.cos]:
+                    grid_list.append(p_fn(grid_x * freq))
+                    grid_list.append(p_fn(grid_y * freq))
+            grid = torch.from_numpy(
+                np.stack(grid_list, axis=0)
+            )  # (N_grid_channels, img_shape_y, img_shape_x)
+            grid.requires_grad = False
+        elif self.gridtype == "sinusoidal_octave":
+            if self.N_grid_channels % 4 != 0:
+                raise ValueError("N_grid_channels must be a multiple of 4")
+            num_freq = self.N_grid_channels // 4
+            freq_bands = 2.0 ** np.arange(num_freq)
             grid_list = []
             grid_x, grid_y = np.meshgrid(
                 np.linspace(0, 2 * np.pi, self.img_shape_x),

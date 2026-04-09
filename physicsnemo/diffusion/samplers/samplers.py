@@ -139,9 +139,9 @@ def sample(
         the ``dtype`` and ``device`` of the generated samples and any
         internally created tensors. Can usually be obtained by using
         :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.init_latents`
-        from a noise scheduler (typically from the same noise scheduler
-        instance as the ``noise_scheduler`` argument, but can be different if
-        desired).
+        from a noise scheduler (typically obtained from the same noise scheduler
+        instance passed as the ``noise_scheduler`` argument, but can be
+        different if desired).
     noise_scheduler : NoiseScheduler
         The noise scheduler instance used for generating time-steps. The
         schedule's
