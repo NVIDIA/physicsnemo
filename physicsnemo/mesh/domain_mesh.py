@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 import torch
@@ -826,8 +826,7 @@ class DomainMesh:
         if self.n_boundaries == 0:
             raise ValueError("No boundary meshes to merge.")
         geometry_only = [
-            Mesh(points=self.boundaries[name].points,
-                 cells=self.boundaries[name].cells)
+            Mesh(points=self.boundaries[name].points, cells=self.boundaries[name].cells)
             for name in self.boundary_names
         ]
         return Mesh.merge(geometry_only)
@@ -910,7 +909,9 @@ class DomainMesh:
         names = self.boundary_names
         for i, name in enumerate(names):
             self.boundaries[name].draw(
-                ax=canvas, alpha_points=0, backend=backend,
+                ax=canvas,
+                alpha_points=0,
+                backend=backend,
                 show=(show and i == len(names) - 1),
             )
         return canvas
@@ -949,9 +950,7 @@ def _domain_mesh_repr(self: DomainMesh) -> str:
     ### Global data (only if non-empty)
     gd_keys = sorted(self.global_data.keys())
     if gd_keys:
-        items = ", ".join(
-            f"{k}: {tuple(self.global_data[k].shape)}" for k in gd_keys
-        )
+        items = ", ".join(f"{k}: {tuple(self.global_data[k].shape)}" for k in gd_keys)
         lines.append(f"    global_data: {{{items}}}")
 
     lines.append(")")
