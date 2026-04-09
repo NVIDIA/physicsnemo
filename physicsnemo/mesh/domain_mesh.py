@@ -896,9 +896,9 @@ class DomainMesh:
         show : bool
             Whether to display the plot immediately.
         ax : matplotlib.axes.Axes or pyvista.Plotter, optional
-            Existing canvas to draw into. If ``None``, a new figure/plotter
-            is created. For matplotlib pass an Axes; for PyVista pass a
-            Plotter.
+            Existing canvas to draw into. For matplotlib pass an Axes;
+            for PyVista pass a Plotter. If ``None``, a new figure/plotter
+            is created.
 
         Returns
         -------
