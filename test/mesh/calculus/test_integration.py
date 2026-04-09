@@ -34,7 +34,6 @@ from physicsnemo.mesh.calculus.integration import (
     integrate_point_data,
 )
 
-
 ###############################################################################
 # Fixtures
 ###############################################################################
@@ -77,9 +76,7 @@ def edge_mesh() -> Mesh:
 @pytest.fixture
 def triangle_3d() -> Mesh:
     """Single triangle in 3D (codimension-1, has normals)."""
-    pts = torch.tensor(
-        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
-    )
+    pts = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
     cells = torch.tensor([[0, 1, 2]])
     return Mesh(points=pts, cells=cells)
 

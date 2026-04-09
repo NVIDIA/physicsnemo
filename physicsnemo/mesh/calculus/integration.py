@@ -249,9 +249,7 @@ def integrate(
     elif data_source == "points":
         return integrate_point_data(mesh, resolved)
     else:
-        raise ValueError(
-            f"Invalid {data_source=!r}. Must be 'cells' or 'points'."
-        )
+        raise ValueError(f"Invalid {data_source=!r}. Must be 'cells' or 'points'.")
 
 
 def integrate_flux(
@@ -362,6 +360,4 @@ def integrate_flux(
         return torch.nansum(f_dot_n * cell_areas, dim=0)
 
     else:
-        raise ValueError(
-            f"Invalid {data_source=!r}. Must be 'cells' or 'points'."
-        )
+        raise ValueError(f"Invalid {data_source=!r}. Must be 'cells' or 'points'.")
