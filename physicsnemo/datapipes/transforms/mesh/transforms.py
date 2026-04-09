@@ -514,7 +514,6 @@ class NormalizeMeshFields(MeshTransform):
             self._stats: dict[str, dict[str, torch.Tensor | str]] = torch.load(
                 stats_file, weights_only=True
             )
-            )
         elif fields is not None:
             self._stats = {}
             for name, cfg in fields.items():

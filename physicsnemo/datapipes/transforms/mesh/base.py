@@ -103,19 +103,69 @@ class MeshTransform(ABC):
         return domain._map_meshes(self)
 
     def to(self, device: torch.device | str) -> MeshTransform:
-        """Move any internal tensors to the specified device."""
+        """Move any internal tensors and generators to the specified device.
+
+        ``torch.Generator`` objects cannot be moved in-place, so a new
+        generator is created on *device* and seeded with
+        :meth:`~torch.Generator.initial_seed` from the original.
+
+        Parameters
+        ----------
+        device : torch.device or str
+            Target device.
+
+        Returns
+        -------
+        MeshTransform
+            ``self``, for chaining.
+        """
         self._device = torch.device(device) if isinstance(device, str) else device
         for name, value in self.__dict__.items():
             if isinstance(value, torch.Tensor):
                 setattr(self, name, value.to(self._device))
+            elif isinstance(value, torch.Generator):
+                new_gen = torch.Generator(device=self._device)
+                new_gen.manual_seed(value.initial_seed())
+                setattr(self, name, new_gen)
         return self
 
     @property
     def device(self) -> torch.device | None:
+        """The device that internal tensors and generators reside on.
+
+        Returns ``None`` if :meth:`to` has not been called yet.
+
+        Returns
+        -------
+        torch.device or None
+            Current device, or ``None`` if unset.
+        """
         return self._device
 
     def extra_repr(self) -> str:
+        """Return a string of extra information for :meth:`__repr__`.
+
+        Subclasses should override this to include constructor arguments
+        or other state that is useful for debugging (e.g.
+        ``"scale=0.1, p=0.5"``).  The base implementation returns an
+        empty string.
+
+        Returns
+        -------
+        str
+            Extra representation string.
+        """
         return ""
 
     def __repr__(self) -> str:
+        """Return a human-readable string representation of the transform.
+
+        The format is ``ClassName(extra_repr())``, mirroring the
+        convention used by :class:`torch.nn.Module`.
+
+        Returns
+        -------
+        str
+            String representation.
+        """
         return f"{self.__class__.__name__}({self.extra_repr()})"
