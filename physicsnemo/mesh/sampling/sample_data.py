@@ -424,6 +424,54 @@ def find_nearest_cells(
 
 
 # ---------------------------------------------------------------------------
+# Point matching
+# ---------------------------------------------------------------------------
+
+
+def match_points(
+    source: Float[torch.Tensor, "n_source n_spatial_dims"],
+    target: Float[torch.Tensor, "n_target n_spatial_dims"],
+    tolerance: float = 1e-6,
+) -> tuple[Int[torch.Tensor, " n_matched"], Int[torch.Tensor, " n_matched"]]:
+    r"""Find near-exact vertex matches between two point sets.
+
+    For each *source* point, finds the nearest *target* point via KNN (k=1).
+    Pairs whose distance exceeds ``tolerance`` are discarded.
+
+    Parameters
+    ----------
+    source : torch.Tensor
+        Source points, shape :math:`(M, D)`.
+    target : torch.Tensor
+        Target points, shape :math:`(N, D)`.
+    tolerance : float
+        Maximum L2 distance for a pair to be considered coincident.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        ``(source_indices, target_indices)`` -- matched index pairs, both
+        shape :math:`(K,)` where *K* is the number of matches found.
+
+    Examples
+    --------
+    >>> import torch
+    >>> a = torch.tensor([[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]])
+    >>> b = torch.tensor([[1.0, 1.0], [3.0, 3.0]])
+    >>> src_idx, tgt_idx = match_points(a, b, tolerance=0.01)
+    >>> src_idx
+    tensor([1])
+    >>> tgt_idx
+    tensor([0])
+    """
+    indices, distances = knn(points=target, queries=source, k=1)
+    indices = indices[:, 0]       # (M,)
+    distances = distances[:, 0]   # (M,)
+    mask = distances <= tolerance
+    return torch.where(mask)[0], indices[mask]
+
+
+# ---------------------------------------------------------------------------
 # Shared accumulation logic
 # ---------------------------------------------------------------------------
 
