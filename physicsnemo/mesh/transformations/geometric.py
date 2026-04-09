@@ -92,7 +92,7 @@ def _transform_tensordict(
                 f"Cannot transform {field_type} field {key!r} with shape {value.shape}. "
                 f"First spatial dimension must be {n_spatial_dims}, but got {shape[0]}. "
                 f"Use a dict to select specific fields, e.g. "
-                f"transform_{field_type}={{\"field_name\": True}}."
+                f'transform_{field_type}={{"field_name": True}}.'
             )
 
         ### Vector field: v' = v @ M^T

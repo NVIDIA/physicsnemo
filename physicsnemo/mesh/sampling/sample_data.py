@@ -465,8 +465,8 @@ def match_points(
     tensor([0])
     """
     indices, distances = knn(points=target, queries=source, k=1)
-    indices = indices[:, 0]       # (M,)
-    distances = distances[:, 0]   # (M,)
+    indices = indices[:, 0]  # (M,)
+    distances = distances[:, 0]  # (M,)
     mask = distances <= tolerance
     return torch.where(mask)[0], indices[mask]
 
