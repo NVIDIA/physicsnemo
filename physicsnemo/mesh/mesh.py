@@ -2448,8 +2448,12 @@ class Mesh:
 
         Raises
         ------
+        KeyError
+            If *field* is a string key not present in the specified
+            data source.
         ValueError
-            If the mesh has no cells.
+            If the mesh has no cells, or if a raw tensor has the wrong
+            leading dimension for the specified *data_source*.
 
         Examples
         --------
@@ -2497,6 +2501,9 @@ class Mesh:
 
         Raises
         ------
+        KeyError
+            If *field* is a string key not present in the specified
+            data source.
         ValueError
             If the mesh is not codimension-1, or if the field's last
             dimension does not match ``n_spatial_dims``.

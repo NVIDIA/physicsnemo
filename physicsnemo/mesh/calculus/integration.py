@@ -73,7 +73,14 @@ def _resolve_field(
     if isinstance(field, torch.Tensor):
         return field
     data = mesh.cell_data if data_source == "cells" else mesh.point_data
-    return data[field]
+    try:
+        return data[field]
+    except KeyError:
+        available = sorted(data.keys())
+        raise KeyError(
+            f"Field {field!r} not found in {data_source}_data. "
+            f"Available keys: {available}"
+        ) from None
 
 
 def integrate_cell_data(
@@ -104,7 +111,19 @@ def integrate_cell_data(
     torch.Tensor
         Integral value.  Shape matches ``field.shape[1:]`` (the trailing
         dimensions).  A scalar field ``(n_cells,)`` produces a 0-d tensor.
+
+    Raises
+    ------
+    ValueError
+        If ``field.shape[0]`` does not equal ``mesh.n_cells``.
     """
+    if not torch.compiler.is_compiling():
+        if field.shape[0] != mesh.n_cells:
+            raise ValueError(
+                f"Field leading dimension ({field.shape[0]}) must equal "
+                f"n_cells ({mesh.n_cells})."
+            )
+
     cell_areas = mesh.cell_areas  # (n_cells,)
 
     ### Reshape cell_areas for broadcasting with arbitrary trailing dims
@@ -138,7 +157,19 @@ def integrate_point_data(
     -------
     torch.Tensor
         Integral value with shape ``field.shape[1:]``.
+
+    Raises
+    ------
+    ValueError
+        If ``field.shape[0]`` does not equal ``mesh.n_points``.
     """
+    if not torch.compiler.is_compiling():
+        if field.shape[0] != mesh.n_points:
+            raise ValueError(
+                f"Field leading dimension ({field.shape[0]}) must equal "
+                f"n_points ({mesh.n_points})."
+            )
+
     cell_areas = mesh.cell_areas  # (n_cells,)
 
     ### Gather vertex values for each cell: (n_cells, n_verts_per_cell, *trailing)
@@ -184,9 +215,11 @@ def integrate(
 
     Raises
     ------
+    KeyError
+        If *field* is a string key not present in the specified data source.
     ValueError
-        If the mesh has no cells (integration over a point cloud is
-        undefined).
+        If the mesh has no cells, or if a raw tensor has the wrong leading
+        dimension for the specified *data_source*.
 
     Examples
     --------
@@ -268,6 +301,8 @@ def integrate_flux(
 
     Raises
     ------
+    KeyError
+        If *field* is a string key not present in the specified data source.
     ValueError
         If the mesh is not codimension-1, or if the field does not have
         the correct trailing dimension.
