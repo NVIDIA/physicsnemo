@@ -98,9 +98,7 @@ class TestApply:
 
     def test_interior_only(self, tet_domain):
         """apply with boundaries=False should leave boundaries unchanged."""
-        dm2 = tet_domain.apply(
-            lambda m: m.translate([1, 0, 0]), boundaries=False
-        )
+        dm2 = tet_domain.apply(lambda m: m.translate([1, 0, 0]), boundaries=False)
         assert not torch.equal(dm2.interior.points, tet_domain.interior.points)
         for name in tet_domain.boundary_names:
             assert torch.equal(
@@ -109,9 +107,7 @@ class TestApply:
 
     def test_boundaries_only(self, tet_domain):
         """apply with interior=False should leave interior unchanged."""
-        dm2 = tet_domain.apply(
-            lambda m: m.translate([1, 0, 0]), interior=False
-        )
+        dm2 = tet_domain.apply(lambda m: m.translate([1, 0, 0]), interior=False)
         assert torch.equal(dm2.interior.points, tet_domain.interior.points)
         for name in tet_domain.boundary_names:
             assert not torch.equal(
