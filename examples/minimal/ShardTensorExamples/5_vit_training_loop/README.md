@@ -62,6 +62,7 @@ options:
                         Domain parallel size (default: 1)
   --use_mixed_precision
                         Enable mixed precision training (default: False)
+  --inference_only      Run inference benchmarks only, skip training (default: False)
 ```
 
 The model code is identical in all use cases: only the input data changes, and
