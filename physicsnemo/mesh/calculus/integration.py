@@ -50,17 +50,16 @@ if TYPE_CHECKING:
 
 def _resolve_field(
     mesh: "Mesh",
-    field: str | tuple[str, ...] | torch.Tensor | None,
+    field: str | tuple[str, ...] | torch.Tensor,
     data_source: Literal["cells", "points"],
-) -> torch.Tensor | None:
+) -> torch.Tensor:
     r"""Resolve a field specification to a concrete tensor.
 
     Parameters
     ----------
     mesh : Mesh
         Source mesh.
-    field : str, tuple, torch.Tensor, or None
-        ``None`` returns ``None`` (caller handles the "integrate 1" case).
+    field : str, tuple, or torch.Tensor
         A string or tuple is looked up in ``cell_data`` or ``point_data``
         depending on *data_source*.  A tensor is returned as-is.
     data_source : {"cells", "points"}
@@ -68,11 +67,9 @@ def _resolve_field(
 
     Returns
     -------
-    torch.Tensor or None
-        The resolved field tensor, or ``None`` if *field* was ``None``.
+    torch.Tensor
+        The resolved field tensor.
     """
-    if field is None:
-        return None
     if isinstance(field, torch.Tensor):
         return field
     data = mesh.cell_data if data_source == "cells" else mesh.point_data
@@ -157,26 +154,22 @@ def integrate_point_data(
 
 def integrate(
     mesh: "Mesh",
-    field: str | tuple[str, ...] | torch.Tensor | None = None,
+    field: str | tuple[str, ...] | torch.Tensor,
     data_source: Literal["cells", "points"] = "cells",
 ) -> torch.Tensor:
     r"""Integrate a field over the mesh domain.
 
     This is the unified entry point for mesh integration.  It dispatches to
     :func:`integrate_cell_data` or :func:`integrate_point_data` based on
-    *data_source*, and resolves *field* from a string key, tensor, or
-    ``None`` (which integrates the constant function 1, yielding the total
-    area / volume / arc length of the mesh).
+    *data_source*, and resolves *field* from a string key or tensor.
 
     Parameters
     ----------
     mesh : Mesh
         Simplicial mesh.
-    field : str, tuple[str, ...], torch.Tensor, or None
+    field : str, tuple[str, ...], or torch.Tensor
         Field to integrate.
 
-        - ``None``: integrates 1 over the domain, returning
-          ``cell_areas.sum()``.
         - ``str`` or ``tuple``: looked up in ``cell_data`` or ``point_data``
           according to *data_source*.
         - ``torch.Tensor``: used directly.
@@ -188,7 +181,6 @@ def integrate(
     torch.Tensor
         Integral value.  Shape matches the trailing dimensions of the field
         (scalar field -> 0-d tensor, vector field -> 1-d tensor, etc.).
-        If *field* is ``None``, returns a 0-d tensor.
 
     Raises
     ------
@@ -203,8 +195,6 @@ def integrate(
     >>> pts = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.]])
     >>> cells = torch.tensor([[0, 1, 2]])
     >>> mesh = Mesh(points=pts, cells=cells)
-    >>> mesh.integrate()  # total area
-    tensor(0.5000)
     >>> mesh.cell_data["p"] = torch.tensor([3.0])
     >>> mesh.integrate("p")  # integrate cell-centered pressure
     tensor(1.5000)
@@ -220,10 +210,6 @@ def integrate(
             )
 
     resolved = _resolve_field(mesh, field, data_source)
-
-    ### field=None: integrate the constant function 1
-    if resolved is None:
-        return mesh.cell_areas.sum()
 
     if data_source == "cells":
         return integrate_cell_data(mesh, resolved)
@@ -309,8 +295,6 @@ def integrate_flux(
             )
 
     resolved = _resolve_field(mesh, field, data_source)
-    if resolved is None:
-        raise TypeError("integrate_flux requires a field (got None).")
 
     cell_normals = mesh.cell_normals  # (n_cells, n_spatial_dims)
     cell_areas = mesh.cell_areas  # (n_cells,)

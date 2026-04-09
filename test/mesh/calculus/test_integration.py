@@ -125,11 +125,11 @@ class TestIntegrateCellData:
 
 
 ###############################################################################
-# Point data integration - linear (P1) method
+# Point data integration (P1)
 ###############################################################################
 
 
-class TestIntegratePointDataLinear:
+class TestIntegratePointData:
     def test_constant_field_exact(self, unit_triangle: Mesh):
         """P1 integral of constant field = constant * volume."""
         f = torch.tensor([3.0, 3.0, 3.0])
@@ -305,11 +305,6 @@ class TestIntegrateFlux:
 
 
 class TestIntegrateDispatch:
-    def test_none_returns_total_area(self, two_triangles: Mesh):
-        assert torch.isclose(
-            integrate(two_triangles), two_triangles.cell_areas.sum()
-        )
-
     def test_string_key_cell(self, two_triangles: Mesh):
         two_triangles.cell_data["p"] = torch.tensor([1.0, 2.0])
         result = integrate(two_triangles, "p", data_source="cells")
@@ -330,7 +325,7 @@ class TestIntegrateDispatch:
         """Integration over a point cloud (no cells) is undefined."""
         pc = Mesh(points=torch.randn(10, 3))
         with pytest.raises(ValueError, match="no cells"):
-            integrate(pc)
+            integrate(pc, torch.ones(10))
 
     def test_invalid_data_source(self, unit_triangle: Mesh):
         with pytest.raises(ValueError, match="data_source"):

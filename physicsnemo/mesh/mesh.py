@@ -2414,14 +2414,16 @@ class Mesh:
 
     def integrate(
         self,
-        field: str | tuple[str, ...] | torch.Tensor | None = None,
+        field: str | tuple[str, ...] | torch.Tensor,
         data_source: Literal["cells", "points"] = "cells",
-        method: Literal["linear", "voronoi"] = "linear",
     ) -> torch.Tensor:
         r"""Integrate a field over the mesh domain.
 
         Computes :math:`\int_\Omega f\,d\Omega` using the appropriate
-        quadrature rule for the field's discretization.
+        quadrature rule for the field's discretization.  Cell data is
+        treated as piecewise-constant (P0); point data is treated as
+        piecewise-linear (P1) via the vertex-averaging rule (exact for
+        linear fields, second-order accurate for smooth fields).
 
         The manifold dimension determines the measure automatically:
         arc length for ``Mesh[1, ...]``, surface area for ``Mesh[2, ...]``,
@@ -2429,26 +2431,14 @@ class Mesh:
 
         Parameters
         ----------
-        field : str, tuple[str, ...], torch.Tensor, or None
+        field : str, tuple[str, ...], or torch.Tensor
             Field to integrate:
 
-            - ``None``: integrates the constant function 1, returning
-              ``cell_areas.sum()``.
             - ``str`` or ``tuple``: looked up in ``cell_data`` or
               ``point_data`` according to *data_source*.
             - ``torch.Tensor``: used directly.
         data_source : {"cells", "points"}
-            Whether *field* is cell-centered (piecewise-constant, P0) or
-            vertex-centered.
-        method : {"linear", "voronoi"}
-            Quadrature rule for point data (ignored for cell data):
-
-            - ``"linear"``: P1 vertex-averaging rule.  Exact for fields
-              that are linear within each simplex (second-order accurate
-              for smooth fields).
-            - ``"voronoi"``: weights each vertex by its dual 0-cell
-              (Voronoi) volume.  First-order accurate; the natural DEC
-              pairing for 0-forms.
+            Whether *field* is cell-centered (P0) or vertex-centered (P1).
 
         Returns
         -------
@@ -2468,8 +2458,6 @@ class Mesh:
         >>> pts = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.]])
         >>> cells = torch.tensor([[0, 1, 2]])
         >>> mesh = Mesh(points=pts, cells=cells)
-        >>> mesh.integrate()  # total area
-        tensor(0.5000)
         >>> mesh.cell_data["p"] = torch.tensor([3.0])
         >>> mesh.integrate("p")
         tensor(1.5000)
@@ -2482,7 +2470,6 @@ class Mesh:
             mesh=self,
             field=field,
             data_source=data_source,
-            method=method,
         )
 
     def integrate_flux(
