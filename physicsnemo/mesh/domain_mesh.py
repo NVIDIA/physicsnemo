@@ -815,39 +815,47 @@ class DomainMesh:
             return False
         return self.merge_boundaries().is_watertight()
 
-    ### Repr
+    ### Repr is defined after the class body (see below) because
+    ### @tensorclass overwrites __repr__ even when defined inline.
 
-    def __repr__(self) -> str:
-        """Format a readable summary of the domain mesh."""
-        lines = ["DomainMesh("]
 
-        ### Interior
-        lines.append(f"    interior: {format_mesh_repr(self.interior)}")
+### Override the tensorclass __repr__ with custom formatting.
+# Must be done after class definition because @tensorclass overrides __repr__
+# even when defined inside the class body (same pattern as Mesh).
+def _domain_mesh_repr(self: DomainMesh) -> str:
+    """Format a readable summary of the domain mesh."""
+    lines = ["DomainMesh("]
 
-        ### Boundaries
-        bc_names = self.boundary_names
-        if not bc_names:
-            lines.append("    boundaries: {}")
-        else:
-            lines.append("    boundaries:")
-            max_bc_len = max(len(n) for n in bc_names)
-            for name in bc_names:
-                bc_mesh = self.boundaries[name]
-                bc_repr = format_mesh_repr(bc_mesh)
-                # First line gets the key prefix; continuation lines are indented
-                first, *rest = bc_repr.split("\n")
-                key_prefix = f"        {name.ljust(max_bc_len)}: "
-                lines.append(f"{key_prefix}{first}")
-                cont_indent = " " * len(key_prefix)
-                lines.extend(f"{cont_indent}{line}" for line in rest)
+    ### Interior - indent data fields one level under "interior:"
+    interior_repr = format_mesh_repr(self.interior)
+    first, *rest = interior_repr.split("\n")
+    lines.append(f"    interior: {first}")
+    lines.extend(f"    {line}" for line in rest)
 
-        ### Global data (only if non-empty)
-        gd_keys = sorted(self.global_data.keys())
-        if gd_keys:
-            items = ", ".join(
-                f"{k}: {tuple(self.global_data[k].shape)}" for k in gd_keys
-            )
-            lines.append(f"    global_data: {{{items}}}")
+    ### Boundaries - indent data fields one level under each boundary key
+    bc_names = self.boundary_names
+    if not bc_names:
+        lines.append("    boundaries: {}")
+    else:
+        lines.append("    boundaries:")
+        max_bc_len = max(len(n) for n in bc_names)
+        for name in bc_names:
+            bc_mesh = self.boundaries[name]
+            bc_repr = format_mesh_repr(bc_mesh)
+            first, *rest = bc_repr.split("\n")
+            lines.append(f"        {name.ljust(max_bc_len)}: {first}")
+            lines.extend(f"        {line}" for line in rest)
 
-        lines.append(")")
-        return "\n".join(lines)
+    ### Global data (only if non-empty)
+    gd_keys = sorted(self.global_data.keys())
+    if gd_keys:
+        items = ", ".join(
+            f"{k}: {tuple(self.global_data[k].shape)}" for k in gd_keys
+        )
+        lines.append(f"    global_data: {{{items}}}")
+
+    lines.append(")")
+    return "\n".join(lines)
+
+
+DomainMesh.__repr__ = _domain_mesh_repr  # type: ignore
