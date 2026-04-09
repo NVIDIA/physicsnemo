@@ -63,7 +63,7 @@ class MeshReader:
         path : Path or str
             Root directory containing mesh files (e.g. .pt directories).
         pattern : str, optional
-            Glob pattern for mesh paths under ``path``. Default matches ``**/*.pt``.
+            Glob pattern for mesh paths under ``path``. Default matches ``**/*.pmsh``.
         pin_memory : bool, default=False
             If True, place tensors in pinned (page-locked) memory for faster
             async CPU→GPU transfers.
