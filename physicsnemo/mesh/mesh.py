@@ -16,6 +16,7 @@
 
 import math
 import types
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
 
 import torch
@@ -495,7 +496,7 @@ class Mesh:
 
         def save(
             self,
-            prefix: str | None = None,
+            prefix: str | Path | None = None,
             copy_existing: bool = False,
             *,
             num_threads: int = 0,
@@ -511,7 +512,7 @@ class Mesh:
 
             Parameters
             ----------
-            prefix : str or None
+            prefix : str, Path, or None
                 Directory path where the memory-mapped files will be
                 written.  If ``None``, a temporary directory is used.
             copy_existing : bool
@@ -539,7 +540,7 @@ class Mesh:
         @classmethod
         def load(
             cls,
-            prefix: str,
+            prefix: str | Path,
             device: torch.device | None = None,
             non_blocking: bool = False,
         ) -> Self:
@@ -553,9 +554,8 @@ class Mesh:
 
             Parameters
             ----------
-            prefix : str
+            prefix : str or Path
                 Path to the directory created by :meth:`save`.
-                ``pathlib.Path`` objects are also accepted at runtime.
             device : torch.device or None
                 If provided, move all tensors to this device after
                 loading.
