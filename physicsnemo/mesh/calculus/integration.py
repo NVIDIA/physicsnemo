@@ -78,16 +78,13 @@ def _resolve_field(
         case "points":
             data, attr_name = mesh.point_data, "point_data"
         case _:
-            raise ValueError(
-                f"Invalid {data_source=!r}. Must be 'cells' or 'points'."
-            )
+            raise ValueError(f"Invalid {data_source=!r}. Must be 'cells' or 'points'.")
     try:
         return data[field]
     except KeyError:
         available = sorted(data.keys())
         raise KeyError(
-            f"Field {field!r} not found in {attr_name}. "
-            f"Available keys: {available}"
+            f"Field {field!r} not found in {attr_name}. Available keys: {available}"
         ) from None
 
 
@@ -258,9 +255,7 @@ def integrate(
         case "points":
             return integrate_point_data(mesh, resolved)
         case _:
-            raise ValueError(
-                f"Invalid {data_source=!r}. Must be 'cells' or 'points'."
-            )
+            raise ValueError(f"Invalid {data_source=!r}. Must be 'cells' or 'points'.")
 
 
 def integrate_flux(
@@ -365,9 +360,7 @@ def integrate_flux(
         case "points":
             cell_field = resolved[mesh.cells].mean(dim=1)  # P1 average
         case _:
-            raise ValueError(
-                f"Invalid {data_source=!r}. Must be 'cells' or 'points'."
-            )
+            raise ValueError(f"Invalid {data_source=!r}. Must be 'cells' or 'points'.")
 
     f_dot_n = (cell_field * cell_normals).sum(dim=-1)  # (n_cells,)
     return torch.nansum(f_dot_n * cell_areas, dim=0)
