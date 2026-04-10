@@ -510,6 +510,11 @@ class Mesh:
             ``.memmap`` files.  Proxy for the tensorclass ``memmap()``
             method.
 
+            This is the recommended serialization method. Compared to
+            ``torch.save`` (pickle-based), memmap serialization is
+            faster (parallel I/O across files), safer (no arbitrary code
+            execution on load), and supports partial loading.
+
             Parameters
             ----------
             prefix : str, Path, or None
