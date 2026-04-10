@@ -252,12 +252,15 @@ def integrate(
 
     resolved = _resolve_field(mesh, field, data_source)
 
-    if data_source == "cells":
-        return integrate_cell_data(mesh, resolved)
-    elif data_source == "points":
-        return integrate_point_data(mesh, resolved)
-    else:
-        raise ValueError(f"Invalid {data_source=!r}. Must be 'cells' or 'points'.")
+    match data_source:
+        case "cells":
+            return integrate_cell_data(mesh, resolved)
+        case "points":
+            return integrate_point_data(mesh, resolved)
+        case _:
+            raise ValueError(
+                f"Invalid {data_source=!r}. Must be 'cells' or 'points'."
+            )
 
 
 def integrate_flux(
@@ -337,35 +340,26 @@ def integrate_flux(
 
     resolved = _resolve_field(mesh, field, data_source)
 
+    if not torch.compiler.is_compiling():
+        if resolved.shape[-1] != mesh.n_spatial_dims:
+            raise ValueError(
+                f"Field last dimension ({resolved.shape[-1]}) must match "
+                f"n_spatial_dims ({mesh.n_spatial_dims}) for flux integration."
+            )
+
     cell_normals = mesh.cell_normals  # (n_cells, n_spatial_dims)
     cell_areas = mesh.cell_areas  # (n_cells,)
 
-    if data_source == "cells":
-        ### Cell data: dot each cell's vector with its normal
-        if not torch.compiler.is_compiling():
-            if resolved.shape[-1] != mesh.n_spatial_dims:
-                raise ValueError(
-                    f"Field last dimension ({resolved.shape[-1]}) must match "
-                    f"n_spatial_dims ({mesh.n_spatial_dims}) for flux integration."
-                )
-        # (n_cells,) dot product per cell
-        f_dot_n = (resolved * cell_normals).sum(dim=-1)
-        return torch.nansum(f_dot_n * cell_areas, dim=0)
+    ### Resolve per-cell vector field
+    match data_source:
+        case "cells":
+            cell_field = resolved
+        case "points":
+            cell_field = resolved[mesh.cells].mean(dim=1)  # P1 average
+        case _:
+            raise ValueError(
+                f"Invalid {data_source=!r}. Must be 'cells' or 'points'."
+            )
 
-    elif data_source == "points":
-        ### Point data: P1-average vertex values, then dot with cell normal
-        if not torch.compiler.is_compiling():
-            if resolved.shape[-1] != mesh.n_spatial_dims:
-                raise ValueError(
-                    f"Field last dimension ({resolved.shape[-1]}) must match "
-                    f"n_spatial_dims ({mesh.n_spatial_dims}) for flux integration."
-                )
-        # (n_cells, n_verts_per_cell, n_spatial_dims)
-        cell_vertex_values = resolved[mesh.cells]
-        # (n_cells, n_spatial_dims) - P1 average per cell
-        cell_means = cell_vertex_values.mean(dim=1)
-        f_dot_n = (cell_means * cell_normals).sum(dim=-1)  # (n_cells,)
-        return torch.nansum(f_dot_n * cell_areas, dim=0)
-
-    else:
-        raise ValueError(f"Invalid {data_source=!r}. Must be 'cells' or 'points'.")
+    f_dot_n = (cell_field * cell_normals).sum(dim=-1)  # (n_cells,)
+    return torch.nansum(f_dot_n * cell_areas, dim=0)
