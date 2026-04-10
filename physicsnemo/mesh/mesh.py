@@ -2466,11 +2466,9 @@ class Mesh:
         >>> mesh.integrate("p")
         tensor(1.5000)
         """
-        from physicsnemo.mesh.calculus.integration import (
-            integrate as _integrate,
-        )
+        from physicsnemo.mesh.calculus.integration import integrate
 
-        return _integrate(
+        return integrate(
             mesh=self,
             field=field,
             data_source=data_source,
@@ -2518,11 +2516,9 @@ class Mesh:
         >>> sphere.integrate_flux(v).abs() < 1e-5
         tensor(True)
         """
-        from physicsnemo.mesh.calculus.integration import (
-            integrate_flux as _integrate_flux,
-        )
+        from physicsnemo.mesh.calculus.integration import integrate_flux
 
-        return _integrate_flux(
+        return integrate_flux(
             mesh=self,
             field=field,
             data_source=data_source,
