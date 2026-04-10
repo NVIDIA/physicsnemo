@@ -313,8 +313,9 @@ def integrate_flux(
     KeyError
         If *field* is a string key not present in the specified data source.
     ValueError
-        If the mesh is not codimension-1, or if the field does not have
-        the correct trailing dimension.
+        If the mesh is not codimension-1, if the field leading dimension
+        does not match the expected entity count, or if the field does
+        not have the correct trailing dimension.
 
     Examples
     --------
@@ -341,6 +342,13 @@ def integrate_flux(
     resolved = _resolve_field(mesh, field, data_source)
 
     if not torch.compiler.is_compiling():
+        expected_leading = mesh.n_cells if data_source == "cells" else mesh.n_points
+        if resolved.shape[0] != expected_leading:
+            entity = "n_cells" if data_source == "cells" else "n_points"
+            raise ValueError(
+                f"Field leading dimension ({resolved.shape[0]}) must equal "
+                f"{entity} ({expected_leading})."
+            )
         if resolved.shape[-1] != mesh.n_spatial_dims:
             raise ValueError(
                 f"Field last dimension ({resolved.shape[-1]}) must match "
