@@ -173,7 +173,7 @@ pv_mesh = pv.examples.load_airplane()  # See pyvista.org for more datasets
 mesh = from_pyvista(pv_mesh)
 
 # Or, equivalently:
-from physicsnemo.mesh.examples.pyvista_datasets.airplane import load
+from physicsnemo.mesh.primitives.pyvista_datasets.airplane import load
 mesh = load()
 
 print(mesh)
