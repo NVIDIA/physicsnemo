@@ -103,11 +103,15 @@ class MeshTransform(ABC):
         return domain._map_meshes(self)
 
     def to(self, device: torch.device | str) -> MeshTransform:
-        """Move any internal tensors and generators to the specified device.
+        """Move any internal tensors, generators, and distributions to *device*.
 
         ``torch.Generator`` objects cannot be moved in-place, so a new
         generator is created on *device* and seeded with
         :meth:`~torch.Generator.initial_seed` from the original.
+
+        ``torch.distributions.Distribution`` objects are reconstructed
+        with their parameter tensors moved to *device*, using
+        ``arg_constraints`` to discover parameter names generically.
 
         Parameters
         ----------
@@ -127,6 +131,17 @@ class MeshTransform(ABC):
                 new_gen = torch.Generator(device=self._device)
                 new_gen.manual_seed(value.initial_seed())
                 setattr(self, name, new_gen)
+            elif isinstance(value, torch.distributions.Distribution):
+                dist_cls = type(value)
+                kwargs = {}
+                # Access arg_constraints on the instance (not the class)
+                # because the base Distribution defines it as a @property.
+                for param_name in value.arg_constraints:
+                    p = getattr(value, param_name)
+                    kwargs[param_name] = (
+                        p.to(self._device) if isinstance(p, torch.Tensor) else p
+                    )
+                setattr(self, name, dist_cls(**kwargs, validate_args=False))
         return self
 
     @property

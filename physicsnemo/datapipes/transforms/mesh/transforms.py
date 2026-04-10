@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Literal
 
 import torch
+from jaxtyping import Float, Int
 from tensordict import TensorDict
 
 from physicsnemo.datapipes.registry import register
@@ -37,7 +38,7 @@ class ScaleMesh(MeshTransform):
 
     def __init__(
         self,
-        factor: float | torch.Tensor,
+        factor: float | Float[torch.Tensor, ""],
         transform_point_data: bool = False,
         transform_cell_data: bool = False,
         transform_global_data: bool = False,
@@ -84,7 +85,9 @@ class ScaleMesh(MeshTransform):
 class TranslateMesh(MeshTransform):
     r"""Translate mesh geometry by a vector."""
 
-    def __init__(self, vector: torch.Tensor | list[float]) -> None:
+    def __init__(
+        self, vector: Float[torch.Tensor, " spatial_dims"] | list[float]
+    ) -> None:
         super().__init__()
         if not isinstance(vector, torch.Tensor):
             vector = torch.tensor(vector, dtype=torch.float32)
@@ -119,8 +122,12 @@ class RotateMesh(MeshTransform):
     def __init__(
         self,
         angle: float,
-        axis: torch.Tensor | list | tuple | Literal["x", "y", "z"] | None = None,
-        center: torch.Tensor | list | tuple | None = None,
+        axis: Float[torch.Tensor, " spatial_dims"]
+        | list
+        | tuple
+        | Literal["x", "y", "z"]
+        | None = None,
+        center: Float[torch.Tensor, " spatial_dims"] | list | tuple | None = None,
         transform_point_data: bool = False,
         transform_cell_data: bool = False,
         transform_global_data: bool = False,
@@ -182,7 +189,7 @@ class CenterMesh(MeshTransform):
         super().__init__()
         self.use_area_weighting = use_area_weighting
 
-    def _compute_com(self, mesh: Mesh) -> torch.Tensor:
+    def _compute_com(self, mesh: Mesh) -> Float[torch.Tensor, " spatial_dims"]:
         """Compute center of mass for a single mesh."""
         if self.use_area_weighting and mesh.n_cells > 0:
             areas = mesh.cell_areas  # (n_cells,)
@@ -257,7 +264,9 @@ class SubsampleMesh(MeshTransform):
         self.n_points = n_points
         self.compact = compact
 
-    def _random_indices(self, total: int, k: int, device: torch.device) -> torch.Tensor:
+    def _random_indices(
+        self, total: int, k: int, device: torch.device
+    ) -> Int[torch.Tensor, " k"]:
         if total <= k:
             return torch.arange(total, device=device)
         if total > 2**24:
@@ -429,10 +438,10 @@ class SetGlobalField(MeshTransform):
 
     def __init__(
         self,
-        fields: dict[str, torch.Tensor | list[float]],
+        fields: dict[str, Float[torch.Tensor, " *shape"] | list[float]],
     ) -> None:
         super().__init__()
-        self._fields: dict[str, torch.Tensor] = {}
+        self._fields: dict[str, Float[torch.Tensor, " *shape"]] = {}
         for k, v in fields.items():
             if not isinstance(v, torch.Tensor):
                 v = torch.tensor(v, dtype=torch.float32)
@@ -511,8 +520,8 @@ class NormalizeMeshFields(MeshTransform):
         self._eps = eps
 
         if stats_file is not None:
-            self._stats: dict[str, dict[str, torch.Tensor | str]] = torch.load(
-                stats_file, weights_only=True
+            self._stats: dict[str, dict[str, Float[torch.Tensor, " *shape"] | str]] = (
+                torch.load(stats_file, weights_only=True)
             )
         elif fields is not None:
             self._stats = {}
@@ -549,10 +558,10 @@ class NormalizeMeshFields(MeshTransform):
 
     def inverse_tensor(
         self,
-        tensor: torch.Tensor,
+        tensor: Float[torch.Tensor, "*batch channels"],
         target_config: dict[str, str],
         vector_dim: int = 3,
-    ) -> torch.Tensor:
+    ) -> Float[torch.Tensor, "*batch channels"]:
         """Un-normalize a concatenated output tensor back to physical units.
 
         Fields present in ``target_config`` but absent from the stored
@@ -747,7 +756,7 @@ class MeshToTensorDict(MeshTransform):
         return TensorDict(out, batch_size=[])
 
 
-def _resolve_td_path(td: TensorDict, dotted_key: str) -> torch.Tensor:
+def _resolve_td_path(td: TensorDict, dotted_key: str) -> Float[torch.Tensor, " *shape"]:
     """Resolve a dot-separated key path into a tensor from a TensorDict."""
     parts = dotted_key.split(".")
     current = td

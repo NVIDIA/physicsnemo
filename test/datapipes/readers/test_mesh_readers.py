@@ -235,7 +235,12 @@ class TestDomainMeshTransforms:
         reader = DomainMeshReader(tmp_path, pattern="*.pt")
         ds = MeshDataset(
             reader,
-            transforms=[RandomScaleMesh(scale_range=(0.5, 2.0), generator=gen)],
+            transforms=[
+                RandomScaleMesh(
+                    distribution=torch.distributions.Uniform(0.5, 2.0),
+                    generator=gen,
+                )
+            ],
         )
         loaded, _ = ds[0]
 

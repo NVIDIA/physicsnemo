@@ -83,7 +83,6 @@ class MeshReader:
         self._paths = sorted(self._root.glob(pattern))
         if not self._paths:
             raise ValueError(f"No paths matching {pattern!r} found in {self._root}")
-        self._length = len(self._paths)
 
     def _load_sample(self, index: int) -> Mesh:
         """Load a single Mesh from disk."""
@@ -95,7 +94,7 @@ class MeshReader:
         return {"source_path": str(self._paths[index])}
 
     def __len__(self) -> int:
-        return self._length
+        return len(self._paths)
 
     def __getitem__(self, index: int) -> tuple[Mesh, dict[str, Any]]:
         mesh = self._load_sample(index)
@@ -166,14 +165,13 @@ class DomainMeshReader:
         self._paths = sorted(self._root.glob(pattern))
         if not self._paths:
             raise ValueError(f"No paths matching {pattern!r} found in {self._root}")
-        self._length = len(self._paths)
 
     def _load_sample(self, index: int) -> DomainMesh:
         """Load a single DomainMesh from disk."""
         return DomainMesh.load(self._paths[index])
 
     def __len__(self) -> int:
-        return self._length
+        return len(self._paths)
 
     def __getitem__(self, index: int) -> tuple[DomainMesh, dict[str, Any]]:
         dm = self._load_sample(index)

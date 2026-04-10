@@ -16,27 +16,90 @@
 
 """
 Random mesh augmentations (on-the-fly randomizations). Mesh -> Mesh.
+
+Augmentation parameters are sampled from ``torch.distributions.Distribution``
+objects, enabling arbitrary continuous distributions (Gaussian, Laplace,
+Cauchy, etc.) while preserving ``torch.Generator``-based reproducibility
+via the inverse CDF (ICDF) method.  See ``DISTRIBUTIONS.md`` in this
+directory for full design documentation.
 """
 
 from __future__ import annotations
 
 import math
+import warnings
 from typing import Literal
 
 import torch
+from jaxtyping import Float
 
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.mesh import DomainMesh, Mesh
 
 
+def _sample_distribution(
+    distribution: torch.distributions.Distribution,
+    shape: tuple[int, ...],
+    generator: torch.Generator | None,
+    fallback_device: torch.device | None = None,
+) -> torch.Tensor:
+    """Sample from a distribution using ICDF + generator for reproducibility.
+
+    Draws ``U ~ Uniform(0, 1)`` with the provided generator, then
+    transforms through ``distribution.icdf(U)``.  The generator and
+    distribution parameters must already reside on the same device
+    (ensured by :meth:`MeshTransform.to`).
+
+    For distributions that do not implement ``icdf`` (e.g. Poisson),
+    falls back to ``distribution.sample()`` without generator
+    reproducibility.
+
+    Parameters
+    ----------
+    distribution : torch.distributions.Distribution
+        The target distribution to sample from.
+    shape : tuple[int, ...]
+        Shape of the sample to draw.
+    generator : torch.Generator or None
+        Random generator for reproducibility.  When provided, uniform
+        samples are generated on ``generator.device``.
+    fallback_device : torch.device or None
+        Device used for ``torch.rand`` when *generator* is ``None``.
+        Typically ``self._device`` set by :meth:`MeshTransform.to`.
+
+    Returns
+    -------
+    torch.Tensor
+        Sampled tensor with the requested *shape*.
+    """
+    if generator is not None:
+        u = torch.rand(shape, generator=generator, device=generator.device)
+    else:
+        u = torch.rand(shape, device=fallback_device)
+    try:
+        return distribution.icdf(u)
+    except NotImplementedError:
+        warnings.warn(
+            f"{type(distribution).__name__} does not implement icdf; "
+            "falling back to .sample() without generator reproducibility.",
+            stacklevel=3,
+        )
+        return distribution.sample(shape).to(device=u.device)
+
+
 @register()
 class RandomScaleMesh(MeshTransform):
-    r"""Random uniform scale of mesh. Scale factor is sampled per __call__."""
+    r"""Random scale of mesh.  Scale factor is sampled per ``__call__``.
+
+    The scale factor is drawn from *distribution* (default
+    ``Uniform(0.9, 1.1)``).  Any ``torch.distributions.Distribution``
+    with an ``icdf`` method can be used; see ``DISTRIBUTIONS.md``.
+    """
 
     def __init__(
         self,
-        scale_range: tuple[float, float] = (0.9, 1.1),
+        distribution: torch.distributions.Distribution | None = None,
         transform_point_data: bool = False,
         transform_cell_data: bool = False,
         transform_global_data: bool = False,
@@ -45,8 +108,9 @@ class RandomScaleMesh(MeshTransform):
         """
         Parameters
         ----------
-        scale_range : tuple[float, float]
-            ``(low, high)`` bounds for the uniform scale factor.
+        distribution : torch.distributions.Distribution or None
+            Distribution from which the scale factor is sampled.
+            Defaults to ``Uniform(0.9, 1.1)``.
         transform_point_data : bool
             If ``True``, transform point-data fields under scaling.
         transform_cell_data : bool
@@ -54,39 +118,29 @@ class RandomScaleMesh(MeshTransform):
         transform_global_data : bool
             If ``True``, transform global-data fields under scaling.
         generator : torch.Generator or None
-            Optional random generator for reproducibility.  May reside on
-            CPU even when the mesh is on GPU.
+            Optional random generator for reproducibility.
         """
         super().__init__()
-        self.scale_range = scale_range
+        self._distribution = distribution or torch.distributions.Uniform(0.9, 1.1)
         self.transform_point_data = transform_point_data
         self.transform_cell_data = transform_cell_data
         self.transform_global_data = transform_global_data
         self._generator = generator
 
-    def _sample_factor(self, device: torch.device) -> torch.Tensor:
-        """Sample a uniform scale factor in ``[low, high]``.
-
-        Random values are generated on the generator's device and then
-        transferred to *device* asynchronously to avoid GPU sync points.
-
-        Parameters
-        ----------
-        device : torch.device
-            Target device for the returned tensor.
+    def _sample_factor(self) -> Float[torch.Tensor, ""]:
+        """Sample a scale factor from ``self._distribution``.
 
         Returns
         -------
         torch.Tensor
             Scalar (0-dim) tensor with the sampled factor.
         """
-        low, high = self.scale_range
-        return low + (high - low) * torch.rand(1, generator=self._generator).squeeze(
-            0
-        ).to(device)
+        return _sample_distribution(
+            self._distribution, (1,), self._generator, self._device
+        ).squeeze(0)
 
     def __call__(self, mesh: Mesh) -> Mesh:
-        """Apply a random uniform scale to *mesh*.
+        """Apply a random scale to *mesh*.
 
         Parameters
         ----------
@@ -98,7 +152,7 @@ class RandomScaleMesh(MeshTransform):
         Mesh
             Scaled mesh.
         """
-        factor = self._sample_factor(mesh.points.device)
+        factor = self._sample_factor()
         return mesh.scale(
             factor,
             transform_point_data=self.transform_point_data,
@@ -107,7 +161,7 @@ class RandomScaleMesh(MeshTransform):
         )
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
-        """Apply a random uniform scale to every mesh in *domain*.
+        """Apply a random scale to every mesh in *domain*.
 
         A single scale factor is sampled and applied consistently to the
         interior and all boundary meshes.
@@ -122,7 +176,7 @@ class RandomScaleMesh(MeshTransform):
         DomainMesh
             Scaled domain mesh.
         """
-        factor = self._sample_factor(domain.interior.points.device)
+        factor = self._sample_factor()
         return domain.scale(
             factor,
             transform_point_data=self.transform_point_data,
@@ -131,65 +185,58 @@ class RandomScaleMesh(MeshTransform):
         )
 
     def extra_repr(self) -> str:
-        return f"scale_range={self.scale_range}"
+        return f"distribution={self._distribution}"
 
 
 @register()
 class RandomTranslateMesh(MeshTransform):
-    r"""Random translation of mesh. Offset is sampled per __call__."""
+    r"""Random translation of mesh.  Offset is sampled per ``__call__``.
+
+    Each spatial axis is sampled independently from *distribution*
+    (default ``Uniform(-0.1, 0.1)``).  Pass a batched distribution to
+    control each axis separately, e.g.
+    ``Uniform(tensor([-0.1, -0.2, -0.3]), tensor([0.1, 0.2, 0.3]))``.
+    """
 
     def __init__(
         self,
-        max_offset: float | tuple[float, float, float] = 0.1,
+        distribution: torch.distributions.Distribution | None = None,
         generator: torch.Generator | None = None,
     ) -> None:
         """
         Parameters
         ----------
-        max_offset : float or tuple[float, float, float]
-            Maximum translation magnitude per axis.  A scalar is broadcast
-            to all three spatial dimensions.
+        distribution : torch.distributions.Distribution or None
+            Distribution from which the per-axis offsets are sampled.
+            A scalar distribution produces IID samples per axis; a
+            batched distribution (``batch_shape == (n_spatial_dims,)``)
+            allows different parameters per axis.
+            Defaults to ``Uniform(-0.1, 0.1)``.
         generator : torch.Generator or None
-            Optional random generator for reproducibility.  May reside on
-            CPU even when the mesh is on GPU.
+            Optional random generator for reproducibility.
         """
         super().__init__()
-        if isinstance(max_offset, (int, float)):
-            max_offset = (max_offset, max_offset, max_offset)
-        self.max_offset = max_offset
+        self._distribution = distribution or torch.distributions.Uniform(-0.1, 0.1)
         self._generator = generator
 
     def _sample_offset(
-        self, n_spatial_dims: int, device: torch.device, dtype: torch.dtype
-    ) -> torch.Tensor:
-        """Sample a uniform translation offset in ``[-max, +max]`` per axis.
-
-        Random values are generated on the generator's device and then
-        transferred to *device* asynchronously to avoid GPU sync points.
+        self, n_spatial_dims: int
+    ) -> Float[torch.Tensor, " spatial_dims"]:
+        """Sample a translation offset from ``self._distribution``.
 
         Parameters
         ----------
         n_spatial_dims : int
             Number of spatial dimensions (typically 2 or 3).
-        device : torch.device
-            Target device for the returned tensor.
-        dtype : torch.dtype
-            Target dtype for the returned tensor.
 
         Returns
         -------
         torch.Tensor
             Offset vector, shape ``(n_spatial_dims,)``.
         """
-        if isinstance(self.max_offset, (int, float)):
-            scales = (self.max_offset,) * n_spatial_dims
-        else:
-            scales = tuple(self.max_offset[i] for i in range(n_spatial_dims))
-        scale_t = torch.tensor(scales, device=device, dtype=dtype)
-        rand = torch.rand(n_spatial_dims, generator=self._generator).to(
-            device=device, dtype=dtype
+        return _sample_distribution(
+            self._distribution, (n_spatial_dims,), self._generator, self._device
         )
-        return (rand * 2 - 1) * scale_t
 
     def __call__(self, mesh: Mesh) -> Mesh:
         """Apply a random translation to *mesh*.
@@ -204,9 +251,7 @@ class RandomTranslateMesh(MeshTransform):
         Mesh
             Translated mesh.
         """
-        offset = self._sample_offset(
-            mesh.n_spatial_dims, mesh.points.device, mesh.points.dtype
-        )
+        offset = self._sample_offset(mesh.n_spatial_dims)
         return mesh.translate(offset)
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
@@ -225,35 +270,31 @@ class RandomTranslateMesh(MeshTransform):
         DomainMesh
             Translated domain mesh.
         """
-        offset = self._sample_offset(
-            domain.interior.n_spatial_dims,
-            domain.interior.points.device,
-            domain.interior.points.dtype,
-        )
+        offset = self._sample_offset(domain.interior.n_spatial_dims)
         return domain.translate(offset)
 
     def extra_repr(self) -> str:
-        return f"max_offset={self.max_offset}"
+        return f"distribution={self._distribution}"
 
 
 @register()
 class RandomRotateMesh(MeshTransform):
-    r"""Random rotation of mesh. Axis and angle are sampled per __call__.
+    r"""Random rotation of mesh.  Axis and angle are sampled per ``__call__``.
 
     Two modes are supported:
 
-    * ``"axis_aligned"`` (default) – picks one of the candidate *axes*
-      uniformly at random and samples an angle from *angle_range*.  This
-      limits rotations to the three cardinal planes.
-    * ``"uniform"`` – samples a rotation uniformly from SO(3) via random
-      unit quaternions (3-D meshes only).  *axes* and *angle_range* are
+    * ``"axis_aligned"`` (default) -- picks one of the candidate *axes*
+      uniformly at random and samples an angle from *distribution*.
+      This limits rotations to the three cardinal planes.
+    * ``"uniform"`` -- samples a rotation uniformly from SO(3) via random
+      unit quaternions (3-D meshes only).  *axes* and *distribution* are
       ignored in this mode.
     """
 
     def __init__(
         self,
         axes: list[Literal["x", "y", "z"]] | None = None,
-        angle_range: tuple[float, float] = (-math.pi, math.pi),
+        distribution: torch.distributions.Distribution | None = None,
         mode: Literal["axis_aligned", "uniform"] = "axis_aligned",
         transform_point_data: bool = False,
         transform_cell_data: bool = False,
@@ -267,8 +308,9 @@ class RandomRotateMesh(MeshTransform):
             Candidate rotation axes.  One is chosen uniformly at random
             per call.  Defaults to ``["x", "y", "z"]``.
             Only used when ``mode="axis_aligned"``.
-        angle_range : tuple[float, float]
-            ``(low, high)`` bounds (radians) for the rotation angle.
+        distribution : torch.distributions.Distribution or None
+            Distribution from which the rotation angle (radians) is
+            sampled.  Defaults to ``Uniform(-pi, pi)``.
             Only used when ``mode="axis_aligned"``.
         mode : {"axis_aligned", "uniform"}
             ``"axis_aligned"`` picks a random cardinal axis and angle
@@ -281,14 +323,15 @@ class RandomRotateMesh(MeshTransform):
         transform_global_data : bool
             If ``True``, transform global-data fields under rotation.
         generator : torch.Generator or None
-            Optional random generator for reproducibility.  May reside on
-            CPU even when the mesh is on GPU.
+            Optional random generator for reproducibility.
         """
         super().__init__()
         if mode not in ("axis_aligned", "uniform"):
             raise ValueError(f"mode must be 'axis_aligned' or 'uniform', got {mode!r}")
         self.axes = axes if axes is not None else ["x", "y", "z"]
-        self.angle_range = angle_range
+        self._distribution = distribution or torch.distributions.Uniform(
+            -math.pi, math.pi
+        )
         self.mode = mode
         self.transform_point_data = transform_point_data
         self.transform_cell_data = transform_cell_data
@@ -318,17 +361,11 @@ class RandomRotateMesh(MeshTransform):
     # axis-aligned helpers
     # ------------------------------------------------------------------
 
-    def _sample_axis_and_angle(self, device: torch.device) -> tuple[str, torch.Tensor]:
+    def _sample_axis_and_angle(self) -> tuple[str, Float[torch.Tensor, ""]]:
         """Sample a random axis and rotation angle.
 
-        The axis index is drawn on CPU (no GPU sync).  The angle is
-        generated on the generator's device and transferred to *device*
-        asynchronously.
-
-        Parameters
-        ----------
-        device : torch.device
-            Target device for the returned angle tensor.
+        The axis index is drawn via ``torch.randint`` with the generator.
+        The angle is sampled from ``self._distribution`` via ICDF.
 
         Returns
         -------
@@ -337,12 +374,16 @@ class RandomRotateMesh(MeshTransform):
         angle : torch.Tensor
             Scalar (0-dim) tensor with the sampled angle in radians.
         """
-        axis_idx = torch.randint(len(self.axes), (1,), generator=self._generator)
+        gen_device = (
+            self._generator.device if self._generator is not None else self._device
+        )
+        axis_idx = torch.randint(
+            len(self.axes), (1,), generator=self._generator, device=gen_device
+        )
         axis = self.axes[axis_idx]
-        low, high = self.angle_range
-        angle = low + (high - low) * torch.rand(1, generator=self._generator).squeeze(
-            0
-        ).to(device)
+        angle = _sample_distribution(
+            self._distribution, (1,), self._generator, self._device
+        ).squeeze(0)
         return axis, angle
 
     # ------------------------------------------------------------------
@@ -351,8 +392,8 @@ class RandomRotateMesh(MeshTransform):
 
     def _quaternion_to_rotation_matrix(
         self,
-        q: torch.Tensor,
-    ) -> torch.Tensor:
+        q: Float[torch.Tensor, "4"],
+    ) -> Float[torch.Tensor, "3 3"]:
         """Convert a unit quaternion to a 3x3 rotation matrix.
 
         Parameters
@@ -368,30 +409,24 @@ class RandomRotateMesh(MeshTransform):
         # 2 dispatches: outer product + matrix-vector multiply.
         return (self._q2r_map.to(q) @ torch.outer(q, q).reshape(16)).reshape(3, 3)
 
-    def _sample_uniform_rotation(
-        self, device: torch.device, dtype: torch.dtype
-    ) -> torch.Tensor:
+    def _sample_uniform_rotation(self) -> Float[torch.Tensor, "3 3"]:
         """Sample a rotation matrix uniformly from SO(3).
 
         Uses the random unit quaternion method: sample a 4-D isotropic
         Gaussian vector, normalize to the unit sphere, and convert to a
         rotation matrix.
 
-        Parameters
-        ----------
-        device : torch.device
-            Target device for the returned matrix.
-        dtype : torch.dtype
-            Target dtype for the returned matrix.
-
         Returns
         -------
         torch.Tensor
             Rotation matrix, shape ``(3, 3)``.
         """
-        q = torch.randn(4, generator=self._generator)
+        gen_device = (
+            self._generator.device if self._generator is not None else self._device
+        )
+        q = torch.randn(4, generator=self._generator, device=gen_device)
         q = q / q.norm()
-        return self._quaternion_to_rotation_matrix(q).to(device=device, dtype=dtype)
+        return self._quaternion_to_rotation_matrix(q)
 
     # ------------------------------------------------------------------
     # __call__ / apply_to_domain
@@ -416,7 +451,7 @@ class RandomRotateMesh(MeshTransform):
                     f"mode='uniform' requires 3-D meshes, "
                     f"got n_spatial_dims={mesh.n_spatial_dims}"
                 )
-            R = self._sample_uniform_rotation(mesh.points.device, mesh.points.dtype)
+            R = self._sample_uniform_rotation()
             return mesh.transform(
                 R,
                 transform_point_data=self.transform_point_data,
@@ -425,7 +460,7 @@ class RandomRotateMesh(MeshTransform):
                 assume_invertible=True,
             )
 
-        axis, angle = self._sample_axis_and_angle(mesh.points.device)
+        axis, angle = self._sample_axis_and_angle()
         return mesh.rotate(
             angle,
             axis=axis,
@@ -456,9 +491,7 @@ class RandomRotateMesh(MeshTransform):
                     f"mode='uniform' requires 3-D meshes, "
                     f"got n_spatial_dims={domain.interior.n_spatial_dims}"
                 )
-            R = self._sample_uniform_rotation(
-                domain.interior.points.device, domain.interior.points.dtype
-            )
+            R = self._sample_uniform_rotation()
             return domain.transform(
                 R,
                 transform_point_data=self.transform_point_data,
@@ -467,7 +500,7 @@ class RandomRotateMesh(MeshTransform):
                 assume_invertible=True,
             )
 
-        axis, angle = self._sample_axis_and_angle(domain.interior.points.device)
+        axis, angle = self._sample_axis_and_angle()
         return domain.rotate(
             angle,
             axis=axis,
@@ -479,4 +512,4 @@ class RandomRotateMesh(MeshTransform):
     def extra_repr(self) -> str:
         if self.mode == "uniform":
             return "mode='uniform'"
-        return f"axes={self.axes}, angle_range={self.angle_range}"
+        return f"axes={self.axes}, distribution={self._distribution}"
