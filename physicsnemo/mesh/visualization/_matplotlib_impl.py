@@ -34,6 +34,8 @@ LineCollection = _collections.LineCollection
 PolyCollection = _collections.PolyCollection
 _colors = importlib.import_module("matplotlib.colors")
 Normalize = _colors.Normalize
+_axes_mod = importlib.import_module("matplotlib.axes")
+MplAxes = _axes_mod.Axes
 
 
 def draw_mesh_matplotlib(
@@ -92,6 +94,14 @@ def draw_mesh_matplotlib(
     matplotlib.axes.Axes
         Matplotlib axes object.
     """
+    ### Validate ax type
+    if ax is not None and not isinstance(ax, MplAxes):
+        raise ValueError(
+            f"Expected a matplotlib Axes for the 'ax' parameter, "
+            f"got {type(ax).__name__}. "
+            f"PyVista Plotters are only supported for pyvista backend."
+        )
+
     ### For volume meshes (3D+ manifold), reduce to a surface mesh.
     ### Matplotlib can only render 2D facets (polygons), not volumetric cells
     ### like tetrahedra. Extract boundary facets for clean surface visualization.

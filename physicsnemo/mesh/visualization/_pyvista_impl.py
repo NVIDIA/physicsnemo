@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 # Dynamic import for optional pyvista dependency (invisible to static analysis)
 pv = importlib.import_module("pyvista")
+_PlotterBase = getattr(pv, "BasePlotter", pv.Plotter)
 
 
 def draw_mesh_pyvista(
@@ -45,6 +46,8 @@ def draw_mesh_pyvista(
     **kwargs,
 ):
     """Draw mesh using PyVista backend.
+
+    Supports all spatial dimensions up to 3D using PyVista's rendering engine.
 
     Parameters
     ----------
@@ -81,8 +84,16 @@ def draw_mesh_pyvista(
     Returns
     -------
     pyvista.Plotter
-        PyVista plotter object (even if show=True, returns before calling .show()).
+        PyVista plotter object.
     """
+    ### Validate plotter type
+    if plotter is not None and not isinstance(plotter, _PlotterBase):
+        raise ValueError(
+            f"Expected a pyvista.Plotter for the 'plotter' parameter, "
+            f"got {type(plotter).__name__}. "
+            f"Matplotlib Axes are only supported for matplotlib backend."
+        )
+
     ### Convert mesh to PyVista format
     from physicsnemo.mesh.io.io_pyvista import to_pyvista
 
