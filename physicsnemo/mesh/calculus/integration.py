@@ -76,9 +76,10 @@ def _resolve_field(
     try:
         return data[field]
     except KeyError:
+        attr_name = "cell_data" if data_source == "cells" else "point_data"
         available = sorted(data.keys())
         raise KeyError(
-            f"Field {field!r} not found in {data_source}_data. "
+            f"Field {field!r} not found in {attr_name}. "
             f"Available keys: {available}"
         ) from None
 
