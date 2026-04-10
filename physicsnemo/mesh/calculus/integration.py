@@ -72,11 +72,18 @@ def _resolve_field(
     """
     if isinstance(field, torch.Tensor):
         return field
-    data = mesh.cell_data if data_source == "cells" else mesh.point_data
+    match data_source:
+        case "cells":
+            data, attr_name = mesh.cell_data, "cell_data"
+        case "points":
+            data, attr_name = mesh.point_data, "point_data"
+        case _:
+            raise ValueError(
+                f"Invalid {data_source=!r}. Must be 'cells' or 'points'."
+            )
     try:
         return data[field]
     except KeyError:
-        attr_name = "cell_data" if data_source == "cells" else "point_data"
         available = sorted(data.keys())
         raise KeyError(
             f"Field {field!r} not found in {attr_name}. "
