@@ -493,6 +493,87 @@ class Mesh:
             """
             ...
 
+        def save(
+            self,
+            prefix: str | None = None,
+            copy_existing: bool = False,
+            *,
+            num_threads: int = 0,
+            return_early: bool = False,
+            share_non_tensor: bool = False,
+        ) -> Self:
+            """Save the mesh to disk as memory-mapped tensors.
+
+            Writes ``points``, ``cells``, ``point_data``, ``cell_data``,
+            ``global_data``, and ``_cache`` to a directory tree of
+            ``.memmap`` files.  Proxy for the tensorclass ``memmap()``
+            method.
+
+            Parameters
+            ----------
+            prefix : str or None
+                Directory path where the memory-mapped files will be
+                written.  If ``None``, a temporary directory is used.
+            copy_existing : bool
+                If ``True``, copy tensors that are already memory-mapped
+                to the new location.
+            num_threads : int
+                Number of threads for parallel I/O (0 = sequential).
+            return_early : bool
+                If ``True``, return before all data is flushed to disk.
+            share_non_tensor : bool
+                If ``True``, share non-tensor data across processes.
+
+            Returns
+            -------
+            Mesh
+                A new Mesh backed by the on-disk memory-mapped storage.
+
+            Examples
+            --------
+            >>> mesh.save("/path/to/mesh")  # doctest: +SKIP
+            >>> reloaded = Mesh.load("/path/to/mesh")  # doctest: +SKIP
+            """
+            ...
+
+        @classmethod
+        def load(
+            cls,
+            prefix: str,
+            device: torch.device | None = None,
+            non_blocking: bool = False,
+        ) -> Self:
+            """Load a previously saved mesh from disk.
+
+            Reads a directory tree of memory-mapped tensors written by
+            :meth:`save` and reconstructs the ``Mesh`` instance,
+            including all attached ``point_data``, ``cell_data``, and
+            ``global_data``.  Proxy for the tensorclass
+            ``load_memmap()`` class method.
+
+            Parameters
+            ----------
+            prefix : str
+                Path to the directory created by :meth:`save`.
+                ``pathlib.Path`` objects are also accepted at runtime.
+            device : torch.device or None
+                If provided, move all tensors to this device after
+                loading.
+            non_blocking : bool
+                Whether device transfers should be non-blocking.
+
+            Returns
+            -------
+            Mesh
+                The reconstructed Mesh instance.
+
+            Examples
+            --------
+            >>> mesh = Mesh.load("/path/to/mesh")  # doctest: +SKIP
+            >>> mesh_gpu = Mesh.load("/path/to/mesh", device="cuda")  # doctest: +SKIP
+            """
+            ...
+
     @property
     def n_points(self) -> int:
         return self.points.shape[0]
