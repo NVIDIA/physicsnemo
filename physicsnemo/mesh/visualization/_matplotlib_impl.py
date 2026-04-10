@@ -87,7 +87,8 @@ def draw_mesh_matplotlib(
     show_edges : bool
         Whether to draw cell edges.
     ax : matplotlib.axes.Axes or None
-        Existing matplotlib axes (if None, creates new figure).
+        Existing matplotlib Axes to draw on. If ``None``, a new figure is
+        created. Use this to overlay multiple meshes on the same axes.
 
     Returns
     -------

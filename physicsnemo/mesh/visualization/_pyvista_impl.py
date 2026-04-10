@@ -60,15 +60,15 @@ def draw_mesh_pyvista(
     active_scalar_source : {"points", "cells", None}
         Which scalar source is active ("points", "cells", or None).
     scalar_label : str or None
-        Human-readable label for the colorbar title.
+        Human-readable label for the colorbar.
     show : bool
         Whether to call plotter.show().
     cmap : str
         Colormap name.
     vmin : float or None
-        Minimum value for colormap normalization (clim).
+        Minimum value for colormap normalization.
     vmax : float or None
-        Maximum value for colormap normalization (clim).
+        Maximum value for colormap normalization.
     alpha_points : float
         Opacity for points (0-1).
     alpha_cells : float
@@ -76,7 +76,7 @@ def draw_mesh_pyvista(
     show_edges : bool
         Whether to draw cell edges.
     plotter : pyvista.Plotter, optional
-        Existing plotter to add the mesh to. If ``None``, a new plotter is
+        Existing pyvista Plotter to draw on. If ``None``, a new plotter is
         created. Use this to overlay multiple meshes on the same scene.
     **kwargs : dict
         Additional backend-specific arguments passed to PyVista.
