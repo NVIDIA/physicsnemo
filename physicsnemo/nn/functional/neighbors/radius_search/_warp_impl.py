@@ -53,7 +53,7 @@ def count_neighbors(
     grid: wp.HashGrid,
     wp_points: wp.array(dtype=wp.vec3),
     wp_queries: wp.array(dtype=wp.vec3),
-    wp_launch_device: wp.context.Device | None,
+    wp_launch_device: wp.Device | None,
     wp_launch_stream: wp.Stream | None,
     radius: float,
     N_queries: int,
@@ -65,7 +65,7 @@ def count_neighbors(
         grid (wp.HashGrid): The hash grid to use for the search.
         wp_points (wp.array): The points to search in, as a warp array.
         wp_queries (wp.array): The queries to search for, as a warp array.
-        wp_launch_device (wp.context.Device | None): The device to launch the kernel on.
+        wp_launch_device (wp.Device | None): The device to launch the kernel on.
         wp_launch_stream (wp.Stream | None): The stream to launch the kernel on.
         radius (float): The radius that bounds the search.
         N_queries (int): Total number of query points.
@@ -114,7 +114,7 @@ def gather_neighbors(
     wp_points: wp.array(dtype=wp.vec3),
     wp_queries: wp.array(dtype=wp.vec3),
     wp_offset: wp.array(dtype=wp.int32),
-    wp_launch_device: wp.context.Device | None,
+    wp_launch_device: wp.Device | None,
     wp_launch_stream: wp.Stream | None,
     radius: float,
     N_queries: int,
@@ -131,7 +131,7 @@ def gather_neighbors(
         wp_points (wp.array): The points to search in, as a warp array.
         wp_queries (wp.array): The queries to search for, as a warp array.
         wp_offset (wp.array): The offset in output for each input point, as a warp array.
-        wp_launch_device (wp.context.Device | None): The device to launch the kernel on.
+        wp_launch_device (wp.Device | None): The device to launch the kernel on.
         wp_launch_stream (wp.Stream | None): The stream to launch the kernel on.
         radius (float): The radius that bounds the search.
         N_queries (int): Total number of query points.
