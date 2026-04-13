@@ -26,3 +26,4 @@ from .checkpoint import (
 )
 from .logging import LaunchLogger, PythonLogger, RankZeroLoggingWrapper
 from .profiling import Profiler
+from .inference import compile_to_trt, is_trt_available
