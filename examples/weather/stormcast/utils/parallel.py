@@ -31,6 +31,7 @@ from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.domain_parallel.shard_tensor import ShardTensor, scatter_tensor
+from physicsnemo.diffusion.noise_schedulers import DomainParallelNoiseScheduler
 
 from datasets.dataset import worker_init
 from utils.nn import nested_to
@@ -45,13 +46,23 @@ class ParallelHelper:
         Number of ranks in the domain-parallel dimension.
     use_shard_tensor : bool, optional
         Whether to shard batches across the domain mesh.
+    shard_dim : int, optional
+        Spatial dimension along which tensors are partitioned for domain
+        parallelism.  For ``(B, C, H, W)`` data sharded along the height
+        axis, set ``shard_dim=2``.
     """
 
-    def __init__(self, domain_parallel_size: int, use_shard_tensor: bool = False):
+    def __init__(
+        self,
+        domain_parallel_size: int,
+        use_shard_tensor: bool = False,
+        shard_dim: int = 2,
+    ):
         if not DistributedManager.is_initialized:
             DistributedManager.initialize()
         self.dist = DistributedManager()
         self.domain_parallel_size = domain_parallel_size
+        self.shard_dim = shard_dim
 
         if self.dist.world_size % domain_parallel_size != 0:
             raise ValueError(
@@ -254,11 +265,41 @@ class ParallelHelper:
             backward_prefetch=BackwardPrefetch.BACKWARD_PRE,  # Backward prefetching for overlap
         )
 
+    def make_domain_parallel_scheduler(self, scheduler: object) -> object:
+        """Wrap a noise scheduler for domain-parallel diffusion.
+
+        When ``use_shard_tensor`` is *False* the scheduler is returned unchanged.
+        Otherwise it is wrapped with
+        :class:`~physicsnemo.diffusion.DomainParallelNoiseScheduler` so that
+        sampled times are broadcast and initial latents are sharded on
+        ``self.shard_dim``.
+
+        Parameters
+        ----------
+        scheduler : NoiseScheduler
+            A noise scheduler implementing the
+            :class:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler`
+            protocol.
+
+        Returns
+        -------
+        NoiseScheduler or DomainParallelNoiseScheduler
+            The (possibly wrapped) scheduler.
+        """
+        if not self.use_shard_tensor:
+            return scheduler
+
+        return DomainParallelNoiseScheduler(
+            scheduler,
+            self.mesh["domain"],
+            shard_dim=self.shard_dim,
+        )
+
     def nested_scatter(
         self,
         x: torch.Tensor | Mapping | list | tuple | Any,
         global_rank_of_source: int,
-        shard_dim: int | None = 2,
+        shard_dim: int | None = None,
     ) -> ShardTensor | dict | list | Any:
         """Scatter tensors within nested structures.
 
@@ -269,13 +310,16 @@ class ParallelHelper:
         global_rank_of_source : int
             Global rank providing the source data.
         shard_dim : int or None, optional
-            Dimension to shard for tensors with >= 3 dims.
+            Dimension to shard for tensors with >= 3 dims.  Defaults to
+            ``self.shard_dim``.
 
         Returns
         -------
         ShardTensor or dict or list
             Scattered structure with tensors sharded or replicated.
         """
+        if shard_dim is None:
+            shard_dim = self.shard_dim
         if isinstance(x, Mapping):
             return {
                 k: self.nested_scatter(v, global_rank_of_source, shard_dim=shard_dim)
@@ -294,7 +338,7 @@ class ParallelHelper:
 
             placement = (
                 Shard(shard_dim)
-                if (x.ndim >= 3 and shard_dim is not None and x.shape[shard_dim] > 1)
+                if (x.ndim >= 3 and x.shape[shard_dim] > 1)
                 else Replicate()
             )
             x = scatter_tensor(

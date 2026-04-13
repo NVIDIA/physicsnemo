@@ -16,32 +16,47 @@
 
 from datetime import datetime
 from pathlib import Path
-from functools import partial
 
+import deepwave
 import hydra
-import torch
 import numpy as np
-from omegaconf import DictConfig
-from hydra.utils import to_absolute_path
+import torch
+import torch.nn.functional as F
 import wandb
-from einops import repeat, rearrange
+from datasets.dataset import EFWIDatapipe
+from datasets.transforms import Interpolate, ZscoreNormalize
+from einops import rearrange, repeat
+from hydra.utils import to_absolute_path
+from omegaconf import DictConfig
+from utils.plot import plot_prediction
 
+from physicsnemo import Module
+from physicsnemo.diffusion.guidance import (
+    DPSScorePredictor,
+    ModelConsistencyDPSGuidance,
+)
+from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
+from physicsnemo.diffusion.samplers import sample
+from physicsnemo.diffusion.utils import StackedRandomGenerator
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
-from physicsnemo import Module
 from physicsnemo.utils.logging.wandb import initialize_wandb
 
-from datasets.dataset import EFWIDatapipe
-from utils.preconditioning import edm_precond
-from utils.diffusion import (
-    DiffusionAdapter,
-    ModelBasedGuidance,
-    generate,
-    EDMStochasticSampler,
-)
-from datasets.transforms import ZscoreNormalize, Interpolate
-from utils.plot import plot_prediction
-import deepwave
+
+class ClippedGuidance:
+    """Thin wrapper that clips DPS guidance output to a given range."""
+
+    def __init__(self, inner, clip_min, clip_max):
+        self.inner = inner
+        self.clip_min = clip_min
+        self.clip_max = clip_max
+
+    def __call__(self, x, t, x_0):
+        return torch.clamp(
+            self.inner(x, t, x_0),
+            min=self.clip_min,
+            max=self.clip_max,
+        )
 
 
 def RMSE(pred: torch.Tensor, target: torch.Tensor) -> float:
@@ -96,7 +111,7 @@ def main(cfg: DictConfig) -> None:
         (len(seeds) - 1) // (cfg.generation.seed_batch_size * dist.world_size) + 1
     ) * dist.world_size
     all_batches = torch.as_tensor(seeds).tensor_split(num_batches)
-    rank_batches = all_batches[dist.rank :: dist.world_size]
+    rank_batches = list(all_batches[dist.rank :: dist.world_size])
 
     # Initialize the validation dataset
     val_dataset = EFWIDatapipe(
@@ -113,13 +128,11 @@ def main(cfg: DictConfig) -> None:
     )
 
     # Define dataset transforms
-    # Zscore normalization
     stats_mean = val_dataset.get_stats("mean")
     stats_std = val_dataset.get_stats("std")
     val_dataset = ZscoreNormalize(val_dataset, stats_mean, stats_std)
     img_H, img_W = list(cfg.dataset.x_resolution)
 
-    # Interpolation to the UNet model accepted resolution
     interp_size = {var: (img_H, img_W) for var in cfg.dataset.x_vars}
     interp_size.update({var: (img_W,) for var in cfg.dataset.y_vars})
     interp_dim = {var: (-2, -1) for var in cfg.dataset.x_vars}
@@ -133,49 +146,38 @@ def main(cfg: DictConfig) -> None:
         mode=interp_mode,
     )
 
-    # Load diffusion model
+    # Load model from checkpoint
     checkpoint_path = to_absolute_path(cfg.model.checkpoint_path)
-    rank_zero_logger.info(f"Loading diffusion model from {checkpoint_path}")
+    rank_zero_logger.info(f"Loading model from {checkpoint_path}")
     try:
-        diffusion_net = Module.from_checkpoint(checkpoint_path)
+        model = Module.from_checkpoint(checkpoint_path)
     except FileNotFoundError:
         rank_zero_logger.error(f"Checkpoint not found at {checkpoint_path}")
         return
     except Exception as e:
         rank_zero_logger.error(f"Error loading checkpoint: {e}")
         return
-    diffusion_net = diffusion_net.eval().to(device)
     rank_zero_logger.info("Diffusion model loaded successfully.")
+    model = model.eval().to(device)
     rank_zero_logger.info(
-        f"Using model {diffusion_net.__class__.__name__} "
-        f"with {diffusion_net.num_parameters()} parameters."
+        f"Using model {model.__class__.__name__} "
+        f"with {model.num_parameters()} parameters."
     )
-    model = DiffusionAdapter(
-        model=diffusion_net,
-        args_map=("x", "sigma", {"y": "y"}),
-    )
-    # EDM preconditioning wrapper
-    model_fn = partial(edm_precond, model, sigma_data=0.5)
 
-    # Sampler
-    sampler = EDMStochasticSampler(
-        model=model_fn,
-        num_steps=cfg.generation.sampler.num_steps,
+    # Noise scheduler
+    noise_scheduler = EDMNoiseScheduler(
         sigma_min=cfg.generation.sampler.sigma_min,
         sigma_max=cfg.generation.sampler.sigma_max,
+        sigma_data=cfg.noise_schedule.sigma_data,
     )
 
     # Wave operator for diffusion posterior sampling (DPS) based on PDE
-    # constraint
+    # constraint.  The wave equation is solved on the original PDE grid
+    # (``pde_resolution``) rather than on the model grid so that the
+    # observation operator is consistent with the training data pipeline:
+    #   training:  vel_orig -> PDE(vel_orig) -> seismic_orig -> norm -> interp
+    #   guidance:  vel_model -> interp_to_orig -> PDE -> seismic_orig -> norm -> interp
     def wave_operator(x: torch.Tensor) -> torch.Tensor:
-        def smooth_clamp(
-            x: torch.Tensor,
-            min_val: float,
-            max_val: float,
-        ) -> torch.Tensor:
-            x_scaled = torch.sigmoid(x)
-            return min_val + (max_val - min_val) * x_scaled
-
         # Unpack velocity model from latent state x
         B = x.shape[0]
         x_vars = torch.split(x, 1, dim=1)
@@ -189,43 +191,54 @@ def main(cfg: DictConfig) -> None:
         vs = stats_mean["vs"] + stats_std["vs"] * vs  # (B, H, W)
         rho = stats_mean["rho"] + stats_std["rho"] * rho  # (B, H, W)
 
-        # Apply smooth clamping to denormalized values if ranges are specified
+        # Clamp denormalized values to physical ranges if specified
         guidance_cfg = cfg.generation.sampler.physics_informed_guidance
         vp_range = getattr(guidance_cfg, "vp_range", None)
         if vp_range is not None:
-            vp_min, vp_max = list(vp_range)
-            vp = smooth_clamp(vp, vp_min, vp_max)
+            vp = torch.clamp(vp, min=vp_range[0], max=vp_range[1])
 
         vs_range = getattr(guidance_cfg, "vs_range", None)
         if vs_range is not None:
-            vs_min, vs_max = list(vs_range)
-            vs = smooth_clamp(vs, vs_min, vs_max)
+            vs = torch.clamp(vs, min=vs_range[0], max=vs_range[1])
 
         rho_range = getattr(guidance_cfg, "rho_range", None)
         if rho_range is not None:
-            rho_min, rho_max = list(rho_range)
-            rho = smooth_clamp(rho, rho_min, rho_max)
+            rho = torch.clamp(rho, min=rho_range[0], max=rho_range[1])
 
-        # Define geometry, sources and receivers
-        # NOTE: hard-coded resolution change from 70 to 80.
-        dx = 5.0 * 7 / 8
+        # Interpolate velocity model from model resolution to original PDE
+        # resolution so that the wave equation is solved on the same grid
+        # that was used to generate the training data.
+        pde_H, pde_W = list(guidance_cfg.pde_resolution)
+        pde_dx = guidance_cfg.pde_dx
+        vp = F.interpolate(
+            vp.unsqueeze(1), size=(pde_H, pde_W), mode="bilinear"
+        ).squeeze(1)
+        vs = F.interpolate(
+            vs.unsqueeze(1), size=(pde_H, pde_W), mode="bilinear"
+        ).squeeze(1)
+        rho = F.interpolate(
+            rho.unsqueeze(1), size=(pde_H, pde_W), mode="bilinear"
+        ).squeeze(1)
+
+        # Define geometry, sources and receivers on the original PDE grid
         nt = cfg.dataset.y_resolution[0]
         dt = 0.001
-        freq = cfg.generation.sampler.physics_informed_guidance.source_frequency
+        freq = guidance_cfg.source_frequency
         peak_time = 1.5 / freq
         n_shots = cfg.dataset.nb_shots
         source_depth = 1
         receiver_depth = 1
-        n_receivers_per_shot = cfg.dataset.y_resolution[1] - 1
+        n_receivers_per_shot = pde_W - 1
 
-        # Set sources and receivers
+        # Set sources evenly spaced on the original grid
         source_locations = torch.zeros(
             n_shots, 1, 2, dtype=torch.long, device=x.device
         )  # (Ns, 1, 2)
         source_locations[..., 0] = source_depth
-        # NOTE: hard-coded to go from 5 sources at 0, 17, 34, 51, 68 on a mesh
-        # of width 70, to 5 sources on a mesh of width 80.
-        source_locations[:, 0, 1] = torch.arange(n_shots) * 17 * 8 // 7
+        source_spacing = (pde_W - 2) // (n_shots - 1)
+        source_locations[:, 0, 1] = torch.arange(n_shots) * source_spacing
+
+        # Set receivers on the original grid
         receiver_locations = torch.zeros(
             n_shots, n_receivers_per_shot, 2, dtype=torch.long, device=x.device
         )  # (Ns, Nr, 2)
@@ -248,11 +261,11 @@ def main(cfg: DictConfig) -> None:
         vs = repeat(vs, "B H W -> (B Ns) H W", Ns=n_shots)
         rho = repeat(rho, "B H W -> (B Ns) H W", Ns=n_shots)
 
-        # Run the forward wave PDE
+        # Run the forward wave PDE at original resolution
         out = {}
         out["vz"], out["vx"] = deepwave.elastic(
             *deepwave.common.vpvsrho_to_lambmubuoyancy(vp, vs, rho),
-            grid_spacing=dx,
+            grid_spacing=pde_dx,
             dt=dt,
             source_amplitudes_y=source_amplitudes,
             source_amplitudes_x=source_amplitudes,
@@ -262,7 +275,7 @@ def main(cfg: DictConfig) -> None:
             receiver_locations_x=receiver_locations,
             pml_freq=freq,
             pml_width=[20, 20, 20, 20],
-        )[-2:]  # (B * Ns, Nr, Nt)
+        )[-2:]  # (B * Ns, Nr_orig, Nt)
 
         y: torch.Tensor = torch.cat(
             [
@@ -270,43 +283,31 @@ def main(cfg: DictConfig) -> None:
                 for var in list(cfg.dataset.y_vars)
             ],
             dim=1,
-        ).transpose(3, 2)  # (B, 2 * Ns, Nt, Nr)
+        ).transpose(3, 2)  # (B, C, Nt, Nr_orig)
 
-        # Pad to match target resolution
-        if y.shape[-1] != cfg.dataset.y_resolution[1]:
-            pad_r = cfg.dataset.y_resolution[1] - y.shape[-1]
-            y = torch.nn.functional.pad(y, pad=(0, pad_r))
+        # Z-score normalize to match the normalized conditioning data
+        y_vars = list(cfg.dataset.y_vars)
+        for idx, var in enumerate(y_vars):
+            ch_start = idx * n_shots
+            ch_end = (idx + 1) * n_shots
+            y[:, ch_start:ch_end] = (
+                y[:, ch_start:ch_end] - stats_mean[var]
+            ) / stats_std[var]
+
+        # Interpolate receiver dimension to model resolution, matching the
+        # bilinear interpolation applied to the training data
+        y = F.interpolate(
+            y,
+            size=(y.shape[2], cfg.dataset.y_resolution[1]),
+            mode="bilinear",
+        )
 
         return y
 
-    # DPS guidance based on the wave operator
-    physics_informed_guidance = ModelBasedGuidance(
-        guide_model=wave_operator,
-        std=cfg.generation.sampler.physics_informed_guidance.std,
-        gamma=cfg.generation.sampler.physics_informed_guidance.gamma,
-        scale=cfg.generation.sampler.physics_informed_guidance.scale,
-        power=cfg.generation.sampler.physics_informed_guidance.power,
-        norm_ord=cfg.generation.sampler.physics_informed_guidance.norm_ord,
-        magnitude_scaling=cfg.generation.sampler.physics_informed_guidance.magnitude_scaling,
-    )
-
-    # Add hook to perform score clipping if specified
-    if cfg.generation.sampler.physics_informed:
-        clip_range = getattr(
-            cfg.generation.sampler.physics_informed_guidance, "score_clip_range", None
-        )
-        if clip_range is not None:
-            clip_range = list(clip_range)
-
-            def score_clipping_hook(guidance, x, x_0_hat, sigma, y, log_p):
-                """Post-hook that applies clipping to the log-likelihood score."""
-                clip_min, clip_max = clip_range
-                return torch.clamp(log_p, min=clip_min, max=clip_max)
-
-            rank_zero_logger.info(
-                f"Registering score clipping hook with range {clip_range}"
-            )
-            physics_informed_guidance.register_score_post_hook(score_clipping_hook)
+    # Precompute timesteps for sampling
+    num_steps = cfg.generation.sampler.num_steps
+    t_steps = noise_scheduler.timesteps(num_steps, device=device)
+    spatial_shape = (len(cfg.dataset.x_vars), img_H, img_W)
 
     output_dir = Path(to_absolute_path(cfg.io.output_dir))
     rank_zero_logger.info(f"Starting generation, saving results to {output_dir}...")
@@ -323,17 +324,47 @@ def main(cfg: DictConfig) -> None:
             memory_format=torch.channels_last
         )  # (B, C_y, T, W)
 
-        # Generate ensemble predictions
-        if cfg.generation.sampler.physics_informed:
-            sampler_kwargs = {
-                "guidance": physics_informed_guidance,
-                "guidance_args": (y,),
-            }
-        else:
-            sampler_kwargs = {}
+        # x0-predictor closed over the conditioning y
+        def x0_predictor(x, t, _y=y):
+            return model(x, t, condition=_y[: x.shape[0]])
 
-        # NOTE: need intermediate grad computation when using physics-informed
-        # guidance, inference mode does not allow this
+        # Build denoiser: either plain or with DPS guidance
+        if cfg.generation.sampler.physics_informed:
+            guidance_cfg = cfg.generation.sampler.physics_informed_guidance
+            guidance = ModelConsistencyDPSGuidance(
+                observation_operator=wave_operator,
+                y=y,
+                std_y=guidance_cfg.std_y,
+                norm=guidance_cfg.norm,
+                gamma=guidance_cfg.gamma,
+                sigma_fn=noise_scheduler.sigma,
+                alpha_fn=noise_scheduler.alpha,
+            )
+
+            # Apply score clipping if specified
+            clip_range = getattr(guidance_cfg, "score_clip_range", None)
+            if clip_range is not None:
+                clip_range = list(clip_range)
+                rank_zero_logger.info(f"Using score clipping with range {clip_range}")
+                guidance = ClippedGuidance(guidance, clip_range[0], clip_range[1])
+
+            dps_score_predictor = DPSScorePredictor(
+                x0_predictor=x0_predictor,
+                x0_to_score_fn=noise_scheduler.x0_to_score,
+                guidances=guidance,
+            )
+            denoiser = noise_scheduler.get_denoiser(
+                score_predictor=dps_score_predictor,
+                denoising_type="ode",
+            )
+        else:
+            denoiser = noise_scheduler.get_denoiser(
+                x0_predictor=x0_predictor,
+                denoising_type="ode",
+            )
+
+        # Guidance requires intermediate grad computation; inference mode
+        # does not allow this
         torch_grad_ctx = (
             torch.no_grad
             if cfg.generation.sampler.physics_informed
@@ -341,15 +372,34 @@ def main(cfg: DictConfig) -> None:
         )
 
         with torch_grad_ctx():
-            x_pred_rank = generate(
-                sampler_fn=sampler,
-                x_channels=len(cfg.dataset.x_vars),
-                x_resolution=(img_H, img_W),
-                rank_batches=rank_batches,
-                cond={"y": y},
-                device=device,
-                sampler_kwargs=sampler_kwargs,
-            )
+            x_generated = []
+            for batch_seeds in rank_batches:
+                B = len(batch_seeds)
+                if B == 0:
+                    continue
+                seeds_list = (
+                    batch_seeds.tolist()
+                    if isinstance(batch_seeds, torch.Tensor)
+                    else list(batch_seeds)
+                )
+                rnd = StackedRandomGenerator(device, seeds_list)
+                x_T = (
+                    noise_scheduler.sigma(t_steps[0])
+                    * rnd.randn((B,) + spatial_shape, device=device)
+                ).to(memory_format=torch.channels_last)
+
+                x_0 = sample(
+                    denoiser=denoiser,
+                    xN=x_T,
+                    noise_scheduler=noise_scheduler,
+                    num_steps=num_steps,
+                    solver="heun",
+                    time_steps=t_steps,
+                )
+                x_generated.append(x_0)
+            if not x_generated:
+                continue
+            x_pred_rank = torch.cat(x_generated)
 
         # Gather predictions to rank 0
         x_pred = gather_tensors(x_pred_rank, dist)

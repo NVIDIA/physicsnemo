@@ -23,6 +23,8 @@ from physicsnemo.distributed import DistributedManager
 from omegaconf import DictConfig
 from physicsnemo.core import Module
 
+from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
+
 from datasets import dataset_classes
 from utils.io import (
     init_inference_results_zarr,
@@ -80,6 +82,13 @@ def main(cfg: DictConfig):
         regression_model = None
     net = Module.from_checkpoint(cfg.inference.diffusion_checkpoint)
     diffusion_model = net.to(device)
+
+    sa = dict(cfg.sampler.args)
+    sampling_scheduler = EDMNoiseScheduler(
+        sigma_min=sa.get("sigma_min", 0.002),
+        sigma_max=sa.get("sigma_max", 80.0),
+        rho=sa.get("rho", 7.0),
+    )
 
     # initialize zarr
     (
@@ -150,7 +159,8 @@ def main(cfg: DictConfig):
                 diffusion_model,
                 condition,
                 state_pred.shape,
-                sampler_args=dict(cfg.sampler.args),
+                scheduler=sampling_scheduler,
+                sampler_args=sa,
                 lead_time_label=lead_time_label,
             )
 

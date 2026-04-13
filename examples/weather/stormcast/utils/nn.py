@@ -14,22 +14,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any, Literal
 
-import numpy as np
 from tensordict import TensorDict
 import torch
 
+import importlib
+
 from physicsnemo.core import Module
 from physicsnemo.models.diffusion_unets import StormCastUNet
-from physicsnemo.diffusion.preconditioners import EDMPrecond, EDMPreconditioner
+from physicsnemo.diffusion.preconditioners import EDMPreconditioner
+from physicsnemo.diffusion.samplers import sample as diffusion_sample
 from physicsnemo.diffusion.utils import ConcatConditionWrapper
-
-# from physicsnemo.diffusion.samplers import deterministic_sampler
 from physicsnemo.models.dit import DiT
+from physicsnemo.diffusion.noise_schedulers import NoiseScheduler
 
-from utils.sampler import deterministic_sampler
 import utils.apex  # do not remove, enables Apex LayerNorm with ShardTensor
 
 
@@ -44,7 +44,7 @@ def get_preconditioned_unet(
     amp_mode: bool = False,
     use_apex_gn: bool = False,
     **model_kwargs,
-) -> EDMPrecond | StormCastUNet:
+) -> EDMPreconditioner | StormCastUNet:
     """
     Create a preconditioner-wrapped SongUNet network.
 
@@ -59,7 +59,7 @@ def get_preconditioned_unet(
         amp_mode: whether to use automatic mixed precision
         use_apex_gn: whether to use Apex GroupNorm
     Returns:
-        EDMPrecond or StormCastUNet: a wrapped torch module net(x+n, sigma, condition, class_labels) -> x
+        EDMPreconditioner or StormCastUNet: a wrapped torch module net(x+n, sigma, condition) -> x
     """
 
     if model_type is None:
@@ -82,10 +82,15 @@ def get_preconditioned_unet(
         lead_time_channels = 0
 
     if name == "diffusion":
-        return EDMPrecond(
-            img_channels=target_channels + conditional_channels + lead_time_channels,
+        unet_module = importlib.import_module("physicsnemo.models.diffusion_unets")
+        model_class = getattr(unet_module, model_params.pop("model_type"))
+        out_channels = model_params.pop("img_out_channels")
+        unet = model_class(
+            in_channels=target_channels + conditional_channels + lead_time_channels,
+            out_channels=out_channels,
             **model_params,
         )
+        return EDMPreconditioner(model=ConcatConditionWrapper(unet))
 
     elif name == "regression":
         return StormCastUNet(
@@ -126,7 +131,7 @@ def get_preconditioned_natten_dit(
         lead_time_steps: the number of possible lead time steps, if 0 lead time embedding will be disabled
         **model_kwargs: any additional parameters to the model
     Returns:
-        EDMPrecond or StormCastUNet: a wrapped torch module net(x+n, sigma, condition, class_labels) -> x
+        EDMPreconditioner: a wrapped torch module net(x+n, sigma, condition) -> x
     """
 
     condition_dim = scalar_condition_channels + lead_time_steps
@@ -257,30 +262,102 @@ def diffusion_model_forward(
     model: Module,
     condition: torch.Tensor,
     shape: Iterable[int],
-    dtype: torch.dtype,
-    device: torch.device,
+    scheduler: NoiseScheduler,
+    dtype: torch.dtype | None = None,
+    device: torch.device | None = None,
     lead_time_label: torch.Tensor | None = None,
     sampler_args: dict[str, Any] = {},
 ) -> torch.Tensor:
-    """Helper function to run diffusion model sampling"""
+    """Run diffusion model sampling using the ``physicsnemo.diffusion`` API.
 
-    # TODO: avoid creating full tensor here when sharding
-    latents = torch.randn(*shape, device=device, dtype=dtype)
+    Uses the provided noise scheduler for timestep generation and
+    :func:`~physicsnemo.diffusion.samplers.sample` for the reverse ODE
+    integration.
 
-    if not hasattr(model, "sigma_min"):
-        model.sigma_min = 0.0
-    if not hasattr(model, "sigma_max"):
-        model.sigma_max = np.inf
-    if not hasattr(model, "round_sigma"):
-        model.round_sigma = torch.as_tensor
+    For domain-parallel inference, pass a scheduler that has already been
+    wrapped with
+    :class:`~physicsnemo.diffusion.DomainParallelNoiseScheduler` (e.g.
+    via :meth:`~utils.parallel.ParallelHelper.make_domain_parallel_scheduler`).
 
-    return deterministic_sampler(
-        model,
-        latents=latents,
-        img_lr=condition,
-        lead_time_label=lead_time_label,
-        dtype=dtype,
-        **sampler_args,
+    Parameters
+    ----------
+    model : Module
+        Preconditioned diffusion model (``EDMPreconditioner``).
+    condition : torch.Tensor
+        Conditioning tensor for the model.
+    shape : Iterable[int]
+        Shape of the output tensor, e.g. ``(B, C, H, W)``.
+    scheduler : NoiseScheduler
+        Noise scheduler (e.g.
+        :class:`~physicsnemo.diffusion.noise_schedulers.EDMNoiseScheduler`).
+    dtype : torch.dtype, optional
+        Precision for ODE integration. Defaults to the condition tensor's dtype.
+    device : torch.device, optional
+        Device for latent generation. Defaults to the condition tensor's device.
+    lead_time_label : torch.Tensor | None
+        Lead-time labels forwarded to the model.
+    sampler_args : dict
+        Sampler configuration. Supported keys: ``num_steps``,
+        ``solver`` (``"heun"`` or ``"euler"``),
+        ``S_churn``, ``S_min``, ``S_max``, ``S_noise``.
+    """
+    if isinstance(condition, TensorDict):
+        ref_tensor = condition.get("cond_concat", condition.get("cond_vec"))
+        if ref_tensor is None:
+            raise ValueError(
+                "condition TensorDict must contain 'cond_concat' or 'cond_vec'"
+                "if a TensorDict is passed as condition."
+            )
+    else:
+        ref_tensor = condition
+    if dtype is None:
+        dtype = ref_tensor.dtype
+    if device is None:
+        device = ref_tensor.device
+
+    sa = sampler_args
+    num_steps = sa.get("num_steps", 18)
+    solver_name = sa.get("solver", "heun")
+    S_churn = float(sa.get("S_churn", 0))
+    S_min = float(sa.get("S_min", 0))
+    S_max = float(sa.get("S_max", float("inf")))
+    S_noise = float(sa.get("S_noise", 1))
+
+    B = shape[0]
+    t_steps = scheduler.timesteps(num_steps, device=device, dtype=dtype)
+    tN = t_steps[0].expand(B)
+    xN = scheduler.init_latents(tuple(shape[1:]), tN, device=device, dtype=dtype)
+
+    extra_kwargs: dict[str, Any] = {}
+    if lead_time_label is not None:
+        extra_kwargs["lead_time_label"] = lead_time_label
+
+    def x0_predictor(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return model(x, t, condition=condition, **extra_kwargs)
+
+    denoiser = scheduler.get_denoiser(x0_predictor=x0_predictor)
+
+    solver_options: dict[str, Any] | None = None
+    if S_churn > 0:
+        solver_name = (
+            "edm_stochastic_heun" if solver_name == "heun" else "edm_stochastic_euler"
+        )
+        solver_options = {
+            "S_churn": S_churn,
+            "S_min": S_min,
+            "S_max": S_max,
+            "S_noise": S_noise,
+            "num_steps": num_steps,
+        }
+
+    return diffusion_sample(
+        denoiser,
+        xN,
+        scheduler,
+        num_steps,
+        solver=solver_name,
+        solver_options=solver_options,
+        time_steps=t_steps,
     )
 
 

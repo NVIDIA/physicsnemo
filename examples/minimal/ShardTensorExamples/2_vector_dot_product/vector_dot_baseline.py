@@ -27,6 +27,9 @@ b = torch.randn(N, device=device)
 
 
 def f(a, b):
+    """
+    Dummy docstring for a trivial function
+    """
     # This is a truly non-local operation: full reduction is needed.
     return torch.dot(a, b)
 

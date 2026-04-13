@@ -14,34 +14,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import datetime
+import importlib.util
+import time
+from typing import Any, Dict
+
 import hydra
 import torch
 import wandb
-import importlib.util
-import time
-import datetime
-from typing import Any, Dict
-from omegaconf import DictConfig, OmegaConf
+from datasets.dataset import EFWIDatapipe
+from datasets.transforms import Interpolate, ZscoreNormalize
 from hydra.utils import to_absolute_path
+from omegaconf import DictConfig, OmegaConf
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from functools import partial
+from utils.nn import DiffusionFWINet
 
+from physicsnemo.diffusion.metrics.losses import MSEDSMLoss
+from physicsnemo.diffusion.noise_schedulers import EDMNoiseScheduler
+from physicsnemo.diffusion.preconditioners import EDMPreconditioner
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
-from physicsnemo.utils.logging.wandb import initialize_wandb
 from physicsnemo.utils import (
+    get_checkpoint_dir,
     load_checkpoint,
     save_checkpoint,
-    get_checkpoint_dir,
 )
-
-from datasets.dataset import EFWIDatapipe
-from utils.preconditioning import edm_precond
-from utils.nn import DiffusionFWINet
-from utils.metrics import EDMLoss
-from utils.diffusion import DiffusionAdapter
-from datasets.transforms import ZscoreNormalize, Interpolate
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils.logging.wandb import initialize_wandb
 
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config_train")
@@ -102,12 +101,10 @@ def main(cfg: DictConfig) -> None:
         unconditional=unconditional,
         **model_args,
     ).to(dist.device)
-    # Thin wrapper around the model_backbone to convert it into a conditional
-    # diffusion model compatible with EDM preconditioning and ResidualLoss
-    model = DiffusionAdapter(
-        model=model_arch,
-        args_map=("x", "sigma", {"y": "y"}),
-    )
+
+    # EDM preconditioning
+    sigma_data = cfg.noise_schedule.sigma_data
+    model = EDMPreconditioner(model_arch, sigma_data=sigma_data).to(dist.device)
 
     rank_zero_logger.info(
         f"Using model DiffusionFWINet with {model.num_parameters()} parameters."
@@ -118,7 +115,6 @@ def main(cfg: DictConfig) -> None:
 
     # Distributed learning (Data parallel)
     if dist.world_size > 1:
-        # Wrap the conditional model in DistributedDataParallel
         model = DistributedDataParallel(
             model,
             device_ids=[dist.local_rank],
@@ -127,8 +123,18 @@ def main(cfg: DictConfig) -> None:
             find_unused_parameters=dist.find_unused_parameters,
         )
 
-    # EDM preconditioning wrapper
-    model_fn = partial(edm_precond, model, sigma_data=0.5)
+    # Noise scheduler and loss function
+    noise_scheduler = EDMNoiseScheduler(
+        P_mean=cfg.noise_schedule.P_mean,
+        P_std=cfg.noise_schedule.P_std,
+        sigma_data=sigma_data,
+    )
+    loss_fn = MSEDSMLoss(
+        model=model,
+        noise_scheduler=noise_scheduler,
+        prediction_type="x0",
+        reduction="mean",
+    )
 
     # Initialize the training dataset
     train_dataset = EFWIDatapipe(
@@ -181,9 +187,6 @@ def main(cfg: DictConfig) -> None:
         dim=interp_dim,
         mode=interp_mode,
     )
-
-    # Loss
-    loss_fn = EDMLoss(P_mean=0.0, P_std=1.0, sigma_data=0.5)
 
     # Create optimizer
     optimizer_class = None
@@ -264,12 +267,7 @@ def main(cfg: DictConfig) -> None:
 
             optimizer.zero_grad(**({} if use_FusedAdam else {"set_to_none": True}))
 
-            loss = loss_fn(
-                model=model_fn,  # Use model_fn instead of model
-                x=x,
-                cond={"y": y},
-            )
-            loss = torch.mean(loss)
+            loss = loss_fn(x0=x, condition=y)
 
             epoch_loss += loss.item() * batch_size
 
@@ -317,9 +315,9 @@ def main(cfg: DictConfig) -> None:
         # Run validation
         model.eval()
         mean_val_loss = validation_step(
-            model_fn,
+            model,
+            noise_scheduler,
             val_dataset,
-            loss_fn,
             dist,
             cfg,
         )
@@ -359,10 +357,16 @@ def main(cfg: DictConfig) -> None:
 
 
 @torch.no_grad()
-def validation_step(model, dataset, loss_fn, dist, cfg):
+def validation_step(model, noise_scheduler, dataset, dist, cfg):
     """
     Perform validation on a dataset and return the average loss.
     """
+    val_loss_fn = MSEDSMLoss(
+        model=model,
+        noise_scheduler=noise_scheduler,
+        prediction_type="x0",
+        reduction="mean",
+    )
     loss_epoch = 0.0
     num_samples = 0.0
 
@@ -383,16 +387,10 @@ def validation_step(model, dataset, loss_fn, dist, cfg):
             ],
             dim=1,
         )
-
-        # Forward pass with validation data
-        loss = loss_fn(
-            model=model,
-            x=x,
-            cond={"y": y},
-        )
-        loss = torch.mean(loss)
-        loss_epoch += loss.item() * x.shape[0]
-        num_samples += x.shape[0]
+        batch_size = x.shape[0]
+        loss = val_loss_fn(x0=x, condition=y)
+        loss_epoch += loss.item() * batch_size
+        num_samples += batch_size
 
     # Average validation loss across all ranks
     mean_val_loss, num_samples_all_ranks = average_loss(dist, loss_epoch, num_samples)

@@ -173,7 +173,7 @@ pv_mesh = pv.examples.load_airplane()  # See pyvista.org for more datasets
 mesh = from_pyvista(pv_mesh)
 
 # Or, equivalently:
-from physicsnemo.mesh.examples.pyvista_datasets.airplane import load
+from physicsnemo.mesh.primitives.pyvista_datasets.airplane import load
 mesh = load()
 
 print(mesh)
@@ -450,8 +450,25 @@ Mesh(
 ```
 
 All data moves together with `.to("cuda")` or `.to("cpu")`. Expensive computations
-(centroids, normals, curvature) are automatically cached in the data dictionaries with
-keys starting with `_`.
+(centroids, normals, curvature) are lazily cached in a dedicated `_cache` TensorDict,
+separate from `point_data` / `cell_data` so user data is never mixed with internal
+cached geometry.
+
+### Dimension-Parametrized Types
+
+`Mesh` supports subscript notation `Mesh[manifold_dims, spatial_dims]` for type
+annotations and runtime `isinstance` checks:
+
+```python
+def compute_normals(mesh: Mesh[2, 3]) -> torch.Tensor:
+    ...  # accepts only triangle meshes in 3D
+
+isinstance(mesh, Mesh[2, 3])    # True for triangles in 3D
+isinstance(mesh, Mesh[1, ...])  # True for any edge mesh
+Mesh[2, 3].boundary             # -> Mesh[1, 3]
+```
+
+Use `...` (Ellipsis) to leave a dimension unconstrained.
 
 ---
 
