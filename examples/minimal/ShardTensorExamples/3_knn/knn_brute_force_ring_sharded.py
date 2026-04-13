@@ -48,6 +48,25 @@ b = torch.randn(N_target_points, 3, device=device)
 
 
 def knn(x, y, n):
+    """Brute-force k-nearest-neighbors search.
+
+    For every point in ``y``, finds the ``n`` closest points in ``x`` by
+    computing all pairwise Euclidean distances and selecting the smallest.
+
+    When called with :class:`ShardTensor` inputs, PyTorch's
+    ``__torch_function__`` dispatch routes the call to the registered
+    ``knn_ring`` handler instead.
+
+    Args:
+        x: Reference point cloud, shape ``(M, D)``.
+        y: Query point cloud, shape ``(N, D)``.
+        n: Number of nearest neighbors to return per query point.
+
+    Returns:
+        Tuple of (neighbors, distances) where:
+        - neighbors: Coordinates of the nearest points, shape ``(N, n, D)``.
+        - distances: Euclidean distances to those points, shape ``(N, n)``.
+    """
     # This is to enable torch to track this knn function and route it correctly in ShardTensor:
     if has_torch_function((x, y)):
         return handle_torch_function(knn, (x, y), x, y, n)
@@ -94,10 +113,29 @@ b_sharded = scatter_tensor(tensor=b, global_src=0, mesh=mesh, placements=placeme
 
 
 def knn_ring(func, types, args, kwargs):
-    # Wrapper to intercept knn and compute it in a ring.
-    # Never fully realizes the distance product.
+    """Ring-parallel ``__torch_function__`` handler for :func:`knn`.
+
+    Instead of materializing the full ``(M, N)`` distance matrix, each rank
+    holds only its local shard of ``x``.  The ``y`` shards are rotated around
+    the ring so every rank computes partial kNN results against each ``y``
+    chunk, merging top-k candidates incrementally.  The final result is
+    returned as a :class:`ShardTensor` with the same placement as ``y``.
+
+    Args:
+        func: The original :func:`knn` callable.
+        types: Tensor subclass types involved (unused, required by protocol).
+        args: Positional args forwarded from the dispatch (x, y, n).
+        kwargs: Keyword args forwarded from the dispatch.
+
+    Returns:
+        Tuple of (neighbors, distances) as :class:`ShardTensor` objects,
+        sharded consistently with the input ``y``.
+    """
 
     def extract_args(x, y, n, *args, **kwargs):
+        """
+        Pass through for argument extraction
+        """
         return x, y, n
 
     x, y, n = extract_args(*args, **kwargs)

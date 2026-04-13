@@ -15,6 +15,7 @@
 # limitations under the License.
 
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 import torch
@@ -233,10 +234,94 @@ class DomainMesh:
             ...
 
         def clone(self) -> Self:
-            """Return a shallow clone of this DomainMesh.
+            """Return a deep clone of this DomainMesh.
 
-            All tensor storage is shared with the original; metadata and
-            TensorDict structure are independent copies.
+            All tensors are copied (independent storage); the clone can
+            be modified without affecting the original.
+            """
+            ...
+
+        def save(
+            self,
+            prefix: str | Path | None = None,
+            copy_existing: bool = False,
+            *,
+            num_threads: int = 0,
+            return_early: bool = False,
+            share_non_tensor: bool = False,
+        ) -> Self:
+            """Save the domain mesh to disk as memory-mapped tensors.
+
+            Writes ``interior``, all ``boundaries``, and ``global_data``
+            to a directory tree of ``.memmap`` files.  Proxy for the
+            tensorclass ``memmap()`` method.
+
+            This is the recommended serialization method. Compared to
+            ``torch.save`` (pickle-based), memmap serialization is
+            faster (parallel I/O across files), safer (no arbitrary code
+            execution on load), and supports partial loading.
+
+            Parameters
+            ----------
+            prefix : str, Path, or None
+                Directory path where the memory-mapped files will be
+                written.  If ``None``, a temporary directory is used.
+            copy_existing : bool
+                If ``True``, copy tensors that are already memory-mapped
+                to the new location.
+            num_threads : int
+                Number of threads for parallel I/O (0 = sequential).
+            return_early : bool
+                If ``True``, return before all data is flushed to disk.
+            share_non_tensor : bool
+                If ``True``, share non-tensor data across processes.
+
+            Returns
+            -------
+            DomainMesh
+                A new DomainMesh backed by the on-disk memory-mapped
+                storage.
+
+            Examples
+            --------
+            >>> dm.save("/path/to/domain_mesh")  # doctest: +SKIP
+            >>> reloaded = DomainMesh.load("/path/to/domain_mesh")  # doctest: +SKIP
+            """
+            ...
+
+        @classmethod
+        def load(
+            cls,
+            prefix: str | Path,
+            device: torch.device | None = None,
+            non_blocking: bool = False,
+        ) -> Self:
+            """Load a previously saved domain mesh from disk.
+
+            Reads a directory tree of memory-mapped tensors written by
+            :meth:`save` and reconstructs the ``DomainMesh`` instance,
+            including the ``interior`` mesh, all ``boundaries``, and
+            ``global_data``.  Proxy for the tensorclass
+            ``load_memmap()`` class method.
+
+            Parameters
+            ----------
+            prefix : str or Path
+                Path to the directory created by :meth:`save`.
+            device : torch.device or None
+                If provided, move all tensors to this device after
+                loading.
+            non_blocking : bool
+                Whether device transfers should be non-blocking.
+
+            Returns
+            -------
+            DomainMesh
+                The reconstructed DomainMesh instance.
+
+            Examples
+            --------
+            >>> dm = DomainMesh.load("/path/to/domain_mesh")  # doctest: +SKIP
             """
             ...
 
