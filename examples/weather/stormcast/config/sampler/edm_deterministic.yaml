@@ -14,9 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Sampler args 
-# Below are passed as kwargs to physicsnemo.utils.diffusion.determinisitic_sampler
-# Also supports stochastic sampling via S_churn and related args.
+# Sampler args for physicsnemo.diffusion.samplers.sample
+# Uses EDMNoiseScheduler for timestep generation and Heun solver for ODE integration.
+# Set S_churn > 0 for stochastic sampling (EDMStochasticHeunSolver).
 # See EDM paper for details (https://arxiv.org/abs/2206.00364)
 
 name: 'EDM Deterministic'
@@ -25,6 +25,7 @@ args:
   sigma_min: 0.002
   sigma_max: 800
   rho: 7
+  solver: heun  # "heun" (2nd order) or "euler" (1st order, faster)
   S_churn: 0.
   S_min: 0.
   S_max: .inf

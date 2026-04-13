@@ -26,6 +26,9 @@ and benchmark computational speed and memory usage.  Shows the differences in
 the training script for a single-GPU, 1D (DDP) and 2D (ShardTensor + FSDP)
 parallelism.
 
+6. Ring Attention - Benchmark and scale the attention operation with ShardTensor,
+using the RingAttention mechanism.
+
 ## Resources
 
 Learn more about the tools used in these examples:

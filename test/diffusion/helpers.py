@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Helper functions for diffusion tests."""
+"""Helper functions and shared test models for diffusion tests."""
 
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
@@ -23,9 +23,58 @@ import torch
 from tensordict import TensorDict
 
 import physicsnemo.core
+from physicsnemo.core import Module
 
 # Directory for test reference data
 DATA_DIR = Path(__file__).parent / "data"
+
+
+# =============================================================================
+# Shared Test Model Definitions
+# =============================================================================
+
+
+class FlatLinearX0Predictor(Module):
+    """Minimal x0-predictor using a linear layer with flatten/reshape.
+
+    Flattens all non-batch dimensions, applies a linear layer, and reshapes
+    back. Suitable for any input shape (1D spatial, 2D spatial, flat, etc.).
+    """
+
+    def __init__(self, features: int):
+        super().__init__()
+        self.net = torch.nn.Linear(features, features)
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+        shape = x.shape
+        flat = x.view(x.shape[0], -1)
+        out = self.net(flat).view(shape)
+        t_bc = t.view(-1, *([1] * (x.ndim - 1)))
+        return out / (1 + t_bc)
+
+
+class Conv2dX0Predictor(Module):
+    """Minimal x0-predictor using Conv2d for 4D (B, C, H, W) input."""
+
+    def __init__(self, channels: int = 3):
+        super().__init__()
+        self.net = torch.nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+        t_bc = t.view(-1, 1, 1, 1)
+        return self.net(x) / (1 + t_bc)
+
+
+class Conv3dX0Predictor(Module):
+    """Minimal x0-predictor using Conv3d for 5D (B, C, D, H, W) input."""
+
+    def __init__(self, channels: int = 2):
+        super().__init__()
+        self.net = torch.nn.Conv3d(channels, channels, kernel_size=3, padding=1)
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+        t_bc = t.view(-1, 1, 1, 1, 1)
+        return self.net(x) / (1 + t_bc)
 
 
 def make_input(
@@ -206,6 +255,64 @@ def load_or_create_checkpoint(
         return model
     else:
         return physicsnemo.core.Module.from_checkpoint(str(checkpoint_path))
+
+
+def gpu_rng_roundtrip(
+    fn: Callable[[], torch.Tensor],
+    seed: int,
+    device: str,
+    atol: float = 1e-2,
+    rtol: float = 5e-2,
+) -> torch.Tensor:
+    """
+    Verify RNG-dependent function reproducibility on GPU via seed-roundtrip.
+
+    Performs a three-step test:
+    1. Seed RNG, call fn -> result_a
+    2. Call fn again (no re-seed) -> result_b, assert result_a != result_b
+    3. Re-seed with same seed, call fn -> result_c, assert result_a == result_c
+
+    Parameters
+    ----------
+    fn : Callable[[], torch.Tensor]
+        Zero-argument callable that internally uses random number generation.
+    seed : int
+        Random seed to use for reproducibility.
+    device : str
+        Device string (e.g. "cuda:0").
+    atol : float
+        Absolute tolerance for the allclose comparison.
+    rtol : float
+        Relative tolerance for the allclose comparison.
+
+    Returns
+    -------
+    torch.Tensor
+        The result from step 1 (result_a).
+    """
+    torch.manual_seed(seed)
+    if "cuda" in device and torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    result_a = fn()
+
+    result_b = fn()
+    assert not torch.allclose(result_a, result_b, atol=atol, rtol=rtol), (
+        "Second call without re-seeding should produce different results"
+    )
+
+    torch.manual_seed(seed)
+    if "cuda" in device and torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    result_c = fn()
+    torch.testing.assert_close(
+        result_a,
+        result_c,
+        atol=atol,
+        rtol=rtol,
+        msg="Re-seeded call should reproduce the first result",
+    )
+
+    return result_a
 
 
 def compare_outputs(

@@ -23,15 +23,13 @@ from jaxtyping import Float
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.models.dit.conditioning_embedders import (
+from physicsnemo.nn import (
     ConditioningEmbedder,
     ConditioningEmbedderType,
-    get_conditioning_embedder,
-)
-from physicsnemo.models.dit.layers import (
     DetokenizerModuleBase,
     DiTBlock,
     TokenizerModuleBase,
+    get_conditioning_embedder,
     get_detokenizer,
     get_tokenizer,
 )
@@ -70,10 +68,10 @@ class DiT(Module):
         If a tuple is provided, a multi-dimensional patch is assumed.
     tokenizer : Union[Literal["patch_embed_2d", "hpx_patch_embed"], Module], optional, default="patch_embed_2d"
         The tokenizer to use. Either a string in ``{"patch_embed_2d", "hpx_patch_embed"}`` or an instantiated PhysicsNeMo :class:`~physicsnemo.core.Module` implementing
-        :class:`~physicsnemo.models.dit.layers.TokenizerModuleBase`, with forward accepting input of shape :math:`(B, C, *\text{spatial\_dims})` and returning :math:`(B, L, D)`.
+        :class:`~physicsnemo.nn.TokenizerModuleBase`, with forward accepting input of shape :math:`(B, C, *\text{spatial\_dims})` and returning :math:`(B, L, D)`.
     detokenizer : Union[Literal["proj_reshape_2d", "hpx_patch_detokenizer"], Module], optional, default="proj_reshape_2d"
         The detokenizer to use. Either a string in ``{"proj_reshape_2d", "hpx_patch_detokenizer"}`` or an instantiated PhysicsNeMo :class:`~physicsnemo.core.Module` implementing
-        :class:`~physicsnemo.models.dit.layers.DetokenizerModuleBase`, with forward accepting :math:`(B, L, D)` and :math:`(B, D)` and returning :math:`(B, C, *\text{spatial\_dims})`.
+        :class:`~physicsnemo.nn.DetokenizerModuleBase`, with forward accepting :math:`(B, L, D)` and :math:`(B, D)` and returning :math:`(B, C, *\text{spatial\_dims})`.
     out_channels : Union[None, int], optional, default=None
         The number of output channels. If ``None``, set to ``in_channels``.
     hidden_size : int, optional, default=384
@@ -85,15 +83,15 @@ class DiT(Module):
     mlp_ratio : float, optional, default=4.0
         The ratio of the MLP hidden dimension to the embedding dimension.
     attention_backend : Literal["timm", "transformer_engine", "natten2d"], optional, default="timm"
-        The attention backend to use. See :class:`~physicsnemo.models.dit.layers.DiTBlock` for a description of each built-in backend.
+        The attention backend to use. See :class:`~physicsnemo.nn.DiTBlock` for a description of each built-in backend.
     layernorm_backend : Literal["apex", "torch"], optional, default="torch"
-        If ``"apex"``, uses FusedLayerNorm from apex. If ``"torch"``, uses :class:`torch.nn.LayerNorm`. Also passed to :class:`~physicsnemo.models.dit.layers.Natten2DSelfAttention` when ``qk_norm=True``.
+        If ``"apex"``, uses FusedLayerNorm from apex. If ``"torch"``, uses :class:`torch.nn.LayerNorm`. Also passed to :class:`~physicsnemo.nn.Natten2DSelfAttention` when ``qk_norm=True``.
     condition_dim : int, optional, default=None
         Dimensionality of conditioning. If ``None``, the model is unconditional.
     dit_initialization : bool, optional, default=True
         If ``True``, applies DiT-specific initialization.
     conditioning_embedder : Literal["dit", "edm", "zero"] or ConditioningEmbedder, optional, default="dit"
-        The conditioning embedder type or an instantiated :class:`~physicsnemo.models.dit.conditioning_embedders.ConditioningEmbedder`.
+        The conditioning embedder type or an instantiated :class:`~physicsnemo.nn.ConditioningEmbedder`.
     conditioning_embedder_kwargs : Dict[str, Any], optional, default={}
         Additional keyword arguments for the conditioning embedder.
     tokenizer_kwargs : Dict[str, Any], optional, default={}
@@ -276,7 +274,7 @@ class DiT(Module):
         else:
             if not isinstance(tokenizer, TokenizerModuleBase):
                 raise TypeError(
-                    "tokenizer must be a string or a physicsnemo.core.Module instance subclassing physicsnemo.models.dit.layers.TokenizerModuleBase"
+                    "tokenizer must be a string or a physicsnemo.core.Module instance subclassing physicsnemo.nn.TokenizerModuleBase"
                 )
             self.tokenizer = tokenizer
 
@@ -310,7 +308,7 @@ class DiT(Module):
         else:
             if not isinstance(detokenizer, DetokenizerModuleBase):
                 raise TypeError(
-                    "detokenizer must be a string or a physicsnemo.core.Module instance subclassing physicsnemo.models.dit.layers.DetokenizerModuleBase"
+                    "detokenizer must be a string or a physicsnemo.core.Module instance subclassing physicsnemo.nn.DetokenizerModuleBase"
                 )
             self.detokenizer = detokenizer
 

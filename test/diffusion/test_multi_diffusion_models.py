@@ -46,7 +46,7 @@ class UnconditionalConv(Module):
 
     def __init__(self, channels: int = 3):
         super().__init__()
-        self.net = torch.nn.Conv2d(channels, channels, kernel_size=1)
+        self.net = torch.nn.Conv2d(channels, channels, kernel_size=3, padding=1)
 
     def forward(self, x, t, condition=None, **kwargs: Any):
         return self.net(x) + t.view(-1, 1, 1, 1)
@@ -57,7 +57,7 @@ class ConditionalConv(Module):
 
     def __init__(self, in_channels: int = 6, out_channels: int = 3):
         super().__init__()
-        self.net = torch.nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        self.net = torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
 
     def forward(self, x, t, condition=None, **kwargs: Any):
         img = condition["image"]
@@ -69,7 +69,7 @@ class VecImgCondConv(Module):
 
     def __init__(self, img_channels: int = 6, out_channels: int = 3, vec_dim: int = 5):
         super().__init__()
-        self.net = torch.nn.Conv2d(img_channels, out_channels, kernel_size=1)
+        self.net = torch.nn.Conv2d(img_channels, out_channels, kernel_size=3, padding=1)
         self.vec_proj = torch.nn.Linear(vec_dim, out_channels)
 
     def forward(self, x, t, condition=None, **kwargs: Any):
@@ -84,7 +84,7 @@ class PosEmbdConv(Module):
 
     def __init__(self, in_channels: int = 10, out_channels: int = 3):
         super().__init__()
-        self.net = torch.nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        self.net = torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
 
     def forward(self, x, t, condition=None, **kwargs: Any):
         img = condition["image"]

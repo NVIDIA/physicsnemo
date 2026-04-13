@@ -19,7 +19,13 @@ import torch
 from model import HybridViT
 
 # from baseline_model import HybridViT
-from utils import parse_args, print_and_save_results, end_to_end_benchmark
+from utils import (
+    parse_args,
+    print_and_save_results,
+    get_csv_filename,
+    save_result_incremental,
+    end_to_end_benchmark,
+)
 
 from physicsnemo.distributed import DistributedManager
 
@@ -39,6 +45,16 @@ from torch.distributed.tensor.placement_types import (  # noqa: E402
 
 
 def partition_model(name, submodule, device_mesh):
+    """Partition a model submodule's positional embeddings across a device mesh.
+
+    Callback for ``distribute_module`` that replaces any ``pos_embed``
+    parameter with a :class:`ShardTensor` sharded along dimension 1.
+
+    Args:
+        name: Fully-qualified name of the submodule within the parent model.
+        submodule: The :class:`torch.nn.Module` whose parameters will be inspected.
+        device_mesh: The :class:`DeviceMesh` over which tensors are distributed.
+    """
     for key, param in submodule._parameters.items():
         if "pos_embed" in key:
             # Replace the pos_embed with a scattered ShardTensor
@@ -73,7 +89,7 @@ def main():
         image_sizes = list(
             range(
                 args.image_size_start,
-                min(args.image_size_stop + 1, 513),
+                args.image_size_stop + 1,
                 args.image_size_step,
             )
         )
@@ -116,6 +132,9 @@ def main():
 
     ddp_size = args.ddp_size
     domain_size = args.domain_size
+
+    # Set up incremental CSV output
+    csv_filename = get_csv_filename(args, precision_mode)
 
     for img_size in image_sizes:
         if dm.rank == 0:
@@ -196,13 +215,13 @@ def main():
                     sync_module_states=True,
                 )
 
-        results.append(
-            end_to_end_benchmark(
-                args, model, (x, target), full_img_size, device, num_classes
-            )
+        result = end_to_end_benchmark(
+            args, model, (x, target), full_img_size, device, num_classes
         )
+        results.append(result)
 
         if dm.rank == 0:
+            save_result_incremental(csv_filename, result, args, dm.world_size)
             print(f"Completed image size: {img_size}x{img_size}")
 
     if dm.rank == 0:

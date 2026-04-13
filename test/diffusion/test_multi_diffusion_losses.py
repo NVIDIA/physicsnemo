@@ -212,8 +212,6 @@ class TestMSEDSMLossNonRegression:
         patch_shape,
         tag,
     ):
-        torch._dynamo.config.error_on_recompile = True
-
         md = _create_md_model(config_name, img_shape=img_shape).to(device)
         md.set_random_patching(patch_shape=patch_shape, patch_num=PATCH_NUM)
         scheduler = EDMNoiseScheduler()
@@ -281,8 +279,6 @@ class TestWeightedMSEDSMLossNonRegression:
         patch_shape,
         tag,
     ):
-        torch._dynamo.config.error_on_recompile = True
-
         md = _create_md_model(config_name, img_shape=img_shape).to(device)
         md.set_random_patching(patch_shape=patch_shape, patch_num=PATCH_NUM)
         scheduler = EDMNoiseScheduler()
@@ -323,3 +319,101 @@ class TestWeightedMSEDSMLossNonRegression:
             compare_outputs(losses[1], ref["loss_1"], **tolerances)
             compare_outputs(params[0], ref["param_0"], **tolerances)
             compare_outputs(params[1], ref["param_1"], **tolerances)
+
+
+# =============================================================================
+# Compile Tests
+# =============================================================================
+
+# The multi-diffusion losses manage their own internal compilation via
+# _CompiledPatchX (lru_cache + torch.compile on patch_x). They cannot be
+# wrapped in an outer torch.compile due to nested compilation + lru_cache
+# conflicts. These tests verify that the internal compilation works correctly:
+# the loss is called twice with error_on_recompile to ensure the internally
+# compiled patch_x graph is reused across calls and patch resets.
+
+COMPILE_LOSS_CONFIGS = [
+    ("uncond", "x0", (IMG_H, IMG_W), PATCH_SHAPE, "uncond_x0_sq"),
+    ("cond_patch", "x0", (IMG_H, IMG_W), PATCH_SHAPE, "cond_patch_x0_sq"),
+    ("uncond", "score", (IMG_H, IMG_W), PATCH_SHAPE, "uncond_score_sq"),
+]
+
+
+@pytest.mark.parametrize(
+    "config_name,prediction_type,img_shape,patch_shape,tag",
+    COMPILE_LOSS_CONFIGS,
+    ids=[c[4] for c in COMPILE_LOSS_CONFIGS],
+)
+class TestMSEDSMLossCompile:
+    """Verify internal _CompiledPatchX compilation is reused across calls."""
+
+    def test_internal_compile_no_recompile(
+        self,
+        deterministic_settings,
+        device,
+        config_name,
+        prediction_type,
+        img_shape,
+        patch_shape,
+        tag,
+    ):
+        """The internally compiled patch_x graph is reused across patch resets."""
+        torch._dynamo.config.error_on_recompile = True
+
+        md = _create_md_model(config_name, img_shape=img_shape).to(device)
+        md.set_random_patching(patch_shape=patch_shape, patch_num=PATCH_NUM)
+        scheduler = EDMNoiseScheduler()
+        loss_fn = _make_loss(md, scheduler, prediction_type)
+
+        H, W = img_shape
+        x0 = make_input((BATCH, CHANNELS, H, W), seed=GLOBAL_SEED, device=device)
+        condition = _make_condition(config_name, img_shape=img_shape, device=device)
+
+        # First call — triggers internal _CompiledPatchX compilation
+        loss_1 = loss_fn(x0, condition=condition)
+        assert loss_1.ndim == 0 and torch.isfinite(loss_1)
+
+        # Second call — patch indices reset internally, compiled graph must be reused
+        loss_2 = loss_fn(x0, condition=condition)
+        assert loss_2.ndim == 0 and torch.isfinite(loss_2)
+
+
+@pytest.mark.parametrize(
+    "config_name,prediction_type,img_shape,patch_shape,tag",
+    COMPILE_LOSS_CONFIGS,
+    ids=[c[4] for c in COMPILE_LOSS_CONFIGS],
+)
+class TestWeightedMSEDSMLossCompile:
+    """Verify internal _CompiledPatchX compilation is reused across calls."""
+
+    def test_internal_compile_no_recompile(
+        self,
+        deterministic_settings,
+        device,
+        config_name,
+        prediction_type,
+        img_shape,
+        patch_shape,
+        tag,
+    ):
+        """The internally compiled patch_x graph is reused across patch resets."""
+        torch._dynamo.config.error_on_recompile = True
+
+        md = _create_md_model(config_name, img_shape=img_shape).to(device)
+        md.set_random_patching(patch_shape=patch_shape, patch_num=PATCH_NUM)
+        scheduler = EDMNoiseScheduler()
+        loss_fn = _make_weighted_loss(md, scheduler, prediction_type)
+
+        H, W = img_shape
+        x0 = make_input((BATCH, CHANNELS, H, W), seed=GLOBAL_SEED, device=device)
+        weight = torch.ones_like(x0)
+        weight[:, :, :, : W // 2] = 0.0
+        condition = _make_condition(config_name, img_shape=img_shape, device=device)
+
+        # First call — triggers internal _CompiledPatchX compilation
+        loss_1 = loss_fn(x0, weight=weight, condition=condition)
+        assert loss_1.ndim == 0 and torch.isfinite(loss_1)
+
+        # Second call — patch indices reset internally, compiled graph must be reused
+        loss_2 = loss_fn(x0, weight=weight, condition=condition)
+        assert loss_2.ndim == 0 and torch.isfinite(loss_2)

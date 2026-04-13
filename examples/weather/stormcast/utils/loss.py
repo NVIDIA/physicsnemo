@@ -15,242 +15,129 @@
 # limitations under the License.
 
 
-"""Loss functions used in the paper
-"Elucidating the Design Space of Diffusion-Based Generative Models"."""
+"""Loss functions for StormCast training.
 
-from typing import Callable
+Diffusion training uses :class:`~physicsnemo.diffusion.metrics.losses.MSEDSMLoss`
+with an :class:`~physicsnemo.diffusion.noise_schedulers.EDMNoiseScheduler` or
+:class:`~physicsnemo.diffusion.noise_schedulers.EDMLogUniformNoiseScheduler`.
+When domain parallelism is active, the caller wraps the scheduler with
+:class:`~physicsnemo.diffusion.DomainParallelNoiseScheduler` (via
+:meth:`~utils.parallel.ParallelHelper.make_domain_parallel_scheduler`) before
+passing it to the loss so that sampled sigmas are broadcast across spatial
+shards.
+"""
+
+from collections.abc import Sequence
 
 import numpy as np
 import torch
-from torch.distributed.tensor.placement_types import Replicate
+
+from physicsnemo.diffusion.noise_schedulers import (
+    EDMLogUniformNoiseScheduler,
+    EDMNoiseScheduler,
+)
 
 
-from physicsnemo.domain_parallel.shard_tensor import scatter_tensor
-
-
-class EDMLoss:
-    """
-    Loss function proposed in the EDM paper.
+def build_noise_scheduler(
+    loss_cfg,
+    logger=None,
+) -> EDMNoiseScheduler:
+    """Create an :class:`~physicsnemo.diffusion.noise_schedulers.EDMNoiseScheduler` from Hydra loss config.
 
     Parameters
     ----------
-    P_mean: float, optional
-        Mean value for `sigma` computation, by default -1.2.
-    P_std: float, optional:
-        Standard deviation for `sigma` computation, by default 1.2.
-    sigma_data: float | torch.Tensor, optional
-        Standard deviation for data, by default 0.5. Can also be a tensor; to use
-        per-channel sigma_data, pass a tensor of shape (1, number_of_channels, 1, 1).
+    loss_cfg : object
+        Loss config with ``sigma_distribution``, ``sigma_data``, and
+        distribution-specific params (``P_mean``/``P_std`` or
+        ``sigma_min``/``sigma_max``).
+    logger : optional
+        Logger for informational messages.
 
-    Note
-    ----
-    Reference: Karras, T., Aittala, M., Aila, T. and Laine, S., 2022. Elucidating the
-    design space of diffusion-based generative models. Advances in Neural Information
-    Processing Systems, 35, pp.26565-26577.
+    Returns
+    -------
+    EDMNoiseScheduler
+    """
+    sigma_data = loss_cfg.sigma_data
+    if isinstance(sigma_data, Sequence):
+        sigma_data = list(sigma_data)
+        if logger:
+            logger.info(
+                f"Per-channel sigma_data detected ({len(sigma_data)} channels)."
+            )
+    else:
+        sigma_data = float(sigma_data)
+
+    sigma_dist = loss_cfg.sigma_distribution
+    if sigma_dist == "lognormal":
+        return EDMNoiseScheduler(
+            sigma_data=sigma_data,
+            P_mean=loss_cfg.P_mean,
+            P_std=loss_cfg.P_std,
+        )
+    elif sigma_dist == "loguniform":
+        return EDMLogUniformNoiseScheduler(
+            sigma_min=loss_cfg.sigma_min,
+            sigma_max=loss_cfg.sigma_max,
+            sigma_data=sigma_data,
+        )
+    else:
+        raise ValueError(
+            "training.loss.sigma_distribution must be 'lognormal' or 'loguniform'"
+        )
+
+
+class RegressionLoss:
+    """MSE loss for a regression model.
+
+    Holds a reference to the model so that the call signature mirrors
+    :class:`~physicsnemo.diffusion.metrics.losses.WeightedMSEDSMLoss`:
+    ``loss_fn(x0, weight, condition=..., **kwargs)``.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Regression network (e.g. ``StormCastUNet``).
     """
 
-    def __init__(
-        self,
-        P_mean: float = -1.2,
-        P_std: float = 1.2,
-        sigma_data: float | torch.Tensor = 0.5,
-        sigma_source_rank: int | None = None,
-    ):
-        self.P_mean = P_mean
-        self.P_std = P_std
-        self.sigma_data = sigma_data
-        self.sigma_source_rank = sigma_source_rank
-
-    def get_noise_level(self, y: torch.Tensor) -> torch.Tensor:
-        """Sample the sigma noise parameter for each sample."""
-        shape = (y.shape[0], 1, 1, 1)
-        rnd_normal = torch.randn(shape, device=y.device)
-        sigma = (rnd_normal * self.P_std + self.P_mean).exp()
-        return sigma
-
-    def get_loss_weight(self, y: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
-        """Compute loss weight for each sample."""
-        weight = (sigma**2 + self.sigma_data**2) / (sigma * self.sigma_data) ** 2
-        return weight
-
-    def sample_noise(self, y: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
-        """Sample the noise."""
-        return torch.randn_like(y) * sigma
-
-    def replicate_in_mesh(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        if (hasattr(y, "_local_tensor") or hasattr(y, "placements")) and hasattr(
-            y, "device_mesh"
-        ):
-            # y is sharded - need to replicate sigma to be compatible with DTensor operations
-            # Get the source rank for replication
-            # Replicate sigma across the domain mesh
-            # This ensures all spatial shards see the same sigma values
-            x = scatter_tensor(
-                x,
-                self.sigma_source_rank,
-                y.device_mesh,
-                placements=(Replicate(),),
-                global_shape=x.shape,
-                dtype=x.dtype,
-            )
-        return x
+    def __init__(self, model: torch.nn.Module) -> None:
+        self.model = model
 
     def __call__(
         self,
-        net: torch.nn.Module,
-        images: torch.Tensor,
-        condition: torch.Tensor | None = None,
-        labels: torch.Tensor | None = None,
-        augment_pipe: Callable | None = None,
+        x0: torch.Tensor,
+        weight: torch.Tensor,
+        *,
+        condition: torch.Tensor,
         lead_time_label: torch.Tensor | None = None,
-        return_sigma: bool = False,
     ) -> torch.Tensor:
-        """
-        Calculate and return the loss corresponding to the EDM formulation.
+        """Compute per-pixel squared error, optionally weighted.
 
-        The method adds random noise to the input images and calculates the loss as the
-        square difference between the network's predictions and the input images.
-        The noise level is determined by 'sigma', which is drawn from the `get_noise_level`
-        function. The calculated loss is weighted as a function of 'sigma' and 'sigma_data'.
-
-        Parameters:
+        Parameters
         ----------
-        net: torch.nn.Module
-            The neural network model that will make predictions.
+        x0 : torch.Tensor
+            Target data, shape ``[B, C, H, W]``.
+        weight : torch.Tensor
+            Per-element weight broadcastable to ``x0`` shape.
+        condition : torch.Tensor
+            Model input, shape ``[B, C_cond, H, W]``.
+        lead_time_label : torch.Tensor | None
+            Optional lead-time label, shape ``(B,)``.
 
-        images: torch.Tensor
-            Input images to the neural network.
-
-        condition: torch.Tensor
-            Condition to be passed to the `condition` argument of `net.forward`.
-
-        labels: torch.Tensor
-            Ground truth labels for the input images.
-
-        augment_pipe: callable, optional
-            An optional data augmentation function that takes images as input and
-            returns augmented images. If not provided, no data augmentation is applied.
-
-        lead_time_label: torch.Tensor, optional
-            Lead-time labels to pass to the model, shape ``(batch_size,)``.
-            If not provided, the model is called without a lead-time label input.
-
-        Returns:
+        Returns
         -------
         torch.Tensor
-            A tensor representing the loss calculated based on the network's
-            predictions.
+            Weighted per-pixel squared error ``[B, C, H, W]``.
         """
-        y, augment_labels = (
-            augment_pipe(images) if augment_pipe is not None else (images, None)
-        )
-        sigma = self.get_noise_level(y)
-        sigma = self.replicate_in_mesh(sigma, y)
-        weight = self.get_loss_weight(y, sigma)
-
-        n = self.sample_noise(y, sigma)
-
-        optional_args = {
-            "augment_labels": augment_labels,
-            "lead_time_label": lead_time_label,
-            "class_labels": labels,
-        }
-        # drop None items to support models that don't have these arguments in `forward`
-        optional_args = {k: v for (k, v) in optional_args.items() if v is not None}
-        if condition is not None:
-            D_yn = net(
-                y + n,
-                sigma.flatten(),
-                condition=condition,
-                # class_labels=labels,
-                **optional_args,
-            )
-        else:
-            D_yn = net(y + n, sigma.flatten(), labels, **optional_args)
-        loss = weight * ((D_yn - y) ** 2)
-        if return_sigma:
-            return (loss, sigma)
-        return loss
-
-
-class EDMLossLogUniform(EDMLoss):
-    """
-    EDM Loss with log-uniform sampling for `sigma`.
-
-    Parameters
-    ----------
-    sigma_min: float, optional
-        Minimum value for `sigma` computation, by default 0.02.
-    sigma_max: float, optional:
-        Minimum value for `sigma` computation, by default 1000.
-    sigma_data: float | torch.Tensor, optional
-        Standard deviation for data, by default 0.5. Can also be a tensor; to use
-        per-channel sigma_data, pass a tensor of shape (1, number_of_channels, 1, 1).
-    """
-
-    def __init__(
-        self,
-        sigma_min: float = 0.02,
-        sigma_max: float = 1000,
-        sigma_data: float | torch.Tensor = 0.5,
-        sigma_source_rank: int | None = None,
-    ):
-        self.sigma_data = sigma_data
-        self.sigma_source_rank = sigma_source_rank
-        self.log_sigma_min = float(np.log(sigma_min))
-        self.log_sigma_diff = float(np.log(sigma_max)) - self.log_sigma_min
-
-    def get_noise_level(self, y: torch.Tensor) -> torch.Tensor:
-        """Sample the sigma noise parameter for each sample."""
-        shape = (y.shape[0], 1, 1, 1)
-        rnd_uniform = torch.rand(shape, device=y.device)
-        sigma = (self.log_sigma_min + rnd_uniform * self.log_sigma_diff).exp()
-        return sigma
-
-
-def regression_loss_fn(
-    net,
-    images: torch.Tensor,
-    condition: torch.Tensor,
-    class_labels=None,
-    lead_time_label: torch.Tensor | None = None,
-    augment_pipe=None,
-    return_model_outputs: bool = False,
-) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-    """MSE loss for the StormCast regression model.
-
-    Shares call signature with EDMLoss so the same training loop works for both.
-
-    Args:
-        net: regression network (e.g. StormCastUNet).
-        images: target data, shape ``[B, C, H, W]``.
-        condition: model input, shape ``[B, C_cond, H, W]``.
-        class_labels: unused (present for EDMLoss call-signature parity).
-        lead_time_label: optional lead-time label, shape ``(B,)``.
-        augment_pipe: optional data augmentation callable.
-        return_model_outputs: if True, return ``(loss, prediction)``.
-
-    Returns:
-        Per-pixel squared error ``[B, C, H, W]``, or ``(loss, prediction)``
-        when *return_model_outputs* is True.
-    """
-    y, augment_labels = (
-        augment_pipe(images) if augment_pipe is not None else (images, None)
-    )
-    labels = {} if lead_time_label is None else {"lead_time_label": lead_time_label}
-    D_yn = net(x=condition, **labels)
-    loss = (D_yn - y) ** 2
-    if return_model_outputs:
-        return loss, D_yn
-    return loss
+        labels = {} if lead_time_label is None else {"lead_time_label": lead_time_label}
+        prediction = self.model(x=condition, **labels)
+        return weight * (prediction - x0) ** 2
 
 
 class SigmaBinTracker:
-    """Track per-sigma-bin loss and bias for diffusion training diagnostics.
+    """Track per-sigma-bin loss for diffusion training diagnostics.
 
-    Accumulates sample-level L2 loss and signed denoising bias into
-    equal-probability sigma bins, then logs per-bin means via an
-    experiment logger.
+    Accumulates sample-level L2 loss into equal-probability sigma bins,
+    then logs per-bin means via an experiment logger.
 
     Parameters
     ----------
@@ -269,7 +156,6 @@ class SigmaBinTracker:
         self.device = device
         self._edges: torch.Tensor | None = None
         self._loss_sum: torch.Tensor | None = None
-        self._bias_sum: torch.Tensor | None = None
         self._count: torch.Tensor | None = None
         if not self.enabled:
             return
@@ -304,16 +190,14 @@ class SigmaBinTracker:
             return
         n = int(self._edges.numel() - 1)
         self._loss_sum = torch.zeros(n, device=self.device, dtype=torch.float32)
-        self._bias_sum = torch.zeros(n, device=self.device, dtype=torch.float32)
         self._count = torch.zeros(n, device=self.device, dtype=torch.float32)
 
     def update(
         self,
         loss: torch.Tensor,
         sigma: torch.Tensor | None,
-        bias: torch.Tensor | None = None,
     ) -> None:
-        """Accumulate one micro-batch of per-sample loss/bias into bins.
+        """Accumulate one micro-batch of per-sample loss into bins.
 
         Parameters
         ----------
@@ -321,12 +205,13 @@ class SigmaBinTracker:
             Per-pixel loss, shape ``[B, C, H, W]``.
         sigma : torch.Tensor | None
             Sampled sigma values, shape ``[B, 1, 1, 1]`` or ``[B]``.
-        bias : torch.Tensor | None
-            Per-sample mean signed error ``[B]`` (from EDMLoss ``return_sigma``).
         """
         if not self.enabled or sigma is None:
             return
         sample_loss = loss.detach().mean(dim=(1, 2, 3))
+        if hasattr(sample_loss, "to_local"):
+            # Cast to regular tensor for bucketize after reducing across sharded dims
+            sample_loss = sample_loss.to_local()
         sample_sigma = sigma.detach().reshape(-1).to(torch.float32)
         bin_idx = torch.bucketize(sample_sigma, self._edges) - 1
         n_bins = int(self._edges.numel() - 1)
@@ -338,8 +223,6 @@ class SigmaBinTracker:
         self._count.index_add_(
             0, idx, torch.ones_like(sample_loss[valid], dtype=torch.float32)
         )
-        if bias is not None:
-            self._bias_sum.index_add_(0, idx, bias.detach().to(torch.float32)[valid])
 
     def log(self, logger, world_size: int = 1) -> None:
         """All-reduce across ranks and log per-bin means.
@@ -354,7 +237,7 @@ class SigmaBinTracker:
         if not self.enabled or self._count is None:
             return
         if world_size > 1:
-            for t in (self._loss_sum, self._bias_sum, self._count):
+            for t in (self._loss_sum, self._count):
                 torch.distributed.all_reduce(t, op=torch.distributed.ReduceOp.SUM)
         edges = self._edges.detach().cpu().tolist()
         for b in range(int(self._edges.numel() - 1)):
@@ -365,8 +248,4 @@ class SigmaBinTracker:
             logger.log_value(
                 f"loss/train_sigma_bin/{tag}",
                 float((self._loss_sum[b] / self._count[b]).item()),
-            )
-            logger.log_value(
-                f"bias/train_sigma_bin/{tag}",
-                float((self._bias_sum[b] / self._count[b]).item()),
             )
