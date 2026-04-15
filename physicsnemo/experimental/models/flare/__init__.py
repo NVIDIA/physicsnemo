@@ -14,13 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Experimental neural network components for PhysicsNemo.
+r"""FLARE Transolver: Transolver with FLARE attention.
 
-This subpackage contains experimental neural network layers and utilities
-that are under active development. These components may have breaking API
-changes between releases.
+This module provides FLARE, a Transolver variant that uses
+FLARE (Fast Low-rank Attention Routing Engine) attention.
 """
 
-from .flare_attention import FLARE
+from .flare import FLARE
 
 __all__ = ["FLARE"]

@@ -13,14 +13,3 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-"""Experimental neural network components for PhysicsNemo.
-
-This subpackage contains experimental neural network layers and utilities
-that are under active development. These components may have breaking API
-changes between releases.
-"""
-
-from .flare_attention import FLARE
-
-__all__ = ["FLARE"]

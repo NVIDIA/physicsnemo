@@ -18,7 +18,7 @@
 import os
 import time
 from pathlib import Path
-from typing import Literal, Any, Callable, Sequence
+from typing import Literal, Any, Callable
 import collections
 from contextlib import nullcontext
 
@@ -56,6 +56,8 @@ from physicsnemo.datapipes.cae.transolver_datapipe import (
 
 # Local folder imports for this example
 from metrics import metrics_fn
+
+from physicsnemo.nn import collect_concrete_dropout_losses, get_concrete_dropout_rates
 
 # tensorwise is to handle single-point-cloud or multi-point-cloud running.
 # it's a decorator that will automatically unzip one or more of a list of tensors,
@@ -413,6 +415,13 @@ def train_epoch(
             dataloader,
         )
 
+        # Add concrete dropout regularization loss
+        lambda_reg = getattr(cfg.training, "lambda_reg", 0.0)
+        if lambda_reg > 0:
+            reg_loss = collect_concrete_dropout_losses(model)
+            if reg_loss.requires_grad:
+                loss = loss + lambda_reg * reg_loss
+
         optimizer.zero_grad()
         if precision == "float16" and scaler is not None:
             scaler.scale(loss).backward()
@@ -469,6 +478,13 @@ def train_epoch(
         writer.add_scalar("epoch/loss", avg_loss, epoch)
         for metric_name, metric_value in avg_metrics.items():
             writer.add_scalar(f"epoch/{metric_name}", metric_value, epoch)
+
+        # Log concrete dropout rates if enabled
+        dropout_rates = get_concrete_dropout_rates(model)
+        if dropout_rates:
+            for name, rate in dropout_rates.items():
+                writer.add_scalar(f"dropout_rates/{name}", rate, epoch)
+
         # Print average metrics using tabulate
         metrics_table = tabulate(
             [[k, v] for k, v in avg_metrics.items()],

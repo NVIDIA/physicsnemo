@@ -21,7 +21,6 @@ import torch
 import torchinfo
 import typing, csv
 import collections
-from typing import Literal
 from datetime import datetime
 
 import hydra
@@ -42,8 +41,13 @@ from physicsnemo.datapipes.cae.transolver_datapipe import (
     create_transolver_dataset,
     TransolverDataPipe,
 )
-from train import forward_pass
 from tabulate import tabulate
+
+from inference_utils import (
+    batched_inference_loop,
+    mc_dropout_inference_loop,
+    setup_mc_dropout,
+)
 
 # import transformer_engine.pytorch as te
 # from transformer_engine.common.recipe import Format, DelayedScaling
@@ -120,99 +124,6 @@ def compute_force_coefficients(
     return c_total, c_p, c_f
 
 
-def batched_inference_loop(
-    batch: dict,
-    model: torch.nn.Module,
-    precision: str,
-    data_mode: Literal["surface", "volume"],
-    batch_resolution: int,
-    output_pad_size: int | None,
-    dist_manager: DistributedManager,
-    datapipe: TransolverDataPipe,
-) -> tuple[float, dict, tuple[torch.Tensor, torch.Tensor]]:
-    N = batch["embeddings"].shape[1]
-    # This generates a random ordering of the input points,
-    # Which we'll then slice up into inputs to the model.
-    indices = torch.randperm(N, device=batch["fx"].device)
-
-    index_blocks = torch.split(indices, batch_resolution)
-
-    global_preds_targets = []
-    global_weight = 0.0
-    start = time.time()
-    for i, index_block in enumerate(index_blocks):
-        # We compute the local_batch by slicing from embeddings and fields:
-        local_embeddings = batch["embeddings"][:, index_block]
-        local_fields = batch["fields"][:, index_block]
-
-        # fx does not need to be sliced for TransolverX:
-        if "geometry" not in batch.keys():
-            local_fx = batch["fx"][:, index_block]
-        else:
-            local_fx = batch["fx"]
-
-        local_batch = {
-            "fx": local_fx,
-            "embeddings": local_embeddings,
-            "fields": local_fields,
-        }
-
-        if "air_density" in batch.keys() and "stream_velocity" in batch.keys():
-            local_batch["air_density"] = batch["air_density"]
-            local_batch["stream_velocity"] = batch["stream_velocity"]
-
-        if "geometry" in batch.keys():
-            local_batch["geometry"] = batch["geometry"]
-
-        # Run the forward inference pass:
-        local_loss, local_metrics, local_preds_targets = forward_pass(
-            local_batch,
-            model,
-            precision,
-            output_pad_size,
-            dist_manager,
-            data_mode,
-            datapipe,
-        )
-
-        # Accumulate the loss and metrics:
-        # (Still on the GPU)
-        weight = index_block.shape[0] / N
-        global_weight += weight
-        if i == 0:
-            metrics = {k: local_metrics[k] * weight for k in local_metrics.keys()}
-            loss = local_loss * weight
-        else:
-            metrics = {
-                k: metrics[k] + local_metrics[k] * weight for k in metrics.keys()
-            }
-            loss += local_loss * weight
-
-        global_preds_targets.append(local_preds_targets)
-
-        end = time.time()
-        elapsed = end - start
-        print(
-            f"Completed sub-batch {i} of {len(index_blocks)} in {elapsed:.4f} seconds"
-        )
-        start = end
-
-    # Now, compute the overall loss, metrics, and coefficients:
-    metrics = {k: v / global_weight for k, v in metrics.items()}
-    loss = loss / global_weight
-
-    global_predictions = torch.cat([l[0][0] for l in global_preds_targets], dim=1)
-    global_targets = torch.cat([l[1][0] for l in global_preds_targets], dim=1)
-
-    # Now, we have to *unshuffle* the prediction to the original index
-    inverse_indices = torch.empty_like(indices)
-    inverse_indices[indices] = torch.arange(indices.size(0), device=indices.device)
-    # Suppose prediction is of shape [batch, N, ...]
-    global_predictions = global_predictions[:, inverse_indices]
-    global_targets = global_targets[:, inverse_indices]
-    return loss, metrics, (global_predictions, global_targets)
-
-
 def inference(cfg: DictConfig) -> None:
     """
     Run inference on a validation Zarr dataset using a trained Transolver model.
@@ -278,7 +189,8 @@ def inference(cfg: DictConfig) -> None:
 
     if cfg.compile:
         model = torch.compile(model, dynamic=True)
-    model.eval()
+
+    mc_dropout_samples = setup_mc_dropout(model, cfg, logger)
 
     # For INFERENCE, we deliberately set the resolution in the data pipe to NONE
     # so there is not downsampling.  We still batch it in the inference script
@@ -305,9 +217,18 @@ def inference(cfg: DictConfig) -> None:
     results = []
     start = time.time()
     for batch_idx, batch in enumerate(val_dataset):
-        with torch.no_grad():
-            loss, metrics, (global_predictions, global_targets) = (
-                batched_inference_loop(
+        if mc_dropout_samples > 0:
+            # MC-Dropout: run N stochastic forward passes (no torch.no_grad
+            # since dropout needs to be active, but we don't need gradients)
+            with torch.no_grad():
+                (
+                    global_predictions,
+                    global_std,
+                    all_mc_predictions,
+                    loss,
+                    metrics,
+                    global_targets,
+                ) = mc_dropout_inference_loop(
                     batch,
                     model,
                     cfg.precision,
@@ -316,8 +237,25 @@ def inference(cfg: DictConfig) -> None:
                     output_pad_size,
                     dist_manager,
                     val_dataset,
+                    n_samples=mc_dropout_samples,
                 )
-            )
+            # Log mean uncertainty for this sample
+            mean_std = global_std.mean().item()
+            logger.info(f"Batch {batch_idx} mean uncertainty (std): {mean_std:.6f}")
+        else:
+            with torch.no_grad():
+                loss, metrics, (global_predictions, global_targets) = (
+                    batched_inference_loop(
+                        batch,
+                        model,
+                        cfg.precision,
+                        cfg.data.mode,
+                        batch_resolution,
+                        output_pad_size,
+                        dist_manager,
+                        val_dataset,
+                    )
+                )
         end = time.time()
         elapsed = end - start
         logger.info(f"Finished batch {batch_idx} in {elapsed:.4f} seconds")

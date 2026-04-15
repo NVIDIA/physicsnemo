@@ -14,12 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 import torch
 
 from physicsnemo.experimental.models.geotransolver.gale import (
     GALE,
     GALE_block,
 )
+from physicsnemo.experimental.models.geotransolver.gale_fa import GALE_FA
 
 # =============================================================================
 # GALE (Geometry-Aware Latent Embeddings) Attention Tests
@@ -129,12 +131,117 @@ def test_gale_forward_multiple_inputs(device):
 
 
 # =============================================================================
+# GALE_FA Attention Tests
+# =============================================================================
+
+
+def test_gale_fa_forward_basic(device):
+    """Test GALE_FA attention layer pass without context."""
+    torch.manual_seed(42)
+
+    dim = 64
+    heads = 4
+    dim_head = 16
+    n_global_queries = 8
+    batch_size = 2
+    n_tokens = 100
+
+    gale_fa = GALE_FA(
+        dim=dim,
+        heads=heads,
+        dim_head=dim_head,
+        dropout=0.0,
+        n_global_queries=n_global_queries,
+        use_te=False,
+        context_dim=dim_head,  # Must match dim_head for cross attention
+    ).to(device)
+
+    # Single input tensor wrapped in tuple
+    x = torch.randn(batch_size, n_tokens, dim).to(device)
+
+    outputs = gale_fa((x,), context=None)
+
+    assert len(outputs) == 1
+    assert outputs[0].shape == (batch_size, n_tokens, dim)
+    assert not torch.isnan(outputs[0]).any()
+
+
+def test_gale_fa_forward_with_context(device):
+    """Test GALE_FA attention layer with cross-attention context."""
+    torch.manual_seed(42)
+
+    dim = 64
+    heads = 4
+    dim_head = 16
+    n_global_queries = 8
+    batch_size = 2
+    n_tokens = 100
+    context_tokens = 32
+    context_dim = dim_head
+
+    gale_fa = GALE_FA(
+        dim=dim,
+        heads=heads,
+        dim_head=dim_head,
+        dropout=0.0,
+        n_global_queries=n_global_queries,
+        use_te=False,
+        context_dim=context_dim,
+    ).to(device)
+
+    x = torch.randn(batch_size, n_tokens, dim).to(device)
+    context = torch.randn(batch_size, heads, context_tokens, context_dim).to(device)
+
+    outputs = gale_fa((x,), context=context)
+
+    assert len(outputs) == 1
+    assert outputs[0].shape == (batch_size, n_tokens, dim)
+    assert not torch.isnan(outputs[0]).any()
+
+
+def test_gale_fa_forward_multiple_inputs(device):
+    """Test GALE_FA attention layer with multiple input tensors."""
+    torch.manual_seed(42)
+
+    dim = 64
+    heads = 4
+    dim_head = 16
+    n_global_queries = 8
+    batch_size = 2
+    n_tokens_1 = 100
+    n_tokens_2 = 150
+    context_dim = dim_head
+
+    gale_fa = GALE_FA(
+        dim=dim,
+        heads=heads,
+        dim_head=dim_head,
+        dropout=0.0,
+        n_global_queries=n_global_queries,
+        use_te=False,
+        context_dim=context_dim,
+    ).to(device)
+
+    x1 = torch.randn(batch_size, n_tokens_1, dim).to(device)
+    x2 = torch.randn(batch_size, n_tokens_2, dim).to(device)
+
+    outputs = gale_fa((x1, x2), context=None)
+
+    assert len(outputs) == 2
+    assert outputs[0].shape == (batch_size, n_tokens_1, dim)
+    assert outputs[1].shape == (batch_size, n_tokens_2, dim)
+    assert not torch.isnan(outputs[0]).any()
+    assert not torch.isnan(outputs[1]).any()
+
+
+# =============================================================================
 # GALE_block Tests
 # =============================================================================
 
 
-def test_gale_block_forward(device):
-    """Test GALE_block transformer block forward pass."""
+@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
+def test_gale_block_forward(device, attention_type):
+    """Test GALE_block transformer block forward pass (GALE and GALE_FA)."""
     torch.manual_seed(42)
 
     hidden_dim = 64
@@ -156,6 +263,7 @@ def test_gale_block_forward(device):
         use_te=False,
         plus=False,
         context_dim=context_dim,
+        attention_type=attention_type,
     ).to(device)
 
     x = torch.randn(batch_size, n_tokens, hidden_dim).to(device)
@@ -168,8 +276,9 @@ def test_gale_block_forward(device):
     assert not torch.isnan(outputs[0]).any()
 
 
-def test_gale_block_multiple_inputs(device):
-    """Test GALE_block with multiple input tensors."""
+@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
+def test_gale_block_multiple_inputs(device, attention_type):
+    """Test GALE_block with multiple input tensors and attention type (GALE and GALE_FA)."""
     torch.manual_seed(42)
 
     hidden_dim = 64
@@ -192,6 +301,7 @@ def test_gale_block_multiple_inputs(device):
         use_te=False,
         plus=False,
         context_dim=context_dim,
+        attention_type=attention_type,
     ).to(device)
 
     x1 = torch.randn(batch_size, n_tokens_1, hidden_dim).to(device)

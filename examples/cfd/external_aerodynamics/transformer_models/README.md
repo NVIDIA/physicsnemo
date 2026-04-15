@@ -213,3 +213,44 @@ entire mesh.  The outputs are then saved to .vtp files for downstream analysis. 
 ## Transolver++
 
 Transolver++ is supported with the `plus` flag to the model. In our experiments, we did not see gains, but you are welcome to try it and share your results with us on GitHub!
+
+## Model Uncertainty Quantification with Concrete Dropout
+
+GeoTransolver supports **model uncertainty quantification (UQ)** via **Concrete Dropout** ([Gal, Hron & Kendall, NeurIPS 2017](https://arxiv.org/abs/1705.07832)). Model UQ captures the uncertainty arising from the model itself -- given finite training data, there are many plausible sets of model weights, and model UQ estimates how much predictions vary across them. Instead of manually tuning per-layer dropout rates, Concrete Dropout learns the optimal dropout probability for each layer during training using a differentiable relaxation. At inference time, **MC-Dropout** (Monte Carlo Dropout) approximates Bayesian inference by running multiple stochastic forward passes, producing both a mean prediction and a per-point uncertainty estimate.
+
+### Training with Concrete Dropout
+
+Enable Concrete Dropout by setting two configuration options:
+
+```bash
+python train.py --config-name geotransolver_surface \
+    model.concrete_dropout=true \
+    training.lambda_reg=1e-4
+```
+
+- `model.concrete_dropout=true` replaces standard dropout layers with learnable `ConcreteDropout` layers throughout the model (GALE attention, context projectors, and FFN blocks).
+- `training.lambda_reg` controls the weight of the dropout entropy regularization loss. This term encourages the learned dropout rates away from trivial values (0 or 1). A value of `0.0` (default) disables the regularization. Typical values are in the range `1e-5` to `1e-3`.
+
+During training, the learned dropout rates for each layer are logged to TensorBoard under `dropout_rates/`.
+
+### Inference with MC-Dropout
+
+After training a model with Concrete Dropout, run MC-Dropout inference by specifying the number of stochastic forward passes:
+
+```bash
+python src/inference_on_zarr.py --config-name geotransolver_surface \
+    run_id=/path/to/model/ \
+    mc_dropout_samples=20
+```
+
+```bash
+python src/inference_on_vtk.py --config-name geotransolver_surface \
+    run_id=/path/to/model/ \
+    mc_dropout_samples=20
+```
+
+- `mc_dropout_samples` sets the number of stochastic forward passes. Each pass uses the learned dropout masks to produce a different prediction. The mean across passes gives the final prediction, and the standard deviation provides a per-point uncertainty estimate.
+- When `mc_dropout_samples=0` (the default), inference runs in standard deterministic mode with no dropout.
+- The VTK inference script (`inference_on_vtk.py`) writes the mean and standard deviation fields to the output VTK files alongside the deterministic predictions.
+
+> **Note:** MC-Dropout inference requires a model that was trained with `concrete_dropout=true`. If `mc_dropout_samples > 0` is set but no ConcreteDropout layers are found in the checkpoint, the script will log a warning and fall back to deterministic inference.
