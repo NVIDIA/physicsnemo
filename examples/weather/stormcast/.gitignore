@@ -1,5 +1,0 @@
-*.mdlus
-*.png
-*.pt
-*.tfevents*
-*wandb/

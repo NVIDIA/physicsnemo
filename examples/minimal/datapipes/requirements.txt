@@ -1,5 +1,0 @@
-jupyter
-matplotlib
-torch_geometric
-scipy
-zarr

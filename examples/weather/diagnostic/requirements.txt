@@ -1,2 +1,0 @@
-hydra-core
-termcolor>=2.1.1

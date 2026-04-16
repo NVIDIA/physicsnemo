@@ -1,2 +1,0 @@
-multi-storage-client[boto3,fsspec]
-zarr

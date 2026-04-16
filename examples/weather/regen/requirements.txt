@@ -1,7 +1,0 @@
-xarray[io]
-cartopy
-seaborn
-click
-wandb
-ruamel.yaml
-dask

@@ -1,6 +1,0 @@
-cdsapi
-xarray
-netCDF4
-h5py
-scipy
-h5netcdf

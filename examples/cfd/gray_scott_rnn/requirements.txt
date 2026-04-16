@@ -1,4 +1,0 @@
-h5py>=3.7.0
-hydra-core>=1.2.0
-termcolor>=2.1.1
-pyvista>=0.43.0

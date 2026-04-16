@@ -1,4 +1,0 @@
-vtk
-omegaconf
-hydra-core
-nvidia-physicsnemo.sym

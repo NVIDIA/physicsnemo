@@ -1,9 +1,0 @@
-hydra-core
-tabulate
-tensorboard
-termcolor
-torchinfo
-einops
-transformer_engine[pytorch]
-tensorstore
-zarr>=3.0

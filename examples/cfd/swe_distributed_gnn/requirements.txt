@@ -1,2 +1,0 @@
-cartopy
-torch-harmonics

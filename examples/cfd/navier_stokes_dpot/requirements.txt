@@ -1,5 +1,0 @@
-gdown>=5.0.0
-einops>=0.7.0
-hydra-core>=1.2.0
-warp-lang>=1.6.0
-termcolor>=2.1.1
