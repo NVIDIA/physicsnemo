@@ -14,10 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .capture import (
-    StaticCaptureEvaluateNoGrad,
-    StaticCaptureTraining,
-)
 from .checkpoint import (
     get_checkpoint_dir,
     load_checkpoint,
