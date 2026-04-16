@@ -131,6 +131,7 @@ class CombinedOptimizer(Optimizer):
             opt.zero_grad(*args, **kwargs)
 
     def step(self, closure=None) -> None:
+        """Execute a single optimization step across all wrapped optimizers."""
         for step_fn in self.step_fns:
             if closure is None:
                 step_fn()
@@ -138,9 +139,11 @@ class CombinedOptimizer(Optimizer):
                 step_fn(closure)
 
     def state_dict(self):
+        """Return combined state dict from all wrapped optimizers."""
         return {"optimizers": [opt.state_dict() for opt in self.optimizers]}
 
     def load_state_dict(self, state_dict):
+        """Restore state dicts to all wrapped optimizers."""
         for opt, sd in zip(self.optimizers, state_dict["optimizers"]):
             opt.load_state_dict(sd)
 

@@ -216,6 +216,19 @@ class TransolverDataPipe(Dataset):
         if self.config.scaling_type is not None:
             fields = self.scale_model_targets(fields, self.config.surface_factors)
 
+        # Subsampled areas and normals (raw, not unit-normalized) for drag integration.
+        # These may be absent for datasets without force-coefficient metadata
+        # (e.g. structures), so we guard with .get() and include them only if present.
+        has_drag_fields = (
+            "surface_areas" in data_dict and "surface_normals" in data_dict
+        )
+        if has_drag_fields:
+            sub_areas = data_dict["surface_areas"]
+            sub_normals = data_dict["surface_normals"]
+            if idx is not None:
+                sub_areas = sub_areas[idx]
+                sub_normals = sub_normals[idx]
+
         if "air_density" in data_dict and "stream_velocity" in data_dict:
             # Build fx:
             fx_inputs = [
@@ -229,17 +242,23 @@ class TransolverDataPipe(Dataset):
             else:
                 fx = fx.unsqueeze(0)
 
-            return {
+            result = {
                 "embeddings": embeddings,
                 "fx": fx,
                 "fields": fields,
             }
 
         else:
-            return {
+            result = {
                 "embeddings": embeddings,
                 "fields": fields,
             }
+
+        if has_drag_fields:
+            result["surface_areas_sub"] = sub_areas
+            result["surface_normals_sub"] = sub_normals
+
+        return result
 
     def preprocess_volume_data(
         self,
@@ -442,11 +461,12 @@ class TransolverDataPipe(Dataset):
         elif (
             self.config.model_type == "surface" or self.config.model_type == "combined"
         ):
-            required_keys.extend(
-                [
-                    "surface_normals",
-                ]
-            )
+            if self.config.include_normals:
+                required_keys.extend(
+                    [
+                        "surface_normals",
+                    ]
+                )
 
         if self.config.translational_invariance:
             if self.config.reference_origin is not None:
@@ -515,8 +535,19 @@ class TransolverDataPipe(Dataset):
             )
 
         if self.config.return_mesh_features:
-            outputs["surface_areas"] = data_dict["surface_areas"]
-            outputs["surface_normals"] = data_dict["surface_normals"]
+            if "surface_areas" in data_dict:
+                outputs["surface_areas"] = data_dict["surface_areas"]
+            if "surface_normals" in data_dict:
+                outputs["surface_normals"] = data_dict["surface_normals"]
+            # Full-mesh fields (same scaling as subsampled) for drag/force computation
+            if self.config.model_type in ("surface", "combined"):
+                if self.config.scaling_type is not None:
+                    outputs["fields_full"] = self.scale_model_targets(
+                        data_dict["surface_fields"],
+                        self.config.surface_factors,
+                    )
+                else:
+                    outputs["fields_full"] = data_dict["surface_fields"]
 
         if "air_density" in data_dict:
             outputs["air_density"] = data_dict["air_density"]

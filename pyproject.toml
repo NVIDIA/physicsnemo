@@ -265,6 +265,9 @@ datapipes-extras = [
     "zarr>=3.0.0",
     "tensordict>=0.11.0",
 ]
+uq-extras = [
+    "gpytorch>=1.11",
+]
 
 # Use case specific dependency groups.
 gnns = [
