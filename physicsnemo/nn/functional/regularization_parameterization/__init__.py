@@ -14,14 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .geometry import signed_distance_field
-from .neighbors import knn, radius_search
-from .regularization_parameterization import drop_path, weight_fact
+from .drop_path import DropPath, drop_path
+from .weight_fact import WeightFact, weight_fact
 
 __all__ = [
+    "DropPath",
     "drop_path",
-    "knn",
-    "radius_search",
-    "signed_distance_field",
+    "WeightFact",
     "weight_fact",
 ]
