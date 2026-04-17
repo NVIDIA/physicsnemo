@@ -31,6 +31,7 @@ def benchmark_model(
     num_warmup=5,
     num_iterations=10,
     use_mixed_precision=False,
+    inference_only=False,
 ):
     """Benchmark forward pass and training step performance.
 
@@ -42,9 +43,11 @@ def benchmark_model(
         num_warmup: Number of warmup iterations
         num_iterations: Number of benchmark iterations
         use_mixed_precision: Whether to use mixed precision training
+        inference_only: If True, skip training benchmarks entirely
 
     Returns:
-        Tuple of (forward_time, training_time) in seconds
+        Tuple of (forward_time, training_time) in seconds.
+        training_time is None when inference_only=True.
     """
 
     # Making a flexible context here to enable us to flip mixed precision on/off easily.
@@ -66,12 +69,13 @@ def benchmark_model(
                 _ = model(x)
 
         # Training warmup step
-        optimizer.zero_grad()
-        with context:
-            output = model(x)
-            loss = nn.CrossEntropyLoss()(output, target)
-        loss.backward()
-        optimizer.step()
+        if not inference_only:
+            optimizer.zero_grad()
+            with context:
+                output = model(x)
+                loss = nn.CrossEntropyLoss()(output, target)
+            loss.backward()
+            optimizer.step()
 
     # Benchmark forward pass
     torch.cuda.synchronize()
@@ -95,29 +99,31 @@ def benchmark_model(
 
     avg_forward_time = np.mean(forward_times)
 
-    # Benchmark training step
-    torch.cuda.synchronize()
-    training_times = []
-
-    for _ in range(num_iterations):
-        start_event = torch.cuda.Event(enable_timing=True)
-        end_event = torch.cuda.Event(enable_timing=True)
-
-        start_event.record()
-        optimizer.zero_grad()
-        with context:
-            output = model(x)
-            loss = nn.CrossEntropyLoss()(output, target)
-        loss.backward()
-        optimizer.step()
-        end_event.record()
-
+    # Benchmark training step (skip if inference-only)
+    avg_training_time = None
+    if not inference_only:
         torch.cuda.synchronize()
-        elapsed_time = (
-            start_event.elapsed_time(end_event) / 1000.0
-        )  # Convert ms to seconds
-        training_times.append(elapsed_time)
+        training_times = []
 
-    avg_training_time = np.mean(training_times)
+        for _ in range(num_iterations):
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)
+
+            start_event.record()
+            optimizer.zero_grad()
+            with context:
+                output = model(x)
+                loss = nn.CrossEntropyLoss()(output, target)
+            loss.backward()
+            optimizer.step()
+            end_event.record()
+
+            torch.cuda.synchronize()
+            elapsed_time = (
+                start_event.elapsed_time(end_event) / 1000.0
+            )  # Convert ms to seconds
+            training_times.append(elapsed_time)
+
+        avg_training_time = np.mean(training_times)
 
     return avg_forward_time, avg_training_time

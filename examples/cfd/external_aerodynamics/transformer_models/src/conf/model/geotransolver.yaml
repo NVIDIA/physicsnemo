@@ -32,4 +32,5 @@ include_local_features: true # use local features
 radii: [0.05, 0.25, 1.0, 2.5] # radius for local features
 neighbors_in_radius: [8, 32, 64, 128] # neighbors in radius for local features
 n_hidden_local: 32 # hidden dimension for local features
+concrete_dropout: false # enable learned per-layer dropout for UQ
 

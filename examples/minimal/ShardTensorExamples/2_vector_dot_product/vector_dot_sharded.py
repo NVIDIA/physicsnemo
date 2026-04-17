@@ -53,6 +53,9 @@ def sharded_dot_product(func: callable, types: tuple, args: tuple, kwargs: dict)
     # the same input signature.  You can use python argument unpacking to
     # extract what you need:
     def extract_args(x, y, *args, **kwargs):
+        """
+        Use python arg magic to get x and y
+        """
         return x, y
 
     x, y = extract_args(*args, **kwargs)
@@ -120,6 +123,9 @@ b = torch.randn(N, device=device)
 
 
 def f(x, y):
+    """
+    Simply return the dot product
+    """
     return torch.dot(x, y)
 
 

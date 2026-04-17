@@ -29,7 +29,9 @@ from physicsnemo.domain_parallel.shard_utils.patch_core import (
 )
 from physicsnemo.domain_parallel.shard_utils.ring import (
     RingPassingConfig,
+    get_comm_stream,
     perform_ring_iteration,
+    perform_ring_iteration_async,
 )
 
 aten = torch.ops.aten
@@ -142,8 +144,6 @@ class RingSDPA(torch.autograd.Function):
     ``add_log_sumexp`` and ``stable_signed_accumulate`` for more details.
     """
 
-    # comm_stream = torch.cuda.Stream()
-
     @staticmethod
     def forward(
         ctx,
@@ -157,10 +157,10 @@ class RingSDPA(torch.autograd.Function):
     ) -> torch.Tensor:
         r"""Forward pass for the ring attention implementation.
 
-        This implementation will overlap the communication with the computation.
-        Note that there is an explicit sync in each iteration to prevent the
-        communication stream from getting ahead of the computation stream, by
-        waiting on the all_to_all operation to complete.
+        Overlaps communication with computation using a dedicated comm stream
+        and double-buffered K/V tensors. The p2p ring shift for the next
+        iteration's K/V runs concurrently with the current iteration's
+        attention kernel.
 
         Parameters
         ----------
@@ -191,109 +191,101 @@ class RingSDPA(torch.autograd.Function):
         ctx.mesh = mesh
         ctx.ring_config = ring_config
 
-        # Create buffers to store outputs
+        # Accumulation state (log-space for numerical stability)
         log_global_output = None
         sign_global_output = None
         global_log_sumexp = None
 
-        # For the first iteration, use local tensors
+        compute_stream = torch.cuda.current_stream()
+        comm_stream = get_comm_stream(q.device)
+
+        # Pre-allocate double buffers for K and V on the default stream to
+        # avoid caching-allocator cross-stream synchronization inside the loop.
+        k_buffers = [torch.empty_like(k), torch.empty_like(k)]
+        v_buffers = [torch.empty_like(v), torch.empty_like(v)]
+
+        # Iteration 0 reads from the original k, v (no copy needed).
         current_k, current_v = k, v
 
-        # Pre-allocate a single combined buffer for k,v
-        # Find the dimension to concatenate on - should be a dim that preserves tensor structure
-        cat_dim = 0  # Usually batch or sequence dimension
-
-        # Set up communication
-        local_group = mesh.get_group(ring_config.mesh_dim)
-        local_rank = mesh.get_local_rank(ring_config.mesh_dim)
-        local_size = dist.get_world_size(group=local_group)
-
-        id_of_right = (local_rank + 1) % ring_config.mesh_size
-        id_of_left = (local_rank - 1) % ring_config.mesh_size
-
-        # Create streams that persist for the duration of the ring computation.
-        compute_stream = torch.cuda.default_stream()
-        comm_stream = torch.cuda.Stream()
+        # CUDA event used to signal that comm_stream has finished receiving
+        # the next iteration's K/V into the recv buffer.
+        comm_done = torch.cuda.Event()
 
         for i in range(ring_config.mesh_size):
-            # Launch communication for the next iteration early
+            # --- Async communication: send current K/V, recv next K/V ---
             with record_function(f"sdpa_send_data_{i}_{dist.get_rank()}"):
                 if i < ring_config.mesh_size - 1:
-                    # Use a dedicated stream for communication
+                    recv_idx = (i + 1) % 2
+                    next_k_buf = k_buffers[recv_idx]
+                    next_v_buf = v_buffers[recv_idx]
+
+                    # comm_stream must wait for compute_stream to finish
+                    # producing current_k / current_v before reading them.
+                    comm_stream.wait_stream(compute_stream)
+
                     with torch.cuda.stream(comm_stream):
-                        send_tensors = [
-                            torch.empty((), device=q.device, dtype=q.dtype)
-                            for _ in range(local_size)
-                        ]
-                        recv_tensors = [
-                            torch.empty((), device=q.device, dtype=q.dtype)
-                            for _ in range(local_size)
-                        ]
-
-                        # Combine k and v for communication
-                        send_tensors[id_of_right] = torch.cat(
-                            [current_k, current_v], dim=cat_dim
-                        ).contiguous()
-                        recv_tensors[id_of_left] = torch.empty_like(
-                            send_tensors[id_of_right]
+                        _, k_work = perform_ring_iteration_async(
+                            current_k,
+                            mesh,
+                            ring_config,
+                            recv_tensor=next_k_buf,
+                        )
+                        _, v_work = perform_ring_iteration_async(
+                            current_v,
+                            mesh,
+                            ring_config,
+                            recv_tensor=next_v_buf,
                         )
 
-                        # Use async_op=True to enable overlapping
-                        a2a_op = dist.all_to_all(
-                            recv_tensors, send_tensors, group=local_group, async_op=True
-                        )
-
-                    # Mark these as used by the communication stream:
+                    # Prevent the allocator from recycling current_k/v while
+                    # comm_stream is still reading them for the send.
                     current_k.record_stream(comm_stream)
                     current_v.record_stream(comm_stream)
 
-            # Perform computation on current k,v while communication happens
+            # --- Compute: attention on current K/V ---
             with record_function(f"sdpa_forward_{i}_{dist.get_rank()}"):
-                with torch.cuda.stream(compute_stream):
-                    (
-                        output,
-                        log_sumexp,
-                        philox_seed,
-                        philox_offset,
-                    ) = aten._scaled_dot_product_efficient_attention(
-                        q,
-                        current_k,
-                        current_v,
-                        attn_mask,
-                        compute_log_sumexp=True,
-                        **attn_args,
-                    )
-
-                    # Add an extra dimension to the log_sumexp:
-                    log_sumexp = log_sumexp.unsqueeze(-1)
-                    log_output = torch.log(torch.abs(output))
-                    sign_output = torch.sign(output)
-
-                    log_global_output, sign_global_output = stable_signed_accumulate(
-                        log_global_output,
-                        sign_global_output,
-                        log_output,
-                        sign_output,
-                        log_sumexp,
-                    )
-
-                    global_log_sumexp = add_log_sumexp(global_log_sumexp, log_sumexp)
-
-            if i < ring_config.mesh_size - 1:
-                # Wait for communication operations to complete before allowing more work
-                a2a_op.wait()
-
-                # compute_stream.wait_stream(comm_stream)
-
-                # Explicit synchronization to ensure communication is complete
-                # Also makes sure that the attention computation is complete before changing current_k, current_v
-                # compute_stream.synchronize()
-
-                current_k, current_v = torch.chunk(
-                    recv_tensors[id_of_left], 2, dim=cat_dim
+                (
+                    output,
+                    log_sumexp,
+                    philox_seed,
+                    philox_offset,
+                ) = aten._scaled_dot_product_efficient_attention(
+                    q,
+                    current_k,
+                    current_v,
+                    attn_mask,
+                    compute_log_sumexp=True,
+                    **attn_args,
                 )
 
-        # Compute the final output
+                log_sumexp = log_sumexp.unsqueeze(-1)
+                log_output = torch.log(torch.abs(output))
+                sign_output = torch.sign(output)
+
+                log_global_output, sign_global_output = stable_signed_accumulate(
+                    log_global_output,
+                    sign_global_output,
+                    log_output,
+                    sign_output,
+                    log_sumexp,
+                )
+
+                global_log_sumexp = add_log_sumexp(global_log_sumexp, log_sumexp)
+
+            # --- Synchronize: wait for next K/V to arrive ---
+            if i < ring_config.mesh_size - 1:
+                for w in k_work + v_work:
+                    w.wait()
+
+                # Record completion on comm_stream and make compute_stream
+                # wait so the next iteration reads valid recv buffer data.
+                comm_stream.record_event(comm_done)
+                compute_stream.wait_event(comm_done)
+
+                current_k = next_k_buf
+                current_v = next_v_buf
+
+        # Final normalization
         stable_output = sign_global_output * torch.exp(
             log_global_output - global_log_sumexp
         )
@@ -324,10 +316,18 @@ class RingSDPA(torch.autograd.Function):
         None,
         None,
     ]:
-        r"""Backward pass for the ring SDPA.
+        r"""Backward pass for the ring SDPA with overlapped communication.
 
-        Currently, this is not overlapping communication with the computation.
-        Note that the backward pass has 2x communication: send k, v but also grad_k, grad_v.
+        Overlaps k/v communication with the backward attention kernel.
+        Each iteration:
+        1. Wait for k, v from the previous iteration's async send.
+        2. Wait for grad_k, grad_v from the previous iteration's async send.
+        3. Async-send k, v for the next iteration (overlaps with compute).
+        4. Compute block gradients and accumulate.
+        5. Async-send accumulated grad_k, grad_v (overlaps with next
+           iteration's waits and k/v send).
+        The final grad_k/grad_v shift uses blocking communication since
+        there is no further compute to overlap with.
 
         Parameters
         ----------
@@ -353,6 +353,9 @@ class RingSDPA(torch.autograd.Function):
             philox_offset,
         ) = ctx.saved_tensors
         attn_args = ctx.attn_args
+        mesh = ctx.mesh
+        ring_config = ctx.ring_config
+        mesh_size = ring_config.mesh_size
 
         grad_q = torch.zeros_like(
             q, device=q.device, memory_format=torch.contiguous_format
@@ -365,49 +368,122 @@ class RingSDPA(torch.autograd.Function):
         )
         grad_attn_mask = None
 
-        # TODO: overlap communication with computation.
-        # This needs to be done in two stages.  First, we can send k, v along the ring before computing
-        # the gradients.  We also need to send grad_k, grad_v along the ring and accumulate them.
+        compute_stream = torch.cuda.current_stream()
+        comm_stream = get_comm_stream(q.device)
 
-        # Since the next iteration's grad_k, grad_v do not depend on the current iteration's gradient
-        # outputs, we can still overlap.  But we need two sync spots instead of one.
-        # Algorithm therefore looks like this:
-        # 1. If iteration != N-1, send k, v to the next GPU asycn after combining them into one tensor.
-        # 2. If iteration != 0, wait for grad_k, grad_v to be received from the previous GPU and split them.
-        # 2. Compute the gradients on the local block (grad_q, grad_k, grad_v)
-        # 3. Accumulate the gradients on the local block.
-        # 5. If iteration != N-1, wait for k, v to be received from the previous GPU (and split them) before the next iteration
-        # 4. If iteration != 0, send grad_k, grad_v to the next GPU after combining them into one tensor.
+        # Pre-allocate double buffers on the default stream.
+        k_bufs = [torch.empty_like(k), torch.empty_like(k)]
+        v_bufs = [torch.empty_like(v), torch.empty_like(v)]
+        grad_k_bufs = [torch.empty_like(k), torch.empty_like(k)]
+        grad_v_bufs = [torch.empty_like(v), torch.empty_like(v)]
 
-        for i in range(ctx.ring_config.mesh_size):
-            (
-                block_grad_q,
-                block_grad_k,
-                block_grad_v,
-                block_grad_attn_mask,
-            ) = aten._scaled_dot_product_efficient_attention_backward(
-                grad_output,
-                q,
-                k,
-                v,
-                attn_mask,
-                output,
-                log_sumexp,
-                philox_seed,
-                philox_offset,
-                grad_input_mask=ctx.grad_input_mask,
-                **attn_args,
-            )
+        kv_done = torch.cuda.Event()
+        grad_done = torch.cuda.Event()
 
-            grad_q += block_grad_q
-            grad_k += block_grad_k
-            grad_v += block_grad_v
+        kv_work = None
+        grad_work = None
+        next_k_buf = None
+        next_v_buf = None
+        next_grad_k_buf = None
+        next_grad_v_buf = None
 
-            # Send k, v, grad_k, grad_v to the next rank:
-            k = perform_ring_iteration(k, ctx.mesh, ctx.ring_config)
-            v = perform_ring_iteration(v, ctx.mesh, ctx.ring_config)
-            grad_k = perform_ring_iteration(grad_k, ctx.mesh, ctx.ring_config)
-            grad_v = perform_ring_iteration(grad_v, ctx.mesh, ctx.ring_config)
+        for i in range(mesh_size):
+            # --- Wait for k,v from previous async send ---
+            if kv_work is not None:
+                for w in kv_work:
+                    w.wait()
+                comm_stream.record_event(kv_done)
+                compute_stream.wait_event(kv_done)
+                k = next_k_buf
+                v = next_v_buf
+                kv_work = None
+
+            # --- Wait for grad_k,v from previous async send ---
+            if grad_work is not None:
+                for w in grad_work:
+                    w.wait()
+                comm_stream.record_event(grad_done)
+                compute_stream.wait_event(grad_done)
+                grad_k = next_grad_k_buf
+                grad_v = next_grad_v_buf
+                grad_work = None
+
+            # --- Async send k,v for next iteration (overlaps with compute) ---
+            if i < mesh_size - 1:
+                recv_idx = (i + 1) % 2
+                next_k_buf = k_bufs[recv_idx]
+                next_v_buf = v_bufs[recv_idx]
+
+                comm_stream.wait_stream(compute_stream)
+                with torch.cuda.stream(comm_stream):
+                    _, kv_work_k = perform_ring_iteration_async(
+                        k,
+                        mesh,
+                        ring_config,
+                        recv_tensor=next_k_buf,
+                    )
+                    _, kv_work_v = perform_ring_iteration_async(
+                        v,
+                        mesh,
+                        ring_config,
+                        recv_tensor=next_v_buf,
+                    )
+                kv_work = kv_work_k + kv_work_v
+                k.record_stream(comm_stream)
+                v.record_stream(comm_stream)
+
+            # --- Compute block gradients ---
+            with record_function(f"sdpa_backward_{i}_{dist.get_rank()}"):
+                (
+                    block_grad_q,
+                    block_grad_k,
+                    block_grad_v,
+                    _,
+                ) = aten._scaled_dot_product_efficient_attention_backward(
+                    grad_output,
+                    q,
+                    k,
+                    v,
+                    attn_mask,
+                    output,
+                    log_sumexp,
+                    philox_seed,
+                    philox_offset,
+                    grad_input_mask=ctx.grad_input_mask,
+                    **attn_args,
+                )
+
+                grad_q += block_grad_q
+                grad_k += block_grad_k
+                grad_v += block_grad_v
+
+            # --- Send grad_k,v: async for non-last, blocking for last ---
+            if i < mesh_size - 1:
+                recv_idx = (i + 1) % 2
+                next_grad_k_buf = grad_k_bufs[recv_idx]
+                next_grad_v_buf = grad_v_bufs[recv_idx]
+
+                comm_stream.wait_stream(compute_stream)
+                with torch.cuda.stream(comm_stream):
+                    _, grad_work_k = perform_ring_iteration_async(
+                        grad_k,
+                        mesh,
+                        ring_config,
+                        recv_tensor=next_grad_k_buf,
+                    )
+                    _, grad_work_v = perform_ring_iteration_async(
+                        grad_v,
+                        mesh,
+                        ring_config,
+                        recv_tensor=next_grad_v_buf,
+                    )
+                grad_work = grad_work_k + grad_work_v
+                grad_k.record_stream(comm_stream)
+                grad_v.record_stream(comm_stream)
+            else:
+                # Last iteration: blocking shift to place grads at the right rank
+                grad_k = perform_ring_iteration(grad_k, mesh, ring_config)
+                grad_v = perform_ring_iteration(grad_v, mesh, ring_config)
 
         return grad_q, grad_k, grad_v, grad_attn_mask, None, None, None
 
@@ -428,8 +504,6 @@ class RingSDPABlocking(torch.autograd.Function):
     space to prevent underflow/overflow as well as precision issues. See the helper functions
     ``add_log_sumexp`` and ``stable_signed_accumulate`` for more details.
     """
-
-    # comm_stream = torch.cuda.Stream()
 
     @staticmethod
     def forward(
@@ -696,7 +770,7 @@ def ring_sdpa(
     else:
         latn_mask = None
 
-    x = RingSDPABlocking.apply(lq, lk, lv, latn_mask, q._spec.mesh, ring_config, kwargs)
+    x = RingSDPA.apply(lq, lk, lv, latn_mask, q._spec.mesh, ring_config, kwargs)
 
     # Convert back to ShardTensor
     x = ShardTensor.from_local(
