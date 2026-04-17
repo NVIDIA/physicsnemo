@@ -31,7 +31,7 @@ from tensordict import TensorDict
 
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
-from physicsnemo.mesh import Mesh
+from physicsnemo.mesh import DomainMesh, Mesh
 
 
 def _get_mesh_section(mesh: Mesh, section: str) -> TensorDict:
@@ -45,15 +45,99 @@ def _get_mesh_section(mesh: Mesh, section: str) -> TensorDict:
     raise ValueError(f"Unknown mesh section: {section!r}")
 
 
-def _compute_q_inf(global_data: TensorDict) -> torch.Tensor:
-    """Compute dynamic pressure q_inf = 0.5 * rho_inf * |U_inf|^2."""
+def _freestream_scales(
+    global_data: TensorDict,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """Derive reference scales from freestream metadata (cast to float32 once).
+
+    Returns ``(q_inf, p_inf, U_inf_mag, rho_inf, T_inf)`` where
+    ``q_inf = 0.5 * rho_inf * |U_inf|^2``.  ``T_inf`` is ``None``
+    when the metadata does not contain a freestream temperature (e.g.
+    incompressible datasets).
+    """
     U_inf = global_data["U_inf"].float()
     rho_inf = global_data["rho_inf"].float()
+    p_inf = global_data["p_inf"].float()
     U_inf_mag_sq = (U_inf * U_inf).sum()
-    return 0.5 * rho_inf * U_inf_mag_sq
+    q_inf = 0.5 * rho_inf * U_inf_mag_sq
+    U_inf_mag = U_inf_mag_sq.sqrt()
+    T_inf = global_data["T_inf"].float() if "T_inf" in global_data else None
+    return q_inf, p_inf, U_inf_mag, rho_inf, T_inf
 
 
-_FIELD_TYPES = frozenset({"pressure", "stress", "velocity"})
+_FIELD_TYPES = frozenset(
+    {"pressure", "stress", "velocity", "temperature", "density", "identity"}
+)
+
+# Number of tensor channels each field type occupies.
+_FIELD_CHANNELS = {
+    "pressure": 1,
+    "stress": 3,
+    "velocity": 3,
+    "temperature": 1,
+    "density": 1,
+    "identity": 1,
+}
+
+
+def _nondim_field(
+    val: torch.Tensor,
+    ftype: str,
+    q_inf: torch.Tensor,
+    p_inf: torch.Tensor,
+    U_inf_mag: torch.Tensor,
+    *,
+    rho_inf: torch.Tensor | None = None,
+    T_inf: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Apply forward non-dimensionalization to a single field."""
+    if ftype == "identity":
+        return val
+    if ftype == "pressure":
+        return (val - p_inf) / q_inf
+    if ftype == "stress":
+        return val / q_inf
+    if ftype == "velocity":
+        return val / U_inf_mag
+    if ftype == "temperature":
+        if T_inf is None:
+            raise ValueError("T_inf required for temperature non-dimensionalization")
+        return val / T_inf
+    if ftype == "density":
+        if rho_inf is None:
+            raise ValueError("rho_inf required for density non-dimensionalization")
+        return val / rho_inf
+    raise ValueError(f"Unknown field type: {ftype!r}")
+
+
+def _redim_field(
+    val: torch.Tensor,
+    ftype: str,
+    q_inf: torch.Tensor,
+    p_inf: torch.Tensor,
+    U_inf_mag: torch.Tensor,
+    *,
+    rho_inf: torch.Tensor | None = None,
+    T_inf: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Reverse non-dimensionalization for a single field."""
+    if ftype == "identity":
+        return val
+    if ftype == "pressure":
+        return val * q_inf + p_inf
+    if ftype == "stress":
+        return val * q_inf
+    if ftype == "velocity":
+        return val * U_inf_mag
+    if ftype == "temperature":
+        if T_inf is None:
+            raise ValueError("T_inf required for temperature re-dimensionalization")
+        return val * T_inf
+    if ftype == "density":
+        if rho_inf is None:
+            raise ValueError("rho_inf required for density re-dimensionalization")
+        return val * rho_inf
+    raise ValueError(f"Unknown field type: {ftype!r}")
 
 
 @register()
@@ -68,6 +152,9 @@ class NonDimensionalizeByMetadata(MeshTransform):
     - **pressure**: ``(p - p_inf) / q_inf`` (pressure coefficient Cp)
     - **stress**: ``tau / q_inf`` (skin-friction coefficient Cf)
     - **velocity**: ``U / |U_inf|``
+    - **temperature**: ``T / T_inf`` (requires ``T_inf`` in ``global_data``)
+    - **density**: ``rho / rho_inf``
+    - **identity**: pass-through (no scaling applied)
 
     If ``L_ref`` is present in ``global_data``, mesh points are divided
     by it to produce non-dimensional coordinates: ``x* = x / L_ref``.
@@ -77,7 +164,8 @@ class NonDimensionalizeByMetadata(MeshTransform):
     ----------
     fields : dict[str, str]
         Mapping of ``{field_name: field_type}`` where *field_type* is one
-        of ``"pressure"``, ``"stress"``, or ``"velocity"``.
+        of ``"pressure"``, ``"stress"``, ``"velocity"``, ``"temperature"``,
+        ``"density"``, or ``"identity"``.
     section : str
         Mesh data section containing the fields (``"point_data"`` or
         ``"cell_data"``).
@@ -106,28 +194,52 @@ class NonDimensionalizeByMetadata(MeshTransform):
         self._fields = fields
         self._section = section
 
-    def __call__(self, mesh: Mesh) -> Mesh:
-        gd = mesh.global_data
-        q_inf = _compute_q_inf(gd)
-        p_inf = gd["p_inf"].float()
-        U_inf = gd["U_inf"].float()
-        U_inf_mag = (U_inf * U_inf).sum().sqrt()
+    def _transform_mesh(
+        self,
+        mesh: Mesh,
+        field_fn,
+        *,
+        inverse: bool,
+        scales: tuple | None = None,
+        skip_missing: bool = False,
+    ) -> Mesh:
+        """Shared implementation for forward and inverse mesh transforms.
+
+        Parameters
+        ----------
+        scales : tuple or None
+            Pre-computed ``(q_inf, p_inf, U_inf_mag, rho_inf, T_inf, L_ref)``
+            to use instead of deriving them from ``mesh.global_data``.
+        skip_missing : bool
+            If *True*, silently skip fields not present in the mesh section.
+        """
+        if scales is not None:
+            q_inf, p_inf, U_inf_mag, rho_inf, T_inf, L_ref = scales
+        else:
+            gd = mesh.global_data
+            q_inf, p_inf, U_inf_mag, rho_inf, T_inf = _freestream_scales(gd)
+            L_ref = gd["L_ref"].float() if "L_ref" in gd else None
 
         td = _get_mesh_section(mesh, self._section)
         new_td = td.clone()
 
         for field_name, ftype in self._fields.items():
+            if skip_missing and field_name not in new_td.keys():
+                continue
             val = new_td[field_name].float()
-            if ftype == "pressure":
-                new_td[field_name] = (val - p_inf) / q_inf
-            elif ftype == "stress":
-                new_td[field_name] = val / q_inf
-            elif ftype == "velocity":
-                new_td[field_name] = val / U_inf_mag
+            new_td[field_name] = field_fn(
+                val,
+                ftype,
+                q_inf,
+                p_inf,
+                U_inf_mag,
+                rho_inf=rho_inf,
+                T_inf=T_inf,
+            )
 
         points = mesh.points
-        if "L_ref" in gd:
-            points = points / gd["L_ref"].float()
+        if L_ref is not None:
+            points = points * L_ref if inverse else points / L_ref
 
         kwargs: dict = {
             "points": points,
@@ -138,6 +250,33 @@ class NonDimensionalizeByMetadata(MeshTransform):
         }
         kwargs[self._section] = new_td
         return Mesh(**kwargs)
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        return self._transform_mesh(mesh, _nondim_field, inverse=False)
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Non-dimensionalize a DomainMesh using domain-level ``global_data``.
+
+        Freestream scales are read once from ``domain.global_data``
+        (where the metadata injector placed them) and applied to the
+        interior and every boundary mesh.  Fields that are not present
+        on a particular sub-mesh (e.g. volume fields on a surface
+        boundary) are silently skipped.
+        """
+        gd = domain.global_data
+        q_inf, p_inf, U_inf_mag, rho_inf, T_inf = _freestream_scales(gd)
+        L_ref = gd["L_ref"].float() if "L_ref" in gd else None
+        scales = (q_inf, p_inf, U_inf_mag, rho_inf, T_inf, L_ref)
+
+        return domain._map_meshes(
+            lambda m: self._transform_mesh(
+                m,
+                _nondim_field,
+                inverse=False,
+                scales=scales,
+                skip_missing=True,
+            )
+        )
 
     def inverse(self, mesh: Mesh) -> Mesh:
         """Re-dimensionalize: reverse the non-dimensionalization.
@@ -156,37 +295,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
         Mesh
             Mesh with re-dimensionalized fields.
         """
-        gd = mesh.global_data
-        q_inf = _compute_q_inf(gd)
-        p_inf = gd["p_inf"].float()
-        U_inf = gd["U_inf"].float()
-        U_inf_mag = (U_inf * U_inf).sum().sqrt()
-
-        td = _get_mesh_section(mesh, self._section)
-        new_td = td.clone()
-
-        for field_name, ftype in self._fields.items():
-            val = new_td[field_name].float()
-            if ftype == "pressure":
-                new_td[field_name] = val * q_inf + p_inf
-            elif ftype == "stress":
-                new_td[field_name] = val * q_inf
-            elif ftype == "velocity":
-                new_td[field_name] = val * U_inf_mag
-
-        points = mesh.points
-        if "L_ref" in gd:
-            points = points * gd["L_ref"].float()
-
-        kwargs: dict = {
-            "points": points,
-            "cells": mesh.cells,
-            "point_data": mesh.point_data,
-            "cell_data": mesh.cell_data,
-            "global_data": mesh.global_data,
-        }
-        kwargs[self._section] = new_td
-        return Mesh(**kwargs)
+        return self._transform_mesh(mesh, _redim_field, inverse=True)
 
     def inverse_tensor(
         self,
@@ -195,6 +304,9 @@ class NonDimensionalizeByMetadata(MeshTransform):
         q_inf: torch.Tensor,
         p_inf: torch.Tensor,
         U_inf_mag: torch.Tensor,
+        *,
+        rho_inf: torch.Tensor | None = None,
+        T_inf: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Re-dimensionalize a concatenated output tensor.
 
@@ -208,11 +320,19 @@ class NonDimensionalizeByMetadata(MeshTransform):
             Shape ``(*, C)`` with channels ordered by *field_types*.
         field_types : dict[str, str]
             Ordered mapping of ``{field_name: nondim_type}`` where
-            *nondim_type* is one of ``"pressure"``, ``"stress"``, or
-            ``"velocity"``.  Uses the model's output field names (e.g.
-            after renaming), not the original mesh field names.
+            *nondim_type* is one of ``"pressure"``, ``"stress"``,
+            ``"velocity"``, ``"temperature"``, ``"density"``, or
+            ``"identity"``.
+            Uses the model's output field names (e.g. after renaming),
+            not the original mesh field names.
         q_inf, p_inf, U_inf_mag : Tensor
             Reference quantities (scalars or broadcastable).
+        rho_inf : Tensor or None
+            Freestream density.  Required when *field_types* contains
+            ``"density"``.
+        T_inf : Tensor or None
+            Freestream temperature.  Required when *field_types* contains
+            ``"temperature"``.
 
         Returns
         -------
@@ -222,15 +342,17 @@ class NonDimensionalizeByMetadata(MeshTransform):
         out = tensor.clone()
         idx = 0
         for name, ftype in field_types.items():
-            if ftype == "pressure":
-                out[..., idx] = out[..., idx] * q_inf + p_inf
-                idx += 1
-            elif ftype == "stress":
-                out[..., idx : idx + 3] = out[..., idx : idx + 3] * q_inf
-                idx += 3
-            elif ftype == "velocity":
-                out[..., idx : idx + 3] = out[..., idx : idx + 3] * U_inf_mag
-                idx += 3
+            n = _FIELD_CHANNELS[ftype]
+            out[..., idx : idx + n] = _redim_field(
+                out[..., idx : idx + n],
+                ftype,
+                q_inf,
+                p_inf,
+                U_inf_mag,
+                rho_inf=rho_inf,
+                T_inf=T_inf,
+            )
+            idx += n
         return out
 
     def extra_repr(self) -> str:

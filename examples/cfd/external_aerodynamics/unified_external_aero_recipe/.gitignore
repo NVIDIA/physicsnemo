@@ -1,3 +1,6 @@
+*.sh
+runs/
+mlruns/
 *.err
 *.out
 outputs/

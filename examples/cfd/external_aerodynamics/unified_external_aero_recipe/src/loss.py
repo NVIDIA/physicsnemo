@@ -161,7 +161,7 @@ class LossCalculator:
         - "huber": Huber loss (smooth L1), robust to outliers
         - "mse": Mean Squared Error
         - "rmse": Relative MSE (normalized by target magnitude)
-    vector_dim : int, optional
+    n_spatial_dims : int, optional
         Dimensionality of vector fields. Default is 3.
     prefix : str, optional
         Prefix for all loss names (e.g., "surface" -> "loss/surface/pressure").
@@ -186,12 +186,12 @@ class LossCalculator:
         self,
         target_config: dict[str, str],
         loss_type: Literal["huber", "mse", "rmse"] = "mse",
-        vector_dim: int = 3,
+        n_spatial_dims: int = 3,
         prefix: str = "",
         normalize_by_channels: bool = True,
     ):
         self.loss_type = loss_type
-        self.vector_dim = vector_dim
+        self.n_spatial_dims = n_spatial_dims
         self.prefix = prefix
         self.normalize_by_channels = normalize_by_channels
 
@@ -203,13 +203,16 @@ class LossCalculator:
             )
 
         # Parse target config to build field specifications using shared utility
-        self.field_specs = parse_target_config(target_config, vector_dim)
+        self.field_specs = parse_target_config(target_config, n_spatial_dims)
         self.total_channels = sum(spec.dim for spec in self.field_specs)
 
     def _make_key(self, *parts: str) -> str:
         """Construct a loss key with optional prefix."""
-        key = "/".join(parts)
-        return f"loss/{self.prefix}/{key}" if self.prefix else f"loss/{key}"
+        segments = ["loss"]
+        if self.prefix:
+            segments.append(self.prefix)
+        segments.extend(parts)
+        return "/".join(segments)
 
     def _compute_scalar_loss(
         self,

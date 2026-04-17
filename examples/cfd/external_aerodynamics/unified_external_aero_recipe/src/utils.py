@@ -18,13 +18,32 @@
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from typing import Literal
 
+import numpy as np
 import torch
 
 from omegaconf import DictConfig
 from physicsnemo.optim import CombinedOptimizer
+
+
+def set_seed(seed: int | None, rank: int = 0) -> None:
+    """Pin all RNG states for reproducible training.
+
+    When *seed* is not None, seeds Python, NumPy, and PyTorch (CPU + all
+    CUDA devices) with ``seed + rank`` so that different ranks diverge
+    deterministically.  When *seed* is None this function is a no-op,
+    preserving the current (non-deterministic) behaviour.
+    """
+    if seed is None:
+        return
+    seed = seed + rank
+    random.seed(seed)
+    np.random.seed(seed % (1 << 31))
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 def build_muon_optimizer(
@@ -123,14 +142,14 @@ class FieldSpec:
 
 
 def parse_target_config(
-    target_config: dict[str, str], vector_dim: int = 3
+    target_config: dict[str, str], n_spatial_dims: int = 3
 ) -> list[FieldSpec]:
     """Parse target configuration to field specifications.
 
     Args:
         target_config: Mapping of field names to types ("scalar" or "vector").
                       Order determines channel indices.
-        vector_dim: Dimensionality of vector fields. Default is 3.
+        n_spatial_dims: Dimensionality of vector fields. Default is 3.
 
     Returns:
         List of FieldSpec objects describing each field.
@@ -154,7 +173,7 @@ def parse_target_config(
         if field_type == "scalar":
             dim = 1
         elif field_type == "vector":
-            dim = vector_dim
+            dim = n_spatial_dims
         else:
             raise ValueError(
                 f"Unknown field type '{field_type}' for field '{name}'. "

@@ -15,10 +15,10 @@
 # limitations under the License.
 
 """
-Unified External Aerodynamics - Surface Training Script
+Unified External Aerodynamics Training Script
 
-Trains a GeoTransolver (or other point-cloud model) on surface pressure
-and wall shear stress using the mesh datapipe infrastructure.
+Trains a point-cloud model (GeoTransolver, Transolver, etc.) on surface
+or volume fields using the mesh datapipe infrastructure.
 
 Usage::
 
@@ -30,13 +30,12 @@ Usage::
 
     # I/O benchmark: iterate dataloaders without model logic
     python src/train.py benchmark_io=true profile=true
-    python src/train.py benchmark_io=true training.benchmark_max_steps=20
+    python src/train.py benchmark_io=true +training.benchmark_max_steps=20
 """
 
 import os
 import sys
 import time
-import collections
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -46,7 +45,7 @@ from omegaconf import DictConfig, OmegaConf
 
 import torch
 from torch.amp import autocast, GradScaler
-from torch.utils.tensorboard import SummaryWriter
+import mlflow
 
 from tabulate import tabulate
 
@@ -58,29 +57,41 @@ from physicsnemo.utils.profiling import profile, Profiler
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.datapipes import DataLoader
 
-from datasets import build_surface_dataset, load_dataset_config
-from collate import surface_collate
+from datasets import (
+    build_dataset,
+    load_dataset_config,
+    load_manifest,
+    resolve_manifest_indices,
+    ManifestSampler,
+)
+from collate import build_collate_fn
 from metrics import MetricCalculator
 from loss import LossCalculator
-from utils import build_muon_optimizer
+from utils import build_muon_optimizer, set_seed
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
-TE_AVAILABLE = check_version_spec("transformer_engine", hard_fail=False)
+te = OptionalImport("transformer_engine.pytorch")
+te_recipe = OptionalImport("transformer_engine.common.recipe")
+TE_AVAILABLE = te.available
 
-if TE_AVAILABLE:
-    import transformer_engine.pytorch as te
-    from transformer_engine.common.recipe import Format, DelayedScaling
-else:
-    te, Format, DelayedScaling = None, None, None
 
-torch.serialization.add_safe_globals([omegaconf.listconfig.ListConfig])
-torch.serialization.add_safe_globals([omegaconf.base.ContainerMetadata])
-torch.serialization.add_safe_globals([collections.defaultdict])
-torch.serialization.add_safe_globals([dict])
-torch.serialization.add_safe_globals([int])
-torch.serialization.add_safe_globals([omegaconf.nodes.AnyNode])
-torch.serialization.add_safe_globals([omegaconf.base.Metadata])
+def _flatten_config(d: dict, parent: str = "", sep: str = ".") -> dict[str, str]:
+    """Recursively flatten a nested dict into dot-separated key/value pairs.
+
+    MLflow has a 500-param limit; values are stringified and truncated
+    to 500 chars to stay within MLflow's constraints.
+    """
+    items: dict[str, str] = {}
+    for k, v in d.items():
+        key = f"{parent}{sep}{k}" if parent else k
+        if isinstance(v, dict):
+            items.update(_flatten_config(v, key, sep))
+        elif isinstance(v, (list, tuple)):
+            items[key] = str(v)[:500]
+        else:
+            items[key] = str(v)[:500]
+    return items
 
 
 def get_autocast_context(precision: str):
@@ -103,8 +114,8 @@ def get_autocast_context(precision: str):
     elif precision == "bfloat16":
         return autocast("cuda", dtype=torch.bfloat16)
     elif precision == "float8" and TE_AVAILABLE:
-        fp8_format = Format.HYBRID
-        fp8_recipe = DelayedScaling(
+        fp8_format = te_recipe.Format.HYBRID
+        fp8_recipe = te_recipe.DelayedScaling(
             fp8_format=fp8_format, amax_history_len=16, amax_compute_algo="max"
         )
         return te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe)
@@ -118,26 +129,43 @@ def forward_pass(
     precision: str,
     loss_calculator: LossCalculator,
     metric_calculator: MetricCalculator,
+    *,
+    broadcast_global: bool = False,
 ) -> tuple[torch.Tensor, dict[str, float], tuple]:
     """Run forward pass, compute loss and metrics.
 
     Parameters
     ----------
     batch : dict
-        Keys: ``geometry`` (B,N,3), ``local_embedding`` (B,N,6),
-        ``global_embedding`` (B,1,3), ``fields`` (B,N,4).
+        Model-ready batch produced by the collate function.  Must contain
+        a ``"fields"`` key holding the prediction targets (popped before
+        the forward call).
     model : torch.nn.Module
-        Point-cloud model with forward(local_embedding, geometry, global_embedding, ...).
+        Point-cloud model whose ``forward`` accepts the remaining batch
+        keys as keyword arguments.
     precision : str
         One of "float32", "float16", "bfloat16", "float8".
     loss_calculator : LossCalculator
     metric_calculator : MetricCalculator
+    broadcast_global : bool, default False
+        When ``True``, any tensor with spatial dimension 1 (e.g. global
+        features shaped ``(B, 1, C)``) is expanded to match the largest
+        spatial dimension in the batch.  Required for Transolver, whose
+        ``forward`` concatenates ``[embedding, fx]`` along the last dim
+        and therefore needs matching spatial sizes.
 
     Returns
     -------
     loss, metrics_dict, (outputs, targets)
     """
     targets = batch.pop("fields")
+
+    if broadcast_global:
+        max_n = max(v.shape[1] for v in batch.values() if v.ndim >= 3)
+        batch = {
+            k: v.expand(-1, max_n, -1) if v.ndim >= 3 and v.shape[1] == 1 else v
+            for k, v in batch.items()
+        }
 
     dtype_map = {"float16": torch.float16, "bfloat16": torch.bfloat16}
     dtype = dtype_map.get(precision)
@@ -164,16 +192,17 @@ def train_epoch(
     loss_calculator: LossCalculator,
     metric_calculator: MetricCalculator,
     logger,
-    writer,
     epoch: int,
     cfg: DictConfig,
     dist_manager: DistributedManager,
     scaler: GradScaler | None = None,
+    broadcast_global: bool = False,
+    log_every_n_steps: int = 10,
 ) -> tuple[float, dict[str, float]]:
     """Run one training epoch over the dataloader.
 
     Iterates through all batches, computes forward pass, back-propagates
-    gradients, and logs per-step and per-epoch statistics to TensorBoard.
+    gradients, and logs per-step and per-epoch statistics to MLflow.
 
     Parameters
     ----------
@@ -192,8 +221,6 @@ def train_epoch(
         Computes evaluation metrics (L1, L2, MAE, etc.).
     logger : RankZeroLoggingWrapper
         Logger for console output.
-    writer : SummaryWriter or None
-        TensorBoard writer for training scalars (rank-0 only).
     epoch : int
         Current epoch index (0-based).
     cfg : DictConfig
@@ -202,6 +229,11 @@ def train_epoch(
         Distributed training manager.
     scaler : torch.amp.GradScaler or None, optional
         Gradient scaler for mixed-precision (float16) training.
+    broadcast_global : bool, default False
+        Expand global (B,1,C) tensors to match the spatial dimension
+        of other batch tensors before forwarding.
+    log_every_n_steps : int, default 10
+        How often to log per-step metrics to MLflow.
 
     Returns
     -------
@@ -222,8 +254,13 @@ def train_epoch(
     for i, batch in enumerate(dataloader):
         batch = {k: v.to(dist_manager.device) for k, v in batch.items()}
 
-        loss, metrics, _ = forward_pass(
-            batch, model, precision, loss_calculator, metric_calculator
+        loss, metrics, (outputs, targets) = forward_pass(
+            batch,
+            model,
+            precision,
+            loss_calculator,
+            metric_calculator,
+            broadcast_global=broadcast_global,
         )
 
         optimizer.zero_grad()
@@ -259,6 +296,17 @@ def train_epoch(
             f"Mem: {mem_gb:.2f}GB"
         )
 
+        # Per-step MLflow logging at configured frequency
+        global_step = epoch * num_steps + i
+        if dist_manager.rank == 0 and (i + 1) % log_every_n_steps == 0:
+            step_metrics = {
+                "step/train_loss": this_loss,
+                "step/mem_gb": mem_gb,
+                "step/step_time_s": step_dt,
+            }
+            step_metrics.update({f"step/train_{k}": v for k, v in metrics.items()})
+            mlflow.log_metrics(step_metrics, step=global_step)
+
         if cfg.profile and i >= 10:
             break
         step_t0 = time.perf_counter()
@@ -272,10 +320,10 @@ def train_epoch(
         f"({n_batches} steps, {epoch_dt / max(n_batches, 1):.3f}s/step avg)"
     )
 
-    if dist_manager.rank == 0 and writer is not None:
-        writer.add_scalar("epoch/loss", avg_loss, epoch)
-        for k, v in avg_metrics.items():
-            writer.add_scalar(f"epoch/{k}", v, epoch)
+    if dist_manager.rank == 0:
+        epoch_metrics = {"train/loss": avg_loss}
+        epoch_metrics.update({f"train/{k}": v for k, v in avg_metrics.items()})
+        mlflow.log_metrics(epoch_metrics, step=epoch)
 
     return avg_loss, avg_metrics
 
@@ -287,21 +335,12 @@ def val_epoch(
     loss_calculator: LossCalculator,
     metric_calculator: MetricCalculator,
     logger,
-    val_writer,
     epoch: int,
     cfg: DictConfig,
     dist_manager: DistributedManager,
-    phys_metric_calculator: MetricCalculator | None = None,
-    target_config: dict[str, str] | None = None,
-    normalizer=None,
-    nondim_transform=None,
-    metadata: dict | None = None,
-) -> tuple[float, dict[str, float], dict[str, float]]:
-    """Run one validation epoch and optionally compute physical-space metrics.
-
-    When ``phys_metric_calculator`` and ``metadata`` are both provided,
-    model outputs and targets are converted back to physical units via
-    :func:`_to_physical` and a second set of metrics is computed.
+    broadcast_global: bool = False,
+) -> tuple[float, dict[str, float]]:
+    """Run one validation epoch.
 
     Parameters
     ----------
@@ -315,26 +354,15 @@ def val_epoch(
         Computes normalised-space metrics.
     logger : RankZeroLoggingWrapper
         Logger for console output.
-    val_writer : SummaryWriter or None
-        TensorBoard writer for validation scalars (rank-0 only).
     epoch : int
         Current epoch index (0-based).
     cfg : DictConfig
         Full Hydra config; uses ``cfg.profile`` and ``cfg.precision``.
     dist_manager : DistributedManager
         Distributed training manager.
-    phys_metric_calculator : MetricCalculator or None, optional
-        If provided, computes metrics in physical (dimensional) space.
-    target_config : dict[str, str] or None, optional
-        Maps target field names to their types (``"scalar"`` / ``"vector"``).
-        Required when ``phys_metric_calculator`` is given.
-    normalizer : NormalizeMeshFields or None, optional
-        The z-score normalizer extracted from the training pipeline.
-    nondim_transform : NonDimensionalizeByMetadata or None, optional
-        The non-dimensionalization transform from the training pipeline.
-    metadata : dict or None, optional
-        Freestream conditions (``U_inf``, ``rho_inf``, ``p_inf``, etc.)
-        needed to invert non-dimensionalization.
+    broadcast_global : bool, default False
+        Expand global (B,1,C) tensors to match the spatial dimension
+        of other batch tensors before forwarding.
 
     Returns
     -------
@@ -342,39 +370,28 @@ def val_epoch(
         Mean validation loss over all batches.
     avg_metrics : dict[str, float]
         Mean normalised-space metrics.
-    avg_phys_metrics : dict[str, float]
-        Mean physical-space metrics (empty dict if not computed).
     """
     model.eval()
     total_loss = 0.0
     total_metrics: dict[str, float] = {}
-    total_phys_metrics: dict[str, float] = {}
     precision = getattr(cfg, "precision", "float32")
     n_batches = 0
     num_steps = len(dataloader)
     epoch_t0 = time.perf_counter()
-    compute_phys = phys_metric_calculator is not None and metadata
 
     with torch.no_grad():
         step_t0 = time.perf_counter()
         for i, batch in enumerate(dataloader):
             batch = {k: v.to(dist_manager.device) for k, v in batch.items()}
 
-            loss, metrics, (outputs, targets) = forward_pass(
-                batch, model, precision, loss_calculator, metric_calculator
+            loss, metrics, _ = forward_pass(
+                batch,
+                model,
+                precision,
+                loss_calculator,
+                metric_calculator,
+                broadcast_global=broadcast_global,
             )
-
-            if compute_phys:
-                phys_out = _to_physical(
-                    outputs, target_config, normalizer, nondim_transform, metadata
-                )
-                phys_tgt = _to_physical(
-                    targets, target_config, normalizer, nondim_transform, metadata
-                )
-                phys_metrics = phys_metric_calculator(phys_out, phys_tgt)
-                for k, v in phys_metrics.items():
-                    val = v if isinstance(v, float) else v.item()
-                    total_phys_metrics[k] = total_phys_metrics.get(k, 0.0) + val
 
             step_dt = time.perf_counter() - step_t0
             total_loss += loss.item()
@@ -397,22 +414,18 @@ def val_epoch(
     epoch_dt = time.perf_counter() - epoch_t0
     avg_loss = total_loss / max(n_batches, 1)
     avg_metrics = {k: v / max(n_batches, 1) for k, v in total_metrics.items()}
-    avg_phys_metrics = {k: v / max(n_batches, 1) for k, v in total_phys_metrics.items()}
 
     logger.info(
         f"Epoch {epoch} val done in {epoch_dt:.1f}s "
         f"({n_batches} steps, {epoch_dt / max(n_batches, 1):.3f}s/step avg)"
     )
 
-    if dist_manager.rank == 0 and val_writer is not None:
-        val_writer.add_scalar("epoch/loss", avg_loss, epoch)
-        for k, v in avg_metrics.items():
-            val_writer.add_scalar(f"epoch/{k}", v, epoch)
-        for k, v in avg_phys_metrics.items():
-            base = k.removeprefix("phys/")
-            val_writer.add_scalar(f"epoch/phys/{base}", v, epoch)
+    if dist_manager.rank == 0:
+        val_metrics_log = {"val/loss": avg_loss}
+        val_metrics_log.update({f"val/{k}": v for k, v in avg_metrics.items()})
+        mlflow.log_metrics(val_metrics_log, step=epoch)
 
-    return avg_loss, avg_metrics, avg_phys_metrics
+    return avg_loss, avg_metrics
 
 
 @profile
@@ -453,6 +466,15 @@ def benchmark_io_epoch(
             f"  [{label}] [{i + 1}/{num_steps}] "
             f"dt={dt:.4f}s  Mem={mem_gb:.2f}GB  {shapes}"
         )
+        for k, v in batch.items():
+            v_flat = v.float()
+            logger.info(
+                f"    {k:20s}  "
+                f"min={v_flat.min().item(): .6e}  "
+                f"mean={v_flat.mean().item(): .6e}  "
+                f"std={v_flat.std().item(): .6e}  "
+                f"max={v_flat.max().item(): .6e}"
+            )
 
         if max_steps is not None and i + 1 >= max_steps:
             break
@@ -496,13 +518,29 @@ def _extract_pipeline_transforms(datasets: list) -> tuple:
 
 
 def build_dataloaders(cfg: DictConfig):
-    """Build train and val dataloaders from dataset configs."""
+    """Build train and val dataloaders from dataset configs.
+
+    Supports two split strategies:
+
+    **Directory-based** (existing): separate ``train_datadir`` and
+    ``val_datadir`` in the dataset YAML. Each split gets its own reader
+    and dataset.
+
+    **Manifest-based** (new): a single ``datadir`` in the dataset YAML
+    with ``train_manifest`` and ``val_manifest`` in the training config's
+    ``data.<key>`` block. One reader/dataset covers the full directory;
+    ``ManifestSampler`` restricts each loader to the correct subset of
+    indices.
+    """
     recipe_root = Path(__file__).resolve().parent.parent
     batch_size = cfg.training.get("batch_size", 1)
     sampling_resolution = cfg.dataset.get("sampling_resolution", None)
     augment = cfg.get("augment", False)
     dist_manager = DistributedManager()
     use_distributed = dist_manager.world_size > 1
+    collate_fn = build_collate_fn(
+        cfg.get("data_mapping", "geotransolver_automotive_surface")
+    )
 
     # DataLoader / MeshDataset performance tuning from cfg.dataloader
     dl_cfg = cfg.get("dataloader", {})
@@ -512,10 +550,17 @@ def build_dataloaders(cfg: DictConfig):
     num_workers = dl_cfg.get("num_workers", 1)
     pin_memory = dl_cfg.get("pin_memory", False)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    sampler_seed = cfg.training.get("seed", 0) or 0
 
     train_datasets = []
     val_datasets = []
+    # When using manifest-based splits, we collect indices per dataset
+    # and build samplers instead of separate datasets.
+    manifest_train_indices: list[int] | None = None
+    manifest_val_indices: list[int] | None = None
+    using_manifests = False
     first_metadata = None
+
     for ds_key in cfg.data:
         ds_cfg_block = cfg.data[ds_key]
         config_path = recipe_root / ds_cfg_block.config
@@ -534,8 +579,75 @@ def build_dataloaders(cfg: DictConfig):
                 OmegaConf.select(ds_yaml, "metadata", default=OmegaConf.create({})),
                 resolve=True,
             )
+
+        # --- Manifest-based splits ---
+        # Two config styles are supported:
+        #
+        # Style A (separate files):
+        #   train_manifest: /path/to/train_runs.txt
+        #   val_manifest:   /path/to/val_runs.txt
+        #
+        # Style B (single dict manifest with split keys):
+        #   manifest:    /path/to/manifest.json
+        #   train_split: single_aoa_4_train
+        #   val_split:   single_aoa_4_val
+        #
+        # Both styles accept an optional ``datadir`` to override
+        # ``train_datadir`` in the dataset YAML with the root directory
+        # containing all runs.
+        train_manifest = ds_cfg_block.get("train_manifest", None)
+        val_manifest = ds_cfg_block.get("val_manifest", None)
+        manifest = ds_cfg_block.get("manifest", None)
+        train_split = ds_cfg_block.get("train_split", None)
+        val_split = ds_cfg_block.get("val_split", None)
+
+        has_manifest = train_manifest is not None or (
+            manifest is not None and train_split is not None
+        )
+
+        if has_manifest:
+            using_manifests = True
+            # When using manifests, the reader must see ALL runs under one
+            # root. The config block can provide ``datadir`` to override the
+            # dataset YAML's ``train_datadir`` with the parent directory that
+            # contains every run (train + val).
+            datadir = ds_cfg_block.get("datadir", None)
+            if datadir:
+                ds_yaml = OmegaConf.merge(ds_yaml, {"train_datadir": datadir})
+            dataset = build_dataset(
+                ds_yaml,
+                augment=augment,
+                device=device,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+            )
+            train_datasets.append(dataset)
+
+            # Resolve train indices
+            if train_manifest is not None:
+                train_entries = load_manifest(train_manifest)
+            else:
+                train_entries = load_manifest(manifest, split=train_split)
+            manifest_train_indices = resolve_manifest_indices(
+                dataset.reader, train_entries
+            )
+
+            # Resolve val indices
+            if val_manifest is not None:
+                val_entries = load_manifest(val_manifest)
+                manifest_val_indices = resolve_manifest_indices(
+                    dataset.reader, val_entries
+                )
+            elif val_split is not None:
+                val_entries = load_manifest(manifest, split=val_split)
+                manifest_val_indices = resolve_manifest_indices(
+                    dataset.reader, val_entries
+                )
+            continue
+
+        # --- Directory-based splits (existing path) ---
         train_datasets.append(
-            build_surface_dataset(
+            build_dataset(
                 ds_yaml,
                 augment=augment,
                 device=device,
@@ -548,7 +660,7 @@ def build_dataloaders(cfg: DictConfig):
         if val_datadir and Path(val_datadir).exists():
             val_yaml = OmegaConf.merge(ds_yaml, {"train_datadir": val_datadir})
             val_datasets.append(
-                build_surface_dataset(
+                build_dataset(
                     val_yaml,
                     augment=False,
                     device=device,
@@ -569,36 +681,69 @@ def build_dataloaders(cfg: DictConfig):
 
         train_dataset = MultiDataset(*train_datasets, output_strict=False)
 
-    if val_datasets:
-        if len(val_datasets) == 1:
-            val_dataset = val_datasets[0]
+    if using_manifests:
+        # Manifest path: single dataset, split via samplers
+        rank = dist_manager.rank if use_distributed else 0
+        world_size = dist_manager.world_size if use_distributed else 1
+
+        train_sampler = ManifestSampler(
+            manifest_train_indices,
+            shuffle=True,
+            seed=sampler_seed,
+            rank=rank,
+            world_size=world_size,
+            drop_last=True,
+        )
+        if manifest_val_indices is not None:
+            val_sampler = ManifestSampler(
+                manifest_val_indices,
+                shuffle=False,
+                seed=sampler_seed,
+                rank=rank,
+                world_size=world_size,
+                drop_last=False,
+            )
         else:
-            from physicsnemo.datapipes import MultiDataset
-
-            val_dataset = MultiDataset(*val_datasets, output_strict=False)
-    else:
+            val_sampler = train_sampler
         val_dataset = train_dataset
+    else:
+        # Directory-based path: separate datasets per split
+        if val_datasets:
+            if len(val_datasets) == 1:
+                val_dataset = val_datasets[0]
+            else:
+                from physicsnemo.datapipes import MultiDataset
 
-    train_sampler = None
-    val_sampler = None
-    if use_distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(
-            train_dataset, shuffle=True, drop_last=True
-        )
-        val_sampler = torch.utils.data.distributed.DistributedSampler(
-            val_dataset, shuffle=False, drop_last=False
-        )
+                val_dataset = MultiDataset(*val_datasets, output_strict=False)
+        else:
+            val_dataset = train_dataset
+
+        train_sampler = None
+        val_sampler = None
+        if use_distributed:
+            train_sampler = torch.utils.data.distributed.DistributedSampler(
+                train_dataset,
+                shuffle=True,
+                drop_last=True,
+                seed=sampler_seed,
+            )
+            val_sampler = torch.utils.data.distributed.DistributedSampler(
+                val_dataset,
+                shuffle=False,
+                drop_last=False,
+            )
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=(train_sampler is None),
         sampler=train_sampler,
-        collate_fn=surface_collate,
+        collate_fn=collate_fn,
         drop_last=True,
         prefetch_factor=prefetch_factor,
         num_streams=num_streams,
         use_streams=use_streams,
+        seed=sampler_seed,
     )
 
     val_loader = DataLoader(
@@ -606,11 +751,12 @@ def build_dataloaders(cfg: DictConfig):
         batch_size=batch_size,
         shuffle=False,
         sampler=val_sampler,
-        collate_fn=surface_collate,
+        collate_fn=collate_fn,
         drop_last=False,
         prefetch_factor=prefetch_factor,
         num_streams=num_streams,
         use_streams=use_streams,
+        seed=sampler_seed,
     )
 
     return train_loader, val_loader, normalizer, nondim_transform, first_metadata or {}
@@ -625,12 +771,22 @@ def _to_physical(
     normalizer,
     nondim_transform,
     metadata: dict,
+    nondim_type_overrides: dict[str, str] | None = None,
 ) -> torch.Tensor:
     """Convert a model-space tensor (normalized + non-dim) back to physical units.
 
     Chains two inverse operations using the existing transform instances:
     1. ``NormalizeMeshFields.inverse_tensor`` -- undo z-score normalization
     2. ``NonDimensionalizeByMetadata.inverse_tensor`` -- undo non-dimensionalization
+
+    Parameters
+    ----------
+    nondim_type_overrides : dict or None
+        Optional per-field mapping of ``{field_name: nondim_type}`` (e.g.
+        ``{"temperature": "temperature", "density": "density"}``).  When
+        provided, overrides the default ``_NONDIM_TYPE_MAP`` lookup for
+        fields that don't follow the simple scalar=pressure / vector=stress
+        convention.
     """
     if not metadata:
         return tensor
@@ -644,8 +800,9 @@ def _to_physical(
 
     # Step 2: undo non-dimensionalization
     if nondim_transform is not None:
+        overrides = nondim_type_overrides or {}
         nondim_fields = {
-            name: _NONDIM_TYPE_MAP.get(ftype, ftype)
+            name: overrides.get(name, _NONDIM_TYPE_MAP.get(ftype, ftype))
             for name, ftype in target_config.items()
         }
         U_inf = torch.tensor(metadata["U_inf"], dtype=dtype, device=device)
@@ -653,8 +810,19 @@ def _to_physical(
         p_inf = torch.tensor(metadata["p_inf"], dtype=dtype, device=device)
         q_inf = 0.5 * rho_inf * (U_inf * U_inf).sum()
         U_inf_mag = (U_inf * U_inf).sum().sqrt()
+
+        T_inf = None
+        if "T_inf" in metadata:
+            T_inf = torch.tensor(metadata["T_inf"], dtype=dtype, device=device)
+
         out = nondim_transform.inverse_tensor(
-            out, nondim_fields, q_inf, p_inf, U_inf_mag
+            out,
+            nondim_fields,
+            q_inf,
+            p_inf,
+            U_inf_mag,
+            rho_inf=rho_inf,
+            T_inf=T_inf,
         )
 
     return out
@@ -666,7 +834,7 @@ def main(cfg: DictConfig):
 
     Orchestrates the complete training workflow:
 
-    1. Initialise distributed training and TensorBoard writers.
+    1. Initialise distributed training and MLflow experiment tracking.
     2. Build train/val dataloaders and extract pipeline transforms.
     3. If ``cfg.benchmark_io`` is true, iterate dataloaders to measure
        I/O throughput and return early (no model, no optimizer).
@@ -678,33 +846,65 @@ def main(cfg: DictConfig):
     cfg : DictConfig
         Hydra config containing ``model``, ``training``, ``dataset``,
         ``data``, ``output_dir``, ``run_id``, ``precision``, ``compile``,
-        ``profile``, ``benchmark_io``, and related keys.
+        ``profile``, ``benchmark_io``, ``mlflow``, and related keys.
     """
     DistributedManager.initialize()
     dist_manager = DistributedManager()
     logger = RankZeroLoggingWrapper(PythonLogger(name="training"), dist_manager)
 
+    seed = cfg.training.get("seed", None)
+    set_seed(seed, rank=dist_manager.rank)
+    logger.info(f"Random seed: {seed} (rank offset: {dist_manager.rank})")
+
     checkpoint_dir = getattr(cfg, "checkpoint_dir", None) or cfg.output_dir
 
-    writer = None
-    val_writer = None
+    # -- MLflow setup (rank 0 only) ---------------------------------------------
+    mlflow_cfg = cfg.get("mlflow", {})
+    log_every_n_steps = mlflow_cfg.get("log_every_n_steps", 10) if mlflow_cfg else 10
     if dist_manager.rank == 0:
         os.makedirs(cfg.output_dir, exist_ok=True)
         os.makedirs(checkpoint_dir, exist_ok=True)
-        writer = SummaryWriter(
-            log_dir=os.path.join(cfg.output_dir, cfg.run_id, "train")
+
+        tracking_uri = mlflow_cfg.get("tracking_uri") if mlflow_cfg else None
+        if tracking_uri:
+            mlflow.set_tracking_uri(tracking_uri)
+        # When tracking_uri is null/omitted, MLflow defaults to local ./mlruns
+        experiment_name = (
+            mlflow_cfg.get("experiment_name", "unified_external_aero")
+            if mlflow_cfg
+            else "unified_external_aero"
         )
-        val_writer = SummaryWriter(
-            log_dir=os.path.join(cfg.output_dir, cfg.run_id, "val")
-        )
+        mlflow.set_experiment(experiment_name)
+        run_name = (mlflow_cfg.get("run_name") if mlflow_cfg else None) or cfg.run_id
+        mlflow.start_run(run_name=run_name)
+        for k, v in (mlflow_cfg.get("tags") or {}).items():
+            mlflow.set_tag(k, v)
 
     logger.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
 
-    train_loader, val_loader, normalizer, nondim_transform, ds_metadata = (
-        build_dataloaders(cfg)
-    )
-    logger.info(f"Train samples: {len(train_loader.dataset)}")
-    logger.info(f"Val samples: {len(val_loader.dataset)}")
+    train_loader, val_loader, normalizer, _, ds_metadata = build_dataloaders(cfg)
+    logger.info(f"Train samples: {len(train_loader.sampler)}")
+    logger.info(f"Val samples: {len(val_loader.sampler)}")
+
+    # -- Log dataset metadata to MLflow (rank 0) --------------------------------
+    recipe_root = Path(__file__).resolve().parent.parent
+    if dist_manager.rank == 0:
+        mlflow.log_params(
+            {
+                "train_samples": len(train_loader.dataset),
+                "val_samples": len(val_loader.dataset),
+            }
+        )
+        for ds_key, ds_block in cfg.data.items():
+            mlflow.set_tag(f"dataset/{ds_key}/config", ds_block.config)
+            ds_config_path = recipe_root / ds_block.config
+            if ds_config_path.exists():
+                mlflow.log_artifact(
+                    str(ds_config_path), artifact_path="dataset_configs"
+                )
+        if ds_metadata:
+            for mk, mv in ds_metadata.items():
+                mlflow.log_param(f"metadata.{mk}", str(mv)[:500])
 
     # -- I/O benchmark mode: iterate dataloaders, skip model entirely -----------
     if cfg.get("benchmark_io", False):
@@ -721,6 +921,8 @@ def main(cfg: DictConfig):
                 benchmark_io_epoch(train_loader, "train", logger, max_steps=max_steps)
                 benchmark_io_epoch(val_loader, "val", logger, max_steps=max_steps)
         logger.info("benchmark_io complete!")
+        if dist_manager.rank == 0:
+            mlflow.end_run()
         return
 
     # -- Normal training path ---------------------------------------------------
@@ -750,39 +952,39 @@ def main(cfg: DictConfig):
     precision = cfg.precision
     scaler = GradScaler() if precision == "float16" else None
 
+    # -- Log full config + model params to MLflow (rank 0) ----------------------
+    if dist_manager.rank == 0:
+        flat_cfg = _flatten_config(
+            OmegaConf.to_container(cfg, resolve=True, throw_on_missing=False)
+        )
+        mlflow.log_params(flat_cfg)
+        mlflow.log_param("num_parameters", num_params)
+        mlflow.set_tag("model", model.__class__.__name__)
+
+        # Save the full resolved config as an artifact
+        resolved_yaml = omegaconf.OmegaConf.to_yaml(cfg, resolve=True)
+        config_artifact_path = os.path.join(
+            cfg.output_dir, cfg.run_id, "resolved_config.yaml"
+        )
+        os.makedirs(os.path.dirname(config_artifact_path), exist_ok=True)
+        with open(config_artifact_path, "w") as f:
+            f.write(resolved_yaml)
+        mlflow.log_artifact(config_artifact_path)
+
     ds_cfg = cfg.dataset
     targets = omegaconf.OmegaConf.to_container(ds_cfg.targets, resolve=True)
     metrics_list = omegaconf.OmegaConf.to_container(
         ds_cfg.get("metrics", ["l1", "l2", "mae"]), resolve=True
     )
-
-    active_data_keys = list(cfg.data.keys())
-    if len(active_data_keys) > 1:
-        prefix = cfg.get("model_type", "merged")
-        logger.info(
-            f"Multiple datasets active ({', '.join(active_data_keys)}); "
-            f"using prefix '{prefix}' for metrics"
-        )
-    else:
-        prefix = ""
-
-    phys_prefix = f"phys/{prefix}" if prefix else "phys"
     metric_calculator = MetricCalculator(
-        target_config=targets, metrics=metrics_list, prefix=prefix
-    )
-    use_phys_metrics = len(active_data_keys) == 1
-    phys_metric_calculator = (
-        MetricCalculator(
-            target_config=targets, metrics=metrics_list, prefix=phys_prefix
-        )
-        if use_phys_metrics
-        else None
+        target_config=targets,
+        metrics=metrics_list,
     )
     loss_calculator = LossCalculator(
         target_config=targets,
         loss_type=cfg.training.get("loss_type", "huber"),
-        prefix=prefix,
     )
+    broadcast_global = cfg.get("broadcast_global", False)
     logger.info(f"Loss: {loss_calculator}")
     logger.info(f"Metrics: {metric_calculator}")
 
@@ -814,55 +1016,46 @@ def main(cfg: DictConfig):
                 loss_calculator,
                 metric_calculator,
                 logger,
-                writer,
                 epoch,
                 cfg,
                 dist_manager,
                 scaler,
+                broadcast_global=broadcast_global,
+                log_every_n_steps=log_every_n_steps,
             )
 
-            val_loss, val_metrics, val_phys_metrics = val_epoch(
+            val_loss, val_metrics = val_epoch(
                 val_loader,
                 model,
                 loss_calculator,
                 metric_calculator,
                 logger,
-                val_writer,
                 epoch,
                 cfg,
                 dist_manager,
-                phys_metric_calculator=phys_metric_calculator,
-                target_config=targets,
-                normalizer=normalizer,
-                nondim_transform=nondim_transform,
-                metadata=ds_metadata,
+                broadcast_global=broadcast_global,
             )
+
+            # Log learning rate per epoch
+            if dist_manager.rank == 0:
+                current_lr = scheduler.get_last_lr()[0]
+                mlflow.log_metric("lr", current_lr, step=epoch)
 
             if dist_manager.rank == 0:
                 all_keys = list(dict.fromkeys(list(train_metrics) + list(val_metrics)))
-                phys_by_base = {}
-                for k, v in val_phys_metrics.items():
-                    base = k.removeprefix("phys/")
-                    phys_by_base[base] = v
 
-                headers = ["Metric", "Train", "Val"]
-                if use_phys_metrics:
-                    headers.append("Val (phys)")
-
-                rows = []
-                for k in all_keys:
-                    row = [
+                rows = [
+                    [
                         k,
                         f"{train_metrics.get(k, float('nan')):.6f}",
                         f"{val_metrics.get(k, float('nan')):.6f}",
                     ]
-                    if use_phys_metrics and not k.startswith("loss/"):
-                        row.append(f"{phys_by_base.get(k, float('nan')):.6f}")
-                    elif use_phys_metrics:
-                        row.append("")
-                    rows.append(row)
+                    for k in all_keys
+                ]
 
-                table = tabulate(rows, headers=headers, tablefmt="pretty")
+                table = tabulate(
+                    rows, headers=["Metric", "Train", "Val"], tablefmt="pretty"
+                )
                 logger.info(
                     f"\nEpoch [{epoch}/{cfg.training.num_epochs}] "
                     f"Train Loss: {train_loss:.6f}  Val Loss: {val_loss:.6f}\n"
@@ -874,27 +1067,29 @@ def main(cfg: DictConfig):
                 if normalizer is not None:
                     norm_path = os.path.join(ckpt_args["path"], "norm_stats.pt")
                     torch.save(normalizer.stats, norm_path)
+                mlflow.log_artifacts(ckpt_args["path"], artifact_path="checkpoints")
 
             if cfg.training.get("scheduler_update_mode", "epoch") == "epoch":
                 scheduler.step()
 
     if dist_manager.rank == 0:
-        if writer is not None:
-            writer.close()
-        if val_writer is not None:
-            val_writer.close()
+        mlflow.end_run()
 
     logger.info("Training completed!")
 
 
-@hydra.main(version_base=None, config_path="../conf", config_name="train_surface")
+@hydra.main(
+    version_base=None,
+    config_path="../conf",
+    config_name="train_geotransolver_automotive_surface",
+)
 def launch(cfg: DictConfig):
     """Hydra entry point: configure profiling and delegate to :func:`main`.
 
     Parameters
     ----------
     cfg : DictConfig
-        Hydra-composed config loaded from ``conf/train_surface.yaml``.
+        Hydra-composed config (override with ``--config-name``).
         When ``cfg.profile`` is truthy, torch profiling is enabled.
     """
     profiler = Profiler()

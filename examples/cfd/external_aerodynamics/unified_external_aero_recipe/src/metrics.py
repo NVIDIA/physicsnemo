@@ -80,7 +80,7 @@ class MetricCalculator:
         Example: {"pressure": "scalar", "velocity": "vector", "turbulence": "scalar"}
     process_group : dist.ProcessGroup | None, optional
         Process group for distributed all-reduce. If None, no reduction is performed.
-    vector_dim : int, optional
+    n_spatial_dims : int, optional
         Dimensionality of vector fields. Default is 3.
     metrics : list[str] | None, optional
         Which metrics to compute. Options: "l1", "l2", "mae".
@@ -106,12 +106,12 @@ class MetricCalculator:
         self,
         target_config: dict[str, str],
         process_group: dist.ProcessGroup | None = None,
-        vector_dim: int = 3,
+        n_spatial_dims: int = 3,
         metrics: list[str] | None = None,
         prefix: str = "",
     ):
         self.process_group = process_group
-        self.vector_dim = vector_dim
+        self.n_spatial_dims = n_spatial_dims
         self.metric_names = metrics if metrics is not None else ["l1", "l2", "mae"]
         self.prefix = prefix
 
@@ -123,7 +123,7 @@ class MetricCalculator:
                 )
 
         # Parse target config to build field specifications using shared utility
-        self.field_specs = parse_target_config(target_config, vector_dim)
+        self.field_specs = parse_target_config(target_config, n_spatial_dims)
         self.total_channels = sum(spec.dim for spec in self.field_specs)
 
     def _make_key(self, *parts: str) -> str:
