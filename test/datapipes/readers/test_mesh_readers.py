@@ -231,16 +231,14 @@ class TestDomainMeshTransforms:
         dm = DomainMesh(interior=interior, boundaries={"wall": wall})
         dm.save(tmp_path / "dm.pt")
 
-        gen = torch.Generator().manual_seed(42)
+        aug = RandomScaleMesh(
+            distribution=torch.distributions.Uniform(0.5, 2.0),
+        )
+        aug.set_generator(torch.Generator().manual_seed(42))
         reader = DomainMeshReader(tmp_path, pattern="*.pt")
         ds = MeshDataset(
             reader,
-            transforms=[
-                RandomScaleMesh(
-                    distribution=torch.distributions.Uniform(0.5, 2.0),
-                    generator=gen,
-                )
-            ],
+            transforms=[aug],
         )
         loaded, _ = ds[0]
 

@@ -65,6 +65,12 @@ def _simple_domain_3d() -> DomainMesh:
     return DomainMesh(interior=interior, boundaries={"wall": wall})
 
 
+def _seed(aug, seed: int):
+    """Assign a seeded generator to an augmentation transform."""
+    aug.set_generator(torch.Generator().manual_seed(seed))
+    return aug
+
+
 # ---------------------------------------------------------------------------
 # _sample_distribution
 # ---------------------------------------------------------------------------
@@ -191,10 +197,7 @@ class TestDistributionDeviceTransfer:
 
     def test_to_cpu_preserves_distribution(self):
         """to('cpu') should produce a working distribution on CPU."""
-        aug = RandomScaleMesh(
-            distribution=D.Normal(1.0, 0.05),
-            generator=torch.Generator().manual_seed(0),
-        )
+        aug = _seed(RandomScaleMesh(distribution=D.Normal(1.0, 0.05)), 0)
         aug.to("cpu")
         factor = aug._sample_factor()
         assert factor.device == torch.device("cpu")
@@ -233,10 +236,7 @@ class TestRandomScaleMesh:
 
     def test_normal_distribution_clusters_near_center(self):
         """Normal(1.0, 0.05) should produce scale factors near 1.0."""
-        aug = RandomScaleMesh(
-            distribution=D.Normal(1.0, 0.05),
-            generator=torch.Generator().manual_seed(42),
-        )
+        aug = _seed(RandomScaleMesh(distribution=D.Normal(1.0, 0.05)), 42)
         mesh = _simple_mesh_3d()
         factors = []
         for _ in range(500):
@@ -249,10 +249,7 @@ class TestRandomScaleMesh:
 
     def test_lognormal_always_positive(self):
         """LogNormal should always produce positive scale factors."""
-        aug = RandomScaleMesh(
-            distribution=D.LogNormal(0.0, 0.1),
-            generator=torch.Generator().manual_seed(0),
-        )
+        aug = _seed(RandomScaleMesh(distribution=D.LogNormal(0.0, 0.1)), 0)
         mesh = _simple_mesh_3d()
         for _ in range(100):
             scaled = aug(mesh)
@@ -263,16 +260,10 @@ class TestRandomScaleMesh:
         """Same seed should produce identical results."""
         mesh = _simple_mesh_3d()
 
-        aug1 = RandomScaleMesh(
-            distribution=D.Normal(1.0, 0.5),
-            generator=torch.Generator().manual_seed(7),
-        )
+        aug1 = _seed(RandomScaleMesh(distribution=D.Normal(1.0, 0.5)), 7)
         r1 = aug1(mesh)
 
-        aug2 = RandomScaleMesh(
-            distribution=D.Normal(1.0, 0.5),
-            generator=torch.Generator().manual_seed(7),
-        )
+        aug2 = _seed(RandomScaleMesh(distribution=D.Normal(1.0, 0.5)), 7)
         r2 = aug2(mesh)
 
         assert torch.allclose(r1.points, r2.points)
@@ -280,10 +271,7 @@ class TestRandomScaleMesh:
     def test_apply_to_domain_consistent(self):
         """apply_to_domain should use the same factor for interior and boundary."""
         domain = _simple_domain_3d()
-        aug = RandomScaleMesh(
-            distribution=D.Uniform(0.5, 2.0),
-            generator=torch.Generator().manual_seed(0),
-        )
+        aug = _seed(RandomScaleMesh(distribution=D.Uniform(0.5, 2.0)), 0)
         scaled = aug.apply_to_domain(domain)
         # Interior and wall started with the same points, so after scaling
         # by the same factor they should still match.
@@ -293,16 +281,10 @@ class TestRandomScaleMesh:
         """Same seed should produce identical results over multiple calls."""
         mesh = _simple_mesh_3d()
 
-        aug1 = RandomScaleMesh(
-            distribution=D.Normal(1.0, 0.5),
-            generator=torch.Generator().manual_seed(7),
-        )
+        aug1 = _seed(RandomScaleMesh(distribution=D.Normal(1.0, 0.5)), 7)
         seq1 = [aug1(mesh).points.clone() for _ in range(10)]
 
-        aug2 = RandomScaleMesh(
-            distribution=D.Normal(1.0, 0.5),
-            generator=torch.Generator().manual_seed(7),
-        )
+        aug2 = _seed(RandomScaleMesh(distribution=D.Normal(1.0, 0.5)), 7)
         seq2 = [aug2(mesh).points.clone() for _ in range(10)]
 
         for s1, s2 in zip(seq1, seq2):
@@ -312,16 +294,10 @@ class TestRandomScaleMesh:
         """Same seed should produce identical domain results."""
         domain = _simple_domain_3d()
 
-        aug1 = RandomScaleMesh(
-            distribution=D.Uniform(0.5, 2.0),
-            generator=torch.Generator().manual_seed(42),
-        )
+        aug1 = _seed(RandomScaleMesh(distribution=D.Uniform(0.5, 2.0)), 42)
         d1 = aug1.apply_to_domain(domain)
 
-        aug2 = RandomScaleMesh(
-            distribution=D.Uniform(0.5, 2.0),
-            generator=torch.Generator().manual_seed(42),
-        )
+        aug2 = _seed(RandomScaleMesh(distribution=D.Uniform(0.5, 2.0)), 42)
         d2 = aug2.apply_to_domain(domain)
 
         assert torch.allclose(d1.interior.points, d2.interior.points)
@@ -350,10 +326,7 @@ class TestRandomTranslateMesh:
 
     def test_laplace_distribution(self):
         """Laplace(0, 0.02) should produce offsets concentrated near zero."""
-        aug = RandomTranslateMesh(
-            distribution=D.Laplace(0.0, 0.02),
-            generator=torch.Generator().manual_seed(0),
-        )
+        aug = _seed(RandomTranslateMesh(distribution=D.Laplace(0.0, 0.02)), 0)
         mesh = _simple_mesh_3d()
         offsets = []
         for _ in range(500):
@@ -370,10 +343,7 @@ class TestRandomTranslateMesh:
             torch.tensor([-1.0, -2.0, -3.0]),
             torch.tensor([1.0, 2.0, 3.0]),
         )
-        aug = RandomTranslateMesh(
-            distribution=dist,
-            generator=torch.Generator().manual_seed(0),
-        )
+        aug = _seed(RandomTranslateMesh(distribution=dist), 0)
         mesh = _simple_mesh_3d()
         offsets = []
         for _ in range(1000):
@@ -394,16 +364,10 @@ class TestRandomTranslateMesh:
         """Same seed should produce identical translations."""
         mesh = _simple_mesh_3d()
 
-        aug1 = RandomTranslateMesh(
-            distribution=D.Normal(0.0, 1.0),
-            generator=torch.Generator().manual_seed(99),
-        )
+        aug1 = _seed(RandomTranslateMesh(distribution=D.Normal(0.0, 1.0)), 99)
         r1 = aug1(mesh)
 
-        aug2 = RandomTranslateMesh(
-            distribution=D.Normal(0.0, 1.0),
-            generator=torch.Generator().manual_seed(99),
-        )
+        aug2 = _seed(RandomTranslateMesh(distribution=D.Normal(0.0, 1.0)), 99)
         r2 = aug2(mesh)
 
         assert torch.allclose(r1.points, r2.points)
@@ -412,16 +376,10 @@ class TestRandomTranslateMesh:
         """Same seed should produce identical results over multiple calls."""
         mesh = _simple_mesh_3d()
 
-        aug1 = RandomTranslateMesh(
-            distribution=D.Normal(0.0, 1.0),
-            generator=torch.Generator().manual_seed(99),
-        )
+        aug1 = _seed(RandomTranslateMesh(distribution=D.Normal(0.0, 1.0)), 99)
         seq1 = [aug1(mesh).points.clone() for _ in range(10)]
 
-        aug2 = RandomTranslateMesh(
-            distribution=D.Normal(0.0, 1.0),
-            generator=torch.Generator().manual_seed(99),
-        )
+        aug2 = _seed(RandomTranslateMesh(distribution=D.Normal(0.0, 1.0)), 99)
         seq2 = [aug2(mesh).points.clone() for _ in range(10)]
 
         for s1, s2 in zip(seq1, seq2):
@@ -430,10 +388,7 @@ class TestRandomTranslateMesh:
     def test_apply_to_domain_consistent(self):
         """apply_to_domain should use the same offset for all meshes."""
         domain = _simple_domain_3d()
-        aug = RandomTranslateMesh(
-            distribution=D.Uniform(-1.0, 1.0),
-            generator=torch.Generator().manual_seed(0),
-        )
+        aug = _seed(RandomTranslateMesh(distribution=D.Uniform(-1.0, 1.0)), 0)
         translated = aug.apply_to_domain(domain)
         assert torch.allclose(
             translated.interior.points, translated.boundaries["wall"].points
@@ -443,16 +398,10 @@ class TestRandomTranslateMesh:
         """Same seed should produce identical domain results."""
         domain = _simple_domain_3d()
 
-        aug1 = RandomTranslateMesh(
-            distribution=D.Laplace(0.0, 0.5),
-            generator=torch.Generator().manual_seed(77),
-        )
+        aug1 = _seed(RandomTranslateMesh(distribution=D.Laplace(0.0, 0.5)), 77)
         d1 = aug1.apply_to_domain(domain)
 
-        aug2 = RandomTranslateMesh(
-            distribution=D.Laplace(0.0, 0.5),
-            generator=torch.Generator().manual_seed(77),
-        )
+        aug2 = _seed(RandomTranslateMesh(distribution=D.Laplace(0.0, 0.5)), 77)
         d2 = aug2.apply_to_domain(domain)
 
         assert torch.allclose(d1.interior.points, d2.interior.points)
@@ -476,10 +425,7 @@ class TestRandomRotateMesh:
 
     def test_small_angle_gaussian(self):
         """Normal(0, 0.1) should produce small rotations near identity."""
-        aug = RandomRotateMesh(
-            distribution=D.Normal(0.0, 0.1),
-            generator=torch.Generator().manual_seed(0),
-        )
+        aug = _seed(RandomRotateMesh(distribution=D.Normal(0.0, 0.1)), 0)
         mesh = _simple_mesh_3d()
         original_points = mesh.points.clone()
         displacements = []
@@ -493,10 +439,12 @@ class TestRandomRotateMesh:
 
     def test_axis_restriction(self):
         """Rotation about z-axis only should not change z coordinates."""
-        aug = RandomRotateMesh(
-            axes=["z"],
-            distribution=D.Uniform(-math.pi, math.pi),
-            generator=torch.Generator().manual_seed(0),
+        aug = _seed(
+            RandomRotateMesh(
+                axes=["z"],
+                distribution=D.Uniform(-math.pi, math.pi),
+            ),
+            0,
         )
         mesh = _simple_mesh_3d()
         for _ in range(20):
@@ -505,10 +453,9 @@ class TestRandomRotateMesh:
 
     def test_uniform_mode_ignores_distribution(self):
         """mode='uniform' should work regardless of distribution parameter."""
-        aug = RandomRotateMesh(
-            mode="uniform",
-            distribution=D.Normal(0.0, 0.01),
-            generator=torch.Generator().manual_seed(0),
+        aug = _seed(
+            RandomRotateMesh(mode="uniform", distribution=D.Normal(0.0, 0.01)),
+            0,
         )
         mesh = _simple_mesh_3d()
         rotated = aug(mesh)
@@ -519,10 +466,7 @@ class TestRandomRotateMesh:
 
     def test_uniform_mode_orthogonal_matrix(self):
         """mode='uniform' should produce orthogonal rotation matrices (det=+1)."""
-        aug = RandomRotateMesh(
-            mode="uniform",
-            generator=torch.Generator().manual_seed(42),
-        )
+        aug = _seed(RandomRotateMesh(mode="uniform"), 42)
         # Sample several rotation matrices and check orthogonality
         for _ in range(20):
             R = aug._sample_uniform_rotation()
@@ -534,16 +478,10 @@ class TestRandomRotateMesh:
         """Same seed should produce identical rotations."""
         mesh = _simple_mesh_3d()
 
-        aug1 = RandomRotateMesh(
-            distribution=D.Normal(0.0, 1.0),
-            generator=torch.Generator().manual_seed(55),
-        )
+        aug1 = _seed(RandomRotateMesh(distribution=D.Normal(0.0, 1.0)), 55)
         r1 = aug1(mesh)
 
-        aug2 = RandomRotateMesh(
-            distribution=D.Normal(0.0, 1.0),
-            generator=torch.Generator().manual_seed(55),
-        )
+        aug2 = _seed(RandomRotateMesh(distribution=D.Normal(0.0, 1.0)), 55)
         r2 = aug2(mesh)
 
         assert torch.allclose(r1.points, r2.points)
@@ -551,9 +489,9 @@ class TestRandomRotateMesh:
     def test_apply_to_domain_consistent(self):
         """apply_to_domain should use the same rotation for all meshes."""
         domain = _simple_domain_3d()
-        aug = RandomRotateMesh(
-            distribution=D.Uniform(-math.pi, math.pi),
-            generator=torch.Generator().manual_seed(0),
+        aug = _seed(
+            RandomRotateMesh(distribution=D.Uniform(-math.pi, math.pi)),
+            0,
         )
         rotated = aug.apply_to_domain(domain)
         assert torch.allclose(
@@ -579,10 +517,7 @@ class TestRandomRotateMesh:
 
     def test_extra_repr_axis_aligned(self):
         """extra_repr should mention axes and distribution."""
-        aug = RandomRotateMesh(
-            axes=["z"],
-            distribution=D.Normal(0.0, 0.1),
-        )
+        aug = RandomRotateMesh(axes=["z"], distribution=D.Normal(0.0, 0.1))
         r = aug.extra_repr()
         assert "z" in r
         assert "Normal" in r
@@ -591,16 +526,10 @@ class TestRandomRotateMesh:
         """Same seed should produce identical results over multiple calls."""
         mesh = _simple_mesh_3d()
 
-        aug1 = RandomRotateMesh(
-            distribution=D.Normal(0.0, 1.0),
-            generator=torch.Generator().manual_seed(55),
-        )
+        aug1 = _seed(RandomRotateMesh(distribution=D.Normal(0.0, 1.0)), 55)
         seq1 = [aug1(mesh).points.clone() for _ in range(10)]
 
-        aug2 = RandomRotateMesh(
-            distribution=D.Normal(0.0, 1.0),
-            generator=torch.Generator().manual_seed(55),
-        )
+        aug2 = _seed(RandomRotateMesh(distribution=D.Normal(0.0, 1.0)), 55)
         seq2 = [aug2(mesh).points.clone() for _ in range(10)]
 
         for s1, s2 in zip(seq1, seq2):
@@ -610,16 +539,10 @@ class TestRandomRotateMesh:
         """Same seed should produce identical uniform SO(3) rotations."""
         mesh = _simple_mesh_3d()
 
-        aug1 = RandomRotateMesh(
-            mode="uniform",
-            generator=torch.Generator().manual_seed(12),
-        )
+        aug1 = _seed(RandomRotateMesh(mode="uniform"), 12)
         r1 = aug1(mesh)
 
-        aug2 = RandomRotateMesh(
-            mode="uniform",
-            generator=torch.Generator().manual_seed(12),
-        )
+        aug2 = _seed(RandomRotateMesh(mode="uniform"), 12)
         r2 = aug2(mesh)
 
         assert torch.allclose(r1.points, r2.points)
@@ -628,16 +551,10 @@ class TestRandomRotateMesh:
         """Same seed should produce identical uniform rotation sequences."""
         mesh = _simple_mesh_3d()
 
-        aug1 = RandomRotateMesh(
-            mode="uniform",
-            generator=torch.Generator().manual_seed(12),
-        )
+        aug1 = _seed(RandomRotateMesh(mode="uniform"), 12)
         seq1 = [aug1(mesh).points.clone() for _ in range(10)]
 
-        aug2 = RandomRotateMesh(
-            mode="uniform",
-            generator=torch.Generator().manual_seed(12),
-        )
+        aug2 = _seed(RandomRotateMesh(mode="uniform"), 12)
         seq2 = [aug2(mesh).points.clone() for _ in range(10)]
 
         for s1, s2 in zip(seq1, seq2):
@@ -647,15 +564,15 @@ class TestRandomRotateMesh:
         """Same seed should produce identical domain rotations."""
         domain = _simple_domain_3d()
 
-        aug1 = RandomRotateMesh(
-            distribution=D.Uniform(-math.pi, math.pi),
-            generator=torch.Generator().manual_seed(0),
+        aug1 = _seed(
+            RandomRotateMesh(distribution=D.Uniform(-math.pi, math.pi)),
+            0,
         )
         d1 = aug1.apply_to_domain(domain)
 
-        aug2 = RandomRotateMesh(
-            distribution=D.Uniform(-math.pi, math.pi),
-            generator=torch.Generator().manual_seed(0),
+        aug2 = _seed(
+            RandomRotateMesh(distribution=D.Uniform(-math.pi, math.pi)),
+            0,
         )
         d2 = aug2.apply_to_domain(domain)
 
@@ -686,18 +603,9 @@ class TestPipelineReproducibility:
 
         def _build_pipeline(seed):
             return [
-                RandomScaleMesh(
-                    distribution=D.Normal(1.0, 0.1),
-                    generator=torch.Generator().manual_seed(seed),
-                ),
-                RandomTranslateMesh(
-                    distribution=D.Laplace(0.0, 0.05),
-                    generator=torch.Generator().manual_seed(seed + 1),
-                ),
-                RandomRotateMesh(
-                    distribution=D.Normal(0.0, 0.3),
-                    generator=torch.Generator().manual_seed(seed + 2),
-                ),
+                _seed(RandomScaleMesh(distribution=D.Normal(1.0, 0.1)), seed),
+                _seed(RandomTranslateMesh(distribution=D.Laplace(0.0, 0.05)), seed + 1),
+                _seed(RandomRotateMesh(distribution=D.Normal(0.0, 0.3)), seed + 2),
             ]
 
         pipeline1 = _build_pipeline(42)
@@ -719,18 +627,9 @@ class TestPipelineReproducibility:
 
         def _build_pipeline(seed):
             return [
-                RandomScaleMesh(
-                    distribution=D.Normal(1.0, 0.1),
-                    generator=torch.Generator().manual_seed(seed),
-                ),
-                RandomTranslateMesh(
-                    distribution=D.Laplace(0.0, 0.05),
-                    generator=torch.Generator().manual_seed(seed + 1),
-                ),
-                RandomRotateMesh(
-                    distribution=D.Normal(0.0, 0.3),
-                    generator=torch.Generator().manual_seed(seed + 2),
-                ),
+                _seed(RandomScaleMesh(distribution=D.Normal(1.0, 0.1)), seed),
+                _seed(RandomTranslateMesh(distribution=D.Laplace(0.0, 0.05)), seed + 1),
+                _seed(RandomRotateMesh(distribution=D.Normal(0.0, 0.3)), seed + 2),
             ]
 
         pipeline1 = _build_pipeline(0)
@@ -750,17 +649,11 @@ class TestPipelineReproducibility:
 
         def _build_pipeline(seed):
             return [
-                RandomScaleMesh(
-                    distribution=D.Uniform(0.8, 1.2),
-                    generator=torch.Generator().manual_seed(seed),
-                ),
-                RandomTranslateMesh(
-                    distribution=D.Normal(0.0, 0.1),
-                    generator=torch.Generator().manual_seed(seed + 1),
-                ),
-                RandomRotateMesh(
-                    distribution=D.Uniform(-math.pi, math.pi),
-                    generator=torch.Generator().manual_seed(seed + 2),
+                _seed(RandomScaleMesh(distribution=D.Uniform(0.8, 1.2)), seed),
+                _seed(RandomTranslateMesh(distribution=D.Normal(0.0, 0.1)), seed + 1),
+                _seed(
+                    RandomRotateMesh(distribution=D.Uniform(-math.pi, math.pi)),
+                    seed + 2,
                 ),
             ]
 
@@ -780,3 +673,137 @@ class TestPipelineReproducibility:
             d2.boundaries["wall"].points,
             atol=1e-6,
         )
+
+
+# ---------------------------------------------------------------------------
+# DataLoader-driven pipeline reproducibility
+# ---------------------------------------------------------------------------
+
+
+class TestDataLoaderDrivenReproducibility:
+    """Tests that the DataLoader seed drives the full pipeline reproducibly."""
+
+    def test_mesh_dataset_set_generator_distributes(self, tmp_path):
+        """set_generator should give independent generators to reader + transforms."""
+        from physicsnemo.datapipes.mesh_dataset import MeshDataset
+        from physicsnemo.datapipes.readers.mesh import MeshReader
+
+        mesh = _simple_mesh_3d()
+        mesh.save(tmp_path / "a.pt")
+        mesh.save(tmp_path / "b.pt")
+
+        reader = MeshReader(tmp_path, pattern="*.pt")
+        transforms = [
+            RandomScaleMesh(distribution=D.Uniform(0.5, 2.0)),
+            RandomTranslateMesh(distribution=D.Uniform(-0.5, 0.5)),
+        ]
+        ds = MeshDataset(reader, transforms=transforms)
+
+        master = torch.Generator().manual_seed(42)
+        ds.set_generator(master)
+
+        # Reader and both transforms should have received generators
+        assert reader._subsample_generator is not None
+        assert transforms[0]._generator is not None
+        assert transforms[1]._generator is not None
+
+        # Generators should have different seeds (independent forks)
+        seeds = {
+            reader._subsample_generator.initial_seed(),
+            transforms[0]._generator.initial_seed(),
+            transforms[1]._generator.initial_seed(),
+        }
+        assert len(seeds) == 3
+
+    def test_dataloader_seed_produces_identical_sequences(self, tmp_path):
+        """Two MeshDatasets seeded identically produce identical transform results."""
+        from physicsnemo.datapipes.mesh_dataset import MeshDataset
+        from physicsnemo.datapipes.readers.mesh import MeshReader
+
+        mesh = _simple_mesh_3d()
+        for i in range(4):
+            mesh.save(tmp_path / f"s{i}.pt")
+
+        def _build(seed):
+            reader = MeshReader(tmp_path, pattern="*.pt")
+            transforms = [RandomScaleMesh(distribution=D.Uniform(0.5, 2.0))]
+            ds = MeshDataset(reader, transforms=transforms)
+            gen = torch.Generator().manual_seed(seed)
+            ds.set_generator(gen)
+            return ds
+
+        ds1 = _build(123)
+        ds2 = _build(123)
+
+        for i in range(len(ds1)):
+            m1, _ = ds1[i]
+            m2, _ = ds2[i]
+            assert torch.allclose(m1.points, m2.points)
+
+    def test_different_seeds_produce_different_results(self, tmp_path):
+        """Two MeshDatasets with different seeds produce different results."""
+        from physicsnemo.datapipes.mesh_dataset import MeshDataset
+        from physicsnemo.datapipes.readers.mesh import MeshReader
+
+        mesh = _simple_mesh_3d()
+        mesh.save(tmp_path / "s0.pt")
+
+        def _build(seed):
+            reader = MeshReader(tmp_path, pattern="*.pt")
+            transforms = [RandomScaleMesh(distribution=D.Uniform(0.5, 2.0))]
+            ds = MeshDataset(reader, transforms=transforms)
+            gen = torch.Generator().manual_seed(seed)
+            ds.set_generator(gen)
+            return ds
+
+        ds1 = _build(0)
+        ds2 = _build(999)
+
+        m1, _ = ds1[0]
+        m2, _ = ds2[0]
+        assert not torch.allclose(m1.points, m2.points)
+
+    def test_set_epoch_changes_randomness(self, tmp_path):
+        """set_epoch reseeds transforms so different epochs differ."""
+        from physicsnemo.datapipes.mesh_dataset import MeshDataset
+        from physicsnemo.datapipes.readers.mesh import MeshReader
+
+        mesh = _simple_mesh_3d()
+        mesh.save(tmp_path / "s0.pt")
+
+        reader = MeshReader(tmp_path, pattern="*.pt")
+        transforms = [RandomScaleMesh(distribution=D.Uniform(0.5, 2.0))]
+        ds = MeshDataset(reader, transforms=transforms)
+        gen = torch.Generator().manual_seed(42)
+        ds.set_generator(gen)
+
+        ds.set_epoch(0)
+        m0, _ = ds[0]
+
+        ds.set_epoch(1)
+        m1, _ = ds[0]
+
+        # Different epochs should produce different scale factors
+        assert not torch.allclose(m0.points, m1.points)
+
+    def test_set_epoch_is_deterministic(self, tmp_path):
+        """Resetting to the same epoch reproduces the same result."""
+        from physicsnemo.datapipes.mesh_dataset import MeshDataset
+        from physicsnemo.datapipes.readers.mesh import MeshReader
+
+        mesh = _simple_mesh_3d()
+        mesh.save(tmp_path / "s0.pt")
+
+        def _run_epoch(seed, epoch):
+            reader = MeshReader(tmp_path, pattern="*.pt")
+            transforms = [RandomScaleMesh(distribution=D.Uniform(0.5, 2.0))]
+            ds = MeshDataset(reader, transforms=transforms)
+            gen = torch.Generator().manual_seed(seed)
+            ds.set_generator(gen)
+            ds.set_epoch(epoch)
+            m, _ = ds[0]
+            return m.points.clone()
+
+        pts_a = _run_epoch(42, 5)
+        pts_b = _run_epoch(42, 5)
+        assert torch.allclose(pts_a, pts_b)
