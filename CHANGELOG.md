@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds xDeepONet — the extended DeepONet family — to experimental models
+  (`physicsnemo.experimental.models.xdeeponet`).  Provides a config-driven
+  assembly of eight DeepONet-based architectures (DeepONet, U-DeepONet,
+  Fourier-DeepONet, Conv-DeepONet, Hybrid-DeepONet, MIONet, Fourier-MIONet,
+  and TNO) for 2D and 3D spatial domains, with composable Fourier / UNet /
+  Conv branches, multiple decoder types (MLP, Conv, temporal projection),
+  and automatic spatial padding.  Suitable for standalone operator learning
+  and autoregressive temporal bundling.
 - Adds GLOBE model (`physicsnemo.experimental.models.globe.model.GLOBE`),
   including new variant that uses a dual tree traversal algorithm to reduce the
   complexity of the kernel evaluations from O(N^2) to O(N).

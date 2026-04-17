@@ -1,0 +1,693 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Core xDeepONet architectures for 2D and 3D operator learning.
+
+The xDeepONet family extends the original DeepONet with eight variants
+that cover both single-input and multi-input operator learning, including
+the Temporal Neural Operator (TNO) for autoregressive temporal bundling:
+
+- ``deeponet``           — basic DeepONet (MLP branch).
+- ``u_deeponet``         — UNet-enhanced spatial branch.
+- ``fourier_deeponet``   — spectral (Fourier) spatial branch.
+- ``conv_deeponet``      — plain convolutional spatial branch.
+- ``hybrid_deeponet``    — Fourier + UNet + Conv spatial branch.
+- ``mionet``             — two-branch multi-input operator network.
+- ``fourier_mionet``     — MIONet with a Fourier spatial branch.
+- ``tno``                — Temporal Neural Operator (branch2 = previous
+  solution, autoregressive only).
+
+The core :class:`DeepONet` (2D) and :class:`DeepONet3D` (3D) classes are
+dimension-specific but share the same construction pattern: a primary branch
+(``branch1``), an optional secondary branch (``branch2`` for MIONet/TNO),
+a coordinate trunk, and a decoder.
+
+References
+----------
+- Lu, L. et al. (2021). "Learning nonlinear operators via DeepONet."
+  *Nature Machine Intelligence*, 3, 218-229.
+- Jin, P., Meng, S. & Lu, L. (2022). "MIONet: Learning multiple-input
+  operators via tensor product." *SIAM J. Sci. Comp.*, 44(6), A3490-A3514.
+- Diab, W. & Al Kobaisi, M. (2024). "U-DeepONet: U-Net enhanced deep
+  operator network for geologic carbon sequestration."
+  *Scientific Reports*, 14, 21298.
+- Zhu, M. et al. (2023). "Fourier-DeepONet: Fourier-enhanced deep operator
+  networks for full waveform inversion." arXiv:2305.17289.
+- Diab, W. & Al Kobaisi, M. (2025). "Temporal neural operator for modeling
+  time-dependent physical phenomena." *Scientific Reports*, 15.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict
+
+import torch.nn as nn
+from torch import Tensor
+
+from physicsnemo.core.module import Module
+from physicsnemo.experimental.models.xdeeponet.branches import (
+    MLPBranch,
+    SpatialBranch,
+    SpatialBranch3D,
+    TrunkNet,
+)
+from physicsnemo.models.mlp import FullyConnected
+from physicsnemo.nn import Conv2dFCLayer, Conv3dFCLayer, get_activation
+
+# ---------------------------------------------------------------------------
+# Branch config helpers
+# ---------------------------------------------------------------------------
+
+
+def _normalize_branch_config(config: dict) -> dict:
+    """Normalize a branch config to the nested encoder/layers format.
+
+    Supports two input formats:
+
+    **New (nested)** format::
+
+        {
+            "encoder": {"type": "linear", "activation_fn": "tanh", ...},
+            "layers":  {"num_fourier_layers": 1, "num_unet_layers": 1, ...},
+            "internal_resolution": [H, W],
+        }
+
+    **Old (flat)** format (auto-converted for backward compatibility)::
+
+        {
+            "encoder": "spatial",        # or "mlp"
+            "num_fourier_layers": 1,
+            "num_unet_layers": 1,
+            "activation_fn": "tanh",
+            ...
+        }
+
+    Returns a dict in the new nested format.
+    """
+    if "encoder" not in config:
+        return config
+
+    enc = config["encoder"]
+    if not isinstance(enc, str):
+        return config
+
+    enc_type_str = str(enc).lower()
+    cfg = dict(config)
+    cfg.pop("encoder")
+
+    encoder_keys = {"hidden_width", "num_layers"}
+    layer_keys = {
+        "num_fourier_layers",
+        "num_unet_layers",
+        "num_conv_layers",
+        "modes1",
+        "modes2",
+        "modes3",
+        "kernel_size",
+        "dropout",
+    }
+
+    activation = cfg.pop("activation_fn", "sin")
+    internal_res = cfg.pop("internal_resolution", None)
+    in_channels = cfg.pop("in_channels", None)
+    # The legacy 'unet_impl' key is silently dropped: only the library UNet
+    # (physicsnemo.models.unet.UNet) is supported in the experimental package.
+    cfg.pop("unet_impl", None)
+
+    encoder_dict = {
+        "type": "mlp" if enc_type_str == "mlp" else "linear",
+        "activation_fn": activation,
+    }
+    for k in encoder_keys:
+        if k in cfg:
+            encoder_dict[k] = cfg.pop(k)
+
+    layers_dict = {"activation_fn": activation}
+    for k in layer_keys:
+        if k in cfg:
+            layers_dict[k] = cfg.pop(k)
+
+    result = {"encoder": encoder_dict, "layers": layers_dict}
+    if internal_res is not None:
+        result["internal_resolution"] = internal_res
+    if in_channels is not None:
+        result["in_channels"] = in_channels
+
+    return result
+
+
+def _build_conv_encoder(width: int, enc_config: dict) -> nn.Module:
+    """Build a multi-layer pointwise encoder replacing the default LazyLinear lift.
+
+    Operates in channels-last format ``(B, *spatial, C)``.  Each layer is a
+    :class:`torch.nn.Linear` with activation — equivalent to a 1x1 convolution
+    applied independently at every spatial point.
+    """
+    num_layers = enc_config.get("num_layers", 1)
+    activation_fn = enc_config.get("activation_fn", "relu")
+    act = get_activation(activation_fn)
+
+    if num_layers <= 1:
+        return nn.LazyLinear(width)
+
+    hidden_width = enc_config.get("hidden_width", width // 2)
+    layers_list = [nn.LazyLinear(hidden_width), act]
+    for _ in range(num_layers - 2):
+        layers_list.extend([nn.Linear(hidden_width, hidden_width), act])
+    layers_list.append(nn.Linear(hidden_width, width))
+    return nn.Sequential(*layers_list)
+
+
+# ---------------------------------------------------------------------------
+# 2D DeepONet
+# ---------------------------------------------------------------------------
+
+
+class DeepONet(Module):
+    """2D xDeepONet core architecture for operator learning.
+
+    Combines a primary spatial/MLP branch, an optional secondary branch
+    (for MIONet/TNO variants), a coordinate trunk, and a decoder.  The
+    branch outputs and trunk are combined via Hadamard product and then
+    projected to the output by the decoder.
+
+    Input / Output
+    --------------
+    - ``x_branch1``: ``(B, H, W, C)`` for spatial branches or
+      ``(B, in_features)`` for MLP branches.
+    - ``x_time``: ``(T,)`` or ``(T, in_features)`` query coordinates.
+    - ``x_branch2`` (optional): secondary branch input for MIONet/TNO.
+    - Returns: ``(B, H, W, T)`` for spatial branches or ``(B, T)`` for MLP.
+
+    Parameters
+    ----------
+    variant : str
+        One of the eight supported variants (see :data:`VALID_VARIANTS`).
+    width : int
+        Latent width.
+    branch1_config, branch2_config, trunk_config : dict, optional
+        Sub-network configurations.  See module docstring for schema.
+    decoder_type : {"mlp", "conv", "temporal_projection"}
+        ``"mlp"`` queries the trunk at each target timestep and applies an
+        MLP decoder; ``"conv"`` uses a convolutional decoder; and
+        ``"temporal_projection"`` queries the trunk once and projects the
+        combined latent representation to K timesteps via a learned linear
+        head (fast autoregressive bundling; requires
+        :meth:`set_output_window`).
+    decoder_width, decoder_layers : int
+        Decoder hidden width and layer count.
+    decoder_activation_fn : str
+        Activation function name for the decoder.
+    """
+
+    VALID_VARIANTS = [
+        "deeponet",
+        "u_deeponet",
+        "fourier_deeponet",
+        "conv_deeponet",
+        "hybrid_deeponet",
+        "mionet",
+        "fourier_mionet",
+        "tno",
+    ]
+
+    def __init__(
+        self,
+        variant: str = "u_deeponet",
+        width: int = 64,
+        branch1_config: Dict[str, Any] = None,
+        branch2_config: Dict[str, Any] = None,
+        trunk_config: Dict[str, Any] = None,
+        decoder_type: str = "mlp",
+        decoder_width: int = 128,
+        decoder_layers: int = 2,
+        decoder_activation_fn: str = "relu",
+    ):
+        super().__init__()
+
+        self.variant = variant.lower()
+        self.width = width
+        self.decoder_type = decoder_type.lower()
+        self.decoder_activation_fn = decoder_activation_fn
+
+        if self.variant not in self.VALID_VARIANTS:
+            raise ValueError(
+                f"Unknown variant: {variant}. Valid: {self.VALID_VARIANTS}"
+            )
+
+        branch1_config = branch1_config or {}
+        trunk_config = trunk_config or {}
+
+        self.branch1 = self._build_branch(branch1_config, width)
+
+        self.has_branch2 = branch2_config is not None
+        if self.has_branch2:
+            self.branch2 = self._build_branch(branch2_config, width)
+
+        self.trunk = TrunkNet(
+            in_features=trunk_config.get("in_features", 1),
+            out_features=width,
+            hidden_width=trunk_config.get("hidden_width", 128),
+            num_layers=trunk_config.get("num_layers", 6),
+            activation_fn=trunk_config.get("activation_fn", "sin"),
+            output_activation=trunk_config.get("output_activation", True),
+        )
+
+        if decoder_type == "temporal_projection":
+            self._temporal_projection = True
+            self.decoder = self._build_decoder(
+                width,
+                width,
+                decoder_layers,
+                decoder_width,
+                "mlp",
+                decoder_activation_fn,
+            )
+            self.temporal_head = None
+        else:
+            self._temporal_projection = False
+            self.decoder = self._build_decoder(
+                width,
+                1,
+                decoder_layers,
+                decoder_width,
+                decoder_type,
+                decoder_activation_fn,
+            )
+
+    def set_output_window(self, K: int):
+        """Create the temporal-projection head for K output timesteps.
+
+        Only effective when ``decoder_type="temporal_projection"``.
+        """
+        if self._temporal_projection:
+            device = next(self.parameters()).device
+            self.temporal_head = nn.Linear(self.width, K).to(device)
+
+    def _build_branch(self, config: dict, width: int) -> nn.Module:
+        config = _normalize_branch_config(config)
+        enc = config.get("encoder", {})
+        layers = config.get("layers", {})
+
+        enc_type = enc.get("type", "linear")
+        enc_activation = enc.get("activation_fn", "sin")
+
+        has_layers = (
+            layers.get("num_fourier_layers", 0)
+            + layers.get("num_unet_layers", 0)
+            + layers.get("num_conv_layers", 0)
+        ) > 0
+
+        if enc_type == "mlp" and not has_layers:
+            return MLPBranch(
+                out_features=width,
+                hidden_width=enc.get("hidden_width", 64),
+                num_layers=enc.get("num_layers", 3),
+                activation_fn=enc_activation,
+            )
+
+        layer_activation = layers.get("activation_fn", enc_activation)
+        branch = SpatialBranch(
+            in_channels=config.get("in_channels", 12),
+            width=width,
+            num_fourier_layers=layers.get("num_fourier_layers", 0),
+            num_unet_layers=layers.get("num_unet_layers", 0),
+            num_conv_layers=layers.get("num_conv_layers", 0),
+            modes1=layers.get("modes1", 12),
+            modes2=layers.get("modes2", 12),
+            kernel_size=layers.get("kernel_size", 3),
+            dropout=layers.get("dropout", 0.0),
+            activation_fn=layer_activation,
+            internal_resolution=config.get("internal_resolution", None),
+        )
+        if enc_type == "conv":
+            branch.lift = _build_conv_encoder(width, enc)
+        return branch
+
+    def _build_decoder(
+        self,
+        width: int,
+        out_channels: int,
+        num_layers: int,
+        hidden_width: int,
+        decoder_type: str,
+        activation_fn: str,
+    ) -> nn.Module:
+        if decoder_type == "mlp":
+            if num_layers == 0:
+                return nn.Linear(width, out_channels)
+            return FullyConnected(
+                width, hidden_width, out_channels, num_layers, activation_fn
+            )
+
+        elif decoder_type == "conv":
+            if num_layers == 0:
+                return Conv2dFCLayer(width, out_channels)
+
+            layers = []
+            in_ch = width
+            for _ in range(num_layers):
+                layers.extend(
+                    [Conv2dFCLayer(in_ch, hidden_width), get_activation(activation_fn)]
+                )
+                in_ch = hidden_width
+            layers.append(Conv2dFCLayer(hidden_width, out_channels))
+            return nn.Sequential(*layers)
+
+        else:
+            raise ValueError(f"Unknown decoder_type: {decoder_type}")
+
+    def forward(
+        self, x_branch1: Tensor, x_time: Tensor, x_branch2: Tensor = None
+    ) -> Tensor:
+        """Forward pass through the DeepONet.
+
+        See class docstring for input/output shapes.
+        """
+        if x_time.dim() == 1:
+            x_time = x_time.unsqueeze(-1)
+
+        b1_out = self.branch1(x_branch1)
+
+        if self.has_branch2:
+            if x_branch2 is None:
+                raise ValueError("x_branch2 required for mionet/tno variants")
+            b2_out = self.branch2(x_branch2)
+
+        trunk_out = self.trunk(x_time)
+
+        if b1_out.dim() == 4:  # Spatial branch
+            if self._temporal_projection:
+                trunk_single = trunk_out[0:1]
+                trunk_exp = trunk_single.unsqueeze(1).unsqueeze(2)
+                combined = b1_out * trunk_exp
+                if self.has_branch2:
+                    if b2_out.dim() == 4:
+                        combined = combined * b2_out
+                    else:
+                        combined = combined * b2_out.unsqueeze(1).unsqueeze(2)
+                combined = self.decoder(combined)
+                if self.temporal_head is not None:
+                    combined = self.temporal_head(combined)
+                return combined
+
+            b1_out = b1_out.unsqueeze(1)
+            trunk_out = trunk_out.unsqueeze(0).unsqueeze(2).unsqueeze(3)
+
+            if self.has_branch2:
+                if b2_out.dim() == 4:
+                    b2_out = b2_out.unsqueeze(1)
+                else:
+                    b2_out = b2_out.unsqueeze(1).unsqueeze(2).unsqueeze(3)
+                combined = b1_out * b2_out * trunk_out
+            else:
+                combined = b1_out * trunk_out
+
+            if self.decoder_type == "mlp":
+                return self.decoder(combined).squeeze(-1).permute(0, 2, 3, 1)
+
+            B, T, H, W, C = combined.shape
+            combined = combined.permute(0, 1, 4, 2, 3).reshape(B * T, C, H, W)
+            return self.decoder(combined).reshape(B, T, H, W).permute(0, 2, 3, 1)
+
+        else:  # MLP branch
+            b1_out = b1_out.unsqueeze(1)
+            trunk_out = trunk_out.unsqueeze(0)
+
+            if self.has_branch2:
+                combined = b1_out * b2_out.unsqueeze(1) * trunk_out
+            else:
+                combined = b1_out * trunk_out
+
+            return self.decoder(combined).squeeze(-1)
+
+    def count_params(self) -> int:
+        """Return the number of trainable parameters."""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+# ---------------------------------------------------------------------------
+# 3D DeepONet
+# ---------------------------------------------------------------------------
+
+
+class DeepONet3D(Module):
+    """3D xDeepONet core architecture for volumetric operator learning.
+
+    Input / Output
+    --------------
+    - ``x_branch1``: ``(B, X, Y, Z, C)`` for spatial branches or
+      ``(B, in_features)`` for MLP branches.
+    - ``x_time``: ``(T,)`` or ``(T, in_features)`` query coordinates.
+    - ``x_branch2`` (optional): secondary branch input for MIONet/TNO.
+    - Returns: ``(B, X, Y, Z, T)`` for spatial branches or ``(B, T)`` for MLP.
+
+    See :class:`DeepONet` for parameter semantics.
+    """
+
+    VALID_VARIANTS = [
+        "deeponet",
+        "u_deeponet",
+        "fourier_deeponet",
+        "conv_deeponet",
+        "hybrid_deeponet",
+        "mionet",
+        "fourier_mionet",
+        "tno",
+    ]
+
+    def __init__(
+        self,
+        variant: str = "u_deeponet",
+        width: int = 64,
+        branch1_config: Dict[str, Any] = None,
+        branch2_config: Dict[str, Any] = None,
+        trunk_config: Dict[str, Any] = None,
+        decoder_type: str = "mlp",
+        decoder_width: int = 128,
+        decoder_layers: int = 2,
+        decoder_activation_fn: str = "relu",
+    ):
+        super().__init__()
+
+        self.variant = variant.lower()
+        self.width = width
+        self.decoder_type = decoder_type.lower()
+        self.decoder_activation_fn = decoder_activation_fn
+
+        if self.variant not in self.VALID_VARIANTS:
+            raise ValueError(
+                f"Unknown variant: {variant}. Valid: {self.VALID_VARIANTS}"
+            )
+
+        branch1_config = branch1_config or {}
+        trunk_config = trunk_config or {}
+
+        self.branch1 = self._build_branch(branch1_config, width)
+
+        self.has_branch2 = branch2_config is not None
+        if self.has_branch2:
+            self.branch2 = self._build_branch(branch2_config, width)
+
+        self.trunk = TrunkNet(
+            in_features=trunk_config.get("in_features", 1),
+            out_features=width,
+            hidden_width=trunk_config.get("hidden_width", 128),
+            num_layers=trunk_config.get("num_layers", 6),
+            activation_fn=trunk_config.get("activation_fn", "sin"),
+            output_activation=trunk_config.get("output_activation", True),
+        )
+
+        if decoder_type == "temporal_projection":
+            self._temporal_projection = True
+            self.decoder = self._build_decoder(
+                width,
+                width,
+                decoder_layers,
+                decoder_width,
+                "mlp",
+                decoder_activation_fn,
+            )
+            self.temporal_head = None
+        else:
+            self._temporal_projection = False
+            self.decoder = self._build_decoder(
+                width,
+                1,
+                decoder_layers,
+                decoder_width,
+                decoder_type,
+                decoder_activation_fn,
+            )
+
+    def set_output_window(self, K: int):
+        """Create the temporal-projection head for K output timesteps.
+
+        Only effective when ``decoder_type="temporal_projection"``.
+        """
+        if self._temporal_projection:
+            device = next(self.parameters()).device
+            self.temporal_head = nn.Linear(self.width, K).to(device)
+
+    def _build_branch(self, config: dict, width: int) -> nn.Module:
+        config = _normalize_branch_config(config)
+        enc = config.get("encoder", {})
+        layers = config.get("layers", {})
+
+        enc_type = enc.get("type", "linear")
+        enc_activation = enc.get("activation_fn", "sin")
+
+        has_layers = (
+            layers.get("num_fourier_layers", 0)
+            + layers.get("num_unet_layers", 0)
+            + layers.get("num_conv_layers", 0)
+        ) > 0
+
+        if enc_type == "mlp" and not has_layers:
+            return MLPBranch(
+                out_features=width,
+                hidden_width=enc.get("hidden_width", 64),
+                num_layers=enc.get("num_layers", 3),
+                activation_fn=enc_activation,
+            )
+
+        layer_activation = layers.get("activation_fn", enc_activation)
+        branch = SpatialBranch3D(
+            in_channels=config.get("in_channels", 11),
+            width=width,
+            num_fourier_layers=layers.get("num_fourier_layers", 0),
+            num_unet_layers=layers.get("num_unet_layers", 0),
+            num_conv_layers=layers.get("num_conv_layers", 0),
+            modes1=layers.get("modes1", 10),
+            modes2=layers.get("modes2", 10),
+            modes3=layers.get("modes3", 8),
+            kernel_size=layers.get("kernel_size", 3),
+            dropout=layers.get("dropout", 0.0),
+            activation_fn=layer_activation,
+            internal_resolution=config.get("internal_resolution", None),
+        )
+        if enc_type == "conv":
+            branch.lift = _build_conv_encoder(width, enc)
+        return branch
+
+    def _build_decoder(
+        self,
+        width: int,
+        out_channels: int,
+        num_layers: int,
+        hidden_width: int,
+        decoder_type: str,
+        activation_fn: str,
+    ) -> nn.Module:
+        if decoder_type == "mlp":
+            if num_layers == 0:
+                return nn.Linear(width, out_channels)
+            return FullyConnected(
+                width, hidden_width, out_channels, num_layers, activation_fn
+            )
+
+        elif decoder_type == "conv":
+            if num_layers == 0:
+                return Conv3dFCLayer(width, out_channels)
+
+            layers = []
+            in_ch = width
+            for _ in range(num_layers):
+                layers.extend(
+                    [Conv3dFCLayer(in_ch, hidden_width), get_activation(activation_fn)]
+                )
+                in_ch = hidden_width
+            layers.append(Conv3dFCLayer(hidden_width, out_channels))
+            return nn.Sequential(*layers)
+
+        else:
+            raise ValueError(f"Unknown decoder_type: {decoder_type}")
+
+    def forward(
+        self, x_branch1: Tensor, x_time: Tensor, x_branch2: Tensor = None
+    ) -> Tensor:
+        """Forward pass through the 3D DeepONet.
+
+        See class docstring for input/output shapes.
+        """
+        if x_time.dim() == 1:
+            x_time = x_time.unsqueeze(-1)
+
+        b1_out = self.branch1(x_branch1)
+
+        if self.has_branch2:
+            if x_branch2 is None:
+                raise ValueError("x_branch2 required for mionet/tno variants")
+            b2_out = self.branch2(x_branch2)
+
+        trunk_out = self.trunk(x_time)
+
+        if b1_out.dim() == 5:  # Spatial branch
+            if self._temporal_projection:
+                trunk_single = trunk_out[0:1]
+                trunk_exp = trunk_single.unsqueeze(1).unsqueeze(2).unsqueeze(3)
+                combined = b1_out * trunk_exp
+                if self.has_branch2:
+                    if b2_out.dim() == 5:
+                        combined = combined * b2_out
+                    else:
+                        combined = combined * b2_out.unsqueeze(1).unsqueeze(
+                            2
+                        ).unsqueeze(3)
+                combined = self.decoder(combined)
+                if self.temporal_head is not None:
+                    combined = self.temporal_head(combined)
+                return combined
+
+            b1_out = b1_out.unsqueeze(1)
+            trunk_out = trunk_out.unsqueeze(0).unsqueeze(2).unsqueeze(3).unsqueeze(4)
+
+            if self.has_branch2:
+                if b2_out.dim() == 5:
+                    b2_out = b2_out.unsqueeze(1)
+                else:
+                    b2_out = b2_out.unsqueeze(1).unsqueeze(2).unsqueeze(3).unsqueeze(4)
+                combined = b1_out * b2_out * trunk_out
+            else:
+                combined = b1_out * trunk_out
+
+            if self.decoder_type == "mlp":
+                return self.decoder(combined).squeeze(-1).permute(0, 2, 3, 4, 1)
+
+            B, T, X, Y, Z, C = combined.shape
+            combined = combined.permute(0, 1, 5, 2, 3, 4).reshape(B * T, C, X, Y, Z)
+            return self.decoder(combined).reshape(B, T, X, Y, Z).permute(0, 2, 3, 4, 1)
+
+        else:  # MLP branch
+            b1_out = b1_out.unsqueeze(1)
+            trunk_out = trunk_out.unsqueeze(0)
+
+            if self.has_branch2:
+                combined = b1_out * b2_out.unsqueeze(1) * trunk_out
+            else:
+                combined = b1_out * trunk_out
+
+            return self.decoder(combined).squeeze(-1)
+
+    def count_params(self) -> int:
+        """Return the number of trainable parameters."""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+__all__ = [
+    "DeepONet",
+    "DeepONet3D",
+]
