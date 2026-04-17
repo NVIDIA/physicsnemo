@@ -47,6 +47,10 @@ def fork_generator(
     list[torch.Generator]
         *n* independent generators on the same device as *parent*.
     """
+
+    # I miss JAX ...
+    # https://docs.jax.dev/en/latest/jax.random.html
+
     base_seed = parent.initial_seed()
     children: list[torch.Generator] = []
     for i in range(n):
