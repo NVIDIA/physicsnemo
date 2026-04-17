@@ -102,6 +102,47 @@ class MeshTransform(ABC):
         """
         return domain._map_meshes(self)
 
+    @property
+    def stochastic(self) -> bool:
+        """Whether this transform uses random sampling.
+
+        Returns ``True`` if the instance has a ``_generator`` attribute
+        (set by stochastic subclasses such as ``RandomScaleMesh``).
+        Deterministic transforms return ``False``.
+        """
+        return hasattr(self, "_generator")
+
+    def set_generator(self, generator: torch.Generator) -> None:
+        """Assign a ``torch.Generator`` for reproducible random sampling.
+
+        Only takes effect on stochastic transforms (those that declare
+        ``self._generator``).  Deterministic transforms silently ignore
+        the call.
+
+        Parameters
+        ----------
+        generator : torch.Generator
+            Generator to use for all subsequent random draws.
+        """
+        if self.stochastic:
+            self._generator = generator
+
+    def set_epoch(self, epoch: int) -> None:
+        """Reseed the generator for a new epoch.
+
+        Reseeds ``self._generator`` with ``initial_seed() + epoch`` so
+        each epoch produces a different but deterministic random
+        sequence.  No-op for deterministic transforms or when no
+        generator has been assigned.
+
+        Parameters
+        ----------
+        epoch : int
+            Current epoch number.
+        """
+        if self.stochastic and self._generator is not None:
+            self._generator.manual_seed(self._generator.initial_seed() + epoch)
+
     def to(self, device: torch.device | str) -> MeshTransform:
         """Move any internal tensors, generators, and distributions to *device*.
 

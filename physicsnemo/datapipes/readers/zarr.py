@@ -144,6 +144,7 @@ class ZarrReader(Reader):
         self.group_pattern = group_pattern
         self._cache_stores = cache_stores
         self._cached_stores: dict[Path, Any] = {}  # Cache for opened zarr stores
+        self._subsample_generator: torch.Generator | None = None
 
         if not self.path.exists():
             raise FileNotFoundError(f"Path not found: {self.path}")
@@ -204,6 +205,17 @@ class ZarrReader(Reader):
         if self._user_fields is not None:
             return self._user_fields
         return self._available_fields
+
+    def set_generator(self, generator: torch.Generator) -> None:
+        """Assign a ``torch.Generator`` for reproducible subsampling."""
+        self._subsample_generator = generator
+
+    def set_epoch(self, epoch: int) -> None:
+        """Reseed the subsample RNG for a new epoch."""
+        if self._subsample_generator is not None:
+            self._subsample_generator.manual_seed(
+                self._subsample_generator.initial_seed() + epoch
+            )
 
     def _open_zarr_store(self, path: Path) -> Any:
         """
@@ -274,7 +286,12 @@ class ZarrReader(Reader):
                 f"{n_points} requested for subsampling"
             )
 
-        start = np.random.randint(slice_start, slice_stop - n_points + 1)
+        start = torch.randint(
+            slice_start,
+            slice_stop - n_points + 1,
+            (1,),
+            generator=self._subsample_generator,
+        ).item()
         return slice(start, start + n_points)
 
     def _load_sample(self, index: int) -> dict[str, torch.Tensor]:

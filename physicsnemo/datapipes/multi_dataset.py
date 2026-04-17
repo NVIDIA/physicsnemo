@@ -28,8 +28,10 @@ from __future__ import annotations
 
 from typing import Any, Iterator, Optional, Sequence
 
+import torch
 from tensordict import TensorDict
 
+from physicsnemo.datapipes._rng import fork_generator
 from physicsnemo.datapipes.protocols import DatasetBase
 from physicsnemo.datapipes.registry import register
 
@@ -249,6 +251,36 @@ class MultiDataset:
     def __len__(self) -> int:
         """Return the total number of samples (sum of all sub-dataset lengths)."""
         return self._cumul[-1]
+
+    # ------------------------------------------------------------------
+    # RNG management
+    # ------------------------------------------------------------------
+
+    def set_generator(self, generator: torch.Generator) -> None:
+        """Fork *generator* and distribute one child per sub-dataset.
+
+        Parameters
+        ----------
+        generator : torch.Generator
+            Parent generator (typically forked from the DataLoader's
+            master generator).
+        """
+        children = fork_generator(generator, len(self._datasets))
+        for child, ds in zip(children, self._datasets):
+            if hasattr(ds, "set_generator"):
+                ds.set_generator(child)
+
+    def set_epoch(self, epoch: int) -> None:
+        """Propagate epoch to every sub-dataset.
+
+        Parameters
+        ----------
+        epoch : int
+            Current epoch number.
+        """
+        for ds in self._datasets:
+            if hasattr(ds, "set_epoch"):
+                ds.set_epoch(epoch)
 
     def __getitem__(self, index: int) -> tuple[TensorDict, dict[str, Any]]:
         """

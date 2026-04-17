@@ -263,6 +263,7 @@ class SubsampleMesh(MeshTransform):
         self.n_cells = n_cells
         self.n_points = n_points
         self.compact = compact
+        self._generator: torch.Generator | None = None
 
     def _random_indices(
         self, total: int, k: int, device: torch.device
@@ -270,8 +271,13 @@ class SubsampleMesh(MeshTransform):
         if total <= k:
             return torch.arange(total, device=device)
         if total > 2**24:
-            return poisson_sample_indices_fixed(total, k, device=device)
-        return torch.randperm(total, device=device)[:k]
+            return poisson_sample_indices_fixed(
+                total,
+                k,
+                device=device,
+                generator=self._generator,
+            )
+        return torch.randperm(total, device=device, generator=self._generator)[:k]
 
     def __call__(self, mesh: Mesh) -> Mesh:
         if self.n_cells is not None and mesh.n_cells > self.n_cells:
@@ -560,7 +566,7 @@ class NormalizeMeshFields(MeshTransform):
         self,
         tensor: Float[torch.Tensor, "*batch channels"],
         target_config: dict[str, str],
-        vector_dim: int = 3,
+        n_spatial_dims: int = 3,
     ) -> Float[torch.Tensor, "*batch channels"]:
         """Un-normalize a concatenated output tensor back to physical units.
 
@@ -577,7 +583,7 @@ class NormalizeMeshFields(MeshTransform):
         target_config : dict[str, str]
             Ordered mapping of ``{field_name: field_type}`` matching the
             channel layout, e.g. ``{"pressure": "scalar", "wss": "vector"}``.
-        vector_dim : int, optional
+        n_spatial_dims : int, optional
             Dimensionality of vector fields. Default is 3.
 
         Returns
@@ -588,7 +594,7 @@ class NormalizeMeshFields(MeshTransform):
         out = tensor.clone()
         idx = 0
         for name, ftype in target_config.items():
-            dim = 1 if ftype == "scalar" else vector_dim
+            dim = 1 if ftype == "scalar" else n_spatial_dims
             if name in self._stats:
                 stats = self._stats[name]
                 mean = stats["mean"].to(dtype=tensor.dtype, device=tensor.device)

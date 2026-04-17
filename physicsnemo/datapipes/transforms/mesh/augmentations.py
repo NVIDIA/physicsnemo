@@ -103,7 +103,6 @@ class RandomScaleMesh(MeshTransform):
         transform_point_data: bool = False,
         transform_cell_data: bool = False,
         transform_global_data: bool = False,
-        generator: torch.Generator | None = None,
     ) -> None:
         """
         Parameters
@@ -117,15 +116,13 @@ class RandomScaleMesh(MeshTransform):
             If ``True``, transform cell-data fields under scaling.
         transform_global_data : bool
             If ``True``, transform global-data fields under scaling.
-        generator : torch.Generator or None
-            Optional random generator for reproducibility.
         """
         super().__init__()
         self._distribution = distribution or torch.distributions.Uniform(0.9, 1.1)
         self.transform_point_data = transform_point_data
         self.transform_cell_data = transform_cell_data
         self.transform_global_data = transform_global_data
-        self._generator = generator
+        self._generator: torch.Generator | None = None
 
     def _sample_factor(self) -> Float[torch.Tensor, ""]:
         """Sample a scale factor from ``self._distribution``.
@@ -201,7 +198,6 @@ class RandomTranslateMesh(MeshTransform):
     def __init__(
         self,
         distribution: torch.distributions.Distribution | None = None,
-        generator: torch.Generator | None = None,
     ) -> None:
         """
         Parameters
@@ -212,12 +208,10 @@ class RandomTranslateMesh(MeshTransform):
             batched distribution (``batch_shape == (n_spatial_dims,)``)
             allows different parameters per axis.
             Defaults to ``Uniform(-0.1, 0.1)``.
-        generator : torch.Generator or None
-            Optional random generator for reproducibility.
         """
         super().__init__()
         self._distribution = distribution or torch.distributions.Uniform(-0.1, 0.1)
-        self._generator = generator
+        self._generator: torch.Generator | None = None
 
     def _sample_offset(
         self, n_spatial_dims: int
@@ -299,7 +293,6 @@ class RandomRotateMesh(MeshTransform):
         transform_point_data: bool = False,
         transform_cell_data: bool = False,
         transform_global_data: bool = False,
-        generator: torch.Generator | None = None,
     ) -> None:
         """
         Parameters
@@ -322,8 +315,6 @@ class RandomRotateMesh(MeshTransform):
             If ``True``, transform cell-data fields under rotation.
         transform_global_data : bool
             If ``True``, transform global-data fields under rotation.
-        generator : torch.Generator or None
-            Optional random generator for reproducibility.
         """
         super().__init__()
         if mode not in ("axis_aligned", "uniform"):
@@ -336,7 +327,7 @@ class RandomRotateMesh(MeshTransform):
         self.transform_point_data = transform_point_data
         self.transform_cell_data = transform_cell_data
         self.transform_global_data = transform_global_data
-        self._generator = generator
+        self._generator: torch.Generator | None = None
 
         # Coefficient matrix mapping outer(q,q).flatten() (16,) -> R.flatten() (9,).
         # Derived from the standard unit-quaternion rotation formula using

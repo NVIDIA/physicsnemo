@@ -5,7 +5,7 @@
 Mesh augmentations (`RandomScaleMesh`, `RandomTranslateMesh`,
 `RandomRotateMesh`) need to sample random parameters (scale factors,
 translation offsets, rotation angles) on every call.  A uniform
-distribution is the simplest choice but is always the best, nor
+distribution is the simplest choice but is not always the best, nor
 should we lock into that design explicitly.  Other alternatives exist:
 
 - **Gaussian** (`Normal`) concentrates samples near a center value,
@@ -53,6 +53,25 @@ back to `distribution.sample()` and emits a warning that generator
 reproducibility is lost.  In practice this is only a small subset of
 distributions.
 
+## Reproducibility
+
+Reproducibility flows from the `DataLoader`.  The loader seeds a
+master `torch.Generator` and passes it to
+`MeshDataset.set_generator(parent_gen)`, which forks the parent
+into independent children — one for the reader and one per
+transform.  `MeshDataset.set_epoch(epoch)` reseeds every child
+with `initial_seed() + epoch` so each epoch is different but
+deterministic.  Deterministic transforms silently ignore both calls.
+
+For standalone usage outside a `DataLoader`, call `set_generator`
+on the transform directly:
+
+```python
+aug = RandomScaleMesh(distribution=D.Normal(1.0, 0.05))
+aug.set_generator(torch.Generator().manual_seed(42))
+result = aug(mesh)  # reproducible
+```
+
 
 ## Python Usage
 
@@ -73,15 +92,11 @@ from physicsnemo.datapipes.transforms.mesh import (
 aug = RandomScaleMesh()
 
 # Gaussian perturbation around identity scale
-aug = RandomScaleMesh(
-    distribution=D.Normal(loc=1.0, scale=0.05),
-    generator=torch.Generator().manual_seed(42),
-)
+aug = RandomScaleMesh(distribution=D.Normal(loc=1.0, scale=0.05))
+aug.set_generator(torch.Generator().manual_seed(42))
 
 # LogNormal (always positive, centered near 1)
-aug = RandomScaleMesh(
-    distribution=D.LogNormal(loc=0.0, scale=0.1),
-)
+aug = RandomScaleMesh(distribution=D.LogNormal(loc=0.0, scale=0.1))
 ```
 
 ### RandomTranslateMesh
@@ -91,10 +106,8 @@ aug = RandomScaleMesh(
 aug = RandomTranslateMesh()
 
 # Laplace offsets (sharp peak, heavy tails)
-aug = RandomTranslateMesh(
-    distribution=D.Laplace(loc=0.0, scale=0.02),
-    generator=torch.Generator().manual_seed(42),
-)
+aug = RandomTranslateMesh(distribution=D.Laplace(loc=0.0, scale=0.02))
+aug.set_generator(torch.Generator().manual_seed(42))
 
 # Per-axis control via batched distribution
 aug = RandomTranslateMesh(
@@ -120,10 +133,8 @@ aug = RandomTranslateMesh(
 aug = RandomRotateMesh()
 
 # Concentrated small-angle perturbations
-aug = RandomRotateMesh(
-    distribution=D.Normal(loc=0.0, scale=0.1),
-    generator=torch.Generator().manual_seed(42),
-)
+aug = RandomRotateMesh(distribution=D.Normal(loc=0.0, scale=0.1))
+aug.set_generator(torch.Generator().manual_seed(42))
 
 # Only rotate about z-axis, Laplace angle distribution
 aug = RandomRotateMesh(
@@ -196,8 +207,8 @@ most commonly used distributions.
 
 Distributions without `icdf` will still work via
 `distribution.sample()`, but the `torch.Generator` is **not** used
-for those draws.  A `UserWarning` is emitted in this case, and datapipe
-reproducability is not possible at the generator level.
+for those draws.  A `UserWarning` is emitted in this case, and
+datapipe reproducibility is not possible at the generator level.
 
 ## Choosing a Distribution
 

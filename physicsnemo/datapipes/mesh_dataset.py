@@ -28,6 +28,7 @@ from typing import Any, Optional, Sequence, Union
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.datapipes._rng import fork_generator
 from physicsnemo.datapipes.protocols import DatasetBase, _PrefetchResult
 from physicsnemo.datapipes.readers.mesh import DomainMeshReader, MeshReader
 from physicsnemo.datapipes.registry import register
@@ -96,6 +97,65 @@ class MeshDataset(DatasetBase):
         self.reader = reader
         self.transforms = list(transforms) if transforms else []
         self._device = torch.device(device) if isinstance(device, str) else device
+
+        if self._device is not None:
+            for t in self.transforms:
+                if hasattr(t, "to"):
+                    t.to(self._device)
+
+    # ------------------------------------------------------------------
+    # RNG management
+    # ------------------------------------------------------------------
+
+    def set_generator(self, generator: torch.Generator) -> None:
+        """Distribute forked generators to the reader and every stochastic transform.
+
+        Forks *generator* into ``1 + len(self.transforms)`` independent
+        children: the first goes to the reader, the rest map 1-to-1 to
+        the transform list (deterministic transforms silently ignore
+        theirs).
+
+        Parameters
+        ----------
+        generator : torch.Generator
+            Parent generator (typically forked from the DataLoader's
+            master generator).
+        """
+        n_children = 1 + len(self.transforms)
+        children = fork_generator(generator, n_children)
+
+        # Child 0 → reader
+        if hasattr(self.reader, "set_generator"):
+            self.reader.set_generator(children[0])
+
+        # Children 1..N → transforms (deterministic ones ignore via base no-op)
+        for child, t in zip(children[1:], self.transforms):
+            if hasattr(t, "set_generator"):
+                if self._device is not None and self._device != child.device:
+                    dev_gen = torch.Generator(device=self._device)
+                    dev_gen.manual_seed(child.initial_seed())
+                    t.set_generator(dev_gen)
+                else:
+                    t.set_generator(child)
+
+    def set_epoch(self, epoch: int) -> None:
+        """Propagate epoch to the reader and every transform.
+
+        Reseeds all generators assigned via :meth:`set_generator` so
+        each epoch produces a different but deterministic random
+        sequence.
+
+        Parameters
+        ----------
+        epoch : int
+            Current epoch number.
+        """
+        if hasattr(self.reader, "set_epoch"):
+            self.reader.set_epoch(epoch)
+
+        for t in self.transforms:
+            if hasattr(t, "set_epoch"):
+                t.set_epoch(epoch)
 
     # ------------------------------------------------------------------
     # DatasetBase implementation
