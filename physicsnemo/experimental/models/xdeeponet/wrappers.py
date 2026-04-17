@@ -35,12 +35,14 @@ These wrappers are the recommended public entry points for xDeepONet.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
 import torch
-import torch.nn as nn
 from torch import Tensor
 
+from physicsnemo.core.meta import ModelMetaData
+from physicsnemo.core.module import Module
 from physicsnemo.experimental.models.xdeeponet.deeponet import DeepONet, DeepONet3D
 from physicsnemo.experimental.models.xdeeponet.padding import (
     compute_right_pad_to_multiple,
@@ -48,40 +50,74 @@ from physicsnemo.experimental.models.xdeeponet.padding import (
 )
 
 
-class DeepONetWrapper(nn.Module):
-    """2D xDeepONet wrapper with automatic padding and input extraction.
+@dataclass
+class _DeepONetWrapperMetaData(ModelMetaData):
+    """PhysicsNeMo model metadata for :class:`DeepONetWrapper`."""
 
-    Input
-    -----
-    ``x`` : Tensor of shape ``(B, H, W, T, C)``.
 
-    Output
-    ------
-    Tensor of shape ``(B, H, W, T_out)`` where ``T_out == T`` unless
-    ``target_times`` is provided (then ``T_out == len(target_times)``).
+@dataclass
+class _DeepONet3DWrapperMetaData(ModelMetaData):
+    """PhysicsNeMo model metadata for :class:`DeepONet3DWrapper`."""
+
+
+class DeepONetWrapper(Module):
+    r"""2D xDeepONet wrapper with automatic padding and input extraction.
+
+    Extracts the spatial channels and trunk coordinates from a packed 5D
+    input tensor, pads spatial dimensions to a multiple of 8, runs the
+    core :class:`~physicsnemo.experimental.models.xdeeponet.deeponet.DeepONet`,
+    and unpads.
 
     Parameters
     ----------
-    padding : int
+    padding : int, optional
         Minimum right-side padding; the wrapper rounds up to the next
-        multiple of 8.  Default is 8.
-    variant : str
+        multiple of 8.
+    variant : str, optional
         xDeepONet variant (see
         :attr:`~physicsnemo.experimental.models.xdeeponet.deeponet.DeepONet.VALID_VARIANTS`).
-    width : int
+    width : int, optional
         Latent width.
-    branch1_config, branch2_config, trunk_config : dict, optional
-        Sub-network configurations (see core class docstrings).  The trunk
-        config may additionally specify ``input_type`` as ``"time"`` or
-        ``"grid"``: ``"time"`` uses the last input channel as the time
-        coordinate; ``"grid"`` uses the last three channels
-        ``(grid_x, grid_y, grid_t)``.
-    decoder_type : {"mlp", "conv", "temporal_projection"}
-        See :class:`~physicsnemo.experimental.models.xdeeponet.deeponet.DeepONet`.
-    decoder_width, decoder_layers : int
-        Decoder hidden width and layer count.
-    decoder_activation_fn : str
+    branch1_config : dict, optional
+        Primary branch configuration (see core class docstring).
+    branch2_config : dict, optional
+        Secondary branch configuration for MIONet/TNO variants.
+    trunk_config : dict, optional
+        Trunk configuration.  May specify ``input_type`` as ``"time"``
+        (uses the last input channel as the time coordinate) or
+        ``"grid"`` (uses the last three channels
+        ``(grid_x, grid_y, grid_t)``).
+    decoder_type : str, optional
+        One of ``"mlp"``, ``"conv"``, or ``"temporal_projection"``.
+    decoder_width : int, optional
+        Decoder hidden width.
+    decoder_layers : int, optional
+        Decoder layer count.
+    decoder_activation_fn : str, optional
         Activation function name for the decoder.
+    output_window : int, optional
+        Output window for the ``"temporal_projection"`` decoder (forwarded
+        to :class:`DeepONet`).
+
+    Forward
+    -------
+    x : torch.Tensor
+        Packed input of shape :math:`(B, H, W, T, C)` where the last
+        channel axis holds features plus time/grid coordinates.
+    x_branch2 : torch.Tensor, optional
+        Secondary branch input for MIONet/TNO variants.
+    target_times : torch.Tensor, optional
+        Explicit trunk query coordinates of shape :math:`(K,)` or
+        :math:`(K, 1)`.  When provided the trunk evaluates at these
+        :math:`K` points instead of the times extracted from ``x``,
+        enabling autoregressive temporal bundling where :math:`K \neq T`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Operator output of shape :math:`(B, H, W, T_{out})` where
+        :math:`T_{out} = K` when ``target_times`` is given and
+        :math:`T_{out} = T` otherwise.
     """
 
     def __init__(
@@ -96,8 +132,9 @@ class DeepONetWrapper(nn.Module):
         decoder_width: int = 128,
         decoder_layers: int = 2,
         decoder_activation_fn: str = "relu",
+        output_window: Optional[int] = None,
     ):
-        super().__init__()
+        super().__init__(meta=_DeepONetWrapperMetaData())
 
         self.padding = ((padding + 7) // 8) * 8 if padding % 8 != 0 else padding
         self.variant = variant
@@ -123,6 +160,7 @@ class DeepONetWrapper(nn.Module):
             decoder_width=decoder_width,
             decoder_layers=decoder_layers,
             decoder_activation_fn=decoder_activation_fn,
+            output_window=output_window,
         )
         self._temporal_projection = self.model._temporal_projection
 
@@ -133,29 +171,26 @@ class DeepONetWrapper(nn.Module):
     def forward(
         self,
         x: Tensor,
-        x_branch2: Tensor = None,
-        target_times: Tensor = None,
+        x_branch2: Optional[Tensor] = None,
+        target_times: Optional[Tensor] = None,
     ) -> Tensor:
         """Forward pass through the 2D wrapper.
 
-        Parameters
-        ----------
-        x : Tensor
-            Input ``(B, H, W, T_in, C)``.
-        x_branch2 : Tensor, optional
-            Secondary branch input (MIONet/TNO variants).
-        target_times : Tensor, optional
-            Explicit trunk query coordinates ``(K,)`` or ``(K, 1)``.  When
-            provided the trunk evaluates at these K points instead of
-            extracting time values from ``x``, enabling autoregressive
-            temporal bundling where ``K != T_in``.
-
-        Returns
-        -------
-        Tensor
-            ``(B, H, W, T_out)`` where ``T_out = K`` if ``target_times`` is
-            given, else ``T_in``.
+        See class docstring for input/output shapes.
         """
+        if not torch.compiler.is_compiling():
+            if x.ndim != 5:
+                raise ValueError(
+                    f"Expected 5D input (B, H, W, T, C), got {x.ndim}D "
+                    f"tensor with shape {tuple(x.shape)}"
+                )
+            if target_times is not None and target_times.ndim not in (1, 2):
+                raise ValueError(
+                    f"Expected target_times to be 1D (K,) or 2D (K, 1), "
+                    f"got {target_times.ndim}D tensor with shape "
+                    f"{tuple(target_times.shape)}"
+                )
+
         H, W = x.shape[1], x.shape[2]
 
         pad_h, pad_w = compute_right_pad_to_multiple(
@@ -203,21 +238,27 @@ class DeepONetWrapper(nn.Module):
         return self.model.count_params()
 
 
-class DeepONet3DWrapper(nn.Module):
-    """3D xDeepONet wrapper with automatic padding and input extraction.
-
-    Input
-    -----
-    ``x`` : Tensor of shape ``(B, X, Y, Z, T, C)``.
-
-    Output
-    ------
-    Tensor of shape ``(B, X, Y, Z, T_out)`` where ``T_out == T`` unless
-    ``target_times`` is provided.
+class DeepONet3DWrapper(Module):
+    r"""3D xDeepONet wrapper with automatic padding and input extraction.
 
     See :class:`DeepONetWrapper` for parameter semantics.  The 3D trunk
     ``input_type="grid"`` uses the last four input channels
     ``(grid_x, grid_y, grid_z, grid_t)``.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Packed input of shape :math:`(B, X, Y, Z, T, C)`.
+    x_branch2 : torch.Tensor, optional
+        Secondary branch input for MIONet/TNO variants.
+    target_times : torch.Tensor, optional
+        Explicit trunk query coordinates of shape :math:`(K,)` or
+        :math:`(K, 1)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Operator output of shape :math:`(B, X, Y, Z, T_{out})`.
     """
 
     def __init__(
@@ -232,8 +273,9 @@ class DeepONet3DWrapper(nn.Module):
         decoder_width: int = 128,
         decoder_layers: int = 2,
         decoder_activation_fn: str = "relu",
+        output_window: Optional[int] = None,
     ):
-        super().__init__()
+        super().__init__(meta=_DeepONet3DWrapperMetaData())
 
         self.padding = ((padding + 7) // 8) * 8 if padding % 8 != 0 else padding
         self.variant = variant
@@ -259,6 +301,7 @@ class DeepONet3DWrapper(nn.Module):
             decoder_width=decoder_width,
             decoder_layers=decoder_layers,
             decoder_activation_fn=decoder_activation_fn,
+            output_window=output_window,
         )
         self._temporal_projection = self.model._temporal_projection
 
@@ -269,26 +312,26 @@ class DeepONet3DWrapper(nn.Module):
     def forward(
         self,
         x: Tensor,
-        x_branch2: Tensor = None,
-        target_times: Tensor = None,
+        x_branch2: Optional[Tensor] = None,
+        target_times: Optional[Tensor] = None,
     ) -> Tensor:
         """Forward pass through the 3D wrapper.
 
-        Parameters
-        ----------
-        x : Tensor
-            Input ``(B, X, Y, Z, T_in, C)``.
-        x_branch2 : Tensor, optional
-            Secondary branch input (MIONet/TNO variants).
-        target_times : Tensor, optional
-            Explicit trunk query coordinates ``(K,)`` or ``(K, 1)``.
-
-        Returns
-        -------
-        Tensor
-            ``(B, X, Y, Z, T_out)`` where ``T_out = K`` if ``target_times``
-            is given, else ``T_in``.
+        See class docstring for input/output shapes.
         """
+        if not torch.compiler.is_compiling():
+            if x.ndim != 6:
+                raise ValueError(
+                    f"Expected 6D input (B, X, Y, Z, T, C), got {x.ndim}D "
+                    f"tensor with shape {tuple(x.shape)}"
+                )
+            if target_times is not None and target_times.ndim not in (1, 2):
+                raise ValueError(
+                    f"Expected target_times to be 1D (K,) or 2D (K, 1), "
+                    f"got {target_times.ndim}D tensor with shape "
+                    f"{tuple(target_times.shape)}"
+                )
+
         X, Y, Z = x.shape[1], x.shape[2], x.shape[3]
 
         pad_x, pad_y, pad_z = compute_right_pad_to_multiple(

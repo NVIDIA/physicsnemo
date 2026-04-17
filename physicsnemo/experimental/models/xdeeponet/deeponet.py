@@ -52,11 +52,14 @@ References
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
+import torch
 import torch.nn as nn
 from torch import Tensor
 
+from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.experimental.models.xdeeponet.branches import (
     MLPBranch,
@@ -66,6 +69,22 @@ from physicsnemo.experimental.models.xdeeponet.branches import (
 )
 from physicsnemo.models.mlp import FullyConnected
 from physicsnemo.nn import Conv2dFCLayer, Conv3dFCLayer, get_activation
+
+# Variants that require a secondary branch (branch2).  Used by the core
+# DeepONet / DeepONet3D __init__ to validate branch2_config up-front so
+# multi-branch variants cannot silently degrade to single-branch models.
+_DUAL_BRANCH_VARIANTS = frozenset({"mionet", "fourier_mionet", "tno"})
+
+
+@dataclass
+class _DeepONetMetaData(ModelMetaData):
+    """PhysicsNeMo model metadata for :class:`DeepONet`."""
+
+
+@dataclass
+class _DeepONet3DMetaData(ModelMetaData):
+    """PhysicsNeMo model metadata for :class:`DeepONet3D`."""
+
 
 # ---------------------------------------------------------------------------
 # Branch config helpers
@@ -177,20 +196,12 @@ def _build_conv_encoder(width: int, enc_config: dict) -> nn.Module:
 
 
 class DeepONet(Module):
-    """2D xDeepONet core architecture for operator learning.
+    r"""2D xDeepONet core architecture for operator learning.
 
     Combines a primary spatial/MLP branch, an optional secondary branch
     (for MIONet/TNO variants), a coordinate trunk, and a decoder.  The
     branch outputs and trunk are combined via Hadamard product and then
     projected to the output by the decoder.
-
-    Input / Output
-    --------------
-    - ``x_branch1``: ``(B, H, W, C)`` for spatial branches or
-      ``(B, in_features)`` for MLP branches.
-    - ``x_time``: ``(T,)`` or ``(T, in_features)`` query coordinates.
-    - ``x_branch2`` (optional): secondary branch input for MIONet/TNO.
-    - Returns: ``(B, H, W, T)`` for spatial branches or ``(B, T)`` for MLP.
 
     Parameters
     ----------
@@ -198,19 +209,49 @@ class DeepONet(Module):
         One of the eight supported variants (see :data:`VALID_VARIANTS`).
     width : int
         Latent width.
-    branch1_config, branch2_config, trunk_config : dict, optional
-        Sub-network configurations.  See module docstring for schema.
-    decoder_type : {"mlp", "conv", "temporal_projection"}
-        ``"mlp"`` queries the trunk at each target timestep and applies an
-        MLP decoder; ``"conv"`` uses a convolutional decoder; and
-        ``"temporal_projection"`` queries the trunk once and projects the
-        combined latent representation to K timesteps via a learned linear
-        head (fast autoregressive bundling; requires
-        :meth:`set_output_window`).
-    decoder_width, decoder_layers : int
-        Decoder hidden width and layer count.
-    decoder_activation_fn : str
+    branch1_config : dict, optional
+        Primary branch configuration.  See module docstring for schema.
+    branch2_config : dict, optional
+        Secondary branch configuration, required for the ``"mionet"``,
+        ``"fourier_mionet"``, and ``"tno"`` variants.
+    trunk_config : dict, optional
+        Trunk network configuration.
+    decoder_type : str, optional
+        One of ``"mlp"`` (queries the trunk at each target timestep and
+        applies an MLP decoder), ``"conv"`` (uses a convolutional decoder),
+        or ``"temporal_projection"`` (queries the trunk once and projects
+        the combined latent to K timesteps via a learned linear head for
+        fast autoregressive bundling).
+    decoder_width : int, optional
+        Decoder hidden width.
+    decoder_layers : int, optional
+        Decoder layer count.
+    decoder_activation_fn : str, optional
         Activation function name for the decoder.
+    output_window : int, optional
+        Output window length K for the ``"temporal_projection"`` decoder.
+        When supplied the temporal head is constructed at ``__init__``, which
+        produces a deterministic ``state_dict`` and makes checkpoint
+        round-tripping straightforward.  When omitted,
+        :meth:`set_output_window` must be called before the first forward
+        pass.
+
+    Forward
+    -------
+    x_branch1 : torch.Tensor
+        Primary input of shape :math:`(B, H, W, C)` for spatial branches or
+        :math:`(B, D_{in})` for MLP branches.
+    x_time : torch.Tensor
+        Query coordinates of shape :math:`(T,)` or
+        :math:`(T, D_{\text{trunk}})`.
+    x_branch2 : torch.Tensor, optional
+        Secondary branch input for MIONet/TNO variants.
+
+    Outputs
+    -------
+    torch.Tensor
+        Operator output of shape :math:`(B, H, W, T)` for spatial branches
+        or :math:`(B, T)` for MLP branches.
     """
 
     VALID_VARIANTS = [
@@ -235,8 +276,9 @@ class DeepONet(Module):
         decoder_width: int = 128,
         decoder_layers: int = 2,
         decoder_activation_fn: str = "relu",
+        output_window: Optional[int] = None,
     ):
-        super().__init__()
+        super().__init__(meta=_DeepONetMetaData())
 
         self.variant = variant.lower()
         self.width = width
@@ -246,6 +288,13 @@ class DeepONet(Module):
         if self.variant not in self.VALID_VARIANTS:
             raise ValueError(
                 f"Unknown variant: {variant}. Valid: {self.VALID_VARIANTS}"
+            )
+
+        if self.variant in _DUAL_BRANCH_VARIANTS and branch2_config is None:
+            raise ValueError(
+                f"variant='{self.variant}' requires branch2_config to be "
+                f"provided.  Dual-branch variants: "
+                f"{sorted(_DUAL_BRANCH_VARIANTS)}."
             )
 
         branch1_config = branch1_config or {}
@@ -276,7 +325,20 @@ class DeepONet(Module):
                 "mlp",
                 decoder_activation_fn,
             )
-            self.temporal_head = None
+            # Preferred path: construct the temporal head at __init__ so
+            # state_dict keys are deterministic and checkpointing just works.
+            # If ``output_window`` is not provided the user must call
+            # :meth:`set_output_window` before the first forward pass; this
+            # path is kept for backwards compatibility but produces a
+            # state_dict whose structure depends on when the method is called.
+            if output_window is not None:
+                if output_window < 1:
+                    raise ValueError(
+                        f"output_window must be a positive integer, got {output_window}"
+                    )
+                self.temporal_head = nn.Linear(self.width, output_window)
+            else:
+                self.temporal_head = None
         else:
             self._temporal_projection = False
             self.decoder = self._build_decoder(
@@ -371,12 +433,33 @@ class DeepONet(Module):
             raise ValueError(f"Unknown decoder_type: {decoder_type}")
 
     def forward(
-        self, x_branch1: Tensor, x_time: Tensor, x_branch2: Tensor = None
+        self,
+        x_branch1: Tensor,
+        x_time: Tensor,
+        x_branch2: Optional[Tensor] = None,
     ) -> Tensor:
         """Forward pass through the DeepONet.
 
         See class docstring for input/output shapes.
         """
+        if not torch.compiler.is_compiling():
+            if x_branch1.ndim not in (2, 4):
+                raise ValueError(
+                    f"Expected x_branch1 to be 2D (B, D_in) for MLP branches "
+                    f"or 4D (B, H, W, C) for spatial branches, got "
+                    f"{x_branch1.ndim}D tensor with shape "
+                    f"{tuple(x_branch1.shape)}"
+                )
+            if x_time.ndim not in (1, 2):
+                raise ValueError(
+                    f"Expected x_time to be 1D (T,) or 2D (T, D), got "
+                    f"{x_time.ndim}D tensor with shape {tuple(x_time.shape)}"
+                )
+            if self.has_branch2 and x_branch2 is None:
+                raise ValueError(
+                    f"variant='{self.variant}' requires x_branch2 but got None"
+                )
+
         if x_time.dim() == 1:
             x_time = x_time.unsqueeze(-1)
 
@@ -445,17 +528,33 @@ class DeepONet(Module):
 
 
 class DeepONet3D(Module):
-    """3D xDeepONet core architecture for volumetric operator learning.
+    r"""3D xDeepONet core architecture for volumetric operator learning.
 
-    Input / Output
-    --------------
-    - ``x_branch1``: ``(B, X, Y, Z, C)`` for spatial branches or
-      ``(B, in_features)`` for MLP branches.
-    - ``x_time``: ``(T,)`` or ``(T, in_features)`` query coordinates.
-    - ``x_branch2`` (optional): secondary branch input for MIONet/TNO.
-    - Returns: ``(B, X, Y, Z, T)`` for spatial branches or ``(B, T)`` for MLP.
+    See :class:`DeepONet` for parameter semantics.  The 3D variant operates
+    on volumetric inputs and uses :class:`SpatialBranch3D` for spatial
+    branches.
 
-    See :class:`DeepONet` for parameter semantics.
+    Parameters
+    ----------
+    variant : str
+        One of the eight supported variants (see :data:`VALID_VARIANTS`).
+
+    Forward
+    -------
+    x_branch1 : torch.Tensor
+        Primary input of shape :math:`(B, X, Y, Z, C)` for spatial branches
+        or :math:`(B, D_{in})` for MLP branches.
+    x_time : torch.Tensor
+        Query coordinates of shape :math:`(T,)` or
+        :math:`(T, D_{\text{trunk}})`.
+    x_branch2 : torch.Tensor, optional
+        Secondary branch input for MIONet/TNO variants.
+
+    Outputs
+    -------
+    torch.Tensor
+        Operator output of shape :math:`(B, X, Y, Z, T)` for spatial
+        branches or :math:`(B, T)` for MLP branches.
     """
 
     VALID_VARIANTS = [
@@ -480,8 +579,9 @@ class DeepONet3D(Module):
         decoder_width: int = 128,
         decoder_layers: int = 2,
         decoder_activation_fn: str = "relu",
+        output_window: Optional[int] = None,
     ):
-        super().__init__()
+        super().__init__(meta=_DeepONet3DMetaData())
 
         self.variant = variant.lower()
         self.width = width
@@ -491,6 +591,13 @@ class DeepONet3D(Module):
         if self.variant not in self.VALID_VARIANTS:
             raise ValueError(
                 f"Unknown variant: {variant}. Valid: {self.VALID_VARIANTS}"
+            )
+
+        if self.variant in _DUAL_BRANCH_VARIANTS and branch2_config is None:
+            raise ValueError(
+                f"variant='{self.variant}' requires branch2_config to be "
+                f"provided.  Dual-branch variants: "
+                f"{sorted(_DUAL_BRANCH_VARIANTS)}."
             )
 
         branch1_config = branch1_config or {}
@@ -521,7 +628,20 @@ class DeepONet3D(Module):
                 "mlp",
                 decoder_activation_fn,
             )
-            self.temporal_head = None
+            # Preferred path: construct the temporal head at __init__ so
+            # state_dict keys are deterministic and checkpointing just works.
+            # If ``output_window`` is not provided the user must call
+            # :meth:`set_output_window` before the first forward pass; this
+            # path is kept for backwards compatibility but produces a
+            # state_dict whose structure depends on when the method is called.
+            if output_window is not None:
+                if output_window < 1:
+                    raise ValueError(
+                        f"output_window must be a positive integer, got {output_window}"
+                    )
+                self.temporal_head = nn.Linear(self.width, output_window)
+            else:
+                self.temporal_head = None
         else:
             self._temporal_projection = False
             self.decoder = self._build_decoder(
@@ -617,12 +737,33 @@ class DeepONet3D(Module):
             raise ValueError(f"Unknown decoder_type: {decoder_type}")
 
     def forward(
-        self, x_branch1: Tensor, x_time: Tensor, x_branch2: Tensor = None
+        self,
+        x_branch1: Tensor,
+        x_time: Tensor,
+        x_branch2: Optional[Tensor] = None,
     ) -> Tensor:
         """Forward pass through the 3D DeepONet.
 
         See class docstring for input/output shapes.
         """
+        if not torch.compiler.is_compiling():
+            if x_branch1.ndim not in (2, 5):
+                raise ValueError(
+                    f"Expected x_branch1 to be 2D (B, D_in) for MLP branches "
+                    f"or 5D (B, X, Y, Z, C) for spatial branches, got "
+                    f"{x_branch1.ndim}D tensor with shape "
+                    f"{tuple(x_branch1.shape)}"
+                )
+            if x_time.ndim not in (1, 2):
+                raise ValueError(
+                    f"Expected x_time to be 1D (T,) or 2D (T, D), got "
+                    f"{x_time.ndim}D tensor with shape {tuple(x_time.shape)}"
+                )
+            if self.has_branch2 and x_branch2 is None:
+                raise ValueError(
+                    f"variant='{self.variant}' requires x_branch2 but got None"
+                )
+
         if x_time.dim() == 1:
             x_time = x_time.unsqueeze(-1)
 

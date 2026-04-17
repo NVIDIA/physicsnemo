@@ -40,6 +40,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.init as init
+from jaxtyping import Float
 from torch import Tensor
 
 from physicsnemo.models.unet import UNet as _PhysicsNeMoUNet
@@ -51,13 +52,13 @@ from physicsnemo.nn import SpectralConv2d, SpectralConv3d, get_activation
 
 
 class _UNet2DFromUNet3D(nn.Module):
-    """Adapter using :class:`physicsnemo.models.unet.UNet` for 2D inputs.
+    r"""Adapter using :class:`physicsnemo.models.unet.UNet` for 2D inputs.
 
     The library UNet is 3D only.  To reuse it for 2D, this adapter adds a
-    short tiled time axis of length ``2 ** model_depth`` — long enough to
-    survive the UNet's ``model_depth`` pooling stages — runs the 3D UNet,
-    and averages the result back to 2D.  Channel-first layout
-    ``(B, C, H, W)`` is preserved on input and output.
+    short tiled time axis of length :math:`2^{\text{model\_depth}}` (long
+    enough to survive the UNet's ``model_depth`` pooling stages), runs the
+    3D UNet, and averages the result back to 2D.  Channel-first layout
+    :math:`(B, C, H, W)` is preserved on input and output.
     """
 
     def __init__(
@@ -87,16 +88,21 @@ class _UNet2DFromUNet3D(nn.Module):
             gradient_checkpointing=False,
         )
 
-    def forward(self, x: Tensor) -> Tensor:
-        """Forward ``(B, C, H, W)`` through the 3D UNet via a tiled time axis."""
+    def forward(
+        self,
+        x: Float[Tensor, "batch channels h w"],
+    ) -> Float[Tensor, "batch out_channels h w"]:
+        """Forward through the 3D UNet via a tiled time axis."""
         x = x.unsqueeze(-1).repeat(1, 1, 1, 1, self._t_tile)
         x = self.unet(x)
         return x.mean(dim=-1)
 
 
 class _UNet3DFromUNet3D(nn.Module):
-    """Thin wrapper exposing :class:`physicsnemo.models.unet.UNet` with a
-    fixed default configuration suitable for skip-connection reuse.
+    r"""Thin wrapper exposing :class:`physicsnemo.models.unet.UNet`.
+
+    Exposes the library 3D UNet with a fixed default configuration suitable
+    for skip-connection reuse inside :class:`SpatialBranch3D`.
     """
 
     def __init__(
@@ -125,8 +131,11 @@ class _UNet3DFromUNet3D(nn.Module):
             gradient_checkpointing=False,
         )
 
-    def forward(self, x: Tensor) -> Tensor:
-        """Forward ``(B, C, X, Y, Z)`` through the library 3D UNet."""
+    def forward(
+        self,
+        x: Float[Tensor, "batch channels x y z"],
+    ) -> Float[Tensor, "batch out_channels x y z"]:
+        """Forward pass through the library 3D UNet."""
         return self.unet(x)
 
 
@@ -136,13 +145,13 @@ class _UNet3DFromUNet3D(nn.Module):
 
 
 class TrunkNet(nn.Module):
-    """MLP trunk network encoding query coordinates.
+    r"""MLP trunk network encoding query coordinates.
 
     Parameters
     ----------
     in_features : int
-        Dimensionality of each query point (1 for time-only, 3 for 2D grid
-        coordinates, 4 for 3D grid coordinates).
+        Dimensionality of each query point (``1`` for time-only, ``3`` for 2D
+        grid coordinates, ``4`` for 3D grid coordinates).
     out_features : int
         Output width (matches the DeepONet latent size).
     hidden_width : int
@@ -154,6 +163,18 @@ class TrunkNet(nn.Module):
     output_activation : bool
         When ``True`` (default) the final layer is followed by the activation.
         Set ``False`` for linear output (e.g. the TNO configuration).
+
+    Forward
+    -------
+    x : torch.Tensor
+        Query coordinates of shape :math:`(T, D_{in})` where
+        :math:`D_{in}` equals ``in_features``.
+
+    Outputs
+    -------
+    torch.Tensor
+        Encoded coordinates of shape :math:`(T, D_{out})` where
+        :math:`D_{out}` equals ``out_features``.
     """
 
     def __init__(
@@ -187,8 +208,17 @@ class TrunkNet(nn.Module):
         init.zeros_(layer.bias)
         return layer
 
-    def forward(self, x: Tensor) -> Tensor:
-        """Encode ``(T, in_features)`` query points into ``(T, out_features)``."""
+    def forward(
+        self,
+        x: Float[Tensor, "time in_features"],
+    ) -> Float[Tensor, "time out_features"]:
+        """Forward pass of the trunk network."""
+        if not torch.compiler.is_compiling():
+            if x.ndim != 2:
+                raise ValueError(
+                    f"Expected 2D input (T, in_features), got {x.ndim}D "
+                    f"tensor with shape {tuple(x.shape)}"
+                )
         for layer in self.layers:
             x = self.activation_fn(layer(x))
         x = self.output_layer(x)
@@ -198,7 +228,7 @@ class TrunkNet(nn.Module):
 
 
 class MLPBranch(nn.Module):
-    """Fully-connected branch for scalar/vector inputs.
+    r"""Fully-connected branch for scalar/vector inputs.
 
     Used for the scalar branch in MIONet-style architectures.  Input features
     are auto-discovered via :class:`torch.nn.LazyLinear` on the first forward.
@@ -210,9 +240,21 @@ class MLPBranch(nn.Module):
     hidden_width : int
         Hidden layer width.
     num_layers : int
-        Number of fully-connected layers (including output).
+        Number of fully-connected layers (including output). Must be ``>= 2``.
     activation_fn : str
         Activation function name.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Scalar input of shape :math:`(B, D_{in})` where :math:`D_{in}` is
+        auto-discovered on the first forward pass.
+
+    Outputs
+    -------
+    torch.Tensor
+        Encoded features of shape :math:`(B, D_{out})` where
+        :math:`D_{out}` equals ``out_features``.
     """
 
     def __init__(
@@ -223,6 +265,12 @@ class MLPBranch(nn.Module):
         activation_fn: str = "relu",
     ):
         super().__init__()
+
+        if num_layers < 2:
+            raise ValueError(
+                f"MLPBranch requires num_layers >= 2 (input + output), "
+                f"got num_layers={num_layers}"
+            )
 
         if activation_fn.lower() == "sin":
             self.activation_fn = torch.sin
@@ -242,8 +290,17 @@ class MLPBranch(nn.Module):
         init.zeros_(layer.bias)
         return layer
 
-    def forward(self, x: Tensor) -> Tensor:
-        """Forward ``(B, in_features)`` through the MLP to ``(B, out_features)``."""
+    def forward(
+        self,
+        x: Float[Tensor, "batch in_features"],
+    ) -> Float[Tensor, "batch out_features"]:
+        """Forward pass of the MLP branch."""
+        if not torch.compiler.is_compiling():
+            if x.ndim != 2:
+                raise ValueError(
+                    f"Expected 2D input (B, in_features), got {x.ndim}D "
+                    f"tensor with shape {tuple(x.shape)}"
+                )
         for layer in self.layers:
             x = self.activation_fn(layer(x))
         return self.activation_fn(self.output_layer(x))
@@ -255,16 +312,13 @@ class MLPBranch(nn.Module):
 
 
 class SpatialBranch(nn.Module):
-    """2D spatial branch composable from Fourier, UNet, and Conv layers.
+    r"""2D spatial branch composable from Fourier, UNet, and Conv layers.
 
     The branch can be configured to use any combination of spectral, UNet,
     and plain convolutional layers.  When Fourier layers are present (the
     "base" mode) UNet/Conv layers are added alongside the spectral path
     (hybrid residual).  When no Fourier layers are present UNet/Conv act
     as independent sequential layers.
-
-    Input: ``(B, H, W, C)`` channels-last.
-    Output: ``(B, H, W, width)``.
 
     Parameters
     ----------
@@ -290,6 +344,17 @@ class SpatialBranch(nn.Module):
     internal_resolution : list, optional
         If set, inputs are adaptively pooled to this resolution before
         processing and upsampled back, decoupling model size from grid size.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Channels-last input of shape :math:`(B, H, W, C)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Channels-last output of shape :math:`(B, H, W, D)` where
+        :math:`D` equals ``width``.
     """
 
     def __init__(
@@ -361,8 +426,17 @@ class SpatialBranch(nn.Module):
                 )
             )
 
-    def forward(self, x: Tensor) -> Tensor:
-        """Encode ``(B, H, W, C)`` into ``(B, H, W, width)``."""
+    def forward(
+        self,
+        x: Float[Tensor, "batch height width channels"],
+    ) -> Float[Tensor, "batch height width out_channels"]:
+        """Forward pass of the 2D spatial branch."""
+        if not torch.compiler.is_compiling():
+            if x.ndim != 4:
+                raise ValueError(
+                    f"Expected 4D input (B, H, W, C), got {x.ndim}D "
+                    f"tensor with shape {tuple(x.shape)}"
+                )
         x = self.lift(x)
         x = x.permute(0, 3, 1, 2)
 
@@ -408,13 +482,21 @@ class SpatialBranch(nn.Module):
 
 
 class SpatialBranch3D(nn.Module):
-    """3D spatial branch composable from Fourier, UNet, and Conv layers.
+    r"""3D spatial branch composable from Fourier, UNet, and Conv layers.
 
-    Input: ``(B, X, Y, Z, C)`` channels-last.
-    Output: ``(B, X, Y, Z, width)``.
+    See :class:`SpatialBranch` for parameter semantics.  The 3D variant adds
+    ``modes3`` for the third spectral axis.
 
-    See :class:`SpatialBranch` for parameter semantics.  The 3D variant
-    adds ``modes3`` for the third spectral axis.
+    Forward
+    -------
+    x : torch.Tensor
+        Channels-last input of shape :math:`(B, X, Y, Z, C)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Channels-last output of shape :math:`(B, X, Y, Z, D)` where
+        :math:`D` equals ``width``.
     """
 
     def __init__(
@@ -489,8 +571,17 @@ class SpatialBranch3D(nn.Module):
                 )
             )
 
-    def forward(self, x: Tensor) -> Tensor:
-        """Encode ``(B, X, Y, Z, C)`` into ``(B, X, Y, Z, width)``."""
+    def forward(
+        self,
+        x: Float[Tensor, "batch x y z channels"],
+    ) -> Float[Tensor, "batch x y z out_channels"]:
+        """Forward pass of the 3D spatial branch."""
+        if not torch.compiler.is_compiling():
+            if x.ndim != 5:
+                raise ValueError(
+                    f"Expected 5D input (B, X, Y, Z, C), got {x.ndim}D "
+                    f"tensor with shape {tuple(x.shape)}"
+                )
         x = self.lift(x)
         x = x.permute(0, 4, 1, 2, 3)
 
