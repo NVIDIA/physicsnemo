@@ -61,6 +61,7 @@ This document is structured in two main sections:
 | [`FNC-005`](#fnc-005-benchmarking-hooks) | Benchmarking hooks | Implementing `make_inputs_forward`/`make_inputs_backward`/`compare_forward` |
 | [`FNC-006`](#fnc-006-testing-functionals) | Testing functionals | Adding functional tests |
 | [`FNC-007`](#fnc-007-benchmark-registry) | Benchmark registry | Adding a functional to ASV |
+| [`FNC-008`](#fnc-008-warp-integration-must-use-torch-custom-ops) | Warp integration must use torch custom ops | Adding/refactoring Warp-backed functionals |
 
 ---
 
@@ -500,4 +501,59 @@ FUNCTIONAL_SPECS = (KNN, RadiusSearch)
 ```python
 # Adding a functional before input generators are implemented.
 FUNCTIONAL_SPECS = (MyFunctionalWithoutInputs,)
+```
+
+---
+
+### FNC-008: Warp integration must use torch custom ops
+
+**Description:**
+
+Warp-backed functionals in `physicsnemo/nn/functional/**` must be integrated
+into PyTorch using `torch.library.custom_op`, `register_fake`, and (when
+backward is supported) `register_autograd`. Do not use
+`torch.autograd.Function` wrappers for Warp-backed functionals.
+
+If a functional has no meaningful backward path, `register_autograd` is not
+required; otherwise, the custom op must register a backward implementation.
+
+**Rationale:**
+
+`torch.library.custom_op` provides a consistent integration path for eager,
+`torch.compile`, fake tensor propagation, and runtime dispatch behavior.
+Avoiding per-functional `torch.autograd.Function` wrappers also keeps backend
+integration uniform across functionals.
+
+**Example:**
+
+```python
+@torch.library.custom_op("physicsnemo::my_warp_op", mutates_args=())
+def my_warp_op_impl(x: torch.Tensor) -> torch.Tensor:
+    ...
+    return y
+
+@my_warp_op_impl.register_fake
+def _my_warp_op_impl_fake(x: torch.Tensor) -> torch.Tensor:
+    return torch.empty_like(x)
+
+def setup_my_warp_op_context(ctx, inputs, output):
+    ...
+
+def backward_my_warp_op(ctx, grad_output):
+    ...
+    return grad_x
+
+my_warp_op_impl.register_autograd(
+    backward_my_warp_op,
+    setup_context=setup_my_warp_op_context,
+)
+```
+
+**Anti-pattern:**
+
+```python
+class _MyWarpAutograd(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        ...
 ```

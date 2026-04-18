@@ -660,7 +660,9 @@ class Trainer:
                 weight = (
                     mask
                     if mask is not None
-                    else torch.ones((), device=target.device, dtype=target.dtype)
+                    else self.parallel_helper.replicate_tensor(
+                        torch.ones((), device=target.device, dtype=target.dtype)
+                    )
                 )
                 loss_kwargs = {}
                 if lead_time_label is not None:
@@ -799,7 +801,9 @@ class Trainer:
                     weight = (
                         mask
                         if mask is not None
-                        else torch.ones((), device=target.device, dtype=target.dtype)
+                        else self.parallel_helper.replicate_tensor(
+                            torch.ones((), device=target.device, dtype=target.dtype)
+                        )
                     )
                     loss_kwargs = {}
                     if lead_time_label is not None:
@@ -989,7 +993,10 @@ class Trainer:
                     plot_state = (
                         None
                         if plot_state is None
-                        else [s.full_tensor() for s in plot_state]
+                        else [
+                            s.full_tensor() if s is not None else None
+                            for s in plot_state
+                        ]
                     )
                     plot_background = (
                         None

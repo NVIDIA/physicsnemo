@@ -230,10 +230,16 @@ class GeoTransolver(Module):
 
     Outputs
     -------
-    torch.Tensor | tuple[torch.Tensor, ...]
-        Output tensor of shape :math:`(B, N, C_{out})` where :math:`C_{out}` is
-        ``out_dim``. Returns a single tensor if input was a single tensor, or a
-        tuple if input was a tuple.
+    Float[torch.Tensor, "batch tokens out_dim"] | tuple[Float[torch.Tensor, "batch tokens out_dim"], ...]
+        When ``return_embedding_states=False`` (default), output tensor of
+        shape :math:`(B, N, C_{out})`. Returns a single tensor if input was
+        a single tensor, or a tuple if input was a tuple.
+
+        When ``return_embedding_states=True``, returns a 2-tuple
+        ``(output, embedding_states)`` where ``embedding_states`` is
+        ``Float[torch.Tensor, "batch heads slices context_dim"]`` of shape
+        :math:`(B, H, S, D_c)` (geometry/global context), or ``None`` if no
+        context sources were provided.
 
     Raises
     ------
@@ -279,7 +285,7 @@ class GeoTransolver(Module):
     >>> output.shape
     torch.Size([2, 1000, 3])
 
-    Usage with geometry and global context:
+    Usage with geometry, global context, and embedding states:
 
     >>> model = GeoTransolver(
     ...     functional_dim=64,
@@ -296,6 +302,17 @@ class GeoTransolver(Module):
     >>> output = model(local_emb, global_embedding=global_emb, geometry=geometry)
     >>> output.shape
     torch.Size([2, 1000, 3])
+
+    To also retrieve the geometry/global context embeddings:
+
+    >>> output, emb_states = model(
+    ...     local_emb,
+    ...     global_embedding=global_emb,
+    ...     geometry=geometry,
+    ...     return_embedding_states=True,
+    ... )
+    >>> emb_states.shape[0] == 2  # batch dimension preserved
+    True
     """
 
     def __init__(
@@ -460,6 +477,7 @@ class GeoTransolver(Module):
         | None = None,
         geometry: Float[torch.Tensor, "batch tokens geometry_dim"] | None = None,
         time: torch.Tensor | None = None,
+        return_embedding_states: bool = False,
     ) -> (
         Float[torch.Tensor, "batch tokens out_dim"]
         | tuple[Float[torch.Tensor, "batch tokens out_dim"], ...]
@@ -486,12 +504,19 @@ class GeoTransolver(Module):
             Geometry features of shape :math:`(B, N, C_{geo})`. Default is ``None``.
         time : torch.Tensor | None, optional
             Time embedding (not yet implemented). Default is ``None``.
+        return_embedding_states : bool, optional
+            If ``True``, return ``(output, embedding_states)`` instead of just
+            ``output``.  The ``embedding_states`` tensor contains geometry/global
+            context of shape :math:`(B, H, S, D_c)`.  Default is ``False``.
 
         Returns
         -------
-        torch.Tensor | tuple[torch.Tensor, ...]
-            Output tensor of shape :math:`(B, N, C_{out})`. Returns single tensor
-            if input was single tensor, tuple if input was tuple.
+        Float[torch.Tensor, "batch tokens out_dim"] | tuple[Float[torch.Tensor, "batch tokens out_dim"], Float[torch.Tensor, "batch heads slices context_dim"]]
+            When ``return_embedding_states=False`` (default): output tensor of
+            shape :math:`(B, N, C_{out})`.
+
+            When ``return_embedding_states=True``: a 2-tuple
+            ``(output, embedding_states)``.
 
         Raises
         ------
@@ -564,4 +589,6 @@ class GeoTransolver(Module):
         else:
             x = tuple(x)
 
+        if return_embedding_states:
+            return x, embedding_states
         return x

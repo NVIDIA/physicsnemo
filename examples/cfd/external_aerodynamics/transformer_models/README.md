@@ -214,7 +214,187 @@ entire mesh.  The outputs are then saved to .vtp files for downstream analysis. 
 
 Transolver++ is supported with the `plus` flag to the model. In our experiments, we did not see gains, but you are welcome to try it and share your results with us on GitHub!
 
-## Model Uncertainty Quantification with Concrete Dropout
+---
+
+## Uncertainty Quantification
+
+GeoTransolver supports two complementary UQ methods: a **Variational GP Head** for scalar-level (drag coefficient) uncertainty, and **Concrete Dropout / MC-Dropout** for per-point field uncertainty.  They can be used independently or together.
+
+## Variational GP Head
+
+### Overview
+
+This recipe extends the GeoTransolver backbone with a **variational Gaussian Process (GP) head** that provides calibrated uncertainty estimates on a scalar quantity of interest — in this case, the aerodynamic drag coefficient (Cd).  The GP head enables two complementary uncertainty signals:
+
+1. **Query-by-Committee disagreement** — The GeoTransolver predicts Cd by integrating its per-point field predictions; the GP head predicts Cd directly from the learned geometry embeddings.  When these two independent predictions disagree, the input is likely out-of-distribution (OOD).
+2. **GP predictive variance** — The GP's posterior variance provides a data-driven measure of how far a new input lies from the training distribution in embedding space.  Unlike an ensemble of GeoTransolvers, the GP learns from a finite set of inducing points and its uncertainty naturally grows as inputs move away from the in-distribution region, providing a principled distance-aware uncertainty signal.
+
+Together, these signals form a **joint UQ estimate** suitable for flagging OOD samples, which can be used to guide active learning sample selection and build trust in surrogate-model predictions.
+
+> **Active learning** — An active-learning loop that uses the joint UQ signal to automatically select the most informative geometries for labelling is coming soon.
+
+### Architecture
+
+```
+                                                ┌───────────────────────────┐
+                                                │  Variational GP Head      │
+  Input geometry ──► GeoTransolver ──┬──► x ──► │  (VariationalGPHead)      │──► Cd_GP, σ²
+                                     │          └───────────────────────────┘
+                                     │
+                     embedding_states│    ┌──────────────────────┐
+                     (B, H, S, D_c)  ├──► │  AttentionPooling    │──► embedding (B, D)
+                                     │    └──────────────────────┘         │
+                                     │                                     ▼
+                                     │                            ┌─────────────────┐
+                                     └──► field integration ───►  │ Cd_GeoTransolver│
+                                                                  └─────────────────┘
+```
+
+The GeoTransolver's `embedding_states` — the geometry/global context of shape `(B, H, S, D_c)` computed before the GALE cross-attention blocks — capture *what the geometry looks like* before any flow-field prediction.  Here `D_c` is the per-head context dimension from the GeoTransolver, while `D` (the final GP input dimension) is the reduced embedding size after attention pooling.  The pooling step reduces the variable-length `(B, H, S, D_c)` states to a fixed-size `(B, D)` embedding that is then fed to the GP head.
+
+Key library modules used:
+
+| Module | Location | Purpose |
+|--------|----------|---------|
+| `AttentionPooling` | `physicsnemo.nn` | Learnable attention-weighted pooling over variable-length point sequences |
+| `VariationalGPHead` | `physicsnemo.experimental.uq` | Variational GP with Matérn-5/2 ARD kernel, float64 internals, optional DKL MLP |
+
+### Training
+
+Training is a two-phase process using a single script (`train_gp_combined.py`):
+
+1. **Warmup (epochs 0–49):** Only the GeoTransolver backbone is trained with per-point field MSE loss.  The GP head is frozen during this phase because it needs meaningful geometric embeddings — training it on random, untrained backbone representations would produce a poorly conditioned variational posterior.
+2. **Joint training (epochs 50+):** The GP head, embedding reduction, and consistency loss activate via a linear ramp.  Three losses are combined:
+   - **Field MSE** — standard per-point loss on pressure + wall shear stress
+   - **GP ELBO** — variational evidence lower bound on the drag prediction
+   - **Consistency** — MSE between GP-predicted drag and field-integrated drag from the *same forward pass* (zero extra memory)
+
+Launch training:
+
+```bash
+torchrun --nproc_per_node=8 \
+    src/train_gp_combined.py \
+    --config-name=geotransolver_surface_gp \
+    ++run_id=geotransolver/surface/my_gp_experiment \
+    ++data.train.data_path=/path/to/surface_files_zarr/class_F/train \
+    ++data.val.data_path=/path/to/surface_files_zarr/class_F/val \
+    ++data.resolution=51200 \
+    ++data.geometry_sampling=51200 \
+    ++data.return_mesh_features=true
+```
+
+The default config (`geotransolver_surface_gp.yaml`) includes tuned GP hyperparameter priors and embedding normalization settings.  The data-path overrides above point to the [DrivAerStar](https://arxiv.org/abs/2510.16857) surface zarr files; `resolution` and `geometry_sampling` are lowered from the defaults (200k / 300k) to 51200 to fit in GPU memory.
+
+### Evaluation and OOD Detection
+
+After training, run the evaluation script to generate diagnostic plots:
+
+```bash
+python src/plot_gp_predictions.py \
+    --config-name=geotransolver_surface_gp \
+    ++run_id=geotransolver/surface/my_gp_experiment \
+    ++data.train.data_path=/path/to/surface_files_zarr/class_F/train \
+    ++data.val.data_path=/path/to/surface_files_zarr/class_F/val \
+    ++data.resolution=51200 \
+    ++data.geometry_sampling=51200 \
+    ++data.return_mesh_features=true \
+    ++data.test_notchback.data_path=/path/to/surface_files_zarr/class_N/val \
+    ++data.test_estateback.data_path=/path/to/surface_files_zarr/class_E/val
+```
+
+This produces:
+- **Scatter plots** — true vs predicted Cd for both the GP and GeoTransolver
+- **Disagreement histograms** — distribution of |Cd_GP − Cd_GeoTransolver|
+- **GP std dev histograms** — distribution of GP predictive standard deviation
+- **Joint UQ scatter** — Cd predictions with combined uncertainty bands
+- **KDE overlays** — kernel density estimates comparing ID vs OOD distributions
+
+OOD test sets are auto-discovered from the config — any key matching `test_*` under `data:` is loaded automatically.  Add as many as you like via command-line overrides (`++data.test_myclass.data_path=...`).  The evaluation results are saved to `prediction_results.npz` for offline re-plotting without re-running inference.
+
+#### Example: KDE of ID vs OOD signals
+
+![KDE of disagreement and GP std dev for in-distribution vs OOD samples](../../../docs/img/kde_id_vs_ood.png)
+
+The model was trained exclusively on **DrivAerStar Fastback** geometries (class F).  The figure above shows kernel density estimates of the two UQ signals evaluated on the in-distribution Fastback validation set and five OOD vehicle classes from different sources and body styles.
+
+**Left — Disagreement:** The distribution of |Cd_GP − Cd_GeoTransolver| is tightly concentrated near zero for in-distribution Fastback samples (solid blue), indicating strong agreement between the two independent drag predictions.  OOD classes exhibit heavier tails and wider spread, meaning the GP and GeoTransolver diverge more when encountering unfamiliar geometries.  Notably, the disagreement signal correlates with geometric similarity to the training distribution: **Notchback** — the DrivAerStar body style most resembling Fastback — shows a relatively modest shift, while **Estateback** (a more distinct rear-end shape) and the **DrivaerML** / **ShiftSUV** classes (entirely different vehicle datasets) produce substantially larger disagreement.  This query-by-committee disagreement provides a strong, interpretable OOD detection signal.
+
+**Right — GP Predictive Std Dev:** The GP's posterior standard deviation shows a subtle but consistent shift: in-distribution samples cluster in a narrow peak, while OOD samples spread to higher values.  The signal is weaker than disagreement alone, but the two are complementary — the joint UQ metric, for example `max(|disagreement|, 2 * GP_std)` combines both for more robust OOD flagging.
+
+### Key Design Choices
+
+| Choice | Rationale |
+|--------|-----------|
+| **Float64 GP internals** | Short lengthscales on L2-normalised embeddings make K_uu ill-conditioned in float32.  Float64 eliminates Cholesky failures at the source. |
+| **L2-normalised embeddings** | Constrains pairwise distances to [0, 2], making GP lengthscale priors more interpretable and stable. |
+| **Spectral norm on embedding layers** | Preserves distances in the embedding space (SNGP-style), preventing the encoder from collapsing different inputs to the same point. |
+| **Matérn-5/2 ARD kernel** | Smooth, twice-differentiable, with per-dimension lengthscales that learn which embedding dimensions matter. |
+| **Gamma priors on lengthscale & outputscale** | Prevents the GP from collapsing to trivial solutions (infinite lengthscale → constant predictions, zero outputscale → zero variance). |
+| **`embedding_states` as GP input** | These capture geometry context *before* the flow-field GALE blocks, giving the GP access to what the shape looks like rather than the (already processed) flow prediction. |
+| **Subsampled consistency loss** | Reuses the training forward pass — no extra full-mesh evaluation needed, making the consistency signal nearly free. |
+
+### Customization Guide
+
+The config file `src/conf/geotransolver_surface_gp.yaml` exposes all tunable parameters.  Common adjustments:
+
+**Switching to an MLP baseline head:**
+
+```bash
+++head_type=mlp ++lambda_gp=1.0
+```
+
+The `DragMLP` head provides the same `forward_and_loss` / `predict` interface.  Downstream scripts work unchanged.
+
+**Adjusting GP capacity:**
+
+```yaml
+embed_dim: 64         # Larger embedding → more expressive GP (default: 32)
+n_inducing: 256       # More inducing points → better coverage (default: 128)
+gp_mlp_hidden: [64, 32]  # Add DKL feature extractor before GP kernel
+```
+
+**Relaxing / tightening GP priors:**
+
+```yaml
+gp_lengthscale_range: [0.01, 2.0]   # Wider allowed range
+gp_lengthscale_prior: [3.0, 6.0]    # Gamma(3, 6) → mean 0.5
+gp_outputscale_prior: [2.0, 0.5]    # Gamma(2, 0.5) → mean 4.0
+```
+
+**Disabling consistency loss:**
+
+```yaml
+lambda_consistency: 0.0
+```
+
+**Enabling gradients through the GeoTransolver in the consistency path:**
+
+```yaml
+consistency_detach_transolver: false  # default; set true to save memory
+```
+
+### Dependencies
+
+The GP head requires `gpytorch`.  Install it alongside PhysicsNeMo:
+
+```bash
+pip install nvidia-physicsnemo[uq-extras]
+# or simply:
+pip install gpytorch
+```
+
+### References
+
+- **DrivaerML dataset:** [DrivaerML: A Large-Scale Parametric Car Dataset](https://caemldatasets.org/drivaerml/) — Elahi et al., NeurIPS 2024
+- **DrivAerStar dataset:** [DrivAerStar: A Body-Fitted Overset Mesh Dataset for Automotive External Aerodynamics](https://arxiv.org/abs/2510.16857) — Qiu et al., 2025
+- **GeoTransolver:** Built on the Transolver architecture ([Wu et al., 2024](https://arxiv.org/abs/2402.02366)) with GALE attention
+- **Variational GPs:** [Scalable Variational Gaussian Process Classification](https://arxiv.org/abs/1411.2005) — Hensman et al., 2015
+- **Deep Kernel Learning:** [Deep Kernel Learning](https://arxiv.org/abs/1511.02222) — Wilson et al., 2016
+- **SNGP / DUE:** [Simple and Principled Uncertainty Estimation with Deterministic Deep Learning](https://arxiv.org/abs/2006.10108) — van Amersfoort et al., 2020
+
+---
+
+## Concrete Dropout / MC-Dropout
 
 GeoTransolver supports **model uncertainty quantification (UQ)** via **Concrete Dropout** ([Gal, Hron & Kendall, NeurIPS 2017](https://arxiv.org/abs/1705.07832)). Model UQ captures the uncertainty arising from the model itself -- given finite training data, there are many plausible sets of model weights, and model UQ estimates how much predictions vary across them. Instead of manually tuning per-layer dropout rates, Concrete Dropout learns the optimal dropout probability for each layer during training using a differentiable relaxation. At inference time, **MC-Dropout** (Monte Carlo Dropout) approximates Bayesian inference by running multiple stochastic forward passes, producing both a mean prediction and a per-point uncertainty estimate.
 

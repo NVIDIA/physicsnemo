@@ -16,6 +16,14 @@
 
 """Registry of FunctionSpec classes to benchmark with ASV."""
 
+from physicsnemo.nn.functional.derivatives import (
+    MeshGreenGaussGradient,
+    MeshlessFDDerivatives,
+    MeshLSQGradient,
+    RectilinearGridGradient,
+    SpectralGridGradient,
+    UniformGridGradient,
+)
 from physicsnemo.nn.functional.fourier_spectral import (
     IRFFT,
     IRFFT2,
@@ -26,7 +34,10 @@ from physicsnemo.nn.functional.fourier_spectral import (
     ViewAsComplex,
 )
 from physicsnemo.nn.functional.geometry import SignedDistanceField
-from physicsnemo.nn.functional.interpolation import Interpolation
+from physicsnemo.nn.functional.interpolation import (
+    GridToPointInterpolation,
+    PointToGridInterpolation,
+)
 from physicsnemo.nn.functional.neighbors import KNN, RadiusSearch
 from physicsnemo.nn.functional.regularization_parameterization import (
     DropPath,
@@ -42,10 +53,18 @@ FUNCTIONAL_SPECS = (
     # Neighbor queries.
     KNN,
     RadiusSearch,
+    # Derivatives.
+    UniformGridGradient,
+    RectilinearGridGradient,
+    MeshLSQGradient,
+    MeshGreenGaussGradient,
+    SpectralGridGradient,
+    MeshlessFDDerivatives,
     # Geometry.
     SignedDistanceField,
     # Interpolation.
-    Interpolation,
+    GridToPointInterpolation,
+    PointToGridInterpolation,
     # Fourier spectral.
     RFFT,
     RFFT2,

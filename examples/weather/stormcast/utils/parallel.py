@@ -26,7 +26,7 @@ from torch.distributed.fsdp import (
     ShardingStrategy,
     BackwardPrefetch,
 )
-from torch.distributed.tensor import distribute_module, distribute_tensor
+from torch.distributed.tensor import DTensor, distribute_module, distribute_tensor
 from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
@@ -295,6 +295,28 @@ class ParallelHelper:
             shard_dim=self.shard_dim,
         )
 
+    def replicate_tensor(self, t: torch.Tensor) -> torch.Tensor:
+        """Promote a plain tensor to a replicated DTensor on the domain mesh.
+
+        When ``use_shard_tensor`` is False or *t* is already a DTensor,
+        returns *t* unchanged.
+
+        Parameters
+        ----------
+        t : torch.Tensor
+            Tensor to replicate.
+
+        Returns
+        -------
+        torch.Tensor or DTensor
+            Replicated DTensor on the domain mesh, or *t* unchanged.
+        """
+        if not self.use_shard_tensor or isinstance(t, DTensor):
+            return t
+        return DTensor.from_local(
+            t, device_mesh=self.mesh["domain"], placements=[Replicate()]
+        )
+
     def nested_scatter(
         self,
         x: torch.Tensor | Mapping | list | tuple | Any,
@@ -398,10 +420,19 @@ def partition_model_selective(
     for key, param in submodule._parameters.items():
         if param is None:
             continue
+        # Explicitly handle every parameter so that distribute_module's
+        # internal replicate_module_params_buffers (which drops
+        # requires_grad in PyTorch <= 2.10) never sees a plain tensor.
+        # This prevents a bug where `distribute_module` silently flips
+        # `requires_grad` on frozen params.
         if (shard_dim := shard_dim_selector(key)) is not None:
-            sharded = distribute_tensor(
-                param,
-                device_mesh=device_mesh,
-                placements=[Shard(shard_dim)],
+            dt = distribute_tensor(
+                param, device_mesh=device_mesh, placements=[Shard(shard_dim)]
             )
-            submodule.register_parameter(key, torch.nn.Parameter(sharded))
+        else:
+            dt = distribute_tensor(
+                param, device_mesh=device_mesh, placements=[Replicate()]
+            )
+        submodule.register_parameter(
+            key, torch.nn.Parameter(dt, requires_grad=param.requires_grad)
+        )

@@ -1,0 +1,93 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+defaults:
+  - training: base
+  - model: geotransolver
+  - data: surface
+
+output_dir: "runs"
+checkpoint_dir: null
+run_id: "geotransolver/surface/combined"
+
+# --- Head type ---
+head_type: gp                  # "gp" (variational GP) or "mlp" (simple MLP baseline)
+mlp_head_hidden: [256, 256]    # Hidden layer sizes for MLP head (only used when head_type=mlp)
+
+# --- Embedding reduction ---
+embedding_pooling: attention   # "attention" or "mean"
+embedding_feat_dim: 256        # context_dim from GlobalContextBuilder
+spectral_norm_embedding: true  # Apply spectral normalization to embedding reduction layers
+normalize_embeddings: true     # L2-normalize embeddings to a sphere of radius target_scale
+embedding_target_scale: 1.0    # Radius of the embedding sphere
+
+# --- GP parameters ---
+embed_dim: 32                  # Output dimension of the embedding reduction (GP input size)
+n_inducing: 128                # Number of variational inducing points for the GP
+
+# --- GP DKL feature extractor ---
+# Hidden layer sizes for MLP between embedding reduction and GP kernel.
+# null = no MLP (embedding goes directly to GP). Example: [128, 64]
+gp_mlp_hidden: null
+
+# --- GP kernel ---
+# Lengthscale: [lower, upper] hard constraint on per-dimension ARD lengthscales.
+gp_lengthscale_range: [0.01, 1.0]
+# Lengthscale prior: [concentration, rate] for Gamma. null = no prior.
+# [3.0, 6.0] -> Gamma mean 0.5, encourages shorter lengthscales for normalised embeddings.
+gp_lengthscale_prior: [3.0, 6.0]
+# Outputscale prior: [concentration, rate] for Gamma. null = no prior.
+# [2.0, 0.5] -> Gamma mean 4.0, encourages meaningful GP prior variance.
+gp_outputscale_prior: [2.0, 0.5]
+
+# --- Loss weights ---
+lambda_gp: 0.01               # Head ELBO/MSE weight (after warmup ramp)
+lambda_consistency: 1.0        # Consistency loss weight (0 disables entirely)
+
+# --- Warmup schedule ---
+gp_warmup_start: 50           # Epoch where head/consistency ramp begins
+gp_warmup_end: 60             # Epoch where ramp reaches full weight (linear 0→1)
+
+# --- Consistency loss ---
+consistency_every_n_steps: 1   # Full-mesh forward every N training steps (higher = cheaper)
+consistency_detach_transolver: false  # If true, detach GeoTransolver outputs in consistency loss
+
+# --- Performance ---
+precision: float32
+compile: false
+profile: false
+
+# --- Training overrides (base.yaml defaults: save_interval=25, no accumulation) ---
+training:
+  save_interval: 10
+  gradient_accumulation_steps: 8
+
+model:
+  functional_dim: 6
+  include_local_features: true
+  radii: [0.01, 0.05, 0.25, 1.0, 2.5, 5.0]
+  neighbors_in_radius: [4, 8, 16, 64, 128, 256]
+  n_hidden_local: 32
+
+data:
+  include_sdf: false
+  include_geometry: true
+  geometry_sampling: 300_000
+  broadcast_global_features: false
+
+logging:
+  level: INFO
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
