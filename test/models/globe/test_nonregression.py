@@ -31,7 +31,6 @@ from pathlib import Path
 
 import pytest
 import torch
-from tensordict import TensorDict
 
 from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.mesh import Mesh
@@ -80,9 +79,7 @@ def _make_globe_and_inputs(
 
     ### Prediction points
     generator = torch.Generator(device=device).manual_seed(SEED)
-    prediction_points = torch.randn(
-        50, 3, generator=generator, device=device
-    )
+    prediction_points = torch.randn(50, 3, generator=generator, device=device)
 
     reference_lengths = {
         "L_ref": torch.tensor(1.0, dtype=torch.float32, device=device),
