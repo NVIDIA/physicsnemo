@@ -669,7 +669,9 @@ class BVH:
         """
         self._validate_query_points(query_points)
         all_q, all_c = self._traverse(
-            query_points, max_candidates_per_point, aabb_tolerance,
+            query_points,
+            max_candidates_per_point,
+            aabb_tolerance,
         )
         n_queries = query_points.shape[0]
         adjacency = build_adjacency_from_pairs(

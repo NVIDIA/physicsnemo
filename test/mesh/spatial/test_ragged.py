@@ -50,11 +50,13 @@ def test_ragged_arange_correctness(starts: list[int], counts: list[int]):
 
     # Build expected output the obvious way
     pos_parts = [torch.arange(s, s + c) for s, c in zip(starts, counts)]
-    seg_parts = [
-        torch.full((c,), i, dtype=torch.long) for i, c in enumerate(counts)
-    ]
-    expected_pos = torch.cat(pos_parts) if pos_parts else torch.empty(0, dtype=torch.long)
-    expected_seg = torch.cat(seg_parts) if seg_parts else torch.empty(0, dtype=torch.long)
+    seg_parts = [torch.full((c,), i, dtype=torch.long) for i, c in enumerate(counts)]
+    expected_pos = (
+        torch.cat(pos_parts) if pos_parts else torch.empty(0, dtype=torch.long)
+    )
+    expected_seg = (
+        torch.cat(seg_parts) if seg_parts else torch.empty(0, dtype=torch.long)
+    )
 
     assert torch.equal(positions, expected_pos)
     assert torch.equal(seg_ids, expected_seg)
@@ -80,9 +82,11 @@ def test_ragged_arange_explicit_total():
     ],
 )
 def test_ragged_arange_no_graph_break_with_explicit_total(
-    starts: list[int], counts: list[int],
+    starts: list[int],
+    counts: list[int],
 ):
     """searchsorted implementation + explicit total should produce zero graph breaks."""
+
     def fn(starts_t, counts_t, total_holder):
         pos, seg = _ragged_arange(starts_t, counts_t, total=total_holder.shape[0])
         return pos.sum() + seg.sum()
@@ -95,5 +99,7 @@ def test_ragged_arange_no_graph_break_with_explicit_total(
     compiled = torch.compile(fn, dynamic=True, backend="eager")
     compiled(starts_t, counts_t, total_holder)
 
-    n_breaks = sum(counters["graph_break"].values()) if counters.get("graph_break") else 0
+    n_breaks = (
+        sum(counters["graph_break"].values()) if counters.get("graph_break") else 0
+    )
     assert n_breaks == 0, f"Expected 0 graph breaks, got {n_breaks}"
