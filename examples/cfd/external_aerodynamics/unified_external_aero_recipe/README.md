@@ -1,110 +1,128 @@
 <!-- markdownlint-disable -->
 # Unified External Aerodynamics Recipe
 
-NOTE THIS README IS AI GENERATED AND YOU SHOULD USE IT WITH EXTREME CAUTION.
-I WILL GO THROUGH IT CAREFULLY FOR ACCURACY BEFORE FINAL REVIEW OR MERGE. 
+> This unified recipe is still under some final polishing but nearly
+> completed.  Feel free to used it and experiment.  In the meantime,
+> be wary of sharp edges!
 
+## Introduction
 
-Train surface-field prediction models (pressure coefficient and wall shear
-stress) on multiple car-geometry datasets simultaneously. The recipe currently
-supports **DrivaerML** (point-cloud surface) and **SHIFT SUV Estate**
-(triangulated surface), merged into a single training stream via
-`MultiDataset`. A Hydra/YAML-driven transform pipeline normalizes every
-dataset into a common schema — handling differences in mesh representation,
-field names, units, and storage conventions — so the downstream model and
-loss code never need to know which dataset a sample came from.
+External Aerodynamic recipes in physicsnemo have proliferated: we have
+a number of recipes, across a range of models, all working on different models
+with unique data handling, pipelines, model architectures, metrics, training
+paradigms, etc.  While there is nothing wrong with that, it does make comparison
+challenging and development of new models somewhat challenging.  In this folder,
+we have unified the external aerodynamic recipes for most of our best models (notably
+missing is our newest model, still in development for large 3D use cases: GLOBE).
+
+Here, you're able to train the following models:
+- [Transolver](https://arxiv.org/abs/2402.02366)
+- [GeoTransolver](https://arxiv.org/abs/2512.20399)
+- [Flare](https://arxiv.org/abs/2508.12594)
+- GeoTransolver also supports using the FLARE attention mechanism backend
+- DoMINO is coming shortly
+
+We currently support the following datasets:
+- DrivaerML
+
+Support for these datasets is coming imminently, with pre-processing support from
+physicsnemo curator:
+- ShiftSUV Estate
+- ShiftSUV Fastback
+- ShiftWING
+- HiftliftAeroML
+
+## Dataset Handling
+
+The data processing pipeline in this example explicitly performs non dimensionalization
+of input data to unitless fields for model inputs.  Check out the yaml configurations
+in `conf/dataset/` to see examples: the metadata section describes the reference
+parameters for each data.  Because datasets are non-dimensionalized, and are loaded
+with the physicsnemo datapipes which support a MultiDataset abstraction, it's 
+possible to merge datasets on-the-fly during training to perform multi-dataset
+training.  We at PhysicsNeMo haven't extensively explored all of the parameters
+of this multi-dataset training yet, but the infrastructure can support it and
+we welcome you to try it if you're interested in it.
+
+Dataset non dimensionalization is handled in the `nondim.py` transformation, which
+is part of the data transformation pipeline.  See `src/nondim.py` in this example
+for the source code.
 
 ## Quick start
 
 ```bash
 cd examples/cfd/external_aerodynamics/unified_external_aero_recipe
 
-# 1. Train (single GPU)
+# 1. Train (single GPU, default GeoTransolver surface config)
 python src/train.py
 
-# 1b. Train (multi-GPU)
+# 1b. Train with a specific config
+python src/train.py --config-name train_transolver_automotive_surface
+
+# 1c. Train (multi-GPU)
 torchrun --nproc_per_node=N src/train.py
+
+# 2. Override config values
+python src/train.py precision=bfloat16 training.num_epochs=100
 ```
-
-## Data layout
-
-Each dataset lives on disk as a directory of simulation runs. Each run
-contains PhysicsNeMo `Mesh` objects saved as `.pt` files (TensorDict memmap
-format).
-
-```
-drivaer_ml_pnm_mesh/
-  run_1/
-    boundary_1.vtp.pt/      <-- surface mesh (point cloud, no cells)
-    drivaer_1.stl.pt/        <-- STL geometry
-    volume_1.vtu.pt/         <-- volume mesh
-  run_2/
-    ...
-
-shift_suv_pnm_mesh/estate/
-  run_00001/
-    merged_surfaces.vtp.pt/  <-- surface mesh (triangulated, has cells)
-    merged_surfaces.stl.pt/  <-- STL geometry
-    merged_volumes.vtu.pt/   <-- volume mesh
-  run_00002/
-    ...
-```
-
-The two surface datasets store the same physical quantities but in
-structurally different ways:
-
-| Property | DrivaerML | SHIFT SUV Estate |
-|---|---|---|
-| Mesh type | Point cloud (~8.8M pts, no cells) | Triangulated surface (~2.5M pts, ~5M cells) |
-| Pressure field | `point_data["pMeanTrim"]` | `cell_data["pressure_average"]` |
-| Wall shear stress | `point_data["wallShearStressMeanTrim"]` (vec3) | `cell_data["wall_shear_stress_average"]` (vec3) |
-| Global data | `TimeValue` (scalar) | (empty) |
-| File pattern | `**/boundary*.vtp.pt` | `**/merged_surfaces.vtp.pt` |
 
 ## Pipeline architecture
 
-Each dataset gets its own `MeshDataset` with an ordered chain of
-`MeshTransform` steps defined in YAML. The two datasets are then merged
-via `MultiDataset`.
+Each dataset gets its own `MeshDataset` or `DomainMeshDataset` with an ordered chain of
+`MeshTransform` steps defined in YAML.  Multiple datasets are then
+merged via `MultiDataset`.
 
 ```
           ┌─────────────────────────────────────────────────────────────┐
           │  Per-dataset pipeline (one per YAML config)                │
           │                                                            │
-          │  MeshReader               Load raw Mesh from .pt files     │
+          │  MeshReader / DomainMeshReader                              │
+          │       │              Load raw Mesh from .pdmsh/.pmsh files  │
           │       │                                                    │
           │  (metadata injection)     Write U_inf, rho_inf, p_inf, nu  │
           │       │                   from YAML metadata into          │
           │       │                   global_data (done by builder)     │
           │       │                                                    │
-          │  DropMeshFields           Remove unwanted fields           │
-          │       │                   (e.g. TimeValue)                 │
+          │ (DropMeshFields)          Remove unwanted fields           │
+          │       │                   (e.g. TimeValue; drivaer only)    │
           │       │                                                    │
-          │  CenterMesh               Translate center of mass         │
+          │ (CenterMesh)              Translate center of mass         │
           │       │                   to origin                        │
           │       │                                                    │
           │ (RandomRotateMesh)        Random yaw around vertical axis  │
-          │       │                   (training only)                   │
+          │       │                   (inserted after CenterMesh when   │
+          │       │                    augment=true)                    │
           │       │                                                    │
           │ (RandomTranslateMesh)     Random horizontal shift           │
-          │       │                   (training only)                   │
+          │       │                   (inserted after CenterMesh when   │
+          │       │                    augment=true)                    │
           │       │                                                    │
-          │  NonDimensionalizeByMeta  Convert to Cp and Cf using       │
-          │       │                   q_inf = ½ρ|U∞|²                  │
+          │ (NonDimensionalizeByMeta) Convert to Cp/Cf/nondim velocity │
+          │       │                   using q_inf = ½ρ|U∞|²            │
+          │       │                                                    │
+          │ (ComputeSDFFromBoundary)  Compute signed distance field    │
+          │       │                   from STL geometry (volume only)   │
+          │       │                                                    │
+          │ (DropBoundary)            Remove auxiliary STL boundary     │
+          │       │                   after SDF (volume only)           │
           │       │                                                    │
           │  RenameMeshFields         Map dataset-specific names to    │
           │       │                   canonical names (pressure, wss)  │
           │       │                                                    │
-          │  NormalizeMeshFields      z-score normalize using          │
+          │ (NormalizeMeshFields)     z-score normalize using          │
           │       │                   inline stats from YAML            │
           │       │                                                    │
-          │  SubsampleMesh            Downsample to fixed point/cell   │
-          │       │                   count for batching                │
+          │ (ComputeSurfaceNormals)   Compute per-cell surface normals │
+          │       │                   (surface pipelines only)          │
+          │       │                                                    │
+          │ (SubsampleMesh)           Downsample to fixed point/cell   │
+          │       │                   count (surface pipelines only;    │
+          │       │                   volume uses reader subsampling)   │
           │       │                                                    │
           │  MeshToTensorDict         Convert Mesh → TensorDict        │
           │       │                                                    │
           │  (ComputeCellCentroids)   Compute cell centers from        │
-          │       │                   connectivity (SHIFT SUV only)     │
+          │       │                   connectivity (cell-based only)    │
           │       │                                                    │
           │  RestructureTensorDict    Remap flat TensorDict into       │
           │       │                   input/output groups for the      │
@@ -119,9 +137,8 @@ via `MultiDataset`.
                   │
                   ▼
           ┌──────────────┐
-          │   Collate    │  Stacks samples into batched tensors:
-          │              │  geometry (B,N,3), U_inf (B,1,3),
-          │              │  fields (B,N,4)
+          │   Collate    │  Stacks samples into batched tensors
+          │              │  via model-specific mapping
           └──────────────┘
 ```
 
@@ -137,56 +154,72 @@ via `MultiDataset`.
   (e.g. `TimeValue` in DrivaerML) to reduce memory and avoid schema
   mismatches when merging datasets.
 
-- **CenterMesh** — Centers each car geometry at the origin so that
-  rotations happen around a sensible point. DrivaerML uses the point mean
-  (no cells available); SHIFT SUV uses area-weighted cell centroids.
+- **CenterMesh** — Centers each geometry at the origin so that
+  rotations happen around a sensible point.  DrivaerML uses point-mean
+  centering (`use_area_weighting: false`); SHIFT SUV uses area-weighted
+  cell centroid centering (`use_area_weighting: true`).
 
-- **RandomRotateMesh / RandomTranslateMesh** — Data augmentation.
-  Currently commented out in both dataset configs; uncomment to enable.
-  Rotation is restricted to the vertical axis. Translation is restricted
-  to horizontal axes by setting the vertical component of `max_offset` to
-  zero.
+- **RandomRotateMesh / RandomTranslateMesh** — Data augmentation,
+  defined in the `augmentations:` block of each dataset config and
+  activated at runtime by setting `augment: true` (default `false`).
+  Augmentations are inserted after `CenterMesh` by the dataset builder.
+  Rotation is restricted to the vertical axis.  Translation is restricted
+  to horizontal axes by setting the vertical component of the offset
+  distribution to zero.
 
 - **NonDimensionalizeByMetadata** — Converts raw physical fields into
   non-dimensional coefficients using the injected freestream metadata:
     - Pressure → Cp: `(p - p_inf) / q_inf` where `q_inf = 0.5 * rho_inf * |U_inf|²`
     - Wall shear stress → Cf: `tau / q_inf`
+    - Velocity → `U / |U_inf|`
   
-  This transform also supports velocity non-dimensionalization (`U / |U_inf|`)
-  and provides an `inverse()` method for re-dimensionalizing predictions.
+  Also supports temperature, density, and identity (pass-through) field
+  types.  Provides an `inverse()` method for re-dimensionalizing
+  predictions.
+
+- **ComputeSDFFromBoundary** — Volume pipelines only.  Computes a
+  signed distance field (and surface normals) from an auxiliary STL
+  boundary mesh loaded via the reader's `extra_boundaries` option.
+  The SDF and normals are stored into `point_data` and used as
+  geometry-aware input features for the model.
+
+- **DropBoundary** — Removes the auxiliary STL boundary mesh after
+  `ComputeSDFFromBoundary` has consumed it, keeping only the interior
+  volume and the original surface boundary.
 
 - **RenameMeshFields** — Maps dataset-specific field names to canonical
-  names (`pressure`, `wss`) so all downstream code uses a single naming
-  convention.
+  names (`pressure`, `wss`, `velocity`, etc.) so all downstream code
+  uses a single naming convention.
 
 - **NormalizeMeshFields** — Applies z-score normalization using
   inline statistics declared in the YAML config or loaded from a `.pt`
-  file. Handles scalar and vector fields differently.  The normalization
+  file.  Handles scalar and vector fields differently.  The normalization
   stats are saved alongside model checkpoints for use at inference time.
 
+  Note that not all fields are normalized, in fact most are not.  Only fields
+  that are particularly far from unit mean or standard deviation are normalized.
+
+- **ComputeSurfaceNormals** — Computes per-cell (or per-point) surface
+  normals from the mesh connectivity.  Used in surface pipelines to
+  provide normal vectors as part of the model's local embedding.
+
 - **SubsampleMesh** — Randomly downsamples each mesh to a fixed size
-  (200k points for DrivaerML, 50k cells for SHIFT SUV) so that samples
-  can be batched. Different samples in the same dataset get different
-  random subsets each epoch.
+  (controlled by `sampling_resolution` in the training config) so that
+  samples can be batched.  Different samples in the same dataset get
+  different random subsets each epoch.
 
 - **MeshToTensorDict** — Terminal transform that converts the `Mesh`
   object into a flat `TensorDict`. After this step, further mesh
   transforms are invalid.
 
-- **ComputeCellCentroids** — For cell-based datasets (SHIFT SUV),
-  computes the centroid of each cell from the connectivity and vertex
-  positions. These centroids serve as the "point positions" for the model.
+- **ComputeCellCentroids** — For cell-based datasets, computes the
+  centroid of each cell from the connectivity and vertex positions.
+  These centroids serve as the "point positions" for the model.
 
 - **RestructureTensorDict** — Reorganizes the flat TensorDict into
-  `input/` and `output/` groups expected by the collate function. Maps
-  point positions and freestream velocity into `input`, and target fields
-  (pressure, wss) into `output`.
-
-- **MultiDataset with output_strict=False** — The two datasets produce
-  TensorDicts with different internal structure (one has `point_data`
-  fields, the other has `cell_data` fields). Strict output validation is
-  disabled because the keys differ. The training loop uses
-  `metadata["dataset_index"]` to distinguish samples if needed.
+  `input/` and `output/` groups expected by the collate function.  Maps
+  point positions (or cell centroids), normals, and freestream velocity
+  into `input`, and target fields into `output`.
 
 ## Non-dimensionalization and normalization
 
@@ -194,10 +227,10 @@ The pipeline applies two layers of field conditioning:
 
 1. **Physics-based non-dimensionalization** (`NonDimensionalizeByMetadata`)
    converts raw simulation outputs to standard aerodynamic coefficients
-   (Cp, Cf). This is essential when combining datasets that may use
-   different freestream conditions, fluid properties, or unit conventions.
-   The freestream metadata (`U_inf`, `rho_inf`, `p_inf`) is declared
-   per-dataset in the YAML config.
+   (Cp, Cf) or non-dimensional velocity.  This is essential when
+   combining datasets that may use different freestream conditions, fluid
+   properties, or unit conventions.  The freestream metadata (`U_inf`,
+   `rho_inf`, `p_inf`) is declared per-dataset in the YAML config.
 
 2. **Statistical normalization** (`NormalizeMeshFields`) applies z-score
    scaling so that all field values fed to the model have roughly zero
@@ -210,33 +243,62 @@ The default model is **GeoTransolver**, a transformer-based architecture
 for point-cloud regression that uses multi-scale local attention with
 geometric embeddings.
 
+### Default settings (GeoTransolver automotive surface)
+
 | Setting | Default |
 |---|---|
-| Model | `GeoTransolver` (8 layers, 128 hidden, 8 heads) |
-| Input | Point positions (N×3) + freestream velocity (1×3) |
+| Model | `GeoTransolver` (12 layers, 256 hidden, 8 heads) |
+| Attention type | `GALE` (also supports `GALE_FA` for FLARE-based self-attention) |
+| State mixing | `weighted` (learnable sigmoid gate; also supports `concat_project`) |
+| Input | Cell centroids (N×3) + surface normals (N×3) + freestream velocity (1×3) |
 | Output | Pressure (1) + wall shear stress (3) = 4 channels |
 | Loss | Huber (smooth L1), normalized by total channels |
 | Optimizer | Muon (2D params) + AdamW (other params) |
 | Scheduler | StepLR (step=100, gamma=0.1) |
-| Precision | float32 (float16/bfloat16/float8 supported) |
+| Precision | bfloat16 (float16/float32/float8 also supported) |
 | Batch size | 1 |
 
-The **collate function** (`src/collate.py`) stacks datapipe outputs into
-the model's forward signature:
+### Data-to-model mapping
+
+The **data-to-model mapping** (`src/collate.py`) converts datapipe
+outputs into the model's forward signature.  Mappings are registered by
+name in `MODEL_MAPPINGS`; the active mapping is selected via the
+`data_mapping` config key (default: `"geotransolver_automotive_surface"`):
 
 ```python
+# geotransolver_automotive_surface mapping produces:
 {
-    "geometry":         (B, N, 3),  # point positions
-    "local_embedding":  (B, N, 3),  # same as geometry
+    "geometry":         (B, N, 3),  # cell centroids / point positions
+    "local_embedding":  (B, N, 6),  # cat(points, normals) via ["input/points", "input/normals"]
+    "local_positions":  (B, N, 3),  # point positions (for local feature builder)
     "global_embedding": (B, 1, 3),  # freestream velocity
-    "fields":           (B, N, 4),  # [pressure, wss_x, wss_y, wss_z]
+    "fields":           (B, N, 4),  # cat(pressure, wss) = prediction target
 }
 ```
 
+All available mappings:
+
+| Mapping name | Model | Domain |
+|---|---|---|
+| `geotransolver_automotive_surface` | GeoTransolver | Automotive surface (Cp, Cf) |
+| `geotransolver_automotive_volume` | GeoTransolver | Automotive volume (U, p, nut) |
+| `geotransolver_highlift_surface` | GeoTransolver | HighLift surface (P, T, rho, U, tau_wall) |
+| `geotransolver_highlift_volume` | GeoTransolver | HighLift volume (P, T, rho, U) |
+| `transolver_automotive_surface` | Transolver | Automotive surface (Cp, Cf) |
+| `transolver_automotive_volume` | Transolver | Automotive volume (U, p, nut) |
+| `flare_automotive_surface` | FLARE | Automotive surface (Cp, Cf) |
+| `flare_automotive_volume` | FLARE | Automotive volume (U, p, nut) |
+| `domino_automotive_surface` | DoMINO | Automotive surface (Cp, Cf) |
+| `domino_automotive_volume` | DoMINO | Automotive volume (U, p, nut) |
+
+To add a new model, register a mapping in `MODEL_MAPPINGS` and set
+`data_mapping` in your config.
+
 The **loss calculator** (`src/loss.py`) and **metric calculator**
 (`src/metrics.py`) are both driven by the same target config
-(`pressure: scalar`, `wss: vector`), so adding a new field is a
-config-only change.
+(e.g. `pressure: scalar`, `wss: vector`), so adding a new field is a
+config-only change.  Supported loss types: Huber, MSE, relative MSE.
+Supported metrics: relative L1, relative L2, MAE.
 
 ## Scripts
 
@@ -246,44 +308,45 @@ All scripts are run from the recipe root directory:
 cd examples/cfd/external_aerodynamics/unified_external_aero_recipe
 ```
 
-### Benchmark datapipe throughput
-
-```bash
-python -m src.benchmark
-python -m src.benchmark --max-samples 20
-python -m src.benchmark --configs conf/dataset/drivaer_ml_surface.yaml
-```
-
-Measures per-sample load time, throughput, and prints the output TensorDict
-layout with per-component value statistics for each pipeline and the
-combined MultiDataset.
-
 ### Train
 
 ```bash
-# Single GPU
+# Single GPU (default: GeoTransolver automotive surface)
 python src/train.py
+
+# Explicit config selection
+python src/train.py --config-name train_transolver_automotive_surface
 
 # Multi-GPU
 torchrun --nproc_per_node=N src/train.py
 
 # Override config values
-python src/train.py precision=bfloat16 training.num_epochs=100
+python src/train.py precision=float32 training.num_epochs=100 training.batch_size=1
 ```
 
-Trains a GeoTransolver on surface pressure and wall shear stress. Supports
-checkpointing (auto-resume), TensorBoard logging, mixed precision
+Supports checkpointing (auto-resume), MLflow logging, mixed precision
 (float16/bfloat16/float8 via Transformer Engine), `torch.compile`, and
 NVIDIA profiling.
+
+### Benchmark datapipe throughput
+
+```bash
+python src/train.py benchmark_io=true
+python src/train.py benchmark_io=true +training.benchmark_max_steps=20
+```
+
+> NOTE: If you want to profile, we recommend you set the number of epochs to 2.
+
+Measures per-sample load time and throughput without running the model.
 
 ## Configuration
 
 The recipe uses a two-level config structure:
 
-- **`conf/train_surface.yaml`** — Top-level training config. Specifies
+- **`conf/train_*.yaml`** — Top-level training configs.  Each specifies
   the model, optimizer, scheduler, precision, and which dataset configs
-  to load.
-- **`conf/dataset/*.yaml`** — Per-dataset configs. Each declares the
+  to load.  Six are provided (see [Training configurations](#training-configurations)).
+- **`conf/dataset/*.yaml`** — Per-dataset configs.  Each declares the
   reader, transform pipeline, freestream metadata, target field types,
   and metrics.
 
@@ -292,8 +355,7 @@ The recipe uses a two-level config structure:
 ```yaml
 name: drivaer_ml_surface
 
-train_datadir: /path/to/train/data
-val_datadir: /path/to/val/data
+train_datadir: /path/to/your/PhysicsNeMo-DrivaerML/
 
 # Freestream conditions (injected into global_data by the dataset builder)
 metadata:
@@ -301,13 +363,25 @@ metadata:
   p_inf: 0.0
   rho_inf: 1.225
   nu: 1
+  L_ref: 5.0
 
 # Transform pipeline — each entry is Hydra-instantiated
 pipeline:
   reader:
     _target_: ${dp:MeshReader}
     path: ${train_datadir}
-    pattern: "**/boundary*.vtp.pt"
+    pattern: "**/*.pdmsh/_tensordict/boundaries/surface"
+    subsample_n_cells: ${sampling_resolution}
+  augmentations:
+    - _target_: ${dp:RandomRotateMesh}
+      axes: ["z"]
+      transform_cell_data: true
+      transform_global_data: true
+    - _target_: ${dp:RandomTranslateMesh}
+      distribution:
+        _target_: torch.distributions.Uniform
+        low: [-1.0, -1.0, 0.0]
+        high: [1.0, 1.0, 0.0]
   transforms:
     - _target_: ${dp:DropMeshFields}
       global_data: [TimeValue]
@@ -317,26 +391,31 @@ pipeline:
       fields:
         pMeanTrim: pressure
         wallShearStressMeanTrim: stress
-      section: point_data
+      section: cell_data
     - _target_: ${dp:RenameMeshFields}
-      point_data:
+      cell_data:
         pMeanTrim: pressure
         wallShearStressMeanTrim: wss
     - _target_: ${dp:NormalizeMeshFields}
-      section: point_data
+      section: cell_data
       fields:
         wss: {type: vector, mean: [0.0, 0.0, 0.0], std: 0.00313}
+    - _target_: ${dp:ComputeSurfaceNormals}
+      store_as: cell_data
+      field_name: normals
     - _target_: ${dp:SubsampleMesh}
-      n_points: 200000
+      n_cells: ${sampling_resolution}
     - _target_: ${dp:MeshToTensorDict}
+    - _target_: ${dp:ComputeCellCentroids}
     - _target_: ${dp:RestructureTensorDict}
       groups:
         input:
-          points: points
+          points: cell_centroids
+          normals: cell_data.normals
           U_inf: global_data.U_inf
         output:
-          pressure: point_data.pressure
-          wss: point_data.wss
+          pressure: cell_data.pressure
+          wss: cell_data.wss
 
 targets:
   pressure: scalar
@@ -346,48 +425,87 @@ metrics: [l1, l2, mae]
 ```
 
 The `${dp:ComponentName}` syntax is an OmegaConf resolver registered by
-PhysicsNeMo's datapipe registry. It maps short class names to fully
-qualified import paths, so Hydra can instantiate them. Each transform
+PhysicsNeMo's datapipe registry.  It maps short class names to fully
+qualified import paths, so Hydra can instantiate them.  Each transform
 entry's keys are passed directly as constructor kwargs.
+
+The `${sampling_resolution}` interpolation is resolved from the
+top-level training config's `dataset.sampling_resolution` value.
+
+### Manifest-based data splitting
+
+DrivaerML datasets use a `manifest.json` file to define train/val/test
+splits.  The manifest path and split names are declared in the top-level
+training config:
+
+```yaml
+data:
+  drivaer_ml:
+    config: conf/dataset/drivaer_ml_surface.yaml
+    manifest: /path/to/PhysicsNeMo-DrivaerML/manifest.json
+    train_split: train
+    val_split: val
+```
+
+The `ManifestSampler` in `src/datasets.py` resolves manifest entries to
+dataset indices and handles distributed sampling across ranks.
+
+For datasets without a manifest (e.g. SHIFT SUV), separate
+`train_datadir` / `val_datadir` paths are specified in the dataset YAML.
 
 ### Adding a new dataset
 
 1. Create a new YAML config in `conf/dataset/` following the pattern above.
 2. Set `reader.path` and `reader.pattern` for your data files.
+   Use `MeshReader` for single-mesh files or `DomainMeshReader` for
+   domain meshes that contain both interior and boundary sub-meshes.
 3. Declare the correct `metadata:` block with freestream conditions.
 4. Choose the right `section:` (`point_data` or `cell_data`) in
-   `NonDimensionalizeByMetadata` and `RenameMeshFields`.
-5. For cell-based data, add `ComputeCellCentroids` after `MeshToTensorDict`
-   and use `cell_centroids` as the point source in `RestructureTensorDict`.
+   `NonDimensionalizeByMetadata`, `RenameMeshFields`, and
+   `NormalizeMeshFields`.
+5. For cell-based surface data, add `ComputeSurfaceNormals` and
+   `ComputeCellCentroids` and use `cell_centroids` as the point source
+   in `RestructureTensorDict`.
 6. Add inline normalization stats to `NormalizeMeshFields` (or point
    `stats_file` at a `.pt` file with precomputed statistics).
-7. Add an entry in `conf/train_surface.yaml` under `data:` pointing to
-   your new config.
+7. Add an entry in the appropriate `conf/train_*.yaml` under `data:`
+   pointing to your new config.
 
 No Python code changes are needed.
+
+### MLflow experiment tracking
+
+Training metrics are logged to MLflow.  By default, experiments are
+stored in a local `./mlruns` directory.  To use a remote tracking
+server, set `mlflow.tracking_uri` in the training config:
+
+```yaml
+mlflow:
+  tracking_uri: "http://YOUR_MLFLOW_SERVER:5000"
+  experiment_name: "unified_external_aero"
+  log_every_n_steps: 10
+```
 
 ## Source modules
 
 | Module | Purpose |
 |---|---|
-| `src/datasets.py` | Factory functions: `build_surface_dataset`, `build_multi_surface_dataset`, `load_dataset_config`. Hydra-instantiates readers and transforms from YAML; injects metadata into `global_data`. |
-| `src/nondim.py` | Recipe-local transform: `NonDimensionalizeByMetadata`. Registered into the global datapipe registry. |
-| `src/collate.py` | `surface_collate` — stacks datapipe `(TensorDict, metadata)` tuples into batched model inputs. |
-| `src/loss.py` | `LossCalculator` — config-driven loss for mixed scalar/vector fields. Supports Huber, MSE, relative MSE. |
-| `src/metrics.py` | `MetricCalculator` — config-driven metrics (relative L1, relative L2, MAE) with optional distributed all-reduce. |
-| `src/utils.py` | `build_muon_optimizer` (Muon+AdamW), `parse_target_config`, `FieldSpec` dataclass. |
-| `src/train.py` | Training loop with DDP, mixed precision, checkpointing, TensorBoard, and profiling. |
-| `src/benchmark.py` | Measures datapipe throughput and prints output shapes with value statistics. |
+| `src/datasets.py` | Factory functions: `build_dataset`, `build_multi_surface_dataset`, `load_dataset_config`.  Hydra-instantiates readers and transforms from YAML; injects metadata into `global_data`.  Also provides `load_manifest`, `resolve_manifest_indices`, and `ManifestSampler` for manifest-based splitting. |
+| `src/nondim.py` | Recipe-local transform: `NonDimensionalizeByMetadata`.  Registered into the global datapipe registry.  Supports pressure, stress, velocity, temperature, density, and identity field types. |
+| `src/collate.py` | Data-to-model mapping: converts datapipe `(TensorDict, metadata)` tuples into batched model inputs via a registry of 10 named mapping specs (see [Data-to-model mapping](#data-to-model-mapping)). |
+| `src/loss.py` | `LossCalculator` — config-driven loss for mixed scalar/vector fields.  Supports Huber, MSE, relative MSE.  Normalizes total loss by number of output channels. |
+| `src/metrics.py` | `MetricCalculator` — config-driven metrics (relative L1, relative L2, MAE) with optional distributed all-reduce.  Reports per-field and per-component (x/y/z) metrics for vector fields. |
+| `src/utils.py` | `build_muon_optimizer` (Muon+AdamW via `CombinedOptimizer`), `parse_target_config`, `FieldSpec` dataclass, `set_seed`. |
+| `src/train.py` | Training loop with DDP, mixed precision, checkpointing, MLflow logging, I/O benchmarking (`benchmark_io=true`), and profiling. |
 
 ## Design decisions
 
-**Why keep native point/cell representation?**
-DrivaerML is a point cloud; SHIFT SUV is a triangulated surface. Converting
-one to match the other would lose information (cell connectivity or point
-precision). Instead, each dataset keeps its native structure and the
-`SubsampleMesh` + `RestructureTensorDict` transforms produce a uniform
-`(N, 3)` point array for the model — from vertex positions for point
-clouds, or from cell centroids for triangulated meshes.
+**Why cell-based representation for surfaces?**
+Both DrivaerML and SHIFT SUV surface data use triangulated meshes with
+fields stored in `cell_data`.  The pipeline computes cell centroids as
+the model's point positions and cell-based surface normals for the local
+embedding.  For volume data, fields live in `point_data` and vertex
+positions are used directly.
 
 **Why two-stage field conditioning (non-dim then normalize)?**
 Non-dimensionalization is physics: it removes dependence on freestream
@@ -397,27 +515,13 @@ rescales those coefficients so the model sees inputs with zero mean and unit
 variance, improving training stability. Separating them means you can
 change normalization strategy without touching the physics, and vice versa.
 
-**Why inject metadata from YAML instead of storing it in the `.pt` files?**
-The freestream conditions are not stored in the converted mesh files.
-Rather than modifying the data conversion pipeline, we inject them at
-runtime from the config. This keeps the `.pt` files format-agnostic and
-makes it trivial to change conditions without reconverting data. The
-dataset builder reads the `metadata:` block and prepends an injection
-step automatically.
-
-**Why output_strict=False in MultiDataset?**
-With strict mode, MultiDataset checks that all sub-datasets produce
-TensorDicts with identical keys. Since one dataset has `point_data.pressure`
-and the other has `cell_data.pressure`, the pre-restructured keys differ.
-After `RestructureTensorDict` both datasets produce matching `input/` and
-`output/` groups, but the intermediate keys still differ.
-
-**Why Muon + AdamW?**
-Muon is used for 2D weight matrices (linear layers, attention projections)
-where it acts as a steepest-descent optimizer on the Stiefel manifold.
-AdamW handles everything else (biases, layer norms, embeddings). The two
-are combined via `CombinedOptimizer`. If all parameters happen to be one
-type, the optimizer gracefully falls back to a single optimizer.
+**Why inject metadata from YAML instead of storing it in the mesh files?**
+The freestream conditions are not always stored in the converted mesh
+files.  Rather than modifying the data conversion pipeline, we inject
+them at runtime from the config.  This keeps the mesh files
+format-agnostic and makes it trivial to change conditions without
+reconverting data.  The dataset builder reads the `metadata:` block and
+prepends an injection step automatically.
 
 **Why Hydra instantiation for the pipeline?**
 The entire pipeline is expressed in YAML with no conditional Python logic.
