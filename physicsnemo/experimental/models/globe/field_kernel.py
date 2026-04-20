@@ -830,6 +830,7 @@ class BarnesHutKernel(Kernel):
         source_aggregates: "SourceAggregates | None" = None,
         target_centroids: Float[torch.Tensor, "n_target_nodes n_dims"] | None = None,
         near_chunk_size: int | None = None,
+        expand_far_targets: bool = False,
     ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
         r"""Evaluate the kernel with dual-tree Barnes-Hut acceleration.
 
@@ -881,6 +882,11 @@ class BarnesHutKernel(Kernel):
             to ensure deterministic chunking inside ``torch.utils.checkpoint``
             replay (free GPU memory changes between forward and backward,
             so ``_auto_chunk_size`` would return different values).
+        expand_far_targets : bool, optional, default=False
+            If ``True``, far-field node pairs are expanded to individual
+            target points during plan construction, eliminating the
+            target-side centroid broadcast.  Passed through to
+            :meth:`ClusterTree.find_dual_interaction_pairs`.
 
         Returns
         -------
@@ -921,7 +927,8 @@ class BarnesHutKernel(Kernel):
         ### Find dual interaction pairs if not precomputed
         if dual_plan is None:
             dual_plan = cluster_tree.find_dual_interaction_pairs(
-                target_tree=target_tree, theta=theta
+                target_tree=target_tree, theta=theta,
+                expand_far_targets=expand_far_targets,
             )
 
         ### Compute source aggregates for far-field clusters.
@@ -1334,9 +1341,14 @@ class BarnesHutKernel(Kernel):
             target_positions[tgt_ids] - source_positions[src_ids]
         ) / reference_length
 
+        ### Flatten source scalars into one tensor, gather once.
+        # concatenate_leaves: 1 GPU kernel (torch.cat)
+        # [src_ids]: 1 GPU kernel (aten::index)
+        # Total: 2 kernels instead of K (one per TensorDict leaf).
+        gathered_src_scalars = concatenate_leaves(source_scalars)[src_ids]
         scalars = TensorDict(
             {
-                "source_scalars": source_scalars[src_ids],
+                "source_scalars": gathered_src_scalars,
                 "global_scalars": global_scalars.expand(
                     n_pairs, *global_scalars.batch_size
                 ),
@@ -1344,9 +1356,27 @@ class BarnesHutKernel(Kernel):
             batch_size=torch.Size([n_pairs]),
             device=device,
         )
+
+        ### Flatten source vectors, gather once, split back into named leaves.
+        # The split-back is required because _evaluate_interactions processes
+        # each vector leaf separately for magnitude/direction extraction and
+        # rotationally-equivariant basis construction.  Integer indexing
+        # along the last dimension creates non-contiguous views (zero copies).
+        src_vector_keys = list(
+            source_vectors.keys(include_nested=True, leaves_only=True)
+        )
+        gathered_src_vectors = concatenate_leaves(source_vectors)[src_ids]
+        gathered_vector_leaves = {
+            k: gathered_src_vectors[..., i]
+            for i, k in enumerate(src_vector_keys)
+        }
         vectors = TensorDict(
             {
-                "source_vectors": source_vectors[src_ids],
+                "source_vectors": TensorDict(
+                    gathered_vector_leaves,
+                    batch_size=torch.Size([n_pairs, self.n_spatial_dims]),
+                    device=device,
+                ),
                 "global_vectors": global_vectors.expand(
                     torch.Size([n_pairs]) + global_vectors.batch_size
                 ),
@@ -1604,6 +1634,7 @@ class MultiscaleKernel(Module):
         target_tree: "ClusterTree | None" = None,
         dual_plan: "DualInteractionPlan | None" = None,
         source_areas: Float[torch.Tensor, " n_sources"] | None = None,
+        expand_far_targets: bool = False,
     ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
         r"""Evaluates the multiscale kernel by combining results from multiple scales.
 
@@ -1635,6 +1666,11 @@ class MultiscaleKernel(Module):
             Precomputed dual traversal plan. Computed if ``None``.
         source_areas : Float[torch.Tensor, "n_sources"] or None, optional
             Per-source areas for aggregate weighting. Defaults to ones.
+        expand_far_targets : bool, optional, default=False
+            If ``True``, eliminates target-side centroid broadcast by
+            expanding far-field node pairs to individual target points.
+            Passed through to
+            :meth:`ClusterTree.find_dual_interaction_pairs`.
 
         Returns
         -------
@@ -1693,7 +1729,8 @@ class MultiscaleKernel(Module):
                 )
             if dual_plan is None:
                 dual_plan = cluster_tree.find_dual_interaction_pairs(
-                    target_tree=target_tree, theta=theta
+                    target_tree=target_tree, theta=theta,
+                    expand_far_targets=expand_far_targets,
                 )
         with record_function("multiscale_kernel::compute_aggregates"):
             source_aggregates = cluster_tree.compute_source_aggregates(
@@ -1765,29 +1802,51 @@ class MultiscaleKernel(Module):
         results_pieces: list[TensorDict[str, Float[torch.Tensor, "n_targets ..."]]] = []
         for name in self.reference_length_names:
             with record_function(f"multiscale_kernel::branch/{name}"):
-                branch_kwargs = dict(
-                    reference_length=reference_lengths[name]
-                    * torch.exp(self.log_scalefactors[name]),
-                    source_points=source_points,
-                    target_points=target_points,
-                    source_strengths=source_strengths[name],
-                    source_data=source_data,
-                    global_data=global_data,
-                    theta=theta,
-                    cluster_tree=cluster_tree,
-                    target_tree=target_tree,
-                    dual_plan=dual_plan,
-                    source_areas=source_areas,
-                    source_aggregates=source_aggregates,
-                    near_chunk_size=near_chunk_sizes[name],
+                ref_length = (
+                    reference_lengths[name]
+                    * torch.exp(self.log_scalefactors[name])
                 )
+                strengths = source_strengths[name]
+                chunk_size = near_chunk_sizes[name]
+                kernel = self.kernels[name]
                 if use_branch_ckpt:
-                    kernel = self.kernels[name]
                     results_pieces.append(
-                        checkpoint(kernel, use_reentrant=False, **branch_kwargs)
+                        checkpoint(
+                            kernel,
+                            use_reentrant=False,
+                            reference_length=ref_length,
+                            source_points=source_points,
+                            target_points=target_points,
+                            source_strengths=strengths,
+                            source_data=source_data,
+                            global_data=global_data,
+                            theta=theta,
+                            cluster_tree=cluster_tree,
+                            target_tree=target_tree,
+                            dual_plan=dual_plan,
+                            source_areas=source_areas,
+                            source_aggregates=source_aggregates,
+                            near_chunk_size=chunk_size,
+                        )
                     )
                 else:
-                    results_pieces.append(self.kernels[name](**branch_kwargs))
+                    results_pieces.append(
+                        kernel(
+                            reference_length=ref_length,
+                            source_points=source_points,
+                            target_points=target_points,
+                            source_strengths=strengths,
+                            source_data=source_data,
+                            global_data=global_data,
+                            theta=theta,
+                            cluster_tree=cluster_tree,
+                            target_tree=target_tree,
+                            dual_plan=dual_plan,
+                            source_areas=source_areas,
+                            source_aggregates=source_aggregates,
+                            near_chunk_size=chunk_size,
+                        )
+                    )
 
         result: TensorDict[str, Float[torch.Tensor, "n_targets ..."]] = reduce(
             operator.add, results_pieces

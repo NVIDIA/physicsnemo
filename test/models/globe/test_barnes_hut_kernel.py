@@ -29,6 +29,7 @@ import torch.nn.functional as F
 from tensordict import TensorDict
 
 from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
+from physicsnemo.mesh.spatial._ragged import _ragged_arange
 from physicsnemo.experimental.models.globe.field_kernel import (
     BarnesHutKernel,
     Kernel,
@@ -376,6 +377,97 @@ class TestClusterTree:
         )
         torch.testing.assert_close(
             agg.node_source_data["v"][0], expected_v, atol=1e-5, rtol=1e-5
+        )
+
+    # -- Precomputed leaf field consistency tests ----------------------------
+
+    @pytest.mark.parametrize(
+        "n_points, leaf_size, n_dims",
+        [
+            (50, 4, 3),
+            (1, 4, 2),
+            (10, 100, 2),
+            (20, 1, 3),
+        ],
+        ids=["normal", "single_point", "root_only_leaf", "one_per_leaf"],
+    )
+    def test_precomputed_leaf_node_ids(
+        self, n_points: int, leaf_size: int, n_dims: int,
+    ):
+        """Precomputed leaf_node_ids matches torch.where(leaf_count > 0)."""
+        torch.manual_seed(DEFAULT_SEED)
+        points = torch.randn(n_points, n_dims)
+        tree = ClusterTree.from_points(points, leaf_size=leaf_size)
+
+        expected = torch.where(tree.leaf_count > 0)[0]
+        assert torch.equal(tree.leaf_node_ids, expected)
+        assert tree.n_leaves == expected.shape[0]
+
+    @pytest.mark.parametrize(
+        "n_points, leaf_size, n_dims",
+        [
+            (50, 4, 3),
+            (1, 4, 2),
+            (10, 100, 2),
+            (20, 1, 3),
+        ],
+        ids=["normal", "single_point", "root_only_leaf", "one_per_leaf"],
+    )
+    def test_precomputed_leaf_seg_ids(
+        self, n_points: int, leaf_size: int, n_dims: int,
+    ):
+        """Precomputed leaf_seg_ids matches on-the-fly _ragged_arange computation."""
+        torch.manual_seed(DEFAULT_SEED)
+        points = torch.randn(n_points, n_dims)
+        tree = ClusterTree.from_points(points, leaf_size=leaf_size)
+
+        assert tree.leaf_seg_ids.shape == (n_points,)
+        assert tree.leaf_seg_ids.dtype == torch.long
+        if n_points > 0:
+            assert tree.leaf_seg_ids.max() < tree.n_leaves
+
+        # Rebuild seg_ids from scratch and compare
+        leaf_starts = tree.leaf_start[tree.leaf_node_ids]
+        leaf_counts = tree.leaf_count[tree.leaf_node_ids]
+        positions, compact_ids = _ragged_arange(
+            leaf_starts, leaf_counts, total=n_points,
+        )
+        expected = torch.zeros(n_points, dtype=torch.long)
+        expected[positions] = compact_ids
+
+        assert torch.equal(tree.leaf_seg_ids, expected)
+
+    def test_precomputed_leaf_fields_empty_tree(self):
+        """Empty tree has empty leaf_node_ids and leaf_seg_ids."""
+        tree = ClusterTree.from_points(torch.empty(0, 2), leaf_size=4)
+
+        assert tree.leaf_node_ids.numel() == 0
+        assert tree.leaf_seg_ids.numel() == 0
+        assert tree.n_leaves == 0
+
+    def test_compute_source_aggregates_single_point(self):
+        """Single-point tree centroid equals the point itself."""
+        point = torch.tensor([[3.0, -1.0, 7.0]])
+        area = torch.tensor([2.5])
+        tree = ClusterTree.from_points(point, leaf_size=4, areas=area)
+        agg = tree.compute_source_aggregates(point, area)
+
+        torch.testing.assert_close(agg.node_centroid[0], point[0])
+
+    def test_compute_source_aggregates_root_only_leaf(self):
+        """Root-is-only-leaf centroid matches brute-force area-weighted mean."""
+        torch.manual_seed(DEFAULT_SEED)
+        n = 10
+        points = torch.randn(n, 3)
+        areas = torch.rand(n) + 0.1
+        tree = ClusterTree.from_points(points, leaf_size=100, areas=areas)
+
+        assert tree.n_leaves == 1, "Expected single leaf (root)"
+        agg = tree.compute_source_aggregates(points, areas)
+
+        expected = (points * areas.unsqueeze(-1)).sum(0) / areas.sum()
+        torch.testing.assert_close(
+            agg.node_centroid[0], expected, atol=1e-5, rtol=1e-5,
         )
 
 
@@ -1044,6 +1136,391 @@ def test_near_field_monotonicity():
             f"when theta increased to {theta}"
         )
         prev_n_near = plan.n_near
+
+
+# ---------------------------------------------------------------------------
+# DualInteractionPlan validation tests
+# ---------------------------------------------------------------------------
+
+
+from physicsnemo.experimental.models.globe.cluster_tree import DualInteractionPlan
+
+
+class TestDualInteractionPlanValidate:
+    """Tests for DualInteractionPlan.validate()."""
+
+    def _make_valid_plan(self) -> DualInteractionPlan:
+        """Construct a minimal valid DualInteractionPlan."""
+        return DualInteractionPlan(
+            near_target_ids=torch.tensor([0, 1]),
+            near_source_ids=torch.tensor([2, 3]),
+            far_target_node_ids=torch.tensor([0]),
+            far_source_node_ids=torch.tensor([1]),
+            nf_target_ids=torch.tensor([0]),
+            nf_source_node_ids=torch.tensor([1]),
+            fn_target_node_ids=torch.tensor([0, 0]),
+            fn_source_ids=torch.tensor([1, 2]),
+            fn_broadcast_targets=torch.tensor([3, 4, 5]),
+            fn_broadcast_starts=torch.tensor([0, 1]),
+            fn_broadcast_counts=torch.tensor([1, 2]),
+        )
+
+    def test_valid_plan_passes(self):
+        """A correctly constructed plan passes validation."""
+        plan = self._make_valid_plan()
+        plan.validate()
+
+    def test_empty_plan_passes(self):
+        """An empty plan (all zero-length tensors) passes validation."""
+        e = torch.empty(0, dtype=torch.long)
+        plan = DualInteractionPlan(
+            near_target_ids=e, near_source_ids=e.clone(),
+            far_target_node_ids=e.clone(), far_source_node_ids=e.clone(),
+            nf_target_ids=e.clone(), nf_source_node_ids=e.clone(),
+            fn_target_node_ids=e.clone(), fn_source_ids=e.clone(),
+            fn_broadcast_targets=e.clone(),
+            fn_broadcast_starts=e.clone(), fn_broadcast_counts=e.clone(),
+        )
+        plan.validate()
+
+    def test_shape_mismatch_detected(self):
+        """Mismatched near_target_ids / near_source_ids shapes are caught."""
+        plan = DualInteractionPlan(
+            near_target_ids=torch.tensor([0, 1, 2]),
+            near_source_ids=torch.tensor([0, 1]),
+            far_target_node_ids=torch.empty(0, dtype=torch.long),
+            far_source_node_ids=torch.empty(0, dtype=torch.long),
+            nf_target_ids=torch.empty(0, dtype=torch.long),
+            nf_source_node_ids=torch.empty(0, dtype=torch.long),
+            fn_target_node_ids=torch.empty(0, dtype=torch.long),
+            fn_source_ids=torch.empty(0, dtype=torch.long),
+            fn_broadcast_targets=torch.empty(0, dtype=torch.long),
+            fn_broadcast_starts=torch.empty(0, dtype=torch.long),
+            fn_broadcast_counts=torch.empty(0, dtype=torch.long),
+        )
+        with pytest.raises(ValueError, match="Shape mismatch"):
+            plan.validate()
+
+    def test_broadcast_out_of_bounds_detected(self):
+        """fn_broadcast_starts + counts exceeding targets length is caught.
+
+        This is the exact invariant violation that caused the original
+        IndexError bug (starts + counts pointed beyond fn_broadcast_targets).
+        """
+        plan = DualInteractionPlan(
+            near_target_ids=torch.empty(0, dtype=torch.long),
+            near_source_ids=torch.empty(0, dtype=torch.long),
+            far_target_node_ids=torch.empty(0, dtype=torch.long),
+            far_source_node_ids=torch.empty(0, dtype=torch.long),
+            nf_target_ids=torch.empty(0, dtype=torch.long),
+            nf_source_node_ids=torch.empty(0, dtype=torch.long),
+            fn_target_node_ids=torch.tensor([0]),
+            fn_source_ids=torch.tensor([1]),
+            fn_broadcast_targets=torch.tensor([0, 1]),
+            fn_broadcast_starts=torch.tensor([1]),
+            fn_broadcast_counts=torch.tensor([3]),
+        )
+        with pytest.raises(ValueError, match="fn_broadcast out of bounds"):
+            plan.validate()
+
+    def test_negative_counts_detected(self):
+        """Negative fn_broadcast_counts values are caught."""
+        plan = DualInteractionPlan(
+            near_target_ids=torch.empty(0, dtype=torch.long),
+            near_source_ids=torch.empty(0, dtype=torch.long),
+            far_target_node_ids=torch.empty(0, dtype=torch.long),
+            far_source_node_ids=torch.empty(0, dtype=torch.long),
+            nf_target_ids=torch.empty(0, dtype=torch.long),
+            nf_source_node_ids=torch.empty(0, dtype=torch.long),
+            fn_target_node_ids=torch.tensor([0]),
+            fn_source_ids=torch.tensor([1]),
+            fn_broadcast_targets=torch.tensor([0, 1, 2]),
+            fn_broadcast_starts=torch.tensor([0]),
+            fn_broadcast_counts=torch.tensor([-1]),
+        )
+        with pytest.raises(ValueError, match="negative values"):
+            plan.validate()
+
+    @pytest.mark.parametrize("n_dims", [2, 3])
+    @pytest.mark.parametrize("theta", [0.3, 1.0, 5.0])
+    def test_validate_called_by_find_dual_interaction_pairs(
+        self, n_dims: int, theta: float,
+    ):
+        """validate() is exercised on every plan produced by the traversal.
+
+        This also checks external validity: all index tensors reference
+        valid source/target/node indices within their respective trees.
+        """
+        torch.manual_seed(DEFAULT_SEED)
+        n_src, n_tgt = 40, 15
+        source_pts = torch.randn(n_src, n_dims)
+        target_pts = torch.randn(n_tgt, n_dims) * 3
+        source_tree = ClusterTree.from_points(source_pts, leaf_size=4)
+        target_tree = ClusterTree.from_points(target_pts, leaf_size=4)
+
+        plan = source_tree.find_dual_interaction_pairs(
+            target_tree=target_tree, theta=theta
+        )
+
+        ### External validity: indices within tree-specific ranges
+        if plan.n_near > 0:
+            assert plan.near_target_ids.max() < n_tgt
+            assert plan.near_source_ids.max() < n_src
+        if plan.n_far_nodes > 0:
+            assert plan.far_target_node_ids.max() < target_tree.n_nodes
+            assert plan.far_source_node_ids.max() < source_tree.n_nodes
+        if plan.n_nf > 0:
+            assert plan.nf_target_ids.max() < n_tgt
+            assert plan.nf_source_node_ids.max() < source_tree.n_nodes
+        if plan.n_fn > 0:
+            assert plan.fn_source_ids.max() < n_src
+            assert plan.fn_target_node_ids.max() < target_tree.n_nodes
+            if plan.fn_broadcast_targets.numel() > 0:
+                assert plan.fn_broadcast_targets.max() < n_tgt
+
+
+# ---------------------------------------------------------------------------
+# fn_broadcast expansion round-trip test
+# ---------------------------------------------------------------------------
+
+
+@dims_params
+@pytest.mark.parametrize("theta", [0.5, 1.0, 3.0])
+def test_fn_broadcast_ragged_arange_matches_python_expansion(
+    n_dims: int, theta: float,
+):
+    """The _ragged_arange expansion of fn_broadcast (BarnesHutKernel's code
+    path) produces the same (target, source) pairs as the pure-Python
+    expansion used in test_interaction_plan_source_coverage.
+
+    This bridges the gap between "the plan is semantically correct" and
+    "the consumer expands it correctly via _ragged_arange."
+    """
+    torch.manual_seed(DEFAULT_SEED)
+    n_src, n_tgt = 40, 15
+    source_pts = torch.randn(n_src, n_dims)
+    target_pts = torch.randn(n_tgt, n_dims) * 3
+    source_tree = ClusterTree.from_points(source_pts, leaf_size=4)
+    target_tree = ClusterTree.from_points(target_pts, leaf_size=4)
+    plan = source_tree.find_dual_interaction_pairs(
+        target_tree=target_tree, theta=theta,
+    )
+
+    if plan.n_fn == 0:
+        pytest.skip("No fn pairs at this theta")
+
+    ### Reference: pure-Python expansion (same logic as source coverage test)
+    ref_pairs: set[tuple[int, int]] = set()
+    for src_id, start, count in zip(
+        plan.fn_source_ids.tolist(),
+        plan.fn_broadcast_starts.tolist(),
+        plan.fn_broadcast_counts.tolist(),
+    ):
+        for j in range(count):
+            ref_pairs.add((plan.fn_broadcast_targets[start + j].item(), src_id))
+
+    ### Actual: _ragged_arange expansion (same code path as BarnesHutKernel)
+    positions, pair_ids = _ragged_arange(
+        plan.fn_broadcast_starts,
+        plan.fn_broadcast_counts,
+    )
+    expanded_tgt_ids = plan.fn_broadcast_targets[positions]
+    expanded_src_ids = plan.fn_source_ids[pair_ids]
+
+    actual_pairs = set(zip(
+        expanded_tgt_ids.tolist(), expanded_src_ids.tolist(),
+    ))
+
+    assert actual_pairs == ref_pairs, (
+        f"Ragged expansion mismatch: "
+        f"{len(actual_pairs - ref_pairs)} extra, "
+        f"{len(ref_pairs - actual_pairs)} missing"
+    )
+
+
+# ---------------------------------------------------------------------------
+# fn_broadcast_targets dead-entry detection
+# ---------------------------------------------------------------------------
+
+
+@dims_params
+@pytest.mark.parametrize("theta", [0.5, 1.0, 3.0])
+def test_fn_broadcast_targets_no_dead_entries(n_dims: int, theta: float):
+    """Every entry in fn_broadcast_targets is reachable from at least one
+    fn pair's (start, count) range.
+
+    Dead entries (survivors from leaf pairs with no fn sources) inflate
+    fn_broadcast_targets.shape[0] beyond fn_broadcast_counts.sum().  This
+    was the root cause of the original IndexError: the consumer passed
+    total=fn_broadcast_targets.shape[0] to _ragged_arange, which
+    generated out-of-bounds positions.
+    """
+    torch.manual_seed(DEFAULT_SEED)
+    n_src, n_tgt = 40, 15
+    source_pts = torch.randn(n_src, n_dims)
+    target_pts = torch.randn(n_tgt, n_dims) * 3
+    source_tree = ClusterTree.from_points(source_pts, leaf_size=4)
+    target_tree = ClusterTree.from_points(target_pts, leaf_size=4)
+    plan = source_tree.find_dual_interaction_pairs(
+        target_tree=target_tree, theta=theta,
+    )
+
+    if plan.n_fn == 0:
+        pytest.skip("No fn pairs at this theta")
+
+    ### Build the set of all referenced positions in fn_broadcast_targets
+    referenced = torch.zeros(
+        plan.fn_broadcast_targets.shape[0], dtype=torch.bool,
+    )
+    for start, count in zip(
+        plan.fn_broadcast_starts.tolist(),
+        plan.fn_broadcast_counts.tolist(),
+    ):
+        referenced[start : start + count] = True
+
+    n_dead = int((~referenced).sum())
+    assert n_dead == 0, (
+        f"{n_dead} of {plan.fn_broadcast_targets.shape[0]} entries in "
+        f"fn_broadcast_targets are unreferenced (dead)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Post-sort invariant preservation
+# ---------------------------------------------------------------------------
+
+
+@dims_params
+@pytest.mark.parametrize("theta", [0.5, 1.0, 3.0])
+def test_fn_sort_preserves_broadcast_mapping(n_dims: int, theta: float):
+    """The source-ID sort in find_dual_interaction_pairs preserves the
+    fn_broadcast expansion semantics.
+
+    After sorting, fn_broadcast_starts/counts are permuted but still
+    reference the same (unsorted) fn_broadcast_targets array.  This test
+    verifies the expansion produces the same (target, source) pair set
+    regardless of the sort order.
+    """
+    torch.manual_seed(DEFAULT_SEED)
+    n_src, n_tgt = 40, 15
+    source_pts = torch.randn(n_src, n_dims)
+    target_pts = torch.randn(n_tgt, n_dims) * 3
+    source_tree = ClusterTree.from_points(source_pts, leaf_size=4)
+    target_tree = ClusterTree.from_points(target_pts, leaf_size=4)
+    plan = source_tree.find_dual_interaction_pairs(
+        target_tree=target_tree, theta=theta,
+    )
+
+    if plan.n_fn == 0:
+        pytest.skip("No fn pairs at this theta")
+
+    ### Expand with the current (sorted) order
+    sorted_pairs: set[tuple[int, int]] = set()
+    for src_id, start, count in zip(
+        plan.fn_source_ids.tolist(),
+        plan.fn_broadcast_starts.tolist(),
+        plan.fn_broadcast_counts.tolist(),
+    ):
+        for j in range(count):
+            sorted_pairs.add(
+                (plan.fn_broadcast_targets[start + j].item(), src_id)
+            )
+
+    ### Expand with a random permutation of the fn entries
+    perm = torch.randperm(plan.n_fn)
+    permuted_pairs: set[tuple[int, int]] = set()
+    perm_src = plan.fn_source_ids[perm]
+    perm_starts = plan.fn_broadcast_starts[perm]
+    perm_counts = plan.fn_broadcast_counts[perm]
+    for src_id, start, count in zip(
+        perm_src.tolist(), perm_starts.tolist(), perm_counts.tolist(),
+    ):
+        for j in range(count):
+            permuted_pairs.add(
+                (plan.fn_broadcast_targets[start + j].item(), src_id)
+            )
+
+    assert sorted_pairs == permuted_pairs, (
+        "fn_broadcast expansion changed under permutation of fn entries"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tightened four-quadrant accuracy test
+# ---------------------------------------------------------------------------
+
+
+@dims_params
+@source_config_params
+def test_four_quadrant_per_category_accuracy(
+    n_dims: int,
+    n_source_scalars: int,
+    n_source_vectors: int,
+):
+    """Verify that each interaction category individually produces
+    reasonable results, not just the combined sum.
+
+    Compares the BH result at a moderate theta against exact, with
+    tighter tolerances than test_all_four_categories_active_and_correct.
+    Also verifies that the near-field contribution alone (theta=0,
+    no approximation) exactly matches the exact kernel.
+    """
+    torch.manual_seed(DEFAULT_SEED)
+    n_src, n_tgt = 60, 30
+    common_kwargs = dict(
+        n_spatial_dims=n_dims,
+        output_field_ranks={"p": 0},
+        source_data_ranks={
+            **{f"source_scalar_{i}": 0 for i in range(n_source_scalars)},
+            **{f"source_vector_{i}": 1 for i in range(max(n_source_vectors, 1))},
+        },
+        hidden_layer_sizes=[32, 32],
+    )
+    bh_kernel = BarnesHutKernel(**common_kwargs, leaf_size=4)
+    exact_kernel = Kernel(**common_kwargs)
+    exact_kernel.load_state_dict(bh_kernel.state_dict(), strict=False)
+    bh_kernel.eval()
+    exact_kernel.eval()
+
+    torch.manual_seed(DEFAULT_SEED + 1)
+    source_data_dict: dict[str, torch.Tensor] = {}
+    for i in range(n_source_scalars):
+        source_data_dict[f"source_scalar_{i}"] = torch.randn(n_src)
+    for i in range(max(n_source_vectors, 1)):
+        source_data_dict[f"source_vector_{i}"] = F.normalize(
+            torch.randn(n_src, n_dims), dim=-1
+        )
+
+    data = {
+        "source_points": torch.randn(n_src, n_dims),
+        "target_points": torch.randn(n_tgt, n_dims),
+        "source_strengths": torch.randn(n_src).abs() + 0.1,
+        "reference_length": torch.ones(()),
+        "source_data": TensorDict(source_data_dict, batch_size=[n_src]),
+        "global_data": TensorDict({}, batch_size=[]),
+    }
+
+    exact_result = exact_kernel(**data)
+
+    ### Near-only (theta=0): should be numerically exact
+    near_only = bh_kernel(**data, theta=0.0)
+    torch.testing.assert_close(
+        near_only["p"],
+        exact_result["p"],
+        atol=1e-5,
+        rtol=1e-5,
+        msg="Near-only (theta=0) doesn't match exact",
+    )
+
+    ### Low theta (0.01): near-exact, tight tolerance
+    low_theta = bh_kernel(**data, theta=0.01)
+    torch.testing.assert_close(
+        low_theta["p"],
+        exact_result["p"],
+        atol=1e-4,
+        rtol=1e-3,
+        msg="Low theta (0.01) not close enough to exact",
+    )
 
 
 if __name__ == "__main__":

@@ -126,12 +126,28 @@ class GLOBE(Module):
     n_spherical_harmonics : int, optional, default=4
         Number of Legendre polynomial terms used for angle-dependent features in
         kernel functions.
+    theta : float, optional, default=1.0
+        Barnes-Hut opening angle controlling the near/far-field split in the
+        dual-tree traversal. The criterion is
+        :math:`(D_T + D_S) / r < \theta`, where :math:`D_T` and :math:`D_S`
+        are AABB diagonals and :math:`r` is the minimum inter-AABB distance.
+        Larger values approximate more aggressively; ``0`` forces all
+        interactions to be exact (no far-field approximation).
+    leaf_size : int, optional, default=1
+        Maximum number of source points per leaf node in the cluster tree.
+        Larger values produce shallower trees (fewer traversal iterations) at
+        the cost of more exact near-field interactions per leaf hit.
+    expand_far_targets : bool, optional, default=False
+        If ``True``, far-field target nodes are expanded to individual points,
+        converting ``(far, far)`` pairs into ``(near, far)`` pairs. This
+        eliminates the target-side approximation at the cost of more kernel
+        evaluations.
 
     Forward
     -------
     prediction_points : Float[torch.Tensor, "n_points n_dims"]
         Target points for field evaluation of shape :math:`(N_{points}, D)`.
-    boundary_meshes : dict[str, Mesh]
+    boundary_meshes : dict[str, Mesh["n-1", "n"]]
         Dictionary mapping boundary condition type names to
         :class:`~physicsnemo.mesh.Mesh` objects. Keys must be a subset of the
         model's boundary condition names (from ``boundary_source_data_ranks``).
@@ -143,7 +159,7 @@ class GLOBE(Module):
 
     Outputs
     -------
-    Mesh
+    Mesh[0, "n"]
         A point-cloud :class:`~physicsnemo.mesh.Mesh` (0-dimensional manifold)
         whose ``.points`` attribute equals the input ``prediction_points``. The
         predicted fields are in ``.point_data``, keyed by the names from
@@ -163,6 +179,11 @@ class GLOBE(Module):
     - Cell areas are automatically normalized by ``reference_area`` to preserve
       discretization-invariance.
     - The cell normal vector is automatically added to source data for each mesh.
+    - The ``Mesh["n-1", "n"]`` type annotations assume the PDE domain fills the
+      full ambient space (domain manifold dim = spatial dim), so boundary meshes
+      are codimension-1 in the ambient space. For a PDE on a ``d``-dimensional
+      manifold embedded in ``n``-dimensional space (``d < n``), the boundary
+      type would be ``Mesh[d-1, n]`` instead.
 
     Examples
     --------
@@ -201,6 +222,7 @@ class GLOBE(Module):
         n_spherical_harmonics: int = 4,
         theta: float = 1.0,
         leaf_size: int = 1,
+        expand_far_targets: bool = False,
     ):
         if hidden_layer_sizes is None:
             hidden_layer_sizes = [64, 64, 64]
@@ -240,6 +262,7 @@ class GLOBE(Module):
         self.n_spherical_harmonics = n_spherical_harmonics
         self.theta = theta
         self.leaf_size = leaf_size
+        self.expand_far_targets = expand_far_targets
 
         ### Build the intermediate output-field rank spec for communication
         # hyperlayers. Only the final hyperlayer emits output_field_ranks.
@@ -322,7 +345,7 @@ class GLOBE(Module):
     @torch.compiler.disable
     def _build_trees_and_plans(
         self,
-        boundary_meshes: dict[str, Mesh],
+        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
     ) -> tuple[
         dict[str, ClusterTree],
         dict[str, torch.Tensor],
@@ -361,7 +384,8 @@ class GLOBE(Module):
         for dst_bc in boundary_meshes:
             comm_plans[dst_bc] = {
                 src_bc: cluster_trees[src_bc].find_dual_interaction_pairs(
-                    target_tree=cluster_trees[dst_bc], theta=self.theta
+                    target_tree=cluster_trees[dst_bc], theta=self.theta,
+                    expand_far_targets=self.expand_far_targets,
                 )
                 for src_bc in boundary_meshes
             }
@@ -408,7 +432,8 @@ class GLOBE(Module):
         )
         pred_plans = {
             bc_type: tree.find_dual_interaction_pairs(
-                target_tree=pred_target_tree, theta=self.theta
+                target_tree=pred_target_tree, theta=self.theta,
+                expand_far_targets=self.expand_far_targets,
             )
             for bc_type, tree in cluster_trees.items()
         }
@@ -429,7 +454,7 @@ class GLOBE(Module):
         self,
         layer_idx: int,
         target_points: Float[torch.Tensor, "n_targets n_dims"],
-        source_meshes: dict[str, Mesh],
+        source_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None,
         cluster_trees: dict[str, ClusterTree],
@@ -449,7 +474,7 @@ class GLOBE(Module):
             Index into ``self.kernel_layers``.
         target_points : Float[torch.Tensor, "n_targets n_dims"]
             Target points of shape :math:`(N_{targets}, D)`.
-        source_meshes : dict[str, Mesh]
+        source_meshes : dict[str, Mesh["n-1", "n"]]
             Enriched boundary meshes with cell_data containing physical
             features, strengths, and (after layer 0) latent state.
         reference_lengths : dict[str, Float[torch.Tensor, ""]]
@@ -507,13 +532,13 @@ class GLOBE(Module):
     def _evaluate_communication_hyperlayer(
         self,
         layer_idx: int,
-        boundary_meshes: dict[str, Mesh],
+        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None,
         cluster_trees: dict[str, ClusterTree],
         comm_plans: dict[str, dict[str, DualInteractionPlan]],
         source_areas: dict[str, torch.Tensor],
-    ) -> dict[str, Mesh]:
+    ) -> dict[str, Mesh["n-1", "n"]]:  # ty: ignore[unresolved-reference]
         r"""Run one boundary-to-boundary communication step.
 
         For each destination BC type, evaluates :meth:`_evaluate_hyperlayer`
@@ -524,11 +549,11 @@ class GLOBE(Module):
 
         Returns
         -------
-        dict[str, Mesh]
+        dict[str, Mesh["n-1", "n"]]
             Updated boundary meshes with evaluation results merged into
             each mesh's ``cell_data``.
         """
-        new_meshes: dict[str, Mesh] = {}
+        new_meshes: dict[str, Mesh["n-1", "n"]] = {}  # ty: ignore[unresolved-reference]
         for bc_type, mesh in boundary_meshes.items():
             result_td = self._evaluate_hyperlayer(
                 layer_idx=layer_idx,
@@ -558,10 +583,10 @@ class GLOBE(Module):
     def forward(
         self,
         prediction_points: Float[torch.Tensor, "n_points n_dims"],
-        boundary_meshes: dict[str, Mesh],
+        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
         reference_lengths: dict[str, torch.Tensor],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None = None,
-    ) -> Mesh:
+    ) -> Mesh[0, "n"]:  # ty: ignore[unresolved-reference]
         r"""Evaluate GLOBE model to predict fields at target points.
 
         Runs the full GLOBE forward pass in three phases:
@@ -578,7 +603,7 @@ class GLOBE(Module):
         ----------
         prediction_points : Float[torch.Tensor, "n_points n_dims"]
             Target points of shape :math:`(N_{points}, D)`.
-        boundary_meshes : dict[str, Mesh]
+        boundary_meshes : dict[str, Mesh["n-1", "n"]]
             Dictionary mapping BC type names to pre-merged
             :class:`~physicsnemo.mesh.Mesh` objects.
         reference_lengths : dict[str, torch.Tensor]
@@ -589,7 +614,7 @@ class GLOBE(Module):
 
         Returns
         -------
-        Mesh
+        Mesh[0, "n"]
             A point-cloud Mesh (0-dimensional manifold) with predicted fields.
         """
         device = prediction_points.device

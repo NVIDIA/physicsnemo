@@ -118,6 +118,71 @@ class DualInteractionPlan:
         """Number of (far,near) target-node-to-source-point pairs."""
         return self.fn_target_node_ids.shape[0]
 
+    def validate(self) -> None:
+        """Check internal consistency of the interaction plan.
+
+        Verifies shape pairing, non-negativity, and fn_broadcast bounds.
+        Raises ``ValueError`` on any inconsistency.  Intended to be called
+        behind a ``not torch.compiler.is_compiling()`` guard so it is
+        zero-cost under ``torch.compile``.
+
+        Raises
+        ------
+        ValueError
+            If any internal consistency check fails.
+        """
+        ### Shape pairing: matched tensor pairs must have identical lengths
+        pairs: list[tuple[str, torch.Tensor, str, torch.Tensor]] = [
+            ("near_target_ids", self.near_target_ids,
+             "near_source_ids", self.near_source_ids),
+            ("far_target_node_ids", self.far_target_node_ids,
+             "far_source_node_ids", self.far_source_node_ids),
+            ("nf_target_ids", self.nf_target_ids,
+             "nf_source_node_ids", self.nf_source_node_ids),
+            ("fn_target_node_ids", self.fn_target_node_ids,
+             "fn_source_ids", self.fn_source_ids),
+        ]
+        for name_a, a, name_b, b in pairs:
+            if a.shape != b.shape:
+                raise ValueError(
+                    f"Shape mismatch: {name_a}.shape={a.shape!r} != "
+                    f"{name_b}.shape={b.shape!r}"
+                )
+
+        ### fn_broadcast tensors must be consistently sized
+        n_fn = self.fn_source_ids.shape[0]
+        for name, tensor in [
+            ("fn_broadcast_starts", self.fn_broadcast_starts),
+            ("fn_broadcast_counts", self.fn_broadcast_counts),
+        ]:
+            if tensor.shape != (n_fn,):
+                raise ValueError(
+                    f"{name}.shape={tensor.shape!r}, expected ({n_fn},)"
+                )
+
+        ### Non-negativity
+        for name, tensor in [
+            ("fn_broadcast_starts", self.fn_broadcast_starts),
+            ("fn_broadcast_counts", self.fn_broadcast_counts),
+        ]:
+            if tensor.numel() > 0 and (tensor < 0).any():
+                raise ValueError(f"{name} contains negative values")
+
+        ### fn_broadcast bounds: every (start, count) range with count > 0
+        ### must fit within fn_broadcast_targets.  Zero-count entries are
+        ### no-ops whose starts are never dereferenced.
+        if n_fn > 0:
+            nonzero = self.fn_broadcast_counts > 0
+            if nonzero.any():
+                ends = self.fn_broadcast_starts[nonzero] + self.fn_broadcast_counts[nonzero]
+                max_end = ends.max().item()
+                bcast_len = self.fn_broadcast_targets.shape[0]
+                if max_end > bcast_len:
+                    raise ValueError(
+                        f"fn_broadcast out of bounds: max(starts + counts)="
+                        f"{max_end} > fn_broadcast_targets.shape[0]={bcast_len}"
+                    )
+
 
 # ---------------------------------------------------------------------------
 # Segmented reduction helpers
@@ -273,10 +338,21 @@ def _expand_dual_leaf_hits(
     # ==================================================================
     # Group survivors by leaf pair so each fn source can look up its
     # broadcast targets (all survivors from the same leaf pair).
-    surv_sort = surv_lp_ids.argsort(stable=True)
-    fn_broadcast_targets = surv_point_ids[surv_sort]
+    # Only include survivors from leaf pairs that have fn sources;
+    # survivors from all-close leaf pairs are not referenced by any
+    # fn_broadcast_starts/counts entry.
+    has_fn_source = torch.zeros(n_pairs, dtype=torch.bool, device=device)
+    if fn_lp_ids.numel() > 0:
+        has_fn_source[fn_lp_ids] = True
+    fn_active_mask = has_fn_source[surv_lp_ids]
 
-    surv_counts_per_lp = torch.bincount(surv_lp_ids, minlength=n_pairs)
+    active_surv_ids = surv_point_ids[fn_active_mask]
+    active_surv_lp_ids = surv_lp_ids[fn_active_mask]
+
+    surv_sort = active_surv_lp_ids.argsort(stable=True)
+    fn_broadcast_targets = active_surv_ids[surv_sort]
+
+    surv_counts_per_lp = torch.bincount(active_surv_lp_ids, minlength=n_pairs)
     surv_starts_per_lp = surv_counts_per_lp.cumsum(0) - surv_counts_per_lp
 
     fn_broadcast_starts = surv_starts_per_lp[fn_lp_ids]
@@ -382,6 +458,15 @@ class ClusterTree:
         Original source point coordinates, shape ``(n_sources, D)``.
     max_depth : torch.Tensor
         Scalar tensor storing the tree depth (for fixed-iteration traversal).
+    leaf_node_ids : torch.Tensor
+        Indices of leaf nodes, shape ``(n_leaves,)``.  Precomputed during
+        tree construction so ``compute_source_aggregates`` avoids a
+        data-dependent ``torch.where`` that would break ``torch.compile``.
+    leaf_seg_ids : torch.Tensor
+        Per-source compact leaf segment ID in sorted order, shape
+        ``(n_sources,)``.  Maps each source to the index of its
+        containing leaf within ``leaf_node_ids``, used for segmented
+        reductions in ``compute_source_aggregates``.
     """
 
     node_aabb_min: torch.Tensor
@@ -406,6 +491,8 @@ class ClusterTree:
     # _compute_node_strengths) to avoid recomputing the BFS traversal
     # that discovers this ordering.  Stored as tensors (not a Python
     # list) so they participate in tensorclass .to(device) moves.
+    leaf_node_ids: torch.Tensor
+    leaf_seg_ids: torch.Tensor
 
     @property
     def n_nodes(self) -> int:
@@ -421,6 +508,11 @@ class ClusterTree:
     def n_spatial_dims(self) -> int:
         """Spatial dimensionality."""
         return self.node_aabb_min.shape[1]
+
+    @property
+    def n_leaves(self) -> int:
+        """Number of leaf nodes in the tree."""
+        return self.leaf_node_ids.shape[0]
 
     @property
     def internal_nodes_per_level(self) -> list[torch.Tensor]:
@@ -493,6 +585,8 @@ class ClusterTree:
                 max_depth=torch.tensor(0, dtype=torch.long, device=device),
                 internal_level_ids=empty_long,
                 internal_level_offsets=torch.tensor([0], dtype=torch.long, device=device),
+                leaf_node_ids=empty_long,
+                leaf_seg_ids=empty_long,
                 batch_size=torch.Size([]),
             )
 
@@ -632,11 +726,24 @@ class ClusterTree:
         aabb_max_trimmed = aabb_max_buf[:node_count]
         diameter_sq = (aabb_max_trimmed - aabb_min_trimmed).pow(2).sum(dim=-1)
 
-        n_leaves = int((leaf_count_buf[:node_count] > 0).sum())
+        ### Precompute leaf indices and per-source segment IDs so that
+        ### compute_source_aggregates() avoids a data-dependent
+        ### torch.where() that would break torch.compile tracing.
+        leaf_count_trimmed = leaf_count_buf[:node_count]
+        _leaf_node_ids = torch.where(leaf_count_trimmed > 0)[0]
+        _leaf_starts = leaf_start_buf[_leaf_node_ids]
+        _leaf_counts = leaf_count_trimmed[_leaf_node_ids]
+        _positions, _compact_ids = _ragged_arange(
+            _leaf_starts, _leaf_counts, total=n_points,
+        )
+        _leaf_seg_ids = torch.zeros(n_points, dtype=torch.long, device=device)
+        _leaf_seg_ids[_positions] = _compact_ids
+
         logger.debug(
             "ClusterTree: %d points -> %d nodes (%d leaves), "
             "depth %d, leaf_size=%d",
-            n_points, node_count, n_leaves, actual_depth, leaf_size,
+            n_points, node_count, _leaf_node_ids.shape[0], actual_depth,
+            leaf_size,
         )
 
         ### Pack the per-level internal node IDs into CSR tensors so they
@@ -663,7 +770,7 @@ class ClusterTree:
             node_left_child=left_child[:node_count],
             node_right_child=right_child[:node_count],
             leaf_start=leaf_start_buf[:node_count],
-            leaf_count=leaf_count_buf[:node_count],
+            leaf_count=leaf_count_trimmed,
             node_range_start=range_start_buf[:node_count],
             node_range_count=range_count_buf[:node_count],
             node_total_area=total_area_buf[:node_count],
@@ -672,6 +779,8 @@ class ClusterTree:
             max_depth=torch.tensor(actual_depth, dtype=torch.long, device=device),
             internal_level_ids=_level_ids,
             internal_level_offsets=_level_offsets,
+            leaf_node_ids=_leaf_node_ids,
+            leaf_seg_ids=_leaf_seg_ids,
             batch_size=torch.Size([]),
         )
 
@@ -716,38 +825,30 @@ class ClusterTree:
         D = source_points.shape[1]
         n_nodes = self.n_nodes
 
-        ### Leaf aggregation: compute per-leaf centroids and source data
+        ### Leaf aggregation: compute per-leaf centroids and source data.
+        ### leaf_node_ids and leaf_seg_ids were precomputed during tree
+        ### construction (from_points) to avoid data-dependent torch.where
+        ### and _ragged_arange calls that would break torch.compile.
         with record_function("cluster_tree::leaf_aggregation"):
-            is_leaf = self.leaf_count > 0
-            leaf_node_ids = torch.where(is_leaf)[0]
-
-            if leaf_node_ids.numel() > 0:
-                leaf_starts = self.leaf_start[leaf_node_ids]
-                leaf_counts = self.leaf_count[leaf_node_ids]
-                n_leaves = leaf_node_ids.shape[0]
-                positions, compact_ids = _ragged_arange(leaf_starts, leaf_counts)
-
-                seg_ids_compact = torch.zeros(
-                    self.n_sources, dtype=torch.long, device=device
-                )
-                seg_ids_compact[positions] = compact_ids
+            leaf_node_ids = self.leaf_node_ids
+            n_leaves = leaf_node_ids.shape[0]
+            seg_ids_compact = self.leaf_seg_ids
 
             sorted_points = source_points[self.sorted_source_order]
             sorted_areas = areas[self.sorted_source_order]
 
             centroid_buf = torch.zeros(n_nodes, D, dtype=dtype, device=device)
 
-            if leaf_node_ids.numel() > 0:
-                leaf_centroids = _segmented_weighted_sum(
-                    sorted_points, sorted_areas, seg_ids_compact, n_leaves
-                )
-                leaf_total_areas = self.node_total_area[leaf_node_ids]
-                safe_areas = leaf_total_areas.clamp(min=1e-30)
-                leaf_centroids = leaf_centroids / safe_areas.unsqueeze(-1)
-                centroid_buf[leaf_node_ids] = leaf_centroids
+            leaf_centroids = _segmented_weighted_sum(
+                sorted_points, sorted_areas, seg_ids_compact, n_leaves
+            )
+            leaf_total_areas = self.node_total_area[leaf_node_ids]
+            safe_areas = leaf_total_areas.clamp(min=1e-30)
+            leaf_centroids = leaf_centroids / safe_areas.unsqueeze(-1)
+            centroid_buf[leaf_node_ids] = leaf_centroids
 
             node_source_data: TensorDict | None = None
-            if source_data is not None and leaf_node_ids.numel() > 0:
+            if source_data is not None:
                 sorted_source_data = source_data[self.sorted_source_order]
                 node_source_data = _aggregate_source_data_leaves(
                     sorted_source_data,
@@ -780,6 +881,8 @@ class ClusterTree:
         self,
         target_tree: "ClusterTree",
         theta: float = 1.0,
+        *,
+        expand_far_targets: bool = False,
     ) -> DualInteractionPlan:
         r"""Find near-field and far-field pairs via dual-tree traversal.
 
@@ -803,6 +906,13 @@ class ClusterTree:
         theta : float
             Barnes-Hut opening angle.  Larger = more aggressive.
             ``theta = 0`` forces all interactions to be exact.
+        expand_far_targets : bool, optional, default=False
+            If ``True``, far-field node pairs are expanded to individual
+            target points, converting ``(far, far)`` entries into
+            ``(near, far)`` entries.  This eliminates the target-side
+            centroid approximation (and the blocky spatial artifacts it
+            produces) at the cost of more kernel evaluations while
+            preserving the source-side monopole speedup.
 
         Returns
         -------
@@ -881,8 +991,21 @@ class ClusterTree:
 
                 ### 1. Far-field: well-separated node pairs
                 if is_far.any():
-                    far_tgt_node_list.append(active_tgt_nodes[is_far])
-                    far_src_node_list.append(active_src_nodes[is_far])
+                    if expand_far_targets:
+                        # Expand target nodes to individual points,
+                        # converting (far,far) → (near,far).
+                        far_tgt_nids = active_tgt_nodes[is_far]
+                        far_src_nids = active_src_nodes[is_far]
+                        starts = target_tree.node_range_start[far_tgt_nids]
+                        counts = target_tree.node_range_count[far_tgt_nids]
+                        positions, pair_ids = _ragged_arange(starts, counts)
+                        nf_target_list.append(
+                            target_tree.sorted_source_order[positions]
+                        )
+                        nf_source_node_list.append(far_src_nids[pair_ids])
+                    else:
+                        far_tgt_node_list.append(active_tgt_nodes[is_far])
+                        far_src_node_list.append(active_src_nodes[is_far])
 
                 ### 2. Near-field, both leaves: two-stage filtered expansion.
                 # Stage 1 (per-target) -> (near,far).
@@ -1061,6 +1184,9 @@ class ClusterTree:
             fn_broadcast_starts=fn_bstarts,
             fn_broadcast_counts=fn_bcounts,
         )
+
+        if not torch.compiler.is_compiling():
+            plan.validate()
 
         is_self = target_tree is self
         logger.debug(
