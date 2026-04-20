@@ -615,7 +615,8 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         Tensor
             Drift term with same shape as ``x``.
         """
-        t_bc = t.reshape(-1, *([1] * (x.ndim - 1)))
+        expected_shape = (-1,) + (1,) * (x.ndim - 1)
+        t_bc = t.reshape(expected_shape)
         alpha_t_bc = self.alpha(t_bc)
         alpha_dot_t_bc = self.alpha_dot(t_bc)
         return (alpha_dot_t_bc / alpha_t_bc) * x
@@ -646,7 +647,8 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         Tensor
             Squared diffusion term, broadcastable to shape of ``x``.
         """
-        t_bc = t.reshape(-1, *([1] * (x.ndim - 1)))
+        expected_shape = (-1,) + (1,) * (x.ndim - 1)
+        t_bc = t.reshape(expected_shape)
         sigma_t_bc = self.sigma(t_bc)
         sigma_dot_t_bc = self.sigma_dot(t_bc)
         alpha_t_bc = self.alpha(t_bc)
@@ -703,7 +705,8 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         ...     return scheduler.x0_to_score(x0_pred, x, t)
         >>> # Or simply: scheduler.get_denoiser(x0_predictor=x0_predictor)
         """
-        t_bc = t.reshape(-1, *([1] * (x0.ndim - 1)))
+        expected_shape = (-1,) + (1,) * (x0.ndim - 1)
+        t_bc = t.reshape(expected_shape)
         alpha_t_bc = self.alpha(t_bc)
         sigma_t_bc = self.sigma(t_bc)
         return (alpha_t_bc * x0 - x_t) / (sigma_t_bc**2)
@@ -764,24 +767,206 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         >>> x0_est.shape
         torch.Size([2, 4])
         """
-        t_bc = t.reshape(-1, *([1] * (score.ndim - 1)))
+        expected_shape = (-1,) + (1,) * (score.ndim - 1)
+        t_bc = t.reshape(expected_shape)
         alpha_t_bc = self.alpha(t_bc)
         sigma_t_bc = self.sigma(t_bc)
         return (x_t + sigma_t_bc**2 * score) / alpha_t_bc
+
+    def epsilon_to_score(
+        self,
+        epsilon: Float[Tensor, " B *dims"],
+        t: Float[Tensor, " B"],
+    ) -> Float[Tensor, " B *dims"]:
+        r"""
+        Convert epsilon (noise) prediction to score.
+
+        For the linear-Gaussian forward process
+        :math:`\mathbf{x}_t = \alpha(t)\mathbf{x}_0
+        + \sigma(t)\boldsymbol{\epsilon}`, the score is related to epsilon by:
+
+        .. math::
+            \nabla_{\mathbf{x}_t} \log p(\mathbf{x}_t)
+            = -\frac{\boldsymbol{\epsilon}}{\sigma(t)}
+
+        Parameters
+        ----------
+        epsilon : Tensor
+            Predicted noise :math:`\hat{\boldsymbol{\epsilon}}` of shape
+            :math:`(B, *)`.
+        t : Tensor
+            Diffusion time of shape :math:`(B,)`.
+
+        Returns
+        -------
+        Tensor
+            Score with same shape as ``epsilon``.
+
+        Examples
+        --------
+        >>> scheduler = EDMNoiseScheduler()
+        >>> eps = torch.randn(2, 4)
+        >>> t = torch.tensor([1.0, 1.0])
+        >>> score = scheduler.epsilon_to_score(eps, t)
+        >>> score.shape
+        torch.Size([2, 4])
+        """
+        expected_shape = (-1,) + (1,) * (epsilon.ndim - 1)
+        t_bc = t.reshape(expected_shape)
+        sigma_t_bc = self.sigma(t_bc)
+        return -epsilon / sigma_t_bc
+
+    def score_to_epsilon(
+        self,
+        score: Float[Tensor, " B *dims"],
+        t: Float[Tensor, " B"],
+    ) -> Float[Tensor, " B *dims"]:
+        r"""
+        Convert score to epsilon (noise) prediction.
+
+        Inverse of :meth:`epsilon_to_score`:
+
+        .. math::
+            \boldsymbol{\epsilon}
+            = -\sigma(t) \nabla_{\mathbf{x}_t} \log p(\mathbf{x}_t)
+
+        Parameters
+        ----------
+        score : Tensor
+            Score :math:`\nabla_{\mathbf{x}_t} \log p(\mathbf{x}_t)` of
+            shape :math:`(B, *)`.
+        t : Tensor
+            Diffusion time of shape :math:`(B,)`.
+
+        Returns
+        -------
+        Tensor
+            Epsilon with same shape as ``score``.
+
+        Examples
+        --------
+        >>> scheduler = EDMNoiseScheduler()
+        >>> score = torch.randn(2, 4)
+        >>> t = torch.tensor([1.0, 1.0])
+        >>> eps = scheduler.score_to_epsilon(score, t)
+        >>> eps.shape
+        torch.Size([2, 4])
+        """
+        expected_shape = (-1,) + (1,) * (score.ndim - 1)
+        t_bc = t.reshape(expected_shape)
+        sigma_t_bc = self.sigma(t_bc)
+        return -sigma_t_bc * score
+
+    def epsilon_to_x0(
+        self,
+        epsilon: Float[Tensor, " B *dims"],
+        x_t: Float[Tensor, " B *dims"],
+        t: Float[Tensor, " B"],
+    ) -> Float[Tensor, " B *dims"]:
+        r"""
+        Convert epsilon (noise) prediction to x0-prediction.
+
+        Given :math:`\mathbf{x}_t = \alpha(t)\mathbf{x}_0
+        + \sigma(t)\boldsymbol{\epsilon}`:
+
+        .. math::
+            \hat{\mathbf{x}}_0 = \frac{\mathbf{x}_t
+            - \sigma(t)\hat{\boldsymbol{\epsilon}}}{\alpha(t)}
+
+        Parameters
+        ----------
+        epsilon : Tensor
+            Predicted noise :math:`\hat{\boldsymbol{\epsilon}}` of shape
+            :math:`(B, *)`.
+        x_t : Tensor
+            Current noisy state :math:`\mathbf{x}_t` with same shape as
+            ``epsilon``.
+        t : Tensor
+            Diffusion time of shape :math:`(B,)`.
+
+        Returns
+        -------
+        Tensor
+            Estimated clean data :math:`\hat{\mathbf{x}}_0` with same shape
+            as ``epsilon``.
+
+        Examples
+        --------
+        >>> scheduler = EDMNoiseScheduler()
+        >>> eps = torch.randn(2, 4)
+        >>> x_t = torch.randn(2, 4)
+        >>> t = torch.tensor([1.0, 1.0])
+        >>> x0_est = scheduler.epsilon_to_x0(eps, x_t, t)
+        >>> x0_est.shape
+        torch.Size([2, 4])
+        """
+        expected_shape = (-1,) + (1,) * (epsilon.ndim - 1)
+        t_bc = t.reshape(expected_shape)
+        alpha_t_bc = self.alpha(t_bc)
+        sigma_t_bc = self.sigma(t_bc)
+        return (x_t - sigma_t_bc * epsilon) / alpha_t_bc
+
+    def x0_to_epsilon(
+        self,
+        x0: Float[Tensor, " B *dims"],
+        x_t: Float[Tensor, " B *dims"],
+        t: Float[Tensor, " B"],
+    ) -> Float[Tensor, " B *dims"]:
+        r"""
+        Convert x0-prediction to epsilon (noise) prediction.
+
+        Inverse of :meth:`epsilon_to_x0`:
+
+        .. math::
+            \hat{\boldsymbol{\epsilon}} = \frac{\mathbf{x}_t
+            - \alpha(t)\hat{\mathbf{x}}_0}{\sigma(t)}
+
+        Parameters
+        ----------
+        x0 : Tensor
+            Predicted clean data :math:`\hat{\mathbf{x}}_0` of shape
+            :math:`(B, *)`.
+        x_t : Tensor
+            Current noisy state :math:`\mathbf{x}_t` with same shape as
+            ``x0``.
+        t : Tensor
+            Diffusion time of shape :math:`(B,)`.
+
+        Returns
+        -------
+        Tensor
+            Epsilon with same shape as ``x0``.
+
+        Examples
+        --------
+        >>> scheduler = EDMNoiseScheduler()
+        >>> x0 = torch.randn(2, 4)
+        >>> x_t = torch.randn(2, 4)
+        >>> t = torch.tensor([1.0, 1.0])
+        >>> eps = scheduler.x0_to_epsilon(x0, x_t, t)
+        >>> eps.shape
+        torch.Size([2, 4])
+        """
+        expected_shape = (-1,) + (1,) * (x0.ndim - 1)
+        t_bc = t.reshape(expected_shape)
+        alpha_t_bc = self.alpha(t_bc)
+        sigma_t_bc = self.sigma(t_bc)
+        return (x_t - alpha_t_bc * x0) / sigma_t_bc
 
     def get_denoiser(
         self,
         *,
         score_predictor: Predictor | None = None,
         x0_predictor: Predictor | None = None,
+        epsilon_predictor: Predictor | None = None,
         denoising_type: Literal["ode", "sde"] = "ode",
         **kwargs: Any,
     ) -> Denoiser:
         r"""
         Factory that converts a predictor to a denoiser for sampling.
 
-        Accepts either a **score-predictor** or an **x0-predictor** (exactly
-        one must be provided). The returned denoiser computes the right-hand
+        Accepts exactly one of **score-predictor**, **x0-predictor**, or
+        **epsilon-predictor**. The returned denoiser computes the right-hand
         side of the reverse ODE or SDE.
 
         For ODE (``denoising_type="ode"``):
@@ -798,10 +983,11 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
 
         where :math:`s(\mathbf{x}, t)` is the score. When an x0-predictor is
         provided, the score is computed internally via :meth:`x0_to_score`.
-        When a score-predictor is provided, it is used directly.
-        *Note:* As usually done in SDE integration, the stochastic term
-        :math:`g(t) d\mathbf{W}` is handled by the solver, not returned by the
-        denoiser itself.
+        When an epsilon-predictor is provided, the score is computed internally
+        via :meth:`epsilon_to_score`. When a score-predictor is provided, it
+        is used directly. *Note:* As usually done in SDE integration, the
+        stochastic term :math:`g(t) d\mathbf{W}` is handled by the solver,
+        not returned by the denoiser itself.
 
         Parameters
         ----------
@@ -809,12 +995,18 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
             A score-predictor that takes ``(x_t, t)`` and returns a score
             (e.g. :math:`\nabla_{\mathbf{x}} \log p(\mathbf{x}_t)`). Can be
             unconditional, conditional, guidance-augmented, etc. Mutually
-            exclusive with ``x0_predictor``.
+            exclusive with ``x0_predictor`` and ``epsilon_predictor``.
         x0_predictor : Predictor, optional
             An x0-predictor that takes ``(x_t, t)`` and returns an estimate
             of clean data :math:`\hat{\mathbf{x}}_0`. The score is computed
             internally via :meth:`x0_to_score`. Mutually exclusive with
-            ``score_predictor``.
+            ``score_predictor`` and ``epsilon_predictor``.
+        epsilon_predictor : Predictor, optional
+            An epsilon-predictor that takes ``(x_t, t)`` and returns an
+            estimate of the noise
+            :math:`\hat{\boldsymbol{\epsilon}}`. The score is computed
+            internally via :meth:`epsilon_to_score`. Mutually exclusive with
+            ``score_predictor`` and ``x0_predictor``.
         denoising_type : {"ode", "sde"}, default="ode"
             Type of reverse process. Use ``"ode"`` for deterministic sampling,
             ``"sde"`` for stochastic sampling.
@@ -830,8 +1022,8 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         Raises
         ------
         ValueError
-            If both or neither ``score_predictor`` and ``x0_predictor`` are
-            provided.
+            If not exactly one of ``score_predictor``, ``x0_predictor``, or
+            ``epsilon_predictor`` is provided.
 
         Examples
         --------
@@ -856,12 +1048,24 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         >>> dx_dt = denoiser(x, t)  # Returns ODE RHS for sampling
         >>> dx_dt.shape
         torch.Size([2, 3, 8, 8])
+
+        Generate ODE RHS from an epsilon-predictor:
+
+        >>> eps_pred = lambda x, t: x * 0.1  # Toy epsilon-predictor
+        >>> denoiser = scheduler.get_denoiser(
+        ...     epsilon_predictor=eps_pred, denoising_type="ode")
+        >>> dx_dt = denoiser(x, t)  # Returns ODE RHS for sampling
+        >>> dx_dt.shape
+        torch.Size([2, 3, 8, 8])
         """
-        # Validate: exactly one of score_predictor or x0_predictor
-        if (score_predictor is None) == (x0_predictor is None):
+        # Validate: exactly one predictor must be provided
+        provided = sum(
+            p is not None for p in (score_predictor, x0_predictor, epsilon_predictor)
+        )
+        if provided != 1:
             raise ValueError(
-                "Exactly one of 'score_predictor' or 'x0_predictor' "
-                "must be provided, not both or neither."
+                "Exactly one of 'score_predictor', 'x0_predictor', or "
+                "'epsilon_predictor' must be provided."
             )
 
         # Capture methods as local variables to avoid referencing self
@@ -879,6 +1083,17 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
                 return x0_to_score(x0, x, t)
 
             score_fn = _score
+        elif epsilon_predictor is not None:
+            eps_to_score = self.epsilon_to_score
+
+            def _score_from_eps(
+                x: Float[Tensor, " B *dims"],
+                t: Float[Tensor, " B"],
+            ) -> Float[Tensor, " B *dims"]:
+                eps = epsilon_predictor(x, t)
+                return eps_to_score(eps, t)
+
+            score_fn = _score_from_eps
         else:
             score_fn = score_predictor
 
@@ -948,7 +1163,8 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         Tensor
             Noisy latent state of shape :math:`(B, *)`.
         """
-        t_bc = time.reshape(-1, *([1] * (x0.ndim - 1)))
+        expected_shape = (-1,) + (1,) * (x0.ndim - 1)
+        t_bc = time.reshape(expected_shape)
         alpha_t_bc = self.alpha(t_bc)
         sigma_t_bc = self.sigma(t_bc)
         noise = torch.randn_like(x0)
@@ -990,7 +1206,8 @@ class LinearGaussianNoiseScheduler(ABC, NoiseScheduler):
         """
         B = tN.shape[0]
         noise = torch.randn(B, *spatial_shape, device=device, dtype=dtype)
-        tN_bc = tN.reshape(-1, *([1] * len(spatial_shape)))
+        expected_shape = (-1,) + (1,) * len(spatial_shape)
+        tN_bc = tN.reshape(expected_shape)
         sigma_tN_bc = self.sigma(tN_bc)
         return sigma_tN_bc * noise
 
@@ -2290,7 +2507,8 @@ class StudentTEDMNoiseScheduler(LinearGaussianNoiseScheduler):
         Tensor
             Noisy latent state of shape :math:`(B, *)`.
         """
-        t_bc = time.reshape(-1, *([1] * (x0.ndim - 1)))
+        expected_shape = (-1,) + (1,) * (x0.ndim - 1)
+        t_bc = time.reshape(expected_shape)
         sigma_t_bc = self.sigma(t_bc)
         noise = self._sample_student_t(*x0.shape, device=x0.device, dtype=x0.dtype)
         return x0 + sigma_t_bc * noise
@@ -2331,6 +2549,7 @@ class StudentTEDMNoiseScheduler(LinearGaussianNoiseScheduler):
         """
         B = tN.shape[0]
         noise = self._sample_student_t(B, *spatial_shape, device=device, dtype=dtype)
-        tN_bc = tN.reshape(-1, *([1] * len(spatial_shape)))
+        expected_shape = (-1,) + (1,) * len(spatial_shape)
+        tN_bc = tN.reshape(expected_shape)
         sigma_tN_bc = self.sigma(tN_bc)
         return sigma_tN_bc * noise

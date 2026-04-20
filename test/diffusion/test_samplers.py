@@ -68,7 +68,7 @@ SCHEDULER_CONFIGS = [
     (VPNoiseScheduler, {}, "vp"),
 ]
 
-PREDICTOR_TYPES = ["x0", "score"]
+PREDICTOR_TYPES = ["x0", "score", "epsilon"]
 
 
 class _CustomEulerSolver:
@@ -128,6 +128,8 @@ def _make_sampling_components(
     ).to(device)
     if predictor_type == "score":
         denoiser = scheduler.get_denoiser(score_predictor=model, denoising_type="ode")
+    elif predictor_type == "epsilon":
+        denoiser = scheduler.get_denoiser(epsilon_predictor=model, denoising_type="ode")
     else:
         denoiser = scheduler.get_denoiser(x0_predictor=model, denoising_type="ode")
     t_steps = scheduler.timesteps(num_steps, device=device)

@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fundamentally reduce the complexity of the kernel evaluations from O(N^2) to
   O(N).
 - Adds GLOBE AirFRANS example case (`examples/cfd/external_aerodynamics/globe/airfrans`)
+- Adds concrete dropout uncertainty quantification for GeoTransolver. Learnable
+  per-layer dropout rates enable MC-Dropout inference for uncertainty
+  estimates. Disabled by default (`concrete_dropout: false`).
 - Adds automatic support for `FSDP` and/or `ShardTensor` models in checkpoint save/load
   functionality
 - PhysicsNeMo-Mesh now supports conversion from PyVista/VTK/VTU meshes that may
@@ -40,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   creating Voronoi regions around seed points. BVH-accelerated.
 - Added support for 1D, 2D, and 3D neighborhood attention (natten) via
   `physicsnemo.nn.functional` interface, with full `ShardTensor` support.
+- Added derivative functionals in `physicsnemo.nn.functional` for
+  `uniform_grid_gradient`, `rectilinear_grid_gradient`,
+  `spectral_grid_gradient`, `meshless_fd_derivatives`, `mesh_lsq_gradient`,
+  and `mesh_green_gauss_gradient`.
+- Added geometry functionals in `physicsnemo.nn.functional` for
+  `mesh_poisson_disk_sample`, `mesh_to_voxel_fraction`, and
+  `signed_distance_field`.
 
 ### Changed
 
@@ -53,6 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `physicsnemo.nn.functional.knn` or
   `physicsnemo.nn.functional.radius_search`) should migrate to
   `physicsnemo.nn.functional.neighbors.*`.
+- Consolidated Warp interpolation kernels for grid-to-point and point-to-grid
+  backends, and added missing kernel/helper docstrings.
 
 ### Deprecated
 
@@ -89,6 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blocks that preserve 2D and 3D rotational equivariance using a
   grid-based layout for efficient GPU parallelization, and an emphasis on
   compact `einsum` operations.
+- Flare attention support for both Transolver and GeoTransolver models.
 
 ### Changed
 

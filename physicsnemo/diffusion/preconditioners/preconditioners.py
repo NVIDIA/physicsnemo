@@ -480,7 +480,8 @@ class BaseAffinePreconditioner(Module, ABC):
             self._validate_input(x)
 
         # Map time step to noise level via sigma method
-        sigma_t = self.sigma(t).reshape(-1, *([1] * (x.ndim - 1)))
+        expected_shape = (-1,) + (1,) * (x.ndim - 1)
+        sigma_t = self.sigma(t).reshape(expected_shape)
 
         # Compute preconditioning coefficients
         # Unwrap to plain tensors so that element-wise arithmetic between

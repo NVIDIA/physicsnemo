@@ -228,26 +228,34 @@ Prediction Types
 ----------------
 
 Diffusion models can be trained to predict different targets.  The PhysicsNeMo
-framework currently supports two prediction types:
+framework currently supports three prediction types, enumerated by the
+:data:`~physicsnemo.diffusion.PredictorType` alias:
 
-- **x0-predictor**: The model estimates the clean data
+- **x0-predictor** (``"x0"``): The model estimates the clean data
   :math:`\hat{\mathbf{x}}_0` from the noisy state :math:`\mathbf{x}_t`.
   This is the most common choice when using a
   :ref:`preconditioner <diffusion_preconditioners>`.
 
-- **Score-predictor**: The model estimates the score function
+- **Score-predictor** (``"score"``): The model estimates the score function
   :math:`\nabla_{\mathbf{x}} \log p(\mathbf{x}_t)`.
 
-For linear-Gaussian noise schedules, these two representations are analytically
-interchangeable, and the framework handles the conversion internally when
-building a denoiser for sampling.  For other schedule families, the conversion
-depends on the specific formulation and may need to be handled by the noise
-scheduler implementation.
+- **Epsilon-predictor** (``"epsilon"``): The model estimates the noise
+  :math:`\hat{\boldsymbol{\epsilon}}` such that
+  :math:`\mathbf{x}_t = \alpha(t)\mathbf{x}_0 + \sigma(t)\boldsymbol{\epsilon}`.
 
-Other prediction types (noise-predictor, velocity-predictor) can be supported
-by implementing a custom :class:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler`
-that handles the appropriate conversions in its
-:meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.get_denoiser` method.
+For linear-Gaussian noise schedules these three representations are
+analytically interchangeable, and the framework handles the conversion
+internally when building a denoiser for sampling.  For other schedule
+families, the conversion depends on the specific formulation and may need to
+be handled by the noise scheduler implementation.
+
+Other prediction types (e.g. velocity-predictor) can be supported by
+implementing a custom
+:class:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler` that handles
+the appropriate conversions in its
+:meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.get_denoiser`
+method, and by extending
+:data:`~physicsnemo.diffusion.PredictorType` accordingly.
 
 
 API Reference
@@ -272,4 +280,10 @@ API Reference
 
 .. autoclass:: physicsnemo.diffusion.Denoiser
     :members:
+
+:code:`PredictorType`
+~~~~~~~~~~~~~~~~~~~~~
+
+.. autodata:: physicsnemo.diffusion.PredictorType
+    :annotation:
     :exclude-members: __init__
