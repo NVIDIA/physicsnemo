@@ -28,13 +28,16 @@ import torch
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
-from physicsnemo.mesh.spatial._ragged import _ragged_arange
+from physicsnemo.experimental.models.globe.cluster_tree import (
+    ClusterTree,
+    DualInteractionPlan,
+)
 from physicsnemo.experimental.models.globe.field_kernel import (
     BarnesHutKernel,
     Kernel,
     MultiscaleKernel,
 )
+from physicsnemo.mesh.spatial._ragged import _ragged_arange
 
 DEFAULT_SEED = 42
 DEFAULT_LEAF_SIZE = 4
@@ -392,7 +395,10 @@ class TestClusterTree:
         ids=["normal", "single_point", "root_only_leaf", "one_per_leaf"],
     )
     def test_precomputed_leaf_node_ids(
-        self, n_points: int, leaf_size: int, n_dims: int,
+        self,
+        n_points: int,
+        leaf_size: int,
+        n_dims: int,
     ):
         """Precomputed leaf_node_ids matches torch.where(leaf_count > 0)."""
         torch.manual_seed(DEFAULT_SEED)
@@ -414,7 +420,10 @@ class TestClusterTree:
         ids=["normal", "single_point", "root_only_leaf", "one_per_leaf"],
     )
     def test_precomputed_leaf_seg_ids(
-        self, n_points: int, leaf_size: int, n_dims: int,
+        self,
+        n_points: int,
+        leaf_size: int,
+        n_dims: int,
     ):
         """Precomputed leaf_seg_ids matches on-the-fly _ragged_arange computation."""
         torch.manual_seed(DEFAULT_SEED)
@@ -430,7 +439,9 @@ class TestClusterTree:
         leaf_starts = tree.leaf_start[tree.leaf_node_ids]
         leaf_counts = tree.leaf_count[tree.leaf_node_ids]
         positions, compact_ids = _ragged_arange(
-            leaf_starts, leaf_counts, total=n_points,
+            leaf_starts,
+            leaf_counts,
+            total=n_points,
         )
         expected = torch.zeros(n_points, dtype=torch.long)
         expected[positions] = compact_ids
@@ -467,7 +478,10 @@ class TestClusterTree:
 
         expected = (points * areas.unsqueeze(-1)).sum(0) / areas.sum()
         torch.testing.assert_close(
-            agg.node_centroid[0], expected, atol=1e-5, rtol=1e-5,
+            agg.node_centroid[0],
+            expected,
+            atol=1e-5,
+            rtol=1e-5,
         )
 
 
@@ -1141,11 +1155,6 @@ def test_near_field_monotonicity():
 # ---------------------------------------------------------------------------
 # DualInteractionPlan validation tests
 # ---------------------------------------------------------------------------
-
-
-from physicsnemo.experimental.models.globe.cluster_tree import DualInteractionPlan
-
-
 class TestDualInteractionPlanValidate:
     """Tests for DualInteractionPlan.validate()."""
 
@@ -1174,12 +1183,17 @@ class TestDualInteractionPlanValidate:
         """An empty plan (all zero-length tensors) passes validation."""
         e = torch.empty(0, dtype=torch.long)
         plan = DualInteractionPlan(
-            near_target_ids=e, near_source_ids=e.clone(),
-            far_target_node_ids=e.clone(), far_source_node_ids=e.clone(),
-            nf_target_ids=e.clone(), nf_source_node_ids=e.clone(),
-            fn_target_node_ids=e.clone(), fn_source_ids=e.clone(),
+            near_target_ids=e,
+            near_source_ids=e.clone(),
+            far_target_node_ids=e.clone(),
+            far_source_node_ids=e.clone(),
+            nf_target_ids=e.clone(),
+            nf_source_node_ids=e.clone(),
+            fn_target_node_ids=e.clone(),
+            fn_source_ids=e.clone(),
             fn_broadcast_targets=e.clone(),
-            fn_broadcast_starts=e.clone(), fn_broadcast_counts=e.clone(),
+            fn_broadcast_starts=e.clone(),
+            fn_broadcast_counts=e.clone(),
         )
         plan.validate()
 
@@ -1244,7 +1258,9 @@ class TestDualInteractionPlanValidate:
     @pytest.mark.parametrize("n_dims", [2, 3])
     @pytest.mark.parametrize("theta", [0.3, 1.0, 5.0])
     def test_validate_called_by_find_dual_interaction_pairs(
-        self, n_dims: int, theta: float,
+        self,
+        n_dims: int,
+        theta: float,
     ):
         """validate() is exercised on every plan produced by the traversal.
 
@@ -1287,7 +1303,8 @@ class TestDualInteractionPlanValidate:
 @dims_params
 @pytest.mark.parametrize("theta", [0.5, 1.0, 3.0])
 def test_fn_broadcast_ragged_arange_matches_python_expansion(
-    n_dims: int, theta: float,
+    n_dims: int,
+    theta: float,
 ):
     """The _ragged_arange expansion of fn_broadcast (BarnesHutKernel's code
     path) produces the same (target, source) pairs as the pure-Python
@@ -1303,7 +1320,8 @@ def test_fn_broadcast_ragged_arange_matches_python_expansion(
     source_tree = ClusterTree.from_points(source_pts, leaf_size=4)
     target_tree = ClusterTree.from_points(target_pts, leaf_size=4)
     plan = source_tree.find_dual_interaction_pairs(
-        target_tree=target_tree, theta=theta,
+        target_tree=target_tree,
+        theta=theta,
     )
 
     if plan.n_fn == 0:
@@ -1327,9 +1345,12 @@ def test_fn_broadcast_ragged_arange_matches_python_expansion(
     expanded_tgt_ids = plan.fn_broadcast_targets[positions]
     expanded_src_ids = plan.fn_source_ids[pair_ids]
 
-    actual_pairs = set(zip(
-        expanded_tgt_ids.tolist(), expanded_src_ids.tolist(),
-    ))
+    actual_pairs = set(
+        zip(
+            expanded_tgt_ids.tolist(),
+            expanded_src_ids.tolist(),
+        )
+    )
 
     assert actual_pairs == ref_pairs, (
         f"Ragged expansion mismatch: "
@@ -1362,7 +1383,8 @@ def test_fn_broadcast_targets_no_dead_entries(n_dims: int, theta: float):
     source_tree = ClusterTree.from_points(source_pts, leaf_size=4)
     target_tree = ClusterTree.from_points(target_pts, leaf_size=4)
     plan = source_tree.find_dual_interaction_pairs(
-        target_tree=target_tree, theta=theta,
+        target_tree=target_tree,
+        theta=theta,
     )
 
     if plan.n_fn == 0:
@@ -1370,7 +1392,8 @@ def test_fn_broadcast_targets_no_dead_entries(n_dims: int, theta: float):
 
     ### Build the set of all referenced positions in fn_broadcast_targets
     referenced = torch.zeros(
-        plan.fn_broadcast_targets.shape[0], dtype=torch.bool,
+        plan.fn_broadcast_targets.shape[0],
+        dtype=torch.bool,
     )
     for start, count in zip(
         plan.fn_broadcast_starts.tolist(),
@@ -1408,7 +1431,8 @@ def test_fn_sort_preserves_broadcast_mapping(n_dims: int, theta: float):
     source_tree = ClusterTree.from_points(source_pts, leaf_size=4)
     target_tree = ClusterTree.from_points(target_pts, leaf_size=4)
     plan = source_tree.find_dual_interaction_pairs(
-        target_tree=target_tree, theta=theta,
+        target_tree=target_tree,
+        theta=theta,
     )
 
     if plan.n_fn == 0:
@@ -1422,9 +1446,7 @@ def test_fn_sort_preserves_broadcast_mapping(n_dims: int, theta: float):
         plan.fn_broadcast_counts.tolist(),
     ):
         for j in range(count):
-            sorted_pairs.add(
-                (plan.fn_broadcast_targets[start + j].item(), src_id)
-            )
+            sorted_pairs.add((plan.fn_broadcast_targets[start + j].item(), src_id))
 
     ### Expand with a random permutation of the fn entries
     perm = torch.randperm(plan.n_fn)
@@ -1433,12 +1455,12 @@ def test_fn_sort_preserves_broadcast_mapping(n_dims: int, theta: float):
     perm_starts = plan.fn_broadcast_starts[perm]
     perm_counts = plan.fn_broadcast_counts[perm]
     for src_id, start, count in zip(
-        perm_src.tolist(), perm_starts.tolist(), perm_counts.tolist(),
+        perm_src.tolist(),
+        perm_starts.tolist(),
+        perm_counts.tolist(),
     ):
         for j in range(count):
-            permuted_pairs.add(
-                (plan.fn_broadcast_targets[start + j].item(), src_id)
-            )
+            permuted_pairs.add((plan.fn_broadcast_targets[start + j].item(), src_id))
 
     assert sorted_pairs == permuted_pairs, (
         "fn_broadcast expansion changed under permutation of fn entries"
