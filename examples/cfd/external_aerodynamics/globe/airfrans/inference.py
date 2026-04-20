@@ -83,7 +83,7 @@ model.load(best_model_path)
 # %%
 with torch.no_grad():
     model.eval()
-    pred_mesh = model(**sample.model_input_kwargs, chunk_size=128)
+    pred_mesh = model(**sample.model_input_kwargs)
 
 # %%
 AirFRANSDataSet.postprocess(

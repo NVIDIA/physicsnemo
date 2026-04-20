@@ -626,7 +626,6 @@ def main(
                             base_model.eval()
                             pred_mesh = base_model(
                                 **viz_sample.model_input_kwargs,
-                                chunk_size=points_per_iter,
                             )
                         AirFRANSDataSet.postprocess(
                             pred_mesh=pred_mesh.to(device="cpu"),
