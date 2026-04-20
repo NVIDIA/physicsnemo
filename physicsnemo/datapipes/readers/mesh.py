@@ -284,6 +284,7 @@ class DomainMeshReader:
         include_index_in_metadata: bool = True,
         subsample_n_points: int | None = None,
         subsample_n_cells: int | None = None,
+        extra_boundaries: dict[str, dict] | None = None,
     ) -> None:
         """
         Initialize the domain mesh reader.
@@ -316,6 +317,20 @@ class DomainMeshReader:
             topology and is the correct choice when downstream
             transforms depend on cells.  Applied before
             ``subsample_n_points`` when both are set.
+        extra_boundaries : dict[str, dict] or None, optional
+            Load additional sibling meshes as extra boundaries on each
+            sample.  Each key is the boundary name to assign; each value
+            is a dict with a ``"pattern"`` key giving a glob pattern
+            (relative to the sample's parent directory) to find the mesh
+            file.  These meshes are loaded at full resolution and are
+            **not** subsampled, making them suitable for geometric
+            queries like SDF computation.
+
+            Example::
+
+                extra_boundaries:
+                  stl_geometry:
+                    pattern: "*_single_solid.stl.pmsh"
         """
         self._root = Path(path)
         self._pattern = pattern
@@ -324,6 +339,7 @@ class DomainMeshReader:
         self.subsample_n_points = subsample_n_points
         self.subsample_n_cells = subsample_n_cells
         self._subsample_generator: torch.Generator | None = None
+        self._extra_boundaries = extra_boundaries or {}
 
         if not self._root.exists():
             raise FileNotFoundError(f"Path not found: {self._root}")
@@ -384,6 +400,10 @@ class DomainMeshReader:
                 global_data=dm.global_data,
             )
 
+        # Load extra boundary meshes (full resolution, no subsampling).
+        if self._extra_boundaries:
+            dm = self._load_extra_boundaries(dm, index)
+
         if self.pin_memory:
             dm = dm.pin_memory()
 
@@ -394,6 +414,40 @@ class DomainMeshReader:
         if self.include_index_in_metadata:
             metadata["index"] = index
         return dm, metadata
+
+    def _load_extra_boundaries(self, dm: DomainMesh, index: int) -> DomainMesh:
+        """Find and load sibling meshes as additional boundaries.
+
+        Extra boundaries are loaded at full resolution (no subsampling)
+        so they are suitable for geometric queries like SDF computation.
+        """
+        case_dir = Path(self._paths[index]).parent
+        new_boundaries = dict(dm.boundaries)
+
+        for bnd_name, bnd_cfg in self._extra_boundaries.items():
+            glob_pattern = bnd_cfg["pattern"]
+            matches = sorted(case_dir.glob(glob_pattern))
+            if not matches:
+                raise FileNotFoundError(
+                    f"No mesh matching {glob_pattern!r} found in "
+                    f"{case_dir} for extra boundary {bnd_name!r}"
+                )
+            if len(matches) > 1:
+                logger.warning(
+                    "Multiple meshes found for extra boundary %r in %s "
+                    "matching %r; using %s",
+                    bnd_name,
+                    case_dir,
+                    glob_pattern,
+                    matches[0],
+                )
+            new_boundaries[bnd_name] = Mesh.load(matches[0])
+
+        return DomainMesh(
+            interior=dm.interior,
+            boundaries=new_boundaries,
+            global_data=dm.global_data,
+        )
 
     def __iter__(self) -> Iterator[tuple[DomainMesh, dict[str, Any]]]:
         for i in range(len(self)):

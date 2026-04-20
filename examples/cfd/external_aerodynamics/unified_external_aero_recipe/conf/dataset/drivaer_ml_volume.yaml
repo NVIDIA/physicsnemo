@@ -23,7 +23,7 @@
 
 name: drivaer_ml_volume
 
-train_datadir: /path/to/your/PhysicsNeMo-DrivaerML/
+train_datadir: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/PhysicsNeMo-DrivaerML/
 
 metadata:
   U_inf:  [30.0, 0.0, 0.0] # freestream velocity
@@ -39,6 +39,9 @@ pipeline:
     pattern: "**/domain_*.pdmsh"
     subsample_n_points: ${sampling_resolution}
     subsample_n_cells: ${sampling_resolution}
+    extra_boundaries:
+      stl_geometry:
+        pattern: "*_single_solid.stl.pmsh"
   augmentations:
     - _target_: ${dp:RandomRotateMesh}
       axes: ["z"]
@@ -60,6 +63,13 @@ pipeline:
         pMeanTrim: pressure
         nutMeanTrim: identity
       section: point_data
+    - _target_: ${dp:ComputeSDFFromBoundary}
+      boundary_name: stl_geometry
+      sdf_field: sdf
+      normals_field: sdf_normals
+      use_winding_number: true
+    - _target_: ${dp:DropBoundary}
+      names: [stl_geometry]
     - _target_: ${dp:RenameMeshFields}
       point_data:
         UMeanTrim: velocity
@@ -75,6 +85,8 @@ pipeline:
         input:
           points: interior.points
           U_inf: global_data.U_inf
+          sdf: interior.point_data.sdf
+          sdf_normals: interior.point_data.sdf_normals
         output:
           velocity: interior.point_data.velocity
           pressure: interior.point_data.pressure

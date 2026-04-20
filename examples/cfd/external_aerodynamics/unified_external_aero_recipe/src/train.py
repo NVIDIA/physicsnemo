@@ -123,6 +123,17 @@ def get_autocast_context(precision: str):
         return nullcontext()
 
 
+def _recursive_to(obj, *args, **kwargs):
+    """Apply ``.to()`` recursively through nested dicts/lists of tensors."""
+    if isinstance(obj, torch.Tensor):
+        return obj.to(*args, **kwargs)
+    if isinstance(obj, dict):
+        return {k: _recursive_to(v, *args, **kwargs) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return type(obj)(_recursive_to(v, *args, **kwargs) for v in obj)
+    return obj
+
+
 def forward_pass(
     batch: dict[str, torch.Tensor],
     model: torch.nn.Module,
@@ -139,7 +150,8 @@ def forward_pass(
     batch : dict
         Model-ready batch produced by the collate function.  Must contain
         a ``"fields"`` key holding the prediction targets (popped before
-        the forward call).
+        the forward call).  Values may be tensors or nested dicts of
+        tensors (e.g. DoMINO's ``data_dict``).
     model : torch.nn.Module
         Point-cloud model whose ``forward`` accepts the remaining batch
         keys as keyword arguments.
@@ -161,19 +173,31 @@ def forward_pass(
     targets = batch.pop("fields")
 
     if broadcast_global:
-        max_n = max(v.shape[1] for v in batch.values() if v.ndim >= 3)
+        max_n = max(
+            v.shape[1]
+            for v in batch.values()
+            if isinstance(v, torch.Tensor) and v.ndim >= 3
+        )
         batch = {
-            k: v.expand(-1, max_n, -1) if v.ndim >= 3 and v.shape[1] == 1 else v
+            k: v.expand(-1, max_n, -1)
+            if isinstance(v, torch.Tensor) and v.ndim >= 3 and v.shape[1] == 1
+            else v
             for k, v in batch.items()
         }
 
     dtype_map = {"float16": torch.float16, "bfloat16": torch.bfloat16}
     dtype = dtype_map.get(precision)
     if dtype is not None:
-        batch = {k: v.to(dtype) for k, v in batch.items()}
+        batch = {k: _recursive_to(v, dtype) for k, v in batch.items()}
 
     with get_autocast_context(precision):
         outputs = model(**batch)
+
+        # Models like DoMINO return (vol_output, surf_output); extract the
+        # non-None element for single-mode training.
+        if isinstance(outputs, tuple):
+            outputs = next(o for o in outputs if o is not None)
+
         loss, loss_dict = loss_calculator(outputs, targets)
 
     metrics = {k: v.item() for k, v in loss_dict.items()}
@@ -252,7 +276,7 @@ def train_epoch(
 
     step_t0 = time.perf_counter()
     for i, batch in enumerate(dataloader):
-        batch = {k: v.to(dist_manager.device) for k, v in batch.items()}
+        batch = {k: _recursive_to(v, dist_manager.device) for k, v in batch.items()}
 
         loss, metrics, (outputs, targets) = forward_pass(
             batch,
@@ -382,7 +406,7 @@ def val_epoch(
     with torch.no_grad():
         step_t0 = time.perf_counter()
         for i, batch in enumerate(dataloader):
-            batch = {k: v.to(dist_manager.device) for k, v in batch.items()}
+            batch = {k: _recursive_to(v, dist_manager.device) for k, v in batch.items()}
 
             loss, metrics, _ = forward_pass(
                 batch,

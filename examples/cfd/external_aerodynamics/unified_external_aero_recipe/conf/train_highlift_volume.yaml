@@ -15,34 +15,34 @@
 # limitations under the License.
 
 # ---------------------------------------------------------------------------
-# Unified External Aerodynamics - Volume Training Configuration (GeoTransolver)
+# High-Lift Airplane - Volume Training Configuration (Compressible)
 # ---------------------------------------------------------------------------
-# Trains a GeoTransolver model on volume fields (velocity, pressure, nut)
-# from DrivaerML volume meshes.
+# Trains a GeoTransolver model on volume pressure, temperature, density,
+# and velocity from the HiLiftAeroML dataset (AoA 4°).
+# Volume data is a point cloud — no surface normals available.
 
 output_dir: "runs"
 checkpoint_dir: null
-run_id: "volume_geotransolver_drivaer_ml"
+run_id: "highlift_volume_geotransolver"
 
 precision: "bfloat16"
-compile: true
-profile: false
+compile: false
+profile: true
 augment: false
 benchmark_io: false
-broadcast_global: false
 
 model_type: "volume"
 
 # -- Data-to-model mapping (see src/collate.py MODEL_MAPPINGS) ---------------
-data_mapping: "geotransolver_automotive_volume"
+data_mapping: "geotransolver_highlift_volume"
 
 # -- Model (GeoTransolver) --------------------------------------------------
 model:
   _target_: physicsnemo.experimental.models.geotransolver.GeoTransolver
   functional_dim: 7       # local_embedding = coords (3) + SDF (1) + SDF normals (3)
-  out_dim: 5              # velocity (3) + pressure (1) + nut (1)
+  out_dim: 6              # pressure (1) + temperature (1) + density (1) + velocity (3)
   geometry_dim: 3         # point coordinates
-  global_dim: 3           # inlet velocity (3)
+  global_dim: 3           # freestream velocity U_inf (3)
   n_layers: 12
   n_hidden: 256
   dropout: 0.0
@@ -56,25 +56,28 @@ model:
   radii: [0.1, 0.5, 2.0]
   neighbors_in_radius: [16, 32, 64]
   n_hidden_local: 32
-  state_mixing_mode: "weighted"  # "weighted" (default) or "concat_project"
 
 # -- Dataset -----------------------------------------------------------------
 dataset:
-  name: drivaer_ml_volume
-  sampling_resolution: 200000   # override SubsampleMesh n_cells/n_points in all dataset configs
+  name: highlift_volume
+  sampling_resolution: 100000
   targets:
-    velocity: vector
     pressure: scalar
-    nut: scalar
+    temperature: scalar
+    density: scalar
+    velocity: vector
+  # Explicit nondim type per output field for physical-space metric inversion.
   nondim_types:
+    pressure: pressure
+    temperature: temperature
+    density: density
     velocity: velocity
-    nut: identity
   metrics: [l2]
 
 # -- Training ----------------------------------------------------------------
 training:
-  seed: 42              # set to null to leave RNGs unseeded
-  num_epochs: 500
+  seed: 42
+  num_epochs: 1
   save_interval: 25
   loss_type: "huber"
   batch_size: 1
@@ -109,10 +112,10 @@ mlflow:
 
 # -- Data paths --------------------------------------------------------------
 # Splits are read from manifest.json; change train_split / val_split to
-# switch experiments.
+# switch experiments (e.g. geometry_train, full_train, aoa_train, ...).
 data:
-  drivaer_ml:
-    config: conf/dataset/drivaer_ml_volume.yaml
-    manifest: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/PhysicsNeMo-DrivaerML/manifest.json
-    train_split: train
-    val_split: val
+  highlift:
+    config: conf/dataset/highlift_volume.yaml
+    manifest: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/PhysicsNeMo-HighLiftAeroML/manifest.json
+    train_split: single_aoa_4_train
+    val_split: single_aoa_4_val

@@ -15,14 +15,16 @@
 # limitations under the License.
 
 # ---------------------------------------------------------------------------
-# Unified External Aerodynamics - Volume Training Configuration (GeoTransolver)
+# Unified External Aerodynamics - Volume Training Configuration
+#   (GeoTransolver with FLARE Attention / GALE_FA)
 # ---------------------------------------------------------------------------
-# Trains a GeoTransolver model on volume fields (velocity, pressure, nut)
-# from DrivaerML volume meshes.
+# Trains a GeoTransolver model using the GALE_FA attention backbone (FLARE-
+# based self-attention + GALE cross-attention) on volume fields (velocity,
+# pressure, nut) from DrivaerML volume meshes.
 
 output_dir: "runs"
 checkpoint_dir: null
-run_id: "volume_geotransolver_drivaer_ml"
+run_id: "volume_geotransolver_fa_drivaer_ml"
 
 precision: "bfloat16"
 compile: true
@@ -34,12 +36,16 @@ broadcast_global: false
 model_type: "volume"
 
 # -- Data-to-model mapping (see src/collate.py MODEL_MAPPINGS) ---------------
+# Same forward interface as standard GeoTransolver.
 data_mapping: "geotransolver_automotive_volume"
 
-# -- Model (GeoTransolver) --------------------------------------------------
+# -- Model (GeoTransolver + GALE_FA) ----------------------------------------
+# Uses GALE_FA attention (FLARE self-attention with GALE cross-attention)
+# instead of the default GALE physics attention.  GALE_FA does not support
+# Transformer Engine — use_te must be false.
 model:
   _target_: physicsnemo.experimental.models.geotransolver.GeoTransolver
-  functional_dim: 7       # local_embedding = coords (3) + SDF (1) + SDF normals (3)
+  functional_dim: 7       # local_embedding = geometry coords (3) + sdf (1) + sdf_normals (3)
   out_dim: 5              # velocity (3) + pressure (1) + nut (1)
   geometry_dim: 3         # point coordinates
   global_dim: 3           # inlet velocity (3)
@@ -50,8 +56,9 @@ model:
   act: "gelu"
   mlp_ratio: 4
   slice_num: 256
-  use_te: false
+  use_te: false           # GALE_FA does not support TE
   plus: false
+  attention_type: "GALE_FA"
   include_local_features: false
   radii: [0.1, 0.5, 2.0]
   neighbors_in_radius: [16, 32, 64]
@@ -61,7 +68,7 @@ model:
 # -- Dataset -----------------------------------------------------------------
 dataset:
   name: drivaer_ml_volume
-  sampling_resolution: 200000   # override SubsampleMesh n_cells/n_points in all dataset configs
+  sampling_resolution: 500000   # override SubsampleMesh n_cells/n_points in all dataset configs
   targets:
     velocity: vector
     pressure: scalar

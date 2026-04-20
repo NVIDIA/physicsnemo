@@ -1,0 +1,108 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# High-lift airplane surface dataset (compressible)
+# Reads the boundary surface Mesh directly from DomainMesh .pdmsh files
+# by navigating into the on-disk tensordict directory structure.
+# Boundary mesh from HiLiftAeroML. Fields live in point_data.
+# Splits are controlled by manifest.json + train_split/val_split in the training config.
+
+name: highlift_surface
+
+train_datadir: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/PhysicsNeMo-HighLiftAeroML/
+
+# Freestream conditions — slug-inch-second-Rankine unit system
+metadata:
+  U_inf: [2672.95, 0.0, 186.92]   # 2679.505 in/s at AoA=4°
+  p_inf: 176.352                   # 14.696 psi × 12 → slug/(in·s²)
+  rho_inf: 1.3756e-6               # 0.002377 slug/ft³ → slug/in³
+  T_inf: 518.67                    # [°R]
+  L_ref: 1156.75                    # [in] — span
+
+pipeline:
+  reader:
+    _target_: ${dp:MeshReader}
+    path: ${train_datadir}
+    pattern: "**/*.pdmsh/_tensordict/boundaries/boundary"
+    subsample_n_cells: ${sampling_resolution}
+  augmentations:
+    - _target_: ${dp:RandomRotateMesh}
+      axes: ["z"]
+      transform_point_data: true
+      transform_global_data: true
+    - _target_: ${dp:RandomTranslateMesh}
+      distribution:
+        _target_: torch.distributions.Uniform
+        low: [-1.0, -1.0, 0.0]
+        high: [1.0, 1.0, 0.0]
+  transforms:
+    - _target_: ${dp:CenterMesh}
+      use_area_weighting: false
+    - _target_: ${dp:NonDimensionalizeByMetadata}
+      fields:
+        PROJ(AVG(P)): pressure
+        PROJ(AVG(T)): temperature
+        PROJ(AVG(RHO)): density
+        PROJ(AVG(U)): velocity
+        AVG(TAU_WALL): stress
+      section: point_data
+    - _target_: ${dp:RenameMeshFields}
+      point_data:
+        PROJ(AVG(P)): pressure
+        PROJ(AVG(T)): temperature
+        PROJ(AVG(RHO)): density
+        PROJ(AVG(U)): velocity
+        AVG(TAU_WALL): tau_wall
+    # z-score normalization (dataset-wide stats, 180 cases / 24B points)
+    # Stats are post-nondimensionalization values.
+    - _target_: ${dp:NormalizeMeshFields}
+      section: point_data
+      fields:
+        pressure:    {type: scalar, mean: -0.26,  std: 0.62}
+        temperature: {type: scalar, mean:  1.004, std: 0.00224}
+        density:     {type: scalar, mean:  0.988, std: 0.0156}
+        velocity:    {type: vector, mean: [0.413, -0.005, 0.029], std: 0.20}
+        tau_wall:    {type: scalar, mean: 0.005068, std: 0.003735}
+    # Full subsampling before normals: subsample cells first, then points
+    # to the final count.  Normals are computed on the surviving triangles.
+    - _target_: ${dp:SubsampleMesh}
+      n_cells: 500000
+      n_points: ${sampling_resolution}
+    - _target_: ${dp:ComputeSurfaceNormals}
+      store_as: point_data
+      field_name: normals
+    - _target_: ${dp:MeshToTensorDict}
+    - _target_: ${dp:RestructureTensorDict}
+      groups:
+        input:
+          points: points
+          normals: point_data.normals
+          U_inf: global_data.U_inf
+        output:
+          pressure: point_data.pressure
+          temperature: point_data.temperature
+          density: point_data.density
+          velocity: point_data.velocity
+          tau_wall: point_data.tau_wall
+
+targets:
+  pressure: scalar
+  temperature: scalar
+  density: scalar
+  velocity: vector
+  tau_wall: scalar
+
+metrics: [l1, l2, mae]

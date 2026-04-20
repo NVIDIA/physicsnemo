@@ -48,6 +48,7 @@ from physicsnemo.datapipes import MeshDataset, MultiDataset
 from physicsnemo.mesh import DomainMesh, Mesh
 
 import nondim  # noqa: F401  (registers NonDimensionalizeByMetadata)
+import sdf  # noqa: F401  (registers ComputeSDFFromBoundary, DropBoundary)
 
 
 def load_dataset_config(yaml_path: str | Path) -> DictConfig:
