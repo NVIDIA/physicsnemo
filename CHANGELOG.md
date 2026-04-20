@@ -11,9 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Adds GLOBE model (`physicsnemo.experimental.models.globe.model.GLOBE`),
-  including new variant that uses a dual tree traversal algorithm to
-  fundamentally reduce the complexity of the kernel evaluations from O(N^2) to
-  O(N).
+  including new variant that uses a dual tree traversal algorithm to reduce the
+  complexity of the kernel evaluations from O(N^2) to O(N).
 - Adds GLOBE AirFRANS example case (`examples/cfd/external_aerodynamics/globe/airfrans`)
 - Adds concrete dropout uncertainty quantification for GeoTransolver. Learnable
   per-layer dropout rates enable MC-Dropout inference for uncertainty
