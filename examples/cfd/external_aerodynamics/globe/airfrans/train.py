@@ -101,7 +101,7 @@ def main(
     n_latent_scalars: int = 12,
     n_latent_vectors: int = 6,
     n_spherical_harmonics: int = 1,
-    theta: float = 1.0,
+    theta: float = 0.0,
     leaf_size: int = 1,
     airfrans_task: Literal["full", "scarce", "reynolds", "aoa"] = "full",
     patience_steps: int = 1600,
