@@ -832,7 +832,7 @@ class DomainMesh:
         return Mesh.merge(geometry_only)
 
     def is_boundary_watertight(self) -> bool:
-        """Check whether the merged boundary meshes form a watertight surface.
+        r"""Check whether the merged boundary meshes form a watertight surface.
 
         Merges all boundary meshes via :meth:`merge_boundaries`, deduplicates
         coincident vertices with :meth:`Mesh.clean`, and calls
@@ -846,6 +846,13 @@ class DomainMesh:
             ``True`` if the merged boundary surface is watertight (every
             codimension-1 facet is shared by exactly 2 cells), ``False``
             otherwise. Returns ``False`` if there are no boundary meshes.
+
+        Notes
+        -----
+        This is not free to compute: the :meth:`Mesh.clean` step performs a
+        BVH-based duplicate-point merge that scales as :math:`O(N \log N)`
+        in the total boundary vertex count :math:`N`, and dominates the
+        runtime. Callers that need the result repeatedly should cache it.
         """
         if self.n_boundaries == 0:
             return False
