@@ -448,7 +448,7 @@ class MultiDiffusionModel2D(Module):
                         "of 4 for 'sinusoidal' positional embedding."
                     )
                 num_freq = C // 4
-                freq_bands = 2.0 ** np.linspace(0.0, num_freq, num=num_freq)
+                freq_bands = 2.0 ** np.arange(num_freq)
                 gx, gy = np.meshgrid(
                     np.linspace(0, 2 * np.pi, W),
                     np.linspace(0, 2 * np.pi, H),

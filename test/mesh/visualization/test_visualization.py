@@ -414,6 +414,19 @@ def test_pyvista_ax_parameter_error():
     plt.close("all")
 
 
+def test_matplotlib_plotter_parameter_error():
+    """Test that passing a PyVista Plotter raises error for matplotlib backend."""
+    import pyvista as pv
+
+    mesh = create_2d_triangle_mesh()
+    plotter = pv.Plotter()
+
+    with pytest.raises(ValueError, match="only supported for pyvista"):
+        mesh.draw(show=False, backend="matplotlib", ax=plotter)
+
+    plotter.close()
+
+
 ### Tests for different mesh types
 
 

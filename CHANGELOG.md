@@ -11,11 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Adds GLOBE model (`physicsnemo.experimental.models.globe.model.GLOBE`),
-  including new variant that uses a dual tree traversal algorithm to
-  fundamentally reduce the complexity of the kernel evaluations from O(N^2) to
-  O(N).
+  including new variant that uses a dual tree traversal algorithm to reduce the
+  complexity of the kernel evaluations from O(N^2) to O(N).
 - Adds GLOBE AirFRANS example case (`examples/cfd/external_aerodynamics/globe/airfrans`)
 - Adds GLOBE DrivAerML example case (`examples/cfd/external_aerodynamics/globe/drivaer`)
+- Adds concrete dropout uncertainty quantification for GeoTransolver. Learnable
+  per-layer dropout rates enable MC-Dropout inference for uncertainty
+  estimates. Disabled by default (`concrete_dropout: false`).
 - Adds automatic support for `FSDP` and/or `ShardTensor` models in checkpoint save/load
   functionality
 - PhysicsNeMo-Mesh now supports conversion from PyVista/VTK/VTU meshes that may
@@ -39,6 +41,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (or plain `dict` for convenience).
 - Adds `physicsnemo.mesh.remeshing` subpackage with `partition_cells()` for
   creating Voronoi regions around seed points. BVH-accelerated.
+- Added support for 1D, 2D, and 3D neighborhood attention (natten) via
+  `physicsnemo.nn.functional` interface, with full `ShardTensor` support.
+- Added derivative functionals in `physicsnemo.nn.functional` for
+  `uniform_grid_gradient`, `rectilinear_grid_gradient`,
+  `spectral_grid_gradient`, `meshless_fd_derivatives`, `mesh_lsq_gradient`,
+  and `mesh_green_gauss_gradient`.
+- Added geometry functionals in `physicsnemo.nn.functional` for
+  `mesh_poisson_disk_sample`, `mesh_to_voxel_fraction`, and
+  `signed_distance_field`.
 
 ### Changed
 
@@ -46,6 +57,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `physicsnemo.mesh.sampling.find_nearest_cells` uses a KNN-backed
   implementation, and no longer accepts the `bvh=`, `chunk_size=`,
   `max_rounds=`, or `max_candidates_per_point=` parameters.
+- &#9888;&#65039; **BC-impact (deep imports):** internal `physicsnemo.nn.functional`
+  modules were reorganized by category. Public top-level functional imports are
+  unchanged, but code importing internal module paths directly (for example
+  `physicsnemo.nn.functional.knn` or
+  `physicsnemo.nn.functional.radius_search`) should migrate to
+  `physicsnemo.nn.functional.neighbors.*`.
+- Consolidated Warp interpolation kernels for grid-to-point and point-to-grid
+  backends, and added missing kernel/helper docstrings.
 
 ### Deprecated
 
@@ -58,6 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed graph break caused by `FunctionSpec` dispatch (`max(key=)` is not supported by `torch.compile`)
 - Fixed bug in Pangu, FengWu attention window shift for asymmetric longitudes
 - Fixed a bug in `mesh.sampling.find_nearest_cells`, where a mixup between L2 and L-inf norms
   could cause slightly incorrect nearest-neighbor assignments in highly skewed meshes.
@@ -81,6 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blocks that preserve 2D and 3D rotational equivariance using a
   grid-based layout for efficient GPU parallelization, and an emphasis on
   compact `einsum` operations.
+- Flare attention support for both Transolver and GeoTransolver models.
 
 ### Changed
 

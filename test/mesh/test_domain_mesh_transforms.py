@@ -56,45 +56,110 @@ def no_boundary_domain():
     return DomainMesh(interior=single_tetrahedron.load())
 
 
-### _map_meshes
+def _open_tetrahedron_faces() -> dict[str, Mesh]:
+    """4 triangular boundary patches forming a closed unit tetrahedron.
+
+    Each face is a separate ``Mesh`` whose vertices are duplicated copies
+    of the canonical tet vertices - this models the realistic case where
+    boundary patches are meshed independently and only "share" vertices
+    geometrically, not by index.
+    """
+    p = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    )
+    cells = torch.tensor([[0, 1, 2]])
+
+    def face(*idx: int, offset: torch.Tensor | None = None) -> Mesh:
+        pts = p[list(idx)].clone()
+        if offset is not None:
+            pts = pts + offset
+        return Mesh(points=pts, cells=cells)
+
+    return {
+        "f0": face(0, 1, 2),
+        "f1": face(0, 1, 3),
+        "f2": face(0, 2, 3),
+        "f3": face(1, 2, 3),
+    }
 
 
-class TestMapMeshes:
-    """Tests for the _map_meshes private helper."""
+### Properties
+
+
+class TestProperties:
+    """Tests for DomainMesh property accessors."""
+
+    def test_n_boundaries_counts_entries(self, tet_domain):
+        """n_boundaries reflects the actual number of boundary keys.
+
+        Regression for the bug where ``len(self.boundaries)`` returned 0
+        for a TensorDict with ``batch_size=[]`` regardless of how many
+        named entries it carried.
+        """
+        assert tet_domain.n_boundaries == 2
+
+    def test_boundary_names_sorted(self, tet_domain):
+        """boundary_names returns keys in sorted order."""
+        assert tet_domain.boundary_names == ["inlet", "wall"]
+
+
+### apply
+
+
+class TestApply:
+    """Tests for DomainMesh.apply."""
 
     def test_applies_fn_to_interior(self, tet_domain):
         original_points = tet_domain.interior.points.clone()
-        dm2 = tet_domain._map_meshes(lambda m: m.translate([1, 0, 0]))
+        dm2 = tet_domain.apply(lambda m: m.translate([1, 0, 0]))
         expected = original_points + torch.tensor([1.0, 0.0, 0.0])
         assert torch.allclose(dm2.interior.points, expected)
 
     def test_applies_fn_to_all_boundaries(self, tet_domain):
         offset = torch.tensor([0.0, 0.0, 1.0])
-        dm2 = tet_domain._map_meshes(lambda m: m.translate([0, 0, 1]))
+        dm2 = tet_domain.apply(lambda m: m.translate([0, 0, 1]))
         for name in tet_domain.boundary_names:
             original = tet_domain.boundaries[name].points
             assert torch.allclose(dm2.boundaries[name].points, original + offset)
 
     def test_preserves_global_data(self, tet_domain):
-        dm2 = tet_domain._map_meshes(lambda m: m.translate([1, 1, 1]))
+        dm2 = tet_domain.apply(lambda m: m.translate([1, 1, 1]))
         assert torch.equal(dm2.global_data["Re"], tet_domain.global_data["Re"])
         assert torch.equal(dm2.global_data["AoA"], tet_domain.global_data["AoA"])
 
     def test_global_data_is_independent_copy(self, tet_domain):
         """Mutating transformed domain's global_data must not affect original."""
         original_re = tet_domain.global_data["Re"].clone()
-        dm2 = tet_domain._map_meshes(lambda m: m.translate([1, 0, 0]))
+        dm2 = tet_domain.apply(lambda m: m.translate([1, 0, 0]))
         dm2.global_data["Re"].fill_(0.0)
         assert torch.equal(tet_domain.global_data["Re"], original_re)
 
     def test_works_with_no_boundaries(self, no_boundary_domain):
-        dm2 = no_boundary_domain._map_meshes(lambda m: m.translate([1, 0, 0]))
+        dm2 = no_boundary_domain.apply(lambda m: m.translate([1, 0, 0]))
         assert dm2.n_boundaries == 0
         assert dm2.interior.points[0, 0].item() == pytest.approx(1.0)
 
     def test_returns_domain_mesh(self, tet_domain):
-        dm2 = tet_domain._map_meshes(lambda m: m)
+        dm2 = tet_domain.apply(lambda m: m)
         assert isinstance(dm2, DomainMesh)
+
+    def test_interior_only(self, tet_domain):
+        """apply with boundaries=False should leave boundaries unchanged."""
+        dm2 = tet_domain.apply(lambda m: m.translate([1, 0, 0]), boundaries=False)
+        assert not torch.equal(dm2.interior.points, tet_domain.interior.points)
+        for name in tet_domain.boundary_names:
+            assert torch.equal(
+                dm2.boundaries[name].points, tet_domain.boundaries[name].points
+            )
+
+    def test_boundaries_only(self, tet_domain):
+        """apply with interior=False should leave interior unchanged."""
+        dm2 = tet_domain.apply(lambda m: m.translate([1, 0, 0]), interior=False)
+        assert torch.equal(dm2.interior.points, tet_domain.interior.points)
+        for name in tet_domain.boundary_names:
+            assert not torch.equal(
+                dm2.boundaries[name].points, tet_domain.boundaries[name].points
+            )
 
 
 ### Geometric Transforms
@@ -319,6 +384,202 @@ class TestValidate:
         dm = DomainMesh(interior=interior)
         report = dm.validate()
         assert not report["valid"]
+
+
+### Boundary watertightness
+
+
+class TestIsBoundaryWatertight:
+    """Tests for DomainMesh.is_boundary_watertight."""
+
+    def test_no_boundaries_returns_false(self, no_boundary_domain):
+        """A domain with no boundaries cannot be watertight."""
+        assert not no_boundary_domain.is_boundary_watertight()
+
+    def test_closed_tet_is_watertight(self):
+        """4 boundary triangles forming a closed tet are watertight."""
+        dm = DomainMesh(
+            interior=Mesh(points=torch.zeros((1, 3))),
+            boundaries=_open_tetrahedron_faces(),
+        )
+        assert dm.is_boundary_watertight()
+
+    def test_open_surface_is_not_watertight(self):
+        """Removing one face must produce a non-watertight surface."""
+        faces = _open_tetrahedron_faces()
+        del faces["f3"]
+        dm = DomainMesh(
+            interior=Mesh(points=torch.zeros((1, 3))),
+            boundaries=faces,
+        )
+        assert not dm.is_boundary_watertight()
+
+    def test_default_tolerance_handles_float_noise(self):
+        """Default tolerance must absorb realistic float32 round-off on shared vertices.
+
+        Independently-meshed boundary patches share physical vertices that
+        carry slightly different float values after any prior transform.
+        The default tolerance must merge such near-duplicates so the
+        surface is correctly classified as watertight.
+        """
+        eps = 1e-7  # Per-face perturbation; max pairwise distance ~2 * eps
+        p = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+        )
+        cells = torch.tensor([[0, 1, 2]])
+
+        def face(idx: list[int], offset: torch.Tensor) -> Mesh:
+            return Mesh(points=p[idx].clone() + offset, cells=cells)
+
+        offsets = [
+            torch.tensor([+eps, 0.0, 0.0]),
+            torch.tensor([-eps, 0.0, 0.0]),
+            torch.tensor([0.0, +eps, 0.0]),
+            torch.tensor([0.0, -eps, 0.0]),
+        ]
+        face_defs = [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]]
+        dm = DomainMesh(
+            interior=Mesh(points=torch.zeros((1, 3))),
+            boundaries={
+                f"f{i}": face(idx, off)
+                for i, (idx, off) in enumerate(zip(face_defs, offsets, strict=True))
+            },
+        )
+
+        ### Default tolerance (1e-6) comfortably absorbs the ~2e-7 mismatch
+        assert dm.is_boundary_watertight()
+        ### A too-tight explicit tolerance must NOT mask the noise -
+        ### documents the failure mode the default protects against.
+        assert not dm.is_boundary_watertight(tolerance=1e-12)
+
+    def test_explicit_tolerance_passthrough(self):
+        """An explicit tolerance is forwarded verbatim to Mesh.clean."""
+        dm = DomainMesh(
+            interior=Mesh(points=torch.zeros((1, 3))),
+            boundaries=_open_tetrahedron_faces(),
+        )
+        ### Exact-match coincidence is below any positive tolerance, so any
+        ### reasonable explicit value still reports watertight.
+        assert dm.is_boundary_watertight(tolerance=1e-3)
+
+
+### Boundary merging
+
+
+class TestMergeBoundaries:
+    """Tests for DomainMesh.merge_boundaries."""
+
+    def test_no_boundaries_raises(self, no_boundary_domain):
+        """Merging a domain with zero boundaries is an error."""
+        with pytest.raises(ValueError, match="No boundary meshes"):
+            no_boundary_domain.merge_boundaries()
+
+    def test_default_strips_data(self, tet_domain):
+        """Default merge produces a geometry-only mesh.
+
+        ``tet_domain`` boundaries carry heterogeneous cell_data keys
+        (``wall_shear`` vs ``mass_flux``). Stripping is the only way to
+        merge such patches; the default does so silently.
+        """
+        merged = tet_domain.merge_boundaries()
+        assert len(list(merged.point_data.keys())) == 0
+        assert len(list(merged.cell_data.keys())) == 0
+        ### Geometry is concatenated as expected
+        expected_points = sum(
+            tet_domain.boundaries[name].n_points for name in tet_domain.boundary_names
+        )
+        expected_cells = sum(
+            tet_domain.boundaries[name].n_cells for name in tet_domain.boundary_names
+        )
+        assert merged.n_points == expected_points
+        assert merged.n_cells == expected_cells
+
+    def test_preserve_data_round_trips_homogeneous_fields(self):
+        """preserve_data=True keeps fields that share keys across boundaries."""
+        ### Two boundaries with the SAME cell_data key set
+        b1 = single_triangle_3d.load()
+        b1.cell_data["shear"] = torch.tensor([0.5])
+        b2 = single_triangle_3d.load()
+        b2.cell_data["shear"] = torch.tensor([1.5])
+        dm = DomainMesh(
+            interior=Mesh(points=torch.zeros((1, 3))),
+            boundaries={"a": b1, "b": b2},
+        )
+        merged = dm.merge_boundaries(preserve_data=True)
+        assert "shear" in merged.cell_data.keys()
+        ### Merged values are concatenated in sorted-name order: a then b
+        assert torch.allclose(merged.cell_data["shear"], torch.tensor([0.5, 1.5]))
+
+    def test_preserve_data_raises_on_heterogeneous_keys(self, tet_domain):
+        """preserve_data=True surfaces the underlying Mesh.merge mismatch."""
+        with pytest.raises(ValueError):
+            tet_domain.merge_boundaries(preserve_data=True)
+
+
+### Visualization
+
+
+@pytest.fixture
+def mpl():
+    """Headless matplotlib for visualization smoke tests; auto-closes figures."""
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    yield plt
+    plt.close("all")
+
+
+class TestDraw:
+    """Smoke tests for DomainMesh.draw (matplotlib backend)."""
+
+    def test_returns_canvas_with_boundaries(self, mpl, tet_domain):
+        """draw() returns the matplotlib Axes with boundaries overlaid."""
+        ax = tet_domain.draw(backend="matplotlib", show=False)
+        ### tet_domain interior is 3D tetrahedral, so backend gives a 3D Axes
+        import matplotlib.axes
+
+        assert isinstance(ax, matplotlib.axes.Axes)
+
+    def test_returns_canvas_no_boundaries(self, mpl, no_boundary_domain):
+        """draw() works on a domain with no boundaries."""
+        ax = no_boundary_domain.draw(backend="matplotlib", show=False)
+        import matplotlib.axes
+
+        assert isinstance(ax, matplotlib.axes.Axes)
+
+    def test_reuses_supplied_axes(self, mpl, tet_domain):
+        """draw(ax=existing) overlays on the supplied canvas."""
+        fig = mpl.figure()
+        ax_in = fig.add_subplot(111, projection="3d")
+        ax_out = tet_domain.draw(backend="matplotlib", show=False, ax=ax_in)
+        assert ax_out is ax_in
+
+    def test_boundary_kwargs_override_defaults(self, mpl, tet_domain, monkeypatch):
+        """boundary_kwargs values reach Mesh.draw and override auto defaults."""
+        captured: list[dict] = []
+        original_draw = Mesh.draw
+
+        def spy(self, **kwargs):
+            captured.append(kwargs)
+            return original_draw(self, **kwargs)
+
+        monkeypatch.setattr(Mesh, "draw", spy)
+
+        tet_domain.draw(
+            backend="matplotlib",
+            show=False,
+            boundary_kwargs={"alpha_cells": 0.7, "show_edges": True},
+        )
+        ### One call for interior + one per boundary
+        assert len(captured) == 1 + tet_domain.n_boundaries
+        boundary_calls = captured[1:]
+        for call in boundary_calls:
+            ### User overrides win against the auto defaults
+            assert call["alpha_cells"] == 0.7
+            assert call["show_edges"] is True
+            ### Default that wasn't overridden survives
+            assert call["alpha_points"] == 0
 
 
 ### Chaining

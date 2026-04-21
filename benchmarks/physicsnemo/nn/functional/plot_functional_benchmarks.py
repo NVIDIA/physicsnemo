@@ -15,32 +15,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Generate bar plots for functional benchmarks from ASV results."""
-# TODO: This code is not meant to be a long term solution. As things progress we will
-# update this script for better automated plot generation.
+"""Generate functional benchmark bar plots from ASV JSON outputs."""
 
 from __future__ import annotations
 
 import argparse
 import ast
 import json
+import re
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeAlias
 
+import torch
+
+from benchmarks.physicsnemo.nn.functional._spec_utils import PHASE_ORDER, case_labels
 from benchmarks.physicsnemo.nn.functional.registry import FUNCTIONAL_SPECS
 
-# Map each FunctionSpec to its docs output directory.
-_SPEC_OUTPUT_SLUG = {
-    "DropPath": "drop_path",
-    "KNN": "knn",
-    "RFFT": "rfft",
-    "RFFT2": "rfft2",
-    "RadiusSearch": "radius_search",
-    "SignedDistanceField": "sdf",
-    "IRFFT": "irfft",
-    "IRFFT2": "irfft2",
-    "Interpolation": "interpolation",
-}
+# Name of the ASV benchmark function to extract from result payloads.
+_BENCHMARK_SUFFIX = "FunctionalBenchmarks.time_functional"
 
 # Keep implementation order and colors stable across plots.
 _IMPL_ORDER = ("warp", "cuml", "scipy", "torch")
@@ -52,56 +46,47 @@ _IMPL_COLORS = {
     "unknown": "#8A8A8A",
 }
 
-# Match the ASV benchmark function used in benchmark_functionals.py.
-_BENCHMARK_SUFFIX = "FunctionalBenchmarks.time_functional"
+# Type aliases used throughout the parsing/plotting pipeline.
+BenchmarkKey: TypeAlias = tuple[str, str, str, int]
+CaseMap: TypeAlias = dict[str, dict[str, float]]
+SpecPhaseMap: TypeAlias = dict[str, dict[str, CaseMap]]
 
 
-def _build_case_labels() -> dict[str, list[str]]:
-    # Build case labels directly from make_inputs for each plottable spec.
-    labels: dict[str, list[str]] = {}
-    for spec in FUNCTIONAL_SPECS:
-        if len(spec.available_implementations()) < 2:
-            continue
-        labels[spec.__name__] = [
-            label for label, _, _ in spec.make_inputs(device="cpu")
-        ]
-    return labels
+@dataclass(frozen=True)
+class BenchmarkSpecData:
+    """Plottable benchmark metadata for one FunctionSpec."""
+
+    slug: str
+    implementations: tuple[str, ...]
+    labels_by_phase: dict[str, list[str]]
 
 
-def _build_spec_implementations() -> dict[str, list[str]]:
-    # Build implementation lists for each plottable spec.
-    implementations: dict[str, list[str]] = {}
-    for spec in FUNCTIONAL_SPECS:
-        impls = spec.available_implementations()
-        if len(impls) < 2:
-            continue
-        implementations[spec.__name__] = impls
-    return implementations
+def _camel_to_snake(name: str) -> str:
+    """Convert a class-style name (e.g. ``MeshToVoxelFraction``) to snake_case."""
+
+    # Step 1: split transitions like "PointCloud" -> "Point_Cloud".
+    stage_1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
+    # Step 2: split acronym-to-word boundaries like "IRFFT2" -> "IRFFT_2".
+    stage_2 = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", stage_1)
+    return stage_2.replace("__", "_").lower()
 
 
-def _build_params(
-    case_labels: dict[str, list[str]],
-    spec_implementations: dict[str, list[str]],
-) -> list[tuple[str, str, int]]:
-    # Recreate ASV parameter ordering for fallback labels.
-    params: list[tuple[str, str, int]] = []
-    for spec_name, impls in spec_implementations.items():
-        for impl_name in impls:
-            params.extend(
-                (spec_name, impl_name, case_index)
-                for case_index in range(len(case_labels[spec_name]))
-            )
-    return params
+def _spec_category(spec: type) -> str:
+    """Infer functional category from a FunctionSpec module path."""
+
+    module = spec.__module__
+    prefix = "physicsnemo.nn.functional."
+    if module.startswith(prefix):
+        relative = module[len(prefix) :]
+        category = relative.split(".", maxsplit=1)[0]
+        if category:
+            return category
+    return "misc"
 
 
-# Materialize spec metadata once.
-_SPEC_CASE_LABELS = _build_case_labels()
-_SPEC_IMPLEMENTATIONS = _build_spec_implementations()
-_PARAMS = _build_params(_SPEC_CASE_LABELS, _SPEC_IMPLEMENTATIONS)
+def _walk_dicts(value: Any) -> Iterator[dict[str, Any]]:
+    """Walk nested dict/list containers and yield dictionary nodes."""
 
-
-def _walk_dicts(value: Any):
-    # Walk nested dict/list containers and yield dict nodes.
     if isinstance(value, dict):
         yield value
         for nested in value.values():
@@ -112,17 +97,26 @@ def _walk_dicts(value: Any):
 
 
 def _latest_result_file(results_dir: Path) -> Path:
-    # Pick the newest ASV result JSON, excluding metadata files.
+    """Return the most recent ASV result JSON file in ``results_dir``."""
+
+    if not results_dir.exists():
+        raise FileNotFoundError(f"ASV results directory not found: {results_dir}")
+
+    # Exclude ASV metadata files that do not contain benchmark timing vectors.
     candidates = [
         path
         for path in results_dir.rglob("*.json")
         if path.name not in {"benchmarks.json", "machine.json"}
     ]
+    if not candidates:
+        raise FileNotFoundError(f"No ASV result JSON files found under: {results_dir}")
+
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
 def _benchmark_entry(data: dict[str, Any]) -> Any:
-    # Find the benchmark entry for the functional benchmark suite.
+    """Extract the functional benchmark entry from a loaded ASV payload."""
+
     for mapping in _walk_dicts(data):
         for key, value in mapping.items():
             if isinstance(key, str) and _BENCHMARK_SUFFIX in key:
@@ -130,118 +124,269 @@ def _benchmark_entry(data: dict[str, Any]) -> Any:
     raise KeyError(f"Unable to find benchmark entry for {_BENCHMARK_SUFFIX}")
 
 
-def _entry_vectors(entry: Any) -> tuple[list[float | None], list[str]]:
-    # Normalize ASV payload into (values, labels).
+def _entry_vectors(
+    entry: Any, fallback_params: list[BenchmarkKey]
+) -> tuple[list[float | None], list[str]]:
+    """Normalize the ASV entry payload into ``(values, labels)`` vectors."""
+
+    # ASV may store benchmark vectors directly or under "result"/"results".
     if isinstance(entry, dict):
         entry = entry.get("result", entry.get("results"))
 
+    if not isinstance(entry, list) or not entry:
+        raise ValueError("Unexpected ASV benchmark entry format.")
+
     values = entry[0]
     labels = (
-        entry[1] if len(entry) > 1 else [str(param) for param in _PARAMS[: len(values)]]
+        entry[1]
+        if len(entry) > 1
+        else [str(param) for param in fallback_params[: len(values)]]
     )
     if labels and isinstance(labels[0], list):
         labels = labels[0]
     return values, labels
 
 
-def _plot_benchmarks(
-    values: list[float | None], labels: list[str], output_root: Path
-) -> None:
-    # Import plotting dependency only for plotting.
-    import matplotlib.pyplot as plt
+def _parse_benchmark_label(label: str) -> BenchmarkKey:
+    """Parse ASV benchmark labels from legacy and phase-aware tuple formats."""
 
-    # Build spec -> case -> implementation -> value map from ASV vectors.
-    data: dict[str, dict[str, dict[str, float]]] = {}
+    parsed = ast.literal_eval(label)
+
+    # New format: (phase, spec_name, impl_name, case_index).
+    if isinstance(parsed, tuple) and len(parsed) == 4:
+        phase, spec_name, impl_name, case_index = parsed
+        return str(phase), str(spec_name), str(impl_name), int(case_index)
+
+    # Legacy format: (spec_name, impl_name, case_index) => forward-only.
+    if isinstance(parsed, tuple) and len(parsed) == 3:
+        spec_name, impl_name, case_index = parsed
+        return "forward", str(spec_name), str(impl_name), int(case_index)
+
+    raise ValueError(f"Unsupported benchmark label format: {label}")
+
+
+def _build_spec_data(device: torch.device | str) -> dict[str, BenchmarkSpecData]:
+    """Materialize plottable metadata for each FunctionSpec in the registry."""
+
+    spec_data: dict[str, BenchmarkSpecData] = {}
+
+    for spec in FUNCTIONAL_SPECS:
+        implementations = tuple(spec.available_implementations())
+        # Skip specs with a single backend: these are less informative as bar charts.
+        if len(implementations) < 2:
+            continue
+
+        labels_by_phase: dict[str, list[str]] = {}
+        for phase in PHASE_ORDER:
+            labels = case_labels(spec=spec, phase=phase, device=device)
+            if labels:
+                labels_by_phase[phase] = labels
+        if not labels_by_phase:
+            continue
+
+        snake_name = _camel_to_snake(spec.__name__)
+        category = _spec_category(spec)
+        spec_data[spec.__name__] = BenchmarkSpecData(
+            slug=f"{category}/{snake_name}",
+            implementations=implementations,
+            labels_by_phase=labels_by_phase,
+        )
+
+    return spec_data
+
+
+def _build_fallback_params(
+    spec_data: dict[str, BenchmarkSpecData],
+) -> list[BenchmarkKey]:
+    """Reconstruct ASV key ordering for result payloads missing explicit labels."""
+
+    params: list[BenchmarkKey] = []
+    for phase in PHASE_ORDER:
+        for spec_name, data in spec_data.items():
+            labels = data.labels_by_phase.get(phase, [])
+            if not labels:
+                continue
+            for implementation in data.implementations:
+                for case_index, _ in enumerate(labels):
+                    params.append((phase, spec_name, implementation, case_index))
+    return params
+
+
+def _collect_grouped_data(
+    values: list[float | None],
+    labels: list[str],
+    spec_data: dict[str, BenchmarkSpecData],
+) -> SpecPhaseMap:
+    """Build phase/spec/case/implementation timing maps from ASV vectors."""
+
+    # Initialize all phases so downstream plotting can iterate predictably.
+    grouped: SpecPhaseMap = {phase: {} for phase in PHASE_ORDER}
+
     for label, value in zip(labels, values):
         if value is None:
             continue
-        spec_name, impl_name, case_index = ast.literal_eval(label)
-        if spec_name not in _SPEC_CASE_LABELS:
+
+        phase, spec_name, implementation, case_index = _parse_benchmark_label(label)
+        if phase not in PHASE_ORDER or spec_name not in spec_data:
             continue
-        case_label = _SPEC_CASE_LABELS[spec_name][case_index]
-        data.setdefault(spec_name, {}).setdefault(case_label, {})[impl_name] = value
 
-    # Render one grouped bar chart per spec.
-    for spec_name, case_map in data.items():
-        output_dir = output_root / _SPEC_OUTPUT_SLUG.get(spec_name, spec_name.lower())
-        output_dir.mkdir(parents=True, exist_ok=True)
+        phase_labels = spec_data[spec_name].labels_by_phase.get(phase, [])
+        if case_index < 0 or case_index >= len(phase_labels):
+            continue
 
-        # Build case order and implementation order for this spec.
-        case_labels = [
-            label for label in _SPEC_CASE_LABELS[spec_name] if label in case_map
+        case_label = phase_labels[case_index]
+        grouped[phase].setdefault(spec_name, {}).setdefault(case_label, {})[
+            implementation
+        ] = float(value)
+
+    return grouped
+
+
+def _ordered_implementations(case_map: CaseMap) -> list[str]:
+    """Return implementation names sorted by canonical display order."""
+
+    implementations = {impl for impl_map in case_map.values() for impl in impl_map}
+    return sorted(
+        implementations,
+        key=lambda name: (_IMPL_ORDER.index(name) if name in _IMPL_ORDER else 99, name),
+    )
+
+
+def _plot_phase_spec(
+    phase: str,
+    spec_name: str,
+    case_map: CaseMap,
+    metadata: BenchmarkSpecData,
+    output_root: Path,
+) -> None:
+    """Render one grouped bar plot for one (phase, spec) pair."""
+
+    import matplotlib.pyplot as plt
+
+    # Preserve label ordering from FunctionSpec metadata/generator output.
+    case_labels_in_order = [
+        label for label in metadata.labels_by_phase.get(phase, []) if label in case_map
+    ]
+    if not case_labels_in_order:
+        return
+
+    # Plot only backend comparisons (at least two implementations present).
+    implementations = _ordered_implementations(case_map)
+    if len(implementations) < 2:
+        return
+
+    # Build output directory under <output_root>/<category>/<functional_name>/.
+    output_dir = output_root / metadata.slug
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create grouped-bar figure.
+    fig, ax = plt.subplots(figsize=(8, 4))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    bar_width = 0.8 / len(implementations)
+    x_positions = list(range(len(case_labels_in_order)))
+
+    # Draw one bar group per case, one color per implementation.
+    for impl_index, implementation in enumerate(implementations):
+        offsets = [x + impl_index * bar_width for x in x_positions]
+        y_values = [
+            case_map[label].get(implementation, float("nan"))
+            for label in case_labels_in_order
         ]
-        impl_names = sorted(
-            {impl for impl_map in case_map.values() for impl in impl_map},
-            key=lambda name: (_IMPL_ORDER.index(name) if name in _IMPL_ORDER else 99),
+        ax.bar(
+            offsets,
+            y_values,
+            width=bar_width,
+            color=_IMPL_COLORS.get(implementation, _IMPL_COLORS["unknown"]),
+            label=implementation,
         )
-        if len(impl_names) < 2:
-            continue
 
-        # Create and style the figure.
-        fig, ax = plt.subplots(figsize=(8, 4))
-        fig.patch.set_facecolor("white")
-        ax.set_facecolor("white")
+    # Configure axes and legend.
+    tick_positions = [
+        x + bar_width * (len(implementations) - 1) / 2 for x in x_positions
+    ]
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels(case_labels_in_order, rotation=20, ha="right")
+    ax.set_ylabel("Time (s)")
+    ax.set_title(f"{spec_name} {phase.title()} Benchmark", color="#111111")
+    ax.grid(axis="y", linestyle=":", color="#E0E0E0")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.tick_params(axis="x", colors="#111111")
+    ax.tick_params(axis="y", colors="#111111")
+    ax.legend(
+        frameon=False,
+        fontsize="small",
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1),
+    )
 
-        # Draw grouped bars for each implementation.
-        bar_width = 0.8 / len(impl_names)
-        x_positions = list(range(len(case_labels)))
-        for idx, impl_name in enumerate(impl_names):
-            offsets = [x + idx * bar_width for x in x_positions]
-            y_values = [
-                case_map[label].get(impl_name, float("nan")) for label in case_labels
-            ]
-            ax.bar(
-                offsets,
-                y_values,
-                width=bar_width,
-                color=_IMPL_COLORS.get(impl_name, _IMPL_COLORS["unknown"]),
-                label=impl_name,
+    # Save to canonical benchmark file name for the phase.
+    fig.tight_layout()
+    output_name = (
+        "benchmark_forward.png" if phase == "forward" else f"benchmark_{phase}.png"
+    )
+    fig.savefig(output_dir / output_name)
+
+    plt.close(fig)
+
+
+def _plot_all(
+    grouped: SpecPhaseMap,
+    spec_data: dict[str, BenchmarkSpecData],
+    output_root: Path,
+) -> None:
+    """Render all available benchmark plots from grouped benchmark data."""
+
+    for phase in PHASE_ORDER:
+        for spec_name, case_map in grouped[phase].items():
+            _plot_phase_spec(
+                phase=phase,
+                spec_name=spec_name,
+                case_map=case_map,
+                metadata=spec_data[spec_name],
+                output_root=output_root,
             )
-
-        # Configure axes and legend.
-        tick_positions = [
-            x + bar_width * (len(impl_names) - 1) / 2 for x in x_positions
-        ]
-        ax.set_xticks(tick_positions)
-        ax.set_xticklabels(case_labels, rotation=20, ha="right")
-        ax.set_ylabel("Time (s)")
-        ax.set_title(f"{spec_name} Benchmark", color="#111111")
-        ax.grid(axis="y", linestyle=":", color="#E0E0E0")
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        ax.tick_params(axis="x", colors="#111111")
-        ax.tick_params(axis="y", colors="#111111")
-        ax.legend(
-            frameon=False, fontsize="small", loc="upper left", bbox_to_anchor=(1.02, 1)
-        )
-
-        # Save figure to docs image path.
-        fig.tight_layout()
-        fig.savefig(output_dir / "benchmark.png")
-        plt.close(fig)
 
 
 def main() -> int:
-    # Parse command-line paths.
+    """CLI entrypoint for generating benchmark plots from ASV outputs."""
+
     parser = argparse.ArgumentParser(
         description="Generate functional benchmark bar plots from ASV results."
     )
     parser.add_argument("--results-dir", type=Path, default=Path(".asv/results"))
     parser.add_argument(
-        "--output-root", type=Path, default=Path("docs/img/nn/functional")
+        "--output-root",
+        type=Path,
+        default=Path("docs/img/nn/functional"),
+        help="Root docs directory for benchmark images.",
+    )
+    parser.add_argument(
+        "--label-device",
+        default="cpu",
+        help="Device used to resolve make_inputs labels (default: cpu).",
     )
     args = parser.parse_args()
 
-    # Load the newest ASV result payload.
-    results_file = _latest_result_file(args.results_dir)
-    data = json.loads(results_file.read_text())
+    # Build spec metadata and fallback ASV key ordering.
+    spec_data = _build_spec_data(device=args.label_device)
+    fallback_params = _build_fallback_params(spec_data=spec_data)
 
-    # Extract benchmark vectors from the ASV payload.
+    # Load the newest ASV result payload and extract benchmark vectors.
+    result_file = _latest_result_file(args.results_dir)
+    data = json.loads(result_file.read_text())
     entry = _benchmark_entry(data)
-    values, labels = _entry_vectors(entry)
+    values, labels = _entry_vectors(entry=entry, fallback_params=fallback_params)
 
-    # Generate all benchmark plots.
-    _plot_benchmarks(values, labels, args.output_root)
+    # Group raw vectors by phase/spec/case/implementation, then render plots.
+    grouped = _collect_grouped_data(values=values, labels=labels, spec_data=spec_data)
+    _plot_all(
+        grouped=grouped,
+        spec_data=spec_data,
+        output_root=args.output_root,
+    )
     return 0
 
 

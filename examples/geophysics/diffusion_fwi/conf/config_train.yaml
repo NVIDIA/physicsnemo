@@ -50,6 +50,18 @@ model:
   # null to use default parameters.
   unet_kwargs: null
 
+# EDM noise schedule parameters
+noise_schedule:
+  # Mean of the log-normal distribution for sampling noise levels during
+  # training
+  P_mean: 0.0
+  # Standard deviation of the log-normal distribution for sampling noise
+  # levels during training
+  P_std: 1.0
+  # Expected standard deviation of the training data. Used by both the noise
+  # schedule loss weighting and the EDM preconditioner.
+  sigma_data: 0.5
+
 dataset:
   # Training data directory that should contain a subdirectory "samples/"" and
   # a file stats.json

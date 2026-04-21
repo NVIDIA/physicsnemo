@@ -18,7 +18,12 @@
 model:
   # Path to checkpoint file for the diffusion model
   checkpoint_path: <path_to_checkpoint>
-  
+
+# EDM noise schedule parameters (should be consistent with training)
+noise_schedule:
+  # Expected standard deviation of the training data
+  sigma_data: 0.5
+
 # Dataset configuration
 dataset:
   # Data directory that should contain a subdirectory "samples/"" and
@@ -67,18 +72,13 @@ generation:
     # true)
     physics_informed_guidance:
       # Standard deviation of measurement noise
-      std: 0.01
-      # Gamma scaling parameter for the guidance, depends on the covariance of
-      # the prior P(x)
+      std_y: 0.01
+      # Covariance scaling factor. When > 0, accounts for the uncertainty in
+      # the denoised estimate at different noise levels, which stabilizes the
+      # guidance at high noise.
       gamma: 0.01
-      # Strength of the guidance (multiplier for the guidance term)
-      scale: 0.1
-      # Noise level exponent for the guidance scaling
-      power: 2.0
-      # Order of the norm used to compute the error in the guidance term
-      norm_ord: 1
-      # Whether to normalize the guidance term by its magnitude
-      magnitude_scaling: true
+      # Order of the norm used to compute the residual in the guidance term
+      norm: 2
       # Frequency of the source in the physics-informed guidance term. Should
       # be consistent with the frequency that is used to generate the seismic
       # observations.
@@ -90,9 +90,15 @@ generation:
       vp_range: null  # P-wave velocity range (m/s), e.g., [1500, 6000]
       vs_range: null  # S-wave velocity range (m/s), e.g., [800, 3500]
       rho_range: null  # Density range (kg/m³), e.g., [1000, 3000]
-      # Clip scaled score likelihood to given range. By default, the sclaled
-      # score is not clipped. Should typically of order [-1, 1]. Clipping may
-      # improve stability of the sampling procedure.
+      # Resolution [depth, width] of the original PDE grid that was used to
+      # generate the training data. The wave operator interpolates the velocity
+      # model to this resolution before running the wave equation, so that the
+      # observation operator is consistent with the training data pipeline.
+      pde_resolution: [70, 70]
+      # Grid spacing (in meters) on the original PDE grid.
+      pde_dx: 5.0
+      # Clip guidance output to given range. By default, the guidance is not
+      # clipped. Clipping may improve stability of the sampling procedure.
       score_clip_range: null  # e.g., [-1, 1]
 
 # I/O configuration

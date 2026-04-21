@@ -16,24 +16,63 @@
 
 """Registry of FunctionSpec classes to benchmark with ASV."""
 
-from physicsnemo.nn.functional.drop_path import DropPath
-from physicsnemo.nn.functional.fft import IRFFT, IRFFT2, RFFT, RFFT2
-from physicsnemo.nn.functional.interpolation.interpolation import Interpolation
-from physicsnemo.nn.functional.knn.knn import KNN
-from physicsnemo.nn.functional.radius_search.radius_search import RadiusSearch
-from physicsnemo.nn.functional.sdf import SignedDistanceField
-
-# FunctionSpec classes listed here must implement ``make_inputs`` for ASV.
-FUNCTIONAL_SPECS = (
+from physicsnemo.nn.functional.derivatives import (
+    MeshGreenGaussGradient,
+    MeshlessFDDerivatives,
+    MeshLSQGradient,
+    RectilinearGridGradient,
+    SpectralGridGradient,
+    UniformGridGradient,
+)
+from physicsnemo.nn.functional.fourier_spectral import (
+    IRFFT,
+    IRFFT2,
+    RFFT,
+    RFFT2,
+    Imag,
+    Real,
+    ViewAsComplex,
+)
+from physicsnemo.nn.functional.geometry import SignedDistanceField
+from physicsnemo.nn.functional.interpolation import (
+    GridToPointInterpolation,
+    PointToGridInterpolation,
+)
+from physicsnemo.nn.functional.neighbors import KNN, RadiusSearch
+from physicsnemo.nn.functional.regularization_parameterization import (
     DropPath,
+    WeightFact,
+)
+
+# FunctionSpec classes listed here must implement ``make_inputs_forward`` for ASV.
+# ``make_inputs_backward`` is optional and only used when backward benchmarks run.
+FUNCTIONAL_SPECS = (
+    # Regularization / parameterization.
+    DropPath,
+    WeightFact,
+    # Neighbor queries.
     KNN,
-    Interpolation,
     RadiusSearch,
+    # Derivatives.
+    UniformGridGradient,
+    RectilinearGridGradient,
+    MeshLSQGradient,
+    MeshGreenGaussGradient,
+    SpectralGridGradient,
+    MeshlessFDDerivatives,
+    # Geometry.
     SignedDistanceField,
+    # Interpolation.
+    GridToPointInterpolation,
+    PointToGridInterpolation,
+    # Fourier spectral.
     RFFT,
     RFFT2,
     IRFFT,
     IRFFT2,
+    ViewAsComplex,
+    Real,
+    Imag,
 )
 
 __all__ = ["FUNCTIONAL_SPECS"]

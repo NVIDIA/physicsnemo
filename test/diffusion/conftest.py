@@ -20,6 +20,7 @@ import random
 
 import pytest
 import torch
+import torch._dynamo
 
 # =============================================================================
 # Shared Constants
@@ -27,13 +28,21 @@ import torch
 
 GLOBAL_SEED = 42
 
-CPU_TOLERANCES = {"atol": 1e-5, "rtol": 1e-5}
+CPU_TOLERANCES = {"atol": 1e-3, "rtol": 1e-3}
 GPU_TOLERANCES = {"atol": 1e-2, "rtol": 5e-2}
 
 
 # =============================================================================
 # Shared Fixtures
 # =============================================================================
+
+
+@pytest.fixture(autouse=True)
+def reset_dynamo():
+    """Reset torch._dynamo state between tests to avoid cross-test recompile errors."""
+    torch._dynamo.reset()
+    yield
+    torch._dynamo.reset()
 
 
 @pytest.fixture

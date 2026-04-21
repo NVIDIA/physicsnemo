@@ -36,7 +36,7 @@ COMPAT_MAP = {
     "physicsnemo.models.meta": "physicsnemo.core.meta",
     "physicsnemo.models.module": "physicsnemo.core.module",
     "physicsnemo.utils.neighbors": "physicsnemo.nn.functional",
-    "physicsnemo.utils.sdf": "physicsnemo.nn.functional.sdf",
+    "physicsnemo.utils.sdf": "physicsnemo.nn.functional.geometry.sdf",
     "physicsnemo.models.layers": "physicsnemo.nn",
     "physicsnemo.models.layers.activations": "physicsnemo.nn.module.activations",
     "physicsnemo.models.layers.attention_layers": "physicsnemo.nn.module.attention_layers",

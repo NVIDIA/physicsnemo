@@ -15,6 +15,9 @@
 # limitations under the License.
 # ruff: noqa: E402
 
+import warnings
+
+import numpy as np
 import pytest
 import torch
 
@@ -272,6 +275,80 @@ def test_fails_if_grid_is_invalid():
             gridtype="sinusoidal",
             N_grid_channels=11,
         )
+
+    with pytest.raises(ValueError):
+        UNet(
+            img_resolution=img_resolution,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            gridtype="sinusoidal_octave",
+            N_grid_channels=11,
+        )
+
+
+def test_sinusoidal_octave_freq_bands():
+    """Test that sinusoidal_octave produces correct octave-doubled freq bands (issue #1522).
+
+    Builds the expected embedding grid manually with ``2.0 ** np.arange(num_freq)``
+    and checks that the model's ``pos_embd`` buffer matches exactly.
+    """
+    img_resolution = 16
+    N_pos = 12  # num_freq = 3 -> freq_bands = [1, 2, 4]
+    model = UNet(
+        img_resolution=img_resolution,
+        in_channels=2 + N_pos,
+        out_channels=2,
+        gridtype="sinusoidal_octave",
+        N_grid_channels=N_pos,
+    )
+
+    # Recompute the expected grid with the correct formula
+    num_freq = N_pos // 4
+    freq_bands = 2.0 ** np.arange(num_freq)
+    grid_x, grid_y = np.meshgrid(
+        np.linspace(0, 2 * np.pi, img_resolution),
+        np.linspace(0, 2 * np.pi, img_resolution),
+    )
+    grid_list = []
+    for freq in freq_bands:
+        for fn in [np.sin, np.cos]:
+            grid_list.append(fn(grid_x * freq))
+            grid_list.append(fn(grid_y * freq))
+    expected = torch.from_numpy(np.stack(grid_list, axis=0)).float()
+
+    torch.testing.assert_close(model.pos_embd, expected)
+
+
+def test_sinusoidal_octave_differs_from_legacy():
+    """Test that sinusoidal_octave and legacy sinusoidal produce different embeddings.
+
+    With num_freq >= 2 the legacy ``np.linspace`` formula generates non-integer
+    powers of 2, so the two embeddings must differ. Also verifies the octave
+    embedding matches the expected [1, 2, 4, ...] frequency progression.
+    """
+    img_resolution = 16
+    N_pos = 12  # num_freq = 3
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        legacy = UNet(
+            img_resolution=img_resolution,
+            in_channels=2 + N_pos,
+            out_channels=2,
+            gridtype="sinusoidal",
+            N_grid_channels=N_pos,
+        )
+    octave = UNet(
+        img_resolution=img_resolution,
+        in_channels=2 + N_pos,
+        out_channels=2,
+        gridtype="sinusoidal_octave",
+        N_grid_channels=N_pos,
+    )
+
+    assert not torch.allclose(legacy.pos_embd, octave.pos_embd), (
+        "Legacy and octave embeddings should differ for num_freq >= 2"
+    )
 
 
 # Skip CPU tests because too slow

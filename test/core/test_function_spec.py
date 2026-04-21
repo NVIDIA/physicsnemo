@@ -211,13 +211,16 @@ def test_missing_imports_handling():
     assert not FunctionSpec._check_imports(("not_a_real_module",))
 
 
-def test_make_inputs_and_compare_not_implemented():
+def test_make_inputs_forward_backward_and_compare_not_implemented():
     # This test is really just for code coverage.
 
     with pytest.raises(NotImplementedError):
-        FunctionSpec.make_inputs(device="cpu")
+        FunctionSpec.make_inputs_forward(device="cpu")
+    assert list(FunctionSpec.make_inputs_backward(device="cpu")) == []
     with pytest.raises(NotImplementedError):
-        FunctionSpec.compare(output=None, reference=None)
+        FunctionSpec.compare_forward(output=None, reference=None)
+    with pytest.raises(NotImplementedError):
+        FunctionSpec.compare_backward(output=None, reference=None)
 
 
 def test_duplicate_name_raises():
@@ -300,3 +303,17 @@ def test_warp_launch_context_missing_warp(monkeypatch):
     monkeypatch.setattr(function_spec.importlib, "import_module", _raise)
     with pytest.raises(ImportError):
         FunctionSpec.warp_launch_context(torch.tensor([1.0]))
+
+
+def test_dispatch_compatible_with_torch_compile():
+    # Regression: dispatch used min(..., key=...) which dynamo does not support.
+    # Using sorted(...)[0] keeps this path compile-friendly.
+    class AddOne(FunctionSpec):
+        @FunctionSpec.register(name="torch", rank=0, baseline=True)
+        def torch_impl(x):
+            return x + 1
+
+    fn = AddOne.make_function()
+    compiled = torch.compile(fn, fullgraph=True)
+    result = compiled(torch.zeros(4))
+    assert torch.allclose(result, torch.ones(4))

@@ -15,6 +15,7 @@
 # limitations under the License.
 
 from .noise_schedulers import (  # noqa: F401
+    EDMLogUniformNoiseScheduler,
     EDMNoiseScheduler,
     IDDPMNoiseScheduler,
     LinearGaussianNoiseScheduler,
@@ -23,3 +24,19 @@ from .noise_schedulers import (  # noqa: F401
     VENoiseScheduler,
     VPNoiseScheduler,
 )
+
+
+def __getattr__(name: str):
+    if name == "DomainParallelNoiseScheduler":
+        try:
+            from .domain_parallel import DomainParallelNoiseScheduler
+
+            return DomainParallelNoiseScheduler
+        except ImportError as exc:
+            raise ImportError(
+                "DomainParallelNoiseScheduler requires optional distributed "
+                "dependencies (physicsnemo.domain_parallel). Check that your "
+                "torch version is compatible with this release of PhysicsNeMo. "
+                f"Original error: {exc}"
+            ) from exc
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

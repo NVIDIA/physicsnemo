@@ -18,11 +18,14 @@
 
 from typing import Any, Dict, List, Literal
 
+import torch.distributed as dist
 from jaxtyping import Float
 from torch import Tensor
+from torch.distributed.tensor.placement_types import Replicate
 
 from physicsnemo.diffusion.base import Denoiser
 from physicsnemo.diffusion.noise_schedulers import NoiseScheduler
+from physicsnemo.domain_parallel.shard_tensor import scatter_tensor
 
 from .solvers import (
     EDMStochasticEulerSolver,
@@ -38,6 +41,35 @@ SOLVERS: Dict[str, type[Solver]] = {
     "edm_stochastic_euler": EDMStochasticEulerSolver,
     "edm_stochastic_heun": EDMStochasticHeunSolver,
 }
+
+
+def _maybe_replicate_timesteps(
+    t_steps: Float[Tensor, " N_plus_1"],
+    xN: Float[Tensor, " B *dims"],
+) -> Float[Tensor, " N_plus_1"]:
+    """Replicate ``t_steps`` on the device mesh of ``xN`` when needed.
+
+    If ``xN`` lives on a device mesh (e.g. a ``ShardTensor`` used for domain
+    parallelism) but ``t_steps`` does not, this function wraps ``t_steps`` as a
+    replicated distributed tensor on the same mesh.  This ensures that solver
+    arithmetic between latents and time-step scalars is type-compatible.
+
+    When ``xN`` is a plain tensor, or ``t_steps`` is already on a mesh, this is
+    a no-op.
+    """
+    xN_mesh = getattr(xN, "device_mesh", None)
+    if xN_mesh is None or hasattr(t_steps, "device_mesh"):
+        return t_steps
+
+    source_rank = dist.get_global_rank(xN_mesh.get_group(), 0)
+    return scatter_tensor(
+        t_steps,
+        source_rank,
+        xN_mesh,
+        placements=(Replicate(),),
+        global_shape=t_steps.shape,
+        dtype=t_steps.dtype,
+    )
 
 
 def sample(
@@ -139,9 +171,9 @@ def sample(
         the ``dtype`` and ``device`` of the generated samples and any
         internally created tensors. Can usually be obtained by using
         :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.init_latents`
-        from a noise scheduler (typically from the same noise scheduler
-        instance as the ``noise_scheduler`` argument, but can be different if
-        desired).
+        from a noise scheduler (typically obtained from the same noise scheduler
+        instance passed as the ``noise_scheduler`` argument, but can be
+        different if desired).
     noise_scheduler : NoiseScheduler
         The noise scheduler instance used for generating time-steps. The
         schedule's
@@ -341,6 +373,12 @@ def sample(
         t_steps = time_steps.to(device=xN.device, dtype=xN.dtype)
     else:
         t_steps = noise_scheduler.timesteps(num_steps, device=xN.device, dtype=xN.dtype)
+
+    # When xN is a distributed tensor (e.g. ShardTensor for domain
+    # parallelism) but t_steps is a plain tensor, replicate t_steps on the
+    # same mesh so that solver arithmetic between latents and timesteps is
+    # type-compatible.
+    t_steps = _maybe_replicate_timesteps(t_steps, xN)
 
     # Main sampling loop
     samples: List[Tensor] = []
