@@ -297,7 +297,7 @@ class MeshDataset(DatasetBase):
                 if result.error is not None:
                     raise result.error
                 if result.event is not None:
-                    result.event.synchronize()
+                    torch.cuda.current_stream().wait_event(result.event)
                 return result.data, result.metadata
 
             return result
