@@ -436,7 +436,7 @@ def match_points(
     r"""Find near-exact vertex matches between two point sets.
 
     For each *source* point, finds the nearest *target* point via KNN (k=1).
-    Pairs whose distance exceeds ``tolerance`` are discarded.
+    Pairs whose L2 distance exceeds ``tolerance`` are discarded.
 
     Parameters
     ----------
@@ -445,13 +445,27 @@ def match_points(
     target : torch.Tensor
         Target points, shape :math:`(N, D)`.
     tolerance : float
-        Maximum L2 distance for a pair to be considered coincident.
+        Maximum L2 distance for a pair to be considered coincident. The
+        comparison is inclusive (``distance <= tolerance``).
 
     Returns
     -------
     tuple[torch.Tensor, torch.Tensor]
         ``(source_indices, target_indices)`` -- matched index pairs, both
         shape :math:`(K,)` where *K* is the number of matches found.
+
+    Notes
+    -----
+    This is a one-way nearest-neighbor lookup, not a bipartite matching:
+    multiple source points can map to the same target index. Callers
+    expecting one-to-one pairs should de-duplicate by target.
+
+    For *within-set* duplicate detection (find coincident vertices within
+    a single point cloud, with transitive merging), see
+    :func:`physicsnemo.mesh.utilities._duplicate_detection.compute_canonical_indices`,
+    which uses a BVH + union-find pipeline tuned for that case. For
+    float-32 inputs, tolerances much below ``~1e-6`` (relative to mesh
+    extent) can be defeated by representation noise.
 
     Examples
     --------
@@ -468,7 +482,8 @@ def match_points(
     indices = indices[:, 0]  # (M,)
     distances = distances[:, 0]  # (M,)
     mask = distances <= tolerance
-    return torch.where(mask)[0], indices[mask]
+    matched_source = mask.nonzero(as_tuple=True)[0]
+    return matched_source, indices[mask]
 
 
 # ---------------------------------------------------------------------------
