@@ -974,65 +974,132 @@ class DomainMesh:
     def draw(
         self,
         *,
-        point_scalars: None | str | tuple[str, ...] = None,
-        show_edges: bool = False,
         backend: Literal["matplotlib", "pyvista", "auto"] = "auto",
         show: bool = True,
-        **kwargs,
+        point_scalars: None | torch.Tensor | str | tuple[str, ...] = None,
+        cell_scalars: None | torch.Tensor | str | tuple[str, ...] = None,
+        cmap: str = "viridis",
+        vmin: float | None = None,
+        vmax: float | None = None,
+        alpha_points: float = 1.0,
+        alpha_cells: float = 1.0,
+        alpha_edges: float = 1.0,
+        show_edges: bool = False,
+        boundary_kwargs: dict[str, Any] | None = None,
+        ax: Any = None,
+        backend_options: dict[str, Any] | None = None,
     ):
         r"""Draw the domain: interior with optional scalar coloring, boundaries overlaid.
 
-        Draws the interior mesh (optionally colored by a ``point_data`` field),
-        then overlays each boundary mesh on the same canvas.  All rendering
-        is delegated to :meth:`Mesh.draw`, so both matplotlib and PyVista
-        backends are supported transparently.
+        Renders the interior as the primary visual layer, then overlays every
+        boundary on the same canvas. The interior parameter set mirrors
+        :meth:`Mesh.draw` exactly, with two intentional changes: the call is
+        keyword-only, and ``show_edges`` defaults to ``False`` (rather than
+        ``True``) because dense interior meshes are typically more readable
+        without edges. Both matplotlib and PyVista backends are supported.
 
         Parameters
         ----------
-        point_scalars : str or tuple[str, ...], optional
-            Key into ``interior.point_data`` to color the interior mesh.
-        show_edges : bool
-            Whether to draw cell edges on the interior mesh.  Defaults to
-            ``False`` (unlike :meth:`Mesh.draw`) because dense meshes are
-            typically more readable without edges.
-        backend : {"auto", "matplotlib", "pyvista"}
-            Visualization backend.  See :meth:`Mesh.draw`.
-        show : bool
-            Whether to display the plot immediately.
-        **kwargs
-            Forwarded to :meth:`Mesh.draw` for the interior mesh
-            (e.g. ``cmap``, ``vmin``, ``vmax``, ``ax``, ``backend_options``).
+        backend, show, point_scalars, cell_scalars, cmap, vmin, vmax, alpha_points, alpha_cells, alpha_edges, show_edges, ax, backend_options
+            Forwarded to :meth:`Mesh.draw` for the **interior** mesh. See
+            :meth:`Mesh.draw` for full descriptions.
+        boundary_kwargs : dict, optional
+            Keyword arguments forwarded to :meth:`Mesh.draw` for **every**
+            boundary mesh. Defaults are tuned for unobtrusive overlay:
+
+            - ``alpha_points = 0`` (boundary vertices are not scattered).
+            - ``alpha_cells = 0.3`` when boundaries are 2-D surfaces,
+              ``1.0`` when they are 1-D curves. Auto-detected from the
+              first boundary's :attr:`Mesh.n_manifold_dims`.
+            - ``show_edges = False``.
+
+            User-supplied keys override these defaults. To color individual
+            boundaries by their own scalar fields, compose :meth:`Mesh.draw`
+            calls directly (see Examples).
 
         Returns
         -------
         matplotlib.axes.Axes or pyvista.Plotter
-            The canvas object, for further customization when ``show=False``.
+            The canvas, for further customization when ``show=False``.
 
         Examples
         --------
+        Default visualization with pressure coloring on the interior:
+
         >>> dm.draw(point_scalars="p", cmap="RdBu_r", vmin=-200, vmax=200)  # doctest: +SKIP
 
-        Zoom into a subregion by setting axis limits on the returned canvas:
+        Translucent boundaries with edges visible:
+
+        >>> dm.draw(  # doctest: +SKIP
+        ...     point_scalars="p",
+        ...     boundary_kwargs={"alpha_cells": 0.5, "show_edges": True},
+        ... )
+
+        Customize and display later by setting axis limits on the returned canvas:
 
         >>> ax = dm.draw(point_scalars="p", show=False)  # doctest: +SKIP
-        >>> ax.set_xlim(-2, 4)  # doctest: +SKIP
-        >>> ax.set_ylim(-3, 3)  # doctest: +SKIP
+        >>> ax.set_xlim(-2, 4); ax.set_ylim(-3, 3)       # doctest: +SKIP
+
+        Per-boundary scalar coloring (manual composition - color the no-slip
+        wall by its own ``shear`` field while the interior shows pressure):
+
+        >>> ax = dm.interior.draw(point_scalars="p", show=False)  # doctest: +SKIP
+        >>> dm.boundaries["wall"].draw(                           # doctest: +SKIP
+        ...     ax=ax, cell_scalars="shear", cmap="hot", show=False,
+        ... )
+        >>> for name in dm.boundary_names:                        # doctest: +SKIP
+        ...     if name == "wall":
+        ...         continue
+        ...     dm.boundaries[name].draw(
+        ...         ax=ax, alpha_cells=0.3, alpha_points=0,
+        ...         show_edges=False, show=False,
+        ...     )
+        >>> import matplotlib.pyplot as plt; plt.show()           # doctest: +SKIP
         """
+        ### Auto-pick boundary opacity from the boundary's manifold dim:
+        ### 2-D surfaces would otherwise occlude the interior; 1-D curves
+        ### are thin lines and stay legible at full opacity.
+        if self.n_boundaries > 0:
+            first_bdy = self.boundaries[self.boundary_names[0]]
+            auto_alpha_cells = 0.3 if first_bdy.n_manifold_dims >= 2 else 1.0
+        else:
+            auto_alpha_cells = 1.0  # unused
+
+        boundary_defaults: dict[str, Any] = {
+            "alpha_points": 0,
+            "alpha_cells": auto_alpha_cells,
+            "show_edges": False,
+        }
+        boundary_defaults.update(boundary_kwargs or {})
+
+        ### Draw interior; if no boundaries follow, this is the layer that
+        ### triggers the eventual ``.show()``.
         has_boundaries = self.n_boundaries > 0
         canvas = self.interior.draw(
-            point_scalars=point_scalars,
-            show_edges=show_edges,
             backend=backend,
-            show=(show and not has_boundaries),
-            **kwargs,
+            show=show and not has_boundaries,
+            point_scalars=point_scalars,
+            cell_scalars=cell_scalars,
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
+            alpha_points=alpha_points,
+            alpha_cells=alpha_cells,
+            alpha_edges=alpha_edges,
+            show_edges=show_edges,
+            ax=ax,
+            backend_options=backend_options,
         )
+
+        ### Overlay boundaries; the last one triggers ``.show()`` if requested.
         names = self.boundary_names
-        for i, name in enumerate(names):
+        last = names[-1] if names else None
+        for name in names:
             self.boundaries[name].draw(
                 ax=canvas,
-                alpha_points=0,
                 backend=backend,
-                show=(show and i == len(names) - 1),
+                show=show and (name is last),
+                **boundary_defaults,
             )
         return canvas
 
@@ -1077,4 +1144,4 @@ def _domain_mesh_repr(self: DomainMesh) -> str:
     return "\n".join(lines)
 
 
-DomainMesh.__repr__ = _domain_mesh_repr  # type: ignore
+DomainMesh.__repr__ = _domain_mesh_repr  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
