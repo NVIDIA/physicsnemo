@@ -47,7 +47,7 @@ force_sharding: False
 # Performance and optimization (like corrdiff perf section)
 perf:
   fp_optimizations: fp32 # Floating point mode: "fp32", "amp-fp16", "amp-bf16"
-  torch_compile: False # Use torch.compile to compile model
+  torch_compile: False # torch.compile the training loss forward (skipped with domain parallelism)
   use_apex_gn: False # Use Apex GroupNorm (enables channels_last memory format)
   allow_tf32: False # Allow TF32 for matmul and cuDNN (faster but less precise)
   allow_fp16_reduced_precision: False # Allow reduced precision reductions in fp16

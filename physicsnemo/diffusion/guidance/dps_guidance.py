@@ -110,7 +110,8 @@ class DPSGuidance(Protocol):
     ...     x_0 = x0_predictor(x, t)
     ...     guidance_term = guidance(x, t, x_0)
     ...     # Convert x0 to score (for EDM: score = (x_0 - x) / t^2)
-    ...     t_bc = t.reshape(-1, *([1] * (x.ndim - 1)))
+    ...     expected_shape = (-1,) + (1,) * (x.ndim - 1)
+    ...     t_bc = t.reshape(expected_shape)
     ...     score = (x_0 - x) / (t_bc ** 2)
     ...     return score + guidance_term
     ...
@@ -237,7 +238,8 @@ class DPSScorePredictor:
     >>>
     >>> # Simple x0_to_score function (for EDM: score = (x_0 - x) / t^2)
     >>> def x0_to_score_fn(x_0, x, t):
-    ...     t_bc = t.reshape(-1, *([1] * (x.ndim - 1)))
+    ...     expected_shape = (-1,) + (1,) * (x.ndim - 1)
+    ...     t_bc = t.reshape(expected_shape)
     ...     return (x_0 - x) / (t_bc ** 2)
     ...
     >>> # Simple inpainting guidance
@@ -546,7 +548,8 @@ class ModelConsistencyDPSGuidance(DPSGuidance):
     >>> # Combine with DPSScorePredictor for complete sampling workflow
     >>> x0_predictor = lambda x, t: x * 0.9
     >>> def x0_to_score_fn(x_0, x, t):
-    ...     t_bc = t.reshape(-1, *([1] * (x.ndim - 1)))
+    ...     expected_shape = (-1,) + (1,) * (x.ndim - 1)
+    ...     t_bc = t.reshape(expected_shape)
     ...     return (x_0 - x) / (t_bc ** 2)
     ...
     >>> dps_score_pred = DPSScorePredictor(
@@ -724,7 +727,8 @@ class ModelConsistencyDPSGuidance(DPSGuidance):
             )[0]
 
         # Compute scaling factor
-        t_bc = t.reshape(-1, *([1] * (x.ndim - 1)))
+        expected_shape = (-1,) + (1,) * (x.ndim - 1)
+        t_bc = t.reshape(expected_shape)
         sigma_t = self.sigma_fn(t_bc)
         alpha_t = self.alpha_fn(t_bc)
         variance = self.std_y**2 + self.gamma * (sigma_t**2) / (alpha_t**2)
@@ -854,7 +858,8 @@ class DataConsistencyDPSGuidance(DPSGuidance):
     >>> # Use with DPSScorePredictor for complete sampling workflow
     >>> x0_predictor = lambda x, t: x * 0.9
     >>> def x0_to_score_fn(x_0, x, t):
-    ...     t_bc = t.reshape(-1, *([1] * (x.ndim - 1)))
+    ...     expected_shape = (-1,) + (1,) * (x.ndim - 1)
+    ...     t_bc = t.reshape(expected_shape)
     ...     return (x_0 - x) / (t_bc ** 2)
     ...
     >>> dps_score_pred = DPSScorePredictor(
@@ -1038,7 +1043,8 @@ class DataConsistencyDPSGuidance(DPSGuidance):
             )[0]
 
         # Compute scaling factor
-        t_bc = t.reshape(-1, *([1] * (x.ndim - 1)))
+        expected_shape = (-1,) + (1,) * (x.ndim - 1)
+        t_bc = t.reshape(expected_shape)
         sigma_t = self.sigma_fn(t_bc)
         alpha_t = self.alpha_fn(t_bc)
         variance = self.std_y**2 + self.gamma * (sigma_t**2) / (alpha_t**2)

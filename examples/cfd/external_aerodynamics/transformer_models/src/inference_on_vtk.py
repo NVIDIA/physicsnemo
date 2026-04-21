@@ -37,6 +37,12 @@ Usage (surface inference with Transolver):
         +vtk_inference.input_dir=/path/to/runs \
         +vtk_inference.output_dir=/path/to/output
 
+Usage (surface inference with MC-Dropout uncertainty quantification):
+    python inference_on_vtk.py --config-name=geotransolver_surface \
+        +vtk_inference.input_dir=/path/to/runs \
+        +vtk_inference.output_dir=/path/to/output \
+        +mc_dropout_samples=20
+
 Note: The '+' prefix adds new config keys that don't exist in the base config.
 
 Expected input directory structure:
@@ -71,7 +77,11 @@ from physicsnemo.datapipes.cae.transolver_datapipe import TransolverDataPipe
 
 from train import update_model_params_for_fp8
 
-from inference_on_zarr import batched_inference_loop
+from inference_utils import (
+    batched_inference_loop,
+    mc_dropout_inference_loop,
+    setup_mc_dropout,
+)
 
 
 # =============================================================================
@@ -324,6 +334,8 @@ def write_surface_predictions_to_vtk(
     predictions: torch.Tensor,
     air_density: float,
     stream_velocity: float,
+    mean_predictions: torch.Tensor | None = None,
+    std_predictions: torch.Tensor | None = None,
 ) -> None:
     """
     Write surface predictions to a VTP file.
@@ -335,30 +347,46 @@ def write_surface_predictions_to_vtk(
     output_path : str
         Path to write the output VTP file.
     predictions : torch.Tensor
-        Model predictions, shape (num_cells, 4) - [pressure, wss_x, wss_y, wss_z].
+        Deterministic model predictions, shape (num_cells, 4) - [pressure, wss_x, wss_y, wss_z].
     air_density : float
         Air density for dimensional scaling.
     stream_velocity : float
         Stream velocity for dimensional scaling.
+    mean_predictions : torch.Tensor | None
+        MC-Dropout mean predictions, same shape as predictions.
+    std_predictions : torch.Tensor | None
+        MC-Dropout std predictions, same shape as predictions.
     """
     mesh = pv.read(vtp_path)
     output_mesh = mesh.copy()
 
-    # Convert to numpy
-    pred_np = predictions.cpu().numpy()
-
-    # Split into pressure and wall shear stress
-    pred_pressure = pred_np[:, 0]  # Shape: (num_cells,)
-    pred_wss = pred_np[:, 1:4]  # Shape: (num_cells, 3)
-
-    # Scale to physical units
     dynamic_pressure = air_density * stream_velocity**2
-    pred_pressure = pred_pressure * dynamic_pressure
-    pred_wss = pred_wss * dynamic_pressure
 
-    # Add to mesh
+    # Deterministic predictions
+    pred_np = predictions.cpu().numpy()
+    pred_pressure = pred_np[:, 0] * dynamic_pressure
+    pred_wss = pred_np[:, 1:4] * dynamic_pressure
+
     output_mesh.cell_data["PredictedPressure"] = pred_pressure
     output_mesh.cell_data["PredictedWallShearStress"] = pred_wss
+
+    # MC-Dropout mean predictions
+    if mean_predictions is not None:
+        mean_np = mean_predictions.cpu().numpy()
+        mean_pressure = mean_np[:, 0] * dynamic_pressure
+        mean_wss = mean_np[:, 1:4] * dynamic_pressure
+
+        output_mesh.cell_data["MCMeanPressure"] = mean_pressure
+        output_mesh.cell_data["MCMeanWallShearStress"] = mean_wss
+
+    # MC-Dropout std predictions
+    if std_predictions is not None:
+        std_np = std_predictions.cpu().numpy()
+        std_pressure = std_np[:, 0] * dynamic_pressure
+        std_wss = std_np[:, 1:4] * dynamic_pressure
+
+        output_mesh.cell_data["MCStdPressure"] = std_pressure
+        output_mesh.cell_data["MCStdWallShearStress"] = std_wss
 
     # Save
     output_mesh.save(output_path)
@@ -370,6 +398,8 @@ def write_volume_predictions_to_vtk(
     predictions: torch.Tensor,
     air_density: float,
     stream_velocity: float,
+    mean_predictions: torch.Tensor | None = None,
+    std_predictions: torch.Tensor | None = None,
 ) -> None:
     """
     Write volume predictions to a VTU file.
@@ -381,33 +411,40 @@ def write_volume_predictions_to_vtk(
     output_path : str
         Path to write the output VTU file.
     predictions : torch.Tensor
-        Model predictions, shape (num_cells, 5) - [vel_x, vel_y, vel_z, pressure, nut].
+        Deterministic model predictions, shape (num_cells, 5) - [vel_x, vel_y, vel_z, pressure, nut].
     air_density : float
         Air density for dimensional scaling.
     stream_velocity : float
         Stream velocity for dimensional scaling.
+    mean_predictions : torch.Tensor | None
+        MC-Dropout mean predictions, same shape as predictions.
+    std_predictions : torch.Tensor | None
+        MC-Dropout std predictions, same shape as predictions.
     """
     mesh = pv.read(vtu_path)
     output_mesh = mesh.copy()
 
-    # Convert to numpy
-    pred_np = predictions.cpu().numpy()
-
-    # Split into velocity, pressure, and turbulent viscosity
-    pred_velocity = pred_np[:, 0:3]  # Shape: (num_cells, 3)
-    pred_pressure = pred_np[:, 3]  # Shape: (num_cells,)
-    pred_nut = pred_np[:, 4]  # Shape: (num_cells,)
-
-    # Scale to physical units
     dynamic_pressure = air_density * stream_velocity**2
-    pred_velocity = pred_velocity * stream_velocity
-    pred_pressure = pred_pressure * dynamic_pressure
-    pred_nut = pred_nut * dynamic_pressure
 
-    # Add to mesh
-    output_mesh.cell_data["PredictedVelocity"] = pred_velocity
-    output_mesh.cell_data["PredictedPressure"] = pred_pressure
-    output_mesh.cell_data["PredictedNut"] = pred_nut
+    # Deterministic predictions
+    pred_np = predictions.cpu().numpy()
+    output_mesh.cell_data["PredictedVelocity"] = pred_np[:, 0:3] * stream_velocity
+    output_mesh.cell_data["PredictedPressure"] = pred_np[:, 3] * dynamic_pressure
+    output_mesh.cell_data["PredictedNut"] = pred_np[:, 4] * dynamic_pressure
+
+    # MC-Dropout mean predictions
+    if mean_predictions is not None:
+        mean_np = mean_predictions.cpu().numpy()
+        output_mesh.cell_data["MCMeanVelocity"] = mean_np[:, 0:3] * stream_velocity
+        output_mesh.cell_data["MCMeanPressure"] = mean_np[:, 3] * dynamic_pressure
+        output_mesh.cell_data["MCMeanNut"] = mean_np[:, 4] * dynamic_pressure
+
+    # MC-Dropout std predictions
+    if std_predictions is not None:
+        std_np = std_predictions.cpu().numpy()
+        output_mesh.cell_data["MCStdVelocity"] = std_np[:, 0:3] * stream_velocity
+        output_mesh.cell_data["MCStdPressure"] = std_np[:, 3] * dynamic_pressure
+        output_mesh.cell_data["MCStdNut"] = std_np[:, 4] * dynamic_pressure
 
     # Save
     output_mesh.save(output_path)
@@ -559,7 +596,8 @@ def inference_on_vtk(cfg: DictConfig) -> None:
     logger.info(f"Loaded checkpoint from epoch: {loaded_epoch}")
 
     model.to(dist_manager.device)
-    model.eval()
+
+    mc_dropout_samples = setup_mc_dropout(model, cfg, logger)
 
     if cfg.compile:
         model = torch.compile(model, dynamic=True)
@@ -636,21 +674,42 @@ def inference_on_vtk(cfg: DictConfig) -> None:
             # Process through datapipe (adds batch dimension)
             batch = datapipe(data_dict)
 
-            # Run batched inference using imported function from inference_on_zarr
-            with torch.no_grad():
-                _, _, (predictions, _) = batched_inference_loop(
-                    batch=batch,
-                    model=model,
-                    precision=cfg.precision,
-                    data_mode=data_mode,
-                    batch_resolution=batch_resolution,
-                    output_pad_size=output_pad_size,
-                    dist_manager=dist_manager,
-                    datapipe=datapipe,
-                )
+            # Run inference
+            mean_preds = None
+            std_preds = None
+            if mc_dropout_samples > 0:
+                # MC-Dropout: N stochastic passes, use mean as prediction
+                with torch.no_grad():
+                    mc_mean, mc_std, _, _, _, _ = mc_dropout_inference_loop(
+                        batch=batch,
+                        model=model,
+                        precision=cfg.precision,
+                        data_mode=data_mode,
+                        batch_resolution=batch_resolution,
+                        output_pad_size=output_pad_size,
+                        dist_manager=dist_manager,
+                        datapipe=datapipe,
+                        n_samples=mc_dropout_samples,
+                    )
 
-            # Remove batch dimension and get predictions
-            predictions = predictions.squeeze(0)
+                predictions = mc_mean.squeeze(0)
+                mean_preds = predictions
+                std_preds = mc_std.squeeze(0)
+            else:
+                # Deterministic: single eval-mode forward pass
+                with torch.no_grad():
+                    _, _, (det_predictions, _) = batched_inference_loop(
+                        batch=batch,
+                        model=model,
+                        precision=cfg.precision,
+                        data_mode=data_mode,
+                        batch_resolution=batch_resolution,
+                        output_pad_size=output_pad_size,
+                        dist_manager=dist_manager,
+                        datapipe=datapipe,
+                    )
+
+                predictions = det_predictions.squeeze(0)
 
             # Write predictions to output files
             run_output_dir = output_dir / run_dir.name
@@ -668,6 +727,8 @@ def inference_on_vtk(cfg: DictConfig) -> None:
                     predictions,
                     air_density,
                     stream_velocity,
+                    mean_predictions=mean_preds,
+                    std_predictions=std_preds,
                 )
                 logger.info(f"Saved surface predictions to {output_vtp}")
 
@@ -683,6 +744,8 @@ def inference_on_vtk(cfg: DictConfig) -> None:
                     predictions,
                     air_density,
                     stream_velocity,
+                    mean_predictions=mean_preds,
+                    std_predictions=std_preds,
                 )
                 logger.info(f"Saved volume predictions to {output_vtu}")
 
@@ -716,6 +779,7 @@ def launch(cfg: DictConfig) -> None:
         +vtk_inference.air_density=1.2050  (optional, default: 1.2050)
         +vtk_inference.stream_velocity=30.0  (optional, default: 30.0)
         +vtk_inference.run_indices=[1,2,3]  (optional, default: all runs)
+        +mc_dropout_samples=20  (optional, default: 0 = no MC-Dropout)
 
     Parameters
     ----------
