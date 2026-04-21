@@ -889,31 +889,47 @@ class DomainMesh:
         """
         yield from self.all_meshes()
 
-    def merge_boundaries(self) -> Mesh:
-        """Merge all boundary meshes into a single geometry-only :class:`Mesh`.
+    def merge_boundaries(self, preserve_data: bool = False) -> Mesh:
+        """Merge all boundary meshes into a single :class:`Mesh`.
 
         Produces a mesh containing the concatenated points and cells from
-        every boundary. Point data and cell data are stripped before merging
-        because boundaries typically carry heterogeneous fields (different
-        keys per boundary), which ``Mesh.merge`` cannot concatenate.
+        every boundary. By default, ``point_data`` and ``cell_data`` are
+        stripped before merging because boundaries typically carry
+        heterogeneous fields (different keys per boundary), which
+        :meth:`Mesh.merge` cannot concatenate.
+
+        Parameters
+        ----------
+        preserve_data : bool
+            If ``False`` (default), strip ``point_data`` and ``cell_data``
+            from each boundary before merging - the safe choice for the
+            typical CFD case where each boundary carries its own field set.
+            If ``True``, delegate directly to :meth:`Mesh.merge`, which
+            preserves data but requires that all boundaries share the same
+            ``cell_data`` keys and have ``point_data`` that can be
+            concatenated. Use this when every boundary has a consistent
+            set of fields.
 
         Returns
         -------
         Mesh
-            A single geometry-only mesh (no point_data or cell_data).
+            A single mesh containing the concatenated points and cells from
+            every boundary. Data fields are included only if
+            ``preserve_data`` is ``True``.
 
         Raises
         ------
         ValueError
-            If there are no boundary meshes to merge, or if boundary meshes
-            have incompatible manifold dimensions.
+            If there are no boundary meshes to merge, if boundary meshes
+            have incompatible manifold dimensions, or (when
+            ``preserve_data=True``) if their data keys are inconsistent.
         """
         if self.n_boundaries == 0:
             raise ValueError("No boundary meshes to merge.")
-        geometry_only = [
-            Mesh(points=self.boundaries[name].points, cells=self.boundaries[name].cells)
-            for name in self.boundary_names
-        ]
+        boundaries = [self.boundaries[name] for name in self.boundary_names]
+        if preserve_data:
+            return Mesh.merge(boundaries)
+        geometry_only = [Mesh(points=b.points, cells=b.cells) for b in boundaries]
         return Mesh.merge(geometry_only)
 
     def is_boundary_watertight(self, tolerance: float = 1e-6) -> bool:
