@@ -21,6 +21,7 @@ to exact results, gradient correctness, equivariance preservation, and
 MultiscaleKernel integration.
 """
 
+import contextlib
 from typing import Any, Literal
 
 import pytest
@@ -46,6 +47,38 @@ DEFAULT_LEAF_SIZE = 4
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _pinned_cpu_determinism():
+    """Pin intraop threads to 1 and enable deterministic algorithms for the block.
+
+    Diagnostic stabilization for tests where BH/exact comparisons are expected
+    to match to within pure fp32 rearrangement error. Targets two plausible
+    CPU-side non-determinism sources:
+
+    1. ``torch.set_num_threads(1)`` removes reduction-order variance in
+       parallelized ops (matmul/einsum/some scatter paths) whose output can
+       differ by a few ULP depending on how work is sharded across cores.
+       CI runners and developer boxes routinely disagree on thread count.
+    2. ``torch.use_deterministic_algorithms(True, warn_only=True)`` forces
+       deterministic implementations where available and warns (rather than
+       erroring) otherwise, so a newly-introduced non-deterministic op
+       surfaces in logs instead of breaking the suite.
+
+    Both settings are restored on exit. This is not a fixture: callers opt
+    in explicitly, keeping the scope obvious and bounded.
+    """
+    orig_threads = torch.get_num_threads()
+    orig_det = torch.are_deterministic_algorithms_enabled()
+    orig_det_warn = torch.is_deterministic_algorithms_warn_only_enabled()
+    try:
+        torch.set_num_threads(1)
+        torch.use_deterministic_algorithms(True, warn_only=True)
+        yield
+    finally:
+        torch.use_deterministic_algorithms(orig_det, warn_only=orig_det_warn)
+        torch.set_num_threads(orig_threads)
 
 
 def _make_bh_kernel_and_data(
@@ -893,77 +926,99 @@ def test_bh_nested_source_data_keys(n_dims: int):
 
     The aggregation, split_by_leaf_rank, and TensorDict.cat operations must
     handle this nesting correctly.
+
+    The body runs under :func:`_pinned_cpu_determinism` to remove thread-count
+    and deterministic-algorithm variance as sources of CI flakiness, and the
+    ``msg`` passed to :func:`torch.testing.assert_close` is a callable so the
+    default "Greatest absolute/relative difference" diagnostics are preserved
+    when a failure occurs in CI.
     """
-    torch.manual_seed(DEFAULT_SEED)
-    n_src, n_tgt = 30, 15
+    with _pinned_cpu_determinism():
+        torch.manual_seed(DEFAULT_SEED)
+        n_src, n_tgt = 30, 15
 
-    source_data_ranks = {
-        "physical": {"pressure": 0},
-        "latent": {"scalars": {"0": 0, "1": 0}, "vectors": {"0": 1}},
-        "normals": 1,
-    }
-    output_field_ranks = {"p": 0, "u": 1}
+        source_data_ranks = {
+            "physical": {"pressure": 0},
+            "latent": {"scalars": {"0": 0, "1": 0}, "vectors": {"0": 1}},
+            "normals": 1,
+        }
+        # Rank spec with integer leaves (0 = scalar, 1 = vector): passed through
+        # directly to the kernels so "p" stays scalar and "u" stays vector.
+        output_field_ranks = {"p": 0, "u": 1}
 
-    common_kwargs = dict(
-        n_spatial_dims=n_dims,
-        output_field_ranks={
-            k: (0 if v == "scalar" else 1) for k, v in output_field_ranks.items()
-        },
-        source_data_ranks=source_data_ranks,
-        hidden_layer_sizes=[16],
-    )
-
-    bh_kernel = BarnesHutKernel(**common_kwargs, leaf_size=DEFAULT_LEAF_SIZE)
-    exact_kernel = Kernel(**common_kwargs)
-    exact_kernel.load_state_dict(bh_kernel.state_dict(), strict=False)
-    bh_kernel.eval()
-    exact_kernel.eval()
-
-    torch.manual_seed(DEFAULT_SEED + 1)
-    source_data = TensorDict(
-        {
-            "physical": TensorDict(
-                {"pressure": torch.randn(n_src)},
-                batch_size=[n_src],
-            ),
-            "latent": TensorDict(
-                {
-                    "scalars": TensorDict(
-                        {"0": torch.randn(n_src), "1": torch.randn(n_src)},
-                        batch_size=[n_src],
-                    ),
-                    "vectors": TensorDict(
-                        {"0": F.normalize(torch.randn(n_src, n_dims), dim=-1)},
-                        batch_size=[n_src],
-                    ),
-                },
-                batch_size=[n_src],
-            ),
-            "normals": F.normalize(torch.randn(n_src, n_dims), dim=-1),
-        },
-        batch_size=[n_src],
-    )
-
-    data = {
-        "source_points": torch.randn(n_src, n_dims),
-        "target_points": torch.randn(n_tgt, n_dims) * 5,
-        "source_strengths": torch.rand(n_src) + 0.1,
-        "reference_length": torch.ones(()),
-        "source_data": source_data,
-        "global_data": TensorDict({}, batch_size=[]),
-    }
-
-    exact_result = exact_kernel(**data)
-    bh_result = bh_kernel(**data, theta=0.01)
-
-    for field_name in output_field_ranks:
-        torch.testing.assert_close(
-            bh_result[field_name],
-            exact_result[field_name],
-            atol=1e-3,
-            rtol=1e-2,
-            msg=f"Nested keys: {field_name!r} not close to exact at theta=0.01",
+        common_kwargs = dict(
+            n_spatial_dims=n_dims,
+            output_field_ranks=output_field_ranks,
+            source_data_ranks=source_data_ranks,
+            hidden_layer_sizes=[16],
         )
+
+        bh_kernel = BarnesHutKernel(**common_kwargs, leaf_size=DEFAULT_LEAF_SIZE)
+        exact_kernel = Kernel(**common_kwargs)
+        exact_kernel.load_state_dict(bh_kernel.state_dict(), strict=False)
+        bh_kernel.eval()
+        exact_kernel.eval()
+
+        torch.manual_seed(DEFAULT_SEED + 1)
+        source_data = TensorDict(
+            {
+                "physical": TensorDict(
+                    {"pressure": torch.randn(n_src)},
+                    batch_size=[n_src],
+                ),
+                "latent": TensorDict(
+                    {
+                        "scalars": TensorDict(
+                            {"0": torch.randn(n_src), "1": torch.randn(n_src)},
+                            batch_size=[n_src],
+                        ),
+                        "vectors": TensorDict(
+                            {"0": F.normalize(torch.randn(n_src, n_dims), dim=-1)},
+                            batch_size=[n_src],
+                        ),
+                    },
+                    batch_size=[n_src],
+                ),
+                "normals": F.normalize(torch.randn(n_src, n_dims), dim=-1),
+            },
+            batch_size=[n_src],
+        )
+
+        data = {
+            "source_points": torch.randn(n_src, n_dims),
+            "target_points": torch.randn(n_tgt, n_dims) * 5,
+            "source_strengths": torch.rand(n_src) + 0.1,
+            "reference_length": torch.ones(()),
+            "source_data": source_data,
+            "global_data": TensorDict({}, batch_size=[]),
+        }
+
+        exact_result = exact_kernel(**data)
+        bh_result = bh_kernel(**data, theta=0.01)
+
+        for field_name in output_field_ranks:
+            # Callable ``msg`` preserves the default "Greatest absolute/relative
+            # difference" report, which a plain string ``msg`` would replace.
+            # Bind loop/parameter variables via default args to dodge late
+            # binding across iterations.
+            def _msg(
+                default: str,
+                field: str = field_name,
+                dims: int = n_dims,
+            ) -> str:
+                return (
+                    f"Nested keys: {field!r} not close to exact at theta=0.01 "
+                    f"(n_dims={dims}, num_threads={torch.get_num_threads()}, "
+                    f"torch={torch.__version__}).\n{default}"
+                )
+
+            torch.testing.assert_close(
+                bh_result[field_name],
+                exact_result[field_name],
+                atol=1e-3,
+                rtol=1e-2,
+                msg=_msg,
+            )
 
 
 # ---------------------------------------------------------------------------
