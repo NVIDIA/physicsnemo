@@ -56,6 +56,53 @@ def no_boundary_domain():
     return DomainMesh(interior=single_tetrahedron.load())
 
 
+def _open_tetrahedron_faces() -> dict[str, Mesh]:
+    """4 triangular boundary patches forming a closed unit tetrahedron.
+
+    Each face is a separate ``Mesh`` whose vertices are duplicated copies
+    of the canonical tet vertices - this models the realistic case where
+    boundary patches are meshed independently and only "share" vertices
+    geometrically, not by index.
+    """
+    p = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    )
+    cells = torch.tensor([[0, 1, 2]])
+
+    def face(*idx: int, offset: torch.Tensor | None = None) -> Mesh:
+        pts = p[list(idx)].clone()
+        if offset is not None:
+            pts = pts + offset
+        return Mesh(points=pts, cells=cells)
+
+    return {
+        "f0": face(0, 1, 2),
+        "f1": face(0, 1, 3),
+        "f2": face(0, 2, 3),
+        "f3": face(1, 2, 3),
+    }
+
+
+### Properties
+
+
+class TestProperties:
+    """Tests for DomainMesh property accessors."""
+
+    def test_n_boundaries_counts_entries(self, tet_domain):
+        """n_boundaries reflects the actual number of boundary keys.
+
+        Regression for the bug where ``len(self.boundaries)`` returned 0
+        for a TensorDict with ``batch_size=[]`` regardless of how many
+        named entries it carried.
+        """
+        assert tet_domain.n_boundaries == 2
+
+    def test_boundary_names_sorted(self, tet_domain):
+        """boundary_names returns keys in sorted order."""
+        assert tet_domain.boundary_names == ["inlet", "wall"]
+
+
 ### apply
 
 
@@ -337,6 +384,83 @@ class TestValidate:
         dm = DomainMesh(interior=interior)
         report = dm.validate()
         assert not report["valid"]
+
+
+### Boundary watertightness
+
+
+class TestIsBoundaryWatertight:
+    """Tests for DomainMesh.is_boundary_watertight."""
+
+    def test_no_boundaries_returns_false(self, no_boundary_domain):
+        """A domain with no boundaries cannot be watertight."""
+        assert not no_boundary_domain.is_boundary_watertight()
+
+    def test_closed_tet_is_watertight(self):
+        """4 boundary triangles forming a closed tet are watertight."""
+        dm = DomainMesh(
+            interior=Mesh(points=torch.zeros((1, 3))),
+            boundaries=_open_tetrahedron_faces(),
+        )
+        assert dm.is_boundary_watertight()
+
+    def test_open_surface_is_not_watertight(self):
+        """Removing one face must produce a non-watertight surface."""
+        faces = _open_tetrahedron_faces()
+        del faces["f3"]
+        dm = DomainMesh(
+            interior=Mesh(points=torch.zeros((1, 3))),
+            boundaries=faces,
+        )
+        assert not dm.is_boundary_watertight()
+
+    def test_auto_tolerance_handles_float_noise(self):
+        """Auto tolerance must absorb realistic float-32 round-off on shared vertices.
+
+        Independently-meshed boundary patches share physical vertices that
+        carry slightly different float values after any prior transform.
+        The auto tolerance, scaled to the boundary bbox, must merge such
+        near-duplicates so the surface is correctly classified as watertight.
+        """
+        eps = 1e-7  # Per-face perturbation; max pairwise distance ~2 * eps
+        p = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+        )
+        cells = torch.tensor([[0, 1, 2]])
+
+        def face(idx: list[int], offset: torch.Tensor) -> Mesh:
+            return Mesh(points=p[idx].clone() + offset, cells=cells)
+
+        offsets = [
+            torch.tensor([+eps, 0.0, 0.0]),
+            torch.tensor([-eps, 0.0, 0.0]),
+            torch.tensor([0.0, +eps, 0.0]),
+            torch.tensor([0.0, -eps, 0.0]),
+        ]
+        face_defs = [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]]
+        dm = DomainMesh(
+            interior=Mesh(points=torch.zeros((1, 3))),
+            boundaries={
+                f"f{i}": face(idx, off)
+                for i, (idx, off) in enumerate(zip(face_defs, offsets, strict=True))
+            },
+        )
+
+        ### auto tolerance (~1e-6) comfortably absorbs the 2e-7 mismatch
+        assert dm.is_boundary_watertight()
+        ### A too-tight explicit tolerance must NOT mask the noise -
+        ### documents the failure mode the auto default protects against.
+        assert not dm.is_boundary_watertight(tolerance=1e-12)
+
+    def test_explicit_tolerance_overrides_auto(self):
+        """An explicit float tolerance is forwarded verbatim to Mesh.clean."""
+        dm = DomainMesh(
+            interior=Mesh(points=torch.zeros((1, 3))),
+            boundaries=_open_tetrahedron_faces(),
+        )
+        ### Exact-match coincidence is below any positive tolerance, so any
+        ### reasonable explicit value still reports watertight.
+        assert dm.is_boundary_watertight(tolerance=1e-3)
 
 
 ### Chaining
