@@ -26,6 +26,10 @@ if TYPE_CHECKING:
 
 # Dynamic import for optional pyvista dependency (invisible to static analysis)
 pv = importlib.import_module("pyvista")
+### ``BasePlotter`` is the common ancestor of ``pv.Plotter`` and Qt-backed
+### plotters (e.g. ``pyvistaqt.BackgroundPlotter`` -> ``QtInteractor`` ->
+### ``BasePlotter``), so accepting it covers every realistic caller. Fall
+### back to ``pv.Plotter`` only on ancient versions that predate the split.
 _PlotterBase = getattr(pv, "BasePlotter", pv.Plotter)
 
 
