@@ -519,7 +519,13 @@ def _draw_3d(
                 edgecolors = [(0, 0, 0, alpha_edges)] * len(verts)
                 linewidths = 0.25
             else:
-                edgecolors = "none"
+                ### Per-face transparent RGBA, NOT the string "none":
+                ### Poly3DCollection with shade=True calls _shade_colors on
+                ### edgecolors, which crashes on the empty array that "none"
+                ### resolves to (matplotlib >= 3.7).  A transparent RGBA list
+                ### of the right length renders identically (invisible) and
+                ### threads through the shading code without breaking.
+                edgecolors = [(0, 0, 0, 0)] * len(verts)
                 linewidths = 0
 
             pc = Poly3DCollection(
