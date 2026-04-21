@@ -916,14 +916,26 @@ class DomainMesh:
         ]
         return Mesh.merge(geometry_only)
 
-    def is_boundary_watertight(self) -> bool:
+    def is_boundary_watertight(self, tolerance: float = 1e-6) -> bool:
         r"""Check whether the merged boundary meshes form a watertight surface.
 
         Merges all boundary meshes via :meth:`merge_boundaries`, deduplicates
         coincident vertices with :meth:`Mesh.clean`, and calls
         :meth:`Mesh.is_watertight` on the result. The clean step is necessary
         because independently-meshed boundary patches share physical vertices
-        that become duplicated during merge.
+        that become duplicated during merge - and float32 round-off from any
+        prior transform may prevent an exact-match merge.
+
+        Parameters
+        ----------
+        tolerance : float, optional
+            L2 distance threshold for merging coincident boundary vertices
+            before the topology check. The default ``1e-6`` is deliberately
+            looser than :meth:`Mesh.clean`'s ``1e-12`` so it absorbs float32
+            round-off (~1e-7 relative) on the duplicated vertices that
+            ``merge_boundaries`` produces from independently-meshed patches.
+            For coordinates that span much smaller or much larger than ~1,
+            pass an explicit value (e.g. ``1e-6 * max_extent`` of the bbox).
 
         Returns
         -------
@@ -941,7 +953,7 @@ class DomainMesh:
         """
         if self.n_boundaries == 0:
             return False
-        return self.merge_boundaries().clean().is_watertight()
+        return self.merge_boundaries().clean(tolerance=tolerance).is_watertight()
 
     def draw(
         self,
