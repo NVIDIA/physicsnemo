@@ -308,6 +308,22 @@ class DeepONet(Module):
 
         self.branch1 = self._build_branch(branch1_config, width)
 
+        # ``temporal_projection`` decoder only makes sense on top of a
+        # spatial branch: its forward path expects ``b1_out`` to be 4D
+        # (or 5D for the 3D core) so the per-timestep linear head has a
+        # spatial dimension to project.  When ``branch1`` is an MLPBranch
+        # the forward path silently drops the temporal head and returns
+        # the wrong shape, so reject the combination up front.
+        if self.decoder_type == "temporal_projection" and isinstance(
+            self.branch1, MLPBranch
+        ):
+            raise ValueError(
+                "decoder_type='temporal_projection' is not supported with "
+                "MLP branches.  Use a SpatialBranch (set num_unet_layers "
+                "or num_fourier_layers > 0 in branch1_config), or choose "
+                "decoder_type='mlp' / 'conv' instead."
+            )
+
         self.has_branch2 = branch2_config is not None
         if self.has_branch2:
             self.branch2 = self._build_branch(branch2_config, width)
@@ -321,7 +337,7 @@ class DeepONet(Module):
             output_activation=trunk_config.get("output_activation", True),
         )
 
-        if decoder_type == "temporal_projection":
+        if self.decoder_type == "temporal_projection":
             self._temporal_projection = True
             self.decoder = self._build_decoder(
                 width,
@@ -352,7 +368,7 @@ class DeepONet(Module):
                 1,
                 decoder_layers,
                 decoder_width,
-                decoder_type,
+                self.decoder_type,
                 decoder_activation_fn,
             )
 
@@ -607,6 +623,22 @@ class DeepONet3D(Module):
 
         self.branch1 = self._build_branch(branch1_config, width)
 
+        # ``temporal_projection`` decoder only makes sense on top of a
+        # spatial branch: its forward path expects ``b1_out`` to be 4D
+        # (or 5D for the 3D core) so the per-timestep linear head has a
+        # spatial dimension to project.  When ``branch1`` is an MLPBranch
+        # the forward path silently drops the temporal head and returns
+        # the wrong shape, so reject the combination up front.
+        if self.decoder_type == "temporal_projection" and isinstance(
+            self.branch1, MLPBranch
+        ):
+            raise ValueError(
+                "decoder_type='temporal_projection' is not supported with "
+                "MLP branches.  Use a SpatialBranch (set num_unet_layers "
+                "or num_fourier_layers > 0 in branch1_config), or choose "
+                "decoder_type='mlp' / 'conv' instead."
+            )
+
         self.has_branch2 = branch2_config is not None
         if self.has_branch2:
             self.branch2 = self._build_branch(branch2_config, width)
@@ -620,7 +652,7 @@ class DeepONet3D(Module):
             output_activation=trunk_config.get("output_activation", True),
         )
 
-        if decoder_type == "temporal_projection":
+        if self.decoder_type == "temporal_projection":
             self._temporal_projection = True
             self.decoder = self._build_decoder(
                 width,
@@ -651,7 +683,7 @@ class DeepONet3D(Module):
                 1,
                 decoder_layers,
                 decoder_width,
-                decoder_type,
+                self.decoder_type,
                 decoder_activation_fn,
             )
 

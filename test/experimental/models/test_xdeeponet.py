@@ -622,6 +622,76 @@ class TestTemporalProjectionGuard:
             model(x)
 
 
+class TestDecoderTypeNormalization:
+    """decoder_type comparison must use the lowercased, stored value."""
+
+    def test_mixed_case_decoder_type_accepted(self):
+        """Constructing with a non-lowercase decoder_type must just work.
+
+        The check in ``__init__`` previously compared the raw argument
+        instead of ``self.decoder_type`` (which is lowercased), so values
+        like ``"MLP"`` or ``"Temporal_Projection"`` bypassed the
+        temporal-projection branch and bubbled up ``ValueError: Unknown
+        decoder_type`` from ``_build_decoder``.
+        """
+        # Mixed-case "MLP" should be equivalent to "mlp".
+        model = DeepONetWrapper(
+            variant="u_deeponet",
+            width=16,
+            branch1_config=BRANCH1_SPATIAL,
+            trunk_config=TRUNK,
+            decoder_type="MLP",
+            decoder_width=16,
+            decoder_layers=1,
+        )
+        assert model.model.decoder_type == "mlp"
+
+        # Mixed-case "Temporal_Projection" should be equivalent to
+        # "temporal_projection" and must build the temporal-projection
+        # pathway (which requires output_window).
+        model = DeepONetWrapper(
+            variant="u_deeponet",
+            width=16,
+            branch1_config=BRANCH1_SPATIAL,
+            trunk_config=TRUNK,
+            decoder_type="Temporal_Projection",
+            decoder_width=16,
+            decoder_layers=1,
+            output_window=3,
+        )
+        assert model.model.decoder_type == "temporal_projection"
+        assert model.model._temporal_projection is True
+
+
+class TestMLPBranchTemporalProjectionGuard:
+    """MLP branches cannot be combined with decoder_type='temporal_projection'."""
+
+    def test_mlp_branch_temporal_projection_raises(self):
+        """2D core must reject the MLP-branch + temporal_projection combo."""
+        # BRANCH1_MLP selects an MLPBranch for branch1.  The forward path
+        # silently returns the wrong shape for this combination, so the
+        # construction must fail instead.
+        with pytest.raises(ValueError, match="MLP branches"):
+            DeepONet(
+                variant="u_deeponet",
+                width=16,
+                branch1_config=BRANCH1_MLP,
+                trunk_config=TRUNK,
+                decoder_type="temporal_projection",
+            )
+
+    def test_mlp_branch_temporal_projection_raises_3d(self):
+        """3D core shares the same guard."""
+        with pytest.raises(ValueError, match="MLP branches"):
+            DeepONet3D(
+                variant="u_deeponet",
+                width=16,
+                branch1_config=BRANCH1_MLP,
+                trunk_config=TRUNK,
+                decoder_type="temporal_projection",
+            )
+
+
 class TestFourierBranchPaths:
     """Exercise the Fourier (spectral-conv) code path in SpatialBranch[3D]."""
 
