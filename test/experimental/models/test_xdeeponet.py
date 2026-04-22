@@ -820,5 +820,51 @@ class TestFourierBranchPaths:
         assert out.shape == (2, 8, 8, 3)
 
 
+class TestConvEncoderSinActivation:
+    """Regression for the conv-encoder ``sin`` activation path."""
+
+    def test_conv_encoder_with_sin_activation(self):
+        """Conv encoder with activation_fn='sin' must construct and forward.
+
+        ``get_activation`` does not know about ``"sin"``; the module-level
+        helper ``_build_conv_encoder`` must route that case through the
+        ``_SinActivation`` wrapper so the multi-layer path does not raise
+        ``KeyError`` at construction nor ``TypeError`` from
+        ``nn.Sequential``.
+        """
+        branch_cfg = {
+            "encoder": {
+                "type": "conv",
+                "num_layers": 2,
+                "hidden_width": 8,
+                "activation_fn": "sin",
+            },
+            "layers": {
+                "num_fourier_layers": 0,
+                "num_unet_layers": 1,
+                "num_conv_layers": 0,
+                "kernel_size": 3,
+                "dropout": 0.0,
+                "activation_fn": "relu",
+            },
+        }
+
+        # Construction must not raise.
+        model = DeepONetWrapper(
+            variant="u_deeponet",
+            width=16,
+            branch1_config=branch_cfg,
+            trunk_config=TRUNK,
+            decoder_type="mlp",
+            decoder_width=16,
+            decoder_layers=1,
+        )
+
+        # Forward must not raise and must preserve the expected shape.
+        x = torch.randn(2, 16, 16, 3, 2)
+        out = model(x)
+        assert out.shape == (2, 16, 16, 3)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -189,6 +189,22 @@ def _normalize_branch_config(config: dict) -> dict:
     return result
 
 
+class _SinActivation(nn.Module):
+    """Module wrapper around :func:`torch.sin` for use inside ``nn.Sequential``.
+
+    ``physicsnemo.nn.get_activation`` does not register ``"sin"`` in its
+    activation table; branch modules in ``branches.py`` work around this
+    by storing ``torch.sin`` as a bare callable and invoking it directly
+    in ``forward``.  That pattern does not compose with ``nn.Sequential``
+    (which requires ``nn.Module`` instances), so this thin wrapper is used
+    whenever a sin activation needs to slot into a ``Sequential`` pipeline.
+    """
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Apply elementwise sine."""
+        return torch.sin(x)
+
+
 def _build_conv_encoder(width: int, enc_config: dict) -> nn.Module:
     """Build a multi-layer pointwise encoder replacing the default LazyLinear lift.
 
@@ -198,7 +214,14 @@ def _build_conv_encoder(width: int, enc_config: dict) -> nn.Module:
     """
     num_layers = enc_config.get("num_layers", 1)
     activation_fn = enc_config.get("activation_fn", "relu")
-    act = get_activation(activation_fn)
+
+    # ``get_activation`` does not know about ``"sin"``; use the module
+    # wrapper defined above when the user explicitly requests it, so
+    # config parity with the branch encoders is preserved.
+    if activation_fn.lower() == "sin":
+        act = _SinActivation()
+    else:
+        act = get_activation(activation_fn)
 
     if num_layers <= 1:
         return nn.LazyLinear(width)
