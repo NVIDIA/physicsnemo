@@ -70,6 +70,21 @@ from physicsnemo.experimental.models.xdeeponet.branches import (
 from physicsnemo.models.mlp import FullyConnected
 from physicsnemo.nn import Conv2dFCLayer, Conv3dFCLayer, get_activation
 
+# All xDeepONet variants supported by both 2D and 3D cores.  Defined once
+# at module scope so the two classes share a single source of truth; each
+# class still exposes it as the ``VALID_VARIANTS`` class attribute for a
+# stable public API.
+_VALID_VARIANTS = (
+    "deeponet",
+    "u_deeponet",
+    "fourier_deeponet",
+    "conv_deeponet",
+    "hybrid_deeponet",
+    "mionet",
+    "fourier_mionet",
+    "tno",
+)
+
 # Variants that require a secondary branch (branch2).  Used by the core
 # DeepONet / DeepONet3D __init__ to validate branch2_config up-front so
 # multi-branch variants cannot silently degrade to single-branch models.
@@ -254,16 +269,7 @@ class DeepONet(Module):
         or :math:`(B, T)` for MLP branches.
     """
 
-    VALID_VARIANTS = [
-        "deeponet",
-        "u_deeponet",
-        "fourier_deeponet",
-        "conv_deeponet",
-        "hybrid_deeponet",
-        "mionet",
-        "fourier_mionet",
-        "tno",
-    ]
+    VALID_VARIANTS = _VALID_VARIANTS
 
     def __init__(
         self,
@@ -483,8 +489,13 @@ class DeepONet(Module):
                     else:
                         combined = combined * b2_out.unsqueeze(1).unsqueeze(2)
                 combined = self.decoder(combined)
-                if self.temporal_head is not None:
-                    combined = self.temporal_head(combined)
+                if self.temporal_head is None:
+                    raise RuntimeError(
+                        "decoder_type='temporal_projection' requires either "
+                        "output_window to be provided at construction time, "
+                        "or set_output_window(K) to be called before forward."
+                    )
+                combined = self.temporal_head(combined)
                 return combined
 
             b1_out = b1_out.unsqueeze(1)
@@ -557,16 +568,7 @@ class DeepONet3D(Module):
         branches or :math:`(B, T)` for MLP branches.
     """
 
-    VALID_VARIANTS = [
-        "deeponet",
-        "u_deeponet",
-        "fourier_deeponet",
-        "conv_deeponet",
-        "hybrid_deeponet",
-        "mionet",
-        "fourier_mionet",
-        "tno",
-    ]
+    VALID_VARIANTS = _VALID_VARIANTS
 
     def __init__(
         self,
@@ -789,8 +791,13 @@ class DeepONet3D(Module):
                             2
                         ).unsqueeze(3)
                 combined = self.decoder(combined)
-                if self.temporal_head is not None:
-                    combined = self.temporal_head(combined)
+                if self.temporal_head is None:
+                    raise RuntimeError(
+                        "decoder_type='temporal_projection' requires either "
+                        "output_window to be provided at construction time, "
+                        "or set_output_window(K) to be called before forward."
+                    )
+                combined = self.temporal_head(combined)
                 return combined
 
             b1_out = b1_out.unsqueeze(1)

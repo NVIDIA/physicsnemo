@@ -151,8 +151,46 @@ class TestSpatialBranch3D:
         assert out.shape == (2, 8, 16, 8, 16)
 
 
-SINGLE_BRANCH_VARIANTS = ["deeponet", "u_deeponet", "conv_deeponet"]
-DUAL_BRANCH_VARIANTS = ["mionet", "tno"]
+SINGLE_BRANCH_VARIANTS = [
+    "deeponet",
+    "u_deeponet",
+    "conv_deeponet",
+    "fourier_deeponet",
+    "hybrid_deeponet",
+]
+DUAL_BRANCH_VARIANTS = ["mionet", "tno", "fourier_mionet"]
+
+# Branch config that actually exercises the Fourier code path in
+# ``SpatialBranch`` / ``SpatialBranch3D``.  Kept small (1 spectral layer, 2
+# modes) so test runtime stays reasonable.
+BRANCH1_SPATIAL_FOURIER = {
+    "encoder": {"type": "linear", "activation_fn": "relu"},
+    "layers": {
+        "num_fourier_layers": 1,
+        "num_unet_layers": 0,
+        "num_conv_layers": 0,
+        "modes1": 2,
+        "modes2": 2,
+        "modes3": 2,
+        "kernel_size": 3,
+        "dropout": 0.0,
+        "activation_fn": "relu",
+    },
+}
+BRANCH2_SPATIAL_FOURIER = {
+    "encoder": {"type": "linear", "activation_fn": "relu"},
+    "layers": {
+        "num_fourier_layers": 1,
+        "num_unet_layers": 0,
+        "num_conv_layers": 0,
+        "modes1": 2,
+        "modes2": 2,
+        "modes3": 2,
+        "kernel_size": 3,
+        "dropout": 0.0,
+        "activation_fn": "relu",
+    },
+}
 
 
 class TestDeepONetWrapper2D:
@@ -555,6 +593,72 @@ class TestInternalResolution:
         x = torch.randn(2, 16, 16, 16, 4)
         out = branch(x)
         assert out.shape == (2, 16, 16, 16, 8)
+
+
+class TestTemporalProjectionGuard:
+    """Validate that forward raises when temporal_head is not configured."""
+
+    def test_forward_without_output_window_raises(self):
+        """Forward must raise RuntimeError when temporal_projection has no head.
+
+        Constructing with ``decoder_type="temporal_projection"`` but without
+        passing ``output_window`` and without calling ``set_output_window``
+        leaves ``temporal_head = None``.  The forward pass must fail loudly
+        in that case rather than silently returning a ``(B, H, W, width)``
+        tensor instead of the expected ``(B, H, W, K)``.
+        """
+        model = DeepONetWrapper(
+            variant="u_deeponet",
+            width=16,
+            branch1_config=BRANCH1_SPATIAL,
+            trunk_config=TRUNK,
+            decoder_type="temporal_projection",
+            decoder_width=16,
+            decoder_layers=1,
+        )
+
+        x = torch.randn(2, 16, 16, 3, 2)
+        with pytest.raises(RuntimeError, match="output_window"):
+            model(x)
+
+
+class TestFourierBranchPaths:
+    """Exercise the Fourier (spectral-conv) code path in SpatialBranch[3D]."""
+
+    @pytest.mark.parametrize("variant", ["fourier_deeponet", "hybrid_deeponet"])
+    def test_2d_fourier_branch_forward(self, variant):
+        """2D Fourier-enabled SpatialBranch produces correct output shape."""
+        # Grid size must be >= 2*modes + 1 so the spectral layer has enough
+        # frequency content; 8 x 8 with modes1=modes2=2 is safe.
+        model = DeepONetWrapper(
+            variant=variant,
+            width=16,
+            branch1_config=BRANCH1_SPATIAL_FOURIER,
+            trunk_config=TRUNK,
+            decoder_type="mlp",
+            decoder_width=16,
+            decoder_layers=1,
+        )
+        x = torch.randn(2, 8, 8, 3, 2)
+        out = model(x)
+        assert out.shape == (2, 8, 8, 3)
+
+    def test_2d_fourier_mionet_forward(self):
+        """Dual-branch Fourier-MIONet forward works end-to-end."""
+        model = DeepONetWrapper(
+            variant="fourier_mionet",
+            width=16,
+            branch1_config=BRANCH1_SPATIAL_FOURIER,
+            branch2_config=BRANCH2_SPATIAL_FOURIER,
+            trunk_config=TRUNK,
+            decoder_type="mlp",
+            decoder_width=16,
+            decoder_layers=1,
+        )
+        x = torch.randn(2, 8, 8, 3, 2)
+        x_b2 = torch.randn(2, 8, 8, 2)
+        out = model(x, x_branch2=x_b2)
+        assert out.shape == (2, 8, 8, 3)
 
 
 if __name__ == "__main__":
