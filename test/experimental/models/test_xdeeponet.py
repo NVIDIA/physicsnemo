@@ -692,6 +692,95 @@ class TestMLPBranchTemporalProjectionGuard:
             )
 
 
+class TestMLPBranchConvDecoderGuard:
+    """MLP branches cannot be combined with decoder_type='conv'."""
+
+    def test_mlp_branch_conv_decoder_raises(self):
+        """2D core rejects MLP-branch + conv decoder at __init__."""
+        # Forward would otherwise crash inside the decoder's Conv2d with
+        # a generic "Expected 3D or 4D input" error rather than pointing
+        # at the real config mismatch.
+        with pytest.raises(ValueError, match="MLP branches"):
+            DeepONet(
+                variant="u_deeponet",
+                width=16,
+                branch1_config=BRANCH1_MLP,
+                trunk_config=TRUNK,
+                decoder_type="conv",
+            )
+
+    def test_mlp_branch_conv_decoder_raises_3d(self):
+        """3D core shares the same guard."""
+        with pytest.raises(ValueError, match="MLP branches"):
+            DeepONet3D(
+                variant="u_deeponet",
+                width=16,
+                branch1_config=BRANCH1_MLP,
+                trunk_config=TRUNK,
+                decoder_type="conv",
+            )
+
+
+class TestMixedBranchTypeGuard:
+    """branch1 and branch2 must have matching output ranks."""
+
+    def test_mlp_branch1_with_spatial_branch2_raises(self):
+        """2D core rejects MLP branch1 + SpatialBranch branch2."""
+        # Forward assumes both branch outputs have the same rank; mixing
+        # 2D (MLP) and 4D (Spatial) produces nonsensical broadcasts.
+        with pytest.raises(ValueError, match="branch1 is an MLPBranch"):
+            DeepONet(
+                variant="mionet",
+                width=16,
+                branch1_config=BRANCH1_MLP,
+                branch2_config=BRANCH2_SPATIAL,
+                trunk_config=TRUNK,
+                decoder_type="mlp",
+            )
+
+    def test_mlp_branch1_with_spatial_branch2_raises_3d(self):
+        """3D core shares the same guard."""
+        with pytest.raises(ValueError, match="branch1 is an MLPBranch"):
+            DeepONet3D(
+                variant="mionet",
+                width=16,
+                branch1_config=BRANCH1_MLP,
+                branch2_config=BRANCH2_SPATIAL,
+                trunk_config=TRUNK,
+                decoder_type="mlp",
+            )
+
+
+class TestInvalidDecoderTypeGuard:
+    """Unknown decoder_type is rejected at __init__ with a helpful message."""
+
+    def test_unknown_decoder_type_raises(self):
+        """2D core rejects unknown decoder_type at the API boundary."""
+        # Previously this surfaced as ``Unknown decoder_type: xyz`` from
+        # deep inside ``_build_decoder`` only when the non-temporal
+        # branch was taken.  Moving the check to ``__init__`` makes it
+        # part of the public contract.
+        with pytest.raises(ValueError, match="Unknown decoder_type"):
+            DeepONet(
+                variant="u_deeponet",
+                width=16,
+                branch1_config=BRANCH1_SPATIAL,
+                trunk_config=TRUNK,
+                decoder_type="definitely_not_a_decoder",
+            )
+
+    def test_unknown_decoder_type_raises_3d(self):
+        """3D core shares the same guard."""
+        with pytest.raises(ValueError, match="Unknown decoder_type"):
+            DeepONet3D(
+                variant="u_deeponet",
+                width=16,
+                branch1_config=BRANCH1_SPATIAL,
+                trunk_config=TRUNK,
+                decoder_type="definitely_not_a_decoder",
+            )
+
+
 class TestFourierBranchPaths:
     """Exercise the Fourier (spectral-conv) code path in SpatialBranch[3D]."""
 

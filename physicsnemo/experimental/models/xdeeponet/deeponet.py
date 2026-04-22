@@ -90,6 +90,12 @@ _VALID_VARIANTS = (
 # multi-branch variants cannot silently degrade to single-branch models.
 _DUAL_BRANCH_VARIANTS = frozenset({"mionet", "fourier_mionet", "tno"})
 
+# Supported decoder types.  Used by the core DeepONet / DeepONet3D
+# __init__ to reject unknown decoder types at the API boundary instead
+# of deferring to ``_build_decoder`` and raising cryptically from deep
+# inside construction.
+_VALID_DECODER_TYPES = frozenset({"mlp", "conv", "temporal_projection"})
+
 
 @dataclass
 class _DeepONetMetaData(ModelMetaData):
@@ -296,6 +302,12 @@ class DeepONet(Module):
                 f"Unknown variant: {variant}. Valid: {self.VALID_VARIANTS}"
             )
 
+        if self.decoder_type not in _VALID_DECODER_TYPES:
+            raise ValueError(
+                f"Unknown decoder_type: {decoder_type!r}. Valid: "
+                f"{sorted(_VALID_DECODER_TYPES)}."
+            )
+
         if self.variant in _DUAL_BRANCH_VARIANTS and branch2_config is None:
             raise ValueError(
                 f"variant='{self.variant}' requires branch2_config to be "
@@ -308,25 +320,46 @@ class DeepONet(Module):
 
         self.branch1 = self._build_branch(branch1_config, width)
 
-        # ``temporal_projection`` decoder only makes sense on top of a
-        # spatial branch: its forward path expects ``b1_out`` to be 4D
-        # (or 5D for the 3D core) so the per-timestep linear head has a
-        # spatial dimension to project.  When ``branch1`` is an MLPBranch
-        # the forward path silently drops the temporal head and returns
-        # the wrong shape, so reject the combination up front.
-        if self.decoder_type == "temporal_projection" and isinstance(
-            self.branch1, MLPBranch
+        # Reject MLP-branch configurations paired with a decoder that
+        # needs a spatial (4D / 5D) ``combined`` tensor.  The MLP-branch
+        # forward path produces a 3D tensor of shape (B, T, width) and:
+        #   * ``temporal_projection`` silently drops the temporal head
+        #     (wrong shape, no error);
+        #   * ``conv`` crashes inside the decoder's ``Conv2d`` /
+        #     ``Conv3d`` with PyTorch's generic "Expected 3D or 4D
+        #     input" message, with no hint that the real cause is a
+        #     config mismatch.
+        # Fail fast here instead.
+        if isinstance(self.branch1, MLPBranch) and self.decoder_type in (
+            "temporal_projection",
+            "conv",
         ):
             raise ValueError(
-                "decoder_type='temporal_projection' is not supported with "
-                "MLP branches.  Use a SpatialBranch (set num_unet_layers "
-                "or num_fourier_layers > 0 in branch1_config), or choose "
-                "decoder_type='mlp' / 'conv' instead."
+                f"decoder_type={self.decoder_type!r} is not supported with "
+                "MLP branches.  Use decoder_type='mlp', or configure a "
+                "SpatialBranch for branch1 (set num_unet_layers, "
+                "num_fourier_layers, or num_conv_layers > 0 in "
+                "branch1_config)."
             )
 
         self.has_branch2 = branch2_config is not None
         if self.has_branch2:
             self.branch2 = self._build_branch(branch2_config, width)
+
+            # Forward assumes branch2's output has the same rank as
+            # branch1's.  Mixing an MLPBranch (2D output (B, width)) with
+            # a SpatialBranch (4D / 5D output) would either broadcast
+            # nonsensically or raise a cryptic dim-mismatch error in the
+            # Hadamard product.  Reject the mixed configuration here.
+            if isinstance(self.branch1, MLPBranch) and not isinstance(
+                self.branch2, MLPBranch
+            ):
+                raise ValueError(
+                    "When branch1 is an MLPBranch, branch2 must also be "
+                    "an MLPBranch (i.e. produce a 2D (B, width) output). "
+                    "Swap branch1 and branch2, or configure branch1 as "
+                    "a SpatialBranch."
+                )
 
         self.trunk = TrunkNet(
             in_features=trunk_config.get("in_features", 1),
@@ -611,6 +644,12 @@ class DeepONet3D(Module):
                 f"Unknown variant: {variant}. Valid: {self.VALID_VARIANTS}"
             )
 
+        if self.decoder_type not in _VALID_DECODER_TYPES:
+            raise ValueError(
+                f"Unknown decoder_type: {decoder_type!r}. Valid: "
+                f"{sorted(_VALID_DECODER_TYPES)}."
+            )
+
         if self.variant in _DUAL_BRANCH_VARIANTS and branch2_config is None:
             raise ValueError(
                 f"variant='{self.variant}' requires branch2_config to be "
@@ -623,25 +662,46 @@ class DeepONet3D(Module):
 
         self.branch1 = self._build_branch(branch1_config, width)
 
-        # ``temporal_projection`` decoder only makes sense on top of a
-        # spatial branch: its forward path expects ``b1_out`` to be 4D
-        # (or 5D for the 3D core) so the per-timestep linear head has a
-        # spatial dimension to project.  When ``branch1`` is an MLPBranch
-        # the forward path silently drops the temporal head and returns
-        # the wrong shape, so reject the combination up front.
-        if self.decoder_type == "temporal_projection" and isinstance(
-            self.branch1, MLPBranch
+        # Reject MLP-branch configurations paired with a decoder that
+        # needs a spatial (4D / 5D) ``combined`` tensor.  The MLP-branch
+        # forward path produces a 3D tensor of shape (B, T, width) and:
+        #   * ``temporal_projection`` silently drops the temporal head
+        #     (wrong shape, no error);
+        #   * ``conv`` crashes inside the decoder's ``Conv2d`` /
+        #     ``Conv3d`` with PyTorch's generic "Expected 3D or 4D
+        #     input" message, with no hint that the real cause is a
+        #     config mismatch.
+        # Fail fast here instead.
+        if isinstance(self.branch1, MLPBranch) and self.decoder_type in (
+            "temporal_projection",
+            "conv",
         ):
             raise ValueError(
-                "decoder_type='temporal_projection' is not supported with "
-                "MLP branches.  Use a SpatialBranch (set num_unet_layers "
-                "or num_fourier_layers > 0 in branch1_config), or choose "
-                "decoder_type='mlp' / 'conv' instead."
+                f"decoder_type={self.decoder_type!r} is not supported with "
+                "MLP branches.  Use decoder_type='mlp', or configure a "
+                "SpatialBranch for branch1 (set num_unet_layers, "
+                "num_fourier_layers, or num_conv_layers > 0 in "
+                "branch1_config)."
             )
 
         self.has_branch2 = branch2_config is not None
         if self.has_branch2:
             self.branch2 = self._build_branch(branch2_config, width)
+
+            # Forward assumes branch2's output has the same rank as
+            # branch1's.  Mixing an MLPBranch (2D output (B, width)) with
+            # a SpatialBranch (4D / 5D output) would either broadcast
+            # nonsensically or raise a cryptic dim-mismatch error in the
+            # Hadamard product.  Reject the mixed configuration here.
+            if isinstance(self.branch1, MLPBranch) and not isinstance(
+                self.branch2, MLPBranch
+            ):
+                raise ValueError(
+                    "When branch1 is an MLPBranch, branch2 must also be "
+                    "an MLPBranch (i.e. produce a 2D (B, width) output). "
+                    "Swap branch1 and branch2, or configure branch1 as "
+                    "a SpatialBranch."
+                )
 
         self.trunk = TrunkNet(
             in_features=trunk_config.get("in_features", 1),
