@@ -70,6 +70,12 @@ concurrency:
   group: nightly-github-uv
   cancel-in-progress: false
 
+# The CUDA container's default shell is sh, which does not support
+# `set -o pipefail`.  Force bash everywhere.
+defaults:
+  run:
+    shell: bash
+
 env:
   # ---- Container baseline identity ---------------------------------------
   # Change ANY of these and both caches invalidate via prefix change.
