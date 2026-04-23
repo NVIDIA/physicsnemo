@@ -59,6 +59,7 @@ def draw_mesh(
         Mesh object to visualize.
     backend : {"auto", "matplotlib", "pyvista"}
         Visualization backend to use:
+
         - "auto": Automatically select based on n_spatial_dims
           (matplotlib for 0D/1D/2D, PyVista for 3D)
         - "matplotlib": Force matplotlib backend (supports 3D via mplot3d)
@@ -70,6 +71,7 @@ def draw_mesh(
     point_scalars : torch.Tensor or str or tuple[str, ...] or None, optional
         Scalar data to color points. Mutually exclusive with
         cell_scalars. Can be:
+
         - None: Points use neutral color (black)
         - torch.Tensor: Direct scalar values, shape (n_points,) or
           (n_points, ...) where trailing dimensions are L2-normed
@@ -77,6 +79,7 @@ def draw_mesh(
     cell_scalars : torch.Tensor or str or tuple[str, ...] or None, optional
         Scalar data to color cells. Mutually exclusive with
         point_scalars. Can be:
+
         - None: Cells use neutral color (lightblue if no scalars,
           lightgray if point_scalars active)
         - torch.Tensor: Direct scalar values, shape (n_cells,) or
