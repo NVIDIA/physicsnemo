@@ -9,6 +9,10 @@ This recipe trains a machine learning surrogate that predicts the full drop-test
 
 The implementation uses a GeoTransolver backbone with one-shot training and is configured via Hydra experiment configs so new datasets, feature sets, or hyperparameters can be introduced without touching the core code.
 
+<p align="center">
+  <img src="../../../docs/img/drop_test/drop_test.png" alt="Drop test" width="60%" />
+</p>
+
 ## Prerequisites
 
 **Data:** OpenRadioss drop-test data preprocessed into VTU format using [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator/tree/main/examples/structural_mechanics/drop_test). See [Data Preprocessing](#data-preprocessing) below.
@@ -198,6 +202,22 @@ model:
 ```
 
 The `out_dim` value is tied to `num_time_steps` and the number of output channels. For the one-shot scheme, `out_dim = (num_time_steps - 1) * (3 + sum(C_k))`, where `C_k` is the per-target channel count (`Von_Mises` contributes 1). Changing either horizon or target set requires updating `out_dim` accordingly.
+
+### Other available model configs
+
+Only `drop_test_geotransolver_oneshot.yaml` is provided as a ready-to-run experiment, but `conf/model/` ships defaults for additional rollout classes defined in `rollout.py`:
+
+| Config | Class | Scheme |
+|---|---|---|
+| `geotransolver_one_shot.yaml` | `GeoTransolverOneShot` | one-shot (provided experiment) |
+| `geotransolver_time_conditional.yaml` | `GeoTransolverTimeConditional` | time-conditional |
+| `geotransolver_autoregressive_rollout_training.yaml` | `GeoTransolverAutoregressiveRolloutTraining` | autoregressive rollout |
+| `geotransolver_one_step_rollout.yaml` | `GeoTransolverOneStepRollout` | one-step rollout |
+| `transolver_one_shot.yaml` | `TransolverOneShot` | one-shot |
+| `mgn_one_shot.yaml` | `MeshGraphNetOneShot` | one-shot (requires `datapipe: graph`) |
+| `figconvunet_one_shot.yaml` | `FIGConvUNetOneShot` | one-shot |
+
+These have **not been validated on drop-test data**. To try one, write a new experiment config following the template above, select the model in `defaults`, set `datapipe.sample_type` (`one_time_step` for time-conditional, `all_time_steps` otherwise), and override `out_dim` / `functional_dim` / `global_dim` to match drop-test output cardinality.
 
 ### Adding a new experiment
 

@@ -102,17 +102,19 @@ def load_vtu_file(vtu_path):
 
     disp_names = sorted(disp_names, key=natural_key)
 
+    # Curator convention: displacement_t0 is always the zero vector (it's written as
+    # `filtered_pos_raw[0] - reference_coords`, which equals zero by construction).
+    # We add disp unconditionally — at t=0 this resolves to coords + 0 = coords, and
+    # at t>0 it gives the absolute position. This handles malformed inputs where the
+    # first frame is non-zero the same way as well-formed inputs.
     pos_list = []
-    for idx, name in enumerate(disp_names):
+    for name in disp_names:
         disp = np.asarray(mesh.point_data[name])
         if disp.ndim != 2 or disp.shape[1] != 3:
             raise ValueError(
                 f"Point-data array '{name}' must be a 3-component vector (got shape {disp.shape})."
             )
-        if idx == 0:
-            pos_list.append(coords)
-        else:
-            pos_list.append(coords + disp)
+        pos_list.append(coords + disp)
 
     pos_raw = np.stack(pos_list, axis=0)
     mesh_connectivity = extract_mesh_connectivity_from_unstructured_grid(mesh)

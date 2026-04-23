@@ -331,12 +331,19 @@ class GeoTransolverTimeConditional(GeoTransolver):
             [N, T, Fo] rollout of predicted positions
         """
         device = sample.node_features["coords"].device
-        outputs: list[torch.Tensor] = []
-        for t in range(self.rollout_steps):
-            time = torch.tensor(t / self.rollout_steps, device=device)
-            sample.node_features["time"] = time
-            y_t2 = self._forward(sample, data_stats)
-            outputs.append(y_t2)
+        # Shallow-copy node_features so the per-step `time` key doesn't mutate the
+        # caller's SimSample. The SimSample dataclass is reused across the validation
+        # loop, and a leaked `time` key would be visible to the next iteration.
+        original_features = sample.node_features
+        try:
+            outputs: list[torch.Tensor] = []
+            for t in range(self.rollout_steps):
+                time = torch.tensor(t / self.rollout_steps, device=device)
+                sample.node_features = {**original_features, "time": time}
+                y_t2 = self._forward(sample, data_stats)
+                outputs.append(y_t2)
+        finally:
+            sample.node_features = original_features
 
         return torch.stack(outputs, dim=0).transpose(0, 1)  # [N,T,3]
 

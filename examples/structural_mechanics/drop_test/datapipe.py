@@ -207,6 +207,24 @@ class DropTestBaseDataset:
             global_features_filepath=self.global_features_filepath,
             logger=self.logger,
         )
+
+        # Reconcile num_samples with what the reader actually returned: the reader may
+        # yield fewer records than requested (e.g. a val/test dir with fewer files),
+        # and every downstream loop (stats computation, normalization, __getitem__)
+        # must iterate over the real count, not the requested count.
+        actual = len(point_data)
+        if actual < num_samples:
+            self.logger.warning(
+                f"Reader returned {actual} records but num_samples={num_samples} was "
+                f"requested; using {actual}."
+            )
+            self.num_samples = actual
+            rollout_steps = num_steps - 1
+            if sample_type == "one_time_step":
+                self._max_idx = self.num_samples * rollout_steps
+            else:
+                self._max_idx = self.num_samples
+            self.length = self.num_samples
         # Check if any global features are present
         has_global = global_features and any(gf for gf in global_features)
         if not has_global:
