@@ -680,7 +680,10 @@ class Kernel(Module):
 
                 basis_vector_components.append(vectors_hat["r"])
 
-                for k in vectors.keys(include_nested=True, leaves_only=True):
+                for k in sorted(
+                    vectors.keys(include_nested=True, leaves_only=True),
+                    key=str,
+                ):
                     if k == "r":
                         continue
 
@@ -1345,25 +1348,17 @@ class BarnesHutKernel(Kernel):
         # concatenate_leaves: 1 GPU kernel (torch.cat)
         # [src_ids]: 1 GPU kernel (aten::index)
         # Total: 2 kernels instead of K (one per TensorDict leaf).
-        # The split-back into named leaves mirrors the vector path below
-        # and ensures that _evaluate_interactions sees the same nested
-        # TensorDict structure as the Exact (Kernel.forward) path.  Without
-        # this, "source_scalars" would be a flat tensor here but a nested
-        # TensorDict in Exact, causing concatenate_leaves inside
-        # _evaluate_interactions to produce different column orderings when
-        # TensorDict leaf-iteration order changes across library versions.
-        src_scalar_keys = list(
-            source_scalars.keys(include_nested=True, leaves_only=True)
+        # The split-back uses sorted keys matching concatenate_leaves's
+        # canonical column ordering so position i maps to the correct leaf.
+        src_scalar_keys = sorted(
+            source_scalars.keys(include_nested=True, leaves_only=True),
+            key=str,
         )
         gathered_src_scalars = concatenate_leaves(source_scalars)[src_ids]
-        gathered_scalar_leaves = {
-            k: gathered_src_scalars[..., i]
-            for i, k in enumerate(src_scalar_keys)
-        }
         scalars = TensorDict(
             {
                 "source_scalars": TensorDict(
-                    gathered_scalar_leaves,
+                    {k: gathered_src_scalars[..., i] for i, k in enumerate(src_scalar_keys)},
                     batch_size=torch.Size([n_pairs]),
                     device=device,
                 ),
@@ -1380,18 +1375,16 @@ class BarnesHutKernel(Kernel):
         # each vector leaf separately for magnitude/direction extraction and
         # rotationally-equivariant basis construction.  Integer indexing
         # along the last dimension creates non-contiguous views (zero copies).
-        src_vector_keys = list(
-            source_vectors.keys(include_nested=True, leaves_only=True)
+        # Sorted keys match concatenate_leaves's canonical column ordering.
+        src_vector_keys = sorted(
+            source_vectors.keys(include_nested=True, leaves_only=True),
+            key=str,
         )
         gathered_src_vectors = concatenate_leaves(source_vectors)[src_ids]
-        gathered_vector_leaves = {
-            k: gathered_src_vectors[..., i]
-            for i, k in enumerate(src_vector_keys)
-        }
         vectors = TensorDict(
             {
                 "source_vectors": TensorDict(
-                    gathered_vector_leaves,
+                    {k: gathered_src_vectors[..., i] for i, k in enumerate(src_vector_keys)},
                     batch_size=torch.Size([n_pairs, self.n_spatial_dims]),
                     device=device,
                 ),

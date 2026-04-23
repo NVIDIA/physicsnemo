@@ -73,6 +73,15 @@ def concatenate_leaves(td: TensorDict[str, torch.Tensor]) -> torch.Tensor:
     :math:`(*, F_{\text{total}})` where :math:`F_{\text{total}}` is the sum of
     flattened features across all leaf tensors.
 
+    Leaves are sorted by ``str(key)`` before concatenation, producing a
+    canonical column ordering that is independent of TensorDict construction
+    order.  This is necessary because ``TensorDict`` iteration order can
+    differ depending on how the object was constructed (dict literal vs
+    sequential ``__setitem__`` vs element-wise ops) and can change across
+    ``tensordict`` library versions.  Sorting eliminates this as a source
+    of bugs in any code that relies on positional column layout (e.g. the
+    MLP input assembly in :meth:`Kernel._evaluate_interactions`).
+
     Parameters
     ----------
     td : TensorDict[str, torch.Tensor]
@@ -96,14 +105,14 @@ def concatenate_leaves(td: TensorDict[str, torch.Tensor]) -> torch.Tensor:
     >>> result.shape
     torch.Size([2, 17])
     """
-    tensors = tuple(td.values(include_nested=True, leaves_only=True))
-    if len(tensors) == 0:
+    items = list(td.items(include_nested=True, leaves_only=True))
+    if len(items) == 0:
         return torch.empty(td.batch_size + torch.Size([0]), device=td.device)
-    else:
-        return torch.cat(
-            [t.reshape(td.batch_size + torch.Size([-1])) for t in tensors],
-            dim=-1,
-        )
+    items.sort(key=lambda kv: str(kv[0]))
+    return torch.cat(
+        [t.reshape(td.batch_size + torch.Size([-1])) for _, t in items],
+        dim=-1,
+    )
 
 
 class TensorsByRank(dict):

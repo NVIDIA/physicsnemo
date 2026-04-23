@@ -85,6 +85,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed bug in Pangu, FengWu attention window shift for asymmetric longitudes
 - Fixed a bug in `mesh.sampling.find_nearest_cells`, where a mixup between L2 and L-inf norms
   could cause slightly incorrect nearest-neighbor assignments in highly skewed meshes.
+- Fixed TensorDict key-ordering bug in GLOBE's Barnes-Hut kernel that caused
+  incorrect results when `tensordict >= 0.12` reordered leaves during
+  TensorDict construction from dict literals mixing plain and nested keys.
 
 ### Security
 
