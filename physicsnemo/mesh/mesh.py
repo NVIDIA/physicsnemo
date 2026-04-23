@@ -2236,9 +2236,10 @@ class Mesh:
             Opacity for cell edges, range [0, 1].
         show_edges : bool
             Whether to draw cell edges.
-        ax : matplotlib.axes.Axes, optional
-            (matplotlib only) Existing matplotlib axes to plot on. If None,
-            creates new figure and axes.
+        ax : matplotlib.axes.Axes or pyvista.Plotter, optional
+            Existing canvas to draw on. For matplotlib, a matplotlib Axes;
+            for PyVista, a pyvista Plotter. If ``None``, a new figure/plotter
+            is created. Use this to overlay multiple meshes on the same scene.
         backend_options : dict[str, Any], optional
             Additional keyword arguments forwarded to the underlying
             visualization backend (e.g. PyVista's ``plotter.add_mesh()``).

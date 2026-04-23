@@ -70,6 +70,9 @@ physicsnemo/core/ @coreyjadams @CharlelieLrt @ktangsali
 # Reusable neural network building blocks
 physicsnemo/nn/ @loliverhennigh
 
+# Symbolic PDE residual computation (PhysicsInformer)
+physicsnemo/sym/ @ktangsali
+
 # Functional operations (KNN, radius search, SDF)
 physicsnemo/nn/functional/ @loliverhennigh
 physicsnemo/nn/functional/knn/ @coreyjadams @peterdsharpe @loliverhennigh

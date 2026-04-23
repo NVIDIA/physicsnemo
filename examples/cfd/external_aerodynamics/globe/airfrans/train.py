@@ -30,8 +30,8 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 import torchinfo
-from dataset import AirFRANSDataSet, AirFRANSSample, compute_max_mesh_sizes
-from jaxtyping import Float, Int
+from dataset import AirFRANSDataSet, AirFRANSSample
+from jaxtyping import Float
 from mlflow.tracking.fluent import (
     active_run,
     log_artifact,
@@ -71,8 +71,8 @@ def main(
     amp: bool = False,
     use_compile: bool = True,
     compile_mode: Literal[
-        "default", "max-autotune-no-cudagraphs", "reduce-overhead", "max-autotune"
-    ] = "max-autotune",
+        "default", "max-autotune-no-cudagraphs"
+    ] = "max-autotune-no-cudagraphs",
     points_per_iter: int = 2048,
     learning_rate: float = 1e-3,
     weight_decay: float = 1e-4,
@@ -87,6 +87,8 @@ def main(
     n_latent_scalars: int = 12,
     n_latent_vectors: int = 6,
     n_spherical_harmonics: int = 1,
+    theta: float = 0.0,
+    leaf_size: int = 1,
     airfrans_task: Literal["full", "scarce", "reynolds", "aoa"] = "full",
     use_profiler: bool = True,
     make_images: bool = True,
@@ -115,6 +117,8 @@ def main(
         n_latent_scalars: Number of scalar latent channels propagated between hyperlayers.
         n_latent_vectors: Number of vector latent channels propagated between hyperlayers.
         n_spherical_harmonics: Number of Legendre polynomial terms for angle features.
+        theta: Barnes-Hut opening angle. Larger = more aggressive approximation.
+        leaf_size: Maximum sources per leaf node in the Barnes-Hut tree.
         airfrans_task: Which AirFRANS dataset task to train on.
         use_profiler: Enable PyTorch profiler for performance analysis.
         make_images: Whether to make images for visualization.
@@ -235,6 +239,8 @@ def main(
         n_latent_scalars=n_latent_scalars,
         n_latent_vectors=n_latent_vectors,
         n_spherical_harmonics=n_spherical_harmonics,
+        theta=theta,
+        leaf_size=leaf_size,
     ).to(device)
 
     if dist.rank == 0:
@@ -268,24 +274,6 @@ def main(
             gradient_as_bucket_view=True,
             static_graph=True,
         )
-
-    ### [Compute Maximum Mesh Sizes Per BC Type and Split]
-    max_sizes: dict[
-        Split,
-        TensorDict[
-            str, TensorDict[Literal["n_points", "n_cells"], Int[torch.Tensor, ""]]
-        ],
-    ] = {
-        split: compute_max_mesh_sizes(
-            dataloaders[split],
-            device,
-            face_downsampling_ratio=(
-                train_face_downsampling_ratio if split == "train" else 1.0
-            ),
-            rank=dist.rank,
-        )
-        for split in splits
-    }
 
     ### [Optimizer and Scheduler Setup]
     # Square-root batch-size scaling: when the effective batch size grows
@@ -401,7 +389,7 @@ def main(
 
     ### [Training and Testing]
     @torch.compile(
-        dynamic=False,
+        dynamic=True,
         mode=compile_mode,
         disable=not use_compile,
     )
@@ -462,29 +450,17 @@ def main(
                             )
                         sample.boundary_meshes[bc_type] = mesh
 
-                ### Pad boundary meshes to fixed size for static compilation
-                split_max_sizes = max_sizes[split]
-                for bc_type, mesh in sample.boundary_meshes.items():
-                    padded = mesh.pad(
-                        target_n_points=int(split_max_sizes[bc_type, "n_points"]),
-                        target_n_cells=int(split_max_sizes[bc_type, "n_cells"]),
-                        data_padding_value=0.0,
-                    )
-                    ### Pre-cache all geometry on the *padded* mesh so that
-                    # the cache structure is fully populated before torch.compile
-                    # ever sees it.  Mesh.pad() creates a new Mesh with an empty
-                    # cache, so caching must happen *after* padding.  Without
-                    # this, lazy computation during the compiled forward pass
-                    # grows the cache dict, triggering Dynamo guard failures.
+                ### Pre-cache geometry so lazy computation doesn't trigger
+                # Dynamo guard failures during compiled forward passes.
+                for mesh in sample.boundary_meshes.values():
                     if training and train_randomize_face_centers:
-                        padded._cache["cell", "centroids"] = (
-                            padded.sample_random_points_on_cells()
+                        mesh._cache["cell", "centroids"] = (
+                            mesh.sample_random_points_on_cells()
                         )
                     else:
-                        _ = padded.cell_centroids
-                    _ = padded.cell_areas
-                    _ = padded.cell_normals
-                    sample.boundary_meshes[bc_type] = padded
+                        _ = mesh.cell_centroids
+                    _ = mesh.cell_areas
+                    _ = mesh.cell_normals
 
             with record_function("data_transfer"):
                 sample = sample.to(device)
@@ -650,7 +626,6 @@ def main(
                             base_model.eval()
                             pred_mesh = base_model(
                                 **viz_sample.model_input_kwargs,
-                                chunk_size=points_per_iter,
                             )
                         AirFRANSDataSet.postprocess(
                             pred_mesh=pred_mesh.to(device="cpu"),

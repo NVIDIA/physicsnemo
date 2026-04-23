@@ -31,6 +31,7 @@ import torch
 from tensordict import tensorclass
 
 from physicsnemo.mesh.neighbors._adjacency import Adjacency, build_adjacency_from_pairs
+from physicsnemo.mesh.spatial._ragged import _ragged_arange
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -133,25 +134,17 @@ def _expand_leaf_hits(
     """
     starts = leaf_start[leaf_node_indices]  # (n_hits,)
     counts = leaf_count[leaf_node_indices]  # (n_hits,)
-    total = int(counts.sum())
     device = leaf_query_indices.device
 
-    if total == 0:
+    if int(counts.sum()) == 0:
         return (
             torch.empty(0, dtype=torch.long, device=device),
             torch.empty(0, dtype=torch.long, device=device),
         )
 
-    ### Expand query indices: repeat each by its leaf's cell count
     expanded_queries = torch.repeat_interleave(leaf_query_indices, counts)
 
-    ### Compute position-within-leaf offsets: [0,1,...,c0-1, 0,1,...,c1-1, ...]
-    cum = counts.cumsum(0)
-    offsets_within = torch.arange(total, dtype=torch.long, device=device)
-    offsets_within = offsets_within - torch.repeat_interleave(cum - counts, counts)
-
-    ### Map to original cell indices through the sorted permutation
-    sorted_positions = torch.repeat_interleave(starts, counts) + offsets_within
+    sorted_positions, _ = _ragged_arange(starts, counts)
     expanded_cells = sorted_cell_order[sorted_positions]
 
     return expanded_queries, expanded_cells
@@ -193,27 +186,15 @@ def _compute_leaf_aabbs(
     D = sorted_aabb_min.shape[1]
     dtype = sorted_aabb_min.dtype
     n_leaf_segs = len(leaf_seg_starts)
-    total_cells = leaf_seg_sizes.sum().item()
 
-    if total_cells == 0 or n_leaf_segs == 0:
+    if int(leaf_seg_sizes.sum()) == 0 or n_leaf_segs == 0:
         return (
             torch.empty((0, D), dtype=dtype, device=device),
             torch.empty((0, D), dtype=dtype, device=device),
         )
 
-    ### Build segment-ID for each cell across all leaf segments
-    seg_ids = torch.repeat_interleave(
-        torch.arange(n_leaf_segs, dtype=torch.long, device=device),
-        leaf_seg_sizes,
-    )  # (total_cells,)
+    cell_pos, seg_ids = _ragged_arange(leaf_seg_starts, leaf_seg_sizes)
 
-    ### Build positions into the sorted cell array
-    cum = leaf_seg_sizes.cumsum(0)
-    offsets = torch.arange(total_cells, dtype=torch.long, device=device)
-    offsets = offsets - torch.repeat_interleave(cum - leaf_seg_sizes, leaf_seg_sizes)
-    cell_pos = torch.repeat_interleave(leaf_seg_starts, leaf_seg_sizes) + offsets
-
-    ### Gather cell AABBs
     cell_mins = sorted_aabb_min[cell_pos]  # (total_cells, D)
     cell_maxs = sorted_aabb_max[cell_pos]  # (total_cells, D)
 

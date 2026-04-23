@@ -14,24 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from physicsnemo.experimental.models.globe.cluster_tree import (
-    ClusterTree,
-    DualInteractionPlan,
-    SourceAggregates,
+from physicsnemo.sym.eq.gradients import (
+    GradientCalculator,
+    compute_connectivity_tensor,
 )
-from physicsnemo.experimental.models.globe.field_kernel import (
-    BarnesHutKernel,
-    Kernel,
-    MultiscaleKernel,
-)
-from physicsnemo.experimental.models.globe.model import GLOBE
+from physicsnemo.sym.eq.pde import PDE
+from physicsnemo.sym.eq.phy_informer import PhysicsInformer
 
 __all__ = [
-    "GLOBE",
-    "Kernel",
-    "BarnesHutKernel",
-    "MultiscaleKernel",
-    "ClusterTree",
-    "DualInteractionPlan",
-    "SourceAggregates",
+    "GradientCalculator",
+    "PDE",
+    "PhysicsInformer",
+    "compute_connectivity_tensor",
 ]

@@ -14,24 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from physicsnemo.experimental.models.globe.cluster_tree import (
-    ClusterTree,
-    DualInteractionPlan,
-    SourceAggregates,
-)
-from physicsnemo.experimental.models.globe.field_kernel import (
-    BarnesHutKernel,
-    Kernel,
-    MultiscaleKernel,
-)
-from physicsnemo.experimental.models.globe.model import GLOBE
+import numpy as np
+import torch
 
-__all__ = [
-    "GLOBE",
-    "Kernel",
-    "BarnesHutKernel",
-    "MultiscaleKernel",
-    "ClusterTree",
-    "DualInteractionPlan",
-    "SourceAggregates",
-]
+diff_str: str = "__"
+
+
+def diff(y: str, x: str, degree: int = 1) -> str:
+    """Build a derivative name string: ``diff('u', 'x')`` → ``'u__x'``."""
+    return diff_str.join([y] + degree * [x])
+
+
+tf_dt = torch.float32
+np_dt = np.float32
