@@ -1341,14 +1341,32 @@ class BarnesHutKernel(Kernel):
             target_positions[tgt_ids] - source_positions[src_ids]
         ) / reference_length
 
-        ### Flatten source scalars into one tensor, gather once.
+        ### Flatten source scalars into one tensor, gather once, split back.
         # concatenate_leaves: 1 GPU kernel (torch.cat)
         # [src_ids]: 1 GPU kernel (aten::index)
         # Total: 2 kernels instead of K (one per TensorDict leaf).
+        # The split-back into named leaves mirrors the vector path below
+        # and ensures that _evaluate_interactions sees the same nested
+        # TensorDict structure as the Exact (Kernel.forward) path.  Without
+        # this, "source_scalars" would be a flat tensor here but a nested
+        # TensorDict in Exact, causing concatenate_leaves inside
+        # _evaluate_interactions to produce different column orderings when
+        # TensorDict leaf-iteration order changes across library versions.
+        src_scalar_keys = list(
+            source_scalars.keys(include_nested=True, leaves_only=True)
+        )
         gathered_src_scalars = concatenate_leaves(source_scalars)[src_ids]
+        gathered_scalar_leaves = {
+            k: gathered_src_scalars[..., i]
+            for i, k in enumerate(src_scalar_keys)
+        }
         scalars = TensorDict(
             {
-                "source_scalars": gathered_src_scalars,
+                "source_scalars": TensorDict(
+                    gathered_scalar_leaves,
+                    batch_size=torch.Size([n_pairs]),
+                    device=device,
+                ),
                 "global_scalars": global_scalars.expand(
                     n_pairs, *global_scalars.batch_size
                 ),

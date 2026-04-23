@@ -1077,13 +1077,12 @@ def test_bh_nested_source_data_keys(n_dims: int):
         # The two invariant checks above guarantee that if we reach this
         # point, BH and Exact computed bit-identical per-pair outputs.
         # The only remaining difference is aggregation order: Exact uses
-        # einsum("ts,s->t", ...) while BH uses scatter_add_. For 30-term
-        # fp32 sums with measured |terms| <= 0.044 and cancellation ratio
-        # <= ~56x, the rearrangement bound is ~30 * eps * 0.044 * 56 ≈
-        # 2.2e-5.  A CI run (torch 2.11.0, CPU) reported 2.02e-3 abs diff
-        # which is ~100x that bound and remains unexplained.  The 5e-3 /
-        # 5e-2 ceiling matches test_bh_globe_like_config and is justified
-        # only because the pre-checks above confirm no algorithmic bug.
+        # einsum("ts,s->t", ...) while BH uses scatter_add_. For a
+        # 30-term fp32 sum with measured |terms| <= 0.044 and cancellation
+        # ratio <= ~56x, the rearrangement bound is ~30 * eps * 0.044 *
+        # 56 ≈ 2.2e-5.  The tolerance matches test_bh_convergence_to_exact:
+        # tight enough to catch real bugs, loose enough for cross-platform
+        # BLAS summation-order variance.
         for field_name in output_field_ranks:
 
             def _msg(
@@ -1100,8 +1099,8 @@ def test_bh_nested_source_data_keys(n_dims: int):
             torch.testing.assert_close(
                 bh_result[field_name],
                 exact_result[field_name],
-                atol=5e-3,
-                rtol=5e-2,
+                atol=1e-4,
+                rtol=1e-3,
                 msg=_msg,
             )
 
