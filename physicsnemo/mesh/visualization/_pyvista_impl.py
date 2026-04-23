@@ -26,6 +26,11 @@ if TYPE_CHECKING:
 
 # Dynamic import for optional pyvista dependency (invisible to static analysis)
 pv = importlib.import_module("pyvista")
+### ``BasePlotter`` is the common ancestor of ``pv.Plotter`` and Qt-backed
+### plotters (e.g. ``pyvistaqt.BackgroundPlotter`` -> ``QtInteractor`` ->
+### ``BasePlotter``), so accepting it covers every realistic caller. Fall
+### back to ``pv.Plotter`` only on ancient versions that predate the split.
+_PlotterBase = getattr(pv, "BasePlotter", pv.Plotter)
 
 
 def draw_mesh_pyvista(
@@ -41,9 +46,12 @@ def draw_mesh_pyvista(
     alpha_points: float,
     alpha_cells: float,
     show_edges: bool,
+    plotter=None,
     **kwargs,
 ):
     """Draw mesh using PyVista backend.
+
+    Supports all spatial dimensions up to 3D using PyVista's rendering engine.
 
     Parameters
     ----------
@@ -56,29 +64,40 @@ def draw_mesh_pyvista(
     active_scalar_source : {"points", "cells", None}
         Which scalar source is active ("points", "cells", or None).
     scalar_label : str or None
-        Human-readable label for the colorbar title.
+        Human-readable label for the colorbar.
     show : bool
         Whether to call plotter.show().
     cmap : str
         Colormap name.
     vmin : float or None
-        Minimum value for colormap normalization (clim).
+        Minimum value for colormap normalization.
     vmax : float or None
-        Maximum value for colormap normalization (clim).
+        Maximum value for colormap normalization.
     alpha_points : float
         Opacity for points (0-1).
     alpha_cells : float
         Opacity for cells (0-1).
     show_edges : bool
         Whether to draw cell edges.
+    plotter : pyvista.Plotter, optional
+        Existing pyvista Plotter to draw on. If ``None``, a new plotter is
+        created. Use this to overlay multiple meshes on the same scene.
     **kwargs : dict
         Additional backend-specific arguments passed to PyVista.
 
     Returns
     -------
     pyvista.Plotter
-        PyVista plotter object (even if show=True, returns before calling .show()).
+        PyVista plotter object.
     """
+    ### Validate plotter type
+    if plotter is not None and not isinstance(plotter, _PlotterBase):
+        raise ValueError(
+            f"Expected a pyvista.Plotter for the 'plotter' parameter, "
+            f"got {type(plotter).__name__}. "
+            f"Matplotlib Axes are only supported for matplotlib backend."
+        )
+
     ### Convert mesh to PyVista format
     from physicsnemo.mesh.io.io_pyvista import to_pyvista
 
@@ -93,8 +112,9 @@ def draw_mesh_pyvista(
         pv_mesh.cell_data["_viz_scalars"] = cell_scalar_values.float().cpu().numpy()
         scalar_name = "_viz_scalars"
 
-    ### Create plotter
-    plotter = pv.Plotter()
+    ### Create plotter (or reuse existing one)
+    if plotter is None:
+        plotter = pv.Plotter()
 
     ### Determine colors based on active_scalar_source
     if active_scalar_source is None:

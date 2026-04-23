@@ -13,6 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import warnings
 from typing import Any
 
@@ -254,6 +255,7 @@ class ConcatConditionWrapper(Module):
                 noise_labels=t,
                 class_labels=cond_vec,
                 augment_labels=augment_labels,
+                **model_kwargs,
             )
 
         return self.model(x, t, condition=cond_vec, **model_kwargs)

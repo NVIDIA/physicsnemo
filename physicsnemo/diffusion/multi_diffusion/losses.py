@@ -17,15 +17,40 @@
 """Multi-diffusion denoising score matching losses for patch-based training."""
 
 from functools import lru_cache
-from typing import Callable, Literal, Tuple
+from typing import Any, Callable, Literal, Tuple
 
 import torch
 from jaxtyping import Float
 from tensordict import TensorDict
 from torch import Tensor
 
+from physicsnemo.diffusion.base import PredictorType
 from physicsnemo.diffusion.multi_diffusion.models import MultiDiffusionModel2D
 from physicsnemo.diffusion.noise_schedulers import NoiseScheduler
+from physicsnemo.diffusion.utils.utils import apply_loss_weight
+
+
+def _unwrap_multi_diffusion(model: torch.nn.Module) -> MultiDiffusionModel2D:
+    """Peel off DDP / torch.compile wrappers to reach the underlying
+    :class:`MultiDiffusionModel2D`.
+
+    The unwrapping order handles arbitrary nesting of
+    ``DistributedDataParallel`` (``model.module``) and ``torch.compile``
+    (``OptimizedModule._orig_mod``).
+    """
+    m = model
+    while not isinstance(m, MultiDiffusionModel2D):
+        if isinstance(m, torch._dynamo.eval_frame.OptimizedModule):
+            m = m._orig_mod
+        elif hasattr(m, "module"):
+            m = m.module
+        else:
+            raise TypeError(
+                f"Could not unwrap a MultiDiffusionModel2D from "
+                f"{type(model).__name__}. Found leaf type "
+                f"{type(m).__name__}."
+            )
+    return m
 
 
 class _CompiledPatchX:
@@ -68,6 +93,22 @@ class MultiDiffusionMSEDSMLoss:
     on each patch. A separate diffusion time is sampled per patch, giving
     :math:`P \times B` independent noise levels per training step.
 
+    All training functionality is centered around a **noise scheduler** that
+    must implement the
+    :class:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler` protocol.
+    At each training step the noise scheduler provides:
+
+    - **Time sampling** via :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.sample_time`: draws
+      random diffusion times :math:`t` — one per patch.
+    - **Noise injection** via :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.add_noise`: produces
+      the noisy state :math:`\mathbf{x}_t` from clean data
+      :math:`\mathbf{x}_0`.
+    - **Loss weighting** via :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.loss_weight`: returns
+      the per-sample weight :math:`w(t)`.  Weights may be scalar
+      :math:`(N,)` or per-channel :math:`(N, C)` when the scheduler uses
+      per-channel ``sigma_data`` (see
+      :class:`~physicsnemo.diffusion.noise_schedulers.EDMNoiseScheduler`).
+
     The model **must** have a random patching strategy configured via
     :meth:`~MultiDiffusionModel2D.set_random_patching` before using this
     loss.
@@ -96,13 +137,20 @@ class MultiDiffusionMSEDSMLoss:
     noise_scheduler : NoiseScheduler
         Noise scheduler implementing the
         :class:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler`
-        protocol.
-    prediction_type : Literal["x0", "score"], default="x0"
+        protocol, providing the methods:
+        :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.sample_time`,
+        :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.add_noise`, and
+        :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.loss_weight`.
+    prediction_type : PredictorType, default="x0"
         Type of prediction the model outputs.
     score_to_x0_fn : Callable[[Tensor, Tensor, Tensor], Tensor], optional
         Callback to convert a score prediction to an
         :math:`\hat{\mathbf{x}}_0` estimate. Required when
         ``prediction_type="score"``.
+    epsilon_to_x0_fn : Callable[[Tensor, Tensor, Tensor], Tensor], optional
+        Callback to convert an epsilon (noise) prediction to an
+        :math:`\hat{\mathbf{x}}_0` estimate. Required when
+        ``prediction_type="epsilon"``.
     reduction : Literal["none", "mean", "sum"], default="mean"
         Reduction applied to the output.
 
@@ -205,31 +253,42 @@ class MultiDiffusionMSEDSMLoss:
         self,
         model: MultiDiffusionModel2D,
         noise_scheduler: NoiseScheduler,
-        prediction_type: Literal["x0", "score"] = "x0",
+        prediction_type: PredictorType = "x0",
         score_to_x0_fn: Callable[
+            [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+        ]
+        | None = None,
+        epsilon_to_x0_fn: Callable[
             [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
         ]
         | None = None,
         reduction: Literal["none", "mean", "sum"] = "mean",
     ) -> None:
         self.model = model
+        self._md_model = _unwrap_multi_diffusion(model)
         self.noise_scheduler = noise_scheduler
-        self._compiled_patch_x = _CompiledPatchX(model)
+        self._compiled_patch_x = _CompiledPatchX(self._md_model)
 
-        if prediction_type == "x0":
-            self._to_x0 = lambda prediction, x_t, t: prediction
-
-        elif prediction_type == "score":
-            if score_to_x0_fn is None:
+        match prediction_type:
+            case "x0":
+                self._to_x0 = lambda prediction, x_t, t: prediction
+            case "score":
+                if score_to_x0_fn is None:
+                    raise ValueError(
+                        "score_to_x0_fn must be provided when prediction_type='score'."
+                    )
+                self._to_x0 = score_to_x0_fn
+            case "epsilon":
+                if epsilon_to_x0_fn is None:
+                    raise ValueError(
+                        "epsilon_to_x0_fn must be provided when prediction_type='epsilon'."
+                    )
+                self._to_x0 = epsilon_to_x0_fn
+            case _:
                 raise ValueError(
-                    "score_to_x0_fn must be provided when prediction_type='score'."
+                    f"prediction_type must be 'x0', 'score', or 'epsilon', "
+                    f"got '{prediction_type}'."
                 )
-            self._to_x0 = score_to_x0_fn
-
-        else:
-            raise ValueError(
-                f"prediction_type must be 'x0' or 'score', got '{prediction_type}'."
-            )
 
         _reductions = {
             "none": lambda x: x,
@@ -247,6 +306,8 @@ class MultiDiffusionMSEDSMLoss:
         x0: Float[Tensor, "B C H W"],
         condition: Float[Tensor, " B *cond_dims"] | TensorDict | None = None,
         reset_patch_indices: bool = True,
+        t: Float[Tensor, " PB"] | None = None,
+        **model_kwargs: Any,
     ) -> Float[Tensor, "P_times_B C Hp Wp"] | Float[Tensor, ""]:
         r"""Compute the multi-diffusion denoising score matching loss.
 
@@ -261,6 +322,16 @@ class MultiDiffusionMSEDSMLoss:
             If ``True``, re-draw random patch positions before computing
             the loss. Set to ``False`` when patch positions are managed
             externally.
+        t : Tensor or None, optional, default=None
+            Pre-sampled diffusion time values of shape :math:`(P \times B,)`
+            — one value per patch.  When ``None`` (the default), times are
+            sampled internally via
+            :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.sample_time`.
+            Passing explicit times is useful when the caller needs access
+            to the sampled values for diagnostics (e.g., per-sigma-bin
+            loss tracking).
+        **model_kwargs : Any
+            Additional keyword arguments forwarded to the model.
 
         Returns
         -------
@@ -269,12 +340,13 @@ class MultiDiffusionMSEDSMLoss:
             :math:`(P \times B, C, H_p, W_p)`. Otherwise a scalar tensor.
         """
         if reset_patch_indices:
-            self.model.reset_patch_indices()
+            self._md_model.reset_patch_indices()
 
         # Patch x0 and sample per-patch noise
         x0_patched = self._compiled_patch_x(x0)  # (P*B, C, Hp, Wp)
         PB = x0_patched.shape[0]
-        t = self.noise_scheduler.sample_time(PB, device=x0.device, dtype=x0.dtype)
+        if t is None:
+            t = self.noise_scheduler.sample_time(PB, device=x0.device, dtype=x0.dtype)
         x_t = self.noise_scheduler.add_noise(x0_patched, t)
 
         # Forward with pre-patched x and t
@@ -284,12 +356,14 @@ class MultiDiffusionMSEDSMLoss:
             condition=condition,
             x_is_patched=True,
             t_is_patched=True,
+            **model_kwargs,
         )
 
         x0_pred = self._to_x0(prediction, x_t, t)
 
+        loss = (x0_pred - x0_patched) ** 2
         w = self.noise_scheduler.loss_weight(t)
-        loss = w.reshape(-1, *([1] * (x0_pred.ndim - 1))) * (x0_pred - x0_patched) ** 2
+        loss = apply_loss_weight(w, x0_patched.ndim) * loss
         return self._reduce(loss)
 
 
@@ -309,6 +383,12 @@ class MultiDiffusionWeightedMSEDSMLoss:
         \left[ w(t) \left\| \mathbf{m} \odot
         \left(\hat{\mathbf{x}}_0(\mathbf{x}_t, t)
         - \mathbf{x}_0\right) \right\|^2 \right]
+
+    The noise scheduler's
+    :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.loss_weight`
+    may return scalar :math:`(N,)` or per-channel :math:`(N, C)` weights
+    when the scheduler uses per-channel ``sigma_data`` (see
+    :class:`~physicsnemo.diffusion.noise_schedulers.EDMNoiseScheduler`).
 
     The model **must** have a random patching strategy configured via
     :meth:`~MultiDiffusionModel2D.set_random_patching` before using this
@@ -336,12 +416,20 @@ class MultiDiffusionWeightedMSEDSMLoss:
     noise_scheduler : NoiseScheduler
         Noise scheduler implementing the
         :class:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler`
-        protocol.
-    prediction_type : {"x0", "score"}, default="x0"
+        protocol, providing the methods:
+        :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.sample_time`,
+        :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.add_noise`, and
+        :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.loss_weight`.
+    prediction_type : PredictorType, default="x0"
         Type of prediction the model outputs.
     score_to_x0_fn : callable, optional
         Callback to convert a score prediction to an
-        :math:`\hat{\mathbf{x}}_0` estimate.
+        :math:`\hat{\mathbf{x}}_0` estimate. Required when
+        ``prediction_type="score"``.
+    epsilon_to_x0_fn : callable, optional
+        Callback to convert an epsilon (noise) prediction to an
+        :math:`\hat{\mathbf{x}}_0` estimate. Required when
+        ``prediction_type="epsilon"``.
     reduction : {"none", "mean", "sum"}, default="mean"
         Reduction applied to the output.
 
@@ -428,31 +516,42 @@ class MultiDiffusionWeightedMSEDSMLoss:
         self,
         model: MultiDiffusionModel2D,
         noise_scheduler: NoiseScheduler,
-        prediction_type: Literal["x0", "score"] = "x0",
+        prediction_type: PredictorType = "x0",
         score_to_x0_fn: Callable[
+            [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+        ]
+        | None = None,
+        epsilon_to_x0_fn: Callable[
             [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
         ]
         | None = None,
         reduction: Literal["none", "mean", "sum"] = "mean",
     ) -> None:
         self.model = model
+        self._md_model = _unwrap_multi_diffusion(model)
         self.noise_scheduler = noise_scheduler
-        self._compiled_patch_x = _CompiledPatchX(model)
+        self._compiled_patch_x = _CompiledPatchX(self._md_model)
 
-        if prediction_type == "x0":
-            self._to_x0 = lambda prediction, x_t, t: prediction
-
-        elif prediction_type == "score":
-            if score_to_x0_fn is None:
+        match prediction_type:
+            case "x0":
+                self._to_x0 = lambda prediction, x_t, t: prediction
+            case "score":
+                if score_to_x0_fn is None:
+                    raise ValueError(
+                        "score_to_x0_fn must be provided when prediction_type='score'."
+                    )
+                self._to_x0 = score_to_x0_fn
+            case "epsilon":
+                if epsilon_to_x0_fn is None:
+                    raise ValueError(
+                        "epsilon_to_x0_fn must be provided when prediction_type='epsilon'."
+                    )
+                self._to_x0 = epsilon_to_x0_fn
+            case _:
                 raise ValueError(
-                    "score_to_x0_fn must be provided when prediction_type='score'."
+                    f"prediction_type must be 'x0', 'score', or 'epsilon', "
+                    f"got '{prediction_type}'."
                 )
-            self._to_x0 = score_to_x0_fn
-
-        else:
-            raise ValueError(
-                f"prediction_type must be 'x0' or 'score', got '{prediction_type}'."
-            )
 
         _reductions = {
             "none": lambda x: x,
@@ -471,6 +570,8 @@ class MultiDiffusionWeightedMSEDSMLoss:
         weight: Float[Tensor, "B C H W"],
         condition: Float[Tensor, " B *cond_dims"] | TensorDict | None = None,
         reset_patch_indices: bool = True,
+        t: Float[Tensor, " PB"] | None = None,
+        **model_kwargs: Any,
     ) -> Float[Tensor, "P_times_B C Hp Wp"] | Float[Tensor, ""]:
         r"""Compute the weighted multi-diffusion DSM loss.
 
@@ -487,6 +588,16 @@ class MultiDiffusionWeightedMSEDSMLoss:
             If ``True``, re-draw random patch positions before computing
             the loss. Set to ``False`` when patch positions are managed
             externally.
+        t : Tensor or None, optional, default=None
+            Pre-sampled diffusion time values of shape :math:`(P \times B,)`
+            — one value per patch.  When ``None`` (the default), times are
+            sampled internally via
+            :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.sample_time`.
+            Passing explicit times is useful when the caller needs access
+            to the sampled values for diagnostics (e.g., per-sigma-bin
+            loss tracking).
+        **model_kwargs : Any
+            Additional keyword arguments forwarded to the model.
 
         Returns
         -------
@@ -502,13 +613,14 @@ class MultiDiffusionWeightedMSEDSMLoss:
                 )
 
         if reset_patch_indices:
-            self.model.reset_patch_indices()
+            self._md_model.reset_patch_indices()
 
         # Patch x0 and weight, then sample per-patch noise
         x0_patched = self._compiled_patch_x(x0)  # (P*B, C, Hp, Wp)
         weight_patched = self._compiled_patch_x(weight)  # (P*B, C, Hp, Wp)
         PB = x0_patched.shape[0]
-        t = self.noise_scheduler.sample_time(PB, device=x0.device, dtype=x0.dtype)
+        if t is None:
+            t = self.noise_scheduler.sample_time(PB, device=x0.device, dtype=x0.dtype)
         x_t = self.noise_scheduler.add_noise(x0_patched, t)
 
         # Forward with pre-patched x and t
@@ -518,14 +630,12 @@ class MultiDiffusionWeightedMSEDSMLoss:
             condition=condition,
             x_is_patched=True,
             t_is_patched=True,
+            **model_kwargs,
         )
 
         x0_pred = self._to_x0(prediction, x_t, t)
 
+        loss = weight_patched * (x0_pred - x0_patched) ** 2
         w = self.noise_scheduler.loss_weight(t)
-        loss = (
-            w.reshape(-1, *([1] * (x0_pred.ndim - 1)))
-            * weight_patched
-            * (x0_pred - x0_patched) ** 2
-        )
+        loss = apply_loss_weight(w, x0_patched.ndim) * loss
         return self._reduce(loss)

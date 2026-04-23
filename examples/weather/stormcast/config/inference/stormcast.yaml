@@ -20,7 +20,7 @@ experiment_name: 'stormcast-inference' # Name for the inference experiment being
 run_id: 0 # Unique identifier for the inference run
 rundir: ./${inference.outdir}/${inference.experiment_name}/${inference.run_id} # Path where experiement outputs will be saved
 regression_checkpoint: stormcast_checkpoints/regression/StormCastUNet.0.0.mdlus
-diffusion_checkpoint: stormcast_checkpoints/diffusion/EDMPrecond.0.0.mdlus
+diffusion_checkpoint: stormcast_checkpoints/diffusion/EDMPreconditioner.0.0.mdlus
 
 # Initial and lead times
 initial_time: "2022-11-04T21:00:00" # datetime to intialize forecast with (YYYY-MM-DDTHH:MM:SS)

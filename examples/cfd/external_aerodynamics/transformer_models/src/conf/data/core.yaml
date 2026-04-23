@@ -57,4 +57,3 @@ broadcast_global_features: true
 # Return the mesh areas and normals?  You don't usually want this for training.
 # We switch it on automatically for inference.
 return_mesh_features: false
-

@@ -34,6 +34,9 @@ b = torch.randn(N, device=device)
 
 
 def f(x, y):
+    """
+    Dummy docstring for a trivial function
+    """
     return x + y
 
 

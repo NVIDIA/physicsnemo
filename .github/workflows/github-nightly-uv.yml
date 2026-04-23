@@ -18,13 +18,34 @@
 # It runs ALL tests and caches the testmon database for use by PR workflows.
 # The tests run here will only use UV.  This is meant to be nightly functionality
 # testing AND a baseline dependency graph for PRs.
+#
+# ----------------------------------------------------------------------------
+# Cache design (see .github/CACHE_CONTRACT.md for the full contract):
+#
+#   uv download cache (~/.cache/uv)
+#     key   : <UV_CACHE_KEY_PREFIX>-latest
+#     prefix: container + python + uv version
+#     scope : additive wheel store; survives lockfile changes; refreshed
+#             via delete-before-save when the cache is cold.  Restored
+#             fail-open.  This is the ONLY cross-run cache for the Python
+#             environment; the realized .venv is rebuilt every job from
+#             the committed lockfile (deterministic given a pinned
+#             container + --frozen + the pinned uv version).
+#
+# Consumer contract for PR workflows:
+#   * Restore the uv download cache fail-open (speed only).
+#   * Always `uv sync --frozen --group dev --extra cu12` (accelerated by
+#     the restored uv download cache).
+#   * Run tests via `.venv/bin/python` or `uv run --no-sync` so the
+#     realized env cannot be mutated mid-job.
+# ----------------------------------------------------------------------------
 
 
 # TO DO: THE COVERAGE LIMIT IS VERY LOW, BECAUSE THIS IS NOT USING GPU TESTS OR
 # THE DATA-DRIVEN TESTS.  RAISE THIS UP AGAIN EVENTUALLY.
 
 
-name: Nightly Github Workflow
+name: Nightly Github UV Workflow
 on:
   schedule:
     # Run nightly at 2 AM UTC
@@ -32,102 +53,206 @@ on:
   workflow_dispatch:
     # Allow manual triggering
 
+permissions:
+  contents: read
+  actions: write
+  checks: write
+
+# Two overlapping nightly runs (manual + schedule, or two manuals) would
+# race on the static `-latest` uv download cache key.  Serialise them so
+# the delete-before-save dance stays correct.  We do NOT cancel
+# in-progress because the nightly testmon DB is consumed by PR workflows
+# and we'd rather a slow nightly than a missing one.
+concurrency:
+  group: nightly-github-uv
+  cancel-in-progress: false
+
+# The CUDA container's default shell is sh, which does not support
+# `set -o pipefail`.  Force bash everywhere.
+defaults:
+  run:
+    shell: bash
+
+env:
+  # ---- Container baseline identity ---------------------------------------
+  # Change ANY of these and the uv cache invalidates via prefix change.
+  # Keep CONTAINER_ID in sync with the `image:` tag below.
+  PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.11.7"
+  CONTAINER_ID: "cuda12.8.1-cudnn-devel-ubuntu24.04"
+  EXTRAS_TAG: "cu12"
+
+  # ---- Cache key prefixes ------------------------------------------------
+  # Inlined literally because GitHub Actions does not allow env-to-env
+  # references within the same env: block.  Bump in lockstep with the
+  # baseline values above.
+  UV_CACHE_KEY_PREFIX:   "uv-cache-nightly-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12-uv0.11.7"
+  TESTMON_CACHE_KEY_PREFIX:  "testmon-nightly"
+  COVERAGE_CACHE_KEY_PREFIX: "coverage-nightly"
+
+  # ---- uv read-only defaults --------------------------------------------
+  # Belt-and-braces against the historical bug class where an unguarded
+  # `uv run` (without --frozen, without the cu12 extra) silently re-syncs
+  # the venv to a different CUDA variant and rewrites uv.lock.
+  #
+  # UV_FROZEN=1   -> all uv invocations refuse to mutate the lockfile.
+  # UV_NO_SYNC=1  -> `uv run` will not implicitly sync.  The explicit
+  #                  `uv sync` inside setup-uv-env is unaffected by this
+  #                  flag.
+  UV_FROZEN: "1"
+  UV_NO_SYNC: "1"
+
+  PYVISTA_OFF_SCREEN: "true"
+
 jobs:
-  # Stage 1: Build and cache the environment
+  # Stage 1: Warm the uv download cache
+  #
+  # This job's sole purpose is to make sure ~/.cache/uv is populated with
+  # the wheels implied by the current lockfile before the downstream GPU
+  # jobs start.  Each downstream job does its own `uv sync --frozen`, but
+  # that sync is fast because it hits the warm cache this job publishes.
   build-environment:
     name: Build Environment
     runs-on: linux-amd64-cpu8
+    container:
+      image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - name: Bootstrap cuDNN CI container
+      uses: ./.github/actions/bootstrap-cudnn-ci
       with:
-        python-version: '3.12'
+        python-version: ${{ env.PYTHON_VERSION }}
+        uv-version: ${{ env.UV_VERSION }}
 
-    - name: Install uv
-      uses: nick-fields/retry@v3
+    - name: Setup uv environment from cache
+      id: setup-uv-env
+      uses: ./.github/actions/setup-uv-env
       with:
-        timeout_minutes: 5
-        max_attempts: 3
-        command: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
+        uv-cache-key-suffix: "latest"
+        extras: ${{ env.EXTRAS_TAG }}
 
-    - name: Restore uv cache
-      id: cache-uv-restore
-      uses: actions/cache/restore@v4
-      with:
-        path: .venv
-        key: uv-env-nightly-latest
-
-    - name: Install package with uv
-      if: steps.cache-uv-restore.outputs.cache-hit != 'true'
+    - name: Report setup action outputs
       run: |
-        # Install core dependencies and development group
-        uv sync --group dev --preview-features extra-build-dependencies
+        echo "setup-uv-env.uv_cache_hit=${{ steps.setup-uv-env.outputs.uv_cache_hit }}"
 
-    - name: Free disk space before caching
-      if: steps.cache-uv-restore.outputs.cache-hit != 'true'
+    # --- uv download cache (static key, delete-before-save) ---
+    #
+    # GitHub Actions caches are immutable: actions/cache/save silently
+    # skips if the key already exists.  Because the uv cache uses a fixed
+    # "-latest" key, we must delete the old entry before saving a new
+    # one.  We then re-query gh cache list to confirm the save actually
+    # took effect (the previous implementation swallowed save failures
+    # silently, which is how a corrupted cache could persist for days).
+    #
+    # Fires only on a cold cache (first run, prefix bump, or manual
+    # purge).  In steady state uv_cache_hit is true and these steps
+    # no-op: the warm cache already contains every wheel the frozen sync
+    # needed.
+    - name: Prune uv cache
+      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true'
       run: |
-        rm -rf ~/.cache/uv
-        df -h
+        set -euo pipefail
+        uv cache prune
+        echo "uv cache after prune:"
+        du -sh ~/.cache/uv 2>/dev/null || echo "  (not present)"
 
-    - name: Delete old environment cache
-      if: steps.cache-uv-restore.outputs.cache-hit != 'true'
-      run: |
-        gh cache delete "uv-env-nightly-latest" || true
+    - name: Delete stale uv cache entry
+      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        UV_CACHE_KEY: ${{ env.UV_CACHE_KEY_PREFIX }}-latest
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        if ! command -v gh >/dev/null 2>&1; then
+          echo "::error::gh CLI not on PATH; cannot manage uv cache slot."
+          exit 1
+        fi
+        # Use --json key + --jq for robust matching (no false positives
+        # on prefix overlap from sibling cache keys).
+        existing="$(gh cache list \
+          --repo "$REPO" \
+          --key "$UV_CACHE_KEY" \
+          --json key \
+          --jq '.[].key' \
+          | grep -Fx "$UV_CACHE_KEY" || true)"
+        if [ -n "$existing" ]; then
+          gh cache delete "$UV_CACHE_KEY" --repo "$REPO"
+          echo "deleted stale uv cache: $UV_CACHE_KEY"
+        else
+          echo "no existing uv cache to delete: $UV_CACHE_KEY"
+        fi
 
-    - name: Save environment to cache
-      if: steps.cache-uv-restore.outputs.cache-hit != 'true'
+    - name: Save uv download cache
+      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true'
       uses: actions/cache/save@v4
       with:
-        path: .venv
-        key: uv-env-nightly-latest
+        path: ~/.cache/uv
+        key: ${{ env.UV_CACHE_KEY_PREFIX }}-latest
+
+    # Confirm the save actually took effect.  actions/cache/save@v4
+    # silently no-ops on key collision; if the previous delete step
+    # somehow left the entry in place (or a concurrent run repopulated
+    # it), we want a hard failure now rather than a stale cache fed to
+    # tomorrow's nightly.
+    - name: Verify uv download cache was saved
+      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        UV_CACHE_KEY: ${{ env.UV_CACHE_KEY_PREFIX }}-latest
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        # GitHub's cache index is eventually consistent; allow a few
+        # seconds before failing.
+        for attempt in 1 2 3 4 5; do
+          if gh cache list --repo "$REPO" --key "$UV_CACHE_KEY" --json key --jq '.[].key' \
+              | grep -Fxq "$UV_CACHE_KEY"; then
+            echo "uv download cache present: $UV_CACHE_KEY"
+            exit 0
+          fi
+          echo "attempt $attempt: uv cache not yet visible, sleeping..."
+          sleep 5
+        done
+        echo "::error::uv download cache save did not take effect for key $UV_CACHE_KEY"
+        exit 1
 
   # Stage 2: Run testmon tests and cache the database
   testmon:
     name: Testmon
     needs: build-environment
     runs-on: linux-amd64-gpu-h100-latest-1
+    container:
+      image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - name: Bootstrap cuDNN CI container
+      uses: ./.github/actions/bootstrap-cudnn-ci
       with:
-        python-version: '3.12'
+        python-version: ${{ env.PYTHON_VERSION }}
+        uv-version: ${{ env.UV_VERSION }}
 
-    - name: Install uv
-      uses: nick-fields/retry@v3
+    # Restore the warm uv download cache (published by build-environment
+    # earlier in this same workflow run) and rebuild .venv from the
+    # frozen lockfile.  With the cache warm the sync is dominated by
+    # local file copies, not network I/O.
+    - name: Setup uv environment from cache
+      uses: ./.github/actions/setup-uv-env
       with:
-        timeout_minutes: 5
-        max_attempts: 3
-        command: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-    - name: Restore environment from cache
-      uses: actions/cache/restore@v4
-      with:
-        path: .venv
-        key: uv-env-nightly-latest
-        fail-on-cache-miss: true
+        uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
+        uv-cache-key-suffix: "latest"
+        extras: ${{ env.EXTRAS_TAG }}
 
     - name: Run core tests (collect all for testmon)
       run: |
-        # This populates the testmon database for PR workflows
-        uv run python -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*"
-
-    - name: Delete old testmon cache
-      run: |
-        gh cache delete "testmon-nightly-latest" || true
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Workflow-level UV_NO_SYNC=1 + UV_FROZEN=1 keep `uv run` strictly
+        # read-only, so the .venv cannot be mutated mid-job.
+        uv run --no-sync python -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*"
 
     - name: Save testmon database to cache
       uses: actions/cache/save@v4
@@ -136,65 +261,68 @@ jobs:
           .testmondata
           .testmondata-shm
           .testmondata-wal
-        key: testmon-nightly-latest
+        key: ${{ env.TESTMON_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
 
   # Stage 3: Run coverage tests and upload artifacts
   coverage:
     name: Coverage
     needs: build-environment
     runs-on: linux-amd64-gpu-h100-latest-1
+    container:
+      image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - name: Bootstrap cuDNN CI container
+      uses: ./.github/actions/bootstrap-cudnn-ci
       with:
-        python-version: '3.12'
+        python-version: ${{ env.PYTHON_VERSION }}
+        uv-version: ${{ env.UV_VERSION }}
 
-    - name: Install uv
-      uses: nick-fields/retry@v3
+    - name: Setup uv environment from cache
+      uses: ./.github/actions/setup-uv-env
       with:
-        timeout_minutes: 5
-        max_attempts: 3
-        command: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-    - name: Restore environment from cache
-      uses: actions/cache/restore@v4
-      with:
-        path: .venv
-        key: uv-env-nightly-latest
-        fail-on-cache-miss: true
+        uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
+        uv-cache-key-suffix: "latest"
+        extras: ${{ env.EXTRAS_TAG }}
 
     - name: Run core tests for coverage report
       run: |
-        uv run coverage run --rcfile='test/coverage.pytest.rc' -m pytest --ignore-glob="*docs*" --ignore-glob="*examples*"
+        # See note in testmon job re: workflow-level UV_NO_SYNC / UV_FROZEN.
+        uv run --no-sync coverage run --rcfile='test/coverage.pytest.rc' -m pytest --ignore-glob="*docs*" --ignore-glob="*examples*" --junitxml=coverage-core-report.xml
 
     - name: Run doc tests (testmon not supported for doctests)
       run: |
-        uv run coverage run --rcfile='test/coverage.docstring.rc' -m pytest --doctest-modules physicsnemo/ --ignore-glob="*internal*" --ignore-glob="*experimental*"
+        uv run --no-sync coverage run --rcfile='test/coverage.docstring.rc' -m pytest --doctest-modules physicsnemo/ --ignore-glob="*internal*" --ignore-glob="*experimental*" --junitxml=coverage-doctest-report.xml
 
-    - name: Delete old coverage cache
-      run: |
-        gh cache delete "coverage-nightly-latest" || true
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Upload core test JUnit XML
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: junit-coverage-core
+        path: coverage-core-report.xml
+
+    - name: Upload doctest JUnit XML
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: junit-coverage-doctest
+        path: coverage-doctest-report.xml
 
     - name: Save coverage files to cache
       uses: actions/cache/save@v4
       with:
         path: .coverage*
-        key: coverage-nightly-latest
+        key: ${{ env.COVERAGE_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
 
     - name: Merge coverage reports
       run: |
-        uv run coverage combine
-        uv run coverage report --show-missing --omit="*test*" --omit="*internal*" --omit="*experimental*" --fail-under=45
-        uv run coverage html
+        uv run --no-sync coverage combine
+        uv run --no-sync coverage report --show-missing --omit="*test*" --omit="*internal*" --omit="*experimental*" --fail-under=45
+        uv run --no-sync coverage html
         # Also create an XML report for potential CI integrations
-        uv run coverage xml -o coverage.xml
+        uv run --no-sync coverage xml -o coverage.xml
 
     - name: Upload coverage HTML report
       uses: actions/upload-artifact@v4
@@ -211,3 +339,34 @@ jobs:
           .coverage
           coverage.xml
         retention-days: 30
+
+  # Stage 4: Generate browsable test reports from JUnit XML
+  test-reports:
+    name: Test Reports
+    needs: [coverage]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download JUnit artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: junit-*
+
+    - name: Core test report
+      uses: dorny/test-reporter@v2
+      with:
+        name: Core Test Results
+        path: junit-coverage-core/coverage-core-report.xml
+        reporter: java-junit
+        fail-on-error: 'false'
+
+    - name: Doctest report
+      uses: dorny/test-reporter@v2
+      with:
+        name: Doctest Results
+        path: junit-coverage-doctest/coverage-doctest-report.xml
+        reporter: java-junit
+        fail-on-error: 'false'

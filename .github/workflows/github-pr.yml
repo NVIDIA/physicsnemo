@@ -17,177 +17,173 @@
 # This CI runs on pull requests and uses testmon to skip tests
 # that don't have changed dependencies based on the nightly cache.
 # The tests run here will only use UV.
+#
+# ----------------------------------------------------------------------------
+# Cache design (see .github/CACHE_CONTRACT.md):
+#
+#   Each job restores the nightly's uv download cache fail-open, then
+#   rebuilds .venv from the committed lockfile via `uv sync --frozen`.
+#   Testmon and coverage baseline caches are restored by lockhash with a
+#   prefix fallback (best-effort; testmon handles stale DBs gracefully).
+#
+#   No cross-run .venv cache: a pinned container + frozen lockfile +
+#   pinned uv version already make the sync deterministic, and caching
+#   the realized venv was not worth the complexity it cost.
+# ----------------------------------------------------------------------------
 
 # TO DO: THE COVERAGE LIMIT IS VERY LOW, BECAUSE THIS IS NOT USING GPU TESTS OR
 # THE DATA-DRIVEN TESTS.  RAISE THIS UP AGAIN EVENTUALLY.
 
 name: Pull Request Github CI
 on:
-  push:
-    branches:
-      - "pull-request/[0-9]+"
   workflow_dispatch:
-    # Allow manual triggering for debugging the CI.
+    # Manual-only while testing the UV pipeline.
+    # To gate PRs on this workflow, re-add the push trigger:
+    #   push:
+    #     branches:
+    #       - "pull-request/[0-9]+"
 
-# Container image used across all jobs - update this single value to change everywhere
-# Note: env context not available in container.image, so we hardcode the value
+permissions:
+  contents: read
+  actions: write
+  checks: write
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # ---- Container baseline identity ---------------------------------------
+  # MUST match the nightly workflow so cache keys align.  See
+  # .github/CACHE_CONTRACT.md for the full design.
+  PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.11.7"
+  CONTAINER_ID: "cuda12.8.1-cudnn-devel-ubuntu24.04"
+  EXTRAS_TAG: "cu12"
+
+  # ---- Cache key prefixes (shared with nightly) --------------------------
+  UV_CACHE_KEY_PREFIX:   "uv-cache-nightly-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12-uv0.11.7"
+  TESTMON_CACHE_KEY_PREFIX:  "testmon-nightly"
+  COVERAGE_CACHE_KEY_PREFIX: "coverage-nightly"
+
+  # ---- uv read-only defaults --------------------------------------------
+  UV_FROZEN: "1"
+  UV_NO_SYNC: "1"
+
+  PYVISTA_OFF_SCREEN: "true"
+
 jobs:
-  # Stage 1: Build and cache the environment
-  build-environment:
-    name: Build Environment
-    runs-on: linux-amd64-cpu8
-    container:
-      image: nvcr.io/nvidia/pytorch:25.12-py3
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install uv
-      uses: nick-fields/retry@v3
-      with:
-        timeout_minutes: 5
-        max_attempts: 3
-        command: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-    - name: Restore uv cache
-      id: cache-uv-restore
-      uses: actions/cache/restore@v4
-      with:
-        path: .venv
-        key: uv-env-pr-latest
-
-    - name: Install package with uv
-      if: steps.cache-uv-restore.outputs.cache-hit != 'true'
-      run: |
-        # Install core dependencies and development group
-        uv sync --group dev --preview-features extra-build-dependencies
-
-    - name: Free disk space before caching
-      if: steps.cache-uv-restore.outputs.cache-hit != 'true'
-      run: |
-        rm -rf ~/.cache/uv
-        df -h
-
-    - name: Delete old environment cache
-      if: steps.cache-uv-restore.outputs.cache-hit != 'true'
-      run: |
-        gh cache delete "uv-env-pr-latest" || true
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Save environment to cache
-      if: steps.cache-uv-restore.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
-      with:
-        path: .venv
-        key: uv-env-pr-latest
-
-  # Stage 2: Run testmon tests
+  # Stage 1: Run testmon tests
+  #
+  # Each GPU job sets up its own environment: restore the nightly's uv
+  # download cache fail-open, then `uv sync --frozen --group dev --extra
+  # cu12`.  The sync is fast because the warm uv cache already has the
+  # wheels.  If the PR bumped uv.lock, any new wheels are downloaded on
+  # demand and the cache is simply not quite as warm.
   testmon:
     name: Testmon
-    needs: build-environment
     runs-on: linux-amd64-gpu-h100-latest-1
     container:
-      image: nvcr.io/nvidia/pytorch:25.12-py3
+      image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install uv
-      uses: nick-fields/retry@v3
+    - name: Bootstrap cuDNN CI container
+      uses: ./.github/actions/bootstrap-cudnn-ci
       with:
-        timeout_minutes: 5
-        max_attempts: 3
-        command: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        python-version: ${{ env.PYTHON_VERSION }}
+        uv-version: ${{ env.UV_VERSION }}
 
-    - name: Restore environment from cache
-      uses: actions/cache/restore@v4
+    - name: Setup uv environment from cache
+      uses: ./.github/actions/setup-uv-env
       with:
-        path: .venv
-        key: uv-env-pr-latest
-        fail-on-cache-miss: true
+        uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
+        uv-cache-key-suffix: "latest"
+        extras: ${{ env.EXTRAS_TAG }}
 
-    - name: Restore testmon database from cache
+    # Restore the nightly testmon DB so testmon can skip unchanged tests.
+    # Exact-match uses the same lockhash the nightly saved under.
+    # For lock-changed PRs the exact key will miss; the prefix fallback
+    # gives the most recent nightly DB, which is still useful (testmon
+    # handles stale DBs gracefully by re-running tests whose dependency
+    # hashes differ).
+    - name: Restore testmon database from nightly cache
       uses: actions/cache/restore@v4
       with:
         path: |
           .testmondata
           .testmondata-shm
           .testmondata-wal
-        key: testmon-nightly-latest
+        key: ${{ env.TESTMON_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+        restore-keys: |
+          ${{ env.TESTMON_CACHE_KEY_PREFIX }}-
 
     - name: Run core tests (with testmon)
       run: |
-        uv run python -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*"
+        uv run --no-sync python -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*"
 
-  # Stage 3: Run coverage tests and upload artifacts
+  # Stage 2: Run coverage tests and upload artifacts
   coverage:
     name: Coverage
-    needs: build-environment
     runs-on: linux-amd64-gpu-h100-latest-1
     container:
-      image: nvcr.io/nvidia/pytorch:25.12-py3
+      image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install uv
-      uses: nick-fields/retry@v3
+    - name: Bootstrap cuDNN CI container
+      uses: ./.github/actions/bootstrap-cudnn-ci
       with:
-        timeout_minutes: 5
-        max_attempts: 3
-        command: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        python-version: ${{ env.PYTHON_VERSION }}
+        uv-version: ${{ env.UV_VERSION }}
 
-    - name: Restore environment from cache
-      uses: actions/cache/restore@v4
+    - name: Setup uv environment from cache
+      uses: ./.github/actions/setup-uv-env
       with:
-        path: .venv
-        key: uv-env-pr-latest
-        fail-on-cache-miss: true
+        uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
+        uv-cache-key-suffix: "latest"
+        extras: ${{ env.EXTRAS_TAG }}
 
-    - name: Restore testmon database from cache
+    - name: Restore testmon database from nightly cache
       uses: actions/cache/restore@v4
       with:
         path: |
           .testmondata
           .testmondata-shm
           .testmondata-wal
-        key: testmon-nightly-latest
+        key: ${{ env.TESTMON_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+        restore-keys: |
+          ${{ env.TESTMON_CACHE_KEY_PREFIX }}-
 
     - name: Restore nightly coverage baseline from cache
       id: cache-coverage-restore
       uses: actions/cache/restore@v4
       with:
         path: .coverage*
-        key: coverage-nightly-latest
+        key: ${{ env.COVERAGE_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+        restore-keys: |
+          ${{ env.COVERAGE_CACHE_KEY_PREFIX }}-
 
     - name: Run core tests for coverage report (testmon-selected)
       run: |
-        # Use testmon to only run tests affected by changes, with coverage
-        uv run coverage run --rcfile='test/coverage.pytest.rc' -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*"
+        uv run --no-sync coverage run --rcfile='test/coverage.pytest.rc' -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*"
 
     - name: Run doc tests (testmon not supported for doctests)
       run: |
-        uv run coverage run --rcfile='test/coverage.docstring.rc' -m pytest --doctest-modules physicsnemo/ --ignore-glob="*internal*" --ignore-glob="*experimental*"
+        uv run --no-sync coverage run --rcfile='test/coverage.docstring.rc' -m pytest --doctest-modules physicsnemo/ --ignore-glob="*internal*" --ignore-glob="*experimental*"
 
     - name: Merge coverage reports
       run: |
-        # List all coverage files being combined
         echo "Coverage files to combine:"
         ls -la .coverage* 2>/dev/null || echo "No coverage files found"
 
-        # Combine all .coverage* files
-        uv run coverage combine
+        uv run --no-sync coverage combine
 
-        uv run coverage report --show-missing --omit="*test*" --omit="*internal*" --omit="*experimental*" --fail-under=45
-        uv run coverage html
-        uv run coverage xml -o coverage.xml
+        uv run --no-sync coverage report --show-missing --omit="*test*" --omit="*internal*" --omit="*experimental*" --fail-under=45
+        uv run --no-sync coverage html
+        uv run --no-sync coverage xml -o coverage.xml
 
     - name: Upload coverage HTML report
       uses: actions/upload-artifact@v4

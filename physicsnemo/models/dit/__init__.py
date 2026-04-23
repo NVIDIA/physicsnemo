@@ -14,44 +14,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Diffusion Transformer (DiT) model and components."""
+"""Diffusion Transformer (DiT) model.
 
-from .conditioning_embedders import (
-    ConditioningEmbedder,
-    ConditioningEmbedderType,
-    DiTConditionEmbedder,
-    EDMConditionEmbedder,
-    ZeroConditioningEmbedder,
-    get_conditioning_embedder,
-)
+The DiT layer components (``DiTBlock``, ``TokenizerModuleBase``, etc.) and conditioning
+embedders (``ConditioningEmbedder``, ``DiTConditionEmbedder``, etc.) have been moved to
+:mod:`physicsnemo.nn`. Import them from there instead:
+
+.. code-block:: python
+
+    from physicsnemo.nn import DiTBlock, ConditioningEmbedder
+
+Importing these names from ``physicsnemo.models.dit`` is deprecated and will be removed
+in a future release.
+"""
+
+import warnings as warnings
+
+from physicsnemo.core.warnings import LegacyFeatureWarning
+
 from .dit import DiT
-from .layers import (
-    AttentionModuleBase,
-    DetokenizerModuleBase,
-    DiTBlock,
-    Natten2DSelfAttention,
-    PatchEmbed2DTokenizer,
-    PerSampleDropout,
-    ProjLayer,
-    ProjReshape2DDetokenizer,
-    TESelfAttention,
-    TimmSelfAttention,
-    TokenizerModuleBase,
-    get_attention,
-    get_detokenizer,
-    get_layer_norm,
-    get_tokenizer,
-)
 
-__all__ = [
+__DEPRECATED_NAMES = {
+    # From physicsnemo.nn.module.dit_layers
     "AttentionModuleBase",
-    "ConditioningEmbedder",
-    "ConditioningEmbedderType",
     "DetokenizerModuleBase",
-    "DiT",
     "DiTBlock",
-    "DiTConditionEmbedder",
-    "EDMConditionEmbedder",
     "Natten2DSelfAttention",
     "PatchEmbed2DTokenizer",
     "PerSampleDropout",
@@ -60,10 +47,30 @@ __all__ = [
     "TESelfAttention",
     "TimmSelfAttention",
     "TokenizerModuleBase",
-    "ZeroConditioningEmbedder",
     "get_attention",
-    "get_conditioning_embedder",
     "get_detokenizer",
     "get_layer_norm",
     "get_tokenizer",
-]
+    # From physicsnemo.nn.module.conditioning_embedders
+    "ConditioningEmbedder",
+    "ConditioningEmbedderType",
+    "DiTConditionEmbedder",
+    "EDMConditionEmbedder",
+    "ZeroConditioningEmbedder",
+    "get_conditioning_embedder",
+}
+
+
+def __getattr__(name):
+    if name in __DEPRECATED_NAMES:
+        import physicsnemo.nn as _nn
+
+        warnings.warn(
+            f"Importing '{name}' from 'physicsnemo.models.dit' is deprecated. "
+            f"Use 'from physicsnemo.nn import {name}' instead. "
+            "This backward-compatibility shim will be removed in a future release.",
+            LegacyFeatureWarning,
+            stacklevel=2,
+        )
+        return getattr(_nn, name)
+    raise AttributeError(f"module 'physicsnemo.models.dit' has no attribute {name!r}")

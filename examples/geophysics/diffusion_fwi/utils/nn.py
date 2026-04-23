@@ -22,12 +22,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
-
+from jaxtyping import Float
 from timm.layers import Mlp
+from torch import Tensor
 
-from physicsnemo.models.diffusion_unets import SongUNetPosEmbd
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
+from physicsnemo.models.diffusion_unets import SongUNetPosEmbd
 
 
 class AttentionPool(nn.Module):
@@ -67,15 +68,15 @@ class AttentionPool(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,
-    ) -> torch.Tensor:
+        x: Float[Tensor, "B L_in C"],
+    ) -> Float[Tensor, "B L_out C"]:
         B, L_in, C = x.shape
 
-        # Validate inputs
-        if C != self.num_channels:
-            raise ValueError(
-                f"x last dim must match num_channels: {C} != {self.num_channels}"
-            )
+        if not torch.compiler.is_compiling():
+            if C != self.num_channels:
+                raise ValueError(
+                    f"x last dim must match num_channels: {C} != {self.num_channels}"
+                )
 
         # Build batch of learned queries
         q = self.query_tokens.unsqueeze(0).expand(
@@ -129,15 +130,16 @@ class GlobalFilterBlock1D(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,  # (B, L, C)
-    ) -> torch.Tensor:
+        x: Float[Tensor, "B L C"],
+    ) -> Float[Tensor, "B L C"]:
         B, L, C = x.shape
 
-        if L != self.length or C != self.num_channels:
-            raise ValueError(
-                f"x shape mismatch: expected {(B, self.length, self.num_channels)}, "
-                f"but got {x.shape}"
-            )
+        if not torch.compiler.is_compiling():
+            if L != self.length or C != self.num_channels:
+                raise ValueError(
+                    f"x shape mismatch: expected "
+                    f"{(B, self.length, self.num_channels)}, but got {x.shape}"
+                )
 
         y = torch.fft.rfft(x, dim=1, norm="ortho")  # (B, L, C)
         weight = torch.view_as_complex(self.complex_weight)  # (L, C)
@@ -233,16 +235,17 @@ class TimeSignalEncoder(nn.Module):
 
     def forward(
         self,
-        y: torch.Tensor,  # (B, C_in, T, W)
-    ) -> torch.Tensor:
+        y: Float[Tensor, "B Cin T W"],
+    ) -> Float[Tensor, "B Cout Lout W"]:
         B, C_in, T, W = y.shape
 
-        # Validate inputs
-        if y.shape != (B, self.in_channels, self.in_length, W):
-            raise ValueError(
-                f"y shape mismatch: expected "
-                f"{(B, self.in_channels, self.in_length, W)}, but got {y.shape}"
-            )
+        if not torch.compiler.is_compiling():
+            if y.shape != (B, self.in_channels, self.in_length, W):
+                raise ValueError(
+                    f"y shape mismatch: expected "
+                    f"{(B, self.in_channels, self.in_length, W)}, "
+                    f"but got {y.shape}"
+                )
         # Consider all time signals as batched elements
         y = rearrange(y, "b c t w -> (b w) t c")  # (B * W, T, C_in)
 
@@ -351,11 +354,11 @@ class DiffusionFWINet(Module):
     x: torch.Tensor
         Latent state vector :math:`\mathbf{x}` of shape :math:`(B,
         C_{\mathbf{x}}, H, W)`.
-    y: torch.Tensor
+    t: torch.Tensor
+        Noise conditioning label, of shape :math:`(B,)`.
+    condition: torch.Tensor | None, optional, default=None
         Seismic observations :math:`\mathbf{Y}` of shape :math:`(B,
-        C_{\mathbf{Y}}, T, W)`.
-    sigma: torch.Tensor
-        Diffusion noise level, of shape :math:`(B,)`.
+        C_{\mathbf{Y}}, T, W)`. Pass ``None`` for unconditional generation.
 
     Outputs
     -------
@@ -431,6 +434,7 @@ class DiffusionFWINet(Module):
             augment_dim=0,
             model_channels=model_channels,
             channel_mult=channel_mult,
+            num_blocks=num_blocks,
             attn_resolutions=attn_resolutions,
             N_grid_channels=N_grid_channels,
             gridtype="learnable",
@@ -448,32 +452,24 @@ class DiffusionFWINet(Module):
 
     def forward(
         self,
-        x: torch.Tensor,
-        y: torch.Tensor,
-        sigma: torch.Tensor,
-    ) -> torch.Tensor:
+        x: Float[Tensor, "B Cx H W"],
+        t: Float[Tensor, " B"],
+        condition: Float[Tensor, "B Cy T W"] | None = None,
+    ) -> Float[Tensor, "B Cx H W"]:
         B, C_x, H, W = x.shape
-        _, C_y, T, _ = y.shape
 
-        # Validate inputs
-        if y.shape != (B, self.y_channels) + self.y_resolution:
-            raise ValueError(
-                f"y shape mismatch: expected "
-                f"{(B, self.y_channels) + self.y_resolution}, but got {y.shape}"
-            )
-        if x.shape != (B, self.x_channels) + self.x_resolution:
-            raise ValueError(
-                f"x shape mismatch: expected "
-                f"{(B, self.x_channels) + self.x_resolution}, but got {x.shape}"
-            )
-        if sigma.shape != (B,):
-            raise ValueError(
-                f"sigma shape mismatch: expected {(B,)}, but got {sigma.shape}"
-            )
+        if not torch.compiler.is_compiling():
+            if x.shape != (B, self.x_channels) + self.x_resolution:
+                raise ValueError(
+                    f"x shape mismatch: expected "
+                    f"{(B, self.x_channels) + self.x_resolution}, but got {x.shape}"
+                )
+            if t.shape != (B,):
+                raise ValueError(
+                    f"t shape mismatch: expected {(B,)}, but got {t.shape}"
+                )
 
-        if self.unconditional:
-            # Unconditional model: create zero tensor instead of encoding y
-            # Shape: (B, C_hidden//2, H, W)
+        if self.unconditional or condition is None:
             y_encoded = torch.zeros(
                 B,
                 self.encoder_hidden_channels // 2,
@@ -483,15 +479,16 @@ class DiffusionFWINet(Module):
                 device=x.device,
             )
         else:
-            # Conditional model: process y through time signal encoder
+            y = condition
             _, C_y, T, _ = y.shape
 
-            # Validate y inputs
-            if y.shape != (B, self.y_channels) + self.y_resolution:
-                raise ValueError(
-                    f"y shape mismatch: expected "
-                    f"{(B, self.y_channels) + self.y_resolution}, but got {y.shape}"
-                )
+            if not torch.compiler.is_compiling():
+                if y.shape != (B, self.y_channels) + self.y_resolution:
+                    raise ValueError(
+                        f"condition shape mismatch: expected "
+                        f"{(B, self.y_channels) + self.y_resolution}, "
+                        f"but got {y.shape}"
+                    )
 
             # Embed grid coordinates and concatenate to seismic data
             pos_embd = self.unet.pos_embd  # (N_grid, H, W)
@@ -512,6 +509,6 @@ class DiffusionFWINet(Module):
         x = torch.cat((x, y_encoded), dim=1)  # (B, C_x + C_hidden//2, H, W)
 
         # Denoise
-        x = self.unet(x=x, noise_labels=sigma, class_labels=None)  # (B, C_x, H, W)
+        x = self.unet(x=x, noise_labels=t, class_labels=None)  # (B, C_x, H, W)
 
         return x

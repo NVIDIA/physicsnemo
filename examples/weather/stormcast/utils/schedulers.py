@@ -146,7 +146,7 @@ def step_scheduler(
                     f"(metric={metric:.6f})"
                 )
             else:
-                logger.debug(
+                logger.info(
                     f"ReduceLROnPlateau stepped: metric={metric:.6f}, LR={new_lr:.6g}, "
                     f"num_bad_epochs={scheduler.num_bad_epochs}/{scheduler.patience}"
                 )

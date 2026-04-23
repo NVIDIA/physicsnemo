@@ -164,8 +164,9 @@ class EulerSolver(Solver):
             ``t_next``, same shape as ``x``.
         """
         # Reshape t for broadcasting: (B,) -> (B, 1, ..., 1)
-        t_cur_bc = t_cur.reshape(-1, *([1] * (x.ndim - 1)))
-        t_next_bc = t_next.reshape(-1, *([1] * (x.ndim - 1)))
+        expected_shape = (-1,) + (1,) * (x.ndim - 1)
+        t_cur_bc = t_cur.reshape(expected_shape)
+        t_next_bc = t_next.reshape(expected_shape)
 
         # RHS evaluation and step update
         d_cur = self.denoiser(x, t_cur)
@@ -245,9 +246,16 @@ class HeunSolver(Solver):
             Updated latent state :math:`\mathbf{x}_{n-1}` at time
             ``t_next``, same shape as ``x``.
         """
+        # Ensure contiguous strides so that both denoiser calls (at t_cur
+        # and at the intermediate t_prime) present the same stride layout
+        # to torch.compile, avoiding spurious recompilations.
+        t_cur = t_cur.contiguous()
+        t_next = t_next.contiguous()
+
         # Reshape t for broadcasting: (B,) -> (B, 1, ..., 1)
-        t_cur_bc = t_cur.reshape(-1, *([1] * (x.ndim - 1)))
-        t_next_bc = t_next.reshape(-1, *([1] * (x.ndim - 1)))
+        expected_shape = (-1,) + (1,) * (x.ndim - 1)
+        t_cur_bc = t_cur.reshape(expected_shape)
+        t_next_bc = t_next.reshape(expected_shape)
 
         h_bc = t_next_bc - t_cur_bc
 
@@ -471,8 +479,9 @@ class EDMStochasticEulerSolver(Solver):
             ``t_next``, same shape as ``x``.
         """
         # Reshape t for broadcasting: (B,) -> (B, 1, ..., 1)
-        t_cur_bc = t_cur.reshape(-1, *([1] * (x.ndim - 1)))
-        t_next_bc = t_next.reshape(-1, *([1] * (x.ndim - 1)))
+        expected_shape = (-1,) + (1,) * (x.ndim - 1)
+        t_cur_bc = t_cur.reshape(expected_shape)
+        t_next_bc = t_next.reshape(expected_shape)
 
         gamma_base = min(self.S_churn / self.num_steps, math.sqrt(2) - 1)
 
@@ -710,8 +719,9 @@ class EDMStochasticHeunSolver(Solver):
             ``t_next``, same shape as ``x``.
         """
         # Reshape t for broadcasting: (B,) -> (B, 1, ..., 1)
-        t_cur_bc = t_cur.reshape(-1, *([1] * (x.ndim - 1)))
-        t_next_bc = t_next.reshape(-1, *([1] * (x.ndim - 1)))
+        expected_shape = (-1,) + (1,) * (x.ndim - 1)
+        t_cur_bc = t_cur.reshape(expected_shape)
+        t_next_bc = t_next.reshape(expected_shape)
 
         gamma_base = min(self.S_churn / self.num_steps, math.sqrt(2) - 1)
 

@@ -96,9 +96,10 @@ def draw_mesh(
         Opacity for cell edges, range [0, 1].
     show_edges : bool
         Whether to draw cell edges.
-    ax : matplotlib.axes.Axes, optional
-        (matplotlib only) Existing matplotlib axes to plot on. If None,
-        creates new figure and axes.
+    ax : matplotlib.axes.Axes or pyvista.Plotter, optional
+        Existing canvas to draw on. For matplotlib, a matplotlib Axes;
+        for PyVista, a pyvista Plotter. If ``None``, a new figure/plotter
+        is created. Use this to overlay multiple meshes on the same scene.
     backend_options : dict[str, Any], optional
         Additional keyword arguments forwarded to the underlying
         visualization backend (e.g. PyVista's ``plotter.add_mesh()``).
@@ -115,7 +116,6 @@ def draw_mesh(
         If both point_scalars and cell_scalars are specified,
         or if n_spatial_dims is not supported by the chosen backend,
         or if backend selection fails.
-        or if `ax` is provided for PyVista backend.
     ImportError
         If the requested backend is not installed.
 
@@ -236,12 +236,6 @@ def draw_mesh(
     elif backend == "pyvista":
         from physicsnemo.mesh.visualization._pyvista_impl import draw_mesh_pyvista
 
-        if ax is not None:
-            raise ValueError(
-                "The 'ax' parameter is only supported for matplotlib backend.\n"
-                "PyVista backend creates its own plotter."
-            )
-
         return draw_mesh_pyvista(
             mesh=mesh,
             point_scalar_values=point_scalar_values,
@@ -255,6 +249,7 @@ def draw_mesh(
             alpha_points=alpha_points,
             alpha_cells=alpha_cells,
             show_edges=show_edges,
+            plotter=ax,
             **(backend_options or {}),
         )
 

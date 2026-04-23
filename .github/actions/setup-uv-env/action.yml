@@ -1,0 +1,177 @@
+name: Setup uv environment
+description: |
+  Restore the uv download cache and build a deterministic Python virtual
+  environment for CUDA CI jobs.  See .github/CACHE_CONTRACT.md for the full
+  design.
+
+    * uv download cache (~/.cache/uv) -- additive wheel store, keyed on the
+      container/python/uv baseline.  Restored fail-open; a missing cache
+      only costs download and build time, never correctness.
+
+    * .venv -- always rebuilt from the committed lockfile via
+      `uv sync --frozen`, accelerated by the uv download cache.  Not
+      itself cached between runs: a pinned container plus a frozen
+      lockfile already make this deterministic, and caching the realized
+      venv was not paying rent for the complexity it cost.
+
+  Verification (.venv/bin/python -c "import torch; ...") and a hash-based
+  lockfile-mutation guard run after the sync so a drifted environment
+  fails loudly before any test executes.
+inputs:
+  uv-cache-key-prefix:
+    description: |
+      Prefix for the uv download cache key.  Should encode container
+      identity, CUDA version, Python version, and uv version -- anything
+      whose change should invalidate the wheel store.
+    required: true
+  uv-cache-key-suffix:
+    description: |
+      Suffix for the uv download cache key.  Conventionally the literal
+      string "latest" so the slot is overwritten in place via
+      delete-before-save.
+    required: true
+  extras:
+    description: |
+      Extras to activate when building the venv (comma-separated, passed
+      as repeated `--extra` flags).  Defaults to "cu12".
+    required: false
+    default: "cu12"
+outputs:
+  uv_cache_hit:
+    description: Whether the uv download cache had an exact key hit
+    value: ${{ steps.restore-uv-cache.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    # --- Pre-flight: snapshot lockfile state ------------------------------
+    # actions/checkout downloads as a tarball when git is missing at
+    # checkout time, so .git/ may not exist and `git diff` is unreliable.
+    # Hash the committed lock + pyproject up front instead; we compare
+    # the post-sync hashes against this snapshot to detect any mutation.
+    - name: Snapshot lockfile hashes
+      id: lock-snapshot
+      shell: bash
+      run: |
+        set -euo pipefail
+        for f in uv.lock pyproject.toml; do
+          if [ ! -f "$f" ]; then
+            echo "::error::$f not found in workspace ($(pwd))"
+            exit 1
+          fi
+        done
+        lock_sha=$(sha256sum uv.lock | awk '{print $1}')
+        proj_sha=$(sha256sum pyproject.toml | awk '{print $1}')
+        echo "lock_sha=${lock_sha}" >> "$GITHUB_OUTPUT"
+        echo "proj_sha=${proj_sha}" >> "$GITHUB_OUTPUT"
+        echo "uv.lock      sha256: ${lock_sha}"
+        echo "pyproject.toml sha256: ${proj_sha}"
+
+    # --- Restore phase ----------------------------------------------------
+    # uv download cache: fail-open, no restore-keys fallback.  The prefix
+    # already encodes the full container/python/uv identity, so a
+    # near-match from a different baseline would be worse than a fresh
+    # download.
+    - name: Restore uv download cache
+      id: restore-uv-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.cache/uv
+        key: ${{ inputs.uv-cache-key-prefix }}-${{ inputs.uv-cache-key-suffix }}
+
+    - name: Debug cache and environment context
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "::group::setup-uv-env debug context"
+        echo "uv cache key:       ${{ inputs.uv-cache-key-prefix }}-${{ inputs.uv-cache-key-suffix }}"
+        echo "uv cache exact hit: ${{ steps.restore-uv-cache.outputs.cache-hit }}"
+        echo "extras:             ${{ inputs.extras }}"
+        echo "workspace:          $GITHUB_WORKSPACE"
+        df -h
+        echo "::endgroup::"
+
+    # --- Build phase ------------------------------------------------------
+    # `rm -rf .venv` guarantees we are not building on top of any leftover
+    # state from a previous run on a reused runner.
+    #
+    # UV_FROZEN=1 plus an explicit --frozen makes uv refuse to mutate the
+    # lockfile.  UV_NO_SYNC=1 is set in the workflow env so any later
+    # `uv run` in downstream steps cannot trigger an implicit resync that
+    # would swap CUDA variants and rewrite uv.lock -- the exact bug that
+    # broke the previous nightly.
+    - name: Build venv from lockfile
+      shell: bash
+      env:
+        UV_LINK_MODE: copy
+        UV_FROZEN: "1"
+        UV_NO_SYNC: "1"
+      run: |
+        set -euo pipefail
+        echo "::group::build venv (extras=${{ inputs.extras }})"
+        rm -rf .venv
+        # Build the --extra flags from the comma-separated input.
+        extra_flags=()
+        IFS=',' read -ra extras <<< "${{ inputs.extras }}"
+        for e in "${extras[@]}"; do
+          e_trimmed="$(echo "$e" | xargs)"
+          if [ -n "$e_trimmed" ]; then
+            extra_flags+=(--extra "$e_trimmed")
+          fi
+        done
+        uv sync --frozen --group dev "${extra_flags[@]}"
+        echo "::endgroup::"
+
+    # --- Verification phase ----------------------------------------------
+    # Use .venv/bin/python directly so uv cannot, even theoretically,
+    # trigger an implicit resync.  This is the read-only access pattern
+    # downstream consumers should also follow.
+    - name: Verify environment
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "::group::verify environment"
+        .venv/bin/python --version
+        .venv/bin/python -c "import torch; print(f'torch={torch.__version__} cuda={torch.version.cuda}')"
+        echo "::endgroup::"
+
+    # Hard-fail if uv mutated the committed lockfile.  This catches the
+    # historical bug class where an unintended `uv run` (without --frozen)
+    # silently rewrites uv.lock to swap extras.
+    - name: Assert lockfile was not mutated
+      shell: bash
+      env:
+        EXPECTED_LOCK_SHA: ${{ steps.lock-snapshot.outputs.lock_sha }}
+        EXPECTED_PROJ_SHA: ${{ steps.lock-snapshot.outputs.proj_sha }}
+      run: |
+        set -euo pipefail
+        actual_lock=$(sha256sum uv.lock | awk '{print $1}')
+        actual_proj=$(sha256sum pyproject.toml | awk '{print $1}')
+        ok=true
+        if [ "$actual_lock" != "$EXPECTED_LOCK_SHA" ]; then
+          echo "::error::uv.lock was modified during environment setup."
+          echo "::error::  expected sha256: ${EXPECTED_LOCK_SHA}"
+          echo "::error::  actual   sha256: ${actual_lock}"
+          ok=false
+        fi
+        if [ "$actual_proj" != "$EXPECTED_PROJ_SHA" ]; then
+          echo "::error::pyproject.toml was modified during environment setup."
+          echo "::error::  expected sha256: ${EXPECTED_PROJ_SHA}"
+          echo "::error::  actual   sha256: ${actual_proj}"
+          ok=false
+        fi
+        if ! $ok; then
+          echo "::error::This usually means an unguarded uv sync or uv run resolved without --frozen."
+          echo "::error::Check that UV_FROZEN=1 is set and no uv command in the action drops the --extra flags."
+          exit 1
+        fi
+
+    - name: Report cache sizes
+      shell: bash
+      run: |
+        echo "::group::cache sizes"
+        echo "uv download cache (~/.cache/uv):"
+        du -sh ~/.cache/uv 2>/dev/null || echo "  (not present)"
+        echo ".venv:"
+        du -sh .venv 2>/dev/null || echo "  (not present)"
+        df -h
+        echo "::endgroup::"

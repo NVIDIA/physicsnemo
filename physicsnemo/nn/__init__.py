@@ -41,6 +41,19 @@ from .module.attention_layers import (
     UNetAttention,
 )
 from .module.ball_query import BQWarp
+from .module.concrete_dropout import (
+    ConcreteDropout,
+    collect_concrete_dropout_losses,
+    get_concrete_dropout_rates,
+)
+from .module.conditioning_embedders import (
+    ConditioningEmbedder,
+    ConditioningEmbedderType,
+    DiTConditionEmbedder,
+    EDMConditionEmbedder,
+    ZeroConditioningEmbedder,
+    get_conditioning_embedder,
+)
 from .module.conv_layers import (
     Conv2d,
     ConvBlock,
@@ -51,6 +64,23 @@ from .module.conv_layers import (
     TransposeConvLayer,
 )
 from .module.dgm_layers import DGMLayer
+from .module.dit_layers import (
+    AttentionModuleBase,
+    DetokenizerModuleBase,
+    DiTBlock,
+    Natten2DSelfAttention,
+    PatchEmbed2DTokenizer,
+    PerSampleDropout,
+    ProjLayer,
+    ProjReshape2DDetokenizer,
+    TESelfAttention,
+    TimmSelfAttention,
+    TokenizerModuleBase,
+    get_attention,
+    get_detokenizer,
+    get_layer_norm,
+    get_tokenizer,
+)
 from .module.drop import DropPath
 from .module.embedding_layers import (
     FourierEmbedding,
@@ -90,6 +120,7 @@ from .module.hpx import (
 from .module.kan_layers import KolmogorovArnoldNetwork
 from .module.mlp_layers import Mlp
 from .module.pade import Pade
+from .module.pooling import AttentionPooling, MeanPooling
 from .module.resample_layers import (
     DownSample2D,
     DownSample3D,
