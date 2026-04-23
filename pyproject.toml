@@ -18,7 +18,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-dynamic = ["version"]
+dynamic = ["version", "optional_dependencies"]
 
 dependencies = [
     "onnx>=1.14.0",

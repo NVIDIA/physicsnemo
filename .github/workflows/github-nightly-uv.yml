@@ -20,27 +20,24 @@
 # testing AND a baseline dependency graph for PRs.
 #
 # ----------------------------------------------------------------------------
-# Cache contracts (see .github/actions/setup-uv-env/action.yml for details):
+# Cache design (see .github/CACHE_CONTRACT.md for the full contract):
 #
 #   uv download cache (~/.cache/uv)
 #     key   : <UV_CACHE_KEY_PREFIX>-latest
 #     prefix: container + python + uv version
-#     scope : additive wheel store; survives lockfile changes; refreshed via
-#             delete-before-save whenever a sync ran.  Restored fail-open.
+#     scope : additive wheel store; survives lockfile changes; refreshed
+#             via delete-before-save when the cache is cold.  Restored
+#             fail-open.  This is the ONLY cross-run cache for the Python
+#             environment; the realized .venv is rebuilt every job from
+#             the committed lockfile (deterministic given a pinned
+#             container + --frozen + the pinned uv version).
 #
-#   venv cache (.venv)
-#     key   : <VENV_CACHE_KEY_PREFIX>-<lockhash>
-#     prefix: container + python + uv version + extras tag
-#     scope : fully-realized environment; immutable per lockhash; restored
-#             exact-match only.  No restore-keys fallback.
-#
-# Consumer contract for PR workflows that depend on this nightly:
+# Consumer contract for PR workflows:
 #   * Restore the uv download cache fail-open (speed only).
-#   * Restore the venv cache exact-match.  Hit => use directly via
-#     .venv/bin/python (no `uv run`, or set UV_NO_SYNC=1 + UV_FROZEN=1).
-#   * Miss (PR touched uv.lock or pyproject.toml) => `rm -rf .venv` and
-#     `uv sync --frozen --group dev --extra cu12`, accelerated by the
-#     restored uv download cache.
+#   * Always `uv sync --frozen --group dev --extra cu12` (accelerated by
+#     the restored uv download cache).
+#   * Run tests via `.venv/bin/python` or `uv run --no-sync` so the
+#     realized env cannot be mutated mid-job.
 # ----------------------------------------------------------------------------
 
 
@@ -62,10 +59,10 @@ permissions:
   checks: write
 
 # Two overlapping nightly runs (manual + schedule, or two manuals) would
-# race on the static `-latest` uv download cache key and on the venv cache
-# slot.  Serialise them so the delete-before-save dance stays correct.
-# We do NOT cancel in-progress because the nightly testmon DB is consumed
-# by PR workflows and we'd rather a slow nightly than a missing one.
+# race on the static `-latest` uv download cache key.  Serialise them so
+# the delete-before-save dance stays correct.  We do NOT cancel
+# in-progress because the nightly testmon DB is consumed by PR workflows
+# and we'd rather a slow nightly than a missing one.
 concurrency:
   group: nightly-github-uv
   cancel-in-progress: false
@@ -78,7 +75,7 @@ defaults:
 
 env:
   # ---- Container baseline identity ---------------------------------------
-  # Change ANY of these and both caches invalidate via prefix change.
+  # Change ANY of these and the uv cache invalidates via prefix change.
   # Keep CONTAINER_ID in sync with the `image:` tag below.
   PYTHON_VERSION: "3.12"
   UV_VERSION: "0.11.7"
@@ -90,7 +87,6 @@ env:
   # references within the same env: block.  Bump in lockstep with the
   # baseline values above.
   UV_CACHE_KEY_PREFIX:   "uv-cache-nightly-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12-uv0.11.7"
-  VENV_CACHE_KEY_PREFIX: "uv-env-nightly-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12-uv0.11.7-cu12"
   TESTMON_CACHE_KEY_PREFIX:  "testmon-nightly"
   COVERAGE_CACHE_KEY_PREFIX: "coverage-nightly"
 
@@ -100,27 +96,26 @@ env:
   # the venv to a different CUDA variant and rewrites uv.lock.
   #
   # UV_FROZEN=1   -> all uv invocations refuse to mutate the lockfile.
-  # UV_NO_SYNC=1  -> `uv run` will not implicitly sync.  Locally
-  #                  overridden inside setup-uv-env's clean-build step
-  #                  (which uses `uv sync` directly, unaffected by this
-  #                  flag) when an actual rebuild is required.
+  # UV_NO_SYNC=1  -> `uv run` will not implicitly sync.  The explicit
+  #                  `uv sync` inside setup-uv-env is unaffected by this
+  #                  flag.
   UV_FROZEN: "1"
   UV_NO_SYNC: "1"
 
   PYVISTA_OFF_SCREEN: "true"
 
 jobs:
-  # Stage 1: Build and cache the environment
+  # Stage 1: Warm the uv download cache
+  #
+  # This job's sole purpose is to make sure ~/.cache/uv is populated with
+  # the wheels implied by the current lockfile before the downstream GPU
+  # jobs start.  Each downstream job does its own `uv sync --frozen`, but
+  # that sync is fast because it hits the warm cache this job publishes.
   build-environment:
     name: Build Environment
     runs-on: linux-amd64-cpu8
     container:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
-    outputs:
-      # Pinned for downstream jobs so they restore the exact key this job
-      # saved -- even if a commit lands between the build-environment and
-      # the downstream checkouts that would shift hashFiles().
-      lockhash: ${{ steps.lockhash.outputs.hash }}
 
     steps:
     - uses: actions/checkout@v4
@@ -131,30 +126,17 @@ jobs:
         python-version: ${{ env.PYTHON_VERSION }}
         uv-version: ${{ env.UV_VERSION }}
 
-    # Compute the lockfile hash exactly once.  Every cache restore/save in
-    # this job AND in downstream jobs reads back this same value, so the
-    # save key and the downstream restore key cannot drift.
-    - name: Compute lockfile hash
-      id: lockhash
-      run: |
-        echo "hash=${{ hashFiles('uv.lock', 'pyproject.toml') }}" >> "$GITHUB_OUTPUT"
-        echo "lockhash=${{ hashFiles('uv.lock', 'pyproject.toml') }}"
-
     - name: Setup uv environment from cache
-      # Nightly build-env is fail-open on cache miss by design; it can rebuild from lockfile.
       id: setup-uv-env
       uses: ./.github/actions/setup-uv-env
       with:
-        uv-cache-key-prefix:   ${{ env.UV_CACHE_KEY_PREFIX }}
-        uv-cache-key-suffix:   "latest"
-        venv-cache-key-prefix: ${{ env.VENV_CACHE_KEY_PREFIX }}
-        venv-cache-key-suffix: ${{ steps.lockhash.outputs.hash }}
+        uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
+        uv-cache-key-suffix: "latest"
         extras: ${{ env.EXTRAS_TAG }}
 
     - name: Report setup action outputs
       run: |
         echo "setup-uv-env.uv_cache_hit=${{ steps.setup-uv-env.outputs.uv_cache_hit }}"
-        echo "setup-uv-env.venv_cache_hit=${{ steps.setup-uv-env.outputs.venv_cache_hit }}"
 
     # --- uv download cache (static key, delete-before-save) ---
     #
@@ -165,14 +147,12 @@ jobs:
     # took effect (the previous implementation swallowed save failures
     # silently, which is how a corrupted cache could persist for days).
     #
-    # The condition fires in two cases:
-    #   1. uv_cache_hit is false  -- cache doesn't exist yet (first run
-    #      or after manual purge).
-    #   2. venv_cache_hit is false -- lock file changed, uv sync ran and
-    #      may have downloaded new wheels.
-    # Both true (steady state) -> these steps no-op.
+    # Fires only on a cold cache (first run, prefix bump, or manual
+    # purge).  In steady state uv_cache_hit is true and these steps
+    # no-op: the warm cache already contains every wheel the frozen sync
+    # needed.
     - name: Prune uv cache
-      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true' || steps.setup-uv-env.outputs.venv_cache_hit != 'true'
+      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true'
       run: |
         set -euo pipefail
         uv cache prune
@@ -180,7 +160,7 @@ jobs:
         du -sh ~/.cache/uv 2>/dev/null || echo "  (not present)"
 
     - name: Delete stale uv cache entry
-      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true' || steps.setup-uv-env.outputs.venv_cache_hit != 'true'
+      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         UV_CACHE_KEY: ${{ env.UV_CACHE_KEY_PREFIX }}-latest
@@ -207,7 +187,7 @@ jobs:
         fi
 
     - name: Save uv download cache
-      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true' || steps.setup-uv-env.outputs.venv_cache_hit != 'true'
+      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: ~/.cache/uv
@@ -219,7 +199,7 @@ jobs:
     # it), we want a hard failure now rather than a stale cache fed to
     # tomorrow's nightly.
     - name: Verify uv download cache was saved
-      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true' || steps.setup-uv-env.outputs.venv_cache_hit != 'true'
+      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         UV_CACHE_KEY: ${{ env.UV_CACHE_KEY_PREFIX }}-latest
@@ -240,22 +220,6 @@ jobs:
         echo "::error::uv download cache save did not take effect for key $UV_CACHE_KEY"
         exit 1
 
-    # --- .venv cache (lock-file-dependent key) ---
-    # Must free disk first: the uv download cache can be several GB and we
-    # need room to upload the .venv.
-    - name: Free disk space before caching venv
-      if: steps.setup-uv-env.outputs.venv_cache_hit != 'true'
-      run: |
-        rm -rf ~/.cache/uv
-        df -h
-
-    - name: Save venv cache
-      if: steps.setup-uv-env.outputs.venv_cache_hit != 'true'
-      uses: actions/cache/save@v4
-      with:
-        path: .venv
-        key: ${{ env.VENV_CACHE_KEY_PREFIX }}-${{ steps.lockhash.outputs.hash }}
-
   # Stage 2: Run testmon tests and cache the database
   testmon:
     name: Testmon
@@ -273,28 +237,21 @@ jobs:
         python-version: ${{ env.PYTHON_VERSION }}
         uv-version: ${{ env.UV_VERSION }}
 
-    # Restore the EXACT venv that build-environment saved.  Key is taken
-    # from the upstream job output, not from a fresh hashFiles(), so a
-    # commit landing between jobs cannot cause a key mismatch.  No
-    # restore-keys: a partial match would defeat the entire point of the
-    # nightly providing a known-good environment.
-    - name: Restore prebuilt environment cache
-      uses: actions/cache/restore@v4
+    # Restore the warm uv download cache (published by build-environment
+    # earlier in this same workflow run) and rebuild .venv from the
+    # frozen lockfile.  With the cache warm the sync is dominated by
+    # local file copies, not network I/O.
+    - name: Setup uv environment from cache
+      uses: ./.github/actions/setup-uv-env
       with:
-        path: .venv
-        key: ${{ env.VENV_CACHE_KEY_PREFIX }}-${{ needs.build-environment.outputs.lockhash }}
-        fail-on-cache-miss: true
-
-    - name: Validate environment
-      run: |
-        set -euo pipefail
-        .venv/bin/python --version
-        .venv/bin/python -c "import torch; print(f'torch={torch.__version__} cuda={torch.version.cuda}')"
+        uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
+        uv-cache-key-suffix: "latest"
+        extras: ${{ env.EXTRAS_TAG }}
 
     - name: Run core tests (collect all for testmon)
       run: |
         # Workflow-level UV_NO_SYNC=1 + UV_FROZEN=1 keep `uv run` strictly
-        # read-only, so the restored .venv cannot be mutated mid-job.
+        # read-only, so the .venv cannot be mutated mid-job.
         uv run --no-sync python -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*"
 
     - name: Save testmon database to cache
@@ -304,7 +261,7 @@ jobs:
           .testmondata
           .testmondata-shm
           .testmondata-wal
-        key: ${{ env.TESTMON_CACHE_KEY_PREFIX }}-${{ needs.build-environment.outputs.lockhash }}
+        key: ${{ env.TESTMON_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
 
   # Stage 3: Run coverage tests and upload artifacts
   coverage:
@@ -323,18 +280,12 @@ jobs:
         python-version: ${{ env.PYTHON_VERSION }}
         uv-version: ${{ env.UV_VERSION }}
 
-    - name: Restore prebuilt environment cache
-      uses: actions/cache/restore@v4
+    - name: Setup uv environment from cache
+      uses: ./.github/actions/setup-uv-env
       with:
-        path: .venv
-        key: ${{ env.VENV_CACHE_KEY_PREFIX }}-${{ needs.build-environment.outputs.lockhash }}
-        fail-on-cache-miss: true
-
-    - name: Validate environment
-      run: |
-        set -euo pipefail
-        .venv/bin/python --version
-        .venv/bin/python -c "import torch; print(f'torch={torch.__version__} cuda={torch.version.cuda}')"
+        uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
+        uv-cache-key-suffix: "latest"
+        extras: ${{ env.EXTRAS_TAG }}
 
     - name: Run core tests for coverage report
       run: |
@@ -363,7 +314,7 @@ jobs:
       uses: actions/cache/save@v4
       with:
         path: .coverage*
-        key: ${{ env.COVERAGE_CACHE_KEY_PREFIX }}-${{ needs.build-environment.outputs.lockhash }}
+        key: ${{ env.COVERAGE_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
 
     - name: Merge coverage reports
       run: |

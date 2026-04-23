@@ -1,22 +1,22 @@
 name: Setup uv environment
 description: |
-  Restore (or build) a deterministic Python virtual environment for CUDA
-  CI jobs.  Implements two disjoint caches with distinct contracts (see
-  .github/CACHE_CONTRACT.md for the full design):
+  Restore the uv download cache and build a deterministic Python virtual
+  environment for CUDA CI jobs.  See .github/CACHE_CONTRACT.md for the full
+  design.
 
-    * uv download cache (~/.cache/uv) -- additive wheel store, keyed on
-      the container/python/uv baseline.  Restored fail-open; missing
-      cache only costs download time, never correctness.
+    * uv download cache (~/.cache/uv) -- additive wheel store, keyed on the
+      container/python/uv baseline.  Restored fail-open; a missing cache
+      only costs download and build time, never correctness.
 
-    * venv cache (.venv) -- realized environment, keyed on the lockfile
-      hash (lock + pyproject + extras).  Restored exact-match only; a
-      partial match would silently violate the "lock-changed PR gets a
-      fresh venv" contract.  On miss we wipe .venv and rebuild from the
-      committed lockfile, accelerated by the uv download cache.
+    * .venv -- always rebuilt from the committed lockfile via
+      `uv sync --frozen`, accelerated by the uv download cache.  Not
+      itself cached between runs: a pinned container plus a frozen
+      lockfile already make this deterministic, and caching the realized
+      venv was not paying rent for the complexity it cost.
 
   Verification (.venv/bin/python -c "import torch; ...") and a hash-based
-  lockfile-mutation guard run on BOTH the hit and miss paths so a
-  drifted environment fails loudly before any test executes.
+  lockfile-mutation guard run after the sync so a drifted environment
+  fails loudly before any test executes.
 inputs:
   uv-cache-key-prefix:
     description: |
@@ -30,33 +30,16 @@ inputs:
       string "latest" so the slot is overwritten in place via
       delete-before-save.
     required: true
-  venv-cache-key-prefix:
-    description: |
-      Prefix for the venv cache key.  Should additionally encode the
-      extras tag (e.g. cu12) so cu12 and cu13 builds do not collide.
-    required: true
-  venv-cache-key-suffix:
-    description: |
-      Deterministic suffix appended to the venv cache key prefix.
-      Conventionally `hashFiles('uv.lock', 'pyproject.toml')` computed
-      once per job and pinned via a job output so downstream jobs read
-      back the exact same key.
-    required: true
   extras:
     description: |
-      Extras to activate when building the venv on cache miss
-      (comma-separated, passed as repeated `--extra` flags).  Defaults
-      to "cu12".  This MUST match the <extras> tag baked into
-      venv-cache-key-prefix or the cache will lie about its contents.
+      Extras to activate when building the venv (comma-separated, passed
+      as repeated `--extra` flags).  Defaults to "cu12".
     required: false
     default: "cu12"
 outputs:
   uv_cache_hit:
     description: Whether the uv download cache had an exact key hit
     value: ${{ steps.restore-uv-cache.outputs.cache-hit }}
-  venv_cache_hit:
-    description: Whether the venv cache had an exact key hit
-    value: ${{ steps.restore-venv-cache.outputs.cache-hit }}
 runs:
   using: composite
   steps:
@@ -95,42 +78,28 @@ runs:
         path: ~/.cache/uv
         key: ${{ inputs.uv-cache-key-prefix }}-${{ inputs.uv-cache-key-suffix }}
 
-    # venv cache: exact match only.  A partial match would hand a Contract
-    # 2 PR (lock changed) a stale venv that disagrees with the current
-    # lockfile -- exactly the failure mode this design exists to forbid.
-    - name: Restore venv cache (exact match only)
-      id: restore-venv-cache
-      uses: actions/cache/restore@v4
-      with:
-        path: .venv
-        key: ${{ inputs.venv-cache-key-prefix }}-${{ inputs.venv-cache-key-suffix }}
-
     - name: Debug cache and environment context
       shell: bash
       run: |
         set -euo pipefail
         echo "::group::setup-uv-env debug context"
         echo "uv cache key:       ${{ inputs.uv-cache-key-prefix }}-${{ inputs.uv-cache-key-suffix }}"
-        echo "venv cache key:     ${{ inputs.venv-cache-key-prefix }}-${{ inputs.venv-cache-key-suffix }}"
         echo "uv cache exact hit: ${{ steps.restore-uv-cache.outputs.cache-hit }}"
-        echo "venv cache hit:     ${{ steps.restore-venv-cache.outputs.cache-hit }}"
         echo "extras:             ${{ inputs.extras }}"
         echo "workspace:          $GITHUB_WORKSPACE"
         df -h
         echo "::endgroup::"
 
-    # --- Build phase (Contract 2: lock changed, no venv hit) --------------
+    # --- Build phase ------------------------------------------------------
     # `rm -rf .venv` guarantees we are not building on top of any leftover
-    # state -- belt and braces, since exact-match restore should never
-    # leave a partial .venv anyway.
+    # state from a previous run on a reused runner.
     #
     # UV_FROZEN=1 plus an explicit --frozen makes uv refuse to mutate the
-    # lockfile.  UV_NO_SYNC=1 is set in the env block so any later
-    # `uv run` in this action (or downstream consumer) cannot trigger an
-    # implicit resync that would swap CUDA variants and rewrite uv.lock --
-    # the exact bug that broke the previous nightly.
-    - name: Clean-build venv on cache miss
-      if: steps.restore-venv-cache.outputs.cache-hit != 'true'
+    # lockfile.  UV_NO_SYNC=1 is set in the workflow env so any later
+    # `uv run` in downstream steps cannot trigger an implicit resync that
+    # would swap CUDA variants and rewrite uv.lock -- the exact bug that
+    # broke the previous nightly.
+    - name: Build venv from lockfile
       shell: bash
       env:
         UV_LINK_MODE: copy
@@ -138,7 +107,7 @@ runs:
         UV_NO_SYNC: "1"
       run: |
         set -euo pipefail
-        echo "::group::clean-build venv (extras=${{ inputs.extras }})"
+        echo "::group::build venv (extras=${{ inputs.extras }})"
         rm -rf .venv
         # Build the --extra flags from the comma-separated input.
         extra_flags=()
@@ -152,7 +121,7 @@ runs:
         uv sync --frozen --group dev "${extra_flags[@]}"
         echo "::endgroup::"
 
-    # --- Verification phase (runs on BOTH hit and miss) -------------------
+    # --- Verification phase ----------------------------------------------
     # Use .venv/bin/python directly so uv cannot, even theoretically,
     # trigger an implicit resync.  This is the read-only access pattern
     # downstream consumers should also follow.
@@ -167,8 +136,7 @@ runs:
 
     # Hard-fail if uv mutated the committed lockfile.  This catches the
     # historical bug class where an unintended `uv run` (without --frozen)
-    # silently rewrites uv.lock to swap extras, so the venv cache ends up
-    # saved under a key that downstream jobs cannot reproduce.
+    # silently rewrites uv.lock to swap extras.
     - name: Assert lockfile was not mutated
       shell: bash
       env:

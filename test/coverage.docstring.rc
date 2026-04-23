@@ -4,3 +4,8 @@ data_file = .coverage.docs.pytest
 concurrency = multiprocessing,thread
 source = physicsnemo
 omit = experimental
+
+[report]
+# Skip "No source for code" / "NoSource" errors at report time (e.g. a
+# restored nightly baseline referencing files deleted in the current PR).
+ignore_errors = True

@@ -3,18 +3,13 @@
 This document is the authoritative reference for how the
 `Nightly Github UV Workflow`
 ([.github/workflows/github-nightly-uv.yml](workflows/github-nightly-uv.yml))
-publishes Python environment caches and how downstream PR workflows must
-consume them. PR gating relies on these contracts being honored on both
-the producer and consumer side; do not weaken them without updating this
-document.
+publishes a uv download cache and how downstream PR workflows consume
+it. PR gating relies on this contract being honored on both sides; do
+not weaken it without updating this document.
 
-## Two caches, two contracts
+## One cache, one contract
 
-The pipeline maintains two strictly disjoint caches with different
-invalidation rules. Conflating them is the historical bug class this
-design exists to forbid.
-
-### A. uv download cache (`~/.cache/uv`)
+### uv download cache (`~/.cache/uv`)
 
 | Property | Value |
 |---|---|
@@ -25,57 +20,42 @@ design exists to forbid.
 | Invalidates when | container image, CUDA version, Python version, or uv version changes (prefix change → new slot) |
 | Does **not** invalidate on | `uv.lock` or `pyproject.toml` changes |
 | Restore semantics | **fail-open**; missing cache only costs download time, never correctness |
-| Save semantics | always save (delete the existing entry first, then save, then verify with `gh cache list`) |
+| Save semantics | nightly only, on cold-cache runs: delete the existing entry first, then save, then verify with `gh cache list` |
 
-The uv download cache is purely a speed optimisation. Anything that
-correctness depends on must come from the venv cache.
+The uv download cache is purely a speed optimisation. Correctness comes
+from three independent sources: a pinned CUDA container image, a pinned
+`uv` version, and `uv sync --frozen` against the committed lockfile.
 
-### B. venv cache (`.venv`)
+## Why no `.venv` cache
 
-| Property | Value |
-|---|---|
-| Key | `<VENV_CACHE_KEY_PREFIX>-<lockhash>` |
-| Prefix encodes | container image + Python version + uv version + extras tag (e.g. `cu12`) |
-| Suffix | `hashFiles('uv.lock', 'pyproject.toml')`, computed once per job and propagated via `needs.<job>.outputs.lockhash` |
-| Contents | the fully realized `.venv` produced by `uv sync --frozen --group dev --extra <tag>` against the committed lockfile |
-| Invalidates when | any prefix component changes, or the lockfile hash changes |
-| Restore semantics | **exact-match only, no `restore-keys` fallback** |
-| Save semantics | standard `actions/cache/save`. Same lockhash → same content → save no-ops, which is correct |
+A previous iteration of this pipeline also cached the realized `.venv`
+keyed on the lockfile hash, with a "fail-on-cache-miss" exact-match
+contract for PR consumers. It was dropped because:
 
-The extras tag (`cu12`, `cu13`, ...) is part of the prefix so cu12 and
-cu13 builds never overwrite each other.
+- The pinned container + pinned uv + frozen lockfile already make `uv
+  sync` deterministic; caching its output added a second correctness
+  boundary no stronger than the first.
+- The venv cache was responsible for most of the pipeline's complexity:
+  two cache contracts, cross-job lockhash plumbing, fail-on-cache-miss
+  restores, and a Contract 1 / Contract 2 branch at every consumer site.
+- The cached `.venv` and the uv download cache together were pushing
+  against GitHub Actions' 10 GB per-repo limit and would have needed
+  separate slots per extras tag (cu12, cu13, ...), making eviction
+  thrash likely.
 
-The lockhash includes both `uv.lock` and `pyproject.toml`. If a PR
-touches `pyproject.toml` without regenerating `uv.lock`, the build fails
-loudly during `uv sync --frozen` rather than silently producing a
-mismatched venv.
+Each job now does the same thing: restore the uv download cache
+fail-open, then `uv sync --frozen --group dev --extra <tag>`. The sync
+is fast because the warm uv cache already has every wheel locally.
 
-## PR consumer contracts
-
-PR workflows that gate on the nightly venv MUST implement one of two
-exhaustive paths.
-
-### Contract 1 — PR does not touch `pyproject.toml` or `uv.lock`
-
-The PR's lockhash equals the hash that the most recent successful nightly
-saved under.
+## PR consumer contract
 
 ```yaml
-- name: Restore uv download cache (fail-open)
-  uses: actions/cache/restore@v4
+- name: Setup uv environment from cache
+  uses: ./.github/actions/setup-uv-env
   with:
-    path: ~/.cache/uv
-    key: <UV_CACHE_KEY_PREFIX>-latest
-    # NO fail-on-cache-miss. Missing uv cache is acceptable here.
-
-- name: Restore venv cache (exact match, MUST hit)
-  uses: actions/cache/restore@v4
-  with:
-    path: .venv
-    key: <VENV_CACHE_KEY_PREFIX>-${{ hashFiles('uv.lock', 'pyproject.toml') }}
-    fail-on-cache-miss: true
-    # NO restore-keys. A partial match would silently degrade test
-    # validity.
+    uv-cache-key-prefix: ${{ env.UV_CACHE_KEY_PREFIX }}
+    uv-cache-key-suffix: "latest"
+    extras: ${{ env.EXTRAS_TAG }}
 
 - name: Use the env, read-only
   env:
@@ -88,55 +68,15 @@ saved under.
 
 Guarantees:
 
-- Either the venv is byte-identical to what nightly validated, or the
-  job fails on cache miss.
-- `UV_FROZEN=1` and `UV_NO_SYNC=1` (plus the `--no-sync` flags) make it
-  impossible for any subsequent `uv run` to mutate the restored venv.
-- `physicsnemo` itself is installed editable, so the PR's source code
-  changes are picked up without rebuilding the venv.
-
-### Contract 2 — PR updates `pyproject.toml` and/or `uv.lock`
-
-The PR's lockhash is new; the venv cache misses by design.
-
-```yaml
-- name: Restore uv download cache (fail-open)
-  uses: actions/cache/restore@v4
-  with:
-    path: ~/.cache/uv
-    key: <UV_CACHE_KEY_PREFIX>-latest
-
-- name: Restore venv cache (will miss; that is fine)
-  id: venv-restore
-  uses: actions/cache/restore@v4
-  with:
-    path: .venv
-    key: <VENV_CACHE_KEY_PREFIX>-${{ hashFiles('uv.lock', 'pyproject.toml') }}
-    # No fail-on-cache-miss; we expect to miss on lock-change PRs.
-
-- name: Clean-build venv
-  if: steps.venv-restore.outputs.cache-hit != 'true'
-  env:
-    UV_LINK_MODE: copy
-    UV_FROZEN: "1"
-    UV_NO_SYNC: "1"
-  run: |
-    rm -rf .venv
-    uv sync --frozen --group dev --extra cu12
-    # Optional: assert the lockfile was not mutated, e.g. with sha256sum
-    # before/after. setup-uv-env does this automatically.
-```
-
-Guarantees:
-
-- `rm -rf .venv` ensures no leftover state from a previous PR push or a
-  partial restore-keys hit. (Restore-keys is forbidden anyway, but this
-  is cheap insurance.)
-- `--frozen` + `UV_FROZEN=1` ensure the resolver cannot rewrite
-  `uv.lock` in CI. If the PR shipped a stale lock, the job fails fast
-  with a clear error rather than papering over the mismatch.
-- The uv download cache (restored fail-open) supplies most wheels, so
-  the rebuild is fast even though the venv itself is fresh.
+- `.venv` is always rebuilt from the committed lockfile; there is no
+  "partial match" failure mode.
+- If the PR touches `pyproject.toml` without regenerating `uv.lock`,
+  `uv sync --frozen` fails loudly rather than silently producing a
+  mismatched venv.
+- `UV_FROZEN=1` and `UV_NO_SYNC=1` (plus `uv run --no-sync`) make it
+  impossible for a downstream step to mutate the built venv.
+- `physicsnemo` itself is installed editable, so PR source changes are
+  picked up without rebuilding the venv.
 
 ## Operational notes
 
@@ -156,6 +96,9 @@ Guarantees:
   via `https://astral.sh/uv/<version>/install.sh` and asserts the
   installed binary matches. The pin is what allows the uv version to
   appear in the cache key prefix without surprise invalidations.
+- **PR workflows never save the uv cache.** Only the nightly mutates
+  the `-latest` slot; PRs restore fail-open and any fresh wheels they
+  download are simply not preserved until the next nightly.
 
 ## Bumping any of the baseline values
 
@@ -166,12 +109,11 @@ version, or extras tag, you must update both:
    [.github/workflows/github-nightly-uv.yml](workflows/github-nightly-uv.yml)
    and
    [.github/workflows/github-pr.yml](workflows/github-pr.yml).
-2. The corresponding literal embedded in `UV_CACHE_KEY_PREFIX` and
-   `VENV_CACHE_KEY_PREFIX` (GitHub Actions does not support env-to-env
-   references within the same `env:` block, so these are kept in
-   lockstep manually).
+2. The corresponding literal embedded in `UV_CACHE_KEY_PREFIX`
+   (GitHub Actions does not support env-to-env references within the
+   same `env:` block, so these are kept in lockstep manually).
 
-The first nightly run after a baseline bump will miss both caches, do a
-full rebuild, and republish under the new prefix. Existing PR workflows
-that pin to the old prefix will hard-fail until they are updated, which
-is the desired behaviour.
+The first nightly run after a baseline bump will miss the cache, do a
+full download, and republish under the new prefix. Existing PR workflows
+that pin to the old prefix will silently fall back to cold-cache (slow
+but correct) until they are updated.
