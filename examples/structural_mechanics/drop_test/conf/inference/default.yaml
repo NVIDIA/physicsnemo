@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# @package inference
+output_dir_pred: "./predicted_vtus"
+output_dir_exact: "./exact_vtus"
+output_dir_single_vtu: "./single_vtu_output"
+raw_data_dir_test: ???

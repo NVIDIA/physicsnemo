@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+raw_data_dir: ???
+raw_data_dir_validation: ???
+global_features_filepath: null
+max_workers_preprocessing: 64
+
+optimizer: adam
+optimizer_weight_decay: 0.0001
+grad_clip_norm: null
+
+num_time_steps: ???
+num_training_samples: ???
+num_validation_samples: 0
+start_lr: 0.0001
+end_lr: 0.0000003
+epochs: 10000
+validation_freq: 10
+save_checkpoint_freq: 10
+
+amp: True
+use_apex: True
+num_dataloader_workers: 8
+
+ckpt_path: "./checkpoints"
+tensorboard_log_dir: ./tensorboard_logs
