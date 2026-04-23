@@ -1022,6 +1022,7 @@ def test_bh_nested_source_data_keys(n_dims: int):
                 out = orig_eval(self, scalars=scalars, vectors=vectors, device=device)
                 captures[tag] = {k: v.detach().clone() for k, v in out.items()}
                 return out
+
             return _patched
 
         try:
@@ -1033,13 +1034,16 @@ def test_bh_nested_source_data_keys(n_dims: int):
             Kernel._evaluate_interactions = orig_eval
 
         src_tree = ClusterTree.from_points(
-            data["source_points"], leaf_size=DEFAULT_LEAF_SIZE,
+            data["source_points"],
+            leaf_size=DEFAULT_LEAF_SIZE,
         )
         tgt_tree = ClusterTree.from_points(
-            data["target_points"], leaf_size=DEFAULT_LEAF_SIZE,
+            data["target_points"],
+            leaf_size=DEFAULT_LEAF_SIZE,
         )
         plan = src_tree.find_dual_interaction_pairs(
-            target_tree=tgt_tree, theta=0.01,
+            target_tree=tgt_tree,
+            theta=0.01,
         )
         assert plan.n_near == n_src * n_tgt, (
             f"Expected all-near at theta=0.01, got n_near={plan.n_near} "
@@ -1081,6 +1085,7 @@ def test_bh_nested_source_data_keys(n_dims: int):
         # 5e-2 ceiling matches test_bh_globe_like_config and is justified
         # only because the pre-checks above confirm no algorithmic bug.
         for field_name in output_field_ranks:
+
             def _msg(
                 default: str,
                 field: str = field_name,
