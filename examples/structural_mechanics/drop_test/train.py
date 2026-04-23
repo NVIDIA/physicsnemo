@@ -291,8 +291,12 @@ class Trainer:
             torch.distributed.all_reduce(MSE_pos, op=torch.distributed.ReduceOp.SUM)
             torch.distributed.all_reduce(MSE_stress, op=torch.distributed.ReduceOp.SUM)
             torch.distributed.all_reduce(MSE_w_time, op=torch.distributed.ReduceOp.SUM)
-            torch.distributed.all_reduce(MSE_pos_w_time, op=torch.distributed.ReduceOp.SUM)
-            torch.distributed.all_reduce(MSE_stress_w_time, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(
+                MSE_pos_w_time, op=torch.distributed.ReduceOp.SUM
+            )
+            torch.distributed.all_reduce(
+                MSE_stress_w_time, op=torch.distributed.ReduceOp.SUM
+            )
 
         n = self.num_validation_samples
         val_stats = {
@@ -308,7 +312,11 @@ class Trainer:
         return val_stats
 
 
-@hydra.main(version_base="1.3", config_path="conf", config_name="drop_test_geotransolver_oneshot")
+@hydra.main(
+    version_base="1.3",
+    config_path="conf",
+    config_name="drop_test_geotransolver_oneshot",
+)
 def main(cfg: DictConfig) -> None:
     DistributedManager.initialize()
     dist = DistributedManager()

@@ -346,9 +346,7 @@ class DropTestBaseDataset:
                 raise FileNotFoundError(
                     f"Node stats file {node_stats_path} or feature stats file {feat_stats_path} not found"
                 )
-            dyn_stats_path = os.path.join(
-                self._stats_dir, DYNAMIC_TARGET_STATS_FILE
-            )
+            dyn_stats_path = os.path.join(self._stats_dir, DYNAMIC_TARGET_STATS_FILE)
             if self.dynamic_targets and os.path.exists(dyn_stats_path):
                 self.dynamic_target_stats = load_json(dyn_stats_path)
             else:
@@ -390,9 +388,9 @@ class DropTestBaseDataset:
                     if ts.ndim == 2:
                         ts = ts.unsqueeze(-1)
                     # ts: [T, N, C], mu/std: [C]
-                    self.target_series_data[i][k] = (
-                        ts - mu.view(1, 1, -1)
-                    ) / (std.view(1, 1, -1) + EPS)
+                    self.target_series_data[i][k] = (ts - mu.view(1, 1, -1)) / (
+                        std.view(1, 1, -1) + EPS
+                    )
 
     def __len__(self):
         return self._max_idx
@@ -539,9 +537,7 @@ class DropTestBaseDataset:
                 all_vals.append(ts)
             stacked = torch.cat([v.reshape(-1, v.shape[-1]) for v in all_vals], dim=0)
             mu = torch.mean(stacked, dim=0)
-            var = torch.clamp(
-                torch.mean(stacked * stacked, dim=0) - mu * mu, min=0.0
-            )
+            var = torch.clamp(torch.mean(stacked * stacked, dim=0) - mu * mu, min=0.0)
             std = torch.sqrt(var + EPS)
             out[f"{k}_mean"] = mu
             out[f"{k}_std"] = std
@@ -681,9 +677,7 @@ class DropTestGraphDataset(DropTestBaseDataset):
     def create_graph(src, dst, num_nodes: int, dtype=torch.long):
         src = torch.as_tensor(src, dtype=dtype)
         dst = torch.as_tensor(dst, dtype=dtype)
-        edge_index = torch.stack(
-            [torch.cat([src, dst]), torch.cat([dst, src])], dim=0
-        )
+        edge_index = torch.stack([torch.cat([src, dst]), torch.cat([dst, src])], dim=0)
         edge_index, _ = _pyg_utils.coalesce(edge_index, None, num_nodes=num_nodes)
         edge_index, _ = _pyg_utils.add_self_loops(edge_index, num_nodes=num_nodes)
         return _pyg_data.Data(edge_index=edge_index, num_nodes=num_nodes)

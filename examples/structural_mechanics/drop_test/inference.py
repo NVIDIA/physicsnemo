@@ -152,7 +152,9 @@ def save_single_vtu(
                 pred_f = field_seq[t]
                 exact_f = (
                     exact_extra[name][t]
-                    if exact_extra and name in exact_extra and t < len(exact_extra[name])
+                    if exact_extra
+                    and name in exact_extra
+                    and t < len(exact_extra[name])
                     else None
                 )
                 pred_fnp = (
@@ -278,8 +280,12 @@ class InferenceWorkerSingleVtu:
             exact_pos_denorm = denormalize_positions(exact_pos, pos_mean, pos_std)
             dyn_stats = data_stats.get("dynamic_target", {})
             log_t = self.log_transform_targets
-            pred_extra_denorm = _denormalize_extra_fields(pred_extra, dyn_stats, log_transform=log_t)
-            exact_extra_denorm = _denormalize_extra_fields(exact_extra, dyn_stats, log_transform=log_t)
+            pred_extra_denorm = _denormalize_extra_fields(
+                pred_extra, dyn_stats, log_transform=log_t
+            )
+            exact_extra_denorm = _denormalize_extra_fields(
+                exact_extra, dyn_stats, log_transform=log_t
+            )
 
             if not os.path.isdir(vtu_frames_dir):
                 self.logger.warning(
@@ -314,7 +320,11 @@ class InferenceWorkerSingleVtu:
         self.logger.info(f"[Rank {self.dist.rank}] Finished run: {run_name}")
 
 
-@hydra.main(version_base="1.3", config_path="conf", config_name="drop_test_geotransolver_oneshot")
+@hydra.main(
+    version_base="1.3",
+    config_path="conf",
+    config_name="drop_test_geotransolver_oneshot",
+)
 def main(cfg: DictConfig):
     DistributedManager.initialize()
     dist = DistributedManager()
