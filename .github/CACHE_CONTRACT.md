@@ -162,8 +162,10 @@ Guarantees:
 If you change the container image, CUDA version, Python version, uv
 version, or extras tag, you must update both:
 
-1. The matching `env:` value at the top of
-   [.github/workflows/github-nightly-uv.yml](workflows/github-nightly-uv.yml).
+1. The matching `env:` value at the top of both
+   [.github/workflows/github-nightly-uv.yml](workflows/github-nightly-uv.yml)
+   and
+   [.github/workflows/github-pr.yml](workflows/github-pr.yml).
 2. The corresponding literal embedded in `UV_CACHE_KEY_PREFIX` and
    `VENV_CACHE_KEY_PREFIX` (GitHub Actions does not support env-to-env
    references within the same `env:` block, so these are kept in
