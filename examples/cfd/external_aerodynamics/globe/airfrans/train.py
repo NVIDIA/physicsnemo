@@ -97,7 +97,7 @@ def main(
     seed: int = 0,
     error_scales: dict[str, float] | None = None,
     n_communication_hyperlayers: int = 2,
-    hidden_layer_sizes: tuple[int, ...] = (64, 64, 64),
+    hidden_layer_sizes: tuple[int, ...] = (128, 128, 128),
     n_latent_scalars: int = 12,
     n_latent_vectors: int = 6,
     n_spherical_harmonics: int = 1,
