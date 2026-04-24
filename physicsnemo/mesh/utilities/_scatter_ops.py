@@ -85,6 +85,20 @@ def scatter_aggregate(
     ### Get data shape beyond the first dimension
     data_shape = src_data.shape[1:]
 
+    if aggregation not in ("mean", "sum"):
+        raise ValueError(f"Invalid {aggregation=}. Must be 'mean' or 'sum'.")
+
+    ### Fast path: unweighted sum is a single scatter_add_ with no extra work
+    if weights is None and aggregation == "sum":
+        aggregated_data = torch.zeros(
+            (n_dst, *data_shape), dtype=dtype, device=device
+        )
+        expanded_indices = src_to_dst_mapping.view(
+            -1, *([1] * len(data_shape))
+        ).expand_as(src_data)
+        aggregated_data.scatter_add_(dim=0, index=expanded_indices, src=src_data)
+        return aggregated_data
+
     ### Initialize weights if not provided
     if weights is None:
         weights = torch.ones(len(src_to_dst_mapping), dtype=dtype, device=device)
@@ -116,7 +130,7 @@ def scatter_aggregate(
         src=weighted_data,
     )
 
-    ### Handle aggregation mode
+    ### Normalize weighted sum to weighted mean
     if aggregation == "mean":
         ### Compute sum of weights at each destination
         weight_sums = torch.zeros(n_dst, dtype=dtype, device=device)
@@ -131,12 +145,5 @@ def scatter_aggregate(
         aggregated_data = aggregated_data / weight_sums.view(
             -1, *([1] * len(data_shape))
         )
-
-    elif aggregation == "sum":
-        # Already computed weighted sum, no normalization needed
-        pass
-
-    else:
-        raise ValueError(f"Invalid {aggregation=}. Must be 'mean' or 'sum'.")
 
     return aggregated_data
