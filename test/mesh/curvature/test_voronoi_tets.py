@@ -123,9 +123,7 @@ class TestDualVolumes2D:
         With a=1, that is sqrt(3)/12 per vertex, summing to area = sqrt(3)/4.
         """
         s3 = 3.0**0.5
-        points = torch.tensor(
-            [[0.0, 0.0], [1.0, 0.0], [0.5, s3 / 2]], device=device
-        )
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.5, s3 / 2]], device=device)
         cells = torch.tensor([[0, 1, 2]], dtype=torch.long, device=device)
         mesh = Mesh(points=points, cells=cells)
 
@@ -142,9 +140,7 @@ class TestDualVolumes2D:
         a right angle is treated as non-obtuse and the Voronoi formula applies.
         The right-angle vertex receives half the total area.
         """
-        points = torch.tensor(
-            [[0.0, 0.0], [3.0, 0.0], [0.0, 4.0]], device=device
-        )
+        points = torch.tensor([[0.0, 0.0], [3.0, 0.0], [0.0, 4.0]], device=device)
         cells = torch.tensor([[0, 1, 2]], dtype=torch.long, device=device)
         mesh = Mesh(points=points, cells=cells)
 
@@ -160,9 +156,7 @@ class TestDualVolumes2D:
         Triangle (0,0)-(4,0)-(2,1): angle at (2,1) is arccos(-3/5) ~ 127 deg.
         Mixed area assigns area/2 to the obtuse vertex and area/4 to each other.
         """
-        points = torch.tensor(
-            [[0.0, 0.0], [4.0, 0.0], [2.0, 1.0]], device=device
-        )
+        points = torch.tensor([[0.0, 0.0], [4.0, 0.0], [2.0, 1.0]], device=device)
         cells = torch.tensor([[0, 1, 2]], dtype=torch.long, device=device)
         mesh = Mesh(points=points, cells=cells)
 
@@ -184,9 +178,7 @@ class TestDualVolumes2D:
         points = torch.tensor(
             [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], device=device
         )
-        cells = torch.tensor(
-            [[0, 1, 2], [0, 2, 3]], dtype=torch.long, device=device
-        )
+        cells = torch.tensor([[0, 1, 2], [0, 2, 3]], dtype=torch.long, device=device)
         mesh = Mesh(points=points, cells=cells)
 
         dual_vols = compute_dual_volumes_0(mesh)
@@ -250,7 +242,9 @@ class TestDualVolumes2D:
         # Each boundary vertex: 2 * sqrt(3)/12 = sqrt(3)/6
         expected_center = s3 / 2
         expected_boundary = s3 / 6
-        torch.testing.assert_close(dual_vols[0], torch.tensor(expected_center, device=device))
+        torch.testing.assert_close(
+            dual_vols[0], torch.tensor(expected_center, device=device)
+        )
         torch.testing.assert_close(
             dual_vols[1:], torch.full((6,), expected_boundary, device=device)
         )
