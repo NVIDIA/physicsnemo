@@ -47,6 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `uniform_grid_gradient`, `rectilinear_grid_gradient`,
   `spectral_grid_gradient`, `meshless_fd_derivatives`, `mesh_lsq_gradient`,
   and `mesh_green_gauss_gradient`.
+- Adds `physicsnemo.sym` module for symbolic PDE residual computation
+  (`PhysicsInformer`). Users define PDEs via SymPy and select a gradient method
+  (`autodiff`, `finite_difference`, `spectral`, `meshless_finite_difference`,
+  `least_squares`); spatial derivatives are computed automatically using the
+  `nn.functional.derivatives` functionals.
 - Added geometry functionals in `physicsnemo.nn.functional` for
   `mesh_poisson_disk_sample`, `mesh_to_voxel_fraction`, and
   `signed_distance_field`.
@@ -81,6 +86,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed bug in Pangu, FengWu attention window shift for asymmetric longitudes
 - Fixed a bug in `mesh.sampling.find_nearest_cells`, where a mixup between L2 and L-inf norms
   could cause slightly incorrect nearest-neighbor assignments in highly skewed meshes.
+- Fixed TensorDict key-ordering bug in GLOBE's Barnes-Hut kernel that caused
+  incorrect results when `tensordict >= 0.12` reordered leaves during
+  TensorDict construction from dict literals mixing plain and nested keys.
 
 ### Security
 

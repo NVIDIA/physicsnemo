@@ -906,16 +906,14 @@ def test_bh_nested_source_data_keys(n_dims: int):
 
     common_kwargs = dict(
         n_spatial_dims=n_dims,
-        output_field_ranks={
-            k: (0 if v == "scalar" else 1) for k, v in output_field_ranks.items()
-        },
+        output_field_ranks=output_field_ranks,
         source_data_ranks=source_data_ranks,
         hidden_layer_sizes=[16],
     )
 
     bh_kernel = BarnesHutKernel(**common_kwargs, leaf_size=DEFAULT_LEAF_SIZE)
     exact_kernel = Kernel(**common_kwargs)
-    exact_kernel.load_state_dict(bh_kernel.state_dict(), strict=False)
+    exact_kernel.load_state_dict(bh_kernel.state_dict(), strict=True)
     bh_kernel.eval()
     exact_kernel.eval()
 
@@ -960,9 +958,12 @@ def test_bh_nested_source_data_keys(n_dims: int):
         torch.testing.assert_close(
             bh_result[field_name],
             exact_result[field_name],
-            atol=1e-3,
-            rtol=1e-2,
-            msg=f"Nested keys: {field_name!r} not close to exact at theta=0.01",
+            atol=1e-4,
+            rtol=1e-3,
+            msg=lambda default, f=field_name: (
+                f"Nested keys: {f!r} not close to exact at theta=0.01 "
+                f"(n_dims={n_dims}, torch={torch.__version__}).\n{default}"
+            ),
         )
 
 

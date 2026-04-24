@@ -207,7 +207,7 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ "$NATTEN_AMD64_WHEEL" != "unkn
 RUN uv pip install --no-build-isolation "torch_sparse"
 
 # All pyproject extras (no dev); installs physicsnemo non-editable
-RUN cd /physicsnemo && uv pip install ".[cu13,utils-extras,mesh-extras,datapipes-extras,gnns]"
+RUN cd /physicsnemo && uv pip install ".[cu13,utils-extras,mesh-extras,datapipes-extras,gnns,sym]"
 
 # Cleanup builder stage
 RUN rm -rf /physicsnemo/

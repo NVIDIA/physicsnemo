@@ -279,6 +279,10 @@ gnns = [
     "nvidia-physicsnemo[model-extras]",
 ]
 
+sym = [
+    "sympy>=1.12",
+]
+
 perf = [
     "transformer_engine[pytorch]",
 ]
