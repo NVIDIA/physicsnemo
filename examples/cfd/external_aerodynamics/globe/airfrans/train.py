@@ -111,7 +111,7 @@ def main(
     use_mlflow: bool = True,
     mlflow_experiment: str = "GLOBE_AirFRANS",
     gradient_clip_norm: float | None = 1.0,
-    network_type: Literal["pade", "smooth_pade", "mlp"] = "pade",
+    network_type: Literal["pade", "mlp"] = "pade",
     self_regularization_beta: float | None = 0.01,
     latent_compression_scale: float | None = 100.0,
 ):
