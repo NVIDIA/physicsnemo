@@ -37,11 +37,9 @@
 name: Pull Request Github CI
 on:
   workflow_dispatch:
-    # Manual-only while testing the UV pipeline.
-    # To gate PRs on this workflow, re-add the push trigger:
-    #   push:
-    #     branches:
-    #       - "pull-request/[0-9]+"
+  push:
+    branches:
+      - "pull-request/[0-9]+"
 
 permissions:
   contents: read
@@ -87,7 +85,7 @@ jobs:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Bootstrap cuDNN CI container
       uses: ./.github/actions/bootstrap-cudnn-ci
@@ -109,7 +107,7 @@ jobs:
     # handles stale DBs gracefully by re-running tests whose dependency
     # hashes differ).
     - name: Restore testmon database from nightly cache
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v5
       with:
         path: |
           .testmondata
@@ -131,7 +129,7 @@ jobs:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Bootstrap cuDNN CI container
       uses: ./.github/actions/bootstrap-cudnn-ci
@@ -147,7 +145,7 @@ jobs:
         extras: ${{ env.EXTRAS_TAG }}
 
     - name: Restore testmon database from nightly cache
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v5
       with:
         path: |
           .testmondata
@@ -159,7 +157,7 @@ jobs:
 
     - name: Restore nightly coverage baseline from cache
       id: cache-coverage-restore
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v5
       with:
         path: .coverage*
         key: ${{ env.COVERAGE_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
