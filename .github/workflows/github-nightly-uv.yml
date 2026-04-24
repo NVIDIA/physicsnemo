@@ -118,7 +118,7 @@ jobs:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Bootstrap cuDNN CI container
       uses: ./.github/actions/bootstrap-cudnn-ci
@@ -188,7 +188,7 @@ jobs:
 
     - name: Save uv download cache
       if: steps.setup-uv-env.outputs.uv_cache_hit != 'true'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v5
       with:
         path: ~/.cache/uv
         key: ${{ env.UV_CACHE_KEY_PREFIX }}-latest
@@ -229,7 +229,7 @@ jobs:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Bootstrap cuDNN CI container
       uses: ./.github/actions/bootstrap-cudnn-ci
@@ -255,7 +255,7 @@ jobs:
         uv run --no-sync python -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*"
 
     - name: Save testmon database to cache
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v5
       with:
         path: |
           .testmondata
@@ -272,7 +272,7 @@ jobs:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Bootstrap cuDNN CI container
       uses: ./.github/actions/bootstrap-cudnn-ci
@@ -311,7 +311,7 @@ jobs:
         path: coverage-doctest-report.xml
 
     - name: Save coverage files to cache
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v5
       with:
         path: .coverage*
         key: ${{ env.COVERAGE_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
@@ -348,7 +348,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Download JUnit artifacts
       uses: actions/download-artifact@v4
@@ -356,7 +356,7 @@ jobs:
         pattern: junit-*
 
     - name: Core test report
-      uses: dorny/test-reporter@v2
+      uses: dorny/test-reporter@v3
       with:
         name: Core Test Results
         path: junit-coverage-core/coverage-core-report.xml
@@ -364,7 +364,7 @@ jobs:
         fail-on-error: 'false'
 
     - name: Doctest report
-      uses: dorny/test-reporter@v2
+      uses: dorny/test-reporter@v3
       with:
         name: Doctest Results
         path: junit-coverage-doctest/coverage-doctest-report.xml
