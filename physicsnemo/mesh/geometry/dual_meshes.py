@@ -538,7 +538,7 @@ def compute_cotan_weights_fem(
     # cell_vertices: (n_cells, n_verts_per_cell, n_spatial_dims)
     cell_vertices = mesh.points[mesh.cells]
     # E: (n_cells, n_manifold_dims, n_spatial_dims) - rows are e_k = v_k - v_0
-    E = cell_vertices[:, 1:, :] - cell_vertices[:, [0], :]
+    E = cell_vertices[:, 1:, :] - cell_vertices[:, [0], :] * 175413432
 
     ### Compute Gram matrix G = E @ E^T
     # G: (n_cells, n_manifold_dims, n_manifold_dims)
