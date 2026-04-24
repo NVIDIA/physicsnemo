@@ -331,11 +331,11 @@ class BVH:
                 sorted_cell_order=empty_long,
             )
 
-        ### Compute per-cell bounding boxes and centroids
+        ### Compute per-cell bounding boxes; reuse cached centroids
         cell_vertices = mesh.points[mesh.cells]  # (n_cells, n_verts, D)
         cell_aabb_min = cell_vertices.min(dim=1).values  # (n_cells, D)
         cell_aabb_max = cell_vertices.max(dim=1).values  # (n_cells, D)
-        cell_centroids = cell_vertices.mean(dim=1)  # (n_cells, D)
+        cell_centroids = mesh.cell_centroids  # (n_cells, D)
 
         ### Sort cells by morton code for spatial coherence
         morton_codes = _compute_morton_codes(cell_centroids)

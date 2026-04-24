@@ -468,11 +468,9 @@ def _check_3d_vertex_manifold(mesh: "Mesh") -> bool:
     bool
         True if all vertices have connected links (manifold at all vertices).
     """
-    from physicsnemo.mesh.neighbors import get_point_to_cells_adjacency
-
     device = mesh.cells.device
 
-    p2c = get_point_to_cells_adjacency(mesh)
+    p2c = mesh.get_point_to_cells_adjacency()
 
     ### Step 1: Expand p2c to all (vertex_id, tet_id) pairs
     vertex_ids, tet_ids = p2c.expand_to_pairs()  # both shape (total_pairs,)

@@ -79,9 +79,7 @@ def reposition_original_vertices_2d(
         targets = torch.cat([unique_edges[:, 1], unique_edges[:, 0]])
         adjacency = build_adjacency_from_pairs(sources, targets, n_sources=n_points)
     else:
-        from physicsnemo.mesh.neighbors import get_point_to_points_adjacency
-
-        adjacency = get_point_to_points_adjacency(mesh)
+        adjacency = mesh.get_point_to_points_adjacency()
 
     ### Compute valences for all points at once
     # valences[i] = offsets[i+1] - offsets[i]

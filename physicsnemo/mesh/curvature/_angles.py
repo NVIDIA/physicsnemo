@@ -27,8 +27,10 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from physicsnemo.mesh.curvature._utils import stable_angle_between_vectors
-from physicsnemo.mesh.geometry._angles import compute_vertex_angle_sums
+from physicsnemo.mesh.geometry._angles import (
+    compute_vertex_angle_sums,
+    stable_angle_between_vectors,
+)
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -77,9 +79,7 @@ def compute_angles_at_vertices(mesh: "Mesh") -> torch.Tensor:
     if mesh.n_cells == 0:
         return angle_sums
 
-    from physicsnemo.mesh.neighbors import get_point_to_cells_adjacency
-
-    adjacency = get_point_to_cells_adjacency(mesh)
+    adjacency = mesh.get_point_to_cells_adjacency()
 
     ### Group points by number of incident edges
     neighbor_counts = adjacency.offsets[1:] - adjacency.offsets[:-1]  # (n_points,)

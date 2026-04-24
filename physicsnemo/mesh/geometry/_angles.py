@@ -21,7 +21,13 @@ dimension-agnostic formula based on correlation (normalized Gram) matrices.
 The formula unifies planar angles (triangles), solid angles (tetrahedra),
 and higher-dimensional generalizations into a single expression.
 
-This module provides two levels of abstraction:
+This module provides several levels of abstraction:
+
+- :func:`stable_angle_between_vectors`: Numerically stable angle between
+  two vectors via atan2. Works in any dimension.
+
+- :func:`compute_triangle_angles`: Angle at a vertex of a triangle (or
+  batch of triangles) given three point positions.
 
 - :func:`compute_vertex_angles`: Per-cell-per-vertex angles, shape
   ``(n_cells, n_vertices_per_cell)``. This is the fundamental geometric
@@ -44,6 +50,79 @@ from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
+
+
+def stable_angle_between_vectors(v1: torch.Tensor, v2: torch.Tensor) -> torch.Tensor:
+    """Compute angle between vectors using numerically stable atan2 formula.
+
+    More stable than ``acos(dot product)`` which suffers from numerical
+    issues when vectors are nearly parallel or anti-parallel.
+
+    Parameters
+    ----------
+    v1 : torch.Tensor
+        First vector(s), shape ``(..., n_dims)``
+    v2 : torch.Tensor
+        Second vector(s), shape ``(..., n_dims)``
+
+    Returns
+    -------
+    torch.Tensor
+        Angle(s) in radians, shape ``(...)``. Range: ``[0, pi]``
+
+    Examples
+    --------
+    >>> import torch
+    >>> v1 = torch.tensor([[1.0, 0.0]])
+    >>> v2 = torch.tensor([[0.0, 1.0]])
+    >>> angle = stable_angle_between_vectors(v1, v2)
+    >>> torch.allclose(angle, torch.tensor([torch.pi / 2]))
+    True
+    """
+    dot_product = (v1 * v2).sum(dim=-1)
+
+    v1_norm = torch.linalg.vector_norm(v1, dim=-1)
+    v2_norm = torch.linalg.vector_norm(v2, dim=-1)
+
+    cross_magnitude_sq = torch.clamp(v1_norm**2 * v2_norm**2 - dot_product**2, min=0)
+    return torch.atan2(torch.sqrt(cross_magnitude_sq), dot_product)
+
+
+def compute_triangle_angles(
+    p0: torch.Tensor,
+    p1: torch.Tensor,
+    p2: torch.Tensor,
+) -> torch.Tensor:
+    """Compute the angle at ``p0`` in triangle ``(p0, p1, p2)``.
+
+    Uses the atan2-based :func:`stable_angle_between_vectors` formula for
+    numerical stability.
+
+    Parameters
+    ----------
+    p0 : torch.Tensor
+        Vertex at which to compute angle, shape ``(..., n_spatial_dims)``
+    p1 : torch.Tensor
+        Second vertex, shape ``(..., n_spatial_dims)``
+    p2 : torch.Tensor
+        Third vertex, shape ``(..., n_spatial_dims)``
+
+    Returns
+    -------
+    torch.Tensor
+        Angle at ``p0`` in radians, shape ``(...)``
+
+    Examples
+    --------
+    >>> import torch
+    >>> p0 = torch.tensor([0., 0.])
+    >>> p1 = torch.tensor([1., 0.])
+    >>> p2 = torch.tensor([0., 1.])
+    >>> angle = compute_triangle_angles(p0, p1, p2)
+    >>> torch.allclose(angle, torch.tensor(torch.pi / 2))
+    True
+    """
+    return stable_angle_between_vectors(p1 - p0, p2 - p0)
 
 
 def compute_vertex_angles(mesh: "Mesh") -> torch.Tensor:

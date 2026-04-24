@@ -124,7 +124,7 @@ def _compute_meyer_mixed_voronoi_areas(
     "Discrete Differential-Geometry Operators for Triangulated 2-Manifolds".
     Section 3.3 (Equation 7) and Section 3.4 (Figure 4).
     """
-    from physicsnemo.mesh.curvature._utils import compute_triangle_angles
+    from physicsnemo.mesh.geometry._angles import compute_triangle_angles
 
     n_cells = cell_vertices.shape[0]
     device = cell_vertices.device
