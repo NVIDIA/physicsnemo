@@ -25,11 +25,14 @@ re-exported here for backwards compatibility.
 """
 
 import torch
+from jaxtyping import Int
 
 from physicsnemo.mesh.utilities._topology import extract_unique_edges  # noqa: F401
 
 
-def get_subdivision_pattern(n_manifold_dims: int) -> torch.Tensor:
+def get_subdivision_pattern(
+    n_manifold_dims: int,
+) -> Int[torch.Tensor, "n_children n_vertices_per_child"]:
     """Get the subdivision pattern for splitting an n-simplex.
 
     Returns a pattern tensor that encodes how to split an n-simplex into
@@ -122,11 +125,16 @@ def get_subdivision_pattern(n_manifold_dims: int) -> torch.Tensor:
 
 
 def generate_child_cells(
-    parent_cells: torch.Tensor,
-    edge_inverse: torch.Tensor,
+    parent_cells: Int[torch.Tensor, "n_parent_cells n_vertices_per_cell"],
+    edge_inverse: Int[torch.Tensor, " n_candidates"],
     n_original_points: int,
-    subdivision_pattern: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    subdivision_pattern: Int[
+        torch.Tensor, "n_children_per_parent n_vertices_per_child"
+    ],
+) -> tuple[
+    Int[torch.Tensor, "n_total_children n_vertices_per_cell"],
+    Int[torch.Tensor, " n_total_children"],
+]:
     """Generate child cells from parent cells using subdivision pattern.
 
     This implementation is fully vectorized using torch operations, avoiding Python loops

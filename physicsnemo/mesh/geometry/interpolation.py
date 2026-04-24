@@ -35,6 +35,7 @@ References:
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
@@ -44,7 +45,7 @@ if TYPE_CHECKING:
 
 def compute_barycentric_gradients(
     mesh: "Mesh",
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "n_cells n_vertices_per_cell n_spatial_dims"]:
     """Compute gradients of barycentric interpolation functions.
 
     For each cell and each of its vertices, computes ∇φ_{v,cell}, the gradient

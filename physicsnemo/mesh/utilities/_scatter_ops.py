@@ -22,17 +22,18 @@ mesh entities (points, cells, facets).
 """
 
 import torch
+from jaxtyping import Float, Int
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 
 def scatter_aggregate(
-    src_data: torch.Tensor,  # shape: (n_src, *data_shape)
-    src_to_dst_mapping: torch.Tensor,  # shape: (n_src,)
+    src_data: Float[torch.Tensor, "n_src ..."],
+    src_to_dst_mapping: Int[torch.Tensor, " n_src"],
     n_dst: int,
-    weights: torch.Tensor | None = None,  # shape: (n_src,)
+    weights: Float[torch.Tensor, " n_src"] | None = None,
     aggregation: str = "mean",
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "n_dst ..."]:
     """Aggregate source data to destination using scatter operations.
 
     This is the core scatter-based aggregation pattern used throughout physicsnemo.mesh
@@ -90,9 +91,7 @@ def scatter_aggregate(
 
     ### Fast path: unweighted sum is a single scatter_add_ with no extra work
     if weights is None and aggregation == "sum":
-        aggregated_data = torch.zeros(
-            (n_dst, *data_shape), dtype=dtype, device=device
-        )
+        aggregated_data = torch.zeros((n_dst, *data_shape), dtype=dtype, device=device)
         expanded_indices = src_to_dst_mapping.view(
             -1, *([1] * len(data_shape))
         ).expand_as(src_data)

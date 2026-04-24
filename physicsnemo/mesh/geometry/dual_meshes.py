@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 def _scatter_add_cell_contributions_to_vertices(
     dual_volumes: Float[torch.Tensor, " n_points"],
     cells: Int[torch.Tensor, "n_cells n_vertices_per_cell"],
-    contributions: Float[torch.Tensor, "n_cells *per_vertex"],
+    contributions: Float[torch.Tensor, "n_cells ..."],
 ) -> None:
     """Scatter cell volume contributions to all cell vertices (in place).
 

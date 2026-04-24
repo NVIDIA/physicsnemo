@@ -26,6 +26,7 @@ angle between adjacent edges, not an intra-cell interior angle.
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float
 
 from physicsnemo.mesh.curvature._utils import stable_angle_between_vectors
 from physicsnemo.mesh.geometry._angles import compute_vertex_angle_sums
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
 
-def compute_angles_at_vertices(mesh: "Mesh") -> torch.Tensor:
+def compute_angles_at_vertices(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
     """Compute sum of angles at each vertex over all incident cells.
 
     For manifold dimension >= 2, uses the unified correlation-matrix formula

@@ -164,11 +164,11 @@ def partition_cells(
 
     ### Accumulate areas per cluster
     cluster_areas = scatter_aggregate(
-        cell_areas.unsqueeze(-1),
+        cell_areas,
         assignments,
         n_seeds,
         aggregation="sum",
-    ).squeeze(-1)
+    )
 
     ### Accumulate area-weighted normals, then normalize to unit length
     if has_normals:
