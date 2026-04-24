@@ -535,16 +535,12 @@ def main(
         if sample_result_path.exists():
             result = torch.load(sample_result_path, weights_only=False)
             logger.info(
-                f"[rank {dist.rank}] "
-                f"[{i + 1}/{len(my_val_paths)}] {run_name} (cached)"
+                f"[rank {dist.rank}] [{i + 1}/{len(my_val_paths)}] {run_name} (cached)"
             )
             my_results.append(result)
             continue
 
-        logger.info(
-            f"[rank {dist.rank}] "
-            f"[{i + 1}/{len(my_val_paths)}] {run_name}..."
-        )
+        logger.info(f"[rank {dist.rank}] [{i + 1}/{len(my_val_paths)}] {run_name}...")
 
         ### Load full-resolution sample from data cache or raw data
         cache_pt = (data_cache_dir / sample_path.name).with_suffix(".pt")
