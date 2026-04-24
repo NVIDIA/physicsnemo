@@ -44,6 +44,7 @@ References:
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float, Int
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
@@ -52,9 +53,9 @@ if TYPE_CHECKING:
 
 
 def _scatter_add_cell_contributions_to_vertices(
-    dual_volumes: torch.Tensor,  # shape: (n_points,)
-    cells: torch.Tensor,  # shape: (n_selected_cells, n_vertices_per_cell)
-    contributions: torch.Tensor,  # shape: (n_cells,) or (n_cells, n_vertices_per_cell)
+    dual_volumes: Float[torch.Tensor, " n_points"],
+    cells: Int[torch.Tensor, "n_cells n_vertices_per_cell"],
+    contributions: Float[torch.Tensor, "n_cells *per_vertex"],
 ) -> None:
     """Scatter cell volume contributions to all cell vertices (in place).
 
@@ -88,15 +89,20 @@ def _scatter_add_cell_contributions_to_vertices(
         ...     dual_volumes2, cells, torch.tensor([[0.1, 0.2, 0.2], [0.15, 0.15, 0.2]])
         ... )
     """
+    if contributions.ndim not in (1, 2):
+        raise ValueError(
+            f"contributions must be 1D or 2D, got {contributions.ndim}D "
+            f"with shape {tuple(contributions.shape)}"
+        )
     if contributions.ndim == 1:
         contributions = contributions.unsqueeze(-1).expand_as(cells)
     dual_volumes.scatter_add_(0, cells.flatten(), contributions.reshape(-1))
 
 
 def _compute_meyer_mixed_voronoi_areas(
-    cell_vertices: torch.Tensor,  # (n_cells, 3, n_spatial_dims)
-    cell_areas: torch.Tensor,  # (n_cells,)
-) -> torch.Tensor:
+    cell_vertices: Float[torch.Tensor, "n_cells 3 n_spatial_dims"],
+    cell_areas: Float[torch.Tensor, " n_cells"],
+) -> Float[torch.Tensor, " n_cells_times_3"]:
     """Compute per-(cell, local_vertex) mixed Voronoi areas (Meyer et al. 2003).
 
     This implements the branchless mixed Voronoi area formula for triangular meshes,
@@ -224,7 +230,7 @@ def _compute_meyer_mixed_voronoi_areas(
     return voronoi_per_vertex.reshape(-1)  # (n_cells * 3,)
 
 
-def compute_dual_volumes_0(mesh: "Mesh") -> torch.Tensor:
+def compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
     """Compute circumcentric dual 0-cell volumes (Voronoi regions) at mesh vertices.
 
     This is the unified, mathematically rigorous implementation used by both DEC
@@ -366,8 +372,8 @@ def compute_dual_volumes_0(mesh: "Mesh") -> torch.Tensor:
 
 
 def compute_circumcenters(
-    vertices: torch.Tensor,  # (n_simplices, n_vertices_per_simplex, n_spatial_dims)
-) -> torch.Tensor:
+    vertices: Float[torch.Tensor, "n_simplices n_vertices_per_simplex n_spatial_dims"],
+) -> Float[torch.Tensor, "n_simplices n_spatial_dims"]:
     """Compute circumcenters of simplices using perpendicular bisector method.
 
     The circumcenter is the unique point equidistant from all vertices of the simplex.
@@ -469,7 +475,7 @@ def compute_circumcenters(
 
 def compute_cotan_weights_fem(
     mesh: "Mesh",
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[Float[torch.Tensor, " n_edges"], Int[torch.Tensor, "n_edges 2"]]:
     r"""Compute cotangent weights for all edges using the FEM stiffness matrix.
 
     This is the dimension-general approach that works for simplicial meshes of
@@ -602,7 +608,7 @@ def compute_cotan_weights_fem(
 
 def compute_dual_volumes_1(
     mesh: "Mesh",
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[Float[torch.Tensor, " n_edges"], Int[torch.Tensor, "n_edges 2"]]:
     """Compute dual 1-cell volumes (dual to edges).
 
     The dual 1-cell of an edge is the portion of the circumcentric dual mesh
@@ -649,7 +655,7 @@ def compute_dual_volumes_1(
     return dual_volumes_1, edges
 
 
-def get_or_compute_dual_volumes_0(mesh: "Mesh") -> torch.Tensor:
+def get_or_compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
     """Get cached dual 0-cell volumes or compute if not present.
 
     Parameters
@@ -669,7 +675,9 @@ def get_or_compute_dual_volumes_0(mesh: "Mesh") -> torch.Tensor:
     return cached
 
 
-def get_or_compute_circumcenters(mesh: "Mesh") -> torch.Tensor:
+def get_or_compute_circumcenters(
+    mesh: "Mesh",
+) -> Float[torch.Tensor, "n_cells n_spatial_dims"]:
     """Get cached circumcenters or compute if not present.
 
     Parameters
