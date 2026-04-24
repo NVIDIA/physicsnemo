@@ -30,6 +30,7 @@ Reference: Desbrun et al., "Discrete Exterior Calculus", Section 4
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float, Int
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -37,8 +38,8 @@ if TYPE_CHECKING:
 
 def hodge_star_0(
     mesh: "Mesh",
-    primal_0form: torch.Tensor,
-) -> torch.Tensor:
+    primal_0form: Float[torch.Tensor, "n_points ..."],
+) -> Float[torch.Tensor, "n_points ..."]:
     """Apply Hodge star to 0-form (vertex values).
 
     Maps ⋆₀: Ω⁰(K) → Ωⁿ(⋆K)
@@ -90,9 +91,9 @@ def hodge_star_0(
 
 def hodge_star_1(
     mesh: "Mesh",
-    primal_1form: torch.Tensor,
-    edges: torch.Tensor,
-) -> torch.Tensor:
+    primal_1form: Float[torch.Tensor, "n_edges ..."],
+    edges: Int[torch.Tensor, "n_edges 2"],
+) -> Float[torch.Tensor, "n_edges ..."]:
     """Apply Hodge star to 1-form (edge values).
 
     Maps ⋆₁: Ω¹(K) → Ω^(n-1)(⋆K)

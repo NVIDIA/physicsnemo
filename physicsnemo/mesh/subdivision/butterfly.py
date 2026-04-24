@@ -28,6 +28,7 @@ for other dimensions.
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float, Int
 
 from physicsnemo.mesh.subdivision._data import propagate_cell_data_to_children
 from physicsnemo.mesh.subdivision._topology import (
@@ -41,13 +42,13 @@ if TYPE_CHECKING:
 
 
 def _build_edge_to_triangle_pairs(
-    candidate_edges: torch.Tensor,
-    parent_cell_indices: torch.Tensor,
+    candidate_edges: Int[torch.Tensor, "n_candidates 2"],
+    parent_cell_indices: Int[torch.Tensor, " n_candidates"],
     n_unique_edges: int,
-    unique_edge_hashes: torch.Tensor,
+    unique_edge_hashes: Int[torch.Tensor, " n_unique_edges"],
     max_vertex: int,
     device: torch.device,
-) -> torch.Tensor:
+) -> Int[torch.Tensor, "n_unique_edges 2"]:
     """Build a (n_unique_edges, 2) tensor mapping each edge to its parent triangles.
 
     Parameters
@@ -100,8 +101,8 @@ def _build_edge_to_triangle_pairs(
 
 def compute_butterfly_weights_2d(
     mesh: "Mesh",
-    unique_edges: torch.Tensor,
-) -> torch.Tensor:
+    unique_edges: Int[torch.Tensor, "n_edges 2"],
+) -> Float[torch.Tensor, "n_edges n_spatial_dims"]:
     r"""Compute butterfly weighted positions for edge midpoints in 2D manifolds.
 
     For triangular meshes, uses the classical 8-point butterfly stencil

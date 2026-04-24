@@ -620,8 +620,8 @@ class Mesh:
         """Compute the centroids (geometric centers) of all cells.
 
         The centroid of a cell is computed as the arithmetic mean of its vertex positions.
-        For an n-simplex with vertices (v0, v1, ..., vn), the centroid is:
-            centroid = (v0 + v1 + ... + vn) / (n + 1)
+        For an n-simplex with vertices (v0, v1, ..., vn), the centroid is
+        ``centroid = (v0 + v1 + ... + vn) / (n + 1)``.
 
         The result is cached in ``_cache["cell", "centroids"]`` for efficiency.
 
@@ -1541,11 +1541,13 @@ class Mesh:
         ----------
         manifold_codimension : int, optional
             Codimension of extracted mesh relative to parent.
+
             - 1: Extract (n-1)-facets (default, immediate boundaries of all cells)
             - 2: Extract (n-2)-facets (e.g., edges from tets, vertices from triangles)
             - k: Extract (n-k)-facets
         data_source : {"points", "cells"}, optional
             Source of data inheritance:
+
             - "cells": Facets inherit from parent cells they bound. When multiple
               cells share a facet, data is aggregated according to data_aggregation.
             - "points": Facets inherit from their boundary vertices. Data from
@@ -1553,12 +1555,14 @@ class Mesh:
         data_aggregation : {"mean", "area_weighted", "inverse_distance"}, optional
             Strategy for aggregating data from multiple sources
             (only applies when data_source="cells"):
+
             - "mean": Simple arithmetic mean
             - "area_weighted": Weighted by parent cell areas
             - "inverse_distance": Weighted by inverse distance from facet centroid
               to parent cell centroids
         target_counts : list[int] | {"boundary", "shared", "interior", "all"}, optional
             Which facets to keep based on how many parent cells share them:
+
             - "all": Keep all unique facets (default)
             - "boundary": Keep only boundary facets (appearing in exactly 1 cell)
             - "shared": Keep only shared facets (appearing in 2+ cells)
@@ -1969,6 +1973,7 @@ class Mesh:
         ----------
         adjacency_codimension : int, optional
             Codimension of shared facets defining adjacency.
+
             - 1 (default): Cells must share a codimension-1 facet (e.g., triangles
               sharing an edge, tetrahedra sharing a triangular face)
             - 2: Cells must share a codimension-2 facet (e.g., tetrahedra sharing
@@ -2201,6 +2206,7 @@ class Mesh:
         ----------
         backend : {"auto", "matplotlib", "pyvista"}
             Visualization backend to use:
+
             - "auto": Automatically select based on n_spatial_dims
               (matplotlib for 0D/1D/2D, PyVista for 3D)
             - "matplotlib": Force matplotlib backend (supports 3D via mplot3d)
@@ -2211,12 +2217,14 @@ class Mesh:
             customization before display.
         point_scalars : torch.Tensor or str or tuple[str, ...], optional
             Scalar data to color points. Mutually exclusive with cell_scalars. Can be:
+
             - None: Points use neutral color (black)
             - torch.Tensor: Direct scalar values, shape (n_points,) or
               (n_points, ...) where trailing dimensions are L2-normed
             - str or tuple[str, ...]: Key to lookup in mesh.point_data
         cell_scalars : torch.Tensor or str or tuple[str, ...], optional
             Scalar data to color cells. Mutually exclusive with point_scalars. Can be:
+
             - None: Cells use neutral color (lightblue if no scalars,
               lightgray if point_scalars active)
             - torch.Tensor: Direct scalar values, shape (n_cells,) or
@@ -2787,12 +2795,14 @@ class Mesh:
         levels : int, optional
             Number of subdivision iterations to perform. Each level
             increases mesh resolution exponentially:
+
             - 0: No subdivision (returns original mesh)
             - 1: Each cell splits into 2^n children
             - 2: Each cell splits into 4^n children
             - k: Each cell splits into (2^k)^n children
         filter : {"linear", "butterfly", "loop"}, optional
             Subdivision scheme to use:
+
             - "linear": Simple midpoint subdivision (interpolating).
               New vertices at exact edge midpoints. Works for any dimension.
               Preserves original vertices.

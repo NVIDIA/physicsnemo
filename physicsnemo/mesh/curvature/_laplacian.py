@@ -25,12 +25,15 @@ L @ points gives the mean curvature normal (times area).
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
 
-def compute_laplacian_at_points(mesh: "Mesh") -> torch.Tensor:
+def compute_laplacian_at_points(
+    mesh: "Mesh",
+) -> Float[torch.Tensor, "n_points n_spatial_dims"]:
     """Compute cotangent Laplacian applied to point positions directly.
 
     Computes L @ points where L is the cotangent Laplacian matrix, but

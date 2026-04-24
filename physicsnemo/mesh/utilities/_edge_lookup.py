@@ -22,12 +22,13 @@ exterior derivatives, and sharp/flat operators.
 """
 
 import torch
+from jaxtyping import Bool, Int
 
 
 def find_edges_in_reference(
-    reference_edges: torch.Tensor,
-    query_edges: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    reference_edges: Int[torch.Tensor, "n_ref 2"],
+    query_edges: Int[torch.Tensor, "n_query 2"],
+) -> tuple[Int[torch.Tensor, " n_query"], Bool[torch.Tensor, " n_query"]]:
     """Find indices of query edges within a reference edge set.
 
     Uses hash-based lookup with O(n log n) complexity for sorting

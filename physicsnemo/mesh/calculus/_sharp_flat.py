@@ -28,6 +28,7 @@ Reference: Desbrun et al., "Discrete Exterior Calculus", Section 5
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float, Int
 
 from physicsnemo.mesh.utilities._edge_lookup import find_edges_in_reference
 
@@ -37,9 +38,9 @@ if TYPE_CHECKING:
 
 def sharp(
     mesh: "Mesh",
-    edge_1form: torch.Tensor,
-    edges: torch.Tensor,
-) -> torch.Tensor:
+    edge_1form: Float[torch.Tensor, "n_edges ..."],
+    edges: Int[torch.Tensor, "n_edges 2"],
+) -> Float[torch.Tensor, "n_points n_spatial_dims ..."]:
     r"""Apply sharp operator to convert 1-form to primal vector field (rigorous DEC).
 
     Maps :math:`\sharp: \Omega^1(K) \to \mathfrak{X}(K)`
@@ -239,9 +240,9 @@ def sharp(
 
 def flat(
     mesh: "Mesh",
-    vector_field: torch.Tensor,
-    edges: torch.Tensor,
-) -> torch.Tensor:
+    vector_field: Float[torch.Tensor, "n_points n_spatial_dims ..."],
+    edges: Int[torch.Tensor, "n_edges 2"],
+) -> Float[torch.Tensor, "n_edges ..."]:
     """Apply PDP-flat operator to convert primal vector field to primal 1-form (rigorous DEC).
 
     Maps ♭: 𝔛(K) → Ω¹(K)

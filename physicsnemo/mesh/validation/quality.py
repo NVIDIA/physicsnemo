@@ -23,6 +23,7 @@ skewness, and angles. Higher quality = better shaped cells.
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float
 from tensordict import TensorDict
 
 from physicsnemo.mesh.geometry._angles import compute_vertex_angles
@@ -31,7 +32,9 @@ if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
 
-def compute_cell_edge_lengths(mesh: "Mesh") -> torch.Tensor:
+def compute_cell_edge_lengths(
+    mesh: "Mesh",
+) -> Float[torch.Tensor, "n_cells n_edges_per_cell"]:
     """Compute all pairwise edge lengths within each cell.
 
     For an n-simplex with (n+1) vertices, there are C(n+1, 2) edges per cell.

@@ -28,6 +28,7 @@ Reference: Charles Loop, "Smooth Subdivision Surfaces Based on Triangles" (1987)
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float, Int
 
 from physicsnemo.mesh.neighbors._adjacency import build_adjacency_from_pairs
 from physicsnemo.mesh.subdivision._data import propagate_cell_data_to_children
@@ -43,8 +44,8 @@ if TYPE_CHECKING:
 
 def reposition_original_vertices_2d(
     mesh: "Mesh",
-    unique_edges: torch.Tensor | None = None,
-) -> torch.Tensor:
+    unique_edges: Int[torch.Tensor, "n_edges 2"] | None = None,
+) -> Float[torch.Tensor, "n_points n_spatial_dims"]:
     """Reposition original vertices using Loop's valence-based formula.
 
     For each vertex, compute new position as:
@@ -145,8 +146,8 @@ def reposition_original_vertices_2d(
 
 def compute_loop_edge_positions_2d(
     mesh: "Mesh",
-    unique_edges: torch.Tensor,
-) -> torch.Tensor:
+    unique_edges: Int[torch.Tensor, "n_edges 2"],
+) -> Float[torch.Tensor, "n_edges n_spatial_dims"]:
     """Compute new edge vertex positions using Loop's edge rule.
 
     For an interior edge with endpoints v0, v1 and opposite vertices opp0, opp1:

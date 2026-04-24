@@ -340,8 +340,7 @@ def _check_3d_edge_link_connectivity(mesh: "Mesh") -> bool:
 
     # Count candidates per edge to identify edges with 2+ tets (others are
     # trivially connected since they have a single candidate).
-    edge_counts = torch.zeros(n_unique_edges, dtype=torch.long, device=device)
-    edge_counts.scatter_add_(0, edge_inverse, torch.ones_like(edge_inverse))
+    edge_counts = torch.bincount(edge_inverse, minlength=n_unique_edges)
     multi = edge_counts >= 2
 
     return bool(torch.all(min_labels[multi] == max_labels[multi]))
@@ -419,15 +418,8 @@ def _check_2d_vertex_manifold(mesh: "Mesh") -> bool:
 
     if len(boundary_edges) > 0:
         ### Count boundary edges per vertex
-        vertex_boundary_count = torch.zeros(
-            mesh.n_points, dtype=torch.int64, device=mesh.cells.device
-        )
-        vertex_boundary_count.scatter_add_(
-            dim=0,
-            index=boundary_edges.flatten(),
-            src=torch.ones(
-                boundary_edges.numel(), dtype=torch.int64, device=mesh.cells.device
-            ),
+        vertex_boundary_count = torch.bincount(
+            boundary_edges.flatten(), minlength=mesh.n_points
         )
 
         ### Each boundary vertex should have exactly 2 boundary edges (forms a chain)
