@@ -84,7 +84,7 @@ def reposition_original_vertices_2d(
     ### Compute valences for all points at once
     # valences[i] = offsets[i+1] - offsets[i]
     # Shape: (n_points,)
-    valences = adjacency.offsets[1:] - adjacency.offsets[:-1]
+    valences = adjacency.counts
 
     ### Compute beta weights for all valences at once
     # Vectorize the beta formula

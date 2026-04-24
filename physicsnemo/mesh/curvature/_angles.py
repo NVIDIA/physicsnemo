@@ -82,7 +82,7 @@ def compute_angles_at_vertices(mesh: "Mesh") -> torch.Tensor:
     adjacency = mesh.get_point_to_cells_adjacency()
 
     ### Group points by number of incident edges
-    neighbor_counts = adjacency.offsets[1:] - adjacency.offsets[:-1]  # (n_points,)
+    neighbor_counts = adjacency.counts  # (n_points,)
 
     ### Handle most common case: exactly 2 incident edges (vectorized)
     two_edge_mask = neighbor_counts == 2
