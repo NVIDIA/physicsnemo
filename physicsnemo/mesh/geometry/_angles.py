@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Interior angle computation for simplicial meshes.
+"""Intra-cell angle computation for simplicial meshes.
 
 Computes generalized interior angles at vertices of n-simplices using a
 dimension-agnostic formula based on correlation (normalized Gram) matrices.
@@ -34,8 +34,12 @@ This module provides several levels of abstraction:
   primitive, used by normal weighting and quality metrics.
 
 - :func:`compute_vertex_angle_sums`: Per-vertex angle sums, shape
-  ``(n_points,)``. This aggregates angles across all incident cells,
-  used by Gaussian curvature (angle defect method).
+  ``(n_points,)``. This aggregates intra-cell angles across all incident
+  cells, used by Gaussian curvature (angle defect method) for 2D+ manifolds.
+
+For 1D manifolds (edge meshes), the relevant curvature quantity is the
+inter-cell turning angle, which is computed in
+:mod:`physicsnemo.mesh.curvature._angles`.
 
 Reference:
     Van Oosterom, A. & Strackee, J. (1983). "The Solid Angle of a Plane
@@ -231,18 +235,18 @@ def compute_vertex_angles(mesh: "Mesh") -> torch.Tensor:
 
 
 def compute_vertex_angle_sums(mesh: "Mesh") -> torch.Tensor:
-    """Compute the sum of interior angles at each vertex over all incident cells.
+    """Compute the sum of intra-cell interior angles at each vertex.
 
     For each vertex, sums the generalized interior angle contributed by every
-    cell incident to that vertex. This is the quantity used in the angle defect
-    formula for discrete Gaussian curvature:
+    cell incident to that vertex. This is the intra-cell geometry primitive
+    used by the angle defect formula for discrete Gaussian curvature:
 
         K_v = (full_angle - angle_sum_v) / voronoi_area_v
 
     Parameters
     ----------
     mesh : Mesh
-        Input simplicial mesh.
+        Input simplicial mesh (``n_manifold_dims >= 2``).
 
     Returns
     -------

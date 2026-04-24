@@ -27,6 +27,7 @@ to be powers of 2, which doesn't work for triangles (3 vertices) or tets (4 vert
 The pure PyTorch implementation here is highly optimized and performs excellently.
 """
 
+from itertools import combinations
 from typing import TYPE_CHECKING, Literal
 
 import torch
@@ -36,42 +37,6 @@ from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
-
-
-def _generate_combination_indices(n: int, k: int) -> torch.Tensor:
-    """Generate all combinations of k elements from n elements.
-
-    This is a vectorized implementation similar to itertools.combinations(range(n), k).
-
-    Parameters
-    ----------
-    n : int
-        Total number of elements
-    k : int
-        Number of elements to choose
-
-    Returns
-    -------
-    torch.Tensor
-        Tensor of shape (n_choose_k, k) containing all combinations
-
-    Examples
-    --------
-    >>> _generate_combination_indices(4, 2)
-    tensor([[0, 1],
-            [0, 2],
-            [0, 3],
-            [1, 2],
-            [1, 3],
-            [2, 3]])
-    """
-    from itertools import combinations
-
-    ### Use standard library for correctness
-    # For small values of n and k (which is always the case for simplicial meshes),
-    # this is fast enough and avoids reinventing the wheel
-    combos = list(combinations(range(n), k))
-    return torch.tensor(combos, dtype=torch.int64)
 
 
 def categorize_facets_by_count(
@@ -239,10 +204,11 @@ def extract_candidate_facets(
 
     ### Generate combination indices for selecting vertices
     # Shape: (n_combinations, n_vertices_per_subsimplex)
-    combination_indices = _generate_combination_indices(
-        n_vertices_per_cell,
-        n_vertices_per_subsimplex,
-    ).to(cells.device)
+    combination_indices = torch.tensor(
+        list(combinations(range(n_vertices_per_cell), n_vertices_per_subsimplex)),
+        dtype=torch.int64,
+        device=cells.device,
+    )
     n_combinations = len(combination_indices)
 
     ### Extract sub-simplices using combination indices
