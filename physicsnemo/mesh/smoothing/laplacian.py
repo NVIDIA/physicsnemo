@@ -358,12 +358,9 @@ def _detect_sharp_edges(
     ### Map candidate edges to unique edges via searchsorted (O(m log n), O(n) memory)
     candidate_to_unique, matched = find_edges_in_reference(edges, candidate_edges)
 
-    ### Count cells per edge
-    edge_cell_counts = torch.zeros(len(edges), dtype=torch.long, device=device)
-    edge_cell_counts.scatter_add_(
-        0,
-        candidate_to_unique,
-        matched.long(),  # only count matched candidates
+    ### Count cells per edge (only matched candidates contribute)
+    edge_cell_counts = torch.bincount(
+        candidate_to_unique[matched], minlength=len(edges)
     )
 
     ### Find interior edges (exactly 2 adjacent cells)

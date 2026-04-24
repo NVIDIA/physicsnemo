@@ -614,9 +614,7 @@ class BVH:
                     all_query_indices_list.append(expanded_q)
                     all_cell_indices_list.append(expanded_c)
 
-                    candidates_count.scatter_add_(
-                        0, expanded_q, torch.ones_like(expanded_q)
-                    )
+                    candidates_count += torch.bincount(expanded_q, minlength=n_queries)
 
             ### Handle internal-node hits: expand to children
             is_internal = ~is_leaf

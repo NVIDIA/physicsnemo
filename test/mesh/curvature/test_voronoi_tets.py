@@ -14,19 +14,97 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for Voronoi volume computation on tetrahedral meshes."""
+"""Tests for dual 0-cell volume (Voronoi region) computation on simplicial meshes."""
 
 import pytest
 import torch
 
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.geometry.dual_meshes import get_or_compute_dual_volumes_0
+from physicsnemo.mesh.geometry.dual_meshes import (
+    compute_dual_volumes_0,
+    get_or_compute_dual_volumes_0,
+)
 
 
 @pytest.fixture
 def device():
     """Test on CPU."""
     return "cpu"
+
+
+class TestDualVolumes1D:
+    """Tests for dual volumes on 1D edge meshes.
+
+    For 1D manifolds, each vertex gets half the length of each incident edge:
+        V(v) = sum_{edges containing v} |edge| / 2
+    """
+
+    def test_two_edges_nonuniform(self, device):
+        """Test 1D dual volumes on a chain with non-uniform edge lengths.
+
+        Vertices at x = [0, 1, 3], edges [[0,1], [1,2]].
+        Edge lengths: 1.0, 2.0.
+        Expected dual volumes:
+            vertex 0 (boundary): 1.0 / 2 = 0.5
+            vertex 1 (interior): 1.0/2 + 2.0/2 = 1.5
+            vertex 2 (boundary): 2.0 / 2 = 1.0
+        """
+        points = torch.tensor([[0.0], [1.0], [3.0]], device=device)
+        cells = torch.tensor([[0, 1], [1, 2]], dtype=torch.long, device=device)
+        mesh = Mesh(points=points, cells=cells)
+
+        dual_vols = compute_dual_volumes_0(mesh)
+
+        expected = torch.tensor([0.5, 1.5, 1.0], device=device)
+        torch.testing.assert_close(dual_vols, expected)
+
+    def test_uniform_chain_conservation(self, device):
+        """Sum of dual volumes equals total mesh length (tiling property)."""
+        points = torch.tensor([[0.0], [1.0], [2.0], [3.0]], device=device)
+        cells = torch.tensor([[0, 1], [1, 2], [2, 3]], dtype=torch.long, device=device)
+        mesh = Mesh(points=points, cells=cells)
+
+        dual_vols = compute_dual_volumes_0(mesh)
+
+        expected = torch.tensor([0.5, 1.0, 1.0, 0.5], device=device)
+        torch.testing.assert_close(dual_vols, expected)
+        torch.testing.assert_close(dual_vols.sum(), mesh.cell_areas.sum())
+
+    def test_1d_curve_in_3d(self, device):
+        """1D edges embedded in 3D space."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [3.0, 4.0, 0.0], [3.0, 4.0, 5.0]],
+            device=device,
+        )
+        cells = torch.tensor([[0, 1], [1, 2]], dtype=torch.long, device=device)
+        mesh = Mesh(points=points, cells=cells)
+
+        dual_vols = compute_dual_volumes_0(mesh)
+
+        # Edge lengths: sqrt(9+16) = 5.0, sqrt(25) = 5.0
+        expected = torch.tensor([2.5, 5.0, 2.5], device=device)
+        torch.testing.assert_close(dual_vols, expected)
+        torch.testing.assert_close(dual_vols.sum(), mesh.cell_areas.sum())
+
+    def test_single_edge(self, device):
+        """Single edge: each endpoint gets half the length."""
+        points = torch.tensor([[0.0], [4.0]], device=device)
+        cells = torch.tensor([[0, 1]], dtype=torch.long, device=device)
+        mesh = Mesh(points=points, cells=cells)
+
+        dual_vols = compute_dual_volumes_0(mesh)
+
+        expected = torch.tensor([2.0, 2.0], device=device)
+        torch.testing.assert_close(dual_vols, expected)
+
+    def test_isolated_vertex(self, device):
+        """Vertex not in any edge gets zero dual volume."""
+        points = torch.tensor([[0.0], [1.0], [99.0]], device=device)
+        cells = torch.tensor([[0, 1]], dtype=torch.long, device=device)
+        mesh = Mesh(points=points, cells=cells)
+
+        dual_vols = compute_dual_volumes_0(mesh)
+        assert dual_vols[2] == 0.0
 
 
 class TestVoronoiVolumes3D:
