@@ -108,15 +108,19 @@ def main(
     n_latent_scalars: int = 8,
     n_latent_vectors: int = 4,
     n_spherical_harmonics: int = 4,
-    theta: float = 2.0,
+    theta: float = 1.0,
     leaf_size: int = 1,
     n_faces_per_boundary: int = 80_000,
     patience_steps: int = 1600,
     use_profiler: bool = True,
-    make_images: bool = True,
+    make_images: bool = False,
     save_every: int = 1,
     use_mlflow: bool = True,
     mlflow_experiment: str = "GLOBE_DrivAerML",
+    gradient_clip_norm: float | None = 1.0,
+    network_type: Literal["pade", "mlp"] = "pade",
+    self_regularization_beta: float | None = 0.01,
+    latent_compression_scale: float | None = 100.0,
 ):
     """Train GLOBE on DrivAerML.
 
@@ -267,6 +271,9 @@ def main(
         n_spherical_harmonics=n_spherical_harmonics,
         theta=theta,
         leaf_size=leaf_size,
+        network_type=network_type,
+        self_regularization_beta=self_regularization_beta,
+        latent_compression_scale=latent_compression_scale,
     ).to(device)
 
     logger0.info(f"{output_dir.name=!r}")
@@ -481,6 +488,11 @@ def main(
                         warnings.warn(f"{batch_loss=} at: {dist.rank=}, {epoch=}")
                     with record_function("backward"):
                         scaler.scale(batch_loss).backward()
+                    if gradient_clip_norm is not None:
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(
+                            model.parameters(), max_norm=gradient_clip_norm
+                        )
                     with record_function("optimizer_step"):
                         scaler.step(optimizer)
                         scaler.update()
