@@ -24,8 +24,9 @@ common branch/trunk/decoder pattern:
 - ``mionet``, ``fourier_mionet`` — two-branch multi-input variants.
 - ``tno`` — Temporal Neural Operator (branch2 = previous solution).
 
-Both 2D and 3D spatial versions are provided.  See the package README for
-standalone usage examples.
+Both 2D and 3D spatial versions are provided.  :class:`DeepONetWrapper` and
+:class:`DeepONet3DWrapper` are the recommended entry points; see their class
+docstrings for usage examples and the branch/trunk configuration schema.
 """
 
 from .branches import MLPBranch, SpatialBranch, SpatialBranch3D, TrunkNet

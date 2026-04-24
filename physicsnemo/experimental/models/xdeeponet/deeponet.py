@@ -57,6 +57,7 @@ from typing import Any, Dict, Optional
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float
 from torch import Tensor
 
 from physicsnemo.core.meta import ModelMetaData
@@ -296,6 +297,23 @@ class DeepONet(Module):
     torch.Tensor
         Operator output of shape :math:`(B, H, W, T)` for spatial branches
         or :math:`(B, T)` for MLP branches.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.experimental.models.xdeeponet import DeepONet
+    >>> model = DeepONet(
+    ...     variant="u_deeponet",
+    ...     width=64,
+    ...     branch1_config={
+    ...         "encoder": {"type": "linear"},
+    ...         "layers": {"num_unet_layers": 1, "kernel_size": 3},
+    ...     },
+    ...     trunk_config={"hidden_width": 64, "num_layers": 4},
+    ... )
+    >>> x_branch = torch.randn(2, 32, 32, 5)   # (B, H, W, C)
+    >>> x_time = torch.linspace(0, 1, 3).unsqueeze(-1)   # (T, 1)
+    >>> out = model(x_branch, x_time)          # (2, 32, 32, 3)
     """
 
     VALID_VARIANTS = _VALID_VARIANTS
@@ -512,13 +530,18 @@ class DeepONet(Module):
 
     def forward(
         self,
-        x_branch1: Tensor,
-        x_time: Tensor,
-        x_branch2: Optional[Tensor] = None,
-    ) -> Tensor:
+        x_branch1: Float[Tensor, "..."],
+        x_time: Float[Tensor, "..."],
+        x_branch2: Optional[Float[Tensor, "..."]] = None,
+    ) -> Float[Tensor, "..."]:
         """Forward pass through the DeepONet.
 
-        See class docstring for input/output shapes.
+        See class docstring for input/output shapes.  ``x_branch1`` accepts
+        either 2D ``(B, D_in)`` (MLP branches) or 4D ``(B, H, W, C)``
+        (spatial branches); ``x_time`` accepts 1D ``(T,)`` or 2D
+        ``(T, D_trunk)``, so the jaxtyping annotation is the unconstrained
+        ``"..."`` shape.  Strict shape validation is performed at the top
+        of this method under a :func:`torch.compiler.is_compiling` guard.
         """
         if not torch.compiler.is_compiling():
             if x_branch1.ndim not in (2, 4):
@@ -638,6 +661,23 @@ class DeepONet3D(Module):
     torch.Tensor
         Operator output of shape :math:`(B, X, Y, Z, T)` for spatial
         branches or :math:`(B, T)` for MLP branches.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.experimental.models.xdeeponet import DeepONet3D
+    >>> model = DeepONet3D(
+    ...     variant="u_deeponet",
+    ...     width=64,
+    ...     branch1_config={
+    ...         "encoder": {"type": "linear"},
+    ...         "layers": {"num_unet_layers": 1, "kernel_size": 3},
+    ...     },
+    ...     trunk_config={"hidden_width": 64, "num_layers": 4},
+    ... )
+    >>> x_branch = torch.randn(1, 16, 16, 16, 5)   # (B, X, Y, Z, C)
+    >>> x_time = torch.linspace(0, 1, 2).unsqueeze(-1)
+    >>> out = model(x_branch, x_time)          # (1, 16, 16, 16, 2)
     """
 
     VALID_VARIANTS = _VALID_VARIANTS
@@ -855,13 +895,17 @@ class DeepONet3D(Module):
 
     def forward(
         self,
-        x_branch1: Tensor,
-        x_time: Tensor,
-        x_branch2: Optional[Tensor] = None,
-    ) -> Tensor:
+        x_branch1: Float[Tensor, "..."],
+        x_time: Float[Tensor, "..."],
+        x_branch2: Optional[Float[Tensor, "..."]] = None,
+    ) -> Float[Tensor, "..."]:
         """Forward pass through the 3D DeepONet.
 
-        See class docstring for input/output shapes.
+        See class docstring for input/output shapes.  ``x_branch1`` accepts
+        either 2D ``(B, D_in)`` (MLP branches) or 5D ``(B, X, Y, Z, C)``
+        (spatial branches); ``x_time`` accepts 1D ``(T,)`` or 2D
+        ``(T, D_trunk)``.  Strict shape validation is performed at the top
+        of this method under a :func:`torch.compiler.is_compiling` guard.
         """
         if not torch.compiler.is_compiling():
             if x_branch1.ndim not in (2, 5):

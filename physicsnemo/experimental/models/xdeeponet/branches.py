@@ -175,6 +175,14 @@ class TrunkNet(nn.Module):
     torch.Tensor
         Encoded coordinates of shape :math:`(T, D_{out})` where
         :math:`D_{out}` equals ``out_features``.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.experimental.models.xdeeponet import TrunkNet
+    >>> trunk = TrunkNet(in_features=1, out_features=64, hidden_width=64, num_layers=4)
+    >>> t = torch.linspace(0, 1, 10).unsqueeze(-1)   # (10, 1)
+    >>> phi = trunk(t)                                # (10, 64)
     """
 
     def __init__(
@@ -255,6 +263,14 @@ class MLPBranch(nn.Module):
     torch.Tensor
         Encoded features of shape :math:`(B, D_{out})` where
         :math:`D_{out}` equals ``out_features``.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.experimental.models.xdeeponet import MLPBranch
+    >>> branch = MLPBranch(out_features=64, hidden_width=64, num_layers=3)
+    >>> x = torch.randn(2, 128)
+    >>> out = branch(x)                               # (2, 64)
     """
 
     def __init__(
@@ -355,6 +371,16 @@ class SpatialBranch(nn.Module):
     torch.Tensor
         Channels-last output of shape :math:`(B, H, W, D)` where
         :math:`D` equals ``width``.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.experimental.models.xdeeponet import SpatialBranch
+    >>> branch = SpatialBranch(
+    ...     in_channels=5, width=64, num_unet_layers=1, kernel_size=3
+    ... )
+    >>> x = torch.randn(2, 32, 32, 5)   # (B, H, W, C)
+    >>> out = branch(x)                  # (2, 32, 32, 64)
     """
 
     def __init__(
@@ -497,6 +523,16 @@ class SpatialBranch3D(nn.Module):
     torch.Tensor
         Channels-last output of shape :math:`(B, X, Y, Z, D)` where
         :math:`D` equals ``width``.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.experimental.models.xdeeponet import SpatialBranch3D
+    >>> branch = SpatialBranch3D(
+    ...     in_channels=5, width=64, num_unet_layers=1, kernel_size=3
+    ... )
+    >>> x = torch.randn(1, 16, 16, 16, 5)   # (B, X, Y, Z, C)
+    >>> out = branch(x)                      # (1, 16, 16, 16, 64)
     """
 
     def __init__(

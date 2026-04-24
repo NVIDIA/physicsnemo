@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 import torch
+from jaxtyping import Float
 from torch import Tensor
 
 from physicsnemo.core.meta import ModelMetaData
@@ -118,6 +119,22 @@ class DeepONetWrapper(Module):
         Operator output of shape :math:`(B, H, W, T_{out})` where
         :math:`T_{out} = K` when ``target_times`` is given and
         :math:`T_{out} = T` otherwise.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.experimental.models.xdeeponet import DeepONetWrapper
+    >>> model = DeepONetWrapper(
+    ...     variant="u_deeponet",
+    ...     width=64,
+    ...     branch1_config={
+    ...         "encoder": {"type": "linear", "activation_fn": "tanh"},
+    ...         "layers": {"num_unet_layers": 1, "kernel_size": 3},
+    ...     },
+    ...     trunk_config={"input_type": "time", "hidden_width": 64, "num_layers": 4},
+    ... )
+    >>> x = torch.randn(2, 32, 32, 3, 5)   # (B, H, W, T, C)
+    >>> out = model(x)                     # (2, 32, 32, 3)
     """
 
     def __init__(
@@ -170,13 +187,17 @@ class DeepONetWrapper(Module):
 
     def forward(
         self,
-        x: Tensor,
-        x_branch2: Optional[Tensor] = None,
-        target_times: Optional[Tensor] = None,
-    ) -> Tensor:
+        x: Float[Tensor, "batch height width time channels"],
+        x_branch2: Optional[Float[Tensor, "..."]] = None,
+        target_times: Optional[Float[Tensor, "..."]] = None,
+    ) -> Float[Tensor, "batch height width time_out"]:
         """Forward pass through the 2D wrapper.
 
-        See class docstring for input/output shapes.
+        See class docstring for input/output shapes.  ``x_branch2`` and
+        ``target_times`` accept multiple ranks (see Forward section); their
+        strict shapes are validated at the top of this method under the
+        :func:`torch.compiler.is_compiling` guard, so the jaxtyping
+        annotation uses the unconstrained ``"..."`` shape for those.
         """
         if not torch.compiler.is_compiling():
             if x.ndim != 5:
@@ -259,6 +280,27 @@ class DeepONet3DWrapper(Module):
     -------
     torch.Tensor
         Operator output of shape :math:`(B, X, Y, Z, T_{out})`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.experimental.models.xdeeponet import DeepONet3DWrapper
+    >>> model = DeepONet3DWrapper(
+    ...     variant="tno",
+    ...     width=64,
+    ...     branch1_config={
+    ...         "encoder": {"type": "linear", "activation_fn": "tanh"},
+    ...         "layers": {"num_unet_layers": 1, "kernel_size": 3},
+    ...     },
+    ...     branch2_config={
+    ...         "encoder": {"type": "linear", "activation_fn": "tanh"},
+    ...         "layers": {"num_unet_layers": 1, "kernel_size": 3},
+    ...     },
+    ...     trunk_config={"input_type": "time", "hidden_width": 64, "num_layers": 4},
+    ... )
+    >>> x = torch.randn(1, 16, 16, 16, 2, 5)   # (B, X, Y, Z, T, C)
+    >>> prev = torch.randn(1, 16, 16, 16, 1)   # previous solution (TNO branch2)
+    >>> out = model(x, x_branch2=prev)          # (1, 16, 16, 16, 2)
     """
 
     def __init__(
@@ -311,13 +353,16 @@ class DeepONet3DWrapper(Module):
 
     def forward(
         self,
-        x: Tensor,
-        x_branch2: Optional[Tensor] = None,
-        target_times: Optional[Tensor] = None,
-    ) -> Tensor:
+        x: Float[Tensor, "batch X Y Z time channels"],
+        x_branch2: Optional[Float[Tensor, "..."]] = None,
+        target_times: Optional[Float[Tensor, "..."]] = None,
+    ) -> Float[Tensor, "batch X Y Z time_out"]:
         """Forward pass through the 3D wrapper.
 
-        See class docstring for input/output shapes.
+        See class docstring for input/output shapes.  ``x_branch2`` and
+        ``target_times`` accept multiple ranks; their strict shapes are
+        validated at the top of this method under the
+        :func:`torch.compiler.is_compiling` guard.
         """
         if not torch.compiler.is_compiling():
             if x.ndim != 6:
