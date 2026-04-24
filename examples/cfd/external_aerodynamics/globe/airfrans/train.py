@@ -89,7 +89,7 @@ def main(
         "default", "max-autotune-no-cudagraphs"
     ] = "max-autotune-no-cudagraphs",
     n_prediction_points: int = 2048,
-    learning_rate: float = 1e-2,
+    learning_rate: float = 1e-3,
     weight_decay: float = 1e-4,
     use_muon: bool = True,
     muon_method: Literal["original", "match_rms_adamw"] = "match_rms_adamw",
@@ -107,9 +107,13 @@ def main(
     patience_steps: int = 1600,
     use_profiler: bool = True,
     make_images: bool = True,
-    save_every: int = 25,
+    save_every: int = 5,
     use_mlflow: bool = True,
     mlflow_experiment: str = "GLOBE_AirFRANS",
+    gradient_clip_norm: float | None = 1.0,
+    network_type: Literal["pade", "smooth_pade", "mlp"] = "pade",
+    self_regularization_beta: float | None = 0.01,
+    latent_compression_scale: float | None = 100.0,
 ):
     """Train the GLOBE model on AirFRANS dataset.
 
@@ -263,6 +267,9 @@ def main(
         n_spherical_harmonics=n_spherical_harmonics,
         theta=theta,
         leaf_size=leaf_size,
+        network_type=network_type,
+        self_regularization_beta=self_regularization_beta,
+        latent_compression_scale=latent_compression_scale,
     ).to(device)
 
     logger0.info(f"{output_dir.name=!r}")
@@ -523,6 +530,11 @@ def main(
                         warnings.warn(f"{batch_loss=} at: {dist.rank=}, {epoch=}")
                     with record_function("backward"):
                         scaler.scale(batch_loss).backward()
+                    if gradient_clip_norm is not None:
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(
+                            model.parameters(), max_norm=gradient_clip_norm
+                        )
                     with record_function("optimizer_step"):
                         scaler.step(optimizer)
                         scaler.update()
