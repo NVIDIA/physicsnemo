@@ -44,10 +44,12 @@ r = (
     + 0.15 * np.cos(3 * theta_boundary + 1.7)
     + 0.10 * np.cos(5 * theta_boundary + 0.8)
 )
-boundary_coords = np.column_stack([
-    r * np.cos(theta_boundary),
-    r * np.sin(theta_boundary),
-])
+boundary_coords = np.column_stack(
+    [
+        r * np.cos(theta_boundary),
+        r * np.sin(theta_boundary),
+    ]
+)
 # Cell centroids and outward normals from consecutive coordinate pairs
 src_centroids_np = (boundary_coords[:-1] + boundary_coords[1:]) / 2
 tangents = boundary_coords[1:] - boundary_coords[:-1]
@@ -178,7 +180,9 @@ r_tree = (
     + 0.15 * np.cos(3 * theta_tree + 1.7)
     + 0.10 * np.cos(5 * theta_tree + 0.8)
 )
-tree_coords = np.column_stack([r_tree * np.cos(theta_tree), r_tree * np.sin(theta_tree)])
+tree_coords = np.column_stack(
+    [r_tree * np.cos(theta_tree), r_tree * np.sin(theta_tree)]
+)
 tree_viz_np = (tree_coords[:-1] + tree_coords[1:]) / 2
 tree_viz_points = torch.as_tensor(tree_viz_np, device=device, dtype=torch.float32)
 tree_viz_tree = ClusterTree.from_points(tree_viz_points, leaf_size=1)
@@ -264,13 +268,22 @@ for node in sorted(tree_nodes, key=lambda n: n["depth"]):
                 ch_cy = (ch["aabb_min"][1] + ch["aabb_max"][1]) / 2
                 ch_z = (max_depth - ch["depth"]) * Z_SPACING
                 ax.plot(
-                    [cx, ch_cx], [cy, ch_cy], [z, ch_z],
-                    color="gray", alpha=0.4, linewidth=0.8,
+                    [cx, ch_cx],
+                    [cy, ch_cy],
+                    [z, ch_z],
+                    color="gray",
+                    alpha=0.4,
+                    linewidth=0.8,
                 )
 
 ax.scatter(
-    *tree_viz_np.T, zs=0, zdir="z",
-    color="black", s=8, depthshade=False, zorder=5,
+    *tree_viz_np.T,
+    zs=0,
+    zdir="z",
+    color="black",
+    s=8,
+    depthshade=False,
+    zorder=5,
 )
 ax.set_xlabel(r"$x$")
 ax.set_ylabel(r"$y$")
@@ -307,7 +320,10 @@ MODE_COLORS = {
 
 print("Evaluating kernel on grid (theta=0, exact)...")
 exact_result = evaluate_on_grid(
-    kernel, theta=0.0, cluster_tree=source_tree, target_tree=grid_target_tree,
+    kernel,
+    theta=0.0,
+    cluster_tree=source_tree,
+    target_tree=grid_target_tree,
 )
 
 grid_results: dict[tuple[bool, bool], dict[float, dict[str, np.ndarray]]] = {}
@@ -336,9 +352,7 @@ col_labels = ["Exact"] + [rf"$\theta = {th}$" for th in THETA_VALUES]
 n_cols = len(col_labels)
 n_rows = len(MODES)
 
-phi_scale = float(
-    np.max(np.abs(np.percentile(exact_result["phi"], [0.1, 99.9])))
-)
+phi_scale = float(np.max(np.abs(np.percentile(exact_result["phi"], [0.1, 99.9]))))
 levels = np.linspace(-phi_scale, phi_scale, 31)
 
 fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.5 * n_cols, 3.5 * n_rows))
@@ -346,9 +360,7 @@ for row, mode in enumerate(MODES):
     phi_fields = [exact_result["phi"]] + [
         grid_results[mode][th]["phi"] for th in THETA_VALUES
     ]
-    for col, (ax, label, phi) in enumerate(
-        zip(axes[row], col_labels, phi_fields)
-    ):
+    for col, (ax, label, phi) in enumerate(zip(axes[row], col_labels, phi_fields)):
         plt.sca(ax)
         p.contour(
             X_grid,
@@ -394,15 +406,15 @@ all_error_arrays = [
     for th in THETA_VALUES
 ]
 positive_vals = np.concatenate([e[e > 0].ravel() for e in all_error_arrays])
-vmin = (
-    max(float(positive_vals.min()), 1e-8) if len(positive_vals) > 0 else 1e-8
-)
+vmin = max(float(positive_vals.min()), 1e-8) if len(positive_vals) > 0 else 1e-8
 vmax = float(max(e.max() for e in all_error_arrays))
 
 n_cols = len(THETA_VALUES)
 n_rows = len(MODES)
 fig, axes = plt.subplots(
-    n_rows, n_cols, figsize=(3.5 * n_cols + 1, 3.5 * n_rows),
+    n_rows,
+    n_cols,
+    figsize=(3.5 * n_cols + 1, 3.5 * n_rows),
     gridspec_kw={"right": 0.88},
 )
 for row, mode in enumerate(MODES):
@@ -410,9 +422,7 @@ for row, mode in enumerate(MODES):
         np.abs(grid_results[mode][th]["phi"] - exact_result["phi"])
         for th in THETA_VALUES
     ]
-    for col, (ax, theta, err) in enumerate(
-        zip(axes[row], THETA_VALUES, errors)
-    ):
+    for col, (ax, theta, err) in enumerate(zip(axes[row], THETA_VALUES, errors)):
         im = ax.pcolormesh(
             X_grid,
             Y_grid,
@@ -425,9 +435,14 @@ for row, mode in enumerate(MODES):
         if row == 0:
             ax.set_title(rf"$\theta = {theta}$")
         ax.text(
-            0.98, 0.02, f"max = {err.max():.2e}",
-            transform=ax.transAxes, ha="right", va="bottom",
-            fontsize=8, color="white",
+            0.98,
+            0.02,
+            f"max = {err.max():.2e}",
+            transform=ax.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=8,
+            color="white",
             bbox=dict(facecolor="black", alpha=0.5, pad=2),
         )
         ax.set_aspect("equal")
@@ -444,12 +459,11 @@ for row, mode in enumerate(MODES):
 
 cbar_ax = fig.add_axes([0.90, 0.12, 0.02, 0.76])
 fig.colorbar(
-    im, cax=cbar_ax,
+    im,
+    cax=cbar_ax,
     label=r"$|\phi_\mathrm{BH} - \phi_\mathrm{exact}|$",
 )
-fig.suptitle(
-    r"Approximation error $|\phi_\mathrm{BH} - \phi_\mathrm{exact}|$", y=1.02
-)
+fig.suptitle(r"Approximation error $|\phi_\mathrm{BH} - \phi_\mathrm{exact}|$", y=1.02)
 p.show_plot(show=False)
 save_figure(fig, stem="error_fields")
 plt.show()
@@ -495,9 +509,7 @@ for expand, src_leaves in MODES:
             expand_far_targets=expand,
             source_leaves_only=src_leaves,
         )
-        n_evals.append(
-            plan.n_near + plan.n_nf + plan.n_fn + plan.n_far_nodes
-        )
+        n_evals.append(plan.n_near + plan.n_nf + plan.n_fn + plan.n_far_nodes)
 
         with torch.no_grad():
             result_at_sweep = kernel(
@@ -534,8 +546,11 @@ for mode in MODES:
     c = MODE_COLORS[mode]
     d = sweep_data[mode]
     ax1.loglog(
-        theta_nonzero, [d["mean_errors"][i] for i in idx], "o-",
-        color=c, label=MODE_LABELS[mode],
+        theta_nonzero,
+        [d["mean_errors"][i] for i in idx],
+        "o-",
+        color=c,
+        label=MODE_LABELS[mode],
     )
 ax1.set_xlabel(r"$\theta$")
 ax1.set_ylabel(r"Mean $|\phi_\mathrm{BH} - \phi_\mathrm{exact}|$")
@@ -545,15 +560,21 @@ ax1.grid(True, alpha=0.3)
 
 ### Center: cost vs theta
 ax2.axhline(
-    n_dense, color="gray", linestyle="--", alpha=0.5,
+    n_dense,
+    color="gray",
+    linestyle="--",
+    alpha=0.5,
     label=f"Dense ({n_dense:,})",
 )
 for mode in MODES:
     c = MODE_COLORS[mode]
     d = sweep_data[mode]
     ax2.loglog(
-        theta_nonzero, [d["n_kernel_evals"][i] for i in idx], "^-",
-        color=c, label=MODE_LABELS[mode],
+        theta_nonzero,
+        [d["n_kernel_evals"][i] for i in idx],
+        "^-",
+        color=c,
+        label=MODE_LABELS[mode],
     )
 ax2.set_xlabel(r"$\theta$")
 ax2.set_ylabel("Kernel evaluations")
@@ -568,8 +589,11 @@ for mode in MODES:
     evals_nz = [d["n_kernel_evals"][i] for i in idx]
     errs_nz = [d["mean_errors"][i] for i in idx]
     ax3.loglog(
-        evals_nz, errs_nz, "o-",
-        color=c, label=MODE_LABELS[mode],
+        evals_nz,
+        errs_nz,
+        "o-",
+        color=c,
+        label=MODE_LABELS[mode],
     )
     for j, label_idx in enumerate([0, -1]):
         th = theta_nonzero[label_idx]
@@ -578,7 +602,8 @@ for mode in MODES:
             xy=(evals_nz[label_idx], errs_nz[label_idx]),
             textcoords="offset points",
             xytext=(8, 8 if j == 0 else -12),
-            fontsize=7, color=c,
+            fontsize=7,
+            color=c,
             arrowprops=dict(arrowstyle="-", color=c, alpha=0.4, lw=0.8),
         )
 ax3.set_xlabel("Kernel evaluations")
