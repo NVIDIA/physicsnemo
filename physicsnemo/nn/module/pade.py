@@ -228,6 +228,8 @@ class Pade(Module):
         denominator = apply_power(raw_denominator, self.denominator_order, even=True)
 
         if self.self_regularization_beta is not None:
-            denominator = denominator + self.self_regularization_beta * raw_numerator.pow(2)
+            denominator = (
+                denominator + self.self_regularization_beta * raw_numerator.pow(2)
+            )
 
         return numerator / (1 + denominator)

@@ -149,6 +149,7 @@ class Kernel(Module):
         network_type: Literal["pade", "mlp"] = "pade",
         spectral_norm: bool = False,
         use_gradient_checkpointing: bool = True,
+        self_regularization_beta: float | None = None,
     ):
         if hidden_layer_sizes is None:
             hidden_layer_sizes = [64]
@@ -182,6 +183,7 @@ class Kernel(Module):
                 denominator_order=2,
                 use_separate_mlps=False,
                 share_denominator_across_channels=False,
+                self_regularization_beta=self_regularization_beta,
             )
         elif network_type == "mlp":
             self.network = nn.Sequential(
@@ -798,6 +800,7 @@ class BarnesHutKernel(Kernel):
         spectral_norm: bool = False,
         use_gradient_checkpointing: bool = True,
         leaf_size: int = 1,
+        self_regularization_beta: float | None = None,
     ):
         super().__init__(
             n_spatial_dims=n_spatial_dims,
@@ -810,6 +813,7 @@ class BarnesHutKernel(Kernel):
             network_type=network_type,
             spectral_norm=spectral_norm,
             use_gradient_checkpointing=use_gradient_checkpointing,
+            self_regularization_beta=self_regularization_beta,
         )
         self.leaf_size = leaf_size
 
@@ -1564,6 +1568,7 @@ class MultiscaleKernel(Module):
         spectral_norm: bool = False,
         use_gradient_checkpointing: bool = True,
         leaf_size: int = 1,
+        self_regularization_beta: float | None = None,
     ):
         super().__init__()
 
@@ -1609,6 +1614,7 @@ class MultiscaleKernel(Module):
                     spectral_norm=spectral_norm,
                     use_gradient_checkpointing=use_gradient_checkpointing,
                     leaf_size=leaf_size,
+                    self_regularization_beta=self_regularization_beta,
                 )
                 for name in reference_length_names
             }

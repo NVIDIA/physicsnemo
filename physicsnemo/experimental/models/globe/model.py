@@ -17,7 +17,7 @@
 import operator
 from dataclasses import dataclass
 from functools import reduce
-from typing import Sequence
+from typing import Literal, Sequence
 
 import torch
 import torch.nn as nn
@@ -222,6 +222,9 @@ class GLOBE(Module):
         n_spherical_harmonics: int = 4,
         theta: float = 1.0,
         leaf_size: int = 1,
+        network_type: Literal["pade", "mlp"] = "pade",
+        self_regularization_beta: float | None = None,
+        latent_compression_scale: float | None = None,
         expand_far_targets: bool = False,
     ):
         if hidden_layer_sizes is None:
@@ -262,6 +265,9 @@ class GLOBE(Module):
         self.n_spherical_harmonics = n_spherical_harmonics
         self.theta = theta
         self.leaf_size = leaf_size
+        self.latent_compression_scale = latent_compression_scale
+        self.network_type = network_type
+        self.self_regularization_beta = self_regularization_beta
         self.expand_far_targets = expand_far_targets
 
         ### Build the intermediate output-field rank spec for communication
@@ -297,6 +303,8 @@ class GLOBE(Module):
                         hidden_layer_sizes=hidden_layer_sizes,
                         n_spherical_harmonics=n_spherical_harmonics,
                         leaf_size=leaf_size,
+                        network_type=network_type,
+                        self_regularization_beta=self_regularization_beta,
                     )
                     for bc_type in boundary_condition_names
                 }
@@ -566,6 +574,21 @@ class GLOBE(Module):
                 dual_plans=comm_plans[bc_type],
                 source_areas=source_areas,
             )
+            ### Compress latent features to prevent the communication-layer
+            ### amplification loop from producing O(10^4) intermediate values.
+            ### Uses arcsinh for C-infinity smooth logarithmic compression.
+            if self.latent_compression_scale is not None:
+                C = self.latent_compression_scale
+                eps_sq = self.smoothing_radius**2
+
+                def _compress(t: torch.Tensor) -> torch.Tensor:
+                    if t.ndim == 1:
+                        return C * torch.arcsinh(t / C)
+                    r = (t.pow(2).sum(dim=-1, keepdim=True) + eps_sq).sqrt()
+                    return t * (C * torch.arcsinh(r / C) / r)
+
+                result_td = result_td.apply(_compress)
+
             new_cell_data = TensorDict(
                 {"physical": mesh.cell_data["physical"]},
                 batch_size=torch.Size([mesh.n_cells]),
