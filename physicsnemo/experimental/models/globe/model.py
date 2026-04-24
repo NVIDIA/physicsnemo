@@ -609,6 +609,7 @@ class GLOBE(Module):
         boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
         reference_lengths: dict[str, torch.Tensor],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None = None,
+        prediction_chunk_size: int | Literal["auto"] | None = "auto",
     ) -> Mesh[0, "n"]:  # ty: ignore[unresolved-reference]
         r"""Evaluate GLOBE model to predict fields at target points.
 
@@ -621,6 +622,10 @@ class GLOBE(Module):
            :meth:`_evaluate_communication_hyperlayer`.
         3. **Final evaluation**: Evaluate the last hyperlayer at
            ``prediction_points`` and apply per-field calibration transforms.
+           When the number of prediction points exceeds
+           ``prediction_chunk_size``, Phase 3 is executed in chunks to
+           bound memory usage.  The communication layers (Phase 2) run
+           once and their results are reused across all chunks.
 
         Parameters
         ----------
@@ -634,6 +639,13 @@ class GLOBE(Module):
         global_data : TensorDict or None, optional, default=None
             Nondimensional conditioning features. Leaf keys and ranks must
             match ``global_data_ranks``. Passed through to the output Mesh.
+        prediction_chunk_size : int or "auto" or None, optional, default="auto"
+            Maximum number of prediction points to evaluate in a single
+            pass through the final hyperlayer.  ``"auto"`` (the default)
+            uses the total number of boundary faces across all BC types,
+            which gives the final evaluation roughly the same memory
+            footprint as the communication layers.  ``None`` disables
+            chunking, evaluating all prediction points in one pass.
 
         Returns
         -------
@@ -735,26 +747,55 @@ class GLOBE(Module):
         # At 800k faces, near-pair indices can be ~3 GB of int64.
         del comm_plans
 
-        ### Phase 3: Final evaluation at prediction points.
-        with record_function("globe::build_prediction_plans"):
-            pred_target_tree, pred_plans = self._build_prediction_plans(
-                cluster_trees, prediction_points
+        ### Phase 3: Final evaluation at prediction points (chunked).
+        # When n_prediction_points > chunk_size, prediction points are
+        # split into chunks to bound memory.  Each chunk builds its own
+        # target tree and dual plans (cheap), then evaluates the final
+        # hyperlayer.  Results are concatenated at the end.
+        n_points = prediction_points.shape[0]
+        if prediction_chunk_size == "auto":
+            prediction_chunk_size = sum(
+                m.n_cells for m in boundary_meshes.values()
             )
+        elif prediction_chunk_size is None:
+            prediction_chunk_size = n_points
+        else:
+            if not (isinstance(prediction_chunk_size, int) and prediction_chunk_size > 0):
+                raise ValueError(
+                    f"Expected prediction_chunk_size to be a positive integer or 'auto' or None, "
+                    f"got {prediction_chunk_size=!r}."
+                )
 
-        with record_function("globe::final_evaluation"):
-            result: TensorDict[str, Float[torch.Tensor, "n_points ..."]] = self._evaluate_hyperlayer(
-                layer_idx=self.n_communication_hyperlayers,
-                target_points=prediction_points,
-                source_meshes=boundary_meshes,
-                reference_lengths=reference_lengths,
-                global_data=global_data,
-                cluster_trees=cluster_trees,
-                target_tree=pred_target_tree,
-                dual_plans=pred_plans,
-                source_areas=bc_areas,
-            )
+        chunk_results: list[TensorDict] = []
+        for start in range(0, n_points, prediction_chunk_size):
+            chunk_pts = prediction_points[start : start + prediction_chunk_size]
 
-        del pred_plans, pred_target_tree
+            with record_function("globe::build_prediction_plans"):
+                pred_target_tree, pred_plans = self._build_prediction_plans(
+                    cluster_trees, chunk_pts
+                )
+
+            with record_function("globe::final_evaluation"):
+                chunk_result = self._evaluate_hyperlayer(
+                    layer_idx=self.n_communication_hyperlayers,
+                    target_points=chunk_pts,
+                    source_meshes=boundary_meshes,
+                    reference_lengths=reference_lengths,
+                    global_data=global_data,
+                    cluster_trees=cluster_trees,
+                    target_tree=pred_target_tree,
+                    dual_plans=pred_plans,
+                    source_areas=bc_areas,
+                )
+
+            del pred_plans, pred_target_tree
+            chunk_results.append(chunk_result)
+
+        result: TensorDict[str, Float[torch.Tensor, "n_points ..."]] = (
+            TensorDict.cat(chunk_results, dim=0)
+            if len(chunk_results) > 1
+            else chunk_results[0]
+        )
 
         ### Wrap as point-cloud Mesh and apply per-field calibration.
         with record_function("globe::calibration"):
