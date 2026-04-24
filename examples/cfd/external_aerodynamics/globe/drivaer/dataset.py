@@ -187,9 +187,7 @@ class DrivAerMLSample:
 
         for bc_type, mesh in self.boundary_meshes.items():
             if bc_type == "vehicle" and randomize_vehicle:
-                mesh._cache["cell", "centroids"] = (
-                    mesh.sample_random_points_on_cells()
-                )
+                mesh._cache["cell", "centroids"] = mesh.sample_random_points_on_cells()
             else:
                 _ = mesh.cell_centroids
             _ = mesh.cell_areas
@@ -766,4 +764,6 @@ if __name__ == "__main__":
     logger.info(f"Reference lengths: {sample.reference_lengths.to_dict()}")
     logger.info(f"Aero coefficients: {sample.aero_coefficients.to_dict()}")
     for bc_name, bc_mesh in sample.boundary_meshes.items():
-        logger.info(f"Boundary '{bc_name}': {bc_mesh.n_points} pts, {bc_mesh.n_cells} cells")
+        logger.info(
+            f"Boundary '{bc_name}': {bc_mesh.n_points} pts, {bc_mesh.n_cells} cells"
+        )

@@ -16,7 +16,6 @@
 
 """MLflow and hyperparameter logging utilities for the GLOBE DrivAerML example."""
 
-
 from pathlib import Path
 from typing import Any
 
