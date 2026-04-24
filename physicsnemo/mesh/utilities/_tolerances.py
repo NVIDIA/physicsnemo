@@ -75,4 +75,4 @@ def safe_eps(dtype: torch.dtype) -> float:
         ``min(torch.finfo(dtype).tiny ** 0.25, torch.finfo(dtype).eps)``.
     """
     info = torch.finfo(dtype)
-    return min(info.tiny ** 0.25, info.eps)
+    return min(info.tiny**0.25, info.eps)

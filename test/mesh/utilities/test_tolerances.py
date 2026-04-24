@@ -16,8 +16,6 @@
 
 """Tests for dtype-aware numerical tolerances."""
 
-import math
-
 import pytest
 import torch
 
@@ -33,7 +31,7 @@ class TestSafeEps:
     def test_matches_formula(self, dtype: torch.dtype) -> None:
         """safe_eps should equal min(tiny ** 0.25, machine_eps)."""
         info = torch.finfo(dtype)
-        expected = min(info.tiny ** 0.25, info.eps)
+        expected = min(info.tiny**0.25, info.eps)
         assert safe_eps(dtype) == expected
 
     def test_positive(self, dtype: torch.dtype) -> None:
