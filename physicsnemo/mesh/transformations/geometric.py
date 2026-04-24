@@ -454,8 +454,8 @@ def transform(
     -----
     Cache Handling:
         - areas: For square invertible matrices:
-            - Full-dimensional meshes: scaled by |det|
-            - Codimension-1 manifolds: per-element scaling using |det| × ||M^{-T} n||
+            - Full-dimensional meshes: scaled by ``|det|``
+            - Codimension-1 manifolds: per-element scaling using ``|det| * ||M^{-T} n||``
             - Higher codimension: invalidated
         - centroids: Always transformed
         - normals: For square invertible matrices, transformed by inverse-transpose

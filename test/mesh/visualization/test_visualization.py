@@ -101,6 +101,7 @@ def test_auto_backend_2d():
     plt.close("all")
 
 
+@pytest.mark.skip("pv Plotter is not working in CI")
 def test_auto_backend_3d():
     """Test auto backend selection for 3D surface mesh."""
     mesh = create_3d_surface_mesh()
@@ -128,6 +129,7 @@ def test_explicit_matplotlib_backend_3d():
     plt.close("all")
 
 
+@pytest.mark.skip("pv Plotter is not working in CI")
 def test_explicit_pyvista_backend_3d():
     """Test explicit PyVista backend for 3D mesh."""
     mesh = create_3d_surface_mesh()
@@ -136,6 +138,7 @@ def test_explicit_pyvista_backend_3d():
     plotter.close()
 
 
+@pytest.mark.skip("pv Plotter is not working in CI")
 def test_pyvista_backend_1d_in_1d():
     """Test PyVista backend with 1D mesh in 1D space [1,1]."""
     # Create 1D mesh in 1D space
@@ -152,6 +155,7 @@ def test_pyvista_backend_1d_in_1d():
     plotter.close()
 
 
+@pytest.mark.skip("pv Plotter is not working in CI")
 def test_pyvista_backend_1d_in_2d():
     """Test PyVista backend with 1D mesh in 2D space [1,2]."""
     # Create 1D mesh in 2D space
@@ -168,6 +172,7 @@ def test_pyvista_backend_1d_in_2d():
     plotter.close()
 
 
+@pytest.mark.skip("pv Plotter is not working in CI")
 def test_pyvista_backend_2d_in_2d():
     """Test PyVista backend with 2D mesh in 2D space [2,2]."""
     # Create 2D mesh in 2D space (triangle in 2D)
@@ -454,6 +459,7 @@ def test_draw_empty_mesh():
     plt.close("all")
 
 
+@pytest.mark.skip("pv Plotter is not working in CI")
 def test_pyvista_with_scalars():
     """Test PyVista backend with scalar coloring."""
     mesh = create_3d_surface_mesh()
@@ -466,6 +472,7 @@ def test_pyvista_with_scalars():
     plotter.close()
 
 
+@pytest.mark.skip("pv Plotter is not working in CI")
 def test_pyvista_with_point_scalars():
     """Test PyVista backend with point scalar coloring."""
     mesh = create_3d_surface_mesh()
@@ -504,6 +511,7 @@ def test_full_workflow_matplotlib():
     plt.close("all")
 
 
+@pytest.mark.skip("pv Plotter is not working in CI")
 def test_full_workflow_pyvista():
     """Test complete workflow with PyVista backend."""
     mesh = create_3d_surface_mesh()
@@ -526,6 +534,7 @@ def test_full_workflow_pyvista():
     plotter.close()
 
 
+@pytest.mark.skip("pv Plotter is not working in CI")
 def test_tetrahedral_mesh_visualization():
     """Test visualization of 3D tetrahedral mesh."""
     mesh = create_3d_tetrahedral_mesh()
@@ -539,6 +548,7 @@ def test_tetrahedral_mesh_visualization():
 ### Parametrized Tests for Exhaustive Configuration Coverage ###
 
 
+@pytest.mark.skip("pv Plotter is not working in CI")
 class TestVisualizationParametrized:
     """Parametrized tests for visualization across configurations."""
 
