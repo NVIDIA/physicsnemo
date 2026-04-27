@@ -38,6 +38,7 @@ class CachedPreprocessingDataset(Dataset, ABC):
             ``functools.cache`` for in-memory caching (increases memory usage).
 
     Raises:
+        ValueError: If *sample_paths* is empty.
         FileNotFoundError: If any *sample_paths* entry does not exist on disk.
     """
 
@@ -50,6 +51,11 @@ class CachedPreprocessingDataset(Dataset, ABC):
         self.sample_paths = [Path(path) for path in sample_paths]
         self.cache_dir = Path(cache_dir) if cache_dir is not None else None
         self.use_ram_caching = use_ram_caching
+
+        if not self.sample_paths:
+            raise ValueError(
+                "sample_paths is empty; the dataset must contain at least one sample."
+            )
 
         if self.cache_dir is not None:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
