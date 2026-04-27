@@ -104,7 +104,7 @@ def compute_mse_vector(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor
     return torch.sum(diff_sq)
 
 
-def compute_rmse_vector(
+def compute_relative_mse(
     pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-8
 ) -> torch.Tensor:
     """Relative MSE for vector fields, normalized per component then summed.
@@ -133,7 +133,7 @@ LOSS_FUNCTIONS_SCALAR = {
 LOSS_FUNCTIONS_VECTOR = {
     "huber": compute_huber_vector,
     "mse": compute_mse_vector,
-    "rmse": compute_rmse_vector,
+    "rmse": compute_relative_mse,
 }
 
 
