@@ -22,7 +22,7 @@ plot generation always interpret benchmark metadata the same way.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from typing import Any, TypeAlias
 
 import torch
@@ -136,7 +136,7 @@ def case_by_index(
 def build_benchmark_plan(
     *,
     device: torch.device | str,
-    phases: Iterable[str],
+    phases: Sequence[str],
     selected_specs: Iterable[type[FunctionSpec]],
 ) -> tuple[list[BenchmarkKey], dict[BenchmarkKey, type[FunctionSpec]]]:
     """Build ASV benchmark keys and their corresponding FunctionSpec classes."""

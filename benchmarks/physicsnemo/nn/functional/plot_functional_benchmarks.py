@@ -23,7 +23,7 @@ import argparse
 import ast
 import json
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeAlias
@@ -203,7 +203,7 @@ def _build_spec_data(device: torch.device | str) -> dict[str, BenchmarkSpecData]
 def _build_fallback_params(
     *,
     device: torch.device | str,
-    phases: Iterable[str] = PHASE_ORDER,
+    phases: Sequence[str] = PHASE_ORDER,
     selected_specs: Iterable[type[FunctionSpec]] = FUNCTIONAL_SPECS,
 ) -> list[BenchmarkKey]:
     """Reconstruct ASV key ordering for result payloads missing explicit labels."""
