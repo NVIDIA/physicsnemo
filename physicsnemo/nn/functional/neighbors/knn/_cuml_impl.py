@@ -43,21 +43,12 @@ if CUML_AVAILABLE and CUPY_AVAILABLE:
         if restore_dtype == torch.bfloat16:
             points = points.to(torch.float32)
             queries = queries.to(torch.float32)
-        # Create a cuml handle to ensure we use the right stream:
-        torch_stream = torch.cuda.current_stream()
-
-        # Get the raw CUDA stream pointer (as an integer)
-        ptr = torch_stream.cuda_stream
-
-        # Build a cuML handle with that stream
-        handle = cuml.Handle(stream=ptr)
-
         # Use dlpack to move the data without copying between pytorch and cuml:
         points = cp.from_dlpack(points)
         queries = cp.from_dlpack(queries)
 
-        # Construct the knn:
-        knn = cuml.neighbors.NearestNeighbors(n_neighbors=k, handle=handle)
+        # Construct the knn using the public cuML estimator API.
+        knn = cuml.neighbors.NearestNeighbors(n_neighbors=k)
         # First pass partitions everything in points to make lookups fast
         knn.fit(points)
 
