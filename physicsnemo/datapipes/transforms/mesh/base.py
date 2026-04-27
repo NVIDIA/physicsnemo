@@ -83,7 +83,7 @@ class MeshTransform(ABC):
         """Apply this transform to a DomainMesh.
 
         Default: broadcasts ``__call__`` to interior and all boundaries
-        via :meth:`DomainMesh._map_meshes`, leaving domain-level
+        via :meth:`DomainMesh.apply`, leaving domain-level
         ``global_data`` unchanged.
 
         Override in subclasses that need domain-aware behavior (e.g.
@@ -100,7 +100,7 @@ class MeshTransform(ABC):
         DomainMesh
             Transformed domain mesh.
         """
-        return domain._map_meshes(self)
+        return domain.apply(self)
 
     @property
     def stochastic(self) -> bool:
