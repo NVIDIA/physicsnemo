@@ -39,9 +39,9 @@ class TestMeshReader:
 
     def test_len_and_getitem(self, tmp_path):
         mesh = two_triangles_2d.load()
-        mesh.save(tmp_path / "a.pt")
-        mesh.save(tmp_path / "b.pt")
-        reader = MeshReader(tmp_path, pattern="*.pt")
+        mesh.save(tmp_path / "a.pmsh")
+        mesh.save(tmp_path / "b.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh")
         assert len(reader) == 2
         m, meta = reader[0]
         assert isinstance(m, Mesh)
@@ -52,8 +52,8 @@ class TestMeshReader:
 
     def test_negative_index(self, tmp_path):
         mesh = two_triangles_2d.load()
-        mesh.save(tmp_path / "single.pt")
-        reader = MeshReader(tmp_path, pattern="*.pt")
+        mesh.save(tmp_path / "single.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh")
         m1, _ = reader[0]
         m2, _ = reader[-1]
         assert m1.n_points == m2.n_points
@@ -61,8 +61,8 @@ class TestMeshReader:
     def test_iter(self, tmp_path):
         mesh = two_triangles_2d.load()
         for i in range(3):
-            mesh.save(tmp_path / f"m{i}.pt")
-        reader = MeshReader(tmp_path, pattern="*.pt")
+            mesh.save(tmp_path / f"m{i}.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh")
         samples = list(reader)
         assert len(samples) == 3
         for m, meta in samples:
@@ -86,9 +86,9 @@ class TestDomainMeshReader:
 
     def test_len_and_getitem(self, tmp_path):
         dm = self._make_domain_mesh()
-        dm.save(tmp_path / "sample_a.pt")
-        dm.save(tmp_path / "sample_b.pt")
-        reader = DomainMeshReader(tmp_path, pattern="*.pt")
+        dm.save(tmp_path / "sample_a.pdmsh")
+        dm.save(tmp_path / "sample_b.pdmsh")
+        reader = DomainMeshReader(tmp_path, pattern="*.pdmsh")
         assert len(reader) == 2
         loaded, meta = reader[0]
         assert isinstance(loaded, DomainMesh)
@@ -99,15 +99,15 @@ class TestDomainMeshReader:
 
     def test_boundary_names_in_metadata(self, tmp_path):
         dm = self._make_domain_mesh()
-        dm.save(tmp_path / "dm.pt")
-        reader = DomainMeshReader(tmp_path, pattern="*.pt")
+        dm.save(tmp_path / "dm.pdmsh")
+        reader = DomainMeshReader(tmp_path, pattern="*.pdmsh")
         _, meta = reader[0]
         assert sorted(meta["boundary_names"]) == ["inlet", "wall"]
 
     def test_no_boundaries(self, tmp_path):
         dm = DomainMesh(interior=Mesh(points=torch.randn(5, 3)))
-        dm.save(tmp_path / "bare.pt")
-        reader = DomainMeshReader(tmp_path, pattern="*.pt")
+        dm.save(tmp_path / "bare.pdmsh")
+        reader = DomainMeshReader(tmp_path, pattern="*.pdmsh")
         loaded, meta = reader[0]
         assert loaded.n_boundaries == 0
         assert meta["boundary_names"] == []
@@ -115,8 +115,8 @@ class TestDomainMeshReader:
     def test_iter(self, tmp_path):
         dm = self._make_domain_mesh()
         for i in range(3):
-            dm.save(tmp_path / f"dm{i}.pt")
-        reader = DomainMeshReader(tmp_path, pattern="*.pt")
+            dm.save(tmp_path / f"dm{i}.pdmsh")
+        reader = DomainMeshReader(tmp_path, pattern="*.pdmsh")
         samples = list(reader)
         assert len(samples) == 3
         for loaded, meta in samples:
@@ -125,8 +125,8 @@ class TestDomainMeshReader:
 
     def test_global_data_preserved(self, tmp_path):
         dm = self._make_domain_mesh()
-        dm.save(tmp_path / "dm.pt")
-        reader = DomainMeshReader(tmp_path, pattern="*.pt")
+        dm.save(tmp_path / "dm.pdmsh")
+        reader = DomainMeshReader(tmp_path, pattern="*.pdmsh")
         loaded, _ = reader[0]
         assert "Re" in loaded.global_data.keys()
 
@@ -136,8 +136,8 @@ class TestMeshDataset:
 
     def test_single_mesh_with_transform(self, tmp_path):
         mesh = two_triangles_2d.load()
-        mesh.save(tmp_path / "m.pt")
-        reader = MeshReader(tmp_path, pattern="*.pt")
+        mesh.save(tmp_path / "m.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh")
         ds = MeshDataset(reader, transforms=[ScaleMesh(2.0)])
         m, meta = ds[0]
         assert isinstance(m, Mesh)
@@ -150,8 +150,8 @@ class TestMeshDataset:
             interior=interior,
             boundaries={"wall": wall},
         )
-        dm.save(tmp_path / "dm.pt")
-        reader = DomainMeshReader(tmp_path, pattern="*.pt")
+        dm.save(tmp_path / "dm.pdmsh")
+        reader = DomainMeshReader(tmp_path, pattern="*.pdmsh")
         ds = MeshDataset(reader, transforms=[ScaleMesh(0.5)])
         loaded, meta = ds[0]
         assert isinstance(loaded, DomainMesh)
@@ -166,8 +166,8 @@ class TestMeshDataset:
             points=torch.tensor([[1.0, 0.0, 0.0], [3.0, 0.0, 0.0]]),
         )
         dm = DomainMesh(interior=interior, boundaries={"wall": wall})
-        dm.save(tmp_path / "dm.pt")
-        reader = DomainMeshReader(tmp_path, pattern="*.pt")
+        dm.save(tmp_path / "dm.pdmsh")
+        reader = DomainMeshReader(tmp_path, pattern="*.pdmsh")
         ds = MeshDataset(reader, transforms=[ScaleMesh(2.0)])
         loaded, _ = ds[0]
         assert torch.allclose(
@@ -191,8 +191,8 @@ class TestDomainMeshTransforms:
             ),
             global_data={"velocity": torch.tensor([1.0, 0.0, 0.0])},
         )
-        dm.save(tmp_path / "dm.pt")
-        reader = DomainMeshReader(tmp_path, pattern="*.pt")
+        dm.save(tmp_path / "dm.pdmsh")
+        reader = DomainMeshReader(tmp_path, pattern="*.pdmsh")
         ds = MeshDataset(
             reader,
             transforms=[ScaleMesh(2.0, transform_global_data=True)],
@@ -211,8 +211,8 @@ class TestDomainMeshTransforms:
             ),
             global_data={"velocity": torch.tensor([1.0, 0.0, 0.0])},
         )
-        dm.save(tmp_path / "dm.pt")
-        reader = DomainMeshReader(tmp_path, pattern="*.pt")
+        dm.save(tmp_path / "dm.pdmsh")
+        reader = DomainMeshReader(tmp_path, pattern="*.pdmsh")
         ds = MeshDataset(reader, transforms=[ScaleMesh(2.0)])
         loaded, _ = ds[0]
         assert torch.allclose(
@@ -229,13 +229,13 @@ class TestDomainMeshTransforms:
             points=torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
         )
         dm = DomainMesh(interior=interior, boundaries={"wall": wall})
-        dm.save(tmp_path / "dm.pt")
+        dm.save(tmp_path / "dm.pdmsh")
 
         aug = RandomScaleMesh(
             distribution=torch.distributions.Uniform(0.5, 2.0),
         )
         aug.set_generator(torch.Generator().manual_seed(42))
-        reader = DomainMeshReader(tmp_path, pattern="*.pt")
+        reader = DomainMeshReader(tmp_path, pattern="*.pdmsh")
         ds = MeshDataset(
             reader,
             transforms=[aug],
@@ -265,8 +265,8 @@ class TestDomainMeshTransforms:
             ),
         )
         dm = DomainMesh(interior=interior, boundaries={"wall": wall})
-        dm.save(tmp_path / "dm.pt")
-        reader = DomainMeshReader(tmp_path, pattern="*.pt")
+        dm.save(tmp_path / "dm.pdmsh")
+        reader = DomainMeshReader(tmp_path, pattern="*.pdmsh")
         ds = MeshDataset(
             reader,
             transforms=[CenterMesh(use_area_weighting=False)],
@@ -285,6 +285,119 @@ class TestDomainMeshTransforms:
         assert torch.allclose(loaded.boundaries["wall"].points, expected_wall)
 
 
+class TestMeshDatasetStreams:
+    """Tests for MeshDataset prefetching with real CUDA streams."""
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_prefetch_with_stream(self, tmp_path):
+        """Prefetch with a CUDA stream transfers data to GPU."""
+        mesh = two_triangles_2d.load()
+        mesh.save(tmp_path / "m.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh", pin_memory=True)
+        ds = MeshDataset(reader, device="cuda:0")
+
+        stream = torch.cuda.Stream()
+        ds.prefetch(0, stream=stream)
+
+        data, _ = ds[0]
+        assert data.points.device.type == "cuda"
+        torch.cuda.synchronize()
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_prefetch_with_stream_and_transforms(self, tmp_path):
+        """Prefetch with CUDA stream applies transforms on GPU."""
+        mesh = Mesh(
+            points=torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
+        )
+        mesh.save(tmp_path / "m.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh", pin_memory=True)
+        ds = MeshDataset(reader, transforms=[ScaleMesh(2.0)], device="cuda:0")
+
+        stream = torch.cuda.Stream()
+        ds.prefetch(0, stream=stream)
+
+        data, _ = ds[0]
+        assert data.points.device.type == "cuda"
+        expected = torch.tensor([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]], device="cuda:0")
+        assert torch.allclose(data.points, expected)
+        torch.cuda.synchronize()
+
+
+class TestMeshReaderSubsamplingRNG:
+    """Tests for MeshReader subsampling RNG reproducibility."""
+
+    def test_subsample_reproducible(self, tmp_path):
+        """Same generator seed yields identical subsampled points."""
+        mesh = Mesh(points=torch.randn(100, 3))
+        mesh.save(tmp_path / "m.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh", subsample_n_points=10)
+
+        reader.set_generator(torch.Generator().manual_seed(42))
+        data1, _ = reader[0]
+
+        reader.set_generator(torch.Generator().manual_seed(42))
+        data2, _ = reader[0]
+
+        assert torch.equal(data1.points, data2.points)
+
+    def test_subsample_epoch_changes_output(self, tmp_path):
+        """Different epochs produce different subsampled slices."""
+        mesh = Mesh(points=torch.randn(100, 3))
+        mesh.save(tmp_path / "m.pmsh")
+        reader = MeshReader(tmp_path, pattern="*.pmsh", subsample_n_points=10)
+
+        reader.set_generator(torch.Generator().manual_seed(42))
+        reader.set_epoch(0)
+        data_e0, _ = reader[0]
+
+        reader.set_generator(torch.Generator().manual_seed(42))
+        reader.set_epoch(1)
+        data_e1, _ = reader[0]
+
+        assert not torch.equal(data_e0.points, data_e1.points)
+
+
+class TestDomainMeshReaderExtraBoundaries:
+    """Tests for DomainMeshReader extra_boundaries feature."""
+
+    def test_extra_boundaries_loaded(self, tmp_path):
+        """Extra boundary mesh is loaded alongside the DomainMesh."""
+        interior = Mesh(points=torch.randn(10, 3))
+        dm = DomainMesh(interior=interior)
+        case_dir = tmp_path / "case"
+        case_dir.mkdir()
+        dm.save(case_dir / "domain.pdmsh")
+
+        farfield = Mesh(points=torch.randn(7, 3))
+        farfield.save(case_dir / "farfield_001.pmsh")
+
+        reader = DomainMeshReader(
+            tmp_path,
+            pattern="**/*.pdmsh",
+            extra_boundaries={"farfield": {"pattern": "farfield*.pmsh"}},
+        )
+        assert len(reader) == 1
+
+        loaded, meta = reader[0]
+        assert "farfield" in loaded.boundary_names
+        assert loaded.boundaries["farfield"].n_points == 7
+
+    def test_extra_boundaries_missing_raises(self, tmp_path):
+        """Missing extra boundary file raises FileNotFoundError."""
+        interior = Mesh(points=torch.randn(10, 3))
+        dm = DomainMesh(interior=interior)
+        dm.save(tmp_path / "domain.pdmsh")
+
+        reader = DomainMeshReader(
+            tmp_path,
+            pattern="*.pdmsh",
+            extra_boundaries={"missing_bnd": {"pattern": "nonexistent*.pmsh"}},
+        )
+
+        with pytest.raises(FileNotFoundError, match="nonexistent"):
+            _ = reader[0]
+
+
 class TestApplyToTensorDictMesh:
     """Tests for apply_to_tensordict_mesh helper (standalone utility)."""
 
@@ -292,8 +405,11 @@ class TestApplyToTensorDictMesh:
         from tensordict import TensorDict
 
         mesh = two_triangles_2d.load()
+        original_points = mesh.points.clone()
         td = TensorDict({"x": mesh, "y": mesh.clone()}, batch_size=[])
         out = apply_to_tensordict_mesh(td, ScaleMesh(3.0))
         assert out["x"].n_points == mesh.n_points
         assert "x" in out
         assert "y" in out
+        assert torch.allclose(out["x"].points, original_points * 3.0)
+        assert torch.allclose(out["y"].points, original_points * 3.0)

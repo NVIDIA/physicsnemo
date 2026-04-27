@@ -35,9 +35,10 @@ from physicsnemo.mesh import DomainMesh, Mesh
 
 logger = logging.getLogger(__name__)
 
-# Default extension for physicsnemo mesh format (tensordict/tensorclass layout).
+# Default extensions for physicsnemo mesh formats (tensordict/tensorclass layout).
 # Do not hardcode elsewhere so format can evolve.
 DEFAULT_MESH_EXTENSION = ".pmsh"
+DEFAULT_DOMAIN_MESH_EXTENSION = ".pdmsh"
 
 
 def _contiguous_block_slice(
@@ -279,7 +280,7 @@ class DomainMeshReader:
         self,
         path: Path | str,
         *,
-        pattern: str = f"**/*{DEFAULT_MESH_EXTENSION}",
+        pattern: str = f"**/*{DEFAULT_DOMAIN_MESH_EXTENSION}",
         pin_memory: bool = False,
         include_index_in_metadata: bool = True,
         subsample_n_points: int | None = None,
@@ -292,10 +293,10 @@ class DomainMeshReader:
         Parameters
         ----------
         path : Path or str
-            Root directory containing DomainMesh files (e.g. .pt archives).
+            Root directory containing DomainMesh files (e.g. .pdmsh archives).
         pattern : str, optional
             Glob pattern for DomainMesh paths under ``path``.
-            Default matches ``**/*.pmsh``.
+            Default matches ``**/*.pdmsh``.
         pin_memory : bool, default=False
             If True, place tensors in pinned (page-locked) memory for faster
             async CPU→GPU transfers.
