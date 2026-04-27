@@ -33,11 +33,11 @@ from jaxtyping import Float, Int
 from physicsnemo.mesh.neighbors._adjacency import build_adjacency_from_pairs
 from physicsnemo.mesh.subdivision._data import propagate_cell_data_to_children
 from physicsnemo.mesh.subdivision._topology import (
-    extract_unique_edges,
     generate_child_cells,
     get_subdivision_pattern,
 )
 from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
+from physicsnemo.mesh.utilities._topology import extract_unique_edges
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
