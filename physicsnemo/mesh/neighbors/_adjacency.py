@@ -59,10 +59,11 @@ class Adjacency:
         [[10, 11], [], [12, 13]]
     """
 
-    offsets: torch.Tensor  # shape: (n_sources + 1,), dtype: int64
-    indices: torch.Tensor  # shape: (total_neighbors,), dtype: int64
+    # n_sources_plus_one == n_sources + 1; the trailing offset is len(indices).
+    offsets: Int[torch.Tensor, " n_sources_plus_one"]
+    indices: Int[torch.Tensor, " n_total_neighbors"]
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not torch.compiler.is_compiling():
             ### Validate offsets is non-empty
             # Offsets must have length (n_sources + 1), so minimum length is 1 (for n_sources=0)

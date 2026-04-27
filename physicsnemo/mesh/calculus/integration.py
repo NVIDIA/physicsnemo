@@ -51,9 +51,9 @@ if TYPE_CHECKING:
 
 def _resolve_field(
     mesh: "Mesh",
-    field: str | tuple[str, ...] | torch.Tensor,
+    field: str | tuple[str, ...] | Float[torch.Tensor, "n ..."],
     data_source: Literal["cells", "points"],
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "n ..."]:
     r"""Resolve a field specification to a concrete tensor.
 
     Parameters
@@ -191,9 +191,11 @@ def integrate_point_data(
 
 def integrate(
     mesh: "Mesh",
-    field: str | tuple[str, ...] | torch.Tensor,
+    field: str
+    | tuple[str, ...]
+    | Float[torch.Tensor, "n_cells_or_points ..."],
     data_source: Literal["cells", "points"] = "cells",
-) -> torch.Tensor:
+) -> Float[torch.Tensor, " ..."]:
     r"""Integrate a field over the mesh domain.
 
     This is the unified entry point for mesh integration.  It dispatches to
@@ -261,9 +263,11 @@ def integrate(
 
 def integrate_flux(
     mesh: "Mesh",
-    field: str | tuple[str, ...] | torch.Tensor,
+    field: str
+    | tuple[str, ...]
+    | Float[torch.Tensor, "n_cells_or_points n_spatial_dims"],
     data_source: Literal["cells", "points"] = "cells",
-) -> torch.Tensor:
+) -> Float[torch.Tensor, ""]:
     r"""Compute the surface flux integral for codimension-1 meshes.
 
     Computes the oriented flux of a vector field through the mesh surface:

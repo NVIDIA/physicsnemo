@@ -23,11 +23,14 @@ n-dimensional point set, fully GPU-compatible using pure PyTorch.
 from itertools import product
 
 import torch
+from jaxtyping import Float
 
 
 def perlin_noise_nd(
-    points: torch.Tensor, scale: float = 1.0, seed: int = 0
-) -> torch.Tensor:
+    points: Float[torch.Tensor, "n_points n_spatial_dims"],
+    scale: float = 1.0,
+    seed: int = 0,
+) -> Float[torch.Tensor, " n_points"]:
     """GPU-accelerated dimension-agnostic Perlin noise using pure PyTorch.
 
     Generates smooth pseudo-random noise values using gradient interpolation
@@ -165,8 +168,10 @@ def perlin_noise_nd(
 
 
 def perlin_noise_1d(
-    points: torch.Tensor, scale: float = 1.0, seed: int = 0
-) -> torch.Tensor:
+    points: Float[torch.Tensor, "n_points 1"],
+    scale: float = 1.0,
+    seed: int = 0,
+) -> Float[torch.Tensor, " n_points"]:
     """1D Perlin noise.
 
     Convenience wrapper for perlin_noise_nd with 1D points.
@@ -189,8 +194,10 @@ def perlin_noise_1d(
 
 
 def perlin_noise_2d(
-    points: torch.Tensor, scale: float = 1.0, seed: int = 0
-) -> torch.Tensor:
+    points: Float[torch.Tensor, "n_points 2"],
+    scale: float = 1.0,
+    seed: int = 0,
+) -> Float[torch.Tensor, " n_points"]:
     """2D Perlin noise.
 
     Convenience wrapper for perlin_noise_nd with 2D points.
@@ -213,8 +220,10 @@ def perlin_noise_2d(
 
 
 def perlin_noise_3d(
-    points: torch.Tensor, scale: float = 1.0, seed: int = 0
-) -> torch.Tensor:
+    points: Float[torch.Tensor, "n_points 3"],
+    scale: float = 1.0,
+    seed: int = 0,
+) -> Float[torch.Tensor, " n_points"]:
     """3D Perlin noise.
 
     Convenience wrapper for perlin_noise_nd with 3D points.

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import torch
+from jaxtyping import Int
 
 from physicsnemo.core.version_check import require_version_spec
 from physicsnemo.mesh.mesh import Mesh
@@ -466,7 +467,7 @@ def _to_vtk_cell_array(cells_np: np.ndarray) -> np.ndarray:
 @require_version_spec("vtk")
 def _build_dual_graph_edges(
     pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid",
-) -> torch.Tensor:
+) -> Int[torch.Tensor, "n_edges 2"]:
     """Build (n_edges, 2) tensor of cell-neighbor pairs sharing a face.
 
     Iterates over every cell and its faces, using VTK's cell links for

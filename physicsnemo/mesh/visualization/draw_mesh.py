@@ -44,9 +44,9 @@ def draw_mesh(
     alpha_cells: float = 1.0,
     alpha_edges: float = 1.0,
     show_edges: bool = True,
-    ax=None,
+    ax: Any = None,
     backend_options: dict[str, Any] | None = None,
-):
+) -> Any:
     """Draw a mesh using matplotlib or PyVista backend.
 
     This is the main visualization function for Mesh objects. It automatically

@@ -16,7 +16,10 @@
 
 """Extrusion operations for generating higher-dimensional meshes."""
 
+from collections.abc import Sequence
+
 import torch
+from jaxtyping import Float
 from tensordict import TensorDict
 
 from physicsnemo.mesh.mesh import Mesh
@@ -25,7 +28,7 @@ from physicsnemo.mesh.projections._embed import embed
 
 def extrude(
     mesh: Mesh,
-    vector: torch.Tensor | list | tuple | None = None,
+    vector: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
     capping: bool = False,
     allow_new_spatial_dims: bool = False,
 ) -> Mesh:

@@ -25,7 +25,10 @@ hole detection (for letters like 'o', 'e', 'a') using the shoelace formula.
 This module requires matplotlib to be installed.
 """
 
+from typing import Any
+
 import torch
+from jaxtyping import Float
 
 from physicsnemo.core.version_check import require_version_spec
 from physicsnemo.mesh.mesh import Mesh
@@ -264,7 +267,9 @@ def _group_letters(text_path):
     return letter_groups
 
 
-def _winding_number(points: torch.Tensor, path) -> torch.Tensor:
+def _winding_number(
+    points: Float[torch.Tensor, "n_points 2"], path: Any
+) -> Float[torch.Tensor, " n_points"]:
     """Compute winding number for path containment test."""
     import importlib
 

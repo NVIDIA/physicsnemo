@@ -37,13 +37,13 @@ if TYPE_CHECKING:
 
 
 def merge_duplicate_points(
-    points: Float[torch.Tensor, "n_points n_dims"],
-    cells: Int[torch.Tensor, "n_cells n_verts"],
+    points: Float[torch.Tensor, "n_points n_spatial_dims"],
+    cells: Int[torch.Tensor, "n_cells n_vertices_per_cell"],
     point_data: TensorDict,
     tolerance: float = 1e-12,
 ) -> tuple[
-    Float[torch.Tensor, "n_unique_points n_dims"],
-    Int[torch.Tensor, "n_cells n_verts"],
+    Float[torch.Tensor, "n_unique_points n_spatial_dims"],
+    Int[torch.Tensor, "n_cells n_vertices_per_cell"],
     TensorDict,
     Int[torch.Tensor, " n_points"],
 ]:
@@ -192,9 +192,9 @@ def _merge_point_data(
 
 
 def remove_duplicate_cells(
-    cells: Int[torch.Tensor, "n_cells n_verts"],
+    cells: Int[torch.Tensor, "n_cells n_vertices_per_cell"],
     cell_data: TensorDict,
-) -> tuple[Int[torch.Tensor, "n_unique_cells n_verts"], TensorDict]:
+) -> tuple[Int[torch.Tensor, "n_unique_cells n_vertices_per_cell"], TensorDict]:
     """Remove duplicate cells from mesh.
 
     Cells are considered duplicates if they contain the same set of vertex indices
@@ -281,12 +281,12 @@ def remove_duplicate_cells(
 
 
 def remove_unused_points(
-    points: Float[torch.Tensor, "n_points n_dims"],
-    cells: Int[torch.Tensor, "n_cells n_verts"],
+    points: Float[torch.Tensor, "n_points n_spatial_dims"],
+    cells: Int[torch.Tensor, "n_cells n_vertices_per_cell"],
     point_data: TensorDict,
 ) -> tuple[
-    Float[torch.Tensor, "n_used_points n_dims"],
-    Int[torch.Tensor, "n_cells n_verts"],
+    Float[torch.Tensor, "n_used_points n_spatial_dims"],
+    Int[torch.Tensor, "n_cells n_vertices_per_cell"],
     TensorDict,
     Int[torch.Tensor, " n_points"],
 ]:
@@ -373,7 +373,7 @@ def clean_mesh(
     merge_points: bool = True,
     deduplicate_cells: bool = True,
     drop_unused_points: bool = True,
-) -> tuple["Mesh", dict]:
+) -> tuple["Mesh", dict[str, int]]:
     """Clean and repair a mesh.
 
     Performs various cleaning operations to fix common mesh issues:
@@ -418,7 +418,7 @@ def clean_mesh(
     point_data = mesh.point_data
     cell_data = mesh.cell_data
     global_data = mesh.global_data
-    stats: dict = {}
+    stats: dict[str, int] = {}
 
     ### Step 1: Merge duplicate points
     if merge_points:

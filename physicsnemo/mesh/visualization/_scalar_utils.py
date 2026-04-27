@@ -19,6 +19,7 @@
 from typing import Literal
 
 import torch
+from jaxtyping import Float
 from tensordict import TensorDict
 
 
@@ -27,7 +28,11 @@ def process_scalars(
     data_dict: TensorDict,
     n_expected: int,
     name: str,
-) -> tuple[torch.Tensor | None, Literal["points", "cells", None], str | None]:
+) -> tuple[
+    Float[torch.Tensor, " n_expected"] | None,
+    Literal["points", "cells", None],
+    str | None,
+]:
     """Process scalar specification into concrete tensor values.
 
     Parameters
@@ -128,8 +133,8 @@ def validate_and_process_scalars(
     n_points: int,
     n_cells: int,
 ) -> tuple[
-    torch.Tensor | None,
-    torch.Tensor | None,
+    Float[torch.Tensor, " n_points"] | None,
+    Float[torch.Tensor, " n_cells"] | None,
     Literal["points", "cells", None],
     str | None,
 ]:

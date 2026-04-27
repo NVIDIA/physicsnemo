@@ -100,7 +100,7 @@ def vectorized_connected_components(
 
 
 def find_duplicate_pairs(
-    points: Float[torch.Tensor, "n_points n_dims"],
+    points: Float[torch.Tensor, "n_points n_spatial_dims"],
     tolerance: float,
 ) -> Int[torch.Tensor, "n_pairs 2"]:
     """Find all pairs of points whose L2 distance is below *tolerance*.
@@ -169,7 +169,7 @@ def find_duplicate_pairs(
 
 
 def compute_canonical_indices(
-    points: Float[torch.Tensor, "n_points n_dims"],
+    points: Float[torch.Tensor, "n_points n_spatial_dims"],
     tolerance: float,
 ) -> Int[torch.Tensor, " n_points"]:
     """Map each point to the smallest-index representative in its cluster.

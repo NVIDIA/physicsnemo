@@ -17,9 +17,10 @@
 """PyVista backend for mesh visualization."""
 
 import importlib
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import torch
+from jaxtyping import Float
 
 if TYPE_CHECKING:
     from physicsnemo.mesh import Mesh
@@ -35,8 +36,8 @@ _PlotterBase = getattr(pv, "BasePlotter", pv.Plotter)
 
 def draw_mesh_pyvista(
     mesh: "Mesh",
-    point_scalar_values: torch.Tensor | None,
-    cell_scalar_values: torch.Tensor | None,
+    point_scalar_values: Float[torch.Tensor, " n_points"] | None,
+    cell_scalar_values: Float[torch.Tensor, " n_cells"] | None,
     active_scalar_source: Literal["points", "cells", None],
     scalar_label: str | None,
     show: bool,
@@ -46,9 +47,9 @@ def draw_mesh_pyvista(
     alpha_points: float,
     alpha_cells: float,
     show_edges: bool,
-    plotter=None,
-    **kwargs,
-):
+    plotter: Any = None,
+    **kwargs: Any,
+) -> Any:
     """Draw mesh using PyVista backend.
 
     Supports all spatial dimensions up to 3D using PyVista's rendering engine.

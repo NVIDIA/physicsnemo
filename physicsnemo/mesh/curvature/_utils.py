@@ -69,8 +69,8 @@ def compute_full_angle_n_sphere(n_manifold_dims: int) -> float:
 
 
 def stable_angle_between_vectors(
-    v1: Float[torch.Tensor, "*batch n_dims"],
-    v2: Float[torch.Tensor, "*batch n_dims"],
+    v1: Float[torch.Tensor, "*batch n_spatial_dims"],
+    v2: Float[torch.Tensor, "*batch n_spatial_dims"],
 ) -> Float[torch.Tensor, " *batch"]:
     """Compute angle between vectors using numerically stable atan2 formula.
 
@@ -80,9 +80,9 @@ def stable_angle_between_vectors(
     Parameters
     ----------
     v1 : torch.Tensor
-        First vector(s), shape (..., n_dims)
+        First vector(s), shape :math:`(\\ldots, D_s)`.
     v2 : torch.Tensor
-        Second vector(s), shape (..., n_dims)
+        Second vector(s), shape :math:`(\\ldots, D_s)`.
 
     Returns
     -------

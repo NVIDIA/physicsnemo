@@ -27,8 +27,8 @@ from jaxtyping import Bool, Int
 
 def find_edges_in_reference(
     reference_edges: Int[torch.Tensor, "n_ref 2"],
-    query_edges: Int[torch.Tensor, "n_query 2"],
-) -> tuple[Int[torch.Tensor, " n_query"], Bool[torch.Tensor, " n_query"]]:
+    query_edges: Int[torch.Tensor, "n_queries 2"],
+) -> tuple[Int[torch.Tensor, " n_queries"], Bool[torch.Tensor, " n_queries"]]:
     """Find indices of query edges within a reference edge set.
 
     Uses hash-based lookup with O(n log n) complexity for sorting
@@ -43,16 +43,16 @@ def find_edges_in_reference(
     reference_edges : torch.Tensor
         Reference edge set, shape (n_ref, 2). Each row is [v0, v1].
     query_edges : torch.Tensor
-        Query edges to find, shape (n_query, 2). Each row is [v0, v1].
+        Query edges to find, shape (n_queries, 2). Each row is [v0, v1].
 
     Returns
     -------
     indices : torch.Tensor
-        Shape (n_query,). For each query edge, the index in reference_edges
+        Shape (n_queries,). For each query edge, the index in reference_edges
         where it was found. For unmatched edges, the value is undefined
         (use the matches mask to filter).
     matches : torch.Tensor
-        Shape (n_query,) bool. True if query edge was found in reference_edges.
+        Shape (n_queries,) bool. True if query edge was found in reference_edges.
 
     Examples
     --------

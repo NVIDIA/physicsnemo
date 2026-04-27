@@ -17,10 +17,11 @@
 """Matplotlib backend for mesh visualization."""
 
 import importlib
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import torch
+from jaxtyping import Float
 
 if TYPE_CHECKING:
     from physicsnemo.mesh import Mesh
@@ -40,8 +41,8 @@ MplAxes = _axes_mod.Axes
 
 def draw_mesh_matplotlib(
     mesh: "Mesh",
-    point_scalar_values: torch.Tensor | None,
-    cell_scalar_values: torch.Tensor | None,
+    point_scalar_values: Float[torch.Tensor, " n_points"] | None,
+    cell_scalar_values: Float[torch.Tensor, " n_cells"] | None,
     active_scalar_source: Literal["points", "cells", None],
     scalar_label: str | None,
     show: bool,
@@ -52,8 +53,8 @@ def draw_mesh_matplotlib(
     alpha_cells: float,
     alpha_edges: float,
     show_edges: bool,
-    ax=None,
-):
+    ax: Any = None,
+) -> Any:
     """Draw mesh using matplotlib backend.
 
     Supports 0D, 1D, 2D, and 3D spatial dimensions with appropriate matplotlib primitives.
