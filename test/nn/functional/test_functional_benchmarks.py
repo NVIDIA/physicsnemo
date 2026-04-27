@@ -14,8 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from physicsnemo.core.function_spec import FunctionSpec
-
 from benchmarks.physicsnemo.nn.functional._spec_utils import (
     PHASE_ORDER,
     build_benchmark_plan,
@@ -25,6 +23,7 @@ from benchmarks.physicsnemo.nn.functional.plot_functional_benchmarks import (
     _build_fallback_params,
     _collect_grouped_data,
 )
+from physicsnemo.core.function_spec import FunctionSpec
 
 
 class FirstPlottableSpec(FunctionSpec):
