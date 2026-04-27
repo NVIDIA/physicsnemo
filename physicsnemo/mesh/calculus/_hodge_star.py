@@ -126,7 +126,11 @@ def hodge_star_1(
     canonical_weights, canonical_edges = compute_cotan_weights_fem(mesh)
 
     ### Map the caller's edges to the canonical ordering
-    indices, matched = find_edges_in_reference(canonical_edges, edges)
+    indices, matched = find_edges_in_reference(
+        canonical_edges,
+        edges,
+        index_bound=mesh.n_points,
+    )
 
     if not matched.all():
         n_unmatched = (~matched).sum().item()

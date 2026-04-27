@@ -72,7 +72,12 @@ def _trace_boundary_loops(
     ### Build bidirectional Adjacency (each edge contributes both directions)
     compact_sources = torch.cat([compact_v0, compact_v1])
     compact_targets = torch.cat([compact_v1, compact_v0])
-    adj = build_adjacency_from_pairs(compact_sources, compact_targets, n_boundary_verts)
+    adj = build_adjacency_from_pairs(
+        compact_sources,
+        compact_targets,
+        n_sources=n_boundary_verts,
+        n_targets=n_boundary_verts,
+    )
 
     ### Convert adjacency to Python lists for scalar-access walks.
     # This replaces O(N) per-vertex .item() GPU-CPU syncs with 2 bulk transfers.

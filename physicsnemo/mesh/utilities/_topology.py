@@ -22,6 +22,7 @@ import torch
 from jaxtyping import Int
 
 from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
+from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -64,11 +65,21 @@ def extract_unique_edges(
     if mesh.n_manifold_dims == 1:
         ### 1D meshes: cells ARE edges - sort and deduplicate directly
         sorted_cells = torch.sort(mesh.cells, dim=1)[0]
-        return torch.unique(sorted_cells, dim=0, return_inverse=True)
+        unique_edges, inverse_indices = unique_index_tuples(
+            sorted_cells,
+            index_bound=mesh.n_points,
+            return_inverse=True,
+        )
+        return unique_edges, inverse_indices
 
     ### General case: extract edges as (n-1)-codimension facets of each cell
     candidate_edges, _parent_cell_indices = extract_candidate_facets(
         mesh.cells,
         manifold_codimension=mesh.n_manifold_dims - 1,
     )
-    return torch.unique(candidate_edges, dim=0, return_inverse=True)
+    unique_edges, inverse_indices = unique_index_tuples(
+        candidate_edges,
+        index_bound=mesh.n_points,
+        return_inverse=True,
+    )
+    return unique_edges, inverse_indices

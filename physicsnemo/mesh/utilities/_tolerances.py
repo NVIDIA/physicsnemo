@@ -25,17 +25,24 @@ This module provides :func:`safe_eps`, which returns a floor value derived
 from the dtype alone, chosen so that:
 
 - It is small enough to never activate on any physically meaningful mesh.
-- Its reciprocal squared does not overflow (important for inverse-distance
-  weights raised to power 2).
+- ``1 / safe_eps(dtype)`` does not overflow in the dtype's arithmetic.
 
-Concretely, ``safe_eps(dtype) = torch.finfo(dtype).tiny ** 0.25``:
+Concretely, ``safe_eps(dtype) = min(tiny ** 0.25, machine_eps)``:
 
-==========  =============  =============================
-dtype       ``safe_eps``   ``1 / safe_eps ** 2``
-==========  =============  =============================
-float32     ~3.3e-10       ~9.2e+18  (well below 3.4e38)
-float64     ~1.2e-77       ~6.7e+153 (well below 1.8e308)
-==========  =============  =============================
+==========  =============  ============  ======================
+dtype       ``safe_eps``   ``1 / eps``   note
+==========  =============  ============  ======================
+float16     ~9.8e-4        ~1.0e+3       capped at machine eps
+bfloat16    ~3.3e-10       ~3.0e+9       tiny ** 0.25
+float32     ~3.3e-10       ~3.0e+9       tiny ** 0.25
+float64     ~1.2e-77       ~8.2e+76      tiny ** 0.25
+==========  =============  ============  ======================
+
+For float32 and wider types, ``1 / safe_eps ** 2`` also does not overflow,
+which is useful when inverse-distance weights are squared.  Float16 has too
+little dynamic range to satisfy both constraints simultaneously; the cap at
+machine epsilon keeps the clamp floor small enough to be transparent for
+values that are numerically meaningful in that dtype.
 """
 
 import torch
@@ -48,7 +55,13 @@ def safe_eps(dtype: torch.dtype) -> float:
     The returned value is:
 
     - Small enough to leave any physically meaningful quantity untouched.
-    - Large enough that ``1 / safe_eps(dtype) ** 2`` does not overflow.
+    - Large enough that ``1 / safe_eps(dtype)`` does not overflow.
+
+    For types with wide exponent range (float32, float64, bfloat16) the
+    formula ``tiny ** 0.25`` additionally guarantees that
+    ``1 / safe_eps ** 2`` does not overflow.  For float16, whose 5-bit
+    exponent cannot satisfy both constraints, the result is capped at
+    machine epsilon to avoid corrupting mesh quantities.
 
     Parameters
     ----------
@@ -59,7 +72,7 @@ def safe_eps(dtype: torch.dtype) -> float:
     Returns
     -------
     float
-        A small positive floor value equal to
-        ``torch.finfo(dtype).tiny ** 0.25``.
+        ``min(torch.finfo(dtype).tiny ** 0.25, torch.finfo(dtype).eps)``.
     """
-    return torch.finfo(dtype).tiny ** 0.25
+    info = torch.finfo(dtype)
+    return min(info.tiny**0.25, info.eps)

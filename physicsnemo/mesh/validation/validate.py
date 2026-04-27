@@ -26,7 +26,10 @@ from typing import TYPE_CHECKING
 import torch
 from jaxtyping import Int
 
-from physicsnemo.mesh.boundaries import extract_candidate_facets
+from physicsnemo.mesh.boundaries import (
+    categorize_facets_by_count,
+    extract_candidate_facets,
+)
 from physicsnemo.mesh.utilities._duplicate_detection import find_duplicate_pairs
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
@@ -239,20 +242,14 @@ def validate_mesh(
     if check_manifoldness:
         if mesh.n_manifold_dims == 2 and mesh.n_spatial_dims >= 2:
             # Check that each edge is shared by at most 2 triangles
-            # Extract all edges (with duplicates)
-            edges_with_dupes, parent_cells = extract_candidate_facets(
+            candidate_edges, _parent_cells = extract_candidate_facets(
                 mesh.cells, manifold_codimension=1
             )
-
-            # Sort edges to canonical form
-            edges_sorted = torch.sort(edges_with_dupes, dim=1).values
-
-            # Find unique edges and their counts
-            unique_edges, inverse_indices, counts = torch.unique(
-                edges_sorted, dim=0, return_inverse=True, return_counts=True
+            unique_edges, _inverse, counts = categorize_facets_by_count(
+                candidate_edges,
+                target_counts="all",
+                index_bound=mesh.n_points,
             )
-
-            # Manifold edges should appear exactly 1 (boundary) or 2 (interior) times
             non_manifold_mask = counts > 2
             n_non_manifold = non_manifold_mask.sum().item()
 

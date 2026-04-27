@@ -193,9 +193,7 @@ def fix_orientation(
     n_cells = mesh.n_cells
 
     ### Step 1: Build face adjacency graph via shared edges
-    from physicsnemo.mesh.neighbors import get_cell_to_cells_adjacency
-
-    adjacency = get_cell_to_cells_adjacency(mesh, adjacency_codimension=1)
+    adjacency = mesh.get_cell_to_cells_adjacency(adjacency_codimension=1)
 
     ### Step 2: Propagate orientation using iterative BFS (flat state machine)
     is_oriented = torch.zeros(n_cells, dtype=torch.bool, device=device)

@@ -109,7 +109,7 @@ def estimate_tangent_space_pca(
 
     ### Identity fallback for points with insufficient neighbors
     min_required = n_manifold_dims + 1
-    neighbor_counts = adjacency.offsets[1:] - adjacency.offsets[:-1]
+    neighbor_counts = adjacency.counts
     effective_counts = torch.minimum(
         neighbor_counts,
         torch.tensor(k_neighbors, dtype=neighbor_counts.dtype, device=device),

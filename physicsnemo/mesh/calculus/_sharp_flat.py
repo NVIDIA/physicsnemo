@@ -135,7 +135,9 @@ def sharp(
     # Strategy: Process all (edge, cell) pairs, then scatter to vertices
 
     edge_indices_for_candidates, matches = find_edges_in_reference(
-        edges, candidate_edges
+        edges,
+        candidate_edges,
+        index_bound=mesh.n_points,
     )
 
     ### Filter to only matched candidates

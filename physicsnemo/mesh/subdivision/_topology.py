@@ -18,16 +18,10 @@
 
 This module handles the combinatorial aspects of subdivision: computing
 subdivision patterns and generating child cell connectivity.
-
-Edge extraction is provided by
-:func:`physicsnemo.mesh.utilities._topology.extract_unique_edges`,
-re-exported here for backwards compatibility.
 """
 
 import torch
 from jaxtyping import Int
-
-from physicsnemo.mesh.utilities._topology import extract_unique_edges  # noqa: F401
 
 
 def get_subdivision_pattern(
