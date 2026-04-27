@@ -289,7 +289,7 @@ class RandomRotateMesh(MeshTransform):
         self,
         axes: list[Literal["x", "y", "z"]] | None = None,
         distribution: torch.distributions.Distribution | None = None,
-        mode: Literal["axis_aligned", "uniform"] = "axis_aligned",
+        mode: Literal["axis_aligned", "uniform"] = "uniform",
         transform_point_data: bool = False,
         transform_cell_data: bool = False,
         transform_global_data: bool = False,
@@ -436,29 +436,35 @@ class RandomRotateMesh(MeshTransform):
         Mesh
             Rotated mesh.
         """
-        if self.mode == "uniform":
-            if mesh.n_spatial_dims != 3:
-                raise ValueError(
-                    f"mode='uniform' requires 3-D meshes, "
-                    f"got n_spatial_dims={mesh.n_spatial_dims}"
+        match self.mode:
+            case "uniform":
+                if mesh.n_spatial_dims != 3:
+                    raise ValueError(
+                        f"mode='uniform' requires 3-D meshes, "
+                        f"got n_spatial_dims={mesh.n_spatial_dims}"
+                    )
+                R = self._sample_uniform_rotation()
+                return mesh.transform(
+                    R,
+                    transform_point_data=self.transform_point_data,
+                    transform_cell_data=self.transform_cell_data,
+                    transform_global_data=self.transform_global_data,
+                    assume_invertible=True,
                 )
-            R = self._sample_uniform_rotation()
-            return mesh.transform(
-                R,
-                transform_point_data=self.transform_point_data,
-                transform_cell_data=self.transform_cell_data,
-                transform_global_data=self.transform_global_data,
-                assume_invertible=True,
-            )
-
-        axis, angle = self._sample_axis_and_angle()
-        return mesh.rotate(
-            angle,
-            axis=axis,
-            transform_point_data=self.transform_point_data,
-            transform_cell_data=self.transform_cell_data,
-            transform_global_data=self.transform_global_data,
-        )
+            case "axis_aligned":
+                axis, angle = self._sample_axis_and_angle()
+                return mesh.rotate(
+                    angle,
+                    axis=axis,
+                    transform_point_data=self.transform_point_data,
+                    transform_cell_data=self.transform_cell_data,
+                    transform_global_data=self.transform_global_data,
+                )
+            case _:
+                raise ValueError(
+                    f"Unknown rotation mode {self.mode!r}. "
+                    f"Expected 'uniform' or 'axis_aligned'."
+                )
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
         """Apply a random rotation to every mesh in *domain*.
@@ -476,29 +482,35 @@ class RandomRotateMesh(MeshTransform):
         DomainMesh
             Rotated domain mesh.
         """
-        if self.mode == "uniform":
-            if domain.interior.n_spatial_dims != 3:
-                raise ValueError(
-                    f"mode='uniform' requires 3-D meshes, "
-                    f"got n_spatial_dims={domain.interior.n_spatial_dims}"
+        match self.mode:
+            case "uniform":
+                if domain.interior.n_spatial_dims != 3:
+                    raise ValueError(
+                        f"mode='uniform' requires 3-D meshes, "
+                        f"got n_spatial_dims={domain.interior.n_spatial_dims}"
+                    )
+                R = self._sample_uniform_rotation()
+                return domain.transform(
+                    R,
+                    transform_point_data=self.transform_point_data,
+                    transform_cell_data=self.transform_cell_data,
+                    transform_global_data=self.transform_global_data,
+                    assume_invertible=True,
                 )
-            R = self._sample_uniform_rotation()
-            return domain.transform(
-                R,
-                transform_point_data=self.transform_point_data,
-                transform_cell_data=self.transform_cell_data,
-                transform_global_data=self.transform_global_data,
-                assume_invertible=True,
-            )
-
-        axis, angle = self._sample_axis_and_angle()
-        return domain.rotate(
-            angle,
-            axis=axis,
-            transform_point_data=self.transform_point_data,
-            transform_cell_data=self.transform_cell_data,
-            transform_global_data=self.transform_global_data,
-        )
+            case "axis_aligned":
+                axis, angle = self._sample_axis_and_angle()
+                return domain.rotate(
+                    angle,
+                    axis=axis,
+                    transform_point_data=self.transform_point_data,
+                    transform_cell_data=self.transform_cell_data,
+                    transform_global_data=self.transform_global_data,
+                )
+            case _:
+                raise ValueError(
+                    f"Unknown rotation mode {self.mode!r}. "
+                    f"Expected 'uniform' or 'axis_aligned'."
+                )
 
     def extra_repr(self) -> str:
         if self.mode == "uniform":
