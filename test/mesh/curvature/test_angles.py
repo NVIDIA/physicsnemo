@@ -32,13 +32,11 @@ import pytest
 import torch
 
 from physicsnemo.mesh.curvature._angles import compute_angles_at_vertices
-from physicsnemo.mesh.curvature._utils import (
-    compute_triangle_angles,
-    stable_angle_between_vectors,
-)
 from physicsnemo.mesh.geometry._angles import (
-    compute_vertex_angles,
+    compute_triangle_angles,
     compute_vertex_angle_sums,
+    compute_vertex_angles,
+    stable_angle_between_vectors,
 )
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.primitives.curves import circle_2d
@@ -126,7 +124,9 @@ class TestTriangleAngleFastPath:
             ]
         )
 
-        forward = compute_vertex_angles(Mesh(points=points, cells=torch.tensor([[0, 1, 2]])))
+        forward = compute_vertex_angles(
+            Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+        )
         reversed_angles = compute_vertex_angles(
             Mesh(points=points, cells=torch.tensor([[0, 2, 1]]))
         )
@@ -147,7 +147,9 @@ class TestTriangleAngleFastPath:
         angles = compute_vertex_angles(mesh)
 
         assert torch.isfinite(angles).all()
-        torch.testing.assert_close(angles.sum(dim=1), torch.tensor([torch.pi], dtype=torch.float64))
+        torch.testing.assert_close(
+            angles.sum(dim=1), torch.tensor([torch.pi], dtype=torch.float64)
+        )
 
     def test_primitive_sphere_angle_sums_are_finite(self):
         mesh = sphere_icosahedral.load(subdivisions=2)
@@ -156,6 +158,7 @@ class TestTriangleAngleFastPath:
 
         assert torch.isfinite(angle_sums).all()
         assert (angle_sums > 0).all()
+
 
 ###############################################################################
 # 1D Manifolds (Closed Curves)

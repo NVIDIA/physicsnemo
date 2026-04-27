@@ -17,18 +17,9 @@
 """Utility functions for curvature computations.
 
 Provides helper functions for computing full angles in n-dimensions.
-
-The angle primitives ``stable_angle_between_vectors`` and
-``compute_triangle_angles`` now live in :mod:`physicsnemo.mesh.geometry._angles`
-and are re-exported here for backward compatibility.
 """
 
 import math
-
-from physicsnemo.mesh.geometry._angles import (
-    compute_triangle_angles,
-    stable_angle_between_vectors,
-)
 
 
 def compute_full_angle_n_sphere(n_manifold_dims: int) -> float:

@@ -27,7 +27,9 @@ def _assert_equal_vertex_distances(
     atol: float = 1e-6,
 ) -> None:
     distances = torch.linalg.vector_norm(vertices - centers[:, None, :], dim=-1)
-    torch.testing.assert_close(distances, distances[:, :1].expand_as(distances), atol=atol, rtol=0)
+    torch.testing.assert_close(
+        distances, distances[:, :1].expand_as(distances), atol=atol, rtol=0
+    )
 
 
 def test_right_triangle_circumcenter_3d() -> None:

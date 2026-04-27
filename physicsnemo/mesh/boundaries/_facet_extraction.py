@@ -27,8 +27,6 @@ to be powers of 2, which doesn't work for triangles (3 vertices) or tets (4 vert
 The pure PyTorch implementation here is highly optimized and performs excellently.
 """
 
-from functools import lru_cache
-from itertools import combinations
 from typing import TYPE_CHECKING, Literal
 
 import torch

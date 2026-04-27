@@ -14,8 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import torch
 import pytest
+import torch
 
 from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
 
