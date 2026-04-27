@@ -83,6 +83,38 @@ def test_knn_cuml(device: str, k: int):
     _assert_knn_outputs(points, queries, indices, distances, k)
 
 
+# Validate that cuML kNN is correctly ordered on non-default CUDA streams.
+def test_knn_cuml_non_default_cuda_stream(device: str):
+    if "cuda" not in device:
+        pytest.skip("cuml backend is CUDA-only")
+    if not check_version_spec("cuml", "24.0.0", hard_fail=False):
+        pytest.skip("cuml not available")
+
+    k = 5
+    cuda_device = torch.device(device)
+    caller_stream = torch.cuda.current_stream(cuda_device)
+    knn_stream = torch.cuda.Stream(device=cuda_device)
+
+    with torch.cuda.stream(knn_stream):
+        points, queries = _build_problem(device, torch.float32)
+        indices, distances = knn(points, queries, k=k, implementation="cuml")
+
+        # Enqueue dependent PyTorch work to exercise the DLPack return path.
+        stream_indices = indices.clone()
+        stream_distances = distances + torch.zeros_like(distances)
+        distance_checksum = stream_distances.square().sum()
+        index_checksum = stream_indices.to(torch.int64).sum()
+
+    caller_stream.wait_stream(knn_stream)
+
+    _assert_knn_outputs(points, queries, stream_indices, stream_distances, k)
+    assert torch.isfinite(distance_checksum)
+    assert index_checksum >= 0
+
+    reference = knn(points, queries, k=k, implementation="torch")
+    KNN.compare_forward((stream_indices, stream_distances), reference)
+
+
 # Validate the SciPy implementation when available on CPU.
 @pytest.mark.parametrize("k", [1, 5])
 def test_knn_scipy(device: str, k: int):
