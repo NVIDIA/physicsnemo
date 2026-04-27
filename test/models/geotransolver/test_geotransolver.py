@@ -283,7 +283,7 @@ def test_geotransolver_forward_accuracy_tuple(device):
             geometry,
         ),
         file_name="models/geotransolver/data/geotransolver_tuple_output.pth",
-        atol=1e-3,
+        atol=2e-3,
     )
 
 

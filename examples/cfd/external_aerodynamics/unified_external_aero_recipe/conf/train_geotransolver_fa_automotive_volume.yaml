@@ -49,7 +49,7 @@ model:
   out_dim: 5              # velocity (3) + pressure (1) + nut (1)
   geometry_dim: 3         # point coordinates
   global_dim: 3           # inlet velocity (3)
-  n_layers: 12
+  n_layers: 20
   n_hidden: 256
   dropout: 0.0
   n_head: 8
@@ -59,11 +59,11 @@ model:
   use_te: false           # GALE_FA does not support TE
   plus: false
   attention_type: "GALE_FA"
-  include_local_features: false
+  include_local_features: true
   radii: [0.1, 0.5, 2.0]
   neighbors_in_radius: [16, 32, 64]
   n_hidden_local: 32
-  state_mixing_mode: "weighted"  # "weighted" (default) or "concat_project"
+  state_mixing_mode: "concat_project"  # "weighted" (default) or "concat_project"
 
 # -- Dataset -----------------------------------------------------------------
 dataset:
@@ -76,7 +76,7 @@ dataset:
   nondim_types:
     velocity: velocity
     nut: identity
-  metrics: [l2]
+  metrics: [l2, l1]
 
 # -- Training ----------------------------------------------------------------
 training:
@@ -95,8 +95,8 @@ training:
 
   scheduler:
     _target_: torch.optim.lr_scheduler.StepLR
-    step_size: 100
-    gamma: 0.1
+    step_size: 50
+    gamma: 0.05
 
 # -- DataLoader / Dataset Performance Tuning --------------------------------
 dataloader:
@@ -104,15 +104,11 @@ dataloader:
   num_streams: 1
   use_streams: false       # SDF computation is not stream-safe
   num_workers: 1
-  pin_memory: true
+  pin_memory: false
 
-# -- MLflow Experiment Tracking ----------------------------------------------
-mlflow:
-  tracking_uri: null
-  experiment_name: "unified_external_aero"
-  run_name: null
+# -- Logging -----------------------------------------------------------------
+logging:
   log_every_n_steps: 10
-  tags: {}
 
 # -- Data paths --------------------------------------------------------------
 # Splits are read from manifest.json; change train_split / val_split to

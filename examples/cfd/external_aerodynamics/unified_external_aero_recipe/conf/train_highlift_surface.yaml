@@ -25,7 +25,7 @@ checkpoint_dir: null
 run_id: "highlift_surface_geotransolver"
 
 precision: "bfloat16"
-compile: false
+compile: true
 profile: false
 augment: false
 benchmark_io: false
@@ -39,7 +39,7 @@ data_mapping: "geotransolver_highlift_surface"
 model:
   _target_: physicsnemo.experimental.models.geotransolver.GeoTransolver
   functional_dim: 6       # local_embedding = geometry coords (3) + normals (3)
-  out_dim: 7              # pressure (1) + temperature (1) + density (1) + velocity (3) + tau_wall (1)
+  out_dim: 9              # pressure (1) + temperature (1) + density (1) + velocity (3) + tau_wall (3)
   geometry_dim: 3         # point coordinates
   global_dim: 3           # freestream velocity U_inf (3)
   n_layers: 12
@@ -65,7 +65,7 @@ dataset:
     temperature: scalar
     density: scalar
     velocity: vector
-    tau_wall: scalar
+    tau_wall: vector
   # Explicit nondim type per output field for physical-space metric inversion.
   nondim_types:
     pressure: pressure
@@ -78,7 +78,7 @@ dataset:
 # -- Training ----------------------------------------------------------------
 training:
   seed: 42
-  num_epochs: 500
+  num_epochs: 200
   save_interval: 25
   loss_type: "huber"
   batch_size: 1
@@ -97,21 +97,30 @@ training:
 
 # -- DataLoader / Dataset Performance Tuning --------------------------------
 dataloader:
-  prefetch_factor: 1
+  prefetch_factor: 4
   num_streams: 1
-  use_streams: true
-  num_workers: 1
+  use_streams: false      # ball query is not stream-safe
+  num_workers: 4
   pin_memory: true
 
-# -- MLflow Experiment Tracking ----------------------------------------------
-mlflow:
-  tracking_uri: null
-  experiment_name: "unified_external_aero"
-  run_name: null
+# -- Logging -----------------------------------------------------------------
+logging:
   log_every_n_steps: 10
-  tags: {}
 
 # -- Data paths --------------------------------------------------------------
+# Splits are read from manifest.json; change train_split / val_split to
+# switch experiments.  Available keys in the manifest:
+#   single_aoa_{4,12,22}_{train,val,test}   (fully covered by converted AoAs)
+#   full_{train,val,test}                   (10 AoAs - needs more conversions)
+#   scarce_{train,val,test}
+#   super_scarce_{train,val,test}
+#   geometry_{train,val,test}
+#   aoa_{train,val,test}                    (train 4-12, test 14-22)
+#   deflection_{train,val,test}
+#   stall_{train,val,test}
 data:
   highlift:
     config: conf/dataset/highlift_surface.yaml
+    manifest: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/PhysicsNeMo-HighLiftAeroML/manifest.json
+    train_split: single_aoa_4_train
+    val_split: single_aoa_4_val

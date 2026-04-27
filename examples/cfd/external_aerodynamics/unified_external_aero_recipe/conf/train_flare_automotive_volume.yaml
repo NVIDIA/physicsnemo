@@ -95,13 +95,9 @@ dataloader:
   num_workers: 1
   pin_memory: true
 
-# -- MLflow Experiment Tracking ----------------------------------------------
-mlflow:
-  tracking_uri: null
-  experiment_name: "unified_external_aero"
-  run_name: null
+# -- Logging -----------------------------------------------------------------
+logging:
   log_every_n_steps: 10
-  tags: {}
 
 # -- Data paths --------------------------------------------------------------
 # Splits are read from manifest.json; change train_split / val_split to

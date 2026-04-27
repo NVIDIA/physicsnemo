@@ -41,7 +41,7 @@ model:
   _target_: physicsnemo.models.transolver.Transolver
   functional_dim: 3       # fx = freestream velocity U_inf (3)
   out_dim: 5              # velocity (3) + pressure (1) + nut (1)
-  embedding_dim: 3        # embedding = points (3), no normals for volume
+  embedding_dim: 7        # embedding = points (3) + SDF (1) + SDF normals (3)
   n_layers: 12
   n_hidden: 256
   dropout: 0.0
@@ -95,13 +95,9 @@ dataloader:
   num_workers: 1
   pin_memory: true
 
-# -- MLflow Experiment Tracking ----------------------------------------------
-mlflow:
-  tracking_uri: null
-  experiment_name: "unified_external_aero"
-  run_name: null
+# -- Logging -----------------------------------------------------------------
+logging:
   log_every_n_steps: 10
-  tags: {}
 
 # -- Data paths --------------------------------------------------------------
 # Splits are read from manifest.json; change train_split / val_split to

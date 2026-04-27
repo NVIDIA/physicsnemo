@@ -52,7 +52,7 @@ model:
   slice_num: 256
   use_te: false
   plus: false
-  include_local_features: false
+  include_local_features: true
   radii: [0.1, 0.5, 2.0]
   neighbors_in_radius: [16, 32, 64]
   n_hidden_local: 32
@@ -99,13 +99,9 @@ dataloader:
   num_workers: 1
   pin_memory: true
 
-# -- MLflow Experiment Tracking ----------------------------------------------
-mlflow:
-  tracking_uri: null
-  experiment_name: "unified_external_aero"
-  run_name: null
+# -- Logging -----------------------------------------------------------------
+logging:
   log_every_n_steps: 10
-  tags: {}
 
 # -- Data paths --------------------------------------------------------------
 # Splits are read from manifest.json; change train_split / val_split to

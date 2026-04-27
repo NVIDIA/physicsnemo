@@ -27,7 +27,7 @@ run_id: "highlift_volume_geotransolver"
 
 precision: "bfloat16"
 compile: false
-profile: true
+profile: false
 augment: false
 benchmark_io: false
 
@@ -102,17 +102,21 @@ dataloader:
   num_workers: 1
   pin_memory: true
 
-# -- MLflow Experiment Tracking ----------------------------------------------
-mlflow:
-  tracking_uri: null
-  experiment_name: "unified_external_aero"
-  run_name: null
+# -- Logging -----------------------------------------------------------------
+logging:
   log_every_n_steps: 10
-  tags: {}
 
 # -- Data paths --------------------------------------------------------------
 # Splits are read from manifest.json; change train_split / val_split to
-# switch experiments (e.g. geometry_train, full_train, aoa_train, ...).
+# switch experiments.  Available keys in the manifest:
+#   single_aoa_{4,12,22}_{train,val,test}   (fully covered by converted AoAs)
+#   full_{train,val,test}                   (10 AoAs - needs more conversions)
+#   scarce_{train,val,test}
+#   super_scarce_{train,val,test}
+#   geometry_{train,val,test}
+#   aoa_{train,val,test}                    (train 4-12, test 14-22)
+#   deflection_{train,val,test}
+#   stall_{train,val,test}
 data:
   highlift:
     config: conf/dataset/highlift_volume.yaml

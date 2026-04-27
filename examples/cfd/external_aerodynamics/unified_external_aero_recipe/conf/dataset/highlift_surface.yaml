@@ -14,10 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# High-lift airplane surface dataset (compressible)
+# High-lift airplane surface dataset (compressible, cell-centric)
 # Reads the boundary surface Mesh directly from DomainMesh .pdmsh files
 # by navigating into the on-disk tensordict directory structure.
-# Boundary mesh from HiLiftAeroML. Fields live in point_data.
+# Boundary mesh from HiLiftAeroML. Physics fields live in cell_data
+# (derived from vertex-projected point_data during conversion).
+# Model inputs use cell centroids and face normals; topology (triangles)
+# is preserved for normal computation and cell-based subsampling.
 # Splits are controlled by manifest.json + train_split/val_split in the training config.
 
 name: highlift_surface
@@ -36,12 +39,13 @@ pipeline:
   reader:
     _target_: ${dp:MeshReader}
     path: ${train_datadir}
-    pattern: "**/*.pdmsh/_tensordict/boundaries/boundary"
+    pattern: "geo_LHC*/*.pdmsh/_tensordict/boundaries/boundary"
     subsample_n_cells: ${sampling_resolution}
   augmentations:
     - _target_: ${dp:RandomRotateMesh}
       axes: ["z"]
       transform_point_data: true
+      transform_cell_data: true
       transform_global_data: true
     - _target_: ${dp:RandomTranslateMesh}
       distribution:
@@ -51,6 +55,9 @@ pipeline:
   transforms:
     - _target_: ${dp:CenterMesh}
       use_area_weighting: false
+    - _target_: ${dp:ComputeSurfaceNormals}
+      store_as: cell_data
+      field_name: normals
     - _target_: ${dp:NonDimensionalizeByMetadata}
       fields:
         PROJ(AVG(P)): pressure
@@ -58,51 +65,45 @@ pipeline:
         PROJ(AVG(RHO)): density
         PROJ(AVG(U)): velocity
         AVG(TAU_WALL): stress
-      section: point_data
+      section: cell_data
     - _target_: ${dp:RenameMeshFields}
-      point_data:
+      cell_data:
         PROJ(AVG(P)): pressure
         PROJ(AVG(T)): temperature
         PROJ(AVG(RHO)): density
         PROJ(AVG(U)): velocity
         AVG(TAU_WALL): tau_wall
-    # z-score normalization (dataset-wide stats, 180 cases / 24B points)
+    # z-score normalization (dataset-wide stats)
     # Stats are post-nondimensionalization values.
+    # TODO: recompute stats for cell-centered data (these are vertex-projected estimates)
     - _target_: ${dp:NormalizeMeshFields}
-      section: point_data
+      section: cell_data
       fields:
-        pressure:    {type: scalar, mean: -0.26,  std: 0.62}
-        temperature: {type: scalar, mean:  1.004, std: 0.00224}
-        density:     {type: scalar, mean:  0.988, std: 0.0156}
-        velocity:    {type: vector, mean: [0.413, -0.005, 0.029], std: 0.20}
-        tau_wall:    {type: scalar, mean: 0.005068, std: 0.003735}
-    # Full subsampling before normals: subsample cells first, then points
-    # to the final count.  Normals are computed on the surviving triangles.
-    - _target_: ${dp:SubsampleMesh}
-      n_cells: 500000
-      n_points: ${sampling_resolution}
-    - _target_: ${dp:ComputeSurfaceNormals}
-      store_as: point_data
-      field_name: normals
+        pressure:    {type: scalar, mean: -0.5,  std: 1.0}
+        temperature: {type: scalar, mean:  1.00, std: 0.002}
+        density:     {type: scalar, mean:  1.0, std: 0.02}
+        velocity:    {type: vector, mean: [0.00, 0.00, 0.00], std: 0.20}
+        tau_wall:    {type: scalar, mean: [0.00, 0.00, 0.00], std: 0.003}
     - _target_: ${dp:MeshToTensorDict}
+    - _target_: ${dp:ComputeCellCentroids}
     - _target_: ${dp:RestructureTensorDict}
       groups:
         input:
-          points: points
-          normals: point_data.normals
+          points: cell_centroids
+          normals: cell_data.normals
           U_inf: global_data.U_inf
         output:
-          pressure: point_data.pressure
-          temperature: point_data.temperature
-          density: point_data.density
-          velocity: point_data.velocity
-          tau_wall: point_data.tau_wall
+          pressure: cell_data.pressure
+          temperature: cell_data.temperature
+          density: cell_data.density
+          velocity: cell_data.velocity
+          tau_wall: cell_data.tau_wall
 
 targets:
   pressure: scalar
   temperature: scalar
   density: scalar
   velocity: vector
-  tau_wall: scalar
+  tau_wall: vector
 
 metrics: [l1, l2, mae]

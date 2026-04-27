@@ -25,7 +25,7 @@ checkpoint_dir: null
 run_id: "surface_geotransolver_shift_suv_estate"
 
 precision: "bfloat16"
-compile: true
+compile: false
 profile: false
 augment: false
 benchmark_io: false
@@ -90,19 +90,13 @@ training:
 dataloader:
   prefetch_factor: 1
   num_streams: 1
-  use_streams: true
+  use_streams: false      # ball query is not stream-safe
   num_workers: 1
   pin_memory: true
 
-# -- MLflow Experiment Tracking ----------------------------------------------
-mlflow:
-  # Default to local file tracking. Override with a remote URI when the server is ready:
-  #   tracking_uri: "http://YOUR_MLFLOW_SERVER:5000"
-  tracking_uri: null  # null => local ./mlruns directory
-  experiment_name: "unified_external_aero"
-  run_name: null  # auto-generated from run_id if null
-  log_every_n_steps: 10  # per-step metric logging frequency
-  tags: {}
+# -- Logging -----------------------------------------------------------------
+logging:
+  log_every_n_steps: 10
 
 # -- Data paths --------------------------------------------------------------
 # Splits are read from manifest.json; change train_split / val_split to

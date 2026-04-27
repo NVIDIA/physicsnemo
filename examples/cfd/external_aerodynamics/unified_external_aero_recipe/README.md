@@ -177,6 +177,12 @@ merged via `MultiDataset`.
   types.  Provides an `inverse()` method for re-dimensionalizing
   predictions.
 
+  Note that for input points, we non-dimensionalize by a reference scalar `L_ref`.
+  In some recipes, the x/y/z axes are all scaled to unit-scale independently.
+  Here, we've made a conscious decision to maintain the aspect ratios of the input
+  positions and vectors deliberately use a scalar parameter for coordinate
+  non-dimensionalization.  To disable, set `L_ref` to 1.0.
+
 - **ComputeSDFFromBoundary** — Volume pipelines only.  Computes a
   signed distance field (and surface normals) from an auxiliary STL
   boundary mesh loaded via the reader's `extra_boundaries` option.

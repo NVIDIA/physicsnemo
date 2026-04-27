@@ -43,9 +43,12 @@ import hydra
 import omegaconf
 from omegaconf import DictConfig, OmegaConf
 
+import json
+from datetime import datetime, timezone
+
 import torch
 from torch.amp import autocast, GradScaler
-import mlflow
+from torch.utils.tensorboard import SummaryWriter
 
 from tabulate import tabulate
 
@@ -77,21 +80,34 @@ TE_AVAILABLE = te.available
 
 
 def _flatten_config(d: dict, parent: str = "", sep: str = ".") -> dict[str, str]:
-    """Recursively flatten a nested dict into dot-separated key/value pairs.
-
-    MLflow has a 500-param limit; values are stringified and truncated
-    to 500 chars to stay within MLflow's constraints.
-    """
+    """Recursively flatten a nested dict into dot-separated key/value pairs."""
     items: dict[str, str] = {}
     for k, v in d.items():
         key = f"{parent}{sep}{k}" if parent else k
         if isinstance(v, dict):
             items.update(_flatten_config(v, key, sep))
-        elif isinstance(v, (list, tuple)):
-            items[key] = str(v)[:500]
         else:
-            items[key] = str(v)[:500]
+            items[key] = str(v)
     return items
+
+
+def _log_to_tensorboard(writer, metrics_dict, prefix, global_step):
+    """Write metrics to TensorBoard with structured tag prefixes.
+
+    Loss entries (keys starting with ``loss/``) are logged as
+    ``{prefix}/{key}`` (e.g. ``iteration/loss/pressure``).  All other
+    entries are treated as evaluation metrics and logged as
+    ``{prefix}/metrics/{key}`` (e.g. ``epoch/metrics/pressure_l2``).
+    """
+    if writer is None:
+        return
+    for k, v in metrics_dict.items():
+        if k.startswith("loss/"):
+            tag = f"{prefix}/{k}"
+        else:
+            tag = f"{prefix}/metrics/{k}"
+        val = v if isinstance(v, (int, float)) else v.item()
+        writer.add_scalar(tag, val, global_step=global_step)
 
 
 def get_autocast_context(precision: str):
@@ -221,12 +237,13 @@ def train_epoch(
     dist_manager: DistributedManager,
     scaler: GradScaler | None = None,
     broadcast_global: bool = False,
-    log_every_n_steps: int = 10,
+    train_writer: SummaryWriter | None = None,
+    log_jsonl=None,
 ) -> tuple[float, dict[str, float]]:
     """Run one training epoch over the dataloader.
 
     Iterates through all batches, computes forward pass, back-propagates
-    gradients, and logs per-step and per-epoch statistics to MLflow.
+    gradients, and logs per-step and per-epoch statistics to TensorBoard and JSONL.
 
     Parameters
     ----------
@@ -256,8 +273,6 @@ def train_epoch(
     broadcast_global : bool, default False
         Expand global (B,1,C) tensors to match the spatial dimension
         of other batch tensors before forwarding.
-    log_every_n_steps : int, default 10
-        How often to log per-step metrics to MLflow.
 
     Returns
     -------
@@ -320,16 +335,31 @@ def train_epoch(
             f"Mem: {mem_gb:.2f}GB"
         )
 
-        # Per-step MLflow logging at configured frequency
+        # Per-step TensorBoard + JSONL logging
         global_step = epoch * num_steps + i
-        if dist_manager.rank == 0 and (i + 1) % log_every_n_steps == 0:
-            step_metrics = {
-                "step/train_loss": this_loss,
-                "step/mem_gb": mem_gb,
-                "step/step_time_s": step_dt,
-            }
-            step_metrics.update({f"step/train_{k}": v for k, v in metrics.items()})
-            mlflow.log_metrics(step_metrics, step=global_step)
+        if dist_manager.rank == 0:
+            if train_writer is not None:
+                _log_to_tensorboard(train_writer, metrics, "iteration", global_step)
+                current_lr = scheduler.get_last_lr()[0]
+                train_writer.add_scalar(
+                    "iteration/lr", current_lr, global_step=global_step
+                )
+                train_writer.add_scalar(
+                    "iteration/performance/mem_gb", mem_gb, global_step=global_step
+                )
+                train_writer.add_scalar(
+                    "iteration/performance/step_time_s",
+                    step_dt,
+                    global_step=global_step,
+                )
+            if log_jsonl is not None:
+                step_metrics = {
+                    "loss": this_loss,
+                    "mem_gb": mem_gb,
+                    "step_time_s": step_dt,
+                }
+                step_metrics.update(metrics)
+                log_jsonl({"phase": "step", "global_step": global_step, **step_metrics})
 
         if cfg.profile and i >= 10:
             break
@@ -345,9 +375,11 @@ def train_epoch(
     )
 
     if dist_manager.rank == 0:
-        epoch_metrics = {"train/loss": avg_loss}
-        epoch_metrics.update({f"train/{k}": v for k, v in avg_metrics.items()})
-        mlflow.log_metrics(epoch_metrics, step=epoch)
+        _log_to_tensorboard(train_writer, avg_metrics, "epoch", epoch)
+        if log_jsonl is not None:
+            epoch_log = {"loss": avg_loss}
+            epoch_log.update(avg_metrics)
+            log_jsonl({"phase": "train", "epoch": epoch, **epoch_log})
 
     return avg_loss, avg_metrics
 
@@ -363,6 +395,8 @@ def val_epoch(
     cfg: DictConfig,
     dist_manager: DistributedManager,
     broadcast_global: bool = False,
+    val_writer: SummaryWriter | None = None,
+    log_jsonl=None,
 ) -> tuple[float, dict[str, float]]:
     """Run one validation epoch.
 
@@ -445,9 +479,11 @@ def val_epoch(
     )
 
     if dist_manager.rank == 0:
-        val_metrics_log = {"val/loss": avg_loss}
-        val_metrics_log.update({f"val/{k}": v for k, v in avg_metrics.items()})
-        mlflow.log_metrics(val_metrics_log, step=epoch)
+        _log_to_tensorboard(val_writer, avg_metrics, "epoch", epoch)
+        if log_jsonl is not None:
+            val_log = {"loss": avg_loss}
+            val_log.update(avg_metrics)
+            log_jsonl({"phase": "val", "epoch": epoch, **val_log})
 
     return avg_loss, avg_metrics
 
@@ -619,6 +655,17 @@ def build_dataloaders(cfg: DictConfig):
         # Both styles accept an optional ``datadir`` to override
         # ``train_datadir`` in the dataset YAML with the root directory
         # containing all runs.
+        #
+        # NOTE (limitation): only ONE ``data.<key>`` block may carry a
+        # manifest today.  If multiple blocks have manifest/train_split,
+        # the later block silently overwrites the earlier block's indices
+        # and the resulting ``ManifestSampler`` is indexed against the
+        # last reader's local positions rather than the MultiDataset's
+        # concatenated positions.  To merge splits via MultiDataset (e.g.
+        # train on single_aoa_4 + single_aoa_12 together), this loop must
+        # first be extended to collect per-block (offset, indices) pairs
+        # and build a single sampler over offset-shifted indices against
+        # the MultiDataset.  Tracked as a follow-up.
         train_manifest = ds_cfg_block.get("train_manifest", None)
         val_manifest = ds_cfg_block.get("val_manifest", None)
         manifest = ds_cfg_block.get("manifest", None)
@@ -858,7 +905,7 @@ def main(cfg: DictConfig):
 
     Orchestrates the complete training workflow:
 
-    1. Initialise distributed training and MLflow experiment tracking.
+    1. Initialise distributed training and TensorBoard/JSONL logging.
     2. Build train/val dataloaders and extract pipeline transforms.
     3. If ``cfg.benchmark_io`` is true, iterate dataloaders to measure
        I/O throughput and return early (no model, no optimizer).
@@ -870,7 +917,7 @@ def main(cfg: DictConfig):
     cfg : DictConfig
         Hydra config containing ``model``, ``training``, ``dataset``,
         ``data``, ``output_dir``, ``run_id``, ``precision``, ``compile``,
-        ``profile``, ``benchmark_io``, ``mlflow``, and related keys.
+        ``profile``, ``benchmark_io``, ``logging``, and related keys.
     """
     DistributedManager.initialize()
     dist_manager = DistributedManager()
@@ -882,27 +929,23 @@ def main(cfg: DictConfig):
 
     checkpoint_dir = getattr(cfg, "checkpoint_dir", None) or cfg.output_dir
 
-    # -- MLflow setup (rank 0 only) ---------------------------------------------
-    mlflow_cfg = cfg.get("mlflow", {})
-    log_every_n_steps = mlflow_cfg.get("log_every_n_steps", 10) if mlflow_cfg else 10
+    # -- Logging setup (rank 0 only) ----------------------------------------------
+    train_writer = None
+    val_writer = None
+    log_jsonl = None
+    run_dir = os.path.join(cfg.output_dir, cfg.run_id)
     if dist_manager.rank == 0:
-        os.makedirs(cfg.output_dir, exist_ok=True)
+        os.makedirs(run_dir, exist_ok=True)
         os.makedirs(checkpoint_dir, exist_ok=True)
 
-        tracking_uri = mlflow_cfg.get("tracking_uri") if mlflow_cfg else None
-        if tracking_uri:
-            mlflow.set_tracking_uri(tracking_uri)
-        # When tracking_uri is null/omitted, MLflow defaults to local ./mlruns
-        experiment_name = (
-            mlflow_cfg.get("experiment_name", "unified_external_aero")
-            if mlflow_cfg
-            else "unified_external_aero"
-        )
-        mlflow.set_experiment(experiment_name)
-        run_name = (mlflow_cfg.get("run_name") if mlflow_cfg else None) or cfg.run_id
-        mlflow.start_run(run_name=run_name)
-        for k, v in (mlflow_cfg.get("tags") or {}).items():
-            mlflow.set_tag(k, v)
+        train_writer = SummaryWriter(log_dir=os.path.join(run_dir, "tb", "train"))
+        val_writer = SummaryWriter(log_dir=os.path.join(run_dir, "tb", "val"))
+        metrics_path = os.path.join(run_dir, "metrics.jsonl")
+
+        def log_jsonl(record: dict):
+            record["ts"] = datetime.now(timezone.utc).isoformat()
+            with open(metrics_path, "a") as f:
+                f.write(json.dumps(record, default=str) + "\n")
 
     logger.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
 
@@ -910,25 +953,17 @@ def main(cfg: DictConfig):
     logger.info(f"Train samples: {len(train_loader.sampler)}")
     logger.info(f"Val samples: {len(val_loader.sampler)}")
 
-    # -- Log dataset metadata to MLflow (rank 0) --------------------------------
+    # -- Log dataset metadata (rank 0) --------------------------------------------
     recipe_root = Path(__file__).resolve().parent.parent
-    if dist_manager.rank == 0:
-        mlflow.log_params(
+    if dist_manager.rank == 0 and log_jsonl is not None:
+        log_jsonl(
             {
+                "phase": "dataset",
                 "train_samples": len(train_loader.dataset),
                 "val_samples": len(val_loader.dataset),
+                "metadata": ds_metadata or {},
             }
         )
-        for ds_key, ds_block in cfg.data.items():
-            mlflow.set_tag(f"dataset/{ds_key}/config", ds_block.config)
-            ds_config_path = recipe_root / ds_block.config
-            if ds_config_path.exists():
-                mlflow.log_artifact(
-                    str(ds_config_path), artifact_path="dataset_configs"
-                )
-        if ds_metadata:
-            for mk, mv in ds_metadata.items():
-                mlflow.log_param(f"metadata.{mk}", str(mv)[:500])
 
     # -- I/O benchmark mode: iterate dataloaders, skip model entirely -----------
     if cfg.get("benchmark_io", False):
@@ -946,7 +981,10 @@ def main(cfg: DictConfig):
                 benchmark_io_epoch(val_loader, "val", logger, max_steps=max_steps)
         logger.info("benchmark_io complete!")
         if dist_manager.rank == 0:
-            mlflow.end_run()
+            if train_writer is not None:
+                train_writer.close()
+            if val_writer is not None:
+                val_writer.close()
         return
 
     # -- Normal training path ---------------------------------------------------
@@ -976,24 +1014,26 @@ def main(cfg: DictConfig):
     precision = cfg.precision
     scaler = GradScaler() if precision == "float16" else None
 
-    # -- Log full config + model params to MLflow (rank 0) ----------------------
+    # -- Log full config + model params (rank 0) ---------------------------------
     if dist_manager.rank == 0:
         flat_cfg = _flatten_config(
             OmegaConf.to_container(cfg, resolve=True, throw_on_missing=False)
         )
-        mlflow.log_params(flat_cfg)
-        mlflow.log_param("num_parameters", num_params)
-        mlflow.set_tag("model", model.__class__.__name__)
+        if log_jsonl is not None:
+            log_jsonl(
+                {
+                    "phase": "config",
+                    "model": model.__class__.__name__,
+                    "num_parameters": num_params,
+                    "params": flat_cfg,
+                }
+            )
 
-        # Save the full resolved config as an artifact
+        # Save the full resolved config
         resolved_yaml = omegaconf.OmegaConf.to_yaml(cfg, resolve=True)
-        config_artifact_path = os.path.join(
-            cfg.output_dir, cfg.run_id, "resolved_config.yaml"
-        )
-        os.makedirs(os.path.dirname(config_artifact_path), exist_ok=True)
+        config_artifact_path = os.path.join(run_dir, "resolved_config.yaml")
         with open(config_artifact_path, "w") as f:
             f.write(resolved_yaml)
-        mlflow.log_artifact(config_artifact_path)
 
     ds_cfg = cfg.dataset
     targets = omegaconf.OmegaConf.to_container(ds_cfg.targets, resolve=True)
@@ -1045,7 +1085,8 @@ def main(cfg: DictConfig):
                 dist_manager,
                 scaler,
                 broadcast_global=broadcast_global,
-                log_every_n_steps=log_every_n_steps,
+                train_writer=train_writer,
+                log_jsonl=log_jsonl,
             )
 
             val_loss, val_metrics = val_epoch(
@@ -1058,12 +1099,9 @@ def main(cfg: DictConfig):
                 cfg,
                 dist_manager,
                 broadcast_global=broadcast_global,
+                val_writer=val_writer,
+                log_jsonl=log_jsonl,
             )
-
-            # Log learning rate per epoch
-            if dist_manager.rank == 0:
-                current_lr = scheduler.get_last_lr()[0]
-                mlflow.log_metric("lr", current_lr, step=epoch)
 
             if dist_manager.rank == 0:
                 all_keys = list(dict.fromkeys(list(train_metrics) + list(val_metrics)))
@@ -1091,13 +1129,15 @@ def main(cfg: DictConfig):
                 if normalizer is not None:
                     norm_path = os.path.join(ckpt_args["path"], "norm_stats.pt")
                     torch.save(normalizer.stats, norm_path)
-                mlflow.log_artifacts(ckpt_args["path"], artifact_path="checkpoints")
 
             if cfg.training.get("scheduler_update_mode", "epoch") == "epoch":
                 scheduler.step()
 
     if dist_manager.rank == 0:
-        mlflow.end_run()
+        if train_writer is not None:
+            train_writer.close()
+        if val_writer is not None:
+            val_writer.close()
 
     logger.info("Training completed!")
 
