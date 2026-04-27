@@ -8,7 +8,7 @@ Numerical derivatives (PINO).
 
 This is an extension of the 2D Darcy flow data-driven problem. In addition to the
 data loss, we will demonstrate the use of physics constranints, specifically
-the equation residual loss. [PhysicsNeMo Sym](https://github.com/NVIDIA/physicsnemo-sym)
+the equation residual loss. the `physicsnemo.sym` module (install with `pip install "nvidia-physicsnemo[sym]"`)
 has utilities tailored for physics-informed machine learning. It also presents an
 abstracted APIs that allows users to think and model the problem from the lens of
 equations, constraints, etc. In this example, we will only levarage the physics-informed
@@ -16,7 +16,7 @@ utilities to see how we can add physics to an existing data-driven model with ea
 still maintaining the flexibility to define our own training loop and other details.
 For a more abstracted definition of these type of problems, where the training loop
 definition and other things is taken care of implictily, you may refer
-[PhysicsNeMo Sym](https://github.com/NVIDIA/physicsnemo-sym)
+the `physicsnemo.sym` module (install with `pip install "nvidia-physicsnemo[sym]"`)
 
 ## Dataset
 
@@ -50,12 +50,12 @@ the loss function and the use of one over the other can change from case-to-case
 With this example, we intend to demonstrate both such cases so that the users can compare
 and contrast the two approaches.
 
-In this example we will use the `PDE` class from PhysicsNeMo-Sym to symbolically define
+In this example we will use the `PDE` class from `physicsnemo.sym` to symbolically define
 the PDEs and use the `PhysicsInformer` utility to introduce the PDE
 constraints. Defining the PDEs sympolically is very convenient and most natural way to
 define these PDEs and allows us to print the equations to check for correctness.
 This also abstracts out the
-complexity of converting the equation into a pytorch representation. PhysicsNeMo Sym also
+complexity of converting the equation into a pytorch representation. `physicsnemo.sym` also
 provides several complex, well tested PDEs like 3D Navier-Stokes, Linear elasticity,
 Electromagnetics, etc. pre-defined which can be used directly in physics-informing
 applications.
@@ -79,7 +79,7 @@ darcy_physics_informed_fno.py
 ### Note
 
 If you are running this example outside of the PhysicsNeMo container, install
-PhysicsNeMo Sym using the instructions from [here](https://github.com/NVIDIA/physicsnemo-sym?tab=readme-ov-file#pypi)
+PhysicsNeMo with the sym extra: `pip install "nvidia-physicsnemo[sym]"`
 
 ## References
 

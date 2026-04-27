@@ -4,7 +4,7 @@
 
 - [What is the recommended hardware for training using PhysicsNeMo framework?](#what-is-the-recommended-hardware-for-training-using-physicsnemo-framework)
 - [What model architectures are in PhysicsNeMo?](#what-model-architectures-are-in-physicsnemo)
-- [What is the difference between PhysicsNeMo Core and Symbolic?](#what-is-the-difference-between-physicsnemo-core-and-symbolic)
+- [How do I use physics-informed training with PhysicsNeMo?](#how-do-i-use-physics-informed-training-with-physicsnemo)
 - [What can I do if I dont see a PDE in PhysicsNeMo?](#what-can-i-do-if-i-dont-see-a-pde-in-physicsnemo)
 - [What is the difference between the pip install and the container?](#what-is-the-difference-between-the-pip-install-and-the-container)
 
@@ -24,33 +24,31 @@ model architecture can be applied to a specific problem.
 These are reference starting points for users to get started.
 
 You can find the list of built in model architectures
-[here](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models) and
-[here](https://github.com/NVIDIA/physicsnemo-sym/tree/main/physicsnemo/sym/models)
+[here](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models).
 
-## What is the difference between PhysicsNeMo Core and Symbolic?
+## How do I use physics-informed training with PhysicsNeMo?
 
-PhysicsNeMo core is the foundational module that provides the core algorithms, network
-architectures and utilities that cover a broad spectrum of Physics-ML approaches.
-PhysicsNeMo Symbolic provides pythonic APIs, algorithms and utilities to be used with
-PhysicsNeMo core, to explicitly physics inform the model training. This includes symbolic
-APIs for PDEs, domain sampling and PDE-based residuals. It also provides higher level
-abstraction to compose a training loop from specification of the geometry, PDEs and
-constraints like boundary conditions using simple symbolic APIs.
-So if you are familiar with PyTorch and want to train model from a dataset, you start
-with PhysicsNeMo core and you import PhysicsNeMo symbolic to bring in explicit domain knowledge.
-Please refer to the [DeepONet example](https://github.com/physicsnemo/tree/main/examples/cfd/darcy_deeponet_physics)
-that illustrates the concept.
-If you are an engineer or domain expert accustomed to using numerical solvers, you can
-use PhysicsNeMo Symbolic to define your problem at a higher level of abstraction. Please
-refer to the [Lid Driven cavity](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/basics/lid_driven_cavity_flow.html)
-that illustrates the concept.
+PhysicsNeMo includes a `physicsnemo.sym` module (install with
+`pip install "nvidia-physicsnemo[sym]"`) that provides symbolic PDE definition,
+automatic spatial derivative computation, and physics-informed residual evaluation.
+Define your equations using SymPy, then use `PhysicsInformer` to compute PDE
+residuals automatically.
+
+See the [LDC PINNs example](examples/cfd/ldc_pinns/) and the
+[Darcy physics-informed example](examples/cfd/darcy_physics_informed/) for
+complete training scripts.
+
+> **Note:** The separate [PhysicsNeMo-Sym](https://github.com/NVIDIA/physicsnemo-sym)
+> repository is being archived. Its core functionality has been upstreamed into
+> PhysicsNeMo. See the [migration guide](v2.0-MIGRATION-GUIDE.md#physicsnemo-sym--physicsnemosym)
+> for details.
 
 ## What can I do if I dont see a PDE in PhysicsNeMo?
 
-PhysicsNeMo Symbolic provides a well documented
-[example](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/foundational/1d_wave_equation.html#writing-custom-pdes-and-boundary-initial-conditions)
-that walks you through how to define a custom PDE. Please see the source [here](https://github.com/NVIDIA/physicsnemo-sym/tree/main/physicsnemo/sym/eq/pdes)
-to see the built-in PDE implementation as an additional reference for your own implementation.
+Define your PDE using SymPy and the `physicsnemo.sym.eq.pde.PDE` base class.
+See the [LDC PINNs example](examples/cfd/ldc_pinns/train.py) for an inline
+Navier-Stokes definition, or the
+[MHD PINO example](examples/cfd/mhd_pino/losses/mhd_pde.py) for a custom MHD PDE.
 
 ## What is the difference between the pip install and the container?
 

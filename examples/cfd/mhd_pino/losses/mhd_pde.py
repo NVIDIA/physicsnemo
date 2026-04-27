@@ -19,7 +19,7 @@ from sympy import Symbol, Function, Number
 
 
 class MHD_PDE(PDE):
-    """MHD PDEs using PhysicsNeMo Sym"""
+    """MHD PDEs using physicsnemo.sym"""
 
     name = "MHD_PDE"
 
