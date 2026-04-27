@@ -43,7 +43,10 @@ if CUML_AVAILABLE and CUPY_AVAILABLE:
         if restore_dtype == torch.bfloat16:
             points = points.to(torch.float32)
             queries = queries.to(torch.float32)
-        # Use dlpack to move the data without copying between pytorch and cuml:
+        # Hand buffers to CuPy via DLPack (zero-copy). cuML now runs on its
+        # own internal stream, so cross-stream correctness depends on PyTorch
+        # and CuPy honoring the DLPack PyCapsule ``stream`` field (verified
+        # by ``test_knn_cuml_non_default_cuda_stream`` on a non-default stream).
         points = cp.from_dlpack(points)
         queries = cp.from_dlpack(queries)
 
