@@ -241,89 +241,89 @@ def _compute_meyer_mixed_voronoi_areas(
 def compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
     """Compute circumcentric dual 0-cell volumes (Voronoi regions) at mesh vertices.
 
-    This is the unified, mathematically rigorous implementation used by both DEC
-    operators and curvature computations. It replaces the previous buggy
-    ``compute_dual_volumes_0()`` in ``calculus/_circumcentric_dual.py`` which failed
-    on obtuse triangles (giving up to 513% conservation error).
+        This is the unified, mathematically rigorous implementation used by both DEC
+        operators and curvature computations. It replaces the previous buggy
+        ``compute_dual_volumes_0()`` in ``calculus/_circumcentric_dual.py`` which failed
+        on obtuse triangles (giving up to 513% conservation error).
 
-    The dual 0-cell (also called Voronoi cell or circumcentric dual) of a vertex
-    is the region of points closer to that vertex than to any other. In DEC, these
-    volumes appear in the Hodge star operator and normalization of the Laplacian.
+        The dual 0-cell (also called Voronoi cell or circumcentric dual) of a vertex
+        is the region of points closer to that vertex than to any other. In DEC, these
+        volumes appear in the Hodge star operator and normalization of the Laplacian.
 
-    **Note**: In the curvature/differential geometry literature, these are often
-    called "Voronoi areas" (for 2D) or "Voronoi volumes". In DEC literature, they
-    are called "dual 0-cell volumes" (denoted |⋆v|). These are identical concepts.
+        **Note**: In the curvature/differential geometry literature, these are often
+        called "Voronoi areas" (for 2D) or "Voronoi volumes". In DEC literature, they
+        are called "dual 0-cell volumes" (denoted |⋆v|). These are identical concepts.
 
-    Dimension-specific algorithms:
+        Dimension-specific algorithms:
 
-    **1D manifolds (edges)**:
-        Each vertex receives half the length of each incident edge.
-        Formula: V(v) = Σ_{edges ∋ v} |edge|/2
+        **1D manifolds (edges)**:
+            Each vertex receives half the length of each incident edge.
+            Formula: V(v) = Σ_{edges ∋ v} |edge|/2
 
-    **2D manifolds (triangles)**:
-        Uses Meyer et al. (2003) mixed area approach:
+        **2D manifolds (triangles)**:
+            Uses Meyer et al. (2003) mixed area approach:
 
-        - **Acute triangles** (all angles ≤ π/2): Circumcentric Voronoi formula (Eq. 7)
-          V(v) = (1/8) Σ (||e_i||² cot(α_i) + ||e_j||² cot(α_j))
-          where e_i, e_j are edges from v, α_i, α_j are opposite angles
+            - **Acute triangles** (all angles ≤ π/2): Circumcentric Voronoi formula (Eq. 7)
+              V(v) = (1/8) Σ (||e_i||² cot(α_i) + ||e_j||² cot(α_j))
+              where e_i, e_j are edges from v, α_i, α_j are opposite angles
 
-        - **Obtuse triangles**: Mixed area subdivision (Figure 4)
+            - **Obtuse triangles**: Mixed area subdivision (Figure 4)
 
-          - If obtuse at vertex v: V(v) = area(T)/2
-          - Otherwise: V(v) = area(T)/4
+              - If obtuse at vertex v: V(v) = area(T)/2
+              - Otherwise: V(v) = area(T)/4
 
-        This ensures perfect tiling and optimal error bounds.
+            This ensures perfect tiling and optimal error bounds.
 
-    **3D+ manifolds (tetrahedra, etc.)**:
-        Barycentric approximation (standard practice):
-        V(v) = Σ_{cells ∋ v} |cell| / (n_manifold_dims + 1)
+        **3D+ manifolds (tetrahedra, etc.)**:
+            Barycentric approximation (standard practice):
+            V(v) = Σ_{cells ∋ v} |cell| / (n_manifold_dims + 1)
 
-        Note: Rigorous circumcentric dual volumes in 3D require "well-centered"
-        meshes where all circumcenters lie inside their simplices (Desbrun et al.
-        2005, *Discrete Exterior Calculus*). Mixed volume formulas for obtuse
-        tetrahedra do not exist in the literature.
+            Note: Rigorous circumcentric dual volumes in 3D require "well-centered"
+            meshes where all circumcenters lie inside their simplices (Desbrun et al.
+            2005, *Discrete Exterior Calculus*). Mixed volume formulas for obtuse
+            tetrahedra do not exist in the literature.
 
-    Parameters
-    ----------
-    mesh : Mesh
-        Input simplicial mesh
+        Parameters
+        ----------
+        mesh : Mesh
+            Input simplicial mesh
 
-    Returns
-    -------
-    torch.Tensor
-        Tensor of shape (n_points,) containing dual 0-cell volume for each vertex.
-        For isolated vertices, volume is 0.
+        Returns
+        -------
+        torch.Tensor
+            Tensor of shape (n_points,) containing dual 0-cell volume for each vertex.
+            For isolated vertices, volume is 0.
 
-        Property: Σ dual_volumes = total_mesh_volume (perfect tiling)
+            Property: Σ dual_volumes = total_mesh_volume (perfect tiling)
 
-    Raises
-    ------
-    NotImplementedError
-        If n_manifold_dims > 3
+        Raises
+        ------
+        NotImplementedError
+            If n_manifold_dims > 3
 
-    Examples
-    --------
-    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-    >>> mesh = two_triangles_2d.load()
-    >>> dual_vols = compute_dual_volumes_0(mesh)
-    >>> # Use in Hodge star: ⋆f(⋆v) = f(v) × dual_vols[v]
-    >>> # Use in Laplacian: Δf(v) = (1/dual_vols[v]) × Σ w_ij(f_j - f_i)
+        Examples
+        --------
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> dual_vols = compute_dual_volumes_0(mesh)
+        >>> # Use in Hodge star: ⋆f(⋆v) = f(v) × dual_vols[v]
+        >>> # Use in Laplacian: Δf(v) = (1/dual_vols[v]) × Σ w_ij(f_j - f_i)
 
-Mathematical Properties:
-    1. Conservation: Σ_v |⋆v| = |mesh|  (perfect tiling)
-    2. Optimality: Minimizes spatial averaging error (Meyer et al. 2003,
-       *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*, §3.2)
-    3. Gauss-Bonnet: Enables Σ K_i × |⋆v_i| = 2πχ(M) to hold exactly
+    Mathematical Properties:
+        1. Conservation: Σ_v |⋆v| = |mesh|  (perfect tiling)
+        2. Optimality: Minimizes spatial averaging error (Meyer et al. 2003,
+           *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*, §3.2)
+        3. Gauss-Bonnet: Enables Σ K_i × |⋆v_i| = 2πχ(M) to hold exactly
 
-    References
-    ----------
-    - Meyer et al. (2003), *Discrete Differential-Geometry Operators for
-      Triangulated 2-Manifolds*, Equation 7 (circumcentric Voronoi, acute
-      triangles) and Figure 4 (mixed area, obtuse triangles).
-    - Desbrun et al. (2005), *Discrete Exterior Calculus*, Definition 3.7
-      (circumcentric duality operator).
-    - Hirani (2003), *Discrete Exterior Calculus* (PhD thesis), Definition 2.4.5
-      (circumcentric dual cell).
+        References
+        ----------
+        - Meyer et al. (2003), *Discrete Differential-Geometry Operators for
+          Triangulated 2-Manifolds*, Equation 7 (circumcentric Voronoi, acute
+          triangles) and Figure 4 (mixed area, obtuse triangles).
+        - Desbrun et al. (2005), *Discrete Exterior Calculus*, Definition 3.7
+          (circumcentric duality operator).
+        - Hirani (2003), *Discrete Exterior Calculus* (PhD thesis), Definition 2.4.5
+          (circumcentric dual cell).
     """
     device = mesh.points.device
     n_points = mesh.n_points
