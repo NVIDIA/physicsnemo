@@ -32,10 +32,10 @@ from jaxtyping import Float, Int
 
 from physicsnemo.mesh.subdivision._data import propagate_cell_data_to_children
 from physicsnemo.mesh.subdivision._topology import (
-    extract_unique_edges,
     generate_child_cells,
     get_subdivision_pattern,
 )
+from physicsnemo.mesh.utilities._topology import extract_unique_edges
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -46,7 +46,7 @@ def _build_edge_to_triangle_pairs(
     parent_cell_indices: Int[torch.Tensor, " n_candidates"],
     n_unique_edges: int,
     unique_edge_hashes: Int[torch.Tensor, " n_unique_edges"],
-    max_vertex: int,
+    index_bound: int,
     device: torch.device,
 ) -> Int[torch.Tensor, "n_unique_edges 2"]:
     """Build a (n_unique_edges, 2) tensor mapping each edge to its parent triangles.
@@ -61,8 +61,9 @@ def _build_edge_to_triangle_pairs(
         Number of unique edges in the mesh.
     unique_edge_hashes : torch.Tensor
         Hash of each unique edge (sorted order), shape (n_unique_edges,).
-    max_vertex : int
-        Value used for hash computation: ``hash = v0 * max_vertex + v1``.
+    index_bound : int
+        Strict upper bound for vertex indices. Used for hash computation:
+        ``hash = v0 * index_bound + v1``.
     device : torch.device
         Target device.
 
@@ -75,7 +76,7 @@ def _build_edge_to_triangle_pairs(
     """
     ### Hash candidate edges (canonicalized) and map to unique edge indices
     sorted_cands, _ = torch.sort(candidate_edges, dim=1)
-    cand_hash = sorted_cands[:, 0] * max_vertex + sorted_cands[:, 1]
+    cand_hash = sorted_cands[:, 0] * index_bound + sorted_cands[:, 1]
 
     sorted_unique_hash, unique_sort_perm = torch.sort(unique_edge_hashes)
     positions = torch.searchsorted(sorted_unique_hash, cand_hash)
@@ -144,9 +145,8 @@ def compute_butterfly_weights_2d(
 
     # Canonical (sorted) hashes for the unique edges
     sorted_unique, _ = torch.sort(unique_edges, dim=1)
-    sorted_cands, _ = torch.sort(candidate_edges, dim=1)
-    max_v = max(sorted_unique.max().item(), sorted_cands.max().item()) + 1
-    unique_hash = sorted_unique[:, 0] * max_v + sorted_unique[:, 1]
+    index_bound = mesh.n_points
+    unique_hash = sorted_unique[:, 0] * index_bound + sorted_unique[:, 1]
 
     # Pair table: (n_edges, 2), with -1 for missing second triangle
     edge_tri_pairs = _build_edge_to_triangle_pairs(
@@ -154,7 +154,7 @@ def compute_butterfly_weights_2d(
         parent_cell_indices=parent_cell_indices,
         n_unique_edges=n_edges,
         unique_edge_hashes=unique_hash,
-        max_vertex=max_v,
+        index_bound=index_bound,
         device=device,
     )
 
@@ -230,7 +230,7 @@ def compute_butterfly_weights_2d(
     for wing_edge, known_tri in wing_edges_and_known_tris:
         # Hash the wing edges and look them up in the unique edge set
         ws, _ = torch.sort(wing_edge, dim=1)
-        whash = ws[:, 0] * max_v + ws[:, 1]
+        whash = ws[:, 0] * index_bound + ws[:, 1]
 
         pos = torch.searchsorted(sorted_uhash, whash).clamp(max=n_uhash - 1)
         matched = sorted_uhash[pos] == whash

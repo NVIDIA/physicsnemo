@@ -30,12 +30,58 @@ from hydra.utils import to_absolute_path
 from torch.nn.parallel import DistributedDataParallel
 from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
 from apex import optimizers
+import itertools
 import os
 import numpy as np
 from vtk.util.numpy_support import vtk_to_numpy, numpy_to_vtk
-from physicsnemo.sym.geometry.primitives_3d import Box, Channel
-from physicsnemo.sym.utils.io.vtk import var_to_polyvtk
-import itertools
+
+
+def _box_sdf(points, lower, upper):
+    """Euclidean signed distance for an axis-aligned box (positive inside)."""
+    cx = 0.5 * (lower[0] + upper[0])
+    cy = 0.5 * (lower[1] + upper[1])
+    cz = 0.5 * (lower[2] + upper[2])
+    hx = 0.5 * (upper[0] - lower[0])
+    hy = 0.5 * (upper[1] - lower[1])
+    hz = 0.5 * (upper[2] - lower[2])
+    dx = np.abs(points[:, 0] - cx) - hx
+    dy = np.abs(points[:, 1] - cy) - hy
+    dz = np.abs(points[:, 2] - cz) - hz
+    outside = np.sqrt(
+        np.maximum(dx, 0) ** 2 + np.maximum(dy, 0) ** 2 + np.maximum(dz, 0) ** 2
+    )
+    inside = np.minimum(np.maximum(np.maximum(dx, dy), dz), 0)
+    return -(outside + inside)
+
+
+def _sdf_union(*sdfs):
+    """CSG union: positive where any operand is positive."""
+    return np.maximum.reduce(sdfs)
+
+
+def _sdf_subtract(a, b):
+    """CSG subtraction (A - B): inside A and outside B."""
+    return np.minimum(a, -b)
+
+
+def _repeated_boxes_sdf(
+    points, lower, upper, spacing, repeat_lower, repeat_higher, center
+):
+    """SDF for repeated boxes: evaluate each copy and take the union (max).
+
+    Uses the Euclidean box SDF per copy, combined via ``max`` (CSG union).
+    The center parameter defines the center of the original (un-repeated) box;
+    copies are offset by ``i * spacing`` along x from that center.
+    """
+    combined = np.full(len(points), -np.inf)
+    cx = center[0] if center is not None else 0.5 * (lower[0] + upper[0])
+    half_x = 0.5 * (upper[0] - lower[0])
+    for i in range(repeat_lower, repeat_higher + 1):
+        offset = i * spacing
+        lo = (cx - half_x + offset, lower[1], lower[2])
+        hi = (cx + half_x + offset, upper[1], upper[2])
+        combined = np.maximum(combined, _box_sdf(points, lo, hi))
+    return combined
 
 
 def reshape_fortran(x, shape):
@@ -68,42 +114,26 @@ def generate_mask(points, sample):
 
     origin = (0, 0.05, 0)
 
-    w1_x = gap / 2 / 1000  # the x distance of the left wall
-    geo = Box(
-        (origin[0] + w1_x, origin[1], origin[2]),
-        (origin[0] + w1_x + rack_x, origin[1] + rack_y, origin[2] + rack_z),
-    )
-    geo = geo.repeat(
-        gap / 1000 + rack_x,
-        repeat_lower=(0, 0, 0),
-        repeat_higher=(int(num_racks - 1), 0, 0),
-        center=(
-            origin[0] + w1_x + rack_x / 2,
-            origin[1] + rack_y / 2,
-            origin[2] + rack_z / 2,
-        ),
-    )
+    w1_x = gap / 2 / 1000
+    spacing = gap / 1000 + rack_x
 
-    geo_block_pos_y = Box(
+    # Wall blocks (pos_y and neg_y) repeated along x
+    sdf_block_pos_y = _repeated_boxes_sdf(
+        points,
         (origin[0] - w1_x, origin[1] - rack_y, origin[2]),
         (origin[0] + w1_x, origin[1] + 2, origin[2] + rack_z),
-    )
-    geo_block_neg_y = Box(
-        (origin[0] - w1_x, origin[1] - width - 2 * rack_y - 2, origin[2]),
-        (origin[0] + w1_x, origin[1] - width - rack_y, origin[2] + rack_z),
-    )
-
-    geo_block_pos_y = geo_block_pos_y.repeat(
-        gap / 1000 + rack_x,
-        repeat_lower=(0, 0, 0),
-        repeat_higher=(int(num_racks), 0, 0),
+        spacing=spacing,
+        repeat_lower=0,
+        repeat_higher=int(num_racks),
         center=(origin[0], origin[1] - rack_y / 2 + 1, origin[2] + rack_z / 2),
     )
-
-    geo_block_neg_y = geo_block_neg_y.repeat(
-        gap / 1000 + rack_x,
-        repeat_lower=(0, 0, 0),
-        repeat_higher=(int(num_racks), 0, 0),
+    sdf_block_neg_y = _repeated_boxes_sdf(
+        points,
+        (origin[0] - w1_x, origin[1] - width - 2 * rack_y - 2, origin[2]),
+        (origin[0] + w1_x, origin[1] - width - rack_y, origin[2] + rack_z),
+        spacing=spacing,
+        repeat_lower=0,
+        repeat_higher=int(num_racks),
         center=(
             origin[0],
             origin[1] - width - 3 * rack_y / 2 - 1,
@@ -111,38 +141,48 @@ def generate_mask(points, sample):
         ),
     )
 
-    geo_block = geo_block_pos_y + geo_block_neg_y
-
-    rack_top_pos_x = Box(
+    # Rack-top boxes
+    sdf_rack_top_pos = _box_sdf(
+        points,
         (origin[0] - 5, origin[1] - rack_y, origin[2] + rack_z),
         (origin[0] + length + 5, origin[1] + 2, origin[2] + height + 10),
     )
-    rack_top_neg_x = Box(
+    sdf_rack_top_neg = _box_sdf(
+        points,
         (origin[0] - 5, origin[1] - width - 2 * rack_y - 2, origin[2] + rack_z),
         (origin[0] + length + 5, origin[1] - width - rack_y, origin[2] + height + 10),
     )
 
-    geo_block = geo_block + rack_top_pos_x + rack_top_neg_x
+    # Union of wall blocks + rack tops (racks are NOT subtracted from the channel,
+    # matching the original code where the rack variable is unused in the CSG)
+    sdf_block = _sdf_union(
+        sdf_block_pos_y, sdf_block_neg_y, sdf_rack_top_pos, sdf_rack_top_neg
+    )
+
+    # Channel (no x-boundaries — Euclidean SDF on y and z only)
+    cy = 0.5 * ((origin[1] - width - 2) + (origin[1] + 2))
+    cz = 0.5 * (origin[2] + (origin[2] + height + 10))
+    hy = 0.5 * ((origin[1] + 2) - (origin[1] - width - 2))
+    hz = 0.5 * ((origin[2] + height + 10) - origin[2])
+    dy = np.abs(points[:, 1] - cy) - hy
+    dz = np.abs(points[:, 2] - cz) - hz
+    outside_ch = np.sqrt(np.maximum(dy, 0) ** 2 + np.maximum(dz, 0) ** 2)
+    inside_ch = np.minimum(np.maximum(dy, dz), 0)
+    sdf_channel = -(outside_ch + inside_ch)
+
+    # hot_aisle = channel - blocks (inside channel AND outside blocks)
+    sdf_hot_aisle = _sdf_subtract(sdf_channel, sdf_block)
 
     hot_aisle_bounds = (
         (origin[0], origin[1] - width - 2 * rack_y, origin[2]),
         (origin[0] + length, origin[1], origin[2] + height),
     )
 
-    hot_aisle = Channel(
-        (origin[0] - 5, origin[1] - width - 2, origin[2]),
-        (origin[0] + length + 5, origin[1] + 2, origin[2] + height + 10),
-    )
-
-    hot_aisle = hot_aisle - geo_block
-
-    # Compute SDF on the points
-    sdf = hot_aisle.sdf(points, params={})
-
-    return sdf["sdf"], hot_aisle_bounds
+    return sdf_hot_aisle, hot_aisle_bounds
 
 
 def save_to_vtu(data_dict, bounds, output_file):
+    """Save a dict of 3-D arrays to a VTU file on a rectilinear grid."""
     num_cells_x, num_cells_y, num_cells_z = next(iter(data_dict.values())).shape
     x_min, x_max, y_min, y_max, z_min, z_max = bounds
     dx = (x_max - x_min) / (num_cells_x - 1)
@@ -196,6 +236,7 @@ def save_to_vtu(data_dict, bounds, output_file):
 
 @hydra.main(version_base="1.2", config_path="conf", config_name="config_inference")
 def main(cfg: DictConfig) -> None:
+    """Run datacenter inference."""
     print("Inference Started!")
 
     # initialize distributed manager

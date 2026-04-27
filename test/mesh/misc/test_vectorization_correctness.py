@@ -92,7 +92,7 @@ class TestLoopSubdivisionCorrectness:
         mesh = Mesh(points=points, cells=cells)
 
         ### Extract unique edges
-        from physicsnemo.mesh.subdivision._topology import extract_unique_edges
+        from physicsnemo.mesh.utilities._topology import extract_unique_edges
 
         unique_edges, _ = extract_unique_edges(mesh)
 
@@ -140,8 +140,8 @@ class TestLoopSubdivisionCorrectness:
         cells = torch.tensor([[0, 1, 2]], dtype=torch.int64, device=device)
         mesh = Mesh(points=points, cells=cells)
 
-        from physicsnemo.mesh.subdivision._topology import extract_unique_edges
         from physicsnemo.mesh.subdivision.loop import compute_loop_edge_positions_2d
+        from physicsnemo.mesh.utilities._topology import extract_unique_edges
 
         unique_edges, _ = extract_unique_edges(mesh)
         edge_positions = compute_loop_edge_positions_2d(mesh, unique_edges)
@@ -397,8 +397,8 @@ class TestButterflySubdivisionCorrectness:
         )
         mesh = Mesh(points=points, cells=cells)
 
-        from physicsnemo.mesh.subdivision._topology import extract_unique_edges
         from physicsnemo.mesh.subdivision.butterfly import compute_butterfly_weights_2d
+        from physicsnemo.mesh.utilities._topology import extract_unique_edges
 
         unique_edges, _ = extract_unique_edges(mesh)
         edge_midpoints = compute_butterfly_weights_2d(mesh, unique_edges)
@@ -512,7 +512,7 @@ class TestSubdivisionTopologyCorrectness:
 
         original_n_points = mesh.n_points
 
-        from physicsnemo.mesh.subdivision._topology import extract_unique_edges
+        from physicsnemo.mesh.utilities._topology import extract_unique_edges
 
         unique_edges, _ = extract_unique_edges(mesh)
         n_edges = len(unique_edges)

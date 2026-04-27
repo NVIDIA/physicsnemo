@@ -16,8 +16,6 @@
 
 """Tests for dtype-aware numerical tolerances."""
 
-import math
-
 import pytest
 import torch
 
@@ -31,8 +29,9 @@ class TestSafeEps:
     """Verify safe_eps returns principled, dtype-aware floor values."""
 
     def test_matches_formula(self, dtype: torch.dtype) -> None:
-        """safe_eps should equal tiny ** 0.25 for the given dtype."""
-        expected = torch.finfo(dtype).tiny ** 0.25
+        """safe_eps should equal min(tiny ** 0.25, machine_eps)."""
+        info = torch.finfo(dtype)
+        expected = min(info.tiny**0.25, info.eps)
         assert safe_eps(dtype) == expected
 
     def test_positive(self, dtype: torch.dtype) -> None:
@@ -40,23 +39,23 @@ class TestSafeEps:
         assert safe_eps(dtype) > 0.0
 
     def test_reciprocal_does_not_overflow(self, dtype: torch.dtype) -> None:
-        """1 / safe_eps must be representable (not inf)."""
-        assert math.isfinite(1.0 / safe_eps(dtype))
+        """1 / safe_eps must not overflow in the dtype's own arithmetic."""
+        eps_tensor = torch.tensor(safe_eps(dtype), dtype=dtype)
+        assert torch.isfinite(1.0 / eps_tensor)
 
     def test_reciprocal_squared_does_not_overflow(self, dtype: torch.dtype) -> None:
-        """1 / safe_eps**2 must be representable (not inf).
+        """1 / safe_eps**2 must not overflow for wide-exponent types.
 
-        This matters for inverse-distance weights where the denominator
-        may be squared before clamping.
+        Float16's 5-bit exponent cannot satisfy both 'small eps' and
+        '1/eps^2 fits' simultaneously; the cap at machine epsilon
+        prioritizes keeping the clamp floor small.
         """
-        assert math.isfinite(1.0 / safe_eps(dtype) ** 2)
-
-    def test_smaller_than_machine_epsilon(self, dtype: torch.dtype) -> None:
-        """safe_eps should be far below machine epsilon (it guards against
-        exact zeros, not rounding errors)."""
         if dtype == torch.float16:
-            pytest.skip(
-                "float16 has a 5-bit exponent; tiny^0.25 exceeds eps, "
-                "which is expected - the overflow-safety constraint dominates"
-            )
-        assert safe_eps(dtype) < torch.finfo(dtype).eps
+            pytest.skip("float16 trades 1/eps^2 safety for a usable clamp floor")
+        eps_tensor = torch.tensor(safe_eps(dtype), dtype=dtype)
+        assert torch.isfinite(1.0 / eps_tensor**2)
+
+    def test_at_most_machine_epsilon(self, dtype: torch.dtype) -> None:
+        """safe_eps must not exceed machine epsilon, so it never corrupts
+        values that are numerically meaningful in the dtype."""
+        assert safe_eps(dtype) <= torch.finfo(dtype).eps

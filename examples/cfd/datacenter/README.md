@@ -71,7 +71,7 @@ mpirun -np <#GPUs> python train.py
 
 Once the model is trained, you can use the inference.py script to compute the
 model inference. For generating the Signed Distance Field and geometry for the
-inference, we make use of the utilities from PhysicsNeMo-Sym.
+inference, we make use of the utilities from `physicsnemo.sym`.
 
 ### Training of Physics-Informed model
 

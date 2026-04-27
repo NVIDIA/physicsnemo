@@ -97,7 +97,7 @@ def iter_neighborhood_batches(
     device = positions.device
 
     ### Compute per-entity neighbor counts from CSR offsets
-    neighbor_counts = adjacency.offsets[1:] - adjacency.offsets[:-1]
+    neighbor_counts = adjacency.counts
 
     ### Optionally clamp to max_neighbors
     if max_neighbors is not None:
