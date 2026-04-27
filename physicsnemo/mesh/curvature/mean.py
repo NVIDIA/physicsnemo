@@ -81,11 +81,11 @@ def mean_curvature_vertices(
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-        >>> # Sphere of radius r has H = 1/r everywhere
-        >>> sphere = sphere_icosahedral.load(radius=2.0, subdivisions=3)
-        >>> H = mean_curvature_vertices(sphere)
-        >>> # H.mean() ≈ 0.5 (= 1/2.0)
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    >>> # Sphere of radius r has H = 1/r everywhere
+    >>> sphere = sphere_icosahedral.load(radius=2.0, subdivisions=3)
+    >>> H = mean_curvature_vertices(sphere)
+    >>> # H.mean() ≈ 0.5 (= 1/2.0)
 
     Notes
     -----

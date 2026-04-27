@@ -23,7 +23,8 @@ For 2D surfaces: K = k1 * k2 where k1, k2 are principal curvatures
 For 1D curves: K represents discrete turning angle
 For 3D volumes: K represents volumetric angle defect
 
-Reference: Meyer et al. (2003), Discrete Gauss-Bonnet theorem
+Reference: Meyer et al. (2003), *Discrete Differential-Geometry Operators for
+Triangulated 2-Manifolds*, §4.2 (Discrete Gaussian Curvature Operator), Eq. 9.
 """
 
 from typing import TYPE_CHECKING
@@ -70,11 +71,11 @@ def gaussian_curvature_vertices(mesh: "Mesh") -> Float[torch.Tensor, " n_points"
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-        >>> # Sphere of radius r has K = 1/r² everywhere
-        >>> sphere_mesh = sphere_icosahedral.load(radius=2.0, subdivisions=3)
-        >>> K = gaussian_curvature_vertices(sphere_mesh)
-        >>> # K.mean() ≈ 0.25 (= 1/(2.0)²)
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    >>> # Sphere of radius r has K = 1/r² everywhere
+    >>> sphere_mesh = sphere_icosahedral.load(radius=2.0, subdivisions=3)
+    >>> K = gaussian_curvature_vertices(sphere_mesh)
+    >>> # K.mean() ≈ 0.25 (= 1/(2.0)²)
 
     Notes
     -----
@@ -137,10 +138,10 @@ def gaussian_curvature_cells(mesh: "Mesh") -> Float[torch.Tensor, " n_cells"]:
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-        >>> sphere_mesh = sphere_icosahedral.load(subdivisions=2)
-        >>> K_cells = gaussian_curvature_cells(sphere_mesh)
-        >>> # Should be positive for sphere
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    >>> sphere_mesh = sphere_icosahedral.load(subdivisions=2)
+    >>> K_cells = gaussian_curvature_cells(sphere_mesh)
+    >>> # Should be positive for sphere
     """
     device = mesh.points.device
     n_cells = mesh.n_cells

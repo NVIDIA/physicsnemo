@@ -19,7 +19,8 @@
 Implements divergence using both DEC and LSQ methods.
 
 The DEC divergence is the composition ⋆₀⁻¹ d* ⋆₁ ♭(X), where ♭ is the
-PDP-flat operator (Hirani 2003, Section 5.6) that converts a vertex vector
+PDP-flat operator (Hirani 2003, *Discrete Exterior Calculus*, §5.6) that
+converts a vertex vector
 field to a primal 1-form via midpoint averaging along edges. The composition
 reduces to a weighted sum over edges:
 

@@ -20,18 +20,21 @@ Support volumes are geometric regions associated with primal simplices, formed b
 the convex hull of the simplex and its circumcentric dual cell. These are fundamental
 to DEC formulas for sharp and flat operators.
 
-Key concept (Hirani Def. 2.4.9, line 2034):
+Key concept (Hirani 2003, *Discrete Exterior Calculus*, Definition 2.4.9):
     V_σᵏ = convex hull(σᵏ, ⋆σᵏ)
 
 The support volumes perfectly tile the mesh: their union is |K| and intersections
 have measure zero.
 
 For implementing sharp/flat operators, we need the intersection of support volumes
-with n-simplices (cells). Hirani Prop. 5.5.1 (lines 2345-2390) proves that these
-can be computed efficiently using pyramid volumes.
+with n-simplices (cells). Hirani (2003), *Discrete Exterior Calculus*,
+Proposition 5.5.1 proves that these can be computed efficiently using pyramid
+volumes.
 
-References:
-    Hirani (2003) Section 2.4, Proposition 5.5.1, Figure 5.4
+References
+----------
+Hirani, A. N. (2003). *Discrete Exterior Calculus*. PhD thesis, California
+Institute of Technology. §2.4 (Dual Complex), Proposition 5.5.1, Figure 5.4.
 """
 
 from typing import TYPE_CHECKING
@@ -54,13 +57,16 @@ def compute_edge_support_volume_cell_fractions(
     For each edge and each cell containing it, computes the fraction of the edge's
     dual 1-cell (and support volume) that lies within that cell.
 
-    This is needed for the DPP-flat operator (Hirani Eq. 5.5.3, line 2398):
+    This is needed for the DPP-flat operator (Hirani 2003, *Discrete Exterior
+    Calculus*, Equation 5.5.3):
         ⟨X♭, edge⟩ = Σ_{cells ⊃ edge} (|⋆edge ∩ cell|/|⋆edge|) × X(cell) · edge⃗
 
-    From Hirani Prop. 5.5.1 (line 2348), this equals:
+    From Hirani (2003), *Discrete Exterior Calculus*, Proposition 5.5.1, this
+    equals:
         |⋆edge ∩ cell| / |⋆edge| = |V_edge ∩ cell| / |V_edge|
 
-    And from the pyramid volume analysis (lines 2361-2388), for dimension n:
+    And from the pyramid-volume analysis in the proof of Proposition 5.5.1, for
+    dimension n:
         |V_edge ∩ cell| = 2 × (1/(n+1)) × |edge|/2 × |⋆edge ∩ cell|
         |V_edge| = Σ_{cells ⊃ edge} |V_edge ∩ cell|
 
@@ -95,12 +101,12 @@ def compute_edge_support_volume_cell_fractions(
 
     Examples
     --------
-        >>> import torch
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> edges = torch.tensor([[0, 1], [1, 2], [0, 2], [1, 3], [2, 3]])
-        >>> fractions = compute_edge_support_volume_cell_fractions(mesh, edges)
-        >>> # fractions[i, j] = fraction of edge i's support volume in its j-th cell
+    >>> import torch
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> edges = torch.tensor([[0, 1], [1, 2], [0, 2], [1, 3], [2, 3]])
+    >>> fractions = compute_edge_support_volume_cell_fractions(mesh, edges)
+    >>> # fractions[i, j] = fraction of edge i's support volume in its j-th cell
     """
     if mesh.n_manifold_dims != 2:
         raise NotImplementedError(
@@ -324,7 +330,8 @@ def compute_dual_edge_volumes_in_cells(
     """Compute |⋆edge ∩ cell| for all edge-cell adjacencies.
 
     Returns the actual volume (not fraction) of dual 1-cell within each cell.
-    This is the |⋆edge ∩ cell| term from Hirani Eq. 5.5.3.
+    This is the |⋆edge ∩ cell| term from Hirani (2003), *Discrete Exterior
+    Calculus*, Eq. 5.5.3.
 
     Parameters
     ----------

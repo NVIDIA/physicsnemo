@@ -31,9 +31,10 @@ This module provides two levels of abstraction:
   ``(n_points,)``. This aggregates angles across all incident cells,
   used by Gaussian curvature (angle defect method).
 
-Reference:
-    Van Oosterom, A. & Strackee, J. (1983). "The Solid Angle of a Plane
-    Triangle." IEEE Trans. Biomed. Eng. BME-30(2):125-126.
+References
+----------
+Van Oosterom, A. & Strackee, J. (1983). "The Solid Angle of a Plane
+Triangle." IEEE Trans. Biomed. Eng. BME-30(2):125-126.
 """
 
 from typing import TYPE_CHECKING

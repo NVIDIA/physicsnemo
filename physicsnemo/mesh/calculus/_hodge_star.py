@@ -24,7 +24,8 @@ Key property: ⋆⋆ = (-1)^(k(n-k)) on k-forms
 The discrete Hodge star preserves averages between primal and dual cells:
     ⟨α, σ⟩/|σ| = ⟨⋆α, ⋆σ⟩/|⋆σ|
 
-Reference: Desbrun et al., "Discrete Exterior Calculus", Section 4
+Reference: Desbrun et al. (2005), *Discrete Exterior Calculus*, §6
+(Hodge Star and Codifferential).
 """
 
 from typing import TYPE_CHECKING

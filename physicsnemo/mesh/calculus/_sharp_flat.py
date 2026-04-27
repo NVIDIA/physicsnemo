@@ -22,7 +22,8 @@ These operators relate 1-forms (edge-based) to vector fields (vertex-based):
 
 These are metric-dependent operators crucial for DEC gradient and divergence.
 
-Reference: Desbrun et al., "Discrete Exterior Calculus", Section 5
+Reference: Desbrun et al. (2005), *Discrete Exterior Calculus*, §7
+(Maps between 1-Forms and Vector Fields).
 """
 
 from typing import TYPE_CHECKING
@@ -86,7 +87,8 @@ def sharp(
 
     References
     ----------
-    Hirani (2003) Definition 5.8.1, Corollary 6.1.8.
+    Hirani (2003), *Discrete Exterior Calculus* (PhD thesis), Definition 5.8.1
+    and Corollary 6.1.8.
     """
     n_points = mesh.n_points
     n_spatial_dims = mesh.n_spatial_dims
@@ -130,7 +132,7 @@ def sharp(
     )
 
     ### Match candidates to input edges to get 1-form values
-    # Implements Hirani Eq. 5.8.1 (FULLY VECTORIZED)
+    # Implements Hirani (2003), Discrete Exterior Calculus, Eq. 5.8.1 (FULLY VECTORIZED)
     # Challenge: This is complex to vectorize due to variable vertex valence
     # Strategy: Process all (edge, cell) pairs, then scatter to vertices
 
@@ -248,7 +250,8 @@ def flat(
     Maps ♭: 𝔛(K) → Ω¹(K)
 
     Converts vectors at vertices (primal vector field) to edge-based 1-form values.
-    Uses the PDP-flat formula from Hirani Section 5.6 (line 2456):
+    Uses the PDP-flat formula from Hirani (2003), *Discrete Exterior Calculus*
+    (PhD thesis), §5.6:
 
         ⟨X♭, edge⟩ = X(v0) · edge⃗/2 + X(v1) · edge⃗/2 = (X(v0) + X(v1))/2 · edge⃗
 
@@ -272,7 +275,8 @@ def flat(
 
     References
     ----------
-    Hirani (2003) Section 5.6, PDP-flat (lines 2456-2465)
+    Hirani (2003), *Discrete Exterior Calculus* (PhD thesis), §5.6
+    (Other Discrete Flats), PDP-flat operator.
 
     Notes
     -----

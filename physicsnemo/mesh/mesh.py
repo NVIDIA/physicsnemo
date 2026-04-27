@@ -602,16 +602,17 @@ class Mesh:
         The codimension is the difference between the spatial dimension and the
         manifold dimension: codimension = n_spatial_dims - n_manifold_dims.
 
-        Examples:
-            - Edges (1-simplices) in 2D: codimension = 2 - 1 = 1 (codimension-1)
-            - Triangles (2-simplices) in 3D: codimension = 3 - 2 = 1 (codimension-1)
-            - Edges in 3D: codimension = 3 - 1 = 2 (codimension-2)
-            - Points in 2D: codimension = 2 - 0 = 2 (codimension-2)
-
         Returns
         -------
         int
             The codimension of the mesh (always non-negative).
+
+        Notes
+        -----
+        - Edges (1-simplices) in 2D: codimension = 2 - 1 = 1 (codimension-1)
+        - Triangles (2-simplices) in 3D: codimension = 3 - 2 = 1 (codimension-1)
+        - Edges in 3D: codimension = 3 - 1 = 2 (codimension-2)
+        - Points in 2D: codimension = 2 - 0 = 2 (codimension-2)
         """
         return self.n_spatial_dims - self.n_manifold_dims
 
@@ -737,11 +738,11 @@ class Mesh:
 
         Examples
         --------
-            >>> # Triangle mesh in 3D
-            >>> mesh = create_triangle_mesh_3d()  # doctest: +SKIP
-            >>> normals = mesh.point_normals  # (n_points, 3), angle-area-weighted  # doctest: +SKIP
-            >>> # Normals are unit vectors (or zero for isolated points)
-            >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)  # doctest: +SKIP
+        >>> # Triangle mesh in 3D
+        >>> mesh = create_triangle_mesh_3d()  # doctest: +SKIP
+        >>> normals = mesh.point_normals  # (n_points, 3), angle-area-weighted  # doctest: +SKIP
+        >>> # Normals are unit vectors (or zero for isolated points)
+        >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)  # doctest: +SKIP
         """
         cached = self._cache.get(("point", "normals"), None)
         if cached is None:
@@ -817,13 +818,13 @@ class Mesh:
 
         Examples
         --------
-            >>> # Triangle mesh in 3D
-            >>> mesh = create_triangle_mesh_3d()  # doctest: +SKIP
-            >>> normals = mesh.compute_point_normals()  # area-weighted (default)  # doctest: +SKIP
-            >>> normals_unweighted = mesh.compute_point_normals(weighting="unweighted")  # doctest: +SKIP
-            >>> normals_angle = mesh.compute_point_normals(weighting="angle")  # doctest: +SKIP
-            >>> # Normals are unit vectors (or zero for isolated points)
-            >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)  # doctest: +SKIP
+        >>> # Triangle mesh in 3D
+        >>> mesh = create_triangle_mesh_3d()  # doctest: +SKIP
+        >>> normals = mesh.compute_point_normals()  # area-weighted (default)  # doctest: +SKIP
+        >>> normals_unweighted = mesh.compute_point_normals(weighting="unweighted")  # doctest: +SKIP
+        >>> normals_angle = mesh.compute_point_normals(weighting="angle")  # doctest: +SKIP
+        >>> # Normals are unit vectors (or zero for isolated points)
+        >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)  # doctest: +SKIP
         """
         valid_weightings = ("area", "unweighted", "angle", "angle_area")
         if weighting not in valid_weightings:

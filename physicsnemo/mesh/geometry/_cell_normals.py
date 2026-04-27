@@ -46,27 +46,31 @@ def compute_cell_normals(
     The caller must ensure the codimension-1 constraint:
     ``n_manifold_dims == n_spatial_dims - 1``.
 
-    Args:
-        relative_vectors: Edge vectors of shape
-            ``(n_cells, n_manifold_dims, n_spatial_dims)``.
-            Row *i* is the vector from vertex 0 to vertex *i+1* of each
-            simplex. Must satisfy ``n_manifold_dims == n_spatial_dims - 1``.
+    Parameters
+    ----------
+    relative_vectors : torch.Tensor
+        Edge vectors of shape ``(n_cells, n_manifold_dims, n_spatial_dims)``.
+        Row *i* is the vector from vertex 0 to vertex *i+1* of each simplex.
+        Must satisfy ``n_manifold_dims == n_spatial_dims - 1``.
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Tensor of shape ``(n_cells, n_spatial_dims)`` containing unit normal
         vectors. For degenerate cells (zero-area), the normal is a zero
         vector (from ``F.normalize``'s default behavior).
 
-    Examples:
-        >>> # Edge in 2D: normal is 90-degree CCW rotation
-        >>> vecs = torch.tensor([[[1.0, 0.0]]])
-        >>> compute_cell_normals(vecs)
-        tensor([[-0., 1.]])
+    Examples
+    --------
+    >>> # Edge in 2D: normal is 90-degree CCW rotation
+    >>> vecs = torch.tensor([[[1.0, 0.0]]])
+    >>> compute_cell_normals(vecs)
+    tensor([[-0., 1.]])
 
-        >>> # Triangle in XY-plane: normal is +Z
-        >>> vecs = torch.tensor([[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]])
-        >>> compute_cell_normals(vecs)
-        tensor([[0., 0., 1.]])
+    >>> # Triangle in XY-plane: normal is +Z
+    >>> vecs = torch.tensor([[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]])
+    >>> compute_cell_normals(vecs)
+    tensor([[0., 0., 1.]])
     """
     n_spatial_dims = relative_vectors.shape[-1]
 

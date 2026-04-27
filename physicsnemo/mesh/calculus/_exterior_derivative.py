@@ -24,7 +24,8 @@ Fundamental property: d² = 0 (applying d twice always gives zero)
 This implements the discrete Stokes theorem exactly:
     ⟨dα, c⟩ = ⟨α, ∂c⟩  (true by definition)
 
-Reference: Desbrun et al., "Discrete Exterior Calculus", Section 3
+Reference: Desbrun et al. (2005), *Discrete Exterior Calculus*, §5
+(Differential Forms and Exterior Derivative).
 """
 
 from typing import TYPE_CHECKING

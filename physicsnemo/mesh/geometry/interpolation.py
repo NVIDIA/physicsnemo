@@ -22,14 +22,16 @@ the function φ_v is 1 at vertex v and 0 at all other vertices, linearly interpo
 
 The gradients of these functions are needed for the discrete sharp operator in DEC.
 
-Key properties (Hirani Rem. 2.7.2, lines 1260-1288):
+Key properties (Hirani 2003, *Discrete Exterior Calculus*, Remark 2.7.2):
 - ∇φ_{v,cell} is constant in the cell interior
 - ∇φ_{v,cell} is perpendicular to the face opposite to v
 - ||∇φ_{v,cell}|| = 1/h where h is the height of v above opposite face
 - Σ_{vertices v in cell} ∇φ_{v,cell} = 0 (gradients sum to zero)
 
-References:
-    Hirani (2003) Section 2.7, Remark 2.7.2
+References
+----------
+Hirani, A. N. (2003). *Discrete Exterior Calculus*. PhD thesis, California
+Institute of Technology. §2.7 (Interpolation Functions), Remark 2.7.2.
 """
 
 from typing import TYPE_CHECKING
@@ -52,7 +54,8 @@ def compute_barycentric_gradients(
     of the barycentric interpolation function that is 1 at vertex v and 0 at
     all other vertices of the cell.
 
-    These gradients are needed for the PP-sharp operator (Hirani Eq. 5.8.1).
+    These gradients are needed for the PP-sharp operator (Hirani 2003,
+    *Discrete Exterior Calculus*, Eq. 5.8.1).
 
     Parameters
     ----------
@@ -85,16 +88,17 @@ def compute_barycentric_gradients(
         - ∇φᵢ · (vⱼ - vᵢ) = -1 for j ≠ i (decrease along edge away from i)
         - ∇φᵢ · (vᵢ - vⱼ) = +1 for j ≠ i (increase along edge toward i)
 
-    Reference:
-        Hirani Remark 2.7.2 (lines 1260-1288)
+    References
+    ----------
+    Hirani (2003), *Discrete Exterior Calculus* (PhD thesis), Remark 2.7.2.
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> grads = compute_barycentric_gradients(mesh)
-        >>> # grads[i, j, :] is ∇φ for j-th vertex of i-th cell
-        >>> # Use in sharp operator with α♯(v) = Σ α(edge) × weight × grad
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> grads = compute_barycentric_gradients(mesh)
+    >>> # grads[i, j, :] is ∇φ for j-th vertex of i-th cell
+    >>> # Use in sharp operator with α♯(v) = Σ α(edge) × weight × grad
     """
     n_cells = mesh.n_cells
     n_manifold_dims = mesh.n_manifold_dims

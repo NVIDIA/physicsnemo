@@ -75,11 +75,11 @@ def subdivide_linear(mesh: "Mesh") -> "Mesh":
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> # Triangle mesh: 2 triangles -> 8 triangles
-        >>> mesh = two_triangles_2d.load()
-        >>> subdivided = subdivide_linear(mesh)
-        >>> assert subdivided.n_cells == mesh.n_cells * 4  # 2^2 for 2D
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> # Triangle mesh: 2 triangles -> 8 triangles
+    >>> mesh = two_triangles_2d.load()
+    >>> subdivided = subdivide_linear(mesh)
+    >>> assert subdivided.n_cells == mesh.n_cells * 4  # 2^2 for 2D
     """
     from physicsnemo.mesh.mesh import Mesh
 

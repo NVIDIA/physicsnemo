@@ -32,7 +32,8 @@ laplacian = compute_laplacian_points_dec(mesh, scalar_field)
 **Properties**:
 
 - Uses cotangent weights derived from the FEM stiffness matrix (see below)
-- In 2D: equivalent to `(1/2)(cot α + cot β)` (Meyer Eq. 5)
+- In 2D: equivalent to `(1/2)(cot α + cot β)` (Meyer et al. 2003,
+  *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*, Eq. 5)
 - In 1D: gives `1/|edge|` (standard finite-difference second derivative)
 - In 3D+: gives exact dihedral-angle-based weights via Gram matrix inverse
 - Normalized by circumcentric dual volumes (Voronoi cells)
@@ -59,7 +60,9 @@ G = E @ E^T                   (Gram matrix, n × n)
 
 This generalizes the classical 2D cotangent formula to arbitrary dimensions.
 
-**Reference**: Hirani (2003) Eq. 6.4.2, Meyer et al. (2003) Eq. 8
+**Reference**: Hirani (2003), *Discrete Exterior Calculus* (PhD thesis), Eq. 6.4.2;
+Meyer et al. (2003), *Discrete Differential-Geometry Operators for Triangulated
+2-Manifolds*, Eq. 8.
 
 #### Exterior Derivative
 
@@ -83,7 +86,9 @@ face_2form, faces = exterior_derivative_1(mesh, edge_1form, edges)
 - `d ∘ d = 0` (exact by construction)
 - Discrete Stokes theorem: `⟨dα, c⟩ = ⟨α, ∂c⟩` (true by definition)
 
-**Reference**: Desbrun et al. (2005) Section 3, Hirani (2003) Chapter 3
+**Reference**: Desbrun et al. (2005), *Discrete Exterior Calculus*, §5
+(Differential Forms and Exterior Derivative); Hirani (2003), *Discrete Exterior
+Calculus* (PhD thesis), Chapter 3 (Discrete Forms and Exterior Derivative).
 
 #### Hodge Star
 
@@ -100,7 +105,9 @@ star_f = hodge_star_0(mesh, f)  # ⋆f(⋆v) = f(v) × |⋆v|
 - `⋆⋆α = (-1)^(k(n-k)) α`
 - Uses circumcentric (Voronoi) dual cells, NOT barycentric
 
-**Reference**: Hirani (2003) Def. 4.1.1, Desbrun et al. (2005) Section 4
+**Reference**: Hirani (2003), *Discrete Exterior Calculus* (PhD thesis),
+Definition 4.1.1; Desbrun et al. (2005), *Discrete Exterior Calculus*, §6 (Hodge
+Star and Codifferential).
 
 #### Sharp and Flat Operators
 
@@ -116,14 +123,17 @@ one_form = flat(mesh, vector_field, edges)
 
 **Implementation**:
 
-- **Sharp (♯)**: Hirani Eq. 5.8.1 with support volume intersections and
-  barycentric gradients
-- **Flat (♭)**: PDP-flat (Hirani Section 5.6) using averaged endpoint vectors
+- **Sharp (♯)**: Hirani (2003), *Discrete Exterior Calculus* (PhD thesis),
+  Eq. 5.8.1, with support volume intersections and barycentric gradients
+- **Flat (♭)**: PDP-flat (Hirani 2003, *Discrete Exterior Calculus*, §5.6) using
+  averaged endpoint vectors
 
-**Note**: Sharp and flat are NOT exact inverses in discrete DEC (Hirani
-Prop. 5.5.3). This is a fundamental property of the discrete theory, not a bug.
+**Note**: Sharp and flat are NOT exact inverses in discrete DEC (Hirani 2003,
+*Discrete Exterior Calculus*, Proposition 5.5.3). This is a fundamental property
+of the discrete theory, not a bug.
 
-**Reference**: Hirani (2003) Chapter 5
+**Reference**: Hirani (2003), *Discrete Exterior Calculus* (PhD thesis),
+Chapter 5 (Forms and Vector Fields).
 
 ### Gradient via DEC
 
@@ -212,13 +222,15 @@ dual_vols = compute_dual_volumes_0(mesh)  # |⋆v| for each vertex
 
 **2D manifolds (triangles)**:
 
-- **Acute triangles**: Circumcentric Voronoi formula (Meyer Eq. 7)
+- **Acute triangles**: Circumcentric Voronoi formula (Meyer et al. 2003,
+  *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*, Eq. 7)
 
 ```text
 |⋆v| = (1/8) Σ (||e||² cot(opposite_angle))
 ```
 
-- **Obtuse triangles**: Mixed area subdivision (Meyer Fig. 4)
+- **Obtuse triangles**: Mixed area subdivision (Meyer et al. 2003,
+  *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*, Fig. 4)
 
 ```text
 If obtuse at vertex: |⋆v| = area(T)/2
@@ -229,16 +241,19 @@ Otherwise: |⋆v| = area(T)/4
 
 - Barycentric approximation: `|⋆v| = Σ |cell|/(n+1)`
 - Note: Rigorous circumcentric dual requires "well-centered" meshes
-  (Desbrun 2005)
+  (Desbrun et al. 2005, *Discrete Exterior Calculus*)
 
 **Property**: Perfect tiling: `Σ_vertices |⋆v| = |mesh|` (conservation holds
 exactly)
 
 **References**:
 
-- Meyer et al. (2003) Sections 3.2-3.4
-- Desbrun et al. (2005) lines 286-395
-- Hirani (2003) Def. 2.4.5
+- Meyer et al. (2003), *Discrete Differential-Geometry Operators for Triangulated
+  2-Manifolds*, Sections 3.2-3.4 (Mixed Voronoi Areas)
+- Desbrun et al. (2005), *Discrete Exterior Calculus*, §3 (Primal Simplicial
+  Complex and Dual Cell Complex)
+- Hirani (2003), *Discrete Exterior Calculus* (PhD thesis), Definition 2.4.5
+  (Circumcentric Dual Cell)
 
 ---
 
@@ -246,15 +261,16 @@ exactly)
 
 **div(grad(f)) ≈ Δf but not exactly**:
 
-- In discrete DEC, sharp (♯) and flat (♭) are NOT exact inverses (Hirani
-  Prop. 5.5.3)
+- In discrete DEC, sharp (♯) and flat (♭) are NOT exact inverses (Hirani 2003,
+  *Discrete Exterior Calculus*, Proposition 5.5.3)
 - Therefore `div(grad(f))` and `Δf` may differ by ~2-3x on coarse meshes
 - Both are O(h) accurate, difference → 0 as mesh refines
 - This is a fundamental property of discrete exterior calculus
 
 **3D dual volumes use barycentric approximation**:
 
-- Rigorous circumcentric requires "well-centered" meshes (Desbrun 2005)
+- Rigorous circumcentric requires "well-centered" meshes (Desbrun et al. 2005,
+  *Discrete Exterior Calculus*)
 - Mixed volume formula for obtuse tetrahedra doesn't exist in literature
 - Current barycentric approximation is standard practice and works well
 
@@ -464,7 +480,8 @@ Not implemented for n > 3.
      stiffness matrix); only the dual volume *normalization* uses approximation
 
 2. **Sharp/Flat Not Exact Inverses**: `♯ ∘ ♭ ≠ identity` in discrete DEC
-   - This is fundamental to discrete theory (Hirani Prop. 5.5.3)
+   - This is fundamental to discrete theory (Hirani 2003, *Discrete Exterior
+     Calculus*, Proposition 5.5.3)
    - Causes `div(grad) ≈ Δ` (not exact)
 
 3. **Boundary Effects**: Cotangent Laplacian assumes complete 1-ring
@@ -487,16 +504,23 @@ Not implemented for n > 3.
 
 ### Discrete Exterior Calculus
 
-- Exterior forms as cochains (Hirani Chapter 3)
-- Circumcentric dual complexes (Desbrun Section 2, Hirani Section 2.4)
-- Hodge star via volume ratios (Hirani Def. 4.1.1)
-- Sharp/flat with support volumes (Hirani Chapter 5)
+- Exterior forms as cochains (Hirani 2003, *Discrete Exterior Calculus*, Chapter 3)
+- Circumcentric dual complexes (Desbrun et al. 2005, *Discrete Exterior
+  Calculus*, §3; Hirani 2003, *Discrete Exterior Calculus*, §2.4)
+- Hodge star via volume ratios (Hirani 2003, *Discrete Exterior Calculus*,
+  Definition 4.1.1)
+- Sharp/flat with support volumes (Hirani 2003, *Discrete Exterior Calculus*,
+  Chapter 5)
 
 ### Discrete Differential Geometry
 
-- Meyer mixed Voronoi areas for curvature (Meyer Sections 3.2-3.4)
-- Cotangent Laplacian for mean curvature (Meyer Eq. 8)
-- Angle defect for Gaussian curvature (Meyer Eq. 9)
+- Meyer mixed Voronoi areas for curvature (Meyer et al. 2003,
+  *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*,
+  Sections 3.2-3.4)
+- Cotangent Laplacian for mean curvature (Meyer et al. 2003,
+  *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*, Eq. 8)
+- Angle defect for Gaussian curvature (Meyer et al. 2003,
+  *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*, Eq. 9)
 
 ### Key Theorems Preserved
 
@@ -509,22 +533,24 @@ Not implemented for n > 3.
 
 ## References
 
-1. **Meyer, M., Desbrun, M., Schröder, P., & Barr, A. H.** (2003). "Discrete
-   Differential-Geometry Operators for Triangulated 2-Manifolds". *VisMath*.
+1. **Meyer, M., Desbrun, M., Schröder, P., & Barr, A. H.** (2003).
+   *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*.
+   In: Visualization and Mathematics III, pp. 35-57.
    - Sections 3.2-3.4: Mixed Voronoi areas
    - Eq. 5: Cotangent weights
    - Eq. 7: Circumcentric Voronoi formula
    - Eq. 8-9: Mean and Gaussian curvature
 
 2. **Desbrun, M., Hirani, A. N., Leok, M., & Marsden, J. E.** (2005).
-   "Discrete Exterior Calculus". *arXiv:math/0508341v2*.
-   - Section 2: Circumcentric dual complexes
-   - Section 3-4: Exterior derivative and Hodge star
-   - Lines 268-275: Cotangent weight derivation
+   *Discrete Exterior Calculus*. arXiv:math/0508341v2.
+   - §3: Primal Simplicial Complex and Dual Cell Complex (circumcentric duals)
+   - §5-§6: Exterior derivative and Hodge star
+   - §9: Divergence and Laplace–Beltrami (cotangent weight derivation)
 
-3. **Hirani, A. N.** (2003). "Discrete Exterior Calculus". PhD thesis,
+3. **Hirani, A. N.** (2003). *Discrete Exterior Calculus*. PhD thesis,
    California Institute of Technology.
-   - Chapter 5: Sharp and flat operators
+   - §2.4: Dual Complex (circumcentric dual cells)
+   - Chapter 5 (Forms and Vector Fields): defines sharp and flat operators
    - Eq. 5.8.1: PP-sharp formula
-   - Eq. 6.4.2: Laplace-Beltrami
+   - Eq. 6.4.2: Laplace–Beltrami
    - Prop. 5.5.1: Support volume intersections

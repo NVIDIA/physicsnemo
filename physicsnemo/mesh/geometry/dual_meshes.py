@@ -22,23 +22,29 @@ fundamental to both:
 - Discrete Exterior Calculus (DEC) operators (Hodge star, Laplacian, etc.)
 - Discrete differential geometry (curvature computations)
 
-Dual 0-cell volumes follow Meyer et al. (2003) for 2D manifolds, using the mixed
+Dual 0-cell volumes follow Meyer et al. (2003), *Discrete Differential-Geometry
+Operators for Triangulated 2-Manifolds*, for 2D manifolds, using the mixed
 Voronoi area approach that handles both acute and obtuse triangles correctly.
 For higher dimensions, barycentric approximation is used as rigorous circumcentric
-dual volumes require well-centered meshes (Desbrun et al. 2005, Hirani 2003).
+dual volumes require well-centered meshes (Desbrun et al. 2005, *Discrete Exterior
+Calculus*; Hirani 2003, *Discrete Exterior Calculus* (PhD thesis)).
 
 Circumcenters and cotangent weights are computed using the perpendicular bisector
 method and FEM stiffness matrix approach, respectively, following Desbrun et al.
-"Discrete Exterior Calculus", Section 2.
+(2005), *Discrete Exterior Calculus*, §3 (Primal Simplicial Complex and Dual
+Cell Complex) and §9 (Divergence and Laplace–Beltrami).
 
-References:
-    Meyer, M., Desbrun, M., Schröder, P., & Barr, A. H. (2003).
-    "Discrete Differential-Geometry Operators for Triangulated 2-Manifolds". VisMath.
+References
+----------
+Meyer, M., Desbrun, M., Schröder, P., & Barr, A. H. (2003).
+*Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*.
+In: Visualization and Mathematics III, pp. 35-57.
 
-    Desbrun, M., Hirani, A. N., Leok, M., & Marsden, J. E. (2005).
-    "Discrete Exterior Calculus". arXiv:math/0508341.
+Desbrun, M., Hirani, A. N., Leok, M., & Marsden, J. E. (2005).
+*Discrete Exterior Calculus*. arXiv:math/0508341v2.
 
-    Hirani, A. N. (2003). "Discrete Exterior Calculus". PhD thesis, Caltech.
+Hirani, A. N. (2003). *Discrete Exterior Calculus*. PhD thesis, California
+Institute of Technology.
 """
 
 from typing import TYPE_CHECKING
@@ -76,18 +82,18 @@ def _scatter_add_cell_contributions_to_vertices(
 
     Examples
     --------
-        >>> import torch
-        >>> dual_volumes = torch.zeros(4)
-        >>> cells = torch.tensor([[0, 1, 2], [1, 2, 3]])
-        >>> # Uniform: 1/3 of each triangle area to every vertex
-        >>> _scatter_add_cell_contributions_to_vertices(
-        ...     dual_volumes, cells, torch.tensor([0.5, 0.5]) / 3.0
-        ... )
-        >>> # Per-vertex: different contribution per corner
-        >>> dual_volumes2 = torch.zeros(4)
-        >>> _scatter_add_cell_contributions_to_vertices(
-        ...     dual_volumes2, cells, torch.tensor([[0.1, 0.2, 0.2], [0.15, 0.15, 0.2]])
-        ... )
+    >>> import torch
+    >>> dual_volumes = torch.zeros(4)
+    >>> cells = torch.tensor([[0, 1, 2], [1, 2, 3]])
+    >>> # Uniform: 1/3 of each triangle area to every vertex
+    >>> _scatter_add_cell_contributions_to_vertices(
+    ...     dual_volumes, cells, torch.tensor([0.5, 0.5]) / 3.0
+    ... )
+    >>> # Per-vertex: different contribution per corner
+    >>> dual_volumes2 = torch.zeros(4)
+    >>> _scatter_add_cell_contributions_to_vertices(
+    ...     dual_volumes2, cells, torch.tensor([[0.1, 0.2, 0.2], [0.15, 0.15, 0.2]])
+    ... )
     """
     if contributions.ndim not in (1, 2):
         raise ValueError(
@@ -103,12 +109,14 @@ def _compute_meyer_mixed_voronoi_areas(
     cell_vertices: Float[torch.Tensor, "n_cells 3 n_spatial_dims"],
     cell_areas: Float[torch.Tensor, " n_cells"],
 ) -> Float[torch.Tensor, " n_cells_times_3"]:
-    """Compute per-(cell, local_vertex) mixed Voronoi areas (Meyer et al. 2003).
+    """Compute per-(cell, local_vertex) mixed Voronoi areas.
 
-    This implements the branchless mixed Voronoi area formula for triangular meshes,
-    handling both acute and obtuse triangles correctly. For acute triangles, uses the
-    circumcentric Voronoi formula (Meyer Eq. 7). For obtuse triangles, uses the
-    mixed area subdivision (Meyer Fig. 4).
+    Implements the branchless mixed Voronoi area formula of Meyer et al. (2003),
+    *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*, for
+    triangular meshes, handling both acute and obtuse triangles correctly. For
+    acute triangles, uses the circumcentric Voronoi formula (Meyer et al. 2003,
+    Eq. 7). For obtuse triangles, uses the mixed area subdivision (Meyer et al.
+    2003, Fig. 4).
 
     Parameters
     ----------
@@ -130,8 +138,8 @@ def _compute_meyer_mixed_voronoi_areas(
     References
     ----------
     Meyer, M., Desbrun, M., Schröder, P., & Barr, A. H. (2003).
-    "Discrete Differential-Geometry Operators for Triangulated 2-Manifolds".
-    Section 3.3 (Equation 7) and Section 3.4 (Figure 4).
+    *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*.
+    §3.3 (Equation 7) and §3.4 (Figure 4).
     """
     from physicsnemo.mesh.curvature._utils import compute_triangle_angles
 
@@ -271,8 +279,9 @@ def compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
         V(v) = Σ_{cells ∋ v} |cell| / (n_manifold_dims + 1)
 
         Note: Rigorous circumcentric dual volumes in 3D require "well-centered"
-        meshes where all circumcenters lie inside their simplices (Desbrun 2005).
-        Mixed volume formulas for obtuse tetrahedra do not exist in the literature.
+        meshes where all circumcenters lie inside their simplices (Desbrun et al.
+        2005, *Discrete Exterior Calculus*). Mixed volume formulas for obtuse
+        tetrahedra do not exist in the literature.
 
     Parameters
     ----------
@@ -294,23 +303,27 @@ def compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> dual_vols = compute_dual_volumes_0(mesh)
-        >>> # Use in Hodge star: ⋆f(⋆v) = f(v) × dual_vols[v]
-        >>> # Use in Laplacian: Δf(v) = (1/dual_vols[v]) × Σ w_ij(f_j - f_i)
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> dual_vols = compute_dual_volumes_0(mesh)
+    >>> # Use in Hodge star: ⋆f(⋆v) = f(v) × dual_vols[v]
+    >>> # Use in Laplacian: Δf(v) = (1/dual_vols[v]) × Σ w_ij(f_j - f_i)
 
-    Mathematical Properties:
-        1. Conservation: Σ_v |⋆v| = |mesh|  (perfect tiling)
-        2. Optimality: Minimizes spatial averaging error (Meyer Section 3.2)
-        3. Gauss-Bonnet: Enables Σ K_i × |⋆v_i| = 2πχ(M) to hold exactly
+Mathematical Properties:
+    1. Conservation: Σ_v |⋆v| = |mesh|  (perfect tiling)
+    2. Optimality: Minimizes spatial averaging error (Meyer et al. 2003,
+       *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*, §3.2)
+    3. Gauss-Bonnet: Enables Σ K_i × |⋆v_i| = 2πχ(M) to hold exactly
 
-    References:
-
-        - Meyer Eq. 7 (circumcentric Voronoi, acute triangles)
-        - Meyer Fig. 4 (mixed area, obtuse triangles)
-        - Desbrun Def. of circumcentric dual (lines 333-352 in umich_dec.tex)
-        - Hirani Def. 2.4.5 (dual cell definition, lines 884-896 in Hirani03.txt)
+    References
+    ----------
+    - Meyer et al. (2003), *Discrete Differential-Geometry Operators for
+      Triangulated 2-Manifolds*, Equation 7 (circumcentric Voronoi, acute
+      triangles) and Figure 4 (mixed area, obtuse triangles).
+    - Desbrun et al. (2005), *Discrete Exterior Calculus*, Definition 3.7
+      (circumcentric duality operator).
+    - Hirani (2003), *Discrete Exterior Calculus* (PhD thesis), Definition 2.4.5
+      (circumcentric dual cell).
     """
     device = mesh.points.device
     n_points = mesh.n_points
@@ -336,7 +349,9 @@ def compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
 
     elif n_manifold_dims == 2:
         ### 2D: Mixed Voronoi area for triangles using Meyer et al. 2003 algorithm
-        # Reference: Section 3.3 (Equation 7) and Section 3.4 (Figure 4)
+        # Reference: Meyer et al. (2003), "Discrete Differential-Geometry
+        # Operators for Triangulated 2-Manifolds", §3.3 (Equation 7) for acute
+        # triangles and §3.4 (Figure 4) for the obtuse-triangle subdivision.
         #
         # CRITICAL: This correctly handles BOTH acute and obtuse triangles.
         # The previous buggy implementation in _circumcentric_dual.py assumed
@@ -358,7 +373,8 @@ def compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
         #
         # NOTE: This is an APPROXIMATION, not rigorous like 2D.
         # Rigorous circumcentric dual volumes in 3D+ require "well-centered"
-        # meshes where all circumcenters lie inside simplices (Desbrun 2005).
+        # meshes where all circumcenters lie inside simplices (Desbrun et al.
+        # 2005, "Discrete Exterior Calculus").
         # Mixed volume formulas for obtuse tetrahedra do NOT exist in literature.
         n_vertices_per_cell = n_manifold_dims + 1
         _scatter_add_cell_contributions_to_vertices(

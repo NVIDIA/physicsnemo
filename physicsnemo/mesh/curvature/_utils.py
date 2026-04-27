@@ -55,9 +55,9 @@ def compute_full_angle_n_sphere(n_manifold_dims: int) -> float:
 
     Examples
     --------
-        >>> import math
-        >>> assert abs(compute_full_angle_n_sphere(1) - math.pi) < 1e-10  # π
-        >>> assert abs(compute_full_angle_n_sphere(2) - 2*math.pi) < 1e-5  # 2π
+    >>> import math
+    >>> assert abs(compute_full_angle_n_sphere(1) - math.pi) < 1e-10  # π
+    >>> assert abs(compute_full_angle_n_sphere(2) - 2*math.pi) < 1e-5  # 2π
     """
 
     ### Special case for 1D: turning angle is π
@@ -142,12 +142,12 @@ def compute_triangle_angles(
 
     Examples
     --------
-        >>> # Right angle at origin
-        >>> p0 = torch.tensor([0., 0.])
-        >>> p1 = torch.tensor([1., 0.])
-        >>> p2 = torch.tensor([0., 1.])
-        >>> angle = compute_triangle_angles(p0, p1, p2)
-        >>> assert torch.allclose(angle, torch.tensor(torch.pi / 2))
+    >>> # Right angle at origin
+    >>> p0 = torch.tensor([0., 0.])
+    >>> p1 = torch.tensor([1., 0.])
+    >>> p2 = torch.tensor([0., 1.])
+    >>> angle = compute_triangle_angles(p0, p1, p2)
+    >>> assert torch.allclose(angle, torch.tensor(torch.pi / 2))
     """
     ### Compute edge vectors from p0
     edge1 = p1 - p0  # (..., n_spatial_dims)

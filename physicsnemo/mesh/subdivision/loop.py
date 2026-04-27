@@ -312,11 +312,11 @@ def subdivide_loop(mesh: "Mesh") -> "Mesh":
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-        >>> # Smooth a rough triangulated surface
-        >>> mesh = sphere_icosahedral.load(subdivisions=2)
-        >>> smooth = subdivide_loop(mesh)
-        >>> # Original vertices have moved; result is smoother
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    >>> # Smooth a rough triangulated surface
+    >>> mesh = sphere_icosahedral.load(subdivisions=2)
+    >>> smooth = subdivide_loop(mesh)
+    >>> # Original vertices have moved; result is smoother
     """
     from physicsnemo.mesh.mesh import Mesh
 
