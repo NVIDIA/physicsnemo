@@ -233,9 +233,15 @@ class TestBoundaryEdges:
         # 9 unique boundary edges: 6 edges of tet 1 + 6 of tet 2 - 3 shared
         expected = torch.tensor(
             [
-                [0, 1], [0, 2], [0, 3], [0, 4],
-                [1, 2], [1, 3], [1, 4],
-                [2, 3], [2, 4],
+                [0, 1],
+                [0, 2],
+                [0, 3],
+                [0, 4],
+                [1, 2],
+                [1, 3],
+                [1, 4],
+                [2, 3],
+                [2, 4],
             ],
             dtype=torch.int64,
             device=device,
