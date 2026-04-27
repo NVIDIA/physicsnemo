@@ -77,9 +77,7 @@ def test_poisson_sample_no_duplicates_stress():
 
     for seed in range(32):
         gen = torch.Generator().manual_seed(seed)
-        indices = poisson_sample_indices_fixed(
-            N, k, generator=gen, replacement=False
-        )
+        indices = poisson_sample_indices_fixed(N, k, generator=gen, replacement=False)
         assert indices.shape == (k,)
         assert indices.unique().numel() == k, (
             f"Duplicates found with seed={seed} in replacement=False mode"
@@ -101,9 +99,7 @@ def test_poisson_sample_replacement_may_duplicate():
     saw_duplicate = False
     for seed in range(32):
         gen = torch.Generator().manual_seed(seed)
-        indices = poisson_sample_indices_fixed(
-            N, k, generator=gen, replacement=True
-        )
+        indices = poisson_sample_indices_fixed(N, k, generator=gen, replacement=True)
         assert indices.shape == (k,)
         if indices.unique().numel() < k:
             saw_duplicate = True

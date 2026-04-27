@@ -121,10 +121,9 @@ def poisson_sample_indices_fixed(
     # cumulative arithmetic: with N up to ~1e8+, float32 precision near the top
     # of the range (~8) would swallow the +1 minimum-gap shift and let
     # consecutive floored positions collide.
-    gaps = (
-        torch.rand(k, device=device, generator=generator, dtype=torch.float64)
-        .exponential_()
-    )
+    gaps = torch.rand(
+        k, device=device, generator=generator, dtype=torch.float64
+    ).exponential_()
 
     # Scale so the raw exponential portion sums to (N - k); adding 1 to every
     # gap then makes the minimum gap >= 1 while keeping the total sum == N.

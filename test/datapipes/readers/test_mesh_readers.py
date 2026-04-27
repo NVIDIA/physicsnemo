@@ -98,8 +98,7 @@ class TestContiguousBlockSlice:
         total, k = 11, 10
         gen = torch.Generator().manual_seed(0)
         starts = {
-            _contiguous_block_slice(total, k, generator=gen).start
-            for _ in range(200)
+            _contiguous_block_slice(total, k, generator=gen).start for _ in range(200)
         }
         assert starts == {0, 1}
 
