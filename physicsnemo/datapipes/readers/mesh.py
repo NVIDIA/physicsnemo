@@ -15,7 +15,7 @@
 # limitations under the License.
 
 """
-Mesh readers - Load physicsnemo Mesh / DomainMesh from physicsnemo mesh format (.pt).
+Mesh readers - Load physicsnemo Mesh / DomainMesh from physicsnemo mesh format (.pmsh / .pdmsh).
 
 MeshReader returns (Mesh, metadata) per sample.
 DomainMeshReader returns (DomainMesh, metadata) per sample.
@@ -138,7 +138,7 @@ class MeshReader:
     Read single-mesh samples from directories of physicsnemo mesh files.
 
     Each sample is one Mesh. Returns (Mesh, metadata) per index.
-    Uses Mesh.load(path) for physicsnemo mesh format (currently .pt).
+    Uses Mesh.load(path) for physicsnemo mesh format (.pmsh).
     """
 
     def __init__(
@@ -157,7 +157,7 @@ class MeshReader:
         Parameters
         ----------
         path : Path or str
-            Root directory containing mesh files (e.g. .pt directories).
+            Root directory containing mesh files (e.g. .pmsh directories).
         pattern : str, optional
             Glob pattern for mesh paths under ``path``. Default matches ``**/*.pmsh``.
         pin_memory : bool, default=False
@@ -273,7 +273,7 @@ class DomainMeshReader:
 
     Each sample is one DomainMesh (interior + named boundaries + global_data).
     Returns (DomainMesh, metadata) per index.
-    Uses DomainMesh.load(path) for physicsnemo mesh format (currently .pt).
+    Uses DomainMesh.load(path) for physicsnemo mesh format (.pdmsh).
     """
 
     def __init__(
