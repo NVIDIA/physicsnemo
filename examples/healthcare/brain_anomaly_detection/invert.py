@@ -15,8 +15,8 @@
 # limitations under the License.
 
 import physicsnemo
-from physicsnemo.sym.hydra import to_absolute_path
-from physicsnemo.sym.distributed.manager import DistributedManager
+from hydra.utils import to_absolute_path
+from physicsnemo.distributed import DistributedManager
 import torch
 import torch.nn as nn
 import numpy as np

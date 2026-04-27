@@ -22,19 +22,60 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.logging import PythonLogger
 from physicsnemo.models.fno import FNO
 from physicsnemo.models.mlp.fully_connected import FullyConnected
-from physicsnemo.sym.eq.pdes.navier_stokes import NavierStokes
+from sympy import Function, Number, Symbol
+
+from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.primitives.planar.structured_grid import (
+    load as load_structured_grid,
+)
+from physicsnemo.mesh.sampling import sample_random_points_on_cells
+from physicsnemo.sym.eq.pde import PDE
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer
-from physicsnemo.sym.geometry.geometry_dataloader import GeometryDatapipe
-from physicsnemo.sym.geometry.primitives_2d import Rectangle
 from physicsnemo.utils import StaticCaptureEvaluateNoGrad, StaticCaptureTraining
 from omegaconf import DictConfig
-from sympy import Abs, Eq, Symbol
 from torch.nn import MSELoss
 from torch.optim import Adam, lr_scheduler
 
 
+class NavierStokes(PDE):
+    """Incompressible Navier-Stokes equations (steady, 2D).
+
+    Simplified from the compressible form in physicsnemo-sym for the case
+    where ``rho`` is constant and ``time=False``.
+
+    Reference: https://turbmodels.larc.nasa.gov/implementrans.html
+    """
+
+    def __init__(self, nu=0.01, rho=1.0, dim=2, time=False):
+        self.dim = dim
+        x, y = Symbol("x"), Symbol("y")
+        iv = {"x": x, "y": y}
+        u = Function("u")(*iv.values())
+        v = Function("v")(*iv.values())
+        p = Function("p")(*iv.values())
+        nu, rho = Number(nu), Number(rho)
+        self.equations = {
+            "continuity": u.diff(x) + v.diff(y),
+            "momentum_x": (
+                u * u.diff(x)
+                + v * u.diff(y)
+                + (1 / rho) * p.diff(x)
+                - nu * u.diff(x, 2)
+                - nu * u.diff(y, 2)
+            ),
+            "momentum_y": (
+                u * v.diff(x)
+                + v * v.diff(y)
+                + (1 / rho) * p.diff(y)
+                - nu * v.diff(x, 2)
+                - nu * v.diff(y, 2)
+            ),
+        }
+
+
 @hydra.main(version_base="1.3", config_path=".", config_name="config.yaml")
 def ldc_trainer(cfg: DictConfig) -> None:
+    """Main function for the LDC PINNs."""
     DistributedManager.initialize()  # Only call this once in the entire script!
     dist = DistributedManager()  # call if required elsewhere
 
@@ -42,10 +83,43 @@ def ldc_trainer(cfg: DictConfig) -> None:
     log = PythonLogger(name="ldc")
     log.file_logging()
 
-    # make geometry
+    # domain geometry using physicsnemo.mesh
     height = 0.1
     width = 0.1
-    rec = Rectangle((-width / 2, -height / 2), (width / 2, height / 2))
+    x_min, x_max = -width / 2, width / 2
+    y_min, y_max = -height / 2, height / 2
+
+    interior_mesh = load_structured_grid(
+        x_min=x_min,
+        x_max=x_max,
+        y_min=y_min,
+        y_max=y_max,
+        n_x=50,
+        n_y=50,
+        device=dist.device,
+    )
+    boundary_mesh = interior_mesh.get_boundary_mesh()
+
+    def sample_boundary(n_points, device):
+        """Sample on the rectangle boundary using physicsnemo.mesh."""
+        cell_indices = torch.randint(
+            0, boundary_mesh.n_cells, (n_points,), device=device
+        )
+        pts = sample_random_points_on_cells(boundary_mesh, cell_indices)
+        return {"x": pts[:, 0], "y": pts[:, 1]}
+
+    def sample_interior(n_points, device):
+        """Sample inside the rectangle using physicsnemo.mesh, with analytical SDF."""
+        cell_indices = torch.randint(
+            0, interior_mesh.n_cells, (n_points,), device=device
+        )
+        pts = sample_random_points_on_cells(interior_mesh, cell_indices)
+        x, y = pts[:, 0], pts[:, 1]
+        sdf = torch.min(
+            torch.stack([x - x_min, x_max - x, y - y_min, y_max - y], dim=-1),
+            dim=-1,
+        ).values
+        return {"x": x, "y": y, "sdf": sdf}
 
     model = FullyConnected(
         in_features=2, out_features=3, num_layers=6, layer_size=512
@@ -73,92 +147,65 @@ def ldc_trainer(cfg: DictConfig) -> None:
         torch.from_numpy(yy).to(torch.float).to(dist.device),
     )
 
-    # bc dataloader
-    bc_dataloader = GeometryDatapipe(
-        geom_objects=[rec],
-        batch_size=1,
-        num_points=2000,
-        sample_type="surface",
-        device=dist.device,
-        num_workers=1,
-        requested_vars=["x", "y"],
-    )
-
-    # interior dataloader
-    interior_dataloader = GeometryDatapipe(
-        geom_objects=[rec],
-        batch_size=1,
-        num_points=4000,
-        sample_type="volume",
-        device=dist.device,
-        num_workers=1,
-        requested_vars=["x", "y", "sdf"],
-    )
-
     for i in range(10000):
-        for bc_data, int_data in zip(bc_dataloader, interior_dataloader):
-            optimizer.zero_grad()
+        optimizer.zero_grad()
 
-            # subsample points:
-            no_slip = {}
-            top_wall = {}
-            y_vals = bc_data[0]["y"]
-            mask_no_slip = y_vals < height / 2
-            mask_top_wall = y_vals == height / 2
+        bc_data = sample_boundary(2000, dist.device)
+        int_data = sample_interior(4000, dist.device)
 
-            for k in bc_data[0].keys():
-                no_slip[k] = (bc_data[0][k][mask_no_slip]).reshape(-1, 1)
-                top_wall[k] = (bc_data[0][k][mask_top_wall]).reshape(-1, 1)
+        y_vals = bc_data["y"]
+        mask_top_wall = y_vals >= height / 2 - 1e-7
+        mask_no_slip = ~mask_top_wall
 
-            interior = {}
-            for k, v in int_data[0].items():
-                # set requires_grad to true to enable gradient computation using autodiff
-                if k in ["x", "y"]:
-                    requires_grad = True
-                else:
-                    requires_grad = False
-                interior[k] = v.reshape(-1, 1).requires_grad_(requires_grad)
+        no_slip_xy = torch.stack(
+            [bc_data["x"][mask_no_slip], bc_data["y"][mask_no_slip]], dim=-1
+        )
+        top_wall_x = bc_data["x"][mask_top_wall].unsqueeze(-1)
+        top_wall_xy = torch.stack(
+            [bc_data["x"][mask_top_wall], bc_data["y"][mask_top_wall]], dim=-1
+        )
 
-            # apply BC constraints
-            coords = torch.cat([interior["x"], interior["y"]], dim=1)
-            no_slip_out = model(torch.cat([no_slip["x"], no_slip["y"]], dim=1))
-            top_wall_out = model(torch.cat([top_wall["x"], top_wall["y"]], dim=1))
-            interior_out = model(coords)
+        int_x = int_data["x"].unsqueeze(-1).requires_grad_(True)
+        int_y = int_data["y"].unsqueeze(-1).requires_grad_(True)
+        int_sdf = int_data["sdf"].unsqueeze(-1)
+        coords = torch.cat([int_x, int_y], dim=1)
 
-            v_no_slip = torch.mean(no_slip_out[:, 1:2] ** 2)
-            u_no_slip = torch.mean(no_slip_out[:, 0:1] ** 2)
-            u_slip = torch.mean(
-                ((top_wall_out[:, 0:1] - 1.0) ** 2)
-                * (1 - 20 * torch.abs(top_wall["x"]))
-            )  # weight the edges zero.
-            v_slip = torch.mean(top_wall_out[:, 1:2] ** 2)
+        no_slip_out = model(no_slip_xy)
+        top_wall_out = model(top_wall_xy)
+        interior_out = model(coords)
 
-            # apply interior constraints
-            phy_loss_dict = phy_inf.forward(
-                {
-                    "coordinates": coords,
-                    "u": interior_out[:, 0:1],
-                    "v": interior_out[:, 1:2],
-                    "p": interior_out[:, 2:3],
-                }
-            )
+        u_no_slip = torch.mean(no_slip_out[:, 0:1] ** 2)
+        v_no_slip = torch.mean(no_slip_out[:, 1:2] ** 2)
+        u_slip = torch.mean(
+            ((top_wall_out[:, 0:1] - 1.0) ** 2) * (1 - 20 * torch.abs(top_wall_x))
+        )
+        v_slip = torch.mean(top_wall_out[:, 1:2] ** 2)
 
-            cont = phy_loss_dict["continuity"] * interior["sdf"]
-            mom_x = phy_loss_dict["momentum_x"] * interior["sdf"]
-            mom_y = phy_loss_dict["momentum_y"] * interior["sdf"]
+        phy_loss_dict = phy_inf.forward(
+            {
+                "coordinates": coords,
+                "u": interior_out[:, 0:1],
+                "v": interior_out[:, 1:2],
+                "p": interior_out[:, 2:3],
+            }
+        )
 
-            phy_loss = (
-                1 * torch.mean(cont**2)
-                + 1 * torch.mean(mom_x**2)
-                + 1 * torch.mean(mom_y**2)
-                + u_no_slip
-                + v_no_slip
-                + u_slip
-                + v_slip
-            )
-            phy_loss.backward()
-            optimizer.step()
-            scheduler.step()
+        cont = phy_loss_dict["continuity"] * int_sdf
+        mom_x = phy_loss_dict["momentum_x"] * int_sdf
+        mom_y = phy_loss_dict["momentum_y"] * int_sdf
+
+        phy_loss = (
+            torch.mean(cont**2)
+            + torch.mean(mom_x**2)
+            + torch.mean(mom_y**2)
+            + u_no_slip
+            + v_no_slip
+            + u_slip
+            + v_slip
+        )
+        phy_loss.backward()
+        optimizer.step()
+        scheduler.step()
 
         if i % 1000 == 0:
             with torch.no_grad():

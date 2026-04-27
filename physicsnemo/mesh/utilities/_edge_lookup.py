@@ -28,6 +28,7 @@ from jaxtyping import Bool, Int
 def find_edges_in_reference(
     reference_edges: Int[torch.Tensor, "n_ref 2"],
     query_edges: Int[torch.Tensor, "n_query 2"],
+    index_bound: int | None = None,
 ) -> tuple[Int[torch.Tensor, " n_query"], Bool[torch.Tensor, " n_query"]]:
     """Find indices of query edges within a reference edge set.
 
@@ -36,7 +37,7 @@ def find_edges_in_reference(
     and m = len(query_edges).
 
     Edge order within each edge is ignored (edges are canonicalized
-    to [min_vertex, max_vertex] internally).
+    to ascending vertex-index order internally).
 
     Parameters
     ----------
@@ -44,6 +45,9 @@ def find_edges_in_reference(
         Reference edge set, shape (n_ref, 2). Each row is [v0, v1].
     query_edges : torch.Tensor
         Query edges to find, shape (n_query, 2). Each row is [v0, v1].
+    index_bound : int, optional
+        Strict upper bound for vertex indices in both edge tensors. Passing
+        this avoids a GPU synchronization when hashing the edges.
 
     Returns
     -------
@@ -71,16 +75,19 @@ def find_edges_in_reference(
             torch.zeros(len(query_edges), dtype=torch.bool, device=device),
         )
 
-    ### Canonicalize edges to [min_vertex, max_vertex] order
+    ### Canonicalize edges to ascending vertex-index order
     sorted_reference, _ = torch.sort(reference_edges, dim=-1)
     sorted_query, _ = torch.sort(query_edges, dim=-1)
 
     ### Compute integer hash for each edge
-    # hash = v0 * (max_vertex + 1) + v1
+    # hash = v0 * index_bound + v1
     # This creates a unique mapping for edges with non-negative vertex indices
-    max_vertex = max(reference_edges.max().item(), query_edges.max().item()) + 1
-    reference_hash = sorted_reference[:, 0] * max_vertex + sorted_reference[:, 1]
-    query_hash = sorted_query[:, 0] * max_vertex + sorted_query[:, 1]
+    if index_bound is None:
+        index_bound = (
+            int(max(reference_edges.max().item(), query_edges.max().item())) + 1
+        )
+    reference_hash = sorted_reference[:, 0] * index_bound + sorted_reference[:, 1]
+    query_hash = sorted_query[:, 0] * index_bound + sorted_query[:, 1]
 
     ### Sort reference hashes to enable binary search via searchsorted
     reference_hash_sorted, sort_indices = torch.sort(reference_hash)

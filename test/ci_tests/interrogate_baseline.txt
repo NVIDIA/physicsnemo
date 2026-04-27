@@ -260,12 +260,6 @@ examples/cfd/navier_stokes_dpot/train_dpot.py:main
 examples/cfd/navier_stokes_rnn/navier_stokes_rnn.py:main
 examples/cfd/stokes_mgn/inference.py:MGNRollout
 examples/cfd/stokes_mgn/inference.py:main
-examples/cfd/stokes_mgn/pi_fine_tuning.py:PhysicsInformedFineTuner.loss
-examples/cfd/stokes_mgn/pi_fine_tuning.py:PhysicsInformedFineTuner.parabolic_inflow
-examples/cfd/stokes_mgn/pi_fine_tuning.py:main
-examples/cfd/stokes_mgn/pi_fine_tuning_gnn.py:PhysicsInformedFineTuner.loss
-examples/cfd/stokes_mgn/pi_fine_tuning_gnn.py:PhysicsInformedFineTuner.parabolic_inflow
-examples/cfd/stokes_mgn/pi_fine_tuning_gnn.py:main
 examples/cfd/stokes_mgn/preprocess.py:copy_files
 examples/cfd/stokes_mgn/train.py:MGNTrainer
 examples/cfd/stokes_mgn/train.py:MGNTrainer.get_lr

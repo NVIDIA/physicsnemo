@@ -30,6 +30,7 @@ from jaxtyping import Float, Int
 from tensordict import TensorDict
 
 from physicsnemo.mesh.utilities._duplicate_detection import compute_canonical_indices
+from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 
 if TYPE_CHECKING:
@@ -194,6 +195,7 @@ def _merge_point_data(
 def remove_duplicate_cells(
     cells: Int[torch.Tensor, "n_cells n_verts"],
     cell_data: TensorDict,
+    index_bound: int | None = None,
 ) -> tuple[Int[torch.Tensor, "n_unique_cells n_verts"], TensorDict]:
     """Remove duplicate cells from mesh.
 
@@ -206,6 +208,8 @@ def remove_duplicate_cells(
         Cell connectivity, shape (n_cells, n_vertices_per_cell)
     cell_data : TensorDict
         Cell data
+    index_bound : int, optional
+        Strict upper bound for cell vertex indices.
 
     Returns
     -------
@@ -235,11 +239,14 @@ def remove_duplicate_cells(
     n_cells = len(cells)
     device = cells.device
 
+    if index_bound is None:
+        index_bound = int(sorted_cells.max().item()) + 1
+
     ### Use torch.unique to identify duplicate groups
     # inverse_indices maps each cell to its unique group
-    _, inverse_indices = torch.unique(
+    _, inverse_indices = unique_index_tuples(
         sorted_cells,
-        dim=0,
+        index_bound=index_bound,
         return_inverse=True,
     )
 
@@ -438,6 +445,7 @@ def clean_mesh(
         cells, cell_data = remove_duplicate_cells(
             cells=cells,
             cell_data=cell_data,
+            index_bound=points.shape[0],
         )
         stats["n_cells_before_dedup"] = n_before
         stats["n_cells_after_dedup"] = cells.shape[0]

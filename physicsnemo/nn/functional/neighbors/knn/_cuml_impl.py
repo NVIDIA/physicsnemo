@@ -23,8 +23,8 @@ from physicsnemo.core.version_check import check_version_spec
 
 from .utils import validate_inputs
 
-CUML_AVAILABLE = check_version_spec("cuml", "24.0.0", hard_fail=False)
-CUPY_AVAILABLE = check_version_spec("cupy", "13.0.0", hard_fail=False)
+CUML_AVAILABLE = check_version_spec("cuml", "26.2.0", hard_fail=False)
+CUPY_AVAILABLE = check_version_spec("cupy", "13.6.0", hard_fail=False)
 
 if CUML_AVAILABLE and CUPY_AVAILABLE:
     cuml = importlib.import_module("cuml")
@@ -43,21 +43,15 @@ if CUML_AVAILABLE and CUPY_AVAILABLE:
         if restore_dtype == torch.bfloat16:
             points = points.to(torch.float32)
             queries = queries.to(torch.float32)
-        # Create a cuml handle to ensure we use the right stream:
-        torch_stream = torch.cuda.current_stream()
-
-        # Get the raw CUDA stream pointer (as an integer)
-        ptr = torch_stream.cuda_stream
-
-        # Build a cuML handle with that stream
-        handle = cuml.Handle(stream=ptr)
-
-        # Use dlpack to move the data without copying between pytorch and cuml:
+        # Hand buffers to CuPy via DLPack (zero-copy). cuML now runs on its
+        # own internal stream, so cross-stream correctness depends on PyTorch
+        # and CuPy honoring the DLPack PyCapsule ``stream`` field (verified
+        # by ``test_knn_cuml_non_default_cuda_stream`` on a non-default stream).
         points = cp.from_dlpack(points)
         queries = cp.from_dlpack(queries)
 
-        # Construct the knn:
-        knn = cuml.neighbors.NearestNeighbors(n_neighbors=k, handle=handle)
+        # Construct the knn using the public cuML estimator API.
+        knn = cuml.neighbors.NearestNeighbors(n_neighbors=k)
         # First pass partitions everything in points to make lookups fast
         knn.fit(points)
 

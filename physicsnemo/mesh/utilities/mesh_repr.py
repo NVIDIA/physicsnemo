@@ -79,24 +79,6 @@ def format_mesh_repr(mesh: "Mesh") -> str:
     return "\n".join(lines)
 
 
-def _count_tensordict_fields(td: TensorDict) -> int:
-    """Recursively count total number of fields in a TensorDict.
-
-    Counts both leaf tensors and intermediate (nested) TensorDict entries.
-
-    Parameters
-    ----------
-    td : TensorDict
-        TensorDict to count fields in.
-
-    Returns
-    -------
-    int
-        Total number of fields including nested fields.
-    """
-    return len(list(td.keys(include_nested=True)))
-
-
 def _get_trailing_shape(tensor: torch.Tensor, batch_dims: int) -> tuple:
     """Extract shape dimensions after the batch dimensions.
 
@@ -142,7 +124,7 @@ def _format_tensordict_repr(
         return "{}"
 
     # Count total fields to decide on single-line vs multi-line
-    total_fields = _count_tensordict_fields(td)
+    total_fields = len(list(td.keys(include_nested=True)))
     use_multiline = total_fields > 3
 
     if not use_multiline:

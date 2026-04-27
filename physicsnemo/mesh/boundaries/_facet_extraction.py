@@ -33,6 +33,7 @@ import torch
 from jaxtyping import Float, Int
 from tensordict import TensorDict
 
+from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
@@ -78,6 +79,7 @@ def _generate_combination_indices(n: int, k: int) -> Int[torch.Tensor, "n_choose
 def categorize_facets_by_count(
     candidate_facets: Int[torch.Tensor, "n_candidates n_vertices_per_facet"],
     target_counts: list[int] | Literal["boundary", "shared", "interior", "all"] = "all",
+    index_bound: int | None = None,
 ) -> tuple[
     Int[torch.Tensor, "n_unique n_vertices_per_facet"],
     Int[torch.Tensor, " n_candidates"],
@@ -99,6 +101,10 @@ def categorize_facets_by_count(
         - "interior": Return facets appearing exactly twice (counts == 2)
         - "shared": Return facets appearing 2+ times (counts >= 2)
         - list[int]: Return facets with counts in the specified list
+    index_bound : int, optional
+        Strict upper bound for vertex indices in ``candidate_facets``. Passing
+        this avoids a GPU synchronization and enables fast packed-int64
+        deduplication.
 
     Returns
     -------
@@ -121,10 +127,15 @@ def categorize_facets_by_count(
     ... )
     >>> assert boundary_facets.shape[0] == 4  # 4 boundary edges
     """
+    if index_bound is None:
+        index_bound = (
+            int(candidate_facets.max().item()) + 1 if len(candidate_facets) > 0 else 1
+        )
+
     ### Deduplicate and count occurrences
-    unique_facets, inverse_indices, counts = torch.unique(
+    unique_facets, inverse_indices, counts = unique_index_tuples(
         candidate_facets,
-        dim=0,
+        index_bound=index_bound,
         return_inverse=True,
         return_counts=True,
     )
@@ -329,6 +340,7 @@ def deduplicate_and_aggregate_facets(
     parent_cell_indices: Int[torch.Tensor, " n_candidates"],
     parent_cell_data: TensorDict,
     aggregation_weights: Float[torch.Tensor, " n_candidates"] | None = None,
+    index_bound: int | None = None,
 ) -> tuple[
     Int[torch.Tensor, "n_unique n_vertices_per_facet"],
     TensorDict,
@@ -349,6 +361,8 @@ def deduplicate_and_aggregate_facets(
         TensorDict with data to aggregate from parent cells
     aggregation_weights : torch.Tensor | None, optional
         Weights for aggregating data (optional, defaults to uniform)
+    index_bound : int, optional
+        Strict upper bound for vertex indices in ``candidate_facets``.
 
     Returns
     -------
@@ -359,10 +373,15 @@ def deduplicate_and_aggregate_facets(
     facet_to_parents : torch.Tensor
         Inverse mapping from candidate facets to unique facets, shape (n_candidate_facets,)
     """
+    if index_bound is None:
+        index_bound = (
+            int(candidate_facets.max().item()) + 1 if len(candidate_facets) > 0 else 1
+        )
+
     ### Find unique facets and inverse mapping
-    unique_facets, inverse_indices = torch.unique(
+    unique_facets, inverse_indices = unique_index_tuples(
         candidate_facets,
-        dim=0,
+        index_bound=index_bound,
         return_inverse=True,
     )
 
@@ -498,15 +517,16 @@ def extract_facet_mesh_data(
 
     ### Deduplicate, optionally filtering by occurrence count
     if target_counts == "all":
-        unique_facets, inverse_indices = torch.unique(
+        unique_facets, inverse_indices = unique_index_tuples(
             candidate_facets,
-            dim=0,
+            index_bound=parent_mesh.n_points,
             return_inverse=True,
         )
     else:
         unique_facets, inverse_indices, _ = categorize_facets_by_count(
             candidate_facets,
             target_counts=target_counts,
+            index_bound=parent_mesh.n_points,
         )
         # Discard candidates that were filtered out (inverse == -1)
         keep_mask = inverse_indices >= 0

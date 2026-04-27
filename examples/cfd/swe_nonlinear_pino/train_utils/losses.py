@@ -35,6 +35,7 @@ class LpLoss(object):
         self.size_average = size_average
 
     def rel(self, x, y):
+        """Compute relative Lp error between *x* and *y*."""
         num_examples = x.size()[0]
 
         diff_norms = torch.norm(
@@ -270,7 +271,7 @@ def physicsnemo_fdm_swe_nonlin(h, u, v, pde_node, D=1, device=0):
     huv_x = f_dhuv[:, 1 : nt - 1, :nx, :ny]
     huv_y = f_dhuv[:, nt + 1 : 2 * nt - 1, :nx, :ny]
 
-    # Compute PDEs using PhysicsNeMo-Sym
+    # Compute PDEs using physicsnemo.sym
     pde_Dh = pde_node[0].evaluate({"h__t": h_t, "hu__x": hu_x, "hv__y": hv_y})
     pde_Du = pde_node[1].evaluate(
         {

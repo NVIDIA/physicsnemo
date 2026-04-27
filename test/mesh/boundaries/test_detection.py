@@ -182,6 +182,79 @@ class TestBoundaryEdges:
         # Should have 4 boundary edges forming a square
         assert len(boundary_edges) == 4
 
+    def test_single_tetrahedron(self, device):
+        """Single tetrahedron has 6 boundary edges (all 4 faces are boundary).
+
+        Exercises the 3D-manifold branch of ``get_boundary_edges``: extract
+        boundary triangular faces, then take the unique edges of those faces.
+        """
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            device=device,
+        )
+        cells = torch.tensor([[0, 1, 2, 3]], dtype=torch.int64, device=device)
+        mesh = Mesh(points=points, cells=cells)
+
+        boundary_edges = get_boundary_edges(mesh)
+
+        # All 6 edges of the tet are boundary edges, in canonical sorted form
+        expected = torch.tensor(
+            [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]],
+            dtype=torch.int64,
+            device=device,
+        )
+        assert boundary_edges.shape == (6, 2)
+        assert torch.equal(boundary_edges, expected)
+
+    def test_two_tetrahedra_sharing_face(self, device):
+        """Two tetrahedra sharing a triangular face have 9 boundary edges.
+
+        Exercises the 3D-manifold branch where some faces are interior. The
+        shared face ``(0, 1, 2)`` is interior, but its 3 edges remain boundary
+        edges because each is incident to other boundary faces.
+        """
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 0.0, -1.0],
+            ],
+            device=device,
+        )
+        cells = torch.tensor(
+            [[0, 1, 2, 3], [0, 1, 2, 4]], dtype=torch.int64, device=device
+        )
+        mesh = Mesh(points=points, cells=cells)
+
+        boundary_edges = get_boundary_edges(mesh)
+
+        # 9 unique boundary edges: 6 edges of tet 1 + 6 of tet 2 - 3 shared
+        expected = torch.tensor(
+            [
+                [0, 1],
+                [0, 2],
+                [0, 3],
+                [0, 4],
+                [1, 2],
+                [1, 3],
+                [1, 4],
+                [2, 3],
+                [2, 4],
+            ],
+            dtype=torch.int64,
+            device=device,
+        )
+        assert boundary_edges.shape == (9, 2)
+        assert torch.equal(boundary_edges, expected)
+
+        # Vertices 3 and 4 are never co-cellular, so edge (3, 4) cannot exist
+        edge_set = {tuple(e.tolist()) for e in boundary_edges}
+        assert (3, 4) not in edge_set, (
+            "Edge (3, 4) is not co-cellular and should not be a boundary edge"
+        )
+
 
 class TestBoundaryCells:
     """Tests for get_boundary_cells."""

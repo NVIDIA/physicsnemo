@@ -32,13 +32,133 @@ import pytest
 import torch
 
 from physicsnemo.mesh.curvature._angles import compute_angles_at_vertices
-from physicsnemo.mesh.curvature._utils import (
+from physicsnemo.mesh.geometry._angles import (
     compute_triangle_angles,
+    compute_vertex_angle_sums,
+    compute_vertex_angles,
     stable_angle_between_vectors,
 )
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.primitives.curves import circle_2d
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+
+def _reference_triangle_angles(vertices: torch.Tensor) -> torch.Tensor:
+    v0 = vertices[:, 0, :]
+    v1 = vertices[:, 1, :]
+    v2 = vertices[:, 2, :]
+
+    def angle(edge_a: torch.Tensor, edge_b: torch.Tensor) -> torch.Tensor:
+        cross_norm = torch.linalg.vector_norm(
+            torch.linalg.cross(edge_a, edge_b, dim=-1), dim=-1
+        )
+        dot_product = (edge_a * edge_b).sum(dim=-1)
+        return torch.atan2(cross_norm, dot_product)
+
+    return torch.stack(
+        [
+            angle(v1 - v0, v2 - v0),
+            angle(v2 - v1, v0 - v1),
+            angle(v0 - v2, v1 - v2),
+        ],
+        dim=1,
+    )
+
+
+###############################################################################
+# Triangle Fast Path
+###############################################################################
+
+
+class TestTriangleAngleFastPath:
+    """Direct tests for 3D triangle angle computations."""
+
+    def test_equilateral_triangle_angles_3d(self):
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.5, 0.8660254038, 0.0],
+            ]
+        )
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+
+        angles = compute_vertex_angles(mesh)
+
+        expected = torch.full((1, 3), torch.pi / 3)
+        torch.testing.assert_close(angles, expected, atol=1e-6, rtol=1e-6)
+
+    def test_right_triangle_angles_3d(self):
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ]
+        )
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+
+        angles = compute_vertex_angles(mesh)
+
+        expected = torch.tensor([[torch.pi / 2, torch.pi / 4, torch.pi / 4]])
+        torch.testing.assert_close(angles, expected, atol=1e-6, rtol=1e-6)
+
+    def test_random_triangle_angles_match_reference(self):
+        generator = torch.Generator().manual_seed(123)
+        points = torch.randn((96, 3), generator=generator)
+        cells = torch.arange(96).reshape(-1, 3)
+        points[cells[:, 2]] += torch.tensor([0.0, 0.0, 2.0])
+        mesh = Mesh(points=points, cells=cells)
+
+        angles = compute_vertex_angles(mesh)
+        expected = _reference_triangle_angles(points[cells])
+
+        torch.testing.assert_close(angles, expected, atol=1e-6, rtol=1e-6)
+
+    def test_reversed_triangle_orientation_permutes_angles(self):
+        points = torch.tensor(
+            [
+                [0.1, 0.2, 0.3],
+                [2.0, 0.4, -0.1],
+                [0.3, 1.5, 0.7],
+            ]
+        )
+
+        forward = compute_vertex_angles(
+            Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+        )
+        reversed_angles = compute_vertex_angles(
+            Mesh(points=points, cells=torch.tensor([[0, 2, 1]]))
+        )
+
+        torch.testing.assert_close(reversed_angles, forward[:, [0, 2, 1]])
+
+    def test_skinny_triangle_angles_are_finite(self):
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1e-4, 1e-6, 0.0],
+            ],
+            dtype=torch.float64,
+        )
+        mesh = Mesh(points=points, cells=torch.tensor([[0, 1, 2]]))
+
+        angles = compute_vertex_angles(mesh)
+
+        assert torch.isfinite(angles).all()
+        torch.testing.assert_close(
+            angles.sum(dim=1), torch.tensor([torch.pi], dtype=torch.float64)
+        )
+
+    def test_primitive_sphere_angle_sums_are_finite(self):
+        mesh = sphere_icosahedral.load(subdivisions=2)
+
+        angle_sums = compute_vertex_angle_sums(mesh)
+
+        assert torch.isfinite(angle_sums).all()
+        assert (angle_sums > 0).all()
+
 
 ###############################################################################
 # 1D Manifolds (Closed Curves)
