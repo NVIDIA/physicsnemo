@@ -69,8 +69,7 @@ Component | Description |
 [**physicsnemo.datapipes**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.datapipes.html) | Optimized and scalable built-in data pipelines fine-tuned to handle engineering and scientific data structures like point clouds, meshes, etc.|
 [**physicsnemo.distributed**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.distributed.html) | A distributed computing sub-module built on top of `torch.distributed` to enable parallel training with just a few steps|
 [**physicsnemo.curator**](https://github.com/NVIDIA/physicsnemo-curator) | A sub-module to streamline and accelerate the process of data curation for engineering datasets|
-[**physicsnemo.sym.geometry**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/features/csg_and_tessellated_module.html) | A sub-module to handle geometry for DL training using Constructive Solid Geometry modeling and CAD files in STL format|
-[**physicsnemo.sym.eq**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/features/nodes.html) | A sub-module to use PDEs in your DL training with several implementations of commonly observed equations and easy ways for customization|
+[**physicsnemo.sym**](docs/api/physicsnemo.sym.rst) | Symbolic PDE residual computation — define equations via SymPy and compute physics-informed losses with automatic spatial derivatives (install with `pip install "nvidia-physicsnemo[sym]"`)|
 <!-- markdownlint-enable -->
 
 For a complete list, refer to the PhysicsNeMo API documentation for
@@ -110,7 +109,7 @@ physics-informed machine learning (ML) models can be trained quickly and effecti
 The framework includes support for advanced
 [optimization utilities](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.utils.html#module-physicsnemo.utils.capture),
 [tailor-made datapipes](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.datapipes.html),
-and [validation utilities](https://github.com/NVIDIA/physicsnemo-sym/tree/main/physicsnemo/sym/eq)
+and [symbolic PDE utilities](physicsnemo/sym/)
 to enhance end-to-end training speed.
 
 ### A Suite of Physics-Informed ML Models
@@ -124,7 +123,7 @@ includes optimized implementations of families of model architectures such as
 Neural Operators:
 
 - [Fourier Neural Operators (FNOs)](physicsnemo/models/fno)
-- [DeepONet](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/neural_operators/deeponet.html)
+- [DeepONet](examples/cfd/darcy_physics_informed/)
 - [DoMINO](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/cfd/external_aerodynamics/domino/readme.html)
 - [Graph Neural Networks (GNNs)](physicsnemo/nn/module/gnn_layers)
 - [MeshGraphNet](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/vortex_shedding_mgn)
@@ -137,7 +136,7 @@ Neural Operators:
 - [Transsolver](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/darcy_transolver)
 - [RNNs](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models)
 - [SwinVRNN](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/swinvrnn)
-- [Physics-Informed Neural Networks (PINNs)](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/foundational/1d_wave_equation.html)
+- [Physics-Informed Neural Networks (PINNs)](examples/cfd/ldc_pinns/)
 
 And many others.
 

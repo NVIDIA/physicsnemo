@@ -27,6 +27,17 @@ if TYPE_CHECKING:
     import pyvista
 
 
+def _vtk_data_to_tensor_dict(data) -> dict[str, torch.Tensor]:  # noqa: ANN001
+    """Convert a PyVista/VTK data container to a plain tensor dictionary."""
+    tensor_data: dict[str, torch.Tensor] = {}
+    for key, value in dict(data).items():
+        array = np.asarray(value)
+        if not np.issubdtype(array.dtype, np.number) and array.dtype != np.bool_:
+            continue
+        tensor_data[str(key)] = torch.as_tensor(array)
+    return tensor_data
+
+
 @require_version_spec("pyvista")
 def from_pyvista(
     pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet",
@@ -255,7 +266,7 @@ def from_pyvista(
         if isinstance(pyvista_mesh, pv.PolyData):
             tri_faces = _maybe_copy(pyvista_mesh.regular_faces)
         elif isinstance(pyvista_mesh, pv.UnstructuredGrid):
-            tri_faces = pyvista_mesh.cells_dict[pv.CellType.TRIANGLE]
+            tri_faces = pyvista_mesh.cells_dict[np.uint8(pv.CellType.TRIANGLE)]
         else:
             raise NotImplementedError(
                 f"Only PolyData and UnstructuredGrid are supported for manifold dimension 2, got {type(pyvista_mesh)=}."
@@ -270,7 +281,7 @@ def from_pyvista(
             raise ValueError(
                 f"Expected tetrahedral cells after triangulation, but got {list(cells_dict.keys())}"
             )
-        tetra_cells = cells_dict[pv.CellType.TETRA]
+        tetra_cells = cells_dict[np.uint8(pv.CellType.TETRA)]
         cells = torch.from_numpy(tetra_cells).long()
 
     ### Return Mesh object
@@ -290,9 +301,11 @@ def from_pyvista(
     return Mesh(
         points=points,
         cells=cells,
-        point_data=pyvista_mesh.point_data,
-        cell_data=pyvista_mesh.cell_data if pass_cell_data else {},
-        global_data=pyvista_mesh.field_data,
+        point_data=_vtk_data_to_tensor_dict(pyvista_mesh.point_data),
+        cell_data=_vtk_data_to_tensor_dict(pyvista_mesh.cell_data)
+        if pass_cell_data
+        else {},
+        global_data=_vtk_data_to_tensor_dict(pyvista_mesh.field_data),
     )
 
 
@@ -436,8 +449,8 @@ def _from_pyvista_cell_centroids(
     return Mesh(
         points=points,
         cells=cells,
-        point_data=pyvista_mesh.cell_data,
-        global_data=pyvista_mesh.field_data,
+        point_data=_vtk_data_to_tensor_dict(pyvista_mesh.cell_data),
+        global_data=_vtk_data_to_tensor_dict(pyvista_mesh.field_data),
     )
 
 

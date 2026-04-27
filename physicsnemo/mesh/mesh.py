@@ -17,7 +17,7 @@
 import math
 import types
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Self, Sequence, cast
 
 import torch
 import torch.nn.functional as F
@@ -1200,11 +1200,13 @@ class Mesh:
 
         ### Extract valid cells with remapped indices
         new_cells = remapped_cells[valid_cells_mask]
-        new_cell_data: TensorDict = self.cell_data[valid_cells_mask]  # type: ignore
+        # cast: TensorDict[bool_mask] returns TensorCollection | Tensor statically;
+        # the runtime is always TensorDict because cell_data is itself a TensorDict.
+        new_cell_data = cast(TensorDict, self.cell_data[valid_cells_mask])
 
         ### Slice points and point_data
         new_points = self.points[kept_indices]
-        new_point_data: TensorDict = self.point_data[kept_indices]  # type: ignore
+        new_point_data = cast(TensorDict, self.point_data[kept_indices])
 
         return Mesh(
             points=new_points,
@@ -1237,7 +1239,7 @@ class Mesh:
         """
         if isinstance(indices, int):
             indices = torch.tensor([indices], device=self.cells.device)
-        new_cell_data: TensorDict = self.cell_data[indices]  # type: ignore
+        new_cell_data = cast(TensorDict, self.cell_data[indices])
         new_cache = TensorDict(
             {
                 "cell": self._cache["cell"][indices],
@@ -2992,4 +2994,4 @@ def _mesh_repr(self) -> str:
     return format_mesh_repr(self)
 
 
-Mesh.__repr__ = _mesh_repr  # type: ignore
+Mesh.__repr__ = _mesh_repr  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]

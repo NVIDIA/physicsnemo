@@ -14,22 +14,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Interior angle computation for simplicial meshes.
+"""Intra-cell angle computation for simplicial meshes.
 
 Computes generalized interior angles at vertices of n-simplices using a
 dimension-agnostic formula based on correlation (normalized Gram) matrices.
 The formula unifies planar angles (triangles), solid angles (tetrahedra),
 and higher-dimensional generalizations into a single expression.
 
-This module provides two levels of abstraction:
+This module provides several levels of abstraction:
+
+- :func:`stable_angle_between_vectors`: Numerically stable angle between
+  two vectors via atan2. Works in any dimension.
+
+- :func:`compute_triangle_angles`: Angle at a vertex of a triangle (or
+  batch of triangles) given three point positions.
 
 - :func:`compute_vertex_angles`: Per-cell-per-vertex angles, shape
   ``(n_cells, n_vertices_per_cell)``. This is the fundamental geometric
   primitive, used by normal weighting and quality metrics.
 
 - :func:`compute_vertex_angle_sums`: Per-vertex angle sums, shape
-  ``(n_points,)``. This aggregates angles across all incident cells,
-  used by Gaussian curvature (angle defect method).
+  ``(n_points,)``. This aggregates intra-cell angles across all incident
+  cells, used by Gaussian curvature (angle defect method) for 2D+ manifolds.
+
+For 1D manifolds (edge meshes), the relevant curvature quantity is the
+inter-cell turning angle, which is computed in
+:mod:`physicsnemo.mesh.curvature._angles`.
 
 Reference:
     Van Oosterom, A. & Strackee, J. (1983). "The Solid Angle of a Plane
@@ -45,6 +55,79 @@ from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
+
+
+def stable_angle_between_vectors(v1: torch.Tensor, v2: torch.Tensor) -> torch.Tensor:
+    """Compute angle between vectors using numerically stable atan2 formula.
+
+    More stable than ``acos(dot product)`` which suffers from numerical
+    issues when vectors are nearly parallel or anti-parallel.
+
+    Parameters
+    ----------
+    v1 : torch.Tensor
+        First vector(s), shape ``(..., n_dims)``
+    v2 : torch.Tensor
+        Second vector(s), shape ``(..., n_dims)``
+
+    Returns
+    -------
+    torch.Tensor
+        Angle(s) in radians, shape ``(...)``. Range: ``[0, pi]``
+
+    Examples
+    --------
+    >>> import torch
+    >>> v1 = torch.tensor([[1.0, 0.0]])
+    >>> v2 = torch.tensor([[0.0, 1.0]])
+    >>> angle = stable_angle_between_vectors(v1, v2)
+    >>> torch.allclose(angle, torch.tensor([torch.pi / 2]))
+    True
+    """
+    dot_product = (v1 * v2).sum(dim=-1)
+
+    v1_norm = torch.linalg.vector_norm(v1, dim=-1)
+    v2_norm = torch.linalg.vector_norm(v2, dim=-1)
+
+    cross_magnitude_sq = torch.clamp(v1_norm**2 * v2_norm**2 - dot_product**2, min=0)
+    return torch.atan2(torch.sqrt(cross_magnitude_sq), dot_product)
+
+
+def compute_triangle_angles(
+    p0: torch.Tensor,
+    p1: torch.Tensor,
+    p2: torch.Tensor,
+) -> torch.Tensor:
+    """Compute the angle at ``p0`` in triangle ``(p0, p1, p2)``.
+
+    Uses the atan2-based :func:`stable_angle_between_vectors` formula for
+    numerical stability.
+
+    Parameters
+    ----------
+    p0 : torch.Tensor
+        Vertex at which to compute angle, shape ``(..., n_spatial_dims)``
+    p1 : torch.Tensor
+        Second vertex, shape ``(..., n_spatial_dims)``
+    p2 : torch.Tensor
+        Third vertex, shape ``(..., n_spatial_dims)``
+
+    Returns
+    -------
+    torch.Tensor
+        Angle at ``p0`` in radians, shape ``(...)``
+
+    Examples
+    --------
+    >>> import torch
+    >>> p0 = torch.tensor([0., 0.])
+    >>> p1 = torch.tensor([1., 0.])
+    >>> p2 = torch.tensor([0., 1.])
+    >>> angle = compute_triangle_angles(p0, p1, p2)
+    >>> torch.allclose(angle, torch.tensor(torch.pi / 2))
+    True
+    """
+    return stable_angle_between_vectors(p1 - p0, p2 - p0)
 
 
 def compute_vertex_angles(
@@ -105,6 +188,32 @@ def compute_vertex_angles(
     n_edges = mesh.n_manifold_dims  # edges emanating from each vertex
     input_dtype = mesh.points.dtype
 
+    if (
+        mesh.n_manifold_dims == 2
+        and mesh.n_spatial_dims == 3
+        and mesh.cells.shape[1] == 3
+    ):
+        cell_vertices = mesh.points[mesh.cells]
+        v0 = cell_vertices[:, 0, :]
+        v1 = cell_vertices[:, 1, :]
+        v2 = cell_vertices[:, 2, :]
+
+        def _angle(edge_a: torch.Tensor, edge_b: torch.Tensor) -> torch.Tensor:
+            cross_norm = torch.linalg.vector_norm(
+                torch.linalg.cross(edge_a, edge_b, dim=-1), dim=-1
+            )
+            dot_product = (edge_a * edge_b).sum(dim=-1)
+            return torch.atan2(cross_norm, dot_product)
+
+        return torch.stack(
+            [
+                _angle(v1 - v0, v2 - v0),
+                _angle(v2 - v1, v0 - v1),
+                _angle(v0 - v2, v1 - v2),
+            ],
+            dim=1,
+        ).to(input_dtype)
+
     ### Upcast to float64 for the correlation matrix and determinant
     # The correlation matrix C_ij = cos(angle_ij) suffers catastrophic
     # cancellation in float32 when angles are near 0 or pi, because
@@ -155,18 +264,18 @@ def compute_vertex_angles(
 
 
 def compute_vertex_angle_sums(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
-    """Compute the sum of interior angles at each vertex over all incident cells.
+    """Compute the sum of intra-cell interior angles at each vertex.
 
     For each vertex, sums the generalized interior angle contributed by every
-    cell incident to that vertex. This is the quantity used in the angle defect
-    formula for discrete Gaussian curvature:
+    cell incident to that vertex. This is the intra-cell geometry primitive
+    used by the angle defect formula for discrete Gaussian curvature:
 
         K_v = (full_angle - angle_sum_v) / voronoi_area_v
 
     Parameters
     ----------
     mesh : Mesh
-        Input simplicial mesh.
+        Input simplicial mesh (``n_manifold_dims >= 2``).
 
     Returns
     -------

@@ -133,7 +133,7 @@ def _compute_meyer_mixed_voronoi_areas(
     "Discrete Differential-Geometry Operators for Triangulated 2-Manifolds".
     Section 3.3 (Equation 7) and Section 3.4 (Figure 4).
     """
-    from physicsnemo.mesh.curvature._utils import compute_triangle_angles
+    from physicsnemo.mesh.geometry._angles import compute_triangle_angles
 
     n_cells = cell_vertices.shape[0]
     device = cell_vertices.device
@@ -371,6 +371,33 @@ def compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
     return dual_volumes
 
 
+def _compute_triangle_circumcenters_3d(vertices: torch.Tensor) -> torch.Tensor:
+    """Compute 3D triangle circumcenters with the closed-form cross formula."""
+    output_dtype = vertices.dtype
+    vertices_64 = vertices.to(dtype=torch.float64)
+
+    p0 = vertices_64[:, 0, :]
+    edge_01 = vertices_64[:, 1, :] - p0
+    edge_02 = vertices_64[:, 2, :] - p0
+
+    normal = torch.linalg.cross(edge_01, edge_02, dim=-1)
+    normal_norm_sq = (
+        (normal * normal)
+        .sum(dim=-1, keepdim=True)
+        .clamp_min(torch.finfo(torch.float64).eps)
+    )
+
+    edge_01_sq = (edge_01 * edge_01).sum(dim=-1, keepdim=True)
+    edge_02_sq = (edge_02 * edge_02).sum(dim=-1, keepdim=True)
+
+    offset = (
+        edge_01_sq * torch.linalg.cross(edge_02, normal, dim=-1)
+        + edge_02_sq * torch.linalg.cross(normal, edge_01, dim=-1)
+    ) / (2.0 * normal_norm_sq)
+
+    return (p0 + offset).to(dtype=output_dtype)
+
+
 def compute_circumcenters(
     vertices: Float[torch.Tensor, "n_simplices n_vertices_per_simplex n_spatial_dims"],
 ) -> Float[torch.Tensor, "n_simplices n_spatial_dims"]:
@@ -418,6 +445,9 @@ def compute_circumcenters(
         # 1-simplex (edge): circumcenter is the midpoint
         # This avoids numerical issues with underdetermined lstsq for edges in higher dimensions
         return vertices.mean(dim=1)
+
+    if n_vertices == 3 and n_spatial_dims == 3:
+        return _compute_triangle_circumcenters_3d(vertices)
 
     ### Build linear system for circumcenter
     # Reference vertex (first one)

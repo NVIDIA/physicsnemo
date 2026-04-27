@@ -74,6 +74,7 @@ def _extract_boundary_facets(
     boundary_facets, inverse_indices, _ = categorize_facets_by_count(
         candidate_facets,
         target_counts="boundary",
+        index_bound=mesh.n_points,
     )
     boundary_candidate_mask = inverse_indices >= 0
     return boundary_facets, parent_cell_indices, boundary_candidate_mask
@@ -250,22 +251,10 @@ def get_boundary_edges(mesh: "Mesh") -> Int[torch.Tensor, "n_boundary_edges 2"]:
     if len(boundary_faces) == 0:
         return torch.zeros((0, 2), dtype=torch.int64, device=device)
 
-    # Extract unique edges from boundary faces
-    n_verts_per_face = boundary_faces.shape[1]
-    from itertools import combinations
+    from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
+    from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
 
-    combo_indices = list(combinations(range(n_verts_per_face), 2))
-    combo_tensor = torch.tensor(
-        combo_indices, dtype=torch.long, device=device
-    )  # (n_combos, 2)
-
-    # Gather edges from boundary faces: (n_boundary_faces, n_combos, 2)
-    all_edges = boundary_faces[:, combo_tensor]
-    # Reshape to (n_boundary_faces * n_combos, 2)
-    all_edges = all_edges.reshape(-1, 2)
-    # Sort each edge for canonical ordering
-    all_edges = torch.sort(all_edges, dim=-1).values
-    # Deduplicate
-    boundary_edges = torch.unique(all_edges, dim=0)
-
-    return boundary_edges
+    candidate_edges, _ = extract_candidate_facets(
+        boundary_faces, manifold_codimension=1
+    )
+    return unique_index_tuples(candidate_edges, index_bound=mesh.n_points)

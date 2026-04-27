@@ -14,64 +14,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from sympy import Symbol, Abs, sign
+"""Simple 2D point primitive with signed distance and boundary sampling."""
+
 import numpy as np
-from physicsnemo.sym.geometry.geometry import Geometry, csg_curve_naming
-from physicsnemo.sym.geometry.curve import SympyCurve
-from physicsnemo.sym.geometry.parameterization import (
-    Parameterization,
-    Parameter,
-    Bounds,
-)
-from physicsnemo.sym.geometry.helper import _sympy_sdf_to_sdf
 
 
-class Point2D(Geometry):
-    """
-    2D Point along x and y axis
+class Point2D:
+    """A 2D point with signed distance field and boundary sampling.
 
     Parameters
     ----------
-    point : Tuple of int or float
-        x and y coordinates of the point
-    parameterization : Parameterization
-        Parameterization of geometry.
+    point : tuple[float, float]
+        (x, y) coordinates of the point.
     """
 
-    def __init__(self, point, parameterization=Parameterization()):
-        # make sympy symbols to use
-        x = Symbol("x")
-        y = Symbol("y")
+    def __init__(self, point):
+        """Initialize with (x, y) coordinates."""
+        self.point = point
 
-        # curves for each side
-        curve_parameterization = Parameterization({Symbol(csg_curve_naming(0)): (0, 1)})
-        curve_parameterization = Parameterization.combine(
-            curve_parameterization, parameterization
-        )
-        pt_1 = SympyCurve(
-            functions={"x": point[0], "y": point[1], "normal_x": 1.0, "normal_y": 0},
-            area=1.0,
-            parameterization=curve_parameterization,
-        )
-        curves = [pt_1]
+    def sdf(self, points, params=None):
+        """Signed distance from query points to this point.
 
-        # calculate SDF
-        sdf = ((x - point[0]) ** 2 + (y - point[1]) ** 2) ** 0.5 * sign(x - point[0])
+        Sign is determined by ``sign(x - point_x)``.
+        """
+        dx = points[:, 0] - self.point[0]
+        dy = points[:, 1] - self.point[1]
+        dist = np.sqrt(dx**2 + dy**2)
+        sign = np.where(dx >= 0, 1.0, -1.0)
+        return {"sdf": dist * sign}
 
-        # calculate bounds
-        bounds = Bounds(
-            {
-                Parameter("x"): (point[0], point[0]),
-                Parameter("y"): (point[1], point[1]),
-            },
-            parameterization=parameterization,
-        )
-
-        # initialize
-        super().__init__(
-            curves,
-            _sympy_sdf_to_sdf(sdf),
-            dims=1,
-            bounds=bounds,
-            parameterization=parameterization,
-        )
+    def sample_boundary(self, num_points):
+        """Return the point coordinates repeated *num_points* times."""
+        return {
+            "x": np.full((num_points, 1), self.point[0]),
+            "y": np.full((num_points, 1), self.point[1]),
+            "normal_x": np.ones((num_points, 1)),
+            "normal_y": np.zeros((num_points, 1)),
+            "area": np.ones((num_points, 1)),
+        }

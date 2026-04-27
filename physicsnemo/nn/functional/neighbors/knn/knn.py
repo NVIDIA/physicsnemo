@@ -63,7 +63,7 @@ class KNN(FunctionSpec):
     )
 
     @FunctionSpec.register(
-        name="cuml", required_imports=("cuml>=24.0.0", "cupy>=13.0.0"), rank=0
+        name="cuml", required_imports=("cuml>=26.2.0", "cupy>=13.6.0"), rank=0
     )
     def cuml_forward(
         points: Float[torch.Tensor, "num_points dim"],

@@ -33,7 +33,7 @@ from physicsnemo.utils.logging import (
     LaunchLogger,
 )
 from physicsnemo.utils.logging.wandb import initialize_wandb
-from physicsnemo.sym.hydra import to_absolute_path
+from hydra.utils import to_absolute_path
 
 from losses import LossMHDVecPot, LossMHDVecPot_PhysicsNeMo
 from torch.optim import AdamW

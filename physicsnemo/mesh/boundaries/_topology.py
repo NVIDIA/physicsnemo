@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, Literal
 
 import torch
 
+from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -72,7 +74,11 @@ def is_watertight(mesh: "Mesh") -> bool:
     )
 
     ### Deduplicate and get counts
-    _, _, counts = categorize_facets_by_count(candidate_facets, target_counts="all")
+    _, _, counts = categorize_facets_by_count(
+        candidate_facets,
+        target_counts="all",
+        index_bound=mesh.n_points,
+    )
 
     ### Watertight iff all facets appear exactly twice
     # Each facet should be shared by exactly 2 cells
@@ -175,7 +181,11 @@ def _check_facets_manifold(mesh: "Mesh") -> bool:
     )
 
     ### Deduplicate and get counts
-    _, _, counts = categorize_facets_by_count(candidate_facets, target_counts="all")
+    _, _, counts = categorize_facets_by_count(
+        candidate_facets,
+        target_counts="all",
+        index_bound=mesh.n_points,
+    )
 
     ### For manifold: each facet appears at most twice (1 = boundary, 2 = interior)
     # If any facet appears 3+ times, it's a non-manifold edge
@@ -250,9 +260,9 @@ def _check_3d_edge_link_connectivity(mesh: "Mesh") -> bool:
     # candidate_edges: (n_candidate_edges, 2), parent_cell_indices: (n_candidate_edges,)
 
     ### Step 2: Map each candidate edge to a unique edge index
-    unique_edges, edge_inverse = torch.unique(
+    unique_edges, edge_inverse = unique_index_tuples(
         candidate_edges,
-        dim=0,
+        index_bound=mesh.n_points,
         return_inverse=True,
     )
     n_unique_edges = len(unique_edges)
@@ -402,9 +412,9 @@ def _check_2d_vertex_manifold(mesh: "Mesh") -> bool:
     )
 
     ### Find unique edges
-    unique_edges, inverse_indices, edge_counts = torch.unique(
+    unique_edges, inverse_indices, edge_counts = unique_index_tuples(
         candidate_edges,
-        dim=0,
+        index_bound=mesh.n_points,
         return_inverse=True,
         return_counts=True,
     )
@@ -460,11 +470,9 @@ def _check_3d_vertex_manifold(mesh: "Mesh") -> bool:
     bool
         True if all vertices have connected links (manifold at all vertices).
     """
-    from physicsnemo.mesh.neighbors import get_point_to_cells_adjacency
-
     device = mesh.cells.device
 
-    p2c = get_point_to_cells_adjacency(mesh)
+    p2c = mesh.get_point_to_cells_adjacency()
 
     ### Step 1: Expand p2c to all (vertex_id, tet_id) pairs
     vertex_ids, tet_ids = p2c.expand_to_pairs()  # both shape (total_pairs,)

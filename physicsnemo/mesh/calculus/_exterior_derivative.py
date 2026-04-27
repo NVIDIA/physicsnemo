@@ -185,7 +185,9 @@ def exterior_derivative_1(
     from physicsnemo.mesh.utilities._edge_lookup import find_edges_in_reference
 
     edge_indices, matches = find_edges_in_reference(
-        edges, boundary_edges_flat
+        edges,
+        boundary_edges_flat,
+        index_bound=mesh.n_points,
     )  # edge_indices: (n_faces*3,), matches: (n_faces*3,)
 
     ### Determine orientation of each boundary edge

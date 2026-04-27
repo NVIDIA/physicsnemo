@@ -274,6 +274,7 @@ def build_adjacency_from_pairs(
     source_indices: Int[torch.Tensor, " n_pairs"],
     target_indices: Int[torch.Tensor, " n_pairs"],
     n_sources: int,
+    n_targets: int | None = None,
 ) -> Adjacency:
     """Build offset-index adjacency from (source, target) pairs.
 
@@ -294,6 +295,9 @@ def build_adjacency_from_pairs(
         Target entity (neighbor) indices, shape (n_pairs,)
     n_sources : int
         Total number of source entities (may exceed max(source_indices))
+    n_targets : int, optional
+        Strict upper bound for target indices. Passing this avoids a GPU
+        synchronization and enables a faster composite-key sort.
 
     Returns
     -------
@@ -319,13 +323,20 @@ def build_adjacency_from_pairs(
             indices=torch.zeros(0, dtype=torch.int64, device=device),
         )
 
-    ### Lexicographic sort by (source, target) using two stable argsorts.
-    # This avoids the int64 overflow that occurs with the composite-key
-    # approach (source * max_target + target) when indices exceed ~3 × 10^9.
-    sort_by_target = torch.argsort(target_indices, stable=True)
-    sort_indices = sort_by_target[
-        torch.argsort(source_indices[sort_by_target], stable=True)
-    ]
+    if n_targets is None:
+        n_targets = int(target_indices.max().item()) + 1
+
+    ### Lexicographic sort by (source, target). The common mesh case has small
+    # bounded indices, so a single composite-key argsort avoids two stable sorts.
+    if n_sources * n_targets < (1 << 62):
+        composite_keys = source_indices.long() * n_targets + target_indices.long()
+        sort_indices = torch.argsort(composite_keys)
+    else:
+        # Fall back to two stable argsorts when the composite key could overflow.
+        sort_by_target = torch.argsort(target_indices, stable=True)
+        sort_indices = sort_by_target[
+            torch.argsort(source_indices[sort_by_target], stable=True)
+        ]
 
     sorted_sources = source_indices[sort_indices]
     sorted_targets = target_indices[sort_indices]
