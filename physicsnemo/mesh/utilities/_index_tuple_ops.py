@@ -64,6 +64,13 @@ def unique_index_tuples(
         raise ValueError(f"rows must be 2D, got {rows.ndim}D with {rows.shape=}.")
     if torch.is_floating_point(rows):
         raise TypeError(f"rows must contain integer indices, got {rows.dtype=}.")
+    if rows.shape[0] == 0:
+        return torch.unique(
+            rows,
+            dim=0,
+            return_inverse=return_inverse,
+            return_counts=return_counts,
+        )
     if index_bound < 1:
         raise ValueError(f"index_bound must be >= 1, got {index_bound=!r}.")
 
