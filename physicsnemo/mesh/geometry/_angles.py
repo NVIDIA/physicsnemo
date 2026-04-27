@@ -185,6 +185,32 @@ def compute_vertex_angles(mesh: "Mesh") -> torch.Tensor:
     n_edges = mesh.n_manifold_dims  # edges emanating from each vertex
     input_dtype = mesh.points.dtype
 
+    if (
+        mesh.n_manifold_dims == 2
+        and mesh.n_spatial_dims == 3
+        and mesh.cells.shape[1] == 3
+    ):
+        cell_vertices = mesh.points[mesh.cells]
+        v0 = cell_vertices[:, 0, :]
+        v1 = cell_vertices[:, 1, :]
+        v2 = cell_vertices[:, 2, :]
+
+        def _angle(edge_a: torch.Tensor, edge_b: torch.Tensor) -> torch.Tensor:
+            cross_norm = torch.linalg.vector_norm(
+                torch.linalg.cross(edge_a, edge_b, dim=-1), dim=-1
+            )
+            dot_product = (edge_a * edge_b).sum(dim=-1)
+            return torch.atan2(cross_norm, dot_product)
+
+        return torch.stack(
+            [
+                _angle(v1 - v0, v2 - v0),
+                _angle(v2 - v1, v0 - v1),
+                _angle(v0 - v2, v1 - v2),
+            ],
+            dim=1,
+        ).to(input_dtype)
+
     ### Upcast to float64 for the correlation matrix and determinant
     # The correlation matrix C_ij = cos(angle_ij) suffers catastrophic
     # cancellation in float32 when angles are near 0 or pi, because

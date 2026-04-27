@@ -86,8 +86,16 @@ def _compute_morton_codes(centroids: torch.Tensor) -> torch.Tensor:
     extent = (cmax - cmin).clamp(min=1e-30)  # avoid division by zero
     coords = ((centroids - cmin) / extent * max_val).long().clamp(0, max_val)  # (N, D)
 
-    ### Bit-interleave all dimensions: bit b of dim d -> position b*D + d
-    # Vectorized across D at each bit level; n_bits iterations total.
+    ### Bit-interleave all dimensions: bit b of dim d -> position b*D + d.
+    if device.type == "cuda":
+        # CUDA is launch-bound in the bit loop below. Materializing all bits at
+        # once trades a modest temporary for far fewer kernel launches.
+        bit_offsets = torch.arange(n_bits, dtype=torch.int64, device=device)
+        dim_offsets = torch.arange(D, dtype=torch.int64, device=device)
+        bits = (coords.unsqueeze(-1) >> bit_offsets) & 1  # (N, D, n_bits)
+        shifts = bit_offsets.view(1, 1, -1) * D + dim_offsets.view(1, -1, 1)
+        return (bits << shifts).reshape(N, -1).sum(dim=1)
+
     code = torch.zeros(N, dtype=torch.int64, device=device)
     dim_offsets = torch.arange(D, dtype=torch.int64, device=device)  # (D,)
     for b in range(n_bits):
