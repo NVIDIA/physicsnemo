@@ -55,7 +55,7 @@ def _contiguous_block_slice(
     """
     if total <= k:
         return slice(0, total)
-    start = torch.randint(0, total - k, (1,), generator=generator).item()
+    start = torch.randint(0, total - k + 1, (1,), generator=generator).item()
     return slice(start, start + k)
 
 
