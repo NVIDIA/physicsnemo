@@ -672,6 +672,15 @@ def build_dataloaders(cfg: DictConfig):
         train_split = ds_cfg_block.get("train_split", None)
         val_split = ds_cfg_block.get("val_split", None)
 
+        # Derive manifest from the dataset's train_datadir when not
+        # explicitly provided in the training config.
+        if manifest is None and train_split is not None:
+            train_datadir = OmegaConf.select(ds_yaml, "train_datadir", default=None)
+            if train_datadir:
+                derived = Path(str(train_datadir)) / "manifest.json"
+                if derived.exists():
+                    manifest = str(derived)
+
         has_manifest = train_manifest is not None or (
             manifest is not None and train_split is not None
         )
@@ -831,72 +840,6 @@ def build_dataloaders(cfg: DictConfig):
     )
 
     return train_loader, val_loader, normalizer, nondim_transform, first_metadata or {}
-
-
-_NONDIM_TYPE_MAP = {"scalar": "pressure", "vector": "stress"}
-
-
-def _to_physical(
-    tensor: torch.Tensor,
-    target_config: dict[str, str],
-    normalizer,
-    nondim_transform,
-    metadata: dict,
-    nondim_type_overrides: dict[str, str] | None = None,
-) -> torch.Tensor:
-    """Convert a model-space tensor (normalized + non-dim) back to physical units.
-
-    Chains two inverse operations using the existing transform instances:
-    1. ``NormalizeMeshFields.inverse_tensor`` -- undo z-score normalization
-    2. ``NonDimensionalizeByMetadata.inverse_tensor`` -- undo non-dimensionalization
-
-    Parameters
-    ----------
-    nondim_type_overrides : dict or None
-        Optional per-field mapping of ``{field_name: nondim_type}`` (e.g.
-        ``{"temperature": "temperature", "density": "density"}``).  When
-        provided, overrides the default ``_NONDIM_TYPE_MAP`` lookup for
-        fields that don't follow the simple scalar=pressure / vector=stress
-        convention.
-    """
-    if not metadata:
-        return tensor
-
-    out = tensor
-    device, dtype = tensor.device, tensor.dtype
-
-    # Step 1: undo z-score normalization
-    if normalizer is not None:
-        out = normalizer.inverse_tensor(out, target_config)
-
-    # Step 2: undo non-dimensionalization
-    if nondim_transform is not None:
-        overrides = nondim_type_overrides or {}
-        nondim_fields = {
-            name: overrides.get(name, _NONDIM_TYPE_MAP.get(ftype, ftype))
-            for name, ftype in target_config.items()
-        }
-        U_inf = torch.tensor(metadata["U_inf"], dtype=dtype, device=device)
-        rho_inf = torch.tensor(metadata["rho_inf"], dtype=dtype, device=device)
-        p_inf = torch.tensor(metadata["p_inf"], dtype=dtype, device=device)
-        q_inf = 0.5 * rho_inf * (U_inf * U_inf).sum()
-        U_inf_mag = (U_inf * U_inf).sum().sqrt()
-
-        T_inf = None
-        if "T_inf" in metadata:
-            T_inf = torch.tensor(metadata["T_inf"], dtype=dtype, device=device)
-
-        out = nondim_transform.inverse_tensor(
-            out,
-            nondim_fields,
-            q_inf,
-            p_inf,
-            U_inf_mag,
-            rho_inf=rho_inf,
-            T_inf=T_inf,
-        )
-
-    return out
 
 
 @profile
