@@ -508,43 +508,7 @@ class BVH:
         )
         return inside
 
-    def find_candidate_cells(
-        self,
-        query_points: Float[torch.Tensor, "n_queries n_dims"],
-        max_candidates_per_point: int | None = 32,
-        aabb_tolerance: float = 1e-6,
-    ) -> Adjacency:
-        """Find candidate cells that might contain each query point.
-
-        Uses batched iterative BVH traversal where all queries are processed
-        simultaneously in a vectorized manner.
-
-        Parameters
-        ----------
-        query_points : torch.Tensor
-            Points to query, shape ``(n_queries, n_spatial_dims)``.
-        max_candidates_per_point : int | None, optional
-            Maximum number of candidate cells to return per query point.
-            Prevents memory explosion for degenerate cases. If None, no
-            limit is applied.
-        aabb_tolerance : float, optional
-            Tolerance for AABB intersection test. Important for degenerate
-            cells (e.g., cells with duplicate vertices).
-
-        Returns
-        -------
-        Adjacency
-            Adjacency object where candidates for query *i* are at
-            ``result.indices[result.offsets[i]:result.offsets[i+1]]``.
-            Use ``result.to_list()`` for a list-of-tensors representation.
-
-        Notes
-        -----
-        Complexity is O(M log N) where M = queries, N = cells. All AABB tests
-        and tree operations are fully vectorized across queries - there are no
-        Python-level loops over individual query points. The outer loop runs
-        once per tree level (O(log N) iterations).
-        """
+    def _validate_query_points(self, query_points: torch.Tensor) -> None:
         if query_points.ndim != 2:
             raise ValueError(
                 f"query_points must be 2D (n_queries, n_spatial_dims), got "
@@ -561,16 +525,24 @@ class BVH:
                 f"BVH has {self.n_spatial_dims}"
             )
 
+    def _traverse(
+        self,
+        query_points: torch.Tensor,
+        max_candidates_per_point: int | None,
+        aabb_tolerance: float,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Core BVH traversal returning raw ``(query_idx, cell_idx)`` pairs.
+
+        All AABB tests and tree operations are fully vectorized across
+        queries.  The outer loop runs once per tree level (O(log N)
+        iterations).
+        """
         n_queries = query_points.shape[0]
         dev = self.device
 
-        ### Handle empty BVH or empty query
         if self.n_nodes == 0 or n_queries == 0:
-            return build_adjacency_from_pairs(
-                source_indices=torch.empty(0, dtype=torch.long, device=dev),
-                target_indices=torch.empty(0, dtype=torch.long, device=dev),
-                n_sources=n_queries,
-            )
+            empty = torch.empty(0, dtype=torch.long, device=dev)
+            return empty, empty.clone()
 
         ### Initialize work queue: all queries start at root (node 0)
         current_query_indices = torch.arange(n_queries, dtype=torch.long, device=dev)
@@ -656,14 +628,55 @@ class BVH:
             else:
                 break
 
-        ### Build Adjacency from accumulated pairs
         if all_query_indices_list:
-            all_q = torch.cat(all_query_indices_list)
-            all_c = torch.cat(all_cell_indices_list)
-        else:
-            all_q = torch.empty(0, dtype=torch.long, device=dev)
-            all_c = torch.empty(0, dtype=torch.long, device=dev)
+            return torch.cat(all_query_indices_list), torch.cat(all_cell_indices_list)
+        empty = torch.empty(0, dtype=torch.long, device=dev)
+        return empty, empty.clone()
 
+    def find_candidate_cells(
+        self,
+        query_points: Float[torch.Tensor, "n_queries n_dims"],
+        max_candidates_per_point: int | None = 32,
+        aabb_tolerance: float = 1e-6,
+    ) -> Adjacency:
+        """Find candidate cells that might contain each query point.
+
+        Uses batched iterative BVH traversal where all queries are processed
+        simultaneously in a vectorized manner.
+
+        Parameters
+        ----------
+        query_points : torch.Tensor
+            Points to query, shape ``(n_queries, n_spatial_dims)``.
+        max_candidates_per_point : int | None, optional
+            Maximum number of candidate cells to return per query point.
+            Prevents memory explosion for degenerate cases. If None, no
+            limit is applied.
+        aabb_tolerance : float, optional
+            Tolerance for AABB intersection test. Important for degenerate
+            cells (e.g., cells with duplicate vertices).
+
+        Returns
+        -------
+        Adjacency
+            Adjacency object where candidates for query *i* are at
+            ``result.indices[result.offsets[i]:result.offsets[i+1]]``.
+            Use ``result.to_list()`` for a list-of-tensors representation.
+
+        Notes
+        -----
+        Complexity is O(M log N) where M = queries, N = cells. All AABB tests
+        and tree operations are fully vectorized across queries - there are no
+        Python-level loops over individual query points. The outer loop runs
+        once per tree level (O(log N) iterations).
+        """
+        self._validate_query_points(query_points)
+        all_q, all_c = self._traverse(
+            query_points,
+            max_candidates_per_point,
+            aabb_tolerance,
+        )
+        n_queries = query_points.shape[0]
         adjacency = build_adjacency_from_pairs(
             source_indices=all_q,
             target_indices=all_c,
