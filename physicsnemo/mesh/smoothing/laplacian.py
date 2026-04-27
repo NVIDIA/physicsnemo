@@ -23,6 +23,7 @@ preserving boundaries and sharp features.
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Bool, Float, Int
 
 from physicsnemo.mesh.boundaries import get_boundary_vertices
 from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
@@ -239,7 +240,7 @@ def smooth_laplacian(
 
 def _compute_edge_weights(
     mesh: "Mesh",
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[Float[torch.Tensor, " n_edges"], Int[torch.Tensor, "n_edges 2"]]:
     """Compute weights for each edge based on mesh geometry.
 
     For codimension-1 manifolds with n_manifold_dims >= 2: uses cotangent weights
@@ -278,9 +279,9 @@ def _compute_edge_weights(
 
 def _get_feature_vertices(
     mesh: "Mesh",
-    edges: torch.Tensor,
+    edges: Int[torch.Tensor, "n_edges 2"],
     feature_angle: float,
-) -> torch.Tensor:
+) -> Bool[torch.Tensor, " n_points"]:
     """Identify vertices on sharp feature edges.
 
     Only applicable for codimension-1 manifolds where normals exist.
@@ -322,9 +323,9 @@ def _get_feature_vertices(
 
 def _detect_sharp_edges(
     mesh: "Mesh",
-    edges: torch.Tensor,
+    edges: Int[torch.Tensor, "n_edges 2"],
     feature_angle: float,
-) -> torch.Tensor:
+) -> Int[torch.Tensor, "n_sharp_edges 2"]:
     """Detect edges with dihedral angle exceeding threshold.
 
     Fully vectorized implementation using :func:`find_edges_in_reference`
@@ -358,12 +359,9 @@ def _detect_sharp_edges(
     ### Map candidate edges to unique edges via searchsorted (O(m log n), O(n) memory)
     candidate_to_unique, matched = find_edges_in_reference(edges, candidate_edges)
 
-    ### Count cells per edge
-    edge_cell_counts = torch.zeros(len(edges), dtype=torch.long, device=device)
-    edge_cell_counts.scatter_add_(
-        0,
-        candidate_to_unique,
-        matched.long(),  # only count matched candidates
+    ### Count cells per edge (only matched candidates contribute)
+    edge_cell_counts = torch.bincount(
+        candidate_to_unique[matched], minlength=len(edges)
     )
 
     ### Find interior edges (exactly 2 adjacent cells)

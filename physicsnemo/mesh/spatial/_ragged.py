@@ -17,13 +17,14 @@
 """Segmented (ragged) tensor utilities for spatial data structures."""
 
 import torch
+from jaxtyping import Int
 
 
 def _ragged_arange(
-    starts: torch.Tensor,
-    counts: torch.Tensor,
+    starts: Int[torch.Tensor, " n_segments"],
+    counts: Int[torch.Tensor, " n_segments"],
     total: int | torch.SymInt | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[Int[torch.Tensor, " n_total"], Int[torch.Tensor, " n_total"]]:
     r"""Expand segment descriptors ``(start, count)`` into flat index arrays.
 
     Given *N* segments where segment *i* spans positions

@@ -21,6 +21,7 @@ using offset-indices encoding, commonly used in graph and mesh processing.
 """
 
 import torch
+from jaxtyping import Int
 from tensordict import tensorclass
 
 
@@ -138,7 +139,7 @@ class Adjacency:
         return len(self.indices)
 
     @property
-    def counts(self) -> torch.Tensor:
+    def counts(self) -> Int[torch.Tensor, " n_sources"]:
         """Number of neighbors for each source element.
 
         Returns
@@ -158,7 +159,9 @@ class Adjacency:
         """
         return self.offsets[1:] - self.offsets[:-1]
 
-    def expand_to_pairs(self) -> tuple[torch.Tensor, torch.Tensor]:
+    def expand_to_pairs(
+        self,
+    ) -> tuple[Int[torch.Tensor, " n_pairs"], Int[torch.Tensor, " n_pairs"]]:
         """Expand offset-indices encoding to (source_idx, target_idx) pairs.
 
         This is the inverse of build_adjacency_from_pairs. It produces a pair
@@ -268,8 +271,8 @@ class Adjacency:
 
 
 def build_adjacency_from_pairs(
-    source_indices: torch.Tensor,  # shape: (n_pairs,)
-    target_indices: torch.Tensor,  # shape: (n_pairs,)
+    source_indices: Int[torch.Tensor, " n_pairs"],
+    target_indices: Int[torch.Tensor, " n_pairs"],
     n_sources: int,
 ) -> Adjacency:
     """Build offset-index adjacency from (source, target) pairs.

@@ -28,6 +28,7 @@ Reference: Standard in CFD literature (Barth & Jespersen, AIAA 1989)
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -46,10 +47,10 @@ def _to_mesh_gradient_layout(
 
 def compute_point_gradient_lsq(
     mesh: "Mesh",
-    point_values: torch.Tensor,
+    point_values: Float[torch.Tensor, "n_points ..."],
     weight_power: float = 2.0,
     min_neighbors: int = 0,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "n_points n_spatial_dims ..."]:
     """Compute gradient at vertices using weighted least-squares reconstruction.
 
     For each vertex, solves:
@@ -113,9 +114,9 @@ def compute_point_gradient_lsq(
 
 def compute_cell_gradient_lsq(
     mesh: "Mesh",
-    cell_values: torch.Tensor,
+    cell_values: Float[torch.Tensor, "n_cells ..."],
     weight_power: float = 2.0,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "n_cells n_spatial_dims ..."]:
     """Compute gradient at cells using weighted least-squares reconstruction.
 
     Uses cell-to-cell adjacency to build LSQ system around each cell centroid.

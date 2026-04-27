@@ -30,6 +30,7 @@ For 3D: curl maps vectors to vectors.
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -37,8 +38,8 @@ if TYPE_CHECKING:
 
 def compute_curl_points_lsq(
     mesh: "Mesh",
-    vector_field: torch.Tensor,
-) -> torch.Tensor:
+    vector_field: Float[torch.Tensor, "n_points 3"],
+) -> Float[torch.Tensor, "n_points 3"]:
     """Compute curl at vertices using LSQ gradient method.
 
     For 3D vector field v = [vₓ, vᵧ, v_z]:
