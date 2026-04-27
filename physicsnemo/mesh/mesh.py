@@ -790,6 +790,7 @@ class Mesh:
         ----------
         weighting : {"area", "unweighted", "angle", "angle_area"}
             Weighting scheme for averaging adjacent cell normals.
+
             - "area": Weight by cell area (larger faces have more influence).
             - "unweighted": Equal weight for all adjacent cells (matches PyVista/VTK).
             - "angle": Weight by interior angle at the vertex.
@@ -922,6 +923,7 @@ class Mesh:
         for any codimension, as it depends only on distances within the manifold.
 
         Signed curvature:
+
         - Positive: Elliptic/convex (sphere-like)
         - Zero: Flat/parabolic (plane-like)
         - Negative: Hyperbolic/saddle (saddle-like)
@@ -998,6 +1000,7 @@ class Mesh:
         For 2D surfaces: H = (k1 + k2) / 2 where k1, k2 are principal curvatures
 
         Signed curvature:
+
         - Positive: Convex (sphere exterior with outward normals)
         - Negative: Concave (sphere interior with outward normals)
         - Zero: Minimal surface (soap film)
@@ -1140,6 +1143,7 @@ class Mesh:
         ----------
         indices : int or slice or Ellipsis or None or torch.Tensor or Sequence
             Indices or mask to select points. Supports:
+
             - ``int``: Single point index
             - ``slice``: Python slice object
             - ``Ellipsis`` or ``None``: Keep all points (returns self)
@@ -1279,6 +1283,7 @@ class Mesh:
         alpha : float, optional
             Concentration parameter for the Dirichlet distribution. Controls how
             samples are distributed within each cell:
+
             - alpha = 1.0: Uniform distribution over the simplex (default)
             - alpha > 1.0: Concentrates samples toward the center of each cell
             - alpha < 1.0: Concentrates samples toward vertices and edges
@@ -1337,10 +1342,12 @@ class Mesh:
             Query point locations, shape (n_queries, n_spatial_dims).
         data_source : {"cells", "points"}, optional
             How to retrieve data:
+
             - "cells": Use cell data directly (no interpolation)
             - "points": Interpolate point data using barycentric coordinates
         multiple_cells_strategy : {"mean", "nan"}, optional
             How to handle query points in multiple cells:
+
             - "mean": Return arithmetic mean of values from all containing cells
             - "nan": Return NaN for ambiguous points
         project_onto_nearest_cell : bool, optional
@@ -1528,6 +1535,7 @@ class Mesh:
         """Extract k-codimension facet mesh from this n-dimensional mesh.
 
         Extracts all (n-k)-simplices from the current n-simplicial mesh. For example:
+
         - Triangle mesh (2-simplices) → edge mesh (1-simplices) [codimension=1, default]
         - Triangle mesh (2-simplices) → vertex mesh (0-simplices) [codimension=2]
         - Tetrahedral mesh (3-simplices) → triangular facet mesh (2-simplices) [codimension=1, default]
@@ -1838,6 +1846,7 @@ class Mesh:
         ----------
         check_level : {"facets", "edges", "full"}, optional
             Level of checking to perform:
+
             - "facets": Only check codimension-1 facets (each appears 1-2 times)
             - "edges": Check facets + edge neighborhoods (for 2D/3D meshes)
             - "full": Complete manifold validation (default)
@@ -1916,8 +1925,8 @@ class Mesh:
         Returns
         -------
         Adjacency
-            Adjacency where adjacency.to_list()[i] contains all cell indices that
-            contain point i. Isolated points (not in any cells) have empty lists.
+            Adjacency where ``adjacency.to_list()[i]`` contains all cell indices that
+            contain point ``i``. Isolated points (not in any cells) have empty lists.
 
         Examples
         --------
@@ -1944,8 +1953,8 @@ class Mesh:
         Returns
         -------
         Adjacency
-            Adjacency where adjacency.to_list()[i] contains all point indices that
-            share a cell (edge) with point i. Isolated points have empty lists.
+            Adjacency where ``adjacency.to_list()[i]`` contains all point indices that
+            share a cell (edge) with point ``i``. Isolated points have empty lists.
 
         Examples
         --------
@@ -1983,8 +1992,8 @@ class Mesh:
         Returns
         -------
         Adjacency
-            Adjacency where adjacency.to_list()[i] contains all cell indices that
-            share a k-codimension facet with cell i.
+            Adjacency where ``adjacency.to_list()[i]`` contains all cell indices that
+            share a k-codimension facet with cell ``i``.
 
         Examples
         --------
@@ -2013,9 +2022,9 @@ class Mesh:
         Returns
         -------
         Adjacency
-            Adjacency where adjacency.to_list()[i] contains all point indices that
-            are vertices of cell i. For simplicial meshes, all cells have the same
-            number of vertices (n_manifold_dims + 1).
+            Adjacency where ``adjacency.to_list()[i]`` contains all point indices that
+            are vertices of cell ``i``. For simplicial meshes, all cells have the same
+            number of vertices (``n_manifold_dims + 1``).
 
         Examples
         --------
@@ -2039,6 +2048,7 @@ class Mesh:
 
         This is the low-level padding method that performs the actual padding operation.
         Padding uses null/degenerate elements that don't affect computations:
+
         - Points: Additional points at the last existing point (preserves bounding box)
         - cells: Degenerate cells with all vertices at the last existing point (zero area)
         - cell data: NaN-valued padding for all cell data fields (default)
@@ -2395,6 +2405,7 @@ class Mesh:
             If True, scale vector/tensor fields in global_data.
         assume_invertible : bool or None, optional
             Controls cache propagation:
+
             - True: Assume all factors are non-zero (compile-safe).
             - False: Skip cache propagation (compile-safe).
             - None: Check at runtime (may cause graph breaks).
@@ -2438,6 +2449,7 @@ class Mesh:
             If True, transform vector/tensor fields in global_data.
         assume_invertible : bool or None, optional
             Controls cache propagation for square matrices:
+
             - True: Assume matrix is invertible (compile-safe).
             - False: Skip cache propagation (compile-safe).
             - None: Check at runtime (may cause graph breaks).
@@ -2470,16 +2482,19 @@ class Mesh:
         ----------
         keys : str or tuple[str, ...] or list[str | tuple[str, ...]] or None, optional
             Fields to compute gradients of. Options:
+
             - None: All non-cached fields (excludes "_cache" subdictionary)
             - str: Single field name (e.g., "pressure")
             - tuple: Nested path (e.g., ("flow", "temperature"))
             - list: Multiple fields (e.g., ["pressure", "velocity"])
         method : {"lsq", "dec"}, optional
             Discretization method:
+
             - "lsq": Weighted least-squares reconstruction (default, CFD standard)
             - "dec": Discrete Exterior Calculus (differential geometry)
         gradient_type : {"intrinsic", "extrinsic", "both"}, optional
             Type of gradient:
+
             - "intrinsic": Project onto manifold tangent space (default)
             - "extrinsic": Full ambient space gradient
             - "both": Compute and store both
@@ -2738,6 +2753,7 @@ class Mesh:
         -------
         TensorDict
             Per-cell quality metrics:
+
             - aspect_ratio: max_edge / characteristic_length
             - edge_length_ratio: max_edge / min_edge
             - min_angle, max_angle: Interior angles (triangles only)
@@ -2819,6 +2835,7 @@ class Mesh:
         -------
         Mesh
             Subdivided mesh with refined geometry and connectivity.
+
             - Manifold and spatial dimensions are preserved
             - Point data is interpolated to new vertices
             - Cell data is propagated from parents to children

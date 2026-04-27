@@ -34,6 +34,7 @@ def load(
     """Create a UV sphere using latitude/longitude parameterization.
 
     The sphere is generated using spherical coordinates:
+
     - phi (latitude): 0 at north pole, π at south pole
     - theta (longitude): 0 to 2π around the equator
 

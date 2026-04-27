@@ -45,8 +45,8 @@ def get_point_to_cells_adjacency(mesh: "Mesh") -> Adjacency:
     Returns
     -------
     Adjacency
-        Adjacency where adjacency.to_list()[i] contains all cell indices that
-        contain point i. Isolated points (not in any cells) have empty lists.
+        Adjacency where ``adjacency.to_list()[i]`` contains all cell indices that
+        contain point ``i``. Isolated points (not in any cells) have empty lists.
 
     Examples
     --------
@@ -107,8 +107,8 @@ def get_point_to_points_adjacency(mesh: "Mesh") -> Adjacency:
     Returns
     -------
     Adjacency
-        Adjacency where adjacency.to_list()[i] contains all point indices that
-        share a cell (edge) with point i. Isolated points have empty lists.
+        Adjacency where ``adjacency.to_list()[i]`` contains all point indices that
+        share a cell (edge) with point ``i``. Isolated points have empty lists.
 
     Examples
     --------

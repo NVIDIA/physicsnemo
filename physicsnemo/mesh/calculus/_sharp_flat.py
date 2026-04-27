@@ -278,6 +278,7 @@ def flat(
     -----
     Note on flat operator variants:
         Hirani defines 8 different flat operators depending on:
+
         - Source: primal vs dual vector field
         - Interpolation: constant in cells vs barycentric
         - Destination: primal vs dual 1-form

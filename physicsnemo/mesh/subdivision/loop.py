@@ -286,6 +286,7 @@ def subdivide_loop(mesh: "Mesh") -> "Mesh":
     3. Connects vertices to form 4 triangles per original triangle
 
     Properties:
+
     - Approximating: original vertices move to new positions
     - Produces C² smooth limit surfaces for regular meshes
     - Designed for 2D manifolds (triangular meshes)

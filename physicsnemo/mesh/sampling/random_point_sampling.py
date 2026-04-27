@@ -51,6 +51,7 @@ def sample_random_points_on_cells(
     alpha : float
         Concentration parameter for the Dirichlet distribution. Controls how
         samples are distributed within each cell:
+
         - alpha = 1.0: Uniform distribution over the simplex (default)
         - alpha > 1.0: Concentrates samples toward the center of each cell
         - alpha < 1.0: Concentrates samples toward vertices and edges

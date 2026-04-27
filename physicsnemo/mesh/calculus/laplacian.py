@@ -132,6 +132,7 @@ def compute_laplacian_points_dec(
     Formula: Δf(v₀) = (1/|⋆v₀|) Σ_{edges from v₀} (|⋆e|/|e|)(f(v) - f(v₀))
 
     Where:
+
     - |⋆v₀| is the dual 0-cell volume (Voronoi cell around vertex)
     - |⋆e| is the dual 1-cell volume (dual to edge)
     - |e| is the edge length

@@ -60,6 +60,7 @@ def exterior_derivative_0(
     -------
     tuple[torch.Tensor, torch.Tensor]
         Tuple of (edge_values, edge_connectivity):
+
         - edge_values: 1-form values on edges, shape (n_edges,) or (n_edges, ...)
         - edge_connectivity: Edge vertex indices, shape (n_edges, 2)
 
@@ -137,6 +138,7 @@ def exterior_derivative_1(
     -------
     tuple[torch.Tensor, torch.Tensor]
         Tuple of (face_values, face_connectivity):
+
         - face_values: 2-form values on 2-simplices, shape (n_faces,) or (n_faces, ...)
         - face_connectivity: Face vertex indices
 

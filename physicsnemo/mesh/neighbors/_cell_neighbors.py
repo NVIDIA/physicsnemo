@@ -39,6 +39,7 @@ def get_cell_to_cells_adjacency(
 
     Two cells are considered adjacent if they share a k-codimension facet.
     For example:
+
     - codimension=1: Share an (n-1)-facet (e.g., triangles sharing an edge in 2D,
       tetrahedra sharing a triangular face in 3D)
     - codimension=2: Share an (n-2)-facet (e.g., tetrahedra sharing an edge in 3D)
@@ -50,6 +51,7 @@ def get_cell_to_cells_adjacency(
         Input simplicial mesh.
     adjacency_codimension : int, optional
         Codimension of shared facets defining adjacency.
+
         - 1 (default): Cells must share a codimension-1 facet (most restrictive)
         - 2: Cells must share a codimension-2 facet (more permissive)
         - k: Cells must share a codimension-k facet
@@ -57,8 +59,8 @@ def get_cell_to_cells_adjacency(
     Returns
     -------
     Adjacency
-        Adjacency where adjacency.to_list()[i] contains all cell indices that
-        share a k-codimension facet with cell i. Each neighbor appears exactly
+        Adjacency where ``adjacency.to_list()[i]`` contains all cell indices that
+        share a k-codimension facet with cell ``i``. Each neighbor appears exactly
         once per source cell.
 
     Examples
@@ -302,9 +304,9 @@ def get_cell_to_points_adjacency(mesh: "Mesh") -> Adjacency:
     Returns
     -------
     Adjacency
-        Adjacency where adjacency.to_list()[i] contains all point indices that
-        are vertices of cell i. For simplicial meshes, all cells have the same
-        number of vertices (n_manifold_dims + 1).
+        Adjacency where ``adjacency.to_list()[i]`` contains all point indices that
+        are vertices of cell ``i``. For simplicial meshes, all cells have the same
+        number of vertices (``n_manifold_dims + 1``).
 
     Examples
     --------

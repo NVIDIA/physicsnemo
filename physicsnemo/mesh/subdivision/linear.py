@@ -53,6 +53,7 @@ def subdivide_linear(mesh: "Mesh") -> "Mesh":
     and new vertices are placed exactly at edge midpoints.
 
     Properties:
+
     - Preserves manifold dimension and spatial dimension
     - Increases mesh resolution uniformly
     - Point data is interpolated to new vertices (averaged from endpoints)
@@ -68,6 +69,7 @@ def subdivide_linear(mesh: "Mesh") -> "Mesh":
     -------
     Mesh
         Subdivided mesh with:
+
         - n_points = original_n_points + n_edges
         - n_cells = original_n_cells * 2^n_manifold_dims
 

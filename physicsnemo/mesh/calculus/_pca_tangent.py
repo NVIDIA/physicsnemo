@@ -55,6 +55,7 @@ def estimate_tangent_space_pca(
     -------
     tuple[torch.Tensor, torch.Tensor]
         Tuple of (tangent_basis, normal_basis) where:
+
         - tangent_basis: (n_points, n_manifold_dims, n_spatial_dims)
             Orthonormal basis vectors spanning tangent space at each point
         - normal_basis: (n_points, codimension, n_spatial_dims)

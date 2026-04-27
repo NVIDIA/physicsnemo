@@ -83,6 +83,7 @@ def _solve_barycentric_system(
     -------
     tuple[torch.Tensor, torch.Tensor]
         Tuple of (barycentric_coords, reconstruction_error):
+
         - barycentric_coords: shape (..., n_vertices_per_cell)
             where n_vertices_per_cell = n_manifold_dims + 1
         - reconstruction_error: L2 distance from query point to its projection
@@ -152,6 +153,7 @@ def compute_barycentric_coordinates(
     -------
     tuple[torch.Tensor, torch.Tensor]
         (barycentric_coords, reconstruction_error):
+
         - barycentric_coords: shape (n_queries, n_cells, n_vertices_per_cell)
         - reconstruction_error: shape (n_queries, n_cells). Zero for codimension-0.
     """
@@ -188,6 +190,7 @@ def compute_barycentric_coordinates_pairwise(
     -------
     tuple[torch.Tensor, torch.Tensor]
         (barycentric_coords, reconstruction_error):
+
         - barycentric_coords: shape (n_pairs, n_vertices_per_cell)
         - reconstruction_error: shape (n_pairs,). Zero for codimension-0.
 
@@ -239,6 +242,7 @@ def _find_containing_pairs(
     -------
     tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]
         (query_indices, cell_indices, bary_coords):
+
         - query_indices: shape (n_containing,)
         - cell_indices: shape (n_containing,)
         - bary_coords: shape (n_containing, n_vertices_per_cell) or None if empty
@@ -301,6 +305,7 @@ def find_containing_cells(
     -------
     tuple[torch.Tensor, torch.Tensor]
         (cell_indices, barycentric_coords):
+
         - cell_indices: shape (n_queries,). Value is -1 if no cell contains
           the point, otherwise the first containing cell index.
         - barycentric_coords: shape (n_queries, n_vertices_per_cell).
@@ -412,6 +417,7 @@ def find_nearest_cells(
     -------
     tuple[torch.Tensor, torch.Tensor]
         ``(cell_indices, projected_points)``:
+
         - cell_indices: shape ``(n_queries,)``
         - projected_points: centroids of nearest cells, shape
           ``(n_queries, n_spatial_dims)``
@@ -621,6 +627,7 @@ def sample_data_at_points(
         - "points": Interpolate point data using barycentric coordinates.
     multiple_cells_strategy : {"mean", "nan"}, optional
         How to handle query points contained in multiple cells:
+
         - "mean": Return arithmetic mean of values from all containing cells.
         - "nan": Return NaN for ambiguous points.
     project_onto_nearest_cell : bool, optional

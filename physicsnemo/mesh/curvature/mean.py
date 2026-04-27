@@ -51,6 +51,7 @@ def mean_curvature_vertices(
     and is only defined for codimension-1 manifolds where normals exist.
 
     Signed curvature:
+
     - Sign determined by normal orientation
     - Positive: Convex (outward bulging like sphere exterior)
     - Negative: Concave (inward curving like sphere interior)

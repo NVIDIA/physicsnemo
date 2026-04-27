@@ -45,14 +45,17 @@ def from_pyvista(
         Input PyVista mesh (PolyData, UnstructuredGrid, or PointSet).
     manifold_dim : int or {"auto"}
         Manifold dimension (0, 1, 2, or 3), or "auto" to detect automatically.
+
         - 0: Point cloud (vertices only)
         - 1: Line mesh (edge cells)
         - 2: Surface mesh (triangular cells)
         - 3: Volume mesh (tetrahedral cells)
+
         When ``point_source="cell_centroids"``, only 0 and 1 are valid
         (defaulting to 0 for "auto").
     point_source : {"vertices", "cell_centroids"}
         Controls what becomes the Mesh points:
+
         - ``"vertices"`` (default): Mesh vertices become points, ``point_data``
           is preserved. ``manifold_dim`` controls cell topology as usual.
         - ``"cell_centroids"``: Cell centroids become points, ``cell_data``

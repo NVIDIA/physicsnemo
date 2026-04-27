@@ -75,10 +75,12 @@ def compute_barycentric_gradients(
         3. Has magnitude 1/height
 
         Efficient computation:
+
         - Use barycentric coordinate derivatives
         - For vertex i: ∇φᵢ = ∇(volume ratio) = normal to opposite face / height
 
     Properties:
+
         - Σᵢ ∇φᵢ = 0 (constraint: barycentric coords sum to 1)
         - ∇φᵢ · (vⱼ - vᵢ) = -1 for j ≠ i (decrease along edge away from i)
         - ∇φᵢ · (vᵢ - vⱼ) = +1 for j ≠ i (increase along edge toward i)

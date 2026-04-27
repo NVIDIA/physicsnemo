@@ -32,6 +32,7 @@ def compute_full_angle_n_sphere(n_manifold_dims: int) -> float:
     This is the total solid angle/turning angle available at a point.
 
     For discrete differential geometry:
+
     - 1D curves: Full turning angle is π (can turn left or right from straight)
     - 2D surfaces: Full angle is 2π (can look 360° around a point)
     - 3D volumes: Full solid angle is 4π (full sphere around a point)
@@ -46,6 +47,7 @@ def compute_full_angle_n_sphere(n_manifold_dims: int) -> float:
     -------
     float
         Full angle for n-dimensional manifold:
+
         - 1D: π
         - 2D: 2π
         - 3D: 4π

@@ -398,6 +398,7 @@ def clean_mesh(
     -------
     tuple[Mesh, dict]
         Tuple of (cleaned_mesh, stats) where stats tracks what was done:
+
         - ``"n_points_before_merge"`` / ``"n_points_after_merge"``
         - ``"n_cells_before_dedup"`` / ``"n_cells_after_dedup"``
         - ``"n_points_before_drop"`` / ``"n_points_after_drop"``
@@ -484,6 +485,7 @@ def remove_isolated_points(
     -------
     tuple[Mesh, dict[str, int]]
         Tuple of (cleaned_mesh, stats_dict) where stats_dict contains:
+
         - "n_isolated_removed": Number of isolated points removed
         - "n_points_original": Original number of points
         - "n_points_final": Final number of points

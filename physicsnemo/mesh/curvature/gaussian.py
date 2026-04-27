@@ -52,6 +52,7 @@ def gaussian_curvature_vertices(mesh: "Mesh") -> Float[torch.Tensor, " n_points"
     as it depends only on distances measured within the manifold (Theorema Egregium).
 
     Signed curvature:
+
     - Positive: Elliptic point (sphere-like)
     - Zero: Flat/parabolic point (plane-like)
     - Negative: Hyperbolic point (saddle-like)

@@ -38,6 +38,7 @@ def scatter_aggregate(
 
     This is the core scatter-based aggregation pattern used throughout physicsnemo.mesh
     for operations like:
+
     - Aggregating cell data to points
     - Aggregating parent cell data to facets
     - Merging duplicate point data
@@ -62,6 +63,7 @@ def scatter_aggregate(
         If None, uses uniform weights of 1.0.
     aggregation : str
         Aggregation mode:
+
         - "mean": Weighted mean (uses weights if provided, uniform otherwise)
         - "sum": Weighted sum (no normalization)
 

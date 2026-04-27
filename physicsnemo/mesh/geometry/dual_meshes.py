@@ -235,7 +235,7 @@ def compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
 
     This is the unified, mathematically rigorous implementation used by both DEC
     operators and curvature computations. It replaces the previous buggy
-    `compute_dual_volumes_0()` in `calculus/_circumcentric_dual.py` which failed
+    ``compute_dual_volumes_0()`` in ``calculus/_circumcentric_dual.py`` which failed
     on obtuse triangles (giving up to 513% conservation error).
 
     The dual 0-cell (also called Voronoi cell or circumcentric dual) of a vertex
@@ -254,11 +254,13 @@ def compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
 
     **2D manifolds (triangles)**:
         Uses Meyer et al. (2003) mixed area approach:
+
         - **Acute triangles** (all angles ≤ π/2): Circumcentric Voronoi formula (Eq. 7)
           V(v) = (1/8) Σ (||e_i||² cot(α_i) + ||e_j||² cot(α_j))
           where e_i, e_j are edges from v, α_i, α_j are opposite angles
 
         - **Obtuse triangles**: Mixed area subdivision (Figure 4)
+
           - If obtuse at vertex v: V(v) = area(T)/2
           - Otherwise: V(v) = area(T)/4
 
@@ -304,6 +306,7 @@ def compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
         3. Gauss-Bonnet: Enables Σ K_i × |⋆v_i| = 2πχ(M) to hold exactly
 
     References:
+
         - Meyer Eq. 7 (circumcentric Voronoi, acute triangles)
         - Meyer Fig. 4 (mixed area, obtuse triangles)
         - Desbrun Def. of circumcentric dual (lines 333-352 in umich_dec.tex)
@@ -509,6 +512,7 @@ def compute_cotan_weights_fem(
     -------
     tuple[torch.Tensor, torch.Tensor]
         Tuple of (cotan_weights, unique_edges):
+
         - cotan_weights: Cotangent weight for each unique edge, shape (n_edges,)
         - unique_edges: Sorted edge vertex indices, shape (n_edges, 2)
 

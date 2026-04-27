@@ -40,6 +40,7 @@ def extrude(
     a prism and then tessellated into (N+1) child (N+1)-simplices.
 
     Common use cases:
+
         - **3D text and shapes**: extrude a 2D triangulated outline to create a
           solid tetrahedral volume (used by ``text_3d_3d`` in this library).
         - **Boundary layer meshing**: sweep a surface mesh along its normals to
@@ -50,6 +51,7 @@ def extrude(
           (e.g., a pipe from a circle, a channel from a rectangle).
 
     Dimensional behavior:
+
         - [N, M] -> [N+1, M]: Default case where M >= N+1
           (e.g., 2D surface in 3D -> 3D volume in 3D)
         - [N, M] -> [N+1, N+1]: When M < N+1 and ``allow_new_spatial_dims=True``,
@@ -79,6 +81,7 @@ def extrude(
     -------
     Mesh
         Extruded mesh with:
+
         - ``n_manifold_dims = original_n_manifold_dims + 1``
         - ``n_spatial_dims = max(original_n_spatial_dims, n_manifold_dims)`` if
           ``allow_new_spatial_dims=True``, else ``original_n_spatial_dims``
@@ -125,6 +128,7 @@ def extrude(
     -----
     The tessellation pattern for an N-simplex with vertices [v0, v1, ..., vN]
     creates (N+1) child (N+1)-simplices:
+
         - Child i has vertices: [v0', v1', ..., vi', vi, vi+1, ..., vN]
     where primed vertices (v') are the extruded copies (offset by the extrusion
     vector).

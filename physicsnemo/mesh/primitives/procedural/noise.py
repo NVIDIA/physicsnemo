@@ -37,6 +37,7 @@ def perlin_noise_nd(
     on an n-dimensional lattice. Works for any number of spatial dimensions.
 
     The implementation uses:
+
     - Smoothstep interpolation for C² continuity
     - Hash-based pseudo-random gradients
     - n-linear interpolation in hypercube

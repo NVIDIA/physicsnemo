@@ -299,8 +299,8 @@ def build_adjacency_from_pairs(
     Returns
     -------
     Adjacency
-        Adjacency object where adjacency.to_list()[i] contains all targets
-        connected from source i. Sources with no outgoing edges have empty lists.
+        Adjacency object where ``adjacency.to_list()[i]`` contains all targets
+        connected from source ``i``. Sources with no outgoing edges have empty lists.
 
     Examples
     --------

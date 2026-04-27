@@ -337,6 +337,7 @@ def compute_dual_edge_volumes_in_cells(
     -------
     tuple[torch.Tensor, torch.Tensor]
         Tuple of (dual_volumes_in_cells, edge_cell_mapping):
+
         - dual_volumes_in_cells: shape (n_edge_cell_pairs,)
         - edge_cell_mapping: shape (n_edge_cell_pairs, 2) - [edge_idx, cell_idx]
 

@@ -276,6 +276,7 @@ def subdivide_butterfly(mesh: "Mesh") -> "Mesh":
     results than linear subdivision by using weighted stencils for new vertices.
 
     Properties:
+
     - Interpolating: original vertices remain unchanged
     - New edge midpoints use weighted neighbor stencils
     - Designed for 2D manifolds (triangular meshes)

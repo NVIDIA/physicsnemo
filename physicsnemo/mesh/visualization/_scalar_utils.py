@@ -39,6 +39,7 @@ def process_scalars(
     ----------
     scalar_spec : torch.Tensor or str or tuple[str, ...] or None
         Scalar specification, can be:
+
         - None: no scalars to display
         - torch.Tensor: direct tensor values
         - str or tuple[str, ...]: key(s) to lookup in data_dict
@@ -53,6 +54,7 @@ def process_scalars(
     -------
     tuple
         Tuple of (scalar_values, source_type, label) where:
+
         - scalar_values is None if scalar_spec is None, otherwise a 1D tensor
         - source_type indicates whether this is "points", "cells", or None
         - label is a human-readable name for the colorbar (or None)
