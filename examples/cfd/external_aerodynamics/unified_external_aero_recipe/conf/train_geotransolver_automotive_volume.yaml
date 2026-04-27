@@ -53,8 +53,8 @@ model:
   use_te: false
   plus: false
   include_local_features: true
-  radii: [0.1, 0.5, 2.0]
-  neighbors_in_radius: [16, 32, 64]
+  radii: [0.01, 0.05, 0.25, 1.0, 2.5, 5.0]
+  neighbors_in_radius: [8, 16, 32, 32, 64, 128]
   n_hidden_local: 32
   state_mixing_mode: "weighted"  # "weighted" (default) or "concat_project"
 
@@ -95,7 +95,7 @@ training:
 dataloader:
   prefetch_factor: 1
   num_streams: 1
-  use_streams: false       # SDF computation is not stream-safe
+  use_streams: true       # SDF computation is not stream-safe
   num_workers: 1
   pin_memory: true
 
