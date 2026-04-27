@@ -90,6 +90,7 @@ physicsnemo/nn/module/fourier_layers.py
 physicsnemo/nn/module/fully_connected_layers.py
 physicsnemo/nn/module/transformer_layers.py
 physicsnemo/nn/module/unet_layers.py @CharlelieLrt
+physicsnemo/nn/module/pade.py @peterdsharpe
 
 # ==============================================================================
 # DISTRIBUTED & DOMAIN PARALLELISM
