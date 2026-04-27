@@ -209,17 +209,23 @@ dev = [
 cu13 = [
     "torch>=2.5.0",
     "torchvision>=0.19.0",
-    "cuml-cu13",
-    "pylibraft-cu13",
-    "cupy-cuda13x==13.6.0",
+    "cuml-cu13>=26.2.0",
+    "pylibraft-cu13>=26.2.0",
+    # Avoid cupy 14.x: 14.0.0 ships a broken cuda13 wheel
+    # (see https://github.com/NVIDIA/physicsnemo/pull/1428) and 14.0.1 still
+    # CUDA_ERROR_INVALID_IMAGEs alongside torch>=2.11
+    # (see https://github.com/cupy/cupy/issues/9827).
+    "cupy-cuda13x>=13.6.0,<14.0.0",
     "nvidia-dali-cuda130",
 ]
 cu12 = [
     "torch>=2.5.0",
     "torchvision>=0.19.0",
-    "cuml-cu12",
-    "pylibraft-cu12",
-    "cupy-cuda12x",
+    "cuml-cu12>=26.2.0",
+    "pylibraft-cu12>=26.2.0",
+    # See cu13 note: cupy 14.x also interacts badly with torch>=2.11 on the
+    # cu128 wheel via cupy issue #9827.
+    "cupy-cuda12x>=13.6.0,<14.0.0",
     "nvidia-dali-cuda120",
 ]
 # NATTEN pre-built wheel extras (mutually exclusive via [tool.uv] conflicts).

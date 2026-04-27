@@ -23,8 +23,8 @@ from physicsnemo.core.version_check import check_version_spec
 
 from .utils import validate_inputs
 
-CUML_AVAILABLE = check_version_spec("cuml", "24.0.0", hard_fail=False)
-CUPY_AVAILABLE = check_version_spec("cupy", "13.0.0", hard_fail=False)
+CUML_AVAILABLE = check_version_spec("cuml", "26.2.0", hard_fail=False)
+CUPY_AVAILABLE = check_version_spec("cupy", "13.6.0", hard_fail=False)
 
 if CUML_AVAILABLE and CUPY_AVAILABLE:
     cuml = importlib.import_module("cuml")

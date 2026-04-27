@@ -75,7 +75,7 @@ def test_knn_torch(device: str, k: int, dtype: torch.dtype):
 def test_knn_cuml(device: str, k: int):
     if "cuda" not in device:
         pytest.skip("cuml backend is CUDA-only")
-    if not check_version_spec("cuml", "24.0.0", hard_fail=False):
+    if not check_version_spec("cuml", "26.2.0", hard_fail=False):
         pytest.skip("cuml not available")
 
     points, queries = _build_problem(device, torch.float32)
@@ -147,7 +147,7 @@ def test_knn_backend_forward_parity(device: str):
     k = 5
 
     if "cuda" in device:
-        if not check_version_spec("cuml", "24.0.0", hard_fail=False):
+        if not check_version_spec("cuml", "26.2.0", hard_fail=False):
             pytest.skip("cuml not available")
         output_a = knn(points, queries, k, implementation="cuml")
     else:
@@ -180,7 +180,7 @@ def test_knn_torch_compile_no_graph_break(device: str):
     k = 5
 
     implementation = (
-        None if check_version_spec("cuml", "24.0.0", hard_fail=False) else "torch"
+        None if check_version_spec("cuml", "26.2.0", hard_fail=False) else "torch"
     )
 
     def search_fn(points: torch.Tensor, queries: torch.Tensor):
@@ -199,7 +199,7 @@ def test_knn_opcheck(device: str):
     k = 5
 
     if "cuda" in device:
-        if not check_version_spec("cuml", "24.0.0", hard_fail=False):
+        if not check_version_spec("cuml", "26.2.0", hard_fail=False):
             pytest.skip("cuml not available")
         op = knn_cuml
     else:
@@ -224,7 +224,7 @@ def test_knn_error_handling(device: str):
         )
 
     # Accelerated implementation/device mismatch checks.
-    if "cpu" in device and check_version_spec("cuml", "24.0.0", hard_fail=False):
+    if "cpu" in device and check_version_spec("cuml", "26.2.0", hard_fail=False):
         with pytest.raises(ValueError, match="does not support CPU"):
             knn(points, queries, k=3, implementation="cuml")
     if "cuda" in device and check_version_spec("scipy", "1.7.0", hard_fail=False):
