@@ -76,13 +76,24 @@ class Pade(Module):
         If ``True``, uses separate MLPs for numerator and denominator.
         If ``False``, uses a single MLP with split outputs.
     self_regularization_beta : float or None, optional, default=None
-        If not ``None``, adds :math:`\beta \varphi_n^2` to the denominator,
-        bounding the output magnitude strictly below :math:`1/\beta`.
-        This prevents unbounded growth when the numerator MLP produces
-        large outputs while the denominator is small. The term
-        :math:`\varphi_n^2` is :math:`C^\infty` smooth and preserves
-        the :math:`N = D` far-field constant-asymptote property.
-        Typical value: ``0.01`` (bounds output below 100).
+        If not ``None``, adds :math:`\beta \, \varphi_n^2` to the
+        denominator. The effect on output magnitude depends on
+        ``numerator_order`` (:math:`N`):
+
+        * :math:`N = 1` (default): :math:`|f|` is bounded above by
+          :math:`1 / (2 \sqrt{\beta})`, with the maximum attained at
+          :math:`|\varphi_n| = 1/\sqrt{\beta}`.
+        * :math:`N = 2`: :math:`|f| < 1/\beta`, the far-field
+          asymptote as :math:`|\varphi_n| \to \infty`.
+        * :math:`N \geq 3`: the term tempers but does not bound the
+          output (it scales as :math:`|\varphi_n|^{N-2}/\beta` at
+          large :math:`|\varphi_n|`).
+
+        The term :math:`\varphi_n^2` is :math:`C^\infty` smooth and
+        preserves the :math:`N = D = 2` constant far-field asymptote.
+        Typical value: ``0.01`` (bounds output magnitude below ``5``
+        at the default :math:`N = 1`, or below ``100`` at
+        :math:`N = 2`).
 
     Forward
     -------

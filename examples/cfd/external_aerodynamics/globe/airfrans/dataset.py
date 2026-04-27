@@ -18,12 +18,12 @@ import json
 import os
 from collections import defaultdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
+from typing import Literal, Sequence
 
 import pyvista as pv
 import torch
 from jaxtyping import Bool, Float, Int
-from tensordict import TensorDict, tensorclass
+from tensordict import TensorClass, TensorDict
 from torch.distributed import ReduceOp, all_reduce, is_initialized
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
@@ -49,8 +49,7 @@ RHO = 1  # kg/m^3
 NU = 1.56e-5  # m^2/s
 
 
-@tensorclass
-class AirFRANSSample:
+class AirFRANSSample(TensorClass):
     prediction_mesh: Mesh  # Point cloud with nondimensional point_data and global_data
     boundary_meshes: TensorDict[str, Mesh]  # BC name -> Mesh
     reference_lengths: TensorDict[
@@ -69,10 +68,6 @@ class AirFRANSSample:
             "reference_lengths": self.reference_lengths,
             "global_data": self.prediction_mesh.global_data,
         }
-
-    if TYPE_CHECKING:
-
-        def to(self, *args: Any, **kwargs: Any) -> Self: ...
 
 
 class AirFRANSDataSet(CachedPreprocessingDataset):
