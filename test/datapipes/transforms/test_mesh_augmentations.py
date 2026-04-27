@@ -220,6 +220,16 @@ class TestDistributionDeviceTransfer:
         assert aug._distribution.low.device == torch.device("cpu")
         assert aug._distribution.high.device == torch.device("cpu")
 
+    def test_to_moves_generator(self):
+        """to() should recreate the generator on the target device with the same seed."""
+        aug = _seed(RandomScaleMesh(distribution=D.Normal(1.0, 0.05)), 42)
+        original_seed = aug._generator.initial_seed()
+
+        aug.to("cpu")
+
+        assert aug._generator.device == torch.device("cpu")
+        assert aug._generator.initial_seed() == original_seed
+
 
 # ---------------------------------------------------------------------------
 # RandomScaleMesh
