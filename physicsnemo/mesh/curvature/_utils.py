@@ -23,6 +23,7 @@ and numerically stable geometric operations.
 import math
 
 import torch
+from jaxtyping import Float
 
 
 def compute_full_angle_n_sphere(n_manifold_dims: int) -> float:
@@ -67,7 +68,10 @@ def compute_full_angle_n_sphere(n_manifold_dims: int) -> float:
     return 2 * math.pi ** (n / 2.0) / math.exp(math.lgamma(n / 2.0))
 
 
-def stable_angle_between_vectors(v1: torch.Tensor, v2: torch.Tensor) -> torch.Tensor:
+def stable_angle_between_vectors(
+    v1: Float[torch.Tensor, "*batch n_dims"],
+    v2: Float[torch.Tensor, "*batch n_dims"],
+) -> Float[torch.Tensor, " *batch"]:
     """Compute angle between vectors using numerically stable atan2 formula.
 
     More stable than using acos(dot product) which suffers from numerical
@@ -112,10 +116,10 @@ def stable_angle_between_vectors(v1: torch.Tensor, v2: torch.Tensor) -> torch.Te
 
 
 def compute_triangle_angles(
-    p0: torch.Tensor,
-    p1: torch.Tensor,
-    p2: torch.Tensor,
-) -> torch.Tensor:
+    p0: Float[torch.Tensor, "*batch n_spatial_dims"],
+    p1: Float[torch.Tensor, "*batch n_spatial_dims"],
+    p2: Float[torch.Tensor, "*batch n_spatial_dims"],
+) -> Float[torch.Tensor, " *batch"]:
     """Compute the angle at p0 in triangle (p0, p1, p2) using stable formula.
 
     Uses atan2-based computation for numerical stability.

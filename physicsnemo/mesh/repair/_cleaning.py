@@ -26,6 +26,7 @@ This module provides functions to clean and repair meshes:
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float, Int
 from tensordict import TensorDict
 
 from physicsnemo.mesh.utilities._duplicate_detection import compute_canonical_indices
@@ -36,11 +37,16 @@ if TYPE_CHECKING:
 
 
 def merge_duplicate_points(
-    points: torch.Tensor,  # shape: (n_points, n_spatial_dims)
-    cells: torch.Tensor,  # shape: (n_cells, n_vertices_per_cell)
+    points: Float[torch.Tensor, "n_points n_dims"],
+    cells: Int[torch.Tensor, "n_cells n_verts"],
     point_data: TensorDict,
     tolerance: float = 1e-12,
-) -> tuple[torch.Tensor, torch.Tensor, TensorDict, torch.Tensor]:
+) -> tuple[
+    Float[torch.Tensor, "n_unique_points n_dims"],
+    Int[torch.Tensor, "n_cells n_verts"],
+    TensorDict,
+    Int[torch.Tensor, " n_points"],
+]:
     """Merge duplicate points within tolerance.
 
     Points whose L2 distance is below *tolerance* are merged into a single
@@ -186,9 +192,9 @@ def _merge_point_data(
 
 
 def remove_duplicate_cells(
-    cells: torch.Tensor,  # shape: (n_cells, n_vertices_per_cell)
+    cells: Int[torch.Tensor, "n_cells n_verts"],
     cell_data: TensorDict,
-) -> tuple[torch.Tensor, TensorDict]:
+) -> tuple[Int[torch.Tensor, "n_unique_cells n_verts"], TensorDict]:
     """Remove duplicate cells from mesh.
 
     Cells are considered duplicates if they contain the same set of vertex indices
@@ -275,10 +281,15 @@ def remove_duplicate_cells(
 
 
 def remove_unused_points(
-    points: torch.Tensor,  # shape: (n_points, n_spatial_dims)
-    cells: torch.Tensor,  # shape: (n_cells, n_vertices_per_cell)
+    points: Float[torch.Tensor, "n_points n_dims"],
+    cells: Int[torch.Tensor, "n_cells n_verts"],
     point_data: TensorDict,
-) -> tuple[torch.Tensor, torch.Tensor, TensorDict, torch.Tensor]:
+) -> tuple[
+    Float[torch.Tensor, "n_used_points n_dims"],
+    Int[torch.Tensor, "n_cells n_verts"],
+    TensorDict,
+    Int[torch.Tensor, " n_points"],
+]:
     """Remove points that are not referenced by any cell.
 
     Parameters

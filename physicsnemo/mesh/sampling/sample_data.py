@@ -508,10 +508,11 @@ def _accumulate_sampled_data(
     device = mesh.points.device
 
     ### Count how many cells contain each query point
-    query_containment_count = torch.zeros(n_queries, dtype=torch.long, device=device)
     if len(query_indices) > 0:
-        query_containment_count.scatter_add_(
-            0, query_indices, torch.ones_like(query_indices)
+        query_containment_count = torch.bincount(query_indices, minlength=n_queries)
+    else:
+        query_containment_count = torch.zeros(
+            n_queries, dtype=torch.long, device=device
         )
 
     source_data = mesh.cell_data if data_source == "cells" else mesh.point_data

@@ -24,6 +24,7 @@ manifold-with-boundary).
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Bool, Int
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -32,7 +33,11 @@ if TYPE_CHECKING:
 def _extract_boundary_facets(
     mesh: "Mesh",
     manifold_codimension: int = 1,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[
+    Int[torch.Tensor, "n_boundary n_vertices_per_facet"],
+    Int[torch.Tensor, " n_candidates"],
+    Bool[torch.Tensor, " n_candidates"],
+]:
     """Extract boundary facets at a given codimension.
 
     Shared helper that avoids duplicating the extract-then-categorize pattern
@@ -74,7 +79,7 @@ def _extract_boundary_facets(
     return boundary_facets, parent_cell_indices, boundary_candidate_mask
 
 
-def get_boundary_vertices(mesh: "Mesh") -> torch.Tensor:
+def get_boundary_vertices(mesh: "Mesh") -> Bool[torch.Tensor, " n_points"]:
     """Identify vertices that lie on the mesh boundary.
 
     A vertex is on the boundary if it belongs to at least one boundary facet
@@ -126,7 +131,7 @@ def get_boundary_vertices(mesh: "Mesh") -> torch.Tensor:
 def get_boundary_cells(
     mesh: "Mesh",
     boundary_codimension: int = 1,
-) -> torch.Tensor:
+) -> Bool[torch.Tensor, " n_cells"]:
     """Identify cells that have at least one facet on the mesh boundary.
 
     A cell is on the boundary if it contains at least one k-codimension facet
@@ -193,7 +198,7 @@ def get_boundary_cells(
     return is_boundary_cell
 
 
-def get_boundary_edges(mesh: "Mesh") -> torch.Tensor:
+def get_boundary_edges(mesh: "Mesh") -> Int[torch.Tensor, "n_boundary_edges 2"]:
     """Get edges that lie on the mesh boundary.
 
     For 2D manifolds, boundary edges are codimension-1 facets appearing in only

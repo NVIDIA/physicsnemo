@@ -36,6 +36,7 @@ volume, with the PDP-flat providing the edge flux estimate.
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
@@ -45,8 +46,8 @@ if TYPE_CHECKING:
 
 def compute_divergence_points_dec(
     mesh: "Mesh",
-    vector_field: torch.Tensor,
-) -> torch.Tensor:
+    vector_field: Float[torch.Tensor, "n_points n_spatial_dims"],
+) -> Float[torch.Tensor, " n_points"]:
     r"""Compute divergence at vertices using DEC: div = ⋆₀⁻¹ d* ⋆₁ ♭(X).
 
     For a vertex vector field X, the DEC divergence at vertex v is:
@@ -124,8 +125,8 @@ def compute_divergence_points_dec(
 
 def compute_divergence_points_lsq(
     mesh: "Mesh",
-    vector_field: torch.Tensor,
-) -> torch.Tensor:
+    vector_field: Float[torch.Tensor, "n_points n_spatial_dims"],
+) -> Float[torch.Tensor, " n_points"]:
     """Compute divergence at vertices using LSQ gradient of each component.
 
     For vector field v = [vₓ, vᵧ, v_z]:

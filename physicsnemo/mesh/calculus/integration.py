@@ -43,6 +43,7 @@ This is exact for P1 fields and second-order accurate for smooth fields.
 from typing import TYPE_CHECKING, Literal
 
 import torch
+from jaxtyping import Float
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -90,8 +91,8 @@ def _resolve_field(
 
 def integrate_cell_data(
     mesh: "Mesh",
-    field: torch.Tensor,
-) -> torch.Tensor:
+    field: Float[torch.Tensor, "n_cells ..."],
+) -> Float[torch.Tensor, " ..."]:
     r"""Integrate a cell-centered (P0) field over the mesh.
 
     Computes the exact integral of a piecewise-constant field:
@@ -108,7 +109,7 @@ def integrate_cell_data(
     mesh : Mesh
         Simplicial mesh with at least one cell.
     field : torch.Tensor
-        Cell-centered values, shape ``(n_cells, *trailing)``.
+        Cell-centered values, shape ``(n_cells, ...)``.
         Trailing dimensions are preserved in the output.
 
     Returns
@@ -139,8 +140,8 @@ def integrate_cell_data(
 
 def integrate_point_data(
     mesh: "Mesh",
-    field: torch.Tensor,
-) -> torch.Tensor:
+    field: Float[torch.Tensor, "n_points ..."],
+) -> Float[torch.Tensor, " ..."]:
     r"""Integrate a vertex-centered (P1) field over the mesh.
 
     Treats vertex values as nodal values of a piecewise-linear field
@@ -155,7 +156,7 @@ def integrate_point_data(
     mesh : Mesh
         Simplicial mesh with at least one cell.
     field : torch.Tensor
-        Vertex-centered values, shape ``(n_points, *trailing)``.
+        Vertex-centered values, shape ``(n_points, ...)``.
         Trailing dimensions are preserved in the output.
 
     Returns
@@ -177,10 +178,10 @@ def integrate_point_data(
 
     cell_areas = mesh.cell_areas  # (n_cells,)
 
-    ### Gather vertex values for each cell: (n_cells, n_verts_per_cell, *trailing)
+    ### Gather vertex values for each cell: (n_cells, n_verts_per_cell, ...)
     cell_vertex_values = field[mesh.cells]
 
-    ### Mean over vertices within each cell: (n_cells, *trailing)
+    ### Mean over vertices within each cell: (n_cells, ...)
     cell_means = cell_vertex_values.mean(dim=1)
 
     ### Weight by cell area and sum
