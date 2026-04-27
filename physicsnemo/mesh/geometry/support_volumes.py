@@ -135,7 +135,11 @@ def compute_edge_support_volume_cell_fractions(
     # Store as (n_edges, 2) with -1 for missing second cell
     from physicsnemo.mesh.utilities._edge_lookup import find_edges_in_reference
 
-    edge_indices, matches = find_edges_in_reference(edges, candidate_edges)
+    edge_indices, matches = find_edges_in_reference(
+        edges,
+        candidate_edges,
+        index_bound=mesh.n_points,
+    )
     edge_to_cells = torch.full(
         (n_edges, 2), -1, dtype=torch.long, device=device
     )  # (n_edges, 2)
@@ -370,7 +374,9 @@ def compute_dual_edge_volumes_in_cells(
     from physicsnemo.mesh.utilities._edge_lookup import find_edges_in_reference
 
     edge_indices_for_candidates, matches = find_edges_in_reference(
-        edges, candidate_edges
+        edges,
+        candidate_edges,
+        index_bound=mesh.n_points,
     )
 
     ### Filter to only matched pairs

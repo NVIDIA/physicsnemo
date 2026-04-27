@@ -28,6 +28,7 @@ from jaxtyping import Bool, Float, Int
 from physicsnemo.mesh.boundaries import get_boundary_vertices
 from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
 from physicsnemo.mesh.geometry.dual_meshes import compute_cotan_weights_fem
+from physicsnemo.mesh.utilities._tolerances import safe_eps
 from physicsnemo.mesh.utilities._topology import extract_unique_edges
 
 if TYPE_CHECKING:
@@ -214,11 +215,7 @@ def smooth_laplacian(
         weight_sum.scatter_add_(0, edges[:, 1], edge_weights)
 
         ### Normalize by total weight per vertex
-        # Avoid division by zero for isolated vertices
-        # Use dtype-appropriate minimum: 1e-10 for fp32+, 1e-4 for fp16
-        # (fp16 smallest normal is ~6e-5, so 1e-10 would round to 0)
-        min_clamp = 1e-4 if dtype == torch.float16 else 1e-10
-        weight_sum = weight_sum.clamp(min=min_clamp)
+        weight_sum = weight_sum.clamp(min=safe_eps(dtype))
         laplacian = laplacian / weight_sum.unsqueeze(-1)
 
         ### Apply relaxation
@@ -357,7 +354,11 @@ def _detect_sharp_edges(
     )
 
     ### Map candidate edges to unique edges via searchsorted (O(m log n), O(n) memory)
-    candidate_to_unique, matched = find_edges_in_reference(edges, candidate_edges)
+    candidate_to_unique, matched = find_edges_in_reference(
+        edges,
+        candidate_edges,
+        index_bound=mesh.n_points,
+    )
 
     ### Count cells per edge (only matched candidates contribute)
     edge_cell_counts = torch.bincount(

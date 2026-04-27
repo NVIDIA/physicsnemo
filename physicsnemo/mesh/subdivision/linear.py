@@ -33,10 +33,10 @@ from physicsnemo.mesh.subdivision._data import (
     propagate_cell_data_to_children,
 )
 from physicsnemo.mesh.subdivision._topology import (
-    extract_unique_edges,
     generate_child_cells,
     get_subdivision_pattern,
 )
+from physicsnemo.mesh.utilities._topology import extract_unique_edges
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh

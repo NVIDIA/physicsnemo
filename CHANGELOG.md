@@ -54,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added geometry functionals in `physicsnemo.nn.functional` for
   `mesh_poisson_disk_sample`, `mesh_to_voxel_fraction`, and
   `signed_distance_field`.
+- In PhysicsNeMo-Mesh, `physicsnemo.mesh.geometry` now publicly exposes
+  `stable_angle_between_vectors` and `compute_triangle_angles` (previously
+  only available via the private `physicsnemo.mesh.curvature._utils`).
 
 ### Changed
 
@@ -69,6 +72,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `physicsnemo.nn.functional.neighbors.*`.
 - Consolidated Warp interpolation kernels for grid-to-point and point-to-grid
   backends, and added missing kernel/helper docstrings.
+- In PhysicsNeMo-Mesh, dual-mesh primitives gained closed-form fast paths
+  for triangle meshes embedded in 3D. `compute_circumcenters` is up to
+  ~10000x faster (e.g. 11 s -> ~1 ms on a 360 K-triangle AirFRANS mesh,
+  RTX 4090) by replacing batched `torch.linalg.lstsq` over (2, 3) systems
+  with a closed-form cross product, and `compute_vertex_angles` is up to
+  ~15x faster on the same meshes by replacing the dimension-agnostic
+  Gram-determinant formula with an `atan2(||cross||, dot)` formulation.
+  Anything that depends on these (Gaussian curvature, FEM Laplacian,
+  cotangent weights, Voronoi areas, smoothing) inherits the speedup. See
+  `perf.md` for the full audit.
+- In PhysicsNeMo-Mesh, BVH construction is faster on GPU.
+  `_compute_morton_codes` has a CUDA-specific fused-bits path that
+  eliminates the `n_bits` sequential kernel launches of the previous
+  bit-loop (5-8x speedup on small / medium meshes), and `BVH.from_mesh`
+  reuses the cached `Mesh.cell_centroids` instead of recomputing.
+  End-to-end `BVH.from_mesh` is ~2x faster on a 162 K-tet `cube_volume`
+  mesh.
+- In PhysicsNeMo-Mesh, the topology-dedup APIs
+  (`categorize_facets_by_count`, `find_edges_in_reference`,
+  `remove_duplicate_cells`, `build_adjacency_from_pairs`) gained optional
+  `index_bound` / `n_targets` parameters. When the caller passes a strict
+  upper bound (typically `mesh.n_points` or `mesh.n_cells`), the implicit
+  `tensor.max().item()` GPU sync is avoided and the dedup uses a packed
+  int64 unique (via the new internal `unique_index_tuples`) and a single
+  composite-key argsort. End-to-end `get_boundary_edges` and
+  `cell_to_cells_adjacency` are ~2x faster on practical-size unstructured
+  meshes (e.g. 360 K-triangle AirFRANS).
+- &#9888;&#65039; **BC-impact (deep imports):** in PhysicsNeMo-Mesh,
+  `stable_angle_between_vectors` and `compute_triangle_angles` moved from
+  `physicsnemo.mesh.curvature._utils` to `physicsnemo.mesh.geometry._angles`.
+  The old private path is no longer available; use the
+  `physicsnemo.mesh.geometry` re-export instead.
 
 ### Deprecated
 
@@ -88,6 +123,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed TensorDict key-ordering bug in GLOBE's Barnes-Hut kernel that caused
   incorrect results when `tensordict >= 0.12` reordered leaves during
   TensorDict construction from dict literals mixing plain and nested keys.
+- In PhysicsNeMo-Mesh, `from_pyvista` now correctly handles
+  `UnstructuredGrid` inputs in newer `pyvista` versions, looking up
+  cell-type buckets in `cells_dict` with `np.uint8(pv.CellType.X)` keys
+  rather than the `IntEnum` value, and skipping non-numeric VTK arrays
+  (strings, objects) when copying point / cell / field data into the
+  `Mesh` `TensorDict`s instead of failing the conversion.
+- In PhysicsNeMo-Mesh, `safe_eps(dtype)` is now capped at
+  `torch.finfo(dtype).eps`, which fixes a float16 corner case where the
+  previous `tiny ** 0.25` floor exceeded machine epsilon and could
+  corrupt fp16 mesh quantities. Ad-hoc `+ 1e-10` denominators in
+  `smooth_laplacian` and `compute_quality_metrics` have been replaced
+  with the dtype-aware `.clamp(min=safe_eps(dtype))` to avoid silently
+  zeroing fp16 weights.
 
 ### Security
 

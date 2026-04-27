@@ -89,6 +89,7 @@ def get_point_to_cells_adjacency(mesh: "Mesh") -> Adjacency:
         source_indices=point_ids,
         target_indices=cell_ids,
         n_sources=mesh.n_points,
+        n_targets=mesh.n_cells,
     )
 
 
@@ -154,4 +155,5 @@ def get_point_to_points_adjacency(mesh: "Mesh") -> Adjacency:
         source_indices=bidirectional_edges[:, 0],
         target_indices=bidirectional_edges[:, 1],
         n_sources=mesh.n_points,
+        n_targets=mesh.n_points,
     )
