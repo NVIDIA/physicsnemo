@@ -69,6 +69,7 @@ def _extract_boundary_facets(
     boundary_facets, inverse_indices, _ = categorize_facets_by_count(
         candidate_facets,
         target_counts="boundary",
+        index_bound=mesh.n_points,
     )
     boundary_candidate_mask = inverse_indices >= 0
     return boundary_facets, parent_cell_indices, boundary_candidate_mask
@@ -246,8 +247,9 @@ def get_boundary_edges(mesh: "Mesh") -> torch.Tensor:
         return torch.zeros((0, 2), dtype=torch.int64, device=device)
 
     from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
+    from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
 
     candidate_edges, _ = extract_candidate_facets(
         boundary_faces, manifold_codimension=1
     )
-    return torch.unique(candidate_edges, dim=0)
+    return unique_index_tuples(candidate_edges, index_bound=mesh.n_points)

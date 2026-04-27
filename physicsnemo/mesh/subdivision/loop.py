@@ -36,6 +36,7 @@ from physicsnemo.mesh.subdivision._topology import (
     generate_child_cells,
     get_subdivision_pattern,
 )
+from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -77,7 +78,12 @@ def reposition_original_vertices_2d(
         # edges from cells, which is the expensive part of get_point_to_points_adjacency)
         sources = torch.cat([unique_edges[:, 0], unique_edges[:, 1]])
         targets = torch.cat([unique_edges[:, 1], unique_edges[:, 0]])
-        adjacency = build_adjacency_from_pairs(sources, targets, n_sources=n_points)
+        adjacency = build_adjacency_from_pairs(
+            sources,
+            targets,
+            n_sources=n_points,
+            n_targets=n_points,
+        )
     else:
         adjacency = mesh.get_point_to_points_adjacency()
 
@@ -175,9 +181,9 @@ def compute_loop_edge_positions_2d(
         manifold_codimension=mesh.n_manifold_dims - 1,
     )
 
-    _, inverse_indices = torch.unique(
+    _, inverse_indices = unique_index_tuples(
         candidate_edges,
-        dim=0,
+        index_bound=mesh.n_points,
         return_inverse=True,
     )
 

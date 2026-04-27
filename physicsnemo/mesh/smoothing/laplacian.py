@@ -353,7 +353,11 @@ def _detect_sharp_edges(
     )
 
     ### Map candidate edges to unique edges via searchsorted (O(m log n), O(n) memory)
-    candidate_to_unique, matched = find_edges_in_reference(edges, candidate_edges)
+    candidate_to_unique, matched = find_edges_in_reference(
+        edges,
+        candidate_edges,
+        index_bound=mesh.n_points,
+    )
 
     ### Count cells per edge
     edge_cell_counts = torch.zeros(len(edges), dtype=torch.long, device=device)

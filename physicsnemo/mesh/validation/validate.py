@@ -245,7 +245,9 @@ def validate_mesh(
                 mesh.cells, manifold_codimension=1
             )
             unique_edges, _inverse, counts = categorize_facets_by_count(
-                candidate_edges, target_counts="all"
+                candidate_edges,
+                target_counts="all",
+                index_bound=mesh.n_points,
             )
             non_manifold_mask = counts > 2
             n_non_manifold = non_manifold_mask.sum().item()

@@ -565,6 +565,7 @@ class BVH:
                 source_indices=torch.empty(0, dtype=torch.long, device=dev),
                 target_indices=torch.empty(0, dtype=torch.long, device=dev),
                 n_sources=n_queries,
+                n_targets=len(self.sorted_cell_order),
             )
 
         ### Initialize work queue: all queries start at root (node 0)
@@ -665,5 +666,6 @@ class BVH:
             source_indices=all_q,
             target_indices=all_c,
             n_sources=n_queries,
+            n_targets=len(self.sorted_cell_order),
         )
         return adjacency.truncate_per_source(max_candidates_per_point)

@@ -381,6 +381,7 @@ def find_all_containing_cells(
         source_indices=query_indices,
         target_indices=cell_indices,
         n_sources=len(query_points),
+        n_targets=mesh.n_cells,
     )
 
 
