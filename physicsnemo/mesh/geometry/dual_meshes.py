@@ -372,8 +372,8 @@ def compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
 
 
 def compute_circumcenters(
-    vertices: Float[torch.Tensor, "n_simplices n_vertices_per_simplex n_spatial_dims"],
-) -> Float[torch.Tensor, "n_simplices n_spatial_dims"]:
+    vertices: Float[torch.Tensor, "n_cells n_vertices_per_cell n_spatial_dims"],
+) -> Float[torch.Tensor, "n_cells n_spatial_dims"]:
     """Compute circumcenters of simplices using perpendicular bisector method.
 
     The circumcenter is the unique point equidistant from all vertices of the simplex.
@@ -382,13 +382,13 @@ def compute_circumcenters(
     Parameters
     ----------
     vertices : torch.Tensor
-        Vertex positions for each simplex.
-        Shape: (n_simplices, n_vertices_per_simplex, n_spatial_dims)
+        Vertex positions for each cell (simplex).
+        Shape: (n_cells, n_vertices_per_cell, n_spatial_dims)
 
     Returns
     -------
     torch.Tensor
-        Circumcenters, shape (n_simplices, n_spatial_dims)
+        Circumcenters, shape (n_cells, n_spatial_dims)
 
     Notes
     -----
@@ -406,33 +406,33 @@ def compute_circumcenters(
         Then c = v₀ + d. For over-determined systems (embedded manifolds),
         use least-squares.
     """
-    n_simplices, n_vertices, n_spatial_dims = vertices.shape
-    n_manifold_dims = n_vertices - 1
+    n_cells, n_verts_per_cell, n_spatial_dims = vertices.shape
+    n_manifold_dims = n_verts_per_cell - 1
 
     ### Handle special cases
-    if n_vertices == 1:
+    if n_verts_per_cell == 1:
         # 0-simplex: circumcenter is the vertex itself
         return vertices.squeeze(1)
 
-    if n_vertices == 2:
+    if n_verts_per_cell == 2:
         # 1-simplex (edge): circumcenter is the midpoint
         # This avoids numerical issues with underdetermined lstsq for edges in higher dimensions
         return vertices.mean(dim=1)
 
     ### Build linear system for circumcenter
     # Reference vertex (first one)
-    v0 = vertices[:, 0, :]  # (n_simplices, n_spatial_dims)
+    v0 = vertices[:, 0, :]  # (n_cells, n_spatial_dims)
 
     # Relative vectors from v₀ to other vertices
-    # Shape: (n_simplices, n_manifold_dims, n_spatial_dims)
+    # Shape: (n_cells, n_manifold_dims, n_spatial_dims)
     relative_vecs = vertices[:, 1:, :] - v0.unsqueeze(1)
 
     # Matrix A = 2 * relative_vecs (each row is an equation)
-    # Shape: (n_simplices, n_manifold_dims, n_spatial_dims)
+    # Shape: (n_cells, n_manifold_dims, n_spatial_dims)
     A = 2 * relative_vecs
 
     # Right-hand side: ||v_i - v₀||²
-    # Shape: (n_simplices, n_manifold_dims)
+    # Shape: (n_cells, n_manifold_dims)
     b = (relative_vecs**2).sum(dim=-1)
 
     ### Solve for circumcenter
@@ -441,14 +441,14 @@ def compute_circumcenters(
 
     if n_manifold_dims == n_spatial_dims:
         ### Square system: use direct solve
-        # A is (n_simplices, n_dims, n_dims)
-        # b is (n_simplices, n_dims)
+        # A is (n_cells, n_spatial_dims, n_spatial_dims)
+        # b is (n_cells, n_spatial_dims)
         try:
             # Solve A @ x = b
             c_minus_v0 = torch.linalg.solve(
-                A,  # (n_simplices, n_dims, n_dims)
-                b.unsqueeze(-1),  # (n_simplices, n_dims, 1)
-            ).squeeze(-1)  # (n_simplices, n_dims)
+                A,  # (n_cells, n_spatial_dims, n_spatial_dims)
+                b.unsqueeze(-1),  # (n_cells, n_spatial_dims, 1)
+            ).squeeze(-1)  # (n_cells, n_spatial_dims)
         except torch.linalg.LinAlgError:
             # Singular matrix - fall back to least squares
             c_minus_v0 = torch.linalg.lstsq(
@@ -458,14 +458,14 @@ def compute_circumcenters(
     else:
         ### Over-determined system (manifold embedded in higher dimension)
         # Use least-squares: (A^T A)^-1 A^T b
-        # A is (n_simplices, n_manifold_dims, n_spatial_dims)
-        # We need A^T @ A which is (n_simplices, n_spatial_dims, n_spatial_dims)
+        # A is (n_cells, n_manifold_dims, n_spatial_dims)
+        # We need A^T @ A which is (n_cells, n_spatial_dims, n_spatial_dims)
 
         # Use torch.linalg.lstsq which handles batched least-squares
         c_minus_v0 = torch.linalg.lstsq(
-            A,  # (n_simplices, n_manifold_dims, n_spatial_dims)
-            b.unsqueeze(-1),  # (n_simplices, n_manifold_dims, 1)
-        ).solution.squeeze(-1)  # (n_simplices, n_spatial_dims)
+            A,  # (n_cells, n_manifold_dims, n_spatial_dims)
+            b.unsqueeze(-1),  # (n_cells, n_manifold_dims, 1)
+        ).solution.squeeze(-1)  # (n_cells, n_spatial_dims)
 
     ### Circumcenter = v₀ + solution
     circumcenters = v0 + c_minus_v0

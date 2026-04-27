@@ -385,9 +385,7 @@ class DomainMesh:
         | Sequence[float]
         | Literal["x", "y", "z"]
         | None = None,
-        center: Float[torch.Tensor, " n_spatial_dims"]
-        | Sequence[float]
-        | None = None,
+        center: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
         transform_point_data: bool | TensorDict = False,
         transform_cell_data: bool | TensorDict = False,
         transform_global_data: bool | TensorDict = False,

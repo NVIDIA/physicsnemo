@@ -191,9 +191,7 @@ def integrate_point_data(
 
 def integrate(
     mesh: "Mesh",
-    field: str
-    | tuple[str, ...]
-    | Float[torch.Tensor, "n_cells_or_points ..."],
+    field: str | tuple[str, ...] | Float[torch.Tensor, "n_cells_or_points ..."],
     data_source: Literal["cells", "points"] = "cells",
 ) -> Float[torch.Tensor, " ..."]:
     r"""Integrate a field over the mesh domain.

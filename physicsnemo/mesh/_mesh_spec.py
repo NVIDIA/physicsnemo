@@ -157,9 +157,7 @@ class MeshDims:
                     f"paired n_spatial_dims (got None). Use both symbolic dims, "
                     f"e.g. Mesh['{self.n_manifold_dims}', 'n']."
                 )
-            object.__setattr__(
-                self, "_m_parsed", _parse_dim_expr(self.n_manifold_dims)
-            )
+            object.__setattr__(self, "_m_parsed", _parse_dim_expr(self.n_manifold_dims))
         if isinstance(self.n_spatial_dims, str):
             if self.n_manifold_dims is None:
                 raise TypeError(
@@ -167,9 +165,7 @@ class MeshDims:
                     f"paired n_manifold_dims (got None). Use both symbolic dims, "
                     f"e.g. Mesh['n', '{self.n_spatial_dims}']."
                 )
-            object.__setattr__(
-                self, "_s_parsed", _parse_dim_expr(self.n_spatial_dims)
-            )
+            object.__setattr__(self, "_s_parsed", _parse_dim_expr(self.n_spatial_dims))
 
     def matches(self, mesh: "Mesh") -> bool:
         r"""Check whether a mesh instance satisfies this dimension spec.
