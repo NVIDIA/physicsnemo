@@ -329,25 +329,6 @@ class RandomRotateMesh(MeshTransform):
         self.transform_global_data = transform_global_data
         self._generator: torch.Generator | None = None
 
-        # Coefficient matrix mapping outer(q,q).flatten() (16,) -> R.flatten() (9,).
-        # Derived from the standard unit-quaternion rotation formula using
-        # w²+x²+y²+z² = 1 to rewrite 1-2(…) terms as sums of squared components.
-        #                ww  wx  wy  wz  xw  xx  xy  xz  yw  yx  yy  yz  zw  zx  zy  zz
-        self._q2r_map = torch.tensor(
-            [
-                [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1],
-                [0, 0, 0, -2, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                [0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0],
-                [0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                [1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1],
-                [0, -2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0],
-                [0, 0, -2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0],
-                [0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0],
-                [1, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1],
-            ],
-            dtype=torch.float32,
-        )
-
     # ------------------------------------------------------------------
     # axis-aligned helpers
     # ------------------------------------------------------------------
@@ -381,24 +362,40 @@ class RandomRotateMesh(MeshTransform):
     # uniform SO(3) helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
     def _quaternion_to_rotation_matrix(
-        self,
         q: Float[torch.Tensor, "4"],
     ) -> Float[torch.Tensor, "3 3"]:
-        """Convert a unit quaternion to a 3x3 rotation matrix.
+        r"""Unit quaternion :math:`(w, \vec v)` to rotation matrix via Rodrigues' formula.
+
+        :math:`R = (2w^2 - 1)\,I + 2\,\vec v\vec v^\top + 2w\,[\vec v]_\times`,
+        where :math:`[\vec v]_\times` is the skew-symmetric cross-product matrix of
+        :math:`\vec v`.
 
         Parameters
         ----------
         q : torch.Tensor
-            Unit quaternion ``(w, x, y, z)``, shape ``(4,)``.
+            Unit quaternion :math:`(w, x, y, z)`, shape :math:`(4,)`.
 
         Returns
         -------
         torch.Tensor
-            Rotation matrix, shape ``(3, 3)``.
+            Rotation matrix, shape :math:`(3, 3)`.
         """
-        # 2 dispatches: outer product + matrix-vector multiply.
-        return (self._q2r_map.to(q) @ torch.outer(q, q).reshape(16)).reshape(3, 3)
+        w, x, y, z = q.unbind()
+        zero = torch.zeros_like(w)
+        v_cross = torch.stack(
+            [
+                torch.stack([zero, -z, y]),
+                torch.stack([z, zero, -x]),
+                torch.stack([-y, x, zero]),
+            ]
+        )
+        return (
+            (2 * w * w - 1) * torch.eye(3, dtype=q.dtype, device=q.device)
+            + 2 * torch.outer(q[1:], q[1:])
+            + 2 * w * v_cross
+        )
 
     def _sample_uniform_rotation(self) -> Float[torch.Tensor, "3 3"]:
         """Sample a rotation matrix uniformly from SO(3).

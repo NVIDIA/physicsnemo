@@ -435,7 +435,10 @@ class TestRandomRotateMesh:
 
     def test_small_angle_gaussian(self):
         """Normal(0, 0.1) should produce small rotations near identity."""
-        aug = _seed(RandomRotateMesh(distribution=D.Normal(0.0, 0.1)), 0)
+        aug = _seed(
+            RandomRotateMesh(distribution=D.Normal(0.0, 0.1), mode="axis_aligned"),
+            0,
+        )
         mesh = _simple_mesh_3d()
         original_points = mesh.points.clone()
         displacements = []
@@ -453,6 +456,7 @@ class TestRandomRotateMesh:
             RandomRotateMesh(
                 axes=["z"],
                 distribution=D.Uniform(-math.pi, math.pi),
+                mode="axis_aligned",
             ),
             0,
         )
@@ -488,10 +492,16 @@ class TestRandomRotateMesh:
         """Same seed should produce identical rotations."""
         mesh = _simple_mesh_3d()
 
-        aug1 = _seed(RandomRotateMesh(distribution=D.Normal(0.0, 1.0)), 55)
+        aug1 = _seed(
+            RandomRotateMesh(distribution=D.Normal(0.0, 1.0), mode="axis_aligned"),
+            55,
+        )
         r1 = aug1(mesh)
 
-        aug2 = _seed(RandomRotateMesh(distribution=D.Normal(0.0, 1.0)), 55)
+        aug2 = _seed(
+            RandomRotateMesh(distribution=D.Normal(0.0, 1.0), mode="axis_aligned"),
+            55,
+        )
         r2 = aug2(mesh)
 
         assert torch.allclose(r1.points, r2.points)
@@ -500,7 +510,9 @@ class TestRandomRotateMesh:
         """apply_to_domain should use the same rotation for all meshes."""
         domain = _simple_domain_3d()
         aug = _seed(
-            RandomRotateMesh(distribution=D.Uniform(-math.pi, math.pi)),
+            RandomRotateMesh(
+                distribution=D.Uniform(-math.pi, math.pi), mode="axis_aligned"
+            ),
             0,
         )
         rotated = aug.apply_to_domain(domain)
@@ -527,7 +539,9 @@ class TestRandomRotateMesh:
 
     def test_extra_repr_axis_aligned(self):
         """extra_repr should mention axes and distribution."""
-        aug = RandomRotateMesh(axes=["z"], distribution=D.Normal(0.0, 0.1))
+        aug = RandomRotateMesh(
+            axes=["z"], distribution=D.Normal(0.0, 0.1), mode="axis_aligned"
+        )
         r = aug.extra_repr()
         assert "z" in r
         assert "Normal" in r
@@ -536,10 +550,16 @@ class TestRandomRotateMesh:
         """Same seed should produce identical results over multiple calls."""
         mesh = _simple_mesh_3d()
 
-        aug1 = _seed(RandomRotateMesh(distribution=D.Normal(0.0, 1.0)), 55)
+        aug1 = _seed(
+            RandomRotateMesh(distribution=D.Normal(0.0, 1.0), mode="axis_aligned"),
+            55,
+        )
         seq1 = [aug1(mesh).points.clone() for _ in range(10)]
 
-        aug2 = _seed(RandomRotateMesh(distribution=D.Normal(0.0, 1.0)), 55)
+        aug2 = _seed(
+            RandomRotateMesh(distribution=D.Normal(0.0, 1.0), mode="axis_aligned"),
+            55,
+        )
         seq2 = [aug2(mesh).points.clone() for _ in range(10)]
 
         for s1, s2 in zip(seq1, seq2):
