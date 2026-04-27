@@ -23,7 +23,7 @@ from pathlib import Path
 import torch
 import yaml
 from dataset import AirFRANSDataSet
-from utilities import disable_autotune_printing
+from physicsnemo.experimental.utils import disable_autotune_printing
 
 from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.utils.logging import PythonLogger
@@ -86,7 +86,14 @@ with torch.no_grad():
     pred_mesh = model(**sample.model_input_kwargs)
 
 # %%
-AirFRANSDataSet.postprocess(
+combined = AirFRANSDataSet.postprocess(
     pred_mesh=pred_mesh.to(device="cpu"),
-    true_mesh=sample.interior_mesh.to(device="cpu"),
+    sample=sample.to(device="cpu"),
 )
+AirFRANSDataSet.visualize_comparison(combined)
+
+for src in ("pred", "true"):
+    coeffs = combined.global_data[src].to_dict()  # ty: ignore[unresolved-attribute]
+    logger.info(
+        f"Force coefficients ({src}): Cd={coeffs['Cd']:.5f}, Cl={coeffs['Cl']:.5f}"
+    )
