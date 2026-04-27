@@ -49,6 +49,7 @@ Reference:
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
@@ -129,7 +130,9 @@ def compute_triangle_angles(
     return stable_angle_between_vectors(p1 - p0, p2 - p0)
 
 
-def compute_vertex_angles(mesh: "Mesh") -> torch.Tensor:
+def compute_vertex_angles(
+    mesh: "Mesh",
+) -> Float[torch.Tensor, "n_cells n_vertices_per_cell"]:
     """Compute generalized interior angles at each vertex of each cell.
 
     For an n-simplex, the "angle" at a vertex is computed using the unified
@@ -260,7 +263,7 @@ def compute_vertex_angles(mesh: "Mesh") -> torch.Tensor:
     return angles.to(input_dtype)
 
 
-def compute_vertex_angle_sums(mesh: "Mesh") -> torch.Tensor:
+def compute_vertex_angle_sums(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
     """Compute the sum of intra-cell interior angles at each vertex.
 
     For each vertex, sums the generalized interior angle contributed by every

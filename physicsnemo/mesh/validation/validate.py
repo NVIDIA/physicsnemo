@@ -24,6 +24,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Int
 
 from physicsnemo.mesh.boundaries import (
     categorize_facets_by_count,
@@ -286,7 +287,9 @@ def validate_mesh(
     return results
 
 
-def check_duplicate_cell_vertices(mesh: "Mesh") -> tuple[int, torch.Tensor]:
+def check_duplicate_cell_vertices(
+    mesh: "Mesh",
+) -> tuple[int, Int[torch.Tensor, " n_invalid"]]:
     """Check for cells with duplicate vertices (degenerate simplices).
 
     A valid n-simplex must have n+1 distinct vertices. Cells with duplicate

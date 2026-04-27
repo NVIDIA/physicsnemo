@@ -24,6 +24,7 @@ method to estimate the tangent space.
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -32,7 +33,10 @@ if TYPE_CHECKING:
 def estimate_tangent_space_pca(
     mesh: "Mesh",
     k_neighbors: int | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[
+    Float[torch.Tensor, "n_points n_manifold_dims n_spatial_dims"],
+    Float[torch.Tensor, "n_points codimension n_spatial_dims"],
+]:
     """Estimate tangent space at each point using PCA on local neighborhoods.
 
     For each point, gathers k-nearest neighbors and performs PCA on their
@@ -159,9 +163,9 @@ def estimate_tangent_space_pca(
 
 def project_gradient_to_tangent_space_pca(
     mesh: "Mesh",
-    gradients: torch.Tensor,
+    gradients: Float[torch.Tensor, "n_points n_spatial_dims ..."],
     k_neighbors: int | None = None,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "n_points n_spatial_dims ..."]:
     """Project gradients onto PCA-estimated tangent space.
 
     For higher codimension manifolds, uses PCA to estimate tangent space

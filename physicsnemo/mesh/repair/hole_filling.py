@@ -23,6 +23,7 @@ each loop independently with fan triangulation from a centroid vertex.
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Int
 
 from physicsnemo.mesh.neighbors._adjacency import build_adjacency_from_pairs
 
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
 
 
 def _trace_boundary_loops(
-    boundary_edges: torch.Tensor,
+    boundary_edges: Int[torch.Tensor, "n_boundary_edges 2"],
 ) -> list[torch.Tensor]:
     """Trace disjoint boundary loops from a set of boundary edges.
 

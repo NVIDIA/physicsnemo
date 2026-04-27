@@ -28,6 +28,7 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, NamedTuple
 
 import torch
+from jaxtyping import Float
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.neighbors._adjacency import Adjacency
@@ -59,7 +60,7 @@ class NeighborhoodBatch(NamedTuple):
 
 
 def iter_neighborhood_batches(
-    positions: torch.Tensor,
+    positions: Float[torch.Tensor, "n_entities n_spatial_dims"],
     adjacency: "Adjacency",
     *,
     min_neighbors: int = 0,

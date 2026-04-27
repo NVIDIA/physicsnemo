@@ -19,6 +19,7 @@
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Int
 
 from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
 from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
@@ -27,7 +28,9 @@ if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
 
-def extract_unique_edges(mesh: "Mesh") -> tuple[torch.Tensor, torch.Tensor]:
+def extract_unique_edges(
+    mesh: "Mesh",
+) -> tuple[Int[torch.Tensor, "n_edges 2"], Int[torch.Tensor, " n_candidates"]]:
     """Extract all unique edges from the mesh.
 
     For 1D meshes (cells are edges), the cells are deduplicated directly.

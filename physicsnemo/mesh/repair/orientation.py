@@ -23,6 +23,7 @@ in the same general direction.
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Bool, Float, Int
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -30,11 +31,11 @@ if TYPE_CHECKING:
 
 
 def _gather_unoriented_neighbors(
-    front: torch.Tensor,
+    front: Int[torch.Tensor, " n_front"],
     adjacency: "Adjacency",
-    is_oriented: torch.Tensor,
+    is_oriented: Bool[torch.Tensor, " n_cells"],
     max_neighbors: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[Int[torch.Tensor, " n_next"], Int[torch.Tensor, " n_next"]]:
     """Expand a BFS front by one level, returning only unoriented neighbors.
 
     Given the current front of face indices and a CSR adjacency structure,
@@ -104,10 +105,10 @@ def _gather_unoriented_neighbors(
 
 
 def _propagate_flip_from_parents(
-    children: torch.Tensor,
-    parents: torch.Tensor,
-    cell_normals: torch.Tensor,
-    should_flip: torch.Tensor,
+    children: Int[torch.Tensor, " n_next"],
+    parents: Int[torch.Tensor, " n_next"],
+    cell_normals: Float[torch.Tensor, "n_cells n_spatial_dims"],
+    should_flip: Bool[torch.Tensor, " n_cells"],
 ) -> None:
     """Determine flip flags for children based on normal agreement with parents.
 

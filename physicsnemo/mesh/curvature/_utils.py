@@ -25,7 +25,7 @@ and are re-exported here for backward compatibility.
 
 import math
 
-from physicsnemo.mesh.geometry._angles import (  # noqa: F401
+from physicsnemo.mesh.geometry._angles import (
     compute_triangle_angles,
     stable_angle_between_vectors,
 )

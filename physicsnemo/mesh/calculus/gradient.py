@@ -27,6 +27,7 @@ for manifolds embedded in higher-dimensional spaces.
 from typing import TYPE_CHECKING, Literal
 
 import torch
+from jaxtyping import Float
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -34,8 +35,8 @@ if TYPE_CHECKING:
 
 def compute_gradient_points_dec(
     mesh: "Mesh",
-    point_values: torch.Tensor,
-) -> torch.Tensor:
+    point_values: Float[torch.Tensor, "n_points ..."],
+) -> Float[torch.Tensor, "n_points n_spatial_dims ..."]:
     """Compute gradient at vertices using DEC: grad(f) = ♯(df).
 
     Steps:
@@ -69,10 +70,10 @@ def compute_gradient_points_dec(
 
 def compute_gradient_points_lsq(
     mesh: "Mesh",
-    point_values: torch.Tensor,
+    point_values: Float[torch.Tensor, "n_points ..."],
     weight_power: float = 2.0,
     intrinsic: bool = False,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "n_points n_spatial_dims ..."]:
     """Compute gradient at vertices using weighted least-squares.
 
     Parameters
@@ -110,9 +111,9 @@ def compute_gradient_points_lsq(
 
 def compute_gradient_cells_lsq(
     mesh: "Mesh",
-    cell_values: torch.Tensor,
+    cell_values: Float[torch.Tensor, "n_cells ..."],
     weight_power: float = 2.0,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "n_cells n_spatial_dims ..."]:
     """Compute gradient at cells using weighted least-squares.
 
     Parameters
@@ -137,9 +138,9 @@ def compute_gradient_cells_lsq(
 
 def project_to_tangent_space(
     mesh: "Mesh",
-    gradients: torch.Tensor,
+    gradients: Float[torch.Tensor, "n n_spatial_dims ..."],
     location: Literal["points", "cells"],
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "n n_spatial_dims ..."]:
     """Project gradients onto manifold tangent space for intrinsic derivatives.
 
     For manifolds where n_manifold_dims < n_spatial_dims (e.g., surfaces in 3D),
