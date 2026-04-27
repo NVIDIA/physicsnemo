@@ -83,7 +83,7 @@ def test_knn_cuml(device: str, k: int):
     _assert_knn_outputs(points, queries, indices, distances, k)
 
 
-# Validate that cuML kNN is correctly ordered on non-default CUDA streams.
+# Verify cuML kNN respects non-default CUDA stream synchronization.
 def test_knn_cuml_non_default_cuda_stream(device: str):
     if "cuda" not in device:
         pytest.skip("cuml backend is CUDA-only")
@@ -95,24 +95,33 @@ def test_knn_cuml_non_default_cuda_stream(device: str):
     caller_stream = torch.cuda.current_stream(cuda_device)
     knn_stream = torch.cuda.Stream(device=cuda_device)
 
+    # Baseline: run cuML on the default stream so we have a reference from
+    # the same backend (any drift in the stream run is a real signal).
+    points_baseline, queries_baseline = _build_problem(device, torch.float32)
+    indices_baseline, distances_baseline = knn(
+        points_baseline, queries_baseline, k=k, implementation="cuml"
+    )
+    torch.cuda.synchronize(cuda_device)
+
+    # Stall knn_stream BEFORE creating the inputs so the input kernels are
+    # still pending when cuML is enqueued. If cuML/cuPy do not honor DLPack
+    # stream synchronization, cuML will read uninitialized memory and produce
+    # visibly wrong output. ``torch.cuda._sleep`` only blocks the current
+    # stream, so the CPU continues to enqueue normally.
     with torch.cuda.stream(knn_stream):
+        torch.cuda._sleep(int(1e8))  # ~100 ms hazard window on knn_stream
         points, queries = _build_problem(device, torch.float32)
         indices, distances = knn(points, queries, k=k, implementation="cuml")
-
-        # Enqueue dependent PyTorch work to exercise the DLPack return path.
         stream_indices = indices.clone()
-        stream_distances = distances + torch.zeros_like(distances)
-        distance_checksum = stream_distances.square().sum()
-        index_checksum = stream_indices.to(torch.int64).sum()
+        stream_distances = distances.clone()
 
     caller_stream.wait_stream(knn_stream)
 
     _assert_knn_outputs(points, queries, stream_indices, stream_distances, k)
-    assert torch.isfinite(distance_checksum)
-    assert index_checksum >= 0
-
-    reference = knn(points, queries, k=k, implementation="torch")
-    KNN.compare_forward((stream_indices, stream_distances), reference)
+    KNN.compare_forward(
+        (stream_indices, stream_distances),
+        (indices_baseline, distances_baseline),
+    )
 
 
 # Validate the SciPy implementation when available on CPU.
