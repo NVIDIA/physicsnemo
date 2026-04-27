@@ -103,7 +103,7 @@ def from_pyvista(
 
     ### Determine native mesh dimension (used for auto-detection, data-loss
     ### warnings, and deciding whether cell_data can be passed through).
-    native_dim = _detect_native_dim(pyvista_mesh, pv)
+    native_dim = _detect_native_dim(pyvista_mesh)
 
     if manifold_dim == "auto":
         if isinstance(pyvista_mesh, pv.PointSet) and not isinstance(
@@ -536,7 +536,9 @@ def _build_dual_graph_edges(
     return torch.from_numpy(np.concatenate(chunks, axis=0))
 
 
-def _detect_native_dim(pyvista_mesh, pv) -> int:  # noqa: ANN001
+def _detect_native_dim(
+    pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet",
+) -> int:
     """Determine the native manifold dimension of a PyVista mesh.
 
     This is a lightweight check (no cell processing) used for data-loss
@@ -544,16 +546,18 @@ def _detect_native_dim(pyvista_mesh, pv) -> int:  # noqa: ANN001
 
     Parameters
     ----------
-    pyvista_mesh : PyVista mesh
+    pyvista_mesh : pyvista.PolyData or pyvista.UnstructuredGrid or pyvista.PointSet
         Input mesh.
-    pv : module
-        The lazily-imported pyvista module.
 
     Returns
     -------
     int
         0, 1, 2, or 3.
     """
+    import importlib
+
+    pv = importlib.import_module("pyvista")
+
     if pyvista_mesh.n_cells == 0:
         return 0
     if hasattr(pyvista_mesh, "celltypes"):
