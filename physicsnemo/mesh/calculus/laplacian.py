@@ -42,11 +42,11 @@ if TYPE_CHECKING:
 
 
 def _apply_cotan_laplacian_operator(
-    n_vertices: int,
+    n_points: int,
     edges: Int[torch.Tensor, "n_edges 2"],
     cotan_weights: Float[torch.Tensor, " n_edges"],
-    data: Float[torch.Tensor, "n_vertices ..."],
-) -> Float[torch.Tensor, "n_vertices ..."]:
+    data: Float[torch.Tensor, "n_points ..."],
+) -> Float[torch.Tensor, "n_points ..."]:
     """Apply cotangent Laplacian operator to data via scatter-add.
 
     Computes: (L @ data)[i] = Σ_{j adjacent to i} w_ij * (data[j] - data[i])
@@ -57,19 +57,19 @@ def _apply_cotan_laplacian_operator(
 
     Parameters
     ----------
-    n_vertices : int
-        Number of vertices
+    n_points : int
+        Number of points (vertices).
     edges : torch.Tensor
         Edge connectivity, shape (n_edges, 2)
     cotan_weights : torch.Tensor
         Cotangent weights for each edge, shape (n_edges,)
     data : torch.Tensor
-        Data at vertices, shape (n_vertices, *data_shape)
+        Data at points, shape (n_points, *data_shape)
 
     Returns
     -------
     torch.Tensor
-        Laplacian applied to data, shape (n_vertices, *data_shape)
+        Laplacian applied to data, shape (n_points, *data_shape)
 
     Examples
     --------
@@ -83,7 +83,7 @@ def _apply_cotan_laplacian_operator(
     ### Initialize output with same shape as data
     device = data.device
     if data.ndim == 1:
-        laplacian = torch.zeros(n_vertices, dtype=data.dtype, device=device)
+        laplacian = torch.zeros(n_points, dtype=data.dtype, device=device)
     else:
         laplacian = torch.zeros_like(data)
 
@@ -106,7 +106,7 @@ def _apply_cotan_laplacian_operator(
         contrib_v1 = weights_expanded * (data[v0_indices] - data[v1_indices])
 
         # Flatten for scatter_add
-        laplacian_flat = laplacian.reshape(n_vertices, -1)
+        laplacian_flat = laplacian.reshape(n_points, -1)
         contrib_v0_flat = contrib_v0.reshape(len(edges), -1)
         contrib_v1_flat = contrib_v1.reshape(len(edges), -1)
 
@@ -159,7 +159,7 @@ def compute_laplacian_points_dec(
 
     ### Apply cotangent Laplacian operator using shared utility
     laplacian = _apply_cotan_laplacian_operator(
-        n_vertices=mesh.n_points,
+        n_points=mesh.n_points,
         edges=sorted_edges,
         cotan_weights=cotan_weights,
         data=point_values,

@@ -95,7 +95,7 @@ def compute_laplacian_at_points(
     from physicsnemo.mesh.calculus.laplacian import _apply_cotan_laplacian_operator
 
     return _apply_cotan_laplacian_operator(
-        n_vertices=n_points,
+        n_points=n_points,
         edges=unique_edges,
         cotan_weights=cotangent_weights,
         data=mesh.points,
