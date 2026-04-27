@@ -59,10 +59,10 @@ def sharp(
     Where:
 
     - :math:`\langle \alpha, [v,\sigma^0] \rangle` is the 1-form value on the
-      oriented edge from *v* to :math:`\sigma^0`
-    - :math:`|{\star}v \cap \sigma^n|` is the portion of vertex *v*'s Voronoi
-      cell within cell :math:`\sigma^n`
-    - :math:`|{\star}v|` is the total dual 0-cell volume of vertex *v*
+      oriented edge from :math:`v` to :math:`\sigma^0`
+    - :math:`|{\star}v \cap \sigma^n|` is the portion of vertex
+      :math:`v`'s Voronoi cell within cell :math:`\sigma^n`
+    - :math:`|{\star}v|` is the total dual 0-cell volume of vertex :math:`v`
     - :math:`\nabla\varphi_{\sigma^0, \sigma^n}` is the gradient of the
       barycentric interpolation function for :math:`\sigma^0` in cell
       :math:`\sigma^n`

@@ -465,7 +465,7 @@ def compute_circumcenters(
         # This avoids numerical issues with underdetermined lstsq for edges in higher dimensions
         return vertices.mean(dim=1)
 
-    if n_vertices == 3 and n_spatial_dims == 3:
+    if n_verts_per_cell == 3 and n_spatial_dims == 3:
         return _compute_triangle_circumcenters_3d(vertices)
 
     ### Build linear system for circumcenter

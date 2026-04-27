@@ -50,7 +50,7 @@ def compute_cell_normals(
     ----------
     relative_vectors : torch.Tensor
         Edge vectors of shape ``(n_cells, n_manifold_dims, n_spatial_dims)``.
-        Row *i* is the vector from vertex 0 to vertex *i+1* of each simplex.
+        Row ``i`` is the vector from vertex 0 to vertex ``i+1`` of each simplex.
         Must satisfy ``n_manifold_dims == n_spatial_dims - 1``.
 
     Returns
@@ -108,10 +108,15 @@ def _normals_3d(
 def _normals_general(
     relative_vectors: Float[torch.Tensor, "n_cells n_manifold_dims n_spatial_dims"],
 ) -> Float[torch.Tensor, "n_cells n_spatial_dims"]:
-    """Normals in d >= 4 via signed minor determinants (Hodge star).
+    r"""Normals in :math:`d \ge 4` via signed minor determinants (Hodge star).
 
-    For (n-1) vectors in R^n (rows of E), the normal components are:
-        n_i = (-1)^(n-1+i) * det(E with column i removed)
+    For :math:`n - 1` vectors in :math:`\mathbb{R}^n` (rows of :math:`E`),
+    the normal components are:
+
+    .. math::
+        n_i = (-1)^{n - 1 + i} \det(E_{\setminus i})
+
+    where :math:`E_{\setminus i}` is :math:`E` with column ``i`` removed.
 
     Disables ``torch.autocast`` because ``torch.det`` dispatches to cuBLAS
     LU factorization which does not support reduced-precision dtypes.

@@ -525,7 +525,7 @@ class BVH:
         max_candidates_per_point: int | None = 32,
         aabb_tolerance: float = 1e-6,
     ) -> Adjacency:
-        """Find candidate cells that might contain each query point.
+        r"""Find candidate cells that might contain each query point.
 
         Uses batched iterative BVH traversal where all queries are processed
         simultaneously in a vectorized manner.
@@ -545,16 +545,17 @@ class BVH:
         Returns
         -------
         Adjacency
-            Adjacency object where candidates for query *i* are at
+            Adjacency object where candidates for query ``i`` are at
             ``result.indices[result.offsets[i]:result.offsets[i+1]]``.
             Use ``result.to_list()`` for a list-of-tensors representation.
 
         Notes
         -----
-        Complexity is O(M log N) where M = queries, N = cells. All AABB tests
-        and tree operations are fully vectorized across queries - there are no
-        Python-level loops over individual query points. The outer loop runs
-        once per tree level (O(log N) iterations).
+        Complexity is :math:`O(M \log N)` where :math:`M` = queries and
+        :math:`N` = cells. All AABB tests and tree operations are fully
+        vectorized across queries - there are no Python-level loops over
+        individual query points. The outer loop runs once per tree level
+        (:math:`O(\log N)` iterations).
         """
         if query_points.ndim != 2:
             raise ValueError(

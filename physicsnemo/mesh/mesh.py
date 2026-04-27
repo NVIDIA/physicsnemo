@@ -1696,7 +1696,7 @@ class Mesh:
 
         Each edge (pair of vertices connected in a cell) appears exactly once.
         The resulting Mesh has the same ``points`` array, with ``cells`` of
-        shape :math:`(E, 2)` where *E* is the number of unique edges.
+        shape :math:`(E, 2)` where :math:`E` is the number of unique edges.
 
         Cell data from the parent mesh is aggregated onto edges via the
         facet extraction pipeline (mean aggregation by default).
@@ -1894,7 +1894,7 @@ class Mesh:
         compute_fn : callable
             ``(mesh, **kwargs) -> Adjacency`` invoked on cache miss.
         **kwargs
-            Forwarded to *compute_fn*.
+            Forwarded to ``compute_fn``.
 
         Returns
         -------
@@ -2603,10 +2603,10 @@ class Mesh:
             Field to integrate:
 
             - ``str`` or ``tuple``: looked up in ``cell_data`` or
-              ``point_data`` according to *data_source*.
+              ``point_data`` according to ``data_source``.
             - ``torch.Tensor``: used directly.
         data_source : {"cells", "points"}
-            Whether *field* is cell-centered (P0) or vertex-centered (P1).
+            Whether ``field`` is cell-centered (P0) or vertex-centered (P1).
 
         Returns
         -------
@@ -2617,11 +2617,11 @@ class Mesh:
         Raises
         ------
         KeyError
-            If *field* is a string key not present in the specified
+            If ``field`` is a string key not present in the specified
             data source.
         ValueError
             If the mesh has no cells, or if a raw tensor has the wrong
-            leading dimension for the specified *data_source*.
+            leading dimension for the specified ``data_source``.
 
         Examples
         --------
@@ -2658,7 +2658,7 @@ class Mesh:
         field : str, tuple[str, ...], or torch.Tensor
             Vector field with last dimension equal to ``n_spatial_dims``.
         data_source : {"cells", "points"}
-            Whether *field* is cell-centered or vertex-centered.
+            Whether ``field`` is cell-centered or vertex-centered.
 
         Returns
         -------
@@ -2668,7 +2668,7 @@ class Mesh:
         Raises
         ------
         KeyError
-            If *field* is a string key not present in the specified
+            If ``field`` is a string key not present in the specified
             data source.
         ValueError
             If the mesh is not codimension-1, or if the field's last
@@ -2908,16 +2908,16 @@ class Mesh:
            within ``tolerance`` L2 distance using BVH spatial queries and
            merges them into a single representative.  Point data values
            are averaged across merged groups.  Cost: :math:`O(N \log N)`
-           where *N* is the number of points.  This is the most expensive
+           where :math:`N` is the number of points.  This is the most expensive
            step - on meshes with millions of points it can take tens of
            seconds.
         2. **Remove duplicate cells** (``remove_duplicate_cells``): Sorts
            vertex indices within each cell and removes cells that share
-           the same vertex set.  Cost: :math:`O(C \log C)` where *C* is
+           the same vertex set.  Cost: :math:`O(C \log C)` where :math:`C` is
            the number of cells.  Typically fast.
         3. **Remove unused points** (``remove_unused_points``): Drops
            points not referenced by any cell and compacts the point
-           array.  Cost: :math:`O(N + C \cdot V)` where *V* is vertices
+           array.  Cost: :math:`O(N + C \cdot V)` where :math:`V` is vertices
            per cell.  Very fast (linear scatter + mask).
 
         This is useful after importing meshes from external sources (VTK,

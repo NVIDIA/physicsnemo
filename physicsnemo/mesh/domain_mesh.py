@@ -368,7 +368,7 @@ class DomainMesh:
         Parameters
         ----------
         offset : torch.Tensor or Sequence[float]
-            Translation vector, shape :math:`(S,)` where *S* is
+            Translation vector, shape :math:`(S,)` where :math:`S` is
             ``n_spatial_dims``.
 
         Returns

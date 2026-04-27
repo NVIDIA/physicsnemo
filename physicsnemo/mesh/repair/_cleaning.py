@@ -50,7 +50,7 @@ def merge_duplicate_points(
 ]:
     """Merge duplicate points within tolerance.
 
-    Points whose L2 distance is below *tolerance* are merged into a single
+    Points whose L2 distance is below ``tolerance`` are merged into a single
     representative, and cell connectivity is updated accordingly.
 
     Parameters
