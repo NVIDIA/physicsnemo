@@ -25,7 +25,7 @@
 
 name: highlift_surface
 
-train_datadir: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/PhysicsNeMo-HighLiftAeroML/
+train_datadir: ${dataset_paths.highlift_aero_ml}
 
 # Freestream conditions — slug-inch-second-Rankine unit system
 metadata:

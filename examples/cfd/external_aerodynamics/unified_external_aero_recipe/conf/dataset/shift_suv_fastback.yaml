@@ -19,9 +19,9 @@
 
 name: shift_suv_fastback
 
-train_datadir: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/shift_suv_pnm_mesh/SUV/fastback/train/
-val_datadir: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/shift_suv_pnm_mesh/SUV/fastback/val/
-test_datadir: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/shift_suv_pnm_mesh/SUV/fastback/test/
+train_datadir: ${dataset_paths.shift_suv}/SUV/fastback/train/
+val_datadir: ${dataset_paths.shift_suv}/SUV/fastback/val/
+test_datadir: ${dataset_paths.shift_suv}/SUV/fastback/test/
 
 metadata:
   U_inf: [30.0, 0.0, 0.0]   # freestream velocity

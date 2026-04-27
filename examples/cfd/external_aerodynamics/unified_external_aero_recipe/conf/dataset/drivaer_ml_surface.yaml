@@ -22,7 +22,7 @@
 
 name: drivaer_ml_surface
 
-train_datadir: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/PhysicsNeMo-DrivaerML/
+train_datadir: ${dataset_paths.drivaer_ml}
 
 metadata:
   U_inf:  [30.0, 0.0, 0.0] # freestream velocity

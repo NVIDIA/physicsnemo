@@ -121,6 +121,5 @@ logging:
 data:
   highlift:
     config: conf/dataset/highlift_surface.yaml
-    manifest: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/PhysicsNeMo-HighLiftAeroML/manifest.json
     train_split: single_aoa_4_train
     val_split: single_aoa_4_val

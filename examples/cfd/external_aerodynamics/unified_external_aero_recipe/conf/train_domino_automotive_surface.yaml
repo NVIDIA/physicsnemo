@@ -103,6 +103,5 @@ logging:
 data:
   drivaer_ml:
     config: conf/dataset/drivaer_ml_surface.yaml
-    manifest: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/PhysicsNeMo-DrivaerML/manifest.json
     train_split: train
     val_split: val

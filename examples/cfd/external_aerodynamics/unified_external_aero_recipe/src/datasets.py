@@ -52,8 +52,17 @@ import sdf  # noqa: F401  (registers ComputeSDFFromBoundary, DropBoundary)
 
 
 def load_dataset_config(yaml_path: str | Path) -> DictConfig:
-    """Load a dataset YAML config and return an OmegaConf DictConfig."""
-    return OmegaConf.load(yaml_path)
+    """Load a dataset YAML config and return an OmegaConf DictConfig.
+
+    The returned config is merged with ``dataset_paths.yaml`` (looked up in
+    the same directory as *yaml_path*, then one level up) so that dataset
+    YAMLs can use ``${dataset_paths.<key>}`` interpolation for root paths.
+    """
+    yaml_path = Path(yaml_path)
+    paths_file = yaml_path.parent / "dataset_paths.yaml"
+    paths = OmegaConf.load(paths_file) if paths_file.exists() else OmegaConf.create()
+    cfg = OmegaConf.load(yaml_path)
+    return OmegaConf.merge({"dataset_paths": paths}, cfg)
 
 
 _PATH_KEYS = {"stats_file"}
@@ -417,8 +426,12 @@ class ManifestSampler(Sampler[int]):
             indices = [indices[i] for i in perm]
 
         if self._world_size > 1:
-            # Pad to make evenly divisible
-            if not self._drop_last:
+            if self._drop_last:
+                # Truncate so every rank gets the same count
+                n_keep = (len(indices) // self._world_size) * self._world_size
+                indices = indices[:n_keep]
+            else:
+                # Pad to make evenly divisible
                 padding = math.ceil(
                     len(indices) / self._world_size
                 ) * self._world_size - len(indices)
