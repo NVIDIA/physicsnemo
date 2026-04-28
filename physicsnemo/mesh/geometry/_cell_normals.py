@@ -48,17 +48,15 @@ def compute_cell_normals(
 
     Parameters
     ----------
-    relative_vectors : torch.Tensor
-        Edge vectors of shape ``(n_cells, n_manifold_dims, n_spatial_dims)``.
-        Row ``i`` is the vector from vertex 0 to vertex ``i+1`` of each simplex.
-        Must satisfy ``n_manifold_dims == n_spatial_dims - 1``.
+    relative_vectors : Float[torch.Tensor, "n_cells n_manifold_dims n_spatial_dims"]
+        Edge vectors. Row ``i`` is the vector from vertex 0 to vertex ``i+1``
+        of each simplex. Must satisfy ``n_manifold_dims == n_spatial_dims - 1``.
 
     Returns
     -------
-    torch.Tensor
-        Tensor of shape ``(n_cells, n_spatial_dims)`` containing unit normal
-        vectors. For degenerate cells (zero-area), the normal is a zero
-        vector (from ``F.normalize``'s default behavior).
+    Float[torch.Tensor, "n_cells n_spatial_dims"]
+        Unit normal vectors. For degenerate cells (zero-area), the normal is
+        a zero vector (from ``F.normalize``'s default behavior).
 
     Examples
     --------

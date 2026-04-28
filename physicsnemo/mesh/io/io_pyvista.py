@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import warnings
 from typing import TYPE_CHECKING, Literal
 
@@ -26,6 +27,13 @@ from physicsnemo.mesh.mesh import Mesh
 
 if TYPE_CHECKING:
     import pyvista
+
+# Dynamic import for optional pyvista dependency (invisible to static
+# analysis). The same pattern is used in
+# :mod:`physicsnemo.mesh.visualization._pyvista_impl`. The whole purpose of
+# this module is pyvista interop, so we require it eagerly; users without
+# pyvista will get a helpful ImportError when they import this module.
+pv = importlib.import_module("pyvista")
 
 
 def _vtk_data_to_tensor_dict(data) -> dict[str, torch.Tensor]:  # noqa: ANN001
@@ -99,10 +107,6 @@ def from_pyvista(
     ImportError
         If pyvista is not installed.
     """
-    import importlib
-
-    pv = importlib.import_module("pyvista")
-
     ### Validate point_source
     if point_source not in {"vertices", "cell_centroids"}:
         raise ValueError(
@@ -336,10 +340,6 @@ def to_pyvista(
     ImportError
         If pyvista is not installed.
     """
-    import importlib
-
-    pv = importlib.import_module("pyvista")
-
     ### Convert points to numpy and pad to 3D if needed (PyVista requires 3D points)
     points_np = mesh.points.float().cpu().numpy()
 
@@ -570,10 +570,6 @@ def _detect_native_dim(
     int
         0, 1, 2, or 3.
     """
-    import importlib
-
-    pv = importlib.import_module("pyvista")
-
     if pyvista_mesh.n_cells == 0:
         return 0
     if hasattr(pyvista_mesh, "celltypes"):

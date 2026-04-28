@@ -995,7 +995,7 @@ class DomainMesh:
         boundary_kwargs: dict[str, Any] | None = None,
         ax: Any = None,
         backend_options: dict[str, Any] | None = None,
-    ) -> Any:
+    ) -> "matplotlib.axes.Axes | pyvista.Plotter":
         r"""Draw the domain: interior with optional scalar coloring, boundaries overlaid.
 
         Renders the interior as the primary visual layer, then overlays every

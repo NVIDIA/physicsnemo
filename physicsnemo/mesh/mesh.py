@@ -915,40 +915,48 @@ class Mesh:
 
     @property
     def gaussian_curvature_vertices(self) -> torch.Tensor:
-        """Compute intrinsic Gaussian curvature at mesh vertices.
+        r"""Compute intrinsic Gaussian curvature at mesh vertices.
 
-        Uses the angle defect method from discrete differential geometry:
-            K = (full_angle - Σ angles) / voronoi_area
+        Uses the angle-defect method from discrete differential geometry,
 
-        This is an intrinsic measure of curvature (Theorema Egregium) that works
-        for any codimension, as it depends only on distances within the manifold.
+        .. math::
+
+            K = \frac{\text{full\_angle} - \sum \text{angles}}{\text{voronoi\_area}}.
+
+        This is an intrinsic measure of curvature (Theorema Egregium) that
+        works for any codimension, as it depends only on distances within the
+        manifold.
 
         Signed curvature:
 
-        - Positive: Elliptic/convex (sphere-like)
-        - Zero: Flat/parabolic (plane-like)
-        - Negative: Hyperbolic/saddle (saddle-like)
+        - Positive: elliptic/convex (sphere-like).
+        - Zero: flat/parabolic (plane-like).
+        - Negative: hyperbolic/saddle (saddle-like).
 
-        The result is cached in ``_cache["point", "gaussian_curvature"]`` for efficiency.
+        The result is cached in ``_cache["point", "gaussian_curvature"]`` for
+        efficiency.
 
         Returns
         -------
         torch.Tensor
-            Tensor of shape (n_points,) containing signed Gaussian curvature.
-            Isolated vertices have NaN curvature.
+            Signed Gaussian curvature, shape ``(n_points,)``.
+            Isolated vertices have ``NaN`` curvature.
 
         Notes
         -----
-        Satisfies discrete Gauss-Bonnet theorem:
-            Σ_vertices (K_i * A_i) = 2π * χ(M)
+        Satisfies the discrete Gauss-Bonnet theorem,
+
+        .. math::
+
+            \sum_\text{vertices} K_i \, A_i = 2 \pi \, \chi(M).
 
         Examples
         --------
         >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-        >>> # Sphere of radius r has K = 1/r²
+        >>> # Sphere of radius r has K = 1/r^2
         >>> sphere = sphere_icosahedral.load(radius=2.0, subdivisions=3)
         >>> K = sphere.gaussian_curvature_vertices
-        >>> # K.mean() ≈ 0.25 (= 1/(2.0)²)
+        >>> # K.mean() approx 0.25 (= 1 / 2.0^2)
         """
         cached = self._cache.get(("point", "gaussian_curvature"), None)
         if cached is None:
@@ -2209,7 +2217,7 @@ class Mesh:
         show_edges: bool = True,
         ax=None,
         backend_options: dict[str, Any] | None = None,
-    ):
+    ) -> "matplotlib.axes.Axes | pyvista.Plotter":
         """Draw the mesh using matplotlib or PyVista backend.
 
         Provides interactive 3D or 2D visualization with support for scalar data

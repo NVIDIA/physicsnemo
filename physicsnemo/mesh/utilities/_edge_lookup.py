@@ -30,33 +30,33 @@ def find_edges_in_reference(
     query_edges: Int[torch.Tensor, "n_queries 2"],
     index_bound: int | None = None,
 ) -> tuple[Int[torch.Tensor, " n_queries"], Bool[torch.Tensor, " n_queries"]]:
-    """Find indices of query edges within a reference edge set.
+    r"""Find indices of query edges within a reference edge set.
 
-    Uses hash-based lookup with O(n log n) complexity for sorting
-    and O(m log n) for queries, where n = len(reference_edges)
-    and m = len(query_edges).
+    Uses hash-based lookup with :math:`O(n \log n)` complexity for sorting and
+    :math:`O(m \log n)` for queries, where ``n = len(reference_edges)`` and
+    ``m = len(query_edges)``.
 
-    Edge order within each edge is ignored (edges are canonicalized
-    to ascending vertex-index order internally).
+    Edge order within each edge is ignored (edges are canonicalized to
+    ascending vertex-index order internally).
 
     Parameters
     ----------
-    reference_edges : torch.Tensor
-        Reference edge set, shape (n_ref, 2). Each row is [v0, v1].
-    query_edges : torch.Tensor
-        Query edges to find, shape (n_queries, 2). Each row is [v0, v1].
+    reference_edges : Int[torch.Tensor, "n_ref 2"]
+        Reference edge set. Each row is ``[v0, v1]``.
+    query_edges : Int[torch.Tensor, "n_queries 2"]
+        Query edges to find. Each row is ``[v0, v1]``.
     index_bound : int, optional
         Strict upper bound for vertex indices in both edge tensors. Passing
         this avoids a GPU synchronization when hashing the edges.
 
     Returns
     -------
-    indices : torch.Tensor
-        Shape (n_queries,). For each query edge, the index in reference_edges
-        where it was found. For unmatched edges, the value is undefined
-        (use the matches mask to filter).
-    matches : torch.Tensor
-        Shape (n_queries,) bool. True if query edge was found in reference_edges.
+    indices : Int[torch.Tensor, " n_queries"]
+        For each query edge, the index in ``reference_edges`` where it was
+        found. For unmatched edges, the value is undefined (use the
+        ``matches`` mask to filter).
+    matches : Bool[torch.Tensor, " n_queries"]
+        ``True`` if query edge was found in ``reference_edges``.
 
     Examples
     --------

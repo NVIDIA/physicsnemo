@@ -31,12 +31,12 @@ def load(
     phi_resolution: int = 30,
     device: torch.device | str = "cpu",
 ) -> Mesh[2, 3]:
-    """Create a UV sphere using latitude/longitude parameterization.
+    r"""Create a UV sphere using latitude/longitude parameterization.
 
     The sphere is generated using spherical coordinates:
 
-    - phi (latitude): 0 at north pole, π at south pole
-    - theta (longitude): 0 to 2π around the equator
+    - :math:`\varphi` (latitude): 0 at north pole, :math:`\pi` at south pole.
+    - :math:`\theta` (longitude): 0 to :math:`2\pi` around the equator.
 
     Poles are handled with triangle fans; the body uses quad strips.
 

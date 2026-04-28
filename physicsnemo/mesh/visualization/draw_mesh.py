@@ -23,6 +23,9 @@ import torch
 from physicsnemo.core.version_check import check_version_spec
 
 if TYPE_CHECKING:
+    import matplotlib.axes
+    import pyvista
+
     from physicsnemo.mesh.mesh import Mesh
 
 # Check availability at module load (add new backends here)
@@ -46,7 +49,7 @@ def draw_mesh(
     show_edges: bool = True,
     ax: Any = None,
     backend_options: dict[str, Any] | None = None,
-) -> Any:
+) -> "matplotlib.axes.Axes | pyvista.Plotter":
     """Draw a mesh using matplotlib or PyVista backend.
 
     This is the main visualization function for Mesh objects. It automatically

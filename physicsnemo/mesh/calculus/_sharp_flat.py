@@ -14,11 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Sharp and flat operators for converting between forms and vector fields.
+r"""Sharp and flat operators for converting between forms and vector fields.
 
 These operators relate 1-forms (edge-based) to vector fields (vertex-based):
-- Flat (♭): Converts vector fields to 1-forms
-- Sharp (♯): Converts 1-forms to vector fields
+
+- Flat (:math:`\flat`): converts vector fields to 1-forms.
+- Sharp (:math:`\sharp`): converts 1-forms to vector fields.
 
 These are metric-dependent operators crucial for DEC gradient and divergence.
 
@@ -46,26 +47,28 @@ def sharp(
 
     Maps :math:`\sharp: \Omega^1(K) \to \mathfrak{X}(K)`
 
-    Converts edge-based 1-form values to vectors at vertices:
+    Converts edge-based 1-form values to vectors at vertices,
 
     .. math::
 
-        \alpha^\sharp(v) = \sum_{\text{edges } [v,\sigma^0]}
-            \langle \alpha, [v,\sigma^0] \rangle
-            \sum_{\sigma^n \supset \text{edge}}
+        \alpha^\sharp(v) = \sum_{[v, \sigma^0]}
+            \langle \alpha, [v, \sigma^0] \rangle
+            \sum_{\sigma^n \supset [v, \sigma^0]}
             \frac{|{\star}v \cap \sigma^n|}{|{\star}v|}
-            \,\nabla\varphi_{\sigma^0, \sigma^n}
+            \, \nabla \varphi_{\sigma^0,\, \sigma^n},
 
-    Where:
+    where the outer sum is over edges :math:`[v, \sigma^0]` incident to
+    :math:`v`, the inner sum is over cells :math:`\sigma^n` containing each
+    edge, and:
 
-    - :math:`\langle \alpha, [v,\sigma^0] \rangle` is the 1-form value on the
-      oriented edge from :math:`v` to :math:`\sigma^0`
-    - :math:`|{\star}v \cap \sigma^n|` is the portion of vertex
-      :math:`v`'s Voronoi cell within cell :math:`\sigma^n`
-    - :math:`|{\star}v|` is the total dual 0-cell volume of vertex :math:`v`
-    - :math:`\nabla\varphi_{\sigma^0, \sigma^n}` is the gradient of the
+    - :math:`\langle \alpha, [v, \sigma^0] \rangle` is the 1-form value on the
+      oriented edge from :math:`v` to :math:`\sigma^0`,
+    - :math:`|{\star}v \cap \sigma^n|` is the portion of vertex :math:`v`'s
+      Voronoi cell within cell :math:`\sigma^n`,
+    - :math:`|{\star}v|` is the total dual 0-cell volume of vertex :math:`v`,
+    - :math:`\nabla \varphi_{\sigma^0,\, \sigma^n}` is the gradient of the
       barycentric interpolation function for :math:`\sigma^0` in cell
-      :math:`\sigma^n`
+      :math:`\sigma^n`.
 
     The weights :math:`|{\star}v \cap \sigma^n| / |{\star}v|` sum to 1.0 for
     each vertex, guaranteeing exact reproduction of constant gradients.
@@ -247,15 +250,21 @@ def flat(
     vector_field: Float[torch.Tensor, "n_points n_spatial_dims ..."],
     edges: Int[torch.Tensor, "n_edges 2"],
 ) -> Float[torch.Tensor, "n_edges ..."]:
-    """Apply PDP-flat operator to convert primal vector field to primal 1-form (rigorous DEC).
+    r"""Apply PDP-flat operator to convert primal vector field to primal 1-form (rigorous DEC).
 
-    Maps ♭: 𝔛(K) → Ω¹(K)
+    Maps :math:`\flat : \mathfrak{X}(K) \to \Omega^1(K)`.
 
-    Converts vectors at vertices (primal vector field) to edge-based 1-form values.
-    Uses the PDP-flat formula from Hirani (2003), *Discrete Exterior Calculus*
-    (PhD thesis), §5.6:
+    Converts vectors at vertices (primal vector field) to edge-based 1-form
+    values. For an oriented edge :math:`e = [v_0, v_1]` with direction
+    vector :math:`\vec{e} = v_1 - v_0`, the PDP-flat formula from Hirani
+    (2003), *Discrete Exterior Calculus* (PhD thesis), §5.6, gives
 
-        ⟨X♭, edge⟩ = X(v0) · edge⃗/2 + X(v1) · edge⃗/2 = (X(v0) + X(v1))/2 · edge⃗
+    .. math::
+
+        \langle X^\flat, e \rangle
+            = \tfrac{1}{2} X(v_0) \cdot \vec{e}
+              + \tfrac{1}{2} X(v_1) \cdot \vec{e}
+            = \tfrac{1}{2} \bigl(X(v_0) + X(v_1)\bigr) \cdot \vec{e}.
 
     This is the simplest flat operator for primal fields and is exact for
     linearly interpolated vector fields along edges.
@@ -263,17 +272,16 @@ def flat(
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh
-    vector_field : torch.Tensor
-        Vectors at vertices, shape (n_points, n_spatial_dims) or
-        (n_points, n_spatial_dims, ...) for tensor fields
-    edges : torch.Tensor
-        Edge connectivity, shape (n_edges, 2)
+        Simplicial mesh.
+    vector_field : Float[torch.Tensor, "n_points n_spatial_dims ..."]
+        Vectors at vertices.
+    edges : Int[torch.Tensor, "n_edges 2"]
+        Edge connectivity.
 
     Returns
     -------
-    torch.Tensor
-        1-form values on edges, shape (n_edges,) or (n_edges, ...)
+    Float[torch.Tensor, "n_edges ..."]
+        1-form values on edges.
 
     References
     ----------
@@ -282,21 +290,20 @@ def flat(
 
     Notes
     -----
-    Note on flat operator variants:
-        Hirani defines 8 different flat operators depending on:
+    Hirani defines 8 different flat operators depending on:
 
-        - Source: primal vs dual vector field
-        - Interpolation: constant in cells vs barycentric
-        - Destination: primal vs dual 1-form
+    - Source: primal vs dual vector field.
+    - Interpolation: constant in cells vs barycentric.
+    - Destination: primal vs dual 1-form.
 
-        This implements PDP-flat (Primal-Dual-Primal): primal vectors, constant
-        in Voronoi regions, to primal 1-form. This is compatible with PP-sharp.
+    This implements PDP-flat (primal-dual-primal): primal vectors, constant
+    in Voronoi regions, to primal 1-form. This is compatible with PP-sharp.
 
-    Algorithm:
-        For edge [v0, v1]:
-        1. Average vectors: (X(v0) + X(v1))/2
-        2. Project onto edge direction
-        3. Multiply by edge length for proper units
+    Algorithm: for edge :math:`[v_0, v_1]`,
+
+    1. average vectors :math:`\bigl(X(v_0) + X(v_1)\bigr) / 2`,
+    2. project onto edge direction,
+    3. multiply by edge length for proper units.
     """
     ### Get edge vectors
     edge_vectors = (
