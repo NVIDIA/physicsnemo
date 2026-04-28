@@ -58,8 +58,7 @@ def compute_gradient_points_dec(
     -------
     Float[torch.Tensor, "n_points n_spatial_dims ..."]
         Gradient vectors at vertices, shape
-        ``(n_points, n_spatial_dims)`` for scalars or
-        ``(n_points, n_spatial_dims, ...)`` for tensor fields.
+        ``(n_points, n_spatial_dims, ...)``.
     """
     from physicsnemo.mesh.calculus._exterior_derivative import exterior_derivative_0
     from physicsnemo.mesh.calculus._sharp_flat import sharp
@@ -96,8 +95,7 @@ def compute_gradient_points_lsq(
     -------
     Float[torch.Tensor, "n_points n_spatial_dims ..."]
         Gradient vectors at vertices, shape
-        ``(n_points, n_spatial_dims)`` for scalars or
-        ``(n_points, n_spatial_dims, ...)`` for tensor fields.
+        ``(n_points, n_spatial_dims, ...)``.
     """
     if intrinsic and mesh.codimension > 0:
         # Use intrinsic LSQ (solves in tangent space)
@@ -135,8 +133,7 @@ def compute_gradient_cells_lsq(
     -------
     Float[torch.Tensor, "n_cells n_spatial_dims ..."]
         Gradient vectors at cells, shape
-        ``(n_cells, n_spatial_dims)`` for scalars or
-        ``(n_cells, n_spatial_dims, ...)`` for tensor fields.
+        ``(n_cells, n_spatial_dims, ...)``.
     """
     from physicsnemo.mesh.calculus._lsq_reconstruction import compute_cell_gradient_lsq
 

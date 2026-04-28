@@ -84,8 +84,7 @@ def compute_point_gradient_lsq(
     Returns
     -------
     Float[torch.Tensor, "n_points n_spatial_dims ..."]
-        Gradients at vertices, shape ``(n_points, n_spatial_dims)`` for
-        scalars or ``(n_points, n_spatial_dims, ...)`` for tensor fields.
+        Gradients at vertices, shape ``(n_points, n_spatial_dims, ...)``.
 
     Notes
     -----
@@ -149,8 +148,7 @@ def compute_cell_gradient_lsq(
     Returns
     -------
     Float[torch.Tensor, "n_cells n_spatial_dims ..."]
-        Gradients at cells, shape ``(n_cells, n_spatial_dims)`` for scalars
-        or ``(n_cells, n_spatial_dims, ...)`` for tensor fields.
+        Gradients at cells, shape ``(n_cells, n_spatial_dims, ...)``.
 
     Notes
     -----

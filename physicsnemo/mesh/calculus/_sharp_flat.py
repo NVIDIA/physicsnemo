@@ -85,8 +85,7 @@ def sharp(
     Returns
     -------
     torch.Tensor
-        Vector field at vertices, shape ``(n_points, n_spatial_dims)`` or
-        ``(n_points, n_spatial_dims, ...)`` for tensor-valued 1-forms.
+        Vector field at vertices, shape ``(n_points, n_spatial_dims, ...)``.
 
     References
     ----------

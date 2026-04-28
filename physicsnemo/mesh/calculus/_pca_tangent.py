@@ -181,8 +181,7 @@ def project_gradient_to_tangent_space_pca(
     mesh : Mesh
         Input mesh.
     gradients : Float[torch.Tensor, "n_points n_spatial_dims ..."]
-        Extrinsic gradients, shape ``(n_points, n_spatial_dims)`` or
-        ``(n_points, n_spatial_dims, ...)``.
+        Extrinsic gradients, shape ``(n_points, n_spatial_dims, ...)``.
     k_neighbors : int or None, optional
         Number of neighbors for PCA estimation.
 
