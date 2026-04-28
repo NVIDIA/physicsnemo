@@ -117,6 +117,11 @@ jobs:
         restore-keys: |
           ${{ env.TESTMON_CACHE_KEY_PREFIX }}-
 
+    - name: Download CI test data
+      uses: ./.github/actions/download-ci-data
+      with:
+        hf-token: ${{ secrets.HF_CI_DATA_TOKEN }}
+
     - name: Run core tests (with testmon)
       run: |
         uv run --no-sync python -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*"
@@ -163,6 +168,11 @@ jobs:
         key: ${{ env.COVERAGE_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
         restore-keys: |
           ${{ env.COVERAGE_CACHE_KEY_PREFIX }}-
+
+    - name: Download CI test data
+      uses: ./.github/actions/download-ci-data
+      with:
+        hf-token: ${{ secrets.HF_CI_DATA_TOKEN }}
 
     - name: Run core tests for coverage report (testmon-selected)
       run: |

@@ -10,8 +10,8 @@ editable-install:
 get-data:
 	test -n "$(TEST_DATA_DIR)" || { echo "Error: TEST_DATA_DIR should be set"; exit 1; }
 	mkdir -p $(TEST_DATA_DIR) && \
-	rm -rf $(TEST_DATA_DIR)/modulus-data && \
-	git clone https://gitlab-master.nvidia.com/modulus/modulus-data.git $(TEST_DATA_DIR)/modulus-data && \
+	rm -rf $(TEST_DATA_DIR)/physicsnemo-data && \
+	git clone https://gitlab-master.nvidia.com/modulus/modulus-data.git $(TEST_DATA_DIR)/physicsnemo-data && \
 	echo "Test data has been saved in ${TEST_DATA_DIR}"
 
 setup-ci:
