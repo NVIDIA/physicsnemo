@@ -219,16 +219,13 @@ def ringless_ball_query(
 
     for i_dim, s in queries._spec.sharding_shapes().items():
         indices_placement[i_dim] = tuple(
-            torch.Size([*_s[:q_shard_dim], _s[q_shard_dim], max_points])
-            for _s in s
+            torch.Size([*_s[:q_shard_dim], _s[q_shard_dim], max_points]) for _s in s
         )
         num_neighbors_placement[i_dim] = tuple(
-            torch.Size([*_s[:q_shard_dim], _s[q_shard_dim]])
-            for _s in s
+            torch.Size([*_s[:q_shard_dim], _s[q_shard_dim]]) for _s in s
         )
         output_points_placement[i_dim] = tuple(
-            torch.Size([*_s[:q_shard_dim], _s[q_shard_dim], max_points, 3])
-            for _s in s
+            torch.Size([*_s[:q_shard_dim], _s[q_shard_dim], max_points, 3]) for _s in s
         )
 
     indices = ShardTensor.from_local(
