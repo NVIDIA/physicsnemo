@@ -28,6 +28,7 @@ sequential approach, enabling scalability to hundreds of millions of cells.
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Bool, Float, Int
 from tensordict import tensorclass
 
 from physicsnemo.mesh.neighbors._adjacency import Adjacency, build_adjacency_from_pairs
@@ -42,7 +43,9 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-def _compute_morton_codes(centroids: torch.Tensor) -> torch.Tensor:
+def _compute_morton_codes(
+    centroids: Float[torch.Tensor, "n_centroids n_dims"],
+) -> Int[torch.Tensor, " n_centroids"]:
     """Compute morton codes (Z-order curve) for a set of points.
 
     Morton codes interleave the bits of quantized coordinates to produce a
@@ -86,8 +89,16 @@ def _compute_morton_codes(centroids: torch.Tensor) -> torch.Tensor:
     extent = (cmax - cmin).clamp(min=1e-30)  # avoid division by zero
     coords = ((centroids - cmin) / extent * max_val).long().clamp(0, max_val)  # (N, D)
 
-    ### Bit-interleave all dimensions: bit b of dim d -> position b*D + d
-    # Vectorized across D at each bit level; n_bits iterations total.
+    ### Bit-interleave all dimensions: bit b of dim d -> position b*D + d.
+    if device.type == "cuda":
+        # CUDA is launch-bound in the bit loop below. Materializing all bits at
+        # once trades a modest temporary for far fewer kernel launches.
+        bit_offsets = torch.arange(n_bits, dtype=torch.int64, device=device)
+        dim_offsets = torch.arange(D, dtype=torch.int64, device=device)
+        bits = (coords.unsqueeze(-1) >> bit_offsets) & 1  # (N, D, n_bits)
+        shifts = bit_offsets.view(1, 1, -1) * D + dim_offsets.view(1, -1, 1)
+        return (bits << shifts).reshape(N, -1).sum(dim=1)
+
     code = torch.zeros(N, dtype=torch.int64, device=device)
     dim_offsets = torch.arange(D, dtype=torch.int64, device=device)  # (D,)
     for b in range(n_bits):
@@ -102,12 +113,12 @@ def _compute_morton_codes(centroids: torch.Tensor) -> torch.Tensor:
 
 
 def _expand_leaf_hits(
-    leaf_query_indices: torch.Tensor,
-    leaf_node_indices: torch.Tensor,
-    leaf_start: torch.Tensor,
-    leaf_count: torch.Tensor,
-    sorted_cell_order: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    leaf_query_indices: Int[torch.Tensor, " n_leaf_hits"],
+    leaf_node_indices: Int[torch.Tensor, " n_leaf_hits"],
+    leaf_start: Int[torch.Tensor, " n_leaves"],
+    leaf_count: Int[torch.Tensor, " n_leaves"],
+    sorted_cell_order: Int[torch.Tensor, " n_cells"],
+) -> tuple[Int[torch.Tensor, " n_expanded"], Int[torch.Tensor, " n_expanded"]]:
     """Expand (query, leaf_node) hits into (query, cell) candidate pairs.
 
     Each leaf node may contain multiple cells. This performs a "ragged expand"
@@ -156,11 +167,13 @@ def _expand_leaf_hits(
 
 
 def _compute_leaf_aabbs(
-    leaf_seg_starts: torch.Tensor,
-    leaf_seg_sizes: torch.Tensor,
-    sorted_aabb_min: torch.Tensor,
-    sorted_aabb_max: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    leaf_seg_starts: Int[torch.Tensor, " n_leaves"],
+    leaf_seg_sizes: Int[torch.Tensor, " n_leaves"],
+    sorted_aabb_min: Float[torch.Tensor, "n_sorted n_dims"],
+    sorted_aabb_max: Float[torch.Tensor, "n_sorted n_dims"],
+) -> tuple[
+    Float[torch.Tensor, "n_leaves n_dims"], Float[torch.Tensor, "n_leaves n_dims"]
+]:
     """Compute AABBs for a batch of leaf segments via segmented reduction.
 
     Each leaf segment is a contiguous range ``[start, start + size)`` in the
@@ -331,11 +344,11 @@ class BVH:
                 sorted_cell_order=empty_long,
             )
 
-        ### Compute per-cell bounding boxes and centroids
+        ### Compute per-cell bounding boxes; reuse cached centroids
         cell_vertices = mesh.points[mesh.cells]  # (n_cells, n_verts, D)
         cell_aabb_min = cell_vertices.min(dim=1).values  # (n_cells, D)
         cell_aabb_max = cell_vertices.max(dim=1).values  # (n_cells, D)
-        cell_centroids = cell_vertices.mean(dim=1)  # (n_cells, D)
+        cell_centroids = mesh.cell_centroids  # (n_cells, D)
 
         ### Sort cells by morton code for spatial coherence
         morton_codes = _compute_morton_codes(cell_centroids)
@@ -461,10 +474,10 @@ class BVH:
 
     def point_in_aabb(
         self,
-        points: torch.Tensor,
-        aabb_min: torch.Tensor,
-        aabb_max: torch.Tensor,
-    ) -> torch.Tensor:
+        points: Float[torch.Tensor, "n_points n_dims"],
+        aabb_min: Float[torch.Tensor, "n_boxes n_dims"],
+        aabb_max: Float[torch.Tensor, "n_boxes n_dims"],
+    ) -> Bool[torch.Tensor, "n_points n_boxes"]:
         """Test if points are inside axis-aligned bounding boxes.
 
         Parameters
@@ -505,7 +518,7 @@ class BVH:
 
     def find_candidate_cells(
         self,
-        query_points: torch.Tensor,
+        query_points: Float[torch.Tensor, "n_queries n_dims"],
         max_candidates_per_point: int | None = 32,
         aabb_tolerance: float = 1e-6,
     ) -> Adjacency:
@@ -565,6 +578,7 @@ class BVH:
                 source_indices=torch.empty(0, dtype=torch.long, device=dev),
                 target_indices=torch.empty(0, dtype=torch.long, device=dev),
                 n_sources=n_queries,
+                n_targets=len(self.sorted_cell_order),
             )
 
         ### Initialize work queue: all queries start at root (node 0)
@@ -614,9 +628,7 @@ class BVH:
                     all_query_indices_list.append(expanded_q)
                     all_cell_indices_list.append(expanded_c)
 
-                    candidates_count.scatter_add_(
-                        0, expanded_q, torch.ones_like(expanded_q)
-                    )
+                    candidates_count += torch.bincount(expanded_q, minlength=n_queries)
 
             ### Handle internal-node hits: expand to children
             is_internal = ~is_leaf
@@ -665,5 +677,6 @@ class BVH:
             source_indices=all_q,
             target_indices=all_c,
             n_sources=n_queries,
+            n_targets=len(self.sorted_cell_order),
         )
         return adjacency.truncate_per_source(max_candidates_per_point)

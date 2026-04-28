@@ -22,7 +22,7 @@ plot generation always interpret benchmark metadata the same way.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from typing import Any, TypeAlias
 
 import torch
@@ -35,9 +35,12 @@ PHASE_ORDER = ("forward", "backward")
 # Canonical benchmark case tuple type yielded by input generators.
 BenchmarkCase: TypeAlias = tuple[str, tuple[Any, ...], dict[str, Any]]
 
+# ASV benchmark key format: (phase, spec_name, implementation_name, case_index).
+BenchmarkKey: TypeAlias = tuple[str, str, str, int]
+
 
 def _phase_case_iterator(
-    spec: type, phase: str, device: torch.device | str
+    spec: type[FunctionSpec], phase: str, device: torch.device | str
 ) -> Iterator[BenchmarkCase]:
     """Return the phase-specific case iterator for ``spec``."""
 
@@ -49,7 +52,7 @@ def _phase_case_iterator(
     raise ValueError(f"Unsupported benchmark phase: {phase}")
 
 
-def supports_backward_inputs(spec: type) -> bool:
+def supports_backward_inputs(spec: type[FunctionSpec]) -> bool:
     """Return ``True`` when ``spec`` overrides backward input generation."""
 
     # Compare unbound callables so this works regardless of classmethod wrapping.
@@ -60,7 +63,7 @@ def supports_backward_inputs(spec: type) -> bool:
     return spec_fn is not base_fn
 
 
-def _metadata_case_labels(spec: type) -> list[str]:
+def _metadata_case_labels(spec: type[FunctionSpec]) -> list[str]:
     """Extract benchmark case labels from optional FunctionSpec metadata."""
 
     # Prefer static metadata declared directly on the FunctionSpec.
@@ -88,7 +91,9 @@ def _metadata_case_labels(spec: type) -> list[str]:
     return []
 
 
-def case_labels(spec: type, phase: str, device: torch.device | str) -> list[str]:
+def case_labels(
+    spec: type[FunctionSpec], phase: str, device: torch.device | str
+) -> list[str]:
     """Resolve benchmark case labels for one spec and one phase."""
 
     # Validate requested phase and skip unsupported backward benchmarking.
@@ -110,7 +115,7 @@ def case_labels(spec: type, phase: str, device: torch.device | str) -> list[str]
 
 
 def case_by_index(
-    spec: type,
+    spec: type[FunctionSpec],
     phase: str,
     case_index: int,
     device: torch.device | str,
@@ -128,9 +133,42 @@ def case_by_index(
     )
 
 
+def build_benchmark_plan(
+    *,
+    device: torch.device | str,
+    phases: Sequence[str],
+    selected_specs: Iterable[type[FunctionSpec]],
+) -> tuple[list[BenchmarkKey], dict[BenchmarkKey, type[FunctionSpec]]]:
+    """Build ASV benchmark keys and their corresponding FunctionSpec classes."""
+
+    keys: list[BenchmarkKey] = []
+    key_to_spec: dict[BenchmarkKey, type[FunctionSpec]] = {}
+
+    # Keep this ordering aligned with ASV's parameter vector positions.
+    for spec in selected_specs:
+        implementations = spec.available_implementations()
+        if not implementations:
+            continue
+
+        for phase in phases:
+            labels = case_labels(spec=spec, phase=phase, device=device)
+            if not labels:
+                continue
+
+            for implementation_name in implementations:
+                for case_index, _ in enumerate(labels):
+                    key = (phase, spec.__name__, implementation_name, case_index)
+                    keys.append(key)
+                    key_to_spec[key] = spec
+
+    return keys, key_to_spec
+
+
 __all__ = [
     "PHASE_ORDER",
     "BenchmarkCase",
+    "BenchmarkKey",
+    "build_benchmark_plan",
     "supports_backward_inputs",
     "case_labels",
     "case_by_index",

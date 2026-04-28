@@ -97,7 +97,7 @@ jobs:
           }}
 
     - name: Install package with uv
-      run: uv sync --group dev
+      run: uv sync --frozen --group dev
 
     - name: Run tests
       run: uv run pytest test/

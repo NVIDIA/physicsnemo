@@ -113,7 +113,7 @@ class GeometryGuardrail:
     >>> import pyvista as pv
     >>> from pathlib import Path
     >>> from physicsnemo.mesh.io import from_pyvista
-    >>> from physicsnemo.experimental.guardrails import GeometryGuardrail
+    >>> from physicsnemo.experimental.guardrails.geometry import GeometryGuardrail
     >>> 
     >>> # Create and fit guardrail from training meshes (CPU)
     >>> train_meshes = [from_pyvista(pv.Cube()) for _ in range(100)]

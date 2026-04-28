@@ -28,6 +28,7 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, NamedTuple
 
 import torch
+from jaxtyping import Float
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.neighbors._adjacency import Adjacency
@@ -59,7 +60,7 @@ class NeighborhoodBatch(NamedTuple):
 
 
 def iter_neighborhood_batches(
-    positions: torch.Tensor,
+    positions: Float[torch.Tensor, "n_entities n_spatial_dims"],
     adjacency: "Adjacency",
     *,
     min_neighbors: int = 0,
@@ -96,7 +97,7 @@ def iter_neighborhood_batches(
     device = positions.device
 
     ### Compute per-entity neighbor counts from CSR offsets
-    neighbor_counts = adjacency.offsets[1:] - adjacency.offsets[:-1]
+    neighbor_counts = adjacency.counts
 
     ### Optionally clamp to max_neighbors
     if max_neighbors is not None:

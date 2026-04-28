@@ -40,9 +40,13 @@ from physicsnemo.datapipes.collate import (
 )
 from physicsnemo.datapipes.dataloader import DataLoader
 from physicsnemo.datapipes.dataset import Dataset
+from physicsnemo.datapipes.mesh_dataset import MeshDataset
 from physicsnemo.datapipes.multi_dataset import MultiDataset
+from physicsnemo.datapipes.protocols import DatasetBase
 from physicsnemo.datapipes.readers import (
+    DomainMeshReader,
     HDF5Reader,
+    MeshReader,
     NumpyReader,
     Reader,
     TensorStoreZarrReader,
@@ -58,23 +62,41 @@ from physicsnemo.datapipes.registry import (
 from physicsnemo.datapipes.transforms import (
     BoundingBoxFilter,
     BroadcastGlobalFeatures,
+    CenterMesh,
     CenterOfMass,
     Compose,
+    ComputeCellCentroids,
     ComputeNormals,
     ComputeSDF,
+    ComputeSurfaceNormals,
     ConcatFields,
     ConstantField,
     CreateGrid,
+    DropMeshFields,
     FieldSlice,
     KNearestNeighbors,
+    MeshToTensorDict,
+    MeshTransform,
     Normalize,
+    NormalizeMeshFields,
     NormalizeVectors,
     Purge,
+    RandomRotateMesh,
+    RandomScaleMesh,
+    RandomTranslateMesh,
     Rename,
+    RenameMeshFields,
+    RestructureTensorDict,
+    RotateMesh,
     Scale,
+    ScaleMesh,
+    SetGlobalField,
+    SubsampleMesh,
     SubsamplePoints,
     Transform,
     Translate,
+    TranslateMesh,
+    apply_to_tensordict_mesh,
 )
 
 # Auto-register OmegaConf resolvers so ${dp:ComponentName} works in Hydra configs
@@ -83,7 +105,9 @@ register_resolvers()
 __all__ = [
     #
     "TensorDict",  # Re-export from tensordict
+    "DatasetBase",
     "Dataset",
+    "MeshDataset",
     "DataLoader",
     "MultiDataset",
     # Transforms - Base
@@ -113,6 +137,25 @@ __all__ = [
     "Rename",
     "Purge",
     "ConstantField",
+    # Transforms - Mesh
+    "MeshTransform",
+    "ComputeCellCentroids",
+    "ComputeSurfaceNormals",
+    "MeshToTensorDict",
+    "apply_to_tensordict_mesh",
+    "ScaleMesh",
+    "TranslateMesh",
+    "RotateMesh",
+    "CenterMesh",
+    "SubsampleMesh",
+    "DropMeshFields",
+    "RenameMeshFields",
+    "NormalizeMeshFields",
+    "SetGlobalField",
+    "RestructureTensorDict",
+    "RandomScaleMesh",
+    "RandomTranslateMesh",
+    "RandomRotateMesh",
     # Readers
     "Reader",
     "HDF5Reader",
@@ -120,6 +163,8 @@ __all__ = [
     "NumpyReader",
     "VTKReader",
     "TensorStoreZarrReader",
+    "MeshReader",
+    "DomainMeshReader",
     # Collation
     "Collator",
     "DefaultCollator",

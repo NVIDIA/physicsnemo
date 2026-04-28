@@ -643,7 +643,8 @@ class GlobalContextBuilder(nn.Module):
     Forward
     -------
     This class does not implement a standard ``forward`` method. Instead, use
-    :meth:`build_context` to construct context and local features.
+    :meth:`build_context` to construct context, local features, and the
+    detached geometry context.
 
     See Also
     --------
@@ -664,7 +665,7 @@ class GlobalContextBuilder(nn.Module):
     >>> local_embeddings = (torch.randn(2, 100, 64),)
     >>> geometry = torch.randn(2, 100, 3)
     >>> global_embedding = torch.randn(2, 1, 16)
-    >>> context, local_feats = builder.build_context(
+    >>> context, local_feats, geo_ctx = builder.build_context(
     ...     local_embeddings, None, geometry, global_embedding
     ... )
     >>> context.shape
@@ -779,6 +780,7 @@ class GlobalContextBuilder(nn.Module):
     ) -> tuple[
         Float[torch.Tensor, "batch heads slices context_dim"] | None,
         list[Float[torch.Tensor, "batch tokens local_features"]] | None,
+        Float[torch.Tensor, "batch heads slices dim_head"] | None,
     ]:
         r"""Build all context and local features.
 
@@ -798,13 +800,17 @@ class GlobalContextBuilder(nn.Module):
 
         Returns
         -------
-        tuple[torch.Tensor | None, list[torch.Tensor] | None]
+        tuple[torch.Tensor | None, list[torch.Tensor] | None, torch.Tensor | None]
             - ``context``: Concatenated context tensor of shape :math:`(B, H, S, D_c)`
               where :math:`D_c` is the total context dimension, or ``None`` if no
               context sources are provided.
             - ``local_features``: List of local feature tensors, one per input type,
               each of shape :math:`(B, N, D_l)`, or ``None`` if local features are
               disabled.
+            - ``geometry_context_detached``: Detached geometry-tokenizer output of shape
+              :math:`(B, H, S, D)`, intended for downstream observers such as the
+              embedded OOD guard.  ``None`` when geometry tokenization is disabled
+              or no geometry was provided.
 
         Raises
         ------
@@ -824,6 +830,7 @@ class GlobalContextBuilder(nn.Module):
 
         context_parts = []
         local_features = None
+        geometry_context_detached: torch.Tensor | None = None
 
         if local_positions is None and self.local_extractors is not None:
             raise ValueError(
@@ -850,7 +857,11 @@ class GlobalContextBuilder(nn.Module):
 
         # Tokenize geometry features
         if self.geometry_tokenizer is not None and geometry is not None:
-            context_parts.append(self.geometry_tokenizer(geometry))
+            geometry_context = self.geometry_tokenizer(geometry)
+            # Detach the returned copy so downstream observers (e.g. the OOD
+            # guard) don't keep the backward graph alive.
+            geometry_context_detached = geometry_context.detach()
+            context_parts.append(geometry_context)
 
         # Tokenize global embedding
         if self.global_tokenizer is not None and global_embedding is not None:
@@ -859,4 +870,4 @@ class GlobalContextBuilder(nn.Module):
         # Concatenate all context features along the last dimension
         context = torch.cat(context_parts, dim=-1) if context_parts else None
 
-        return context, local_features
+        return context, local_features, geometry_context_detached

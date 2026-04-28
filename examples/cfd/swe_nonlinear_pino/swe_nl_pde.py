@@ -19,7 +19,7 @@ from sympy import Symbol, Function, Number
 
 
 class SWE_NL(PDE):
-    """SWE Nonlinear PDE using PhysicsNeMo Sym"""
+    """SWE Nonlinear PDE using physicsnemo.sym"""
 
     name = "SWE_NL"
 
