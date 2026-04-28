@@ -28,8 +28,11 @@ pytest.importorskip("pyvista")
 
 import pyvista as pv
 
-from physicsnemo.experimental.guardrails import GeometryGuardrail
-from physicsnemo.experimental.guardrails.geometry import FEATURE_NAMES, FEATURE_VERSION
+from physicsnemo.experimental.guardrails.geometry import (
+    FEATURE_NAMES,
+    FEATURE_VERSION,
+    GeometryGuardrail,
+)
 from physicsnemo.mesh.io.io_pyvista import from_pyvista
 
 

@@ -23,12 +23,11 @@ from hydra.utils import to_absolute_path
 from physicsnemo.utils.logging import LaunchLogger
 from physicsnemo.utils.checkpoint import save_checkpoint
 from physicsnemo.models.fno import FNO
-from physicsnemo.sym.eq.pdes.diffusion import Diffusion
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
-from utils import HDF5MapStyleDataset
+from utils import Diffusion, HDF5MapStyleDataset
 
 
 def validation_step(model, dataloader, epoch):
@@ -71,6 +70,7 @@ def validation_step(model, dataloader, epoch):
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config_pino.yaml")
 def main(cfg: DictConfig):
+    """Main function for the Darcy physics-informed FNO."""
     # CUDA support
     if torch.cuda.is_available():
         device = torch.device("cuda")

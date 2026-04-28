@@ -37,6 +37,7 @@ References:
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float, Int
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
@@ -46,8 +47,8 @@ if TYPE_CHECKING:
 
 def compute_edge_support_volume_cell_fractions(
     mesh: "Mesh",
-    edges: torch.Tensor,
-) -> torch.Tensor:
+    edges: Int[torch.Tensor, "n_edges 2"],
+) -> Float[torch.Tensor, "n_edges 2"]:
     """Compute |⋆edge ∩ cell| / |⋆edge| for all edge-cell pairs.
 
     For each edge and each cell containing it, computes the fraction of the edge's
@@ -128,7 +129,11 @@ def compute_edge_support_volume_cell_fractions(
     # Store as (n_edges, 2) with -1 for missing second cell
     from physicsnemo.mesh.utilities._edge_lookup import find_edges_in_reference
 
-    edge_indices, matches = find_edges_in_reference(edges, candidate_edges)
+    edge_indices, matches = find_edges_in_reference(
+        edges,
+        candidate_edges,
+        index_bound=mesh.n_points,
+    )
     edge_to_cells = torch.full(
         (n_edges, 2), -1, dtype=torch.long, device=device
     )  # (n_edges, 2)
@@ -212,7 +217,7 @@ def compute_edge_support_volume_cell_fractions(
 
 def compute_vertex_support_volume_cell_fractions(
     mesh: "Mesh",
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[Float[torch.Tensor, " n_pairs"], Int[torch.Tensor, "n_pairs 2"]]:
     r"""Compute |⋆vertex ∩ cell| / |⋆vertex| for all vertex-cell pairs.
 
     For each vertex v and each cell containing it, computes the fraction of v's
@@ -315,8 +320,11 @@ def compute_vertex_support_volume_cell_fractions(
 
 def compute_dual_edge_volumes_in_cells(
     mesh: "Mesh",
-    edges: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    edges: Int[torch.Tensor, "n_edges 2"],
+) -> tuple[
+    Float[torch.Tensor, " n_edge_cell_pairs"],
+    Int[torch.Tensor, "n_edge_cell_pairs 2"],
+]:
     """Compute |⋆edge ∩ cell| for all edge-cell adjacencies.
 
     Returns the actual volume (not fraction) of dual 1-cell within each cell.
@@ -358,7 +366,9 @@ def compute_dual_edge_volumes_in_cells(
     from physicsnemo.mesh.utilities._edge_lookup import find_edges_in_reference
 
     edge_indices_for_candidates, matches = find_edges_in_reference(
-        edges, candidate_edges
+        edges,
+        candidate_edges,
+        index_bound=mesh.n_points,
     )
 
     ### Filter to only matched pairs

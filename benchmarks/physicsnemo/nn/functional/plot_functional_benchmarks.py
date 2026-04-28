@@ -23,15 +23,21 @@ import argparse
 import ast
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeAlias
 
 import torch
 
-from benchmarks.physicsnemo.nn.functional._spec_utils import PHASE_ORDER, case_labels
+from benchmarks.physicsnemo.nn.functional._spec_utils import (
+    PHASE_ORDER,
+    BenchmarkKey,
+    build_benchmark_plan,
+    case_labels,
+)
 from benchmarks.physicsnemo.nn.functional.registry import FUNCTIONAL_SPECS
+from physicsnemo.core.function_spec import FunctionSpec
 
 # Name of the ASV benchmark function to extract from result payloads.
 _BENCHMARK_SUFFIX = "FunctionalBenchmarks.time_functional"
@@ -47,7 +53,6 @@ _IMPL_COLORS = {
 }
 
 # Type aliases used throughout the parsing/plotting pipeline.
-BenchmarkKey: TypeAlias = tuple[str, str, str, int]
 CaseMap: TypeAlias = dict[str, dict[str, float]]
 SpecPhaseMap: TypeAlias = dict[str, dict[str, CaseMap]]
 
@@ -71,7 +76,7 @@ def _camel_to_snake(name: str) -> str:
     return stage_2.replace("__", "_").lower()
 
 
-def _spec_category(spec: type) -> str:
+def _spec_category(spec: type[FunctionSpec]) -> str:
     """Infer functional category from a FunctionSpec module path."""
 
     module = spec.__module__
@@ -196,19 +201,18 @@ def _build_spec_data(device: torch.device | str) -> dict[str, BenchmarkSpecData]
 
 
 def _build_fallback_params(
-    spec_data: dict[str, BenchmarkSpecData],
+    *,
+    device: torch.device | str,
+    phases: Sequence[str] = PHASE_ORDER,
+    selected_specs: Iterable[type[FunctionSpec]] = FUNCTIONAL_SPECS,
 ) -> list[BenchmarkKey]:
     """Reconstruct ASV key ordering for result payloads missing explicit labels."""
 
-    params: list[BenchmarkKey] = []
-    for phase in PHASE_ORDER:
-        for spec_name, data in spec_data.items():
-            labels = data.labels_by_phase.get(phase, [])
-            if not labels:
-                continue
-            for implementation in data.implementations:
-                for case_index, _ in enumerate(labels):
-                    params.append((phase, spec_name, implementation, case_index))
+    params, _ = build_benchmark_plan(
+        device=device,
+        phases=phases,
+        selected_specs=selected_specs,
+    )
     return params
 
 
@@ -372,7 +376,7 @@ def main() -> int:
 
     # Build spec metadata and fallback ASV key ordering.
     spec_data = _build_spec_data(device=args.label_device)
-    fallback_params = _build_fallback_params(spec_data=spec_data)
+    fallback_params = _build_fallback_params(device=args.label_device)
 
     # Load the newest ASV result payload and extract benchmark vectors.
     result_file = _latest_result_file(args.results_dir)

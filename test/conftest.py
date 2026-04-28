@@ -110,6 +110,12 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "multigpu_static: mark test to run only with --multigpu-static flag"
     )
+    config.addinivalue_line(
+        "markers", "cuda: mark test as requiring CUDA (skipped if unavailable)"
+    )
+    config.addinivalue_line(
+        "markers", "slow: mark test as slow-running (for optional exclusion)"
+    )
 
     # Conditionally register the distributed_print plugin for multigpu tests
     static_flag = config.getoption("--multigpu-static")

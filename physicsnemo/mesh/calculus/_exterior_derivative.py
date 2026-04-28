@@ -30,6 +30,7 @@ Reference: Desbrun et al., "Discrete Exterior Calculus", Section 3
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float, Int
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -37,8 +38,8 @@ if TYPE_CHECKING:
 
 def exterior_derivative_0(
     mesh: "Mesh",
-    vertex_0form: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    vertex_0form: Float[torch.Tensor, "n_points ..."],
+) -> tuple[Float[torch.Tensor, "n_edges ..."], Int[torch.Tensor, "n_edges 2"]]:
     """Compute exterior derivative of 0-form (function on vertices).
 
     Maps Ω⁰(K) → Ω¹(K): takes vertex values to edge values.
@@ -108,9 +109,12 @@ def exterior_derivative_0(
 
 def exterior_derivative_1(
     mesh: "Mesh",
-    edge_1form: torch.Tensor,
-    edges: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    edge_1form: Float[torch.Tensor, "n_edges ..."],
+    edges: Int[torch.Tensor, "n_edges 2"],
+) -> tuple[
+    Float[torch.Tensor, "n_faces ..."],
+    Int[torch.Tensor, "n_faces n_vertices_per_face"],
+]:
     """Compute exterior derivative of 1-form (values on edges).
 
     Maps Ω¹(K) → Ω²(K): takes edge values to face values (2-cells or higher).
@@ -181,7 +185,9 @@ def exterior_derivative_1(
     from physicsnemo.mesh.utilities._edge_lookup import find_edges_in_reference
 
     edge_indices, matches = find_edges_in_reference(
-        edges, boundary_edges_flat
+        edges,
+        boundary_edges_flat,
+        index_bound=mesh.n_points,
     )  # edge_indices: (n_faces*3,), matches: (n_faces*3,)
 
     ### Determine orientation of each boundary edge

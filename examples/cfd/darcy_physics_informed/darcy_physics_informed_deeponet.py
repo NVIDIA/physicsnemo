@@ -27,14 +27,11 @@ from physicsnemo.utils.logging import LaunchLogger
 from physicsnemo.utils.checkpoint import save_checkpoint
 from physicsnemo.models.fno import FNO
 from physicsnemo.models.mlp import FullyConnected
-from physicsnemo.sym.eq.pdes.diffusion import Diffusion
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer
-from physicsnemo.sym.key import Key
-from physicsnemo.sym.models.arch import Arch
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
-from utils import HDF5MapStyleDataset
+from utils import Diffusion, HDF5MapStyleDataset
 
 
 def validation_step(graph, dataloader, epoch):
@@ -78,78 +75,42 @@ def validation_step(graph, dataloader, epoch):
         return loss_epoch / len(dataloader)
 
 
-class MdlsSymWrapper(Arch):
-    """
-    Wrapper model to convert PhysicsNeMo model to PhysicsNeMo-Sym model.
+class DeepONet(torch.nn.Module):
+    """Dict-in/dict-out DeepONet (branch + trunk) model.
 
-    PhysicsNeMo Sym relies on the inputs/outputs of the model being dictionary of tensors.
-    This wrapper converts the input dictionary of tensors to a tensor inputs that can
-    be processed by the PhysicsNeMo model that operate on tensors. Appropriate
-    transformations are performed in the forward pass of the model to translate between
-    these two input/output definitions.
-
-    These transformations can differ based on the models. For e.g. typically for a fully
-    connected network, the input tensors are combined by concatenating them along
-    appropriate dimension before passing them as an input to the PhysicsNeMo model.
-    During the output, the process is reversed, the output tensor from pytorch model is
-    split across appropriate dimensions and then converted to a dictionary with
-    appropriate keys to produce the final output.
-
-    Having the model wrapped in a wrapper like this allows gradient computation using
-    the PhysicsNeMo Sym's optimized gradient computing backend.
-
-    For more details on PhysicsNeMo Sym models, refer:
-    https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/tutorials/simple_training_example.html#using-custom-models-in-physicsnemo
-    For more details on Key class, refer:
-    https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.html#module-physicsnemo.sym.key
+    Translates between the dict-of-tensors interface that PhysicsInformer
+    expects and the raw tensor interface of the underlying FNO + MLP.
     """
 
-    def __init__(
-        self,
-        input_keys=[Key("k"), Key("x"), Key("y")],
-        output_keys=[Key("k_prime"), Key("u")],
-        trunk_net=None,
-        branch_net=None,
-    ):
-        super().__init__(
-            input_keys=input_keys,
-            output_keys=output_keys,
-        )
-
+    def __init__(self, output_keys, trunk_net=None, branch_net=None):
+        super().__init__()
+        self.output_keys = output_keys
         self.branch_net = branch_net
         self.trunk_net = trunk_net
 
     def forward(self, dict_tensor: Dict[str, torch.Tensor]):
-        # Concatenate x, y inputs to feeed in the trunk network which has a MLP
         xy_input_shape = dict_tensor["x"].shape
-        xy = self.concat_input(
-            {
-                k: dict_tensor[k].view(xy_input_shape[0], -1, 1) for k in ["x", "y"]
-            },  # flatten the coordinate dimensions
-            ["x", "y"],
-            detach_dict=self.detach_key_dict,
-            dim=-1,  # concat along the last dimension to form the feature vector.
+        xy = torch.cat(
+            [dict_tensor[k].view(xy_input_shape[0], -1, 1) for k in ["x", "y"]],
+            dim=-1,
         )
         fc_out = self.trunk_net(xy)
 
-        # Pass the k-prime for the FNO input
         fno_out = self.branch_net(dict_tensor["k_prime"])
 
-        # reshape the fc_out
         fc_out = fc_out.view(
             xy_input_shape[0], -1, xy_input_shape[-2], xy_input_shape[-1]
         )
-
-        # multiply the outputs of branch and trunk networks to get the final output
         out = fc_out * fno_out
 
-        return self.split_output(
-            out, self.output_key_dict, dim=1
-        )  # Split along the channel dimension to get a dictionary of tensors
+        chunks = torch.split(out, 1, dim=1)
+        return {k: chunks[i] for i, k in enumerate(self.output_keys)}
 
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config_deeponet.yaml")
 def main(cfg: DictConfig):
+    """Main function for the Darcy physics-informed DeepONet."""
+
     # CUDA support
     if torch.cuda.is_available():
         device = torch.device("cuda")
@@ -195,9 +156,8 @@ def main(cfg: DictConfig):
     # Define k-prime as an auxiliary variable that is a copy of k.
     # Having k as the output of the model will allow gradients of k (for pde loss)
     # to be computed using Sym's gradient backend
-    model = MdlsSymWrapper(
-        input_keys=[Key("k_prime"), Key("x"), Key("y")],
-        output_keys=[Key("k"), Key("u")],
+    model = DeepONet(
+        output_keys=["k", "u"],
         trunk_net=model_trunk,
         branch_net=model_branch,
     ).to(device)

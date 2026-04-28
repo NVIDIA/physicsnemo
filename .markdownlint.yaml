@@ -90,8 +90,10 @@ MD013:
   code_block_line_length: 88
   # Include code blocks
   code_blocks: true
-  # Include tables
-  tables: true
+  # Exclude tables: table rows cannot always be wrapped at 88 chars without
+  # breaking the grid, and horizontal overflow in a browser is preferable
+  # to splitting a table row into multiple lines.
+  tables: false
   # Include headings
   headings: true
   # Include headings
