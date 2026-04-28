@@ -574,8 +574,8 @@ class DoMINO(Module):
 
             # Normalize geometry coordinates based on computational domain
             if "volume_min_max" in data_dict.keys():
-                vol_max = data_dict["volume_min_max"][:, 1]
-                vol_min = data_dict["volume_min_max"][:, 0]
+                vol_max = data_dict["volume_min_max"][:, 1].unsqueeze(1)
+                vol_min = data_dict["volume_min_max"][:, 0].unsqueeze(1)
                 geo_centers_vol = (
                     2.0 * (geo_centers - vol_min) / (vol_max - vol_min) - 1
                 )
@@ -618,8 +618,8 @@ class DoMINO(Module):
             # Represent geometry on bounding box
             # Normalize geometry coordinates based on surface bounding box
             if "surface_min_max" in data_dict.keys():
-                surf_max = data_dict["surface_min_max"][:, 1]
-                surf_min = data_dict["surface_min_max"][:, 0]
+                surf_max = data_dict["surface_min_max"][:, 1].unsqueeze(1)
+                surf_min = data_dict["surface_min_max"][:, 0].unsqueeze(1)
                 geo_centers_surf = (
                     2.0 * (geo_centers - surf_min) / (surf_max - surf_min) - 1
                 )
