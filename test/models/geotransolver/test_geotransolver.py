@@ -748,3 +748,107 @@ def test_geotransolver_metadata():
     assert model.meta.name == "GeoTransolver"
     assert model.meta.amp is True
     assert model.__name__ == "GeoTransolver"
+
+
+# =============================================================================
+# Embedded OOD guard (guard_config) integration
+# =============================================================================
+
+
+def _make_guarded_model(device, guard_config):
+    """Minimal guard-enabled GeoTransolver used by the tests below."""
+    return GeoTransolver(
+        functional_dim=32,
+        out_dim=4,
+        geometry_dim=3,
+        global_dim=16,
+        n_layers=2,
+        n_hidden=64,
+        dropout=0.0,
+        n_head=4,
+        act="gelu",
+        mlp_ratio=2,
+        slice_num=8,
+        use_te=False,
+        time_input=False,
+        plus=False,
+        include_local_features=False,
+        guard_config=guard_config,
+    ).to(device)
+
+
+def test_geotransolver_guard_config_none_leaves_guard_unattached(device):
+    """``guard_config=None`` (the default) produces no OOD guard."""
+    model = _make_guarded_model(device, guard_config=None)
+    assert model.ood_guard is None
+
+
+def test_geotransolver_guard_config_dict_attaches_and_runs(device):
+    """Dict ``guard_config`` attaches an ``OODGuard`` wired through the forward pass."""
+    torch.manual_seed(42)
+
+    model = _make_guarded_model(
+        device,
+        guard_config={"buffer_size": 8, "knn_k": 3, "sensitivity": 1.5},
+    )
+    assert model.ood_guard is not None
+
+    batch_size = 2
+    local_emb = torch.randn(batch_size, 50, 32, device=device)
+    local_positions = local_emb[:, :, :3]
+    geometry = torch.randn(batch_size, 80, 3, device=device)
+    global_emb = torch.randn(batch_size, 1, 16, device=device)
+
+    # Training forward should populate the guard's buffers.
+    model.train()
+    _ = model(
+        local_emb,
+        local_positions=local_positions,
+        global_embedding=global_emb,
+        geometry=geometry,
+    )
+    assert model.ood_guard.geo_ptr.item() == batch_size
+    assert not torch.isinf(model.ood_guard.global_min).any()
+
+    # Eval forward should run the checks (threshold may remain inf until the
+    # buffer has enough samples, which is acceptable — we just verify no crash).
+    model.eval()
+    _ = model(
+        local_emb,
+        local_positions=local_positions,
+        global_embedding=global_emb,
+        geometry=geometry,
+    )
+
+
+@pytest.mark.parametrize(
+    "bad_config,expected_exc,match",
+    [
+        # Unknown field: OODGuardConfig rejects at construction.
+        ({"buffer_size": 8, "nope": 1}, TypeError, "unexpected keyword argument"),
+        # Missing required field.
+        ({}, TypeError, "buffer_size"),
+        # Non-dict type.
+        (42, TypeError, "guard_config must be a dict"),
+    ],
+)
+def test_geotransolver_guard_config_invalid_inputs(bad_config, expected_exc, match):
+    """Invalid ``guard_config`` values raise at construction with clear messages."""
+    with pytest.raises(expected_exc, match=match):
+        _make_guarded_model("cpu", guard_config=bad_config)
+
+
+def test_geotransolver_guard_config_without_any_surface_raises():
+    """Enabling the guard without either ``global_dim`` or ``geometry_dim`` raises."""
+    with pytest.raises(ValueError, match="nothing to watch"):
+        GeoTransolver(
+            functional_dim=32,
+            out_dim=4,
+            geometry_dim=None,
+            global_dim=None,
+            n_layers=2,
+            n_hidden=64,
+            n_head=4,
+            use_te=False,
+            guard_config={"buffer_size": 8},
+        )

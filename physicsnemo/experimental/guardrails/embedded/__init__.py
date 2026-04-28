@@ -14,18 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Embedded (in-forward) guardrails for PhysicsNemo models.
+
+This submodule provides guardrails that live inside a model's forward pass,
+calibrating during training and checking during inference.  Contrast with
+``physicsnemo.experimental.guardrails.geometry``, which operates on raw mesh
+data offline prior to inference.
 """
-Guardrails for PhysicsNemo.
 
-This package provides utilities for detecting out-of-distribution data
-and validating inputs to physics-based machine learning models.
+from .ood_guard import OODGuard, OODGuardConfig
 
-Import individual guardrails from their respective subpackages, e.g.::
-
-    from physicsnemo.experimental.guardrails.geometry import GeometryGuardrail
-    from physicsnemo.experimental.guardrails.embedded import OODGuard
-
-The top-level namespace intentionally does not re-export guardrail classes so
-that importing one subpackage does not force-load the others (some carry
-optional dependencies like ``pyvista``).
-"""
+__all__ = ["OODGuard", "OODGuardConfig"]
