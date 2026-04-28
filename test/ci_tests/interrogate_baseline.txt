@@ -694,15 +694,6 @@ physicsnemo/nn/functional/neighbors/knn/knn.py:KNN.make_inputs_forward
 physicsnemo/nn/functional/neighbors/knn/knn.py:KNN.scipy_forward
 physicsnemo/nn/functional/neighbors/knn/knn.py:KNN.torch_forward
 physicsnemo/nn/functional/neighbors/knn/utils.py:validate_inputs
-physicsnemo/nn/functional/neighbors/radius_search/_torch_impl.py:radius_search
-physicsnemo/nn/functional/neighbors/radius_search/_warp_impl.py:radius_search
-physicsnemo/nn/functional/neighbors/radius_search/radius_search.py:RadiusSearch.compare_backward
-physicsnemo/nn/functional/neighbors/radius_search/radius_search.py:RadiusSearch.compare_forward
-physicsnemo/nn/functional/neighbors/radius_search/radius_search.py:RadiusSearch.make_inputs_backward
-physicsnemo/nn/functional/neighbors/radius_search/radius_search.py:RadiusSearch.make_inputs_forward
-physicsnemo/nn/functional/neighbors/radius_search/radius_search.py:RadiusSearch.torch_forward
-physicsnemo/nn/functional/neighbors/radius_search/radius_search.py:RadiusSearch.warp_forward
-physicsnemo/nn/functional/neighbors/radius_search/utils.py:format_returns
 physicsnemo/nn/functional/regularization_parameterization/drop_path.py:DropPath.make_inputs_backward
 physicsnemo/nn/functional/regularization_parameterization/drop_path.py:DropPath.make_inputs_forward
 physicsnemo/nn/functional/regularization_parameterization/drop_path.py:DropPath.torch_forward

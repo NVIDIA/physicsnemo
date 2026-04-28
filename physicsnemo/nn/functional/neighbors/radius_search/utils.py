@@ -24,6 +24,11 @@ def format_returns(
     return_dists: bool,
     return_points: bool,
 ):
+    """Select which tensors to include in the radius search return tuple.
+
+    Always includes ``indices``. Appends ``points`` if ``return_points`` is True,
+    and ``distances`` if ``return_dists`` is True.
+    """
     if return_points:
         if return_dists:
             return indices, points, distances
