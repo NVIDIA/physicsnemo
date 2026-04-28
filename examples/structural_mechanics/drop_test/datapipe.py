@@ -69,6 +69,7 @@ class SimSample:
         self.target_series = target_series
 
     def to(self, device: torch.device):
+        """Move all contained tensors (and graph) to ``device`` in place."""
         for k, v in self.node_features.items():
             self.node_features[k] = v.to(device)
         self.node_target = self.node_target.to(device)
@@ -81,6 +82,7 @@ class SimSample:
         return self
 
     def is_graph(self) -> bool:
+        """Whether this sample carries a PyG graph (vs. point cloud only)."""
         return self.graph is not None
 
     def __repr__(self) -> str:
@@ -675,6 +677,7 @@ class DropTestGraphDataset(DropTestBaseDataset):
 
     @staticmethod
     def create_graph(src, dst, num_nodes: int, dtype=torch.long):
+        """Build a coalesced, self-loop-augmented undirected PyG graph from ``src``/``dst``."""
         src = torch.as_tensor(src, dtype=dtype)
         dst = torch.as_tensor(dst, dtype=dtype)
         edge_index = torch.stack([torch.cat([src, dst]), torch.cat([dst, src])], dim=0)
@@ -684,6 +687,7 @@ class DropTestGraphDataset(DropTestBaseDataset):
 
     @staticmethod
     def add_edge_features(data, pos: torch.Tensor):
+        """Attach per-edge (displacement, |displacement|) features to ``data.edge_attr``."""
         row, col = data.edge_index
         pos_t = torch.as_tensor(pos, dtype=torch.float32)
         disp = pos_t[row] - pos_t[col]

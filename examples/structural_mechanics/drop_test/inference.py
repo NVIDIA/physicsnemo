@@ -213,6 +213,7 @@ class InferenceWorkerSingleVtu:
 
     @torch.no_grad()
     def run_on_single_run(self, run_path: str, run_name: str):
+        """Run inference rollout on one simulation and write predicted VTU files."""
         self.logger.info(f"[Rank {self.dist.rank}] Processing run: {run_name}")
 
         reader = instantiate(self.cfg.reader)
@@ -326,6 +327,7 @@ class InferenceWorkerSingleVtu:
     config_name="drop_test_geotransolver_oneshot",
 )
 def main(cfg: DictConfig):
+    """Hydra entry point: shard runs across ranks and write predicted VTUs."""
     DistributedManager.initialize()
     dist = DistributedManager()
 

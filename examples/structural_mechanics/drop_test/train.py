@@ -230,6 +230,7 @@ class Trainer:
             self.writer = SummaryWriter(log_dir=cfg.training.tensorboard_log_dir)
 
     def train(self, sample: SimSample):
+        """Run one optimizer step on ``sample`` and return the loss tensor."""
         self.optimizer.zero_grad()
         loss = self.forward(sample)
         self.backward(loss)
@@ -261,6 +262,7 @@ class Trainer:
 
     @torch.no_grad()
     def validate(self, epoch):
+        """Run validation rollout, log per-step MSE breakdown, and return the mean loss."""
         self.model.eval()
 
         MSE = torch.zeros(1, device=self.dist.device)
@@ -318,6 +320,7 @@ class Trainer:
     config_name="drop_test_geotransolver_oneshot",
 )
 def main(cfg: DictConfig) -> None:
+    """Hydra entry point: build the trainer from ``cfg`` and run the training loop."""
     DistributedManager.initialize()
     dist = DistributedManager()
 
