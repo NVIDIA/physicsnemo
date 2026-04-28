@@ -61,6 +61,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In PhysicsNeMo-Mesh, `physicsnemo.mesh.geometry` now publicly exposes
   `stable_angle_between_vectors` and `compute_triangle_angles` (previously
   only available via the private `physicsnemo.mesh.curvature._utils`).
+- PhysicsNeMo Datapipes enables reproducability through `torch.generator`
+  utilities.
+- PhysicsNeMo Datapipes now supports `physicsnemo.mesh.Mesh` and
+  `physicsnemo.mesh.DomainMesh` objects for deserialization, with
+  transformations and utilities for mesh-based datasets.
+- PhysicsNeMo Datapipes now support `MultiDataset` construction,
+  allowing on-the-fly construction of multi-source composite datasets
+  that can be sampled and processed efficiently and coherently
+  as one dataset.
+- PhysicsNeMo Datapipes also support random augmentations for
+  mesh-based datapipes, leveraging `torch.distributions` for
+  broad random distribution support. Mesh and DomainMesh
+  datasets allow random translation, scaling, and rotation
+  of mesh data in coherent ways, compatible with reproducability
+  features of physicsnemo datapipes.
+- Adds a new *unified* training recipe for external aerodynamics
+  that supports training on multiple datasets (DrivaerML, ShiftSUV,
+  HighLiftAeroML, or more, bring your own, mix and match), supports
+  training several different models (Domino, Transolver, GeoTransolver,
+  Flare, GeoTransolver with Flare-attention, bring your own!).  Leverages
+  mesh datasets and non-dimensionalization to enable dataset mixing and
+  matching at runtime.  Train with surface or volume data.
 
 ### Changed
 
@@ -140,6 +162,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `smooth_laplacian` and `compute_quality_metrics` have been replaced
   with the dtype-aware `.clamp(min=safe_eps(dtype))` to avoid silently
   zeroing fp16 weights.
+- Fixed issues with physicsnemo.nn.functional's `radius_search` that
+  caused crashes when used with torch.compile.
 
 ### Security
 

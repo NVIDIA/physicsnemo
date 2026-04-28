@@ -185,7 +185,7 @@ class LossCalculator:
     def __init__(
         self,
         target_config: dict[str, str],
-        loss_type: Literal["huber", "mse", "rmse"] = "mse",
+        loss_type: Literal["huber", "mse", "rmse"] = "huber",
         n_spatial_dims: int = 3,
         prefix: str = "",
         normalize_by_channels: bool = True,
