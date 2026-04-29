@@ -143,6 +143,12 @@ class Pade(Module):
         if activation_function is None:
             activation_function = nn.SiLU()
 
+        if self_regularization_beta is not None and self_regularization_beta <= 0:
+            raise ValueError(
+                f"self_regularization_beta must be positive (use None to disable), "
+                f"got {self_regularization_beta=!r}"
+            )
+
         super().__init__()
 
         self.register_buffer("_one", torch.tensor(1.0))
