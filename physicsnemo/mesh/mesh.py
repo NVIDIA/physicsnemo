@@ -917,12 +917,19 @@ class Mesh:
     def gaussian_curvature_vertices(self) -> torch.Tensor:
         r"""Compute intrinsic Gaussian curvature at mesh vertices.
 
-        Uses the angle-defect method from discrete differential geometry,
+        Uses the angle-defect method from discrete differential geometry. For
+        a vertex :math:`v` with incident cells :math:`\sigma \ni v` and
+        interior angle :math:`\theta_\sigma(v)` at :math:`v` in each
+        :math:`\sigma`,
 
         .. math::
 
-            K = \frac{\text{full\_angle} - \sum \text{angles}}{\text{voronoi\_area}}.
+            K(v) = \frac{\Theta(v)}{|{\star}v|},
+            \quad
+            \Theta(v) = \Theta_n - \sum_{\sigma \ni v} \theta_\sigma(v),
 
+        where :math:`\Theta_n` is the full angle in an :math:`n`-dimensional
+        manifold and :math:`|{\star}v|` is the dual 0-cell (Voronoi) volume.
         This is an intrinsic measure of curvature (Theorema Egregium) that
         works for any codimension, as it depends only on distances within the
         manifold.
@@ -948,7 +955,10 @@ class Mesh:
 
         .. math::
 
-            \sum_\text{vertices} K_i \, A_i = 2 \pi \, \chi(M).
+            \sum_v K(v) \, |{\star}v| = 2 \pi \, \chi(M),
+
+        where the sum is over vertices and :math:`\chi(M)` is the Euler
+        characteristic.
 
         Examples
         --------

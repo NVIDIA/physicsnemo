@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 import warnings
 from typing import TYPE_CHECKING, Literal
 
@@ -22,18 +21,20 @@ import numpy as np
 import torch
 from jaxtyping import Int
 
-from physicsnemo.core.version_check import require_version_spec
+from physicsnemo.core.version_check import OptionalImport, require_version_spec
 from physicsnemo.mesh.mesh import Mesh
 
+### Optional dependencies. Construction does not import the package; the
+### nicely-formatted ``ImportError`` (with the ``[mesh-extras]`` install hint)
+### fires only on first attribute access on ``pv`` / ``vtk``. The
+### ``@require_version_spec`` decorators on the public entry points raise
+### that same error proactively, before any function-body work happens.
 if TYPE_CHECKING:
-    import pyvista
-
-# Dynamic import for optional pyvista dependency (invisible to static
-# analysis). The same pattern is used in
-# :mod:`physicsnemo.mesh.visualization._pyvista_impl`. The whole purpose of
-# this module is pyvista interop, so we require it eagerly; users without
-# pyvista will get a helpful ImportError when they import this module.
-pv = importlib.import_module("pyvista")
+    import pyvista as pv
+    import vtk
+else:
+    pv = OptionalImport("pyvista")
+    vtk = OptionalImport("vtk")
 
 
 def _vtk_data_to_tensor_dict(data) -> dict[str, torch.Tensor]:  # noqa: ANN001
@@ -49,7 +50,7 @@ def _vtk_data_to_tensor_dict(data) -> dict[str, torch.Tensor]:  # noqa: ANN001
 
 @require_version_spec("pyvista")
 def from_pyvista(
-    pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet",
+    pyvista_mesh: "pv.PolyData | pv.UnstructuredGrid | pv.PointSet",
     manifold_dim: int | Literal["auto"] = "auto",
     *,
     point_source: Literal["vertices", "cell_centroids"] = "vertices",
@@ -320,7 +321,7 @@ def from_pyvista(
 @require_version_spec("pyvista")
 def to_pyvista(
     mesh: Mesh,
-) -> "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet":
+) -> "pv.PolyData | pv.UnstructuredGrid | pv.PointSet":
     """Convert a physicsnemo.mesh Mesh to a PyVista mesh.
 
     Parameters
@@ -402,7 +403,7 @@ def to_pyvista(
 
 
 def _from_pyvista_cell_centroids(
-    pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid",
+    pyvista_mesh: "pv.PolyData | pv.UnstructuredGrid",
     manifold_dim: int | Literal["auto"],
     warn_on_lost_data: bool,
 ) -> Mesh:
@@ -482,7 +483,7 @@ def _to_vtk_cell_array(cells_np: np.ndarray) -> np.ndarray:
 
 @require_version_spec("vtk")
 def _build_dual_graph_edges(
-    pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid",
+    pyvista_mesh: "pv.PolyData | pv.UnstructuredGrid",
 ) -> Int[torch.Tensor, "n_edges 2"]:
     """Build (n_edges, 2) tensor of cell-neighbor pairs sharing a face.
 
@@ -504,18 +505,14 @@ def _build_dual_graph_edges(
     torch.Tensor
         Shape ``(n_edges, 2)`` with dtype ``torch.long``.
     """
-    import importlib
-
-    _vtk = importlib.import_module("vtk")
-
     pyvista_mesh.BuildLinks()
     n_cells = pyvista_mesh.n_cells
 
     if n_cells == 0:
         return torch.empty((0, 2), dtype=torch.long)
 
-    face_pt_ids = _vtk.vtkIdList()
-    nbr_ids = _vtk.vtkIdList()
+    face_pt_ids = vtk.vtkIdList()
+    nbr_ids = vtk.vtkIdList()
 
     # Collect upper-triangular neighbor pairs into chunked numpy buffers.
     _CHUNK = 1 << 20
@@ -553,7 +550,7 @@ def _build_dual_graph_edges(
 
 
 def _detect_native_dim(
-    pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet",
+    pyvista_mesh: "pv.PolyData | pv.UnstructuredGrid | pv.PointSet",
 ) -> int:
     """Determine the native manifold dimension of a PyVista mesh.
 
@@ -603,7 +600,7 @@ def _detect_native_dim(
 
 
 def _warn_on_data_loss(
-    pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet",
+    pyvista_mesh: "pv.PolyData | pv.UnstructuredGrid | pv.PointSet",
     point_source: str,
     manifold_dim: int,
     detected_dim: int | None,
