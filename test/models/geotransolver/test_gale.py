@@ -235,6 +235,80 @@ def test_gale_fa_forward_multiple_inputs(device):
 
 
 # =============================================================================
+# concat_project state mixing mode
+# =============================================================================
+
+
+def test_gale_concat_project_forward(device):
+    """Test GALE with state_mixing_mode='concat_project' and cross-attention context."""
+    torch.manual_seed(42)
+
+    dim = 64
+    heads = 4
+    dim_head = 16
+    slice_num = 8
+    batch_size = 2
+    n_tokens = 100
+    context_tokens = 32
+    context_dim = dim_head
+
+    gale = GALE(
+        dim=dim,
+        heads=heads,
+        dim_head=dim_head,
+        dropout=0.0,
+        slice_num=slice_num,
+        use_te=False,
+        plus=False,
+        context_dim=context_dim,
+        state_mixing_mode="concat_project",
+    ).to(device)
+
+    x = torch.randn(batch_size, n_tokens, dim).to(device)
+    context = torch.randn(batch_size, heads, context_tokens, context_dim).to(device)
+
+    outputs = gale((x,), context=context)
+
+    assert len(outputs) == 1
+    assert outputs[0].shape == (batch_size, n_tokens, dim)
+    assert not torch.isnan(outputs[0]).any()
+
+
+def test_gale_fa_concat_project_forward(device):
+    """Test GALE_FA with state_mixing_mode='concat_project' and cross-attention context."""
+    torch.manual_seed(42)
+
+    dim = 64
+    heads = 4
+    dim_head = 16
+    n_global_queries = 8
+    batch_size = 2
+    n_tokens = 100
+    context_tokens = 32
+    context_dim = dim_head
+
+    gale_fa = GALE_FA(
+        dim=dim,
+        heads=heads,
+        dim_head=dim_head,
+        dropout=0.0,
+        n_global_queries=n_global_queries,
+        use_te=False,
+        context_dim=context_dim,
+        state_mixing_mode="concat_project",
+    ).to(device)
+
+    x = torch.randn(batch_size, n_tokens, dim).to(device)
+    context = torch.randn(batch_size, heads, context_tokens, context_dim).to(device)
+
+    outputs = gale_fa((x,), context=context)
+
+    assert len(outputs) == 1
+    assert outputs[0].shape == (batch_size, n_tokens, dim)
+    assert not torch.isnan(outputs[0]).any()
+
+
+# =============================================================================
 # GALE_block Tests
 # =============================================================================
 
@@ -313,3 +387,41 @@ def test_gale_block_multiple_inputs(device, attention_type):
     assert len(outputs) == 2
     assert outputs[0].shape == (batch_size, n_tokens_1, hidden_dim)
     assert outputs[1].shape == (batch_size, n_tokens_2, hidden_dim)
+
+
+@pytest.mark.parametrize("attention_type", ["GALE", "GALE_FA"])
+def test_gale_block_concat_project(device, attention_type):
+    """Test GALE_block with state_mixing_mode='concat_project'."""
+    torch.manual_seed(42)
+
+    hidden_dim = 64
+    n_head = 4
+    batch_size = 2
+    n_tokens = 100
+    slice_num = 8
+    context_dim = hidden_dim // n_head
+
+    block = GALE_block(
+        num_heads=n_head,
+        hidden_dim=hidden_dim,
+        dropout=0.0,
+        act="gelu",
+        mlp_ratio=4,
+        last_layer=False,
+        out_dim=1,
+        slice_num=slice_num,
+        use_te=False,
+        plus=False,
+        context_dim=context_dim,
+        attention_type=attention_type,
+        state_mixing_mode="concat_project",
+    ).to(device)
+
+    x = torch.randn(batch_size, n_tokens, hidden_dim).to(device)
+    context = torch.randn(batch_size, n_head, slice_num, context_dim).to(device)
+
+    outputs = block((x,), global_context=context)
+
+    assert len(outputs) == 1
+    assert outputs[0].shape == (batch_size, n_tokens, hidden_dim)
+    assert not torch.isnan(outputs[0]).any()

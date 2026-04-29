@@ -30,7 +30,7 @@ checks:
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -106,6 +106,16 @@ class MeshDims:
     n_manifold_dims: int | str | None = None
     n_spatial_dims: int | str | None = None
 
+    # Caches for parsed symbolic expressions, populated in __post_init__ when
+    # the corresponding dimension is a string. Excluded from init / equality /
+    # hash / repr so they don't leak into the public dataclass surface.
+    _m_parsed: tuple[str, int] | None = field(
+        default=None, init=False, repr=False, compare=False, hash=False
+    )
+    _s_parsed: tuple[str, int] | None = field(
+        default=None, init=False, repr=False, compare=False, hash=False
+    )
+
     def __post_init__(self) -> None:
         for name, val in [
             ("n_manifold_dims", self.n_manifold_dims),
@@ -136,33 +146,26 @@ class MeshDims:
 
         # Validate symbolic expressions eagerly and cache parsed results.
         # A symbolic dimension paired with None is meaningless (no codimension
-        # constraint can be derived), so reject it early.
-        m_is_sym = isinstance(self.n_manifold_dims, str)
-        s_is_sym = isinstance(self.n_spatial_dims, str)
-        if m_is_sym and self.n_spatial_dims is None:
-            raise TypeError(
-                f"Symbolic n_manifold_dims={self.n_manifold_dims!r} requires a "
-                f"paired n_spatial_dims (got None). Use both symbolic dims, "
-                f"e.g. Mesh['{self.n_manifold_dims}', 'n']."
-            )
-        if s_is_sym and self.n_manifold_dims is None:
-            raise TypeError(
-                f"Symbolic n_spatial_dims={self.n_spatial_dims!r} requires a "
-                f"paired n_manifold_dims (got None). Use both symbolic dims, "
-                f"e.g. Mesh['n', '{self.n_spatial_dims}']."
-            )
-        if m_is_sym:
-            object.__setattr__(
-                self,
-                "_m_parsed",
-                _parse_dim_expr(self.n_manifold_dims),  # type: ignore[arg-type]
-            )
-        if s_is_sym:
-            object.__setattr__(
-                self,
-                "_s_parsed",
-                _parse_dim_expr(self.n_spatial_dims),  # type: ignore[arg-type]
-            )
+        # constraint can be derived), so reject it early. Frozen dataclass
+        # requires object.__setattr__ to populate the post-init cache fields.
+        # The isinstance() checks below also narrow the str type for
+        # _parse_dim_expr's signature.
+        if isinstance(self.n_manifold_dims, str):
+            if self.n_spatial_dims is None:
+                raise TypeError(
+                    f"Symbolic n_manifold_dims={self.n_manifold_dims!r} requires a "
+                    f"paired n_spatial_dims (got None). Use both symbolic dims, "
+                    f"e.g. Mesh['{self.n_manifold_dims}', 'n']."
+                )
+            object.__setattr__(self, "_m_parsed", _parse_dim_expr(self.n_manifold_dims))
+        if isinstance(self.n_spatial_dims, str):
+            if self.n_manifold_dims is None:
+                raise TypeError(
+                    f"Symbolic n_spatial_dims={self.n_spatial_dims!r} requires a "
+                    f"paired n_manifold_dims (got None). Use both symbolic dims, "
+                    f"e.g. Mesh['n', '{self.n_spatial_dims}']."
+                )
+            object.__setattr__(self, "_s_parsed", _parse_dim_expr(self.n_spatial_dims))
 
     def matches(self, mesh: "Mesh") -> bool:
         r"""Check whether a mesh instance satisfies this dimension spec.
@@ -204,8 +207,13 @@ class MeshDims:
         the expected codimension is ``spatial_offset - manifold_offset``.
         Different variables impose no constraint.
         """
-        m_var, m_off = self._m_parsed  # type: ignore[attr-defined]
-        s_var, s_off = self._s_parsed  # type: ignore[attr-defined]
+        # By construction (matches() only delegates here when both dims are
+        # str), __post_init__ has populated both parsed caches. The if-guard
+        # is defensive and acts as a type narrower for the parsed tuples.
+        if self._m_parsed is None or self._s_parsed is None:
+            return True
+        m_var, m_off = self._m_parsed
+        s_var, s_off = self._s_parsed
         if m_var != s_var:
             return True
         expected_codim = s_off - m_off
@@ -286,9 +294,13 @@ class _MeshSpecMeta(type):
     def __instancecheck__(cls, instance: object) -> bool:
         from physicsnemo.mesh.mesh import Mesh
 
-        if not type.__instancecheck__(Mesh, instance):
+        # Mesh's metaclass is plain ``type`` (not _MeshSpecMeta), so this
+        # ``isinstance`` call dispatches to the default implementation - no
+        # recursion risk - and narrows ``instance`` to ``Mesh`` for the
+        # subsequent matches() call.
+        if not isinstance(instance, Mesh):
             return False
-        return cls._mesh_dims.matches(instance)  # type: ignore[arg-type]
+        return cls._mesh_dims.matches(instance)
 
     def __repr__(cls) -> str:
         return f"Mesh[{cls._mesh_dims}]"

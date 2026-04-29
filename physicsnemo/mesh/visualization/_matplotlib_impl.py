@@ -16,34 +16,46 @@
 
 """Matplotlib backend for mesh visualization."""
 
-import importlib
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 import torch
+from jaxtyping import Float
 
+from physicsnemo.core.version_check import OptionalImport
+
+### Optional dependencies. Each ``OptionalImport`` is a lazy proxy:
+### construction does not import the package; the friendly ``ImportError``
+### (with the ``[mesh-extras]`` install hint) fires only on first attribute
+### access. We therefore avoid extracting individual classes at module level
+### (e.g. ``ScalarMappable = _cm.ScalarMappable`` would import matplotlib at
+### load time) and reach through the proxy at the use sites instead.
+###
+### This module is only loaded by ``draw_mesh.draw_mesh(..., backend="matplotlib")``,
+### so that first attribute access already implies the user opted in.
 if TYPE_CHECKING:
+    import matplotlib.cm as mpl_cm
+    import matplotlib.collections as mpl_collections
+    import matplotlib.colors as mpl_colors
+    import matplotlib.pyplot as plt
+    import mpl_toolkits.mplot3d.art3d as mpl_art3d
+    from matplotlib import axes as mpl_axes
     from mpl_toolkits.mplot3d.axes3d import Axes3D
 
     from physicsnemo.mesh import Mesh
-
-# Dynamic imports for optional matplotlib dependency (invisible to static analysis)
-plt = importlib.import_module("matplotlib.pyplot")
-_cm = importlib.import_module("matplotlib.cm")
-ScalarMappable = _cm.ScalarMappable
-_collections = importlib.import_module("matplotlib.collections")
-LineCollection = _collections.LineCollection
-PolyCollection = _collections.PolyCollection
-_colors = importlib.import_module("matplotlib.colors")
-Normalize = _colors.Normalize
-_axes_mod = importlib.import_module("matplotlib.axes")
-MplAxes = _axes_mod.Axes
+else:
+    plt = OptionalImport("matplotlib.pyplot")
+    mpl_cm = OptionalImport("matplotlib.cm")
+    mpl_collections = OptionalImport("matplotlib.collections")
+    mpl_colors = OptionalImport("matplotlib.colors")
+    mpl_axes = OptionalImport("matplotlib.axes")
+    mpl_art3d = OptionalImport("mpl_toolkits.mplot3d.art3d")
 
 
 def draw_mesh_matplotlib(
     mesh: "Mesh",
-    point_scalar_values: torch.Tensor | None,
-    cell_scalar_values: torch.Tensor | None,
+    point_scalar_values: Float[torch.Tensor, " n_points"] | None,
+    cell_scalar_values: Float[torch.Tensor, " n_cells"] | None,
     active_scalar_source: Literal["points", "cells", None],
     scalar_label: str | None,
     show: bool,
@@ -54,8 +66,8 @@ def draw_mesh_matplotlib(
     alpha_cells: float,
     alpha_edges: float,
     show_edges: bool,
-    ax=None,
-):
+    ax: Any = None,
+) -> Any:
     """Draw mesh using matplotlib backend.
 
     Supports 0D, 1D, 2D, and 3D spatial dimensions with appropriate matplotlib primitives.
@@ -98,7 +110,7 @@ def draw_mesh_matplotlib(
         Matplotlib axes object.
     """
     ### Validate ax type
-    if ax is not None and not isinstance(ax, MplAxes):
+    if ax is not None and not isinstance(ax, mpl_axes.Axes):
         raise ValueError(
             f"Expected a matplotlib Axes for the 'ax' parameter, "
             f"got {type(ax).__name__}. "
@@ -176,11 +188,11 @@ def draw_mesh_matplotlib(
         scalar_values_for_norm = None
 
     if scalar_values_for_norm is not None:
-        norm = Normalize(
+        norm = mpl_colors.Normalize(
             vmin=vmin if vmin is not None else scalar_values_for_norm.min(),
             vmax=vmax if vmax is not None else scalar_values_for_norm.max(),
         )
-        scalar_mapper = ScalarMappable(norm=norm, cmap=cmap)
+        scalar_mapper = mpl_cm.ScalarMappable(norm=norm, cmap=cmap)
     else:
         norm = None
         scalar_mapper = None
@@ -362,7 +374,7 @@ def _draw_1d(
         else:
             colors = cell_neutral_color
 
-        lc = LineCollection(
+        lc = mpl_collections.LineCollection(
             segments, colors=colors, alpha=alpha_cells, linewidths=2, zorder=1
         )
         ax.add_collection(lc)
@@ -417,7 +429,7 @@ def _draw_2d(
             edgecolors = "none"
             linewidths = 0
 
-        pc = PolyCollection(
+        pc = mpl_collections.PolyCollection(
             verts,
             facecolors=facecolors,
             edgecolors=edgecolors,
@@ -480,10 +492,6 @@ def _draw_3d(
     show_edges,
 ):
     """Draw mesh in 3D space using mpl_toolkits.mplot3d."""
-    _art3d = importlib.import_module("mpl_toolkits.mplot3d.art3d")
-    Line3DCollection = _art3d.Line3DCollection
-    Poly3DCollection = _art3d.Poly3DCollection
-
     ### Draw cells based on manifold dimension
     if cells_np.shape[0] > 0 and alpha_cells > 0:
         n_manifold_dims = cells_np.shape[1] - 1
@@ -501,7 +509,7 @@ def _draw_3d(
             else:
                 colors = cell_neutral_color
 
-            lc = Line3DCollection(
+            lc = mpl_art3d.Line3DCollection(
                 segments, colors=colors, alpha=alpha_cells, linewidths=2, zorder=1
             )
             ax.add_collection3d(lc)
@@ -537,7 +545,7 @@ def _draw_3d(
                 edgecolors = [(0, 0, 0, 0)] * len(verts)
                 linewidths = 0
 
-            pc = Poly3DCollection(
+            pc = mpl_art3d.Poly3DCollection(
                 verts,
                 facecolors=facecolors,
                 edgecolors=edgecolors,

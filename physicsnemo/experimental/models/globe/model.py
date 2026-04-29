@@ -234,7 +234,10 @@ class GLOBE(Module):
 
         boundary_condition_names = list(boundary_source_data_ranks.keys())
 
-        ### Input validation (eager mode only)
+        ### Input validation (eager mode only).  Only validate parameters whose
+        ### use sites are inside `GLOBE` itself; parameters plumbed through to a
+        ### deeper owner (e.g. `self_regularization_beta` -> `Pade`) are validated
+        ### at that owner's constructor to avoid drift between the two checks.
         for rank in flatten_rank_spec(output_field_ranks).values():
             if rank not in (0, 1):
                 raise ValueError(
@@ -247,6 +250,28 @@ class GLOBE(Module):
                     f"In `boundary_source_data_ranks`, got {bc_name=!r};\n"
                     "BC names must not contain `.` for TensorDict compatibility."
                 )
+        if smoothing_radius <= 0:
+            raise ValueError(
+                f"smoothing_radius must be positive, got {smoothing_radius=!r}"
+            )
+        if theta < 0:
+            raise ValueError(
+                f"theta must be non-negative (0 means exact summation), "
+                f"got {theta=!r}"
+            )
+        if leaf_size < 1:
+            raise ValueError(
+                f"leaf_size must be at least 1, got {leaf_size=!r}"
+            )
+        if reference_area <= 0:
+            raise ValueError(
+                f"reference_area must be positive, got {reference_area=!r}"
+            )
+        if latent_compression_scale is not None and latent_compression_scale <= 0:
+            raise ValueError(
+                f"latent_compression_scale must be positive (use None to disable "
+                f"compression), got {latent_compression_scale=!r}"
+            )
 
         super().__init__(meta=MetaData())
 

@@ -23,42 +23,47 @@ import math
 
 
 def compute_full_angle_n_sphere(n_manifold_dims: int) -> float:
-    """Compute the full angle around a point in an n-dimensional manifold.
+    r"""Compute the full angle around a point in an n-dimensional manifold.
 
-    This is the total solid angle/turning angle available at a point.
+    This is the total solid angle / turning angle available at a point.
 
     For discrete differential geometry:
-    - 1D curves: Full turning angle is π (can turn left or right from straight)
-    - 2D surfaces: Full angle is 2π (can look 360° around a point)
-    - 3D volumes: Full solid angle is 4π (full sphere around a point)
-    - nD: Surface area of unit (n-1)-sphere
+
+    - 1D curves: full turning angle is :math:`\pi` (can turn left or right
+      from straight).
+    - 2D surfaces: full angle is :math:`2\pi` (can look 360 degrees around
+      a point).
+    - 3D volumes: full solid angle is :math:`4\pi` (full sphere around a
+      point).
+    - nD: surface area of the unit :math:`(n-1)`-sphere.
 
     Parameters
     ----------
     n_manifold_dims : int
-        Manifold dimension
+        Manifold dimension.
 
     Returns
     -------
     float
-        Full angle for n-dimensional manifold:
-        - 1D: π
-        - 2D: 2π
-        - 3D: 4π
-        - nD: 2π^(n/2) / Γ(n/2) for n ≥ 2
+        Full angle for an :math:`n`-dimensional manifold:
+
+        - 1D: :math:`\pi`.
+        - 2D: :math:`2\pi`.
+        - 3D: :math:`4\pi`.
+        - nD: :math:`2 \pi^{n/2} / \Gamma(n/2)` for :math:`n \ge 2`.
 
     Examples
     --------
-        >>> import math
-        >>> assert abs(compute_full_angle_n_sphere(1) - math.pi) < 1e-10  # π
-        >>> assert abs(compute_full_angle_n_sphere(2) - 2*math.pi) < 1e-5  # 2π
+    >>> import math
+    >>> assert abs(compute_full_angle_n_sphere(1) - math.pi) < 1e-10
+    >>> assert abs(compute_full_angle_n_sphere(2) - 2 * math.pi) < 1e-10
     """
 
-    ### Special case for 1D: turning angle is π
+    ### Special case for 1D: turning angle is pi
     if n_manifold_dims == 1:
         return math.pi
 
-    ### General case (n ≥ 2): Surface area of (n-1)-sphere
-    # Formula: 2π^(n/2) / Γ(n/2)
+    ### General case (n >= 2): surface area of (n-1)-sphere
+    # Formula: 2 pi^(n/2) / Gamma(n/2)
     n = n_manifold_dims
     return 2 * math.pi ** (n / 2.0) / math.exp(math.lgamma(n / 2.0))

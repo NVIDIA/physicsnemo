@@ -278,6 +278,30 @@ class Reader(ABC):
                 logger.error(error_msg)
                 raise RuntimeError(error_msg) from e
 
+    def set_generator(self, generator: torch.Generator) -> None:
+        """Assign a ``torch.Generator`` for reproducible random sampling.
+
+        Override in subclasses that use randomness (e.g. subsampling).
+        The default implementation is a no-op.
+
+        Parameters
+        ----------
+        generator : torch.Generator
+            Generator to use for random draws.
+        """
+
+    def set_epoch(self, epoch: int) -> None:
+        """Reseed the reader's RNG for a new epoch.
+
+        Override in subclasses that use randomness.
+        The default implementation is a no-op.
+
+        Parameters
+        ----------
+        epoch : int
+            Current epoch number.
+        """
+
     def close(self) -> None:
         """
         Clean up resources (file handles, connections, etc.).

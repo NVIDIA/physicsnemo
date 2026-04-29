@@ -37,39 +37,44 @@ def estimate_tangent_space_pca(
     Float[torch.Tensor, "n_points n_manifold_dims n_spatial_dims"],
     Float[torch.Tensor, "n_points codimension n_spatial_dims"],
 ]:
-    """Estimate tangent space at each point using PCA on local neighborhoods.
+    r"""Estimate tangent space at each point using PCA on local neighborhoods.
 
-    For each point, gathers k-nearest neighbors and performs PCA on their
-    relative positions. The eigenvectors corresponding to the largest eigenvalues
-    span the tangent space, while those with smallest eigenvalues span the normal space.
+    For each point, gathers :math:`k` nearest neighbors and performs PCA on
+    their relative positions. The eigenvectors with the largest eigenvalues
+    span the tangent space; those with the smallest span the normal space.
 
     Parameters
     ----------
     mesh : Mesh
-        Input mesh
-    k_neighbors : int | None
-        Number of neighbors to use for PCA. If None, uses
-        min(2 * n_manifold_dims + 1, available_neighbors)
+        Input mesh.
+    k_neighbors : int or None, optional
+        Number of neighbors to use for PCA. If ``None``, uses
+        ``min(2 * n_manifold_dims + 1, available_neighbors)``.
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor]
-        Tuple of (tangent_basis, normal_basis) where:
-        - tangent_basis: (n_points, n_manifold_dims, n_spatial_dims)
-            Orthonormal basis vectors spanning tangent space at each point
-        - normal_basis: (n_points, codimension, n_spatial_dims)
-            Orthonormal basis vectors spanning normal space at each point
+    tuple[Float[torch.Tensor, "n_points n_manifold_dims n_spatial_dims"], Float[torch.Tensor, "n_points codimension n_spatial_dims"]]
+        Tuple of ``(tangent_basis, normal_basis)``:
+
+        - ``tangent_basis``: orthonormal basis vectors spanning the tangent
+          space at each point, shape
+          ``(n_points, n_manifold_dims, n_spatial_dims)``.
+        - ``normal_basis``: orthonormal basis vectors spanning the normal
+          space at each point, shape
+          ``(n_points, codimension, n_spatial_dims)``.
 
     Notes
     -----
     Algorithm:
-        1. For each point, gather k nearest neighbors
-        2. Center the neighborhood (subtract mean)
-        3. Compute covariance matrix C = (1/k) Σ (x_i - mean)(x_i - mean)^T
-        4. Eigen-decompose: C = V Λ V^T
-        5. Sort eigenvectors by eigenvalue (descending)
-        6. First n_manifold_dims eigenvectors span tangent space
-        7. Remaining eigenvectors span normal space
+
+    1. For each point, gather :math:`k` nearest neighbors.
+    2. Center the neighborhood (subtract mean).
+    3. Compute the covariance matrix
+       :math:`C = \tfrac{1}{k} \sum_i (x_i - \bar{x})(x_i - \bar{x})^\top`.
+    4. Eigen-decompose: :math:`C = V \Lambda V^\top`.
+    5. Sort eigenvectors by eigenvalue (descending).
+    6. First ``n_manifold_dims`` eigenvectors span the tangent space.
+    7. Remaining eigenvectors span the normal space.
 
     Examples
     --------
@@ -174,17 +179,17 @@ def project_gradient_to_tangent_space_pca(
     Parameters
     ----------
     mesh : Mesh
-        Input mesh
-    gradients : torch.Tensor
-        Extrinsic gradients, shape (n_points, n_spatial_dims) or
-        (n_points, n_spatial_dims, ...)
-    k_neighbors : int | None
-        Number of neighbors for PCA estimation
+        Input mesh.
+    gradients : Float[torch.Tensor, "n_points n_spatial_dims ..."]
+        Extrinsic gradients, shape ``(n_points, n_spatial_dims, ...)``.
+    k_neighbors : int or None, optional
+        Number of neighbors for PCA estimation.
 
     Returns
     -------
-    torch.Tensor
-        Intrinsic gradients projected onto tangent space, same shape as input
+    Float[torch.Tensor, "n_points n_spatial_dims ..."]
+        Intrinsic gradients projected onto the tangent space, same shape as
+        ``gradients``.
 
     Examples
     --------

@@ -276,6 +276,7 @@ def subdivide_butterfly(mesh: "Mesh") -> "Mesh":
     results than linear subdivision by using weighted stencils for new vertices.
 
     Properties:
+
     - Interpolating: original vertices remain unchanged
     - New edge midpoints use weighted neighbor stencils
     - Designed for 2D manifolds (triangular meshes)
@@ -301,12 +302,12 @@ def subdivide_butterfly(mesh: "Mesh") -> "Mesh":
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-        >>> # Smooth a triangular surface
-        >>> mesh = sphere_icosahedral.load(subdivisions=2)
-        >>> smooth = subdivide_butterfly(mesh)
-        >>> # smooth has same connectivity as linear subdivision
-        >>> # but smoother geometry from weighted stencils
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    >>> # Smooth a triangular surface
+    >>> mesh = sphere_icosahedral.load(subdivisions=2)
+    >>> smooth = subdivide_butterfly(mesh)
+    >>> # smooth has same connectivity as linear subdivision
+    >>> # but smoother geometry from weighted stencils
     """
     from physicsnemo.mesh.mesh import Mesh
 

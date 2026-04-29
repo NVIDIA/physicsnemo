@@ -38,7 +38,7 @@ defaults:
 # └───────────────────────────────────────────┘
 
 training:
-  raw_data_dir: ???              # set in config or via CLI: training.raw_data_dir=/path/to/train
+  raw_data_dir: ???        # set in config or via CLI: training.raw_data_dir=/path/to/train
   raw_data_dir_validation: ???   # set in config or via CLI: training.raw_data_dir_validation=/path/to/validation
   global_features_filepath: ???  # set in config or via CLI: training.global_features_filepath=/path/to/global_features.json
   optimizer: muon
@@ -76,3 +76,11 @@ model:
   functional_dim: 3   # coords (3)
   out_dim: 250        # (num_time_steps - 1) * 5 = 50 * 5
   global_dim: 3       # must match len(datapipe.global_features)
+  # OOD guard (disabled by default — set `guard_config` to a mapping to enable)
+  guard_config: null
+  # Example enabled config:
+  # guard_config:
+  #   buffer_size: 121       # FIFO buffer size (= num_training_samples)
+  #   knn_k: 10              # k for geometry kNN distance (recommended 5–15)
+  #   sensitivity: 1.5       # threshold = sensitivity * 99th-percentile in-dist
+  #                          # kNN distance; >1 is less sensitive, <1 more.

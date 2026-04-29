@@ -53,9 +53,9 @@ class CellPartition(NamedTuple):
     cluster_areas : Float[torch.Tensor, " n_seeds"]
         Total cell area assigned to each seed.
         Sums to the total surface area of the original mesh by construction.
-    cluster_normals : Float[torch.Tensor, "n_seeds n_dims"]
+    cluster_normals : Float[torch.Tensor, "n_seeds n_spatial_dims"]
         Area-weighted average unit normal per cluster.
-    cluster_centroids : Float[torch.Tensor, "n_seeds n_dims"]
+    cluster_centroids : Float[torch.Tensor, "n_seeds n_spatial_dims"]
         Area-weighted centroid per cluster.
         For a well-centered seed this is close to the seed itself; the
         difference measures how far the seed is from its Voronoi centroid
@@ -64,13 +64,13 @@ class CellPartition(NamedTuple):
 
     assignments: Int[torch.Tensor, " n_cells"]
     cluster_areas: Float[torch.Tensor, " n_seeds"]
-    cluster_normals: Float[torch.Tensor, "n_seeds n_dims"]
-    cluster_centroids: Float[torch.Tensor, "n_seeds n_dims"]
+    cluster_normals: Float[torch.Tensor, "n_seeds n_spatial_dims"]
+    cluster_centroids: Float[torch.Tensor, "n_seeds n_spatial_dims"]
 
 
 def partition_cells(
     mesh: Mesh,
-    seeds: Float[torch.Tensor, "n_seeds n_dims"],
+    seeds: Float[torch.Tensor, "n_seeds n_spatial_dims"],
 ) -> CellPartition:
     """Partition mesh cells into Voronoi regions around seed points.
 
@@ -93,8 +93,9 @@ def partition_cells(
         Source mesh whose cells will be partitioned.  For codimension-1
         meshes (surfaces), cluster normals are computed from cell normals.
         For other meshes, cluster normals are zero vectors.
-    seeds : Float[torch.Tensor, "n_seeds n_dims"]
-        Seed point positions.  ``n_dims`` must match ``mesh.n_spatial_dims``.
+    seeds : Float[torch.Tensor, "n_seeds n_spatial_dims"]
+        Seed point positions.  ``n_spatial_dims`` must match
+        ``mesh.n_spatial_dims``.
 
     Returns
     -------

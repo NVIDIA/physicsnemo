@@ -424,33 +424,38 @@ def radius_search_impl_fake(
         indices = torch.empty(
             queries.shape[0], max_points, dtype=torch.int32, device=queries.device
         )
-        if max_points is not None:
-            num_neighbors = torch.empty(
-                queries.shape[0], dtype=torch.int32, device=queries.device
-            )
-        else:
-            num_neighbors = torch.empty(0, dtype=torch.int32, device=queries.device)
+        num_neighbors = torch.empty(
+            queries.shape[0], dtype=torch.int32, device=queries.device
+        )
 
+        # Dtype must match the real op, which returns `distances.to(points.dtype)`
+        # and `points.to(points.dtype)`. Hard-coding fp32 here causes Inductor to
+        # emit kernels with the wrong strides/byte-counts under bf16/fp16 and
+        # triggers cudaErrorIllegalAddress downstream.
         if return_dists:
             distances = torch.empty(
                 queries.shape[0],
                 max_points,
-                dtype=torch.float32,
+                dtype=points.dtype,
                 device=queries.device,
             )
         else:
-            distances = torch.empty(0, dtype=torch.float32, device=queries.device)
+            distances = torch.empty(0, dtype=points.dtype, device=queries.device)
 
         if return_points:
             out_points = torch.empty(
                 queries.shape[0],
                 max_points,
                 3,
-                dtype=torch.float32,
+                dtype=points.dtype,
                 device=queries.device,
             )
         else:
-            out_points = torch.empty(0, 3, dtype=torch.float32, device=queries.device)
+            # Real op returns rank-3 (0, max_points, 3); keep the rank consistent
+            # so downstream shape/stride assumptions in compiled graphs hold.
+            out_points = torch.empty(
+                0, max_points, 3, dtype=points.dtype, device=queries.device
+            )
 
         return indices, out_points, distances, num_neighbors
 
@@ -601,6 +606,7 @@ def apply_grad_to_points(
 @apply_grad_to_points.register_fake
 def apply_grad_to_points_fake(
     indexes: torch.Tensor,
+    num_neighbors: torch.Tensor,
     grad_points_out: torch.Tensor,
     points_shape: List[int],
     max_points: int | None = None,
@@ -610,6 +616,8 @@ def apply_grad_to_points_fake(
 
     Args:
         indexes (torch.Tensor): The indices mapping output points to input points.
+        num_neighbors (torch.Tensor): The per-query neighbor counts (only used when
+            ``max_points`` is not None, but always present to match the real op signature).
         grad_points_out (torch.Tensor): The gradient of the output points.
         points_shape (torch.Size): The shape of the input points tensor.
 
@@ -636,6 +644,23 @@ def radius_search(
     return_dists: bool = False,
     return_points: bool = False,
 ):
+    """
+    Perform a radius search between points and queries.
+
+    Args:
+        points (torch.Tensor): The input points tensor.
+        queries (torch.Tensor): The query points tensor.
+        radius (float): The search radius.
+        max_points (int | None): The maximum number of neighbors per query, or
+            None for unlimited.
+        return_dists (bool): Whether to return distances between query and
+            neighbor points.
+        return_points (bool): Whether to return the neighbor points themselves.
+
+    Returns:
+        The formatted radius search results, whose contents depend on
+        ``return_dists`` and ``return_points``.
+    """
     indices, points_out, distances, _ = radius_search_impl(
         points, queries, radius, max_points, return_dists, return_points
     )

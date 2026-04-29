@@ -14,12 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Mean curvature computation for simplicial meshes.
+r"""Mean curvature computation for simplicial meshes.
 
-Implements extrinsic mean curvature using the cotangent Laplace-Beltrami operator.
-Only works for codimension-1 manifolds (surfaces with well-defined normals).
+Implements extrinsic mean curvature using the cotangent Laplace-Beltrami
+operator. Only works for codimension-1 manifolds (surfaces with well-defined
+normals).
 
-For 2D surfaces: H = (k1 + k2) / 2 where k1, k2 are principal curvatures
+For 2D surfaces: :math:`H = (k_1 + k_2) / 2`, where :math:`k_1, k_2` are the
+principal curvatures.
 """
 
 from typing import TYPE_CHECKING
@@ -39,57 +41,64 @@ def mean_curvature_vertices(
     mesh: "Mesh",
     include_boundary: bool = False,
 ) -> Float[torch.Tensor, " n_points"]:
-    """Compute extrinsic mean curvature at mesh vertices.
+    r"""Compute extrinsic mean curvature at mesh vertices.
 
-    Uses the cotangent Laplace-Beltrami operator:
-        H_vertex = (1/2) * ||L @ points|| / voronoi_area
+    Uses the cotangent Laplace-Beltrami operator. Let :math:`p` be the vertex
+    position vector and :math:`L` be the cotangent Laplacian; the mean
+    curvature at vertex :math:`v` is
 
-    where L is the cotangent Laplacian. The Laplacian of the embedding coordinates
-    gives the mean curvature normal vector, whose magnitude is the mean curvature.
+    .. math::
 
-    Mean curvature is an extrinsic measure (depends on embedding in ambient space)
-    and is only defined for codimension-1 manifolds where normals exist.
+        H(v) = \tfrac{1}{2} \, \frac{\|L\, p\|_v}{|{\star}v|},
+
+    where :math:`|{\star}v|` is the dual 0-cell (Voronoi) volume at :math:`v`.
+    The Laplacian of the embedding coordinates gives the mean curvature
+    normal vector, whose magnitude is the mean curvature.
+
+    Mean curvature is an extrinsic measure (depends on embedding in ambient
+    space) and is only defined for codimension-1 manifolds where normals exist.
 
     Signed curvature:
-    - Sign determined by normal orientation
-    - Positive: Convex (outward bulging like sphere exterior)
-    - Negative: Concave (inward curving like sphere interior)
-    - Zero: Minimal surface (soap film)
+
+    - Sign determined by normal orientation.
+    - Positive: convex (outward bulging like sphere exterior).
+    - Negative: concave (inward curving like sphere interior).
+    - Zero: minimal surface (soap film).
 
     Parameters
     ----------
     mesh : Mesh
-        Input mesh (must be codimension-1)
+        Input mesh (must be codimension-1).
     include_boundary : bool, optional
-        If False, boundary vertices are set to NaN (default).
-        If True, computes curvature at boundary vertices using available
-        neighbors (Neumann-like boundary condition). This may be less accurate
-        at boundaries but provides complete coverage.
+        If ``False`` (default), boundary vertices are set to ``NaN``.
+        If ``True``, computes curvature at boundary vertices using available
+        neighbors (Neumann-like boundary condition). This may be less
+        accurate at boundaries but provides complete coverage.
 
     Returns
     -------
-    torch.Tensor
-        Tensor of shape (n_points,) containing signed mean curvature at each vertex.
-        For isolated vertices, mean curvature is NaN.
-        For boundary vertices, NaN if include_boundary=False, otherwise computed.
+    Float[torch.Tensor, " n_points"]
+        Signed mean curvature at each vertex, shape ``(n_points,)``.
+        For isolated vertices, mean curvature is ``NaN``. For boundary
+        vertices, ``NaN`` if ``include_boundary=False``, otherwise computed.
 
     Raises
     ------
     ValueError
-        If mesh is not codimension-1
+        If mesh is not codimension-1.
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-        >>> # Sphere of radius r has H = 1/r everywhere
-        >>> sphere = sphere_icosahedral.load(radius=2.0, subdivisions=3)
-        >>> H = mean_curvature_vertices(sphere)
-        >>> # H.mean() ≈ 0.5 (= 1/2.0)
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    >>> # Sphere of radius r has H = 1/r everywhere
+    >>> sphere = sphere_icosahedral.load(radius=2.0, subdivisions=3)
+    >>> H = mean_curvature_vertices(sphere)
+    >>> # H.mean() approx 0.5 (= 1 / 2.0)
 
     Notes
     -----
-    For a sphere with outward normals, H > 0.
-    For minimal surfaces (soap films), H = 0.
+    For a sphere with outward normals, :math:`H > 0`. For minimal surfaces
+    (soap films), :math:`H = 0`.
     """
     ### Validate codimension (done in compute_laplacian_at_points)
 
