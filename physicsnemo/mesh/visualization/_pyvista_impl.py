@@ -16,22 +16,24 @@
 
 """PyVista backend for mesh visualization."""
 
-import importlib
 from typing import TYPE_CHECKING, Any, Literal
 
 import torch
 from jaxtyping import Float
 
-if TYPE_CHECKING:
-    from physicsnemo.mesh import Mesh
+from physicsnemo.core.version_check import OptionalImport
 
-# Dynamic import for optional pyvista dependency (invisible to static analysis)
-pv = importlib.import_module("pyvista")
-### ``BasePlotter`` is the common ancestor of ``pv.Plotter`` and Qt-backed
-### plotters (e.g. ``pyvistaqt.BackgroundPlotter`` -> ``QtInteractor`` ->
-### ``BasePlotter``), so accepting it covers every realistic caller. Fall
-### back to ``pv.Plotter`` only on ancient versions that predate the split.
-_PlotterBase = getattr(pv, "BasePlotter", pv.Plotter)
+### Optional dependency. ``pv`` is a lazy proxy: construction does not
+### import pyvista; the friendly ``ImportError`` (with the ``[mesh-extras]``
+### install hint) fires only on first attribute access. This module is only
+### loaded by ``draw_mesh.draw_mesh(..., backend="pyvista")``, so reaching
+### that first attribute access already implies the user opted in to pyvista.
+if TYPE_CHECKING:
+    import pyvista as pv
+
+    from physicsnemo.mesh import Mesh
+else:
+    pv = OptionalImport("pyvista")
 
 
 def draw_mesh_pyvista(
@@ -91,8 +93,13 @@ def draw_mesh_pyvista(
     pyvista.Plotter
         PyVista plotter object.
     """
-    ### Validate plotter type
-    if plotter is not None and not isinstance(plotter, _PlotterBase):
+    ### Validate plotter type. ``BasePlotter`` is the common ancestor of
+    ### ``pv.Plotter`` and Qt-backed plotters (e.g.
+    ### ``pyvistaqt.BackgroundPlotter`` -> ``QtInteractor`` -> ``BasePlotter``),
+    ### so accepting it covers every realistic caller. Fall back to
+    ### ``pv.Plotter`` only on ancient versions that predate the split.
+    plotter_base = getattr(pv, "BasePlotter", pv.Plotter)
+    if plotter is not None and not isinstance(plotter, plotter_base):
         raise ValueError(
             f"Expected a pyvista.Plotter for the 'plotter' parameter, "
             f"got {type(plotter).__name__}. "
