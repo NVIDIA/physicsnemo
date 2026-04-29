@@ -21,10 +21,19 @@ This module wires together all components of the remeshing pipeline.
 
 from typing import TYPE_CHECKING
 
-from physicsnemo.core.version_check import require_version_spec
+from physicsnemo.core.version_check import OptionalImport, require_version_spec
 
+### Optional dependency. ``pyacvd`` is a lazy proxy: construction does not
+### import the package; the friendly ``ImportError`` (with the
+### ``[mesh-extras]`` install hint) fires only on first attribute access. The
+### ``@require_version_spec("pyacvd")`` decorator on ``remesh`` raises that
+### same error proactively before any function-body work happens.
 if TYPE_CHECKING:
+    import pyacvd
+
     from physicsnemo.mesh.mesh import Mesh
+else:
+    pyacvd = OptionalImport("pyacvd")
 
 
 @require_version_spec("pyacvd")
@@ -82,12 +91,9 @@ def remesh(
     - Point and cell data are not transferred (topology changes fundamentally)
     - Output cell orientation may differ from input
     """
-    import importlib
-
     from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista
     from physicsnemo.mesh.repair import repair_mesh
 
-    pyacvd = importlib.import_module("pyacvd")
     clustering = pyacvd.Clustering(to_pyvista(mesh))
     clustering.cluster(n_clusters)
     new_mesh = from_pyvista(clustering.create_mesh())

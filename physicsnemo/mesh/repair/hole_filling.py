@@ -50,7 +50,7 @@ def _trace_boundary_loops(
     -------
     list[torch.Tensor]
         Each tensor contains the ordered vertex indices forming one boundary
-        loop (on the same device as *boundary_edges*). Vertices are in
+        loop (on the same device as ``boundary_edges``). Vertices are in
         traversal order; each consecutive pair shares a boundary edge, and
         the last connects back to the first.
     """

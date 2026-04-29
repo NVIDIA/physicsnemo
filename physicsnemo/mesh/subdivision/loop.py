@@ -290,6 +290,7 @@ def subdivide_loop(mesh: "Mesh") -> "Mesh":
     3. Connects vertices to form 4 triangles per original triangle
 
     Properties:
+
     - Approximating: original vertices move to new positions
     - Produces C² smooth limit surfaces for regular meshes
     - Designed for 2D manifolds (triangular meshes)
@@ -315,11 +316,11 @@ def subdivide_loop(mesh: "Mesh") -> "Mesh":
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-        >>> # Smooth a rough triangulated surface
-        >>> mesh = sphere_icosahedral.load(subdivisions=2)
-        >>> smooth = subdivide_loop(mesh)
-        >>> # Original vertices have moved; result is smoother
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    >>> # Smooth a rough triangulated surface
+    >>> mesh = sphere_icosahedral.load(subdivisions=2)
+    >>> smooth = subdivide_loop(mesh)
+    >>> # Original vertices have moved; result is smoother
     """
     from physicsnemo.mesh.mesh import Mesh
 

@@ -14,14 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Gradient operators using both DEC and LSQ methods.
+r"""Gradient operators using both DEC and LSQ methods.
 
 Provides gradient computation via:
-1. DEC (Discrete Exterior Calculus): grad(f) = ♯(df) - rigorous differential geometry
-2. LSQ (Least-Squares): weighted reconstruction - standard CFD approach
 
-Both methods support intrinsic (tangent space) and extrinsic (ambient space) gradients
-for manifolds embedded in higher-dimensional spaces.
+1. DEC (Discrete Exterior Calculus):
+   :math:`\operatorname{grad}(f) = \sharp(df)`, rigorous differential geometry.
+2. LSQ (Least-Squares): weighted reconstruction, the standard CFD approach.
+
+Both methods support intrinsic (tangent space) and extrinsic (ambient space)
+gradients for manifolds embedded in higher-dimensional spaces.
 """
 
 from typing import TYPE_CHECKING, Literal
@@ -37,24 +39,26 @@ def compute_gradient_points_dec(
     mesh: "Mesh",
     point_values: Float[torch.Tensor, "n_points ..."],
 ) -> Float[torch.Tensor, "n_points n_spatial_dims ..."]:
-    """Compute gradient at vertices using DEC: grad(f) = ♯(df).
+    r"""Compute gradient at vertices using DEC: :math:`\operatorname{grad}(f) = \sharp(df)`.
 
     Steps:
-        1. Apply exterior derivative d₀ to get 1-form on edges
-        2. Apply sharp operator ♯ to convert 1-form to vector field
+
+    1. Apply the exterior derivative :math:`d_0` to get a 1-form on edges.
+    2. Apply the sharp operator :math:`\sharp` to convert the 1-form to a
+       vector field.
 
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh
-    point_values : torch.Tensor
-        Values at vertices, shape (n_points,) or (n_points, ...)
+        Simplicial mesh.
+    point_values : Float[torch.Tensor, "n_points ..."]
+        Values at vertices.
 
     Returns
     -------
-    torch.Tensor
-        Gradient vectors at vertices, shape (n_points, n_spatial_dims) or
-        (n_points, n_spatial_dims, ...) for tensor fields
+    Float[torch.Tensor, "n_points n_spatial_dims ..."]
+        Gradient vectors at vertices, shape
+        ``(n_points, n_spatial_dims, ...)``.
     """
     from physicsnemo.mesh.calculus._exterior_derivative import exterior_derivative_0
     from physicsnemo.mesh.calculus._sharp_flat import sharp
@@ -74,24 +78,24 @@ def compute_gradient_points_lsq(
     weight_power: float = 2.0,
     intrinsic: bool = False,
 ) -> Float[torch.Tensor, "n_points n_spatial_dims ..."]:
-    """Compute gradient at vertices using weighted least-squares.
+    r"""Compute gradient at vertices using weighted least-squares.
 
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh
-    point_values : torch.Tensor
-        Values at vertices, shape (n_points,) or (n_points, ...)
+        Simplicial mesh.
+    point_values : Float[torch.Tensor, "n_points ..."]
+        Values at vertices.
     weight_power : float
-        Exponent for inverse distance weighting
+        Exponent for inverse-distance weighting.
     intrinsic : bool
-        If True and mesh is a manifold, solve LSQ in tangent space
+        If ``True`` and mesh is a manifold, solve LSQ in tangent space.
 
     Returns
     -------
-    torch.Tensor
-        Gradient vectors at vertices, shape (n_points, n_spatial_dims) or
-        (n_points, n_spatial_dims, ...) for tensor fields
+    Float[torch.Tensor, "n_points n_spatial_dims ..."]
+        Gradient vectors at vertices, shape
+        ``(n_points, n_spatial_dims, ...)``.
     """
     if intrinsic and mesh.codimension > 0:
         # Use intrinsic LSQ (solves in tangent space)
@@ -114,22 +118,22 @@ def compute_gradient_cells_lsq(
     cell_values: Float[torch.Tensor, "n_cells ..."],
     weight_power: float = 2.0,
 ) -> Float[torch.Tensor, "n_cells n_spatial_dims ..."]:
-    """Compute gradient at cells using weighted least-squares.
+    r"""Compute gradient at cells using weighted least-squares.
 
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh
-    cell_values : torch.Tensor
-        Values at cells, shape (n_cells,) or (n_cells, ...)
+        Simplicial mesh.
+    cell_values : Float[torch.Tensor, "n_cells ..."]
+        Values at cells.
     weight_power : float
-        Exponent for inverse distance weighting
+        Exponent for inverse-distance weighting.
 
     Returns
     -------
-    torch.Tensor
-        Gradient vectors at cells, shape (n_cells, n_spatial_dims) or
-        (n_cells, n_spatial_dims, ...) for tensor fields
+    Float[torch.Tensor, "n_cells n_spatial_dims ..."]
+        Gradient vectors at cells, shape
+        ``(n_cells, n_spatial_dims, ...)``.
     """
     from physicsnemo.mesh.calculus._lsq_reconstruction import compute_cell_gradient_lsq
 
@@ -141,35 +145,35 @@ def project_to_tangent_space(
     gradients: Float[torch.Tensor, "n n_spatial_dims ..."],
     location: Literal["points", "cells"],
 ) -> Float[torch.Tensor, "n n_spatial_dims ..."]:
-    """Project gradients onto manifold tangent space for intrinsic derivatives.
+    r"""Project gradients onto manifold tangent space for intrinsic derivatives.
 
-    For manifolds where n_manifold_dims < n_spatial_dims (e.g., surfaces in 3D),
-    the intrinsic gradient lies in the tangent space of the manifold.
+    For manifolds where ``n_manifold_dims < n_spatial_dims`` (e.g. surfaces in
+    3D), the intrinsic gradient lies in the tangent space of the manifold.
 
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh
-    gradients : torch.Tensor
-        Extrinsic gradients, shape (n, n_spatial_dims, ...)
-    location : Literal["points", "cells"]
-        Whether gradients are at "points" or "cells"
+        Simplicial mesh.
+    gradients : Float[torch.Tensor, "n n_spatial_dims ..."]
+        Extrinsic gradients.
+    location : {"points", "cells"}
+        Whether gradients are at points or cells.
 
     Returns
     -------
-    torch.Tensor
-        Intrinsic gradients (projected onto tangent space),
-        same shape as input
+    Float[torch.Tensor, "n n_spatial_dims ..."]
+        Intrinsic gradients (projected onto tangent space), same shape as input.
 
     Notes
     -----
-    Algorithm:
-        For codimension-1 manifolds:
-        1. Get normal vector at each point/cell
-        2. Project gradient: grad_intrinsic = grad - (grad·n)n
+    For codimension-1 manifolds:
 
-        For higher codimension:
-        Use PCA on local neighborhood to estimate tangent space
+    1. get the normal vector at each point/cell,
+    2. project the gradient,
+       :math:`\nabla_\text{int} f = \nabla f - (\nabla f \cdot \hat{n}) \, \hat{n}`.
+
+    For higher codimension, PCA on a local neighborhood is used to estimate
+    the tangent space.
     """
     if mesh.codimension == 0:
         # Manifold fills the space: intrinsic = extrinsic

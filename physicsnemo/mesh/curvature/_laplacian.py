@@ -34,15 +34,20 @@ if TYPE_CHECKING:
 def compute_laplacian_at_points(
     mesh: "Mesh",
 ) -> Float[torch.Tensor, "n_points n_spatial_dims"]:
-    """Compute cotangent Laplacian applied to point positions directly.
+    r"""Compute cotangent Laplacian applied to point positions directly.
 
-    Computes L @ points where L is the cotangent Laplacian matrix, but
-    without explicitly building L (more efficient).
+    Computes :math:`L p` where :math:`L` is the cotangent Laplacian matrix
+    and :math:`p` is the stack of vertex position vectors, but without
+    explicitly building :math:`L` (more efficient).
 
-    For each vertex i:
-        (L @ points)_i = Σ_neighbors_j w_ij * (p_j - p_i)
+    For each vertex :math:`i` with neighborhood :math:`N(i)`,
 
-    where w_ij are cotangent weights that depend on manifold dimension.
+    .. math::
+
+        (L p)_i = \sum_{j \in N(i)} w_{ij} \, (p_j - p_i),
+
+    where :math:`w_{ij}` are cotangent weights that depend on the manifold
+    dimension.
 
     Parameters
     ----------
@@ -51,14 +56,13 @@ def compute_laplacian_at_points(
 
     Returns
     -------
-    torch.Tensor
-        Tensor of shape (n_points, n_spatial_dims) representing Laplacian
-        applied to point coordinates.
+    Float[torch.Tensor, "n_points n_spatial_dims"]
+        Laplacian applied to point coordinates.
 
     Raises
     ------
     ValueError
-        If codimension != 1 (mean curvature requires normals).
+        If ``codimension != 1`` (mean curvature requires normals).
 
     Examples
     --------
@@ -95,7 +99,7 @@ def compute_laplacian_at_points(
     from physicsnemo.mesh.calculus.laplacian import _apply_cotan_laplacian_operator
 
     return _apply_cotan_laplacian_operator(
-        n_vertices=n_points,
+        n_points=n_points,
         edges=unique_edges,
         cotan_weights=cotangent_weights,
         data=mesh.points,

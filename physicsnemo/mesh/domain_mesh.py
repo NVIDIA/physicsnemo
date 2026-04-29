@@ -14,15 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 import torch
+from jaxtyping import Float
 from tensordict import TensorDict, tensorclass
 
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
+
+if TYPE_CHECKING:
+    import matplotlib.axes
+    import pyvista
 
 
 @tensorclass
@@ -124,7 +129,7 @@ class DomainMesh:
         # defaults, coercions, and validation.
         self.__post_init__()
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Normalize fields and validate invariants.
 
         Called automatically during ``load()`` by tensorclass, and explicitly
@@ -358,7 +363,7 @@ class DomainMesh:
 
     def translate(
         self,
-        offset: torch.Tensor | list | tuple,
+        offset: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float],
     ) -> "DomainMesh":
         r"""Translate all meshes in the domain by a constant offset.
 
@@ -366,8 +371,8 @@ class DomainMesh:
 
         Parameters
         ----------
-        offset : torch.Tensor or list or tuple
-            Translation vector, shape :math:`(S,)` where *S* is
+        offset : torch.Tensor or Sequence[float]
+            Translation vector, shape :math:`(S,)` where :math:`S` is
             ``n_spatial_dims``.
 
         Returns
@@ -380,8 +385,11 @@ class DomainMesh:
     def rotate(
         self,
         angle: float,
-        axis: torch.Tensor | list | tuple | Literal["x", "y", "z"] | None = None,
-        center: torch.Tensor | list | tuple | None = None,
+        axis: Float[torch.Tensor, " n_spatial_dims"]
+        | Sequence[float]
+        | Literal["x", "y", "z"]
+        | None = None,
+        center: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
         transform_point_data: bool | TensorDict = False,
         transform_cell_data: bool | TensorDict = False,
         transform_global_data: bool | TensorDict = False,
@@ -397,10 +405,10 @@ class DomainMesh:
         ----------
         angle : float
             Rotation angle in radians.
-        axis : torch.Tensor or list or tuple or {"x", "y", "z"}, optional
-            Rotation axis vector (3D) or ``None`` (2D).
-        center : torch.Tensor or list or tuple, optional
-            Center point for rotation.
+        axis : torch.Tensor or Sequence[float] or {"x", "y", "z"}, optional
+            Rotation axis vector, shape :math:`(D_s,)`. Use ``None`` for 2D.
+        center : torch.Tensor or Sequence[float], optional
+            Center point for rotation, shape :math:`(D_s,)`.
         transform_point_data : bool or TensorDict
             Controls transformation of ``point_data`` fields. ``True``
             transforms all compatible fields; a ``TensorDict`` (or
@@ -454,8 +462,8 @@ class DomainMesh:
 
     def scale(
         self,
-        factor: float | torch.Tensor,
-        center: torch.Tensor | None = None,
+        factor: float | Float[torch.Tensor, " n_spatial_dims"],
+        center: Float[torch.Tensor, " n_spatial_dims"] | Sequence[float] | None = None,
         transform_point_data: bool | TensorDict = False,
         transform_cell_data: bool | TensorDict = False,
         transform_global_data: bool | TensorDict = False,
@@ -470,9 +478,9 @@ class DomainMesh:
         Parameters
         ----------
         factor : float or torch.Tensor
-            Scale factor (scalar) or per-dimension factors.
-        center : torch.Tensor, optional
-            Center point for scaling.
+            Scale factor (scalar) or per-dimension factors, shape :math:`(D_s,)`.
+        center : torch.Tensor or Sequence[float], optional
+            Center point for scaling, shape :math:`(D_s,)`.
         transform_point_data : bool or TensorDict
             Controls transformation of ``point_data`` fields. ``True``
             transforms all compatible fields; a ``TensorDict`` (or
@@ -527,7 +535,7 @@ class DomainMesh:
 
     def transform(
         self,
-        matrix: torch.Tensor,
+        matrix: Float[torch.Tensor, "new_n_spatial_dims n_spatial_dims"],
         transform_point_data: bool | TensorDict = False,
         transform_cell_data: bool | TensorDict = False,
         transform_global_data: bool | TensorDict = False,
@@ -768,7 +776,7 @@ class DomainMesh:
         check_manifoldness: bool = False,
         tolerance: float = 1e-10,
         raise_on_error: bool = False,
-    ) -> dict:
+    ) -> dict[str, Any]:
         r"""Validate all meshes in the domain and aggregate results.
 
         Delegates to :meth:`Mesh.validate` for the interior and each boundary
@@ -793,14 +801,17 @@ class DomainMesh:
 
         Returns
         -------
-        dict
+        dict[str, Any]
             Aggregated validation report with keys:
 
-            - ``"interior"``: validation report for the interior mesh.
-            - ``"boundaries"``: ``dict[str, dict]`` of per-boundary reports.
-            - ``"valid"``: ``True`` only if all meshes pass validation.
+            - ``"interior"``: validation report for the interior mesh
+              (``Mapping[str, bool | int | torch.Tensor]``, see
+              :meth:`Mesh.validate`).
+            - ``"boundaries"``: ``dict[str, Mapping[str, ...]]`` of per-boundary
+              reports.
+            - ``"valid"``: ``bool``, ``True`` only if all meshes pass validation.
         """
-        kwargs = dict(
+        kwargs: dict[str, Any] = dict(
             check_degenerate_cells=check_degenerate_cells,
             check_duplicate_vertices=check_duplicate_vertices,
             check_inverted_cells=check_inverted_cells,
@@ -986,9 +997,9 @@ class DomainMesh:
         alpha_edges: float = 1.0,
         show_edges: bool = False,
         boundary_kwargs: dict[str, Any] | None = None,
-        ax: Any = None,
+        ax: "matplotlib.axes.Axes | pyvista.Plotter | None" = None,
         backend_options: dict[str, Any] | None = None,
-    ):
+    ) -> "matplotlib.axes.Axes | pyvista.Plotter":
         r"""Draw the domain: interior with optional scalar coloring, boundaries overlaid.
 
         Renders the interior as the primary visual layer, then overlays every

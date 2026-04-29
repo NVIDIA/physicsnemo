@@ -36,6 +36,10 @@ from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.visualization.draw_mesh import draw_mesh
 
+if TYPE_CHECKING:
+    import matplotlib.axes
+    import pyvista
+
 
 @tensorclass(tensor_only=True, shadow=True)
 class Mesh:
@@ -602,16 +606,17 @@ class Mesh:
         The codimension is the difference between the spatial dimension and the
         manifold dimension: codimension = n_spatial_dims - n_manifold_dims.
 
-        Examples:
-            - Edges (1-simplices) in 2D: codimension = 2 - 1 = 1 (codimension-1)
-            - Triangles (2-simplices) in 3D: codimension = 3 - 2 = 1 (codimension-1)
-            - Edges in 3D: codimension = 3 - 1 = 2 (codimension-2)
-            - Points in 2D: codimension = 2 - 0 = 2 (codimension-2)
-
         Returns
         -------
         int
             The codimension of the mesh (always non-negative).
+
+        Notes
+        -----
+        - Edges (1-simplices) in 2D: codimension = 2 - 1 = 1 (codimension-1)
+        - Triangles (2-simplices) in 3D: codimension = 3 - 2 = 1 (codimension-1)
+        - Edges in 3D: codimension = 3 - 1 = 2 (codimension-2)
+        - Points in 2D: codimension = 2 - 0 = 2 (codimension-2)
         """
         return self.n_spatial_dims - self.n_manifold_dims
 
@@ -737,11 +742,11 @@ class Mesh:
 
         Examples
         --------
-            >>> # Triangle mesh in 3D
-            >>> mesh = create_triangle_mesh_3d()  # doctest: +SKIP
-            >>> normals = mesh.point_normals  # (n_points, 3), angle-area-weighted  # doctest: +SKIP
-            >>> # Normals are unit vectors (or zero for isolated points)
-            >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)  # doctest: +SKIP
+        >>> # Triangle mesh in 3D
+        >>> mesh = create_triangle_mesh_3d()  # doctest: +SKIP
+        >>> normals = mesh.point_normals  # (n_points, 3), angle-area-weighted  # doctest: +SKIP
+        >>> # Normals are unit vectors (or zero for isolated points)
+        >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)  # doctest: +SKIP
         """
         cached = self._cache.get(("point", "normals"), None)
         if cached is None:
@@ -790,6 +795,7 @@ class Mesh:
         ----------
         weighting : {"area", "unweighted", "angle", "angle_area"}
             Weighting scheme for averaging adjacent cell normals.
+
             - "area": Weight by cell area (larger faces have more influence).
             - "unweighted": Equal weight for all adjacent cells (matches PyVista/VTK).
             - "angle": Weight by interior angle at the vertex.
@@ -816,13 +822,13 @@ class Mesh:
 
         Examples
         --------
-            >>> # Triangle mesh in 3D
-            >>> mesh = create_triangle_mesh_3d()  # doctest: +SKIP
-            >>> normals = mesh.compute_point_normals()  # area-weighted (default)  # doctest: +SKIP
-            >>> normals_unweighted = mesh.compute_point_normals(weighting="unweighted")  # doctest: +SKIP
-            >>> normals_angle = mesh.compute_point_normals(weighting="angle")  # doctest: +SKIP
-            >>> # Normals are unit vectors (or zero for isolated points)
-            >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)  # doctest: +SKIP
+        >>> # Triangle mesh in 3D
+        >>> mesh = create_triangle_mesh_3d()  # doctest: +SKIP
+        >>> normals = mesh.compute_point_normals()  # area-weighted (default)  # doctest: +SKIP
+        >>> normals_unweighted = mesh.compute_point_normals(weighting="unweighted")  # doctest: +SKIP
+        >>> normals_angle = mesh.compute_point_normals(weighting="angle")  # doctest: +SKIP
+        >>> # Normals are unit vectors (or zero for isolated points)
+        >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)  # doctest: +SKIP
         """
         valid_weightings = ("area", "unweighted", "angle", "angle_area")
         if weighting not in valid_weightings:
@@ -913,39 +919,58 @@ class Mesh:
 
     @property
     def gaussian_curvature_vertices(self) -> torch.Tensor:
-        """Compute intrinsic Gaussian curvature at mesh vertices.
+        r"""Compute intrinsic Gaussian curvature at mesh vertices.
 
-        Uses the angle defect method from discrete differential geometry:
-            K = (full_angle - Σ angles) / voronoi_area
+        Uses the angle-defect method from discrete differential geometry. For
+        a vertex :math:`v` with incident cells :math:`\sigma \ni v` and
+        interior angle :math:`\theta_\sigma(v)` at :math:`v` in each
+        :math:`\sigma`,
 
-        This is an intrinsic measure of curvature (Theorema Egregium) that works
-        for any codimension, as it depends only on distances within the manifold.
+        .. math::
+
+            K(v) = \frac{\Theta(v)}{|{\star}v|},
+            \quad
+            \Theta(v) = \Theta_n - \sum_{\sigma \ni v} \theta_\sigma(v),
+
+        where :math:`\Theta_n` is the full angle in an :math:`n`-dimensional
+        manifold and :math:`|{\star}v|` is the dual 0-cell (Voronoi) volume.
+        This is an intrinsic measure of curvature (Theorema Egregium) that
+        works for any codimension, as it depends only on distances within the
+        manifold.
 
         Signed curvature:
-        - Positive: Elliptic/convex (sphere-like)
-        - Zero: Flat/parabolic (plane-like)
-        - Negative: Hyperbolic/saddle (saddle-like)
 
-        The result is cached in ``_cache["point", "gaussian_curvature"]`` for efficiency.
+        - Positive: elliptic/convex (sphere-like).
+        - Zero: flat/parabolic (plane-like).
+        - Negative: hyperbolic/saddle (saddle-like).
+
+        The result is cached in ``_cache["point", "gaussian_curvature"]`` for
+        efficiency.
 
         Returns
         -------
         torch.Tensor
-            Tensor of shape (n_points,) containing signed Gaussian curvature.
-            Isolated vertices have NaN curvature.
+            Signed Gaussian curvature, shape ``(n_points,)``.
+            Isolated vertices have ``NaN`` curvature.
 
         Notes
         -----
-        Satisfies discrete Gauss-Bonnet theorem:
-            Σ_vertices (K_i * A_i) = 2π * χ(M)
+        Satisfies the discrete Gauss-Bonnet theorem,
+
+        .. math::
+
+            \sum_v K(v) \, |{\star}v| = 2 \pi \, \chi(M),
+
+        where the sum is over vertices and :math:`\chi(M)` is the Euler
+        characteristic.
 
         Examples
         --------
         >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-        >>> # Sphere of radius r has K = 1/r²
+        >>> # Sphere of radius r has K = 1/r^2
         >>> sphere = sphere_icosahedral.load(radius=2.0, subdivisions=3)
         >>> K = sphere.gaussian_curvature_vertices
-        >>> # K.mean() ≈ 0.25 (= 1/(2.0)²)
+        >>> # K.mean() approx 0.25 (= 1 / 2.0^2)
         """
         cached = self._cache.get(("point", "gaussian_curvature"), None)
         if cached is None:
@@ -998,6 +1023,7 @@ class Mesh:
         For 2D surfaces: H = (k1 + k2) / 2 where k1, k2 are principal curvatures
 
         Signed curvature:
+
         - Positive: Convex (sphere exterior with outward normals)
         - Negative: Concave (sphere interior with outward normals)
         - Zero: Minimal surface (soap film)
@@ -1140,6 +1166,7 @@ class Mesh:
         ----------
         indices : int or slice or Ellipsis or None or torch.Tensor or Sequence
             Indices or mask to select points. Supports:
+
             - ``int``: Single point index
             - ``slice``: Python slice object
             - ``Ellipsis`` or ``None``: Keep all points (returns self)
@@ -1281,6 +1308,7 @@ class Mesh:
         alpha : float, optional
             Concentration parameter for the Dirichlet distribution. Controls how
             samples are distributed within each cell:
+
             - alpha = 1.0: Uniform distribution over the simplex (default)
             - alpha > 1.0: Concentrates samples toward the center of each cell
             - alpha < 1.0: Concentrates samples toward vertices and edges
@@ -1339,10 +1367,12 @@ class Mesh:
             Query point locations, shape (n_queries, n_spatial_dims).
         data_source : {"cells", "points"}, optional
             How to retrieve data:
+
             - "cells": Use cell data directly (no interpolation)
             - "points": Interpolate point data using barycentric coordinates
         multiple_cells_strategy : {"mean", "nan"}, optional
             How to handle query points in multiple cells:
+
             - "mean": Return arithmetic mean of values from all containing cells
             - "nan": Return NaN for ambiguous points
         project_onto_nearest_cell : bool, optional
@@ -1530,6 +1560,7 @@ class Mesh:
         """Extract k-codimension facet mesh from this n-dimensional mesh.
 
         Extracts all (n-k)-simplices from the current n-simplicial mesh. For example:
+
         - Triangle mesh (2-simplices) → edge mesh (1-simplices) [codimension=1, default]
         - Triangle mesh (2-simplices) → vertex mesh (0-simplices) [codimension=2]
         - Tetrahedral mesh (3-simplices) → triangular facet mesh (2-simplices) [codimension=1, default]
@@ -1687,7 +1718,7 @@ class Mesh:
 
         Each edge (pair of vertices connected in a cell) appears exactly once.
         The resulting Mesh has the same ``points`` array, with ``cells`` of
-        shape :math:`(E, 2)` where *E* is the number of unique edges.
+        shape :math:`(E, 2)` where :math:`E` is the number of unique edges.
 
         Cell data from the parent mesh is aggregated onto edges via the
         facet extraction pipeline (mean aggregation by default).
@@ -1840,6 +1871,7 @@ class Mesh:
         ----------
         check_level : {"facets", "edges", "full"}, optional
             Level of checking to perform:
+
             - "facets": Only check codimension-1 facets (each appears 1-2 times)
             - "edges": Check facets + edge neighborhoods (for 2D/3D meshes)
             - "full": Complete manifold validation (default)
@@ -1884,7 +1916,7 @@ class Mesh:
         compute_fn : callable
             ``(mesh, **kwargs) -> Adjacency`` invoked on cache miss.
         **kwargs
-            Forwarded to *compute_fn*.
+            Forwarded to ``compute_fn``.
 
         Returns
         -------
@@ -1918,8 +1950,8 @@ class Mesh:
         Returns
         -------
         Adjacency
-            Adjacency where adjacency.to_list()[i] contains all cell indices that
-            contain point i. Isolated points (not in any cells) have empty lists.
+            Adjacency where ``adjacency.to_list()[i]`` contains all cell indices that
+            contain point ``i``. Isolated points (not in any cells) have empty lists.
 
         Examples
         --------
@@ -1946,8 +1978,8 @@ class Mesh:
         Returns
         -------
         Adjacency
-            Adjacency where adjacency.to_list()[i] contains all point indices that
-            share a cell (edge) with point i. Isolated points have empty lists.
+            Adjacency where ``adjacency.to_list()[i]`` contains all point indices that
+            share a cell (edge) with point ``i``. Isolated points have empty lists.
 
         Examples
         --------
@@ -1985,8 +2017,8 @@ class Mesh:
         Returns
         -------
         Adjacency
-            Adjacency where adjacency.to_list()[i] contains all cell indices that
-            share a k-codimension facet with cell i.
+            Adjacency where ``adjacency.to_list()[i]`` contains all cell indices that
+            share a k-codimension facet with cell ``i``.
 
         Examples
         --------
@@ -2015,9 +2047,9 @@ class Mesh:
         Returns
         -------
         Adjacency
-            Adjacency where adjacency.to_list()[i] contains all point indices that
-            are vertices of cell i. For simplicial meshes, all cells have the same
-            number of vertices (n_manifold_dims + 1).
+            Adjacency where ``adjacency.to_list()[i]`` contains all point indices that
+            are vertices of cell ``i``. For simplicial meshes, all cells have the same
+            number of vertices (``n_manifold_dims + 1``).
 
         Examples
         --------
@@ -2041,6 +2073,7 @@ class Mesh:
 
         This is the low-level padding method that performs the actual padding operation.
         Padding uses null/degenerate elements that don't affect computations:
+
         - Points: Additional points at the last existing point (preserves bounding box)
         - cells: Degenerate cells with all vertices at the last existing point (zero area)
         - cell data: NaN-valued padding for all cell data fields (default)
@@ -2196,9 +2229,9 @@ class Mesh:
         alpha_cells: float = 1.0,
         alpha_edges: float = 1.0,
         show_edges: bool = True,
-        ax=None,
+        ax: "matplotlib.axes.Axes | pyvista.Plotter | None" = None,
         backend_options: dict[str, Any] | None = None,
-    ):
+    ) -> "matplotlib.axes.Axes | pyvista.Plotter":
         """Draw the mesh using matplotlib or PyVista backend.
 
         Provides interactive 3D or 2D visualization with support for scalar data
@@ -2397,6 +2430,7 @@ class Mesh:
             If True, scale vector/tensor fields in global_data.
         assume_invertible : bool or None, optional
             Controls cache propagation:
+
             - True: Assume all factors are non-zero (compile-safe).
             - False: Skip cache propagation (compile-safe).
             - None: Check at runtime (may cause graph breaks).
@@ -2440,6 +2474,7 @@ class Mesh:
             If True, transform vector/tensor fields in global_data.
         assume_invertible : bool or None, optional
             Controls cache propagation for square matrices:
+
             - True: Assume matrix is invertible (compile-safe).
             - False: Skip cache propagation (compile-safe).
             - None: Check at runtime (may cause graph breaks).
@@ -2472,16 +2507,19 @@ class Mesh:
         ----------
         keys : str or tuple[str, ...] or list[str | tuple[str, ...]] or None, optional
             Fields to compute gradients of. Options:
+
             - None: All non-cached fields (excludes "_cache" subdictionary)
             - str: Single field name (e.g., "pressure")
             - tuple: Nested path (e.g., ("flow", "temperature"))
             - list: Multiple fields (e.g., ["pressure", "velocity"])
         method : {"lsq", "dec"}, optional
             Discretization method:
+
             - "lsq": Weighted least-squares reconstruction (default, CFD standard)
             - "dec": Discrete Exterior Calculus (differential geometry)
         gradient_type : {"intrinsic", "extrinsic", "both"}, optional
             Type of gradient:
+
             - "intrinsic": Project onto manifold tangent space (default)
             - "extrinsic": Full ambient space gradient
             - "both": Compute and store both
@@ -2587,10 +2625,10 @@ class Mesh:
             Field to integrate:
 
             - ``str`` or ``tuple``: looked up in ``cell_data`` or
-              ``point_data`` according to *data_source*.
+              ``point_data`` according to ``data_source``.
             - ``torch.Tensor``: used directly.
         data_source : {"cells", "points"}
-            Whether *field* is cell-centered (P0) or vertex-centered (P1).
+            Whether ``field`` is cell-centered (P0) or vertex-centered (P1).
 
         Returns
         -------
@@ -2601,11 +2639,11 @@ class Mesh:
         Raises
         ------
         KeyError
-            If *field* is a string key not present in the specified
+            If ``field`` is a string key not present in the specified
             data source.
         ValueError
             If the mesh has no cells, or if a raw tensor has the wrong
-            leading dimension for the specified *data_source*.
+            leading dimension for the specified ``data_source``.
 
         Examples
         --------
@@ -2642,7 +2680,7 @@ class Mesh:
         field : str, tuple[str, ...], or torch.Tensor
             Vector field with last dimension equal to ``n_spatial_dims``.
         data_source : {"cells", "points"}
-            Whether *field* is cell-centered or vertex-centered.
+            Whether ``field`` is cell-centered or vertex-centered.
 
         Returns
         -------
@@ -2652,7 +2690,7 @@ class Mesh:
         Raises
         ------
         KeyError
-            If *field* is a string key not present in the specified
+            If ``field`` is a string key not present in the specified
             data source.
         ValueError
             If the mesh is not codimension-1, or if the field's last
@@ -2740,6 +2778,7 @@ class Mesh:
         -------
         TensorDict
             Per-cell quality metrics:
+
             - aspect_ratio: max_edge / characteristic_length
             - edge_length_ratio: max_edge / min_edge
             - min_angle, max_angle: Interior angles (triangles only)
@@ -2821,6 +2860,7 @@ class Mesh:
         -------
         Mesh
             Subdivided mesh with refined geometry and connectivity.
+
             - Manifold and spatial dimensions are preserved
             - Point data is interpolated to new vertices
             - Cell data is propagated from parents to children
@@ -2890,16 +2930,16 @@ class Mesh:
            within ``tolerance`` L2 distance using BVH spatial queries and
            merges them into a single representative.  Point data values
            are averaged across merged groups.  Cost: :math:`O(N \log N)`
-           where *N* is the number of points.  This is the most expensive
+           where :math:`N` is the number of points.  This is the most expensive
            step - on meshes with millions of points it can take tens of
            seconds.
         2. **Remove duplicate cells** (``remove_duplicate_cells``): Sorts
            vertex indices within each cell and removes cells that share
-           the same vertex set.  Cost: :math:`O(C \log C)` where *C* is
+           the same vertex set.  Cost: :math:`O(C \log C)` where :math:`C` is
            the number of cells.  Typically fast.
         3. **Remove unused points** (``remove_unused_points``): Drops
            points not referenced by any cell and compacts the point
-           array.  Cost: :math:`O(N + C \cdot V)` where *V* is vertices
+           array.  Cost: :math:`O(N + C \cdot V)` where :math:`V` is vertices
            per cell.  Very fast (linear scatter + mask).
 
         This is useful after importing meshes from external sources (VTK,

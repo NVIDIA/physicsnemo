@@ -80,6 +80,7 @@ def validate_mesh(
     -------
     Mapping[str, bool | int | torch.Tensor]
         Dictionary with validation results:
+
             - "valid": bool, True if all enabled checks passed
             - "n_degenerate_cells": int, number of degenerate cells found
             - "degenerate_cell_indices": Tensor of indices (if any found)

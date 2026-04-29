@@ -100,26 +100,27 @@ def vectorized_connected_components(
 
 
 def find_duplicate_pairs(
-    points: Float[torch.Tensor, "n_points n_dims"],
+    points: Float[torch.Tensor, "n_points n_spatial_dims"],
     tolerance: float,
 ) -> Int[torch.Tensor, "n_pairs 2"]:
-    """Find all pairs of points whose L2 distance is below *tolerance*.
+    r"""Find all pairs of points whose L2 distance is below ``tolerance``.
 
-    Uses a BVH for O(n log n) candidate generation, then exact L2
-    filtering.  Every returned pair satisfies ``i < j``.
+    Uses a BVH for :math:`O(n \log n)` candidate generation, then exact
+    L2 filtering.  Every returned pair satisfies ``i < j``.
 
     Parameters
     ----------
     points : torch.Tensor
-        Point coordinates, shape (n_points, n_spatial_dims).
+        Point coordinates, shape ``(n_points, n_spatial_dims)``.
     tolerance : float
         Absolute distance threshold.
 
     Returns
     -------
     torch.Tensor
-        Duplicate pairs, shape (n_pairs, 2) with ``pairs[:, 0] < pairs[:, 1]``.
-        Empty (0, 2) tensor if no duplicates are found.
+        Duplicate pairs, shape ``(n_pairs, 2)`` with
+        ``pairs[:, 0] < pairs[:, 1]``. Empty ``(0, 2)`` tensor if no
+        duplicates are found.
     """
     n_points = points.shape[0]
     device = points.device
@@ -169,26 +170,26 @@ def find_duplicate_pairs(
 
 
 def compute_canonical_indices(
-    points: Float[torch.Tensor, "n_points n_dims"],
+    points: Float[torch.Tensor, "n_points n_spatial_dims"],
     tolerance: float,
 ) -> Int[torch.Tensor, " n_points"]:
     """Map each point to the smallest-index representative in its cluster.
 
     Two points belong to the same cluster when they are connected by a
-    chain of pairwise distances below *tolerance* (transitive closure).
+    chain of pairwise distances below ``tolerance`` (transitive closure).
 
     Parameters
     ----------
     points : torch.Tensor
-        Point coordinates, shape (n_points, n_spatial_dims).
+        Point coordinates, shape ``(n_points, n_spatial_dims)``.
     tolerance : float
         Absolute distance threshold.
 
     Returns
     -------
     torch.Tensor
-        Shape (n_points,).  ``canonical[i]`` is the index of the
-        canonical representative for point *i* (always the smallest
+        Shape ``(n_points,)``.  ``canonical[i]`` is the index of the
+        canonical representative for point ``i`` (always the smallest
         index in the equivalence class).
     """
     n_points = points.shape[0]

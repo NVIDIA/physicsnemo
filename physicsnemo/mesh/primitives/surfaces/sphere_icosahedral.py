@@ -47,6 +47,7 @@ def load(
     subdivisions : int
         Number of subdivision levels to apply. Each level quadruples the
         triangle count:
+
         - 0: 20 triangles (base icosahedron)
         - 1: 80 triangles
         - 2: 320 triangles

@@ -86,6 +86,7 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     """Compute geometric quality metrics for all cells.
 
     Returns TensorDict with per-cell quality metrics:
+
     - aspect_ratio: max_edge / min_altitude (lower is better, 1.0 is equilateral)
     - min_angle: Minimum interior angle in radians
     - max_angle: Maximum interior angle in radians
