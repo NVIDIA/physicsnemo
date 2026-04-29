@@ -34,6 +34,7 @@ import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.experimental.guardrails.embedded import OODGuard, OODGuardConfig
 from physicsnemo.models.transolver.transolver import _TransolverMlp
 
 from .context_projector import GlobalContextBuilder
@@ -204,9 +205,26 @@ class GeoTransolver(Module):
         Neighbors in radius for the local features. Default is ``[8, 32]``.
     n_hidden_local : int, optional
         Hidden dimension for the local features. Default is 32.
+    guard_config : dict | None, optional
+        Configuration for the embedded OOD guard
+        (:class:`~physicsnemo.experimental.guardrails.embedded.OODGuard`).
+        Pass a plain ``dict`` whose keys match the fields of
+        :class:`~physicsnemo.experimental.guardrails.embedded.OODGuardConfig`
+        (``buffer_size`` required; ``knn_k`` and ``sensitivity`` optional), or
+        ``None`` to disable the guard entirely. A ``dict`` is required (rather
+        than the dataclass directly) so the model kwargs remain
+        JSON-serialisable for ``.mdlus`` checkpointing. When set, the guard
+        accumulates global-parameter bounds and pooled geometry latents during
+        training, and emits warnings on out-of-distribution inputs during
+        inference. Default is ``None``.
     attention_type : str, optional
         attention_type is used to choose the attention type (GALE or GALE_FA). 
         Default is ``"GALE"``.
+    state_mixing_mode : str, optional
+        How to blend self-attention and cross-attention outputs in GALE layers.
+        ``"weighted"`` uses a learnable sigmoid-gated weighted sum.
+        ``"concat_project"`` concatenates the two along the head dimension and
+        projects back with a linear layer. Default is ``"weighted"``.
 
     Forward
     -------
@@ -335,8 +353,10 @@ class GeoTransolver(Module):
         radii: list[float] | None = None,
         neighbors_in_radius: list[int] | None = None,
         n_hidden_local: int = 32,
+        guard_config: dict | None = None,
         attention_type: str = "GALE",
         concrete_dropout: bool = False,
+        state_mixing_mode: str = "weighted",
     ) -> None:
         super().__init__(meta=GeoTransolverMetaData())
         self.__name__ = "GeoTransolver"
@@ -429,6 +449,7 @@ class GeoTransolver(Module):
                     context_dim=context_dim,
                     attention_type=attention_type,
                     concrete_dropout=concrete_dropout,
+                    state_mixing_mode=state_mixing_mode,
                 )
                 for layer_idx in range(n_layers)
             ]
@@ -460,6 +481,35 @@ class GeoTransolver(Module):
                 nn.Linear(n_hidden, n_hidden),
                 nn.SiLU(),
                 nn.Linear(n_hidden, n_hidden),
+            )
+
+        # OOD guard (None when disabled).
+        if guard_config is None:
+            self.ood_guard = None
+        else:
+            if not isinstance(guard_config, dict):
+                raise TypeError(
+                    f"guard_config must be a dict or None; got "
+                    f"{type(guard_config).__name__}. If using Hydra, set "
+                    f"_convert_=partial or _convert_=all on the model config "
+                    f"so nested mappings are passed as native dicts."
+                )
+            if global_dim is None and geometry_dim is None:
+                raise ValueError(
+                    "guard_config is set, but neither global_dim nor "
+                    "geometry_dim is configured; the OOD guard would have "
+                    "nothing to watch. Either set guard_config=None or "
+                    "enable at least one of the two surfaces."
+                )
+            # OODGuardConfig validates keys and applies defaults.
+            cfg = OODGuardConfig(**guard_config)
+            dim_head = n_hidden // n_head
+            self.ood_guard = OODGuard(
+                buffer_size=cfg.buffer_size,
+                global_dim=global_dim,
+                geometry_embed_dim=dim_head if geometry_dim is not None else None,
+                knn_k=cfg.knn_k,
+                sensitivity=cfg.sensitivity,
             )
 
     def forward(
@@ -562,9 +612,22 @@ class GeoTransolver(Module):
                 )
 
         # Build context embeddings and extract local features
-        embedding_states, local_embedding_bq = self.context_builder.build_context(
-            local_embedding, local_positions, geometry, global_embedding
+        embedding_states, local_embedding_bq, geo_ctx = (
+            self.context_builder.build_context(
+                local_embedding, local_positions, geometry, global_embedding
+            )
         )
+
+        # --- OOD Guard ---
+        if self.ood_guard is not None:
+            # Pool (B, H, S, D) -> (B, D); guard expects pre-pooled latents.
+            geo_latent = (
+                geo_ctx.mean(dim=(1, 2)) if geo_ctx is not None else None
+            )
+            if self.training:
+                self.ood_guard.collect(global_embedding, geo_latent)
+            else:
+                self.ood_guard.check(global_embedding, geo_latent)
 
         # Project inputs to hidden dimension: (B, N, C) -> (B, N, n_hidden)
         x = [self.preprocess[i](le) for i, le in enumerate(local_embedding)]

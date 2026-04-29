@@ -28,16 +28,18 @@ from __future__ import annotations
 
 from typing import Any, Iterator, Optional, Sequence
 
+import torch
 from tensordict import TensorDict
 
-from physicsnemo.datapipes.dataset import Dataset
+from physicsnemo.datapipes._rng import fork_generator
+from physicsnemo.datapipes.protocols import DatasetBase
 from physicsnemo.datapipes.registry import register
 
 # Metadata key added by MultiDataset to identify which sub-dataset produced the sample.
 DATASET_INDEX_METADATA_KEY = "dataset_index"
 
 
-def _validate_strict_outputs(datasets: Sequence[Dataset]) -> list[str]:
+def _validate_strict_outputs(datasets: Sequence[DatasetBase]) -> list[str]:
     """
     Check that all non-empty datasets produce the same TensorDict keys; return them.
 
@@ -46,7 +48,7 @@ def _validate_strict_outputs(datasets: Sequence[Dataset]) -> list[str]:
 
     Parameters
     ----------
-    datasets : Sequence[Dataset]
+    datasets : Sequence[DatasetBase]
         Datasets to validate.
 
     Returns
@@ -76,25 +78,30 @@ def _validate_strict_outputs(datasets: Sequence[Dataset]) -> list[str]:
                 "output_strict=True requires identical output keys (TensorDict keys) "
                 f"across datasets: dataset {ref_index} has {ref_keys}, dataset {i} has {keys}"
             )
-    return list(ref_keys) if ref_keys is not None else list(datasets[0].field_names)
+    if ref_keys is not None:
+        return list(ref_keys)
+    first = datasets[0]
+    return list(first.field_names) if hasattr(first, "field_names") else []
 
 
 @register()
 class MultiDataset:
     r"""
-    A dataset that composes multiple :class:`Dataset` instances behind one index space.
+    A dataset that composes multiple :class:`DatasetBase` instances behind one index space.
 
-    Global indices are mapped to (dataset_index, local_index) by concatenation:
-    indices 0..len0-1 come from the first dataset, len0..len0+len1-1 from the second,
-    and so on. Each constituent can have its own Reader and transforms. Metadata
-    is enriched with ``dataset_index`` so batches can identify the source.
+    Accepts both :class:`Dataset` (TensorDict pipelines) and :class:`MeshDataset`
+    (Mesh pipelines) as sub-datasets. Global indices are mapped to
+    (dataset_index, local_index) by concatenation: indices 0..len0-1 come from the
+    first dataset, len0..len0+len1-1 from the second, and so on. Each constituent
+    can have its own Reader and transforms. Metadata is enriched with
+    ``dataset_index`` so batches can identify the source.
 
     Parameters
     ----------
-    *datasets : Dataset
-        One or more Dataset instances passed as positional arguments
-        (Reader + transforms each). Order defines index mapping: first
-        dataset occupies 0..len(ds0)-1, etc.
+    *datasets : DatasetBase
+        One or more Dataset or MeshDataset instances passed as positional
+        arguments (Reader + transforms each). Order defines index mapping:
+        first dataset occupies 0..len(ds0)-1, etc.
     output_strict : bool, default=True
         If True, require all datasets to produce the same TensorDict keys (output
         keys after transforms) so :class:`DefaultCollator` can stack batches. If
@@ -112,7 +119,7 @@ class MultiDataset:
     Notes
     -----
     MultiDataset implements the same interface as :class:`Dataset` (``__len__``,
-    ``__getitem__``, ``prefetch``, ``prefetch_batch``, ``prefetch_count``,
+    ``__getitem__``, ``prefetch``,
     ``cancel_prefetch``, ``close``, ``field_names``) and can be passed to
     :class:`DataLoader` in place of a single dataset. Prefetch and close are
     delegated to the sub-dataset that owns the index. When ``output_strict=True``,
@@ -157,7 +164,7 @@ class MultiDataset:
 
     def __init__(
         self,
-        *datasets: Dataset,
+        *datasets: DatasetBase,
         output_strict: bool = True,
     ) -> None:
         if len(datasets) < 1:
@@ -165,9 +172,10 @@ class MultiDataset:
                 f"MultiDataset requires at least one dataset, got {len(datasets)}"
             )
         for i, ds in enumerate(datasets):
-            if not isinstance(ds, Dataset):
+            if not isinstance(ds, DatasetBase):
                 raise TypeError(
-                    f"datasets[{i}] must be a Dataset instance, got {type(ds).__name__}"
+                    f"datasets[{i}] must be a Dataset or MeshDataset instance, "
+                    f"got {type(ds).__name__}"
                 )
 
         self._datasets = list(datasets)
@@ -183,7 +191,11 @@ class MultiDataset:
         if output_strict:
             self._field_names = _validate_strict_outputs(self._datasets)
         else:
-            self._field_names = list(self._datasets[0].field_names)
+            first = self._datasets[0]
+            if hasattr(first, "field_names"):
+                self._field_names = list(first.field_names)
+            else:
+                self._field_names = []
 
     def _index_to_dataset_and_local(self, index: int) -> tuple[int, int]:
         """
@@ -240,6 +252,36 @@ class MultiDataset:
         """Return the total number of samples (sum of all sub-dataset lengths)."""
         return self._cumul[-1]
 
+    # ------------------------------------------------------------------
+    # RNG management
+    # ------------------------------------------------------------------
+
+    def set_generator(self, generator: torch.Generator) -> None:
+        """Fork *generator* and distribute one child per sub-dataset.
+
+        Parameters
+        ----------
+        generator : torch.Generator
+            Parent generator (typically forked from the DataLoader's
+            master generator).
+        """
+        children = fork_generator(generator, len(self._datasets))
+        for child, ds in zip(children, self._datasets):
+            if hasattr(ds, "set_generator"):
+                ds.set_generator(child)
+
+    def set_epoch(self, epoch: int) -> None:
+        """Propagate epoch to every sub-dataset.
+
+        Parameters
+        ----------
+        epoch : int
+            Current epoch number.
+        """
+        for ds in self._datasets:
+            if hasattr(ds, "set_epoch"):
+                ds.set_epoch(epoch)
+
     def __getitem__(self, index: int) -> tuple[TensorDict, dict[str, Any]]:
         """
         Return the transformed sample and metadata for the given global index.
@@ -282,31 +324,6 @@ class MultiDataset:
         ds_id, local_i = self._index_to_dataset_and_local(index)
         self._datasets[ds_id].prefetch(local_i, stream=stream)
 
-    def prefetch_batch(
-        self,
-        indices: Sequence[int],
-        streams: Optional[Sequence[Any]] = None,
-    ) -> None:
-        """
-        Start prefetching multiple samples by global index.
-
-        Delegates to the sub-dataset that owns each index. Streams are cycled
-        if shorter than indices.
-
-        Parameters
-        ----------
-        indices : Sequence[int]
-            Global sample indices to prefetch.
-        streams : Sequence[Any], optional
-            Optional CUDA streams, one per index. If shorter than indices,
-            streams are cycled. If None, no streams used.
-        """
-        for i, idx in enumerate(indices):
-            stream = None
-            if streams:
-                stream = streams[i % len(streams)]
-            self.prefetch(idx, stream=stream)
-
     def cancel_prefetch(self, index: Optional[int] = None) -> None:
         """
         Cancel prefetch for the given index or all sub-datasets.
@@ -327,18 +344,6 @@ class MultiDataset:
             if mapped is not None:
                 ds_id, local_i = mapped
                 self._datasets[ds_id].cancel_prefetch(local_i)
-
-    @property
-    def prefetch_count(self) -> int:
-        """
-        Number of items currently being prefetched across all sub-datasets.
-
-        Returns
-        -------
-        int
-            Sum of in-flight prefetch counts from each sub-dataset.
-        """
-        return sum(ds.prefetch_count for ds in self._datasets)
 
     def __iter__(self) -> Iterator[tuple[TensorDict, dict[str, Any]]]:
         """Iterate over all samples in global index order."""

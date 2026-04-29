@@ -68,6 +68,11 @@ class GALE_FA(nn.Module):
     concrete_dropout : bool, optional
         Whether to use learned concrete dropout instead of standard dropout.
         Default is ``False``.
+    state_mixing_mode : str, optional
+        How to blend self-attention and cross-attention outputs.         ``"weighted"`` uses
+        a learnable sigmoid-gated weighted sum. ``"concat_project"``
+        concatenates the two along the head dimension and projects back with a
+        linear layer. Default is ``"weighted"``.
 
     Forward
     -------
@@ -119,6 +124,7 @@ class GALE_FA(nn.Module):
         use_te: bool = True,
         context_dim: int = 0,
         concrete_dropout: bool = False,
+        state_mixing_mode: str = "weighted",
     ):
         if use_te:
             raise ValueError(
@@ -126,6 +132,12 @@ class GALE_FA(nn.Module):
                 "Use use_te=False; TE disables FlashAttention for differing q/k sizes in FLARE attention."
             )
         super().__init__()
+        if state_mixing_mode not in ("weighted", "concat_project"):
+            raise ValueError(
+                f"Invalid state_mixing_mode: {state_mixing_mode!r}. "
+                f"Expected 'weighted' or 'concat_project'."
+            )
+        self.state_mixing_mode = state_mixing_mode
         self.use_te = use_te
         self.heads = heads
         self.dim_head = dim_head
@@ -150,8 +162,16 @@ class GALE_FA(nn.Module):
             self.cross_k = linear_layer(context_dim, dim_head)
             self.cross_v = linear_layer(context_dim, dim_head)
 
-            # Learnable mixing weight between self and cross attention
-            self.state_mixing = nn.Parameter(torch.tensor(0.0))
+            # Mixing layers for blending self-attention and cross-attention
+            if state_mixing_mode == "weighted":
+                # Learnable mixing weight between self and cross attention
+                self.state_mixing = nn.Parameter(torch.tensor(0.0))
+            else:
+                # Concatenate self and cross attention and project back to dim_head
+                self.concat_project = nn.Sequential(
+                    linear_layer(2 * dim_head, dim_head),
+                    nn.GELU(),
+                )
 
         # te attention
         if self.use_te:
@@ -249,9 +269,12 @@ class GALE_FA(nn.Module):
             else:
                 cross_attention = [F.scaled_dot_product_attention(_q, k, v, scale=self.scale) for _q in q]
 
-            # Apply learnable mixing:
-            mixing_weight = torch.sigmoid(self.state_mixing)
-            outputs = [mixing_weight * _ys + (1 - mixing_weight) * _yc for _ys, _yc in zip(self_attention, cross_attention)]
+            # Blend self-attention and cross-attention
+            if self.state_mixing_mode == "weighted":
+                mixing_weight = torch.sigmoid(self.state_mixing)
+                outputs = [mixing_weight * _ys + (1 - mixing_weight) * _yc for _ys, _yc in zip(self_attention, cross_attention)]
+            else:
+                outputs = [self.concat_project(torch.cat([_ys, _yc], dim=-1)) for _ys, _yc in zip(self_attention, cross_attention)]
         else:
             outputs = self_attention
 

@@ -19,8 +19,13 @@ Guardrails for PhysicsNemo.
 
 This package provides utilities for detecting out-of-distribution data
 and validating inputs to physics-based machine learning models.
+
+Import individual guardrails from their respective subpackages, e.g.::
+
+    from physicsnemo.experimental.guardrails.geometry import GeometryGuardrail
+    from physicsnemo.experimental.guardrails.embedded import OODGuard
+
+The top-level namespace intentionally does not re-export guardrail classes so
+that importing one subpackage does not force-load the others (some carry
+optional dependencies like ``pyvista``).
 """
-
-from .geometry import GeometryGuardrail
-
-__all__ = ["GeometryGuardrail"]

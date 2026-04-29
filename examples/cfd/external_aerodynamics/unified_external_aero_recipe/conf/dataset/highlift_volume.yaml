@@ -1,0 +1,103 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# High-lift airplane volume dataset (compressible, DomainMesh)
+# Loads .pdmsh files from PhysicsNeMo-HighLiftAeroML.
+# Each case directory (e.g. geo_LHC001_AoA_4/) contains a DomainMesh .pdmsh.
+# Interior: volume point cloud with fields in point_data.
+# global_data: freestream conditions injected from metadata below.
+# Splits are controlled by a manifest.json + train_split/val_split in the
+# training config (see train_geotransolver_automotive_volume.yaml).
+
+name: highlift_volume
+
+train_datadir: ${dataset_paths.highlift_aero_ml}
+
+# Freestream conditions — slug-inch-second-Rankine unit system
+metadata:
+  U_inf: [2672.95, 0.0, 186.92]   # 2679.505 in/s at AoA=4°
+  p_inf: 176.352                   # 14.696 psi × 12 → slug/(in·s²)
+  rho_inf: 1.3756e-6               # 0.002377 slug/ft³ → slug/in³
+  T_inf: 518.67                    # [°R]
+  L_ref: 1156.75                    # [in] — span
+
+pipeline:
+  reader:
+    _target_: ${dp:DomainMeshReader}
+    path: ${train_datadir}
+    pattern: "**/*.pdmsh"
+    subsample_n_points: ${sampling_resolution}
+    extra_boundaries:
+      stl_geometry:
+        pattern: "*.stl.pmsh"
+  # augmentations:
+  #   - _target_: ${dp:RandomRotateMesh}
+  #     axes: ["z"]
+  #     transform_point_data: true
+  #     transform_global_data: true
+  #   - _target_: ${dp:RandomTranslateMesh}
+  #     distribution:
+  #       _target_: torch.distributions.Uniform
+  #       low: [-1.0, -1.0, 0.0]
+  #       high: [1.0, 1.0, 0.0]
+  transforms:
+    # - _target_: ${dp:CenterMesh}
+    #   use_area_weighting: false
+    # - _target_: ${dp:NonDimensionalizeByMetadata}
+    #   fields:
+    #     avg(P): pressure
+    #     avg(T): temperature
+    #     avg(rho): density
+    #     avg(u): velocity
+    #   section: point_data
+    - _target_: ${dp:ComputeSDFFromBoundary}
+      boundary_name: stl_geometry
+      sdf_field: sdf
+      normals_field: sdf_normals
+      use_winding_number: true
+    - _target_: ${dp:DropBoundary}
+      names: [stl_geometry]
+    - _target_: ${dp:RenameMeshFields}
+      point_data:
+        avg(P): pressure
+        avg(T): temperature
+        avg(rho): density
+        avg(u): velocity
+    # z-score normalization — leave empty until stats are computed
+    # - _target_: ${dp:NormalizeMeshFields}
+    #   section: point_data
+    #   fields: {}
+    - _target_: ${dp:MeshToTensorDict}
+    - _target_: ${dp:RestructureTensorDict}
+      groups:
+        input:
+          points: interior.points
+          U_inf: global_data.U_inf
+          sdf: interior.point_data.sdf
+          sdf_normals: interior.point_data.sdf_normals
+        output:
+          pressure: interior.point_data.pressure
+          temperature: interior.point_data.temperature
+          density: interior.point_data.density
+          velocity: interior.point_data.velocity
+
+targets:
+  pressure: scalar
+  temperature: scalar
+  density: scalar
+  velocity: vector
+
+metrics: [l1, l2, mae]
