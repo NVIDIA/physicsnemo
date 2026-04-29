@@ -25,6 +25,10 @@ from tensordict import TensorDict, tensorclass
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 
+if TYPE_CHECKING:
+    import matplotlib.axes
+    import pyvista
+
 
 @tensorclass
 class DomainMesh:
@@ -993,7 +997,7 @@ class DomainMesh:
         alpha_edges: float = 1.0,
         show_edges: bool = False,
         boundary_kwargs: dict[str, Any] | None = None,
-        ax: Any = None,
+        ax: "matplotlib.axes.Axes | pyvista.Plotter | None" = None,
         backend_options: dict[str, Any] | None = None,
     ) -> "matplotlib.axes.Axes | pyvista.Plotter":
         r"""Draw the domain: interior with optional scalar coloring, boundaries overlaid.

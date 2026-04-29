@@ -36,6 +36,10 @@ from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.visualization.draw_mesh import draw_mesh
 
+if TYPE_CHECKING:
+    import matplotlib.axes
+    import pyvista
+
 
 @tensorclass(tensor_only=True, shadow=True)
 class Mesh:
@@ -2225,7 +2229,7 @@ class Mesh:
         alpha_cells: float = 1.0,
         alpha_edges: float = 1.0,
         show_edges: bool = True,
-        ax=None,
+        ax: "matplotlib.axes.Axes | pyvista.Plotter | None" = None,
         backend_options: dict[str, Any] | None = None,
     ) -> "matplotlib.axes.Axes | pyvista.Plotter":
         """Draw the mesh using matplotlib or PyVista backend.
