@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self
 
@@ -776,7 +776,7 @@ class DomainMesh:
         check_manifoldness: bool = False,
         tolerance: float = 1e-10,
         raise_on_error: bool = False,
-    ) -> Mapping[str, Any]:
+    ) -> dict[str, Any]:
         r"""Validate all meshes in the domain and aggregate results.
 
         Delegates to :meth:`Mesh.validate` for the interior and each boundary
@@ -801,7 +801,7 @@ class DomainMesh:
 
         Returns
         -------
-        Mapping[str, Any]
+        dict[str, Any]
             Aggregated validation report with keys:
 
             - ``"interior"``: validation report for the interior mesh
