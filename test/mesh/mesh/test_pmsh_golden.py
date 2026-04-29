@@ -40,7 +40,17 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 ### Locate the regeneration helper without requiring `golden_pmsh` to be a package.
+### Skip the whole module gracefully if the helper has been moved or renamed,
+### so that a missing file produces a clean skip rather than a collection error
+### (`spec_from_file_location` returns a valid spec for non-existent paths,
+### so the failure would otherwise surface as a `FileNotFoundError` from
+### `exec_module` at module import time, before `pytestmark` can take effect).
 _REGEN_PATH = Path(__file__).parent / "golden_pmsh" / "_regenerate.py"
+if not _REGEN_PATH.exists():
+    pytest.skip(
+        f"Golden .pmsh regeneration helper not found at {_REGEN_PATH}",
+        allow_module_level=True,
+    )
 _spec = importlib.util.spec_from_file_location("_pmsh_golden_regen", _REGEN_PATH)
 assert _spec is not None and _spec.loader is not None
 _regen = importlib.util.module_from_spec(_spec)
