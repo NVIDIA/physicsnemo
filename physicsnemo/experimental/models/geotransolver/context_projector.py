@@ -463,6 +463,7 @@ class StructuredContextProjector(_SliceToContextMixin, nn.Module):
         kernel: int = 3,
         use_te: bool = True,
         plus: bool = False,
+        concrete_dropout: bool = False,
     ) -> None:
         super().__init__()
         if len(spatial_shape) not in (2, 3):
@@ -493,6 +494,15 @@ class StructuredContextProjector(_SliceToContextMixin, nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self._init_slice_components(dim_head, slice_num, heads, use_te, plus)
+
+        # Concrete dropout on the output slice tokens
+        if concrete_dropout:
+            self.output_dropout = ConcreteDropout(
+                in_features=dim_head,
+                init_p=max(dropout, 0.05),
+            )
+        else:
+            self.output_dropout = None
 
     def _grid_project(
         self, x: Float[torch.Tensor, "batch tokens channels"]
@@ -536,6 +546,11 @@ class StructuredContextProjector(_SliceToContextMixin, nn.Module):
         _, slice_tokens = self.compute_slices_from_projections(
             slice_projections, feature_projection
         )
+
+        # Apply concrete dropout to output slice tokens
+        if self.output_dropout is not None:
+            slice_tokens = self.output_dropout(slice_tokens)
+
         return slice_tokens
 
 
@@ -967,16 +982,6 @@ class GlobalContextBuilder(nn.Module):
                     geometry_dim, n_head, dim_head, dropout, slice_num, use_te, plus=plus, 
                     concrete_dropout=concrete_dropout,
                 )
-            self.geometry_tokenizer = ContextProjector(
-                geometry_dim,
-                n_head,
-                dim_head,
-                dropout,
-                slice_num,
-                use_te,
-                plus,
-                concrete_dropout=concrete_dropout,
-            )
             context_dim += dim_head
         else:
             self.geometry_tokenizer = None
