@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+epochs: 501
+checkpoint_interval: 100
+gradient_accumulation_steps: 1
+seed: 6
+deterministic: false
+amp: true
+amp_dtype: bf16                                     # bf16 | fp16
+loss_metric: mse
+tensorboard: true
+
+# Optimizer (Muon is opt-in; install via `pip install emerging-optimizers`).
+optimizer:
+  type: adam                                        # adam | muon
+  weight_decay: 0.0
+  muon_momentum_beta: 0.95
+  muon_lr: 1.0e-4
+
+learning_rate: 3.0e-5
+min_learning_rate: 1.0e-6
+warmup_epochs: 10
+scheduler_type: cosine
+
+pretrain_checkpoint: null
+resume_checkpoint: null
+
+# Physics-informed loss (case-specific weight + qoi_region pulled from case group).
+use_physics_loss: true
+physics_loss:
+  weight: ${case.physics_loss_weight}
+  mse_weight: 1.0
+  qoi_region: ${case.qoi_region}
+  warmup_epochs: 0
+  warmup_start_fraction: 0.0
+
+# Region-weighted MSE (heavier penalty on void points).
+use_region_weighted_loss: true
+region_weights:
+  void_weight: 10.0
+  material_weight: 1.0
+
+dataloader:
+  batch_size: 1                                     # only batch_size=1 is supported (point-cloud adapter)
+  pin_memory: true
+  num_workers: 8
+  prefetch_factor: 4
+  persistent_workers: true
+
+sampler:
+  shuffle: true
+  drop_last: false
+
+val:
+  dataloader:
+    batch_size: 1
+    pin_memory: true
+    num_workers: 8
+    prefetch_factor: 4
+    persistent_workers: true
+  sampler:
+    shuffle: false
+    drop_last: false

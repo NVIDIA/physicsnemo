@@ -1,0 +1,10 @@
+hydra-core>=1.3
+omegaconf>=2.3
+zarr<3
+tensordict
+numpy
+scipy
+matplotlib
+pyyaml
+pandas
+tqdm
