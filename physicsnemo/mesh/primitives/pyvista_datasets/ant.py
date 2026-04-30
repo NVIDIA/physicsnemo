@@ -19,10 +19,22 @@
 Dimensional: 2D manifold in 3D space.
 """
 
+from typing import TYPE_CHECKING
+
 import torch
 
-from physicsnemo.core.version_check import require_version_spec
+from physicsnemo.core.version_check import OptionalImport, require_version_spec
 from physicsnemo.mesh.mesh import Mesh
+
+### Optional dependency. ``pv`` is a lazy proxy: construction does not import
+### pyvista; the friendly ``ImportError`` (with the ``[mesh-extras]`` install
+### hint) fires only on first attribute access. The
+### ``@require_version_spec("pyvista")`` decorator on ``load`` raises that
+### same error proactively before any function-body work happens.
+if TYPE_CHECKING:
+    import pyvista as pv
+else:
+    pv = OptionalImport("pyvista")
 
 
 @require_version_spec("pyvista")
@@ -41,10 +53,6 @@ def load(device: torch.device | str = "cpu") -> Mesh[2, 3]:
     Mesh[2, 3]
         Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
-    import importlib
-
-    pv = importlib.import_module("pyvista")
-
     from physicsnemo.mesh.io.io_pyvista import from_pyvista
 
     pv_mesh = pv.examples.load_ant()

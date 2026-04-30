@@ -14,22 +14,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Barycentric interpolation functions and their gradients for DEC.
+r"""Barycentric interpolation functions and their gradients for DEC.
 
-Barycentric (or Whitney 0-form) interpolation functions φ_{v,cell} are the standard
-linear shape functions used in finite elements. For a simplex with vertices v₀,...,vₙ,
-the function φ_v is 1 at vertex v and 0 at all other vertices, linearly interpolated.
+Barycentric (or Whitney 0-form) interpolation functions
+:math:`\varphi_{v, \sigma}` are the standard linear shape functions used in
+finite elements. For a simplex :math:`\sigma` with vertices
+:math:`v_0, \ldots, v_n`, the function :math:`\varphi_v` is 1 at vertex
+:math:`v` and 0 at all other vertices of :math:`\sigma`, linearly
+interpolated.
 
-The gradients of these functions are needed for the discrete sharp operator in DEC.
+The gradients of these functions are needed for the discrete sharp operator
+in DEC.
 
-Key properties (Hirani Rem. 2.7.2, lines 1260-1288):
-- ∇φ_{v,cell} is constant in the cell interior
-- ∇φ_{v,cell} is perpendicular to the face opposite to v
-- ||∇φ_{v,cell}|| = 1/h where h is the height of v above opposite face
-- Σ_{vertices v in cell} ∇φ_{v,cell} = 0 (gradients sum to zero)
+Key properties (Hirani 2003, *Discrete Exterior Calculus*, Remark 2.7.2):
 
-References:
-    Hirani (2003) Section 2.7, Remark 2.7.2
+- :math:`\nabla \varphi_{v, \sigma}` is constant in the interior of
+  :math:`\sigma`.
+- :math:`\nabla \varphi_{v, \sigma}` is perpendicular to the face of
+  :math:`\sigma` opposite to :math:`v`.
+- :math:`\|\nabla \varphi_{v, \sigma}\| = 1 / h`, where :math:`h` is the
+  height of :math:`v` above the opposite face.
+- :math:`\sum_{v \in \sigma} \nabla \varphi_{v, \sigma} = 0` (gradients sum
+  to zero).
+
+References
+----------
+Hirani, A. N. (2003). *Discrete Exterior Calculus*. PhD thesis, California
+Institute of Technology. §2.7 (Interpolation Functions), Remark 2.7.2.
 """
 
 from typing import TYPE_CHECKING
@@ -46,53 +57,63 @@ if TYPE_CHECKING:
 def compute_barycentric_gradients(
     mesh: "Mesh",
 ) -> Float[torch.Tensor, "n_cells n_vertices_per_cell n_spatial_dims"]:
-    """Compute gradients of barycentric interpolation functions.
+    r"""Compute gradients of barycentric interpolation functions.
 
-    For each cell and each of its vertices, computes ∇φ_{v,cell}, the gradient
-    of the barycentric interpolation function that is 1 at vertex v and 0 at
-    all other vertices of the cell.
+    For each cell :math:`\sigma` and each of its vertices :math:`v`, computes
+    :math:`\nabla \varphi_{v, \sigma}`, the gradient of the barycentric
+    interpolation function that is 1 at :math:`v` and 0 at all other vertices
+    of :math:`\sigma`.
 
-    These gradients are needed for the PP-sharp operator (Hirani Eq. 5.8.1).
+    These gradients are needed for the primal-primal sharp (PP-sharp)
+    operator (Hirani 2003, *Discrete Exterior Calculus*, Eq. 5.8.1).
 
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh (2D or 3D)
+        Simplicial mesh (2D or 3D).
 
     Returns
     -------
-    torch.Tensor
-        Gradients of shape (n_cells, n_vertices_per_cell, n_spatial_dims)
+    Float[torch.Tensor, "n_cells n_vertices_per_cell n_spatial_dims"]
+        Per-vertex barycentric gradients. ``gradients[i, j, :]`` is
+        :math:`\nabla \varphi_{v_j,\, \sigma_i}`, where :math:`v_j` is the
+        :math:`j`-th vertex of cell :math:`\sigma_i` in local indexing.
 
-        gradients[cell_i, local_vertex_j, :] = ∇φ_{v_j, cell_i}
+    Notes
+    -----
+    For an :math:`n`-simplex :math:`\sigma` with vertices
+    :math:`v_0, \ldots, v_n`:
 
-        where v_j is the j-th vertex of cell_i (in local indexing).
+    1. :math:`\nabla \varphi_{v_0, \sigma}` is perpendicular to the face
+       :math:`[v_1, \ldots, v_n]` opposite :math:`v_0`.
+    2. It points from the face centroid toward :math:`v_0`.
+    3. It has magnitude :math:`1 / h`, where :math:`h` is the height of
+       :math:`v_0` above the opposite face.
 
-    Algorithm:
-        For n-simplex with vertices v₀, ..., vₙ:
-        1. The gradient ∇φ_{v₀,cell} is perpendicular to face [v₁,...,vₙ]
-        2. Points from face centroid toward v₀
-        3. Has magnitude 1/height
-
-        Efficient computation:
-        - Use barycentric coordinate derivatives
-        - For vertex i: ∇φᵢ = ∇(volume ratio) = normal to opposite face / height
+    Efficient computation uses barycentric coordinate derivatives: for
+    vertex :math:`v_i`, :math:`\nabla \varphi_{v_i, \sigma}` equals the
+    inward unit normal to the opposite face, divided by :math:`h_i`.
 
     Properties:
-        - Σᵢ ∇φᵢ = 0 (constraint: barycentric coords sum to 1)
-        - ∇φᵢ · (vⱼ - vᵢ) = -1 for j ≠ i (decrease along edge away from i)
-        - ∇φᵢ · (vᵢ - vⱼ) = +1 for j ≠ i (increase along edge toward i)
 
-    Reference:
-        Hirani Remark 2.7.2 (lines 1260-1288)
+    - :math:`\sum_i \nabla \varphi_{v_i, \sigma} = 0`
+      (barycentric coords sum to 1).
+    - :math:`\nabla \varphi_{v_i, \sigma} \cdot (v_j - v_i) = -1`
+      for :math:`j \neq i`.
+    - :math:`\nabla \varphi_{v_i, \sigma} \cdot (v_i - v_j) = +1`
+      for :math:`j \neq i`.
+
+    References
+    ----------
+    Hirani (2003), *Discrete Exterior Calculus* (PhD thesis), Remark 2.7.2.
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> grads = compute_barycentric_gradients(mesh)
-        >>> # grads[i, j, :] is ∇φ for j-th vertex of i-th cell
-        >>> # Use in sharp operator with α♯(v) = Σ α(edge) × weight × grad
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> grads = compute_barycentric_gradients(mesh)
+    >>> # grads[i, j, :] is grad phi for j-th vertex of i-th cell
+    >>> # Use in sharp operator with sharp(alpha)(v) = sum alpha(edge) * weight * grad
     """
     n_cells = mesh.n_cells
     n_manifold_dims = mesh.n_manifold_dims

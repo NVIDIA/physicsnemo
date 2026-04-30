@@ -160,6 +160,7 @@ def fix_orientation(
     -------
     tuple[Mesh, dict[str, int]]
         Tuple of (oriented_mesh, stats_dict) where stats_dict contains:
+
         - "n_faces_flipped": Number of faces that were flipped
         - "n_components": Number of connected components found
         - "largest_component_size": Size of largest component

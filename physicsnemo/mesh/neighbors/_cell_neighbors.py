@@ -40,6 +40,7 @@ def get_cell_to_cells_adjacency(
 
     Two cells are considered adjacent if they share a k-codimension facet.
     For example:
+
     - codimension=1: Share an (n-1)-facet (e.g., triangles sharing an edge in 2D,
       tetrahedra sharing a triangular face in 3D)
     - codimension=2: Share an (n-2)-facet (e.g., tetrahedra sharing an edge in 3D)
@@ -51,6 +52,7 @@ def get_cell_to_cells_adjacency(
         Input simplicial mesh.
     adjacency_codimension : int, optional
         Codimension of shared facets defining adjacency.
+
         - 1 (default): Cells must share a codimension-1 facet (most restrictive)
         - 2: Cells must share a codimension-2 facet (more permissive)
         - k: Cells must share a codimension-k facet
@@ -58,21 +60,21 @@ def get_cell_to_cells_adjacency(
     Returns
     -------
     Adjacency
-        Adjacency where adjacency.to_list()[i] contains all cell indices that
-        share a k-codimension facet with cell i. Each neighbor appears exactly
+        Adjacency where ``adjacency.to_list()[i]`` contains all cell indices that
+        share a k-codimension facet with cell ``i``. Each neighbor appears exactly
         once per source cell.
 
     Examples
     --------
-        >>> import torch
-        >>> from physicsnemo.mesh import Mesh
-        >>> # Two triangles sharing an edge
-        >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 1.], [1., 1.]])
-        >>> cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
-        >>> mesh = Mesh(points=points, cells=cells)
-        >>> adj = get_cell_to_cells_adjacency(mesh, adjacency_codimension=1)
-        >>> adj.to_list()
-        [[1], [0]]
+    >>> import torch
+    >>> from physicsnemo.mesh import Mesh
+    >>> # Two triangles sharing an edge
+    >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 1.], [1., 1.]])
+    >>> cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+    >>> mesh = Mesh(points=points, cells=cells)
+    >>> adj = get_cell_to_cells_adjacency(mesh, adjacency_codimension=1)
+    >>> adj.to_list()
+    [[1], [0]]
     """
     from physicsnemo.mesh.boundaries import (
         categorize_facets_by_count,
@@ -306,21 +308,21 @@ def get_cell_to_points_adjacency(mesh: "Mesh") -> Adjacency:
     Returns
     -------
     Adjacency
-        Adjacency where adjacency.to_list()[i] contains all point indices that
-        are vertices of cell i. For simplicial meshes, all cells have the same
-        number of vertices (n_manifold_dims + 1).
+        Adjacency where ``adjacency.to_list()[i]`` contains all point indices that
+        are vertices of cell ``i``. For simplicial meshes, all cells have the same
+        number of vertices (``n_manifold_dims + 1``).
 
     Examples
     --------
-        >>> import torch
-        >>> from physicsnemo.mesh import Mesh
-        >>> # Triangle mesh with 2 cells
-        >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 1.], [1., 1.]])
-        >>> cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
-        >>> mesh = Mesh(points=points, cells=cells)
-        >>> adj = get_cell_to_points_adjacency(mesh)
-        >>> adj.to_list()
-        [[0, 1, 2], [1, 3, 2]]
+    >>> import torch
+    >>> from physicsnemo.mesh import Mesh
+    >>> # Triangle mesh with 2 cells
+    >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 1.], [1., 1.]])
+    >>> cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+    >>> mesh = Mesh(points=points, cells=cells)
+    >>> adj = get_cell_to_points_adjacency(mesh)
+    >>> adj.to_list()
+    [[0, 1, 2], [1, 3, 2]]
     """
     ### Handle empty mesh
     if mesh.n_cells == 0:

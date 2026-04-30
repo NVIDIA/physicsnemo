@@ -14,20 +14,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Divergence operator for vector fields.
+r"""Divergence operator for vector fields.
 
 Implements divergence using both DEC and LSQ methods.
 
-The DEC divergence is the composition ⋆₀⁻¹ d* ⋆₁ ♭(X), where ♭ is the
-PDP-flat operator (Hirani 2003, Section 5.6) that converts a vertex vector
-field to a primal 1-form via midpoint averaging along edges. The composition
-reduces to a weighted sum over edges:
+The DEC divergence is the composition :math:`\star_0^{-1}\, d^{\ast}\, \star_1\, \flat(X)`,
+where :math:`\flat` is the PDP-flat operator (Hirani 2003, *Discrete Exterior
+Calculus*, §5.6) that converts a vertex vector field to a primal 1-form via
+midpoint averaging along edges. The composition reduces to a weighted sum
+over edges:
 
-    div(X)(v) = (1/|⋆v|) Σ_{edges [v,w]} w_ij × (X(v) + X(w))/2 · (w - v)
+.. math::
 
-where w_ij are the FEM cotangent weights (= |⋆e|/|e|) and |⋆v| is the dual
-0-cell (Voronoi) volume. This is exact for linear vector fields at interior
-vertices and first-order convergent on smooth fields.
+    \operatorname{div}(X)(v) = \frac{1}{|{\star}v|}
+    \sum_{\text{edges } [v,w]} w_{vw}\;
+    \frac{X(v) + X(w)}{2} \cdot (w - v)
+
+where :math:`w_{vw} = |{\star}e|/|e|` are the FEM cotangent weights and
+:math:`|{\star}v|` is the dual 0-cell (Voronoi) volume. This is exact for
+linear vector fields at interior vertices and first-order convergent on
+smooth fields.
 
 Physical interpretation: net flux through the dual cell boundary per unit
 volume, with the PDP-flat providing the edge flux estimate.
@@ -48,9 +54,11 @@ def compute_divergence_points_dec(
     mesh: "Mesh",
     vector_field: Float[torch.Tensor, "n_points n_spatial_dims"],
 ) -> Float[torch.Tensor, " n_points"]:
-    r"""Compute divergence at vertices using DEC: div = ⋆₀⁻¹ d* ⋆₁ ♭(X).
+    r"""Compute divergence at vertices using DEC.
 
-    For a vertex vector field X, the DEC divergence at vertex v is:
+    Implements :math:`\operatorname{div} = \star_0^{-1}\, d^{\ast}\, \star_1\, \flat(X)`.
+    For a vertex vector field :math:`X`, the DEC divergence at vertex
+    :math:`v` is:
 
     .. math::
 
@@ -127,10 +135,15 @@ def compute_divergence_points_lsq(
     mesh: "Mesh",
     vector_field: Float[torch.Tensor, "n_points n_spatial_dims"],
 ) -> Float[torch.Tensor, " n_points"]:
-    """Compute divergence at vertices using LSQ gradient of each component.
+    r"""Compute divergence at vertices using LSQ gradient of each component.
 
-    For vector field v = [vₓ, vᵧ, v_z]:
-        div(v) = ∂vₓ/∂x + ∂vᵧ/∂y + ∂v_z/∂z
+    For a vector field :math:`v = (v_x, v_y, v_z)`:
+
+    .. math::
+
+        \operatorname{div}(v) = \frac{\partial v_x}{\partial x}
+            + \frac{\partial v_y}{\partial y}
+            + \frac{\partial v_z}{\partial z}
 
     Computes the full Jacobian via a single batched LSQ solve, then takes
     the trace. This is more efficient than solving each component separately,
@@ -141,14 +154,14 @@ def compute_divergence_points_lsq(
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh
+        Simplicial mesh.
     vector_field : torch.Tensor
-        Vectors at vertices, shape (n_points, n_spatial_dims)
+        Vectors at vertices, shape ``(n_points, n_spatial_dims)``.
 
     Returns
     -------
-    torch.Tensor
-        Divergence at vertices, shape (n_points,)
+    Float[torch.Tensor, " n_points"]
+        Divergence at vertices, shape ``(n_points,)``.
     """
     from physicsnemo.mesh.calculus._lsq_reconstruction import compute_point_gradient_lsq
 

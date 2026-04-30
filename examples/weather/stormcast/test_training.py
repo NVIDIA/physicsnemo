@@ -241,22 +241,33 @@ def test_checkpointing(
     )
 
 
+@pytest.mark.parametrize("force_sharding", [False, True])
 def test_checkpoint_integrity(
     tmp_path: Path,
     cfg_diffusion: DictConfig,
     *,
+    force_sharding: bool,
     net_architecture: Literal["unet", "dit"] = "dit",
 ):
     """Test that model and optimizer states are intact and sharded correctly after checkpoint save/load."""
 
     dist = DistributedManager()
-    if not dist.world_size == 4:
+    if dist.world_size not in (1, 4):
         pytest.skip(
-            f"Skipping: test_checkpoint_integrity is only run with exactly 4 processes, current: {dist.world_size}."
+            f"Skipping: test_checkpoint_integrity is only run with 1 or 4 processes, current: {dist.world_size}."
         )
 
-    cfg_diffusion.training.domain_parallel_size = 2
-    cfg_diffusion.training.batch_size = 2
+    if dist.world_size == 4:
+        if force_sharding:
+            pytest.skip(
+                "Skipping: force_sharding is redundant with domain_parallel_size = 2"
+            )
+        cfg_diffusion.training.domain_parallel_size = 2
+        cfg_diffusion.training.batch_size = 2
+    else:
+        cfg_diffusion.training.domain_parallel_size = 1
+        cfg_diffusion.training.batch_size = 1
+        cfg_diffusion.training.force_sharding = force_sharding
     cfg_diffusion.training.rundir = _setup_rundir(tmp_path, dist.world_size)
     cfg_diffusion.training.seed = 0
 
@@ -288,11 +299,14 @@ def test_checkpoint_integrity(
         )
 
     for key, opt_param0 in opt_params0["state"].items():
-        opt_param1 = opt_params0["state"][key]
+        opt_param1 = opt_params1["state"][key]
         for opt_var in opt_param0:
             assert (opt_param0[opt_var] == opt_param1[opt_var]).all().cpu().item(), (
                 f"Optimizer parameter {key} before and after checkpointing is not equal"
             )
+
+    if dist.world_size != 4:
+        return  # remaining tests are for the 4-GPU setup
 
     # get positional embedding tensors for model and optimizer
     posembed = params1["model.model.tokenizer.pos_embed"]

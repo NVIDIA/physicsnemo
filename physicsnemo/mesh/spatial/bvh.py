@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 
 
 def _compute_morton_codes(
-    centroids: Float[torch.Tensor, "n_centroids n_dims"],
+    centroids: Float[torch.Tensor, "n_centroids n_spatial_dims"],
 ) -> Int[torch.Tensor, " n_centroids"]:
     """Compute morton codes (Z-order curve) for a set of points.
 
@@ -169,10 +169,11 @@ def _expand_leaf_hits(
 def _compute_leaf_aabbs(
     leaf_seg_starts: Int[torch.Tensor, " n_leaves"],
     leaf_seg_sizes: Int[torch.Tensor, " n_leaves"],
-    sorted_aabb_min: Float[torch.Tensor, "n_sorted n_dims"],
-    sorted_aabb_max: Float[torch.Tensor, "n_sorted n_dims"],
+    sorted_aabb_min: Float[torch.Tensor, "n_sorted n_spatial_dims"],
+    sorted_aabb_max: Float[torch.Tensor, "n_sorted n_spatial_dims"],
 ) -> tuple[
-    Float[torch.Tensor, "n_leaves n_dims"], Float[torch.Tensor, "n_leaves n_dims"]
+    Float[torch.Tensor, "n_leaves n_spatial_dims"],
+    Float[torch.Tensor, "n_leaves n_spatial_dims"],
 ]:
     """Compute AABBs for a batch of leaf segments via segmented reduction.
 
@@ -271,13 +272,15 @@ class BVH:
     >>> candidates = bvh.find_candidate_cells(query_points)
     """
 
-    node_aabb_min: torch.Tensor  # (n_nodes, n_spatial_dims)
-    node_aabb_max: torch.Tensor  # (n_nodes, n_spatial_dims)
-    node_left_child: torch.Tensor  # (n_nodes,), int64, -1 for leaves
-    node_right_child: torch.Tensor  # (n_nodes,), int64, -1 for leaves
-    leaf_start: torch.Tensor  # (n_nodes,), int64, -1 for internal
-    leaf_count: torch.Tensor  # (n_nodes,), int64, 0 for internal
-    sorted_cell_order: torch.Tensor  # (n_cells,), int64
+    node_aabb_min: Float[torch.Tensor, "n_nodes n_spatial_dims"]
+    node_aabb_max: Float[torch.Tensor, "n_nodes n_spatial_dims"]
+    # Child indices: -1 for leaves
+    node_left_child: Int[torch.Tensor, " n_nodes"]
+    node_right_child: Int[torch.Tensor, " n_nodes"]
+    # Leaf metadata: -1 / 0 for internal nodes
+    leaf_start: Int[torch.Tensor, " n_nodes"]
+    leaf_count: Int[torch.Tensor, " n_nodes"]
+    sorted_cell_order: Int[torch.Tensor, " n_cells"]
 
     @property
     def n_nodes(self) -> int:
@@ -474,9 +477,9 @@ class BVH:
 
     def point_in_aabb(
         self,
-        points: Float[torch.Tensor, "n_points n_dims"],
-        aabb_min: Float[torch.Tensor, "n_boxes n_dims"],
-        aabb_max: Float[torch.Tensor, "n_boxes n_dims"],
+        points: Float[torch.Tensor, "n_points n_spatial_dims"],
+        aabb_min: Float[torch.Tensor, "n_boxes n_spatial_dims"],
+        aabb_max: Float[torch.Tensor, "n_boxes n_spatial_dims"],
     ) -> Bool[torch.Tensor, "n_points n_boxes"]:
         """Test if points are inside axis-aligned bounding boxes.
 
@@ -518,11 +521,11 @@ class BVH:
 
     def find_candidate_cells(
         self,
-        query_points: Float[torch.Tensor, "n_queries n_dims"],
+        query_points: Float[torch.Tensor, "n_queries n_spatial_dims"],
         max_candidates_per_point: int | None = 32,
         aabb_tolerance: float = 1e-6,
     ) -> Adjacency:
-        """Find candidate cells that might contain each query point.
+        r"""Find candidate cells that might contain each query point.
 
         Uses batched iterative BVH traversal where all queries are processed
         simultaneously in a vectorized manner.
@@ -542,16 +545,17 @@ class BVH:
         Returns
         -------
         Adjacency
-            Adjacency object where candidates for query *i* are at
+            Adjacency object where candidates for query ``i`` are at
             ``result.indices[result.offsets[i]:result.offsets[i+1]]``.
             Use ``result.to_list()`` for a list-of-tensors representation.
 
         Notes
         -----
-        Complexity is O(M log N) where M = queries, N = cells. All AABB tests
-        and tree operations are fully vectorized across queries - there are no
-        Python-level loops over individual query points. The outer loop runs
-        once per tree level (O(log N) iterations).
+        Complexity is :math:`O(M \log N)` where :math:`M` = queries and
+        :math:`N` = cells. All AABB tests and tree operations are fully
+        vectorized across queries - there are no Python-level loops over
+        individual query points. The outer loop runs once per tree level
+        (:math:`O(\log N)` iterations).
         """
         if query_points.ndim != 2:
             raise ValueError(

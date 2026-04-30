@@ -96,6 +96,7 @@ def categorize_facets_by_count(
         All candidate facets (may contain duplicates), already sorted
     target_counts : list[int] | {"boundary", "shared", "interior", "all"}, optional
         How to filter the results:
+
         - "all": Return all unique facets with their counts (no filtering)
         - "boundary": Return facets appearing exactly once (counts == 1)
         - "interior": Return facets appearing exactly twice (counts == 2)
@@ -110,6 +111,7 @@ def categorize_facets_by_count(
     -------
     tuple[torch.Tensor, torch.Tensor, torch.Tensor]
         Tuple of (unique_facets, inverse_indices, counts):
+
         - unique_facets: Deduplicated facets, possibly filtered by count
         - inverse_indices: Mapping from candidate facets to unique facet indices
         - counts: How many times each unique facet appears
@@ -210,6 +212,7 @@ def extract_candidate_facets(
         Parent mesh connectivity, shape (n_cells, n_vertices_per_cell)
     manifold_codimension : int, optional
         Codimension of the extracted mesh relative to parent.
+
         - 1: Extract (n-1)-facets (default, e.g., triangular faces from tets)
         - 2: Extract (n-2)-facets (e.g., edges from tets, vertices from triangles)
         - k: Extract (n-k)-facets

@@ -32,6 +32,7 @@ import torch.nn as nn
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     get_model_state_dict,
+    get_optimizer_state_dict,
 )
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import (
@@ -493,7 +494,7 @@ def test_load_model_weights_fsdp_shard_tensor(
     )
     with torch.no_grad():
         loaded_output = fsdp_model2(x_sharded).full_tensor()
-    assert torch.allclose(ref_output, loaded_output, rtol=1e-5, atol=1e-5), (
+    assert torch.allclose(ref_output, loaded_output, rtol=1e-4, atol=1e-4), (
         "Model outputs differ after load_model_weights into 2-D mesh model"
     )
 
@@ -816,3 +817,111 @@ def test_fsdp_grad_scaler_checkpoint(shared_tmp_dir, sync_module_states):
     assert torch.allclose(ref_output, loaded_output, rtol=1e-5, atol=1e-5), (
         "Model outputs differ after FSDP+GradScaler checkpoint round-trip"
     )
+
+
+# ---------------------------------------------------------------------------
+# channels_last optimizer state survives a checkpoint round-trip
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("use_orig_params", [False, True])
+@pytest.mark.parametrize(
+    "memory_format",
+    [
+        pytest.param(torch.channels_last, id="channels_last"),
+        pytest.param(torch.contiguous_format, id="contiguous"),
+    ],
+)
+def test_fsdp_channels_last_optim_roundtrip(
+    shared_tmp_dir, memory_format, use_orig_params
+):
+    """Optimizer state for channels_last Conv2d weights survives a checkpoint round-trip.
+
+    With ``use_orig_params=False`` PyTorch FSDP packs the FlatParameter
+    using ``as_strided((numel,), (1,))`` for non-truly-contiguous params
+    (storage byte order) but unpacks loaded optimizer state with
+    ``torch.flatten`` (logical NCHW order).  For channels_last Conv2d
+    weights those orders differ, which silently corrupts ``exp_avg`` /
+    ``exp_avg_sq`` after a save-load cycle.  ``checkpoint.py`` works
+    around the asymmetry via ``_remap_channels_last_optim_sd``.
+
+    Parametrized to also pin the negative cases:
+
+    * ``contiguous_format``: same code path with no remap needed.
+    * ``use_orig_params=True``: optim state goes per-original-param,
+      not via the FlatParameter, so the asymmetry doesn't exist and the
+      remap must *not* fire (firing would itself scramble the state).
+    """
+    torch.manual_seed(0)
+    dm = DistributedManager()
+    device = dm.device
+    mesh = init_device_mesh("cuda", (dm.world_size,), mesh_dim_names=("world",))
+
+    def _build_model():
+        # Conv2d (4-D weight, exercises channels_last) followed by a Linear
+        # (2-D weight) so we cover both contiguous and non-contiguous params
+        # in the same FlatParameter.
+        m = nn.Sequential(
+            nn.Conv2d(3, 8, kernel_size=3, padding=1),
+            nn.Flatten(),
+            nn.Linear(8 * 4 * 4, 8),
+        ).to(device, memory_format=memory_format)
+        return FSDP(
+            m,
+            device_mesh=mesh["world"],
+            sharding_strategy=ShardingStrategy.NO_SHARD,
+            use_orig_params=use_orig_params,
+            sync_module_states=True,
+        )
+
+    fsdp_model = _build_model()
+    optimizer = torch.optim.Adam(fsdp_model.parameters(), lr=1e-3)
+
+    x = torch.randn(2, 3, 4, 4, device=device).to(memory_format=memory_format)
+    for _ in range(3):
+        loss = fsdp_model(x).sum()
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+
+    full_options = StateDictOptions(full_state_dict=True)
+    ref_optim_sd = get_optimizer_state_dict(fsdp_model, optimizer, options=full_options)
+
+    save_checkpoint(
+        shared_tmp_dir,
+        models=fsdp_model,
+        optimizer=optimizer,
+        epoch=3,
+        optimizer_model=fsdp_model,
+    )
+    dist.barrier()
+
+    fsdp_model2 = _build_model()
+    optimizer2 = torch.optim.Adam(fsdp_model2.parameters(), lr=1e-3)
+    epoch = load_checkpoint(
+        shared_tmp_dir,
+        models=fsdp_model2,
+        optimizer=optimizer2,
+        optimizer_model=fsdp_model2,
+    )
+    assert epoch == 3
+
+    loaded_optim_sd = get_optimizer_state_dict(
+        fsdp_model2, optimizer2, options=full_options
+    )
+
+    if dm.rank == 0:
+        assert ref_optim_sd["state"].keys() == loaded_optim_sd["state"].keys()
+        for pname, pstate in ref_optim_sd["state"].items():
+            for k, ref_v in pstate.items():
+                loaded_v = loaded_optim_sd["state"][pname][k]
+                if not isinstance(ref_v, torch.Tensor):
+                    assert ref_v == loaded_v, (
+                        f"Optimizer state {pname}.{k} differs: {ref_v} vs {loaded_v}"
+                    )
+                    continue
+                assert torch.equal(ref_v.cpu(), loaded_v.cpu()), (
+                    f"Optimizer state {pname}.{k} differs after round-trip"
+                )

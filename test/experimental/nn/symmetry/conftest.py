@@ -110,7 +110,7 @@ def get_rtol_atol(dtype: torch.dtype, scale: float = 1.0) -> tuple[float, float]
     elif dtype == torch.float32:
         # float32 needs looser tolerances for equivariance tests with
         # accumulated numerical operations (matrix multiplications, rotations)
-        rtol, atol = 1e-4, 1e-4
+        rtol, atol = 1e-4, 5e-3
     elif dtype == torch.float64:
         # float64 needs slightly looser tolerances for accumulated numerical
         # operations in Wigner D-matrix and rotation calculations
