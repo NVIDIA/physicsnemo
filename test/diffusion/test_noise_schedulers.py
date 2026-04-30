@@ -677,6 +677,114 @@ class TestSpatialMethodNonRegression:
         score_recovered = s.x0_to_score(x0, x_t, t)
         compare_outputs(score_recovered, score, atol=1e-3, rtol=1e-3)
 
+    def test_epsilon_to_score_to_epsilon_roundtrip(
+        self,
+        device,
+        sched_cls,
+        sched_kwargs,
+        sched_name,
+        spatial_name,
+        shape,
+        predictor_cls,
+        predictor_kwargs,
+    ):
+        s = sched_cls(**sched_kwargs)
+        eps = make_input(shape, seed=90, device=device)
+        t = make_input((shape[0],), seed=91, device=device).abs() * 0.3 + 0.2
+        score = s.epsilon_to_score(eps, t)
+        eps_recovered = s.score_to_epsilon(score, t)
+        compare_outputs(eps_recovered, eps, atol=1e-3, rtol=1e-3)
+
+    def test_epsilon_to_x0_to_epsilon_roundtrip(
+        self,
+        device,
+        sched_cls,
+        sched_kwargs,
+        sched_name,
+        spatial_name,
+        shape,
+        predictor_cls,
+        predictor_kwargs,
+    ):
+        s = sched_cls(**sched_kwargs)
+        eps = make_input(shape, seed=100, device=device)
+        x_t = make_input(shape, seed=101, device=device)
+        t = make_input((shape[0],), seed=102, device=device).abs() * 0.3 + 0.2
+        x0 = s.epsilon_to_x0(eps, x_t, t)
+        eps_recovered = s.x0_to_epsilon(x0, x_t, t)
+        compare_outputs(eps_recovered, eps, atol=1e-3, rtol=1e-3)
+
+    def test_epsilon_score_x0_consistency(
+        self,
+        device,
+        sched_cls,
+        sched_kwargs,
+        sched_name,
+        spatial_name,
+        shape,
+        predictor_cls,
+        predictor_kwargs,
+    ):
+        """Verify epsilon->score->x0 matches epsilon->x0 directly."""
+        s = sched_cls(**sched_kwargs)
+        eps = make_input(shape, seed=110, device=device)
+        x_t = make_input(shape, seed=111, device=device)
+        t = make_input((shape[0],), seed=112, device=device).abs() * 0.3 + 0.2
+        # Path 1: epsilon -> x0 directly
+        x0_direct = s.epsilon_to_x0(eps, x_t, t)
+        # Path 2: epsilon -> score -> x0
+        score = s.epsilon_to_score(eps, t)
+        x0_via_score = s.score_to_x0(score, x_t, t)
+        compare_outputs(x0_direct, x0_via_score, atol=1e-3, rtol=1e-3)
+
+    def test_get_denoiser_epsilon_predictor(
+        self,
+        device,
+        sched_cls,
+        sched_kwargs,
+        sched_name,
+        spatial_name,
+        shape,
+        predictor_cls,
+        predictor_kwargs,
+    ):
+        """Verify get_denoiser works with epsilon_predictor and matches score path."""
+        s = sched_cls(**sched_kwargs)
+        # Toy epsilon predictor: returns constant noise
+        eps_pred = lambda x, t: make_input(x.shape, seed=120, device=device)  # noqa: E731
+        # Build denoiser from epsilon predictor
+        denoiser_eps = s.get_denoiser(epsilon_predictor=eps_pred)
+
+        # Build equivalent score predictor and denoiser
+        def score_pred(x, t):
+            eps = eps_pred(x, t)
+            return s.epsilon_to_score(eps, t)
+
+        denoiser_score = s.get_denoiser(score_predictor=score_pred)
+        x = make_input(shape, seed=121, device=device)
+        t = make_input((shape[0],), seed=122, device=device).abs() * 0.3 + 0.2
+        out_eps = denoiser_eps(x, t)
+        out_score = denoiser_score(x, t)
+        compare_outputs(out_eps, out_score, atol=1e-4, rtol=1e-4)
+
+    def test_get_denoiser_validates_multiple_predictors(
+        self,
+        device,
+        sched_cls,
+        sched_kwargs,
+        sched_name,
+        spatial_name,
+        shape,
+        predictor_cls,
+        predictor_kwargs,
+    ):
+        s = sched_cls(**sched_kwargs)
+        pred = lambda x, t: x  # noqa: E731
+        with pytest.raises(ValueError, match="Exactly one"):
+            s.get_denoiser(x0_predictor=pred, epsilon_predictor=pred)
+        with pytest.raises(ValueError, match="Exactly one"):
+            s.get_denoiser(score_predictor=pred, epsilon_predictor=pred)
+
 
 # =============================================================================
 # Compile Tests — Denoiser Closures
@@ -692,8 +800,13 @@ COMPILE_SCHEDULER_CONFIGS = [
 
 @pytest.mark.parametrize(
     "denoising_type,predictor_kwarg",
-    [("ode", "x0_predictor"), ("ode", "score_predictor"), ("sde", "x0_predictor")],
-    ids=["ode_x0", "ode_score", "sde_x0"],
+    [
+        ("ode", "x0_predictor"),
+        ("ode", "score_predictor"),
+        ("ode", "epsilon_predictor"),
+        ("sde", "x0_predictor"),
+    ],
+    ids=["ode_x0", "ode_score", "ode_epsilon", "sde_x0"],
 )
 @pytest.mark.parametrize(
     "sched_cls,sched_kwargs,sched_name",

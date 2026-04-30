@@ -381,6 +381,7 @@ def find_all_containing_cells(
         source_indices=query_indices,
         target_indices=cell_indices,
         n_sources=len(query_points),
+        n_targets=mesh.n_cells,
     )
 
 
@@ -424,6 +425,69 @@ def find_nearest_cells(
 
 
 # ---------------------------------------------------------------------------
+# Point matching
+# ---------------------------------------------------------------------------
+
+
+def match_points(
+    source: Float[torch.Tensor, "n_source n_spatial_dims"],
+    target: Float[torch.Tensor, "n_target n_spatial_dims"],
+    tolerance: float = 1e-6,
+) -> tuple[Int[torch.Tensor, " n_matched"], Int[torch.Tensor, " n_matched"]]:
+    r"""Find near-exact vertex matches between two point sets.
+
+    For each *source* point, finds the nearest *target* point via KNN (k=1).
+    Pairs whose L2 distance exceeds ``tolerance`` are discarded.
+
+    Parameters
+    ----------
+    source : torch.Tensor
+        Source points, shape :math:`(M, D)`.
+    target : torch.Tensor
+        Target points, shape :math:`(N, D)`.
+    tolerance : float
+        Maximum L2 distance for a pair to be considered coincident. The
+        comparison is inclusive (``distance <= tolerance``).
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        ``(source_indices, target_indices)`` -- matched index pairs, both
+        shape :math:`(K,)` where *K* is the number of matches found.
+
+    Notes
+    -----
+    This is a one-way nearest-neighbor lookup, not a bipartite matching:
+    multiple source points can map to the same target index. Callers
+    expecting one-to-one pairs should de-duplicate by target.
+
+    For *within-set* duplicate detection (find coincident vertices within
+    a single point cloud, with transitive merging), see
+    :func:`physicsnemo.mesh.utilities._duplicate_detection.compute_canonical_indices`,
+    which uses a BVH + union-find pipeline tuned for that case. For
+    float-32 inputs, tolerances much below ``~1e-6`` (relative to mesh
+    extent) can be defeated by representation noise.
+
+    Examples
+    --------
+    >>> import torch
+    >>> a = torch.tensor([[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]])
+    >>> b = torch.tensor([[1.0, 1.0], [3.0, 3.0]])
+    >>> src_idx, tgt_idx = match_points(a, b, tolerance=0.01)
+    >>> src_idx
+    tensor([1])
+    >>> tgt_idx
+    tensor([0])
+    """
+    indices, distances = knn(points=target, queries=source, k=1)
+    indices = indices[:, 0]  # (M,)
+    distances = distances[:, 0]  # (M,)
+    mask = distances <= tolerance
+    matched_source = mask.nonzero(as_tuple=True)[0]
+    return matched_source, indices[mask]
+
+
+# ---------------------------------------------------------------------------
 # Shared accumulation logic
 # ---------------------------------------------------------------------------
 
@@ -445,10 +509,11 @@ def _accumulate_sampled_data(
     device = mesh.points.device
 
     ### Count how many cells contain each query point
-    query_containment_count = torch.zeros(n_queries, dtype=torch.long, device=device)
     if len(query_indices) > 0:
-        query_containment_count.scatter_add_(
-            0, query_indices, torch.ones_like(query_indices)
+        query_containment_count = torch.bincount(query_indices, minlength=n_queries)
+    else:
+        query_containment_count = torch.zeros(
+            n_queries, dtype=torch.long, device=device
         )
 
     source_data = mesh.cell_data if data_source == "cells" else mesh.point_data

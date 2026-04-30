@@ -17,12 +17,14 @@
 """Matplotlib backend for mesh visualization."""
 
 import importlib
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 import numpy as np
 import torch
 
 if TYPE_CHECKING:
+    from mpl_toolkits.mplot3d.axes3d import Axes3D
+
     from physicsnemo.mesh import Mesh
 
 # Dynamic imports for optional matplotlib dependency (invisible to static analysis)
@@ -34,6 +36,8 @@ LineCollection = _collections.LineCollection
 PolyCollection = _collections.PolyCollection
 _colors = importlib.import_module("matplotlib.colors")
 Normalize = _colors.Normalize
+_axes_mod = importlib.import_module("matplotlib.axes")
+MplAxes = _axes_mod.Axes
 
 
 def draw_mesh_matplotlib(
@@ -85,13 +89,22 @@ def draw_mesh_matplotlib(
     show_edges : bool
         Whether to draw cell edges.
     ax : matplotlib.axes.Axes or None
-        Existing matplotlib axes (if None, creates new figure).
+        Existing matplotlib Axes to draw on. If ``None``, a new figure is
+        created. Use this to overlay multiple meshes on the same axes.
 
     Returns
     -------
     matplotlib.axes.Axes
         Matplotlib axes object.
     """
+    ### Validate ax type
+    if ax is not None and not isinstance(ax, MplAxes):
+        raise ValueError(
+            f"Expected a matplotlib Axes for the 'ax' parameter, "
+            f"got {type(ax).__name__}. "
+            f"PyVista Plotters are only supported for pyvista backend."
+        )
+
     ### For volume meshes (3D+ manifold), reduce to a surface mesh.
     ### Matplotlib can only render 2D facets (polygons), not volumetric cells
     ### like tetrahedra. Extract boundary facets for clean surface visualization.
@@ -248,16 +261,23 @@ def draw_mesh_matplotlib(
         ax.set_ylabel("y")
         ax.set_aspect("equal", adjustable="box")
     elif mesh.n_spatial_dims == 3:
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.set_zlabel("z")  # ty: ignore[possibly-missing-attribute]
+        # ax was created with projection="3d" upstream when n_spatial_dims=3
+        # (see the figure setup earlier), or the caller provided a 3D-projected
+        # Axes. The 3D-only methods (set_zlabel, get_*lim3d, set_*lim3d) live on
+        # Axes3D, not the 2D base Axes - so narrow the static type once here so
+        # they're visible without per-line suppressions.
+        ax_3d = cast("Axes3D", ax)
+
+        ax_3d.set_xlabel("x")
+        ax_3d.set_ylabel("y")
+        ax_3d.set_zlabel("z")
 
         ### Make 3D axes equal by adjusting limits to have same range
-        ax.set_box_aspect((1, 1, 1))  # ty: ignore[invalid-argument-type]
+        ax_3d.set_box_aspect((1, 1, 1))
 
-        xlim = ax.get_xlim3d()  # ty: ignore[possibly-missing-attribute]
-        ylim = ax.get_ylim3d()  # ty: ignore[possibly-missing-attribute]
-        zlim = ax.get_zlim3d()  # ty: ignore[possibly-missing-attribute]
+        xlim = ax_3d.get_xlim3d()
+        ylim = ax_3d.get_ylim3d()
+        zlim = ax_3d.get_zlim3d()
 
         x_range = abs(xlim[1] - xlim[0])
         x_middle = np.mean(xlim)
@@ -269,9 +289,9 @@ def draw_mesh_matplotlib(
         # Use the maximum range to ensure all axes have equal scale
         plot_radius = 0.5 * max([x_range, y_range, z_range])
 
-        ax.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])  # ty: ignore[possibly-missing-attribute]
-        ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])  # ty: ignore[possibly-missing-attribute]
-        ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])  # ty: ignore[possibly-missing-attribute]
+        ax_3d.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])
+        ax_3d.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
+        ax_3d.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
 
     if show:
         plt.show()
@@ -508,7 +528,13 @@ def _draw_3d(
                 edgecolors = [(0, 0, 0, alpha_edges)] * len(verts)
                 linewidths = 0.25
             else:
-                edgecolors = "none"
+                ### Per-face transparent RGBA, NOT the string "none":
+                ### Poly3DCollection with shade=True calls _shade_colors on
+                ### edgecolors, which crashes on the empty array that "none"
+                ### resolves to (matplotlib >= 3.7).  A transparent RGBA list
+                ### of the right length renders identically (invisible) and
+                ### threads through the shading code without breaking.
+                edgecolors = [(0, 0, 0, 0)] * len(verts)
                 linewidths = 0
 
             pc = Poly3DCollection(

@@ -1,0 +1,109 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# High-lift airplane surface dataset (compressible, cell-centric)
+# Reads the boundary surface Mesh directly from DomainMesh .pdmsh files
+# by navigating into the on-disk tensordict directory structure.
+# Boundary mesh from HiLiftAeroML. Physics fields live in cell_data
+# (derived from vertex-projected point_data during conversion).
+# Model inputs use cell centroids and face normals; topology (triangles)
+# is preserved for normal computation and cell-based subsampling.
+# Splits are controlled by manifest.json + train_split/val_split in the training config.
+
+name: highlift_surface
+
+train_datadir: ${dataset_paths.highlift_aero_ml}
+
+# Freestream conditions — slug-inch-second-Rankine unit system
+metadata:
+  U_inf: [2672.95, 0.0, 186.92]   # 2679.505 in/s at AoA=4°
+  p_inf: 176.352                   # 14.696 psi × 12 → slug/(in·s²)
+  rho_inf: 1.3756e-6               # 0.002377 slug/ft³ → slug/in³
+  T_inf: 518.67                    # [°R]
+  L_ref: 1156.75                    # [in] — span
+
+pipeline:
+  reader:
+    _target_: ${dp:MeshReader}
+    path: ${train_datadir}
+    pattern: "geo_LHC*/*.pdmsh/_tensordict/boundaries/boundary"
+    subsample_n_cells: ${sampling_resolution}
+  augmentations:
+    - _target_: ${dp:RandomRotateMesh}
+      axes: ["z"]
+      transform_point_data: true
+      transform_cell_data: true
+      transform_global_data: true
+    - _target_: ${dp:RandomTranslateMesh}
+      distribution:
+        _target_: torch.distributions.Uniform
+        low: [-1.0, -1.0, 0.0]
+        high: [1.0, 1.0, 0.0]
+  transforms:
+    - _target_: ${dp:CenterMesh}
+      use_area_weighting: false
+    - _target_: ${dp:ComputeSurfaceNormals}
+      store_as: cell_data
+      field_name: normals
+    - _target_: ${dp:NonDimensionalizeByMetadata}
+      fields:
+        PROJ(AVG(P)): pressure
+        PROJ(AVG(T)): temperature
+        PROJ(AVG(RHO)): density
+        PROJ(AVG(U)): velocity
+        AVG(TAU_WALL): stress
+      section: cell_data
+    - _target_: ${dp:RenameMeshFields}
+      cell_data:
+        PROJ(AVG(P)): pressure
+        PROJ(AVG(T)): temperature
+        PROJ(AVG(RHO)): density
+        PROJ(AVG(U)): velocity
+        AVG(TAU_WALL): tau_wall
+    # z-score normalization (dataset-wide stats)
+    # Stats are post-nondimensionalization values.
+    # TODO: recompute stats for cell-centered data (these are vertex-projected estimates)
+    - _target_: ${dp:NormalizeMeshFields}
+      section: cell_data
+      fields:
+        pressure:    {type: scalar, mean: -0.5,  std: 1.0}
+        temperature: {type: scalar, mean:  1.00, std: 0.002}
+        density:     {type: scalar, mean:  1.0, std: 0.02}
+        velocity:    {type: vector, mean: [0.00, 0.00, 0.00], std: 0.20}
+        tau_wall:    {type: scalar, mean: [0.00, 0.00, 0.00], std: 0.003}
+    - _target_: ${dp:MeshToTensorDict}
+    - _target_: ${dp:ComputeCellCentroids}
+    - _target_: ${dp:RestructureTensorDict}
+      groups:
+        input:
+          points: cell_centroids
+          normals: cell_data.normals
+          U_inf: global_data.U_inf
+        output:
+          pressure: cell_data.pressure
+          temperature: cell_data.temperature
+          density: cell_data.density
+          velocity: cell_data.velocity
+          tau_wall: cell_data.tau_wall
+
+targets:
+  pressure: scalar
+  temperature: scalar
+  density: scalar
+  velocity: vector
+  tau_wall: vector
+
+metrics: [l1, l2, mae]

@@ -14,4 +14,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .base import Denoiser, DiffusionModel, Predictor  # noqa: F401
+from .base import Denoiser, DiffusionModel, Predictor, PredictorType  # noqa: F401

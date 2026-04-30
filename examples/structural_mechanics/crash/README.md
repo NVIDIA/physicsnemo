@@ -211,6 +211,75 @@ torchrun --nproc_per_node=<NUM_GPUS> inference.py --config-name=bumper_geotranso
 Runs are sharded across ranks: rank `r` processes `run_items[r::world_size]`.
 Predicted meshes are written as .vtp files under `./predicted_vtps/`, and can be opened using ParaView.
 
+## Guardrails (OOD detection)
+
+GeoTransolver ships with an optional embedded out-of-distribution (OOD) guardrail
+that calibrates during training and emits warnings at inference when inputs
+drift outside the training distribution.  It watches two surfaces:
+
+- **Global parameters** — per-channel bounding box on the global embedding
+  (e.g. `velocity_x`, `thickness_scale`).
+- **Geometry** — k-nearest-neighbour distance on a pooled geometry latent.
+
+Enable it through the model config by setting `guard_config` to a mapping
+(leave `null` to disable):
+
+```yaml
+# conf/my_experiment.yaml
+model:
+  guard_config:
+    buffer_size: 121       # FIFO buffer; typically = num_training_samples
+    knn_k: 10              # k for geometry kNN distance
+    sensitivity: 1.5       # threshold multiplier on 99th-percentile kNN dist
+```
+
+What each parameter controls:
+
+- **`buffer_size`** — Capacity of the FIFO ring buffer that stores pooled
+  geometry latents during training; the kNN threshold is computed over its
+  contents. Set it to at least the training-set size so calibration sees every
+  sample. Under DDP each rank keeps its own buffer and the distributed sampler
+  shuffles, so after a few epochs each rank's FIFO covers most of the data.
+  Memory cost is `buffer_size × head_dim × 4` bytes — typically well under 1 MB.
+- **`knn_k`** — Number of nearest neighbours used in the kNN distance. Smaller
+  `k` is more sensitive to isolated training-set outliers; larger `k` is
+  smoother but can blur multi-modal cluster boundaries. The default of `10`
+  works for buffer sizes from ~100 up to several thousand.
+- **`sensitivity`** — Multiplier on the 99th-percentile training kNN distance
+  used as the OOD threshold. **Higher = less sensitive** (fewer warnings).
+  Raise it if known in-distribution validation data triggers warnings; lower
+  it if known-OOD inputs are being missed.
+
+Recommended starting points by training-set size:
+
+| Training samples | `buffer_size`           | `knn_k` | `sensitivity` |
+|------------------|-------------------------|---------|---------------|
+| ~100             | 100–200                 | 5–10    | 1.5           |
+| ~500             | 500–1000                | 10      | 1.5           |
+| 5000+            | = dataset size          | 10–15   | 1.5           |
+
+If validation data trips warnings, raise `sensitivity` toward 2.0–3.0; if
+known-OOD inputs slip through, lower it toward 1.0.
+
+No changes to `train.py` / `inference.py` are required: during training the
+guard silently collects calibration statistics, and during inference it emits
+warnings of the form `OOD Guard: geometry sample ...` or
+`OOD Guard: global_embedding dim ...` to the Python logger whenever a sample
+falls outside the calibrated training envelope.  Warnings do not halt inference.
+
+Two inference drivers are provided to synthesise OOD samples for testing the
+guard end-to-end:
+
+```bash
+# Scale every global-feature scalar by 1.5x (default):
+python inference_ood_global.py   --config-name=bumper_geotransolver_oneshot
+# Scale the geometry uniformly by 1.10x in raw space (default):
+python inference_ood_geometry.py --config-name=bumper_geotransolver_oneshot
+```
+
+Override the perturbation factor from the CLI, e.g.
+`inference.ood_global_scale=2.0` or `inference.ood_geometry_scale=1.05`.
+
 ## Experiments
 
 Each experiment is a self-contained YAML file in `conf/`. Each config file includes all defaults and experiment-specific settings.

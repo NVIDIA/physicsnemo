@@ -20,6 +20,8 @@ This module consolidates all Dataset tests, using real CUDA streams
 for GPU-related tests instead of mocks.
 """
 
+from unittest.mock import patch
+
 import pytest
 import torch
 from tensordict import TensorDict
@@ -277,25 +279,9 @@ class TestDatasetPrefetching:
         # Prefetch index 0
         dataset.prefetch(0)
 
-        # Should have 1 prefetch in flight (may complete quickly)
-        assert dataset.prefetch_count >= 0
-
         # Get should use prefetched result
         data, metadata = dataset[0]
         assert "positions" in data
-
-    def test_prefetch_batch(self, numpy_data_dir):
-        """Test prefetching multiple samples."""
-        reader = dp.NumpyReader(numpy_data_dir)
-        dataset = dp.Dataset(reader)
-
-        # Prefetch multiple indices
-        dataset.prefetch_batch([0, 1, 2, 3])
-
-        # Get samples
-        for i in range(4):
-            data, metadata = dataset[i]
-            assert metadata["index"] == i
 
     def test_prefetch_non_prefetched_index(self, numpy_data_dir):
         """Test getting a non-prefetched index loads synchronously."""
@@ -314,12 +300,9 @@ class TestDatasetPrefetching:
         reader = dp.NumpyReader(numpy_data_dir)
         dataset = dp.Dataset(reader)
 
-        # Prefetch same index twice
+        # Prefetch same index twice -- second call should be a no-op
         dataset.prefetch(0)
-        initial_count = dataset.prefetch_count
-
-        dataset.prefetch(0)  # Should be a no-op
-        assert dataset.prefetch_count == initial_count
+        dataset.prefetch(0)
 
         # Still should be able to get the data
         data, metadata = dataset[0]
@@ -355,8 +338,9 @@ class TestDatasetPrefetching:
             data, metadata = dataset[i]
             assert metadata["index"] == i
 
-        # Prefetch count should be 0 after retrieving all
-        assert dataset.prefetch_count == 0
+        # After consuming all prefetched samples, subsequent getitem still works
+        data, metadata = dataset[0]
+        assert metadata["index"] == 0
 
 
 # ============================================================================
@@ -378,39 +362,6 @@ class TestDatasetPrefetchWithStreams:
 
         data, metadata = dataset[0]
         assert data["positions"].device.type == "cuda"
-
-        torch.cuda.synchronize()
-
-    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-    def test_prefetch_batch_with_streams(self, numpy_data_dir):
-        """Test prefetch_batch with multiple CUDA streams."""
-        reader = dp.NumpyReader(numpy_data_dir, pin_memory=True)
-        dataset = dp.Dataset(reader, device="cuda:0")
-
-        streams = [torch.cuda.Stream() for _ in range(4)]
-        dataset.prefetch_batch([0, 1, 2, 3], streams=streams)
-
-        for i in range(4):
-            data, metadata = dataset[i]
-            assert data["positions"].device.type == "cuda"
-
-        torch.cuda.synchronize()
-
-    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-    def test_prefetch_batch_with_stream_cycling(self, numpy_data_dir):
-        """Test prefetch_batch cycles through streams correctly."""
-        reader = dp.NumpyReader(numpy_data_dir, pin_memory=True)
-        dataset = dp.Dataset(reader, device="cuda:0")
-
-        # Use fewer streams than indices to test cycling
-        streams = [torch.cuda.Stream() for _ in range(2)]
-        dataset.prefetch_batch([0, 1, 2, 3, 4], streams=streams)
-
-        # All samples should be retrievable
-        for i in range(5):
-            data, metadata = dataset[i]
-            assert metadata["index"] == i
-            assert data["positions"].device.type == "cuda"
 
         torch.cuda.synchronize()
 
@@ -474,11 +425,13 @@ class TestDatasetCancelPrefetch:
         reader = dp.NumpyReader(numpy_data_dir)
         dataset = dp.Dataset(reader)
 
-        dataset.prefetch_batch([0, 1, 2, 3])
+        for i in range(4):
+            dataset.prefetch(i)
         dataset.cancel_prefetch()
 
-        # Prefetch count should be 0 after cancel
-        assert dataset.prefetch_count == 0
+        # After cancel, synchronous getitem should still work
+        data, metadata = dataset[0]
+        assert metadata["index"] == 0
 
     def test_prefetch_cancel_specific(self, numpy_data_dir):
         """Test canceling a specific prefetch."""
@@ -525,33 +478,31 @@ class TestDatasetClose:
         reader = dp.NumpyReader(numpy_data_dir)
         dataset = dp.Dataset(reader)
 
-        dataset.prefetch_batch([0, 1, 2, 3])
+        for i in range(4):
+            dataset.prefetch(i)
         dataset.close()
 
-        # Should not raise, prefetch should be stopped
-        assert dataset.prefetch_count == 0
+        # close() is idempotent -- calling again should not raise
+        dataset.close()
 
     def test_close_shuts_down_executor(self, numpy_data_dir):
         """Test that close shuts down the executor."""
         reader = dp.NumpyReader(numpy_data_dir)
         dataset = dp.Dataset(reader)
 
-        # Trigger executor creation
+        # Trigger executor creation via prefetch
         dataset.prefetch(0)
-        assert dataset._executor is not None
-
         dataset.close()
-        assert dataset._executor is None
+
+        # Idempotent: second close should not raise
+        dataset.close()
 
     def test_close_without_executor(self, numpy_data_dir):
         """Test that close works when executor was never created."""
         reader = dp.NumpyReader(numpy_data_dir)
         dataset = dp.Dataset(reader)
 
-        # Never use prefetch, so no executor
-        assert dataset._executor is None
-
-        # Should not raise
+        # Should not raise even without prior prefetch
         dataset.close()
 
     def test_context_manager_cleans_up(self, numpy_data_dir):
@@ -562,11 +513,9 @@ class TestDatasetClose:
             # Start some prefetches
             dataset.prefetch(0)
             dataset.prefetch(1)
-            _ = dataset._ensure_executor()
 
-        # After context exit, executor should be shut down
-        assert dataset._executor is None
-        assert dataset.prefetch_count == 0
+        # After context exit, close was called; idempotent second close is safe
+        dataset.close()
 
 
 # ============================================================================
@@ -632,6 +581,75 @@ class TestDatasetRepr:
 
 
 # ============================================================================
+# RNG Management (set_generator / set_epoch)
+# ============================================================================
+
+
+class TestDatasetRNG:
+    """Tests for Dataset RNG propagation via set_generator / set_epoch."""
+
+    def test_set_generator_propagates_to_reader_and_transforms(self, numpy_data_dir):
+        """set_generator delegates to reader and each transform."""
+        reader = dp.NumpyReader(numpy_data_dir)
+        transform = dp.SubsamplePoints(
+            input_keys=["positions", "features"], n_points=50
+        )
+        dataset = dp.Dataset(reader, transforms=transform)
+
+        with (
+            patch.object(
+                reader, "set_generator", wraps=reader.set_generator
+            ) as spy_reader,
+            patch.object(
+                transform, "set_generator", wraps=transform.set_generator
+            ) as spy_transform,
+        ):
+            g = torch.Generator().manual_seed(7)
+            dataset.set_generator(g)
+            spy_reader.assert_called_once()
+            spy_transform.assert_called_once()
+            assert isinstance(spy_reader.call_args[0][0], torch.Generator)
+            assert isinstance(spy_transform.call_args[0][0], torch.Generator)
+
+    def test_set_epoch_propagates_to_reader_and_transforms(self, numpy_data_dir):
+        """set_epoch delegates to reader and each transform."""
+        reader = dp.NumpyReader(numpy_data_dir)
+        transform = dp.SubsamplePoints(
+            input_keys=["positions", "features"], n_points=50
+        )
+        dataset = dp.Dataset(reader, transforms=transform)
+
+        with (
+            patch.object(reader, "set_epoch", wraps=reader.set_epoch) as spy_reader,
+            patch.object(
+                transform, "set_epoch", wraps=transform.set_epoch
+            ) as spy_transform,
+        ):
+            dataset.set_epoch(3)
+            spy_reader.assert_called_once_with(3)
+            spy_transform.assert_called_once_with(3)
+
+    def test_set_generator_deterministic_readout(self, numpy_data_dir):
+        """Same seed produces identical samples across two set_generator calls."""
+        reader = dp.NumpyReader(numpy_data_dir)
+        transform = dp.SubsamplePoints(
+            input_keys=["positions", "features"], n_points=50
+        )
+        dataset = dp.Dataset(reader, transforms=transform)
+
+        g1 = torch.Generator().manual_seed(42)
+        dataset.set_generator(g1)
+        data1, _ = dataset[0]
+
+        g2 = torch.Generator().manual_seed(42)
+        dataset.set_generator(g2)
+        data2, _ = dataset[0]
+
+        for key in data1.keys():
+            assert torch.equal(data1[key], data2[key])
+
+
+# ============================================================================
 # Integration Tests
 # ============================================================================
 
@@ -679,7 +697,8 @@ class TestDatasetIntegration:
 
         # Prefetch with streams
         streams = [torch.cuda.Stream() for _ in range(2)]
-        dataset.prefetch_batch([0, 1, 2, 3], streams=streams)
+        for i in range(4):
+            dataset.prefetch(i, stream=streams[i % len(streams)])
 
         # Retrieve results
         for i in range(4):

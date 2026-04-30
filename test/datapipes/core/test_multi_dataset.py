@@ -16,7 +16,10 @@
 
 """Tests for MultiDataset class."""
 
+from unittest.mock import patch
+
 import pytest
+import torch
 
 import physicsnemo.datapipes as dp
 from physicsnemo.datapipes.multi_dataset import DATASET_INDEX_METADATA_KEY
@@ -194,37 +197,92 @@ class TestMultiDatasetPrefetchAndClose:
         data0, _ = multi[0]
         assert "positions" in data0
 
-    def test_prefetch_batch(self, numpy_data_dir):
-        """prefetch_batch delegates to sub-datasets by global index."""
-        ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
-
-        multi.prefetch_batch([0, 1, 10, 11])
-        for idx in [0, 1, 10, 11]:
-            data, meta = multi[idx]
-            assert meta[DATASET_INDEX_METADATA_KEY] == (0 if idx < 10 else 1)
-            assert "positions" in data
-
-    def test_prefetch_count(self, numpy_data_dir):
-        """prefetch_count is sum of sub-dataset prefetch counts."""
-        ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
-        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
-
-        assert multi.prefetch_count == 0
-        multi.prefetch_batch([0, 1, 2, 3])
-        assert multi.prefetch_count >= 0  # may complete quickly
-        multi.cancel_prefetch()
-        assert multi.prefetch_count == 0
-
     def test_close_closes_all(self, numpy_data_dir):
-        """close() closes all sub-datasets."""
+        """close() delegates to every sub-dataset exactly once."""
         ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
         multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
+
+        with (
+            patch.object(ds_a, "close", wraps=ds_a.close) as spy_a,
+            patch.object(ds_b, "close", wraps=ds_b.close) as spy_b,
+        ):
+            multi.close()
+            spy_a.assert_called_once()
+            spy_b.assert_called_once()
+
+        # Idempotent: calling close again should not raise
         multi.close()
-        # After close, sub-datasets are closed (no-op to call again)
+
+
+class TestMultiDatasetRNG:
+    """RNG propagation via set_generator / set_epoch."""
+
+    def test_set_generator_propagates(self, numpy_data_dir):
+        """set_generator delegates a forked generator to each sub-dataset."""
+        ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
+        ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
+
+        with (
+            patch.object(ds_a, "set_generator", wraps=ds_a.set_generator) as spy_a,
+            patch.object(ds_b, "set_generator", wraps=ds_b.set_generator) as spy_b,
+        ):
+            g = torch.Generator().manual_seed(123)
+            multi.set_generator(g)
+            spy_a.assert_called_once()
+            spy_b.assert_called_once()
+            assert isinstance(spy_a.call_args[0][0], torch.Generator)
+            assert isinstance(spy_b.call_args[0][0], torch.Generator)
+
+    def test_set_epoch_propagates(self, numpy_data_dir):
+        """set_epoch delegates to every sub-dataset."""
+        ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
+        ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
+
+        with (
+            patch.object(ds_a, "set_epoch", wraps=ds_a.set_epoch) as spy_a,
+            patch.object(ds_b, "set_epoch", wraps=ds_b.set_epoch) as spy_b,
+        ):
+            multi.set_epoch(5)
+            spy_a.assert_called_once_with(5)
+            spy_b.assert_called_once_with(5)
+
+    def test_set_generator_deterministic(self, numpy_data_dir):
+        """Same seed produces identical samples across two calls."""
+        ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
+        ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
+
+        g1 = torch.Generator().manual_seed(42)
+        multi.set_generator(g1)
+        data1, _ = multi[0]
+
+        g2 = torch.Generator().manual_seed(42)
+        multi.set_generator(g2)
+        data2, _ = multi[0]
+
+        for key in data1.keys():
+            assert torch.equal(data1[key], data2[key])
+
+    def test_set_epoch_propagates_multiple_epochs(self, numpy_data_dir):
+        """set_epoch can be called for successive epochs without error."""
+        ds_a = dp.Dataset(dp.NumpyReader(numpy_data_dir))
+        ds_b = dp.Dataset(dp.NumpyReader(numpy_data_dir))
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=True)
+
+        g = torch.Generator().manual_seed(99)
+        multi.set_generator(g)
+
+        with (
+            patch.object(ds_a, "set_epoch", wraps=ds_a.set_epoch) as spy_a,
+            patch.object(ds_b, "set_epoch", wraps=ds_b.set_epoch) as spy_b,
+        ):
+            multi.set_epoch(0)
+            multi.set_epoch(1)
+            assert spy_a.call_count == 2
+            assert spy_b.call_count == 2
 
 
 class TestMultiDatasetErrors:
@@ -317,6 +375,61 @@ class TestMultiDatasetWithDataLoader:
             )
         assert set(all_dataset_indices) == {0, 1}
         assert len(all_dataset_indices) == 20
+
+
+class TestMultiDatasetMixed:
+    """MultiDataset with MeshDataset sub-datasets."""
+
+    @pytest.fixture
+    def mesh_data_dir(self, tmp_path):
+        """Create a directory with saved Mesh .pmsh files."""
+        from physicsnemo.mesh import Mesh
+
+        for i in range(5):
+            mesh = Mesh(points=torch.randn(20, 3))
+            mesh.save(tmp_path / f"mesh_{i:03d}.pmsh")
+        return tmp_path
+
+    def test_multi_dataset_with_mesh_datasets(self, mesh_data_dir):
+        """MultiDataset from two MeshDatasets has correct length and metadata."""
+        from physicsnemo.datapipes.mesh_dataset import MeshDataset
+        from physicsnemo.datapipes.readers.mesh import MeshReader
+        from physicsnemo.mesh import Mesh
+
+        reader_a = MeshReader(mesh_data_dir, pattern="*.pmsh")
+        reader_b = MeshReader(mesh_data_dir, pattern="*.pmsh")
+        ds_a = MeshDataset(reader_a)
+        ds_b = MeshDataset(reader_b)
+        multi = dp.MultiDataset(ds_a, ds_b, output_strict=False)
+
+        assert len(multi) == len(ds_a) + len(ds_b)
+
+        data0, meta0 = multi[0]
+        assert isinstance(data0, Mesh)
+        assert meta0[DATASET_INDEX_METADATA_KEY] == 0
+
+        data5, meta5 = multi[5]
+        assert isinstance(data5, Mesh)
+        assert meta5[DATASET_INDEX_METADATA_KEY] == 1
+
+    def test_multi_dataset_mixed_dataset_and_mesh_dataset(
+        self, numpy_data_dir, mesh_data_dir
+    ):
+        """MultiDataset with Dataset + MeshDataset (output_strict=False)."""
+        from physicsnemo.datapipes.mesh_dataset import MeshDataset
+        from physicsnemo.datapipes.readers.mesh import MeshReader
+
+        ds_numpy = dp.Dataset(dp.NumpyReader(numpy_data_dir))
+        ds_mesh = MeshDataset(MeshReader(mesh_data_dir, pattern="*.pmsh"))
+        multi = dp.MultiDataset(ds_numpy, ds_mesh, output_strict=False)
+
+        assert len(multi) == len(ds_numpy) + len(ds_mesh)
+
+        _, meta_first = multi[0]
+        assert meta_first[DATASET_INDEX_METADATA_KEY] == 0
+
+        _, meta_second = multi[len(ds_numpy)]
+        assert meta_second[DATASET_INDEX_METADATA_KEY] == 1
 
 
 class TestMultiDatasetRepr:

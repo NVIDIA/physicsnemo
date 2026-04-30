@@ -23,6 +23,7 @@ from parent cells to child cells, reusing existing aggregation infrastructure.
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Int
 from tensordict import TensorDict
 
 if TYPE_CHECKING:
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
 
 def interpolate_point_data_to_edges(
     point_data: TensorDict,
-    edges: torch.Tensor,
+    edges: Int[torch.Tensor, "n_edges 2"],
     n_original_points: int,
 ) -> TensorDict:
     """Interpolate point_data to edge midpoints.
@@ -103,7 +104,7 @@ def interpolate_point_data_to_edges(
 
 def propagate_cell_data_to_children(
     cell_data: TensorDict,
-    parent_indices: torch.Tensor,
+    parent_indices: Int[torch.Tensor, " n_children"],
     n_total_children: int,
 ) -> TensorDict:
     """Propagate cell_data from parent cells to child cells.

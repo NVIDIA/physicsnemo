@@ -43,7 +43,49 @@ from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
 
 from physicsnemo.datapipes.cae.readers import read_vtp
-from physicsnemo.sym.geometry.tessellation import Tessellation
+from physicsnemo.mesh.io import from_pyvista
+from physicsnemo.mesh.sampling import sample_random_points_on_cells
+
+
+def load_stl_mesh(stl_file):
+    """Load an STL file and return a PyVista triangular surface mesh."""
+    return pv.read(stl_file)
+
+
+def sample_boundary_from_mesh(pv_mesh, num_points):
+    """Area-weighted sampling on a triangulated surface using physicsnemo.mesh.
+
+    Returns dict with ``x, y, z, normal_x, normal_y, normal_z, area`` arrays,
+    matching the interface of the former ``Tessellation.sample_boundary``.
+    """
+    pv_mesh = pv_mesh.triangulate()
+    pv_mesh = pv_mesh.compute_normals(
+        cell_normals=True, point_normals=False, auto_orient_normals=True
+    )
+    cell_normals = pv_mesh.cell_data["Normals"]
+    areas = pv_mesh.compute_cell_sizes(length=False, volume=False)["Area"]
+    total_area = areas.sum()
+
+    mesh = from_pyvista(pv_mesh, manifold_dim=2)
+
+    probs = torch.tensor(areas / total_area, dtype=torch.float32)
+    cell_indices = torch.multinomial(probs, num_points, replacement=True)
+
+    pts = sample_random_points_on_cells(mesh, cell_indices).numpy()
+
+    normals = cell_normals[cell_indices.numpy()]
+    area_per_point = np.full((num_points, 1), total_area / num_points)
+
+    return {
+        "x": pts[:, 0:1],
+        "y": pts[:, 1:2],
+        "z": pts[:, 2:3],
+        "normal_x": normals[:, 0:1],
+        "normal_y": normals[:, 1:2],
+        "normal_z": normals[:, 2:3],
+        "area": area_per_point,
+    }
+
 
 from dataloader import PartitionedGraph
 
@@ -151,7 +193,7 @@ def process_run(
 
     try:
         # Load the STL and VTP files
-        obj = Tessellation.from_stl(stl_file, airtight=False)
+        obj = load_stl_mesh(stl_file)
         surface_mesh = read_vtp(vtp_file)
         surface_mesh = convert_to_triangular_mesh(surface_mesh)
         surface_vertices = fetch_mesh_vertices(surface_mesh)
@@ -177,7 +219,7 @@ def process_run(
 
         for num_points in sorted_points:
             # Sample the boundary points for the current level
-            boundary = obj.sample_boundary(num_points)
+            boundary = sample_boundary_from_mesh(obj, num_points)
             points = np.concatenate(
                 [boundary["x"], boundary["y"], boundary["z"]], axis=1
             )
@@ -312,6 +354,7 @@ def process_all_runs(
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
+    """Entry point for xaeronet surface preprocessing."""
     process_all_runs(
         base_path=to_absolute_path(cfg.data_path),
         num_points=cfg.num_nodes,

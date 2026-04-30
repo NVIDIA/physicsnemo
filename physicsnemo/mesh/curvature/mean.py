@@ -25,6 +25,7 @@ For 2D surfaces: H = (k1 + k2) / 2 where k1, k2 are principal curvatures
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float
 
 from physicsnemo.mesh.curvature._laplacian import compute_laplacian_at_points
 from physicsnemo.mesh.geometry.dual_meshes import compute_dual_volumes_0
@@ -37,7 +38,7 @@ if TYPE_CHECKING:
 def mean_curvature_vertices(
     mesh: "Mesh",
     include_boundary: bool = False,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, " n_points"]:
     """Compute extrinsic mean curvature at mesh vertices.
 
     Uses the cotangent Laplace-Beltrami operator:

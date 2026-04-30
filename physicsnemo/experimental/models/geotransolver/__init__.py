@@ -51,12 +51,13 @@ Basic usage:
 torch.Size([2, 1000, 3])
 """
 
-from .context_projector import (
-    ContextProjector,
-    GlobalContextBuilder,
-    StructuredContextProjector,
+from physicsnemo.nn import (
+      ConcreteDropout,
+      collect_concrete_dropout_losses,
+      get_concrete_dropout_rates,
 )
-from .gale import GALE, GALE_block, GALEStructuredMesh2D, GALEStructuredMesh3D
+from .context_projector import ContextProjector, GlobalContextBuilder
+from .gale import GALE, GALE_block
 from .geotransolver import GeoTransolver, GeoTransolverMetaData
 
 __all__ = [
@@ -69,4 +70,7 @@ __all__ = [
     "ContextProjector",
     "GlobalContextBuilder",
     "StructuredContextProjector",
+    "ConcreteDropout",
+    "collect_concrete_dropout_losses",
+    "get_concrete_dropout_rates",
 ]

@@ -29,6 +29,7 @@ Reference: Meyer et al. (2003), Discrete Gauss-Bonnet theorem
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float
 
 from physicsnemo.mesh.curvature._angles import compute_angles_at_vertices
 from physicsnemo.mesh.curvature._utils import compute_full_angle_n_sphere
@@ -39,7 +40,7 @@ if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
 
-def gaussian_curvature_vertices(mesh: "Mesh") -> torch.Tensor:
+def gaussian_curvature_vertices(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
     """Compute intrinsic Gaussian curvature at mesh vertices.
 
     Uses the angle defect formula from discrete differential geometry:
@@ -114,7 +115,7 @@ def gaussian_curvature_vertices(mesh: "Mesh") -> torch.Tensor:
     return gaussian_curvature
 
 
-def gaussian_curvature_cells(mesh: "Mesh") -> torch.Tensor:
+def gaussian_curvature_cells(mesh: "Mesh") -> Float[torch.Tensor, " n_cells"]:
     """Compute Gaussian curvature at cell centers.
 
     Averages the intrinsic vertex-based Gaussian curvature (angle defect)

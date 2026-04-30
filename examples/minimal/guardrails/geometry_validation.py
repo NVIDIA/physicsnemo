@@ -30,7 +30,7 @@ The example runs three experiments:
 import multiprocessing as mp
 from pathlib import Path
 
-from physicsnemo.experimental.guardrails import GeometryGuardrail
+from physicsnemo.experimental.guardrails.geometry import GeometryGuardrail
 
 
 def prepare_datasets(

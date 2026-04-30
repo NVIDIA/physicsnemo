@@ -35,6 +35,7 @@ import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.experimental.guardrails.embedded import OODGuard, OODGuardConfig
 from physicsnemo.models.transolver.transolver import _TransolverMlp
 
 from .context_projector import GlobalContextBuilder
@@ -251,6 +252,26 @@ class GeoTransolver(Module):
         (Conv2d/Conv3d GALE; no ball-query local features). Inputs may be
         flattened :math:`(B, N, C)` with :math:`N = H W` or :math:`H W D`, or
         spatial :math:`(B, H, W, C)` / :math:`(B, H, W, D, C)`. Default is ``None``.
+    guard_config : dict | None, optional
+        Configuration for the embedded OOD guard
+        (:class:`~physicsnemo.experimental.guardrails.embedded.OODGuard`).
+        Pass a plain ``dict`` whose keys match the fields of
+        :class:`~physicsnemo.experimental.guardrails.embedded.OODGuardConfig`
+        (``buffer_size`` required; ``knn_k`` and ``sensitivity`` optional), or
+        ``None`` to disable the guard entirely. A ``dict`` is required (rather
+        than the dataclass directly) so the model kwargs remain
+        JSON-serialisable for ``.mdlus`` checkpointing. When set, the guard
+        accumulates global-parameter bounds and pooled geometry latents during
+        training, and emits warnings on out-of-distribution inputs during
+        inference. Default is ``None``.
+    attention_type : str, optional
+        attention_type is used to choose the attention type (GALE or GALE_FA). 
+        Default is ``"GALE"``.
+    state_mixing_mode : str, optional
+        How to blend self-attention and cross-attention outputs in GALE layers.
+        ``"weighted"`` uses a learnable sigmoid-gated weighted sum.
+        ``"concat_project"`` concatenates the two along the head dimension and
+        projects back with a linear layer. Default is ``"weighted"``.
 
     Forward
     -------
@@ -275,9 +296,19 @@ class GeoTransolver(Module):
     Outputs
     -------
     torch.Tensor | tuple[torch.Tensor, ...]
-        Unstructured: :math:`(B, N, C_{out})`. Structured: same as input layout—
-        flattened :math:`(B, N, C_{out})` or spatial :math:`(B, H, W, C_{out})` /
-        :math:`(B, H, W, D, C_{out})` when inputs were 4D/5D. Tuple if tuple in.
+        When ``return_embedding_states=False`` (default): output tensor(s) of
+        shape :math:`(B, N, C_{out})`. Returns a single tensor if input was
+        a single tensor, or a tuple of tensors if input was a tuple
+        (multi-stream). For structured grids, output matches the input
+        layout—flattened :math:`(B, N, C_{out})` or spatial
+        :math:`(B, H, W, C_{out})` / :math:`(B, H, W, D, C_{out})` when
+        inputs were 4D/5D.
+        
+        When ``return_embedding_states=True``, returns a 2-tuple
+        ``(output, embedding_states)`` where ``output`` follows the same
+        rules above, and ``embedding_states`` is of shape
+        :math:`(B, H, S, D_c)` (geometry/global context), or ``None`` if no
+        context sources were provided.
 
     Raises
     ------
@@ -324,7 +355,7 @@ class GeoTransolver(Module):
     >>> output.shape
     torch.Size([2, 1000, 3])
 
-    Usage with geometry and global context:
+    Usage with geometry, global context, and embedding states:
 
     >>> model = GeoTransolver(
     ...     functional_dim=64,
@@ -356,6 +387,17 @@ class GeoTransolver(Module):
     >>> y = model(torch.randn(2, 8, 8, 3))
     >>> y.shape
     torch.Size([2, 8, 8, 1])
+
+    To also retrieve the geometry/global context embeddings:
+
+    >>> output, emb_states = model(
+    ...     local_emb,
+    ...     global_embedding=global_emb,
+    ...     geometry=geometry,
+    ...     return_embedding_states=True,
+    ... )
+    >>> emb_states.shape[0] == 2  # batch dimension preserved
+    True
     """
 
     def __init__(
@@ -379,6 +421,10 @@ class GeoTransolver(Module):
         neighbors_in_radius: list[int] | None = None,
         n_hidden_local: int = 32,
         structured_shape: tuple[int, ...] | None = None,
+        guard_config: dict | None = None,
+        attention_type: str = "GALE",
+        concrete_dropout: bool = False,
+        state_mixing_mode: str = "weighted",
     ) -> None:
         super().__init__(meta=GeoTransolverMetaData())
         self.__name__ = "GeoTransolver"
@@ -436,6 +482,7 @@ class GeoTransolver(Module):
             plus=plus,
             include_local_features=self.include_local_features,
             structured_shape=structured_shape,
+            concrete_dropout=concrete_dropout,
         )
         context_dim = self.context_builder.get_context_dim()
 
@@ -484,6 +531,9 @@ class GeoTransolver(Module):
                     plus=plus,
                     context_dim=context_dim,
                     spatial_shape=structured_shape,
+                    attention_type=attention_type,
+                    concrete_dropout=concrete_dropout,
+                    state_mixing_mode=state_mixing_mode,
                 )
                 for layer_idx in range(n_layers)
             ]
@@ -517,6 +567,35 @@ class GeoTransolver(Module):
                 nn.Linear(n_hidden, n_hidden),
             )
 
+        # OOD guard (None when disabled).
+        if guard_config is None:
+            self.ood_guard = None
+        else:
+            if not isinstance(guard_config, dict):
+                raise TypeError(
+                    f"guard_config must be a dict or None; got "
+                    f"{type(guard_config).__name__}. If using Hydra, set "
+                    f"_convert_=partial or _convert_=all on the model config "
+                    f"so nested mappings are passed as native dicts."
+                )
+            if global_dim is None and geometry_dim is None:
+                raise ValueError(
+                    "guard_config is set, but neither global_dim nor "
+                    "geometry_dim is configured; the OOD guard would have "
+                    "nothing to watch. Either set guard_config=None or "
+                    "enable at least one of the two surfaces."
+                )
+            # OODGuardConfig validates keys and applies defaults.
+            cfg = OODGuardConfig(**guard_config)
+            dim_head = n_hidden // n_head
+            self.ood_guard = OODGuard(
+                buffer_size=cfg.buffer_size,
+                global_dim=global_dim,
+                geometry_embed_dim=dim_head if geometry_dim is not None else None,
+                knn_k=cfg.knn_k,
+                sensitivity=cfg.sensitivity,
+            )
+
     def forward(
         self,
         local_embedding: (
@@ -532,6 +611,7 @@ class GeoTransolver(Module):
         | None = None,
         geometry: Float[torch.Tensor, "batch tokens geometry_dim"] | None = None,
         time: torch.Tensor | None = None,
+        return_embedding_states: bool = False,
     ) -> (
         Float[torch.Tensor, "batch tokens out_dim"]
         | tuple[Float[torch.Tensor, "batch tokens out_dim"], ...]
@@ -558,12 +638,19 @@ class GeoTransolver(Module):
             Geometry features of shape :math:`(B, N, C_{geo})`. Default is ``None``.
         time : torch.Tensor | None, optional
             Time embedding (not yet implemented). Default is ``None``.
+        return_embedding_states : bool, optional
+            If ``True``, return ``(output, embedding_states)`` instead of just
+            ``output``.  The ``embedding_states`` tensor contains geometry/global
+            context of shape :math:`(B, H, S, D_c)`.  Default is ``False``.
 
         Returns
         -------
-        torch.Tensor | tuple[torch.Tensor, ...]
-            Output tensor of shape :math:`(B, N, C_{out})`. Returns single tensor
-            if input was single tensor, tuple if input was tuple.
+        Float[torch.Tensor, "batch tokens out_dim"] | tuple[Float[torch.Tensor, "batch tokens out_dim"], Float[torch.Tensor, "batch heads slices context_dim"]]
+            When ``return_embedding_states=False`` (default): output tensor of
+            shape :math:`(B, N, C_{out})`.
+
+            When ``return_embedding_states=True``: a 2-tuple
+            ``(output, embedding_states)``.
 
         Raises
         ------
@@ -630,9 +717,22 @@ class GeoTransolver(Module):
                 )
 
         # Build context embeddings and extract local features
-        embedding_states, local_embedding_bq = self.context_builder.build_context(
-            local_embedding, local_positions, geometry, global_embedding
+        embedding_states, local_embedding_bq, geo_ctx = (
+            self.context_builder.build_context(
+                local_embedding, local_positions, geometry, global_embedding
+            )
         )
+
+        # --- OOD Guard ---
+        if self.ood_guard is not None:
+            # Pool (B, H, S, D) -> (B, D); guard expects pre-pooled latents.
+            geo_latent = (
+                geo_ctx.mean(dim=(1, 2)) if geo_ctx is not None else None
+            )
+            if self.training:
+                self.ood_guard.collect(global_embedding, geo_latent)
+            else:
+                self.ood_guard.check(global_embedding, geo_latent)
 
         # Project inputs to hidden dimension: (B, N, C) -> (B, N, n_hidden)
         x = [self.preprocess[i](le) for i, le in enumerate(local_embedding)]
@@ -667,4 +767,6 @@ class GeoTransolver(Module):
         else:
             x = tuple(x)
 
+        if return_embedding_states:
+            return x, embedding_states
         return x

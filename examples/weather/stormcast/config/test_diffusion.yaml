@@ -35,7 +35,7 @@ defaults:
   - _self_
 
 training:
-  num_data_workers: 2
+  num_data_workers: 1
   validation_plot_variables: ["state_0"]
   log_to_wandb: True
   wandb_mode: "offline"  # not using online logging while testing
@@ -53,6 +53,13 @@ training:
   loss:
     type: 'edm'
     sigma_distribution: "lognormal"
+
+sampler:
+  args:
+    num_steps: 2
+
+dataset:
+  num_samples: 20
 
 model:
   hyperparameters:

@@ -37,6 +37,7 @@ asv.conf.json @loliverhennigh
 
 # Coding standards
 CODING_STANDARDS/ @CharlelieLrt @coreyjadams @loliverhennigh
+CODING_STANDARDS/FUNCTIONAL_APIS.md @loliverhennigh
 
 # Interrogate "grandfathered exceptions" list
 ./test/ci_tests/interrogate_baseline.txt @ktangsali @coreyjadams @nickgeneva @peterdsharpe
@@ -69,12 +70,15 @@ physicsnemo/core/ @coreyjadams @CharlelieLrt @ktangsali
 # Reusable neural network building blocks
 physicsnemo/nn/ @loliverhennigh
 
+# Symbolic PDE residual computation (PhysicsInformer)
+physicsnemo/sym/ @ktangsali
+
 # Functional operations (KNN, radius search, SDF)
 physicsnemo/nn/functional/ @loliverhennigh
-physicsnemo/nn/functional/knn/ @coreyjadams @peterdsharpe @loliverhennigh
-physicsnemo/nn/functional/radius_search/ @coreyjadams @peterdsharpe @loliverhennigh
-physicsnemo/nn/functional/natten/ @pzharrington
-physicsnemo/nn/functional/sdf.py @RishikeshRanade @loliverhennigh
+physicsnemo/nn/functional/neighbors/knn/ @coreyjadams @peterdsharpe @loliverhennigh
+physicsnemo/nn/functional/neighbors/radius_search/ @coreyjadams @peterdsharpe @loliverhennigh
+physicsnemo/nn/functional/natten.py @pzharrington
+physicsnemo/nn/functional/geometry/sdf.py @RishikeshRanade @loliverhennigh
 
 # Module layers
 physicsnemo/nn/module/ @loliverhennigh

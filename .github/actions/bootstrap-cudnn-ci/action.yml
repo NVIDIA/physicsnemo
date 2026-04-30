@@ -1,0 +1,74 @@
+name: Bootstrap cuDNN CI container
+description: Install OS dependencies and uv in CUDA cuDNN container jobs
+inputs:
+  python-version:
+    description: Python major.minor expected in the container
+    required: false
+    default: "3.12"
+  uv-version:
+    description: |
+      Exact uv version to install. Pinning is required because the uv
+      version is part of the cache key prefix (a surprise uv upgrade would
+      otherwise silently invalidate the wheel store). Bump in lockstep
+      with the workflow's UV_VERSION env value.
+    required: false
+    default: "0.11.7"
+runs:
+  using: composite
+  steps:
+    - name: Install system dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        apt-get install -y --no-install-recommends \
+          ca-certificates \
+          curl \
+          git \
+          gh \
+          build-essential \
+          cmake \
+          pkg-config \
+          python3 \
+          python3-dev \
+          python3-venv \
+          python3-pip \
+          zstd
+        ln -sf /usr/bin/python3 /usr/bin/python
+        rm -rf /var/lib/apt/lists/*
+
+    - name: Install uv (pinned)
+      shell: bash
+      env:
+        UV_VERSION: ${{ inputs.uv-version }}
+      run: |
+        set -euo pipefail
+        # Pinned installer URL: https://astral.sh/uv/<version>/install.sh
+        # ensures the installed binary version matches the cache-key tag.
+        curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
+        # Modern uv (>= 0.5) installs to ~/.local/bin, not ~/.cargo/bin.
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+    - name: Print toolchain versions
+      shell: bash
+      env:
+        EXPECTED_UV_VERSION: ${{ inputs.uv-version }}
+      run: |
+        set -euo pipefail
+        python3 --version
+        uv --version
+        # Hard-fail if the installed uv does not match the pin -- otherwise
+        # the cache prefix would lie about which uv produced the wheels.
+        actual_uv="$(uv --version | awk '{print $2}')"
+        if [ "$actual_uv" != "$EXPECTED_UV_VERSION" ]; then
+          echo "::error::uv version mismatch: expected ${EXPECTED_UV_VERSION}, got ${actual_uv}"
+          exit 1
+        fi
+        gcc --version | head -n 1
+        cmake --version | head -n 1
+        if command -v nvcc >/dev/null 2>&1; then
+          nvcc --version
+        else
+          echo "nvcc not found on PATH"
+        fi

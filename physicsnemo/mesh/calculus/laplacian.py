@@ -33,6 +33,7 @@ This is the cotangent Laplacian, intrinsic to the manifold.
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float, Int
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
@@ -42,10 +43,10 @@ if TYPE_CHECKING:
 
 def _apply_cotan_laplacian_operator(
     n_vertices: int,
-    edges: torch.Tensor,
-    cotan_weights: torch.Tensor,
-    data: torch.Tensor,
-) -> torch.Tensor:
+    edges: Int[torch.Tensor, "n_edges 2"],
+    cotan_weights: Float[torch.Tensor, " n_edges"],
+    data: Float[torch.Tensor, "n_vertices ..."],
+) -> Float[torch.Tensor, "n_vertices ..."]:
     """Apply cotangent Laplacian operator to data via scatter-add.
 
     Computes: (L @ data)[i] = Σ_{j adjacent to i} w_ij * (data[j] - data[i])
@@ -122,8 +123,8 @@ def _apply_cotan_laplacian_operator(
 
 def compute_laplacian_points_dec(
     mesh: "Mesh",
-    point_values: torch.Tensor,
-) -> torch.Tensor:
+    point_values: Float[torch.Tensor, "n_points ..."],
+) -> Float[torch.Tensor, "n_points ..."]:
     """Compute Laplace-Beltrami at vertices using DEC cotangent formula.
 
     This is the INTRINSIC Laplacian - it automatically respects the manifold structure.

@@ -25,11 +25,8 @@ from jaxtyping import Float
 from tensordict import TensorDict
 from torch import Tensor
 
-from physicsnemo.diffusion.base import DiffusionModel
-from physicsnemo.diffusion.noise_schedulers import (
-    DomainParallelNoiseScheduler,
-    NoiseScheduler,
-)
+from physicsnemo.diffusion.base import DiffusionModel, PredictorType
+from physicsnemo.diffusion.noise_schedulers import NoiseScheduler
 from physicsnemo.diffusion.utils.utils import apply_loss_weight
 
 
@@ -38,7 +35,13 @@ def _check_domain_parallel_scheduler(
 ) -> None:
     """Raise if *x0* is domain-sharded but *scheduler* is not domain-parallel."""
     mesh = getattr(x0, "device_mesh", None)
-    if mesh is not None and not isinstance(scheduler, DomainParallelNoiseScheduler):
+    if mesh is None:
+        return
+    from physicsnemo.diffusion.noise_schedulers.domain_parallel import (
+        DomainParallelNoiseScheduler,
+    )
+
+    if not isinstance(scheduler, DomainParallelNoiseScheduler):
         raise ValueError(
             "x0 is a ShardTensor (domain-parallel) but the noise scheduler "
             "is not a DomainParallelNoiseScheduler. Wrap your scheduler with "
@@ -168,15 +171,21 @@ class MSEDSMLoss:
         :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.sample_time`,
         :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.add_noise`, and
         :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.loss_weight`.
-    prediction_type : Literal["x0", "score"], default="x0"
+    prediction_type : PredictorType, default="x0"
         Type of prediction the model outputs. Use ``"x0"`` when the model
         directly predicts clean data (the most common case with standard
         preconditioners). Use ``"score"`` when the model predicts the score,
-        in which case ``score_to_x0_fn`` must be provided.
+        in which case ``score_to_x0_fn`` must be provided. Use ``"epsilon"``
+        when the model predicts the noise, in which case ``epsilon_to_x0_fn``
+        must be provided.
     score_to_x0_fn : Callable[[Tensor, Tensor, Tensor], Tensor], optional
         Callback to convert a score prediction to an
         :math:`\hat{\mathbf{x}}_0` estimate. Required when
         ``prediction_type="score"``. See above for the expected signature.
+    epsilon_to_x0_fn : Callable[[Tensor, Tensor, Tensor], Tensor], optional
+        Callback to convert an epsilon (noise) prediction to an
+        :math:`\hat{\mathbf{x}}_0` estimate. Required when
+        ``prediction_type="epsilon"``. See above for the expected signature.
     reduction : Literal["none", "mean", "sum"], default="mean"
         Reduction to apply to the output: ``"none"`` returns the
         per-element loss, ``"mean"`` returns the mean over all elements,
@@ -185,9 +194,11 @@ class MSEDSMLoss:
     Raises
     ------
     ValueError
-        If ``prediction_type`` is not ``"x0"`` or ``"score"``.
+        If ``prediction_type`` is not ``"x0"``, ``"score"``, or ``"epsilon"``.
     ValueError
         If ``prediction_type="score"`` and ``score_to_x0_fn`` is ``None``.
+    ValueError
+        If ``prediction_type="epsilon"`` and ``epsilon_to_x0_fn`` is ``None``.
 
     Examples
     --------
@@ -327,8 +338,12 @@ class MSEDSMLoss:
         self,
         model: DiffusionModel,
         noise_scheduler: NoiseScheduler,
-        prediction_type: Literal["x0", "score"] = "x0",
+        prediction_type: PredictorType = "x0",
         score_to_x0_fn: Callable[
+            [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+        ]
+        | None = None,
+        epsilon_to_x0_fn: Callable[
             [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
         ]
         | None = None,
@@ -337,20 +352,26 @@ class MSEDSMLoss:
         self.model = model
         self.noise_scheduler = noise_scheduler
 
-        if prediction_type == "x0":
-            self._to_x0 = lambda prediction, x_t, t: prediction
-
-        elif prediction_type == "score":
-            if score_to_x0_fn is None:
+        match prediction_type:
+            case "x0":
+                self._to_x0 = lambda prediction, x_t, t: prediction
+            case "score":
+                if score_to_x0_fn is None:
+                    raise ValueError(
+                        "score_to_x0_fn must be provided when prediction_type='score'."
+                    )
+                self._to_x0 = score_to_x0_fn
+            case "epsilon":
+                if epsilon_to_x0_fn is None:
+                    raise ValueError(
+                        "epsilon_to_x0_fn must be provided when prediction_type='epsilon'."
+                    )
+                self._to_x0 = epsilon_to_x0_fn
+            case _:
                 raise ValueError(
-                    "score_to_x0_fn must be provided when prediction_type='score'."
+                    f"prediction_type must be 'x0', 'score', or 'epsilon', "
+                    f"got '{prediction_type}'."
                 )
-            self._to_x0 = score_to_x0_fn
-
-        else:
-            raise ValueError(
-                f"prediction_type must be 'x0' or 'score', got '{prediction_type}'."
-            )
 
         # Define the reduction callbacks
         _reductions = {
@@ -459,12 +480,16 @@ class WeightedMSEDSMLoss:
         Noise scheduler implementing the
         :class:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler`
         protocol.
-    prediction_type : Literal["x0", "score"], default="x0"
+    prediction_type : PredictorType, default="x0"
         Type of prediction the model outputs. See :class:`MSEDSMLoss`.
     score_to_x0_fn : callable, optional
         Callback to convert a score prediction to an
         :math:`\hat{\mathbf{x}}_0` estimate. Required when
         ``prediction_type="score"``.
+    epsilon_to_x0_fn : callable, optional
+        Callback to convert an epsilon (noise) prediction to an
+        :math:`\hat{\mathbf{x}}_0` estimate. Required when
+        ``prediction_type="epsilon"``.
     reduction : {"none", "mean", "sum"}, default="mean"
         Reduction to apply to the output: ``"none"`` returns the
         per-element loss, ``"mean"`` the mean, ``"sum"`` the sum.
@@ -504,8 +529,12 @@ class WeightedMSEDSMLoss:
         self,
         model: DiffusionModel,
         noise_scheduler: NoiseScheduler,
-        prediction_type: Literal["x0", "score"] = "x0",
+        prediction_type: PredictorType = "x0",
         score_to_x0_fn: Callable[
+            [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+        ]
+        | None = None,
+        epsilon_to_x0_fn: Callable[
             [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
         ]
         | None = None,
@@ -514,20 +543,26 @@ class WeightedMSEDSMLoss:
         self.model = model
         self.noise_scheduler = noise_scheduler
 
-        if prediction_type == "x0":
-            self._to_x0 = lambda prediction, x_t, t: prediction
-
-        elif prediction_type == "score":
-            if score_to_x0_fn is None:
+        match prediction_type:
+            case "x0":
+                self._to_x0 = lambda prediction, x_t, t: prediction
+            case "score":
+                if score_to_x0_fn is None:
+                    raise ValueError(
+                        "score_to_x0_fn must be provided when prediction_type='score'."
+                    )
+                self._to_x0 = score_to_x0_fn
+            case "epsilon":
+                if epsilon_to_x0_fn is None:
+                    raise ValueError(
+                        "epsilon_to_x0_fn must be provided when prediction_type='epsilon'."
+                    )
+                self._to_x0 = epsilon_to_x0_fn
+            case _:
                 raise ValueError(
-                    "score_to_x0_fn must be provided when prediction_type='score'."
+                    f"prediction_type must be 'x0', 'score', or 'epsilon', "
+                    f"got '{prediction_type}'."
                 )
-            self._to_x0 = score_to_x0_fn
-
-        else:
-            raise ValueError(
-                f"prediction_type must be 'x0' or 'score', got '{prediction_type}'."
-            )
 
         # Define the reduction callbacks
         _reductions = {

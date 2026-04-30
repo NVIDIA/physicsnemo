@@ -20,3 +20,7 @@ This subpackage contains experimental neural network layers and utilities
 that are under active development. These components may have breaking API
 changes between releases.
 """
+
+from .flare_attention import FLARE
+
+__all__ = ["FLARE"]

@@ -91,7 +91,8 @@ def _transform_tensordict(
             raise ValueError(
                 f"Cannot transform {field_type} field {key!r} with shape {value.shape}. "
                 f"First spatial dimension must be {n_spatial_dims}, but got {shape[0]}. "
-                f"Set the corresponding transform_*_data=False to skip this field."
+                f"Use a dict to select specific fields, e.g. "
+                f'transform_{field_type}={{"field_name": True}}.'
             )
 
         ### Vector field: v' = v @ M^T
@@ -453,8 +454,8 @@ def transform(
     -----
     Cache Handling:
         - areas: For square invertible matrices:
-            - Full-dimensional meshes: scaled by |det|
-            - Codimension-1 manifolds: per-element scaling using |det| × ||M^{-T} n||
+            - Full-dimensional meshes: scaled by ``|det|``
+            - Codimension-1 manifolds: per-element scaling using ``|det| * ||M^{-T} n||``
             - Higher codimension: invalidated
         - centroids: Always transformed
         - normals: For square invertible matrices, transformed by inverse-transpose

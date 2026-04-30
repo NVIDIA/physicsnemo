@@ -41,6 +41,11 @@ from .module.attention_layers import (
     UNetAttention,
 )
 from .module.ball_query import BQWarp
+from .module.concrete_dropout import (
+    ConcreteDropout,
+    collect_concrete_dropout_losses,
+    get_concrete_dropout_rates,
+)
 from .module.conditioning_embedders import (
     ConditioningEmbedder,
     ConditioningEmbedderType,
@@ -115,6 +120,7 @@ from .module.hpx import (
 from .module.kan_layers import KolmogorovArnoldNetwork
 from .module.mlp_layers import Mlp
 from .module.pade import Pade
+from .module.pooling import AttentionPooling, MeanPooling
 from .module.resample_layers import (
     DownSample2D,
     DownSample3D,

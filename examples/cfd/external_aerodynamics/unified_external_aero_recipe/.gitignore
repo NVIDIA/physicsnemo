@@ -1,0 +1,11 @@
+*.sh
+runs/
+mlruns/
+*.err
+*.out
+outputs/
+stats/
+checkpoints/
+*.mdlus
+*.tfevents*
+*.parquet

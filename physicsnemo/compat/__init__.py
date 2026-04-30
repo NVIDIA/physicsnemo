@@ -48,7 +48,7 @@ COMPAT_MAP = {
     "physicsnemo.models.layers.fourier_layers": "physicsnemo.nn.module.fourier_layers",
     "physicsnemo.models.layers.fully_connected_layers": "physicsnemo.nn.module.fully_connected_layers",
     "physicsnemo.models.layers.fused_silu": "physicsnemo.nn.module.fused_silu",
-    "physicsnemo.models.layers.interpolation": "physicsnemo.nn.functional.interpolation.interpolation",
+    "physicsnemo.models.layers.interpolation": "physicsnemo.nn.functional.interpolation",
     "physicsnemo.models.layers.kan_layers": "physicsnemo.nn.module.kan_layers",
     "physicsnemo.models.layers.mlp_layers": "physicsnemo.nn.module.mlp_layers",
     "physicsnemo.models.layers.resample_layers": "physicsnemo.nn.module.resample_layers",

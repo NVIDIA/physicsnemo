@@ -17,21 +17,27 @@
 import operator
 from dataclasses import dataclass
 from functools import reduce
-from typing import Literal, Sequence
+from typing import Sequence
 
 import torch
 import torch.nn as nn
 from jaxtyping import Float
 from tensordict import TensorDict
+from torch.profiler import record_function
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
+from physicsnemo.experimental.models.globe.cluster_tree import (
+    ClusterTree,
+    DualInteractionPlan,
+)
 from physicsnemo.experimental.models.globe.field_kernel import MultiscaleKernel
 from physicsnemo.experimental.models.globe.utilities.rank_spec import (
     RankSpecDict,
     flatten_rank_spec,
 )
 from physicsnemo.mesh import Mesh
+from physicsnemo.utils.logging import PythonLogger
 
 # allow_in_graph wraps these TensorDict methods as opaque graph nodes so that
 # torch.compile doesn't trace into them (their internals cause graph breaks).
@@ -43,15 +49,13 @@ from physicsnemo.mesh import Mesh
 # these wrappers.
 _flatten_keys = torch.compiler.allow_in_graph(TensorDict.flatten_keys)
 _unflatten_keys = torch.compiler.allow_in_graph(TensorDict.unflatten_keys)
-from physicsnemo.utils.logging import PythonLogger
 
 logger = PythonLogger("globe.model")
 
-
 @dataclass
 class MetaData(ModelMetaData):
-    jit: bool = True
-    cuda_graphs: bool = True
+    jit: bool = False  # Refers to torch.compile compatibility - this is compatible.
+    cuda_graphs: bool = False  # Computational graph changes depending on inputs due to tree traversals
     amp: bool = True
     torch_fx: bool = False
     onnx: bool = False
@@ -122,12 +126,28 @@ class GLOBE(Module):
     n_spherical_harmonics : int, optional, default=4
         Number of Legendre polynomial terms used for angle-dependent features in
         kernel functions.
+    theta : float, optional, default=1.0
+        Barnes-Hut opening angle controlling the near/far-field split in the
+        dual-tree traversal. The criterion is
+        :math:`(D_T + D_S) / r < \theta`, where :math:`D_T` and :math:`D_S`
+        are AABB diagonals and :math:`r` is the minimum inter-AABB distance.
+        Larger values approximate more aggressively; ``0`` forces all
+        interactions to be exact (no far-field approximation).
+    leaf_size : int, optional, default=1
+        Maximum number of source points per leaf node in the cluster tree.
+        Larger values produce shallower trees (fewer traversal iterations) at
+        the cost of more exact near-field interactions per leaf hit.
+    expand_far_targets : bool, optional, default=False
+        If ``True``, far-field target nodes are expanded to individual points,
+        converting ``(far, far)`` pairs into ``(near, far)`` pairs. This
+        eliminates the target-side approximation at the cost of more kernel
+        evaluations.
 
     Forward
     -------
     prediction_points : Float[torch.Tensor, "n_points n_dims"]
         Target points for field evaluation of shape :math:`(N_{points}, D)`.
-    boundary_meshes : dict[str, Mesh]
+    boundary_meshes : dict[str, Mesh["n-1", "n"]]
         Dictionary mapping boundary condition type names to
         :class:`~physicsnemo.mesh.Mesh` objects. Keys must be a subset of the
         model's boundary condition names (from ``boundary_source_data_ranks``).
@@ -136,12 +156,10 @@ class GLOBE(Module):
     global_data : TensorDict or None, optional, default=None
         Nondimensional conditioning features. Leaf keys and ranks must match
         ``global_data_ranks``. Passed through to the output Mesh.
-    chunk_size : None | int | Literal["auto"], optional, default=None
-        Controls memory usage during kernel evaluation.
 
     Outputs
     -------
-    Mesh
+    Mesh[0, "n"]
         A point-cloud :class:`~physicsnemo.mesh.Mesh` (0-dimensional manifold)
         whose ``.points`` attribute equals the input ``prediction_points``. The
         predicted fields are in ``.point_data``, keyed by the names from
@@ -161,6 +179,11 @@ class GLOBE(Module):
     - Cell areas are automatically normalized by ``reference_area`` to preserve
       discretization-invariance.
     - The cell normal vector is automatically added to source data for each mesh.
+    - The ``Mesh["n-1", "n"]`` type annotations assume the PDE domain fills the
+      full ambient space (domain manifold dim = spatial dim), so boundary meshes
+      are codimension-1 in the ambient space. For a PDE on a ``d``-dimensional
+      manifold embedded in ``n``-dimensional space (``d < n``), the boundary
+      type would be ``Mesh[d-1, n]`` instead.
 
     Examples
     --------
@@ -197,6 +220,9 @@ class GLOBE(Module):
         smoothing_radius: float = 1e-8,
         hidden_layer_sizes: Sequence[int] | None = None,
         n_spherical_harmonics: int = 4,
+        theta: float = 1.0,
+        leaf_size: int = 1,
+        expand_far_targets: bool = False,
     ):
         if hidden_layer_sizes is None:
             hidden_layer_sizes = [64, 64, 64]
@@ -234,6 +260,9 @@ class GLOBE(Module):
         self.smoothing_radius = smoothing_radius
         self.hidden_layer_sizes = hidden_layer_sizes
         self.n_spherical_harmonics = n_spherical_harmonics
+        self.theta = theta
+        self.leaf_size = leaf_size
+        self.expand_far_targets = expand_far_targets
 
         ### Build the intermediate output-field rank spec for communication
         # hyperlayers. Only the final hyperlayer emits output_field_ranks.
@@ -267,6 +296,7 @@ class GLOBE(Module):
                         smoothing_radius=smoothing_radius,
                         hidden_layer_sizes=hidden_layer_sizes,
                         n_spherical_harmonics=n_spherical_harmonics,
+                        leaf_size=leaf_size,
                     )
                     for bc_type in boundary_condition_names
                 }
@@ -312,50 +342,157 @@ class GLOBE(Module):
             }
         return result
 
+    @torch.compiler.disable
+    def _build_trees_and_plans(
+        self,
+        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
+    ) -> tuple[
+        dict[str, ClusterTree],
+        dict[str, torch.Tensor],
+        dict[str, dict[str, DualInteractionPlan]],
+    ]:
+        """Build per-BC-type cluster trees and cross-BC dual interaction plans.
+
+        Builds one :class:`ClusterTree` per BC type (O(B) trees), then computes
+        a :class:`DualInteractionPlan` for every (source BC, destination BC)
+        pair (B^2 plans total).  For self-interaction (source == destination),
+        the target tree is the same object as the source tree.  Plans are
+        reused across all communication layers since the geometry is fixed.
+
+        Returns
+        -------
+        cluster_trees : dict[str, ClusterTree]
+            Per-BC-type cluster trees built from cell centroids.
+        bc_areas : dict[str, torch.Tensor]
+            Per-BC-type normalized cell area tensors.
+        comm_plans : dict[str, dict[str, DualInteractionPlan]]
+            Communication plans indexed as ``comm_plans[dst_bc][src_bc]``.
+        """
+        from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
+
+        cluster_trees: dict[str, ClusterTree] = {}
+        bc_areas: dict[str, torch.Tensor] = {}
+        for bc_type, mesh in boundary_meshes.items():
+            areas = mesh.cell_areas / self.reference_area
+            bc_areas[bc_type] = areas
+            cluster_trees[bc_type] = ClusterTree.from_points(
+                mesh.cell_centroids, leaf_size=self.leaf_size, areas=areas
+            )
+
+        ### Build interaction plans for all (source, destination) BC pairs.
+        comm_plans: dict[str, dict[str, DualInteractionPlan]] = {}
+        for dst_bc in boundary_meshes:
+            comm_plans[dst_bc] = {
+                src_bc: cluster_trees[src_bc].find_dual_interaction_pairs(
+                    target_tree=cluster_trees[dst_bc], theta=self.theta,
+                    expand_far_targets=self.expand_far_targets,
+                )
+                for src_bc in boundary_meshes
+            }
+
+        for dst_bc, plans_for_dst in comm_plans.items():
+            n_dst = boundary_meshes[dst_bc].n_cells
+            for src_bc, plan in plans_for_dst.items():
+                n_src = boundary_meshes[src_bc].n_cells
+                logger.logger.debug(
+                    "comm plan [%s -> %s]: %d near + %d nf + %d fn + %d far_node "
+                    "(%.2f%% near-field, %d src x %d dst faces, "
+                    "theta=%.2f, leaf_size=%d)",
+                    src_bc, dst_bc,
+                    plan.n_near, plan.n_nf, plan.n_fn, plan.n_far_nodes,
+                    100.0 * plan.n_near / max(n_src * n_dst, 1),
+                    n_src, n_dst, self.theta, self.leaf_size,
+                )
+
+        return cluster_trees, bc_areas, comm_plans
+
+    @torch.compiler.disable
+    def _build_prediction_plans(
+        self,
+        cluster_trees: dict[str, ClusterTree],
+        prediction_points: torch.Tensor,
+    ) -> tuple[ClusterTree, dict[str, DualInteractionPlan]]:
+        """Build target tree and dual plans for prediction-point evaluation.
+
+        Builds a single target tree from ``prediction_points`` and computes
+        one :class:`DualInteractionPlan` per source BC type against it.
+
+        Returns
+        -------
+        pred_target_tree : ClusterTree
+            Target tree built from prediction points.
+        pred_plans : dict[str, DualInteractionPlan]
+            Plans indexed by source BC type, each computed from that source
+            BC's tree to ``pred_target_tree``.
+        """
+        from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
+
+        pred_target_tree = ClusterTree.from_points(
+            prediction_points, leaf_size=self.leaf_size,
+        )
+        pred_plans = {
+            bc_type: tree.find_dual_interaction_pairs(
+                target_tree=pred_target_tree, theta=self.theta,
+                expand_far_targets=self.expand_far_targets,
+            )
+            for bc_type, tree in cluster_trees.items()
+        }
+
+        n_pred = prediction_points.shape[0]
+        for bc_type, plan in pred_plans.items():
+            n_src = cluster_trees[bc_type].n_sources
+            logger.logger.debug(
+                "pred plan [%s]: %d near + %d nf + %d fn + %d far_node "
+                "(%d sources x %d targets, theta=%.2f)",
+                bc_type, plan.n_near, plan.n_nf, plan.n_fn, plan.n_far_nodes,
+                n_src, n_pred, self.theta,
+            )
+
+        return pred_target_tree, pred_plans
+
     def _evaluate_hyperlayer(
         self,
         layer_idx: int,
         target_points: Float[torch.Tensor, "n_targets n_dims"],
-        source_meshes: dict[str, Mesh],
+        source_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None,
-        chunk_size: None | int | Literal["auto"],
+        cluster_trees: dict[str, ClusterTree],
+        target_tree: ClusterTree | None,
+        dual_plans: dict[str, DualInteractionPlan],
+        source_areas: dict[str, torch.Tensor],
     ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
         r"""Evaluate one hyperlayer by summing kernel contributions from all BC types.
 
-        For each boundary condition type, extracts source data from the mesh's
-        enriched ``cell_data``, evaluates the corresponding
-        :class:`MultiscaleKernel`, and sums the results.
-
-        Each mesh's ``cell_data`` carries a namespaced structure:
-
-        - ``"physical"``: original boundary condition features
-        - ``"strengths"``: per-reference-length scalar multipliers that modulate
-          each source face's kernel contribution (learned during communication
-          and area-normalized before use)
-        - ``"latent"``: (after first layer) learned scalar and vector features
-
-        Strengths are extracted and area-normalized separately. All remaining
-        features (plus cell normals) are combined into a unified
-        ``source_data`` TensorDict and passed to the kernel, which splits
-        them by tensor rank internally.
+        Each call evaluates all source BC types against a single set of target
+        points.  The ``target_tree`` and per-source-BC ``dual_plans`` must
+        correspond to those target points.
 
         Parameters
         ----------
         layer_idx : int
-            Index into ``self.kernel_layers`` selecting which hyperlayer to evaluate.
+            Index into ``self.kernel_layers``.
         target_points : Float[torch.Tensor, "n_targets n_dims"]
             Target points of shape :math:`(N_{targets}, D)`.
-        source_meshes : dict[str, Mesh]
-            Mapping of BC type names to enriched :class:`~physicsnemo.mesh.Mesh`
-            objects whose ``cell_data`` carries both physical features and latent
-            state.
+        source_meshes : dict[str, Mesh["n-1", "n"]]
+            Enriched boundary meshes with cell_data containing physical
+            features, strengths, and (after layer 0) latent state.
         reference_lengths : dict[str, Float[torch.Tensor, ""]]
-            Mapping of reference length names to scalar tensors.
+            Reference length names to scalar tensors.
         global_data : TensorDict or None
-            Problem-level features (mixed scalar/vector ranks).
-        chunk_size : None or int or {"auto"}
-            Controls memory usage during kernel evaluation.
+            Problem-level features.
+        cluster_trees : dict[str, ClusterTree]
+            Per-BC-type precomputed source trees.
+        target_tree : ClusterTree or None
+            Precomputed target tree shared by all source BCs in this call.
+            For communication self-interaction, this is the destination BC's
+            own cluster tree.  If ``None``, each kernel branch builds a tree
+            from ``target_points`` on the fly.
+        dual_plans : dict[str, DualInteractionPlan]
+            Per-source-BC-type precomputed dual interaction plans, each
+            computed from that source BC's tree to ``target_tree``.
+        source_areas : dict[str, torch.Tensor]
+            Per-BC-type source area tensors.
 
         Returns
         -------
@@ -371,9 +508,6 @@ class GLOBE(Module):
                 )
             )
 
-            ### Combine non-strength features with cell normals into source_data.
-            # flatten_keys produces a flat namespace so the kernel's
-            # split_by_leaf_rank can separate scalars from vectors by rank.
             source_data = _flatten_keys(mesh.cell_data.exclude("strengths"))
             source_data["normals"] = mesh.cell_normals
 
@@ -385,7 +519,11 @@ class GLOBE(Module):
                 target_points=target_points,
                 reference_lengths=reference_lengths,
                 global_data=global_data,
-                chunk_size=chunk_size,
+                theta=self.theta,
+                cluster_tree=cluster_trees[bc_type],
+                target_tree=target_tree,
+                dual_plan=dual_plans[bc_type],
+                source_areas=source_areas[bc_type],
             )
             result_pieces.append(_unflatten_keys(kernel_result))
 
@@ -394,40 +532,28 @@ class GLOBE(Module):
     def _evaluate_communication_hyperlayer(
         self,
         layer_idx: int,
-        boundary_meshes: dict[str, Mesh],
+        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
         reference_lengths: dict[str, Float[torch.Tensor, ""]],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None,
-        chunk_size: None | int | Literal["auto"],
-    ) -> dict[str, Mesh]:
+        cluster_trees: dict[str, ClusterTree],
+        comm_plans: dict[str, dict[str, DualInteractionPlan]],
+        source_areas: dict[str, torch.Tensor],
+    ) -> dict[str, Mesh["n-1", "n"]]:  # ty: ignore[unresolved-reference]
         r"""Run one boundary-to-boundary communication step.
 
-        For each BC type, evaluates :meth:`_evaluate_hyperlayer` at the mesh's
-        cell centroids and wraps the result into an enriched Mesh that carries
-        both the original physical ``cell_data`` (under ``"physical"``) and the
-        new latent state (``"strengths"``, ``"latent"``).
-
-        Geometry tensors and cached properties (centroids, areas, normals) are
-        shared by reference across layers - no copies are made.
-
-        Parameters
-        ----------
-        layer_idx : int
-            Index into ``self.kernel_layers`` for this communication layer.
-        boundary_meshes : dict[str, Mesh]
-            Current enriched boundary meshes (from the previous layer or init).
-        reference_lengths : dict[str, Float[torch.Tensor, ""]]
-            Mapping of reference length names to scalar tensors.
-        global_data : TensorDict[str, Float[torch.Tensor, "..."]] or None
-            Problem-level features (mixed scalar/vector ranks).
-        chunk_size : None or int or {"auto"}
-            Controls memory usage during kernel evaluation.
+        For each destination BC type, evaluates :meth:`_evaluate_hyperlayer`
+        at that BC's cell centroids, summing contributions from all source
+        BC types.  The target tree for each destination is that BC's own
+        cluster tree; for self-interaction (source == destination), this is
+        the same object as the source tree.
 
         Returns
         -------
-        dict[str, Mesh]
-            New enriched boundary meshes for the next layer.
+        dict[str, Mesh["n-1", "n"]]
+            Updated boundary meshes with evaluation results merged into
+            each mesh's ``cell_data``.
         """
-        new_meshes: dict[str, Mesh] = {}
+        new_meshes: dict[str, Mesh["n-1", "n"]] = {}  # ty: ignore[unresolved-reference]
         for bc_type, mesh in boundary_meshes.items():
             result_td = self._evaluate_hyperlayer(
                 layer_idx=layer_idx,
@@ -435,7 +561,10 @@ class GLOBE(Module):
                 source_meshes=boundary_meshes,
                 reference_lengths=reference_lengths,
                 global_data=global_data,
-                chunk_size=chunk_size,
+                cluster_trees=cluster_trees,
+                target_tree=cluster_trees[bc_type],
+                dual_plans=comm_plans[bc_type],
+                source_areas=source_areas,
             )
             new_cell_data = TensorDict(
                 {"physical": mesh.cell_data["physical"]},
@@ -454,11 +583,10 @@ class GLOBE(Module):
     def forward(
         self,
         prediction_points: Float[torch.Tensor, "n_points n_dims"],
-        boundary_meshes: dict[str, Mesh],
+        boundary_meshes: dict[str, Mesh["n-1", "n"]],  # ty: ignore[unresolved-reference]
         reference_lengths: dict[str, torch.Tensor],
         global_data: TensorDict[str, Float[torch.Tensor, "..."]] | None = None,
-        chunk_size: None | int | Literal["auto"] = None,
-    ) -> Mesh:
+    ) -> Mesh[0, "n"]:  # ty: ignore[unresolved-reference]
         r"""Evaluate GLOBE model to predict fields at target points.
 
         Runs the full GLOBE forward pass in three phases:
@@ -475,7 +603,7 @@ class GLOBE(Module):
         ----------
         prediction_points : Float[torch.Tensor, "n_points n_dims"]
             Target points of shape :math:`(N_{points}, D)`.
-        boundary_meshes : dict[str, Mesh]
+        boundary_meshes : dict[str, Mesh["n-1", "n"]]
             Dictionary mapping BC type names to pre-merged
             :class:`~physicsnemo.mesh.Mesh` objects.
         reference_lengths : dict[str, torch.Tensor]
@@ -483,20 +611,11 @@ class GLOBE(Module):
         global_data : TensorDict or None, optional, default=None
             Nondimensional conditioning features. Leaf keys and ranks must
             match ``global_data_ranks``. Passed through to the output Mesh.
-        chunk_size : None | int | Literal["auto"], optional, default=None
-            Controls memory usage during kernel evaluation.
 
         Returns
         -------
-        Mesh
-            A point-cloud Mesh (0-dimensional manifold) with:
-
-            - ``points``: the input ``prediction_points``
-            - ``point_data``: calibrated output fields (keys from
-              ``output_fields``)
-            - ``global_data``: the input ``global_data``, passed through
-            - ``cells``: empty (shape ``(0, 1)``)
-            - ``cell_data``: empty
+        Mesh[0, "n"]
+            A point-cloud Mesh (0-dimensional manifold) with predicted fields.
         """
         device = prediction_points.device
 
@@ -504,7 +623,6 @@ class GLOBE(Module):
             global_data = TensorDict({}, device=device)
 
         ### Input validation
-        # Skip validation when running under torch.compile for performance
         if not torch.compiler.is_compiling():
             if prediction_points.ndim != 2:
                 raise ValueError(
@@ -540,62 +658,92 @@ class GLOBE(Module):
                 )
 
         ### Phase 1: Enrich boundary meshes with initial (all-ones) strengths.
-        # Wraps original cell_data under "physical" and adds "strengths".
-        # Geometry tensors are shared by reference - no copies.
-        boundary_meshes = {
-            bc_type: Mesh(
-                points=mesh.points,
-                cells=mesh.cells,
-                cell_data=TensorDict(
-                    {
-                        "physical": mesh.cell_data,
-                        "strengths": TensorDict(
-                            {
-                                name: torch.ones(mesh.n_cells, device=device)
-                                for name in self.reference_length_names
-                            },
-                            batch_size=torch.Size([mesh.n_cells]),
-                            device=device,
-                        ),
-                    },
-                    batch_size=torch.Size([mesh.n_cells]),
-                    device=device,
-                ),
-                _cache=mesh._cache,
+        with record_function("globe::enrich_meshes"):
+            boundary_meshes = {
+                bc_type: Mesh(
+                    points=mesh.points,
+                    cells=mesh.cells,
+                    cell_data=TensorDict(
+                        {
+                            "physical": mesh.cell_data,
+                            "strengths": TensorDict(
+                                {
+                                    name: torch.ones(mesh.n_cells, device=device)
+                                    for name in self.reference_length_names
+                                },
+                                batch_size=torch.Size([mesh.n_cells]),
+                                device=device,
+                            ),
+                        },
+                        batch_size=torch.Size([mesh.n_cells]),
+                        device=device,
+                    ),
+                    _cache=mesh._cache,
+                )
+                for bc_type, mesh in boundary_meshes.items()
+            }
+
+        ### Build per-BC-type trees and areas (reused across all layers).
+        ### Tree construction and traversal involve irregular control flow
+        ### (morton codes, variable-depth loops) that cannot be traced by
+        ### torch.compile, so we skip compilation for this block.
+        with record_function("globe::build_trees_and_plans"):
+            cluster_trees, bc_areas, comm_plans = self._build_trees_and_plans(
+                boundary_meshes
             )
-            for bc_type, mesh in boundary_meshes.items()
-        }
 
         ### Phase 2: Communication hyperlayers (boundary-to-boundary).
+        # Trees and comm_plans are reused across all layers because cell
+        # centroids (the source/target points) are fixed - only the
+        # cell_data (latent features, strengths) changes between layers.
         for i in range(self.n_communication_hyperlayers):
-            boundary_meshes = self._evaluate_communication_hyperlayer(
-                layer_idx=i,
-                boundary_meshes=boundary_meshes,
-                reference_lengths=reference_lengths,
-                global_data=global_data,
-                chunk_size=chunk_size,
-            )
+            with record_function(f"globe::communication_layer/{i}"):
+                boundary_meshes = self._evaluate_communication_hyperlayer(
+                    layer_idx=i,
+                    boundary_meshes=boundary_meshes,
+                    reference_lengths=reference_lengths,
+                    global_data=global_data,
+                    cluster_trees=cluster_trees,
+                    comm_plans=comm_plans,
+                    source_areas=bc_areas,
+                )
+
+        ### Free comm plans - no longer needed after communication layers.
+        # At 800k faces, near-pair indices can be ~3 GB of int64.
+        del comm_plans
 
         ### Phase 3: Final evaluation at prediction points.
-        result: TensorDict[str, Float[torch.Tensor, "n_points ..."]] = self._evaluate_hyperlayer(
-            layer_idx=self.n_communication_hyperlayers,
-            target_points=prediction_points,
-            source_meshes=boundary_meshes,
-            reference_lengths=reference_lengths,
-            global_data=global_data,
-            chunk_size=chunk_size,
-        )
+        with record_function("globe::build_prediction_plans"):
+            pred_target_tree, pred_plans = self._build_prediction_plans(
+                cluster_trees, prediction_points
+            )
+
+        with record_function("globe::final_evaluation"):
+            result: TensorDict[str, Float[torch.Tensor, "n_points ..."]] = self._evaluate_hyperlayer(
+                layer_idx=self.n_communication_hyperlayers,
+                target_points=prediction_points,
+                source_meshes=boundary_meshes,
+                reference_lengths=reference_lengths,
+                global_data=global_data,
+                cluster_trees=cluster_trees,
+                target_tree=pred_target_tree,
+                dual_plans=pred_plans,
+                source_areas=bc_areas,
+            )
+
+        del pred_plans, pred_target_tree
 
         ### Wrap as point-cloud Mesh and apply per-field calibration.
-        output_mesh = Mesh(
-            points=prediction_points,
-            point_data=result,
-            global_data=global_data,
-        )
-        for idx, name in enumerate(self._output_field_order):
-            key = tuple(name.split("."))
-            t = output_mesh.point_data[key]
-            output_mesh.point_data[key] = self.final_field_transforms[idx](
-                t.view(-1, 1)
-            ).view(t.shape)
+        with record_function("globe::calibration"):
+            output_mesh = Mesh(
+                points=prediction_points,
+                point_data=result,
+                global_data=global_data,
+            )
+            for idx, name in enumerate(self._output_field_order):
+                key = tuple(name.split("."))
+                t = output_mesh.point_data[key]
+                output_mesh.point_data[key] = self.final_field_transforms[idx](
+                    t.view(-1, 1)
+                ).view(t.shape)
         return output_mesh

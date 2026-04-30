@@ -37,8 +37,8 @@ class _MockDataset(StormCastDataset):
         num_background_channels: int = 4,
         num_invariant_channels: int = 2,
         num_scalar_cond_channels: int = 2,
-        image_size: tuple[int, int] = (256, 128),
-        num_samples: int = 100,
+        image_size: tuple[int, int] = (32, 16),
+        num_samples: int = 20,
         train: bool = True,
         model_type: Literal[
             "hybrid", "nowcasting", "downscaling", "unconditional"

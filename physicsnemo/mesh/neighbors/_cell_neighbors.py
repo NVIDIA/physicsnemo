@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from physicsnemo.mesh.neighbors._adjacency import Adjacency
+from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -95,7 +96,9 @@ def get_cell_to_cells_adjacency(
 
     ### Find shared facets (those appearing in 2+ cells)
     _, inverse_indices, _ = categorize_facets_by_count(
-        candidate_facets, target_counts="shared"
+        candidate_facets,
+        target_counts="shared",
+        index_bound=mesh.n_points,
     )
 
     ### Filter to only keep candidate facets that are shared
@@ -278,13 +281,14 @@ def get_cell_to_cells_adjacency(
     # This ensures each neighbor appears exactly once per source
     from physicsnemo.mesh.neighbors._adjacency import build_adjacency_from_pairs
 
-    unique_pairs = torch.unique(cell_pairs_tensor, dim=0)
+    unique_pairs = unique_index_tuples(cell_pairs_tensor, index_bound=mesh.n_cells)
 
     ### Build adjacency using shared utility
     return build_adjacency_from_pairs(
         source_indices=unique_pairs[:, 0],
         target_indices=unique_pairs[:, 1],
         n_sources=mesh.n_cells,
+        n_targets=mesh.n_cells,
     )
 
 

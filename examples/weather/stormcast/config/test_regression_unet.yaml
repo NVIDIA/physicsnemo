@@ -35,7 +35,7 @@ defaults:
   - _self_
 
 training:
-  num_data_workers: 2
+  num_data_workers: 1
   validation_plot_variables: ["state_0"]
   log_to_wandb: True
   wandb_mode: "offline"  # not using online logging while testing
@@ -63,5 +63,10 @@ model:
   regression_conditions: ["state", "background", "invariant"]
   diffusion_conditions: ["state", "background", "invariant"]
 
+sampler:
+  args:
+    num_steps: 2
+
 dataset:
+  num_samples: 20
   num_scalar_cond_channels: 0

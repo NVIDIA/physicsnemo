@@ -43,6 +43,8 @@ from physicsnemo.nn import gumbel_softmax
 from physicsnemo.nn import BQWarp
 from physicsnemo.nn import Mlp
 
+from physicsnemo.nn import ConcreteDropout
+
 # Check optional dependency availability
 TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
 if TE_AVAILABLE:
@@ -309,6 +311,7 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
         slice_num: int = 64,
         use_te: bool = True,
         plus: bool = False,
+        concrete_dropout: bool = False,
     ) -> None:
         super().__init__()
         inner_dim = dim_head * heads
@@ -328,9 +331,17 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
 
         # Attention components
         self.softmax = nn.Softmax(dim=-1)
-        self.dropout = nn.Dropout(dropout)
 
         self._init_slice_components(dim_head, slice_num, heads, use_te, plus)
+
+        # Concrete dropout on the output slice tokens
+        if concrete_dropout:
+            self.output_dropout = ConcreteDropout(
+                in_features=dim_head,
+                init_p=max(dropout, 0.05),
+            )
+        else:
+            self.output_dropout = None
 
     def project_input_onto_slices(
         self, x: Float[torch.Tensor, "batch tokens channels"]
@@ -425,6 +436,10 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
         _, slice_tokens = self.compute_slices_from_projections(
             slice_projections, feature_projection
         )
+
+        # Apply concrete dropout to output slice tokens
+        if self.output_dropout is not None:
+            slice_tokens = self.output_dropout(slice_tokens)
 
         return slice_tokens
 
@@ -715,6 +730,7 @@ class MultiScaleFeatureExtractor(nn.Module):
         slice_num: int = 64,
         use_te: bool = True,
         plus: bool = False,
+        concrete_dropout: bool = False,
     ) -> None:
         super().__init__()
         self.num_scales = len(radii)
@@ -733,7 +749,14 @@ class MultiScaleFeatureExtractor(nn.Module):
         self.tokenizers = nn.ModuleList(
             [
                 ContextProjector(
-                    hidden_dim, n_head, dim_head, dropout, slice_num, use_te, plus
+                    hidden_dim,
+                    n_head,
+                    dim_head,
+                    dropout,
+                    slice_num,
+                    use_te,
+                    plus,
+                    concrete_dropout=concrete_dropout,
                 )
                 for _ in range(self.num_scales)
             ]
@@ -835,7 +858,8 @@ class GlobalContextBuilder(nn.Module):
     Forward
     -------
     This class does not implement a standard ``forward`` method. Instead, use
-    :meth:`build_context` to construct context and local features.
+    :meth:`build_context` to construct context, local features, and the
+    detached geometry context.
 
     See Also
     --------
@@ -856,7 +880,7 @@ class GlobalContextBuilder(nn.Module):
     >>> local_embeddings = (torch.randn(2, 100, 64),)
     >>> geometry = torch.randn(2, 100, 3)
     >>> global_embedding = torch.randn(2, 1, 16)
-    >>> context, local_feats = builder.build_context(
+    >>> context, local_feats, geo_ctx = builder.build_context(
     ...     local_embeddings, None, geometry, global_embedding
     ... )
     >>> context.shape
@@ -879,6 +903,7 @@ class GlobalContextBuilder(nn.Module):
         plus: bool = False,
         include_local_features: bool = False,
         structured_shape: tuple[int, ...] | None = None,
+        concrete_dropout: bool = False,
     ) -> None:
         super().__init__()
 
@@ -914,6 +939,7 @@ class GlobalContextBuilder(nn.Module):
                         slice_num,
                         use_te,
                         plus,
+                        concrete_dropout=concrete_dropout,
                     )
                     for _ in functional_dims
                 ]
@@ -934,11 +960,23 @@ class GlobalContextBuilder(nn.Module):
                     slice_num,
                     use_te=use_te,
                     plus=plus,
+                    concrete_dropout=concrete_dropout,
                 )
             else:
                 self.geometry_tokenizer = ContextProjector(
-                    geometry_dim, n_head, dim_head, dropout, slice_num, use_te, plus
+                    geometry_dim, n_head, dim_head, dropout, slice_num, use_te, plus=plus, 
+                    concrete_dropout=concrete_dropout,
                 )
+            self.geometry_tokenizer = ContextProjector(
+                geometry_dim,
+                n_head,
+                dim_head,
+                dropout,
+                slice_num,
+                use_te,
+                plus,
+                concrete_dropout=concrete_dropout,
+            )
             context_dim += dim_head
         else:
             self.geometry_tokenizer = None
@@ -946,7 +984,14 @@ class GlobalContextBuilder(nn.Module):
         # Global embedding tokenizer
         if global_dim is not None:
             self.global_tokenizer = ContextProjector(
-                global_dim, n_head, dim_head, dropout, slice_num, use_te, plus
+                global_dim,
+                n_head,
+                dim_head,
+                dropout,
+                slice_num,
+                use_te,
+                plus,
+                concrete_dropout=concrete_dropout,
             )
             context_dim += dim_head
         else:
@@ -976,6 +1021,7 @@ class GlobalContextBuilder(nn.Module):
     ) -> tuple[
         Float[torch.Tensor, "batch heads slices context_dim"] | None,
         list[Float[torch.Tensor, "batch tokens local_features"]] | None,
+        Float[torch.Tensor, "batch heads slices dim_head"] | None,
     ]:
         r"""Build all context and local features.
 
@@ -995,13 +1041,17 @@ class GlobalContextBuilder(nn.Module):
 
         Returns
         -------
-        tuple[torch.Tensor | None, list[torch.Tensor] | None]
+        tuple[torch.Tensor | None, list[torch.Tensor] | None, torch.Tensor | None]
             - ``context``: Concatenated context tensor of shape :math:`(B, H, S, D_c)`
               where :math:`D_c` is the total context dimension, or ``None`` if no
               context sources are provided.
             - ``local_features``: List of local feature tensors, one per input type,
               each of shape :math:`(B, N, D_l)`, or ``None`` if local features are
               disabled.
+            - ``geometry_context_detached``: Detached geometry-tokenizer output of shape
+              :math:`(B, H, S, D)`, intended for downstream observers such as the
+              embedded OOD guard.  ``None`` when geometry tokenization is disabled
+              or no geometry was provided.
 
         Raises
         ------
@@ -1021,6 +1071,7 @@ class GlobalContextBuilder(nn.Module):
 
         context_parts = []
         local_features = None
+        geometry_context_detached: torch.Tensor | None = None
 
         if local_positions is None and self.local_extractors is not None:
             raise ValueError(
@@ -1047,7 +1098,11 @@ class GlobalContextBuilder(nn.Module):
 
         # Tokenize geometry features
         if self.geometry_tokenizer is not None and geometry is not None:
-            context_parts.append(self.geometry_tokenizer(geometry))
+            geometry_context = self.geometry_tokenizer(geometry)
+            # Detach the returned copy so downstream observers (e.g. the OOD
+            # guard) don't keep the backward graph alive.
+            geometry_context_detached = geometry_context.detach()
+            context_parts.append(geometry_context)
 
         # Tokenize global embedding
         if self.global_tokenizer is not None and global_embedding is not None:
@@ -1056,4 +1111,4 @@ class GlobalContextBuilder(nn.Module):
         # Concatenate all context features along the last dimension
         context = torch.cat(context_parts, dim=-1) if context_parts else None
 
-        return context, local_features
+        return context, local_features, geometry_context_detached

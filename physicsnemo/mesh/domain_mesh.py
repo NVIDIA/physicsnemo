@@ -37,7 +37,7 @@ class DomainMesh:
 
     The semantic contract is that the boundary meshes, if merged, form a
     watertight enclosure around the interior mesh. This is documented but not
-    enforced at construction time; call :meth:`check_boundary_watertight` to
+    enforced at construction time; call :meth:`is_boundary_watertight` to
     verify explicitly.
 
     Because ``DomainMesh`` is a tensorclass, standard TensorDict operations
@@ -169,27 +169,56 @@ class DomainMesh:
                         f"has n_spatial_dims={bc_mesh.n_spatial_dims}."
                     )
 
-    def _map_meshes(self, fn: Callable[[Mesh], Mesh]) -> "DomainMesh":
-        r"""Apply a Mesh-to-Mesh function to interior and all boundaries.
+    def apply(
+        self,
+        fn: Callable[[Mesh], Mesh],
+        *,
+        interior: bool = True,
+        boundaries: bool = True,
+    ) -> "DomainMesh":
+        r"""Apply a Mesh-to-Mesh function to meshes in the domain.
 
-        Produces a new :class:`DomainMesh` whose ``interior`` is
-        ``fn(self.interior)`` and whose ``boundaries`` are each individually
-        transformed by ``fn``.  The domain-level ``global_data`` is preserved
-        unchanged.
+        By default, ``fn`` is called on the ``interior`` and on each boundary
+        mesh. Use the keyword flags to apply selectively. Components that are
+        skipped are cloned unchanged. Domain-level ``global_data`` is always
+        cloned unchanged.
+
+        All built-in operations (``translate``, ``rotate``, ``subdivide``,
+        ``clean``, etc.) delegate here.
 
         Parameters
         ----------
         fn : Callable[[Mesh], Mesh]
             A function that takes a :class:`Mesh` and returns a :class:`Mesh`.
+        interior : bool
+            If ``True`` (default), apply ``fn`` to the interior mesh.
+        boundaries : bool
+            If ``True`` (default), apply ``fn`` to every boundary mesh.
 
         Returns
         -------
         DomainMesh
             New domain with the transformed meshes.
+
+        Examples
+        --------
+        Convert every mesh to a point cloud (drop connectivity):
+
+        >>> dm_cloud = dm.apply(lambda m: Mesh(points=m.points))  # doctest: +SKIP
+
+        Subdivide only the boundaries (e.g. to match a finer interior):
+
+        >>> dm2 = dm.apply(  # doctest: +SKIP
+        ...     lambda m: m.subdivide(levels=1), boundaries=True, interior=False
+        ... )
         """
         return DomainMesh(
-            interior=fn(self.interior),
-            boundaries=self.boundaries.apply(fn, call_on_nested=True),
+            interior=fn(self.interior) if interior else self.interior.clone(),
+            boundaries=(
+                self.boundaries.apply(fn, call_on_nested=True)
+                if boundaries
+                else self.boundaries.clone()
+            ),
             global_data=self.global_data.clone(),
         )
 
@@ -346,7 +375,7 @@ class DomainMesh:
         DomainMesh
             New domain with translated geometry.
         """
-        return self._map_meshes(lambda m: m.translate(offset=offset))
+        return self.apply(lambda m: m.translate(offset=offset))
 
     def rotate(
         self,
@@ -531,7 +560,7 @@ class DomainMesh:
         DomainMesh
             New domain with transformed geometry.
         """
-        result = self._map_meshes(
+        result = self.apply(
             lambda m: m.transform(
                 matrix=matrix,
                 transform_point_data=transform_point_data,
@@ -584,7 +613,7 @@ class DomainMesh:
         DomainMesh
             New domain with cleaned meshes.
         """
-        return self._map_meshes(
+        return self.apply(
             lambda m: m.clean(
                 tolerance=tolerance,
                 merge_points=merge_points,
@@ -603,7 +632,7 @@ class DomainMesh:
         DomainMesh
             New domain with all cached values cleared.
         """
-        return self._map_meshes(lambda m: m.strip_caches())
+        return self.apply(lambda m: m.strip_caches())
 
     def subdivide(
         self,
@@ -626,7 +655,7 @@ class DomainMesh:
         DomainMesh
             New domain with subdivided meshes.
         """
-        return self._map_meshes(lambda m: m.subdivide(levels=levels, filter=filter))
+        return self.apply(lambda m: m.subdivide(levels=levels, filter=filter))
 
     ### Data Operations
 
@@ -645,7 +674,7 @@ class DomainMesh:
         DomainMesh
             New domain with converted data on all meshes.
         """
-        return self._map_meshes(
+        return self.apply(
             lambda m: m.cell_data_to_point_data(overwrite_keys=overwrite_keys)
         )
 
@@ -664,7 +693,7 @@ class DomainMesh:
         DomainMesh
             New domain with converted data on all meshes.
         """
-        return self._map_meshes(
+        return self.apply(
             lambda m: m.point_data_to_cell_data(overwrite_keys=overwrite_keys)
         )
 
@@ -692,7 +721,7 @@ class DomainMesh:
         DomainMesh
             Domain with gradient fields added to each mesh's ``point_data``.
         """
-        return self._map_meshes(
+        return self.apply(
             lambda m: m.compute_point_derivatives(
                 keys=keys, method=method, gradient_type=gradient_type
             )
@@ -722,7 +751,7 @@ class DomainMesh:
         DomainMesh
             Domain with gradient fields added to each mesh's ``cell_data``.
         """
-        return self._map_meshes(
+        return self.apply(
             lambda m: m.compute_cell_derivatives(
                 keys=keys, method=method, gradient_type=gradient_type
             )
@@ -814,7 +843,7 @@ class DomainMesh:
         int
             The number of entries in ``boundaries``.
         """
-        return len(self.boundaries)
+        return len(self.boundary_names)
 
     ### Methods
 
@@ -839,8 +868,8 @@ class DomainMesh:
         no_slip: 3 points
         """
         yield "interior", self.interior
-        for name, mesh in self.boundaries.items():
-            yield name, mesh
+        for name in self.boundary_names:
+            yield name, self.boundaries[name]
 
     def __iter__(self) -> Iterator[tuple[str, Mesh]]:
         r"""Iterate over all meshes in the domain.
@@ -860,34 +889,69 @@ class DomainMesh:
         """
         yield from self.all_meshes()
 
-    def merge_boundaries(self) -> Mesh:
+    def merge_boundaries(self, preserve_data: bool = False) -> Mesh:
         """Merge all boundary meshes into a single :class:`Mesh`.
 
-        Delegates to :meth:`Mesh.merge`. All boundary meshes must have the
-        same manifold dimension and compatible ``cell_data`` keys.
+        Produces a mesh containing the concatenated points and cells from
+        every boundary. By default, ``point_data`` and ``cell_data`` are
+        stripped before merging because boundaries typically carry
+        heterogeneous fields (different keys per boundary), which
+        :meth:`Mesh.merge` cannot concatenate.
+
+        Parameters
+        ----------
+        preserve_data : bool
+            If ``False`` (default), strip ``point_data`` and ``cell_data``
+            from each boundary before merging - the safe choice for the
+            typical CFD case where each boundary carries its own field set.
+            If ``True``, delegate directly to :meth:`Mesh.merge`, which
+            preserves data but requires that all boundaries share the same
+            ``cell_data`` keys and have ``point_data`` that can be
+            concatenated. Use this when every boundary has a consistent
+            set of fields.
 
         Returns
         -------
         Mesh
-            A single mesh containing the concatenated points, cells, and data
-            from every boundary mesh.
+            A single mesh containing the concatenated points and cells from
+            every boundary. Data fields are included only if
+            ``preserve_data`` is ``True``.
 
         Raises
         ------
         ValueError
-            If there are no boundary meshes to merge, or if boundary meshes
-            have incompatible dimensions or ``cell_data`` keys.
+            If there are no boundary meshes to merge, if boundary meshes
+            have incompatible manifold dimensions, or (when
+            ``preserve_data=True``) if their data keys are inconsistent.
         """
-        boundary_meshes = [self.boundaries[name] for name in self.boundary_names]
-        if not boundary_meshes:
+        if self.n_boundaries == 0:
             raise ValueError("No boundary meshes to merge.")
-        return Mesh.merge(boundary_meshes)
+        boundaries = [self.boundaries[name] for name in self.boundary_names]
+        if preserve_data:
+            return Mesh.merge(boundaries)
+        geometry_only = [Mesh(points=b.points, cells=b.cells) for b in boundaries]
+        return Mesh.merge(geometry_only)
 
-    def check_boundary_watertight(self) -> bool:
-        """Check whether the merged boundary meshes form a watertight surface.
+    def is_boundary_watertight(self, tolerance: float = 1e-6) -> bool:
+        r"""Check whether the merged boundary meshes form a watertight surface.
 
-        Merges all boundary meshes via :meth:`merge_boundaries` and calls
-        :meth:`Mesh.is_watertight` on the result.
+        Merges all boundary meshes via :meth:`merge_boundaries`, deduplicates
+        coincident vertices with :meth:`Mesh.clean`, and calls
+        :meth:`Mesh.is_watertight` on the result. The clean step is necessary
+        because independently-meshed boundary patches share physical vertices
+        that become duplicated during merge - and float32 round-off from any
+        prior transform may prevent an exact-match merge.
+
+        Parameters
+        ----------
+        tolerance : float, optional
+            L2 distance threshold for merging coincident boundary vertices
+            before the topology check. The default ``1e-6`` is deliberately
+            looser than :meth:`Mesh.clean`'s ``1e-12`` so it absorbs float32
+            round-off (~1e-7 relative) on the duplicated vertices that
+            ``merge_boundaries`` produces from independently-meshed patches.
+            For coordinates that span much smaller or much larger than ~1,
+            pass an explicit value (e.g. ``1e-6 * max_extent`` of the bbox).
 
         Returns
         -------
@@ -895,44 +959,189 @@ class DomainMesh:
             ``True`` if the merged boundary surface is watertight (every
             codimension-1 facet is shared by exactly 2 cells), ``False``
             otherwise. Returns ``False`` if there are no boundary meshes.
+
+        Notes
+        -----
+        This is not free to compute: the :meth:`Mesh.clean` step performs a
+        BVH-based duplicate-point merge that scales as :math:`O(N \log N)`
+        in the total boundary vertex count :math:`N`, and dominates the
+        runtime. Callers that need the result repeatedly should cache it.
         """
         if self.n_boundaries == 0:
             return False
-        return self.merge_boundaries().is_watertight()
+        return self.merge_boundaries().clean(tolerance=tolerance).is_watertight()
 
-    ### Repr
+    def draw(
+        self,
+        *,
+        backend: Literal["matplotlib", "pyvista", "auto"] = "auto",
+        show: bool = True,
+        point_scalars: None | torch.Tensor | str | tuple[str, ...] = None,
+        cell_scalars: None | torch.Tensor | str | tuple[str, ...] = None,
+        cmap: str = "viridis",
+        vmin: float | None = None,
+        vmax: float | None = None,
+        alpha_points: float = 1.0,
+        alpha_cells: float = 1.0,
+        alpha_edges: float = 1.0,
+        show_edges: bool = False,
+        boundary_kwargs: dict[str, Any] | None = None,
+        ax: Any = None,
+        backend_options: dict[str, Any] | None = None,
+    ):
+        r"""Draw the domain: interior with optional scalar coloring, boundaries overlaid.
 
-    def __repr__(self) -> str:
-        """Format a readable summary of the domain mesh."""
-        lines = ["DomainMesh("]
+        Renders the interior as the primary visual layer, then overlays every
+        boundary on the same canvas. The interior parameter set mirrors
+        :meth:`Mesh.draw` exactly, with two intentional changes: the call is
+        keyword-only, and ``show_edges`` defaults to ``False`` (rather than
+        ``True``) because dense interior meshes are typically more readable
+        without edges. Both matplotlib and PyVista backends are supported.
 
-        ### Interior
-        lines.append(f"    interior: {format_mesh_repr(self.interior)}")
+        Parameters
+        ----------
+        backend, show, point_scalars, cell_scalars, cmap, vmin, vmax, alpha_points, alpha_cells, alpha_edges, show_edges, ax, backend_options
+            Forwarded to :meth:`Mesh.draw` for the **interior** mesh. See
+            :meth:`Mesh.draw` for full descriptions.
+        boundary_kwargs : dict, optional
+            Keyword arguments forwarded to :meth:`Mesh.draw` for **every**
+            boundary mesh. Defaults are tuned for unobtrusive overlay:
 
-        ### Boundaries
-        bc_names = self.boundary_names
-        if not bc_names:
-            lines.append("    boundaries: {}")
+            - ``alpha_points = 0`` (boundary vertices are not scattered).
+            - ``alpha_cells = 0.3`` when boundaries are 2-D surfaces,
+              ``1.0`` when they are 1-D curves. Auto-detected from the
+              first boundary's :attr:`Mesh.n_manifold_dims`.
+            - ``show_edges = False``.
+
+            User-supplied keys override these defaults. To color individual
+            boundaries by their own scalar fields, compose :meth:`Mesh.draw`
+            calls directly (see Examples).
+
+        Returns
+        -------
+        matplotlib.axes.Axes or pyvista.Plotter
+            The canvas, for further customization when ``show=False``.
+
+        Examples
+        --------
+        Default visualization with pressure coloring on the interior:
+
+        >>> dm.draw(point_scalars="p", cmap="RdBu_r", vmin=-200, vmax=200)  # doctest: +SKIP
+
+        Translucent boundaries with edges visible:
+
+        >>> dm.draw(  # doctest: +SKIP
+        ...     point_scalars="p",
+        ...     boundary_kwargs={"alpha_cells": 0.5, "show_edges": True},
+        ... )
+
+        Customize and display later by setting axis limits on the returned canvas:
+
+        >>> ax = dm.draw(point_scalars="p", show=False)  # doctest: +SKIP
+        >>> ax.set_xlim(-2, 4); ax.set_ylim(-3, 3)       # doctest: +SKIP
+
+        Per-boundary scalar coloring (manual composition - color the no-slip
+        wall by its own ``shear`` field while the interior shows pressure):
+
+        >>> ax = dm.interior.draw(point_scalars="p", show=False)  # doctest: +SKIP
+        >>> dm.boundaries["wall"].draw(                           # doctest: +SKIP
+        ...     ax=ax, cell_scalars="shear", cmap="hot", show=False,
+        ... )
+        >>> for name in dm.boundary_names:                        # doctest: +SKIP
+        ...     if name == "wall":
+        ...         continue
+        ...     dm.boundaries[name].draw(
+        ...         ax=ax, alpha_cells=0.3, alpha_points=0,
+        ...         show_edges=False, show=False,
+        ...     )
+        >>> import matplotlib.pyplot as plt; plt.show()           # doctest: +SKIP
+        """
+        ### Auto-pick boundary opacity from the boundary's manifold dim:
+        ### 2-D surfaces would otherwise occlude the interior; 1-D curves
+        ### are thin lines and stay legible at full opacity.
+        if self.n_boundaries > 0:
+            first_bdy = self.boundaries[self.boundary_names[0]]
+            auto_alpha_cells = 0.3 if first_bdy.n_manifold_dims >= 2 else 1.0
         else:
-            lines.append("    boundaries:")
-            max_bc_len = max(len(n) for n in bc_names)
-            for name in bc_names:
-                bc_mesh = self.boundaries[name]
-                bc_repr = format_mesh_repr(bc_mesh)
-                # First line gets the key prefix; continuation lines are indented
-                first, *rest = bc_repr.split("\n")
-                key_prefix = f"        {name.ljust(max_bc_len)}: "
-                lines.append(f"{key_prefix}{first}")
-                cont_indent = " " * len(key_prefix)
-                lines.extend(f"{cont_indent}{line}" for line in rest)
+            auto_alpha_cells = 1.0  # unused
 
-        ### Global data (only if non-empty)
-        gd_keys = sorted(self.global_data.keys())
-        if gd_keys:
-            items = ", ".join(
-                f"{k}: {tuple(self.global_data[k].shape)}" for k in gd_keys
+        boundary_defaults: dict[str, Any] = {
+            "alpha_points": 0,
+            "alpha_cells": auto_alpha_cells,
+            "show_edges": False,
+        }
+        boundary_defaults.update(boundary_kwargs or {})
+
+        ### Draw interior; if no boundaries follow, this is the layer that
+        ### triggers the eventual ``.show()``.
+        has_boundaries = self.n_boundaries > 0
+        canvas = self.interior.draw(
+            backend=backend,
+            show=show and not has_boundaries,
+            point_scalars=point_scalars,
+            cell_scalars=cell_scalars,
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
+            alpha_points=alpha_points,
+            alpha_cells=alpha_cells,
+            alpha_edges=alpha_edges,
+            show_edges=show_edges,
+            ax=ax,
+            backend_options=backend_options,
+        )
+
+        ### Overlay boundaries; the last one triggers ``.show()`` if requested.
+        names = self.boundary_names
+        last = names[-1] if names else None
+        for name in names:
+            self.boundaries[name].draw(
+                ax=canvas,
+                backend=backend,
+                show=show and (name is last),
+                **boundary_defaults,
             )
-            lines.append(f"    global_data: {{{items}}}")
+        return canvas
 
-        lines.append(")")
-        return "\n".join(lines)
+    ### Repr is defined after the class body (see below) because
+    ### @tensorclass overwrites __repr__ even when defined inline.
+
+
+### Override the tensorclass __repr__ with custom formatting.
+# Must be done after class definition because @tensorclass overrides __repr__
+# even when defined inside the class body (same pattern as Mesh).
+def _domain_mesh_repr(self: DomainMesh) -> str:
+    """Format a readable summary of the domain mesh."""
+    lines = ["DomainMesh("]
+
+    ### Interior - indent data fields one level under "interior:"
+    interior_repr = format_mesh_repr(self.interior)
+    first, *rest = interior_repr.split("\n")
+    lines.append(f"    interior: {first}")
+    lines.extend(f"    {line}" for line in rest)
+
+    ### Boundaries - indent data fields one level under each boundary key
+    bc_names = self.boundary_names
+    if not bc_names:
+        lines.append("    boundaries: {}")
+    else:
+        lines.append("    boundaries:")
+        max_bc_len = max(len(n) for n in bc_names)
+        for name in bc_names:
+            bc_mesh = self.boundaries[name]
+            bc_repr = format_mesh_repr(bc_mesh)
+            first, *rest = bc_repr.split("\n")
+            lines.append(f"        {name.ljust(max_bc_len)}: {first}")
+            lines.extend(f"        {line}" for line in rest)
+
+    ### Global data (only if non-empty)
+    gd_keys = sorted(self.global_data.keys())
+    if gd_keys:
+        items = ", ".join(f"{k}: {tuple(self.global_data[k].shape)}" for k in gd_keys)
+        lines.append(f"    global_data: {{{items}}}")
+
+    lines.append(")")
+    return "\n".join(lines)
+
+
+DomainMesh.__repr__ = _domain_mesh_repr  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
