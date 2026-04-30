@@ -25,8 +25,10 @@ GeoTransolver
     Main model class combining GALE attention with geometry and global context.
 GALE
     Geometry-Aware Latent Embeddings attention layer.
+GALE_FA
+    GALE with FLARE self-attention backend.
 GALE_block
-    Transformer block using GALE attention.
+    Transformer block using GALE or GALE_FA attention.
 ContextProjector
     Projects context features onto physical state slices.
 GlobalContextBuilder
@@ -56,14 +58,25 @@ from physicsnemo.nn import (
       collect_concrete_dropout_losses,
       get_concrete_dropout_rates,
 )
-from .context_projector import ContextProjector, GlobalContextBuilder
-from .gale import GALE, GALE_block
+from .context_projector import (
+    ContextProjector,
+    GlobalContextBuilder,
+    StructuredContextProjector,
+)
+from .gale import (
+    GALE,
+    GALE_FA,
+    GALE_block,
+    GALEStructuredMesh2D,
+    GALEStructuredMesh3D,
+)
 from .geotransolver import GeoTransolver, GeoTransolverMetaData
 
 __all__ = [
     "GeoTransolver",
     "GeoTransolverMetaData",
     "GALE",
+    "GALE_FA",
     "GALE_block",
     "GALEStructuredMesh2D",
     "GALEStructuredMesh3D",
