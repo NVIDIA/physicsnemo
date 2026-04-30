@@ -39,9 +39,12 @@ from einops import rearrange
 from jaxtyping import Float
 
 from physicsnemo.core.version_check import check_version_spec
-from physicsnemo.nn import gumbel_softmax
 from physicsnemo.nn import BQWarp
 from physicsnemo.nn import Mlp
+from physicsnemo.nn.module.physics_attention import (
+    _compute_slices_from_projections,
+    _project_input,
+)
 
 from physicsnemo.nn import ConcreteDropout
 
@@ -49,60 +52,6 @@ from physicsnemo.nn import ConcreteDropout
 TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
 if TE_AVAILABLE:
     import transformer_engine.pytorch as te
-
-
-def _compute_slices_from_projections_impl(
-    slice_projections: Float[torch.Tensor, "batch heads tokens slices"],
-    fx: Float[torch.Tensor, "batch heads tokens dim"],
-    temperature: torch.Tensor,
-    plus: bool,
-    proj_temperature: nn.Module | None = None,
-) -> tuple[
-    Float[torch.Tensor, "batch heads tokens slices"],
-    Float[torch.Tensor, "batch heads slices dim"],
-]:
-    r"""Shared slice aggregation: temperature-weighted softmax then weighted sum over tokens.
-
-    Used by both :class:`ContextProjector` and :class:`StructuredContextProjector`
-    to avoid duplicating the slice-weight and slice-token computation.
-
-    Parameters
-    ----------
-    slice_projections : torch.Tensor
-        Projection of each token onto each slice, shape :math:`(B, H, N, S)`.
-    fx : torch.Tensor
-        Latent features to aggregate per slice, shape :math:`(B, H, N, D)`.
-    temperature : torch.Tensor
-        Scalar temperature for softmax/gumbel, shape broadcastable to projections.
-    plus : bool
-        If ``True``, use Gumbel softmax with optional adaptive temperature.
-    proj_temperature : nn.Module or None, optional
-        If ``plus`` is ``True``, module mapping :math:`(B, H, N, D)` to adaptive
-        temperature; ignored otherwise. Default is ``None``.
-
-    Returns
-    -------
-    slice_weights : torch.Tensor
-        Normalized weights per token and slice, shape :math:`(B, H, N, S)`.
-    slice_token : torch.Tensor
-        Aggregated features per slice, shape :math:`(B, H, S, D)`.
-    """
-    if plus and proj_temperature is not None:
-        temp = temperature + proj_temperature(fx)
-        clamped_temp = torch.clamp(temp, min=0.01).to(slice_projections.dtype)
-        slice_weights = gumbel_softmax(slice_projections, clamped_temp)
-    else:
-        clamped_temp = torch.clamp(temperature, min=0.5, max=5).to(
-            slice_projections.dtype
-        )
-        slice_weights = nn.functional.softmax(
-            slice_projections / clamped_temp, dim=-1
-        )
-    slice_weights = slice_weights.to(slice_projections.dtype)
-    slice_norm = slice_weights.sum(2)
-    normed_weights = slice_weights / (slice_norm[:, :, None, :] + 1e-2)
-    slice_token = torch.matmul(normed_weights.transpose(2, 3), fx)
-    return slice_weights, slice_token
 
 
 def _structured_grid_to_conv_input(
@@ -166,8 +115,9 @@ class _SliceToContextMixin:
     r"""Internal mixin providing shared slice-to-context init and slice aggregation.
 
     Used by :class:`ContextProjector` and :class:`StructuredContextProjector` to
-    avoid duplicating in_project_slice, temperature, proj_temperature, and
-    compute_slices_from_projections.
+    avoid duplicating ``in_project_slice``, ``temperature``, ``proj_temperature``,
+    and the call to
+    :func:`~physicsnemo.nn.module.physics_attention._compute_slices_from_projections`.
     """
 
     def _init_slice_components(
@@ -199,7 +149,7 @@ class _SliceToContextMixin:
         """
         linear_layer = te.Linear if (use_te and TE_AVAILABLE) else nn.Linear
         self.in_project_slice = linear_layer(dim_head, slice_num)
-        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        self.temperature = nn.Parameter(torch.ones([1, 1, heads, 1]) * 0.5)
         if plus:
             self.proj_temperature = nn.Sequential(
                 linear_layer(dim_head, slice_num),
@@ -208,34 +158,35 @@ class _SliceToContextMixin:
                 nn.GELU(),
             )
 
-    def compute_slices_from_projections(
+    def _compute_slices(
         self,
-        slice_projections: Float[torch.Tensor, "batch heads tokens slices"],
-        fx: Float[torch.Tensor, "batch heads tokens dim"],
+        slice_projections: Float[torch.Tensor, "batch tokens heads slices"],
+        fx: Float[torch.Tensor, "batch tokens heads dim"],
     ) -> tuple[
-        Float[torch.Tensor, "batch heads tokens slices"],
+        Float[torch.Tensor, "batch tokens heads slices"],
         Float[torch.Tensor, "batch heads slices dim"],
     ]:
         r"""Compute slice weights and slice tokens from projections and latent features.
 
-        Delegates to :func:`_compute_slices_from_projections_impl` using this
-        instance's ``temperature``, ``plus``, and (when plus) ``proj_temperature``.
+        Delegates to :func:`~physicsnemo.nn.module.physics_attention._compute_slices_from_projections`,
+        the shared free function that also backs
+        :meth:`~physicsnemo.nn.module.physics_attention.PhysicsAttentionBase._compute_slices_from_projections`.
 
         Parameters
         ----------
         slice_projections : torch.Tensor
-            Shape :math:`(B, H, N, S)`.
+            Shape :math:`(B, N, H, S)`.
         fx : torch.Tensor
-            Shape :math:`(B, H, N, D)`.
+            Shape :math:`(B, N, H, D)`.
 
         Returns
         -------
         tuple[torch.Tensor, torch.Tensor]
-            ``(slice_weights, slice_token)`` with shapes :math:`(B, H, N, S)`
+            ``(slice_weights, slice_token)`` with shapes :math:`(B, N, H, S)`
             and :math:`(B, H, S, D)`.
         """
         proj_temp = getattr(self, "proj_temperature", None) if self.plus else None
-        return _compute_slices_from_projections_impl(
+        return _compute_slices_from_projections(
             slice_projections,
             fx,
             self.temperature,
@@ -346,10 +297,10 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
     def project_input_onto_slices(
         self, x: Float[torch.Tensor, "batch tokens channels"]
     ) -> (
-        Float[torch.Tensor, "batch heads tokens dim"]
+        Float[torch.Tensor, "batch tokens heads dim"]
         | tuple[
-            Float[torch.Tensor, "batch heads tokens dim"],
-            Float[torch.Tensor, "batch heads tokens dim"],
+            Float[torch.Tensor, "batch tokens heads dim"],
+            Float[torch.Tensor, "batch tokens heads dim"],
         ]
     ):
         r"""Project the input onto the slice space.
@@ -363,28 +314,16 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
         Returns
         -------
         torch.Tensor or tuple[torch.Tensor, torch.Tensor]
-            If ``plus=True``, returns single tensor of shape :math:`(B, H, N, D)` where
+            If ``plus=True``, returns single tensor of shape :math:`(B, N, H, D)` where
             :math:`H` is number of heads and :math:`D` is head dimension. If ``plus=False``,
-            returns tuple of two tensors both of shape :math:`(B, H, N, D)`, representing
+            returns tuple of two tensors both of shape :math:`(B, N, H, D)`, representing
             the query and key projections respectively.
         """
-        # Project input to multi-head representation: (B, N, C) -> (B, H, N, D)
-        projected_x = rearrange(
-            self.in_project_x(x), "B N (h d) -> B h N d", h=self.heads, d=self.dim_head
+        fx = None if self.plus else self.in_project_fx
+        return _project_input(
+            x, self.in_project_x, self.heads, self.dim_head,
+            "B N (H D) -> B N H D", project_fx=fx,
         )
-
-        if self.plus:
-            # Transolver++ uses single projection for both paths
-            return projected_x
-        else:
-            # Standard Transolver uses separate query and key projections
-            feature_projection = rearrange(
-                self.in_project_fx(x),
-                "B N (h d) -> B h N d",
-                h=self.heads,
-                d=self.dim_head,
-            )
-            return projected_x, feature_projection
 
     def forward(
         self, x: Float[torch.Tensor, "batch tokens channels"]
@@ -429,11 +368,11 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
         else:
             projected_x, feature_projection = self.project_input_onto_slices(x)
 
-        # Project latent representations onto physical state slices: (B, H, N, D) -> (B, H, N, S)
+        # Project latent representations onto physical state slices: (B, N, H, D) -> (B, N, H, S)
         slice_projections = self.in_project_slice(projected_x)
 
         # Compute weighted aggregation of features into slice tokens
-        _, slice_tokens = self.compute_slices_from_projections(
+        _, slice_tokens = self._compute_slices(
             slice_projections, feature_projection
         )
 
@@ -506,28 +445,27 @@ class StructuredContextProjector(_SliceToContextMixin, nn.Module):
 
     def _grid_project(
         self, x: Float[torch.Tensor, "batch tokens channels"]
-    ) -> tuple[
-        Float[torch.Tensor, "batch heads tokens dim"],
-        Float[torch.Tensor, "batch heads tokens dim"],
-    ]:
+    ) -> (
+        Float[torch.Tensor, "batch tokens heads dim"]
+        | tuple[
+            Float[torch.Tensor, "batch tokens heads dim"],
+            Float[torch.Tensor, "batch tokens heads dim"],
+        ]
+    ):
         B, N, C = x.shape
         grid = _structured_grid_to_conv_input(
             x, B, N, C, self._nd, self.spatial_shape
         )
         pattern = (
-            "B (H D) h w -> B H (h w) D"
+            "B (H D) h w -> B (h w) H D"
             if self._nd == 2
-            else "B (H D) h w d -> B H (h w d) D"
+            else "B (H D) h w d -> B (h w d) H D"
         )
-        px = rearrange(
-            self.in_project_x(grid), pattern, H=self.heads, D=self.dim_head
+        fx = None if self.plus else self.in_project_fx
+        return _project_input(
+            grid, self.in_project_x, self.heads, self.dim_head,
+            pattern, project_fx=fx,
         )
-        if self.plus:
-            return px, px
-        pfx = rearrange(
-            self.in_project_fx(grid), pattern, H=self.heads, D=self.dim_head
-        )
-        return px, pfx
 
     def forward(
         self, x: Float[torch.Tensor, "batch tokens channels"]
@@ -538,12 +476,12 @@ class StructuredContextProjector(_SliceToContextMixin, nn.Module):
                     f"Expected 3D input (B, N, C), got {x.ndim}D shape {tuple(x.shape)}"
                 )
         if self.plus:
-            projected_x = self._grid_project(x)[0]
+            projected_x = self._grid_project(x)
             feature_projection = projected_x
         else:
             projected_x, feature_projection = self._grid_project(x)
         slice_projections = self.in_project_slice(projected_x)
-        _, slice_tokens = self.compute_slices_from_projections(
+        _, slice_tokens = self._compute_slices(
             slice_projections, feature_projection
         )
 

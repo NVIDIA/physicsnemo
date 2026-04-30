@@ -28,11 +28,15 @@ import torch.nn.functional as F
 from einops import rearrange
 from jaxtyping import Float
 
-from physicsnemo.core.version_check import check_version_spec, OptionalImport
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.nn import ConcreteDropout
+from physicsnemo.nn.module.physics_attention import _project_input
+from physicsnemo.experimental.nn.flare_attention import _flare_self_attention
+from physicsnemo.experimental.models.geotransolver.gale import (
+    _gale_cross_init,
+    _mix_self_and_cross,
+)
 
-# Check optional dependency availability
-TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
 te = OptionalImport("transformer_engine.pytorch", "0.1.0")
 
 
@@ -132,12 +136,6 @@ class GALE_FA(nn.Module):
                 "Use use_te=False; TE disables FlashAttention for differing q/k sizes in FLARE attention."
             )
         super().__init__()
-        if state_mixing_mode not in ("weighted", "concat_project"):
-            raise ValueError(
-                f"Invalid state_mixing_mode: {state_mixing_mode!r}. "
-                f"Expected 'weighted' or 'concat_project'."
-            )
-        self.state_mixing_mode = state_mixing_mode
         self.use_te = use_te
         self.heads = heads
         self.dim_head = dim_head
@@ -157,31 +155,7 @@ class GALE_FA(nn.Module):
         self.self_v = linear_layer(dim_head, dim_head)
 
         if context_dim > 0:
-            # Linear projections for cross-attention
-            self.cross_q = linear_layer(dim_head, dim_head)
-            self.cross_k = linear_layer(context_dim, dim_head)
-            self.cross_v = linear_layer(context_dim, dim_head)
-
-            # Mixing layers for blending self-attention and cross-attention
-            if state_mixing_mode == "weighted":
-                # Learnable mixing weight between self and cross attention
-                self.state_mixing = nn.Parameter(torch.tensor(0.0))
-            else:
-                # Concatenate self and cross attention and project back to dim_head
-                self.concat_project = nn.Sequential(
-                    linear_layer(2 * dim_head, dim_head),
-                    nn.GELU(),
-                )
-
-        # te attention
-        if self.use_te:
-            self.attn_fn = te.DotProductAttention(
-                num_attention_heads=self.heads,
-                kv_channels=self.dim_head,
-                attention_dropout=dropout,
-                qkv_format="bshd",
-                softmax_scale=self.scale
-            )
+            _gale_cross_init(self, dim_head, context_dim, use_te, state_mixing_mode)
 
         # Linear projection for output
         self.out_linear = linear_layer(inner_dim, dim)
@@ -223,62 +197,45 @@ class GALE_FA(nn.Module):
             as inputs.
         """
 
-        # with record_function("forward"):
-        x_mid = [self.in_project_x(_x) for _x in x]
-        x_mid = [rearrange(
-            _x_mid, "B N (h d) -> B N h d", h=self.heads, d=self.dim_head
-        ) for _x_mid in x_mid]
-        x_mid = [_x_mid.permute(0, 2, 1, 3) for _x_mid in x_mid]  # [B, H, N, D]
-        G = [self.q_global.to(dtype=x_mid[0].dtype).expand(x_mid[0].shape[0], -1, -1, -1)] * len(x) 
-        k = [self.self_k(_x_mid) for _x_mid in x_mid]
-        v = [self.self_v(_x_mid) for _x_mid in x_mid]
+        # Input projection: (B, N, C) -> (B, N, H, D) -> (B, H, N, D)
+        x_mid = [
+            _project_input(
+                _x, self.in_project_x, self.heads, self.dim_head,
+                "B N (H D) -> B N H D",
+            ).permute(0, 2, 1, 3)
+            for _x in x
+        ]
 
-        # FLARE: Self Attention
-        if self.use_te:
-            # Transformer Engine expects (B, S, H, D) format
-            G = [rearrange(_G, "b h s d -> b s h d") for _G in G]
-            k = [rearrange(_k, "b h s d -> b s h d") for _k in k]
-            v = [rearrange(_v, "b h s d -> b s h d") for _v in v]
-            z = [self.attn_fn(_G, _k, _v) for _G, _k, _v in zip(G, k, v)]
-            z = [rearrange(
-                _z, "b s (h d) -> b s h d", h=self.heads, d=self.dim_head
-            ) for _z in z]
-            self_attention = [self.attn_fn(_k, _G, _z) for _k, _G, _z in zip(k, G, z)]
-            self_attention = [rearrange(
-                _self_attention, "b s (h d) -> b h s d", h=self.heads, d=self.dim_head
-            ) for _self_attention in self_attention]
-        else:
-            # Use PyTorch's scaled dot-product attention
-            z = [F.scaled_dot_product_attention(_G, _k, _v, scale=self.scale) for _G, _k, _v in zip(G, k, v)]
-            self_attention = [F.scaled_dot_product_attention(_k, _G, _z, scale=self.scale) for _k, _G, _z in zip(k, G, z)]
+        # FLARE self-attention per input
+        self_attention = [
+            _flare_self_attention(
+                _x_mid, self.q_global, self.self_k, self.self_v, self.scale,
+            )
+            for _x_mid in x_mid
+        ]
 
-        # apply cross-attention with physical states:
+        # Cross-attention with context and state mixing
         if context is not None:
             q = [self.cross_q(_x_mid) for _x_mid in x_mid]
             k = self.cross_k(context)
             v = self.cross_v(context)
-
-            if self.use_te:
-                q = [rearrange(_q, "b h s d -> b s h d") for _q in q]
-                k = rearrange(k, "b h s d -> b s h d")
-                v = rearrange(v, "b h s d -> b s h d")
-                cross_attention = [self.attn_fn(_q, k, v) for _q in q]
-                cross_attention = [rearrange(
-                    _cross_attention, "b s (h d) -> b h s d", h=self.heads, d=self.dim_head
-                ) for _cross_attention in cross_attention]
-            else:
-                cross_attention = [F.scaled_dot_product_attention(_q, k, v, scale=self.scale) for _q in q]
-
-            # Blend self-attention and cross-attention
-            if self.state_mixing_mode == "weighted":
-                mixing_weight = torch.sigmoid(self.state_mixing)
-                outputs = [mixing_weight * _ys + (1 - mixing_weight) * _yc for _ys, _yc in zip(self_attention, cross_attention)]
-            else:
-                outputs = [self.concat_project(torch.cat([_ys, _yc], dim=-1)) for _ys, _yc in zip(self_attention, cross_attention)]
+            cross_attention = [
+                F.scaled_dot_product_attention(_q, k, v, scale=self.scale)
+                for _q in q
+            ]
+            outputs = [
+                _mix_self_and_cross(
+                    sa, ca, self.state_mixing_mode,
+                    state_mixing=getattr(self, "state_mixing", None),
+                    concat_project=getattr(self, "concat_project", None),
+                )
+                for sa, ca in zip(self_attention, cross_attention)
+            ]
         else:
             outputs = self_attention
 
-        outputs = [_y.permute(0, 2, 1, 3) for _y in outputs]  # [B, N, H, D]
+        # Back to token layout: (B, H, N, D) -> (B, N, H, D)
+        outputs = [_y.permute(0, 2, 1, 3) for _y in outputs]
         outputs = [rearrange(_out, "b n h d -> b n (h d)") for _out in outputs]
         outputs = [self.out_linear(_out) for _out in outputs]
         return [self.out_dropout(_out) for _out in outputs]
