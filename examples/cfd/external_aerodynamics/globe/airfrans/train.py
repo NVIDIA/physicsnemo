@@ -62,9 +62,9 @@ from physicsnemo.core import get_physicsnemo_pkg_info
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.experimental.utils import (
-    CompileDiagnosticsCollector,
     disable_autotune_printing,
     prefetch_map,
+    silence_compile_logs_on_non_zero_ranks,
 )
 from physicsnemo.optim import CombinedOptimizer
 from physicsnemo.utils.checkpoint import load_checkpoint, save_checkpoint
@@ -186,6 +186,7 @@ def main(
     dist = DistributedManager()
     device = dist.device
     torch.cuda.set_device(device)
+    silence_compile_logs_on_non_zero_ranks(dist.rank)
 
     if dist.rank == 0:
         logging.basicConfig(level=logging.INFO)
@@ -390,7 +391,6 @@ def main(
     # launch, debug logging and graph break capture are disabled after the
     # first training batch completes.
     is_first_launch = (epoch == 0) and dist.rank == 0
-    _compile_collector: CompileDiagnosticsCollector | None = None
     _globe_logger: logging.Logger | None = None
 
     if is_first_launch:
@@ -398,8 +398,6 @@ def main(
         _globe_logger = logging.getLogger("globe")
         _globe_logger.setLevel(logging.DEBUG)
         torch._logging.set_logs(graph_breaks=True, recompiles=True)
-        _compile_collector = CompileDiagnosticsCollector()
-        _compile_collector.install()
 
     ### [MLflow Setup]
     mlflow_run_ctx: contextlib.AbstractContextManager = contextlib.nullcontext()
@@ -548,14 +546,11 @@ def main(
                 profiler.step()
 
             ### Disable all first-launch diagnostics after the first batch.
-            if _compile_collector is not None and _compile_collector.active:
-                if _globe_logger is not None:
-                    _globe_logger.setLevel(logging.INFO)
+            ### Re-entry guard: globe_logger.level is DEBUG only between
+            ### first-launch setup and the first cleanup pass.
+            if _globe_logger is not None and _globe_logger.level == logging.DEBUG:
+                _globe_logger.setLevel(logging.INFO)
                 torch._logging.set_logs(graph_breaks=False, recompiles=False)
-                _compile_collector.uninstall()
-                logger0.info(
-                    "torch.compile diagnostics:\n" + _compile_collector.summary()
-                )
 
         # [Distributed comms]
         keys = ["loss", *all_batch_loss_components.keys()]

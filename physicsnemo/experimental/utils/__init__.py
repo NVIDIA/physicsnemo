@@ -16,14 +16,14 @@
 
 from physicsnemo.experimental.utils.cached_dataset import CachedPreprocessingDataset
 from physicsnemo.experimental.utils.compile_logging import (
-    CompileDiagnosticsCollector,
     disable_autotune_printing,
+    silence_compile_logs_on_non_zero_ranks,
 )
 from physicsnemo.experimental.utils.prefetch import prefetch_map
 
 __all__ = [
     "CachedPreprocessingDataset",
-    "CompileDiagnosticsCollector",
     "disable_autotune_printing",
     "prefetch_map",
+    "silence_compile_logs_on_non_zero_ranks",
 ]
