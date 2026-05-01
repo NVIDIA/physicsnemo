@@ -17,6 +17,24 @@
 import torch
 
 
+def validate_inputs(points: torch.Tensor, queries: torch.Tensor):
+    """Validate and normalize inputs to (B, N, 3) shape. Returns (points, queries, was_unbatched)."""
+    if points.ndim == 2 and queries.ndim == 2:
+        return points.unsqueeze(0), queries.unsqueeze(0), True
+    elif points.ndim == 3 and queries.ndim == 3:
+        if points.shape[0] != queries.shape[0]:
+            raise ValueError(
+                f"Batch dimensions must match: points has {points.shape[0]}, "
+                f"queries has {queries.shape[0]}"
+            )
+        return points, queries, False
+    else:
+        raise ValueError(
+            f"points and queries must be 2D (N, 3) or 3D (B, N, 3), "
+            f"got {points.ndim}D and {queries.ndim}D"
+        )
+
+
 def format_returns(
     indices: torch.Tensor,
     points: torch.Tensor,

@@ -17,25 +17,7 @@
 
 import torch
 
-from .utils import format_returns
-
-
-def _validate_inputs(points: torch.Tensor, queries: torch.Tensor):
-    """Validate and normalize inputs to (B, N, 3) shape. Returns (points, queries, was_unbatched)."""
-    if points.ndim == 2 and queries.ndim == 2:
-        return points.unsqueeze(0), queries.unsqueeze(0), True
-    elif points.ndim == 3 and queries.ndim == 3:
-        if points.shape[0] != queries.shape[0]:
-            raise ValueError(
-                f"Batch dimensions must match: points has {points.shape[0]}, "
-                f"queries has {queries.shape[0]}"
-            )
-        return points, queries, False
-    else:
-        raise ValueError(
-            f"points and queries must be 2D (N, 3) or 3D (B, N, 3), "
-            f"got {points.ndim}D and {queries.ndim}D"
-        )
+from .utils import format_returns, validate_inputs
 
 
 def _radius_search_dynamic(
@@ -89,7 +71,7 @@ def radius_search_impl(
     This is a brute force implementation that is not memory efficient.
     """
 
-    points, queries, was_unbatched = _validate_inputs(points, queries)
+    points, queries, was_unbatched = validate_inputs(points, queries)
     B = points.shape[0]
 
     if max_points is None:
