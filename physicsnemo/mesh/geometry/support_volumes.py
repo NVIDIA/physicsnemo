@@ -14,24 +14,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Support volume computation for Discrete Exterior Calculus.
+r"""Support volume computation for Discrete Exterior Calculus.
 
 Support volumes are geometric regions associated with primal simplices, formed by
 the convex hull of the simplex and its circumcentric dual cell. These are fundamental
 to DEC formulas for sharp and flat operators.
 
-Key concept (Hirani Def. 2.4.9, line 2034):
-    V_σᵏ = convex hull(σᵏ, ⋆σᵏ)
+Key concept (Hirani 2003, *Discrete Exterior Calculus*, Definition 2.4.9):
 
-The support volumes perfectly tile the mesh: their union is |K| and intersections
-have measure zero.
+.. math::
+
+    V_{\sigma^k} = \operatorname{conv}\bigl(\sigma^k,\, \star \sigma^k\bigr).
+
+The support volumes perfectly tile the mesh: their union is :math:`|K|` and
+intersections have measure zero.
 
 For implementing sharp/flat operators, we need the intersection of support volumes
-with n-simplices (cells). Hirani Prop. 5.5.1 (lines 2345-2390) proves that these
-can be computed efficiently using pyramid volumes.
+with n-simplices (cells). Hirani (2003), *Discrete Exterior Calculus*,
+Proposition 5.5.1 proves that these can be computed efficiently using pyramid
+volumes.
 
-References:
-    Hirani (2003) Section 2.4, Proposition 5.5.1, Figure 5.4
+References
+----------
+Hirani, A. N. (2003). *Discrete Exterior Calculus*. PhD thesis, California
+Institute of Technology. §2.4 (Dual Complex), Proposition 5.5.1, Figure 5.4.
 """
 
 from typing import TYPE_CHECKING
@@ -49,58 +55,87 @@ def compute_edge_support_volume_cell_fractions(
     mesh: "Mesh",
     edges: Int[torch.Tensor, "n_edges 2"],
 ) -> Float[torch.Tensor, "n_edges 2"]:
-    """Compute |⋆edge ∩ cell| / |⋆edge| for all edge-cell pairs.
+    r"""Compute :math:`|{\star}e \cap c| / |{\star}e|` for all edge-cell pairs.
 
-    For each edge and each cell containing it, computes the fraction of the edge's
-    dual 1-cell (and support volume) that lies within that cell.
+    For each edge :math:`e` and each cell :math:`c` containing it, computes
+    the fraction of the edge's dual 1-cell (and support volume) that lies
+    within that cell.
 
-    This is needed for the DPP-flat operator (Hirani Eq. 5.5.3, line 2398):
-        ⟨X♭, edge⟩ = Σ_{cells ⊃ edge} (|⋆edge ∩ cell|/|⋆edge|) × X(cell) · edge⃗
+    This is needed for the DPP-flat operator (Hirani 2003, *Discrete Exterior
+    Calculus*, Equation 5.5.3),
 
-    From Hirani Prop. 5.5.1 (line 2348), this equals:
-        |⋆edge ∩ cell| / |⋆edge| = |V_edge ∩ cell| / |V_edge|
+    .. math::
 
-    And from the pyramid volume analysis (lines 2361-2388), for dimension n:
-        |V_edge ∩ cell| = 2 × (1/(n+1)) × |edge|/2 × |⋆edge ∩ cell|
-        |V_edge| = Σ_{cells ⊃ edge} |V_edge ∩ cell|
+        \langle X^\flat, e \rangle
+            = \sum_{c \supset e}
+                \frac{|{\star}e \cap c|}{|{\star}e|}
+                \, X(c) \cdot \vec{e}.
 
-    So: fraction = |⋆edge ∩ cell| / |⋆edge| = |⋆edge ∩ cell| / Σ|⋆edge ∩ cell|
+    From Hirani (2003), *Discrete Exterior Calculus*, Proposition 5.5.1, this
+    equals
 
-    For 2D triangles, |⋆edge ∩ triangle| is the length of the dual edge segment
-    from edge midpoint to triangle circumcenter.
+    .. math::
+
+        \frac{|{\star}e \cap c|}{|{\star}e|}
+            = \frac{|V_e \cap c|}{|V_e|},
+
+    where :math:`V_e` is the support volume of edge :math:`e`. From the
+    pyramid-volume analysis in the proof of Proposition 5.5.1, in dimension
+    :math:`n`,
+
+    .. math::
+
+        |V_e \cap c|
+            &= 2 \cdot \frac{1}{n + 1} \cdot \frac{|e|}{2}
+                \cdot |{\star}e \cap c|, \\
+        |V_e|
+            &= \sum_{c \supset e} |V_e \cap c|,
+
+    so the fraction becomes
+
+    .. math::
+
+        \frac{|{\star}e \cap c|}
+             {\sum_{c \supset e} |{\star}e \cap c|}.
+
+    For 2D triangles, :math:`|{\star}e \cap c|` is the length of the dual
+    edge segment from the edge midpoint to the triangle circumcenter.
 
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh (must be 2D for now)
-    edges : torch.Tensor
-        Edge connectivity, shape (n_edges, 2)
+        Simplicial mesh (must be 2D for now).
+    edges : Int[torch.Tensor, "n_edges 2"]
+        Edge connectivity.
 
     Returns
     -------
-    torch.Tensor
-        Sparse representation of fractions, shape (n_edges, max_cells_per_edge)
-        where max_cells_per_edge = 2 for manifold meshes without boundary.
+    Float[torch.Tensor, "n_edges 2"]
+        Sparse representation of fractions, shape
+        ``(n_edges, max_cells_per_edge)`` where ``max_cells_per_edge = 2``
+        for manifold meshes without boundary.
 
         For boundary edges (only 1 adjacent cell), the fraction is 1.0.
         For interior edges (2 adjacent cells), fractions sum to 1.0.
 
-    Algorithm (2D specific):
-        For each edge:
-        1. Find all triangles containing it (typically 1 or 2)
-        2. Compute circumcenter of each triangle
-        3. Dual edge length in triangle = distance from edge midpoint to circumcenter
-        4. Total dual edge length = sum over all triangles
-        5. Fraction = (dual length in triangle) / (total dual length)
+    Notes
+    -----
+    Algorithm (2D specific): for each edge,
+
+    1. find all triangles containing it (typically 1 or 2),
+    2. compute the circumcenter of each triangle,
+    3. dual edge length in triangle = distance from edge midpoint to circumcenter,
+    4. total dual edge length = sum over all triangles,
+    5. fraction = (dual length in triangle) / (total dual length).
 
     Examples
     --------
-        >>> import torch
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> edges = torch.tensor([[0, 1], [1, 2], [0, 2], [1, 3], [2, 3]])
-        >>> fractions = compute_edge_support_volume_cell_fractions(mesh, edges)
-        >>> # fractions[i, j] = fraction of edge i's support volume in its j-th cell
+    >>> import torch
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> edges = torch.tensor([[0, 1], [1, 2], [0, 2], [1, 3], [2, 3]])
+    >>> fractions = compute_edge_support_volume_cell_fractions(mesh, edges)
+    >>> # fractions[i, j] = fraction of edge i's support volume in its j-th cell
     """
     if mesh.n_manifold_dims != 2:
         raise NotImplementedError(
@@ -218,26 +253,29 @@ def compute_edge_support_volume_cell_fractions(
 def compute_vertex_support_volume_cell_fractions(
     mesh: "Mesh",
 ) -> tuple[Float[torch.Tensor, " n_pairs"], Int[torch.Tensor, "n_pairs 2"]]:
-    r"""Compute |⋆vertex ∩ cell| / |⋆vertex| for all vertex-cell pairs.
+    r"""Compute :math:`|{\star}v \cap c| / |{\star}v|` for all vertex-cell pairs.
 
-    For each vertex v and each cell containing it, computes the fraction of v's
-    total dual 0-cell volume (Voronoi region) that lies within that cell. These
-    fractions sum to 1.0 for each vertex by construction, since
-    :math:`|⋆v| = \sum_{\text{cells } c \ni v} |⋆v \cap c|`.
+    For each vertex :math:`v` and each cell :math:`c` containing it, computes
+    the fraction of :math:`v`'s total dual 0-cell volume (Voronoi region)
+    that lies within :math:`c`. These fractions sum to 1.0 for each vertex
+    by construction, since
+    :math:`|{\star}v| = \sum_{c \ni v} |{\star}v \cap c|`.
 
-    This normalization is required by the PP-sharp operator so that it exactly
-    reproduces constant gradients:
+    This normalization is required by the PP-sharp (primal-primal sharp)
+    operator so that it exactly reproduces constant gradients,
 
     .. math::
 
-        \alpha^\sharp(v) = \sum_{\text{edges } [v,\sigma^0]}
-            \langle \alpha, [v,\sigma^0] \rangle
-            \sum_{\text{cells } \sigma^n \supset \text{edge}}
-            \frac{|⋆v \cap \sigma^n|}{|⋆v|}
-            \nabla\varphi_{\sigma^0, \sigma^n}
+        \alpha^\sharp(v) = \sum_{[v, \sigma^0]}
+            \langle \alpha, [v, \sigma^0] \rangle
+            \sum_{\sigma^n \supset [v, \sigma^0]}
+            \frac{|{\star}v \cap \sigma^n|}{|{\star}v|}\,
+            \nabla \varphi_{\sigma^0,\, \sigma^n},
 
-    For 2D triangles, :math:`|⋆v \cap \text{cell}|` is the area of the Voronoi
-    region within the triangle, computed using the Meyer mixed area formula
+    where the outer sum is over edges incident to :math:`v` and the inner
+    sum is over cells :math:`\sigma^n` containing each edge. For 2D
+    triangles, :math:`|{\star}v \cap c|` is the area of the Voronoi region
+    within the triangle, computed using the Meyer mixed area formula
     (Eq. 7 for acute triangles, Fig. 4 for obtuse).
 
     Parameters
@@ -247,20 +285,21 @@ def compute_vertex_support_volume_cell_fractions(
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor]
+    tuple[Float[torch.Tensor, " n_pairs"], Int[torch.Tensor, "n_pairs 2"]]
         Tuple of ``(fractions, cell_vertex_pairs)``:
 
-        - ``fractions``: shape ``(n_pairs,)`` - the weight
-          :math:`|⋆v \cap \text{cell}| / |⋆v|`
-        - ``cell_vertex_pairs``: shape ``(n_pairs, 2)`` -
-          ``[cell_idx, local_vertex_idx]``
+        - ``fractions``: shape ``(n_pairs,)``, the weight
+          :math:`|{\star}v \cap c| / |{\star}v|` for each (vertex, cell) pair.
+        - ``cell_vertex_pairs``: shape ``(n_pairs, 2)``,
+          ``[cell_idx, local_vertex_idx]``.
 
         Fractions are guaranteed to sum to 1.0 for each vertex.
 
     Notes
     -----
     For non-2D manifolds, uses the barycentric approximation where each
-    vertex's Voronoi region in a cell is ``|cell| / n_vertices_per_cell``.
+    vertex's Voronoi region in a cell is
+    ``cell_volume / n_vertices_per_cell``.
 
     Returns a flat array of all (cell, vertex) pairs to avoid a dense tensor.
     """
@@ -325,28 +364,33 @@ def compute_dual_edge_volumes_in_cells(
     Float[torch.Tensor, " n_edge_cell_pairs"],
     Int[torch.Tensor, "n_edge_cell_pairs 2"],
 ]:
-    """Compute |⋆edge ∩ cell| for all edge-cell adjacencies.
+    r"""Compute :math:`|{\star}e \cap c|` for all edge-cell adjacencies.
 
-    Returns the actual volume (not fraction) of dual 1-cell within each cell.
-    This is the |⋆edge ∩ cell| term from Hirani Eq. 5.5.3.
+    Returns the actual volume (not fraction) of the dual 1-cell within each
+    cell, where :math:`e` is an edge and :math:`c` is a cell containing it.
+    This is the :math:`|{\star}e \cap c|` term from Hirani (2003),
+    *Discrete Exterior Calculus*, Eq. 5.5.3.
 
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh (2D for now)
-    edges : torch.Tensor
-        Edge connectivity, shape (n_edges, 2)
+        Simplicial mesh (2D for now).
+    edges : Int[torch.Tensor, "n_edges 2"]
+        Edge connectivity.
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor]
-        Tuple of (dual_volumes_in_cells, edge_cell_mapping):
-        - dual_volumes_in_cells: shape (n_edge_cell_pairs,)
-        - edge_cell_mapping: shape (n_edge_cell_pairs, 2) - [edge_idx, cell_idx]
+    tuple[Float[torch.Tensor, " n_edge_cell_pairs"], Int[torch.Tensor, "n_edge_cell_pairs 2"]]
+        Tuple of ``(dual_volumes_in_cells, edge_cell_mapping)``:
 
-    Algorithm (2D):
-        For each edge-cell pair:
-        |⋆edge ∩ cell| = distance from edge midpoint to cell circumcenter
+        - ``dual_volumes_in_cells``: shape ``(n_edge_cell_pairs,)``.
+        - ``edge_cell_mapping``: shape ``(n_edge_cell_pairs, 2)``,
+          ``[edge_idx, cell_idx]``.
+
+    Notes
+    -----
+    Algorithm (2D): for each edge-cell pair, :math:`|{\star}e \cap c|` equals
+    the distance from the edge midpoint to the cell circumcenter.
     """
     if mesh.n_manifold_dims != 2:
         raise NotImplementedError(

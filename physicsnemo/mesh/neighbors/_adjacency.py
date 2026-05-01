@@ -33,22 +33,25 @@ class Adjacency:
     arrays: offsets and indices. This is a standard format for sparse graph data
     structures and enables GPU-compatible operations on ragged data.
 
-    Attributes:
-        offsets: Indices into the indices array marking the start of each neighbor list.
-            Shape (n_sources + 1,), dtype int64. The i-th source's neighbors are
-            indices[offsets[i]:offsets[i+1]].
-        indices: Flattened array of all neighbor indices.
-            Shape (total_neighbors,), dtype int64.
+    Attributes
+    ----------
+    offsets : torch.Tensor
+        Indices into the indices array marking the start of each neighbor list.
+        Shape ``(n_sources + 1,)``, dtype int64. The i-th source's neighbors are
+        ``indices[offsets[i]:offsets[i+1]]``.
+    indices : torch.Tensor
+        Flattened array of all neighbor indices.
+        Shape ``(total_neighbors,)``, dtype int64.
 
     Examples
     --------
-        >>> # Represent [[0,1,2], [3,4], [5], [6,7,8]]
-        >>> adj = Adjacency(
-        ...     offsets=torch.tensor([0, 3, 5, 6, 9]),
-        ...     indices=torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8]),
-        ... )
-        >>> adj.to_list()
-        [[0, 1, 2], [3, 4], [5], [6, 7, 8]]
+    >>> # Represent [[0,1,2], [3,4], [5], [6,7,8]]
+    >>> adj = Adjacency(
+    ...     offsets=torch.tensor([0, 3, 5, 6, 9]),
+    ...     indices=torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8]),
+    ... )
+    >>> adj.to_list()
+    [[0, 1, 2], [3, 4], [5], [6, 7, 8]]
 
         >>> # Empty neighbor list for source 2
         >>> adj = Adjacency(
@@ -59,10 +62,11 @@ class Adjacency:
         [[10, 11], [], [12, 13]]
     """
 
-    offsets: torch.Tensor  # shape: (n_sources + 1,), dtype: int64
-    indices: torch.Tensor  # shape: (total_neighbors,), dtype: int64
+    # n_sources_plus_one == n_sources + 1; the trailing offset is len(indices).
+    offsets: Int[torch.Tensor, " n_sources_plus_one"]
+    indices: Int[torch.Tensor, " n_total_neighbors"]
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not torch.compiler.is_compiling():
             ### Validate offsets is non-empty
             # Offsets must have length (n_sources + 1), so minimum length is 1 (for n_sources=0)
@@ -106,12 +110,12 @@ class Adjacency:
 
         Examples
         --------
-            >>> adj = Adjacency(
-            ...     offsets=torch.tensor([0, 3, 3, 5]),
-            ...     indices=torch.tensor([1, 2, 0, 4, 3]),
-            ... )
-            >>> adj.to_list()
-            [[1, 2, 0], [], [4, 3]]
+        >>> adj = Adjacency(
+        ...     offsets=torch.tensor([0, 3, 3, 5]),
+        ...     indices=torch.tensor([1, 2, 0, 4, 3]),
+        ... )
+        >>> adj.to_list()
+        [[1, 2, 0], [], [4, 3]]
         """
         ### Convert to CPU numpy for Python list operations
         offsets_np = self.offsets.cpu().numpy()
@@ -177,15 +181,15 @@ class Adjacency:
 
         Examples
         --------
-            >>> adj = Adjacency(
-            ...     offsets=torch.tensor([0, 2, 4, 5]),
-            ...     indices=torch.tensor([10, 11, 20, 21, 30]),
-            ... )
-            >>> sources, targets = adj.expand_to_pairs()
-            >>> sources.tolist()
-            [0, 0, 1, 1, 2]
-            >>> targets.tolist()
-            [10, 11, 20, 21, 30]
+        >>> adj = Adjacency(
+        ...     offsets=torch.tensor([0, 2, 4, 5]),
+        ...     indices=torch.tensor([10, 11, 20, 21, 30]),
+        ... )
+        >>> sources, targets = adj.expand_to_pairs()
+        >>> sources.tolist()
+        [0, 0, 1, 1, 2]
+        >>> targets.tolist()
+        [10, 11, 20, 21, 30]
         """
         device = self.offsets.device
 
@@ -226,14 +230,14 @@ class Adjacency:
 
         Examples
         --------
-            >>> adj = Adjacency(
-            ...     offsets=torch.tensor([0, 5, 8, 10]),
-            ...     indices=torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
-            ... )
-            >>> adj.to_list()
-            [[0, 1, 2, 3, 4], [5, 6, 7], [8, 9]]
-            >>> adj.truncate_per_source(2).to_list()
-            [[0, 1], [5, 6], [8, 9]]
+        >>> adj = Adjacency(
+        ...     offsets=torch.tensor([0, 5, 8, 10]),
+        ...     indices=torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+        ... )
+        >>> adj.to_list()
+        [[0, 1, 2, 3, 4], [5, 6, 7], [8, 9]]
+        >>> adj.truncate_per_source(2).to_list()
+        [[0, 1], [5, 6], [8, 9]]
         """
         if max_count is None:
             return self
@@ -302,17 +306,17 @@ def build_adjacency_from_pairs(
     Returns
     -------
     Adjacency
-        Adjacency object where adjacency.to_list()[i] contains all targets
-        connected from source i. Sources with no outgoing edges have empty lists.
+        Adjacency object where ``adjacency.to_list()[i]`` contains all targets
+        connected from source ``i``. Sources with no outgoing edges have empty lists.
 
     Examples
     --------
-        >>> # Create adjacency: 0→[1,2], 1→[3], 2→[], 3→[0]
-        >>> sources = torch.tensor([0, 0, 1, 3])
-        >>> targets = torch.tensor([1, 2, 3, 0])
-        >>> adj = build_adjacency_from_pairs(sources, targets, n_sources=4)
-        >>> adj.to_list()
-        [[1, 2], [3], [], [0]]
+    >>> # Create adjacency: 0→[1,2], 1→[3], 2→[], 3→[0]
+    >>> sources = torch.tensor([0, 0, 1, 3])
+    >>> targets = torch.tensor([1, 2, 3, 0])
+    >>> adj = build_adjacency_from_pairs(sources, targets, n_sources=4)
+    >>> adj.to_list()
+    [[1, 2], [3], [], [0]]
     """
     device = source_indices.device
 

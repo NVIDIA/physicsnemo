@@ -57,10 +57,10 @@ def compute_angles_at_vertices(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> triangle_mesh = two_triangles_2d.load()
-        >>> angles = compute_angles_at_vertices(triangle_mesh)
-        >>> # Angles are computed at each vertex
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> triangle_mesh = two_triangles_2d.load()
+    >>> angles = compute_angles_at_vertices(triangle_mesh)
+    >>> # Angles are computed at each vertex
     """
     if mesh.n_manifold_dims >= 2:
         return compute_vertex_angle_sums(mesh)

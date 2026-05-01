@@ -250,6 +250,7 @@ physicsnemo/models/vfgn/ @mnabian
 
 # Experimental deliberately has no codeowner
 physicsnemo/experimental/
+physicsnemo/experimental/datapipes/healda/ @pzharrington
 
 # ==============================================================================
 # EXAMPLES - Active Learning

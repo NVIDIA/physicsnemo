@@ -51,21 +51,29 @@ def compute_point_gradient_lsq(
     weight_power: float = 2.0,
     min_neighbors: int = 0,
 ) -> Float[torch.Tensor, "n_points n_spatial_dims ..."]:
-    """Compute gradient at vertices using weighted least-squares reconstruction.
+    r"""Compute gradient at vertices using weighted least-squares reconstruction.
 
-    For each vertex, solves:
-        min_{∇φ} Σ_neighbors w_i ||∇φ·(x_i - x_0) - (φ_i - φ_0)||²
+    For each vertex with center :math:`x_0` and value :math:`\varphi_0`, and
+    a neighborhood :math:`N = \{x_1, \ldots, x_k\}` with values
+    :math:`\varphi_1, \ldots, \varphi_k`, solves
 
-    Where weights w_i = 1/||x_i - x_0||^α (typically α=2).
+    .. math::
+
+        \min_{\nabla \varphi} \sum_{i = 1}^{k}
+            w_i \, \bigl\| \nabla \varphi \cdot (x_i - x_0)
+                          - (\varphi_i - \varphi_0) \bigr\|^2,
+
+    with weights :math:`w_i = 1 / \|x_i - x_0\|^{\alpha}` (typically
+    :math:`\alpha = 2`).
 
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh
-    point_values : torch.Tensor
-        Values at vertices, shape (n_points,) or (n_points, ...)
+        Simplicial mesh.
+    point_values : Float[torch.Tensor, "n_points ..."]
+        Values at vertices.
     weight_power : float
-        Exponent for inverse distance weighting (default: 2.0)
+        Exponent :math:`\alpha` for inverse-distance weighting (default 2.0).
     min_neighbors : int
         Minimum neighbors required for gradient computation. Points with
         fewer neighbors get zero gradients. The default of 0 means all
@@ -75,22 +83,29 @@ def compute_point_gradient_lsq(
 
     Returns
     -------
-    torch.Tensor
-        Gradients at vertices, shape (n_points, n_spatial_dims) for scalars,
-        or (n_points, n_spatial_dims, ...) for tensor fields
+    Float[torch.Tensor, "n_points n_spatial_dims ..."]
+        Gradients at vertices, shape ``(n_points, n_spatial_dims, ...)``.
 
     Notes
     -----
-    Algorithm:
-        Solve weighted least-squares: (A^T W A) ∇φ = A^T W b
-        where:
-            A = [x₁-x₀, x₂-x₀, ...]^T  (n_neighbors × n_spatial_dims)
-            b = [φ₁-φ₀, φ₂-φ₀, ...]^T  (n_neighbors,)
-            W = diag([w₁, w₂, ...])     (n_neighbors × n_neighbors)
+    Solves the weighted least-squares system
+    :math:`(A^\top W A) \, \nabla \varphi = A^\top W b`, where, with
+    :math:`k` neighbors and :math:`d` spatial dimensions,
 
-    Implementation:
-        Fully vectorized using batched operations. Groups points by neighbor count
-        and processes each group in parallel to handle ragged neighbor structure.
+    .. math::
+
+        A &= [x_1 - x_0, x_2 - x_0, \ldots, x_k - x_0]^\top
+            \quad (k \times d), \\
+        b &= [\varphi_1 - \varphi_0, \varphi_2 - \varphi_0, \ldots,
+              \varphi_k - \varphi_0]^\top
+            \quad (k,), \\
+        W &= \operatorname{diag}(w_1, w_2, \ldots, w_k)
+            \quad (k \times k).
+
+    Here ``k`` is the number of neighbors of the point and ``d`` equals
+    ``n_spatial_dims``. Fully vectorized using batched operations. Points are
+    grouped by neighbor count and processed in parallel to handle the ragged
+    neighbor structure.
     """
     ### Get point-to-point adjacency
     adjacency = mesh.get_point_to_points_adjacency()
@@ -117,30 +132,28 @@ def compute_cell_gradient_lsq(
     cell_values: Float[torch.Tensor, "n_cells ..."],
     weight_power: float = 2.0,
 ) -> Float[torch.Tensor, "n_cells n_spatial_dims ..."]:
-    """Compute gradient at cells using weighted least-squares reconstruction.
+    r"""Compute gradient at cells using weighted least-squares reconstruction.
 
-    Uses cell-to-cell adjacency to build LSQ system around each cell centroid.
+    Uses cell-to-cell adjacency to build a LSQ system around each cell centroid.
 
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh
-    cell_values : torch.Tensor
-        Values at cells, shape (n_cells,) or (n_cells, ...)
+        Simplicial mesh.
+    cell_values : Float[torch.Tensor, "n_cells ..."]
+        Values at cells.
     weight_power : float
-        Exponent for inverse distance weighting (default: 2.0)
+        Exponent for inverse-distance weighting (default 2.0).
 
     Returns
     -------
-    torch.Tensor
-        Gradients at cells, shape (n_cells, n_spatial_dims) for scalars,
-        or (n_cells, n_spatial_dims, ...) for tensor fields
+    Float[torch.Tensor, "n_cells n_spatial_dims ..."]
+        Gradients at cells, shape ``(n_cells, n_spatial_dims, ...)``.
 
     Notes
     -----
-    Implementation:
-        Fully vectorized using batched operations. Groups cells by neighbor count
-        and processes each group in parallel.
+    Fully vectorized using batched operations. Cells are grouped by neighbor
+    count and processed in parallel.
     """
     ### Get cell-to-cell adjacency
     adjacency = mesh.get_cell_to_cells_adjacency(adjacency_codimension=1)

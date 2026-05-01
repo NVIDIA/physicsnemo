@@ -53,6 +53,7 @@ def subdivide_linear(mesh: "Mesh") -> "Mesh":
     and new vertices are placed exactly at edge midpoints.
 
     Properties:
+
     - Preserves manifold dimension and spatial dimension
     - Increases mesh resolution uniformly
     - Point data is interpolated to new vertices (averaged from endpoints)
@@ -68,16 +69,17 @@ def subdivide_linear(mesh: "Mesh") -> "Mesh":
     -------
     Mesh
         Subdivided mesh with:
+
         - n_points = original_n_points + n_edges
         - n_cells = original_n_cells * 2^n_manifold_dims
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> # Triangle mesh: 2 triangles -> 8 triangles
-        >>> mesh = two_triangles_2d.load()
-        >>> subdivided = subdivide_linear(mesh)
-        >>> assert subdivided.n_cells == mesh.n_cells * 4  # 2^2 for 2D
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> # Triangle mesh: 2 triangles -> 8 triangles
+    >>> mesh = two_triangles_2d.load()
+    >>> subdivided = subdivide_linear(mesh)
+    >>> assert subdivided.n_cells == mesh.n_cells * 4  # 2^2 for 2D
     """
     from physicsnemo.mesh.mesh import Mesh
 

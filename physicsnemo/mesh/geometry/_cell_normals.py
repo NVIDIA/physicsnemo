@@ -46,27 +46,29 @@ def compute_cell_normals(
     The caller must ensure the codimension-1 constraint:
     ``n_manifold_dims == n_spatial_dims - 1``.
 
-    Args:
-        relative_vectors: Edge vectors of shape
-            ``(n_cells, n_manifold_dims, n_spatial_dims)``.
-            Row *i* is the vector from vertex 0 to vertex *i+1* of each
-            simplex. Must satisfy ``n_manifold_dims == n_spatial_dims - 1``.
+    Parameters
+    ----------
+    relative_vectors : Float[torch.Tensor, "n_cells n_manifold_dims n_spatial_dims"]
+        Edge vectors. Row ``i`` is the vector from vertex 0 to vertex ``i+1``
+        of each simplex. Must satisfy ``n_manifold_dims == n_spatial_dims - 1``.
 
-    Returns:
-        Tensor of shape ``(n_cells, n_spatial_dims)`` containing unit normal
-        vectors. For degenerate cells (zero-area), the normal is a zero
-        vector (from ``F.normalize``'s default behavior).
+    Returns
+    -------
+    Float[torch.Tensor, "n_cells n_spatial_dims"]
+        Unit normal vectors. For degenerate cells (zero-area), the normal is
+        a zero vector (from ``F.normalize``'s default behavior).
 
-    Examples:
-        >>> # Edge in 2D: normal is 90-degree CCW rotation
-        >>> vecs = torch.tensor([[[1.0, 0.0]]])
-        >>> compute_cell_normals(vecs)
-        tensor([[-0., 1.]])
+    Examples
+    --------
+    >>> # Edge in 2D: normal is 90-degree CCW rotation
+    >>> vecs = torch.tensor([[[1.0, 0.0]]])
+    >>> compute_cell_normals(vecs)
+    tensor([[-0., 1.]])
 
-        >>> # Triangle in XY-plane: normal is +Z
-        >>> vecs = torch.tensor([[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]])
-        >>> compute_cell_normals(vecs)
-        tensor([[0., 0., 1.]])
+    >>> # Triangle in XY-plane: normal is +Z
+    >>> vecs = torch.tensor([[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]])
+    >>> compute_cell_normals(vecs)
+    tensor([[0., 0., 1.]])
     """
     n_spatial_dims = relative_vectors.shape[-1]
 
@@ -104,10 +106,15 @@ def _normals_3d(
 def _normals_general(
     relative_vectors: Float[torch.Tensor, "n_cells n_manifold_dims n_spatial_dims"],
 ) -> Float[torch.Tensor, "n_cells n_spatial_dims"]:
-    """Normals in d >= 4 via signed minor determinants (Hodge star).
+    r"""Normals in :math:`d \ge 4` via signed minor determinants (Hodge star).
 
-    For (n-1) vectors in R^n (rows of E), the normal components are:
-        n_i = (-1)^(n-1+i) * det(E with column i removed)
+    For :math:`n - 1` vectors in :math:`\mathbb{R}^n` (rows of :math:`E`),
+    the normal components are:
+
+    .. math::
+        n_i = (-1)^{n - 1 + i} \det(E_{\setminus i})
+
+    where :math:`E_{\setminus i}` is :math:`E` with column ``i`` removed.
 
     Disables ``torch.autocast`` because ``torch.det`` dispatches to cuBLAS
     LU factorization which does not support reduced-precision dtypes.

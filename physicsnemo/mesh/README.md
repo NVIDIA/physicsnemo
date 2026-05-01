@@ -30,7 +30,7 @@ This means you can work with:
 - 2D triangles in 3D space (surface meshes for graphics/CFD)
 - 3D tetrahedra in 3D space (volume meshes for FEM/CFD)
 - 1D edges in 3D space (curve meshes for path planning)
-- Any other n-dimensional manifold in m-dimensional space (where n ≤ m)
+- Any other $n$-dimensional manifold in $m$-dimensional space (where $n \leq m$)
 
 all with the same API. PhysicsNeMo-Mesh's API design takes heavy inspiration from
 [PyVista](https://pyvista.org/), but it is designed to be a) end-to-end
@@ -85,7 +85,7 @@ performance benefits.
 **Mesh Operations:**
 
 - **Subdivision**: Linear, [Loop](https://en.wikipedia.org/wiki/Loop_subdivision_surface)
-  (C²), and [Butterfly](https://en.wikipedia.org/wiki/Butterfly_subdivision_surface)
+  ($C^2$), and [Butterfly](https://en.wikipedia.org/wiki/Butterfly_subdivision_surface)
   (interpolating) schemes
 - **Smoothing**: [Laplacian smoothing](https://en.wikipedia.org/wiki/Laplacian_smoothing)
   with feature preservation
@@ -242,7 +242,7 @@ mesh_with_grad = mesh.compute_point_derivatives(keys="temperature", method="lsq"
 grad_T = mesh_with_grad.point_data["temperature_gradient"]
 
 print(f"Gradient shape: {grad_T.shape}")  # (n_points, n_spatial_dims)
-print(f"∇T = {grad_T[0]}")  # tensor([1.0000, 2.0000])
+print(f"grad T = {grad_T[0]}")  # tensor([1.0000, 2.0000])
 ```
 
 ### Moving to GPU
@@ -295,7 +295,7 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | Mean curvature | ✅ | [Cotangent Laplacian](https://en.wikipedia.org/wiki/Discrete_Laplace_operator#Mesh_Laplacians) |
 | **Subdivision** | | |
 | Linear | ✅ | Midpoint subdivision |
-| Loop | ✅ | C² smooth, approximating |
+| Loop | ✅ | $C^2$ smooth, approximating |
 | Butterfly | ✅ | Interpolating |
 | **Smoothing** | | |
 | Laplacian smoothing | ✅ | |

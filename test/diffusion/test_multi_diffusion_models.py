@@ -24,6 +24,10 @@ from tensordict import TensorDict
 
 from physicsnemo.core import Module
 from physicsnemo.diffusion.multi_diffusion import MultiDiffusionModel2D
+from physicsnemo.diffusion.multi_diffusion.patching import (
+    GridPatching2D,
+    RandomPatching2D,
+)
 from physicsnemo.diffusion.preconditioners import EDMPreconditioner
 
 from .conftest import GLOBAL_SEED
@@ -245,7 +249,7 @@ class TestConstructor:
     def test_attributes(self, config_name):
         md = _create_md_model(config_name)
         assert md.global_spatial_shape == (IMG_H, IMG_W)
-        assert md._patching_type is None
+        assert md._patching is None
         assert isinstance(md.model, Module)
 
     def test_positional_embedding_sinusoidal(self):
@@ -272,13 +276,13 @@ class TestConstructor:
     def test_set_random_patching(self):
         md = _create_md_model("uncond")
         md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
-        assert md._patching_type == "random"
+        assert isinstance(md._patching, RandomPatching2D)
         assert md._patching.patch_num == PATCH_NUM
 
     def test_set_grid_patching(self):
         md = _create_md_model("uncond")
         md.set_grid_patching(patch_shape=PATCH_SHAPE, overlap_pix=2, fuse=True)
-        assert md._patching_type == "grid"
+        assert isinstance(md._patching, GridPatching2D)
         assert md._fuse is True
 
 

@@ -14,31 +14,38 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Dual mesh (circumcentric/Voronoi) volume computation and DEC dual operators.
+r"""Dual mesh (circumcentric/Voronoi) volume computation and DEC dual operators.
 
 This module provides the unified implementation of dual cell volumes (Voronoi regions),
 circumcenters, and cotangent weights for n-dimensional simplicial meshes. These are
 fundamental to both:
+
 - Discrete Exterior Calculus (DEC) operators (Hodge star, Laplacian, etc.)
 - Discrete differential geometry (curvature computations)
 
-Dual 0-cell volumes follow Meyer et al. (2003) for 2D manifolds, using the mixed
+Dual 0-cell volumes follow Meyer et al. (2003), *Discrete Differential-Geometry
+Operators for Triangulated 2-Manifolds*, for 2D manifolds, using the mixed
 Voronoi area approach that handles both acute and obtuse triangles correctly.
 For higher dimensions, barycentric approximation is used as rigorous circumcentric
-dual volumes require well-centered meshes (Desbrun et al. 2005, Hirani 2003).
+dual volumes require well-centered meshes (Desbrun et al. 2005, *Discrete Exterior
+Calculus*; Hirani 2003, *Discrete Exterior Calculus* (PhD thesis)).
 
 Circumcenters and cotangent weights are computed using the perpendicular bisector
 method and FEM stiffness matrix approach, respectively, following Desbrun et al.
-"Discrete Exterior Calculus", Section 2.
+(2005), *Discrete Exterior Calculus*, §3 (Primal Simplicial Complex and Dual
+Cell Complex) and §9 (Divergence and Laplace–Beltrami).
 
-References:
-    Meyer, M., Desbrun, M., Schröder, P., & Barr, A. H. (2003).
-    "Discrete Differential-Geometry Operators for Triangulated 2-Manifolds". VisMath.
+References
+----------
+Meyer, M., Desbrun, M., Schröder, P., & Barr, A. H. (2003).
+*Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*.
+In: Visualization and Mathematics III, pp. 35-57.
 
-    Desbrun, M., Hirani, A. N., Leok, M., & Marsden, J. E. (2005).
-    "Discrete Exterior Calculus". arXiv:math/0508341.
+Desbrun, M., Hirani, A. N., Leok, M., & Marsden, J. E. (2005).
+*Discrete Exterior Calculus*. arXiv:math/0508341v2.
 
-    Hirani, A. N. (2003). "Discrete Exterior Calculus". PhD thesis, Caltech.
+Hirani, A. N. (2003). *Discrete Exterior Calculus*. PhD thesis, California
+Institute of Technology.
 """
 
 from typing import TYPE_CHECKING
@@ -76,18 +83,18 @@ def _scatter_add_cell_contributions_to_vertices(
 
     Examples
     --------
-        >>> import torch
-        >>> dual_volumes = torch.zeros(4)
-        >>> cells = torch.tensor([[0, 1, 2], [1, 2, 3]])
-        >>> # Uniform: 1/3 of each triangle area to every vertex
-        >>> _scatter_add_cell_contributions_to_vertices(
-        ...     dual_volumes, cells, torch.tensor([0.5, 0.5]) / 3.0
-        ... )
-        >>> # Per-vertex: different contribution per corner
-        >>> dual_volumes2 = torch.zeros(4)
-        >>> _scatter_add_cell_contributions_to_vertices(
-        ...     dual_volumes2, cells, torch.tensor([[0.1, 0.2, 0.2], [0.15, 0.15, 0.2]])
-        ... )
+    >>> import torch
+    >>> dual_volumes = torch.zeros(4)
+    >>> cells = torch.tensor([[0, 1, 2], [1, 2, 3]])
+    >>> # Uniform: 1/3 of each triangle area to every vertex
+    >>> _scatter_add_cell_contributions_to_vertices(
+    ...     dual_volumes, cells, torch.tensor([0.5, 0.5]) / 3.0
+    ... )
+    >>> # Per-vertex: different contribution per corner
+    >>> dual_volumes2 = torch.zeros(4)
+    >>> _scatter_add_cell_contributions_to_vertices(
+    ...     dual_volumes2, cells, torch.tensor([[0.1, 0.2, 0.2], [0.15, 0.15, 0.2]])
+    ... )
     """
     if contributions.ndim not in (1, 2):
         raise ValueError(
@@ -103,35 +110,35 @@ def _compute_meyer_mixed_voronoi_areas(
     cell_vertices: Float[torch.Tensor, "n_cells 3 n_spatial_dims"],
     cell_areas: Float[torch.Tensor, " n_cells"],
 ) -> Float[torch.Tensor, " n_cells_times_3"]:
-    """Compute per-(cell, local_vertex) mixed Voronoi areas (Meyer et al. 2003).
+    r"""Compute per-(cell, local_vertex) mixed Voronoi areas.
 
-    This implements the branchless mixed Voronoi area formula for triangular meshes,
-    handling both acute and obtuse triangles correctly. For acute triangles, uses the
-    circumcentric Voronoi formula (Meyer Eq. 7). For obtuse triangles, uses the
-    mixed area subdivision (Meyer Fig. 4).
+    Implements the branchless mixed Voronoi area formula of Meyer et al. (2003),
+    *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*, for
+    triangular meshes, handling both acute and obtuse triangles correctly. For
+    acute triangles, uses the circumcentric Voronoi formula (Meyer et al. 2003,
+    Eq. 7). For obtuse triangles, uses the mixed area subdivision (Meyer et al.
+    2003, Fig. 4).
 
     Parameters
     ----------
-    cell_vertices : torch.Tensor
+    cell_vertices : Float[torch.Tensor, "n_cells 3 n_spatial_dims"]
         Vertex positions for each triangle cell.
-        Shape: (n_cells, 3, n_spatial_dims)
-    cell_areas : torch.Tensor
+    cell_areas : Float[torch.Tensor, " n_cells"]
         Area of each triangle cell.
-        Shape: (n_cells,)
 
     Returns
     -------
-    torch.Tensor
-        Per-(cell, local_vertex) Voronoi areas, shape (n_cells * 3,).
-        Ordered as [cell0_v0, cell0_v1, cell0_v2, cell1_v0, ...], i.e.
-        the flattened (n_cells, 3) tensor where column j corresponds to
-        local vertex j.
+    Float[torch.Tensor, " n_cells_times_3"]
+        Per-(cell, local_vertex) Voronoi areas, shape ``(n_cells * 3,)``.
+        Ordered as ``[cell0_v0, cell0_v1, cell0_v2, cell1_v0, ...]``, i.e.
+        the flattened ``(n_cells, 3)`` tensor where column ``j`` corresponds
+        to local vertex ``j``.
 
     References
     ----------
     Meyer, M., Desbrun, M., Schröder, P., & Barr, A. H. (2003).
-    "Discrete Differential-Geometry Operators for Triangulated 2-Manifolds".
-    Section 3.3 (Equation 7) and Section 3.4 (Figure 4).
+    *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*.
+    §3.3 (Equation 7) and §3.4 (Figure 4).
     """
     from physicsnemo.mesh.geometry._angles import compute_triangle_angles
 
@@ -231,83 +238,114 @@ def _compute_meyer_mixed_voronoi_areas(
 
 
 def compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
-    """Compute circumcentric dual 0-cell volumes (Voronoi regions) at mesh vertices.
+    r"""Compute circumcentric dual 0-cell volumes (Voronoi regions) at mesh vertices.
 
     This is the unified, mathematically rigorous implementation used by both DEC
     operators and curvature computations. It replaces the previous buggy
-    `compute_dual_volumes_0()` in `calculus/_circumcentric_dual.py` which failed
+    ``compute_dual_volumes_0()`` in ``calculus/_circumcentric_dual.py`` which failed
     on obtuse triangles (giving up to 513% conservation error).
 
     The dual 0-cell (also called Voronoi cell or circumcentric dual) of a vertex
     is the region of points closer to that vertex than to any other. In DEC, these
     volumes appear in the Hodge star operator and normalization of the Laplacian.
 
-    **Note**: In the curvature/differential geometry literature, these are often
-    called "Voronoi areas" (for 2D) or "Voronoi volumes". In DEC literature, they
-    are called "dual 0-cell volumes" (denoted |⋆v|). These are identical concepts.
+    .. note::
+
+        In the curvature/differential geometry literature, these are often
+        called "Voronoi areas" (for 2D) or "Voronoi volumes". In DEC literature,
+        they are called "dual 0-cell volumes" (denoted :math:`|{\star}v|`). These
+        are identical concepts.
 
     Dimension-specific algorithms:
 
-    **1D manifolds (edges)**:
-        Each vertex receives half the length of each incident edge.
-        Formula: V(v) = Σ_{edges ∋ v} |edge|/2
+    **1D manifolds (edges)**: each vertex receives half the length of each
+    incident edge,
 
-    **2D manifolds (triangles)**:
-        Uses Meyer et al. (2003) mixed area approach:
-        - **Acute triangles** (all angles ≤ π/2): Circumcentric Voronoi formula (Eq. 7)
-          V(v) = (1/8) Σ (||e_i||² cot(α_i) + ||e_j||² cot(α_j))
-          where e_i, e_j are edges from v, α_i, α_j are opposite angles
+    .. math::
 
-        - **Obtuse triangles**: Mixed area subdivision (Figure 4)
-          - If obtuse at vertex v: V(v) = area(T)/2
-          - Otherwise: V(v) = area(T)/4
+        V(v) = \sum_{e \ni v} \tfrac{1}{2} |e|.
 
-        This ensures perfect tiling and optimal error bounds.
+    **2D manifolds (triangles)**: uses the Meyer et al. (2003) mixed-area approach.
 
-    **3D+ manifolds (tetrahedra, etc.)**:
-        Barycentric approximation (standard practice):
-        V(v) = Σ_{cells ∋ v} |cell| / (n_manifold_dims + 1)
+    - For acute triangles (all angles :math:`\le \pi/2`), uses the circumcentric
+      Voronoi formula (Eq. 7),
 
-        Note: Rigorous circumcentric dual volumes in 3D require "well-centered"
-        meshes where all circumcenters lie inside their simplices (Desbrun 2005).
-        Mixed volume formulas for obtuse tetrahedra do not exist in the literature.
+      .. math::
+
+          V(v) = \tfrac{1}{8} \sum
+              \left(\|e_i\|^{2} \cot \alpha_i + \|e_j\|^{2} \cot \alpha_j\right),
+
+      where :math:`e_i, e_j` are edges from :math:`v` and :math:`\alpha_i, \alpha_j`
+      are the opposite angles.
+
+    - For obtuse triangles, uses the mixed area subdivision (Figure 4): if obtuse
+      at vertex :math:`v`, then :math:`V(v) = \operatorname{area}(T)/2`, otherwise
+      :math:`V(v) = \operatorname{area}(T)/4`.
+
+    This branch correctly handles **both** acute and obtuse triangles. The previous
+    buggy implementation in ``_circumcentric_dual.py`` assumed circumcenters were
+    always inside the triangle, which is only true for acute triangles. Together
+    they ensure perfect tiling and optimal error bounds.
+
+    **3D+ manifolds (tetrahedra, etc.)**: barycentric approximation,
+
+    .. math::
+
+        V(v) = \sum_{\sigma \ni v} \frac{|\sigma|}{n + 1},
+
+    where :math:`n` is the manifold dimension (so :math:`n + 1` is the number
+    of vertices per cell).
+
+    Rigorous circumcentric dual volumes in 3D+ require "well-centered" meshes
+    where all circumcenters lie inside their simplices (Desbrun et al. 2005,
+    *Discrete Exterior Calculus*). Mixed volume formulas for obtuse tetrahedra
+    do not exist in the literature.
 
     Parameters
     ----------
     mesh : Mesh
-        Input simplicial mesh
+        Input simplicial mesh.
 
     Returns
     -------
-    torch.Tensor
-        Tensor of shape (n_points,) containing dual 0-cell volume for each vertex.
-        For isolated vertices, volume is 0.
-
-        Property: Σ dual_volumes = total_mesh_volume (perfect tiling)
+    Float[torch.Tensor, " n_points"]
+        Dual 0-cell volume for each vertex, shape ``(n_points,)``.
+        For isolated vertices, volume is 0. Satisfies the perfect-tiling
+        identity :math:`\sum_v V(v) = |M|`.
 
     Raises
     ------
     NotImplementedError
-        If n_manifold_dims > 3
+        If ``n_manifold_dims > 3``.
+
+    Notes
+    -----
+    Mathematical properties:
+
+    1. Conservation: :math:`\sum_v |{\star}v| = |M|` (perfect tiling).
+    2. Optimality: minimizes spatial averaging error (Meyer et al. 2003,
+       *Discrete Differential-Geometry Operators for Triangulated 2-Manifolds*,
+       §3.2).
+    3. Gauss-Bonnet: enables
+       :math:`\sum_i K_i \, |{\star}v_i| = 2 \pi \chi(M)` to hold exactly.
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> dual_vols = compute_dual_volumes_0(mesh)
-        >>> # Use in Hodge star: ⋆f(⋆v) = f(v) × dual_vols[v]
-        >>> # Use in Laplacian: Δf(v) = (1/dual_vols[v]) × Σ w_ij(f_j - f_i)
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> dual_vols = compute_dual_volumes_0(mesh)
+    >>> # Use in Hodge star: (star f)(star v) = f(v) * dual_vols[v]
+    >>> # Use in Laplacian: Lap_f(v) = (1 / dual_vols[v]) * sum w_ij (f_j - f_i)
 
-    Mathematical Properties:
-        1. Conservation: Σ_v |⋆v| = |mesh|  (perfect tiling)
-        2. Optimality: Minimizes spatial averaging error (Meyer Section 3.2)
-        3. Gauss-Bonnet: Enables Σ K_i × |⋆v_i| = 2πχ(M) to hold exactly
-
-    References:
-        - Meyer Eq. 7 (circumcentric Voronoi, acute triangles)
-        - Meyer Fig. 4 (mixed area, obtuse triangles)
-        - Desbrun Def. of circumcentric dual (lines 333-352 in umich_dec.tex)
-        - Hirani Def. 2.4.5 (dual cell definition, lines 884-896 in Hirani03.txt)
+    References
+    ----------
+    - Meyer et al. (2003), *Discrete Differential-Geometry Operators for
+      Triangulated 2-Manifolds*, Equation 7 (circumcentric Voronoi, acute
+      triangles) and Figure 4 (mixed area, obtuse triangles).
+    - Desbrun et al. (2005), *Discrete Exterior Calculus*, Definition 3.7
+      (circumcentric duality operator).
+    - Hirani (2003), *Discrete Exterior Calculus* (PhD thesis), Definition 2.4.5
+      (circumcentric dual cell).
     """
     device = mesh.points.device
     n_points = mesh.n_points
@@ -332,13 +370,7 @@ def compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
         )
 
     elif n_manifold_dims == 2:
-        ### 2D: Mixed Voronoi area for triangles using Meyer et al. 2003 algorithm
-        # Reference: Section 3.3 (Equation 7) and Section 3.4 (Figure 4)
-        #
-        # CRITICAL: This correctly handles BOTH acute and obtuse triangles.
-        # The previous buggy implementation in _circumcentric_dual.py assumed
-        # circumcenters were always inside triangles, which is only true for acute.
-
+        ### 2D: Meyer et al. (2003) mixed Voronoi area (see docstring Notes)
         cell_vertices = mesh.points[mesh.cells]  # (n_cells, 3, n_spatial_dims)
         voronoi_areas = _compute_meyer_mixed_voronoi_areas(
             cell_vertices, cell_volumes
@@ -350,13 +382,7 @@ def compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
         )
 
     elif n_manifold_dims >= 3:
-        ### 3D and higher: Barycentric subdivision
-        # Each vertex gets equal share of each incident cell's volume
-        #
-        # NOTE: This is an APPROXIMATION, not rigorous like 2D.
-        # Rigorous circumcentric dual volumes in 3D+ require "well-centered"
-        # meshes where all circumcenters lie inside simplices (Desbrun 2005).
-        # Mixed volume formulas for obtuse tetrahedra do NOT exist in literature.
+        ### 3D and higher: barycentric subdivision (see docstring Notes)
         n_vertices_per_cell = n_manifold_dims + 1
         _scatter_add_cell_contributions_to_vertices(
             dual_volumes, mesh.cells, cell_volumes / n_vertices_per_cell
@@ -399,108 +425,85 @@ def _compute_triangle_circumcenters_3d(vertices: torch.Tensor) -> torch.Tensor:
 
 
 def compute_circumcenters(
-    vertices: Float[torch.Tensor, "n_simplices n_vertices_per_simplex n_spatial_dims"],
-) -> Float[torch.Tensor, "n_simplices n_spatial_dims"]:
-    """Compute circumcenters of simplices using perpendicular bisector method.
+    vertices: Float[torch.Tensor, "n_cells n_vertices_per_cell n_spatial_dims"],
+) -> Float[torch.Tensor, "n_cells n_spatial_dims"]:
+    r"""Compute circumcenters of simplices using the perpendicular-bisector method.
 
-    The circumcenter is the unique point equidistant from all vertices of the simplex.
-    It lies at the intersection of perpendicular bisector hyperplanes.
+    The circumcenter is the unique point equidistant from all vertices of the
+    simplex; it lies at the intersection of the perpendicular-bisector hyperplanes.
 
     Parameters
     ----------
-    vertices : torch.Tensor
-        Vertex positions for each simplex.
-        Shape: (n_simplices, n_vertices_per_simplex, n_spatial_dims)
+    vertices : Float[torch.Tensor, "n_cells n_vertices_per_cell n_spatial_dims"]
+        Vertex positions for each cell (simplex).
 
     Returns
     -------
-    torch.Tensor
-        Circumcenters, shape (n_simplices, n_spatial_dims)
+    Float[torch.Tensor, "n_cells n_spatial_dims"]
+        Circumcenters, shape ``(n_cells, n_spatial_dims)``.
 
     Notes
     -----
-    Algorithm:
-        For simplex with vertices v₀, v₁, ..., vₙ, the circumcenter c satisfies:
-            ||c - v₀||² = ||c - v₁||² = ... = ||c - vₙ||²
+    For a simplex with vertices :math:`v_0, v_1, \ldots, v_n`, the circumcenter
+    :math:`c` satisfies
 
-        Substituting d = c - v₀ gives n linear equations:
-            2(v_i - v₀)·d = ||v_i - v₀||²  for i=1,...,n
+    .. math::
 
-        In matrix form: A·d = b where:
-            A = 2[(v₁-v₀)^T, (v₂-v₀)^T, ...]^T
-            b = [||v₁-v₀||², ||v₂-v₀||², ...]^T
+        \|c - v_0\|^2 = \|c - v_1\|^2 = \cdots = \|c - v_n\|^2.
 
-        Then c = v₀ + d. For over-determined systems (embedded manifolds),
-        use least-squares.
+    Substituting :math:`d = c - v_0` yields :math:`n` linear equations,
+
+    .. math::
+
+        2 (v_i - v_0) \cdot d = \|v_i - v_0\|^2 \quad \text{for } i = 1, \ldots, n,
+
+    or in matrix form :math:`A d = b` with
+    :math:`A = 2 [(v_1 - v_0)^\top, (v_2 - v_0)^\top, \ldots]^\top`
+    and
+    :math:`b = [\|v_1 - v_0\|^2, \|v_2 - v_0\|^2, \ldots]^\top`.
+
+    Then :math:`c = v_0 + d`. For over-determined systems (embedded manifolds),
+    least-squares is used. Square systems use ``torch.linalg.solve_ex`` with a
+    fallback to least-squares for singular cells, written branchlessly so
+    ``torch.compile`` can trace through without graph breaks.
     """
-    n_simplices, n_vertices, n_spatial_dims = vertices.shape
-    n_manifold_dims = n_vertices - 1
+    n_cells, n_verts_per_cell, n_spatial_dims = vertices.shape
+    n_manifold_dims = n_verts_per_cell - 1
 
-    ### Handle special cases
-    if n_vertices == 1:
-        # 0-simplex: circumcenter is the vertex itself
-        return vertices.squeeze(1)
+    ### Handle low-dimensional special cases up front
+    match (n_verts_per_cell, n_spatial_dims):
+        case (1, _):
+            # 0-simplex: circumcenter is the vertex itself
+            return vertices.squeeze(1)
+        case (2, _):
+            # 1-simplex (edge): circumcenter is the midpoint. Avoids numerical
+            # issues with underdetermined lstsq for edges in higher dimensions.
+            return vertices.mean(dim=1)
+        case (3, 3):
+            return _compute_triangle_circumcenters_3d(vertices)
 
-    if n_vertices == 2:
-        # 1-simplex (edge): circumcenter is the midpoint
-        # This avoids numerical issues with underdetermined lstsq for edges in higher dimensions
-        return vertices.mean(dim=1)
-
-    if n_vertices == 3 and n_spatial_dims == 3:
-        return _compute_triangle_circumcenters_3d(vertices)
-
-    ### Build linear system for circumcenter
-    # Reference vertex (first one)
-    v0 = vertices[:, 0, :]  # (n_simplices, n_spatial_dims)
-
-    # Relative vectors from v₀ to other vertices
-    # Shape: (n_simplices, n_manifold_dims, n_spatial_dims)
+    ### Build linear system A @ (c - v0) = b for each simplex
+    v0 = vertices[:, 0, :]  # (n_cells, n_spatial_dims)
     relative_vecs = vertices[:, 1:, :] - v0.unsqueeze(1)
-
-    # Matrix A = 2 * relative_vecs (each row is an equation)
-    # Shape: (n_simplices, n_manifold_dims, n_spatial_dims)
+    # (n_cells, n_manifold_dims, n_spatial_dims)
     A = 2 * relative_vecs
+    b = (relative_vecs**2).sum(dim=-1)  # (n_cells, n_manifold_dims)
+    rhs = b.unsqueeze(-1)  # (n_cells, n_manifold_dims, 1)
 
-    # Right-hand side: ||v_i - v₀||²
-    # Shape: (n_simplices, n_manifold_dims)
-    b = (relative_vecs**2).sum(dim=-1)
-
-    ### Solve for circumcenter
-    # Need to solve: A @ (c - v₀) = b for each simplex
-    # This is: 2*(v_i - v₀) @ (c - v₀) = ||v_i - v₀||²
-
+    ### Solve for c - v0
     if n_manifold_dims == n_spatial_dims:
-        ### Square system: use direct solve
-        # A is (n_simplices, n_dims, n_dims)
-        # b is (n_simplices, n_dims)
-        try:
-            # Solve A @ x = b
-            c_minus_v0 = torch.linalg.solve(
-                A,  # (n_simplices, n_dims, n_dims)
-                b.unsqueeze(-1),  # (n_simplices, n_dims, 1)
-            ).squeeze(-1)  # (n_simplices, n_dims)
-        except torch.linalg.LinAlgError:
-            # Singular matrix - fall back to least squares
-            c_minus_v0 = torch.linalg.lstsq(
-                A,
-                b.unsqueeze(-1),
-            ).solution.squeeze(-1)
+        # Square system: solve_ex returns info != 0 for singular cells.
+        # We always also compute lstsq and select branchlessly to avoid the
+        # try/except graph break that torch.compile would otherwise see.
+        solve_solution, info = torch.linalg.solve_ex(A, rhs, check_errors=False)
+        lstsq_solution = torch.linalg.lstsq(A, rhs).solution
+        singular = info.ne(0).view(-1, 1, 1)  # (n_cells, 1, 1)
+        c_minus_v0 = torch.where(singular, lstsq_solution, solve_solution).squeeze(-1)
     else:
-        ### Over-determined system (manifold embedded in higher dimension)
-        # Use least-squares: (A^T A)^-1 A^T b
-        # A is (n_simplices, n_manifold_dims, n_spatial_dims)
-        # We need A^T @ A which is (n_simplices, n_spatial_dims, n_spatial_dims)
+        # Over-determined system (manifold embedded in higher-dim ambient space)
+        c_minus_v0 = torch.linalg.lstsq(A, rhs).solution.squeeze(-1)
 
-        # Use torch.linalg.lstsq which handles batched least-squares
-        c_minus_v0 = torch.linalg.lstsq(
-            A,  # (n_simplices, n_manifold_dims, n_spatial_dims)
-            b.unsqueeze(-1),  # (n_simplices, n_manifold_dims, 1)
-        ).solution.squeeze(-1)  # (n_simplices, n_spatial_dims)
-
-    ### Circumcenter = v₀ + solution
-    circumcenters = v0 + c_minus_v0
-
-    return circumcenters
+    return v0 + c_minus_v0
 
 
 def compute_cotan_weights_fem(
@@ -513,22 +516,29 @@ def compute_cotan_weights_fem(
     derives the cotangent weights from the Finite Element Method (FEM) stiffness
     matrix with piecewise-linear basis functions.
 
-    For an n-simplex with vertices v_0, ..., v_n and barycentric coordinate
-    functions lambda_i, the stiffness matrix entry for edge (i, j) is:
+    For an :math:`n`-simplex with vertices :math:`v_0, \ldots, v_n` and
+    barycentric coordinate functions :math:`\lambda_i`, the stiffness matrix
+    entry for edge :math:`(i, j)` is
 
-        K_ij = |sigma| * (grad lambda_i . grad lambda_j)
+    .. math::
 
-    The cotangent weight is w_ij = -K_ij, accumulated over all cells sharing
-    the edge. This is mathematically equivalent to the classical cotangent
-    formula in 2D: w_ij = (1/2)(cot alpha + cot beta).
+        K_{ij} = |\sigma| \, \bigl(\nabla \lambda_i \cdot \nabla \lambda_j\bigr).
+
+    The cotangent weight :math:`w_{ij} = -K_{ij}` is accumulated over all cells
+    sharing the edge. This is mathematically equivalent to the classical
+    cotangent formula in 2D, :math:`w_{ij} = \tfrac{1}{2}(\cot \alpha + \cot \beta)`.
 
     The gradient dot products are computed efficiently via the Gram matrix:
 
-        E = [v_1 - v_0, ..., v_n - v_0]  (n x d edge matrix)
-        G = E @ E^T                        (n x n Gram matrix)
-        grad lambda_k . grad lambda_l = (G^{-1})_{k-1, l-1}   for k, l >= 1
+    .. math::
 
-    For pairs involving vertex 0, the constraint sum(grad lambda_i) = 0 is used.
+        E &= [v_1 - v_0, \ldots, v_n - v_0]   \quad (n \times d \text{ edge matrix}) \\
+        G &= E E^\top                         \quad (n \times n \text{ Gram matrix}) \\
+        \nabla \lambda_k \cdot \nabla \lambda_l &= (G^{-1})_{k-1,\, l-1}
+            \quad \text{for } k, l \ge 1.
+
+    For pairs involving vertex 0, the constraint
+    :math:`\sum_i \nabla \lambda_i = 0` is used.
 
     Parameters
     ----------
@@ -537,10 +547,13 @@ def compute_cotan_weights_fem(
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor]
-        Tuple of (cotan_weights, unique_edges):
-        - cotan_weights: Cotangent weight for each unique edge, shape (n_edges,)
-        - unique_edges: Sorted edge vertex indices, shape (n_edges, 2)
+    tuple[Float[torch.Tensor, " n_edges"], Int[torch.Tensor, "n_edges 2"]]
+        Tuple of ``(cotan_weights, unique_edges)``:
+
+        - ``cotan_weights``: cotangent weight for each unique edge,
+          shape ``(n_edges,)``.
+        - ``unique_edges``: sorted edge vertex indices,
+          shape ``(n_edges, 2)``.
 
     Examples
     --------
@@ -639,18 +652,20 @@ def compute_cotan_weights_fem(
 def compute_dual_volumes_1(
     mesh: "Mesh",
 ) -> tuple[Float[torch.Tensor, " n_edges"], Int[torch.Tensor, "n_edges 2"]]:
-    """Compute dual 1-cell volumes (dual to edges).
+    r"""Compute dual 1-cell volumes (dual to edges).
 
     The dual 1-cell of an edge is the portion of the circumcentric dual mesh
     associated with that edge. For a 2D triangle mesh, it consists of segments
-    from the edge midpoint to the circumcenters of adjacent triangles:
+    from the edge midpoint to the circumcenters of adjacent triangles,
 
-        |⋆e| = |e| × w_ij
+    .. math::
 
-    where w_ij is the FEM cotangent weight for the edge. This relationship
-    holds for any manifold dimension; the FEM stiffness matrix approach
-    (see :func:`compute_cotan_weights_fem`) derives these weights from the
-    gradient dot products of barycentric basis functions.
+        |{\star}e| = |e| \, w_{ij},
+
+    where :math:`w_{ij}` is the FEM cotangent weight for the edge. This
+    relationship holds for any manifold dimension; the FEM stiffness matrix
+    approach (see :func:`compute_cotan_weights_fem`) derives these weights from
+    the gradient dot products of barycentric basis functions.
 
     Parameters
     ----------
@@ -659,14 +674,15 @@ def compute_dual_volumes_1(
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor]
+    tuple[Float[torch.Tensor, " n_edges"], Int[torch.Tensor, "n_edges 2"]]
         Tuple of ``(dual_volumes, edges)``:
 
-        - ``dual_volumes``: Dual 1-cell volume for each edge, shape ``(n_edges,)``.
-          May be negative for edges in non-Delaunay configurations (obtuse
-          angles exceeding pi/2 at both adjacent cells).
-        - ``edges``: Canonically sorted edge connectivity, shape ``(n_edges, 2)``,
-          with ``edges[:, 0] < edges[:, 1]``.
+        - ``dual_volumes``: dual 1-cell volume for each edge,
+          shape ``(n_edges,)``. May be negative for edges in non-Delaunay
+          configurations (obtuse angles exceeding :math:`\pi/2` at both
+          adjacent cells).
+        - ``edges``: canonically sorted edge connectivity,
+          shape ``(n_edges, 2)``, with ``edges[:, 0] < edges[:, 1]``.
 
     Notes
     -----
@@ -677,7 +693,7 @@ def compute_dual_volumes_1(
     ### Derive cotangent weights from the FEM stiffness matrix (works for any dimension)
     cotan_weights, edges = compute_cotan_weights_fem(mesh)
 
-    ### |⋆e| = w_ij × |e|
+    ### |star e| = w_ij * |e|
     edge_vectors = mesh.points[edges[:, 1]] - mesh.points[edges[:, 0]]
     edge_lengths = torch.norm(edge_vectors, dim=-1)
     dual_volumes_1 = cotan_weights * edge_lengths
@@ -686,17 +702,17 @@ def compute_dual_volumes_1(
 
 
 def get_or_compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
-    """Get cached dual 0-cell volumes or compute if not present.
+    r"""Get cached dual 0-cell volumes or compute if not present.
 
     Parameters
     ----------
     mesh : Mesh
-        Input mesh
+        Input mesh.
 
     Returns
     -------
-    torch.Tensor
-        Dual volumes for vertices, shape (n_points,)
+    Float[torch.Tensor, " n_points"]
+        Dual volumes for vertices, shape ``(n_points,)``.
     """
     cached = mesh._cache.get(("point", "dual_volumes_0"), None)
     if cached is None:
@@ -708,17 +724,17 @@ def get_or_compute_dual_volumes_0(mesh: "Mesh") -> Float[torch.Tensor, " n_point
 def get_or_compute_circumcenters(
     mesh: "Mesh",
 ) -> Float[torch.Tensor, "n_cells n_spatial_dims"]:
-    """Get cached circumcenters or compute if not present.
+    r"""Get cached circumcenters or compute if not present.
 
     Parameters
     ----------
     mesh : Mesh
-        Input mesh
+        Input mesh.
 
     Returns
     -------
-    torch.Tensor
-        Circumcenters for all cells, shape (n_cells, n_spatial_dims)
+    Float[torch.Tensor, "n_cells n_spatial_dims"]
+        Circumcenters for all cells, shape ``(n_cells, n_spatial_dims)``.
     """
     cached = mesh._cache.get(("cell", "circumcenters"), None)
     if cached is None:
