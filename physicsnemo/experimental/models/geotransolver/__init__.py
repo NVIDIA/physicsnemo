@@ -23,16 +23,31 @@ Classes
 -------
 GeoTransolver
     Main model class combining GALE attention with geometry and global context.
+GeoTransolverMetaData
+    Data class for storing essential meta data needed for the GeoTransolver model.
 GALE
     Geometry-Aware Latent Embeddings attention layer.
 GALE_FA
     GALE with FLARE self-attention backend.
 GALE_block
     Transformer block using GALE or GALE_FA attention.
+GALEStructuredMesh2D
+    GALE with Conv2d slice projection for 2D structured grids.
+GALEStructuredMesh3D
+    GALE with Conv3d slice projection for 3D structured grids.
 ContextProjector
     Projects context features onto physical state slices.
+StructuredContextProjector
+    Context projector with Conv2d/Conv3d geometry encoding on structured grids.
 GlobalContextBuilder
     Orchestrates context construction for the model.
+
+Functions
+---------
+collect_concrete_dropout_losses
+    Collect concrete dropout regularization losses from a model.
+get_concrete_dropout_rates
+    Get concrete dropout rates from a model.
 
 Examples
 --------

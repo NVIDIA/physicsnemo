@@ -23,6 +23,8 @@ Classes
 -------
 ContextProjector
     Projects context features onto physical state slices.
+StructuredContextProjector
+    Context projector with Conv2d/Conv3d geometry encoding on structured grids.
 GeometricFeatureProcessor
     Processes geometric features at a single spatial scale using BQWarp.
 MultiScaleFeatureExtractor
