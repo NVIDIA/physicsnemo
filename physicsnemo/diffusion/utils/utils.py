@@ -14,12 +14,53 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Iterator, Sequence
+from typing import Any, Iterator, Sequence, TypeVar
 
 import numpy as np
 import torch
 from jaxtyping import Float
 from torch import Tensor
+
+_T = TypeVar("_T")
+
+
+def _unwrap_module(model: torch.nn.Module, target_cls: type[_T]) -> _T:
+    """Peel off DDP / torch.compile wrappers to reach the underlying module.
+
+    The unwrapping order handles arbitrary nesting of
+    ``DistributedDataParallel`` (``model.module``) and ``torch.compile``
+    (``OptimizedModule._orig_mod``).
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Possibly-wrapped module to unwrap.
+    target_cls : type
+        The class to unwrap to.
+
+    Returns
+    -------
+    module : target_cls
+        The unwrapped module.
+
+    Raises
+    ------
+    TypeError
+        If ``target_cls`` is not found before reaching a leaf module.
+    """
+    m: Any = model
+    while not isinstance(m, target_cls):
+        if isinstance(m, torch._dynamo.eval_frame.OptimizedModule):
+            m = m._orig_mod
+        elif hasattr(m, "module"):
+            m = m.module
+        else:
+            raise TypeError(
+                f"Could not unwrap a {target_cls.__name__} from "
+                f"{type(model).__name__}. Found leaf type "
+                f"{type(m).__name__}."
+            )
+    return m
 
 
 def apply_loss_weight(

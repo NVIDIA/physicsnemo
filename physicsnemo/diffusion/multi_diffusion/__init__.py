@@ -23,3 +23,4 @@ from .patching import (
     image_batching,
     image_fuse,
 )
+from .predictor import MultiDiffusionPredictor

@@ -163,6 +163,12 @@ class EulerSolver(Solver):
             Updated latent state :math:`\mathbf{x}_{n-1}` at time
             ``t_next``, same shape as ``x``.
         """
+        # Ensure contiguous strides so successive denoiser calls (across
+        # sampling steps) present the same stride layout to torch.compile,
+        # avoiding spurious recompilations / silently divergent traces.
+        t_cur = t_cur.contiguous()
+        t_next = t_next.contiguous()
+
         # Reshape t for broadcasting: (B,) -> (B, 1, ..., 1)
         expected_shape = (-1,) + (1,) * (x.ndim - 1)
         t_cur_bc = t_cur.reshape(expected_shape)
@@ -478,6 +484,12 @@ class EDMStochasticEulerSolver(Solver):
             Updated latent state :math:`\mathbf{x}_{n-1}` at time
             ``t_next``, same shape as ``x``.
         """
+        # Ensure contiguous strides so successive denoiser calls (across
+        # sampling steps) present the same stride layout to torch.compile,
+        # avoiding spurious recompilations / silently divergent traces.
+        t_cur = t_cur.contiguous()
+        t_next = t_next.contiguous()
+
         # Reshape t for broadcasting: (B,) -> (B, 1, ..., 1)
         expected_shape = (-1,) + (1,) * (x.ndim - 1)
         t_cur_bc = t_cur.reshape(expected_shape)
@@ -718,6 +730,12 @@ class EDMStochasticHeunSolver(Solver):
             Updated latent state :math:`\mathbf{x}_{n-1}` at time
             ``t_next``, same shape as ``x``.
         """
+        # Ensure contiguous strides so successive denoiser calls (across
+        # sampling steps) present the same stride layout to torch.compile,
+        # avoiding spurious recompilations / silently divergent traces.
+        t_cur = t_cur.contiguous()
+        t_next = t_next.contiguous()
+
         # Reshape t for broadcasting: (B,) -> (B, 1, ..., 1)
         expected_shape = (-1,) + (1,) * (x.ndim - 1)
         t_cur_bc = t_cur.reshape(expected_shape)
