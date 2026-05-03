@@ -65,15 +65,15 @@ from physicsnemo.core import get_physicsnemo_pkg_info
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.experimental.models.globe.model import GLOBE
 from physicsnemo.experimental.utils import (
-    CompileDiagnosticsCollector,
     disable_autotune_printing,
     prefetch_map,
+    silence_compile_logs_on_non_zero_ranks,
 )
 from physicsnemo.optim import CombinedOptimizer
 from physicsnemo.utils.checkpoint import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
-mpl.use("agg")
+mpl.use("agg")  # Allows headless plotting
 disable_autotune_printing()
 
 Split = Literal["train", "validation"]
@@ -94,7 +94,7 @@ def main(
     compile_mode: Literal[
         "default",
         "max-autotune-no-cudagraphs",
-    ] = "max-autotune-no-cudagraphs",
+    ] = "default",  # max-autotune-no-cudagraphs has a CUDA illegal memory error. Due to buggy triton kernel in no-grad.
     n_prediction_points: int | None = None,
     learning_rate: float = 1e-2,
     weight_decay: float = 1e-4,
@@ -104,7 +104,7 @@ def main(
     seed: int = 0,
     error_scales: dict[str, float] | None = None,
     n_communication_hyperlayers: int = 2,
-    hidden_layer_sizes: tuple[int, ...] = (128, 128, 128),
+    hidden_layer_sizes: tuple[int, ...] = (256, 256, 256),
     n_latent_scalars: int = 8,
     n_latent_vectors: int = 4,
     n_spherical_harmonics: int = 4,
@@ -121,6 +121,7 @@ def main(
     network_type: Literal["pade", "mlp"] = "pade",
     self_regularization_beta: float | None = 0.01,
     latent_compression_scale: float | None = 100.0,
+    expand_far_targets: bool = False,
 ):
     """Train GLOBE on DrivAerML.
 
@@ -158,6 +159,9 @@ def main(
         save_every: Save a checkpoint every this many epochs.
         use_mlflow: Enable MLflow experiment tracking.
         mlflow_experiment: MLflow experiment name.
+        expand_far_targets: If True, expand far-field target nodes to
+            individual points so target-side approximation is removed
+            (more kernel evaluations, often more stable training).
     """
     ### [Config Processing]
     if data_dir is None:
@@ -191,6 +195,7 @@ def main(
     dist = DistributedManager()
     device = dist.device
     torch.cuda.set_device(device)
+    silence_compile_logs_on_non_zero_ranks(dist.rank)
 
     if dist.rank == 0:
         logging.basicConfig(level=logging.INFO)
@@ -230,7 +235,7 @@ def main(
     autocast_ctx = torch.autocast(
         device_type=device.type, dtype=torch.bfloat16, enabled=amp
     )
-    torch.set_float32_matmul_precision("high")
+    torch.set_float32_matmul_precision("high")  # Allows use of Tensor Cores in matmuls
     torch.manual_seed(seed)
 
     ### [Dataset Preparation]
@@ -274,17 +279,28 @@ def main(
         network_type=network_type,
         self_regularization_beta=self_regularization_beta,
         latent_compression_scale=latent_compression_scale,
+        expand_far_targets=expand_far_targets,
     ).to(device)
 
     logger0.info(f"{output_dir.name=!r}")
 
     base_model = model
 
+    # TODO: candidate for upstreaming to physicsnemo once torch.compiler
+    # cache APIs stabilize (currently experimental in PyTorch).
     if use_compile and torch_compile_cache.exists():
         torch.compiler.load_cache_artifacts(torch_compile_cache.read_bytes())
 
+    # Different MultiscaleKernel instances have different MLP output sizes.
+    # Without this, Dynamo guards on parameter shapes and recompiles for each
+    # kernel branch, quickly exhausting the recompile limit.
     torch._dynamo.config.force_parameter_static_shapes = False
     torch._dynamo.config.capture_scalar_outputs = True
+
+    # The GLOBE model stores latent channels as individually-named TensorDict
+    # entries (one key per scalar/vector channel).  Dynamo specializes on each
+    # key, so the default limit of 8 is exhausted mid-forward and remaining
+    # code falls back to eager.
     torch._dynamo.config.cache_size_limit = 64
 
     ### [Distribute the model across GPUs]
@@ -303,6 +319,10 @@ def main(
     # batch size, so the maximum safe LR is determined by loss-landscape
     # curvature, not gradient noise.  See arXiv:2502.16982 Sec 2.2.
     if use_muon:
+        # Muon is designed for matrix-shaped parameters (2D weight tensors
+        # of linear layers); biases, norms, and other non-matrix parameters
+        # fall back to RAdam.  This ndim==2 split is the standard Muon
+        # recommendation.
         optimizer = CombinedOptimizer(
             optimizers=[
                 torch.optim.Muon(
@@ -378,7 +398,6 @@ def main(
     # launch, debug logging and graph break capture are disabled after the
     # first training batch completes.
     is_first_launch = (epoch == 0) and dist.rank == 0
-    _compile_collector: CompileDiagnosticsCollector | None = None
     _globe_logger: logging.Logger | None = None
 
     if is_first_launch:
@@ -386,8 +405,6 @@ def main(
         _globe_logger = logging.getLogger("globe")
         _globe_logger.setLevel(logging.DEBUG)
         torch._logging.set_logs(graph_breaks=True, recompiles=True)
-        _compile_collector = CompileDiagnosticsCollector()
-        _compile_collector.install()
 
     ### [MLflow Setup]
     mlflow_run_ctx: contextlib.AbstractContextManager = contextlib.nullcontext()
@@ -505,14 +522,11 @@ def main(
                 profiler.step()
 
             ### Disable all first-launch diagnostics after the first batch.
-            if _compile_collector is not None and _compile_collector.active:
-                if _globe_logger is not None:
-                    _globe_logger.setLevel(logging.INFO)
+            ### Re-entry guard: globe_logger.level is DEBUG only between
+            ### first-launch setup and the first cleanup pass.
+            if _globe_logger is not None and _globe_logger.level == logging.DEBUG:
+                _globe_logger.setLevel(logging.INFO)
                 torch._logging.set_logs(graph_breaks=False, recompiles=False)
-                _compile_collector.uninstall()
-                logger0.info(
-                    "torch.compile diagnostics:\n" + _compile_collector.summary()
-                )
 
         ### [Distributed comms]
         keys = ["loss", *all_batch_loss_components.keys()]
