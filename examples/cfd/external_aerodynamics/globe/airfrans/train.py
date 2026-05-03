@@ -114,7 +114,7 @@ def main(
     network_type: Literal["pade", "mlp"] = "pade",
     self_regularization_beta: float | None = 0.01,
     latent_compression_scale: float | None = 100.0,
-    expand_far_targets: bool = False,
+    expand_far_targets: bool = True,
 ):
     """Train the GLOBE model on AirFRANS dataset.
 
