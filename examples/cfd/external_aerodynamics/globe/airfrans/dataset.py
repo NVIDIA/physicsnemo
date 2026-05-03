@@ -116,23 +116,59 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         Args:
             sample_paths: Paths to individual sample directories.
             cache_dir: Directory for disk caching of preprocessed samples.
-            world_size: Total number of distributed ranks.
+            world_size: Total number of distributed ranks (across all nodes).
             rank: This process's distributed rank.
             num_workers: DataLoader worker processes per rank.  When ``None``
-                (the default), auto-computed as ``floor(n_cpus / n_gpus)``
-                to fully overlap data loading with GPU training.
+                (the default), auto-computed from this rank's CPU affinity
+                and the per-node rank count detected from launcher env vars
+                (``LOCAL_WORLD_SIZE`` / ``OMPI_COMM_WORLD_LOCAL_SIZE`` /
+                ``SLURM_NTASKS_PER_NODE``), reserving one core per GPU the
+                rank drives for kernel-launch orchestration and OS work.
 
         Returns:
             Configured DataLoader with distributed sampling.
         """
         if num_workers is None:
-            n_cpus = os.cpu_count() or 1
-            n_gpus = max(1, torch.cuda.device_count())
-            num_workers = n_cpus // n_gpus
+            n_cpus = (
+                len(os.sched_getaffinity(0))
+                if hasattr(os, "sched_getaffinity")
+                else os.cpu_count() or 1
+            )
+            ### Per-node rank count, in launcher-precedence order.  torchrun
+            ### sets ``LOCAL_WORLD_SIZE``; OpenMPI sets ``OMPI_COMM_WORLD_LOCAL_SIZE``;
+            ### pure SLURM srun sets ``SLURM_NTASKS_PER_NODE``.  Default to 1
+            ### when running standalone.
+            local_world_size = 1
+            for env_var in (
+                "LOCAL_WORLD_SIZE",
+                "OMPI_COMM_WORLD_LOCAL_SIZE",
+                "SLURM_NTASKS_PER_NODE",
+            ):
+                if (raw := os.environ.get(env_var)) is not None:
+                    try:
+                        local_world_size = max(1, int(raw))
+                        break
+                    except ValueError:
+                        continue
+            ### Pigeonhole: if my affinity slice times the number of
+            ### co-located ranks exceeds total CPUs, the slice must be
+            ### shared with siblings (no per-rank pinning); divide to get
+            ### my fair share.  When the launcher pinned each rank
+            ### exclusively, this branch is skipped.
+            if n_cpus * local_world_size > (os.cpu_count() or n_cpus):
+                n_cpus //= local_world_size
+            ### One orchestration core per GPU this rank actually drives.
+            ### In DDP each rank drives one (its ``local_rank`` GPU)
+            ### regardless of how many are visible; single-process
+            ### multi-GPU drives every visible GPU.
+            n_visible_gpus = max(1, torch.cuda.device_count())
+            orchestration = 1 if world_size > 1 else n_visible_gpus
+            num_workers = max(0, n_cpus - orchestration)
             if rank == 0:
                 logger.info(
                     f"Auto-set DataLoader num_workers={num_workers} "
-                    f"({n_cpus} CPUs / {n_gpus} GPUs)"
+                    f"(n_cpus={n_cpus}, local_world_size={local_world_size}, "
+                    f"world_size={world_size}, n_visible_gpus={n_visible_gpus})"
                 )
 
         dataset = cls(sample_paths=sample_paths, cache_dir=cache_dir)

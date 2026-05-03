@@ -56,13 +56,29 @@ def prefetch_map(iterable: Iterable[_T], fn: Callable[[_T], _U]) -> _PrefetchMap
     """Apply *fn* to each element, overlapping ``fn(next)`` with consumption of current.
 
     Submits ``fn(element)`` to a single background thread one step ahead
-    of the consumer.  Tensor operations release the GIL during C++/CUDA
-    execution, so CPU-bound preparation of the next sample overlaps with
-    GPU-bound processing of the current sample.
+    of the consumer.  ``ThreadPoolExecutor`` does *not* sidestep the GIL;
+    the overlap is real only when ``fn`` performs operations that release
+    the GIL while running.  Operations that typically release the GIL and
+    so benefit from prefetching:
 
-    Typical use: wrap a DataLoader to overlap CPU-bound sample preparation
-    (subsampling, geometry precomputation, host-to-device transfer) with
-    GPU-bound forward/backward processing of the previous sample.
+    * CUDA kernel dispatch (asynchronous launches return immediately).
+    * Host-to-device copies via ``tensor.to(device, non_blocking=True)``.
+    * NumPy and PyTorch C++ kernels on tensors above the small-op threshold.
+    * File and network I/O.
+
+    Operations that hold the GIL or force synchronization, and so will
+    *not* benefit (and may even serialize work):
+
+    * Pure-Python computation.
+    * ``tensor.item()`` and other host-side reads from device tensors.
+    * Explicit syncs such as ``torch.cuda.synchronize`` or blocking
+      ``tensor.cpu()`` calls.
+
+    Typical good fit: wrap a DataLoader to overlap CPU-bound sample
+    preparation (subsampling, geometry precomputation, host-to-device
+    transfer) with GPU-bound forward/backward of the previous sample.
+    For pure-Python heavy ``fn``, prefer a ``ProcessPoolExecutor``-based
+    pattern instead.
 
     Parameters
     ----------
