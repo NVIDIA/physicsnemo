@@ -399,8 +399,8 @@ class MultiDiffusionModel2D(Module):
         self.model = model
         self.global_spatial_shape = tuple(global_spatial_shape)
         self._patching: RandomPatching2D | GridPatching2D | None = None
-        self._patching_type: Literal["random", "grid"] | None = None
         self._fuse: bool = False
+        self._skip_positional_embedding_injection: bool = False
         # Normalise condition flags to defaultdict for uniform access
         if not isinstance(condition_patch, (bool, dict)):
             raise TypeError(
@@ -533,7 +533,6 @@ class MultiDiffusionModel2D(Module):
             patch_shape=patch_shape,
             patch_num=patch_num,
         )
-        self._patching_type = "random"
         self._fuse = False
 
     def reset_patch_indices(self) -> None:
@@ -545,7 +544,7 @@ class MultiDiffusionModel2D(Module):
         RuntimeError
             If the current patching strategy is not random patching.
         """
-        if self._patching_type != "random":
+        if not isinstance(self._patching, RandomPatching2D):
             raise RuntimeError(
                 "reset_patch_indices() is only available when random "
                 "patching is active. Call set_random_patching() first."
@@ -601,7 +600,6 @@ class MultiDiffusionModel2D(Module):
             overlap_pix=overlap_pix,
             boundary_pix=boundary_pix,
         )
-        self._patching_type = "grid"
         self._fuse = fuse
 
     # ------------------------------------------------------------------
@@ -633,12 +631,13 @@ class MultiDiffusionModel2D(Module):
         RuntimeError
             If no patching strategy has been configured.
         """
+        patching = self._patching
+        if patching is None:
+            raise RuntimeError(
+                "No patching strategy set. Call set_random_patching() "
+                "or set_grid_patching() first."
+            )
         if not torch.compiler.is_compiling():
-            if self._patching is None:
-                raise RuntimeError(
-                    "No patching strategy set. Call set_random_patching() "
-                    "or set_grid_patching() first."
-                )
             if x.ndim != 4:
                 raise ValueError(
                     f"patch_x expects a 4D tensor (B, C, H, W), got {x.ndim}D."
@@ -648,7 +647,7 @@ class MultiDiffusionModel2D(Module):
                     f"Spatial dimensions {tuple(x.shape[2:])} do not match "
                     f"global_spatial_shape {self.global_spatial_shape}."
                 )
-        return self._patching.apply(x)
+        return patching.apply(x)
 
     def patch_t(self, t: Float[Tensor, " B"]) -> Float[Tensor, " P_times_B"]:
         r"""Convert a diffusion-time tensor to patch-compatible format.
@@ -671,13 +670,13 @@ class MultiDiffusionModel2D(Module):
         RuntimeError
             If no patching strategy has been configured.
         """
-        if not torch.compiler.is_compiling():
-            if self._patching is None:
-                raise RuntimeError(
-                    "No patching strategy set. Call set_random_patching() "
-                    "or set_grid_patching() first."
-                )
-        return t.repeat(self._patching.patch_num)
+        patching = self._patching
+        if patching is None:
+            raise RuntimeError(
+                "No patching strategy set. Call set_random_patching() "
+                "or set_grid_patching() first."
+            )
+        return t.repeat(patching.patch_num)
 
     def patch_condition(
         self,
@@ -737,16 +736,16 @@ class MultiDiffusionModel2D(Module):
         >>> cp["vec"].shape  # default: repeated P times
         torch.Size([8, 5])
         """
-        if not torch.compiler.is_compiling():
-            if self._patching is None:
-                raise RuntimeError(
-                    "No patching strategy set. Call set_random_patching() "
-                    "or set_grid_patching() first."
-                )
+        patching = self._patching
+        if patching is None:
+            raise RuntimeError(
+                "No patching strategy set. Call set_random_patching() "
+                "or set_grid_patching() first."
+            )
         if condition is None:
             return None
 
-        P = self._patching.patch_num
+        P = patching.patch_num
 
         if isinstance(condition, Tensor):
             if self._condition_has_per_key_flags:
@@ -858,7 +857,7 @@ class MultiDiffusionModel2D(Module):
         >>> torch.allclose(md.fuse(x_patched, batch_size=2), x)
         True
         """
-        if self._patching_type != "grid":
+        if not isinstance(self._patching, GridPatching2D):
             raise RuntimeError(
                 "Fusing is only supported with grid patching. "
                 "Call set_grid_patching() first."
@@ -883,36 +882,27 @@ class MultiDiffusionModel2D(Module):
         **model_kwargs: Any,
     ) -> Float[Tensor, "P_times_B C Hp Wp"] | Float[Tensor, "B C H W"]:
         # No patching strategy: warn and pass through
-        if self._patching_type is None:
+        patching = self._patching
+        if patching is None:
             if not torch.compiler.is_compiling():
                 warnings.warn(
                     "No patching strategy set on MultiDiffusionModel2D. "
                     "The model will run without patching.",
                     stacklevel=2,
                 )
-            if self.pos_embd is not None:
+            if (
+                self.pos_embd is not None
+                and not self._skip_positional_embedding_injection
+            ):
                 B = x.shape[0]
-                pos_embd = self.pos_embd.unsqueeze(0).expand(B, -1, -1, -1)
-                if condition is None:
-                    condition = TensorDict(
-                        {"positional_embedding": pos_embd}, batch_size=[B]
-                    )
-                elif isinstance(condition, TensorDict):
-                    condition["positional_embedding"] = pos_embd
-                elif isinstance(condition, Tensor):
-                    condition = TensorDict(
-                        {"condition": condition, "positional_embedding": pos_embd},
-                        batch_size=[B],
-                    )
-                else:
-                    raise ValueError(
-                        "When positional embeddings are configured, condition "
-                        "must be a Tensor, TensorDict, or None, got "
-                        f"{type(condition).__name__}."
-                    )
+                # .expand creates a stride-0 view that can trip up downstream
+                # torch ops (e.g. nn.ReflectionPad2d / F.unfold on torch 2.10).
+                # Materialise a contiguous copy before handing it off.
+                pos_embd = self.pos_embd.unsqueeze(0).expand(B, -1, -1, -1).contiguous()
+                condition = self._inject_patched_pos_embd(condition, pos_embd, B)
             return self.model(x, t, condition=condition, **model_kwargs)
 
-        P = self._patching.patch_num
+        P = patching.patch_num
 
         # Determine original batch size B
         if x_is_patched:
@@ -935,35 +925,23 @@ class MultiDiffusionModel2D(Module):
         if not condition_is_patched:
             condition = self.patch_condition(condition)
 
-        # Positional embeddings are always injected (internal to the wrapper)
-        if self.pos_embd is not None:
-            pos_embd_patched = self._patching.apply(
-                self.pos_embd.unsqueeze(0).expand(B, -1, -1, -1)
+        # Positional embeddings injected here unless _skip_positional_embedding_injection
+        # is set (e.g. by MultiDiffusionPredictor which pre-patches PE at construction time)
+        if self.pos_embd is not None and not self._skip_positional_embedding_injection:
+            # .expand creates a stride-0 view that can trip up downstream
+            # torch ops (e.g. nn.ReflectionPad2d / F.unfold on torch 2.10).
+            # Materialise a contiguous copy before passing to patching.
+            pos_embd_patched = patching.apply(
+                self.pos_embd.unsqueeze(0).expand(B, -1, -1, -1).contiguous()
             )  # (P*B, C_PE, Hp, Wp)
-            PB = P * B
-            if condition is None:
-                condition = TensorDict(
-                    {"positional_embedding": pos_embd_patched},
-                    batch_size=[PB],
-                )
-            elif isinstance(condition, TensorDict):
-                condition["positional_embedding"] = pos_embd_patched
-            elif isinstance(condition, Tensor):
-                condition = TensorDict(
-                    {"condition": condition, "positional_embedding": pos_embd_patched},
-                    batch_size=[PB],
-                )
-            else:
-                raise ValueError(
-                    "When positional embeddings are configured, condition "
-                    "must be a Tensor, TensorDict, or None, got "
-                    f"{type(condition).__name__}."
-                )
+            condition = self._inject_patched_pos_embd(
+                condition, pos_embd_patched, P * B
+            )
 
         output = self.model(x, t, condition=condition, **model_kwargs)
 
         if self._fuse:
-            output = self._patching.fuse(output, batch_size=B)
+            output = patching.fuse(output, batch_size=B)
 
         return output
 
@@ -996,13 +974,54 @@ class MultiDiffusionModel2D(Module):
                 f"(B, C, H, W), got {tensor.ndim}D."
             )
 
+        # Default case: no patching needed, just repeat along the batch dim.
+        if not do_patch and not do_interp:
+            return tensor.repeat(P, *([1] * (tensor.ndim - 1)))
+
+        # Both patch and interp need an active patching strategy.
+        patching = self._patching
+        if patching is None:
+            raise RuntimeError(
+                "No patching strategy set. Call set_random_patching() "
+                "or set_grid_patching() first."
+            )
+
         if do_patch:
-            return self._patching.apply(tensor)
+            return patching.apply(tensor)
 
-        if do_interp:
-            Hp, Wp = self._patching.patch_shape
-            tensor = F.interpolate(tensor, size=(Hp, Wp), mode="bilinear")
-            return tensor.repeat(P, 1, 1, 1)
+        # do_interp case
+        Hp, Wp = patching.patch_shape
+        tensor = F.interpolate(tensor, size=(Hp, Wp), mode="bilinear")
+        return tensor.repeat(P, 1, 1, 1)
 
-        # Default: repeat along batch dimension
-        return tensor.repeat(P, *([1] * (tensor.ndim - 1)))
+    def _inject_patched_pos_embd(
+        self,
+        condition: Tensor | TensorDict | None,
+        pos_embd_patched: Float[Tensor, "P_times_B C_PE Hp Wp"],
+        PB: int,
+    ) -> TensorDict:
+        """Inject an already-patched positional embedding into the (possibly
+        already-patched) condition under the ``"positional_embedding"`` key.
+
+        Common logic factored out of :meth:`forward` so it can be reused by
+        :class:`~physicsnemo.diffusion.multi_diffusion.MultiDiffusionPredictor`.
+        When ``condition`` is a ``TensorDict`` it is mutated in place for
+        efficiency; otherwise a new ``TensorDict`` is built.
+        """
+        if condition is None:
+            return TensorDict(
+                {"positional_embedding": pos_embd_patched},
+                batch_size=[PB],
+            )
+        if isinstance(condition, TensorDict):
+            condition["positional_embedding"] = pos_embd_patched
+            return condition
+        if isinstance(condition, Tensor):
+            return TensorDict(
+                {"condition": condition, "positional_embedding": pos_embd_patched},
+                batch_size=[PB],
+            )
+        raise ValueError(
+            "When positional embeddings are configured, condition must be a "
+            f"Tensor, TensorDict, or None, got {type(condition).__name__}."
+        )

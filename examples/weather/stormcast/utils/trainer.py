@@ -334,7 +334,6 @@ class Trainer:
             self.dataset_train,
             batch_size=self.local_batch_size,
             num_workers=num_workers,
-            seed=self.cfg.training.seed,
         )
         self.dataset_iterator = self.parallel_helper.sharded_data_iter(
             self.train_dataloader

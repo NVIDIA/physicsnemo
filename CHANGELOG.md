@@ -171,6 +171,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `smooth_laplacian` and `compute_quality_metrics` have been replaced
   with the dtype-aware `.clamp(min=safe_eps(dtype))` to avoid silently
   zeroing fp16 weights.
+- Fixed a silent bug in loading of optimizer state from checkpoint for
+  FSDP-backed models with `use_orig_params=False` and channels last
+  memory format.
 - Fixed issues with physicsnemo.nn.functional's `radius_search` that
   caused crashes when used with torch.compile.
 
