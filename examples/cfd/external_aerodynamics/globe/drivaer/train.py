@@ -33,16 +33,19 @@ from time import perf_counter
 from typing import Any, Literal
 
 import matplotlib as mpl
-import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 import torchinfo
-from dataset import AirFRANSDataSet, AirFRANSSample
+from dataset import (
+    DrivAerMLDataSet,
+    DrivAerMLSample,
+    postprocess,
+    visualize_comparison,
+)
 from jaxtyping import Float
 from mlflow.tracking.fluent import (
     active_run,
     log_artifact,
-    log_figure,
     log_metrics,
     set_experiment,
     start_run,
@@ -73,9 +76,12 @@ from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 mpl.use("agg")  # Allows headless plotting
 disable_autotune_printing()
 
-Split = Literal["train", "test"]
-splits: list[Split] = ["train", "test"]
+Split = Literal["train", "validation"]
+splits: list[Split] = ["train", "validation"]
 
+# MLflow's system-metrics monitor thread can collide with the main thread
+# when both write to SQLite on Lustre, causing "database is locked" errors.
+# Wrapping with retry ensures transient failures never kill training.
 log_artifact = resilient(log_artifact)
 log_metrics = resilient(log_metrics)
 
@@ -83,13 +89,14 @@ log_metrics = resilient(log_metrics)
 def main(
     data_dir: Path | None = None,
     output_name: str | None = None,
-    amp: bool = False,
+    amp: bool = True,
     use_compile: bool = True,
     compile_mode: Literal[
-        "default", "max-autotune-no-cudagraphs"
-    ] = "max-autotune-no-cudagraphs",
-    n_prediction_points: int = 2048,
-    learning_rate: float = 1e-3,
+        "default",
+        "max-autotune-no-cudagraphs",
+    ] = "default",  # max-autotune-no-cudagraphs has a CUDA illegal memory error. Due to buggy triton kernel in no-grad.
+    n_prediction_points: int | None = None,
+    learning_rate: float = 1e-2,
     weight_decay: float = 1e-4,
     use_muon: bool = True,
     muon_method: Literal["original", "match_rms_adamw"] = "match_rms_adamw",
@@ -97,71 +104,73 @@ def main(
     seed: int = 0,
     error_scales: dict[str, float] | None = None,
     n_communication_hyperlayers: int = 2,
-    hidden_layer_sizes: tuple[int, ...] = (128, 128, 128),
-    n_latent_scalars: int = 12,
-    n_latent_vectors: int = 6,
-    n_spherical_harmonics: int = 1,
-    theta: float = 0.0,
+    hidden_layer_sizes: tuple[int, ...] = (256, 256, 256),
+    n_latent_scalars: int = 8,
+    n_latent_vectors: int = 4,
+    n_spherical_harmonics: int = 4,
+    theta: float = 1.0,
     leaf_size: int = 1,
-    airfrans_task: Literal["full", "scarce", "reynolds", "aoa"] = "full",
+    n_faces_per_boundary: int = 80_000,
     patience_steps: int = 1600,
     use_profiler: bool = True,
-    make_images: bool = True,
-    save_every: int = 5,
+    make_images: bool = False,
+    save_every: int = 1,
     use_mlflow: bool = True,
-    mlflow_experiment: str = "GLOBE_AirFRANS",
+    mlflow_experiment: str = "GLOBE_DrivAerML",
     gradient_clip_norm: float | None = 1.0,
     network_type: Literal["pade", "mlp"] = "pade",
     self_regularization_beta: float | None = 0.01,
     latent_compression_scale: float | None = 100.0,
     expand_far_targets: bool = True,
 ):
-    """Train the GLOBE model on AirFRANS dataset.
+    """Train GLOBE on DrivAerML.
 
     Args:
-        data_dir: Path to the AirFRANS dataset directory. Resolution order:
-            1. This argument (if provided)
-            2. AIRFRANS_DATA_DIR environment variable (set automatically by run.sh)
-        output_name: Name for output directory. If None, uses current timestamp.
-        amp: Enable automatic mixed precision (AMP) training for faster computation.
-        use_compile: Enable torch.compile for model optimization and performance.
-        compile_mode: Mode for torch.compile.
-        n_prediction_points: Number of points to sample per training iteration.
-        learning_rate: Initial learning rate for the Adam optimizer.
-        weight_decay: Weight decay (L2 regularization) factor for the optimizer.
-        train_randomize_face_centers: Whether to use random points inside faces instead of centroids.
-        seed: Random seed for reproducibility across runs.
-        error_scales: Dictionary specifying error scales for loss components. If None, uses default scales.
-        n_communication_hyperlayers: Number of boundary-to-boundary communication layers.
-        hidden_layer_sizes: Hidden layer sizes for the kernel MLP architecture.
-        n_latent_scalars: Number of scalar latent channels propagated between hyperlayers.
-        n_latent_vectors: Number of vector latent channels propagated between hyperlayers.
-        n_spherical_harmonics: Number of Legendre polynomial terms for angle features.
-        theta: Barnes-Hut opening angle. Larger = more aggressive approximation.
+        data_dir: Path to the DrivAerML dataset root (containing ``run_N/``
+            subdirectories).  Falls back to ``DRIVAER_DATA_DIR`` env var.
+        output_name: Name for the output directory.  Defaults to a timestamp.
+        amp: Enable automatic mixed precision (bfloat16).
+        use_compile: Enable ``torch.compile`` for the forward/loss function.
+        compile_mode: Compilation mode for ``torch.compile``.
+        n_prediction_points: Surface points sampled per training iteration.
+            ``None`` (default) uses ``n_faces_per_boundary``.
+        learning_rate: Base learning rate (sqrt-scaled by world size).
+        weight_decay: Weight decay factor.
+        use_muon: Use Muon optimizer for 2D parameters (matrix weights).
+        muon_method: Muon learning-rate adjustment method.
+        train_randomize_face_centers: Sample random points inside faces
+            instead of centroids during training.
+        seed: Random seed.
+        error_scales: Per-field loss scaling.  Keys must match output field
+            names.  Defaults to ``{"C_p": 1.0, "C_f": 0.01}``.
+        n_communication_hyperlayers: GLOBE boundary-to-boundary comm layers.
+        hidden_layer_sizes: Kernel MLP architecture.
+        n_latent_scalars: Scalar latent channels between hyperlayers.
+        n_latent_vectors: Vector latent channels between hyperlayers.
+        n_spherical_harmonics: Legendre polynomial terms (default 4 for 3D).
+        theta: Barnes-Hut opening angle. Larger values are more
+            aggressive (more approximation, faster). 0 = exact.
         leaf_size: Maximum sources per leaf node in the Barnes-Hut tree.
-        airfrans_task: Which AirFRANS dataset task to train on.
+        n_faces_per_boundary: Target boundary mesh face count after decimation.
         patience_steps: ReduceLROnPlateau patience expressed in gradient
             steps (world-size independent).  Converted to epochs internally.
-        use_profiler: Enable PyTorch profiler for performance analysis.
-        make_images: Whether to make images for visualization.
+        use_profiler: Enable PyTorch profiler (rank 0 only).
+        make_images: Generate visualization images during training.
         save_every: Save a checkpoint every this many epochs.
-        use_mlflow: Enable MLflow experiment tracking. Requires MLFLOW_TRACKING_URI to be set
-            in the environment (see run.sh). When False, training still logs to console and
-            saves hyperparameters to YAML, but skips all MLflow calls.
-        mlflow_experiment: MLflow experiment name. Ignored when use_mlflow is False.
-
-    Note:
-        Output directory is created under the script's parent directory in an 'output' folder.
-        Error scales control the relative weighting of different physical fields in the loss.
-        When profiling is enabled, results are saved to output_dir/profiling/ as Chrome trace files.
+        use_mlflow: Enable MLflow experiment tracking.
+        mlflow_experiment: MLflow experiment name.
+        expand_far_targets: If True, expand far-field target nodes to
+            individual points so target-side approximation is removed
+            (more kernel evaluations, often more stable training).
     """
     ### [Config Processing]
     if data_dir is None:
-        if _data_dir_str := os.environ.get("AIRFRANS_DATA_DIR"):
+        if _data_dir_str := os.environ.get("DRIVAER_DATA_DIR"):
             data_dir = Path(_data_dir_str)
         else:
             raise ValueError(
-                "AirFRANS data directory not specified. Pass `data_dir` or set the AIRFRANS_DATA_DIR environment variable."
+                "DrivAerML data directory not specified.  Pass `data_dir` or "
+                "set the DRIVAER_DATA_DIR environment variable."
             )
     data_dir = Path(data_dir)
 
@@ -171,12 +180,12 @@ def main(
     output_dir = Path(__file__).parent / "output" / output_name
     cache_dir = Path(__file__).parent / "cache"
 
+    if n_prediction_points is None:
+        n_prediction_points = n_faces_per_boundary
+
     error_scale_config = {
-        "ΔU/|U_inf|": 1.0,
         "C_p": 1.0,
-        "C_pt": 1.0,
-        "ln(1+nut/nu)": 5.0,
-        "C_F,shear": 0.01,
+        "C_f": 0.01,
     } | ({} if error_scales is None else error_scales)
 
     config_settings = locals()
@@ -200,7 +209,7 @@ def main(
         )
     else:
         logging.disable(logging.ERROR)
-    logger = PythonLogger("globe.airfrans.train")
+    logger = PythonLogger("globe.drivaer.train")
     logger0 = RankZeroLoggingWrapper(logger, dist)
     logger0.info(f"{dist.world_size = }")
 
@@ -218,11 +227,7 @@ def main(
     shutdown_file = output_dir / "SHUTDOWN"
 
     if dist.rank == 0:
-        for directory in (
-            checkpoint_dir,
-            torch_compile_cache_dir,
-            profiling_dir,
-        ):
+        for directory in (checkpoint_dir, torch_compile_cache_dir, profiling_dir):
             directory.mkdir(parents=True, exist_ok=True)
         shutdown_file.unlink(missing_ok=True)
 
@@ -235,33 +240,35 @@ def main(
 
     ### [Dataset Preparation]
     sample_paths: dict[Split, list[Path]] = {
-        split: AirFRANSDataSet.get_split_paths(data_dir, airfrans_task, split)
-        for split in splits
+        split: DrivAerMLDataSet.get_split_paths(data_dir, split) for split in splits
     }
     dataloaders: dict[Split, DataLoader] = {
-        split: AirFRANSDataSet.make_dataloader(
+        split: DrivAerMLDataSet.make_dataloader(
             sample_paths[split],
             cache_dir,
             world_size=dist.world_size,
             rank=dist.rank,
+            n_faces_per_boundary=n_faces_per_boundary,
         )
         for split in splits
     }
 
     ### [Model]
+    # Reference area: constant aRefRef = 2.170 m² from the DrivAerML spec
     model = GLOBE(
-        n_spatial_dims=2,
+        n_spatial_dims=3,
         output_field_ranks={
-            "ΔU/|U_inf|": 1,
             "C_p": 0,
-            "C_pt": 0,
-            "ln(1+nut/nu)": 0,
-            "C_F,shear": 1,
+            "C_f": 1,
         },
-        boundary_source_data_ranks={"no_slip": {}},
-        reference_length_names=["chord", "delta_FS"],
-        reference_area=1.0,
-        global_data_ranks={"U_inf / U_inf_magnitude": 1},
+        boundary_source_data_ranks={
+            "vehicle": {},
+            "no_slip_floor": {},
+            "slip_floor": {},
+        },
+        reference_length_names=["L_ref", "delta_turb"],
+        reference_area=2.170,
+        global_data_ranks=None,
         n_communication_hyperlayers=n_communication_hyperlayers,
         hidden_layer_sizes=hidden_layer_sizes,
         n_latent_scalars=n_latent_scalars,
@@ -291,9 +298,9 @@ def main(
     torch._dynamo.config.capture_scalar_outputs = True
 
     # The GLOBE model stores latent channels as individually-named TensorDict
-    # entries (18 keys for 12 scalar + 6 vector channels).  Dynamo specializes
-    # on each key, so the default limit of 8 is exhausted mid-forward and
-    # remaining code falls back to eager.
+    # entries (one key per scalar/vector channel).  Dynamo specializes on each
+    # key, so the default limit of 8 is exhausted mid-forward and remaining
+    # code falls back to eager.
     torch._dynamo.config.cache_size_limit = 64
 
     ### [Distribute the model across GPUs]
@@ -417,10 +424,7 @@ def main(
         if not mlflow_run_id:
             mlflow_run_ctx = start_run(
                 run_name=f"{output_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                tags={
-                    "airfrans_task": airfrans_task,
-                    "output_name": output_name,
-                },
+                tags={"output_name": output_name},
                 log_system_metrics=True,
             )
 
@@ -437,7 +441,6 @@ def main(
                 "physicsnemo_pkg_info": get_physicsnemo_pkg_info(),
                 "world_size": dist.world_size,
                 **{f"n_{split}_samples": len(sample_paths[split]) for split in splits},
-                **{f"{split}_sample_paths": sample_paths[split] for split in splits},
             },
         )
         if use_mlflow:
@@ -450,64 +453,36 @@ def main(
         disable=not use_compile,
     )
     def run_batch(
-        sample: AirFRANSSample,
+        sample: DrivAerMLSample,
     ) -> tuple[torch.Tensor, TensorDict[str, Float[torch.Tensor, ""]]]:
-        """Runs a single batch (always just one sample) through the model and computes the loss."""
+        """Forward pass + loss for one sample."""
         pred_mesh = model(**sample.model_input_kwargs)
         batch_loss_components = pred_mesh.point_data.apply(
             field_loss_fn,
             sample.prediction_mesh.point_data,
             error_scales.expand_as(pred_mesh.point_data),
-        ).mean(dim=0)  # Mean over points
+        ).mean(dim=0)
         batch_loss = batch_loss_components.stack_from_tensordict().sum()
         return batch_loss, batch_loss_components
 
     def run_epoch(split: Split) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        """Run one epoch of training or testing.
-
-        Returns:
-            ``(epoch_loss, epoch_loss_components)``: average total loss
-            (scalar tensor) and a dict mapping component names to their
-            average losses (scalar tensors).  All values are synchronized
-            across ranks via all-reduce.
-        """
+        """Run one epoch of training or testing."""
         training = split == "train"
-        dataloaders[split].sampler.set_epoch(epoch=epoch)  # ty: ignore[unresolved-attribute]
+        dataloaders[split].sampler.set_epoch(epoch=epoch)
         model.train(training)
 
         all_batch_losses: list[torch.Tensor] = []
         all_batch_loss_components: dict[str, list[torch.Tensor]] = defaultdict(list)
 
-        def prepare_sample(sample: AirFRANSSample) -> AirFRANSSample:
-            """Subsample prediction points, precompute cell geometry, transfer to GPU.
-
-            Runs in a background thread via prefetch_map so that CPU-bound
-            preparation of sample N+1 overlaps with GPU processing of sample N.
-            """
-            with record_function("data_subsampling"):
-                n_points = min(n_prediction_points, sample.prediction_mesh.n_points)
-                mask = torch.randint(sample.prediction_mesh.n_points, (n_points,))
-                sample.prediction_mesh = (
-                    sample.prediction_mesh.to_point_cloud().slice_points(mask)
-                )
-
-                for mesh in sample.boundary_meshes.values():
-                    if training and train_randomize_face_centers:
-                        mesh._cache["cell", "centroids"] = (
-                            mesh.sample_random_points_on_cells()
-                        )
-                    else:
-                        _ = mesh.cell_centroids
-                    _ = mesh.cell_areas
-                    _ = mesh.cell_normals
-
-            with record_function("data_transfer"):
-                sample = sample.to(device)
-
-            return sample
-
         for sample in tqdm(
-            prefetch_map(dataloaders[split], prepare_sample),
+            prefetch_map(
+                dataloaders[split],
+                lambda s: s.prepare(
+                    n_prediction_points,
+                    device,
+                    randomize_vehicle=training and train_randomize_face_centers,
+                ),
+            ),
             desc=f"{epoch:d} {split.title()}",
             unit=" samples",
             disable=dist.rank != 0 or epoch > 10,
@@ -538,6 +513,7 @@ def main(
                     with record_function("optimizer_step"):
                         scaler.step(optimizer)
                         scaler.update()
+
                 all_batch_losses.append(batch_loss.detach().clone())
                 for k, v in batch_loss_components.items():
                     all_batch_loss_components[k].append(v.detach().clone())
@@ -552,7 +528,7 @@ def main(
                 _globe_logger.setLevel(logging.INFO)
                 torch._logging.set_logs(graph_breaks=False, recompiles=False)
 
-        # [Distributed comms]
+        ### [Distributed comms]
         keys = ["loss", *all_batch_loss_components.keys()]
         all_values = torch.stack(
             [
@@ -637,16 +613,14 @@ def main(
 
             ### [Logging and Checkpointing]
             if dist.rank == 0:
-                ### [Checkpointing]
                 if epoch % save_every == 0:
                     save_ckpt()
-                if loss["test"] < best_loss:
-                    best_loss = loss["test"]
+                if loss["validation"] < best_loss:
+                    best_loss = loss["validation"]
                     base_model.save(best_model_path)
                     if use_mlflow:
                         log_artifact(str(best_model_path), artifact_path="best_model")
 
-                ### [MLflow Scalars Logging]
                 if use_mlflow:
                     log_metrics(
                         {
@@ -674,7 +648,7 @@ def main(
                     save_ckpt()
                 break
 
-            ### [MLflow Image Logging]
+            ### [Visualization]
             if (
                 make_images
                 and (loss["train"] / last_image_loss < 0.9)
@@ -683,51 +657,18 @@ def main(
                 if dist.rank == 0:
                     logger0.info("Generating visualization images...")
                     for split in splits:
-                        viz_sample = dataloaders[split].dataset[0].to(device)
-                        with torch.no_grad(), autocast_ctx:
-                            base_model.eval()
-                            pred_mesh = base_model(
-                                **viz_sample.model_input_kwargs,
-                            )
-
-                        combined = AirFRANSDataSet.postprocess(
-                            pred_mesh=pred_mesh.to(device="cpu"),
-                            sample=viz_sample.to(device="cpu"),
+                        generate_visualization(
+                            model=base_model,
+                            dataset=dataloaders[split].dataset,
+                            n_faces_per_boundary=n_faces_per_boundary,
+                            device=device,
+                            autocast_ctx=autocast_ctx,
+                            output_dir=output_dir,
+                            split=split,
+                            epoch=epoch,
+                            use_mlflow=use_mlflow,
+                            logger=logger0,
                         )
-                        AirFRANSDataSet.visualize_comparison(combined, show=False)
-                        plt.gcf().set_dpi(300)
-                        if use_mlflow:
-                            log_figure(
-                                plt.gcf(),
-                                f"visualization/{split}_sample_epoch_{epoch}.png",
-                            )
-                        plt.close()
-
-                        ### [Surface Force Coefficients]
-                        pred_coeffs = combined.global_data["pred"].to_dict()  # ty: ignore[unresolved-attribute]
-                        true_coeffs = combined.global_data["true"].to_dict()  # ty: ignore[unresolved-attribute]
-
-                        logger0.info(
-                            f"Force coefficients ({split}):"
-                            + "".join(
-                                f"\n  {k}: pred={pred_coeffs[k]:.5f}"
-                                f"  true={true_coeffs[k]:.5f}"
-                                f"  err={pred_coeffs[k] - true_coeffs[k]:+.5f}"
-                                for k in ("Cd", "Cl")
-                            )
-                        )
-                        if use_mlflow:
-                            log_metrics(
-                                {
-                                    f"force_coeffs/{split}_{k}_{src}": coeffs[k]
-                                    for src, coeffs in [
-                                        ("pred", pred_coeffs),
-                                        ("true", true_coeffs),
-                                    ]
-                                    for k in pred_coeffs
-                                },
-                                step=epoch,
-                            )
 
                 last_image_epoch, last_image_loss = epoch, loss["train"]
                 if dist.world_size > 1:
@@ -735,7 +676,7 @@ def main(
 
             ### [torch.compile Caching]
             if use_compile and not torch_compile_cache.exists():
-                artifacts_bytes, cache_info = torch.compiler.save_cache_artifacts()  # ty: ignore[not-iterable]
+                artifacts_bytes, cache_info = torch.compiler.save_cache_artifacts()
                 torch_compile_cache.write_bytes(artifacts_bytes)
                 logger.info(f"Saved torch.compile cache to {torch_compile_cache}.")
 
@@ -745,19 +686,18 @@ def field_loss_fn(
     true: Float[torch.Tensor, "n_points ..."],
     error_scale: Float[torch.Tensor, ""],
 ) -> Float[torch.Tensor, " n_points"]:
-    """Per-point Huber loss for GLOBE field predictions, with NaN masking.
+    """Per-point Huber loss with NaN masking and per-field scaling.
 
-    Computes the scaled error ``(pred - true) / error_scale``, masks out
-    points where ``true`` is NaN, takes the vector norm for multi-component
-    fields, and applies a Huber loss (delta=1) with a factor of 2.
+    Computes ``||(pred - true) / error_scale||`` with Huber smoothing
+    (delta=1) and masks out NaN entries in *true*.
 
     Args:
-        pred: Predicted field values, shape ``(n_points,)`` or ``(n_points, n_dims)``.
-        true: Ground-truth field values (same shape). NaN entries are masked.
-        error_scale: Per-field scaling factor broadcastable to *pred*.
+        pred: Predicted values, ``(n_points,)`` or ``(n_points, 3)``.
+        true: Ground truth (same shape). NaN entries are masked.
+        error_scale: Scalar scaling factor for this field.
 
     Returns:
-        Per-point loss tensor of shape ``(n_points,)``.
+        Per-point loss of shape ``(n_points,)``.
     """
     error = torch.where(
         torch.isnan(true),
@@ -767,6 +707,88 @@ def field_loss_fn(
     if error.ndim > 1:
         error = error.norm(dim=-1)
     return 2 * F.huber_loss(error, torch.zeros_like(error), reduction="none", delta=1.0)
+
+
+def generate_visualization(
+    model: torch.nn.Module,
+    dataset: DrivAerMLDataSet,
+    *,
+    n_faces_per_boundary: int,
+    device: torch.device,
+    autocast_ctx: contextlib.AbstractContextManager,
+    output_dir: Path,
+    split: str,
+    epoch: int,
+    use_mlflow: bool,
+    logger: Any,
+) -> None:
+    """Run inference on sample 0 of a split and produce comparison visualizations.
+
+    Generates a pred/true/error image, computes integrated force coefficients,
+    and logs both to MLflow (if enabled) and the console.
+
+    Args:
+        model: Trained GLOBE model (will be set to eval mode).
+        dataset: Dataset to draw sample 0 from.
+        n_faces_per_boundary: Face count for subsampling the prediction mesh.
+        device: Device to run inference on.
+        autocast_ctx: Autocast context for mixed precision.
+        output_dir: Directory for saving visualization images.
+        split: Split name (for labeling output files and log messages).
+        epoch: Current epoch (for labeling output files and MLflow steps).
+        use_mlflow: Whether to log artifacts and metrics to MLflow.
+        logger: Logger instance for console output.
+    """
+    viz_sample = dataset[0]
+
+    ### Subsample prediction surface for speed
+    if viz_sample.prediction_mesh.n_cells > n_faces_per_boundary:
+        viz_sample.prediction_mesh = DrivAerMLDataSet.subsample_mesh(
+            viz_sample.prediction_mesh,
+            n_faces_per_boundary,
+            geometry_only=False,
+        )
+
+    viz_sample = viz_sample.to(device)
+    with torch.no_grad(), autocast_ctx:
+        model.eval()
+        pred_mesh = model(**viz_sample.model_input_kwargs)
+
+    combined = postprocess(
+        pred_mesh=pred_mesh.to(device="cpu"),
+        sample=viz_sample.to(device="cpu"),
+    )
+
+    save_path = output_dir / f"viz_{split}_epoch_{epoch}.png"
+    visualize_comparison(combined, save_path=save_path, backend="matplotlib")
+    if use_mlflow:
+        log_artifact(str(save_path), artifact_path="visualization")
+
+    ### Log force coefficients
+    pred_coeffs = combined.global_data["pred"].to_dict()  # ty: ignore[unresolved-attribute]
+    true_coeffs = combined.global_data["true"].to_dict()  # ty: ignore[unresolved-attribute]
+
+    logger.info(
+        f"Force coefficients ({split}):"
+        + "".join(
+            f"\n  {k}: pred={pred_coeffs[k]:.5f}"
+            f"  true={true_coeffs[k]:.5f}"
+            f"  err={pred_coeffs[k] - true_coeffs[k]:+.5f}"
+            for k in ("Cd", "Cl", "Cs")
+        )
+    )
+    if use_mlflow:
+        log_metrics(
+            {
+                f"force_coeffs/{split}_{k}_{src}": coeffs[k]
+                for src, coeffs in [
+                    ("pred", pred_coeffs),
+                    ("true", true_coeffs),
+                ]
+                for k in pred_coeffs
+            },
+            step=epoch,
+        )
 
 
 if __name__ == "__main__":

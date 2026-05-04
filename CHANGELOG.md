@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   including new variant that uses a dual tree traversal algorithm to reduce the
   complexity of the kernel evaluations from O(N^2) to O(N).
 - Adds GLOBE AirFRANS example case (`examples/cfd/external_aerodynamics/globe/airfrans`)
+- Adds GLOBE DrivAerML example case (`examples/cfd/external_aerodynamics/globe/drivaer`)
 - Adds drop-test dynamics recipe.
 - Adds concrete dropout uncertainty quantification for GeoTransolver. Learnable
   per-layer dropout rates enable MC-Dropout inference for uncertainty

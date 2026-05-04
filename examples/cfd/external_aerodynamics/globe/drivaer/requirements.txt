@@ -1,0 +1,9 @@
+tyro~=1.0.8
+pyyaml
+torchinfo~=1.8.0
+mlflow~=3.10.0
+tenacity~=9.1.4
+pyvista~=0.47.0
+matplotlib~=3.10.8
+tensordict~=0.12.2
+nvidia-ml-py>=13.590.48
