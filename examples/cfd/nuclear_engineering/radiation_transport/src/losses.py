@@ -189,38 +189,6 @@ def create_scheduler(cfg: DictConfig, optimizer: torch.optim.Optimizer, logger=N
 # =========================================================================
 
 
-def loss_fn(
-    output: torch.Tensor,
-    target: torch.Tensor,
-    loss_type: str = "mse",
-    padded_value: float = -10,
-) -> torch.Tensor:
-    """
-    Calculate loss with masking for padded values.
-
-    Args:
-        output: Predicted values
-        target: Ground truth values
-        loss_type: Type of loss - "mse" or "rmse"
-        padded_value: Value used for padding (will be masked out)
-
-    Returns:
-        Scalar loss value
-    """
-    mask = abs(target - padded_value) > 1e-3
-
-    num = torch.sum(mask * (output - target) ** 2.0)
-
-    if loss_type == "rmse":
-        denom = torch.sum(mask * target**2.0)
-        loss = torch.sqrt(num / denom)
-    else:  # mse
-        denom = torch.sum(mask)
-        loss = num / denom
-
-    return loss
-
-
 def masked_mse_loss(
     output: torch.Tensor, target: torch.Tensor, mask: torch.Tensor = None
 ) -> torch.Tensor:
@@ -657,74 +625,6 @@ def compute_hohlraum_qoi_loss(
     return loss, details
 
 
-def compute_combined_loss(
-    predicted_flux: torch.Tensor,
-    target_flux: torch.Tensor,
-    cell_centers: torch.Tensor,
-    cell_areas: torch.Tensor,
-    sigma_t: torch.Tensor,
-    sigma_s: torch.Tensor,
-    sim_time: torch.Tensor,
-    mse_weight: float = 1.0,
-    qoi_weight: float = 0.1,
-    loss_type: str = "mse",
-    padded_value: float = -10,
-) -> tuple[torch.Tensor, dict[str, float]]:
-    """
-    Compute combined MSE + QoI physics loss for lattice problems.
-
-    Args:
-        predicted_flux: Model predictions (normalized), shape (B, N, 1)
-        target_flux: Ground truth flux (normalized), shape (B, N, 1)
-        cell_centers: Cell center coordinates (unnormalized), shape (B, N, 3)
-        cell_areas: Cell areas, shape (B, N)
-        sigma_t: Total cross-section, shape (B, N)
-        sigma_s: Scattering cross-section, shape (B, N)
-        sim_time: Simulation time for each sample, shape (B,)
-        mse_weight: Weight for MSE loss component (default: 1.0)
-        qoi_weight: Weight for QoI loss component (default: 0.1)
-        loss_type: Type of MSE loss - "mse" or "rmse"
-        padded_value: Value used for padding (will be masked out)
-
-    Returns:
-        total_loss: Combined weighted loss
-        loss_dict: Dictionary with individual loss components
-    """
-    # compute MSE loss with masking
-    mask = abs(target_flux - padded_value) > 1e-3
-    num = torch.sum(mask * (predicted_flux - target_flux) ** 2.0)
-
-    if loss_type == "rmse":
-        denom = torch.sum(mask * target_flux**2.0)
-        loss_mse = torch.sqrt(num / denom)
-    else:
-        denom = torch.sum(mask)
-        loss_mse = num / denom
-
-    # compute QoI physics loss (uses normalized flux)
-    loss_qoi = compute_lattice_qoi_loss(
-        predicted_flux=predicted_flux,
-        target_flux=target_flux,
-        cell_centers=cell_centers,
-        cell_areas=cell_areas,
-        sigma_t=sigma_t,
-        sigma_s=sigma_s,
-        sim_time=sim_time,
-    )
-
-    # combine losses
-    total_loss = mse_weight * loss_mse + qoi_weight * loss_qoi
-
-    # return loss and components
-    loss_dict = {
-        "loss": total_loss.item(),
-        "loss_mse": loss_mse.item(),
-        "loss_qoi": loss_qoi.item(),
-    }
-
-    return total_loss, loss_dict
-
-
 def extract_geometry_params(filename) -> dict:
     """Extract hohlraum geometry parameters from zarr filename."""
     # handle list (batched) or single string filename
@@ -1078,7 +978,6 @@ __all__ = [
     "WarmupCosineScheduler",
     "create_scheduler",
     # Regression losses
-    "loss_fn",
     "masked_mse_loss",
     "region_weighted_loss_fn",
     "parse_loss_config",
@@ -1086,7 +985,6 @@ __all__ = [
     "compute_physics_loss",
     "compute_lattice_qoi_loss",
     "compute_hohlraum_qoi_loss",
-    "compute_combined_loss",
     "denormalize_flux_from_stats",
     "extract_geometry_params",
     # QoI helpers (torch)

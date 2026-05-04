@@ -60,7 +60,6 @@ _TENSOR_FIELD_NAMES = (
     "coordinates",
     "cell_areas",
     "scalar_flux",
-    "timesteps",
     "sim_times",
     "material_properties",
     "geometric_features",
@@ -199,9 +198,9 @@ class ZarrDataReader(Reader):
     ) -> TensorDict:
         """Load a zarr store into a ``TensorDict``.
 
-        Tensor fields (``coordinates``, ``cell_areas``, ``scalar_flux``,
-        ``timesteps`` and the optional ``sim_times`` / ``material_properties``
-        / ``geometric_features`` / ``sigma_*`` / ``Q``) are stored as
+        Tensor fields (``coordinates``, ``cell_areas``, ``scalar_flux``, and
+        the optional ``sim_times`` / ``material_properties`` / ``geometric_features``
+        / ``sigma_*`` / ``Q``) are stored as
         ``torch.Tensor`` entries. The zarr store's ``.attrs`` dict is stored
         as ``NonTensorData`` under the ``metadata`` key.
 
@@ -220,13 +219,11 @@ class ZarrDataReader(Reader):
             flux_shape = z["scalar_flux"].shape
             num_cells = flux_shape[-1]
             scalar_flux = np.zeros((1, num_cells), dtype=np.float32)
-            timesteps_array = np.array([0])
             sim_times = None
         else:
             flux_array = z["scalar_flux"]
             if len(flux_array.shape) == 1:
                 scalar_flux = np.array(flux_array, dtype=np.float32)[None, :]
-                timesteps_array = np.array([0])
                 resolved = [0]
             else:
                 num_timesteps = flux_array.shape[0]
@@ -238,7 +235,6 @@ class ZarrDataReader(Reader):
                     ],
                     axis=0,
                 )
-                timesteps_array = np.array([z["timesteps"][idx] for idx in resolved])
             if load_sim_times and "sim_times" in z:
                 sim_times = np.array(
                     [z["sim_times"][idx] for idx in resolved], dtype=np.float32
@@ -257,7 +253,6 @@ class ZarrDataReader(Reader):
 
         td = TensorDict({}, batch_size=[])
         td["scalar_flux"] = _to_tensor(scalar_flux)
-        td["timesteps"] = _to_tensor(np.asarray(timesteps_array))
         if sim_times is not None:
             td["sim_times"] = _to_tensor(np.asarray(sim_times))
 
@@ -355,7 +350,7 @@ class ZarrDataReader(Reader):
         filepath = self.data_path / filename
         z = zarr.open(str(filepath), mode="r")
 
-        required = ["cell_centers", "cell_areas", "scalar_flux", "timesteps"]
+        required = ["cell_centers", "cell_areas", "scalar_flux"]
         for key in required:
             if key not in z:
                 raise ValueError(f"Zarr store missing required key: {key}")
@@ -481,7 +476,6 @@ class RTEBaseDataset(Dataset):
             )
             entry: Dict[str, torch.Tensor] = {
                 "scalar_flux": td["scalar_flux"].clone(),
-                "timesteps": td["timesteps"].clone(),
             }
             if "sim_times" in td:
                 entry["sim_times"] = td["sim_times"].clone()
@@ -524,7 +518,6 @@ class RTEBaseDataset(Dataset):
             print(f"  Cache misses: {cache_stats['cache_misses']}")
             flux_mem = sum(
                 cached["scalar_flux"].element_size() * cached["scalar_flux"].numel()
-                + cached["timesteps"].element_size() * cached["timesteps"].numel()
                 + (
                     cached["sim_times"].element_size() * cached["sim_times"].numel()
                     if "sim_times" in cached
@@ -565,7 +558,6 @@ class RTEBaseDataset(Dataset):
                 load_flux=False,
             )
             td["scalar_flux"] = cached["scalar_flux"]
-            td["timesteps"] = cached.get("timesteps", td["timesteps"])
             if "sim_times" in cached:
                 td["sim_times"] = cached["sim_times"]
         else:

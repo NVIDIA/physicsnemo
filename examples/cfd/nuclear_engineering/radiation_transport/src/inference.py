@@ -48,7 +48,7 @@ import torch.nn as nn
 import yaml
 from omegaconf import DictConfig, OmegaConf
 from torch.amp import autocast
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 # Flat sibling imports — keep this module self-contained relative to ``src/``.

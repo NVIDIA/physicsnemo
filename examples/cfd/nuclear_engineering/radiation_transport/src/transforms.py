@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Transform framework + flux / coordinates / sampling / qoi transforms.
+"""Transform framework + flux / coordinates / sampling transforms.
 
 This module consolidates the RTE transform framework with the concrete
 preprocessing transforms used by the Transolver pipeline. It is intentionally
@@ -23,13 +23,9 @@ flat (no submodules) so the standalone example can be read top-to-bottom:
 * ``Transform`` and ``Compose`` are re-exports from PhysicsNeMo
   (``physicsnemo.datapipes.transforms``); RTE transforms subclass ``Transform``
   and operate on ``tensordict.TensorDict`` instances.
-* ``TRANSFORM_REGISTRY`` is a module-level dict mapping the string names used
-  by Hydra configs (``"RTEFluxLogClip"``, etc.) to the transform classes
-  defined here. Sibling modules (e.g. ``material.py``) register their own
-  transforms into the same dict.
 * The ``@register(...)`` decorator from
   ``physicsnemo.datapipes.registry`` populates the global PhysicsNeMo registry;
-  we apply it alongside the local registry for instantiation by either path.
+  we apply it for config-driven instantiation if needed.
 
 Material transforms live in the sibling ``material.py``.
 """
@@ -41,26 +37,23 @@ from __future__ import annotations
 # =========================================================================
 
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Type, Union
+from typing import Any, Dict, Mapping, Optional, Union
 
 import numpy as np
 import torch
-import zarr
 from physicsnemo.datapipes.registry import register
-from physicsnemo.datapipes.transforms import Compose, Transform
-from tensordict import NonTensorData, TensorDict
+from physicsnemo.datapipes.transforms import Transform
+from tensordict import TensorDict
 
 
 # =========================================================================
-# Framework: Transform base, Compose, TensorDict utilities, registry
+# Framework: Transform base + TensorDict utilities
 # =========================================================================
 #
-# ``Transform`` and ``Compose`` are imported above. RTE transforms subclass
-# ``Transform`` and operate on ``TensorDict``. The TensorDict helpers below
+# ``Transform`` is imported above. RTE transforms subclass it and operate on
+# ``TensorDict``. The TensorDict helpers below
 # bridge numpy / torch / non-tensor (str, dict, None) values that flow through
-# the pipeline. ``TRANSFORM_REGISTRY`` is the local string->class map; the
-# ``@register(name)`` decorator additionally populates the PhysicsNeMo global
-# registry so existing config-driven instantiation paths continue to work.
+# the pipeline.
 
 
 def td_from_dict(sample: Mapping[str, Any]) -> TensorDict:
@@ -101,66 +94,14 @@ def to_numpy(value: Any) -> np.ndarray:
     return np.asarray(value)
 
 
-# Local registry: maps the string name used in configs to the transform class.
-# Sibling modules (e.g. ``material.py``) extend this dict at import time.
-TRANSFORM_REGISTRY: Dict[str, Type[Transform]] = {}
-
-
-def _register_local(name: str):
-    """Combined decorator: register with PhysicsNeMo's global registry and
-    record the class in ``TRANSFORM_REGISTRY`` under the same name."""
-
-    pnm_register = register(name)
-
-    def _decorator(cls):
-        TRANSFORM_REGISTRY[name] = cls
-        return pnm_register(cls)
-
-    return _decorator
-
-
 # =========================================================================
 # Flux
 # =========================================================================
 #
 # ``RTEFluxLogClip`` is the canonical pre-step that clamps flux and applies
 # log10 before z-score normalization (the latter performed by
-# ``physicsnemo.datapipes.transforms.Normalize``). ``FluxClipper`` and
-# ``LogTransform`` are kept as small standalone utilities for notebooks.
-# ``denormalize_flux`` inverts the full ``RTEFluxLogClip + Normalize`` chain
-# for evaluation.
-
-
-@_register_local("RTEFluxClipper")
-class FluxClipper(Transform):
-    """Clip flux below a threshold."""
-
-    def __init__(self, threshold: float = 1e-8):
-        super().__init__()
-        self.threshold = threshold
-
-    def __call__(self, data: TensorDict) -> TensorDict:
-        data["scalar_flux"] = torch.clamp(data["scalar_flux"], min=self.threshold)
-        return data
-
-    def extra_repr(self) -> str:
-        return f"threshold={self.threshold}"
-
-
-@_register_local("RTELogTransform")
-class LogTransform(Transform):
-    """Log10 transformation for flux."""
-
-    def __init__(self, offset: float = 1e-8):
-        super().__init__()
-        self.offset = offset
-
-    def __call__(self, data: TensorDict) -> TensorDict:
-        data["scalar_flux"] = torch.log10(data["scalar_flux"] + self.offset)
-        return data
-
-    def extra_repr(self) -> str:
-        return f"offset={self.offset}"
+# ``physicsnemo.datapipes.transforms.Normalize``). ``denormalize_flux`` inverts
+# the full ``RTEFluxLogClip + Normalize`` chain for evaluation.
 
 
 def denormalize_flux(
@@ -182,7 +123,7 @@ def denormalize_flux(
     return torch.clamp(flux, min=0.0)
 
 
-@_register_local("RTEFluxLogClip")
+@register("RTEFluxLogClip")
 class RTEFluxLogClip(Transform):
     """Clip flux to a threshold, apply ``log10``, and record denorm stats.
 
@@ -282,7 +223,7 @@ GLOBAL_DOMAIN_BOUNDS = {
 }
 
 
-@_register_local("RTEBackupCoords")
+@register("RTEBackupCoords")
 class RTEBackupCoords(Transform):
     """Clone ``coordinates`` into ``coordinates_unnormalized`` before Translate/Scale.
 
@@ -291,40 +232,20 @@ class RTEBackupCoords(Transform):
     transform immediately before
     ``physicsnemo.datapipes.transforms.Translate`` + ``Scale`` in the
     pipeline so the raw coords survive the normalization.
-
-    Optionally also writes ``bbox_min`` / ``bbox_max`` tensors to the
-    TensorDict so downstream code that previously read them from the legacy
-    ``CoordinateNormalizer`` output still finds them.
     """
 
-    def __init__(
-        self,
-        bbox_min: Optional[torch.Tensor] = None,
-        bbox_max: Optional[torch.Tensor] = None,
-    ) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.bbox_min = (
-            None if bbox_min is None else torch.as_tensor(bbox_min, dtype=torch.float32)
-        )
-        self.bbox_max = (
-            None if bbox_max is None else torch.as_tensor(bbox_max, dtype=torch.float32)
-        )
 
     def __call__(self, data: TensorDict) -> TensorDict:
         data["coordinates_unnormalized"] = data["coordinates"].clone()
-        if self.bbox_min is not None:
-            data["bbox_min"] = self.bbox_min.clone()
-        if self.bbox_max is not None:
-            data["bbox_max"] = self.bbox_max.clone()
         return data
 
     def extra_repr(self) -> str:
-        if self.bbox_min is None:
-            return "no bbox recorded"
-        return f"bbox_min={self.bbox_min.tolist()}, bbox_max={self.bbox_max.tolist()}"
+        return "preserve raw coordinates"
 
 
-@_register_local("RTEFourierFeatures")
+@register("RTEFourierFeatures")
 class FourierFeatures(Transform):
     """Sin/cos positional encoding features at multiple frequency scales."""
 
@@ -375,37 +296,6 @@ class FourierFeatures(Transform):
         )
 
 
-@_register_local("RTEStandardScaler")
-class StandardScaler(Transform):
-    """Z-score normalization for coordinates (utility, not used by default chain)."""
-
-    def __init__(
-        self, mean: Optional[np.ndarray] = None, std: Optional[np.ndarray] = None
-    ):
-        super().__init__()
-        self.mean = mean
-        self.std = std
-
-    def __call__(self, data: TensorDict) -> TensorDict:
-        coords = data["coordinates"]
-        if self.mean is not None:
-            mean_t = torch.as_tensor(
-                self.mean, dtype=coords.dtype, device=coords.device
-            )
-        else:
-            mean_t = coords.mean(dim=0)
-        if self.std is not None:
-            std_t = torch.as_tensor(self.std, dtype=coords.dtype, device=coords.device)
-        else:
-            std_t = coords.std(dim=0)
-        std_t = torch.where(std_t < 1e-10, torch.ones_like(std_t), std_t)
-
-        data["coordinates"] = (coords - mean_t) / std_t
-        data["coord_mean"] = mean_t
-        data["coord_std"] = std_t
-        return data
-
-
 # =========================================================================
 # Sampling (spatial + steady-state)
 # =========================================================================
@@ -414,7 +304,7 @@ class StandardScaler(Transform):
 # ``SteadyStateSampler`` extracts the fixed initial->final flux mapping.
 
 
-@_register_local("RTESpatialSampler")
+@register("RTESpatialSampler")
 class SpatialSampler(Transform):
     """Sample spatial points from mesh.
 
@@ -439,8 +329,6 @@ class SpatialSampler(Transform):
         num_available = data["coordinates"].shape[0]
 
         if self.num_points == -1:
-            data.set_non_tensor("spatial_indices", None)
-            data.set_non_tensor("spatial_num_original", num_available)
             return data
 
         needs_sampling = num_available > self.num_points
@@ -449,8 +337,6 @@ class SpatialSampler(Transform):
             indices_np = self.rng.choice(num_available, self.num_points, replace=False)
         else:
             if num_available == self.num_points:
-                data.set_non_tensor("spatial_indices", None)
-                data.set_non_tensor("spatial_num_original", num_available)
                 return data
             indices_np = np.arange(num_available)
 
@@ -491,8 +377,6 @@ class SpatialSampler(Transform):
                     flux_1d = self._pad_flux_1d(flux_1d, self.num_points)
                 data[flux_key] = flux_1d
 
-        data["spatial_indices"] = indices
-        data.set_non_tensor("spatial_num_original", int(num_available))
         return data
 
     def _pad_tensor(self, tensor: torch.Tensor, target_size: int) -> torch.Tensor:
@@ -524,7 +408,7 @@ class SpatialSampler(Transform):
         return f"num_points={self.num_points}"
 
 
-@_register_local("RTESteadyStateSampler")
+@register("RTESteadyStateSampler")
 class SteadyStateSampler(Transform):
     """Extract the fixed steady-state mapping: first flux -> final flux."""
 
@@ -552,93 +436,6 @@ class SteadyStateSampler(Transform):
         )
         return data
 
-
-# =========================================================================
-# QoI loader
-# =========================================================================
-#
-# Loads ground-truth QoI values for the target timestep from each sample's
-# zarr ``global_metrics`` array. Lattice writes a single scalar; hohlraum
-# writes the three regional cumulated fluxes plus a ``ground_truth_qoi``
-# alias pointing at the center value (used by the loss).
-
-
-@_register_local("RTELoadGroundTruthQoI")
-class LoadGroundTruthQoI(Transform):
-    """Load ground truth QoI for the target timestep from zarr global_metrics."""
-
-    def __init__(self, data_path: Union[str, Path]):
-        super().__init__()
-        self.data_path = Path(data_path)
-
-    def __call__(self, data: TensorDict) -> TensorDict:
-        filename = td_get(data, "filename")
-        if filename is None:
-            raise ValueError(
-                "Sample is missing 'filename' field required for QoI loading"
-            )
-
-        timestep_target_idx = td_get(data, "timestep_target")
-        if timestep_target_idx is None:
-            raise ValueError(f"Sample from {filename} missing timestep_target field")
-
-        zarr_path = self.data_path / filename
-        if not zarr_path.exists():
-            raise FileNotFoundError(f"Zarr file not found: {zarr_path}")
-
-        z = zarr.open(str(zarr_path), mode="r")
-        if "global_metrics" not in z:
-            raise KeyError(f"'global_metrics' not found in zarr file: {zarr_path}")
-
-        global_metrics = np.array(z["global_metrics"], dtype=np.float32)
-        timesteps_full = np.array(z["timesteps"])
-
-        metadata = td_get(data, "metadata", default={}) or {}
-        case_type = metadata.get("case_type") if isinstance(metadata, dict) else None
-        if case_type is None:
-            raise ValueError("metadata.case_type is required for QoI computation")
-
-        timestep_target_idx = int(timestep_target_idx)
-        if timestep_target_idx >= len(timesteps_full):
-            raise ValueError(
-                f"timestep_target index {timestep_target_idx} out of bounds for "
-                f"full timesteps array of length {len(timesteps_full)} in {filename}"
-            )
-
-        global_metrics_idx = timestep_target_idx
-        if global_metrics_idx >= global_metrics.shape[0]:
-            raise IndexError(
-                f"QoI index {global_metrics_idx} out of bounds for global_metrics "
-                f"shape {global_metrics.shape} in {filename}"
-            )
-
-        if case_type == "lattice":
-            data["ground_truth_qoi"] = torch.tensor(
-                float(global_metrics[global_metrics_idx, 1]), dtype=torch.float32
-            )
-        elif case_type == "hohlraum":
-            center = float(global_metrics[global_metrics_idx, 1])
-            vertical = float(global_metrics[global_metrics_idx, 2])
-            horizontal = float(global_metrics[global_metrics_idx, 3])
-            data["ground_truth_qoi_cumulated_center"] = torch.tensor(
-                center, dtype=torch.float32
-            )
-            data["ground_truth_qoi_cumulated_vertical"] = torch.tensor(
-                vertical, dtype=torch.float32
-            )
-            data["ground_truth_qoi_cumulated_horizontal"] = torch.tensor(
-                horizontal, dtype=torch.float32
-            )
-            data["ground_truth_qoi"] = torch.tensor(center, dtype=torch.float32)
-        else:
-            raise ValueError(f"Unknown case type: {case_type}")
-
-        return data
-
-    def extra_repr(self) -> str:
-        return f"data_path={self.data_path}"
-
-
 # =========================================================================
 # Public API
 # =========================================================================
@@ -646,25 +443,17 @@ class LoadGroundTruthQoI(Transform):
 __all__ = [
     # Framework
     "Transform",
-    "Compose",
-    "TRANSFORM_REGISTRY",
     "td_from_dict",
     "td_get",
     "to_numpy",
-    "NonTensorData",
     # Flux
     "RTEFluxLogClip",
-    "FluxClipper",
-    "LogTransform",
     "denormalize_flux",
     # Coordinates
     "GLOBAL_DOMAIN_BOUNDS",
     "RTEBackupCoords",
     "FourierFeatures",
-    "StandardScaler",
     # Sampling
     "SpatialSampler",
     "SteadyStateSampler",
-    # QoI
-    "LoadGroundTruthQoI",
 ]

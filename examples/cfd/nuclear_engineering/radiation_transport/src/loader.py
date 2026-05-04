@@ -76,24 +76,13 @@ from dataset import (
 )
 from material import MaterialPropertyExtractor
 from transforms import (
-    TRANSFORM_REGISTRY,
     FourierFeatures,
-    LoadGroundTruthQoI,
     RTEBackupCoords,
     RTEFluxLogClip,
     SpatialSampler,
     SteadyStateSampler,
     td_from_dict,
 )
-
-
-# Register the material transform into the local TRANSFORM_REGISTRY so
-# config-driven lookups by name resolve correctly. ``material.py`` does not
-# decorate ``MaterialPropertyExtractor`` with ``@_register_local`` (to avoid
-# importing the registry plumbing from a sibling), so we wire it up here at
-# loader-import time. This keeps the registry a single source of truth even
-# for transforms that live outside ``transforms.py``.
-TRANSFORM_REGISTRY.setdefault("RTEMaterialPropertyExtractor", MaterialPropertyExtractor)
 
 
 # =========================================================================
@@ -146,9 +135,8 @@ class TransolverAdapter(ModelAdapter):
     * ``flux_target`` — target flux to predict.
 
     Extra fields (``coordinates_unnormalized``, ``material_labels``,
-    ``cell_areas``, ``sigma_t``, ``sigma_s``, ``sim_time``, ``ground_truth_qoi``,
-    ``flux_normalization_stats``, ``geometry_params``) are passed through when
-    present in the sample.
+    ``cell_areas``, ``sigma_t``, ``sigma_s``, ``sim_time``, and
+    ``flux_normalization_stats``) are passed through when present in the sample.
     """
 
     def __init__(
@@ -244,24 +232,8 @@ class TransolverAdapter(ModelAdapter):
                 sim_time = sim_time.unsqueeze(0)
             result["sim_time"] = sim_time
 
-        if "ground_truth_qoi" in sample:
-            qoi_value = sample["ground_truth_qoi"]
-            if not isinstance(qoi_value, torch.Tensor):
-                qoi_value = torch.tensor([qoi_value], dtype=torch.float32)
-            else:
-                qoi_value = qoi_value.float()
-            if self.add_batch_dim:
-                qoi_value = qoi_value.unsqueeze(0)
-            result["ground_truth_qoi"] = qoi_value
-
         if "flux_normalization_stats" in sample:
             result["flux_normalization_stats"] = sample["flux_normalization_stats"]
-
-        filename = sample.get("filename", "") or ""
-        if filename and "hohlraum" in filename.lower():
-            geometry_params = self._extract_geometry_params(filename)
-            if geometry_params:
-                result["geometry_params"] = geometry_params
 
         metadata = sample.get("metadata", {}) or {}
         max_timestep = metadata.get("max_timestep") if isinstance(metadata, dict) else None
@@ -277,30 +249,6 @@ class TransolverAdapter(ModelAdapter):
         result["metadata"] = {k: v for k, v in metadata_dict.items() if v is not None}
 
         return result
-
-    def _extract_geometry_params(self, filename: str) -> dict:
-        """Extract hohlraum geometry parameters from the zarr filename."""
-        filename = filename.replace(".zarr", "")
-        parts = filename.split("_")
-        geometry_params: Dict[str, float] = {}
-        for part in parts:
-            if part.startswith("ulr"):
-                geometry_params["ulr"] = float(part[3:])
-            elif part.startswith("llr"):
-                geometry_params["llr"] = float(part[3:])
-            elif part.startswith("urr"):
-                geometry_params["urr"] = float(part[3:])
-            elif part.startswith("lrr"):
-                geometry_params["lrr"] = float(part[3:])
-            elif part.startswith("hlr"):
-                geometry_params["hlr"] = float(part[3:])
-            elif part.startswith("hrr"):
-                geometry_params["hrr"] = float(part[3:])
-            elif part.startswith("cx"):
-                geometry_params["cx"] = float(part[2:])
-            elif part.startswith("cy"):
-                geometry_params["cy"] = float(part[2:])
-        return geometry_params
 
     def __repr__(self) -> str:
         return (
@@ -439,7 +387,6 @@ def build_rte_dataset_kwargs(
         "flux_clip_threshold": flux_clip_threshold,
         "split_file": split_file,
         "seed": seed,
-        "load_ground_truth_qoi": data_cfg.get("load_ground_truth_qoi", False),
         "cache_static_arrays": data_cfg.get("cache_static_arrays", True),
         "max_cache_size": data_cfg.get("max_cache_size", 200),
         "include_q_in_embedding": cfg.model.get("include_q_in_embedding", True),
@@ -543,7 +490,6 @@ class RTEDataPipe(Dataset):
         flux_normalization_stats_file: Optional[Union[str, Path]] = None,
         normalize_coordinates: bool = True,
         flux_clip_threshold: float = 1e-8,
-        load_ground_truth_qoi: bool = False,
         split_file: Optional[Union[str, Path]] = None,
         seed: Optional[int] = None,
         # Cache options
@@ -582,7 +528,6 @@ class RTEDataPipe(Dataset):
             fourier_num_frequencies=fourier_num_frequencies,
             fourier_coord_dims=fourier_coord_dims,
             fourier_base_frequency=fourier_base_frequency,
-            load_ground_truth_qoi=load_ground_truth_qoi,
         )
 
         adapter_obj = _build_adapter(
@@ -650,7 +595,6 @@ def _build_transforms(
     fourier_num_frequencies: int,
     fourier_coord_dims: int,
     fourier_base_frequency: float,
-    load_ground_truth_qoi: bool,
 ) -> Compose:
     """Assemble the canonical RTE transform pipeline.
 
@@ -663,7 +607,6 @@ def _build_transforms(
     5. ``SpatialSampler`` — always.
     6. ``RTEBackupCoords`` + ``Translate`` + ``Scale`` — when normalize_coordinates.
     7. ``FourierFeatures`` — when use_fourier_features.
-    8. ``LoadGroundTruthQoI`` — when load_ground_truth_qoi.
     """
     flux_stats = load_flux_stats(flux_normalization_stats_file)
     if abs(flux_stats["clip_threshold"] - flux_clip_threshold) > 1e-10:
@@ -711,14 +654,7 @@ def _build_transforms(
                 "(used to look up the global domain bounds)."
             )
         center, half_extent = coord_translate_scale_params(case_type)
-        # RTEBackupCoords preserves raw coords AND writes bbox_min / bbox_max
-        # so downstream readers keep working.
-        transform_list.append(
-            RTEBackupCoords(
-                bbox_min=center - half_extent,
-                bbox_max=center + half_extent,
-            )
-        )
+        transform_list.append(RTEBackupCoords())
         transform_list.append(
             Translate(
                 input_keys=["coordinates"],
@@ -743,9 +679,6 @@ def _build_transforms(
                 append_to_coordinates=True,
             )
         )
-
-    if load_ground_truth_qoi:
-        transform_list.append(LoadGroundTruthQoI(data_path=data_path))
 
     return Compose(transform_list)
 

@@ -52,6 +52,7 @@ from typing import Dict
 import numpy as np
 import torch
 import yaml
+from physicsnemo.datapipes.transforms import Compose
 
 # Flat-import shim: when invoked as ``python compute_normalizations.py`` the
 # script's own directory is already on ``sys.path``; when invoked from
@@ -62,7 +63,6 @@ from dataset import RTEBaseDataset  # noqa: E402
 from loader import RTEDataPipe  # noqa: E402
 from material import MaterialPropertyExtractor  # noqa: E402
 from transforms import (  # noqa: E402
-    Compose,
     RTEFluxLogClip,
     SpatialSampler,
     SteadyStateSampler,
