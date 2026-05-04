@@ -224,8 +224,25 @@ class CombinedOptimizer(torch.optim.Optimizer):
 
     def load_state_dict(self, state_dict: dict) -> None:
         """Load combined state dict."""
-        for opt, opt_state in zip(self.optimizers, state_dict["optimizers"]):
+        if "optimizers" not in state_dict:
+            raise KeyError(
+                "Expected CombinedOptimizer state_dict to contain 'optimizers', "
+                f"got keys: {list(state_dict.keys())}"
+            )
+
+        optimizer_states = state_dict["optimizers"]
+        if len(optimizer_states) != len(self.optimizers):
+            raise ValueError(
+                f"State dict contains {len(optimizer_states)} optimizer(s), "
+                f"but this CombinedOptimizer has {len(self.optimizers)} optimizer(s)."
+            )
+
+        for opt, opt_state in zip(self.optimizers, optimizer_states):
             opt.load_state_dict(opt_state)
+
+        self.param_groups = []
+        for opt in self.optimizers:
+            self.param_groups.extend(opt.param_groups)
 
 
 # =========================================================================
@@ -240,6 +257,62 @@ TOP_MODEL_DIR = "top_model"
 
 # Folder name for the best model by QoI relative error.
 BEST_QOI_MODEL_DIR = "best_qoi_model"
+
+# Folder name for the latest full training-state checkpoint.
+LATEST_CHECKPOINT_DIR = "latest_checkpoint"
+
+
+def _checkpoint_kwargs_with_metadata(
+    checkpoint_kwargs: Dict[str, Any], **metadata_updates
+) -> Dict[str, Any]:
+    """Return checkpoint kwargs with selected metadata keys refreshed."""
+    updated_kwargs = dict(checkpoint_kwargs)
+    metadata = dict(updated_kwargs.get("metadata") or {})
+    metadata.update(metadata_updates)
+    updated_kwargs["metadata"] = metadata
+    return updated_kwargs
+
+
+def save_latest_checkpoint(
+    checkpoint_dir: Path,
+    epoch: int,
+    save_checkpoint_fn,
+    logger: logging.Logger = None,
+    **checkpoint_kwargs,
+) -> Path:
+    """Replace ``latest_checkpoint`` with the most recent training state.
+
+    This checkpoint is meant for robust resume, not model selection. It is
+    overwritten at the caller's cadence, usually every epoch.
+
+    Args:
+        checkpoint_dir: Directory containing checkpoint subdirectories.
+        epoch: Current epoch number.
+        save_checkpoint_fn: Function to save the checkpoint.
+        logger: Optional logger.
+        **checkpoint_kwargs: Additional arguments forwarded to ``save_checkpoint_fn``.
+
+    Returns:
+        Path to the refreshed ``latest_checkpoint`` directory.
+    """
+    checkpoint_dir = Path(checkpoint_dir)
+    latest_path = checkpoint_dir / LATEST_CHECKPOINT_DIR
+    tmp_path = checkpoint_dir / f".{LATEST_CHECKPOINT_DIR}.tmp"
+
+    if tmp_path.exists():
+        shutil.rmtree(tmp_path)
+    tmp_path.mkdir(parents=True, exist_ok=True)
+
+    save_checkpoint_fn(path=str(tmp_path), epoch=epoch, **checkpoint_kwargs)
+
+    if latest_path.exists():
+        shutil.rmtree(latest_path)
+    tmp_path.rename(latest_path)
+
+    if logger:
+        logger.info(f"  Updated latest checkpoint (epoch {epoch})")
+
+    return latest_path
 
 
 def save_best_checkpoint(
@@ -261,7 +334,7 @@ def save_best_checkpoint(
         epoch: Current epoch number.
         val_loss: Current validation loss.
         best_val_losses: List of ``(loss, epoch)`` tuples for best models
-            (will be modified in-place and returned).
+            (returned with any updates applied).
         save_checkpoint_fn: Function to call to save the checkpoint
             (e.g. PhysicsNeMo's ``save_checkpoint``).
         logger: Optional logger for log messages.
@@ -276,6 +349,8 @@ def save_best_checkpoint(
     if best_val_losses and isinstance(best_val_losses[0], (int, float)):
         # Legacy format detected, reset to empty (can't recover epoch info).
         best_val_losses = []
+    else:
+        best_val_losses = list(best_val_losses)
 
     # Check whether this is a top-N model.
     current_losses = [loss for loss, _ in best_val_losses]
@@ -286,19 +361,26 @@ def save_best_checkpoint(
     if not is_top_n:
         return best_val_losses
 
+    updated_best_val_losses = best_val_losses + [(val_loss, epoch)]
+    updated_best_val_losses.sort(key=lambda x: x[0])  # Sort by loss.
+
+    pruned_epochs = []
+    while len(updated_best_val_losses) > MAX_BEST_CHECKPOINTS:
+        _worst_loss, worst_epoch = updated_best_val_losses.pop()
+        pruned_epochs.append(worst_epoch)
+
+    checkpoint_kwargs = _checkpoint_kwargs_with_metadata(
+        checkpoint_kwargs,
+        best_val_losses=updated_best_val_losses,
+    )
+
     # Save new best model to epoch-specific directory.
     best_model_dir = checkpoint_dir / f"best_model_epoch_{epoch}"
     best_model_dir.mkdir(parents=True, exist_ok=True)
 
     save_checkpoint_fn(path=str(best_model_dir), epoch=epoch, **checkpoint_kwargs)
 
-    # Update best losses list with the new (loss, epoch) tuple.
-    best_val_losses.append((val_loss, epoch))
-    best_val_losses.sort(key=lambda x: x[0])  # Sort by loss.
-
-    # Cleanup if we have more than MAX_BEST_CHECKPOINTS.
-    while len(best_val_losses) > MAX_BEST_CHECKPOINTS:
-        worst_loss, worst_epoch = best_val_losses.pop()
+    for worst_epoch in pruned_epochs:
         cleanup_checkpoint_by_epoch(checkpoint_dir, worst_epoch, logger)
 
     # Update top_model folder if this is the new best.
@@ -306,7 +388,7 @@ def save_best_checkpoint(
         checkpoint_dir,
         val_loss,
         epoch,
-        best_val_losses,
+        updated_best_val_losses,
         save_checkpoint_fn,
         logger,
         **checkpoint_kwargs,
@@ -316,10 +398,10 @@ def save_best_checkpoint(
         logger.info(
             f"  Saved top-{MAX_BEST_CHECKPOINTS} model! Val loss: {val_loss:.6f}"
         )
-        loss_strs = [f"{loss:.6f}" for loss, _ in best_val_losses[:3]]
+        loss_strs = [f"{loss:.6f}" for loss, _ in updated_best_val_losses[:3]]
         logger.info(f"  Top 3 losses: {loss_strs}")
 
-    return best_val_losses
+    return updated_best_val_losses
 
 
 def _update_top_model(
@@ -399,6 +481,11 @@ def save_best_qoi_checkpoint(
 
     if qoi_model_path.exists():
         shutil.rmtree(qoi_model_path)
+
+    checkpoint_kwargs = _checkpoint_kwargs_with_metadata(
+        checkpoint_kwargs,
+        best_qoi_loss=qoi_error,
+    )
 
     qoi_model_path.mkdir(parents=True, exist_ok=True)
     save_checkpoint_fn(path=str(qoi_model_path), epoch=epoch, **checkpoint_kwargs)
@@ -542,13 +629,24 @@ def resume_or_pretrain(
     resume_checkpoint = cfg.train.get("resume_checkpoint", None)
     pretrain_checkpoint = cfg.train.get("pretrain_checkpoint", None)
 
-    if resume_checkpoint and os.path.exists(resume_checkpoint):
+    if resume_checkpoint:
+        resume_path = Path(str(resume_checkpoint))
+        if not resume_path.exists():
+            raise FileNotFoundError(
+                f"train.resume_checkpoint does not exist: {resume_path}"
+            )
+        if not resume_path.is_dir():
+            raise NotADirectoryError(
+                "train.resume_checkpoint must be a checkpoint directory, "
+                f"not a file: {resume_path}"
+            )
+
         if dist.rank == 0:
-            logger.info(f"\nResuming from checkpoint: {resume_checkpoint}")
+            logger.info(f"\nResuming from checkpoint: {resume_path}")
 
         metadata: Dict[str, Any] = {}
         start_epoch = load_checkpoint(
-            path=resume_checkpoint,
+            path=str(resume_path),
             models=model,
             optimizer=optimizer,
             scheduler=scheduler,
@@ -575,14 +673,25 @@ def resume_or_pretrain(
 
         start_epoch += 1
 
-    elif pretrain_checkpoint and os.path.exists(pretrain_checkpoint):
+    elif pretrain_checkpoint:
+        pretrain_path = Path(str(pretrain_checkpoint))
+        if not pretrain_path.exists():
+            raise FileNotFoundError(
+                f"train.pretrain_checkpoint does not exist: {pretrain_path}"
+            )
+        if not pretrain_path.is_dir():
+            raise NotADirectoryError(
+                "train.pretrain_checkpoint must be a checkpoint directory, "
+                f"not a file: {pretrain_path}"
+            )
+
         if dist.rank == 0:
             logger.info(
-                f"\nLoading pretrained weights for fine-tuning: {pretrain_checkpoint}"
+                f"\nLoading pretrained weights for fine-tuning: {pretrain_path}"
             )
 
         load_checkpoint(
-            path=pretrain_checkpoint,
+            path=str(pretrain_path),
             models=model,
             device=dist.device,
         )
