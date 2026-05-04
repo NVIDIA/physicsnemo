@@ -22,7 +22,9 @@ force coefficients (Cd, Cl, Cs) for engineering evaluation.
 
 ## Dataset
 
-The DrivAerML dataset should be available at a path like:
+[The DrivAerML dataset is available from
+HuggingFace](https://huggingface.co/datasets/neashton/drivaerml). Once
+downloaded, it should be available at a path like:
 
 ```text
 drivaer_data_full/
