@@ -52,7 +52,11 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.checkpoint import save_checkpoint
 from physicsnemo.utils.logging.launch import LaunchLogger
 
-from checkpointing import save_best_checkpoint, save_best_qoi_checkpoint
+from checkpointing import (
+    save_best_checkpoint,
+    save_best_qoi_checkpoint,
+    save_latest_checkpoint,
+)
 from losses import compute_physics_loss, masked_mse_loss, region_weighted_loss_fn
 
 
@@ -655,6 +659,31 @@ def run_training_loop(
                         "case_type": case_type,
                     },
                 )
+
+                latest_checkpoint_interval = cfg.train.get(
+                    "latest_checkpoint_interval", 1
+                )
+                if latest_checkpoint_interval > 0 and (
+                    epoch % latest_checkpoint_interval == 0
+                ):
+                    save_latest_checkpoint(
+                        checkpoint_dir=Path(checkpoint_dir),
+                        epoch=epoch,
+                        save_checkpoint_fn=save_checkpoint,
+                        logger=logger,
+                        models=model,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        scaler=scaler,
+                        metadata={
+                            "best_val_losses": best_val_losses,
+                            "best_qoi_loss": best_qoi_loss,
+                            "train_loss": train_loss,
+                            "val_loss": val_loss,
+                            "val_loss_qoi": val_loss_qoi,
+                            "case_type": case_type,
+                        },
+                    )
 
                 if val_loss_qoi is not None and writer:
                     writer.add_scalar("Loss/val_qoi", val_loss_qoi, epoch)
