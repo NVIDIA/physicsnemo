@@ -14,10 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Suppress all warnings during import. In multi-GPU training (up to 400
+# ranks), every process emits identical import-time warnings (e.g.
+# ExperimentalFeatureWarning, Warp DeprecationWarning) and srun merges them
+# into one log file. Re-enabled for rank 0 after distributed init below.
+import warnings
+
+warnings.filterwarnings("ignore")
+
 import contextlib
 import logging
 import os
-import warnings
 from collections import defaultdict
 from datetime import datetime
 from itertools import count
@@ -41,28 +48,36 @@ from mlflow.tracking.fluent import (
     start_run,
 )
 from tensordict import TensorDict
-from torch.distributed import ReduceOp, all_reduce
+from torch.distributed import ReduceOp, all_reduce, barrier
 from torch.profiler import record_function
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from utilities import (
-    disable_autotune_printing,
     log_hyperparameters,
+    resilient,
     sanitize_metric_name,
 )
 
 from physicsnemo.core import get_physicsnemo_pkg_info
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.experimental.models.globe.model import GLOBE
+from physicsnemo.experimental.utils import (
+    disable_autotune_printing,
+    prefetch_map,
+    silence_compile_logs_on_non_zero_ranks,
+)
 from physicsnemo.optim import CombinedOptimizer
 from physicsnemo.utils.checkpoint import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 mpl.use("agg")  # Allows headless plotting
-disable_autotune_printing()  # Silences the verbose output of `torch.compile(..., mode="max-autotune")`.
+disable_autotune_printing()
 
 Split = Literal["train", "test"]
 splits: list[Split] = ["train", "test"]
+
+log_artifact = resilient(log_artifact)
+log_metrics = resilient(log_metrics)
 
 
 def main(
@@ -73,27 +88,33 @@ def main(
     compile_mode: Literal[
         "default", "max-autotune-no-cudagraphs"
     ] = "max-autotune-no-cudagraphs",
-    points_per_iter: int = 2048,
+    n_prediction_points: int = 2048,
     learning_rate: float = 1e-3,
     weight_decay: float = 1e-4,
     use_muon: bool = True,
-    muon_method: Literal["original", "match_rms_adamw"] = "original",
-    train_face_downsampling_ratio: float = 1.0,
+    muon_method: Literal["original", "match_rms_adamw"] = "match_rms_adamw",
     train_randomize_face_centers: bool = True,
     seed: int = 0,
     error_scales: dict[str, float] | None = None,
     n_communication_hyperlayers: int = 2,
-    hidden_layer_sizes: tuple[int, ...] = (64, 64, 64),
+    hidden_layer_sizes: tuple[int, ...] = (128, 128, 128),
     n_latent_scalars: int = 12,
     n_latent_vectors: int = 6,
     n_spherical_harmonics: int = 1,
     theta: float = 0.0,
     leaf_size: int = 1,
     airfrans_task: Literal["full", "scarce", "reynolds", "aoa"] = "full",
+    patience_steps: int = 1600,
     use_profiler: bool = True,
     make_images: bool = True,
+    save_every: int = 5,
     use_mlflow: bool = True,
     mlflow_experiment: str = "GLOBE_AirFRANS",
+    gradient_clip_norm: float | None = 1.0,
+    network_type: Literal["pade", "mlp"] = "pade",
+    self_regularization_beta: float | None = 0.01,
+    latent_compression_scale: float | None = 100.0,
+    expand_far_targets: bool = False,
 ):
     """Train the GLOBE model on AirFRANS dataset.
 
@@ -105,10 +126,9 @@ def main(
         amp: Enable automatic mixed precision (AMP) training for faster computation.
         use_compile: Enable torch.compile for model optimization and performance.
         compile_mode: Mode for torch.compile.
-        points_per_iter: Number of points to sample per training iteration.
+        n_prediction_points: Number of points to sample per training iteration.
         learning_rate: Initial learning rate for the Adam optimizer.
         weight_decay: Weight decay (L2 regularization) factor for the optimizer.
-        train_face_downsampling_ratio: Ratio of faces to keep when downsampling boundary meshes.
         train_randomize_face_centers: Whether to use random points inside faces instead of centroids.
         seed: Random seed for reproducibility across runs.
         error_scales: Dictionary specifying error scales for loss components. If None, uses default scales.
@@ -120,8 +140,11 @@ def main(
         theta: Barnes-Hut opening angle. Larger = more aggressive approximation.
         leaf_size: Maximum sources per leaf node in the Barnes-Hut tree.
         airfrans_task: Which AirFRANS dataset task to train on.
+        patience_steps: ReduceLROnPlateau patience expressed in gradient
+            steps (world-size independent).  Converted to epochs internally.
         use_profiler: Enable PyTorch profiler for performance analysis.
         make_images: Whether to make images for visualization.
+        save_every: Save a checkpoint every this many epochs.
         use_mlflow: Enable MLflow experiment tracking. Requires MLFLOW_TRACKING_URI to be set
             in the environment (see run.sh). When False, training still logs to console and
             saves hyperparameters to YAML, but skips all MLflow calls.
@@ -148,8 +171,7 @@ def main(
     output_dir = Path(__file__).parent / "output" / output_name
     cache_dir = Path(__file__).parent / "cache"
 
-    # Parse error scales
-    error_scales = {
+    error_scale_config = {
         "ΔU/|U_inf|": 1.0,
         "C_p": 1.0,
         "C_pt": 1.0,
@@ -164,22 +186,28 @@ def main(
     dist = DistributedManager()
     device = dist.device
     torch.cuda.set_device(device)
+    silence_compile_logs_on_non_zero_ranks(dist.rank)
 
     if dist.rank == 0:
         logging.basicConfig(level=logging.INFO)
+        warnings.resetwarnings()  # undo module-level suppression for rank 0
+        # MLflow's SQLAlchemy store and system-metrics monitor emit verbose
+        # tracebacks on transient SQLite "database is locked" errors.  Our
+        # resilient() wrapper reports final failures as one-liners.
+        logging.getLogger("mlflow.store.db.utils").setLevel(logging.CRITICAL)
+        logging.getLogger("mlflow.system_metrics.system_metrics_monitor").setLevel(
+            logging.CRITICAL
+        )
     else:
         logging.disable(logging.ERROR)
-        warnings.filterwarnings("ignore")
     logger = PythonLogger("globe.airfrans.train")
     logger0 = RankZeroLoggingWrapper(logger, dist)
     logger0.info(f"{dist.world_size = }")
 
     error_scales: TensorDict[str, Float[torch.Tensor, ""]] = TensorDict(
-        error_scales,  # ty: ignore[invalid-argument-type]
+        error_scale_config,
         device=device,
     )
-    if dist.rank == 0:
-        torch._logging.set_logs(graph_breaks=True, recompiles=True)
 
     ### [Output Directory Setup]
     torch_compile_cache_dir = output_dir / "torch_compile_cache"
@@ -241,10 +269,12 @@ def main(
         n_spherical_harmonics=n_spherical_harmonics,
         theta=theta,
         leaf_size=leaf_size,
+        network_type=network_type,
+        self_regularization_beta=self_regularization_beta,
+        latent_compression_scale=latent_compression_scale,
+        expand_far_targets=expand_far_targets,
     ).to(device)
 
-    if dist.rank == 0:
-        torchinfo.summary(model, depth=20)
     logger0.info(f"{output_dir.name=!r}")
 
     base_model = model
@@ -258,6 +288,7 @@ def main(
     # Without this, Dynamo guards on parameter shapes and recompiles for each
     # kernel branch, quickly exhausting the recompile limit.
     torch._dynamo.config.force_parameter_static_shapes = False
+    torch._dynamo.config.capture_scalar_outputs = True
 
     # The GLOBE model stores latent channels as individually-named TensorDict
     # entries (18 keys for 12 scalar + 6 vector channels).  Dynamo specializes
@@ -276,12 +307,10 @@ def main(
         )
 
     ### [Optimizer and Scheduler Setup]
-    # Square-root batch-size scaling: when the effective batch size grows
-    # (more GPUs or more points), gradient variance decreases proportionally,
-    # so the optimal LR scales as sqrt(batch_size).  The denominator 2048
-    # is the reference point count per iteration (not samples) at which the
-    # base `learning_rate` applies.
-    learning_rate *= (dist.world_size * points_per_iter / 2048) ** 0.5
+    # No automatic LR scaling for batch size / world_size.  Muon
+    # orthogonalizes the gradient, fixing the update norm independent of
+    # batch size, so the maximum safe LR is determined by loss-landscape
+    # curvature, not gradient noise.  See arXiv:2502.16982 Sec 2.2.
     if use_muon:
         # Muon is designed for matrix-shaped parameters (2D weight tensors
         # of linear layers); biases, norms, and other non-matrix parameters
@@ -312,18 +341,18 @@ def main(
             decoupled_weight_decay=True,
             foreach=True,
         )
+    patience_epochs = patience_steps // len(dataloaders["train"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode="min",
         factor=0.5,
-        patience=400,
+        patience=patience_epochs,
         min_lr=learning_rate / 64,
         threshold=1e-3,
     )
     scaler = torch.amp.GradScaler(device=device.type, enabled=amp)
 
     ### [Checkpoint Save/Load]
-    mlflow_run_id: str | None = None
     metadata_dict: dict[str, Any] = {}
     epoch = load_checkpoint(
         checkpoint_dir,
@@ -334,17 +363,41 @@ def main(
         metadata_dict=metadata_dict,
         device=dist.device,
     )
-    if epoch > 0:
-        logger0.info(f"Resuming training from epoch {epoch}")
-        best_loss = metadata_dict.get("best_loss", float("inf"))
-        last_image_epoch = metadata_dict.get("last_image_epoch", -float("inf"))
-        last_image_loss = metadata_dict.get("last_image_loss", float("inf"))
-        mlflow_run_id = metadata_dict.get("mlflow_run_id")
-    else:
-        logger0.info("Starting training from scratch.")
-        best_loss = float("inf")
-        last_image_epoch = -float("inf")
-        last_image_loss = float("inf")
+    logger0.info(
+        f"Resuming training from epoch {epoch}"
+        if epoch > 0
+        else "Starting training from scratch."
+    )
+    best_loss = metadata_dict.get("best_loss", float("inf"))
+    last_image_epoch = metadata_dict.get("last_image_epoch", -float("inf"))
+    last_image_loss = metadata_dict.get("last_image_loss", float("inf"))
+    mlflow_run_id: str | None = metadata_dict.get("mlflow_run_id")
+
+    ### [Scheduler patience normalization]
+    # ReduceLROnPlateau measures patience in epochs.  When world_size
+    # changes, epoch length changes (fewer steps per epoch with more
+    # GPUs), so we recompute patience in epochs from the step-based
+    # target and rescale the bad-epoch counter accordingly.
+    scheduler.patience = patience_epochs
+    loaded_world_size = metadata_dict.get("world_size")
+    if loaded_world_size is not None and loaded_world_size != dist.world_size:
+        ws_ratio = dist.world_size / loaded_world_size
+        scheduler.num_bad_epochs = round(scheduler.num_bad_epochs * ws_ratio)
+
+    ### [First-Launch Diagnostics]
+    # Verbose diagnostics (torchinfo, GLOBE debug, graph break summary) are
+    # only emitted on the very first SLURM launch (epoch==0). Subsequent
+    # --dependency=singleton restarts skip them entirely. Within the first
+    # launch, debug logging and graph break capture are disabled after the
+    # first training batch completes.
+    is_first_launch = (epoch == 0) and dist.rank == 0
+    _globe_logger: logging.Logger | None = None
+
+    if is_first_launch:
+        torchinfo.summary(base_model, depth=4)
+        _globe_logger = logging.getLogger("globe")
+        _globe_logger.setLevel(logging.DEBUG)
+        torch._logging.set_logs(graph_breaks=True, recompiles=True)
 
     ### [MLflow Setup]
     mlflow_run_ctx: contextlib.AbstractContextManager = contextlib.nullcontext()
@@ -352,7 +405,9 @@ def main(
         set_experiment(experiment_name=mlflow_experiment)
         if mlflow_run_id:
             try:
-                mlflow_run_ctx = start_run(run_id=mlflow_run_id)
+                mlflow_run_ctx = start_run(
+                    run_id=mlflow_run_id, log_system_metrics=True
+                )
                 logger0.info(f"Resumed MLflow run {mlflow_run_id}")
             except Exception:
                 warnings.warn(
@@ -366,10 +421,11 @@ def main(
                     "airfrans_task": airfrans_task,
                     "output_name": output_name,
                 },
+                log_system_metrics=True,
             )
 
     ### [Hyperparameter Logging]
-    if dist.rank == 0:
+    if dist.rank == 0 and epoch == 0:
         log_hyperparameters(
             log_dir=output_dir,
             model=base_model,
@@ -400,7 +456,7 @@ def main(
         pred_mesh = model(**sample.model_input_kwargs)
         batch_loss_components = pred_mesh.point_data.apply(
             field_loss_fn,
-            sample.interior_mesh.point_data,
+            sample.prediction_mesh.point_data,
             error_scales.expand_as(pred_mesh.point_data),
         ).mean(dim=0)  # Mean over points
         batch_loss = batch_loss_components.stack_from_tensordict().sum()
@@ -422,36 +478,19 @@ def main(
         all_batch_losses: list[torch.Tensor] = []
         all_batch_loss_components: dict[str, list[torch.Tensor]] = defaultdict(list)
 
-        for sample in tqdm(
-            dataloaders[split],
-            desc=f"{epoch:d} {split.title()}",
-            unit=" samples",
-            disable=dist.rank != 0 or epoch > 10,
-        ):
-            torch.compiler.cudagraph_mark_step_begin()
+        def prepare_sample(sample: AirFRANSSample) -> AirFRANSSample:
+            """Subsample prediction points, precompute cell geometry, transfer to GPU.
+
+            Runs in a background thread via prefetch_map so that CPU-bound
+            preparation of sample N+1 overlaps with GPU processing of sample N.
+            """
             with record_function("data_subsampling"):
-                ### Subsample interior points (on CPU to reduce GPU transfer)
-                n_points = min(points_per_iter, sample.interior_mesh.n_points)
-                mask = torch.randperm(sample.interior_mesh.n_points)[:n_points]
-                sample.interior_mesh = sample.interior_mesh.slice_points(mask)
+                n_points = min(n_prediction_points, sample.prediction_mesh.n_points)
+                mask = torch.randint(sample.prediction_mesh.n_points, (n_points,))
+                sample.prediction_mesh = (
+                    sample.prediction_mesh.to_point_cloud().slice_points(mask)
+                )
 
-                ### Subsample boundary mesh cells during training
-                if training:
-                    for bc_type, mesh in sample.boundary_meshes.items():
-                        if train_face_downsampling_ratio != 1.0:
-                            mesh._cache["cell", "areas"] = (
-                                mesh.cell_areas / train_face_downsampling_ratio
-                            )
-                            new_n_cells = int(
-                                mesh.n_cells * train_face_downsampling_ratio
-                            )
-                            mesh = mesh.slice_cells(
-                                torch.randperm(mesh.n_cells)[:new_n_cells]
-                            )
-                        sample.boundary_meshes[bc_type] = mesh
-
-                ### Pre-cache geometry so lazy computation doesn't trigger
-                # Dynamo guard failures during compiled forward passes.
                 for mesh in sample.boundary_meshes.values():
                     if training and train_randomize_face_centers:
                         mesh._cache["cell", "centroids"] = (
@@ -465,6 +504,16 @@ def main(
             with record_function("data_transfer"):
                 sample = sample.to(device)
 
+            return sample
+
+        for sample in tqdm(
+            prefetch_map(dataloaders[split], prepare_sample),
+            desc=f"{epoch:d} {split.title()}",
+            unit=" samples",
+            disable=dist.rank != 0 or epoch > 10,
+        ):
+            torch.compiler.cudagraph_mark_step_begin()
+
             with (
                 autocast_ctx,
                 contextlib.nullcontext() if training else torch.no_grad(),
@@ -472,18 +521,36 @@ def main(
             ):
                 if training:
                     optimizer.zero_grad()
-                batch_loss, batch_loss_components = run_batch(sample)
+
+                with record_function("forward"):
+                    batch_loss, batch_loss_components = run_batch(sample)
+
                 if training:
                     if torch.isnan(batch_loss):
-                        warnings.warn(
-                            f"{batch_loss=} at: {dist.rank=}, {epoch=}, {training=}"
+                        warnings.warn(f"{batch_loss=} at: {dist.rank=}, {epoch=}")
+                    with record_function("backward"):
+                        scaler.scale(batch_loss).backward()
+                    if gradient_clip_norm is not None:
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(
+                            model.parameters(), max_norm=gradient_clip_norm
                         )
-                    scaler.scale(batch_loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
+                    with record_function("optimizer_step"):
+                        scaler.step(optimizer)
+                        scaler.update()
                 all_batch_losses.append(batch_loss.detach().clone())
                 for k, v in batch_loss_components.items():
                     all_batch_loss_components[k].append(v.detach().clone())
+
+            if training and profiler is not None:
+                profiler.step()
+
+            ### Disable all first-launch diagnostics after the first batch.
+            ### Re-entry guard: globe_logger.level is DEBUG only between
+            ### first-launch setup and the first cleanup pass.
+            if _globe_logger is not None and _globe_logger.level == logging.DEBUG:
+                _globe_logger.setLevel(logging.INFO)
+                torch._logging.set_logs(graph_breaks=False, recompiles=False)
 
         # [Distributed comms]
         keys = ["loss", *all_batch_loss_components.keys()]
@@ -519,11 +586,11 @@ def main(
     )
     profiler_ctx = (
         torch.profiler.profile(
-            schedule=torch.profiler.schedule(wait=4, warmup=1, active=1, repeat=1),
+            schedule=torch.profiler.schedule(wait=5, warmup=1, active=1, repeat=1),
             on_trace_ready=torch.profiler.tensorboard_trace_handler(
                 str(profiling_dir), worker_name=f"worker_{dist.rank}"
             ),
-            with_stack=True,
+            with_stack=False,
         )
         if use_profiler
         else contextlib.nullcontext()
@@ -542,7 +609,19 @@ def main(
                 "mlflow_run_id": (
                     _run.info.run_id if use_mlflow and (_run := active_run()) else None
                 ),
+                "world_size": dist.world_size,
             }
+
+        def save_ckpt() -> None:
+            save_checkpoint(
+                checkpoint_dir,
+                models=base_model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                scaler=scaler,
+                epoch=epoch,
+                metadata=checkpoint_metadata(),
+            )
 
         for epoch in count(start=epoch + 1):
             loss = {}
@@ -553,22 +632,14 @@ def main(
 
             scheduler.step(loss["train"])
 
-            if profiler is not None:
-                profiler.step()
+            if dist.world_size > 1:
+                barrier()
 
             ### [Logging and Checkpointing]
             if dist.rank == 0:
                 ### [Checkpointing]
-                if epoch % (25 * dist.world_size) == 0:
-                    save_checkpoint(
-                        checkpoint_dir,
-                        models=base_model,
-                        optimizer=optimizer,
-                        scheduler=scheduler,
-                        scaler=scaler,
-                        epoch=epoch,
-                        metadata=checkpoint_metadata(),
-                    )
+                if epoch % save_every == 0:
+                    save_ckpt()
                 if loss["test"] < best_loss:
                     best_loss = loss["test"]
                     base_model.save(best_model_path)
@@ -600,15 +671,7 @@ def main(
             if shutdown_file.exists():
                 logger0.info("Quitting due to shutdown request.")
                 if dist.rank == 0:
-                    save_checkpoint(
-                        checkpoint_dir,
-                        models=base_model,
-                        optimizer=optimizer,
-                        scheduler=scheduler,
-                        scaler=scaler,
-                        epoch=epoch,
-                        metadata=checkpoint_metadata(),
-                    )
+                    save_ckpt()
                 break
 
             ### [MLflow Image Logging]
@@ -620,18 +683,18 @@ def main(
                 if dist.rank == 0:
                     logger0.info("Generating visualization images...")
                     for split in splits:
-                        sample_path = sample_paths[split][0]
-                        viz_sample = AirFRANSDataSet.preprocess(sample_path).to(device)
+                        viz_sample = dataloaders[split].dataset[0].to(device)
                         with torch.no_grad(), autocast_ctx:
                             base_model.eval()
                             pred_mesh = base_model(
                                 **viz_sample.model_input_kwargs,
                             )
-                        AirFRANSDataSet.postprocess(
+
+                        combined = AirFRANSDataSet.postprocess(
                             pred_mesh=pred_mesh.to(device="cpu"),
-                            true_mesh=viz_sample.interior_mesh.to(device="cpu"),
-                            show=False,
+                            sample=viz_sample.to(device="cpu"),
                         )
+                        AirFRANSDataSet.visualize_comparison(combined, show=False)
                         plt.gcf().set_dpi(300)
                         if use_mlflow:
                             log_figure(
@@ -639,7 +702,36 @@ def main(
                                 f"visualization/{split}_sample_epoch_{epoch}.png",
                             )
                         plt.close()
+
+                        ### [Surface Force Coefficients]
+                        pred_coeffs = combined.global_data["pred"].to_dict()  # ty: ignore[unresolved-attribute]
+                        true_coeffs = combined.global_data["true"].to_dict()  # ty: ignore[unresolved-attribute]
+
+                        logger0.info(
+                            f"Force coefficients ({split}):"
+                            + "".join(
+                                f"\n  {k}: pred={pred_coeffs[k]:.5f}"
+                                f"  true={true_coeffs[k]:.5f}"
+                                f"  err={pred_coeffs[k] - true_coeffs[k]:+.5f}"
+                                for k in ("Cd", "Cl")
+                            )
+                        )
+                        if use_mlflow:
+                            log_metrics(
+                                {
+                                    f"force_coeffs/{split}_{k}_{src}": coeffs[k]
+                                    for src, coeffs in [
+                                        ("pred", pred_coeffs),
+                                        ("true", true_coeffs),
+                                    ]
+                                    for k in pred_coeffs
+                                },
+                                step=epoch,
+                            )
+
                 last_image_epoch, last_image_loss = epoch, loss["train"]
+                if dist.world_size > 1:
+                    barrier()
 
             ### [torch.compile Caching]
             if use_compile and not torch_compile_cache.exists():
