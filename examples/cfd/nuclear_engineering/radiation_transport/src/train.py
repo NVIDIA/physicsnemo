@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -99,7 +99,6 @@ def build_dataloaders_for_training(
     loaders, train_sampler = build_dataloaders(
         cfg,
         dist,
-        adapter="transolver",
         collate_fn=collate_no_padding,
         phases=("train", "val"),
         logger=logger,
@@ -110,8 +109,7 @@ def build_dataloaders_for_training(
 def to_device(batch: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
     """Move tensor entries of a batch dict to ``device``; pass through the rest."""
     return {
-        k: v.to(device) if isinstance(v, torch.Tensor) else v
-        for k, v in batch.items()
+        k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()
     }
 
 
@@ -123,7 +121,9 @@ def forward(
     return model(fx=batch["fx"], embedding=batch["embedding"])
 
 
-def loss_inputs(batch: Dict[str, Any], *, require_physics: bool = False) -> Dict[str, Any]:
+def loss_inputs(
+    batch: Dict[str, Any], *, require_physics: bool = False
+) -> Dict[str, Any]:
     """Assemble the dict of optional/physics inputs consumed by ``compute_losses``.
 
     Physics loss requires raw, unnormalized coordinates. The model embedding
@@ -395,9 +395,7 @@ def main(cfg: DictConfig) -> None:
             "warmup_start_fraction", 0.0
         )
         if dist.rank == 0 and physics_loss_warmup_epochs > 0:
-            logger.info(
-                f"  Physics-loss warmup epochs: {physics_loss_warmup_epochs}"
-            )
+            logger.info(f"  Physics-loss warmup epochs: {physics_loss_warmup_epochs}")
             logger.info(
                 f"  Physics-loss warmup start fraction: {physics_loss_warmup_start}"
             )
@@ -439,8 +437,7 @@ def main(cfg: DictConfig) -> None:
         else:
             progress = epoch / max(1, physics_loss_warmup_epochs)
             current_weight = (
-                physics_loss_warmup_start
-                + (1.0 - physics_loss_warmup_start) * progress
+                physics_loss_warmup_start + (1.0 - physics_loss_warmup_start) * progress
             ) * physics_loss_weight_base
         if dist.rank == 0 and epoch < physics_loss_warmup_epochs:
             logger.info(

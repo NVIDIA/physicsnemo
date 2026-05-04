@@ -16,19 +16,17 @@
 
 """Data plumbing: TransolverAdapter, collate, datapipe orchestration, DataLoader builder.
 
-This module is the "wiring" layer of the RTE Transolver example. It composes
-the ``RTEBaseDataset`` (data source) with a ``Compose`` of transforms and a
-``TransolverAdapter`` to produce model-ready batches, and exposes a single
-``build_dataloaders`` entry point used by the training and evaluation
-scripts.
+This module composes ``RTEBaseDataset`` (data source) with a ``Compose`` of
+transforms and a ``TransolverAdapter``, and exposes a single
+``build_dataloaders`` entry point used by ``train.py`` and ``inference.py``.
 
 Sections:
 
-* Adapter — ``ModelAdapter`` base + ``TransolverAdapter`` + ``_as_dict`` helper.
+* Adapter — ``TransolverAdapter``.
 * Collation — ``collate_no_padding`` (batch_size=1 unsqueeze).
 * Stats / kwargs translation — ``build_rte_dataset_kwargs``.
 * Pipeline orchestration — ``RTEDataPipe`` + ``_build_transforms`` +
-  ``_build_adapter`` + ``from_config`` + ``create_dataset``.
+  ``_build_rte_datapipe``.
 * Distributed preload barrier — file-marker rank-sequencing helpers.
 * DataLoader builder — ``build_dataloaders`` + ``_make_loader`` +
   ``_log_material_sanity``.
@@ -42,7 +40,6 @@ from __future__ import annotations
 
 import logging
 import time
-from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import (
     Any,
@@ -88,69 +85,33 @@ from transforms import (
 # Adapter
 # =========================================================================
 #
-# ``ModelAdapter`` is the abstract base class for converting a transformed
-# RTE sample into a model-specific input dict. Only ``TransolverAdapter`` is
-# shipped here (GenericAdapter and GeoTransolverAdapter were dropped as part
-# of the upstream Transolver-only consolidation).
-
-
-class ModelAdapter(ABC):
-    """Abstract base class for model-specific data adapters.
-
-    Adapters take a transformed sample (a ``TensorDict`` or plain dict with
-    numpy arrays / torch tensors) and convert it to the format expected by a
-    particular model (e.g. Transolver).
-    """
-
-    @abstractmethod
-    def __call__(self, sample: Dict[str, Any]) -> Dict[str, torch.Tensor]:
-        """Convert a sample to model-specific format."""
-        pass
-
-    def __repr__(self) -> str:
-        return f"{self.__class__.__name__}()"
-
-
-def _as_dict(sample: Union[TensorDict, Dict[str, Any]]) -> Dict[str, Any]:
-    """Unwrap a ``TensorDict`` into a plain dict; pass through regular dicts.
-
-    Tensor entries remain ``torch.Tensor`` references (no copy). NonTensorData
-    entries are transparently unwrapped via bracket access.
-    """
-    if isinstance(sample, TensorDict):
-        return {k: sample[k] for k in sample.keys()}
-    return sample
+# ``TransolverAdapter`` packages a transformed RTE TensorDict into the
+# tensor dict that ``physicsnemo.models.transolver.Transolver`` expects.
+# Only one model is shipped — there is no plug-in dispatcher.
 
 
 @register("RTETransolverAdapter")
-class TransolverAdapter(ModelAdapter):
-    """Adapter for the Transolver model.
+class TransolverAdapter:
+    """Pack a transformed RTE TensorDict into Transolver-ready tensors.
 
-    Maps RTE data to Transolver's expected input format:
-
-    * ``fx`` — spatial coordinates ``[x, y, z]`` (plus Fourier features when enabled).
+    Output keys:
+    * ``fx`` — spatial coordinates (plus Fourier features when enabled).
     * ``embedding`` — material properties ``[sigma_a, sigma_s, sigma_t, Q]``
       (or just the first three when ``include_q_in_embedding=False``).
     * ``flux_target`` — target flux to predict.
 
     Extra fields (``coordinates_unnormalized``, ``material_labels``,
     ``cell_areas``, ``sigma_t``, ``sigma_s``, ``sim_time``, and
-    ``flux_normalization_stats``) are passed through when present in the sample.
+    ``flux_normalization_stats``) pass through when present.
+
+    The output has no batch dimension; ``collate_no_padding`` adds one.
     """
 
-    def __init__(
-        self,
-        add_batch_dim: bool = False,
-        include_q_in_embedding: bool = True,
-    ):
-        self.add_batch_dim = add_batch_dim
+    def __init__(self, include_q_in_embedding: bool = True):
         self.include_q_in_embedding = include_q_in_embedding
 
-    def __call__(
-        self, data: Union[TensorDict, Dict[str, Any]]
-    ) -> Dict[str, torch.Tensor]:
-        """Convert sample to Transolver format."""
-        sample = _as_dict(data)
+    def __call__(self, data: TensorDict) -> Dict[str, torch.Tensor]:
+        sample = {k: data[k] for k in data.keys()}
         result: Dict[str, Any] = {}
 
         def to_tensor(x):
@@ -159,24 +120,18 @@ class TransolverAdapter(ModelAdapter):
             return torch.from_numpy(x).float()
 
         if "coordinates" in sample:
-            coords = to_tensor(sample["coordinates"])
-            if self.add_batch_dim:
-                coords = coords.unsqueeze(0)
-            result["fx"] = coords
+            result["fx"] = to_tensor(sample["coordinates"])
 
         if "physical_properties" in sample:
             mat_props = to_tensor(sample["physical_properties"])
             if not self.include_q_in_embedding:
                 mat_props = mat_props[..., :3]
-            if self.add_batch_dim:
-                mat_props = mat_props.unsqueeze(0)
             result["embedding"] = mat_props
 
         if "coordinates_unnormalized" in sample:
-            coords_unnorm = to_tensor(sample["coordinates_unnormalized"])
-            if self.add_batch_dim:
-                coords_unnorm = coords_unnorm.unsqueeze(0)
-            result["coordinates_unnormalized"] = coords_unnorm
+            result["coordinates_unnormalized"] = to_tensor(
+                sample["coordinates_unnormalized"]
+            )
 
         if (
             "material_properties" in sample
@@ -187,74 +142,52 @@ class TransolverAdapter(ModelAdapter):
                 mat_labels = torch.from_numpy(mat_labels.astype(np.int64))
             elif isinstance(mat_labels, torch.Tensor):
                 mat_labels = mat_labels.long()
-            if self.add_batch_dim:
-                mat_labels = mat_labels.unsqueeze(0)
             result["material_labels"] = mat_labels
 
         if "flux_target" in sample:
             flux_tgt = to_tensor(sample["flux_target"])
             if flux_tgt.ndim == 1:
                 flux_tgt = flux_tgt.unsqueeze(-1)
-            if self.add_batch_dim:
-                flux_tgt = flux_tgt.unsqueeze(0)
             result["flux_target"] = flux_tgt
 
-        if "cell_areas" in sample:
-            cell_areas = to_tensor(sample["cell_areas"])
-            if self.add_batch_dim:
-                cell_areas = cell_areas.unsqueeze(0)
-            result["cell_areas"] = cell_areas
-
-        if "sigma_t" in sample:
-            sigma_t = to_tensor(sample["sigma_t"])
-            if self.add_batch_dim:
-                sigma_t = sigma_t.unsqueeze(0)
-            result["sigma_t"] = sigma_t
-
-        if "sigma_s" in sample:
-            sigma_s = to_tensor(sample["sigma_s"])
-            if self.add_batch_dim:
-                sigma_s = sigma_s.unsqueeze(0)
-            result["sigma_s"] = sigma_s
+        for key in ("cell_areas", "sigma_t", "sigma_s"):
+            if key in sample:
+                result[key] = to_tensor(sample[key])
 
         if "sim_times" in sample:
             sim_times_arr = sample["sim_times"]
             if isinstance(sim_times_arr, torch.Tensor) and sim_times_arr.numel() > 0:
-                sim_time = torch.tensor(
+                result["sim_time"] = torch.tensor(
                     [float(sim_times_arr[-1].item())], dtype=torch.float32
                 )
             elif hasattr(sim_times_arr, "__len__") and len(sim_times_arr) > 0:
-                sim_time = torch.tensor([float(sim_times_arr[-1])], dtype=torch.float32)
+                result["sim_time"] = torch.tensor(
+                    [float(sim_times_arr[-1])], dtype=torch.float32
+                )
             else:
-                sim_time = torch.tensor([0.0], dtype=torch.float32)
-            if self.add_batch_dim:
-                sim_time = sim_time.unsqueeze(0)
-            result["sim_time"] = sim_time
+                result["sim_time"] = torch.tensor([0.0], dtype=torch.float32)
 
         if "flux_normalization_stats" in sample:
             result["flux_normalization_stats"] = sample["flux_normalization_stats"]
 
         metadata = sample.get("metadata", {}) or {}
-        max_timestep = metadata.get("max_timestep") if isinstance(metadata, dict) else None
         metadata_dict = {
             "timestep_input": sample.get("timestep_input"),
             "timestep_target": sample.get("timestep_target"),
-            "max_timestep": max_timestep,
+            "max_timestep": metadata.get("max_timestep")
+            if isinstance(metadata, dict)
+            else None,
             "filename": sample.get("filename"),
-            "case_type": (
-                metadata.get("case_type") if isinstance(metadata, dict) else None
-            ),
+            "case_type": metadata.get("case_type")
+            if isinstance(metadata, dict)
+            else None,
         }
         result["metadata"] = {k: v for k, v in metadata_dict.items() if v is not None}
 
         return result
 
     def __repr__(self) -> str:
-        return (
-            f"{self.__class__.__name__}("
-            f"add_batch_dim={self.add_batch_dim}, "
-            f"include_q_in_embedding={self.include_q_in_embedding})"
-        )
+        return f"{self.__class__.__name__}(include_q_in_embedding={self.include_q_in_embedding})"
 
 
 # =========================================================================
@@ -297,13 +230,12 @@ def collate_no_padding(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
 def build_rte_dataset_kwargs(
     cfg: DictConfig,
     *,
-    adapter: str,
     num_spatial_points_key: str = "num_spatial_points",
     num_spatial_points_override: Optional[int] = None,
     split_file_override: Optional[str] = None,
     extra_kwargs: Optional[dict] = None,
 ) -> dict:
-    """Translate a Hydra config into the kwargs ``create_dataset`` expects.
+    """Translate a Hydra config into the kwargs ``_build_rte_datapipe`` expects.
 
     Callers that run against a checkpoint's saved config (evaluation) can
     provide overrides for values the CLI wants to win over the config
@@ -380,7 +312,6 @@ def build_rte_dataset_kwargs(
     kwargs = {
         "data_path": cfg.case.data_path,
         "num_spatial_points": num_spatial_points,
-        "adapter": adapter,
         "flux_normalization_stats_file": flux_stats_file,
         "normalize_coordinates": data_cfg.get("normalize_coordinates", True),
         "flux_clip_threshold": flux_clip_threshold,
@@ -406,26 +337,15 @@ def build_rte_dataset_kwargs(
 # =========================================================================
 #
 # ``RTEDataPipe`` composes ``RTEBaseDataset`` (data source) with a ``Compose``
-# of transforms and a ``TransolverAdapter`` (model adapter). ``from_config``
-# is the simple-configuration entry point; ``_build_transforms`` and
-# ``_build_adapter`` are internal builders used by ``from_config``.
-# ``create_dataset`` is the convenience wrapper used by ``build_dataloaders``.
+# of transforms and a ``TransolverAdapter`` (model adapter).
+# ``_build_rte_datapipe`` is the high-level builder used by
+# ``build_dataloaders``; ``compute_normalizations.py`` instantiates
+# ``RTEDataPipe`` directly with a custom transform pipeline and ``adapter=None``.
 
 
 @register("RTEDataPipe")
 class RTEDataPipe(Dataset):
-    """High-level composable datapipe for RTE data.
-
-    Combines:
-
-    * ``RTEBaseDataset`` (data source / file enumeration)
-    * ``Compose`` of transforms (preprocessing pipeline)
-    * ``TransolverAdapter`` (model-specific tensor packaging)
-
-    For the canonical training configuration, use ``RTEDataPipe.from_config``;
-    for fully custom pipelines, instantiate directly with explicit
-    ``transforms`` and ``adapter``.
-    """
+    """``RTEBaseDataset`` + transforms + (optional) adapter, in one ``Dataset``."""
 
     def __init__(
         self,
@@ -439,18 +359,16 @@ class RTEDataPipe(Dataset):
         cache_static_arrays: bool = True,
         max_cache_size: int = 200,
     ):
-        """Initialize the datapipe (see ``from_config`` for the simple path)."""
         self.base_dataset = RTEBaseDataset(
             data_path=data_path,
             case_type=case_type,
             phase=phase,
             split_file=split_file,
             seed=seed,
-            load_sigma_fields=True,  # load precomputed material properties for speed
+            load_sigma_fields=True,
             cache_static_arrays=cache_static_arrays,
             max_cache_size=max_cache_size,
         )
-
         self.transforms = transforms
         self.adapter = adapter
 
@@ -458,108 +376,25 @@ class RTEDataPipe(Dataset):
         return len(self.base_dataset)
 
     def __getitem__(self, idx: int) -> Any:
-        """Get a sample from the dataset.
-
-        ``base_dataset[idx]`` returns a ``TensorDict`` with tensor fields plus
-        ``metadata`` / ``filename`` as ``NonTensorData`` entries. Transforms
-        consume and return ``TensorDict``; the adapter converts to the
-        model-specific format.
-        """
         td = self.base_dataset[idx]
-
         if self.transforms is not None:
             td = self.transforms(td)
-
         if self.adapter is not None:
             return self.adapter(td)
         return td
-
-    @classmethod
-    def from_config(
-        cls,
-        data_path: Union[str, Path],
-        case_type: Optional[Literal["lattice", "hohlraum"]] = None,
-        adapter: Optional[Literal["transolver", None]] = "transolver",
-        phase: Literal["train", "val", "test"] = "train",
-        # Data processing options
-        num_spatial_points: int = 2048,
-        flux_normalization_stats_file: Optional[Union[str, Path]] = None,
-        normalize_coordinates: bool = True,
-        flux_clip_threshold: float = 1e-8,
-        split_file: Optional[Union[str, Path]] = None,
-        seed: Optional[int] = None,
-        # Cache options
-        cache_static_arrays: bool = True,
-        max_cache_size: int = 200,
-        # Transolver-specific options
-        include_q_in_embedding: bool = True,
-        # Fourier features options
-        use_fourier_features: bool = False,
-        fourier_num_frequencies: int = 3,
-        fourier_coord_dims: int = 2,
-        fourier_base_frequency: float = 1.0,
-    ) -> "RTEDataPipe":
-        """Create a datapipe from a simple configuration.
-
-        The transform pipeline and adapter are built by ``_build_transforms``
-        and ``_build_adapter`` respectively; this method is a thin
-        orchestrator that validates required inputs, composes both stages,
-        and returns the configured datapipe.
-        """
-        if flux_normalization_stats_file is None:
-            raise ValueError(
-                "flux_normalization_stats_file is required. "
-                "Run compute_normalizations.py first to generate statistics file."
-            )
-
-        transforms = _build_transforms(
-            data_path=data_path,
-            case_type=case_type,
-            flux_normalization_stats_file=flux_normalization_stats_file,
-            flux_clip_threshold=flux_clip_threshold,
-            seed=seed,
-            num_spatial_points=num_spatial_points,
-            normalize_coordinates=normalize_coordinates,
-            use_fourier_features=use_fourier_features,
-            fourier_num_frequencies=fourier_num_frequencies,
-            fourier_coord_dims=fourier_coord_dims,
-            fourier_base_frequency=fourier_base_frequency,
-        )
-
-        adapter_obj = _build_adapter(
-            adapter,
-            include_q_in_embedding=include_q_in_embedding,
-        )
-
-        return cls(
-            data_path=data_path,
-            transforms=transforms,
-            adapter=adapter_obj,
-            case_type=case_type,
-            phase=phase,
-            split_file=split_file,
-            seed=seed,
-            cache_static_arrays=cache_static_arrays,
-            max_cache_size=max_cache_size,
-        )
 
     def preload_to_memory(self, verbose: bool = True, num_workers: int = 8) -> dict:
         """Preload all static arrays into main process memory.
 
         Workers inherit the populated cache via fork, eliminating disk I/O.
-        Uses parallel I/O for faster loading on multi-core systems.
         """
         return self.base_dataset.preload_to_memory(
             verbose=verbose, num_workers=num_workers
         )
 
-    def get_raw_sample(self, idx: int) -> TensorDict:
-        """Get a raw sample as a ``TensorDict`` (pre-transform, pre-adapter)."""
-        return self.base_dataset[idx]
-
     def get_transformed_sample(self, idx: int) -> TensorDict:
         """Get sample with transforms applied but no adapter (``TensorDict``)."""
-        td = self.get_raw_sample(idx)
+        td = self.base_dataset[idx]
         if self.transforms is not None:
             td = self.transforms(td)
         return td
@@ -573,6 +408,58 @@ class RTEDataPipe(Dataset):
             ")",
         ]
         return "\n".join(lines)
+
+
+def _build_rte_datapipe(
+    case_type: Literal["lattice", "hohlraum"],
+    data_path: Union[str, Path],
+    phase: Literal["train", "val", "test"],
+    *,
+    num_spatial_points: int,
+    flux_normalization_stats_file: Union[str, Path],
+    normalize_coordinates: bool,
+    flux_clip_threshold: float,
+    split_file: Union[str, Path],
+    seed: Optional[int],
+    cache_static_arrays: bool,
+    max_cache_size: int,
+    include_q_in_embedding: bool,
+    use_fourier_features: bool,
+    fourier_num_frequencies: Optional[int],
+    fourier_coord_dims: Optional[int],
+    fourier_base_frequency: Optional[float],
+) -> RTEDataPipe:
+    """Build the canonical training/inference RTE datapipe."""
+    if case_type not in ("lattice", "hohlraum"):
+        raise ValueError(
+            f"Unknown case_type: {case_type!r}. Expected 'lattice' or 'hohlraum'."
+        )
+
+    transforms = _build_transforms(
+        data_path=data_path,
+        case_type=case_type,
+        flux_normalization_stats_file=flux_normalization_stats_file,
+        flux_clip_threshold=flux_clip_threshold,
+        seed=seed,
+        num_spatial_points=num_spatial_points,
+        normalize_coordinates=normalize_coordinates,
+        use_fourier_features=use_fourier_features,
+        fourier_num_frequencies=fourier_num_frequencies,
+        fourier_coord_dims=fourier_coord_dims,
+        fourier_base_frequency=fourier_base_frequency,
+    )
+
+    return RTEDataPipe(
+        data_path=data_path,
+        transforms=transforms,
+        adapter=TransolverAdapter(include_q_in_embedding=include_q_in_embedding),
+        case_type=case_type,
+        phase=phase,
+        split_file=split_file,
+        seed=seed,
+        cache_static_arrays=cache_static_arrays,
+        max_cache_size=max_cache_size,
+    )
 
 
 def _build_transforms(
@@ -632,9 +519,7 @@ def _build_transforms(
     material_stats = load_material_stats(material_stats_path)
     transform_list.append(
         Normalize(
-            **material_normalize_kwargs(
-                material_stats, field="physical_properties"
-            )
+            **material_normalize_kwargs(material_stats, field="physical_properties")
         )
     )
 
@@ -674,48 +559,6 @@ def _build_transforms(
         )
 
     return Compose(transform_list)
-
-
-def _build_adapter(
-    adapter: Optional[str],
-    *,
-    include_q_in_embedding: bool,
-):
-    """Build the model-specific output adapter (or ``None``).
-
-    Collapsed to a constant for the upstream Transolver-only example: the
-    only valid non-``None`` value is ``"transolver"``. Kept as a function
-    for plug-in clarity so ``from_config`` flows naturally.
-    """
-    if adapter is None:
-        return None
-    if adapter == "transolver":
-        return TransolverAdapter(include_q_in_embedding=include_q_in_embedding)
-    raise ValueError(
-        f"Unknown adapter: {adapter!r}. The upstream example ships only "
-        "'transolver' (or None for raw TensorDicts)."
-    )
-
-
-def create_dataset(
-    case_type: Literal["lattice", "hohlraum"],
-    data_path: Union[str, Path],
-    phase: Literal["train", "val", "test"] = "train",
-    adapter: Optional[Literal["transolver"]] = "transolver",
-    **kwargs,
-) -> RTEDataPipe:
-    """Create a dataset for the given case type."""
-    if case_type not in ("lattice", "hohlraum"):
-        raise ValueError(
-            f"Unknown case_type: {case_type!r}. Expected 'lattice' or 'hohlraum'."
-        )
-    return RTEDataPipe.from_config(
-        data_path=data_path,
-        case_type=case_type,
-        phase=phase,
-        adapter=adapter,
-        **kwargs,
-    )
 
 
 # =========================================================================
@@ -944,7 +787,6 @@ def build_dataloaders(
     cfg: DictConfig,
     dist=None,
     *,
-    adapter: str = "transolver",
     collate_fn: Optional[Callable] = None,
     extra_dataset_kwargs: Optional[dict] = None,
     phases: Iterable[str] = ("train", "val"),
@@ -960,9 +802,8 @@ def build_dataloaders(
     Args:
         cfg: Hydra configuration (training cfg or a loaded checkpoint cfg).
         dist: ``DistributedManager`` for training; ``None`` for eval.
-        adapter: Model adapter identifier (only ``"transolver"`` is shipped).
         collate_fn: Collate function. Defaults to ``collate_no_padding``.
-        extra_dataset_kwargs: Additional kwargs forwarded to ``create_dataset``.
+        extra_dataset_kwargs: Additional kwargs forwarded to the datapipe.
         phases: Which splits to build (subset of ``{"train", "val", "test"}``).
         num_spatial_points_key: Where to read ``num_spatial_points`` from
             the config (dotted path). Overridden by
@@ -994,7 +835,6 @@ def build_dataloaders(
 
     common_kwargs = build_rte_dataset_kwargs(
         cfg,
-        adapter=adapter,
         num_spatial_points_key=num_spatial_points_key,
         num_spatial_points_override=num_spatial_points_override,
         split_file_override=split_file_override,
@@ -1013,7 +853,7 @@ def build_dataloaders(
             )
 
     datasets = {
-        phase: create_dataset(cfg.case.type, phase=phase, **common_kwargs)
+        phase: _build_rte_datapipe(cfg.case.type, phase=phase, **common_kwargs)
         for phase in phases
     }
 
@@ -1071,11 +911,9 @@ def build_dataloaders(
 
 
 __all__ = [
-    "ModelAdapter",
     "TransolverAdapter",
     "collate_no_padding",
     "build_rte_dataset_kwargs",
     "RTEDataPipe",
-    "create_dataset",
     "build_dataloaders",
 ]

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -295,7 +295,7 @@ def setup_training_environment(
     Returns:
         ``(dist, logger)``.
     """
-    _initialize_distributed_manager()
+    initialize_distributed_manager()
     dist = DistributedManager()
 
     synchronize_output_directory(cfg, dist)
@@ -314,7 +314,7 @@ def setup_training_environment(
     return dist, logger
 
 
-def _initialize_distributed_manager() -> None:
+def initialize_distributed_manager() -> None:
     """Initialize distributed state without misreading an interactive SLURM shell.
 
     PhysicsNeMo's default initializer auto-detects SLURM variables. In an

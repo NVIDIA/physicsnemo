@@ -32,7 +32,6 @@ Usage::
 import argparse
 import os
 import pathlib
-import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional, Tuple, Union
@@ -56,6 +55,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
 from dataset import load_flux_stats  # noqa: E402
 from loader import build_dataloaders, collate_no_padding  # noqa: E402
+from losses import extract_geometry_params  # noqa: E402
+from trainer import initialize_distributed_manager  # noqa: E402
 from transforms import denormalize_flux  # noqa: E402
 
 from physicsnemo.distributed import DistributedManager  # noqa: E402
@@ -134,7 +135,7 @@ def load_model_from_checkpoint(
 
     cfg = load_hydra_config(checkpoint_dir)
 
-    _initialize_distributed_manager()
+    initialize_distributed_manager()
 
     # Build model from cfg.model. Strip RTE-specific keys consumed elsewhere.
     cfg_model = OmegaConf.to_container(cfg.model, resolve=True)
@@ -160,44 +161,29 @@ def load_model_from_checkpoint(
     return model, cfg, metadata
 
 
-def _initialize_distributed_manager() -> None:
-    """Use distributed init only for torchrun/explicit distributed launches."""
-    if DistributedManager.is_initialized():
-        return
-
-    explicit_method = os.getenv("PHYSICSNEMO_DISTRIBUTED_INITIALIZATION_METHOD")
-    torchrun_env = os.getenv("RANK") is not None and os.getenv("WORLD_SIZE") is not None
-    openmpi_env = os.getenv("OMPI_COMM_WORLD_RANK") is not None
-
-    if explicit_method or torchrun_env or openmpi_env:
-        DistributedManager.initialize()
-        return
-
-    DistributedManager._shared_state["_is_initialized"] = True
-    dist = DistributedManager()
-    dist._initialization_method = "single"
-    if torch.cuda.is_available():
-        torch.cuda.set_device(dist.device)
-
-
 # =========================================================================
 # Metrics
 # =========================================================================
 
 
 def mse(pred: np.ndarray, target: np.ndarray) -> float:
+    """Mean squared error."""
     return float(np.mean((pred - target) ** 2))
 
 
 def rmse(pred: np.ndarray, target: np.ndarray) -> float:
+    """Root mean squared error."""
     return float(np.sqrt(np.mean((pred - target) ** 2)))
 
 
 def mae(pred: np.ndarray, target: np.ndarray) -> float:
+    """Mean absolute error."""
     return float(np.mean(np.abs(pred - target)))
 
 
-def l2_relative_error(pred: np.ndarray, target: np.ndarray, eps: float = 1e-10) -> float:
+def l2_relative_error(
+    pred: np.ndarray, target: np.ndarray, eps: float = 1e-10
+) -> float:
     """Sample-wise L2 relative error: ||pred - target||_2 / ||target||_2."""
     num = np.linalg.norm(pred.flatten() - target.flatten())
     den = np.linalg.norm(target.flatten()) + eps
@@ -240,28 +226,6 @@ def aggregate_metrics(per_sample: list[Dict[str, float]]) -> Dict[str, float]:
 # =========================================================================
 # QoI (numpy side)
 # =========================================================================
-
-
-def _extract_geometry_params(filename: Optional[str]) -> Optional[Dict[str, float]]:
-    """Parse hohlraum geometry parameters out of a simulation filename."""
-    if not filename:
-        return None
-    patterns = {
-        "cx": r"cx([-\d.]+)",
-        "cy": r"cy([-\d.]+)",
-        "ulr": r"ulr([-\d.]+)",
-        "llr": r"llr([-\d.]+)",
-        "urr": r"urr([-\d.]+)",
-        "lrr": r"lrr([-\d.]+)",
-        "hlr": r"hlr([-\d.]+)",
-        "hrr": r"hrr([-\d.]+)",
-    }
-    params: Dict[str, float] = {}
-    for key, pat in patterns.items():
-        m = re.search(pat, filename)
-        if m:
-            params[key] = float(m.group(1).rstrip("."))
-    return params if params else None
 
 
 def evaluate_lattice_qoi(
@@ -366,8 +330,11 @@ def compute_sample_qoi(
         qp = evaluate_lattice_qoi(coords, cell_areas, sigma_t, sigma_s, pred)
         qt = evaluate_lattice_qoi(coords, cell_areas, sigma_t, sigma_s, target)
     elif case_type == "hohlraum":
-        gp = _extract_geometry_params(metadata.get("filename"))
-        if gp is None:
+        filename = metadata.get("filename")
+        if not filename:
+            return None
+        gp = extract_geometry_params(filename)
+        if not gp:
             return None
         qp = evaluate_hohlraum_qoi(coords, cell_areas, sigma_t, sigma_s, pred, gp)
         qt = evaluate_hohlraum_qoi(coords, cell_areas, sigma_t, sigma_s, target, gp)
@@ -608,8 +575,7 @@ def plot_error_histogram(
     ax.set_xlabel("|prediction - target|")
     ax.set_ylabel("Count (log)")
     ax.set_title(
-        f"Pointwise error histogram (mean={errors.mean():.3e}, "
-        f"max={errors.max():.3e})"
+        f"Pointwise error histogram (mean={errors.mean():.3e}, max={errors.max():.3e})"
     )
     plt.tight_layout()
     plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
@@ -808,9 +774,7 @@ def _resolve_data_path(
         str(Path(cli_data_path) / case_type),
         force_add=True,
     )
-    flux_stats_file = (
-        Path(cli_data_path) / "stats" / f"{case_type}_flux_stats.yaml"
-    )
+    flux_stats_file = Path(cli_data_path) / "stats" / f"{case_type}_flux_stats.yaml"
     OmegaConf.update(
         cfg,
         "data.flux_normalization_stats_file",
@@ -823,6 +787,7 @@ def _resolve_data_path(
 
 
 def main():
+    """CLI entry point: parse args, load checkpoint, run evaluation, write outputs."""
     parser = argparse.ArgumentParser(
         description="Evaluate a trained RTE Transolver model on the test split.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -857,8 +822,7 @@ def main():
         "--output_dir",
         type=Path,
         default=None,
-        help="Where to write metrics + figures. "
-        "Defaults to <run_dir>/evaluation.",
+        help="Where to write metrics + figures. Defaults to <run_dir>/evaluation.",
     )
     parser.add_argument(
         "--num_samples",
@@ -932,7 +896,6 @@ def main():
     loaders, _ = build_dataloaders(
         cfg,
         dist=None,
-        adapter="transolver",
         collate_fn=collate_no_padding,
         phases=("test",),
         test_batch_size=1,
@@ -1010,9 +973,7 @@ def main():
         qoi_series = collect_qoi_series(per_sample_qoi)
         if "total" in qoi_series:
             total_target, total_prediction = qoi_series["total"]
-            qoi_summary["total"] = summarize_qoi_series(
-                total_target, total_prediction
-            )
+            qoi_summary["total"] = summarize_qoi_series(total_target, total_prediction)
         with open(output_dir / "qoi_metrics.yaml", "w") as f:
             yaml.safe_dump(qoi_summary, f, sort_keys=False)
         plot_qoi_true_vs_pred(qoi_series, figures_dir / "qoi_true_vs_pred.png")
