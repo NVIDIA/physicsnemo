@@ -27,6 +27,7 @@ Usage::
     python compute_normalizations.py \\
         --data_path <DATA_ROOT>/lattice \\
         --case_type lattice \\
+        --split_file <DATA_ROOT>/splits/lattice_splits.json \\
         --output_dir <DATA_ROOT>/stats
 
 The flux statistics walk the training split of the dataset, log-clip the raw
@@ -94,8 +95,7 @@ def compute_flux_statistics(
         data_path: path to the zarr stores for one case.
         case_type: ``"lattice"`` or ``"hohlraum"``.
         output_file: destination YAML path.
-        split_file: optional split JSON; defaults to the dataset's internal
-            random split.
+        split_file: split JSON used to select the training split.
         clip_threshold: minimum flux value before ``log10``.
         steady_state: when ``True``, only use the first and last timesteps
             of each simulation.
@@ -210,7 +210,8 @@ def compute_material_statistics(
     case_type: str,
     output_file: Path,
     flux_stats_file: Path,
-    split_file: Optional[Path] = None,
+    split_file: Path,
+    clip_threshold: float = 1e-8,
     num_spatial_points: int = 2048,
     seed: int = 42,
 ) -> Dict[str, Dict[str, float]]:
@@ -223,8 +224,8 @@ def compute_material_statistics(
         flux_stats_file: path to the flux stats YAML produced by
             :func:`compute_flux_statistics`. Required because the transform
             pipeline runs ``RTEFluxLogClip`` first.
-        split_file: optional split JSON; defaults to the dataset's internal
-            random split.
+        split_file: split JSON used to select the training split.
+        clip_threshold: flux clip threshold used by the flux transform.
         num_spatial_points: number of points per simulation drawn by
             ``SpatialSampler``.
         seed: RNG seed for the temporal and spatial samplers.
@@ -248,7 +249,7 @@ def compute_material_statistics(
         [
             RTEFluxLogClip(
                 normalization_stats_file=flux_stats_file,
-                clip_threshold=1e-8,
+                clip_threshold=clip_threshold,
             ),
             NextStepSampler(stride=1, seed=seed),
             MaterialPropertyExtractor(case_type=case_type),
@@ -371,8 +372,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--split_file",
         type=Path,
-        default=None,
-        help="Optional split JSON; defaults to the dataset's internal random split.",
+        required=True,
+        help="Required split JSON; statistics are computed on its training split.",
     )
     parser.add_argument(
         "--clip_threshold",
@@ -428,6 +429,7 @@ def main() -> int:
         output_file=material_output,
         flux_stats_file=flux_output,
         split_file=args.split_file,
+        clip_threshold=args.clip_threshold,
         num_spatial_points=args.num_spatial_points,
         seed=args.seed,
     )
