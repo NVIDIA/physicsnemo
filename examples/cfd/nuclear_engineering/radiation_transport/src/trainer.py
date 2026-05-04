@@ -33,6 +33,7 @@ Optimizer / scheduler construction and checkpoint save/load live in
 
 import hashlib
 import logging
+import math
 import os
 import random
 import time
@@ -247,6 +248,40 @@ def aggregate_validation_loss(
     return global_loss_sum / max(global_num_batches, 1), global_num_batches
 
 
+def aggregate_validation_metrics(
+    metric_sums: Mapping[str, float],
+    metric_counts: Mapping[str, int],
+    dist: DistributedManager,
+) -> Dict[str, float]:
+    """Aggregate named validation metrics across ranks."""
+    if not dist.distributed:
+        return {
+            key: metric_sums[key] / metric_counts[key]
+            for key in metric_sums
+            if metric_counts.get(key, 0) > 0
+        }
+
+    gathered = [None for _ in range(dist.world_size)]
+    torch_dist.all_gather_object(
+        gathered,
+        (dict(metric_sums), dict(metric_counts)),
+    )
+
+    total_sums: Dict[str, float] = {}
+    total_counts: Dict[str, int] = {}
+    for rank_sums, rank_counts in gathered:
+        for key, value in rank_sums.items():
+            total_sums[key] = total_sums.get(key, 0.0) + float(value)
+        for key, value in rank_counts.items():
+            total_counts[key] = total_counts.get(key, 0) + int(value)
+
+    return {
+        key: total_sums[key] / total_counts[key]
+        for key in total_sums
+        if total_counts.get(key, 0) > 0
+    }
+
+
 def setup_training_environment(
     cfg: DictConfig,
     model_name: str,
@@ -424,6 +459,15 @@ def _finalize_step(
     optimizer.zero_grad(set_to_none=True)
 
 
+def _scale_pending_gradients(model: torch.nn.Module, factor: float) -> None:
+    """Scale accumulated gradients in-place before optimizer finalization."""
+    if factor == 1.0:
+        return
+    for parameter in model.parameters():
+        if parameter.grad is not None:
+            parameter.grad.mul_(factor)
+
+
 def grad_step(
     loss: torch.Tensor,
     scaler: GradScaler,
@@ -456,8 +500,10 @@ def flush_partial_accumulation(
     max_grad_norm: float = 10.0,
 ) -> None:
     """Flush leftover gradients when ``total_steps % accum_steps != 0``."""
-    if total_steps % accum_steps == 0:
+    remainder = total_steps % accum_steps
+    if remainder == 0:
         return
+    _scale_pending_gradients(model, accum_steps / remainder)
     _finalize_step(scaler, optimizer, model, max_grad_norm)
 
 
@@ -477,6 +523,16 @@ def _coerce_optional_checkpoint_interval(value: Any) -> Optional[int]:
     if interval < 0:
         raise ValueError("latest_checkpoint_interval must be >= 0 or null")
     return interval
+
+
+def _finite_metric_values(metrics: Mapping[str, Optional[float]]) -> bool:
+    """Return True when all present metric values are finite."""
+    for value in metrics.values():
+        if value is None:
+            continue
+        if not math.isfinite(float(value)):
+            return False
+    return True
 
 
 def run_training_loop(
@@ -576,16 +632,31 @@ def run_training_loop(
             with LaunchLogger(
                 "val", epoch=epoch, num_mini_batch=len(val_loader)
             ) as val_log:
-                val_loss_sum, val_num_batches = validate_fn(
+                validation_result = validate_fn(
                     val_loader,
                     model,
                     dist.device,
                     val_log,
                     **val_kw,
                 )
+                if len(validation_result) == 2:
+                    val_loss_sum, val_num_batches = validation_result
+                    val_metric_sums: Dict[str, float] = {}
+                    val_metric_counts: Dict[str, int] = {}
+                else:
+                    (
+                        val_loss_sum,
+                        val_num_batches,
+                        val_metric_sums,
+                        val_metric_counts,
+                    ) = validation_result
 
             train_loss = train_log.epoch_losses.get("loss", 0.0)
             val_loss, _ = aggregate_validation_loss(val_loss_sum, val_num_batches, dist)
+            val_metrics = aggregate_validation_metrics(
+                val_metric_sums, val_metric_counts, dist
+            )
+            val_log.epoch_losses.update(val_metrics)
 
             scheduler_type = cfg.train.get("scheduler_type", "cosine")
             if scheduler_type == "plateau":
@@ -612,38 +683,30 @@ def run_training_loop(
                     writer.add_scalar("Learning_Rate", current_lr, epoch)
                     writer.flush()
 
-                val_loss_qoi = val_log.epoch_losses.get("loss_qoi")
+                val_loss_qoi = val_metrics.get("loss_qoi")
                 metadata_best_qoi_loss = best_qoi_loss
                 if val_loss_qoi is not None:
                     metadata_best_qoi_loss = min(best_qoi_loss, val_loss_qoi)
 
-                best_val_losses[:] = save_best_checkpoint(
-                    checkpoint_dir=Path(checkpoint_dir),
-                    epoch=epoch,
-                    val_loss=val_loss,
-                    best_val_losses=best_val_losses,
-                    save_checkpoint_fn=save_checkpoint,
-                    logger=logger,
-                    models=model,
-                    optimizer=optimizer,
-                    scheduler=scheduler,
-                    scaler=scaler,
-                    metadata={
-                        "best_val_losses": best_val_losses,
-                        "best_qoi_loss": metadata_best_qoi_loss,
-                        "train_loss": train_loss,
-                        "val_loss": val_loss,
-                        "val_loss_qoi": val_loss_qoi,
-                        "case_type": case_type,
-                    },
-                )
-
-                if val_loss_qoi is not None:
-                    best_qoi_loss = save_best_qoi_checkpoint(
+                checkpoint_metrics = {
+                    "train_loss": train_loss,
+                    "val_loss": val_loss,
+                    "val_loss_qoi": val_loss_qoi,
+                }
+                can_write_checkpoint = _finite_metric_values(checkpoint_metrics)
+                if not can_write_checkpoint:
+                    logger.warning(
+                        "Skipping checkpoint saves for epoch %s because at least "
+                        "one checkpoint metric is NaN or inf: %s",
+                        epoch,
+                        checkpoint_metrics,
+                    )
+                else:
+                    best_val_losses[:] = save_best_checkpoint(
                         checkpoint_dir=Path(checkpoint_dir),
                         epoch=epoch,
-                        qoi_error=val_loss_qoi,
-                        best_qoi_error=best_qoi_loss,
+                        val_loss=val_loss,
+                        best_val_losses=best_val_losses,
                         save_checkpoint_fn=save_checkpoint,
                         logger=logger,
                         models=model,
@@ -660,49 +723,71 @@ def run_training_loop(
                         },
                     )
 
-                if epoch % cfg.train.checkpoint_interval == 0:
-                    save_checkpoint(
-                        path=checkpoint_dir,
-                        models=model,
-                        optimizer=optimizer,
-                        scheduler=scheduler,
-                        scaler=scaler,
-                        epoch=epoch,
-                        metadata={
-                            "best_val_losses": best_val_losses,
-                            "best_qoi_loss": best_qoi_loss,
-                            "train_loss": train_loss,
-                            "val_loss": val_loss,
-                            "val_loss_qoi": val_loss_qoi,
-                            "case_type": case_type,
-                        },
-                    )
-                    logger.info(f"  Saved checkpoint at epoch {epoch + 1}")
+                    if val_loss_qoi is not None:
+                        best_qoi_loss = save_best_qoi_checkpoint(
+                            checkpoint_dir=Path(checkpoint_dir),
+                            epoch=epoch,
+                            qoi_error=val_loss_qoi,
+                            best_qoi_error=best_qoi_loss,
+                            save_checkpoint_fn=save_checkpoint,
+                            logger=logger,
+                            models=model,
+                            optimizer=optimizer,
+                            scheduler=scheduler,
+                            scaler=scaler,
+                            metadata={
+                                "best_val_losses": best_val_losses,
+                                "best_qoi_loss": metadata_best_qoi_loss,
+                                "train_loss": train_loss,
+                                "val_loss": val_loss,
+                                "val_loss_qoi": val_loss_qoi,
+                                "case_type": case_type,
+                            },
+                        )
 
-                latest_checkpoint_interval = _coerce_optional_checkpoint_interval(
-                    cfg.train.get("latest_checkpoint_interval", 1)
-                )
-                if latest_checkpoint_interval and (
-                    epoch % latest_checkpoint_interval == 0
-                ):
-                    save_latest_checkpoint(
-                        checkpoint_dir=Path(checkpoint_dir),
-                        epoch=epoch,
-                        save_checkpoint_fn=save_checkpoint,
-                        logger=logger,
-                        models=model,
-                        optimizer=optimizer,
-                        scheduler=scheduler,
-                        scaler=scaler,
-                        metadata={
-                            "best_val_losses": best_val_losses,
-                            "best_qoi_loss": best_qoi_loss,
-                            "train_loss": train_loss,
-                            "val_loss": val_loss,
-                            "val_loss_qoi": val_loss_qoi,
-                            "case_type": case_type,
-                        },
+                    if epoch % cfg.train.checkpoint_interval == 0:
+                        save_checkpoint(
+                            path=checkpoint_dir,
+                            models=model,
+                            optimizer=optimizer,
+                            scheduler=scheduler,
+                            scaler=scaler,
+                            epoch=epoch,
+                            metadata={
+                                "best_val_losses": best_val_losses,
+                                "best_qoi_loss": best_qoi_loss,
+                                "train_loss": train_loss,
+                                "val_loss": val_loss,
+                                "val_loss_qoi": val_loss_qoi,
+                                "case_type": case_type,
+                            },
+                        )
+                        logger.info(f"  Saved checkpoint at epoch {epoch + 1}")
+
+                    latest_checkpoint_interval = _coerce_optional_checkpoint_interval(
+                        cfg.train.get("latest_checkpoint_interval", 1)
                     )
+                    if latest_checkpoint_interval and (
+                        epoch % latest_checkpoint_interval == 0
+                    ):
+                        save_latest_checkpoint(
+                            checkpoint_dir=Path(checkpoint_dir),
+                            epoch=epoch,
+                            save_checkpoint_fn=save_checkpoint,
+                            logger=logger,
+                            models=model,
+                            optimizer=optimizer,
+                            scheduler=scheduler,
+                            scaler=scaler,
+                            metadata={
+                                "best_val_losses": best_val_losses,
+                                "best_qoi_loss": best_qoi_loss,
+                                "train_loss": train_loss,
+                                "val_loss": val_loss,
+                                "val_loss_qoi": val_loss_qoi,
+                                "case_type": case_type,
+                            },
+                        )
 
                 if val_loss_qoi is not None and writer:
                     writer.add_scalar("Loss/val_qoi", val_loss_qoi, epoch)
