@@ -466,6 +466,19 @@ def flush_partial_accumulation(
 # =========================================================================
 
 
+def _coerce_optional_checkpoint_interval(value: Any) -> Optional[int]:
+    """Parse an optional checkpoint cadence; None/0 disables the feature."""
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip().lower() in ("", "none", "null"):
+        return None
+
+    interval = int(value)
+    if interval < 0:
+        raise ValueError("latest_checkpoint_interval must be >= 0 or null")
+    return interval
+
+
 def run_training_loop(
     cfg: DictConfig,
     dist: Any,
@@ -600,6 +613,31 @@ def run_training_loop(
                     writer.flush()
 
                 val_loss_qoi = val_log.epoch_losses.get("loss_qoi")
+                metadata_best_qoi_loss = best_qoi_loss
+                if val_loss_qoi is not None:
+                    metadata_best_qoi_loss = min(best_qoi_loss, val_loss_qoi)
+
+                best_val_losses[:] = save_best_checkpoint(
+                    checkpoint_dir=Path(checkpoint_dir),
+                    epoch=epoch,
+                    val_loss=val_loss,
+                    best_val_losses=best_val_losses,
+                    save_checkpoint_fn=save_checkpoint,
+                    logger=logger,
+                    models=model,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                    metadata={
+                        "best_val_losses": best_val_losses,
+                        "best_qoi_loss": metadata_best_qoi_loss,
+                        "train_loss": train_loss,
+                        "val_loss": val_loss,
+                        "val_loss_qoi": val_loss_qoi,
+                        "case_type": case_type,
+                    },
+                )
+
                 if val_loss_qoi is not None:
                     best_qoi_loss = save_best_qoi_checkpoint(
                         checkpoint_dir=Path(checkpoint_dir),
@@ -614,7 +652,7 @@ def run_training_loop(
                         scaler=scaler,
                         metadata={
                             "best_val_losses": best_val_losses,
-                            "best_qoi_loss": best_qoi_loss,
+                            "best_qoi_loss": metadata_best_qoi_loss,
                             "train_loss": train_loss,
                             "val_loss": val_loss,
                             "val_loss_qoi": val_loss_qoi,
@@ -635,35 +673,16 @@ def run_training_loop(
                             "best_qoi_loss": best_qoi_loss,
                             "train_loss": train_loss,
                             "val_loss": val_loss,
+                            "val_loss_qoi": val_loss_qoi,
                             "case_type": case_type,
                         },
                     )
                     logger.info(f"  Saved checkpoint at epoch {epoch + 1}")
 
-                best_val_losses[:] = save_best_checkpoint(
-                    checkpoint_dir=Path(checkpoint_dir),
-                    epoch=epoch,
-                    val_loss=val_loss,
-                    best_val_losses=best_val_losses,
-                    save_checkpoint_fn=save_checkpoint,
-                    logger=logger,
-                    models=model,
-                    optimizer=optimizer,
-                    scheduler=scheduler,
-                    scaler=scaler,
-                    metadata={
-                        "best_val_losses": best_val_losses,
-                        "best_qoi_loss": best_qoi_loss,
-                        "train_loss": train_loss,
-                        "val_loss": val_loss,
-                        "case_type": case_type,
-                    },
+                latest_checkpoint_interval = _coerce_optional_checkpoint_interval(
+                    cfg.train.get("latest_checkpoint_interval", 1)
                 )
-
-                latest_checkpoint_interval = cfg.train.get(
-                    "latest_checkpoint_interval", 1
-                )
-                if latest_checkpoint_interval > 0 and (
+                if latest_checkpoint_interval and (
                     epoch % latest_checkpoint_interval == 0
                 ):
                     save_latest_checkpoint(
