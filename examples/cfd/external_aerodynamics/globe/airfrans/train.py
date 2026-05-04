@@ -217,13 +217,9 @@ def main(
     profiling_dir = output_dir / "profiling"
     shutdown_file = output_dir / "SHUTDOWN"
 
+    for directory in (checkpoint_dir, torch_compile_cache_dir, profiling_dir):
+        directory.mkdir(parents=True, exist_ok=True)
     if dist.rank == 0:
-        for directory in (
-            checkpoint_dir,
-            torch_compile_cache_dir,
-            profiling_dir,
-        ):
-            directory.mkdir(parents=True, exist_ok=True)
         shutdown_file.unlink(missing_ok=True)
 
     ### [PyTorch Configuration]

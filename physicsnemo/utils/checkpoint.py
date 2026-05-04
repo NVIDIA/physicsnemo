@@ -223,6 +223,85 @@ def _redistribute_optim_sd_for_dtensor(
     return {**optim_sd, "state": new_state}
 
 
+def _fsdp_uses_flat_param_optim(model: torch.nn.Module | None) -> bool:
+    """Return True if *model* is FSDP-wrapped with ``use_orig_params=False``.
+
+    That is the only configuration in which optimizer state goes through
+    the FlatParameter flatten/unflatten path (and therefore the only
+    configuration affected by the channels_last asymmetry). With
+    ``use_orig_params=True`` FSDP exposes per-original-param optimizer
+    state and the round-trip is layout-preserving on its own.
+    """
+    if not isinstance(model, FSDP):
+        return False
+    return not getattr(model, "_use_orig_params", True)
+
+
+def _remap_channels_last_optim_sd(
+    opt_model: torch.nn.Module | None,
+    optim_sd: dict[str, Any],
+) -> dict[str, Any]:
+    """Compensate for an FSDP optim-state flatten/unflatten asymmetry.
+
+    PyTorch FSDP with ``use_orig_params=False`` packs and unpacks the
+    ``FlatParameter`` asymmetrically for non-truly-contiguous params:
+
+    * Save path (``_get_unflat_views``) uses
+      ``as_strided((numel,), (1,))`` -- bytes are read in *storage* order.
+    * Load path (``_flatten_tensor_optim_state``) uses ``torch.flatten``
+      -- bytes are read in *logical* (row-major) order.
+
+    For a 4-D Conv2d weight in ``channels_last`` format the two orders
+    differ, so the round-trip silently corrupts the optimizer state.
+
+    Detect channels_last entries directly on *optim_sd* (the saved tensor
+    preserves its memory format through ``torch.save`` / ``torch.load``)
+    and pre-permute them so the loader's ``torch.flatten`` produces the
+    same byte sequence the ``FlatParameter`` was originally filled with.
+    Other entries (and ranks that received an empty ``optim_sd`` for the
+    broadcast-from-rank-0 path) pass through unchanged.
+
+    Only fires when *opt_model* is FSDP-wrapped with
+    ``use_orig_params=False`` -- with ``use_orig_params=True`` the
+    asymmetry doesn't exist and the remap would *cause* the corruption it
+    is meant to prevent.
+
+    Note: we cannot inspect the live model to find channels_last params --
+    with ``use_orig_params=False`` the original parameters are hidden
+    behind plain tensor attributes and ``named_parameters()`` only sees
+    the 1-D ``FlatParameter``. So detection is on the saved tensors
+    instead.
+
+    See ``torch/distributed/fsdp/_optim_utils.py::_flatten_tensor_optim_state``
+    and ``_flat_param.py::flatten_tensors``.
+    """
+    if "state" not in optim_sd:
+        return optim_sd
+    if not _fsdp_uses_flat_param_optim(opt_model):
+        return optim_sd
+
+    def _maybe_remap(t: torch.Tensor) -> torch.Tensor:
+        if isinstance(t, DTensor):
+            return t
+        if t.dim() == 4 and t.is_contiguous(memory_format=torch.channels_last):
+            return t.permute(0, 2, 3, 1).contiguous().view(*t.shape)
+        if t.dim() == 5 and t.is_contiguous(memory_format=torch.channels_last_3d):
+            return t.permute(0, 2, 3, 4, 1).contiguous().view(*t.shape)
+        return t
+
+    new_state: dict[str, Any] = {}
+    for pname, pstate in optim_sd["state"].items():
+        if not isinstance(pstate, dict):
+            new_state[pname] = pstate
+            continue
+        new_ps: dict[str, Any] = {}
+        for k, v in pstate.items():
+            new_ps[k] = _maybe_remap(v) if isinstance(v, torch.Tensor) else v
+        new_state[pname] = new_ps
+
+    return {**optim_sd, "state": new_state}
+
+
 def _is_mdlus_archive(path: str) -> bool:
     """Return ``True`` if *path* is a ``.mdlus`` archive (tar or zip containing ``model.pt``)."""
     cached = _cache_if_needed(path)
@@ -1067,10 +1146,14 @@ def _load_checkpoint_distributed(
                 osd_list: list[Any] = [optim_sd]
                 torch.distributed.broadcast_object_list(osd_list, src=0)
                 optim_sd = _redistribute_optim_sd_for_dtensor(dtensor_plc, osd_list[0])
+                optim_sd = _remap_channels_last_optim_sd(opt_model, optim_sd)
                 set_optimizer_state_dict(
                     opt_model, optimizer, optim_sd, options=full_options
                 )
             else:
+                # Remap on rank 0 only -- DCP broadcasts the rank-0 dict to
+                # the others as part of broadcast_from_rank0.
+                optim_sd = _remap_channels_last_optim_sd(opt_model, optim_sd)
                 set_optimizer_state_dict(
                     opt_model, optimizer, optim_sd, options=broadcast_options
                 )

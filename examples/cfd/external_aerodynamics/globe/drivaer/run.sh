@@ -26,7 +26,7 @@ TRAIN_ARGS=(
     --amp
 )
 
-export DRIVAER_DATA_DIR="${HOME}/datasets/drivaer_aws/drivaer_data_full"
+export DRIVAER_DATA_DIR="${HOME}/datasets/drivaer_aws/drivaer_data_full"  # Set this to your DrivAerML dataset
 
 export MLFLOW_TRACKING_URI="sqlite:///${SLURM_SUBMIT_DIR:-$(pwd)}/output/mlflow.db"
 

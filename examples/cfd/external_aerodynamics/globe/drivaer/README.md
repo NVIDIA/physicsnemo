@@ -40,14 +40,19 @@ drivaer_data_full/
 This example uses only the VTP boundary files, geometry CSVs, and force
 coefficient CSVs.  Volume VTU files are not loaded.
 
+Set the dataset location via one of:
+
+- The `--data-dir` CLI argument
+- The `DRIVAER_DATA_DIR` environment variable (set automatically by `run.sh`)
+
 ## Usage
 
 ### Training
 
-Set `DRIVAER_DATA_DIR` to point to your dataset root, then launch via SLURM:
+Multi-node via SLURM (edit `DRIVAER_DATA_DIR` in `run.sh` to point to your
+dataset root, then):
 
 ```bash
-export DRIVAER_DATA_DIR=/path/to/drivaer_data_full
 sbatch run.sh
 ```
 

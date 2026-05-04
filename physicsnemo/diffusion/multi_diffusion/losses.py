@@ -27,30 +27,7 @@ from torch import Tensor
 from physicsnemo.diffusion.base import PredictorType
 from physicsnemo.diffusion.multi_diffusion.models import MultiDiffusionModel2D
 from physicsnemo.diffusion.noise_schedulers import NoiseScheduler
-from physicsnemo.diffusion.utils.utils import apply_loss_weight
-
-
-def _unwrap_multi_diffusion(model: torch.nn.Module) -> MultiDiffusionModel2D:
-    """Peel off DDP / torch.compile wrappers to reach the underlying
-    :class:`MultiDiffusionModel2D`.
-
-    The unwrapping order handles arbitrary nesting of
-    ``DistributedDataParallel`` (``model.module``) and ``torch.compile``
-    (``OptimizedModule._orig_mod``).
-    """
-    m = model
-    while not isinstance(m, MultiDiffusionModel2D):
-        if isinstance(m, torch._dynamo.eval_frame.OptimizedModule):
-            m = m._orig_mod
-        elif hasattr(m, "module"):
-            m = m.module
-        else:
-            raise TypeError(
-                f"Could not unwrap a MultiDiffusionModel2D from "
-                f"{type(model).__name__}. Found leaf type "
-                f"{type(m).__name__}."
-            )
-    return m
+from physicsnemo.diffusion.utils.utils import _unwrap_module, apply_loss_weight
 
 
 class _CompiledPatchX:
@@ -265,7 +242,7 @@ class MultiDiffusionMSEDSMLoss:
         reduction: Literal["none", "mean", "sum"] = "mean",
     ) -> None:
         self.model = model
-        self._md_model = _unwrap_multi_diffusion(model)
+        self._md_model = _unwrap_module(model, MultiDiffusionModel2D)
         self.noise_scheduler = noise_scheduler
         self._compiled_patch_x = _CompiledPatchX(self._md_model)
 
@@ -528,7 +505,7 @@ class MultiDiffusionWeightedMSEDSMLoss:
         reduction: Literal["none", "mean", "sum"] = "mean",
     ) -> None:
         self.model = model
-        self._md_model = _unwrap_multi_diffusion(model)
+        self._md_model = _unwrap_module(model, MultiDiffusionModel2D)
         self.noise_scheduler = noise_scheduler
         self._compiled_patch_x = _CompiledPatchX(self._md_model)
 
