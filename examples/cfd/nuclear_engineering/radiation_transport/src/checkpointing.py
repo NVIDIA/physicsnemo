@@ -28,6 +28,7 @@ DDP / seeding / batch-size logging helpers live in ``trainer.py``.
 """
 
 import logging
+import math
 import os
 import shutil
 from pathlib import Path
@@ -345,6 +346,16 @@ def save_best_checkpoint(
     """
     checkpoint_dir = Path(checkpoint_dir)
 
+    if not math.isfinite(float(val_loss)):
+        if logger:
+            logger.warning(
+                "  Skipping best-checkpoint save for epoch %s: non-finite "
+                "val_loss=%s",
+                epoch,
+                val_loss,
+            )
+        return list(best_val_losses)
+
     # Handle legacy format: convert List[float] to List[Tuple[float, int]].
     if best_val_losses and isinstance(best_val_losses[0], (int, float)):
         # Legacy format detected, reset to empty (can't recover epoch info).
@@ -473,6 +484,16 @@ def save_best_qoi_checkpoint(
     Returns:
         Updated best QoI loss value.
     """
+    if not math.isfinite(float(qoi_error)):
+        if logger:
+            logger.warning(
+                "  Skipping best-QoI checkpoint save for epoch %s: non-finite "
+                "qoi_error=%s",
+                epoch,
+                qoi_error,
+            )
+        return best_qoi_error
+
     if qoi_error >= best_qoi_error:
         return best_qoi_error
 
