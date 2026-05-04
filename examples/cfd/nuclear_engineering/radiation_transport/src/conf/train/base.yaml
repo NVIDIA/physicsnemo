@@ -4,7 +4,7 @@
 
 epochs: 501
 checkpoint_interval: 100
-latest_checkpoint_interval: null
+latest_checkpoint_interval: null                      # 0/null disables rolling latest_checkpoint/
 gradient_accumulation_steps: 1
 seed: 6
 deterministic: false
