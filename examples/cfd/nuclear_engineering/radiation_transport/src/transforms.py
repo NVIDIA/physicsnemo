@@ -490,7 +490,7 @@ class SpatialSampler(Transform):
             if flux_key in data:
                 flux_1d = data[flux_key][indices]
                 if flux_1d.shape[0] < self.num_points:
-                    flux_1d = self._pad_tensor(flux_1d, self.num_points)
+                    flux_1d = self._pad_flux_1d(flux_1d, self.num_points)
                 data[flux_key] = flux_1d
 
         data["spatial_indices"] = indices
@@ -513,6 +513,14 @@ class SpatialSampler(Transform):
         pad_shape = (flux.shape[0], target_size - flux.shape[1])
         padding = torch.full(pad_shape, -10.0, dtype=flux.dtype, device=flux.device)
         return torch.cat([flux, padding], dim=1)
+
+    def _pad_flux_1d(self, flux: torch.Tensor, target_size: int) -> torch.Tensor:
+        if flux.shape[0] >= target_size:
+            return flux[:target_size]
+        pad_shape = list(flux.shape)
+        pad_shape[0] = target_size - flux.shape[0]
+        padding = torch.full(pad_shape, -10.0, dtype=flux.dtype, device=flux.device)
+        return torch.cat([flux, padding], dim=0)
 
     def extra_repr(self) -> str:
         return f"num_points={self.num_points}"
