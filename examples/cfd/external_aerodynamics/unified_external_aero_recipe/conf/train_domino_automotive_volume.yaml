@@ -35,10 +35,21 @@ profile: false
 augment: false
 benchmark_io: false
 
-model_type: "volume"
+# -- Data contract -----------------------------------------------------------
+# NOTE: DoMINO is still in progress in this recipe (the dataset pipeline
+# does not yet expose all the volume-grid / neighbor features DoMINO's full
+# forward expects). The spec below is illustrative; see the surface variant
+# for context.
+input_type: tensors
+output_type: tensors
 
-# -- Data-to-model mapping (see src/collate.py MODEL_MAPPINGS) ---------------
-data_mapping: "domino_automotive_volume"
+forward_kwargs:
+  data_dict:
+    geometry_coordinates: interior.points
+    volume_mesh_centers: interior.points
+    sdf_nodes: interior.point_data.sdf
+    global_params_values: global_data.U_inf
+    global_params_reference: global_data.U_inf
 
 # -- Model (DoMINO, volume-only) --------------------------------------------
 model:
@@ -58,13 +69,6 @@ model:
 dataset:
   name: drivaer_ml_volume
   sampling_resolution: 200000
-  targets:
-    velocity: vector
-    pressure: scalar
-    nut: scalar
-  nondim_types:
-    velocity: velocity
-    nut: identity
   metrics: [l2]
 
 # -- Training ----------------------------------------------------------------

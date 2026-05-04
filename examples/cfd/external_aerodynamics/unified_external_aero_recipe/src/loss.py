@@ -14,7 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Flexible loss calculator for configurable target fields."""
+"""Configurable loss calculator on dict-of-tensor inputs.
+
+The loss accepts ``dict[str, Tensor]`` predictions and targets keyed by
+field name, matching the recipe's DomainMesh-native flow. For each named
+target field declared in ``target_config``, the loss type is applied
+according to the field type:
+
+- ``"scalar"`` : single mean over all elements (matches per-element loss).
+- ``"vector"`` : per-component mean, summed across components (matches
+                  the legacy per-component summing convention).
+
+Per-field weights (``field_weights``) replace the legacy implicit equal
+weighting. Each per-field loss is multiplied by ``field_weights[name]``
+(default 1.0) before summation. The total is normalized by the total
+channel count (sum of per-field dims) when ``normalize_by_channels=True``,
+preserving the previous total-loss scale when all weights are 1.
+"""
 
 from __future__ import annotations
 
@@ -23,283 +39,218 @@ from typing import Literal
 import torch
 import torch.nn.functional as F
 
-from utils import FieldSpec, parse_target_config
+from utils import parse_target_config
 
-# Default delta for Huber loss
 DEFAULT_HUBER_DELTA = 1.0
 
-
-# ---------------------------------------------------------------------------
-# Core loss functions operating on tensors
-# ---------------------------------------------------------------------------
+LossType = Literal["huber", "mse", "rmse"]
 
 
-def compute_huber(
-    pred: torch.Tensor, target: torch.Tensor, delta: float = DEFAULT_HUBER_DELTA
+### ---------------------------------------------------------------------------
+### Per-field loss kernels
+### ---------------------------------------------------------------------------
+
+
+def _scalar_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    loss_type: LossType,
+    delta: float,
+    eps: float = 1e-8,
 ) -> torch.Tensor:
-    """Huber loss (smooth L1) for scalar fields.
+    """Element-wise loss reduced to a scalar (matches legacy scalar behavior)."""
+    if loss_type == "huber":
+        return F.huber_loss(pred, target, reduction="mean", delta=delta)
+    if loss_type == "mse":
+        return torch.mean((pred - target) ** 2)
+    if loss_type == "rmse":
+        num = torch.mean((pred - target) ** 2)
+        denom = torch.mean(target**2)
+        return num / (denom + eps)
+    raise ValueError(f"Unknown loss_type {loss_type!r}")
 
-    Huber loss is quadratic for small errors and linear for large errors,
-    making it more robust to outliers than MSE.
 
-    Args:
-        pred: Predictions tensor
-        target: Targets tensor
-        delta: Threshold at which to switch from quadratic to linear.
+def _vector_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    loss_type: LossType,
+    delta: float,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """Per-component scalar loss summed across components.
 
-    Returns:
-        Mean Huber loss as a scalar tensor.
+    Matches the legacy ``compute_huber_vector`` / ``compute_mse_vector`` /
+    ``compute_relative_mse`` semantics: for a vector field of dimension
+    ``D``, the result is ``D * mean_huber_over_all_elements`` (or the MSE /
+    RMSE analogue), not a single mean over the flattened tensor.
     """
-    return F.huber_loss(pred, target, reduction="mean", delta=delta)
-
-
-def compute_mse(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    """Mean Squared Error loss."""
-    return torch.mean((pred - target) ** 2.0)
-
-
-def compute_rmse(
-    pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-8
-) -> torch.Tensor:
-    """Relative Mean Squared Error (normalized by target magnitude)."""
-    num = torch.mean((pred - target) ** 2.0)
-    denom = torch.mean(target**2.0)
-    return num / (denom + eps)
-
-
-def compute_huber_vector(
-    pred: torch.Tensor, target: torch.Tensor, delta: float = DEFAULT_HUBER_DELTA
-) -> torch.Tensor:
-    """Huber loss for vector fields, summed across components.
-
-    Args:
-        pred: Predictions of shape [batch, points, dim]
-        target: Targets of shape [batch, points, dim]
-        delta: Threshold at which to switch from quadratic to linear.
-
-    Returns:
-        Sum of per-component Huber losses.
-    """
-    # Compute Huber loss per component
-    total_loss = torch.tensor(0.0, device=pred.device, dtype=pred.dtype)
-    for i in range(pred.shape[-1]):
-        total_loss = total_loss + F.huber_loss(
-            pred[:, :, i], target[:, :, i], reduction="mean", delta=delta
+    if pred.shape != target.shape:
+        raise ValueError(
+            f"pred and target shapes must match, got {tuple(pred.shape)} vs "
+            f"{tuple(target.shape)}"
         )
-    return total_loss
+    n_components = pred.shape[-1]
+
+    if loss_type == "rmse":
+        ### Per-component relative MSE, summed.
+        diff_sq = torch.mean((pred - target) ** 2, dim=tuple(range(pred.ndim - 1)))
+        target_sq = torch.mean(target**2, dim=tuple(range(pred.ndim - 1)))
+        return torch.sum(diff_sq / (target_sq + eps))
+
+    total = torch.tensor(0.0, device=pred.device, dtype=pred.dtype)
+    for i in range(n_components):
+        p, t = pred[..., i], target[..., i]
+        if loss_type == "huber":
+            total = total + F.huber_loss(p, t, reduction="mean", delta=delta)
+        elif loss_type == "mse":
+            total = total + torch.mean((p - t) ** 2)
+        else:
+            raise ValueError(f"Unknown loss_type {loss_type!r}")
+    return total
 
 
-def compute_mse_vector(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    """MSE for vector fields, summed across components.
-
-    Args:
-        pred: Predictions of shape [batch, points, dim]
-        target: Targets of shape [batch, points, dim]
-
-    Returns:
-        Sum of per-component MSE losses.
-    """
-    # Compute mean squared diff per component, keeping last dim
-    diff_sq = torch.mean((pred - target) ** 2.0, dim=(0, 1))
-    return torch.sum(diff_sq)
-
-
-def compute_relative_mse(
-    pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-8
-) -> torch.Tensor:
-    """Relative MSE for vector fields, normalized per component then summed.
-
-    Args:
-        pred: Predictions of shape [batch, points, dim]
-        target: Targets of shape [batch, points, dim]
-        eps: Small value to avoid division by zero.
-
-    Returns:
-        Sum of per-component relative MSE losses.
-    """
-    # Compute mean squared diff per component
-    diff_sq = torch.mean((pred - target) ** 2.0, dim=(0, 1))
-    # Compute mean squared target per component
-    target_sq = torch.mean(target**2.0, dim=(0, 1))
-    return torch.sum(diff_sq / (target_sq + eps))
-
-
-LOSS_FUNCTIONS_SCALAR = {
-    "huber": compute_huber,
-    "mse": compute_mse,
-    "rmse": compute_rmse,
-}
-
-LOSS_FUNCTIONS_VECTOR = {
-    "huber": compute_huber_vector,
-    "mse": compute_mse_vector,
-    "rmse": compute_relative_mse,
-}
-
-
-# ---------------------------------------------------------------------------
-# LossCalculator class
-# ---------------------------------------------------------------------------
+### ---------------------------------------------------------------------------
+### LossCalculator
+### ---------------------------------------------------------------------------
 
 
 class LossCalculator:
-    """Configurable loss calculator for scalar and vector target fields.
+    """Per-field loss aggregator over `dict[str, Tensor]` predictions.
 
-    Computes loss for each configured target field separately, then combines them.
-    Supports Huber, MSE, and RMSE (relative MSE) loss types.
+    Args:
+        target_config: ``{name: scalar|vector}`` mapping. Iteration order
+            determines the order in the loss dict and the channel weighting
+            in the total.
+        loss_type: One of ``"huber"``, ``"mse"``, ``"rmse"``.
+        n_spatial_dims: Vector field dimensionality. Used to compute
+            channel counts for the normalization denominator.
+        field_weights: Optional per-field multiplicative weights. Each
+            per-field loss is multiplied by ``field_weights[name]`` before
+            summation. Default 1.0 for any unspecified name.
+        prefix: Optional prefix for the keys in the returned loss dict
+            (e.g. ``"surface"`` produces ``"loss/surface/pressure"``).
+        normalize_by_channels: When ``True`` (default), divide the
+            (weighted) total loss by ``sum(per_field_dims)``. Matches the
+            legacy normalization semantics when all weights are 1.
 
-    For vector fields, computes per-component losses and sums them.
-    The final loss is normalized by the total number of channels.
-
-    Parameters
-    ----------
-    target_config : dict[str, str]
-        Mapping of field names to types. Order determines channel indices.
-        Example: {"pressure": "scalar", "velocity": "vector", "turbulence": "scalar"}
-    loss_type : Literal["huber", "mse", "rmse"], optional
-        Type of loss to compute. Default is "huber".
-        - "huber": Huber loss (smooth L1), robust to outliers
-        - "mse": Mean Squared Error
-        - "rmse": Relative MSE (normalized by target magnitude)
-    n_spatial_dims : int, optional
-        Dimensionality of vector fields. Default is 3.
-    prefix : str, optional
-        Prefix for all loss names (e.g., "surface" -> "loss/surface/pressure").
-        Default is empty string.
-    normalize_by_channels : bool, optional
-        Whether to normalize the total loss by the number of channels.
-        Default is True.
-
-    Examples
-    --------
-    >>> calc = LossCalculator(
-    ...     target_config={"pressure": "scalar", "wall_shear": "vector"},
-    ...     loss_type="huber",
-    ...     prefix="surface",
-    ... )
-    >>> pred = torch.randn(2, 100, 4)  # [batch, points, channels]
-    >>> target = torch.randn(2, 100, 4)
-    >>> total_loss, loss_dict = calc(pred, target)
+    The returned loss dict contains one entry per field
+    (``"loss/[prefix/]<name>"``) plus ``"loss/total"`` (or
+    ``"loss/<prefix>"`` when ``prefix`` is set).
     """
 
     def __init__(
         self,
         target_config: dict[str, str],
-        loss_type: Literal["huber", "mse", "rmse"] = "huber",
+        loss_type: LossType = "huber",
         n_spatial_dims: int = 3,
+        field_weights: dict[str, float] | None = None,
         prefix: str = "",
         normalize_by_channels: bool = True,
-    ):
+        delta: float = DEFAULT_HUBER_DELTA,
+    ) -> None:
+        if loss_type not in ("huber", "mse", "rmse"):
+            raise ValueError(
+                f"Unknown loss_type {loss_type!r}; expected one of "
+                f"'huber', 'mse', 'rmse'."
+            )
+        self.target_config = dict(target_config)
         self.loss_type = loss_type
         self.n_spatial_dims = n_spatial_dims
         self.prefix = prefix
         self.normalize_by_channels = normalize_by_channels
+        self.delta = delta
 
-        # Validate loss type
-        if loss_type not in LOSS_FUNCTIONS_SCALAR:
+        ### Field specs are kept around purely to compute total_channels;
+        ### we no longer need start/end indices since we're dict-keyed.
+        self._field_specs = parse_target_config(target_config, n_spatial_dims)
+        self.total_channels = sum(spec.dim for spec in self._field_specs)
+
+        ### Per-field weights default to 1.0 for any field not in the dict.
+        weights = dict(field_weights or {})
+        unknown = set(weights) - set(target_config)
+        if unknown:
             raise ValueError(
-                f"Unknown loss type '{loss_type}'. "
-                f"Available: {list(LOSS_FUNCTIONS_SCALAR.keys())}"
+                f"field_weights references unknown fields {sorted(unknown)!r}; "
+                f"target_config has {sorted(target_config)!r}."
             )
-
-        # Parse target config to build field specifications using shared utility
-        self.field_specs = parse_target_config(target_config, n_spatial_dims)
-        self.total_channels = sum(spec.dim for spec in self.field_specs)
+        self.field_weights: dict[str, float] = {
+            name: float(weights.get(name, 1.0)) for name in target_config
+        }
 
     def _make_key(self, *parts: str) -> str:
-        """Construct a loss key with optional prefix."""
         segments = ["loss"]
         if self.prefix:
             segments.append(self.prefix)
         segments.extend(parts)
         return "/".join(segments)
 
-    def _compute_scalar_loss(
-        self,
-        pred: torch.Tensor,
-        target: torch.Tensor,
-        name: str,
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        """Compute loss for a scalar field [batch, points].
-
-        Returns:
-            Tuple of (loss_value, {loss_key: loss_value})
-        """
-        loss_fn = LOSS_FUNCTIONS_SCALAR[self.loss_type]
-        loss = loss_fn(pred, target)
-        return loss, {self._make_key(name): loss}
-
-    def _compute_vector_loss(
-        self,
-        pred: torch.Tensor,
-        target: torch.Tensor,
-        name: str,
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        """Compute loss for a vector field [batch, points, dim].
-
-        Returns:
-            Tuple of (loss_value, {loss_key: loss_value})
-        """
-        loss_fn = LOSS_FUNCTIONS_VECTOR[self.loss_type]
-        loss = loss_fn(pred, target)
-        return loss, {self._make_key(name): loss}
-
     def __call__(
         self,
-        pred: torch.Tensor,
-        target: torch.Tensor,
+        pred: dict[str, torch.Tensor],
+        target: dict[str, torch.Tensor],
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        """Compute losses for all configured fields.
+        """Compute per-field losses and a (weighted) total.
 
         Args:
-            pred: Predicted values, shape [batch, points, channels].
-            target: Target values, shape [batch, points, channels].
+            pred: ``{name: Tensor}`` predictions. Each tensor has shape
+                ``(..., 1)`` or ``(..., D)`` for vectors, or shape
+                ``(...)`` for scalars (with optional leading batch dim).
+            target: Same shape as ``pred``.
 
         Returns:
-            Tuple of:
-                - total_loss: Combined loss as a scalar tensor
-                - loss_dict: Dictionary of loss name -> scalar tensor value
+            ``(total_loss, loss_dict)``. ``loss_dict`` has one entry per
+            field (``"loss/[prefix/]<name>"``) plus a total entry.
         """
-        if pred.shape[-1] != self.total_channels:
-            raise ValueError(
-                f"Expected {self.total_channels} channels based on target config, "
-                f"but got {pred.shape[-1]}."
+        missing_pred = set(self.target_config) - set(pred)
+        missing_target = set(self.target_config) - set(target)
+        if missing_pred:
+            raise KeyError(f"pred is missing target fields {sorted(missing_pred)!r}")
+        if missing_target:
+            raise KeyError(
+                f"target is missing target fields {sorted(missing_target)!r}"
             )
 
-        total_loss = torch.tensor(0.0, device=pred.device, dtype=pred.dtype)
-        loss_dict = {}
+        ### Find a tensor we can use to seed the accumulator's dtype/device.
+        any_pred = next(iter(pred.values()))
+        total_loss = torch.zeros((), device=any_pred.device, dtype=any_pred.dtype)
+        loss_dict: dict[str, torch.Tensor] = {}
 
-        for spec in self.field_specs:
-            pred_field = pred[:, :, spec.start_index : spec.end_index]
-            target_field = target[:, :, spec.start_index : spec.end_index]
-
+        for spec in self._field_specs:
+            name = spec.name
+            p = pred[name]
+            t = target[name]
             if spec.field_type == "scalar":
-                field_loss, field_dict = self._compute_scalar_loss(
-                    pred_field.squeeze(-1), target_field.squeeze(-1), spec.name
-                )
-            else:
-                field_loss, field_dict = self._compute_vector_loss(
-                    pred_field, target_field, spec.name
-                )
+                ### Strip a trailing singleton dim if present so the loss is
+                ### invariant to whether the caller passed (..., 1) or (...).
+                if p.ndim > 0 and p.shape[-1] == 1 and p.ndim > t.ndim:
+                    p = p.squeeze(-1)
+                if t.ndim > 0 and t.shape[-1] == 1 and t.ndim > p.ndim:
+                    t = t.squeeze(-1)
+                field_loss = _scalar_loss(p, t, self.loss_type, self.delta)
+            else:  # vector
+                field_loss = _vector_loss(p, t, self.loss_type, self.delta)
 
-            total_loss = total_loss + field_loss
-            loss_dict.update(field_dict)
+            weighted = field_loss * self.field_weights[name]
+            loss_dict[self._make_key(name)] = weighted
+            total_loss = total_loss + weighted
 
-        if self.normalize_by_channels:
+        if self.normalize_by_channels and self.total_channels > 0:
             total_loss = total_loss / self.total_channels
 
-        # Add total loss to dict
         total_key = f"loss/{self.prefix}" if self.prefix else "loss/total"
         loss_dict[total_key] = total_loss
-
         return total_loss, loss_dict
 
     def __repr__(self) -> str:
         fields_str = ", ".join(
-            f"{s.name}:{s.field_type}[{s.start_index}:{s.end_index}]"
-            for s in self.field_specs
+            f"{spec.name}:{spec.field_type}" for spec in self._field_specs
         )
-        return (
-            f"LossCalculator(fields=[{fields_str}], "
-            f"loss_type='{self.loss_type}', prefix='{self.prefix}')"
+        weights_str = ", ".join(
+            f"{name}={w}" for name, w in self.field_weights.items() if w != 1.0
         )
+        parts = [f"fields=[{fields_str}]", f"loss_type='{self.loss_type}'"]
+        if weights_str:
+            parts.append(f"field_weights={{{weights_str}}}")
+        if self.prefix:
+            parts.append(f"prefix='{self.prefix}'")
+        return f"LossCalculator({', '.join(parts)})"

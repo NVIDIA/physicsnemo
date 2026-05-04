@@ -67,6 +67,7 @@ def load_dataset_config(yaml_path: str | Path) -> DictConfig:
 
 _PATH_KEYS = {"stats_file"}
 _CENTER_MESH_SUFFIX = "CenterMesh"
+_MESH_TO_DOMAIN_MESH_SUFFIX = "MeshToDomainMesh"
 
 
 def _resolve_transform_paths(t_cfg: DictConfig, base_dir: Path) -> DictConfig:
@@ -83,6 +84,38 @@ def _resolve_transform_paths(t_cfg: DictConfig, base_dir: Path) -> DictConfig:
             resolved = base_dir / val
             if resolved.exists():
                 t_cfg = OmegaConf.merge(t_cfg, {key: str(resolved)})
+    return t_cfg
+
+
+def _maybe_inject_targets(t_cfg: DictConfig, target_names: list[str]) -> DictConfig:
+    """Auto-inject target names into a ``MeshToDomainMesh`` transform.
+
+    The dataset YAML's ``targets:`` block is the single source of truth for
+    target field names. Repeating the names inside the ``MeshToDomainMesh``
+    transform is redundant and error-prone, so when the user omits them we
+    fill them in here based on the transform's ``interior_points`` strategy:
+
+    - ``interior_points='cell_centroids'`` (default) uses ``cell_data_targets``.
+    - ``interior_points='vertices'`` uses ``point_data_targets``.
+
+    No-op for transforms that aren't ``MeshToDomainMesh`` or that already
+    specify target names explicitly.
+    """
+    target = OmegaConf.select(t_cfg, "_target_", default="") or ""
+    if not target.endswith(_MESH_TO_DOMAIN_MESH_SUFFIX):
+        return t_cfg
+
+    interior = OmegaConf.select(t_cfg, "interior_points", default="cell_centroids")
+    if interior == "cell_centroids":
+        if OmegaConf.select(t_cfg, "cell_data_targets", default=None) is None:
+            t_cfg = OmegaConf.merge(
+                t_cfg, OmegaConf.create({"cell_data_targets": list(target_names)})
+            )
+    elif interior == "vertices":
+        if OmegaConf.select(t_cfg, "point_data_targets", default=None) is None:
+            t_cfg = OmegaConf.merge(
+                t_cfg, OmegaConf.create({"point_data_targets": list(target_names)})
+            )
     return t_cfg
 
 
@@ -194,9 +227,18 @@ def build_surface_dataset(
     if metadata:
         resolved.append(_make_metadata_injector(metadata))
 
+    target_names = list(
+        OmegaConf.to_container(
+            OmegaConf.select(cfg, "targets", default=OmegaConf.create({})),
+            resolve=True,
+        )
+        or {}
+    )
+
     if "transforms" in cfg.pipeline and cfg.pipeline.transforms:
         for t in cfg.pipeline.transforms:
             t = _resolve_transform_paths(t, base_dir)
+            t = _maybe_inject_targets(t, target_names)
             resolved.append(hydra.utils.instantiate(t))
 
         if augment and "augmentations" in cfg.pipeline and cfg.pipeline.augmentations:

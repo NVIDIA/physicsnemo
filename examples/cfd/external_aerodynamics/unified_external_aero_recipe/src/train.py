@@ -35,8 +35,8 @@ Usage::
 
 import json
 import os
-import sys
 import time
+from collections.abc import Iterator
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,12 +58,13 @@ from omegaconf import DictConfig, OmegaConf
 from tabulate import tabulate
 from torch.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
-from utils import build_muon_optimizer, set_seed
+from utils import build_muon_optimizer, parse_target_config, set_seed
 
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes import DataLoader
 from physicsnemo.distributed import DistributedManager
+from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.utils.profiling import Profiler, profile
@@ -133,88 +134,176 @@ def get_autocast_context(precision: str):
         return nullcontext()
 
 
-def _recursive_to(obj, *args, **kwargs):
-    """Apply ``.to()`` recursively through nested dicts/lists of tensors."""
-    if isinstance(obj, torch.Tensor):
-        return obj.to(*args, **kwargs)
+def _recursive_to_device(obj, device):
+    """Move every tensor / Mesh / DomainMesh in a nested value to *device*.
+
+    Pure device move: dtypes are preserved, integer index tensors stay
+    integer, and Mesh objects use their tensorclass `.to()` (which moves
+    `points`, `cells`, and all data fields together).
+    """
+    if isinstance(obj, (torch.Tensor, Mesh, DomainMesh)):
+        return obj.to(device)
     if isinstance(obj, dict):
-        return {k: _recursive_to(v, *args, **kwargs) for k, v in obj.items()}
+        return {k: _recursive_to_device(v, device) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
-        return type(obj)(_recursive_to(v, *args, **kwargs) for v in obj)
+        return type(obj)(_recursive_to_device(v, device) for v in obj)
     return obj
 
 
+def _recursive_cast_floats(obj, dtype):
+    """Cast floating-point tensors in a nested value to *dtype*; skip everything else.
+
+    - Non-float tensors (e.g. mesh `cells` in int64) pass through unchanged.
+    - Mesh / DomainMesh pass through unchanged: their tensorclass `.to(dtype)`
+      would error on integer cell indices, and the model's autocast context
+      handles internal casting anyway.
+    - Dicts and lists/tuples are walked recursively.
+    """
+    if isinstance(obj, torch.Tensor):
+        return obj.to(dtype) if obj.is_floating_point() else obj
+    if isinstance(obj, (Mesh, DomainMesh)):
+        return obj
+    if isinstance(obj, dict):
+        return {k: _recursive_cast_floats(v, dtype) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return type(obj)(_recursive_cast_floats(v, dtype) for v in obj)
+    return obj
+
+
+def _normalize_output_to_dict(
+    output,
+    target_config: dict[str, str],
+    output_type: str,
+    n_spatial_dims: int = 3,
+) -> dict[str, torch.Tensor]:
+    """Adapt a model output into a `dict[name, Tensor]` keyed by target name.
+
+    For ``output_type == "mesh"``, the output is expected to be a `Mesh`
+    whose `.point_data` contains one tensor per target name (e.g. GLOBE).
+
+    For ``output_type == "tensors"``, the output is expected to be a
+    ``(B, N, C)`` tensor whose channels are concatenated in
+    ``target_config`` order (e.g. GeoTransolver, Transolver, FLARE,
+    DoMINO). DoMINO returns a ``(vol, surf)`` tuple; we take the
+    non-None element automatically.
+    """
+    if output_type == "mesh":
+        if not isinstance(output, Mesh):
+            raise TypeError(
+                f"output_type='mesh' but model returned {type(output).__name__}"
+            )
+        missing = set(target_config) - set(output.point_data.keys())
+        if missing:
+            raise KeyError(
+                f"Mesh output is missing target fields {sorted(missing)!r}; "
+                f"available: {sorted(output.point_data.keys())!r}"
+            )
+        return {name: output.point_data[name] for name in target_config}
+
+    if output_type == "tensors":
+        if isinstance(output, tuple):
+            output = next(o for o in output if o is not None)
+        if not isinstance(output, torch.Tensor):
+            raise TypeError(
+                f"output_type='tensors' but model returned {type(output).__name__}"
+            )
+        specs = parse_target_config(target_config, n_spatial_dims=n_spatial_dims)
+        expected_channels = sum(spec.dim for spec in specs)
+        if output.shape[-1] != expected_channels:
+            raise ValueError(
+                f"Output channel dim {output.shape[-1]} does not match the "
+                f"expected total channels {expected_channels} for "
+                f"target_config={target_config!r}."
+            )
+        out: dict[str, torch.Tensor] = {}
+        for spec in specs:
+            slice_ = output[..., spec.start_index : spec.end_index]
+            if spec.field_type == "scalar":
+                slice_ = slice_.squeeze(-1)
+            out[spec.name] = slice_
+        return out
+
+    raise ValueError(f"Unknown output_type {output_type!r}")
+
+
+def _cast_dict_to_float32(d: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Cast every tensor in a flat dict to float32 (used right before loss)."""
+    return {k: v.float() if isinstance(v, torch.Tensor) else v for k, v in d.items()}
+
+
 def forward_pass(
-    batch: dict[str, torch.Tensor],
+    batch: dict,
     model: torch.nn.Module,
     precision: str,
     loss_calculator: LossCalculator,
     metric_calculator: MetricCalculator,
     *,
-    broadcast_global: bool = False,
+    output_type: str,
+    target_config: dict[str, str],
+    n_spatial_dims: int = 3,
 ) -> tuple[torch.Tensor, dict[str, float], tuple]:
     """Run forward pass, compute loss and metrics.
 
     Parameters
     ----------
     batch : dict
-        Model-ready batch produced by the collate function.  Must contain
-        a ``"fields"`` key holding the prediction targets (popped before
-        the forward call).  Values may be tensors or nested dicts of
-        tensors (e.g. DoMINO's ``data_dict``).
+        ``{"forward_kwargs": ..., "targets": dict[str, Tensor]}`` produced
+        by the collate function.
     model : torch.nn.Module
-        Point-cloud model whose ``forward`` accepts the remaining batch
-        keys as keyword arguments.
+        Model whose ``forward`` accepts the resolved ``forward_kwargs`` as
+        keyword arguments.
     precision : str
         One of "float32", "float16", "bfloat16", "float8".
-    loss_calculator : LossCalculator
-    metric_calculator : MetricCalculator
-    broadcast_global : bool, default False
-        When ``True``, any tensor with spatial dimension 1 (e.g. global
-        features shaped ``(B, 1, C)``) is expanded to match the largest
-        spatial dimension in the batch.  Required for Transolver, whose
-        ``forward`` concatenates ``[embedding, fx]`` along the last dim
-        and therefore needs matching spatial sizes.
+    output_type : str
+        "mesh" or "tensors". Controls how the model output is unpacked.
+    target_config : dict
+        ``{name: "scalar"|"vector"}``; used to split tensor outputs and
+        validate Mesh outputs.
+    n_spatial_dims : int
+        Vector field dimensionality (3 for the recipe's automotive cases).
 
     Returns
     -------
-    loss, metrics_dict, (outputs, targets)
+    loss, metrics_dict, (output, targets)
     """
-    targets = batch.pop("fields")
+    forward_kwargs = batch["forward_kwargs"]
+    targets = batch["targets"]
 
-    if broadcast_global:
-        max_n = max(
-            v.shape[1]
-            for v in batch.values()
-            if isinstance(v, torch.Tensor) and v.ndim >= 3
-        )
-        batch = {
-            k: v.expand(-1, max_n, -1)
-            if isinstance(v, torch.Tensor) and v.ndim >= 3 and v.shape[1] == 1
-            else v
-            for k, v in batch.items()
-        }
-
+    ### Cast forward_kwargs floats to the autocast dtype. We cast inputs
+    ### explicitly (not just rely on autocast) for parity with the legacy
+    ### behavior; integer mesh cells are skipped automatically.
     dtype_map = {"float16": torch.float16, "bfloat16": torch.bfloat16}
     dtype = dtype_map.get(precision)
     if dtype is not None:
-        batch = {k: _recursive_to(v, dtype) for k, v in batch.items()}
+        forward_kwargs = _recursive_cast_floats(forward_kwargs, dtype)
 
     with get_autocast_context(precision):
-        outputs = model(**batch)
+        output = model(**forward_kwargs)
 
-        # Models like DoMINO return (vol_output, surf_output); extract the
-        # non-None element for single-mode training.
-        if isinstance(outputs, tuple):
-            outputs = next(o for o in outputs if o is not None)
+    pred_dict = _normalize_output_to_dict(
+        output, target_config, output_type, n_spatial_dims
+    )
 
-        loss, loss_dict = loss_calculator(outputs, targets)
+    ### Loss runs in float32 to avoid bf16 precision loss in the reduction.
+    pred_f32 = _cast_dict_to_float32(pred_dict)
+    target_f32 = _cast_dict_to_float32(targets)
 
-    metrics = {k: v.item() for k, v in loss_dict.items()}
+    loss, loss_dict = loss_calculator(pred_f32, target_f32)
+
+    metrics: dict[str, float] = {
+        k: v.item() if isinstance(v, torch.Tensor) else float(v)
+        for k, v in loss_dict.items()
+    }
     with torch.no_grad():
-        metrics.update(metric_calculator(outputs, targets))
+        metric_dict = metric_calculator(pred_f32, target_f32)
+        metrics.update(
+            {
+                k: v.item() if isinstance(v, torch.Tensor) else float(v)
+                for k, v in metric_dict.items()
+            }
+        )
 
-    return loss, metrics, (outputs, targets)
+    return loss, metrics, (output, targets)
 
 
 @profile
@@ -230,7 +319,10 @@ def train_epoch(
     cfg: DictConfig,
     dist_manager: DistributedManager,
     scaler: GradScaler | None = None,
-    broadcast_global: bool = False,
+    *,
+    output_type: str,
+    target_config: dict[str, str],
+    n_spatial_dims: int = 3,
     train_writer: SummaryWriter | None = None,
     log_jsonl=None,
 ) -> tuple[float, dict[str, float]]:
@@ -264,9 +356,13 @@ def train_epoch(
         Distributed training manager.
     scaler : torch.amp.GradScaler or None, optional
         Gradient scaler for mixed-precision (float16) training.
-    broadcast_global : bool, default False
-        Expand global (B,1,C) tensors to match the spatial dimension
-        of other batch tensors before forwarding.
+    output_type : str
+        "mesh" or "tensors". Forwarded to :func:`forward_pass` so the
+        model output is unpacked the right way for loss/metrics.
+    target_config : dict
+        ``{name: scalar|vector}`` declared by the dataset YAML.
+    n_spatial_dims : int
+        Vector field dimensionality (defaults to 3).
 
     Returns
     -------
@@ -285,7 +381,7 @@ def train_epoch(
 
     step_t0 = time.perf_counter()
     for i, batch in enumerate(dataloader):
-        batch = {k: _recursive_to(v, dist_manager.device) for k, v in batch.items()}
+        batch = _recursive_to_device(batch, dist_manager.device)
 
         loss, metrics, (outputs, targets) = forward_pass(
             batch,
@@ -293,7 +389,9 @@ def train_epoch(
             precision,
             loss_calculator,
             metric_calculator,
-            broadcast_global=broadcast_global,
+            output_type=output_type,
+            target_config=target_config,
+            n_spatial_dims=n_spatial_dims,
         )
 
         optimizer.zero_grad()
@@ -388,7 +486,10 @@ def val_epoch(
     epoch: int,
     cfg: DictConfig,
     dist_manager: DistributedManager,
-    broadcast_global: bool = False,
+    *,
+    output_type: str,
+    target_config: dict[str, str],
+    n_spatial_dims: int = 3,
     val_writer: SummaryWriter | None = None,
     log_jsonl=None,
 ) -> tuple[float, dict[str, float]]:
@@ -412,9 +513,12 @@ def val_epoch(
         Full Hydra config; uses ``cfg.profile`` and ``cfg.precision``.
     dist_manager : DistributedManager
         Distributed training manager.
-    broadcast_global : bool, default False
-        Expand global (B,1,C) tensors to match the spatial dimension
-        of other batch tensors before forwarding.
+    output_type : str
+        "mesh" or "tensors". Forwarded to :func:`forward_pass`.
+    target_config : dict
+        ``{name: scalar|vector}``.
+    n_spatial_dims : int
+        Vector field dimensionality (defaults to 3).
 
     Returns
     -------
@@ -434,7 +538,7 @@ def val_epoch(
     with torch.no_grad():
         step_t0 = time.perf_counter()
         for i, batch in enumerate(dataloader):
-            batch = {k: _recursive_to(v, dist_manager.device) for k, v in batch.items()}
+            batch = _recursive_to_device(batch, dist_manager.device)
 
             loss, metrics, _ = forward_pass(
                 batch,
@@ -442,7 +546,9 @@ def val_epoch(
                 precision,
                 loss_calculator,
                 metric_calculator,
-                broadcast_global=broadcast_global,
+                output_type=output_type,
+                target_config=target_config,
+                n_spatial_dims=n_spatial_dims,
             )
 
             step_dt = time.perf_counter() - step_t0
@@ -482,6 +588,34 @@ def val_epoch(
     return avg_loss, avg_metrics
 
 
+def _walk_batch_for_logging(
+    value, prefix: str = ""
+) -> Iterator[tuple[str, torch.Tensor]]:
+    """Yield ``(dotted_name, Tensor)`` pairs from a batch (nested dicts of tensors / Mesh)."""
+    if isinstance(value, torch.Tensor):
+        yield prefix, value
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            sub = f"{prefix}.{k}" if prefix else str(k)
+            yield from _walk_batch_for_logging(v, sub)
+    elif isinstance(value, (list, tuple)):
+        for i, v in enumerate(value):
+            sub = f"{prefix}[{i}]" if prefix else f"[{i}]"
+            yield from _walk_batch_for_logging(v, sub)
+    elif isinstance(value, (Mesh, DomainMesh)):
+        ### For benchmarking we just log a few key tensors per Mesh.
+        if isinstance(value, DomainMesh):
+            yield from _walk_batch_for_logging(value.interior, f"{prefix}.interior")
+            for bname in value.boundary_names:
+                yield from _walk_batch_for_logging(
+                    value.boundaries[bname], f"{prefix}.boundaries.{bname}"
+                )
+        else:  # Mesh
+            yield (f"{prefix}.points", value.points)
+            if value.n_cells > 0:
+                yield (f"{prefix}.cells", value.cells)
+
+
 @profile
 def benchmark_io_epoch(
     dataloader,
@@ -515,15 +649,17 @@ def benchmark_io_epoch(
         mem_gb = (
             torch.cuda.memory_reserved() / 1024**3 if torch.cuda.is_available() else 0
         )
-        shapes = "  ".join(f"{k}:{tuple(v.shape)}" for k, v in batch.items())
+
+        named_tensors = list(_walk_batch_for_logging(batch))
+        shapes = "  ".join(f"{name}:{tuple(t.shape)}" for name, t in named_tensors)
         logger.info(
             f"  [{label}] [{i + 1}/{num_steps}] "
             f"dt={dt:.4f}s  Mem={mem_gb:.2f}GB  {shapes}"
         )
-        for k, v in batch.items():
-            v_flat = v.float()
+        for name, t in named_tensors:
+            v_flat = t.float() if t.is_floating_point() else t.to(torch.float32)
             logger.info(
-                f"    {k:20s}  "
+                f"    {name:30s}  "
                 f"min={v_flat.min().item(): .6e}  "
                 f"mean={v_flat.mean().item(): .6e}  "
                 f"std={v_flat.std().item(): .6e}  "
@@ -588,13 +724,16 @@ def build_dataloaders(cfg: DictConfig):
     """
     recipe_root = Path(__file__).resolve().parent.parent
     batch_size = cfg.training.get("batch_size", 1)
+    if batch_size != 1:
+        raise NotImplementedError(
+            f"batch_size > 1 is not supported (got batch_size={batch_size}). "
+            f"All models in this recipe assume batch_size=1; the YAML field is "
+            f"reserved for future use."
+        )
     sampling_resolution = cfg.dataset.get("sampling_resolution", None)
     augment = cfg.get("augment", False)
     dist_manager = DistributedManager()
     use_distributed = dist_manager.world_size > 1
-    collate_fn = build_collate_fn(
-        cfg.get("data_mapping", "geotransolver_automotive_surface")
-    )
 
     # DataLoader / MeshDataset performance tuning from cfg.dataloader
     dl_cfg = cfg.get("dataloader", {})
@@ -613,7 +752,9 @@ def build_dataloaders(cfg: DictConfig):
     manifest_train_indices: list[int] | None = None
     manifest_val_indices: list[int] | None = None
     using_manifests = False
-    first_metadata = None
+    first_metadata: dict | None = None
+    first_targets: dict[str, str] | None = None
+    first_metrics: list[str] | None = None
 
     for ds_key in cfg.data:
         ds_cfg_block = cfg.data[ds_key]
@@ -631,6 +772,14 @@ def build_dataloaders(cfg: DictConfig):
         if first_metadata is None:
             first_metadata = OmegaConf.to_container(
                 OmegaConf.select(ds_yaml, "metadata", default=OmegaConf.create({})),
+                resolve=True,
+            )
+            first_targets = OmegaConf.to_container(
+                OmegaConf.select(ds_yaml, "targets", default=OmegaConf.create({})),
+                resolve=True,
+            )
+            first_metrics = OmegaConf.to_container(
+                OmegaConf.select(ds_yaml, "metrics", default=OmegaConf.create([])),
                 resolve=True,
             )
 
@@ -748,6 +897,34 @@ def build_dataloaders(cfg: DictConfig):
 
     normalizer, nondim_transform = _extract_pipeline_transforms(train_datasets)
 
+    ### Build the collate function from the model YAML's input/output spec
+    ### plus the dataset YAML's targets. Both must be present; clear errors
+    ### if not.
+    if first_targets is None or not first_targets:
+        raise ValueError(
+            "Dataset YAML must declare a non-empty `targets:` block. "
+            "Targets are the single source of truth for prediction field "
+            "names + types."
+        )
+    input_type = cfg.get("input_type", None)
+    if input_type is None:
+        raise ValueError(
+            "Training YAML must declare `input_type` (one of 'mesh', 'tensors')."
+        )
+    forward_kwargs_spec = OmegaConf.to_container(
+        OmegaConf.select(cfg, "forward_kwargs", default=OmegaConf.create({})),
+        resolve=True,
+    )
+    if not forward_kwargs_spec:
+        raise ValueError(
+            "Training YAML must declare a non-empty `forward_kwargs:` block."
+        )
+    collate_fn = build_collate_fn(
+        input_type=input_type,
+        forward_kwargs_spec=forward_kwargs_spec,
+        target_config=first_targets,
+    )
+
     if len(train_datasets) == 1:
         train_dataset = train_datasets[0]
     else:
@@ -833,7 +1010,12 @@ def build_dataloaders(cfg: DictConfig):
         seed=sampler_seed,
     )
 
-    return train_loader, val_loader, normalizer, nondim_transform, first_metadata or {}
+    dataset_info = {
+        "metadata": first_metadata or {},
+        "targets": first_targets or {},
+        "metrics": first_metrics or ["l1", "l2", "mae"],
+    }
+    return train_loader, val_loader, normalizer, nondim_transform, dataset_info
 
 
 @profile
@@ -886,9 +1068,13 @@ def main(cfg: DictConfig):
 
     logger.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
 
-    train_loader, val_loader, normalizer, _, ds_metadata = build_dataloaders(cfg)
+    train_loader, val_loader, normalizer, _, dataset_info = build_dataloaders(cfg)
+    target_config: dict[str, str] = dataset_info["targets"]
+    metrics_list: list[str] = dataset_info["metrics"]
+    ds_metadata: dict = dataset_info["metadata"]
     logger.info(f"Train samples: {len(train_loader.sampler)}")
     logger.info(f"Val samples: {len(val_loader.sampler)}")
+    logger.info(f"Targets (from dataset YAML): {target_config}")
 
     # -- Log dataset metadata (rank 0) --------------------------------------------
     recipe_root = Path(__file__).resolve().parent.parent
@@ -899,6 +1085,7 @@ def main(cfg: DictConfig):
                 "train_samples": len(train_loader.dataset),
                 "val_samples": len(val_loader.dataset),
                 "metadata": ds_metadata or {},
+                "targets": target_config,
             }
         )
 
@@ -972,22 +1159,44 @@ def main(cfg: DictConfig):
         with open(config_artifact_path, "w") as f:
             f.write(resolved_yaml)
 
-    ds_cfg = cfg.dataset
-    targets = omegaconf.OmegaConf.to_container(ds_cfg.targets, resolve=True)
-    metrics_list = omegaconf.OmegaConf.to_container(
-        ds_cfg.get("metrics", ["l1", "l2", "mae"]), resolve=True
+    ### `target_config` and `metrics_list` were loaded from the dataset YAML
+    ### by `build_dataloaders` -- see the dataset_info dict above. The
+    ### training YAML may override the metrics list with a (typically
+    ### shorter) `dataset.metrics` selection.
+    metrics_override = OmegaConf.select(cfg, "dataset.metrics", default=None)
+    if metrics_override is not None:
+        metrics_list = OmegaConf.to_container(metrics_override, resolve=True)
+
+    field_weights = (
+        OmegaConf.to_container(
+            OmegaConf.select(
+                cfg, "training.field_weights", default=OmegaConf.create({})
+            ),
+            resolve=True,
+        )
+        or None
     )
+
     metric_calculator = MetricCalculator(
-        target_config=targets,
+        target_config=target_config,
         metrics=metrics_list,
     )
     loss_calculator = LossCalculator(
-        target_config=targets,
+        target_config=target_config,
         loss_type=cfg.training.get("loss_type", "huber"),
+        field_weights=field_weights,
     )
-    broadcast_global = cfg.get("broadcast_global", False)
+    output_type = cfg.get("output_type", None)
+    if output_type is None:
+        raise ValueError(
+            "Training YAML must declare `output_type` (one of 'mesh', 'tensors')."
+        )
+    n_spatial_dims = int(cfg.get("n_spatial_dims", 3))
     logger.info(f"Loss: {loss_calculator}")
     logger.info(f"Metrics: {metric_calculator}")
+    logger.info(
+        f"Model contract: input_type={cfg.input_type}, output_type={output_type}"
+    )
 
     ckpt_args = {
         "path": os.path.join(checkpoint_dir, cfg.run_id, "checkpoints"),
@@ -1021,7 +1230,9 @@ def main(cfg: DictConfig):
                 cfg,
                 dist_manager,
                 scaler,
-                broadcast_global=broadcast_global,
+                output_type=output_type,
+                target_config=target_config,
+                n_spatial_dims=n_spatial_dims,
                 train_writer=train_writer,
                 log_jsonl=log_jsonl,
             )
@@ -1035,7 +1246,9 @@ def main(cfg: DictConfig):
                 epoch,
                 cfg,
                 dist_manager,
-                broadcast_global=broadcast_global,
+                output_type=output_type,
+                target_config=target_config,
+                n_spatial_dims=n_spatial_dims,
                 val_writer=val_writer,
                 log_jsonl=log_jsonl,
             )

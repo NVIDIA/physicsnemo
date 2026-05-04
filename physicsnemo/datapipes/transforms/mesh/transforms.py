@@ -831,3 +831,238 @@ class RestructureTensorDict(MeshTransform):
             sources = ", ".join(f"{k}<-{v}" for k, v in mapping.items())
             lines.append(f"{group}: {{{sources}}}")
         return "; ".join(lines)
+
+
+@register()
+class MeshToDomainMesh(MeshTransform):
+    r"""Convert a :class:`Mesh` into a :class:`DomainMesh` with a prediction-vs-input split.
+
+    The output ``DomainMesh`` follows a semantic contract that separates
+    *where the predictions live* from *what the inputs are*:
+
+    - ``interior``: a :class:`Mesh` (typically a point cloud
+      :class:`Mesh[0, n_spatial_dims]`) whose ``points`` are the prediction
+      locations and whose ``point_data`` carries the prediction targets.
+    - ``boundaries``: a single named entry mapping ``boundary_name`` to the
+      input mesh, with target fields removed (so consumers cannot accidentally
+      read targets through the boundary).
+    - ``global_data``: passed through unchanged from the input mesh.
+
+    This transform is intended for the common case where a single :class:`Mesh`
+    serves as both the input geometry and (after centroid sampling or vertex
+    sampling) the prediction locations -- e.g. surface CFD datasets where the
+    model is asked to predict ``C_p`` and ``C_f`` on the same surface that
+    forms its boundary condition.
+
+    Wide inputs / narrow outputs:
+
+    - Accepts any :class:`Mesh` (any manifold dimension; any cell / point /
+      global data layout).
+    - Always produces a :class:`DomainMesh` with exactly one boundary entry.
+    - For :class:`DomainMesh` inputs, :meth:`apply_to_domain` is an identity
+      passthrough so this transform may sit harmlessly at the end of any
+      pipeline.
+
+    Parameters
+    ----------
+    cell_data_targets : list[str] or None, default ``None``
+        Names of cell-centered fields on the input mesh to use as prediction
+        targets. They are moved out of the boundary's ``cell_data`` and into
+        ``interior.point_data``. Use with ``interior_points='cell_centroids'``.
+        If ``None`` (and ``point_data_targets`` is also ``None``), no targets
+        are placed on the interior.
+    point_data_targets : list[str] or None, default ``None``
+        Names of vertex-centered fields on the input mesh to use as prediction
+        targets. They are moved out of the boundary's ``point_data`` and into
+        ``interior.point_data``. Use with ``interior_points='vertices'``.
+    interior_points : str, default ``'cell_centroids'``
+        Where the prediction interior is located. One of:
+
+        - ``'cell_centroids'``: the interior is a point cloud
+          :class:`Mesh[0, n_spatial_dims]` at ``mesh.cell_centroids``. Requires
+          ``mesh.n_cells > 0``.
+        - ``'vertices'``: the interior is a point cloud
+          :class:`Mesh[0, n_spatial_dims]` at ``mesh.points``.
+    boundary_name : str, default ``'vehicle'``
+        Key used in the output ``DomainMesh``'s ``boundaries`` dict for the
+        input mesh.
+
+    Raises
+    ------
+    NotImplementedError
+        Raised at call time when the requested combination of arguments is
+        not implemented in this version. v1 implements two diagonals:
+        ``(cell_data_targets, interior_points='cell_centroids')`` and
+        ``(point_data_targets, interior_points='vertices')``. Cross-corners
+        (cell-centered targets at vertex-located interior, or vice versa)
+        require cell-to-point / point-to-cell interpolation and are deferred.
+        Also raised if ``interior_points='cell_centroids'`` and the input mesh
+        has no cells.
+
+    Examples
+    --------
+    Convert a triangulated surface mesh into a DomainMesh with predictions at
+    cell centroids and the original mesh as the ``vehicle`` boundary:
+
+    >>> import torch
+    >>> from physicsnemo.mesh import Mesh
+    >>> mesh = Mesh(
+    ...     points=torch.tensor([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]),
+    ...     cells=torch.tensor([[0, 1, 2]]),
+    ...     cell_data={"C_p": torch.tensor([0.5]), "normals": torch.tensor([[0., 0., 1.]])},
+    ... )
+    >>> transform = MeshToDomainMesh(
+    ...     cell_data_targets=["C_p"], interior_points="cell_centroids", boundary_name="vehicle",
+    ... )
+    >>> domain = transform(mesh)
+    >>> domain.interior.n_points  # one centroid per input cell
+    1
+    >>> "C_p" in domain.interior.point_data.keys()
+    True
+    >>> "normals" in domain.boundaries["vehicle"].cell_data.keys()  # non-target stays on boundary
+    True
+    >>> "C_p" in domain.boundaries["vehicle"].cell_data.keys()  # target removed from boundary
+    False
+    """
+
+    _IMPLEMENTED_INTERIOR_POINTS = ("cell_centroids", "vertices")
+
+    def __init__(
+        self,
+        cell_data_targets: list[str] | None = None,
+        point_data_targets: list[str] | None = None,
+        interior_points: str = "cell_centroids",
+        boundary_name: str = "vehicle",
+    ) -> None:
+        super().__init__()
+        if interior_points not in self._IMPLEMENTED_INTERIOR_POINTS:
+            raise ValueError(
+                f"interior_points must be one of "
+                f"{self._IMPLEMENTED_INTERIOR_POINTS!r}, got {interior_points!r}"
+            )
+        self._cell_data_targets: list[str] = list(cell_data_targets or [])
+        self._point_data_targets: list[str] = list(point_data_targets or [])
+        self._interior_points = interior_points
+        self._boundary_name = boundary_name
+
+    def __call__(self, mesh: Mesh) -> DomainMesh:  # type: ignore[override]
+        ### v1 supports two diagonal corners:
+        ### (cell_data_targets, interior_points='cell_centroids')
+        ### (point_data_targets, interior_points='vertices')
+        ### Cross-corners require cell<->point interpolation and are deferred.
+        if self._interior_points == "cell_centroids":
+            if self._point_data_targets:
+                raise NotImplementedError(
+                    f"point_data_targets={self._point_data_targets!r} requires "
+                    f"point-to-cell interpolation when interior_points='cell_centroids'; "
+                    f"this combination is not implemented in v1. Use "
+                    f"interior_points='vertices' for point-centered targets, or "
+                    f"interpolate to cell_data upstream."
+                )
+            if mesh.n_cells == 0:
+                raise NotImplementedError(
+                    f"interior_points='cell_centroids' requires the input mesh to "
+                    f"have at least one cell, but got n_cells={mesh.n_cells}. Use "
+                    f"interior_points='vertices' for point-cloud inputs."
+                )
+            return self._call_cell_centroids(mesh)
+        else:  # interior_points == 'vertices'
+            if self._cell_data_targets:
+                raise NotImplementedError(
+                    f"cell_data_targets={self._cell_data_targets!r} requires "
+                    f"cell-to-point interpolation when interior_points='vertices'; "
+                    f"this combination is not implemented in v1. Use "
+                    f"interior_points='cell_centroids' for cell-centered targets, "
+                    f"or interpolate to point_data upstream."
+                )
+            return self._call_vertices(mesh)
+
+    def _call_cell_centroids(self, mesh: Mesh) -> DomainMesh:
+        ### Build the interior as a point cloud at cell centroids, with target
+        ### cell_data fields moved into interior.point_data.
+        interior_point_data = (
+            mesh.cell_data.select(*self._cell_data_targets)
+            if self._cell_data_targets
+            else TensorDict({}, batch_size=[mesh.n_cells])
+        )
+        interior = Mesh(
+            points=mesh.cell_centroids,
+            point_data=interior_point_data,
+        )
+        ### Build the boundary by stripping target fields from cell_data.
+        boundary_cell_data = (
+            mesh.cell_data.exclude(*self._cell_data_targets)
+            if self._cell_data_targets
+            else mesh.cell_data
+        )
+        boundary = Mesh(
+            points=mesh.points,
+            cells=mesh.cells,
+            point_data=mesh.point_data,
+            cell_data=boundary_cell_data,
+            global_data=mesh.global_data,
+        )
+        return DomainMesh(
+            interior=interior,
+            boundaries={self._boundary_name: boundary},
+            global_data=mesh.global_data,
+        )
+
+    def _call_vertices(self, mesh: Mesh) -> DomainMesh:
+        ### Build the interior as a point cloud at the input mesh's vertices,
+        ### with target point_data fields moved into interior.point_data.
+        interior_point_data = (
+            mesh.point_data.select(*self._point_data_targets)
+            if self._point_data_targets
+            else TensorDict({}, batch_size=[mesh.n_points])
+        )
+        interior = Mesh(
+            points=mesh.points,
+            point_data=interior_point_data,
+        )
+        boundary_point_data = (
+            mesh.point_data.exclude(*self._point_data_targets)
+            if self._point_data_targets
+            else mesh.point_data
+        )
+        boundary = Mesh(
+            points=mesh.points,
+            cells=mesh.cells,
+            point_data=boundary_point_data,
+            cell_data=mesh.cell_data,
+            global_data=mesh.global_data,
+        )
+        return DomainMesh(
+            interior=interior,
+            boundaries={self._boundary_name: boundary},
+            global_data=mesh.global_data,
+        )
+
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:  # type: ignore[override]
+        """Identity passthrough for :class:`DomainMesh` inputs.
+
+        A ``DomainMesh`` already satisfies the prediction-vs-input contract,
+        so this transform is a no-op when applied to one. This lets you place
+        :class:`MeshToDomainMesh` at the end of any pipeline -- it converts
+        single-Mesh outputs and leaves DomainMesh outputs alone.
+
+        Parameters
+        ----------
+        domain : DomainMesh
+
+        Returns
+        -------
+        DomainMesh
+            The input, unchanged.
+        """
+        return domain
+
+    def extra_repr(self) -> str:
+        parts: list[str] = []
+        if self._cell_data_targets:
+            parts.append(f"cell_data_targets={self._cell_data_targets}")
+        if self._point_data_targets:
+            parts.append(f"point_data_targets={self._point_data_targets}")
+        parts.append(f"interior_points={self._interior_points!r}")
+        parts.append(f"boundary_name={self._boundary_name!r}")
+        return ", ".join(parts)

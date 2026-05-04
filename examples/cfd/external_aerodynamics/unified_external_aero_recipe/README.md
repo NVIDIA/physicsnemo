@@ -12,14 +12,16 @@ a number of recipes, across a range of models, all working on different models
 with unique data handling, pipelines, model architectures, metrics, training
 paradigms, etc.  While there is nothing wrong with that, it does make comparison
 challenging and development of new models somewhat challenging.  In this folder,
-we have unified the external aerodynamic recipes for most of our best models (notably
-missing is our newest model, still in development for large 3D use cases: GLOBE).
+we have unified the external aerodynamic recipes for most of our best models.
 
 Here, you're able to train the following models:
 - [Transolver](https://arxiv.org/abs/2402.02366)
 - [GeoTransolver](https://arxiv.org/abs/2512.20399)
-- [Flare](https://arxiv.org/abs/2508.12594)
+- [FLARE](https://arxiv.org/abs/2508.12594)
 - GeoTransolver also supports using the FLARE attention mechanism backend
+- [GLOBE](https://arxiv.org/abs/2511.15856) (mesh-native; first member of a
+  growing class of models that consume Mesh / DomainMesh objects directly
+  rather than flat tensor batches).
 - DoMINO is coming shortly
 
 We currently support the following datasets:
@@ -68,78 +70,37 @@ python src/train.py precision=bfloat16 training.num_epochs=100
 
 ## Pipeline architecture
 
-Each dataset gets its own `MeshDataset` or `DomainMeshDataset` with an ordered chain of
-`MeshTransform` steps defined in YAML.  Multiple datasets are then
-merged via `MultiDataset`.
+Each dataset gets its own `MeshDataset` or `DomainMeshDataset` with an
+ordered chain of `MeshTransform` steps defined in YAML. Multiple
+datasets are then merged via `MultiDataset`. The pipeline is
+**DomainMesh-native end-to-end**: every dataset YAML produces a
+`DomainMesh` whose `interior` describes "where to predict" (a point
+cloud at cell centroids for surface configs; the volume mesh for
+volume configs) and whose `boundaries` describe "what the inputs are".
+Each model YAML's `forward_kwargs:` block then declaratively maps
+DomainMesh paths into the model's `forward()` kwargs, with the recipe
+collate either passing those values through directly (for mesh-native
+models like GLOBE) or batch-wrapping them into `(B, N, C)` tensors
+(for transformer-style models).
 
-```
-          ┌─────────────────────────────────────────────────────────────┐
-          │  Per-dataset pipeline (one per YAML config)                │
-          │                                                            │
-          │  MeshReader / DomainMeshReader                              │
-          │       │              Load raw Mesh from .pdmsh/.pmsh files  │
-          │       │                                                    │
-          │  (metadata injection)     Write U_inf, rho_inf, p_inf, nu  │
-          │       │                   from YAML metadata into          │
-          │       │                   global_data (done by builder)     │
-          │       │                                                    │
-          │ (DropMeshFields)          Remove unwanted fields           │
-          │       │                   (e.g. TimeValue; drivaer only)    │
-          │       │                                                    │
-          │ (CenterMesh)              Translate center of mass         │
-          │       │                   to origin                        │
-          │       │                                                    │
-          │ (RandomRotateMesh)        Random yaw around vertical axis  │
-          │       │                   (inserted after CenterMesh when   │
-          │       │                    augment=true)                    │
-          │       │                                                    │
-          │ (RandomTranslateMesh)     Random horizontal shift           │
-          │       │                   (inserted after CenterMesh when   │
-          │       │                    augment=true)                    │
-          │       │                                                    │
-          │ (NonDimensionalizeByMeta) Convert to Cp/Cf/nondim velocity │
-          │       │                   using q_inf = ½ρ|U∞|²            │
-          │       │                                                    │
-          │ (ComputeSDFFromBoundary)  Compute signed distance field    │
-          │       │                   from STL geometry (volume only)   │
-          │       │                                                    │
-          │ (DropBoundary)            Remove auxiliary STL boundary     │
-          │       │                   after SDF (volume only)           │
-          │       │                                                    │
-          │  RenameMeshFields         Map dataset-specific names to    │
-          │       │                   canonical names (pressure, wss)  │
-          │       │                                                    │
-          │ (NormalizeMeshFields)     z-score normalize using          │
-          │       │                   inline stats from YAML            │
-          │       │                                                    │
-          │ (ComputeSurfaceNormals)   Compute per-cell surface normals │
-          │       │                   (surface pipelines only)          │
-          │       │                                                    │
-          │ (SubsampleMesh)           Downsample to fixed point/cell   │
-          │       │                   count (surface pipelines only;    │
-          │       │                   volume uses reader subsampling)   │
-          │       │                                                    │
-          │  MeshToTensorDict         Convert Mesh → TensorDict        │
-          │       │                                                    │
-          │  (ComputeCellCentroids)   Compute cell centers from        │
-          │       │                   connectivity (cell-based only)    │
-          │       │                                                    │
-          │  RestructureTensorDict    Remap flat TensorDict into       │
-          │       │                   input/output groups for the      │
-          │       │                   collate function                  │
-          └───────┼────────────────────────────────────────────────────┘
-                  │
-                  ▼
-          ┌──────────────┐
-          │ MultiDataset │  Concatenates index spaces,
-          │              │  adds dataset_index to metadata
-          └──────────────┘
-                  │
-                  ▼
-          ┌──────────────┐
-          │   Collate    │  Stacks samples into batched tensors
-          │              │  via model-specific mapping
-          └──────────────┘
+```mermaid
+flowchart LR
+    pdmsh[".pdmsh on disk"] --> Reader["MeshReader / DomainMeshReader"]
+    Reader --> Pipeline["mesh transforms (DropMeshFields, CenterMesh, NonDim, Rename, Normalize, ComputeSurfaceNormals, SubsampleMesh, ...)"]
+    Pipeline --> Term["MeshToDomainMesh (surface only; volume already produces DomainMesh natively)"]
+    Term --> Multi["MultiDataset (optional; concatenates samples across datasets)"]
+    Multi --> Collate["build_collate_fn(input_type, forward_kwargs_spec, target_config)"]
+    Collate --> Branch{"input_type?"}
+    Branch -- mesh --> mk["forward_kwargs as Mesh / dict / scalar tensors (no batch dim)"]
+    Branch -- tensors --> tk["forward_kwargs as batched tensors (1, N, C)"]
+    mk --> Model["model.forward(**kwargs)"]
+    tk --> Model
+    Model --> Out{"output_type?"}
+    Out -- mesh --> mout["Mesh.point_data"]
+    Out -- tensors --> tout["(1, N, C) tensor"]
+    mout --> Norm["normalize to dict[name, Tensor]"]
+    tout --> Norm
+    Norm --> Loss["LossCalculator + MetricCalculator (dict interface; optional field_weights)"]
 ```
 
 ### Why each step exists
@@ -214,18 +175,18 @@ merged via `MultiDataset`.
   samples can be batched.  Different samples in the same dataset get
   different random subsets each epoch.
 
-- **MeshToTensorDict** — Terminal transform that converts the `Mesh`
-  object into a flat `TensorDict`. After this step, further mesh
-  transforms are invalid.
-
-- **ComputeCellCentroids** — For cell-based datasets, computes the
-  centroid of each cell from the connectivity and vertex positions.
-  These centroids serve as the "point positions" for the model.
-
-- **RestructureTensorDict** — Reorganizes the flat TensorDict into
-  `input/` and `output/` groups expected by the collate function.  Maps
-  point positions (or cell centroids), normals, and freestream velocity
-  into `input`, and target fields into `output`.
+- **MeshToDomainMesh** — Terminal transform for surface dataset YAMLs
+  (volume YAMLs already produce a `DomainMesh` natively via
+  `DomainMeshReader`). Converts the single surface `Mesh` into a
+  `DomainMesh(interior, boundaries={"vehicle": ...}, global_data)`
+  per the recipe's prediction-vs-input contract: `interior` is a
+  `Mesh[0, n_spatial_dims]` point cloud at the cell centroids carrying
+  the prediction targets in `point_data`; `boundaries["vehicle"]` is
+  the original triangulated surface with non-target cell features
+  (e.g. precomputed normals from `ComputeSurfaceNormals`) preserved
+  in `cell_data`. The dataset builder auto-injects
+  `cell_data_targets` from the YAML's `targets:` block, so users
+  don't list field names twice.
 
 ## Non-dimensionalization and normalization
 
@@ -264,47 +225,130 @@ geometric embeddings.
 | Precision | bfloat16 (float16/float32/float8 also supported) |
 | Batch size | 1 |
 
-### Data-to-model mapping
+### DomainMesh contract and the data-to-model mapping
 
-The **data-to-model mapping** (`src/collate.py`) converts datapipe
-outputs into the model's forward signature.  Mappings are registered by
-name in `MODEL_MAPPINGS`; the active mapping is selected via the
-`data_mapping` config key (default: `"geotransolver_automotive_surface"`):
+Each dataset YAML's pipeline produces a [`DomainMesh`](../../../physicsnemo/mesh/domain_mesh.py)
+that follows a simple semantic contract:
 
-```python
-# geotransolver_automotive_surface mapping produces:
-{
-    "geometry":         (B, N, 3),  # cell centroids / point positions
-    "local_embedding":  (B, N, 6),  # cat(points, normals) via ["input/points", "input/normals"]
-    "local_positions":  (B, N, 3),  # point positions (for local feature builder)
-    "global_embedding": (B, 1, 3),  # freestream velocity
-    "fields":           (B, N, 4),  # cat(pressure, wss) = prediction target
-}
+- **`interior`** — answers "where should the output be?". For surface
+  configs this is a `Mesh[0, 3]` point cloud at the cell centroids of
+  the (subsampled) car body surface; for volume configs it's the volume
+  mesh's interior points. Prediction targets live in
+  `interior.point_data` and are extracted by the loss / metric
+  calculators by name.
+- **`boundaries`** — answers "what are the inputs?". A `dict[str, Mesh]`
+  keyed by boundary name. For surface configs this is
+  `{"vehicle": Mesh[2, 3]}` (the original triangulated surface, with
+  precomputed cell normals available on `cell_data`). For volume
+  configs the boundary key is `"surface"` (matching the .pdmsh on-disk
+  naming).
+- **`global_data`** — scalar metadata (`U_inf`, `L_ref`, etc.) injected
+  from the dataset YAML's `metadata:` block.
+
+**Each model YAML declares its data contract** with three top-level fields:
+
+- `input_type: mesh | tensors`. Controls whether the collate passes
+  forward kwargs through as Mesh / DomainMesh / dict objects (for
+  mesh-native models like GLOBE) or extracts and batch-stacks tensors
+  (for transformer models like GeoTransolver).
+- `output_type: mesh | tensors`. Controls how the model output is
+  unpacked for the loss: `Mesh.point_data` lookup vs. tensor channel
+  splitting by `target_config` order.
+- `forward_kwargs:`. A declarative spec mapping `model.forward()` kwarg
+  names to paths into the DomainMesh.
+
+The `forward_kwargs:` spec syntax is intentionally minimal:
+
+| Spec value | Resolves to |
+|---|---|
+| `"interior.points"` | The tensor at that dotted path on the DomainMesh (walked via getattr-then-getitem). Empty string `""` resolves to the source itself. |
+| `1.0` (number) | A 0-d float32 tensor literal. |
+| `[a, b, c]` | Each element resolved, then `torch.cat` along the last dim. Used for tensor-input models that want concatenated feature vectors (e.g. `[interior.points, boundaries.vehicle.cell_data.normals]`). |
+| `{a: ..., b: ...}` | Each value resolved, returned as a dict. Used for dict-valued kwargs (e.g. GLOBE's `boundary_meshes: {vehicle: boundaries.vehicle}` and `reference_lengths: {L_ref: 1.0, delta_turb: 0.015}`). |
+| `{source: <path>, expand_like: <other_kwarg>}` | Resolve `source` then expand its axis -2 to match `<other_kwarg>`'s axis -2. Replaces the legacy `broadcast_global` flag for Transolver / FLARE-style models that need a global feature broadcast across the spatial axis. |
+
+For tensor-input models, scalars and 1-D vectors in `forward_kwargs`
+are padded up to ndim>=2 before the batch dim is added (so `U_inf`
+shape `(3,)` becomes `(1, 1, 3)` and lines up with per-element features
+shaped `(1, N, C)`). For mesh-input models, no batch dim is added at
+all.
+
+**Targets always live at `interior.point_data.<name>` by contract.**
+The dataset YAML's `targets:` block declares the names + types; the
+recipe's dataset builder also auto-injects those names into the
+`MeshToDomainMesh` transform so you don't have to list them twice.
+
+Example (GeoTransolver surface):
+
+```yaml
+input_type: tensors
+output_type: tensors
+forward_kwargs:
+  geometry: interior.points
+  local_embedding:
+    - interior.points
+    - boundaries.vehicle.cell_data.normals
+  local_positions: interior.points
+  global_embedding: global_data.U_inf
 ```
 
-All available mappings:
+Example (GLOBE surface):
 
-| Mapping name | Model | Domain |
+```yaml
+input_type: mesh
+output_type: mesh
+forward_kwargs:
+  prediction_points: interior.points
+  boundary_meshes:
+    vehicle: boundaries.vehicle
+  reference_lengths:
+    L_ref: 1.0
+    delta_turb: 0.015
+```
+
+Available training configs:
+
+| Training config | Model | Domain |
 |---|---|---|
-| `geotransolver_automotive_surface` | GeoTransolver | Automotive surface (Cp, Cf) |
-| `geotransolver_automotive_volume` | GeoTransolver | Automotive volume (U, p, nut) |
-| `geotransolver_highlift_surface` | GeoTransolver | HighLift surface (P, T, rho, U, tau_wall) |
-| `geotransolver_highlift_volume` | GeoTransolver | HighLift volume (P, T, rho, U) |
-| `transolver_automotive_surface` | Transolver | Automotive surface (Cp, Cf) |
-| `transolver_automotive_volume` | Transolver | Automotive volume (U, p, nut) |
-| `flare_automotive_surface` | FLARE | Automotive surface (Cp, Cf) |
-| `flare_automotive_volume` | FLARE | Automotive volume (U, p, nut) |
-| `domino_automotive_surface` | DoMINO | Automotive surface (Cp, Cf) |
-| `domino_automotive_volume` | DoMINO | Automotive volume (U, p, nut) |
+| `train_geotransolver_automotive_surface` | GeoTransolver | Automotive surface (Cp, Cf) |
+| `train_geotransolver_automotive_volume` | GeoTransolver | Automotive volume (U, p, nut) |
+| `train_geotransolver_fa_automotive_surface` | GeoTransolver + GALE_FA attention | Automotive surface (Cp, Cf) |
+| `train_geotransolver_fa_automotive_volume` | GeoTransolver + GALE_FA attention | Automotive volume (U, p, nut) |
+| `train_geotransolver_fa_highlift_surface` | GeoTransolver + GALE_FA attention | High-lift surface (P, T, rho, U, tau_wall) |
+| `train_transolver_automotive_surface` | Transolver | Automotive surface (Cp, Cf) |
+| `train_transolver_automotive_volume` | Transolver | Automotive volume (U, p, nut) |
+| `train_flare_automotive_surface` | FLARE | Automotive surface (Cp, Cf) |
+| `train_flare_automotive_volume` | FLARE | Automotive volume (U, p, nut) |
+| `train_highlift_surface` | GeoTransolver | High-lift surface (P, T, rho, U, tau_wall) |
+| `train_highlift_volume` | GeoTransolver | High-lift volume (P, T, rho, U) |
+| `train_globe_automotive_surface` | GLOBE | Automotive surface (Cp, Cf) |
+| `train_globe_automotive_volume` | GLOBE | Automotive volume (U, p, nut) |
+| `train_domino_automotive_surface` | DoMINO | Automotive surface (Cp, Cf) — wiring complete; needs DoMINO-specific data prep |
+| `train_domino_automotive_volume` | DoMINO | Automotive volume (U, p, nut) — same caveat |
 
-To add a new model, register a mapping in `MODEL_MAPPINGS` and set
-`data_mapping` in your config.
+To add a new model, write a top-level `train_<model>_<domain>.yaml`
+with `input_type`, `output_type`, `forward_kwargs`, and `model:` blocks.
+No registry edits needed.
 
 The **loss calculator** (`src/loss.py`) and **metric calculator**
-(`src/metrics.py`) are both driven by the same target config
-(e.g. `pressure: scalar`, `wss: vector`), so adding a new field is a
-config-only change.  Supported loss types: Huber, MSE, relative MSE.
+(`src/metrics.py`) operate on `dict[str, Tensor]` predictions and targets,
+keyed by the field names declared in the dataset YAML's `targets:` block.
+For each field, the loss type is applied per the field's type (`scalar`
+or `vector`); per-field losses are then weighted by the optional
+`training.field_weights` block in the model YAML and summed.
+
+Supported loss types: Huber (default), MSE, relative MSE.
 Supported metrics: relative L1, relative L2, MAE.
+
+**`training.field_weights`** is a model-side dict that multiplies each
+per-field loss before summation. Use it to balance fields with very
+different natural scales (e.g. GLOBE's
+`{pressure: 1.0, wss: 100.0}` mimics the standalone recipe's
+`error_scales = {C_p: 1.0, C_f: 0.01}` weighting).
+
+**`batch_size > 1`** is not supported by any model in the recipe today;
+the YAML field is reserved for future use, and `train.py` raises
+`NotImplementedError` if you try to set it above 1.
 
 ## Scripts
 
@@ -357,6 +401,10 @@ The recipe uses a two-level config structure:
   and metrics.
 
 ### Dataset config anatomy
+
+Surface dataset YAML (DrivAerML; produces a DomainMesh whose interior is
+the prediction surface and whose `vehicle` boundary is the input
+geometry):
 
 ```yaml
 name: drivaer_ml_surface
@@ -411,24 +459,25 @@ pipeline:
       field_name: normals
     - _target_: ${dp:SubsampleMesh}
       n_cells: ${sampling_resolution}
-    - _target_: ${dp:MeshToTensorDict}
-    - _target_: ${dp:ComputeCellCentroids}
-    - _target_: ${dp:RestructureTensorDict}
-      groups:
-        input:
-          points: cell_centroids
-          normals: cell_data.normals
-          U_inf: global_data.U_inf
-        output:
-          pressure: cell_data.pressure
-          wss: cell_data.wss
+    # Terminal: convert the surface Mesh into a DomainMesh per the recipe
+    # contract. interior = Mesh[0, 3] at cell centroids with target fields
+    # in interior.point_data; boundaries = {"vehicle": <surface Mesh with
+    # non-target cell features kept>}. cell_data_targets are auto-injected
+    # by the dataset builder from the `targets:` block below.
+    - _target_: ${dp:MeshToDomainMesh}
+      interior_points: cell_centroids
+      boundary_name: vehicle
 
+# Single source of truth for prediction field names + types.
 targets:
   pressure: scalar
   wss: vector
 
 metrics: [l1, l2, mae]
 ```
+
+Volume YAMLs use `DomainMeshReader` directly (the .pdmsh on-disk format
+is already a DomainMesh) and don't need a `MeshToDomainMesh` terminal.
 
 The `${dp:ComponentName}` syntax is an OmegaConf resolver registered by
 PhysicsNeMo's datapipe registry.  It maps short class names to fully
@@ -469,12 +518,15 @@ For datasets without a manifest (e.g. SHIFT SUV), separate
 4. Choose the right `section:` (`point_data` or `cell_data`) in
    `NonDimensionalizeByMetadata`, `RenameMeshFields`, and
    `NormalizeMeshFields`.
-5. For cell-based surface data, add `ComputeSurfaceNormals` and
-   `ComputeCellCentroids` and use `cell_centroids` as the point source
-   in `RestructureTensorDict`.
+5. For cell-based surface data, add `ComputeSurfaceNormals` to compute
+   per-cell normals (kept on the boundary's `cell_data`).
 6. Add inline normalization stats to `NormalizeMeshFields` (or point
    `stats_file` at a `.pt` file with precomputed statistics).
-7. Add an entry in the appropriate `conf/train_*.yaml` under `data:`
+7. Append `MeshToDomainMesh` as the terminal pipeline step (surface
+   datasets only; volume datasets already produce a `DomainMesh`
+   natively via `DomainMeshReader`). The dataset builder will
+   auto-inject `cell_data_targets` from the YAML's `targets:` block.
+8. Add an entry in the appropriate `conf/train_*.yaml` under `data:`
    pointing to your new config.
 
 No Python code changes are needed.
@@ -496,13 +548,14 @@ mlflow:
 
 | Module | Purpose |
 |---|---|
-| `src/datasets.py` | Factory functions: `build_dataset`, `build_multi_surface_dataset`, `load_dataset_config`.  Hydra-instantiates readers and transforms from YAML; injects metadata into `global_data`.  Also provides `load_manifest`, `resolve_manifest_indices`, and `ManifestSampler` for manifest-based splitting. |
-| `src/nondim.py` | Recipe-local transform: `NonDimensionalizeByMetadata`.  Registered into the global datapipe registry.  Supports pressure, stress, velocity, temperature, density, and identity field types. |
-| `src/collate.py` | Data-to-model mapping: converts datapipe `(TensorDict, metadata)` tuples into batched model inputs via a registry of 10 named mapping specs (see [Data-to-model mapping](#data-to-model-mapping)). |
-| `src/loss.py` | `LossCalculator` — config-driven loss for mixed scalar/vector fields.  Supports Huber, MSE, relative MSE.  Normalizes total loss by number of output channels. |
-| `src/metrics.py` | `MetricCalculator` — config-driven metrics (relative L1, relative L2, MAE) with optional distributed all-reduce.  Reports per-field and per-component (x/y/z) metrics for vector fields. |
+| `src/datasets.py` | Factory functions: `build_dataset`, `build_multi_surface_dataset`, `load_dataset_config`. Hydra-instantiates readers and transforms from YAML; injects metadata into `global_data`. Auto-injects target names from the YAML's `targets:` block into `MeshToDomainMesh`. Also provides `load_manifest`, `resolve_manifest_indices`, and `ManifestSampler` for manifest-based splitting. |
+| `src/nondim.py` | Recipe-local transform: `NonDimensionalizeByMetadata`. Registered into the global datapipe registry. Supports pressure, stress, velocity, temperature, density, and identity field types. |
+| `src/forward_kwargs.py` | Spec resolver. Walks declarative `forward_kwargs:` specs (paths, lists, nested dicts, `expand_like` modifiers) into actual `model.forward()` kwargs against a DomainMesh. Also provides `extract_targets` (interior.point_data lookup by target name). |
+| `src/collate.py` | `build_collate_fn(input_type, forward_kwargs_spec, target_config)`. Resolves forward kwargs from each `DomainMesh` sample, extracts targets from `interior.point_data`. For `input_type='tensors'`, batch-wraps tensors with the right token / per-element padding; for `input_type='mesh'`, passes Mesh / dict / scalar values through unchanged. |
+| `src/loss.py` | `LossCalculator` — dict-of-tensors loss for mixed scalar/vector fields. Supports Huber, MSE, relative MSE. Optional `field_weights` per-field multiplicative weights. Normalizes total loss by number of output channels. |
+| `src/metrics.py` | `MetricCalculator` — dict-of-tensors metrics (relative L1, relative L2, MAE) with optional distributed all-reduce. Reports per-field and per-component (x/y/z) metrics for vector fields. |
 | `src/utils.py` | `build_muon_optimizer` (Muon+AdamW via `CombinedOptimizer`), `parse_target_config`, `FieldSpec` dataclass, `set_seed`. |
-| `src/train.py` | Training loop with DDP, mixed precision, checkpointing, MLflow logging, I/O benchmarking (`benchmark_io=true`), and profiling. |
+| `src/train.py` | Training loop with DDP, mixed precision, checkpointing, MLflow / TensorBoard / JSONL logging, I/O benchmarking (`benchmark_io=true`), and profiling. Dispatches forward-pass output unpacking on `output_type` (`mesh` -> extract from `Mesh.point_data`; `tensors` -> split `(B, N, C)` by `FieldSpec`). |
 
 ## Design decisions
 

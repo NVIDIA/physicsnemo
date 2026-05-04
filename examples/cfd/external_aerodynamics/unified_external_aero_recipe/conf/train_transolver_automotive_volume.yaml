@@ -29,12 +29,19 @@ compile: true
 profile: false
 augment: false
 benchmark_io: false
-broadcast_global: true    # broadcast U_inf (B,1,3) -> (B,N,3) for Transolver
 
-model_type: "volume"
+# -- Data contract -----------------------------------------------------------
+input_type: tensors
+output_type: tensors
 
-# -- Data-to-model mapping (see src/collate.py MODEL_MAPPINGS) ---------------
-data_mapping: "transolver_automotive_volume"
+forward_kwargs:
+  embedding:
+    - interior.points
+    - interior.point_data.sdf
+    - interior.point_data.sdf_normals
+  fx:
+    source: global_data.U_inf
+    expand_like: embedding
 
 # -- Model (Transolver) -----------------------------------------------------
 model:
@@ -57,14 +64,7 @@ model:
 # -- Dataset -----------------------------------------------------------------
 dataset:
   name: drivaer_ml_volume
-  sampling_resolution: 200000   # override SubsampleMesh n_cells/n_points in all dataset configs
-  targets:
-    velocity: vector
-    pressure: scalar
-    nut: scalar
-  nondim_types:
-    velocity: velocity
-    nut: identity
+  sampling_resolution: 200000
   metrics: [l2]
 
 # -- Training ----------------------------------------------------------------
