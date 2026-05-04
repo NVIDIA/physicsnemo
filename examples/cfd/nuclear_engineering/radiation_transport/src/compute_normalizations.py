@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -33,9 +33,9 @@ Usage::
 The flux statistics walk the training split of the dataset, log-clip the raw
 ``scalar_flux`` field, and accumulate (mean, std, min, max) plus the clip
 threshold the training pipeline must use. The material statistics walk the
-training split through a minimal transform pipeline that derives the
-per-point ``physical_properties`` tensor (sigma_a, sigma_s, sigma_t, Q) and
-records (mean, std, min, max) for each component.
+training split, read the precomputed ``sigma_a / sigma_s / sigma_t / Q``
+fields from each store, and accumulate per-property (mean, std, min, max)
+across all cells.
 
 The on-disk YAML schema matches the originals so that ``load_flux_stats`` /
 ``load_material_stats`` in ``dataset.py`` consume them unchanged.
@@ -44,7 +44,6 @@ The on-disk YAML schema matches the originals so that ``load_flux_stats`` /
 from __future__ import annotations
 
 import argparse
-import pathlib
 import sys
 from pathlib import Path
 from typing import Dict
@@ -52,21 +51,9 @@ from typing import Dict
 import numpy as np
 import torch
 import yaml
-from physicsnemo.datapipes.transforms import Compose
 
-# Flat-import shim: when invoked as ``python compute_normalizations.py`` the
-# script's own directory is already on ``sys.path``; when invoked from
-# elsewhere we make sure sibling modules are importable.
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-
-from dataset import RTEBaseDataset  # noqa: E402
-from loader import RTEDataPipe  # noqa: E402
-from material import MaterialPropertyExtractor  # noqa: E402
-from transforms import (  # noqa: E402
-    RTEFluxLogClip,
-    SpatialSampler,
-    SteadyStateSampler,
-)
+from dataset import RTEBaseDataset
+from material import MaterialPropertyExtractor
 
 
 # =========================================================================
@@ -178,27 +165,16 @@ def compute_flux_statistics(
 # Material statistics
 # =========================================================================
 #
-# Walks the training split through a minimal transform pipeline:
-#
-#     RTEFluxLogClip -> SteadyStateSampler -> MaterialPropertyExtractor -> SpatialSampler
-#
-# The flux log-clip step is required because the dataset reader produces a
-# steady-state flux tensor; the sampler picks the first/final pair, the
-# material extractor produces ``physical_properties`` with shape (N, 4), and
-# ``SpatialSampler`` subsamples to a fixed point count for speed. Per-property
-# stats are written in the schema the existing ``load_material_stats`` reader
-# expects.
+# Reads the precomputed sigma_a / sigma_s / sigma_t / Q fields from each zarr
+# store in the training split and accumulates per-property mean / std / min /
+# max across all cells. Schema matches what ``load_material_stats`` expects.
 
 
 def compute_material_statistics(
     data_path: Path,
     case_type: str,
     output_file: Path,
-    flux_stats_file: Path,
     split_file: Path,
-    clip_threshold: float = 1e-8,
-    num_spatial_points: int = 2048,
-    seed: int = 42,
 ) -> Dict[str, Dict[str, float]]:
     """Compute per-property material statistics from the training split.
 
@@ -206,62 +182,30 @@ def compute_material_statistics(
         data_path: path to the zarr stores for one case.
         case_type: ``"lattice"`` or ``"hohlraum"``.
         output_file: destination YAML path.
-        flux_stats_file: path to the flux stats YAML produced by
-            :func:`compute_flux_statistics`. Required because the transform
-            pipeline runs ``RTEFluxLogClip`` first.
         split_file: split JSON used to select the training split.
-        clip_threshold: flux clip threshold used by the flux transform.
-        num_spatial_points: number of points per simulation drawn by
-            ``SpatialSampler``.
-        seed: RNG seed for spatial sampling.
 
     Returns:
         The nested statistics dict written to ``output_file``.
     """
     print(f"\nComputing material statistics for {case_type}")
     print(f"Data path: {data_path}")
-    print(f"Flux stats: {flux_stats_file}")
     print(f"Split file: {split_file}")
 
-    if not Path(flux_stats_file).exists():
-        raise FileNotFoundError(
-            f"Flux statistics file not found: {flux_stats_file}\n"
-            "Compute flux statistics before material statistics."
-        )
-
-    transforms = Compose(
-        [
-            RTEFluxLogClip(
-                normalization_stats_file=flux_stats_file,
-                clip_threshold=clip_threshold,
-            ),
-            SteadyStateSampler(),
-            MaterialPropertyExtractor(),
-            SpatialSampler(num_points=num_spatial_points, seed=seed),
-        ]
-    )
-
-    print("\nCreating dataset (this may take a moment)...")
-    dataset = RTEDataPipe(
+    dataset = RTEBaseDataset(
         data_path=data_path,
-        transforms=transforms,
-        adapter=None,
         case_type=case_type,
         phase="train",
         split_file=split_file,
+        load_geometric_features=False,
     )
+    extractor = MaterialPropertyExtractor()
     print(f"Dataset loaded: {len(dataset)} samples")
 
     print("\nAccumulating physical_properties...")
     all_sigma_a, all_sigma_s, all_sigma_t, all_Q = [], [], [], []
 
     for i in range(len(dataset)):
-        sample = dataset.get_transformed_sample(i)
-        if "physical_properties" not in sample:
-            raise KeyError(
-                f"Sample {i} is missing 'physical_properties'. "
-                "MaterialPropertyExtractor did not produce expected output."
-            )
+        sample = extractor(dataset[i])
         props = sample["physical_properties"]
         if isinstance(props, torch.Tensor):
             props = props.detach().cpu().numpy()
@@ -364,18 +308,6 @@ def _parse_args() -> argparse.Namespace:
         default=1e-8,
         help="Flux clip threshold used during log-transform (default: 1e-8).",
     )
-    parser.add_argument(
-        "--num_spatial_points",
-        type=int,
-        default=2048,
-        help="Points per simulation for material stats subsampling (default: 2048).",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="RNG seed for material-stats sampling (default: 42).",
-    )
     return parser.parse_args()
 
 
@@ -404,11 +336,7 @@ def main() -> int:
         data_path=args.data_path,
         case_type=args.case_type,
         output_file=material_output,
-        flux_stats_file=flux_output,
         split_file=args.split_file,
-        clip_threshold=args.clip_threshold,
-        num_spatial_points=args.num_spatial_points,
-        seed=args.seed,
     )
 
     print("\n" + "=" * 80)

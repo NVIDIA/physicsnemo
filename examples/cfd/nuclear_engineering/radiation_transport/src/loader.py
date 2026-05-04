@@ -24,7 +24,7 @@ Sections:
 
 * Adapter — ``TransolverAdapter``.
 * Collation — ``collate_no_padding`` (batch_size=1 unsqueeze).
-* Stats / kwargs translation — ``build_rte_dataset_kwargs``.
+* Stats / kwargs translation — ``_build_rte_dataset_kwargs``.
 * Pipeline orchestration — ``RTEDataPipe`` + ``_build_transforms`` +
   ``_build_rte_datapipe``.
 * Distributed preload barrier — file-marker rank-sequencing helpers.
@@ -114,73 +114,49 @@ class TransolverAdapter:
         sample = {k: data[k] for k in data.keys()}
         result: Dict[str, Any] = {}
 
-        def to_tensor(x):
-            if isinstance(x, torch.Tensor):
-                return x.float()
-            return torch.from_numpy(x).float()
-
         if "coordinates" in sample:
-            result["fx"] = to_tensor(sample["coordinates"])
+            result["fx"] = sample["coordinates"]
 
         if "physical_properties" in sample:
-            mat_props = to_tensor(sample["physical_properties"])
+            mat_props = sample["physical_properties"]
             if not self.include_q_in_embedding:
                 mat_props = mat_props[..., :3]
             result["embedding"] = mat_props
 
         if "coordinates_unnormalized" in sample:
-            result["coordinates_unnormalized"] = to_tensor(
-                sample["coordinates_unnormalized"]
-            )
+            result["coordinates_unnormalized"] = sample["coordinates_unnormalized"]
 
         if (
             "material_properties" in sample
             and sample["material_properties"] is not None
         ):
-            mat_labels = sample["material_properties"]
-            if isinstance(mat_labels, np.ndarray):
-                mat_labels = torch.from_numpy(mat_labels.astype(np.int64))
-            elif isinstance(mat_labels, torch.Tensor):
-                mat_labels = mat_labels.long()
-            result["material_labels"] = mat_labels
+            result["material_labels"] = sample["material_properties"].long()
 
         if "flux_target" in sample:
-            flux_tgt = to_tensor(sample["flux_target"])
+            flux_tgt = sample["flux_target"]
             if flux_tgt.ndim == 1:
                 flux_tgt = flux_tgt.unsqueeze(-1)
             result["flux_target"] = flux_tgt
 
         for key in ("cell_areas", "sigma_t", "sigma_s"):
             if key in sample:
-                result[key] = to_tensor(sample[key])
+                result[key] = sample[key]
 
-        if "sim_times" in sample:
-            sim_times_arr = sample["sim_times"]
-            if isinstance(sim_times_arr, torch.Tensor) and sim_times_arr.numel() > 0:
-                result["sim_time"] = torch.tensor(
-                    [float(sim_times_arr[-1].item())], dtype=torch.float32
-                )
-            elif hasattr(sim_times_arr, "__len__") and len(sim_times_arr) > 0:
-                result["sim_time"] = torch.tensor(
-                    [float(sim_times_arr[-1])], dtype=torch.float32
-                )
-            else:
-                result["sim_time"] = torch.tensor([0.0], dtype=torch.float32)
+        if "sim_times" in sample and sample["sim_times"].numel() > 0:
+            result["sim_time"] = sample["sim_times"][-1].reshape(1).to(torch.float32)
+        elif "sim_times" in sample:
+            result["sim_time"] = torch.tensor([0.0], dtype=torch.float32)
 
         if "flux_normalization_stats" in sample:
             result["flux_normalization_stats"] = sample["flux_normalization_stats"]
 
-        metadata = sample.get("metadata", {}) or {}
+        metadata = sample.get("metadata") or {}
         metadata_dict = {
             "timestep_input": sample.get("timestep_input"),
             "timestep_target": sample.get("timestep_target"),
-            "max_timestep": metadata.get("max_timestep")
-            if isinstance(metadata, dict)
-            else None,
+            "max_timestep": metadata.get("max_timestep"),
             "filename": sample.get("filename"),
-            "case_type": metadata.get("case_type")
-            if isinstance(metadata, dict)
-            else None,
+            "case_type": metadata.get("case_type"),
         }
         result["metadata"] = {k: v for k, v in metadata_dict.items() if v is not None}
 
@@ -194,142 +170,54 @@ class TransolverAdapter:
 # Collation
 # =========================================================================
 #
-# Only ``collate_no_padding`` ships with the upstream example: all configs
-# use ``batch_size=1`` with a fixed ``num_spatial_points`` from
-# ``SpatialSampler``, so no padding is needed. The PyG-graph collator was
-# dropped along with the MeshGraphNet adapter.
+# All configs use ``batch_size=1`` with a fixed ``num_spatial_points`` from
+# ``SpatialSampler``, so no padding is needed. ``build_dataloaders_for_training``
+# enforces ``batch_size=1`` upstream, so this collate just unsqueezes the
+# single sample and passes non-tensors through (default torch collate would
+# choke on the ``metadata`` / ``flux_normalization_stats`` dicts).
 
 
 @register("RTECollateNoPadding")
 def collate_no_padding(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Batch-size-1 collate: unsqueeze each tensor, pass non-tensors through.
-
-    Asserts ``len(batch) == 1`` to keep us honest if someone flips the config
-    without wiring a real multi-sample collator.
-    """
-    assert len(batch) == 1, "collate_no_padding requires batch_size=1"
+    """Batch-size-1 collate: unsqueeze each tensor, pass non-tensors through."""
     item = batch[0]
-    result: Dict[str, Any] = {}
-    for k, v in item.items():
-        if isinstance(v, torch.Tensor):
-            result[k] = v.unsqueeze(0)
-        else:
-            result[k] = v
-    return result
+    return {
+        k: v.unsqueeze(0) if isinstance(v, torch.Tensor) else v for k, v in item.items()
+    }
 
 
 # =========================================================================
 # Stats / kwargs translation
 # =========================================================================
 #
-# ``build_rte_dataset_kwargs`` translates a Hydra config into the kwargs
-# ``create_dataset`` expects. Used by both training (phases ``train``/``val``)
-# and evaluation (phase ``test``).
+# ``_build_rte_dataset_kwargs`` translates a Hydra config into the kwargs
+# ``_build_rte_datapipe`` expects. Required keys (``flux_normalization_stats_file``,
+# ``flux_clip_threshold``, ``case.split_file``) raise a clear ``KeyError`` on
+# direct access if missing; no manual ``None``-checking is layered on top.
 
 
-def build_rte_dataset_kwargs(
-    cfg: DictConfig,
-    *,
-    num_spatial_points_key: str = "num_spatial_points",
-    num_spatial_points_override: Optional[int] = None,
-    split_file_override: Optional[str] = None,
-    extra_kwargs: Optional[dict] = None,
-) -> dict:
-    """Translate a Hydra config into the kwargs ``_build_rte_datapipe`` expects.
-
-    Callers that run against a checkpoint's saved config (evaluation) can
-    provide overrides for values the CLI wants to win over the config
-    (``split_file``) or that diverge between current and checkpoint shapes
-    (``num_spatial_points``).
-    """
+def _build_rte_dataset_kwargs(cfg: DictConfig) -> dict:
+    """Translate a Hydra config into the kwargs ``_build_rte_datapipe`` expects."""
     data_cfg = cfg.data
-
-    flux_stats_file = data_cfg.get("flux_normalization_stats_file")
-    if flux_stats_file is None:
-        raise ValueError(
-            "data.flux_normalization_stats_file must be specified in config."
-        )
-
-    flux_clip_threshold = data_cfg.get("flux_clip_threshold")
-    if flux_clip_threshold is None:
-        raise ValueError("data.flux_clip_threshold must be specified in config.")
-
-    # num_spatial_points — override for eval when the checkpoint's model
-    # config carries the authoritative value.
-    if num_spatial_points_override is not None:
-        num_spatial_points = num_spatial_points_override
-    elif "." in num_spatial_points_key:
-        parts = num_spatial_points_key.split(".")
-        num_spatial_points = cfg
-        for part in parts:
-            num_spatial_points = num_spatial_points[part]
-    else:
-        num_spatial_points = cfg.model[num_spatial_points_key]
-
-    case_cfg = cfg.get("case", {})
-    split_file = (
-        split_file_override
-        if split_file_override
-        else case_cfg.get("split_file") or data_cfg.get("split_file")
-    )
-    if not split_file:
-        raise ValueError(
-            "case.split_file is required. Configure a JSON split file instead "
-            "of percentage-based train/val/test splits."
-        )
-
-    seed = data_cfg.get("seed", None)
-    if seed is None and "train" in cfg:
-        seed = cfg.train.get("seed", None)
-
-    # Fourier features config
     use_fourier_features = data_cfg.get("use_fourier_features", False)
-    fourier_num_frequencies = None
-    fourier_coord_dims = None
-    fourier_base_frequency = None
-    if use_fourier_features:
-        fourier_cfg = data_cfg.get("fourier_features")
-        if fourier_cfg is None:
-            raise ValueError(
-                "use_fourier_features=True but data.fourier_features is missing."
-            )
-        fourier_num_frequencies = fourier_cfg.get("num_frequencies")
-        fourier_coord_dims = fourier_cfg.get("coord_dims")
-        fourier_base_frequency = fourier_cfg.get("base_frequency")
-        if any(
-            v is None
-            for v in (
-                fourier_num_frequencies,
-                fourier_coord_dims,
-                fourier_base_frequency,
-            )
-        ):
-            raise ValueError(
-                "fourier_features config must specify num_frequencies, "
-                f"coord_dims, base_frequency. Got: {dict(fourier_cfg)}"
-            )
+    fourier_cfg = data_cfg.get("fourier_features") if use_fourier_features else None
 
-    kwargs = {
+    return {
         "data_path": cfg.case.data_path,
-        "num_spatial_points": num_spatial_points,
-        "flux_normalization_stats_file": flux_stats_file,
+        "num_spatial_points": cfg.model.num_spatial_points,
+        "flux_normalization_stats_file": data_cfg.flux_normalization_stats_file,
         "normalize_coordinates": data_cfg.get("normalize_coordinates", True),
-        "flux_clip_threshold": flux_clip_threshold,
-        "split_file": split_file,
-        "seed": seed,
+        "flux_clip_threshold": data_cfg.flux_clip_threshold,
+        "split_file": cfg.case.split_file,
+        "seed": data_cfg.get("seed") or cfg.get("train", {}).get("seed"),
         "cache_static_arrays": data_cfg.get("cache_static_arrays", True),
         "max_cache_size": data_cfg.get("max_cache_size", 200),
         "include_q_in_embedding": cfg.model.get("include_q_in_embedding", True),
         "use_fourier_features": use_fourier_features,
-        "fourier_num_frequencies": fourier_num_frequencies,
-        "fourier_coord_dims": fourier_coord_dims,
-        "fourier_base_frequency": fourier_base_frequency,
+        "fourier_num_frequencies": fourier_cfg.num_frequencies if fourier_cfg else None,
+        "fourier_coord_dims": fourier_cfg.coord_dims if fourier_cfg else None,
+        "fourier_base_frequency": fourier_cfg.base_frequency if fourier_cfg else None,
     }
-
-    if extra_kwargs:
-        kwargs.update(extra_kwargs)
-
-    return kwargs
 
 
 # =========================================================================
@@ -788,11 +676,7 @@ def build_dataloaders(
     dist=None,
     *,
     collate_fn: Optional[Callable] = None,
-    extra_dataset_kwargs: Optional[dict] = None,
     phases: Iterable[str] = ("train", "val"),
-    num_spatial_points_key: str = "num_spatial_points",
-    num_spatial_points_override: Optional[int] = None,
-    split_file_override: Optional[str] = None,
     test_batch_size: int = 1,
     test_num_workers: int = 0,
     logger: Optional[logging.Logger] = None,
@@ -803,14 +687,7 @@ def build_dataloaders(
         cfg: Hydra configuration (training cfg or a loaded checkpoint cfg).
         dist: ``DistributedManager`` for training; ``None`` for eval.
         collate_fn: Collate function. Defaults to ``collate_no_padding``.
-        extra_dataset_kwargs: Additional kwargs forwarded to the datapipe.
         phases: Which splits to build (subset of ``{"train", "val", "test"}``).
-        num_spatial_points_key: Where to read ``num_spatial_points`` from
-            the config (dotted path). Overridden by
-            ``num_spatial_points_override`` when the caller already knows
-            the authoritative value (eval path).
-        num_spatial_points_override: Optional explicit ``num_spatial_points``.
-        split_file_override: CLI override for ``data.split_file``.
         test_batch_size / test_num_workers: Used only when ``test`` is in
             ``phases``.
         logger: Optional logger; defaults to module logger.
@@ -823,8 +700,6 @@ def build_dataloaders(
     logger = logger or logging.getLogger(__name__)
     phases = tuple(phases)
 
-    # Hardcode the collate to ``collate_no_padding`` — the upstream example
-    # ships only the point-cloud adapter, which requires batch_size=1.
     if collate_fn is None:
         collate_fn = collate_no_padding
 
@@ -833,13 +708,7 @@ def build_dataloaders(
     if rank_zero:
         logger.info(f"Loading {cfg.case.type} data from: {cfg.case.data_path}")
 
-    common_kwargs = build_rte_dataset_kwargs(
-        cfg,
-        num_spatial_points_key=num_spatial_points_key,
-        num_spatial_points_override=num_spatial_points_override,
-        split_file_override=split_file_override,
-        extra_kwargs=extra_dataset_kwargs,
-    )
+    common_kwargs = _build_rte_dataset_kwargs(cfg)
 
     if rank_zero:
         logger.info("Mapping mode: steady-state first-to-final flux")
@@ -858,11 +727,8 @@ def build_dataloaders(
     }
 
     # Distributed/single preloading (training only; eval skips).
-    preload_data = False
-    if "data" in cfg:
-        preload_data = cfg.data.get("preload_data", False)
     if (
-        preload_data
+        cfg.data.get("preload_data", False)
         and common_kwargs["max_cache_size"] == -1
         and dist is not None
         and any(p in datasets for p in ("train", "val"))
@@ -913,7 +779,6 @@ def build_dataloaders(
 __all__ = [
     "TransolverAdapter",
     "collate_no_padding",
-    "build_rte_dataset_kwargs",
     "RTEDataPipe",
     "build_dataloaders",
 ]

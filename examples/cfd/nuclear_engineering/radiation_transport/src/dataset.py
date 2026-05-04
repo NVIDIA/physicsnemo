@@ -70,11 +70,6 @@ _TENSOR_FIELD_NAMES = (
 )
 
 
-def _to_tensor(array: np.ndarray) -> torch.Tensor:
-    """Zero-copy when possible; always returns a CPU ``torch.Tensor``."""
-    return torch.from_numpy(np.ascontiguousarray(array))
-
-
 @register("RTEZarrReader")
 class ZarrDataReader(Reader):
     """Filename-indexed reader over a directory of RTE zarr stores.
@@ -229,10 +224,7 @@ class ZarrDataReader(Reader):
                 num_timesteps = flux_array.shape[0]
                 resolved = [0] if num_timesteps == 1 else [0, num_timesteps - 1]
                 scalar_flux = np.stack(
-                    [
-                        np.array(flux_array[idx], dtype=np.float32)
-                        for idx in resolved
-                    ],
+                    [np.array(flux_array[idx], dtype=np.float32) for idx in resolved],
                     axis=0,
                 )
             if load_sim_times and "sim_times" in z:
@@ -252,9 +244,9 @@ class ZarrDataReader(Reader):
                 cached_entry = dict(self._static_cache[filename])  # shallow copy
 
         td = TensorDict({}, batch_size=[])
-        td["scalar_flux"] = _to_tensor(scalar_flux)
+        td["scalar_flux"] = torch.from_numpy(scalar_flux)
         if sim_times is not None:
-            td["sim_times"] = _to_tensor(np.asarray(sim_times))
+            td["sim_times"] = torch.from_numpy(np.asarray(sim_times))
 
         if cache_hit:
             # Reuse cached static tensors; copy references, not data.
@@ -262,27 +254,29 @@ class ZarrDataReader(Reader):
                 td[key] = tensor
         else:
             self._cache_misses += 1
-            cell_centers = np.array(z["cell_centers"], dtype=np.float32)
-            cell_areas = np.array(z["cell_areas"], dtype=np.float32)
-            td["coordinates"] = _to_tensor(cell_centers)
-            td["cell_areas"] = _to_tensor(cell_areas)
+            td["coordinates"] = torch.from_numpy(
+                np.array(z["cell_centers"], dtype=np.float32)
+            )
+            td["cell_areas"] = torch.from_numpy(
+                np.array(z["cell_areas"], dtype=np.float32)
+            )
 
             if load_material_properties and "material_properties" in z:
-                td["material_properties"] = _to_tensor(
+                td["material_properties"] = torch.from_numpy(
                     np.array(z["material_properties"], dtype=np.int32)
                 )
             elif load_material_properties and "material_properties" not in z:
                 warnings.warn(f"Material properties not found in {filename}.")
 
             if load_geometric_features and "geometric_features" in z:
-                td["geometric_features"] = _to_tensor(
+                td["geometric_features"] = torch.from_numpy(
                     np.array(z["geometric_features"], dtype=np.float32)
                 )
 
             if load_sigma_fields:
                 for key in ("sigma_t", "sigma_s", "sigma_a", "Q"):
                     if key in z:
-                        td[key] = _to_tensor(np.array(z[key], dtype=np.float32))
+                        td[key] = torch.from_numpy(np.array(z[key], dtype=np.float32))
 
             if self.cache_static_arrays:
                 self._maybe_cache_entry(filename, td)
@@ -435,9 +429,9 @@ class RTEBaseDataset(Dataset):
         self._memory_cache = {}
 
         if verbose:
-            print(f"\nPreloading {num_files} files with steady-state flux...")
-            print("  Loading ONLY first and final snapshots (2 per file)")
-            print(f"  Parallel I/O workers: {num_workers}")
+            print(
+                f"Preloading {num_files} files (first+final flux, {num_workers} workers)..."
+            )
 
         start = time.perf_counter()
 
@@ -454,25 +448,15 @@ class RTEBaseDataset(Dataset):
             }
             if "sim_times" in td:
                 entry["sim_times"] = td["sim_times"].clone()
-            return filename, td, entry
+            return filename, entry
 
         completed = 0
-        first_logged = False
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             futures = {executor.submit(load_one, fn): fn for fn in self.filenames}
             for fut in as_completed(futures):
-                filename, td, entry = fut.result()
+                filename, entry = fut.result()
                 completed += 1
                 self._memory_cache[filename] = entry
-                if verbose and not first_logged:
-                    n_cells = td["coordinates"].shape[0]
-                    print(f"\n  First file diagnostics ({filename}):")
-                    print(f"    scalar_flux shape: {tuple(td['scalar_flux'].shape)}")
-                    print(f"    num_cells: {n_cells:,}")
-                    print(f"    sigma_t loaded: {'sigma_t' in td}")
-                    print(f"    sigma_s loaded: {'sigma_s' in td}")
-                    print("")
-                    first_logged = True
                 if verbose and completed % 50 == 0:
                     elapsed = time.perf_counter() - start
                     rate = completed / elapsed
@@ -485,24 +469,9 @@ class RTEBaseDataset(Dataset):
         elapsed = time.perf_counter() - start
         cache_stats = self.reader.get_cache_stats()
         if verbose:
-            print("\nPreload complete!")
-            print(f"  Files loaded: {num_files}")
-            print(f"  Time: {elapsed:.1f}s ({num_files/elapsed:.1f} files/s)")
-            print(f"  Static arrays cache: {cache_stats['cache_size']} files")
-            print(f"  Cache hits: {cache_stats['cache_hits']}")
-            print(f"  Cache misses: {cache_stats['cache_misses']}")
-            flux_mem = sum(
-                cached["scalar_flux"].element_size() * cached["scalar_flux"].numel()
-                + (
-                    cached["sim_times"].element_size() * cached["sim_times"].numel()
-                    if "sim_times" in cached
-                    else 0
-                )
-                for cached in self._memory_cache.values()
-            )
             print(
-                f"  Flux cache: {len(self._memory_cache)} simulations "
-                f"({flux_mem / 1024**2:.1f} MB)"
+                f"Preload complete: {num_files} files in {elapsed:.1f}s "
+                f"({num_files / elapsed:.1f} files/s)."
             )
 
         return {
@@ -643,12 +612,8 @@ def material_normalize_kwargs(
     ``torch.Tensor`` of shape ``(4,)`` is passed as the mean and the std,
     delegating the math to ``physicsnemo.datapipes.transforms.Normalize``.
     """
-    means = torch.tensor(
-        [float(stats[k]["mean"]) for k in order], dtype=torch.float32
-    )
-    stds = torch.tensor(
-        [float(stats[k]["std"]) for k in order], dtype=torch.float32
-    )
+    means = torch.tensor([float(stats[k]["mean"]) for k in order], dtype=torch.float32)
+    stds = torch.tensor([float(stats[k]["std"]) for k in order], dtype=torch.float32)
     return {
         "input_keys": [field],
         "method": "mean_std",

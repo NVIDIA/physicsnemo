@@ -33,13 +33,6 @@ Multi-GPU::
 
 from __future__ import annotations
 
-import pathlib
-import sys
-
-# Flat-module shim: workers and direct ``python src/train.py`` invocations
-# both need to be able to resolve sibling modules by their bare names.
-sys.path.insert(0, str(pathlib.Path(__file__).parent))
-
 from typing import Any, Dict, Optional, Tuple
 
 import hydra

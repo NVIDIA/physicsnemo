@@ -833,10 +833,7 @@ def run_training_loop(
         if dist.rank == 0:
             logger.info("\n" + "=" * 70)
             logger.info("Training completed!")
-            if best_val_losses and isinstance(best_val_losses[0], (int, float)):
-                loss_strs = [f"{v:.6f}" for v in best_val_losses]
-            else:
-                loss_strs = [f"{loss:.6f}" for loss, _ in best_val_losses]
+            loss_strs = [f"{loss:.6f}" for loss, _ in best_val_losses]
             logger.info(f"Top validation losses: {loss_strs}")
             if best_qoi_loss < float("inf"):
                 logger.info(f"Best QoI loss: {best_qoi_loss:.6e}")

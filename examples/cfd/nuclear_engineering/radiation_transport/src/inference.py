@@ -31,8 +31,6 @@ Usage::
 
 import argparse
 import os
-import pathlib
-import sys
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional, Tuple, Union
 
@@ -50,17 +48,18 @@ from torch.amp import autocast
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-# Flat sibling imports — keep this module self-contained relative to ``src/``.
-sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from dataset import load_flux_stats
+from loader import build_dataloaders, collate_no_padding
+from losses import (
+    evaluate_hohlraum_qoi_torch,
+    evaluate_lattice_qoi_torch,
+    extract_geometry_params,
+)
+from trainer import initialize_distributed_manager
+from transforms import denormalize_flux
 
-from dataset import load_flux_stats  # noqa: E402
-from loader import build_dataloaders, collate_no_padding  # noqa: E402
-from losses import extract_geometry_params  # noqa: E402
-from trainer import initialize_distributed_manager  # noqa: E402
-from transforms import denormalize_flux  # noqa: E402
-
-from physicsnemo.distributed import DistributedManager  # noqa: E402
-from physicsnemo.utils.checkpoint import load_checkpoint  # noqa: E402
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.utils.checkpoint import load_checkpoint
 
 
 # =========================================================================
@@ -166,45 +165,21 @@ def load_model_from_checkpoint(
 # =========================================================================
 
 
-def mse(pred: np.ndarray, target: np.ndarray) -> float:
-    """Mean squared error."""
-    return float(np.mean((pred - target) ** 2))
-
-
-def rmse(pred: np.ndarray, target: np.ndarray) -> float:
-    """Root mean squared error."""
-    return float(np.sqrt(np.mean((pred - target) ** 2)))
-
-
-def mae(pred: np.ndarray, target: np.ndarray) -> float:
-    """Mean absolute error."""
-    return float(np.mean(np.abs(pred - target)))
-
-
-def l2_relative_error(
+def compute_metrics(
     pred: np.ndarray, target: np.ndarray, eps: float = 1e-10
-) -> float:
-    """Sample-wise L2 relative error: ||pred - target||_2 / ||target||_2."""
-    num = np.linalg.norm(pred.flatten() - target.flatten())
-    den = np.linalg.norm(target.flatten()) + eps
-    return float(num / den)
-
-
-def relative_error(pred: np.ndarray, target: np.ndarray, eps: float = 1e-10) -> float:
-    """Mean pointwise relative error |pred - target| / (|target| + eps)."""
-    return float(np.mean(np.abs(pred - target) / (np.abs(target) + eps)))
-
-
-def compute_metrics(pred: np.ndarray, target: np.ndarray) -> Dict[str, float]:
-    """Compute the full metric panel for one (pred, target) pair."""
+) -> Dict[str, float]:
+    """Compute the full metric panel for one ``(pred, target)`` pair."""
     p, t = pred.flatten(), target.flatten()
+    diff = p - t
+    abs_diff = np.abs(diff)
+    mse = float(np.mean(diff**2))
     return {
-        "mse": mse(p, t),
-        "rmse": rmse(p, t),
-        "mae": mae(p, t),
-        "l2_relative_error": l2_relative_error(p, t),
-        "relative_error": relative_error(p, t),
-        "max_error": float(np.max(np.abs(p - t))),
+        "mse": mse,
+        "rmse": float(np.sqrt(mse)),
+        "mae": float(np.mean(abs_diff)),
+        "l2_relative_error": float(np.linalg.norm(diff) / (np.linalg.norm(t) + eps)),
+        "relative_error": float(np.mean(abs_diff / (np.abs(t) + eps))),
+        "max_error": float(np.max(abs_diff)),
     }
 
 
@@ -224,88 +199,12 @@ def aggregate_metrics(per_sample: list[Dict[str, float]]) -> Dict[str, float]:
 
 
 # =========================================================================
-# QoI (numpy side)
+# QoI
 # =========================================================================
-
-
-def evaluate_lattice_qoi(
-    cell_centers: np.ndarray,
-    cell_areas: np.ndarray,
-    sigma_t: np.ndarray,
-    sigma_s: np.ndarray,
-    scalar_flux: np.ndarray,
-) -> Dict[str, float]:
-    """Lattice absorption QoI in the absorbing blocks. Matches KiT-RT.
-
-    ``scalar_flux`` is shape ``(N,)`` for a single steady-state snapshot.
-    Returns ``{"cur_absorption": ...}``.
-    """
-    x = cell_centers[:, 0]
-    y = cell_centers[:, 1]
-    sigma_a = sigma_t - sigma_s
-
-    xy_corrector = -3.5
-    lbounds = np.array([1.0, 2.0, 3.0, 4.0, 5.0]) + xy_corrector
-    ubounds = np.array([2.0, 3.0, 4.0, 5.0, 6.0]) + xy_corrector
-    in_absorption = np.zeros_like(x, dtype=bool)
-    for k in range(5):
-        for l in range(5):  # noqa: E741
-            if (l + k) % 2 == 1:
-                continue
-            if (k == 2 and l == 2) or (k == 2 and l == 4):
-                continue
-            in_absorption |= (
-                (x >= lbounds[k])
-                & (x <= ubounds[k])
-                & (y >= lbounds[l])
-                & (y <= ubounds[l])
-            )
-
-    flux = scalar_flux.flatten()
-    absorption_density = flux * sigma_a * cell_areas
-    return {"cur_absorption": float(np.sum(absorption_density * in_absorption))}
-
-
-def evaluate_hohlraum_qoi(
-    cell_centers: np.ndarray,
-    cell_areas: np.ndarray,
-    sigma_t: np.ndarray,
-    sigma_s: np.ndarray,
-    scalar_flux: np.ndarray,
-    geometry_params: Dict[str, float],
-) -> Dict[str, float]:
-    """Hohlraum absorption QoI (center / vertical / horizontal). Matches KiT-RT.
-
-    ``scalar_flux`` is shape ``(N,)``. ``geometry_params`` carries ``cx``,
-    ``cy``, ``hlr``, ``hrr``, ``llr``, ``ulr``, ``urr``.
-    """
-    x = cell_centers[:, 0]
-    y = cell_centers[:, 1]
-
-    cx = geometry_params["cx"]
-    cy = geometry_params["cy"]
-    hlr = geometry_params["hlr"]
-    hrr = geometry_params["hrr"]
-    llr = geometry_params["llr"]
-    ulr = geometry_params["ulr"]
-    urr = geometry_params["urr"]
-
-    sigma_a = sigma_t - sigma_s
-
-    in_center = (x > -0.2 + cx) & (x < 0.2 + cx) & (y > -0.4 + cy) & (y < 0.4 + cy)
-    # Note: KiT-RT uses ``llr`` for both vertical-wall lower bounds.
-    in_vertical = ((x < hlr) & (y > llr) & (y < ulr)) | (
-        (x > hrr) & (y > llr) & (y < urr)
-    )
-    in_horizontal = (y > 0.6) | (y < -0.6)
-
-    flux = scalar_flux.flatten()
-    absorption_density = flux * sigma_a * cell_areas
-    return {
-        "cur_absorption_center": float(np.sum(absorption_density * in_center)),
-        "cur_absorption_vertical": float(np.sum(absorption_density * in_vertical)),
-        "cur_absorption_horizontal": float(np.sum(absorption_density * in_horizontal)),
-    }
+#
+# QoI geometry (lattice block layout, hohlraum region predicates) lives in
+# ``losses.evaluate_*_qoi_torch``. Inference reuses those torch evaluators on
+# (T=1, N) tensors built from the per-sample numpy metadata.
 
 
 def compute_sample_qoi(
@@ -326,9 +225,21 @@ def compute_sample_qoi(
     if coords is None or cell_areas is None or sigma_t is None or sigma_s is None:
         return None
 
+    cell_centers_t = torch.from_numpy(np.asarray(coords)).float()
+    cell_areas_t = torch.from_numpy(np.asarray(cell_areas)).float()
+    sigma_t_t = torch.from_numpy(np.asarray(sigma_t)).float()
+    sigma_s_t = torch.from_numpy(np.asarray(sigma_s)).float()
+    pred_t = torch.from_numpy(np.asarray(pred)).float().reshape(1, -1)
+    target_t = torch.from_numpy(np.asarray(target)).float().reshape(1, -1)
+    sim_times_t = torch.zeros(1)  # unused by the steady-state QoI
+
     if case_type == "lattice":
-        qp = evaluate_lattice_qoi(coords, cell_areas, sigma_t, sigma_s, pred)
-        qt = evaluate_lattice_qoi(coords, cell_areas, sigma_t, sigma_s, target)
+        qp = evaluate_lattice_qoi_torch(
+            cell_centers_t, cell_areas_t, sigma_t_t, sigma_s_t, pred_t, sim_times_t
+        )
+        qt = evaluate_lattice_qoi_torch(
+            cell_centers_t, cell_areas_t, sigma_t_t, sigma_s_t, target_t, sim_times_t
+        )
     elif case_type == "hohlraum":
         filename = metadata.get("filename")
         if not filename:
@@ -336,14 +247,25 @@ def compute_sample_qoi(
         gp = extract_geometry_params(filename)
         if not gp:
             return None
-        qp = evaluate_hohlraum_qoi(coords, cell_areas, sigma_t, sigma_s, pred, gp)
-        qt = evaluate_hohlraum_qoi(coords, cell_areas, sigma_t, sigma_s, target, gp)
+        qp = evaluate_hohlraum_qoi_torch(
+            cell_centers_t, cell_areas_t, sigma_t_t, sigma_s_t, pred_t, sim_times_t, gp
+        )
+        qt = evaluate_hohlraum_qoi_torch(
+            cell_centers_t,
+            cell_areas_t,
+            sigma_t_t,
+            sigma_s_t,
+            target_t,
+            sim_times_t,
+            gp,
+        )
     else:
         raise ValueError(f"Unknown case_type: {case_type}")
 
     out: Dict[str, Dict[str, float]] = {}
     for region in qp:
-        p, t = qp[region], qt[region]
+        p = float(qp[region][0].item())
+        t = float(qt[region][0].item())
         abs_err = abs(p - t)
         out[region] = {
             "predicted": p,
@@ -672,12 +594,6 @@ def plot_qoi_error_histograms(
 # =========================================================================
 
 
-def _move_to_device(batch: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
-    return {
-        k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()
-    }
-
-
 def _denormalize(flux_norm: torch.Tensor, stats: Dict[str, float]) -> np.ndarray:
     """Apply ``denormalize_flux`` (RTEFluxLogClip + Normalize inverse)."""
     return denormalize_flux(flux_norm.detach().cpu(), stats).numpy()
@@ -706,7 +622,10 @@ def run_evaluation(
     for batch in tqdm(dataloader, desc="evaluating"):
         if max_samples is not None and n >= max_samples:
             break
-        batch = _move_to_device(batch, device)
+        batch = {
+            k: v.to(device) if isinstance(v, torch.Tensor) else v
+            for k, v in batch.items()
+        }
 
         amp_enabled = use_amp and device.type == "cuda"
         with autocast(device_type=device.type, enabled=amp_enabled):

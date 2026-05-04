@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -51,6 +51,7 @@ from losses import create_scheduler
 # =========================================================================
 # Optimizers
 # =========================================================================
+
 
 def create_optimizer(
     model: nn.Module,
@@ -349,19 +350,13 @@ def save_best_checkpoint(
     if not math.isfinite(float(val_loss)):
         if logger:
             logger.warning(
-                "  Skipping best-checkpoint save for epoch %s: non-finite "
-                "val_loss=%s",
+                "  Skipping best-checkpoint save for epoch %s: non-finite val_loss=%s",
                 epoch,
                 val_loss,
             )
         return list(best_val_losses)
 
-    # Handle legacy format: convert List[float] to List[Tuple[float, int]].
-    if best_val_losses and isinstance(best_val_losses[0], (int, float)):
-        # Legacy format detected, reset to empty (can't recover epoch info).
-        best_val_losses = []
-    else:
-        best_val_losses = list(best_val_losses)
+    best_val_losses = list(best_val_losses)
 
     # Check whether this is a top-N model.
     current_losses = [loss for loss, _ in best_val_losses]
@@ -543,6 +538,7 @@ def cleanup_checkpoint_by_epoch(
 # Training-state setup
 # =========================================================================
 
+
 def create_training_components(
     cfg: DictConfig,
     model: nn.Module,
@@ -574,9 +570,7 @@ def create_training_components(
     """
     optimizer_cfg = cfg.train.get("optimizer", {})
     optimizer_type = optimizer_cfg.get("type", "adam")
-    weight_decay = optimizer_cfg.get(
-        "weight_decay", cfg.train.get("weight_decay", 0.0)
-    )
+    weight_decay = optimizer_cfg.get("weight_decay", cfg.train.get("weight_decay", 0.0))
     muon_momentum_beta = optimizer_cfg.get("muon_momentum_beta", 0.95)
     muon_lr = optimizer_cfg.get("muon_lr", None)
 
@@ -684,10 +678,7 @@ def resume_or_pretrain(
         if dist.rank == 0:
             logger.info(f"  Resumed from epoch {start_epoch}")
             if best_val_losses:
-                if isinstance(best_val_losses[0], (int, float)):
-                    loss_strs = [f"{v:.6f}" for v in best_val_losses[:3]]
-                else:
-                    loss_strs = [f"{loss:.6f}" for loss, _ in best_val_losses[:3]]
+                loss_strs = [f"{loss:.6f}" for loss, _ in best_val_losses[:3]]
                 logger.info(f"  Top val losses: {loss_strs}")
             if best_qoi_loss < float("inf"):
                 logger.info(f"  Best QoI loss: {best_qoi_loss:.6e}")
