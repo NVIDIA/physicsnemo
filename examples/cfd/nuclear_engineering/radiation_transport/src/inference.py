@@ -40,6 +40,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
 import numpy as np
 import torch
 import torch.nn as nn
@@ -413,6 +414,61 @@ def aggregate_qoi(
     return summary
 
 
+def collect_qoi_series(
+    per_sample_qoi: list[Dict[str, Dict[str, float]]],
+) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
+    """Collect per-component QoI arrays and add a total for multi-component QoIs."""
+    component_names: list[str] = []
+    for sample in per_sample_qoi:
+        for name in sample:
+            if name not in component_names:
+                component_names.append(name)
+
+    series: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+    for name in component_names:
+        target_vals = []
+        pred_vals = []
+        for sample in per_sample_qoi:
+            entry = sample.get(name)
+            if entry is None:
+                continue
+            target_vals.append(entry["ground_truth"])
+            pred_vals.append(entry["predicted"])
+        if target_vals:
+            series[name] = (np.array(target_vals), np.array(pred_vals))
+
+    if len(series) > 1:
+        totals_target = []
+        totals_pred = []
+        for sample in per_sample_qoi:
+            if not all(name in sample for name in series):
+                continue
+            totals_target.append(sum(sample[name]["ground_truth"] for name in series))
+            totals_pred.append(sum(sample[name]["predicted"] for name in series))
+        if totals_target:
+            series["total"] = (np.array(totals_target), np.array(totals_pred))
+
+    return series
+
+
+def summarize_qoi_series(
+    target: np.ndarray,
+    prediction: np.ndarray,
+) -> Dict[str, float]:
+    """Summarize absolute and relative QoI errors for one component."""
+    abs_errs = np.abs(prediction - target)
+    rel_errs = abs_errs / (np.abs(target) + 1e-10) * 100.0
+    return {
+        "num_samples": int(target.size),
+        "mae": float(np.mean(abs_errs)),
+        "rmse": float(np.sqrt(np.mean(abs_errs**2))),
+        "max_error": float(np.max(abs_errs)),
+        "mean_relative_error_pct": float(np.mean(rel_errs)),
+        "median_relative_error_pct": float(np.median(rel_errs)),
+        "max_relative_error_pct": float(np.max(rel_errs)),
+    }
+
+
 # =========================================================================
 # Plots
 # =========================================================================
@@ -424,6 +480,7 @@ def plot_flux_panels(
     prediction: np.ndarray,
     output_path: Union[str, Path],
     *,
+    log_flux: bool = False,
     figsize: Tuple[int, int] = (16, 5),
     dpi: int = 150,
 ) -> Path:
@@ -444,19 +501,50 @@ def plot_flux_panels(
     fig, axes = plt.subplots(1, 3, figsize=figsize, dpi=dpi)
     flux_vmin = min(target.min(), prediction.min())
     flux_vmax = max(target.max(), prediction.max())
+    flux_norm = None
+    if log_flux:
+        positive_flux = np.concatenate(
+            [target[target > 0.0], prediction[prediction > 0.0]]
+        )
+        if positive_flux.size:
+            flux_vmin = float(positive_flux.min())
+            flux_vmax = float(positive_flux.max())
+            if flux_vmin == flux_vmax:
+                flux_vmax = flux_vmin * 1.01
+            flux_norm = LogNorm(vmin=flux_vmin, vmax=flux_vmax)
+        else:
+            log_flux = False
     cmap_flux = plt.get_cmap("viridis")
     cmap_err = plt.get_cmap("hot")
 
-    for ax, label, vals, cmap, vmin, vmax in (
-        (axes[0], "Target", target, cmap_flux, flux_vmin, flux_vmax),
-        (axes[1], "Prediction", prediction, cmap_flux, flux_vmin, flux_vmax),
-        (axes[2], "Absolute Error", error, cmap_err, 0.0, float(error.max())),
+    for ax, label, vals, cmap, vmin, vmax, norm in (
+        (axes[0], "Target", target, cmap_flux, flux_vmin, flux_vmax, flux_norm),
+        (
+            axes[1],
+            "Prediction",
+            prediction,
+            cmap_flux,
+            flux_vmin,
+            flux_vmax,
+            flux_norm,
+        ),
+        (axes[2], "Absolute Error", error, cmap_err, 0.0, float(error.max()), None),
     ):
-        sc = ax.scatter(x, y, c=vals, cmap=cmap, vmin=vmin, vmax=vmax, s=1)
+        plot_vals = np.clip(vals, flux_vmin, None) if norm is not None else vals
+        sc = ax.scatter(
+            x,
+            y,
+            c=plot_vals,
+            cmap=cmap,
+            vmin=None if norm is not None else vmin,
+            vmax=None if norm is not None else vmax,
+            norm=norm,
+            s=1,
+        )
         ax.set_aspect("equal")
         ax.set_xlim(xlim)
         ax.set_ylim(ylim)
-        ax.set_title(label)
+        ax.set_title(f"{label} (log)" if norm is not None else label)
         plt.colorbar(sc, ax=ax)
 
     plt.tight_layout()
@@ -523,6 +611,90 @@ def plot_error_histogram(
         f"Pointwise error histogram (mean={errors.mean():.3e}, "
         f"max={errors.max():.3e})"
     )
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def _subplot_grid(num_panels: int) -> Tuple[int, int]:
+    """Choose a compact subplot grid for QoI component plots."""
+    ncols = min(num_panels, 3)
+    nrows = int(np.ceil(num_panels / ncols))
+    return nrows, ncols
+
+
+def plot_qoi_true_vs_pred(
+    qoi_series: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    output_path: Union[str, Path],
+    *,
+    dpi: int = 150,
+) -> Path:
+    """Scatter predicted vs ground-truth QoI values for each component."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    items = list(qoi_series.items())
+    nrows, ncols = _subplot_grid(len(items))
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(5 * ncols, 4.5 * nrows), dpi=dpi, squeeze=False
+    )
+
+    for ax, (name, (target, prediction)) in zip(axes.flat, items):
+        lo = float(min(target.min(), prediction.min()))
+        hi = float(max(target.max(), prediction.max()))
+        if lo == hi:
+            pad = max(abs(lo) * 0.05, 1e-12)
+            lo -= pad
+            hi += pad
+
+        ax.scatter(target, prediction, s=18, alpha=0.75)
+        ax.plot([lo, hi], [lo, hi], "r--", linewidth=1.0, label="y = x")
+        ax.set_title(name)
+        ax.set_xlabel("Ground truth QoI")
+        ax.set_ylabel("Predicted QoI")
+        ax.set_aspect("equal")
+        ax.legend(loc="best")
+
+    for ax in axes.flat[len(items) :]:
+        ax.axis("off")
+
+    fig.suptitle("QoI predicted vs. ground truth")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def plot_qoi_error_histograms(
+    qoi_series: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    output_path: Union[str, Path],
+    *,
+    bins: int = 40,
+    dpi: int = 150,
+) -> Path:
+    """Plot absolute QoI error histograms for each component."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    items = list(qoi_series.items())
+    nrows, ncols = _subplot_grid(len(items))
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(5 * ncols, 4.0 * nrows), dpi=dpi, squeeze=False
+    )
+
+    for ax, (name, (target, prediction)) in zip(axes.flat, items):
+        errors = np.abs(prediction - target)
+        ax.hist(errors, bins=bins, color="C0", edgecolor="black", linewidth=0.3)
+        ax.set_yscale("log")
+        ax.set_title(f"{name} error")
+        ax.set_xlabel("|prediction - target|")
+        ax.set_ylabel("Count (log)")
+
+    for ax in axes.flat[len(items) :]:
+        ax.axis("off")
+
+    fig.suptitle("QoI absolute error histograms")
     plt.tight_layout()
     plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
@@ -794,6 +966,7 @@ def main():
                 target,
                 pred,
                 figures_dir / f"flux_panels_{idx:04d}.png",
+                log_flux=args.case_type == "lattice",
             )
 
     if not per_sample_metrics:
@@ -819,8 +992,16 @@ def main():
     # QoI summary.
     if per_sample_qoi:
         qoi_summary = aggregate_qoi(per_sample_qoi)
+        qoi_series = collect_qoi_series(per_sample_qoi)
+        if "total" in qoi_series:
+            total_target, total_prediction = qoi_series["total"]
+            qoi_summary["total"] = summarize_qoi_series(
+                total_target, total_prediction
+            )
         with open(output_dir / "qoi_metrics.yaml", "w") as f:
             yaml.safe_dump(qoi_summary, f, sort_keys=False)
+        plot_qoi_true_vs_pred(qoi_series, figures_dir / "qoi_true_vs_pred.png")
+        plot_qoi_error_histograms(qoi_series, figures_dir / "qoi_error_histogram.png")
         print("\nQoI summary:")
         for region, stats in qoi_summary.items():
             print(
