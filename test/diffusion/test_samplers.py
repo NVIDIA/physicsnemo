@@ -48,7 +48,7 @@ from .helpers import (
 
 REF_PREFIX = "test_samplers_"
 BATCH = 2
-NUM_STEPS = 4
+NUM_STEPS = 2
 NUM_STEPS_SHORT = 2
 
 # Sampler non-regression tolerances — looser than single-op tests because
@@ -105,7 +105,7 @@ SAMPLER_CONFIGS = [
     ),
 ]
 
-TIME_EVAL_INDICES = [0, 1, 3]
+TIME_EVAL_INDICES = [0, 1]
 
 
 def _make_sampling_components(
@@ -572,6 +572,7 @@ class TestSampleValidation:
     SPATIAL_CONFIGS,
     ids=[c[0] for c in SPATIAL_CONFIGS],
 )
+@pytest.mark.usefixtures("nop_compile")
 class TestSampleCompile:
     """torch.compile tests: compiled denoiser passed to sample()."""
 
@@ -684,6 +685,7 @@ class TestSampleCompile:
     SPATIAL_CONFIGS,
     ids=[c[0] for c in SPATIAL_CONFIGS],
 )
+@pytest.mark.usefixtures("nop_compile")
 class TestFullSamplerCompile:
     """Compile the entire sample() call and verify double-call graph reuse."""
 

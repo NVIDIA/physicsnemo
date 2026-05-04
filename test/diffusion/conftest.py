@@ -37,12 +37,41 @@ GPU_TOLERANCES = {"atol": 1e-2, "rtol": 5e-2}
 # =============================================================================
 
 
+def _nop_backend(gm, inputs):
+    def forward(*args, **kwargs):
+        return gm.forward(*args, **kwargs)
+
+    return forward
+
+
 @pytest.fixture(autouse=True)
 def reset_dynamo():
     """Reset torch._dynamo state between tests to avoid cross-test recompile errors."""
     torch._dynamo.reset()
+    torch._dynamo.config.error_on_recompile = False
     yield
     torch._dynamo.reset()
+    torch._dynamo.config.error_on_recompile = False
+
+
+@pytest.fixture
+def nop_compile(monkeypatch):
+    """Redirect all torch.compile calls in this test to the nop backend.
+
+    Patches torch.compile so every call — explicit in test code or internal in
+    framework code (e.g. _CompiledPatchX) — uses _nop_backend. Dynamo still
+    traces the graph, fullgraph=True still catches graph breaks, and
+    error_on_recompile still catches spurious recompilations, but no kernel is
+    ever compiled, making the tests significantly faster.
+    """
+    original = torch.compile
+    monkeypatch.setattr(
+        torch,
+        "compile",
+        lambda fn, *args, backend=_nop_backend, **kwargs: original(
+            fn, *args, backend=backend, **kwargs
+        ),
+    )
 
 
 @pytest.fixture

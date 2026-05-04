@@ -90,6 +90,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Flare, GeoTransolver with Flare-attention, bring your own!).  Leverages
   mesh datasets and non-dimensionalization to enable dataset mixing and
   matching at runtime.  Train with surface or volume data.
+- Adds a new `physicsnemo.diffusion.multi_diffusion` subpackage that
+  scales 2D diffusion models to large domains via patch-based training
+  and inference. Provides `MultiDiffusionModel2D` (wraps a base model and
+  handles state patching, conditioning preprocessing, positional-embedding
+  injection, and per-patch output fusion), the
+  `MultiDiffusionMSEDSMLoss` / `MultiDiffusionWeightedMSEDSMLoss` losses
+  for patch-based DSM training, and `MultiDiffusionPredictor` for
+  sampling (plugs straight into `sample()` / `get_denoiser()` and the
+  standard solvers). Patching primitives (`BasePatching2D`,
+  `GridPatching2D`, `RandomPatching2D`) are exposed under the same
+  subpackage and are `torch.compile`-friendly with `fullgraph=True`.
+- Adds `"epsilon"` as a supported prediction type throughout the diffusion
+  framework, alongside the existing `"x0"` and `"score"` modes. A new
+  `PredictorType = Literal["x0", "score", "epsilon"]` alias in
+  `physicsnemo.diffusion.base` is wired through losses (`MSEDSMLoss`,
+  `WeightedMSEDSMLoss`, and the multi-diffusion losses), preconditioners,
+  samplers / solvers, DPS guidance, and noise schedulers, enabling
+  end-to-end training and sampling of epsilon-parameterized models.
+  Losses gain an `epsilon_to_x0_fn` kwarg used for the epsilon-to-x0
+  conversion required during DSM training.
 - Added support for Batched radius search, which enables Domino
   and GeoTransolver with local features and batch size > 1.
 
@@ -139,6 +159,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `physicsnemo.mesh.curvature._utils` to `physicsnemo.mesh.geometry._angles`.
   The old private path is no longer available; use the
   `physicsnemo.mesh.geometry` re-export instead.
+- Refactored the patching utilities under
+  `physicsnemo.diffusion.multi_diffusion.patching`. Patching and fusion
+  operations are now more performant and `torch.compile`-friendly (e.g.
+  `fullgraph=True`,`error_on_recompile=True`).
+- Refactored the `examples/geophysics/diffusion_fwi` full-waveform
+  inversion example to use the consolidated `physicsnemo.diffusion` API
+  (preconditioners, samplers, losses, DPS guidance) and removed the
+  recipe-local copies of these utilities under `utils/`.
+- Significantly expanded CI test coverage for `physicsnemo.diffusion`,
+  including new tests for samplers, solvers, preconditioners, losses,
+  DPS guidance, multi-diffusion, and patching utilities, plus
+  combined-workflow and from-checkpoint round-trip tests. Most tests
+  run with `fullgraph=True` and `error_on_recompile` to catch
+  `torch.compile` regressions.
 
 ### Deprecated
 
@@ -178,6 +212,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   memory format.
 - Fixed issues with physicsnemo.nn.functional's `radius_search` that
   caused crashes when used with torch.compile.
+- Fixed the sinusoidal positional embeddings formula in `SongUNet` and
+  `MultiDiffusionModel2D` so it now follows the standard `sin / cos`
+  convention. Affected reference data was regenerated.
 
 ### Security
 

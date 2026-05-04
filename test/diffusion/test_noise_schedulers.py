@@ -818,6 +818,7 @@ COMPILE_SCHEDULER_CONFIGS = [
     SPATIAL_CONFIGS,
     ids=[c[0] for c in SPATIAL_CONFIGS],
 )
+@pytest.mark.usefixtures("nop_compile")
 class TestDenoiserCompile:
     """Double-call compile tests for denoiser closures from get_denoiser()."""
 
