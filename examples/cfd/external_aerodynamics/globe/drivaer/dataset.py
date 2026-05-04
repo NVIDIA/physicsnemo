@@ -25,12 +25,12 @@ randomly subsampling cells from the cached surface mesh.
 import csv
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
+from typing import Literal, Self, Sequence
 
 import pyvista as pv
 import torch
 from jaxtyping import Float
-from tensordict import TensorDict, tensorclass
+from tensordict import TensorClass, TensorDict
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
@@ -115,8 +115,7 @@ def create_domain_boundaries(
     }
 
 
-@tensorclass
-class DrivAerMLSample:
+class DrivAerMLSample(TensorClass):
     """Single preprocessed DrivAerML sample for GLOBE training / inference.
 
     Attributes:
@@ -194,10 +193,6 @@ class DrivAerMLSample:
             _ = mesh.cell_normals
 
         return self.to(device)
-
-    if TYPE_CHECKING:
-
-        def to(self, *args: Any, **kwargs: Any) -> Self: ...
 
 
 # ---------------------------------------------------------------------------
