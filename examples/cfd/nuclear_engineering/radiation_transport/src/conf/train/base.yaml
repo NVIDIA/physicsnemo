@@ -4,6 +4,7 @@
 
 epochs: 501
 checkpoint_interval: 100
+latest_checkpoint_interval: null
 gradient_accumulation_steps: 1
 seed: 6
 deterministic: false
@@ -12,7 +13,6 @@ amp_dtype: bf16                                     # bf16 | fp16
 loss_metric: mse
 tensorboard: true
 
-# Optimizer (Muon is opt-in; install via `pip install emerging-optimizers`).
 optimizer:
   type: adam                                        # adam | muon
   weight_decay: 0.0
@@ -36,7 +36,7 @@ physics_loss:
   warmup_epochs: 0
   warmup_start_fraction: 0.0
 
-# Region-weighted MSE (heavier penalty on void points).
+# Region-weighted MSE (heavier penalty on low absorption (void) points).
 use_region_weighted_loss: true
 region_weights:
   void_weight: 10.0
