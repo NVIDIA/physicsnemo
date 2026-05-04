@@ -1156,6 +1156,8 @@ def test_near_field_monotonicity():
 # ---------------------------------------------------------------------------
 # DualInteractionPlan validation tests
 # ---------------------------------------------------------------------------
+
+
 class TestDualInteractionPlanValidate:
     """Tests for DualInteractionPlan.validate()."""
 
@@ -1184,7 +1186,7 @@ class TestDualInteractionPlanValidate:
         """An empty plan (all zero-length tensors) passes validation."""
         e = torch.empty(0, dtype=torch.long)
         plan = DualInteractionPlan(
-            near_target_ids=e,
+            near_target_ids=e.clone(),
             near_source_ids=e.clone(),
             far_target_node_ids=e.clone(),
             far_source_node_ids=e.clone(),

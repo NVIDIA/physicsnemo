@@ -85,6 +85,7 @@ def ring_ball_query(
     # We've already checked that the mesh is 1D so call the '0' index.
 
     points_shard_sizes = points._spec.sharding_shapes()[0]
+    points_shard_dim = points._spec.placements[0].dim
 
     # Call the differentiable version of the ring-ball-query:
     indices_shard, outputs_shard, _, num_neighbors_shard = RingBallQuery.apply(
@@ -93,6 +94,7 @@ def ring_ball_query(
         mesh,
         ring_config,
         points_shard_sizes,
+        points_shard_dim,
         bq_kwargs,
     )
 
@@ -109,19 +111,31 @@ def ring_ball_query(
         outputs_shard_shapes = "infer"
     elif isinstance(queries._spec.placements[0], Shard):
         queries_shard_sizes = queries._spec.sharding_shapes()[0]
+        q_shard_dim = queries._spec.placements[0].dim
 
         # This conversion to shard tensor can be done explicitly computing the output shapes.
+        # For batched inputs, shard sizes have a batch prefix (dims before the shard dim)
+        # that must be preserved in the output shapes.
 
         mp = indices_shard.shape[-1]
         d = queries.shape[-1]
         indices_shard_output_sharding = {
-            0: tuple(torch.Size([s[0], mp]) for s in queries_shard_sizes),
+            0: tuple(
+                torch.Size([*s[:q_shard_dim], s[q_shard_dim], mp])
+                for s in queries_shard_sizes
+            ),
         }
         num_neighbors_shard_output_sharding = {
-            0: tuple(torch.Size([s[0]]) for s in queries_shard_sizes),
+            0: tuple(
+                torch.Size([*s[:q_shard_dim], s[q_shard_dim]])
+                for s in queries_shard_sizes
+            ),
         }
         outputs_shard_output_sharding = {
-            0: tuple(torch.Size([s[0], mp, d]) for s in queries_shard_sizes),
+            0: tuple(
+                torch.Size([*s[:q_shard_dim], s[q_shard_dim], mp, d])
+                for s in queries_shard_sizes
+            ),
         }
 
         indices_shard_shapes = indices_shard_output_sharding
@@ -197,15 +211,21 @@ def ringless_ball_query(
     num_neighbors_placement = {}
     output_points_placement = {}
 
-    # Output sharding should match the query shapes:
+    # Output sharding should match the query shapes.
+    # For batched inputs, shard sizes have a batch prefix (dims before the shard dim)
+    # that must be preserved in the output shapes.
+    queries_placement = queries._spec.placements[0]
+    q_shard_dim = queries_placement.dim if queries_placement.is_shard() else 0
+
     for i_dim, s in queries._spec.sharding_shapes().items():
-        n_points = [int(_s[0]) for _s in s]
         indices_placement[i_dim] = tuple(
-            torch.Size([np, max_points]) for np in n_points
+            torch.Size([*_s[:q_shard_dim], _s[q_shard_dim], max_points]) for _s in s
         )
-        num_neighbors_placement[i_dim] = tuple(torch.Size([np]) for np in n_points)
+        num_neighbors_placement[i_dim] = tuple(
+            torch.Size([*_s[:q_shard_dim], _s[q_shard_dim]]) for _s in s
+        )
         output_points_placement[i_dim] = tuple(
-            torch.Size([np, max_points, 3]) for np in n_points
+            torch.Size([*_s[:q_shard_dim], _s[q_shard_dim], max_points, 3]) for _s in s
         )
 
     indices = ShardTensor.from_local(
@@ -307,8 +327,6 @@ def merge_outputs(
     ):
         return incoming_indices, incoming_num_neighbors, incoming_points
 
-    n_points, max_neighbors = current_indices.shape
-
     # This is a gather/scatter operation:
     # We need to merge the incoming values into the current arrays.  The arrays
     # are essentially a ragged tensor that has been padded to a consistent shape.
@@ -320,21 +338,51 @@ def merge_outputs(
     # - gather / scatter from incoming to current.
     # - Update the current num neighbors correctly
 
+    # The warp kernel expects 2D indices, 1D num_neighbors, 3D points.
+    # For batched inputs (3D indices, 2D num_neighbors, 4D points),
+    # loop over the batch dimension.
+    batched = current_indices.ndim == 3
+    if batched:
+        B = current_indices.shape[0]
+        n_points = current_indices.shape[1]
+        max_neighbors = current_indices.shape[2]
+    else:
+        n_points = current_indices.shape[0]
+        max_neighbors = current_indices.shape[1]
+
     stream = wp.stream_from_torch(current_indices.device)
-    wp.launch(
-        merge_indices_and_points,
-        dim=n_points,
-        inputs=[
-            wp.from_torch(current_indices, return_ctype=True),
-            wp.from_torch(current_num_neighbors, return_ctype=True),
-            wp.from_torch(current_points, return_ctype=True),
-            wp.from_torch(incoming_indices, return_ctype=True),
-            wp.from_torch(incoming_num_neighbors, return_ctype=True),
-            wp.from_torch(incoming_points, return_ctype=True),
-            max_neighbors,
-        ],
-        stream=stream,
-    )
+
+    if batched:
+        for b in range(B):
+            wp.launch(
+                merge_indices_and_points,
+                dim=n_points,
+                inputs=[
+                    wp.from_torch(current_indices[b], return_ctype=True),
+                    wp.from_torch(current_num_neighbors[b], return_ctype=True),
+                    wp.from_torch(current_points[b], return_ctype=True),
+                    wp.from_torch(incoming_indices[b], return_ctype=True),
+                    wp.from_torch(incoming_num_neighbors[b], return_ctype=True),
+                    wp.from_torch(incoming_points[b], return_ctype=True),
+                    max_neighbors,
+                ],
+                stream=stream,
+            )
+    else:
+        wp.launch(
+            merge_indices_and_points,
+            dim=n_points,
+            inputs=[
+                wp.from_torch(current_indices, return_ctype=True),
+                wp.from_torch(current_num_neighbors, return_ctype=True),
+                wp.from_torch(current_points, return_ctype=True),
+                wp.from_torch(incoming_indices, return_ctype=True),
+                wp.from_torch(incoming_num_neighbors, return_ctype=True),
+                wp.from_torch(incoming_points, return_ctype=True),
+                max_neighbors,
+            ],
+            stream=stream,
+        )
 
     return current_indices, current_num_neighbors, current_points
 
@@ -354,6 +402,7 @@ class RingBallQuery(torch.autograd.Function):
         mesh: Any,
         ring_config: RingPassingConfig,
         shard_sizes: list,
+        shard_dim: int,
         bq_kwargs: Any,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         r"""Forward pass for distributed ball query computation.
@@ -372,6 +421,8 @@ class RingBallQuery(torch.autograd.Function):
             Configuration for ring passing.
         shard_sizes : list
             Sizes of each shard across ranks.
+        shard_dim : int
+            The tensor dimension along which points are sharded.
         bq_kwargs : Any
             Keyword arguments for the ball query operation.
 
@@ -399,7 +450,7 @@ class RingBallQuery(torch.autograd.Function):
         # Store results from each rank to merge in the correct order
         rank_results = [None] * world_size
         # For uneven point clouds, the global stide is important:
-        strides = [s[0] for s in shard_sizes]
+        strides = [s[shard_dim] for s in shard_sizes]
 
         ctx.max_points = bq_kwargs["max_points"]
         ctx.radius = bq_kwargs["radius"]

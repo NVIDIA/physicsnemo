@@ -149,6 +149,7 @@ class Kernel(Module):
         network_type: Literal["pade", "mlp"] = "pade",
         spectral_norm: bool = False,
         use_gradient_checkpointing: bool = True,
+        self_regularization_beta: float | None = None,
     ):
         if hidden_layer_sizes is None:
             hidden_layer_sizes = [64]
@@ -182,6 +183,7 @@ class Kernel(Module):
                 denominator_order=2,
                 use_separate_mlps=False,
                 share_denominator_across_channels=False,
+                self_regularization_beta=self_regularization_beta,
             )
         elif network_type == "mlp":
             self.network = nn.Sequential(
@@ -279,82 +281,6 @@ class Kernel(Module):
             1  # r_hat
             + 2 * (n_vectors_in - 1)  # All non-r vectors
         )
-
-    def add_semantics(
-        self,
-        tensor: Float[torch.Tensor, "... total_dims"],
-        shape_for_scalars: torch.Size | None = None,
-        shape_for_vectors: torch.Size | None = None,
-    ) -> TensorDict[str, Float[torch.Tensor, "..."]]:
-        r"""Adds semantics to a tensor by splitting it into named fields.
-
-        The input tensor is assumed to have its last dimension of size equal to the sum
-        of the flattened dimensions of all output fields. This function separates the
-        tensor into its constituent fields according to the model's output field
-        definitions, maintaining the proper shapes for scalar and vector fields.
-
-        Parameters
-        ----------
-        tensor : Float[torch.Tensor, "... total_dims"]
-            Tensor with shape :math:`(\ldots, D_{total})` where :math:`D_{total}` is
-            the sum of ``prod(shape)`` for all output fields.
-        shape_for_scalars : torch.Size or None, optional
-            Shape to use for scalar fields. If ``None``, defaults to ``()``.
-        shape_for_vectors : torch.Size or None, optional
-            Shape to use for vector fields. If ``None``, defaults to
-            :math:`(D,)`.
-
-        Returns
-        -------
-        TensorDict[str, Float[torch.Tensor, "..."]]
-            TensorDict with ``batch_size`` matching ``tensor.shape[:-1]``,
-            containing the separated fields with proper shapes. Each scalar field
-            has shape :math:`(\ldots, S)` and each vector field has shape
-            :math:`(\ldots, V)` where :math:`S` and :math:`V` are determined by
-            ``shape_for_scalars`` and ``shape_for_vectors`` respectively.
-
-        Raises
-        ------
-        ValueError
-            If the size of the last dimension does not match the expected total
-            number of flattened output dimensions.
-        """
-        if shape_for_scalars is None:
-            shape_for_scalars = torch.Size([])
-        if shape_for_vectors is None:
-            shape_for_vectors = torch.Size([self.n_spatial_dims])
-
-        shapes_by_rank: dict[int, torch.Size] = {
-            0: shape_for_scalars,
-            1: shape_for_vectors,
-        }
-
-        ranks_dict = flatten_rank_spec(self.output_field_ranks)
-        output_field_shapes: dict[str, torch.Size] = {
-            field_name: shapes_by_rank[rank]
-            for field_name, rank in ranks_dict.items()
-        }
-
-        if not torch.compiler.is_compiling():
-            if not tensor.shape[-1] == sum(
-                prod(shape) for shape in output_field_shapes.values()
-            ):
-                raise ValueError(
-                    f"Expected an array with length {sum(prod(shape) for shape in output_field_shapes.values())} along dimension -1;\n"
-                    f"got {tensor.shape=!r}."
-                )
-
-        batch_size = tensor.shape[:-1]
-
-        ### Split the flat tensor into per-field views
-        fields: dict[str, torch.Tensor] = {}
-        i: int = 0
-        for field_name, shape in sorted(output_field_shapes.items()):
-            field_width = prod(shape)
-            slc = [slice(None)] * (tensor.ndim - 1) + [slice(i, i + field_width)]
-            fields[field_name] = tensor[tuple(slc)].reshape(batch_size + shape)
-            i += field_width
-        return TensorDict(fields, batch_size=batch_size)
 
     def forward(
         self,
@@ -653,32 +579,15 @@ class Kernel(Module):
                     (self.n_spatial_dims - 1) / 2
                 )
 
-            ### Add field-name semantics to the flat output channels
-            n_vectors_in = len(vectors.keys(include_nested=True, leaves_only=True))
-            result: TensorDict[str, Float[torch.Tensor, "..."]] = self.add_semantics(
-                output,
-                shape_for_scalars=torch.Size([]),
-                shape_for_vectors=torch.Size(
-                    [
-                        1  # r_hat
-                        + 2 * (n_vectors_in - 1),  # All non-r vectors
-                    ]
-                ),
-            )
-
-            ### Vector reprojection onto local rotationally-equivariant basis
+            ### Local rotationally-equivariant basis (built only when needed)
             ranks_dict = flatten_rank_spec(self.output_field_ranks)
-            vector_reprojection_needed = any(
-                rank == 1 for rank in ranks_dict.values()
-            )
+            needs_basis = any(rank == 1 for rank in ranks_dict.values())
 
-            if vector_reprojection_needed:
+            if needs_basis:
                 # Helmholtz-like decomposition: each vector field is expressed in a
                 # local basis derived from the input vectors (r_hat, source vectors,
                 # and their derived dipole/polar/spherical directions).
-                basis_vector_components: list[torch.Tensor] = []
-
-                basis_vector_components.append(vectors_hat["r"])
+                basis_vector_components: list[torch.Tensor] = [vectors_hat["r"]]
 
                 for k in sorted(
                     vectors.keys(include_nested=True, leaves_only=True),
@@ -688,7 +597,6 @@ class Kernel(Module):
                         continue
 
                     scale: torch.Tensor = vectors_log_mag[k][..., None]
-
                     basis_vector_components.append(scale * vectors_hat[k])
 
                     if self.n_spatial_dims == 2:
@@ -714,13 +622,32 @@ class Kernel(Module):
 
                 basis_vectors = torch.stack(basis_vector_components, dim=-1)
 
-                for field_name, rank in ranks_dict.items():
-                    if rank == 1:
-                        result[field_name] = torch.sum(
-                            basis_vectors
-                            * result[field_name].unsqueeze(-2),
-                            dim=-1,
-                        )
+            ### Build per-field outputs in a single pass over the flat tensor.
+            # One immutable dict + one TensorDict construction (no setitem on
+            # the result), sidestepping pytorch/tensordict#1680 under
+            # torch.compile + torch.utils.checkpoint.
+            n_vectors_in = len(vectors.keys(include_nested=True, leaves_only=True))
+            coeffs_per_vector = 1 + 2 * (n_vectors_in - 1)  # r_hat + (theta, kappa) per non-r vector
+
+            final_fields: dict[str, torch.Tensor] = {}
+            offset = 0
+            for name in sorted(ranks_dict):
+                if ranks_dict[name] == 0:
+                    final_fields[name] = output[..., offset]
+                    offset += 1
+                else:
+                    coeffs = output[..., offset : offset + coeffs_per_vector]
+                    final_fields[name] = torch.sum(
+                        basis_vectors * coeffs.unsqueeze(-2),
+                        dim=-1,
+                    )
+                    offset += coeffs_per_vector
+
+            result: TensorDict[str, Float[torch.Tensor, "..."]] = TensorDict(
+                final_fields,
+                batch_size=output.shape[:-1],
+                device=device,
+            )
 
         return result
 
@@ -801,6 +728,7 @@ class BarnesHutKernel(Kernel):
         spectral_norm: bool = False,
         use_gradient_checkpointing: bool = True,
         leaf_size: int = 1,
+        self_regularization_beta: float | None = None,
     ):
         super().__init__(
             n_spatial_dims=n_spatial_dims,
@@ -813,6 +741,7 @@ class BarnesHutKernel(Kernel):
             network_type=network_type,
             spectral_norm=spectral_norm,
             use_gradient_checkpointing=use_gradient_checkpointing,
+            self_regularization_beta=self_regularization_beta,
         )
         self.leaf_size = leaf_size
 
@@ -1575,6 +1504,7 @@ class MultiscaleKernel(Module):
         spectral_norm: bool = False,
         use_gradient_checkpointing: bool = True,
         leaf_size: int = 1,
+        self_regularization_beta: float | None = None,
     ):
         super().__init__()
 
@@ -1620,6 +1550,7 @@ class MultiscaleKernel(Module):
                     spectral_norm=spectral_norm,
                     use_gradient_checkpointing=use_gradient_checkpointing,
                     leaf_size=leaf_size,
+                    self_regularization_beta=self_regularization_beta,
                 )
                 for name in reference_length_names
             }
