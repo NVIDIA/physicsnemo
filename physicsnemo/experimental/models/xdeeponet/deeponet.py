@@ -53,7 +53,7 @@ References
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional, get_args
 
 import torch
 import torch.nn as nn
@@ -71,11 +71,14 @@ from physicsnemo.experimental.models.xdeeponet.branches import (
 from physicsnemo.models.mlp import FullyConnected
 from physicsnemo.nn import Conv2dFCLayer, Conv3dFCLayer, get_activation
 
-# All xDeepONet variants supported by both 2D and 3D cores.  Defined once
-# at module scope so the two classes share a single source of truth; each
-# class still exposes it as the ``VALID_VARIANTS`` class attribute for a
-# stable public API.
-_VALID_VARIANTS = (
+# Type aliases for the enumerated string parameters at the public API
+# surface.  Annotating ``variant`` and ``decoder_type`` with ``Literal``
+# rather than bare ``str`` lets static type checkers and IDEs flag
+# unknown values at the call site; the runtime ``.lower()``
+# normalization and ``ValueError`` guards below remain in place so
+# mixed-case strings still flow through (Python does not enforce
+# ``Literal`` at runtime).
+_VariantStr = Literal[
     "deeponet",
     "u_deeponet",
     "fourier_deeponet",
@@ -84,18 +87,26 @@ _VALID_VARIANTS = (
     "mionet",
     "fourier_mionet",
     "tno",
-)
+]
+
+_DecoderTypeStr = Literal["mlp", "conv", "temporal_projection"]
+
+# Runtime sets, derived from the ``Literal`` aliases via ``typing.get_args``
+# so the two views (static type and runtime validator) cannot drift.  Each
+# class still exposes ``_VALID_VARIANTS`` as the ``VALID_VARIANTS`` class
+# attribute for a stable public API.
+_VALID_VARIANTS = get_args(_VariantStr)
 
 # Variants that require a secondary branch (branch2).  Used by the core
 # DeepONet / DeepONet3D __init__ to validate branch2_config up-front so
 # multi-branch variants cannot silently degrade to single-branch models.
 _DUAL_BRANCH_VARIANTS = frozenset({"mionet", "fourier_mionet", "tno"})
 
-# Supported decoder types.  Used by the core DeepONet / DeepONet3D
-# __init__ to reject unknown decoder types at the API boundary instead
-# of deferring to ``_build_decoder`` and raising cryptically from deep
-# inside construction.
-_VALID_DECODER_TYPES = frozenset({"mlp", "conv", "temporal_projection"})
+# Supported decoder types -- runtime view of the ``_DecoderTypeStr``
+# alias.  Used by the core DeepONet / DeepONet3D __init__ to reject
+# unknown decoder types at the API boundary instead of deferring to
+# ``_build_decoder`` and raising cryptically from deep inside construction.
+_VALID_DECODER_TYPES = frozenset(get_args(_DecoderTypeStr))
 
 
 @dataclass
@@ -250,8 +261,9 @@ class DeepONet(Module):
 
     Parameters
     ----------
-    variant : str
+    variant : Literal["deeponet", "u_deeponet", "fourier_deeponet", "conv_deeponet", "hybrid_deeponet", "mionet", "fourier_mionet", "tno"]
         One of the eight supported variants (see :data:`VALID_VARIANTS`).
+        Mixed-case strings are accepted at runtime and lowercased.
     width : int
         Latent width.
     branch1_config : dict, optional
@@ -261,12 +273,13 @@ class DeepONet(Module):
         ``"fourier_mionet"``, and ``"tno"`` variants.
     trunk_config : dict, optional
         Trunk network configuration.
-    decoder_type : str, optional
-        One of ``"mlp"`` (queries the trunk at each target timestep and
-        applies an MLP decoder), ``"conv"`` (uses a convolutional decoder),
-        or ``"temporal_projection"`` (queries the trunk once and projects
-        the combined latent to K timesteps via a learned linear head for
-        fast autoregressive bundling).
+    decoder_type : Literal["mlp", "conv", "temporal_projection"], optional
+        Decoder choice: ``"mlp"`` queries the trunk at each target
+        timestep and applies an MLP decoder; ``"conv"`` uses a
+        convolutional decoder; ``"temporal_projection"`` queries the
+        trunk once and projects the combined latent to K timesteps via a
+        learned linear head for fast autoregressive bundling.
+        Mixed-case strings are accepted at runtime and lowercased.
     decoder_width : int, optional
         Decoder hidden width.
     decoder_layers : int, optional
@@ -320,12 +333,12 @@ class DeepONet(Module):
 
     def __init__(
         self,
-        variant: str = "u_deeponet",
+        variant: _VariantStr = "u_deeponet",
         width: int = 64,
         branch1_config: Dict[str, Any] = None,
         branch2_config: Dict[str, Any] = None,
         trunk_config: Dict[str, Any] = None,
-        decoder_type: str = "mlp",
+        decoder_type: _DecoderTypeStr = "mlp",
         decoder_width: int = 128,
         decoder_layers: int = 2,
         decoder_activation_fn: str = "relu",
@@ -642,8 +655,11 @@ class DeepONet3D(Module):
 
     Parameters
     ----------
-    variant : str
+    variant : Literal["deeponet", "u_deeponet", "fourier_deeponet", "conv_deeponet", "hybrid_deeponet", "mionet", "fourier_mionet", "tno"]
         One of the eight supported variants (see :data:`VALID_VARIANTS`).
+        Mixed-case strings are accepted at runtime and lowercased.
+    decoder_type : Literal["mlp", "conv", "temporal_projection"], optional
+        Decoder choice; see :class:`DeepONet` for semantics.
 
     Forward
     -------
@@ -684,12 +700,12 @@ class DeepONet3D(Module):
 
     def __init__(
         self,
-        variant: str = "u_deeponet",
+        variant: _VariantStr = "u_deeponet",
         width: int = 64,
         branch1_config: Dict[str, Any] = None,
         branch2_config: Dict[str, Any] = None,
         trunk_config: Dict[str, Any] = None,
-        decoder_type: str = "mlp",
+        decoder_type: _DecoderTypeStr = "mlp",
         decoder_width: int = 128,
         decoder_layers: int = 2,
         decoder_activation_fn: str = "relu",

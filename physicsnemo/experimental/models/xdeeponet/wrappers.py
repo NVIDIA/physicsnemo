@@ -44,7 +44,12 @@ from torch import Tensor
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.models.xdeeponet.deeponet import DeepONet, DeepONet3D
+from physicsnemo.experimental.models.xdeeponet.deeponet import (
+    DeepONet,
+    DeepONet3D,
+    _DecoderTypeStr,
+    _VariantStr,
+)
 from physicsnemo.experimental.models.xdeeponet.padding import (
     compute_right_pad_to_multiple,
     pad_spatial_right,
@@ -74,9 +79,10 @@ class DeepONetWrapper(Module):
     padding : int, optional
         Minimum right-side padding; the wrapper rounds up to the next
         multiple of 8.
-    variant : str, optional
+    variant : Literal["deeponet", "u_deeponet", "fourier_deeponet", "conv_deeponet", "hybrid_deeponet", "mionet", "fourier_mionet", "tno"], optional
         xDeepONet variant (see
         :attr:`~physicsnemo.experimental.models.xdeeponet.deeponet.DeepONet.VALID_VARIANTS`).
+        Mixed-case strings are accepted at runtime and lowercased.
     width : int, optional
         Latent width.
     branch1_config : dict, optional
@@ -88,8 +94,9 @@ class DeepONetWrapper(Module):
         (uses the last input channel as the time coordinate) or
         ``"grid"`` (uses the last three channels
         ``(grid_x, grid_y, grid_t)``).
-    decoder_type : str, optional
-        One of ``"mlp"``, ``"conv"``, or ``"temporal_projection"``.
+    decoder_type : Literal["mlp", "conv", "temporal_projection"], optional
+        One of ``"mlp"``, ``"conv"``, or ``"temporal_projection"``;
+        mixed-case strings are accepted and lowercased.
     decoder_width : int, optional
         Decoder hidden width.
     decoder_layers : int, optional
@@ -140,12 +147,12 @@ class DeepONetWrapper(Module):
     def __init__(
         self,
         padding: int = 8,
-        variant: str = "u_deeponet",
+        variant: _VariantStr = "u_deeponet",
         width: int = 64,
         branch1_config: Dict[str, Any] = None,
         branch2_config: Dict[str, Any] = None,
         trunk_config: Dict[str, Any] = None,
-        decoder_type: str = "mlp",
+        decoder_type: _DecoderTypeStr = "mlp",
         decoder_width: int = 128,
         decoder_layers: int = 2,
         decoder_activation_fn: str = "relu",
@@ -306,12 +313,12 @@ class DeepONet3DWrapper(Module):
     def __init__(
         self,
         padding: int = 8,
-        variant: str = "u_deeponet",
+        variant: _VariantStr = "u_deeponet",
         width: int = 64,
         branch1_config: Dict[str, Any] = None,
         branch2_config: Dict[str, Any] = None,
         trunk_config: Dict[str, Any] = None,
-        decoder_type: str = "mlp",
+        decoder_type: _DecoderTypeStr = "mlp",
         decoder_width: int = 128,
         decoder_layers: int = 2,
         decoder_activation_fn: str = "relu",
