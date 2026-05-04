@@ -852,3 +852,116 @@ def test_geotransolver_guard_config_without_any_surface_raises():
             use_te=False,
             guard_config={"buffer_size": 8},
         )
+
+
+# =============================================================================
+# Batched local-features tests (B > 1)
+# =============================================================================
+
+
+@requires_module("warp")
+def test_geotransolver_local_features_batch_gt_1(device):
+    """GeoTransolver with local features should work with batch_size > 1."""
+    torch.manual_seed(42)
+
+    model = GeoTransolver(
+        functional_dim=16,
+        out_dim=4,
+        geometry_dim=3,
+        global_dim=8,
+        n_layers=1,
+        n_hidden=32,
+        dropout=0.0,
+        n_head=4,
+        act="gelu",
+        mlp_ratio=1,
+        slice_num=4,
+        use_te=False,
+        time_input=False,
+        plus=False,
+        include_local_features=True,
+        radii=[0.25],
+        neighbors_in_radius=[8],
+        n_hidden_local=16,
+    ).to(device)
+
+    batch_size = 2
+    n_tokens = 32
+    n_geom = 50
+    n_global = 2
+
+    local_emb = torch.randn(batch_size, n_tokens, 16, device=device)
+    local_positions = local_emb[:, :, :3]
+    geometry = torch.randn(batch_size, n_geom, 3, device=device)
+    global_emb = torch.randn(batch_size, n_global, 8, device=device)
+
+    outputs = model(
+        local_emb,
+        local_positions=local_positions,
+        global_embedding=global_emb,
+        geometry=geometry,
+    )
+
+    assert isinstance(outputs, torch.Tensor)
+    assert outputs.shape == (batch_size, n_tokens, 4)
+    assert not torch.isnan(outputs).any()
+
+
+@requires_module("warp")
+def test_geotransolver_local_features_compile(device):
+    """GeoTransolver with local features should be compilable (max_points path)."""
+    if "cuda" in device:
+        pytest.skip("Skipping GeoTransolver torch.compile on CUDA")
+    if not hasattr(torch, "compile"):
+        pytest.skip("torch.compile not available")
+
+    torch.manual_seed(42)
+
+    model = GeoTransolver(
+        functional_dim=16,
+        out_dim=4,
+        geometry_dim=3,
+        global_dim=8,
+        n_layers=1,
+        n_hidden=32,
+        dropout=0.0,
+        n_head=4,
+        act="gelu",
+        mlp_ratio=1,
+        slice_num=4,
+        use_te=False,
+        time_input=False,
+        plus=False,
+        include_local_features=True,
+        radii=[0.25],
+        neighbors_in_radius=[8],
+        n_hidden_local=16,
+    ).to(device)
+
+    batch_size = 2
+    n_tokens = 32
+    n_geom = 50
+    n_global = 2
+
+    local_emb = torch.randn(batch_size, n_tokens, 16, device=device)
+    local_positions = local_emb[:, :, :3]
+    geometry = torch.randn(batch_size, n_geom, 3, device=device)
+    global_emb = torch.randn(batch_size, n_global, 8, device=device)
+
+    eager_out = model(
+        local_emb,
+        local_positions=local_positions,
+        global_embedding=global_emb,
+        geometry=geometry,
+    )
+
+    compiled_model = torch.compile(model)
+    compiled_out = compiled_model(
+        local_emb,
+        local_positions=local_positions,
+        global_embedding=global_emb,
+        geometry=geometry,
+    )
+
+    assert compiled_out.shape == eager_out.shape
+    assert not torch.isnan(compiled_out).any()
