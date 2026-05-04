@@ -17,7 +17,7 @@
 """RTE data-source layer: zarr reader, PyTorch Dataset, and stats loaders.
 
 This module is the bottom of the data dependency tree. It provides the
-low-level Zarr access (``ZarrDataReader``), a thin file/timestep-indexed
+low-level Zarr access (``ZarrDataReader``), a thin file-indexed
 ``Dataset`` wrapper (``RTEBaseDataset``), and helpers for reading the
 RTE-specific YAML statistics files into PhysicsNeMo ``Normalize`` kwargs.
 """
@@ -50,10 +50,10 @@ from torch.utils.data import Dataset
 # ``load()``. The TensorDict carries both the tensor fields and non-tensor
 # metadata (``metadata``, ``filename``) via ``NonTensorData`` entries.
 #
-# RTE-specific kwargs (``timestep_slice``, ``timestep_indices``,
-# ``load_flux``, etc.) live on the filename-indexed ``load(filename, ...)``
-# entry. The int-indexed ``_load_sample(index)`` required by the PhysicsNeMo
-# ``Reader`` contract uses defaults (load everything, no slicing).
+# RTE-specific kwargs (``load_flux``, optional field loading, etc.) live on the
+# filename-indexed ``load(filename, ...)`` entry. The int-indexed
+# ``_load_sample(index)`` required by the PhysicsNeMo ``Reader`` contract uses
+# defaults.
 
 
 _TENSOR_FIELD_NAMES = (
@@ -83,8 +83,8 @@ class ZarrDataReader(Reader):
     Inherits from ``physicsnemo.datapipes.readers.base.Reader`` so the reader
     plugs into any PhysicsNeMo-native pipeline via ``__getitem__(int)`` →
     ``(TensorDict, metadata_dict)``. RTE pipelines still reach it via
-    ``load(filename, **kwargs)`` for the fine-grained timestep-selection
-    controls the training data loaders rely on.
+    ``load(filename, **kwargs)`` for the steady-state loader controls the
+    training data loaders rely on.
 
     Example:
         >>> reader = ZarrDataReader("/path/to/zarr_stores/lattice")
@@ -195,8 +195,6 @@ class ZarrDataReader(Reader):
         load_geometric_features: bool = True,
         load_sim_times: bool = True,
         load_sigma_fields: bool = True,
-        timestep_slice: Optional[slice] = None,
-        timestep_indices: Optional[List[int]] = None,
         load_flux: bool = True,
     ) -> TensorDict:
         """Load a zarr store into a ``TensorDict``.
@@ -217,41 +215,34 @@ class ZarrDataReader(Reader):
 
         z = zarr.open(str(filepath), mode="r")
 
-        # ------- flux + timesteps (honors load_flux / timestep_*) -------
+        # ------- flux + timesteps (steady-state first -> final snapshots) -------
         if not load_flux:
-            num_cells = z["scalar_flux"].shape[1]
+            flux_shape = z["scalar_flux"].shape
+            num_cells = flux_shape[-1]
             scalar_flux = np.zeros((1, num_cells), dtype=np.float32)
             timesteps_array = np.array([0])
             sim_times = None
-        elif timestep_indices is not None:
-            num_total_timesteps = z["scalar_flux"].shape[0]
-            resolved = [
-                idx if idx >= 0 else num_total_timesteps + idx
-                for idx in timestep_indices
-            ]
-            scalar_flux = np.stack(
-                [np.array(z["scalar_flux"][idx], dtype=np.float32) for idx in resolved],
-                axis=0,
-            )
-            timesteps_array = np.array([z["timesteps"][idx] for idx in resolved])
+        else:
+            flux_array = z["scalar_flux"]
+            if len(flux_array.shape) == 1:
+                scalar_flux = np.array(flux_array, dtype=np.float32)[None, :]
+                timesteps_array = np.array([0])
+                resolved = [0]
+            else:
+                num_timesteps = flux_array.shape[0]
+                resolved = [0] if num_timesteps == 1 else [0, num_timesteps - 1]
+                scalar_flux = np.stack(
+                    [
+                        np.array(flux_array[idx], dtype=np.float32)
+                        for idx in resolved
+                    ],
+                    axis=0,
+                )
+                timesteps_array = np.array([z["timesteps"][idx] for idx in resolved])
             if load_sim_times and "sim_times" in z:
                 sim_times = np.array(
                     [z["sim_times"][idx] for idx in resolved], dtype=np.float32
                 )
-            else:
-                sim_times = None
-        elif timestep_slice is not None:
-            scalar_flux = np.array(z["scalar_flux"][timestep_slice], dtype=np.float32)
-            timesteps_array = np.array(z["timesteps"][timestep_slice])
-            if load_sim_times and "sim_times" in z:
-                sim_times = np.array(z["sim_times"][timestep_slice], dtype=np.float32)
-            else:
-                sim_times = None
-        else:
-            scalar_flux = np.array(z["scalar_flux"], dtype=np.float32)
-            timesteps_array = np.array(z["timesteps"])
-            if load_sim_times and "sim_times" in z:
-                sim_times = np.array(z["sim_times"], dtype=np.float32)
             else:
                 sim_times = None
 
@@ -344,8 +335,9 @@ class ZarrDataReader(Reader):
         z = zarr.open(str(filepath), mode="r")
 
         metadata = dict(z.attrs) if hasattr(z, "attrs") else {}
-        metadata["num_timesteps"] = z["scalar_flux"].shape[0]
-        metadata["num_cells"] = z["scalar_flux"].shape[1]
+        flux_shape = z["scalar_flux"].shape
+        metadata["num_timesteps"] = flux_shape[0] if len(flux_shape) > 1 else 1
+        metadata["num_cells"] = flux_shape[-1]
         metadata["has_geometric_features"] = "geometric_features" in z
         metadata["has_material_properties"] = "material_properties" in z
         metadata["has_sim_times"] = "sim_times" in z
@@ -370,7 +362,7 @@ class ZarrDataReader(Reader):
 
         nc_centers = z["cell_centers"].shape[0]
         nc_areas = z["cell_areas"].shape[0]
-        nc_flux = z["scalar_flux"].shape[1]
+        nc_flux = z["scalar_flux"].shape[-1]
         if nc_centers != nc_flux:
             raise ValueError(
                 f"Shape mismatch: cell_centers has {nc_centers} cells, "
@@ -390,19 +382,16 @@ class ZarrDataReader(Reader):
 #
 # Minimal PyTorch ``Dataset`` that wraps ``ZarrDataReader`` and produces
 # per-sample ``TensorDict`` outputs. The reader returns TensorDicts directly;
-# this layer only glues together file/timestep selection, the preload cache,
-# and per-sample metadata enrichment (filename, ``max_timestep``,
-# ``max_sim_time``, ``_timestep_idx``).
+# this layer only glues together file selection, the preload cache, and
+# per-sample metadata enrichment.
 
 
 class RTEBaseDataset(Dataset):
-    """File- and timestep-indexed dataset over a directory of zarr stores.
+    """File-indexed steady-state dataset over a directory of zarr stores.
 
     Output of ``__getitem__`` is a ``TensorDict`` with the tensor fields the
     reader returned, plus ``filename`` (``NonTensorData``), an updated
-    ``metadata`` ``NonTensorData`` entry (``max_timestep`` /
-    ``max_sim_time``), and optionally ``_timestep_idx`` when
-    ``expand_timesteps=True``.
+    ``metadata`` ``NonTensorData`` entry (``max_timestep`` / ``max_sim_time``).
     """
 
     def __init__(
@@ -411,31 +400,21 @@ class RTEBaseDataset(Dataset):
         case_type: Optional[str] = None,
         phase: str = "train",
         split_file: Optional[Path | str] = None,
-        train_split: float = 0.7,
-        val_split: float = 0.15,
         seed: Optional[int] = None,
         load_material_properties: bool = True,
         load_geometric_features: bool = True,
         load_sigma_fields: bool = True,
-        expand_timesteps: bool = True,
-        temporal_stride: int = 1,
         cache_static_arrays: bool = True,
         max_cache_size: int = 200,
-        task: str = "next_step",
     ):
         self.data_path = Path(data_path)
         self.case_type = case_type
         self.phase = phase
         self.split_file = Path(split_file) if split_file else None
-        self.train_split = train_split
-        self.val_split = val_split
         self.seed = seed
         self.load_material_properties = load_material_properties
         self.load_geometric_features = load_geometric_features
         self.load_sigma_fields = load_sigma_fields
-        self.expand_timesteps = expand_timesteps
-        self.temporal_stride = temporal_stride
-        self.task = task
 
         self.reader = ZarrDataReader(
             data_path,
@@ -444,28 +423,22 @@ class RTEBaseDataset(Dataset):
             max_cache_size=max_cache_size,
         )
 
-        if self.split_file:
-            self.filenames = self._load_split_from_file()
-        else:
-            all_filenames = self.reader.get_filenames()
-            if not all_filenames:
-                raise ValueError(f"No zarr stores found in {data_path}")
-            self.filenames = self._split_filenames(all_filenames)
+        if self.split_file is None:
+            raise ValueError(
+                "split_file is required. RTE datasets must use explicit "
+                "train/val/test splits from a JSON split file."
+            )
+        self.filenames = self._load_split_from_file()
 
         if not self.filenames:
             raise ValueError(f"No files in {phase} split")
 
-        self.timestep_index_map: Optional[List[tuple]] = None
-        if self.expand_timesteps:
-            self._build_timestep_index()
-
         # In-memory cache for flux data (populated by preload_to_memory when
-        # ``task == 'steady_state'``). Values are ``dict`` mirrors of the
-        # cached tensor entries.
+        # enabled). Values are ``dict`` mirrors of the cached tensor entries.
         self._memory_cache: Optional[Dict[str, Dict[str, torch.Tensor]]] = None
 
     # ------------------------------------------------------------------
-    # Split machinery (unchanged semantics)
+    # Split machinery
     # ------------------------------------------------------------------
 
     def _load_split_from_file(self) -> List[str]:
@@ -483,93 +456,36 @@ class RTEBaseDataset(Dataset):
         filenames = split_data["splits"][self.phase]
         return [f if f.endswith(".zarr") else f + ".zarr" for f in filenames]
 
-    def _split_filenames(self, filenames: List[str]) -> List[str]:
-        n = len(filenames)
-        indices = np.arange(n)
-        if self.seed is not None:
-            np.random.default_rng(self.seed).shuffle(indices)
-        train_end = int(n * self.train_split)
-        val_end = train_end + int(n * self.val_split)
-        if self.phase == "train":
-            sel = indices[:train_end]
-        elif self.phase == "val":
-            sel = indices[train_end:val_end]
-        elif self.phase == "test":
-            sel = indices[val_end:]
-        else:
-            raise ValueError(f"Invalid phase: {self.phase}")
-        return [filenames[i] for i in sel]
-
-    def _build_timestep_index(self):
-        self.timestep_index_map = []
-        for file_idx, filename in enumerate(self.filenames):
-            meta = self.reader.get_metadata(filename)
-            num_timesteps = meta["num_timesteps"]
-            max_start = num_timesteps - self.temporal_stride
-            if max_start > 0:
-                for t in range(max_start):
-                    self.timestep_index_map.append((file_idx, t))
-
-        num_sims = len(self.filenames)
-        num_pairs = len(self.timestep_index_map)
-        avg = num_pairs / num_sims if num_sims > 0 else 0
-        print(f"Timestep expansion ({self.phase}):")
-        print(f"  {num_sims} simulations → {num_pairs} timestep pairs")
-        print(f"  Average {avg:.1f} pairs per simulation")
-        print(f"  Stride: {self.temporal_stride}")
-
-    # ------------------------------------------------------------------
-    # Preload cache
-    # ------------------------------------------------------------------
-
     def preload_to_memory(self, verbose: bool = True, num_workers: int = 8) -> dict:
-        """Preload static arrays (and optionally flux for steady_state)."""
+        """Preload static arrays and first/final flux snapshots."""
         import time
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         num_files = len(self.filenames)
-        preload_flux = self.task == "steady_state"
+        self._memory_cache = {}
 
         if verbose:
-            if preload_flux:
-                print(
-                    f"\nPreloading {num_files} files with flux (steady_state mode)..."
-                )
-                print("  Loading ONLY first and last timesteps (2 per file)")
-            else:
-                print(f"\nPreloading {num_files} files into memory...")
+            print(f"\nPreloading {num_files} files with steady-state flux...")
+            print("  Loading ONLY first and final snapshots (2 per file)")
             print(f"  Parallel I/O workers: {num_workers}")
 
         start = time.perf_counter()
-        if preload_flux:
-            self._memory_cache = {}
 
         def load_one(filename: str):
-            if preload_flux:
-                td = self.reader.load(
-                    filename,
-                    load_material_properties=self.load_material_properties,
-                    load_geometric_features=self.load_geometric_features,
-                    load_sim_times=True,
-                    load_sigma_fields=self.load_sigma_fields,
-                    timestep_indices=[0, -1],
-                )
-                entry: Dict[str, torch.Tensor] = {
-                    "scalar_flux": td["scalar_flux"].clone(),
-                    "timesteps": td["timesteps"].clone(),
-                }
-                if "sim_times" in td:
-                    entry["sim_times"] = td["sim_times"].clone()
-                return filename, td, entry
             td = self.reader.load(
                 filename,
                 load_material_properties=self.load_material_properties,
                 load_geometric_features=self.load_geometric_features,
                 load_sim_times=True,
                 load_sigma_fields=self.load_sigma_fields,
-                timestep_slice=slice(0, 2),
             )
-            return filename, td, None
+            entry: Dict[str, torch.Tensor] = {
+                "scalar_flux": td["scalar_flux"].clone(),
+                "timesteps": td["timesteps"].clone(),
+            }
+            if "sim_times" in td:
+                entry["sim_times"] = td["sim_times"].clone()
+            return filename, td, entry
 
         completed = 0
         first_logged = False
@@ -578,8 +494,7 @@ class RTEBaseDataset(Dataset):
             for fut in as_completed(futures):
                 filename, td, entry = fut.result()
                 completed += 1
-                if entry is not None:
-                    self._memory_cache[filename] = entry
+                self._memory_cache[filename] = entry
                 if verbose and not first_logged:
                     n_cells = td["coordinates"].shape[0]
                     print(f"\n  First file diagnostics ({filename}):")
@@ -607,27 +522,26 @@ class RTEBaseDataset(Dataset):
             print(f"  Static arrays cache: {cache_stats['cache_size']} files")
             print(f"  Cache hits: {cache_stats['cache_hits']}")
             print(f"  Cache misses: {cache_stats['cache_misses']}")
-            if preload_flux:
-                flux_mem = sum(
-                    cached["scalar_flux"].element_size() * cached["scalar_flux"].numel()
-                    + cached["timesteps"].element_size() * cached["timesteps"].numel()
-                    + (
-                        cached["sim_times"].element_size() * cached["sim_times"].numel()
-                        if "sim_times" in cached
-                        else 0
-                    )
-                    for cached in self._memory_cache.values()
+            flux_mem = sum(
+                cached["scalar_flux"].element_size() * cached["scalar_flux"].numel()
+                + cached["timesteps"].element_size() * cached["timesteps"].numel()
+                + (
+                    cached["sim_times"].element_size() * cached["sim_times"].numel()
+                    if "sim_times" in cached
+                    else 0
                 )
-                print(
-                    f"  Flux cache: {len(self._memory_cache)} simulations "
-                    f"({flux_mem / 1024**2:.1f} MB)"
-                )
+                for cached in self._memory_cache.values()
+            )
+            print(
+                f"  Flux cache: {len(self._memory_cache)} simulations "
+                f"({flux_mem / 1024**2:.1f} MB)"
+            )
 
         return {
             "num_files": num_files,
             "elapsed_seconds": elapsed,
             "cache_stats": cache_stats,
-            "flux_cached": preload_flux,
+            "flux_cached": True,
         }
 
     # ------------------------------------------------------------------
@@ -635,25 +549,10 @@ class RTEBaseDataset(Dataset):
     # ------------------------------------------------------------------
 
     def __len__(self) -> int:
-        if self.expand_timesteps and self.timestep_index_map is not None:
-            return len(self.timestep_index_map)
         return len(self.filenames)
 
     def __getitem__(self, idx: int) -> TensorDict:
-        timestep_slice = None
-        timestep_indices = None
-        timestep_idx = None
-
-        if self.expand_timesteps and self.timestep_index_map is not None:
-            file_idx, timestep_idx = self.timestep_index_map[idx]
-            filename = self.filenames[file_idx]
-            num_timesteps_needed = self.temporal_stride + 1
-            timestep_slice = slice(timestep_idx, timestep_idx + num_timesteps_needed)
-        elif self.task == "steady_state":
-            filename = self.filenames[idx]
-            timestep_indices = [0, -1]
-        else:
-            filename = self.filenames[idx]
+        filename = self.filenames[idx]
 
         if self._memory_cache is not None and filename in self._memory_cache:
             cached = self._memory_cache[filename]
@@ -676,28 +575,20 @@ class RTEBaseDataset(Dataset):
                 load_geometric_features=self.load_geometric_features,
                 load_sim_times=True,
                 load_sigma_fields=self.load_sigma_fields,
-                timestep_slice=timestep_slice,
-                timestep_indices=timestep_indices,
             )
 
         # Enrich metadata with the per-sample info transforms rely on.
         # ``td["metadata"]`` is a NonTensorData dict of zarr attrs; extend it.
         attrs = dict(td["metadata"]) if "metadata" in td else {}
-        if timestep_slice is not None or timestep_indices is not None:
-            file_meta = self.reader.get_metadata(filename)
-            attrs["max_timestep"] = file_meta["num_timesteps"] - 1
-            attrs["max_sim_time"] = file_meta.get("max_sim_time")
+        file_meta = self.reader.get_metadata(filename)
+        attrs["max_timestep"] = file_meta["num_timesteps"] - 1
+        attrs["max_sim_time"] = file_meta.get("max_sim_time")
+        if "sim_times" in td and td["sim_times"].numel() > 0:
+            attrs["sim_time"] = float(td["sim_times"][-1].item())
         else:
-            attrs["max_timestep"] = td["scalar_flux"].shape[0] - 1
-            if "sim_times" in td and td["sim_times"].numel() > 0:
-                attrs["max_sim_time"] = float(td["sim_times"][-1].item())
-            else:
-                attrs["max_sim_time"] = None
+            attrs["sim_time"] = None
         td.set_non_tensor("metadata", attrs)
         td.set_non_tensor("filename", filename)
-
-        if timestep_idx is not None:
-            td.set_non_tensor("_timestep_idx", timestep_idx)
 
         return td
 

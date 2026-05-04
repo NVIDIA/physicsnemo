@@ -3,15 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 input_dir: ${case.data_path}
-task: steady_state
 flux_normalization_stats_file: ${case.data_root}/stats/hohlraum_flux_stats.yaml
 flux_clip_threshold: 1.0e-8
-expand_timesteps: false
 cache_static_arrays: true
 max_cache_size: -1
 preload_data: true
-train_split: 0.8
-val_split: 0.1
 
 use_fourier_features: true
 fourier_features:

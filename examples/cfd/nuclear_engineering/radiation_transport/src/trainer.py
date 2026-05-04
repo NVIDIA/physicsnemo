@@ -295,7 +295,7 @@ def setup_training_environment(
     Returns:
         ``(dist, logger)``.
     """
-    DistributedManager.initialize()
+    _initialize_distributed_manager()
     dist = DistributedManager()
 
     synchronize_output_directory(cfg, dist)
@@ -312,6 +312,34 @@ def setup_training_environment(
         logger.info(f"\nConfiguration:\n{OmegaConf.to_yaml(cfg, sort_keys=True)}\n")
 
     return dist, logger
+
+
+def _initialize_distributed_manager() -> None:
+    """Initialize distributed state without misreading an interactive SLURM shell.
+
+    PhysicsNeMo's default initializer auto-detects SLURM variables. In an
+    allocated shell, plain ``python src/train.py`` can inherit those variables
+    even though only one Python process was launched, causing process-group
+    setup to wait for ranks that do not exist. For this example, DDP should be
+    entered via ``torchrun`` (or an explicit PhysicsNeMo init method); otherwise
+    run as a normal single process.
+    """
+    if DistributedManager.is_initialized():
+        return
+
+    explicit_method = os.getenv("PHYSICSNEMO_DISTRIBUTED_INITIALIZATION_METHOD")
+    torchrun_env = os.getenv("RANK") is not None and os.getenv("WORLD_SIZE") is not None
+    openmpi_env = os.getenv("OMPI_COMM_WORLD_RANK") is not None
+
+    if explicit_method or torchrun_env or openmpi_env:
+        DistributedManager.initialize()
+        return
+
+    DistributedManager._shared_state["_is_initialized"] = True
+    dist = DistributedManager()
+    dist._initialization_method = "single"
+    if torch.cuda.is_available():
+        torch.cuda.set_device(dist.device)
 
 
 def wrap_ddp(

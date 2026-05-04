@@ -47,7 +47,7 @@ import argparse
 import pathlib
 import sys
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 import numpy as np
 import torch
@@ -63,9 +63,9 @@ from loader import RTEDataPipe  # noqa: E402
 from material import MaterialPropertyExtractor  # noqa: E402
 from transforms import (  # noqa: E402
     Compose,
-    NextStepSampler,
     RTEFluxLogClip,
     SpatialSampler,
+    SteadyStateSampler,
 )
 
 
@@ -85,9 +85,8 @@ def compute_flux_statistics(
     data_path: Path,
     case_type: str,
     output_file: Path,
-    split_file: Optional[Path] = None,
+    split_file: Path,
     clip_threshold: float = 1e-8,
-    steady_state: bool = False,
 ) -> Dict[str, float]:
     """Compute flux normalization statistics from the training split.
 
@@ -97,19 +96,12 @@ def compute_flux_statistics(
         output_file: destination YAML path.
         split_file: split JSON used to select the training split.
         clip_threshold: minimum flux value before ``log10``.
-        steady_state: when ``True``, only use the first and last timesteps
-            of each simulation.
-
     Returns:
         The statistics dict written to ``output_file``.
     """
-    mode_label = (
-        "steady state (first + last timestep)" if steady_state else "full trajectory"
-    )
-    print(f"Computing flux statistics for {case_type} [{mode_label}]")
+    print(f"Computing flux statistics for {case_type} [steady state]")
     print(f"Data path: {data_path}")
-    if split_file is not None:
-        print(f"Split file: {split_file}")
+    print(f"Split file: {split_file}")
 
     dataset = RTEBaseDataset(
         data_path=data_path,
@@ -118,8 +110,6 @@ def compute_flux_statistics(
         split_file=split_file,
         load_material_properties=False,
         load_geometric_features=False,
-        expand_timesteps=False,
-        task="steady_state" if steady_state else "next_step",
     )
 
     print(f"\nProcessing {len(dataset)} training simulations...")
@@ -136,10 +126,6 @@ def compute_flux_statistics(
         if isinstance(flux, torch.Tensor):
             flux = flux.detach().cpu().numpy()
         flux = np.asarray(flux)
-
-        if steady_state:
-            # select only first and last timesteps: (T, N) -> (2, N)
-            flux = np.stack([flux[0], flux[-1]], axis=0)
 
         # match training-pipeline preprocessing
         flux = np.clip(flux, clip_threshold, None)
@@ -170,8 +156,7 @@ def compute_flux_statistics(
         "case_type": case_type,
     }
 
-    if steady_state:
-        stats["note"] = "computed from first and last timesteps only (steady state)"
+    stats["note"] = "computed from first and final snapshots only (steady state)"
 
     output_file = Path(output_file)
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -195,14 +180,14 @@ def compute_flux_statistics(
 #
 # Walks the training split through a minimal transform pipeline:
 #
-#     RTEFluxLogClip -> NextStepSampler -> MaterialPropertyExtractor -> SpatialSampler
+#     RTEFluxLogClip -> SteadyStateSampler -> MaterialPropertyExtractor -> SpatialSampler
 #
 # The flux log-clip step is required because the dataset reader produces a
-# trajectory tensor; the temporal sampler picks one (t, t+1) pair per
-# simulation, the material extractor produces ``physical_properties`` with
-# shape (N, 4), and ``SpatialSampler`` subsamples to a fixed point count for
-# speed. Per-property stats are written in the schema the existing
-# ``load_material_stats`` reader expects.
+# steady-state flux tensor; the sampler picks the first/final pair, the
+# material extractor produces ``physical_properties`` with shape (N, 4), and
+# ``SpatialSampler`` subsamples to a fixed point count for speed. Per-property
+# stats are written in the schema the existing ``load_material_stats`` reader
+# expects.
 
 
 def compute_material_statistics(
@@ -228,7 +213,7 @@ def compute_material_statistics(
         clip_threshold: flux clip threshold used by the flux transform.
         num_spatial_points: number of points per simulation drawn by
             ``SpatialSampler``.
-        seed: RNG seed for the temporal and spatial samplers.
+        seed: RNG seed for spatial sampling.
 
     Returns:
         The nested statistics dict written to ``output_file``.
@@ -236,8 +221,7 @@ def compute_material_statistics(
     print(f"\nComputing material statistics for {case_type}")
     print(f"Data path: {data_path}")
     print(f"Flux stats: {flux_stats_file}")
-    if split_file is not None:
-        print(f"Split file: {split_file}")
+    print(f"Split file: {split_file}")
 
     if not Path(flux_stats_file).exists():
         raise FileNotFoundError(
@@ -251,7 +235,7 @@ def compute_material_statistics(
                 normalization_stats_file=flux_stats_file,
                 clip_threshold=clip_threshold,
             ),
-            NextStepSampler(stride=1, seed=seed),
+            SteadyStateSampler(),
             MaterialPropertyExtractor(case_type=case_type),
             SpatialSampler(num_points=num_spatial_points, seed=seed),
         ]
@@ -265,7 +249,6 @@ def compute_material_statistics(
         case_type=case_type,
         phase="train",
         split_file=split_file,
-        expand_timesteps=False,
     )
     print(f"Dataset loaded: {len(dataset)} samples")
 
@@ -382,11 +365,6 @@ def _parse_args() -> argparse.Namespace:
         help="Flux clip threshold used during log-transform (default: 1e-8).",
     )
     parser.add_argument(
-        "--steady_state",
-        action="store_true",
-        help="Use only first and last timesteps for the flux statistics.",
-    )
-    parser.add_argument(
         "--num_spatial_points",
         type=int,
         default=2048,
@@ -420,7 +398,6 @@ def main() -> int:
         output_file=flux_output,
         split_file=args.split_file,
         clip_threshold=args.clip_threshold,
-        steady_state=args.steady_state,
     )
 
     compute_material_statistics(

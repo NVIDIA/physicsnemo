@@ -41,8 +41,7 @@ from __future__ import annotations
 # =========================================================================
 
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Tuple, Type, Union
-import warnings
+from typing import Any, Dict, Mapping, Optional, Type, Union
 
 import numpy as np
 import torch
@@ -408,12 +407,11 @@ class StandardScaler(Transform):
 
 
 # =========================================================================
-# Sampling (spatial + temporal)
+# Sampling (spatial + steady-state)
 # =========================================================================
 #
 # ``SpatialSampler`` randomly subsamples / pads point clouds to a target size.
-# ``TemporalSampler`` and its subclasses define the prediction task structure
-# (next-step vs. steady-state).
+# ``SteadyStateSampler`` extracts the fixed initial->final flux mapping.
 
 
 @_register_local("RTESpatialSampler")
@@ -526,105 +524,33 @@ class SpatialSampler(Transform):
         return f"num_points={self.num_points}"
 
 
-class TemporalSampler(Transform):
-    """Base class for temporal sampling strategies.
-
-    Subclasses implement different prediction tasks:
-    - NextStepSampler: Predict t+stride from t
-    - SteadyStateSampler: Predict t=T from t=0
-    """
-
-    def select_time_indices(
-        self, num_timesteps: int, rng: np.random.Generator
-    ) -> Tuple[int, int]:
-        raise NotImplementedError
-
-    def __call__(self, data: TensorDict) -> TensorDict:
-        """Apply temporal sampling; extracts input/target flux slices."""
-        num_timesteps = data["scalar_flux"].shape[0]
-
-        if "_timestep_idx" in data:
-            original_idx = int(data["_timestep_idx"])
-
-            metadata = td_get(data, "metadata", default={}) or {}
-            max_timestep = (
-                metadata.get("max_timestep") if isinstance(metadata, dict) else None
-            )
-            if max_timestep is not None:
-                selective_loading_used = (max_timestep + 1) != num_timesteps
-            else:
-                selective_loading_used = original_idx >= num_timesteps
-
-            if selective_loading_used:
-                input_idx = 0
-                target_idx = min(self.stride, num_timesteps - 1)
-                data.set_non_tensor("timestep_input", original_idx)
-                data.set_non_tensor("timestep_target", original_idx + self.stride)
-            else:
-                input_idx = original_idx
-                target_idx = min(original_idx + self.stride, num_timesteps - 1)
-                data.set_non_tensor("timestep_input", input_idx)
-                data.set_non_tensor("timestep_target", target_idx)
-
-            del data["_timestep_idx"]
-        else:
-            rng = np.random.default_rng()
-            input_idx, target_idx = self.select_time_indices(num_timesteps, rng)
-            data.set_non_tensor("timestep_input", int(input_idx))
-            data.set_non_tensor("timestep_target", int(target_idx))
-
-        flux_all = data["scalar_flux"]
-        data["flux_input"] = flux_all[input_idx].clone()
-        data["flux_target"] = flux_all[target_idx].clone()
-        return data
-
-
-@_register_local("RTENextStepSampler")
-class NextStepSampler(TemporalSampler):
-    """Sample for next-step prediction task.
-
-    Selects random timestep t and predicts t+stride.
-    """
-
-    def __init__(self, stride: int = 1, seed: Optional[int] = None):
-        super().__init__()
-        self.stride = stride
-        self.seed = seed
-        self.rng = np.random.default_rng(seed) if seed is not None else None
-
-    def select_time_indices(
-        self, num_timesteps: int, rng: np.random.Generator
-    ) -> Tuple[int, int]:
-        if self.rng is not None:
-            rng = self.rng
-
-        max_start = num_timesteps - self.stride
-        if max_start <= 0:
-            warnings.warn(
-                "Not enough timesteps to sample for next-step prediction. "
-                "Using first and last timestep."
-            )
-            return 0, num_timesteps - 1
-
-        input_idx = rng.integers(0, max_start)
-        target_idx = input_idx + self.stride
-        return input_idx, target_idx
-
-    def extra_repr(self) -> str:
-        return f"stride={self.stride}"
-
-
 @_register_local("RTESteadyStateSampler")
-class SteadyStateSampler(TemporalSampler):
-    """Sample for steady state prediction task (t=0 input, t=T target)."""
+class SteadyStateSampler(Transform):
+    """Extract the fixed steady-state mapping: first flux -> final flux."""
 
     def __init__(self):
         super().__init__()
 
-    def select_time_indices(
-        self, num_timesteps: int, rng: np.random.Generator
-    ) -> Tuple[int, int]:
-        return 0, num_timesteps - 1
+    def __call__(self, data: TensorDict) -> TensorDict:
+        flux_all = data["scalar_flux"]
+        if flux_all.shape[0] == 0:
+            raise ValueError("scalar_flux must contain at least one snapshot")
+
+        input_idx = 0
+        target_idx = flux_all.shape[0] - 1
+        metadata = td_get(data, "metadata", default={}) or {}
+        max_timestep = (
+            metadata.get("max_timestep") if isinstance(metadata, dict) else None
+        )
+
+        data["flux_input"] = flux_all[input_idx].clone()
+        data["flux_target"] = flux_all[target_idx].clone()
+        data.set_non_tensor("timestep_input", 0)
+        data.set_non_tensor(
+            "timestep_target",
+            int(max_timestep) if max_timestep is not None else int(target_idx),
+        )
+        return data
 
 
 # =========================================================================
@@ -738,8 +664,6 @@ __all__ = [
     "StandardScaler",
     # Sampling
     "SpatialSampler",
-    "TemporalSampler",
-    "NextStepSampler",
     "SteadyStateSampler",
     # QoI
     "LoadGroundTruthQoI",

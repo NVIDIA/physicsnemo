@@ -3,15 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 input_dir: ${case.data_path}
-task: steady_state
 flux_normalization_stats_file: ${case.data_root}/stats/lattice_flux_stats.yaml
 flux_clip_threshold: 1.0e-8
-expand_timesteps: false
 cache_static_arrays: true
 max_cache_size: -1
 preload_data: true
-train_split: 0.8
-val_split: 0.1
 
 # Fourier features for coordinates (adds 2 * coord_dims * num_frequencies features).
 # Default: 3 freq * 2 coords * 2 (sin/cos) = 12 extra features, on top of 3 raw coords.

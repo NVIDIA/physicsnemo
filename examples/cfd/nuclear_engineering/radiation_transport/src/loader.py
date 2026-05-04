@@ -79,7 +79,6 @@ from transforms import (
     TRANSFORM_REGISTRY,
     FourierFeatures,
     LoadGroundTruthQoI,
-    NextStepSampler,
     RTEBackupCoords,
     RTEFluxLogClip,
     SpatialSampler,
@@ -145,7 +144,6 @@ class TransolverAdapter(ModelAdapter):
     * ``embedding`` — material properties ``[sigma_a, sigma_s, sigma_t, Q]``
       (or just the first three when ``include_q_in_embedding=False``).
     * ``flux_target`` — target flux to predict.
-    * ``time`` — normalized timestep (always present).
 
     Extra fields (``coordinates_unnormalized``, ``material_labels``,
     ``cell_areas``, ``sigma_t``, ``sigma_s``, ``sim_time``, ``ground_truth_qoi``,
@@ -214,38 +212,6 @@ class TransolverAdapter(ModelAdapter):
                 flux_tgt = flux_tgt.unsqueeze(0)
             result["flux_target"] = flux_tgt
 
-        metadata = sample.get("metadata", {}) or {}
-        max_timestep = metadata.get("max_timestep") if isinstance(metadata, dict) else None
-        max_sim_time = metadata.get("max_sim_time") if isinstance(metadata, dict) else None
-        timestep_target = sample.get("timestep_target")
-
-        if "sim_times" in sample and max_sim_time is not None:
-            sim_times = sample["sim_times"]
-            sim_time_target = (
-                float(sim_times[-1].item())
-                if isinstance(sim_times, torch.Tensor)
-                else float(sim_times[-1])
-            )
-            time_normalized = sim_time_target / float(max_sim_time)
-            time_tensor = torch.tensor([[time_normalized]], dtype=torch.float32)
-            if not self.add_batch_dim:
-                time_tensor = time_tensor.squeeze(0)
-            result["time"] = time_tensor
-        elif timestep_target is not None and max_timestep is not None:
-            if float(max_timestep) == 0:
-                time_normalized = 1.0
-            else:
-                time_normalized = float(timestep_target) / float(max_timestep)
-            time_tensor = torch.tensor([[time_normalized]], dtype=torch.float32)
-            if not self.add_batch_dim:
-                time_tensor = time_tensor.squeeze(0)
-            result["time"] = time_tensor
-        else:
-            time_tensor = torch.tensor([[0.0]], dtype=torch.float32)
-            if not self.add_batch_dim:
-                time_tensor = time_tensor.squeeze(0)
-            result["time"] = time_tensor
-
         if "cell_areas" in sample:
             cell_areas = to_tensor(sample["cell_areas"])
             if self.add_batch_dim:
@@ -297,6 +263,8 @@ class TransolverAdapter(ModelAdapter):
             if geometry_params:
                 result["geometry_params"] = geometry_params
 
+        metadata = sample.get("metadata", {}) or {}
+        max_timestep = metadata.get("max_timestep") if isinstance(metadata, dict) else None
         metadata_dict = {
             "timestep_input": sample.get("timestep_input"),
             "timestep_target": sample.get("timestep_target"),
@@ -403,10 +371,6 @@ def build_rte_dataset_kwargs(
             "data.flux_normalization_stats_file must be specified in config."
         )
 
-    task = data_cfg.get("task")
-    if task is None:
-        raise ValueError("data.task must be specified in config.")
-
     flux_clip_threshold = data_cfg.get("flux_clip_threshold")
     if flux_clip_threshold is None:
         raise ValueError("data.flux_clip_threshold must be specified in config.")
@@ -429,6 +393,11 @@ def build_rte_dataset_kwargs(
         if split_file_override
         else case_cfg.get("split_file") or data_cfg.get("split_file")
     )
+    if not split_file:
+        raise ValueError(
+            "case.split_file is required. Configure a JSON split file instead "
+            "of percentage-based train/val/test splits."
+        )
 
     seed = data_cfg.get("seed", None)
     if seed is None and "train" in cfg:
@@ -463,18 +432,13 @@ def build_rte_dataset_kwargs(
 
     kwargs = {
         "data_path": cfg.case.data_path,
-        "task": task,
         "num_spatial_points": num_spatial_points,
         "adapter": adapter,
         "flux_normalization_stats_file": flux_stats_file,
         "normalize_coordinates": data_cfg.get("normalize_coordinates", True),
         "flux_clip_threshold": flux_clip_threshold,
         "split_file": split_file,
-        "train_split": data_cfg.get("train_split", 0.7),
-        "val_split": data_cfg.get("val_split", 0.15),
         "seed": seed,
-        "expand_timesteps": data_cfg.get("expand_timesteps", True),
-        "temporal_stride": data_cfg.get("temporal_stride", 1),
         "load_ground_truth_qoi": data_cfg.get("load_ground_truth_qoi", False),
         "cache_static_arrays": data_cfg.get("cache_static_arrays", True),
         "max_cache_size": data_cfg.get("max_cache_size", 200),
@@ -508,7 +472,7 @@ class RTEDataPipe(Dataset):
 
     Combines:
 
-    * ``RTEBaseDataset`` (data source / file enumeration / timestep expansion)
+    * ``RTEBaseDataset`` (data source / file enumeration)
     * ``Compose`` of transforms (preprocessing pipeline)
     * ``TransolverAdapter`` (model-specific tensor packaging)
 
@@ -525,14 +489,9 @@ class RTEDataPipe(Dataset):
         case_type: Optional[Literal["lattice", "hohlraum"]] = None,
         phase: Literal["train", "val", "test"] = "train",
         split_file: Optional[Union[str, Path]] = None,
-        train_split: float = 0.7,
-        val_split: float = 0.15,
         seed: Optional[int] = None,
-        expand_timesteps: bool = True,
-        temporal_stride: int = 1,
         cache_static_arrays: bool = True,
         max_cache_size: int = 200,
-        task: Literal["next_step", "steady_state"] = "next_step",
     ):
         """Initialize the datapipe (see ``from_config`` for the simple path)."""
         self.base_dataset = RTEBaseDataset(
@@ -540,15 +499,10 @@ class RTEDataPipe(Dataset):
             case_type=case_type,
             phase=phase,
             split_file=split_file,
-            train_split=train_split,
-            val_split=val_split,
             seed=seed,
             load_sigma_fields=True,  # load precomputed material properties for speed
-            expand_timesteps=expand_timesteps,
-            temporal_stride=temporal_stride,
             cache_static_arrays=cache_static_arrays,
             max_cache_size=max_cache_size,
-            task=task,
         )
 
         self.transforms = transforms
@@ -561,9 +515,9 @@ class RTEDataPipe(Dataset):
         """Get a sample from the dataset.
 
         ``base_dataset[idx]`` returns a ``TensorDict`` with tensor fields plus
-        ``metadata`` / ``filename`` / ``_timestep_idx`` as ``NonTensorData``
-        entries. Transforms consume and return ``TensorDict``; the adapter
-        converts to the model-specific format.
+        ``metadata`` / ``filename`` as ``NonTensorData`` entries. Transforms
+        consume and return ``TensorDict``; the adapter converts to the
+        model-specific format.
         """
         td = self.base_dataset[idx]
         if not isinstance(td, TensorDict):
@@ -582,7 +536,6 @@ class RTEDataPipe(Dataset):
         cls,
         data_path: Union[str, Path],
         case_type: Optional[Literal["lattice", "hohlraum"]] = None,
-        task: Literal["next_step", "steady_state"] = "next_step",
         adapter: Optional[Literal["transolver", None]] = "transolver",
         phase: Literal["train", "val", "test"] = "train",
         # Data processing options
@@ -591,12 +544,7 @@ class RTEDataPipe(Dataset):
         normalize_coordinates: bool = True,
         flux_clip_threshold: float = 1e-8,
         load_ground_truth_qoi: bool = False,
-        # Advanced options
-        temporal_stride: int = 1,
-        expand_timesteps: bool = True,
         split_file: Optional[Union[str, Path]] = None,
-        train_split: float = 0.7,
-        val_split: float = 0.15,
         seed: Optional[int] = None,
         # Cache options
         cache_static_arrays: bool = True,
@@ -625,10 +573,8 @@ class RTEDataPipe(Dataset):
         transforms = _build_transforms(
             data_path=data_path,
             case_type=case_type,
-            task=task,
             flux_normalization_stats_file=flux_normalization_stats_file,
             flux_clip_threshold=flux_clip_threshold,
-            temporal_stride=temporal_stride,
             seed=seed,
             num_spatial_points=num_spatial_points,
             normalize_coordinates=normalize_coordinates,
@@ -644,10 +590,6 @@ class RTEDataPipe(Dataset):
             include_q_in_embedding=include_q_in_embedding,
         )
 
-        # steady_state always uses t=0 → t=T, so per-step expansion is moot.
-        if task == "steady_state":
-            expand_timesteps = False
-
         return cls(
             data_path=data_path,
             transforms=transforms,
@@ -655,14 +597,9 @@ class RTEDataPipe(Dataset):
             case_type=case_type,
             phase=phase,
             split_file=split_file,
-            train_split=train_split,
-            val_split=val_split,
             seed=seed,
-            expand_timesteps=expand_timesteps,
-            temporal_stride=temporal_stride,
             cache_static_arrays=cache_static_arrays,
             max_cache_size=max_cache_size,
-            task=task,
         )
 
     def preload_to_memory(self, verbose: bool = True, num_workers: int = 8) -> dict:
@@ -704,10 +641,8 @@ def _build_transforms(
     *,
     data_path: Union[str, Path],
     case_type: Optional[str],
-    task: str,
     flux_normalization_stats_file: Union[str, Path],
     flux_clip_threshold: float,
-    temporal_stride: int,
     seed: Optional[int],
     num_spatial_points: int,
     normalize_coordinates: bool,
@@ -722,7 +657,7 @@ def _build_transforms(
     Normalization steps are delegated to PhysicsNeMo primitives:
 
     1. ``RTEFluxLogClip`` + ``Normalize`` — flux: log+clip, then z-score.
-    2. Temporal sampler — ``NextStepSampler`` | ``SteadyStateSampler``.
+    2. ``SteadyStateSampler`` — first snapshot input, final snapshot target.
     3. ``MaterialPropertyExtractor`` — always.
     4. ``Normalize`` (``physical_properties``) — per-column z-score via broadcast.
     5. ``SpatialSampler`` — always.
@@ -746,12 +681,7 @@ def _build_transforms(
         Normalize(**flux_normalize_kwargs(flux_stats, field="scalar_flux")),
     ]
 
-    if task == "next_step":
-        transform_list.append(NextStepSampler(stride=temporal_stride, seed=seed))
-    elif task == "steady_state":
-        transform_list.append(SteadyStateSampler())
-    else:
-        raise ValueError(f"Unknown task: {task}")
+    transform_list.append(SteadyStateSampler())
 
     transform_list.append(MaterialPropertyExtractor(case_type=case_type))
 
@@ -845,7 +775,6 @@ def create_dataset(
     case_type: Literal["lattice", "hohlraum"],
     data_path: Union[str, Path],
     phase: Literal["train", "val", "test"] = "train",
-    task: Literal["next_step", "steady_state"] = "next_step",
     adapter: Optional[Literal["transolver"]] = "transolver",
     **kwargs,
 ) -> RTEDataPipe:
@@ -858,7 +787,6 @@ def create_dataset(
         data_path=data_path,
         case_type=case_type,
         phase=phase,
-        task=task,
         adapter=adapter,
         **kwargs,
     )
@@ -1148,7 +1076,7 @@ def build_dataloaders(
     )
 
     if rank_zero:
-        logger.info(f"Task mode: {common_kwargs['task']}")
+        logger.info("Mapping mode: steady-state first-to-final flux")
         if common_kwargs["split_file"]:
             logger.info(f"Using predefined splits from: {common_kwargs['split_file']}")
         if common_kwargs["max_cache_size"] == -1:

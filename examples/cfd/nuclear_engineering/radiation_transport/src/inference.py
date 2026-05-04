@@ -30,6 +30,7 @@ Usage::
 """
 
 import argparse
+import os
 import pathlib
 import re
 import sys
@@ -133,8 +134,7 @@ def load_model_from_checkpoint(
 
     cfg = load_hydra_config(checkpoint_dir)
 
-    if not DistributedManager.is_initialized():
-        DistributedManager.initialize()
+    _initialize_distributed_manager()
 
     # Build model from cfg.model. Strip RTE-specific keys consumed elsewhere.
     cfg_model = OmegaConf.to_container(cfg.model, resolve=True)
@@ -158,6 +158,26 @@ def load_model_from_checkpoint(
         f"params={sum(p.numel() for p in model.parameters()):,})"
     )
     return model, cfg, metadata
+
+
+def _initialize_distributed_manager() -> None:
+    """Use distributed init only for torchrun/explicit distributed launches."""
+    if DistributedManager.is_initialized():
+        return
+
+    explicit_method = os.getenv("PHYSICSNEMO_DISTRIBUTED_INITIALIZATION_METHOD")
+    torchrun_env = os.getenv("RANK") is not None and os.getenv("WORLD_SIZE") is not None
+    openmpi_env = os.getenv("OMPI_COMM_WORLD_RANK") is not None
+
+    if explicit_method or torchrun_env or openmpi_env:
+        DistributedManager.initialize()
+        return
+
+    DistributedManager._shared_state["_is_initialized"] = True
+    dist = DistributedManager()
+    dist._initialization_method = "single"
+    if torch.cuda.is_available():
+        torch.cuda.set_device(dist.device)
 
 
 # =========================================================================
@@ -716,7 +736,6 @@ def run_evaluation(
     """
     model.eval()
     n = 0
-    use_time = bool(getattr(model, "time_input", False))
 
     for batch in tqdm(dataloader, desc="evaluating"):
         if max_samples is not None and n >= max_samples:
@@ -725,12 +744,7 @@ def run_evaluation(
 
         amp_enabled = use_amp and device.type == "cuda"
         with autocast(device_type=device.type, enabled=amp_enabled):
-            if use_time:
-                pred = model(
-                    fx=batch["fx"], embedding=batch["embedding"], time=batch.get("time")
-                )
-            else:
-                pred = model(fx=batch["fx"], embedding=batch["embedding"])
+            pred = model(fx=batch["fx"], embedding=batch["embedding"])
         pred = pred.float()
         target = batch["flux_target"].float()
 
@@ -777,7 +791,11 @@ def run_evaluation(
 # =========================================================================
 
 
-def _resolve_data_path(cfg: DictConfig, cli_data_path: str) -> None:
+def _resolve_data_path(
+    cfg: DictConfig,
+    cli_data_path: str,
+    split_file: Union[str, Path],
+) -> None:
     """Override ``case.data_root`` and ``data.input_dir`` to the user-supplied path."""
     OmegaConf.update(cfg, "case.data_root", cli_data_path, force_add=True)
     case_type = cfg.case.type
@@ -799,7 +817,7 @@ def _resolve_data_path(cfg: DictConfig, cli_data_path: str) -> None:
         str(flux_stats_file),
         force_add=True,
     )
-    split_file = Path(cli_data_path) / "splits" / f"{case_type}_splits.json"
+    split_file = Path(split_file)
     OmegaConf.update(cfg, "case.split_file", str(split_file), force_add=True)
     OmegaConf.update(cfg, "data.split_file", str(split_file), force_add=True)
 
@@ -828,6 +846,12 @@ def main():
         required=True,
         choices=("lattice", "hohlraum"),
         help="Which benchmark to evaluate.",
+    )
+    parser.add_argument(
+        "--split_file",
+        type=Path,
+        required=True,
+        help="Explicit train/val/test split JSON to use for evaluation.",
     )
     parser.add_argument(
         "--output_dir",
@@ -876,7 +900,9 @@ def main():
             f"but --case_type={args.case_type}. Using --case_type."
         )
         OmegaConf.update(cfg, "case.type", args.case_type, force_add=True)
-    _resolve_data_path(cfg, str(args.data_path))
+    if not args.split_file.exists():
+        raise FileNotFoundError(f"Split file not found: {args.split_file}")
+    _resolve_data_path(cfg, str(args.data_path), args.split_file)
 
     num_spatial_points = cfg.model.get("num_spatial_points", -1)
     if num_spatial_points != -1:

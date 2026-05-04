@@ -118,14 +118,8 @@ def to_device(batch: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
 def forward(
     model: nn.Module,
     batch: Dict[str, Any],
-    *,
-    use_time_embeddings: bool = False,
 ) -> torch.Tensor:
     """Run a forward pass with the Transolver-expected input keys."""
-    if use_time_embeddings:
-        return model(
-            fx=batch["fx"], embedding=batch["embedding"], time=batch["time"]
-        )
     return model(fx=batch["fx"], embedding=batch["embedding"])
 
 
@@ -191,7 +185,6 @@ def train_epoch(
     *,
     loss_cfg: Dict[str, Any],
     case_type: str,
-    use_time_embeddings: bool,
     gradient_accumulation_steps: int = 1,
     use_amp: bool = True,
     amp_dtype: Optional[torch.dtype] = None,
@@ -204,9 +197,7 @@ def train_epoch(
         batch = to_device(batch, device)
 
         with autocast(enabled=use_amp, device_type=device.type, dtype=amp_dtype):
-            prediction = forward(
-                model, batch, use_time_embeddings=use_time_embeddings
-            )
+            prediction = forward(model, batch)
 
         # Transolver predicts absolute flux directly — no reconstruction step.
         pred, target = prediction, batch["flux_target"]
@@ -258,7 +249,6 @@ def validate(
     *,
     loss_cfg: Dict[str, Any],
     case_type: str,
-    use_time_embeddings: bool,
     use_amp: bool = True,
     amp_dtype: Optional[torch.dtype] = None,
 ) -> Tuple[float, int, Dict[str, float], Dict[str, int]]:
@@ -280,9 +270,7 @@ def validate(
         batch = to_device(batch, device)
 
         with autocast(enabled=use_amp, device_type=device.type, dtype=amp_dtype):
-            prediction = forward(
-                eval_model, batch, use_time_embeddings=use_time_embeddings
-            )
+            prediction = forward(eval_model, batch)
 
         pred, target = prediction, batch["flux_target"]
 
@@ -421,14 +409,10 @@ def main(cfg: DictConfig) -> None:
     if resumed_val_losses:
         best_val_losses = resumed_val_losses
 
-    # --- forward kwargs ---
-    use_time_embeddings = bool(cfg.model.get("time_input", False))
-
     # --- per-epoch hooks ---
     shared_kwargs = {
         "loss_cfg": loss_cfg,
         "case_type": cfg.case.type,
-        "use_time_embeddings": use_time_embeddings,
         "use_amp": use_amp,
         "amp_dtype": amp_dtype,
     }

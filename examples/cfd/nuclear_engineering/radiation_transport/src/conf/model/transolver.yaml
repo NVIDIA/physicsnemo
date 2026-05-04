@@ -17,7 +17,6 @@ n_head: 16
 slice_num: 128
 mlp_ratio: 4
 dropout: 0.0
-time_input: false
 use_te: true
 structured_shape: null
 
