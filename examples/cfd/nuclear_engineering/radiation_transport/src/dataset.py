@@ -345,31 +345,6 @@ class ZarrDataReader(Reader):
                 ) from exc
         return metadata
 
-    def validate(self, filename: str) -> bool:
-        """Assert the zarr store has the required top-level arrays."""
-        filepath = self.data_path / filename
-        z = zarr.open(str(filepath), mode="r")
-
-        required = ["cell_centers", "cell_areas", "scalar_flux"]
-        for key in required:
-            if key not in z:
-                raise ValueError(f"Zarr store missing required key: {key}")
-
-        nc_centers = z["cell_centers"].shape[0]
-        nc_areas = z["cell_areas"].shape[0]
-        nc_flux = z["scalar_flux"].shape[-1]
-        if nc_centers != nc_flux:
-            raise ValueError(
-                f"Shape mismatch: cell_centers has {nc_centers} cells, "
-                f"scalar_flux has {nc_flux}"
-            )
-        if nc_areas != nc_flux:
-            raise ValueError(
-                f"Shape mismatch: cell_areas has {nc_areas} cells, "
-                f"scalar_flux has {nc_flux}"
-            )
-        return True
-
 
 # =========================================================================
 # PyTorch Dataset
@@ -661,42 +636,25 @@ def material_normalize_kwargs(
     stats: Mapping,
     field: str = "physical_properties",
     order: Sequence[str] = ("sigma_a", "sigma_s", "sigma_t", "Q"),
-    method: str = "mean_std",
 ) -> dict:
     """Build ``Normalize`` kwargs for ``physical_properties`` as (N, 4).
 
     The 4 columns are normalized independently via broadcasting: a per-column
-    ``torch.Tensor`` of shape ``(4,)`` is passed as the mean and the std. This
-    mirrors what the custom ``MaterialPropertyNormalizer`` did column-by-column,
-    but delegates the math to ``physicsnemo.datapipes.transforms.Normalize``.
+    ``torch.Tensor`` of shape ``(4,)`` is passed as the mean and the std,
+    delegating the math to ``physicsnemo.datapipes.transforms.Normalize``.
     """
-    if method == "mean_std":
-        means = torch.tensor(
-            [float(stats[k]["mean"]) for k in order], dtype=torch.float32
-        )
-        stds = torch.tensor(
-            [float(stats[k]["std"]) for k in order], dtype=torch.float32
-        )
-        return {
-            "input_keys": [field],
-            "method": "mean_std",
-            "means": {field: means},
-            "stds": {field: stds},
-        }
-    if method == "min_max":
-        mins = torch.tensor(
-            [float(stats[k]["min"]) for k in order], dtype=torch.float32
-        )
-        maxs = torch.tensor(
-            [float(stats[k]["max"]) for k in order], dtype=torch.float32
-        )
-        return {
-            "input_keys": [field],
-            "method": "min_max",
-            "mins": {field: mins},
-            "maxs": {field: maxs},
-        }
-    raise ValueError(f"Unknown method: {method}. Expected 'mean_std' or 'min_max'.")
+    means = torch.tensor(
+        [float(stats[k]["mean"]) for k in order], dtype=torch.float32
+    )
+    stds = torch.tensor(
+        [float(stats[k]["std"]) for k in order], dtype=torch.float32
+    )
+    return {
+        "input_keys": [field],
+        "method": "mean_std",
+        "means": {field: means},
+        "stds": {field: stds},
+    }
 
 
 def coord_bounds_for_case(case_type: str) -> Tuple[torch.Tensor, torch.Tensor]:

@@ -605,7 +605,7 @@ def run_training_loop(
         val_loader: Validation DataLoader.
         train_sampler: DistributedSampler for training (or None).
         optimizer: Optimizer.
-        scheduler: LR scheduler (e.g. CosineAnnealingLR or ReduceLROnPlateau).
+        scheduler: LR scheduler.
         scaler: GradScaler for AMP.
         train_epoch_fn: ``(train_loader, model, optimizer, scaler, device,
             launch_logger, **train_epoch_kwargs) -> None``.
@@ -686,16 +686,8 @@ def run_training_loop(
             )
             val_log.epoch_losses.update(val_metrics)
 
-            scheduler_type = cfg.train.get("scheduler_type", "cosine")
-            if scheduler_type == "plateau":
-                scheduler.step(val_loss)
-            else:
-                scheduler.step()
-
-            if scheduler_type == "plateau":
-                current_lr = optimizer.param_groups[0]["lr"]
-            else:
-                current_lr = scheduler.get_last_lr()[0]
+            scheduler.step()
+            current_lr = scheduler.get_last_lr()[0]
 
             if dist.rank == 0:
                 if after_epoch_fn is not None:

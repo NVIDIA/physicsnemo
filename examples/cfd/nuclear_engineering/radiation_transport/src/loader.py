@@ -81,7 +81,6 @@ from transforms import (
     RTEFluxLogClip,
     SpatialSampler,
     SteadyStateSampler,
-    td_from_dict,
 )
 
 
@@ -467,9 +466,6 @@ class RTEDataPipe(Dataset):
         model-specific format.
         """
         td = self.base_dataset[idx]
-        if not isinstance(td, TensorDict):
-            # Defensive path for callers that still return a dict.
-            td = td_from_dict(td)
 
         if self.transforms is not None:
             td = self.transforms(td)
@@ -559,10 +555,7 @@ class RTEDataPipe(Dataset):
 
     def get_raw_sample(self, idx: int) -> TensorDict:
         """Get a raw sample as a ``TensorDict`` (pre-transform, pre-adapter)."""
-        td = self.base_dataset[idx]
-        if not isinstance(td, TensorDict):
-            td = td_from_dict(td)
-        return td
+        return self.base_dataset[idx]
 
     def get_transformed_sample(self, idx: int) -> TensorDict:
         """Get sample with transforms applied but no adapter (``TensorDict``)."""
@@ -626,7 +619,7 @@ def _build_transforms(
 
     transform_list.append(SteadyStateSampler())
 
-    transform_list.append(MaterialPropertyExtractor(case_type=case_type))
+    transform_list.append(MaterialPropertyExtractor())
 
     material_stats_path = (
         Path(flux_normalization_stats_file).parent / f"{case_type}_material_stats.yaml"
@@ -640,7 +633,7 @@ def _build_transforms(
     transform_list.append(
         Normalize(
             **material_normalize_kwargs(
-                material_stats, field="physical_properties", method="mean_std"
+                material_stats, field="physical_properties"
             )
         )
     )

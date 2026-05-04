@@ -18,7 +18,7 @@
 
 This module consolidates every "loss" concept the trainer touches:
 
-* Learning-rate schedulers (warmup + cosine, step, plateau, constant).
+* Learning-rate schedulers (warmup + cosine, plus a constant fallback).
 * Regression losses on the (possibly padded) flux tensor: ``loss_fn``,
   ``masked_mse_loss``, ``region_weighted_loss_fn``.
 * Physics-informed loss for the radiation-transport surrogate: per-case
@@ -99,14 +99,11 @@ class WarmupCosineScheduler(torch.optim.lr_scheduler._LRScheduler):
 
 
 def create_scheduler(cfg: DictConfig, optimizer: torch.optim.Optimizer, logger=None):
-    """
-    Create learning rate scheduler based on config.
+    """Create the LR scheduler.
 
     Supports:
-    - constant: No learning rate decay (useful for overfit tests)
-    - cosine: Warmup + cosine annealing (recommended)
-    - step: Step decay every N epochs
-    - plateau: Reduce on plateau (adaptive)
+    - cosine: Warmup + cosine annealing (recommended; default)
+    - constant: No decay (useful for overfit tests)
     """
     scheduler_type = cfg.train.get("scheduler_type", "cosine")
     warmup_epochs = cfg.train.get("warmup_epochs", 5)
@@ -121,67 +118,21 @@ def create_scheduler(cfg: DictConfig, optimizer: torch.optim.Optimizer, logger=N
             logger.info(f"  Warmup epochs: {warmup_epochs}")
 
     if scheduler_type == "constant":
-        # constant LR - no decay (useful for overfit tests)
-        scheduler = torch.optim.lr_scheduler.ConstantLR(
+        return torch.optim.lr_scheduler.ConstantLR(
             optimizer,
             factor=1.0,
             total_iters=cfg.train.epochs,
         )
-    elif scheduler_type == "cosine":
-        scheduler = WarmupCosineScheduler(
+    if scheduler_type == "cosine":
+        return WarmupCosineScheduler(
             optimizer,
             warmup_epochs=warmup_epochs,
             total_epochs=cfg.train.epochs,
             min_lr=min_lr,
         )
-    elif scheduler_type == "step":
-        step_size = cfg.train.get("step_size", 50)
-        step_gamma = cfg.train.get("step_gamma", 0.5)
-        if logger:
-            logger.info(f"  Step size: {step_size}, Gamma: {step_gamma}")
-
-        # For step scheduler, we use a sequential scheduler with warmup
-        if warmup_epochs > 0:
-            warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
-                optimizer,
-                start_factor=min_lr / cfg.train.learning_rate,
-                end_factor=1.0,
-                total_iters=warmup_epochs,
-            )
-            step_scheduler = torch.optim.lr_scheduler.StepLR(
-                optimizer, step_size=step_size, gamma=step_gamma
-            )
-            scheduler = torch.optim.lr_scheduler.SequentialLR(
-                optimizer,
-                schedulers=[warmup_scheduler, step_scheduler],
-                milestones=[warmup_epochs],
-            )
-        else:
-            scheduler = torch.optim.lr_scheduler.StepLR(
-                optimizer, step_size=step_size, gamma=step_gamma
-            )
-    elif scheduler_type == "plateau":
-        patience = cfg.train.get("plateau_patience", 10)
-        factor = cfg.train.get("plateau_factor", 0.5)
-        threshold = cfg.train.get("plateau_threshold", 0.01)
-        if logger:
-            logger.info(f"  Patience: {patience}, Factor: {factor}")
-
-        # ReduceLROnPlateau doesn't work well with warmup, so we just use it directly
-        # and set initial LR lower if warmup is desired
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode="min",
-            factor=factor,
-            patience=patience,
-            threshold=threshold,
-            min_lr=min_lr,
-            verbose=True,
-        )
-    else:
-        raise ValueError(f"Unknown scheduler type: {scheduler_type}")
-
-    return scheduler
+    raise ValueError(
+        f"Unknown scheduler_type {scheduler_type!r}; expected 'cosine' or 'constant'."
+    )
 
 
 # =========================================================================
@@ -756,21 +707,22 @@ def evaluate_lattice_qoi_torch(
     scalar_flux: torch.Tensor,
     sim_times: torch.Tensor,
 ) -> dict[str, torch.Tensor]:
-    """
-    Compute lattice absorption QoI using PyTorch (differentiable).
+    """Compute lattice absorption QoI using PyTorch (differentiable).
 
-    Matches KiT-RT SNSolverHPC::IterPostprocessing() exactly.
+    Matches KiT-RT SNSolverHPC::IterPostprocessing() exactly. Steady-state
+    surrogate ⇒ T=1; ``sim_times`` is accepted for callsite uniformity but
+    not used.
 
     Args:
         cell_centers: (N, 3) or (B, N, 3)
         cell_areas: (N,) or (B, N)
         sigma_t: (N,) or (B, N)
         sigma_s: (N,) or (B, N)
-        scalar_flux: (T, N) or (B, T, N)
-        sim_times: (T,) or (B, T)
+        scalar_flux: (T, N) or (B, T, N) — only T=1 is exercised
+        sim_times: (T,) or (B, T) — unused, kept for callsite uniformity
 
     Returns:
-        {"cur_absorption": (T,) or (B, T), "total_absorption": (T,) or (B, T)}
+        ``{"cur_absorption": (T,) or (B, T)}``
     """
     if cell_centers.ndim == 3:
         return _evaluate_lattice_qoi_torch_batched(
@@ -803,19 +755,12 @@ def evaluate_lattice_qoi_torch(
     if scalar_flux.ndim != 2:
         raise ValueError(f"Expected scalar_flux shape (T, N), got {scalar_flux.shape}")
 
-    num_timesteps = scalar_flux.shape[0]
     absorption_density = scalar_flux * sigma_a.unsqueeze(0) * cell_areas.unsqueeze(0)
     cur_absorption = torch.sum(
         absorption_density * in_absorption.unsqueeze(0).float(), dim=1
     )
 
-    total_absorption = torch.zeros_like(cur_absorption)
-    total_absorption[0] = cur_absorption[0] * sim_times[0]
-    for t in range(1, num_timesteps):
-        dt = sim_times[t] - sim_times[t - 1]
-        total_absorption[t] = total_absorption[t - 1] + cur_absorption[t] * dt
-
-    return {"cur_absorption": cur_absorption, "total_absorption": total_absorption}
+    return {"cur_absorption": cur_absorption}
 
 
 def _evaluate_lattice_qoi_torch_batched(
@@ -836,7 +781,6 @@ def _evaluate_lattice_qoi_torch_batched(
     ]
     return {
         "cur_absorption": torch.stack([r["cur_absorption"] for r in results]),
-        "total_absorption": torch.stack([r["total_absorption"] for r in results]),
     }
 
 
@@ -849,24 +793,24 @@ def evaluate_hohlraum_qoi_torch(
     sim_times: torch.Tensor,
     geometry_params: dict[str, float],
 ) -> dict[str, torch.Tensor]:
-    """
-    Compute hohlraum absorption QoI using PyTorch (differentiable).
+    """Compute hohlraum absorption QoI using PyTorch (differentiable).
 
     Matches KiT-RT SNSolverHPC hohlraum geometry exactly (including known KiT-RT
-    quirk of using pos_red_left_bottom for both vertical wall sides).
+    quirk of using pos_red_left_bottom for both vertical wall sides). Steady-state
+    surrogate ⇒ T=1; ``sim_times`` is accepted for callsite uniformity but
+    not used.
 
     Args:
         cell_centers: (N, 3) or (B, N, 3)
         cell_areas: (N,) or (B, N)
         sigma_t: (N,) or (B, N)
         sigma_s: (N,) or (B, N)
-        scalar_flux: (T, N) or (B, T, N)
-        sim_times: (T,) or (B, T)
+        scalar_flux: (T, N) or (B, T, N) — only T=1 is exercised
+        sim_times: (T,) or (B, T) — unused, kept for callsite uniformity
         geometry_params: dict with cx, cy, hlr, hrr, llr, ulr, lrr, urr
 
     Returns:
-        Dict with cur_absorption_{center,vertical,horizontal},
-        cumulated_absorption_{center,vertical,horizontal}, total_absorption
+        Dict with ``cur_absorption_{center,vertical,horizontal}``.
     """
     if cell_centers.ndim == 3:
         return _evaluate_hohlraum_qoi_torch_batched(
@@ -906,43 +850,18 @@ def evaluate_hohlraum_qoi_torch(
     if scalar_flux.ndim != 2:
         raise ValueError(f"Expected scalar_flux shape (T, N), got {scalar_flux.shape}")
 
-    num_timesteps = scalar_flux.shape[0]
     absorption_density = scalar_flux * sigma_a.unsqueeze(0) * cell_areas.unsqueeze(0)
 
-    cur_center = torch.sum(absorption_density * in_center.unsqueeze(0).float(), dim=1)
-    cur_vertical = torch.sum(
-        absorption_density * in_vertical.unsqueeze(0).float(), dim=1
-    )
-    cur_horizontal = torch.sum(
-        absorption_density * in_horizontal.unsqueeze(0).float(), dim=1
-    )
-    cur_total = torch.sum(absorption_density, dim=1)
-
-    cum_center = torch.zeros_like(cur_center)
-    cum_vertical = torch.zeros_like(cur_vertical)
-    cum_horizontal = torch.zeros_like(cur_horizontal)
-    total_absorption = torch.zeros_like(cur_total)
-
-    cum_center[0] = cur_center[0] * sim_times[0]
-    cum_vertical[0] = cur_vertical[0] * sim_times[0]
-    cum_horizontal[0] = cur_horizontal[0] * sim_times[0]
-    total_absorption[0] = cur_total[0] * sim_times[0]
-
-    for t in range(1, num_timesteps):
-        dt = sim_times[t] - sim_times[t - 1]
-        cum_center[t] = cum_center[t - 1] + cur_center[t] * dt
-        cum_vertical[t] = cum_vertical[t - 1] + cur_vertical[t] * dt
-        cum_horizontal[t] = cum_horizontal[t - 1] + cur_horizontal[t] * dt
-        total_absorption[t] = total_absorption[t - 1] + cur_total[t] * dt
-
     return {
-        "cur_absorption_center": cur_center,
-        "cur_absorption_vertical": cur_vertical,
-        "cur_absorption_horizontal": cur_horizontal,
-        "cumulated_absorption_center": cum_center,
-        "cumulated_absorption_vertical": cum_vertical,
-        "cumulated_absorption_horizontal": cum_horizontal,
-        "total_absorption": total_absorption,
+        "cur_absorption_center": torch.sum(
+            absorption_density * in_center.unsqueeze(0).float(), dim=1
+        ),
+        "cur_absorption_vertical": torch.sum(
+            absorption_density * in_vertical.unsqueeze(0).float(), dim=1
+        ),
+        "cur_absorption_horizontal": torch.sum(
+            absorption_density * in_horizontal.unsqueeze(0).float(), dim=1
+        ),
     }
 
 

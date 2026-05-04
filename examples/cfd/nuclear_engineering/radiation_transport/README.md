@@ -8,6 +8,8 @@ steady-state mapping from the initial flux snapshot to the final scalar flux,
 using a physics-informed loss that combines region-weighted MSE with a
 quantity-of-interest (QoI) penalty based on absorption in key regions.
 
+The datasets used for this example were generated using [KiT-RT](https://github.com/KiT-RT)[1].
+
 ---
 
 ## 1. The science
@@ -415,3 +417,24 @@ The Hydra group structure means `case=hohlraum` swaps the entire
 so case-specific overrides propagate automatically.
 
 
+---
+
+## References
+
+[1]: Kusch, J., Schotthöfer, S., Stammer, P., Wolters, J., & Xiao, T. (2023).
+    "KiT-RT: An extendable framework for radiative transfer and therapy."
+    *ACM Transactions on Mathematical Software*, **49**(4), 1–24.
+
+    ```bibtex
+    @article{kitrt2023,
+      title     = {KiT-RT: An extendable framework for radiative transfer and therapy},
+      author    = {Kusch, Jonas and Schotth{\"o}fer, Steffen and Stammer, Pia
+                   and Wolters, Jannick and Xiao, Tianbai},
+      journal   = {ACM Transactions on Mathematical Software},
+      volume    = {49},
+      number    = {4},
+      pages     = {1--24},
+      year      = {2023},
+      publisher = {ACM New York, NY}
+    }
+    ```

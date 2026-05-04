@@ -37,7 +37,7 @@ from __future__ import annotations
 # =========================================================================
 
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 import torch
@@ -54,25 +54,6 @@ from tensordict import TensorDict
 # ``TensorDict``. The TensorDict helpers below
 # bridge numpy / torch / non-tensor (str, dict, None) values that flow through
 # the pipeline.
-
-
-def td_from_dict(sample: Mapping[str, Any]) -> TensorDict:
-    """Wrap a heterogeneous sample dict into a zero-batch-size ``TensorDict``.
-
-    ``numpy`` arrays and ``torch`` tensors become tensor entries. Any other
-    value (``None``, dict, str, Python scalar) is stored as ``NonTensorData``.
-    Use bracket access (``td["key"]``) on the result to retrieve the original
-    value; ``NonTensorData`` entries are transparently unwrapped.
-    """
-    out = TensorDict({}, batch_size=[])
-    for key, value in sample.items():
-        if isinstance(value, torch.Tensor):
-            out[key] = value
-        elif isinstance(value, np.ndarray):
-            out[key] = torch.from_numpy(np.ascontiguousarray(value))
-        else:
-            out.set_non_tensor(key, value)
-    return out
 
 
 def td_get(data: TensorDict, key: str, default: Any = None) -> Any:
@@ -300,46 +281,42 @@ class FourierFeatures(Transform):
 # Sampling (spatial + steady-state)
 # =========================================================================
 #
-# ``SpatialSampler`` randomly subsamples / pads point clouds to a target size.
+# ``SpatialSampler`` randomly subsamples point clouds to a target size.
 # ``SteadyStateSampler`` extracts the fixed initial->final flux mapping.
 
 
 @register("RTESpatialSampler")
 class SpatialSampler(Transform):
-    """Sample spatial points from mesh.
+    """Randomly subsample spatial points to ``num_points``.
 
-    Supports random sampling, fixed N, and padding for variable mesh sizes.
+    ``num_points = -1`` is a passthrough. Otherwise ``num_available`` must be
+    ``>= num_points`` (the shipped lattice / hohlraum meshes have tens of
+    thousands of cells, far above any practical ``num_points``).
     """
 
-    def __init__(
-        self,
-        num_points: int,
-        pad_value: float = -100.0,
-        seed: Optional[int] = None,
-    ):
+    def __init__(self, num_points: int, seed: Optional[int] = None):
         super().__init__()
         self.num_points = num_points
-        self.pad_value = pad_value
         self.seed = seed
         self.rng = (
             np.random.default_rng(seed) if seed is not None else np.random.default_rng()
         )
 
     def __call__(self, data: TensorDict) -> TensorDict:
-        num_available = data["coordinates"].shape[0]
-
         if self.num_points == -1:
             return data
 
-        needs_sampling = num_available > self.num_points
+        num_available = data["coordinates"].shape[0]
+        if num_available == self.num_points:
+            return data
+        if num_available < self.num_points:
+            raise ValueError(
+                f"SpatialSampler: num_available={num_available} < "
+                f"num_points={self.num_points}; the shipped meshes are larger "
+                "than any configured num_points, so this should never happen."
+            )
 
-        if needs_sampling:
-            indices_np = self.rng.choice(num_available, self.num_points, replace=False)
-        else:
-            if num_available == self.num_points:
-                return data
-            indices_np = np.arange(num_available)
-
+        indices_np = self.rng.choice(num_available, self.num_points, replace=False)
         indices = torch.from_numpy(indices_np.astype(np.int64))
 
         spatial_keys = [
@@ -353,56 +330,18 @@ class SpatialSampler(Transform):
             "sigma_a",
             "Q",
         ]
-
         for key in spatial_keys:
-            if key in data:
-                arr = data[key]
-                if arr is None:
-                    continue
-                sampled = arr[indices]
-                if sampled.shape[0] < self.num_points:
-                    sampled = self._pad_tensor(sampled, self.num_points)
-                data[key] = sampled
+            if key in data and data[key] is not None:
+                data[key] = data[key][indices]
 
         if "scalar_flux" in data:
-            flux = data["scalar_flux"][:, indices]  # (T, N_sampled)
-            if flux.shape[1] < self.num_points:
-                flux = self._pad_flux(flux, self.num_points)
-            data["scalar_flux"] = flux
+            data["scalar_flux"] = data["scalar_flux"][:, indices]
 
         for flux_key in ("flux_input", "flux_target"):
             if flux_key in data:
-                flux_1d = data[flux_key][indices]
-                if flux_1d.shape[0] < self.num_points:
-                    flux_1d = self._pad_flux_1d(flux_1d, self.num_points)
-                data[flux_key] = flux_1d
+                data[flux_key] = data[flux_key][indices]
 
         return data
-
-    def _pad_tensor(self, tensor: torch.Tensor, target_size: int) -> torch.Tensor:
-        if tensor.shape[0] >= target_size:
-            return tensor[:target_size]
-        pad_shape = list(tensor.shape)
-        pad_shape[0] = target_size - tensor.shape[0]
-        padding = torch.full(
-            pad_shape, float(self.pad_value), dtype=tensor.dtype, device=tensor.device
-        )
-        return torch.cat([tensor, padding], dim=0)
-
-    def _pad_flux(self, flux: torch.Tensor, target_size: int) -> torch.Tensor:
-        if flux.shape[1] >= target_size:
-            return flux[:, :target_size]
-        pad_shape = (flux.shape[0], target_size - flux.shape[1])
-        padding = torch.full(pad_shape, -10.0, dtype=flux.dtype, device=flux.device)
-        return torch.cat([flux, padding], dim=1)
-
-    def _pad_flux_1d(self, flux: torch.Tensor, target_size: int) -> torch.Tensor:
-        if flux.shape[0] >= target_size:
-            return flux[:target_size]
-        pad_shape = list(flux.shape)
-        pad_shape[0] = target_size - flux.shape[0]
-        padding = torch.full(pad_shape, -10.0, dtype=flux.dtype, device=flux.device)
-        return torch.cat([flux, padding], dim=0)
 
     def extra_repr(self) -> str:
         return f"num_points={self.num_points}"
@@ -443,7 +382,6 @@ class SteadyStateSampler(Transform):
 __all__ = [
     # Framework
     "Transform",
-    "td_from_dict",
     "td_get",
     "to_numpy",
     # Flux

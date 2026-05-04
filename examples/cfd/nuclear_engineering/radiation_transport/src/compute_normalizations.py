@@ -236,7 +236,7 @@ def compute_material_statistics(
                 clip_threshold=clip_threshold,
             ),
             SteadyStateSampler(),
-            MaterialPropertyExtractor(case_type=case_type),
+            MaterialPropertyExtractor(),
             SpatialSampler(num_points=num_spatial_points, seed=seed),
         ]
     )
