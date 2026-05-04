@@ -91,11 +91,10 @@ def load_hydra_config(checkpoint_dir: Union[str, Path]) -> DictConfig:
 
 
 def find_best_checkpoint(run_dir: Union[str, Path]) -> Path:
-    """Find the best checkpoint directory under a training run.
+    """Find the default checkpoint directory under a training run.
 
-    Prefers the ``top_model`` directory (single best). Falls back to scanning
-    ``best_model_epoch_*`` directories and returning the one with the lowest
-    recorded validation loss.
+    Explicit checkpoint directories are consumed by the caller. When a run or
+    ``checkpoints`` directory is supplied instead, default to ``top_model``.
     """
     run_dir = Path(run_dir)
     checkpoint_root = run_dir / "checkpoints"
@@ -107,29 +106,10 @@ def find_best_checkpoint(run_dir: Union[str, Path]) -> Path:
     if top.exists() and list(top.glob("checkpoint.0.*.pt")):
         return top
 
-    best_dirs = list(checkpoint_root.glob("best_model_epoch_*"))
-    if not best_dirs:
-        raise FileNotFoundError(
-            f"No checkpoint found under {checkpoint_root} "
-            "(looked for top_model/ and best_model_epoch_*/)"
-        )
-
-    best_path, best_loss = None, float("inf")
-    for d in best_dirs:
-        ckpts = list(d.glob("checkpoint.0.*.pt"))
-        if not ckpts:
-            continue
-        try:
-            data = torch.load(ckpts[0], map_location="cpu", weights_only=False)
-        except Exception:
-            continue
-        val_loss = data.get("metadata", {}).get("val_loss", float("inf"))
-        if val_loss < best_loss:
-            best_loss = val_loss
-            best_path = d
-    if best_path is None:
-        raise RuntimeError(f"No loadable checkpoints in {checkpoint_root}")
-    return best_path
+    raise FileNotFoundError(
+        f"No top_model checkpoint found under {checkpoint_root}. Pass a specific "
+        "checkpoint directory to evaluate something other than top_model."
+    )
 
 
 def load_model_from_checkpoint(
@@ -821,6 +801,7 @@ def _resolve_data_path(cfg: DictConfig, cli_data_path: str) -> None:
     )
     split_file = Path(cli_data_path) / "splits" / f"{case_type}_splits.json"
     OmegaConf.update(cfg, "case.split_file", str(split_file), force_add=True)
+    OmegaConf.update(cfg, "data.split_file", str(split_file), force_add=True)
 
 
 def main():
@@ -896,6 +877,14 @@ def main():
         )
         OmegaConf.update(cfg, "case.type", args.case_type, force_add=True)
     _resolve_data_path(cfg, str(args.data_path))
+
+    num_spatial_points = cfg.model.get("num_spatial_points", -1)
+    if num_spatial_points != -1:
+        print(
+            "Warning: evaluation will use the checkpoint's "
+            f"num_spatial_points={num_spatial_points}; field metrics and QoI "
+            "are computed on that subsampled point set."
+        )
 
     # Output dir defaults to ``<run_dir>/evaluation``.
     if args.output_dir is None:
