@@ -63,7 +63,7 @@ from omegaconf import DictConfig
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms import Compose, Normalize, Scale, Translate
 from tensordict import TensorDict
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Sampler
 from torch.utils.data.distributed import DistributedSampler
 
 from dataset import (
@@ -423,9 +423,16 @@ def build_rte_dataset_kwargs(
     else:
         num_spatial_points = cfg.model[num_spatial_points_key]
 
+    case_cfg = cfg.get("case", {})
     split_file = (
-        split_file_override if split_file_override else data_cfg.get("split_file")
+        split_file_override
+        if split_file_override
+        else case_cfg.get("split_file") or data_cfg.get("split_file")
     )
+
+    seed = data_cfg.get("seed", None)
+    if seed is None and "train" in cfg:
+        seed = cfg.train.get("seed", None)
 
     # Fourier features config
     use_fourier_features = data_cfg.get("use_fourier_features", False)
@@ -465,6 +472,7 @@ def build_rte_dataset_kwargs(
         "split_file": split_file,
         "train_split": data_cfg.get("train_split", 0.7),
         "val_split": data_cfg.get("val_split", 0.15),
+        "seed": seed,
         "expand_timesteps": data_cfg.get("expand_timesteps", True),
         "temporal_stride": data_cfg.get("temporal_stride", 1),
         "load_ground_truth_qoi": data_cfg.get("load_ground_truth_qoi", False),
@@ -1016,7 +1024,7 @@ def _make_loader(
     dataset,
     cfg: DictConfig,
     phase: str,
-    sampler: Optional[DistributedSampler],
+    sampler: Optional[Sampler],
     collate_fn: Optional[Callable],
     test_batch_size: int,
     test_num_workers: int,
@@ -1059,6 +1067,23 @@ def _make_loader(
         kwargs["persistent_workers"] = phase_cfg.get("persistent_workers", False)
 
     return DataLoader(dataset, **kwargs)
+
+
+class DistributedEvalSampler(Sampler[int]):
+    """Shard eval data across ranks without padding or duplicate samples."""
+
+    def __init__(self, dataset: Dataset, num_replicas: int, rank: int):
+        self.dataset = dataset
+        self.num_replicas = num_replicas
+        self.rank = rank
+
+    def __iter__(self):
+        return iter(range(self.rank, len(self.dataset), self.num_replicas))
+
+    def __len__(self) -> int:
+        if self.rank >= len(self.dataset):
+            return 0
+        return ((len(self.dataset) - 1 - self.rank) // self.num_replicas) + 1
 
 
 def build_dataloaders(
@@ -1162,21 +1187,21 @@ def build_dataloaders(
     for phase in phases:
         sampler = None
         if dist is not None and dist.distributed and phase in ("train", "val"):
-            shuffle_cfg = cfg.train.sampler.shuffle if phase == "train" else False
-            drop_last = (
-                cfg.train.sampler.get("drop_last", False)
-                if phase == "train"
-                else cfg.train.val.sampler.get("drop_last", False)
-            )
-            sampler = DistributedSampler(
-                datasets[phase],
-                num_replicas=dist.world_size,
-                rank=dist.rank,
-                shuffle=shuffle_cfg,
-                drop_last=drop_last,
-            )
             if phase == "train":
+                sampler = DistributedSampler(
+                    datasets[phase],
+                    num_replicas=dist.world_size,
+                    rank=dist.rank,
+                    shuffle=cfg.train.sampler.shuffle,
+                    drop_last=cfg.train.sampler.get("drop_last", False),
+                )
                 train_sampler = sampler
+            else:
+                sampler = DistributedEvalSampler(
+                    datasets[phase],
+                    num_replicas=dist.world_size,
+                    rank=dist.rank,
+                )
 
         loaders[phase] = _make_loader(
             datasets[phase],
