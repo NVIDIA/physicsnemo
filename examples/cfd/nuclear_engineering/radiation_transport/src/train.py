@@ -129,11 +129,11 @@ def forward(
     return model(fx=batch["fx"], embedding=batch["embedding"])
 
 
-def loss_inputs(batch: Dict[str, Any]) -> Dict[str, Any]:
+def loss_inputs(batch: Dict[str, Any], *, require_physics: bool = False) -> Dict[str, Any]:
     """Assemble the dict of optional/physics inputs consumed by ``compute_losses``.
 
-    ``coordinates_unnormalized`` falls back to the model's ``embedding`` tensor
-    when the dataset did not pre-stash the raw coordinates.
+    Physics loss requires raw, unnormalized coordinates. The model embedding
+    can contain material features, so it is never a safe coordinate fallback.
     """
     inputs: Dict[str, Any] = {}
     if batch.get("padding_mask") is not None:
@@ -141,10 +141,18 @@ def loss_inputs(batch: Dict[str, Any]) -> Dict[str, Any]:
     if "material_labels" in batch:
         inputs["material_labels"] = batch["material_labels"]
     physics_keys = ("cell_areas", "sigma_t", "sigma_s", "sim_time")
+    if require_physics and not all(k in batch for k in physics_keys):
+        missing = [k for k in physics_keys if k not in batch]
+        raise KeyError(f"Missing physics-loss input(s): {missing}")
     if all(k in batch for k in physics_keys):
-        inputs["coordinates_unnormalized"] = batch.get(
-            "coordinates_unnormalized", batch["embedding"]
-        )
+        if "coordinates_unnormalized" not in batch:
+            if require_physics:
+                raise KeyError(
+                    "coordinates_unnormalized is required when physics loss is "
+                    "enabled. Enable coordinate backup before normalization."
+                )
+            return inputs
+        inputs["coordinates_unnormalized"] = batch["coordinates_unnormalized"]
         for k in physics_keys:
             inputs[k] = batch[k]
         for k in ("metadata", "flux_normalization_stats"):
@@ -206,7 +214,9 @@ def train_epoch(
         loss, loss_mse, loss_qoi, qoi_details = compute_losses(
             pred=pred.float(),
             target=target.float(),
-            loss_inputs=loss_inputs(batch),
+            loss_inputs=loss_inputs(
+                batch, require_physics=loss_cfg.get("use_physics_loss", False)
+            ),
             loss_cfg=loss_cfg,
             case_type=case_type,
             device=device,
@@ -218,7 +228,7 @@ def train_epoch(
             loss_mse,
             loss_qoi,
             qoi_details,
-            scale=gradient_accumulation_steps,
+            scale=1,
         )
 
         grad_step(
@@ -251,19 +261,27 @@ def validate(
     use_time_embeddings: bool,
     use_amp: bool = True,
     amp_dtype: Optional[torch.dtype] = None,
-) -> Tuple[float, int]:
-    """Run one Transolver validation pass and return ``(loss_sum, num_batches)``."""
+) -> Tuple[float, int, Dict[str, float], Dict[str, int]]:
+    """Run validation and return loss plus metric sums/counts for DDP reduce."""
     model.eval()
+    eval_model = model.module if hasattr(model, "module") else model
 
     loss_sum = 0.0
     num_batches = 0
+    metric_sums: Dict[str, float] = {}
+    metric_counts: Dict[str, int] = {}
+
+    def accumulate_metric(name: str, value: Any) -> None:
+        scalar = float(value)
+        metric_sums[name] = metric_sums.get(name, 0.0) + scalar
+        metric_counts[name] = metric_counts.get(name, 0) + 1
 
     for batch in dataloader:
         batch = to_device(batch, device)
 
         with autocast(enabled=use_amp, device_type=device.type, dtype=amp_dtype):
             prediction = forward(
-                model, batch, use_time_embeddings=use_time_embeddings
+                eval_model, batch, use_time_embeddings=use_time_embeddings
             )
 
         pred, target = prediction, batch["flux_target"]
@@ -271,7 +289,9 @@ def validate(
         loss, loss_mse, loss_qoi, qoi_details = compute_losses(
             pred=pred.float(),
             target=target.float(),
-            loss_inputs=loss_inputs(batch),
+            loss_inputs=loss_inputs(
+                batch, require_physics=loss_cfg.get("use_physics_loss", False)
+            ),
             loss_cfg=loss_cfg,
             case_type=case_type,
             device=device,
@@ -281,8 +301,13 @@ def validate(
 
         loss_sum += loss.item()
         num_batches += 1
+        accumulate_metric("loss_mse", loss_mse.item())
+        if loss_qoi is not None:
+            accumulate_metric("loss_qoi", loss_qoi.item())
+        for key, value in qoi_details.items():
+            accumulate_metric(key, value)
 
-    return loss_sum, num_batches
+    return loss_sum, num_batches, metric_sums, metric_counts
 
 
 # =========================================================================
