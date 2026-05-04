@@ -95,7 +95,7 @@ You can also use GeoTransolver, Flare, or GeoTransolver with flare attention
 for the darcy example with the "fixed" usage.  Change the `model` parameter
 to update it!  Note that the inputs to geotransolver here uses the positions
 and the `x` diffusivity to both the model trunk and encoder paths.  For these
-problems, GeoTransolver is not yet extensively tested, and your results 
+problems, GeoTransolver is not yet extensively tested, and your results
 may vary.
 
 ## Additional Information

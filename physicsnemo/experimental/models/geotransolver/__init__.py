@@ -39,6 +39,10 @@ ContextProjector
     Projects context features onto physical state slices.
 StructuredContextProjector
     Context projector with Conv2d/Conv3d geometry encoding on structured grids.
+GeometricFeatureProcessor
+    Processes geometric features at a single spatial scale using BQWarp.
+MultiScaleFeatureExtractor
+    Multi-scale geometric feature extraction over multiple radii.
 GlobalContextBuilder
     Orchestrates context construction for the model.
 
@@ -75,7 +79,9 @@ from physicsnemo.nn import (
 )
 from .context_projector import (
     ContextProjector,
+    GeometricFeatureProcessor,
     GlobalContextBuilder,
+    MultiScaleFeatureExtractor,
     StructuredContextProjector,
 )
 from .gale import (
@@ -96,7 +102,9 @@ __all__ = [
     "GALEStructuredMesh2D",
     "GALEStructuredMesh3D",
     "ContextProjector",
+    "GeometricFeatureProcessor",
     "GlobalContextBuilder",
+    "MultiScaleFeatureExtractor",
     "StructuredContextProjector",
     "ConcreteDropout",
     "collect_concrete_dropout_losses",

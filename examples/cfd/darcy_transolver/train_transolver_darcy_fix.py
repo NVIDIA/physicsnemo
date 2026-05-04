@@ -81,7 +81,9 @@ def make_model_forward(cfg: DictConfig) -> callable:
 
         def _forward(model, pos, x):
             combined_inputs = torch.cat([pos, x.unsqueeze(-1)], dim=-1)
-            return model(local_embedding=combined_inputs, geometry=combined_inputs).squeeze(-1)
+            return model(
+                local_embedding=combined_inputs, geometry=combined_inputs
+            ).squeeze(-1)
 
     else:
 
@@ -155,7 +157,9 @@ def build_optimizer(
         else:
             return AdamW(other_params, lr=lr, weight_decay=weight_decay)
 
-    raise ValueError(f"Unsupported optimizer type: {opt_type!r}. Use 'adamw' or 'muon'.")
+    raise ValueError(
+        f"Unsupported optimizer type: {opt_type!r}. Use 'adamw' or 'muon'."
+    )
 
 
 def forward_train_full_loop(
@@ -601,9 +605,7 @@ def darcy_trainer(cfg: DictConfig) -> None:
                     metrics_record["val_loss"] = val_loss.item()
                     metrics_record["val_rl2"] = RL2.item()
                     metrics_record["val_time_s"] = val_time
-                    metrics_record["val_images_per_sec_per_gpu"] = (
-                        val_images / val_time
-                    )
+                    metrics_record["val_images_per_sec_per_gpu"] = val_images / val_time
 
                 if dm.rank == 0 and cfg.validation.save_plots:
                     validator.make_plot(pred, y, pseudo_epoch, test_datapipe.s)
