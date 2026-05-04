@@ -33,46 +33,40 @@ Usage::
     python src/train.py benchmark_io=true +training.benchmark_max_steps=20
 """
 
+import json
 import os
 import sys
 import time
 from contextlib import nullcontext
+from datetime import datetime, timezone
 from pathlib import Path
 
 import hydra
 import omegaconf
-from omegaconf import DictConfig, OmegaConf
-
-import json
-from datetime import datetime, timezone
-
 import torch
-from torch.amp import autocast, GradScaler
-from torch.utils.tensorboard import SummaryWriter
-
-from tabulate import tabulate
-
-from physicsnemo.utils import load_checkpoint, save_checkpoint
-from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
-from physicsnemo.distributed import DistributedManager
-from physicsnemo.utils.profiling import profile, Profiler
-
-from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
-from physicsnemo.datapipes import DataLoader
-
+from collate import build_collate_fn
 from datasets import (
+    ManifestSampler,
     build_dataset,
     load_dataset_config,
     load_manifest,
     resolve_manifest_indices,
-    ManifestSampler,
 )
-from collate import build_collate_fn
-from metrics import MetricCalculator
 from loss import LossCalculator
+from metrics import MetricCalculator
+from omegaconf import DictConfig, OmegaConf
+from tabulate import tabulate
+from torch.amp import GradScaler, autocast
+from torch.utils.tensorboard import SummaryWriter
 from utils import build_muon_optimizer, set_seed
 
+from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.core.version_check import OptionalImport
+from physicsnemo.datapipes import DataLoader
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils.profiling import Profiler, profile
 
 te = OptionalImport("transformer_engine.pytorch")
 te_recipe = OptionalImport("transformer_engine.common.recipe")
