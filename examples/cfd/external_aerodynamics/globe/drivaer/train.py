@@ -349,7 +349,7 @@ def main(
             decoupled_weight_decay=True,
             foreach=True,
         )
-    patience_epochs = patience_steps // len(dataloaders["train"])
+    patience_epochs = max(1, patience_steps // len(dataloaders["train"]))
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode="min",
