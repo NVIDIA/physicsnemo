@@ -1,0 +1,1 @@
+{"points":{"device":"cpu","shape":[4,2],"dtype":"torch.float32","is_nested":false},"cells":{"device":"cpu","shape":[2,3],"dtype":"torch.int64","is_nested":false},"point_data":{"type":"TensorDict"},"cell_data":{"type":"TensorDict"},"global_data":{"type":"TensorDict"},"_cache":{"type":"TensorDict"},"shape":[],"device":"cpu","_type":"<class 'tensordict._td.TensorDict'>"}

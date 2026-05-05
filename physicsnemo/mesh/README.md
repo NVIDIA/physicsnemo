@@ -422,7 +422,7 @@ neighbors of mesh elements (i.e., based on the mesh connectivity,as opposed to
 Note that these use an efficient sparse (`indices`, `offsets`) encoding of the
 adjacency relationships, which is used internally for all computations. (See the
 dedicated
-[`physicsnemo.mesh.neighbors._adjacency.py`](neighbors/_adjacency.py)
+[`physicsnemo.mesh.neighbors._adjacency.py`](./neighbors/_adjacency.py)
 module.) You can convert these to a typical ragged list-of-lists representation
 with `.to_list()`, which is useful for debugging or interoperability, at the
 cost of performance:
@@ -541,34 +541,34 @@ Key design decisions enable these principles:
 ## Documentation & Resources
 
 - **Examples**: See [`examples/`](../../examples/) directory for runnable demonstrations
-- **Tests**: See [`test/mesh/`](../../test/mesh/) directory for comprehensive test
+- **Tests**: See [`test/`](../../test/mesh/) directory for comprehensive test
   suite showing usage patterns
-- **Source**: Explore the source modules in this directory for implementation details
+- **Source**: Explore [`physicsnemo/mesh/`](./) for implementation details
 
 **Module Organization:**
 
-- [`physicsnemo.mesh.calculus`](calculus/) - Discrete differential
+- [`physicsnemo.mesh.calculus`](./calculus/) - Discrete differential
   operators
-- [`physicsnemo.mesh.curvature`](curvature/) - Gaussian and mean
+- [`physicsnemo.mesh.curvature`](./curvature/) - Gaussian and mean
   curvature
-- [`physicsnemo.mesh.subdivision`](subdivision/) - Mesh refinement
+- [`physicsnemo.mesh.subdivision`](./subdivision/) - Mesh refinement
   schemes
-- [`physicsnemo.mesh.boundaries`](boundaries/) - Boundary detection
+- [`physicsnemo.mesh.boundaries`](./boundaries/) - Boundary detection
   and facet extraction
-- [`physicsnemo.mesh.neighbors`](neighbors/) - Adjacency computations
-- [`physicsnemo.mesh.spatial`](spatial/) - BVH and spatial queries
-- [`physicsnemo.mesh.sampling`](sampling/) - Point sampling and
+- [`physicsnemo.mesh.neighbors`](./neighbors/) - Adjacency computations
+- [`physicsnemo.mesh.spatial`](./spatial/) - BVH and spatial queries
+- [`physicsnemo.mesh.sampling`](./sampling/) - Point sampling and
   interpolation
-- [`physicsnemo.mesh.transformations`](transformations/) - Geometric
+- [`physicsnemo.mesh.transformations`](./transformations/) - Geometric
   operations
-- [`physicsnemo.mesh.repair`](repair/) - Mesh cleaning and topology
+- [`physicsnemo.mesh.repair`](./repair/) - Mesh cleaning and topology
   repair
-- [`physicsnemo.mesh.validation`](validation/) - Quality metrics
+- [`physicsnemo.mesh.validation`](./validation/) - Quality metrics
   and statistics
-- [`physicsnemo.mesh.visualization`](visualization/) - Matplotlib
+- [`physicsnemo.mesh.visualization`](./visualization/) - Matplotlib
   and PyVista backends
-- [`physicsnemo.mesh.io`](io/) - PyVista import/export
-- [`physicsnemo.mesh.primitives`](primitives/) - Example mesh generators
+- [`physicsnemo.mesh.io`](./io/) - PyVista import/export
+- [`physicsnemo.mesh.primitives`](./primitives/) - Example mesh generators
 
 ---
 

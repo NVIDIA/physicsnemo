@@ -23,7 +23,6 @@ structure and global context throughout the forward pass.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -145,47 +144,6 @@ def _normalize_tensor(
     raise TypeError(f"Invalid tensor structure")
 
 
-def _structured_num_tokens(spatial_shape: tuple[int, ...]) -> int:
-    return int(math.prod(spatial_shape))
-
-
-def _flatten_for_structured(
-    t: torch.Tensor,
-    spatial_shape: tuple[int, ...],
-    name: str,
-) -> torch.Tensor:
-    """Flatten (B,H,W,C) or (B,H,W,D,C) to (B,N,C); pass through (B,N,C) if N matches.
-
-    Mirrors Transolver's structured flatten/unflatten behavior so the rest of
-    GeoTransolver can assume a single token layout (B, N, C).
-    """
-    n = _structured_num_tokens(spatial_shape)
-    if t.ndim == 3:
-        if not torch.compiler.is_compiling() and t.shape[1] != n:
-            raise ValueError(
-                f"{name} token count {t.shape[1]} != structured grid size {n}"
-            )
-        return t
-    if len(spatial_shape) == 2 and t.ndim == 4:
-        B, H, W, C = t.shape
-        if (H, W) != spatial_shape:
-            raise ValueError(
-                f"{name} spatial dims {(H, W)} != structured_shape {spatial_shape}"
-            )
-        return t.reshape(B, n, C)
-    if len(spatial_shape) == 3 and t.ndim == 5:
-        B, H, W, D, C = t.shape
-        if (H, W, D) != spatial_shape:
-            raise ValueError(
-                f"{name} spatial dims {(H, W, D)} != structured_shape {spatial_shape}"
-            )
-        return t.reshape(B, n, C)
-    raise ValueError(
-        f"{name}: expected (B,N,C) with N={n}, or spatial layout matching "
-        f"structured_shape {spatial_shape}; got shape {tuple(t.shape)}"
-    )
-
-
 class GeoTransolver(Module):
     r"""GeoTransolver: Geometry-Aware Physics Attention Transformer.
 
@@ -247,11 +205,6 @@ class GeoTransolver(Module):
         Neighbors in radius for the local features. Default is ``[8, 32]``.
     n_hidden_local : int, optional
         Hidden dimension for the local features. Default is 32.
-    structured_shape : tuple[int, ...] | None, optional
-        If set to ``(H, W)`` or ``(H, W, D)``, enables structured 2D/3D paths
-        (Conv2d/Conv3d GALE; no ball-query local features). Inputs may be
-        flattened :math:`(B, N, C)` with :math:`N = H W` or :math:`H W D`, or
-        spatial :math:`(B, H, W, C)` / :math:`(B, H, W, D, C)`. Default is ``None``.
     guard_config : dict | None, optional
         Configuration for the embedded OOD guard
         (:class:`~physicsnemo.experimental.guardrails.embedded.OODGuard`).
@@ -276,9 +229,9 @@ class GeoTransolver(Module):
     Forward
     -------
     local_embedding : torch.Tensor | tuple[torch.Tensor, ...]
-        Local embedding: unstructured :math:`(B, N, C)`; structured 2D
-        :math:`(B, H, W, C)` or flattened :math:`(B, H W, C)`; structured 3D
-        :math:`(B, H, W, D, C)` or flattened. Can be a tuple for multiple input types.
+        Local embedding of the input data of shape :math:`(B, N, C)` where :math:`B`
+        is batch size, :math:`N` is number of nodes/tokens, and :math:`C` is
+        ``functional_dim``. Can be a single tensor or tuple for multiple input types.
     local_positions : torch.Tensor | tuple[torch.Tensor, ...] | None, optional
         Local positions for each input, each of shape :math:`(B, N, 3)`. Required if
         ``include_local_features=True``. Default is ``None``.
@@ -295,18 +248,14 @@ class GeoTransolver(Module):
 
     Outputs
     -------
-    torch.Tensor | tuple[torch.Tensor, ...]
-        When ``return_embedding_states=False`` (default): output tensor(s) of
+    Float[torch.Tensor, "batch tokens out_dim"] | tuple[Float[torch.Tensor, "batch tokens out_dim"], ...]
+        When ``return_embedding_states=False`` (default), output tensor of
         shape :math:`(B, N, C_{out})`. Returns a single tensor if input was
-        a single tensor, or a tuple of tensors if input was a tuple
-        (multi-stream). For structured grids, output matches the input
-        layout—flattened :math:`(B, N, C_{out})` or spatial
-        :math:`(B, H, W, C_{out})` / :math:`(B, H, W, D, C_{out})` when
-        inputs were 4D/5D.
-        
+        a single tensor, or a tuple if input was a tuple.
+
         When ``return_embedding_states=True``, returns a 2-tuple
-        ``(output, embedding_states)`` where ``output`` follows the same
-        rules above, and ``embedding_states`` is of shape
+        ``(output, embedding_states)`` where ``embedding_states`` is
+        ``Float[torch.Tensor, "batch heads slices context_dim"]`` of shape
         :math:`(B, H, S, D_c)` (geometry/global context), or ``None`` if no
         context sources were provided.
 
@@ -322,9 +271,8 @@ class GeoTransolver(Module):
 
     Notes
     -----
-    Unstructured mesh uses linear GALE projection; structured ``structured_shape``
-    uses the same Conv2d/Conv3d slice projection as :class:`~physicsnemo.models.transolver.Transolver`.
-    Ball-query local features are disabled when ``structured_shape`` is set.
+    GeoTransolver currently supports unstructured mesh input only. Enhancements for
+    image-based and voxel-based inputs may be available in the future.
 
     For more details on Transolver, see:
 
@@ -373,21 +321,6 @@ class GeoTransolver(Module):
     >>> output.shape
     torch.Size([2, 1000, 3])
 
-    Structured 2D grid:
-
-    >>> model = GeoTransolver(
-    ...     functional_dim=3,
-    ...     out_dim=1,
-    ...     structured_shape=(8, 8),
-    ...     n_hidden=64,
-    ...     n_head=4,
-    ...     n_layers=2,
-    ...     use_te=False,
-    ... )
-    >>> y = model(torch.randn(2, 8, 8, 3))
-    >>> y.shape
-    torch.Size([2, 8, 8, 1])
-
     To also retrieve the geometry/global context embeddings:
 
     >>> output, emb_states = model(
@@ -420,7 +353,6 @@ class GeoTransolver(Module):
         radii: list[float] | None = None,
         neighbors_in_radius: list[int] | None = None,
         n_hidden_local: int = 32,
-        structured_shape: tuple[int, ...] | None = None,
         guard_config: dict | None = None,
         attention_type: str = "GALE",
         concrete_dropout: bool = False,
@@ -435,22 +367,8 @@ class GeoTransolver(Module):
         if neighbors_in_radius is None:
             neighbors_in_radius = [8, 32]
 
-        if structured_shape is not None:
-            if include_local_features:
-                raise ValueError(
-                    "include_local_features=True is not supported with structured_shape "
-                    "(ball-query path is mesh-only)."
-                )
-            if len(structured_shape) not in (2, 3):
-                raise ValueError(
-                    f"structured_shape must have length 2 or 3, got {structured_shape!r}"
-                )
-            if not all(int(s) > 0 for s in structured_shape):
-                raise ValueError(f"structured_shape must be positive ints, got {structured_shape!r}")
-
         self.include_local_features = include_local_features
         self.use_te = use_te
-        self.structured_shape = structured_shape
 
         # Validate head dimension compatibility
         if not n_hidden % n_head == 0:
@@ -481,7 +399,6 @@ class GeoTransolver(Module):
             use_te=use_te,
             plus=plus,
             include_local_features=self.include_local_features,
-            structured_shape=structured_shape,
             concrete_dropout=concrete_dropout,
         )
         context_dim = self.context_builder.get_context_dim()
@@ -530,7 +447,6 @@ class GeoTransolver(Module):
                     use_te=use_te,
                     plus=plus,
                     context_dim=context_dim,
-                    spatial_shape=structured_shape,
                     attention_type=attention_type,
                     concrete_dropout=concrete_dropout,
                     state_mixing_mode=state_mixing_mode,
@@ -674,27 +590,6 @@ class GeoTransolver(Module):
         if local_positions is not None:
             local_positions = _normalize_tensor(local_positions)
 
-        unflatten_output = False
-        if self.structured_shape is not None:
-            unflatten_output = any(le.ndim in (4, 5) for le in local_embedding)
-            local_embedding = tuple(
-                _flatten_for_structured(
-                    le, self.structured_shape, f"local_embedding[{i}]"
-                )
-                for i, le in enumerate(local_embedding)
-            )
-            if geometry is not None:
-                geometry = _flatten_for_structured(
-                    geometry, self.structured_shape, "geometry"
-                )
-            n_tok = _structured_num_tokens(self.structured_shape)
-            for i, le in enumerate(local_embedding):
-                if le.shape[1] != n_tok:
-                    raise ValueError(
-                        f"structured GeoTransolver: all streams must have N={n_tok} tokens; "
-                        f"local_embedding[{i}] has N={le.shape[1]}"
-                    )
-
         ### Input validation
         if not torch.compiler.is_compiling():
             if len(local_embedding) == 0:
@@ -750,16 +645,6 @@ class GeoTransolver(Module):
 
         # Project to output dimensions: (B, N, n_hidden) -> (B, N, out_dim)
         x = [self.ln_mlp_out[i](x[i]) for i in range(len(x))]
-
-        if self.structured_shape is not None and unflatten_output:
-            B = x[0].shape[0]
-            for i in range(len(x)):
-                if len(self.structured_shape) == 2:
-                    H, W = self.structured_shape
-                    x[i] = x[i].reshape(B, H, W, -1)
-                else:
-                    H, W, D_ = self.structured_shape
-                    x[i] = x[i].reshape(B, H, W, D_, -1)
 
         # Return same format as input (single tensor or tuple)
         if single_input:

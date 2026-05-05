@@ -292,6 +292,13 @@ def test_checkpoint_integrity(
     (params0, opt_params0) = get_state_dict(net0, opt0, options=options)
     (params1, opt_params1) = get_state_dict(net1, opt1, options=options)
 
+    assert set(params0.keys()) == set(params1.keys()), (
+        "State dicts before and after checkpointing have different keys"
+    )
+    assert set(opt_params0.keys()) == set(opt_params1.keys()), (
+        "Optimizer state dicts before and after checkpointing have different keys"
+    )
+
     for key, param0 in params0.items():
         param1 = params1[key]
         assert (param0 == param1).all().cpu().item(), (
@@ -303,6 +310,42 @@ def test_checkpoint_integrity(
         for opt_var in opt_param0:
             assert (opt_param0[opt_var] == opt_param1[opt_var]).all().cpu().item(), (
                 f"Optimizer parameter {key} before and after checkpointing is not equal"
+            )
+
+    for _ in range(5):
+        t1.train_step()
+    t1.save_checkpoint()
+
+    torch.distributed.barrier()
+
+    # flip sharding setting to test that sharded checkpoints load ok in non-sharded mode and vice versa
+    cfg_diffusion.training.force_sharding = not cfg_diffusion.training.force_sharding
+    t2 = trainer.Trainer(cfg_diffusion.copy())
+    net2 = t2.net
+    opt2 = t2.optimizer
+
+    options = StateDictOptions(full_state_dict=True)
+    (params1, opt_params1) = get_state_dict(net1, opt1, options=options)
+    (params2, opt_params2) = get_state_dict(net2, opt2, options=options)
+
+    assert set(params1.keys()) == set(params2.keys()), (
+        "Model state dicts before and after checkpointing have different keys"
+    )
+    assert set(opt_params1.keys()) == set(opt_params2.keys()), (
+        "Optimizer state dicts before and after checkpointing have different keys"
+    )
+
+    for key, param1 in params1.items():
+        param2 = params2[key]
+        assert (param1 == param2).all().cpu().item(), (
+            f"Model parameter {key} before (force_sharding={force_sharding}) and after force_sharding={not force_sharding} checkpointing is not equal"
+        )
+
+    for key, opt_param1 in opt_params1["state"].items():
+        opt_param2 = opt_params2["state"][key]
+        for opt_var in opt_param1:
+            assert (opt_param1[opt_var] == opt_param2[opt_var]).all().cpu().item(), (
+                f"Optimizer parameter {key} before (force_sharding={force_sharding}) and after force_sharding={not force_sharding} checkpointing is not equal"
             )
 
     if dist.world_size != 4:
