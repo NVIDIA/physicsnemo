@@ -1,0 +1,1 @@
+{"g_scalar":{"device":"cpu","shape":[],"dtype":"torch.float32","is_nested":false},"g_vector":{"device":"cpu","shape":[3],"dtype":"torch.float32","is_nested":false},"shape":[],"device":"cpu","_type":"<class 'tensordict._td.TensorDict'>"}

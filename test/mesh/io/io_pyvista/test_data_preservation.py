@@ -17,7 +17,9 @@
 """Tests for physicsnemo.mesh.io module - data preservation.
 
 Tests validate that all data (point_data, cell_data, field_data) is correctly
-preserved during PyVista → physicsnemo.mesh conversion across backends.
+preserved during PyVista → physicsnemo.mesh conversion across backends, and
+that the :class:`physicsnemo.mesh.Mesh` constructor itself robustly accepts
+PyVista's :class:`DataSetAttributes` containers (a non-dict ``Mapping``).
 """
 
 import numpy as np
@@ -203,3 +205,105 @@ class TestDataPreservationParametrized:
             torch.from_numpy(pv_mesh.field_data["time"]),
             atol=1e-6,
         )
+
+
+### Direct Mesh construction with PyVista DataSetAttributes ###
+
+
+class TestMeshConstructorAcceptsPyVistaDataSetAttributes:
+    """Mesh(...) must accept PyVista DataSetAttributes (a non-dict Mapping).
+
+    This is a regression test for a silent data-loss bug surfaced by
+    ``tensordict>=0.12``: the ``@tensorclass`` auto-init's fast path wraps any
+    non-dict ``Mapping`` as ``NonTensorData`` and drops all keys. The
+    ``from_pyvista`` helper sidesteps this by pre-converting to a plain
+    ``dict[str, torch.Tensor]``, but users that build a ``Mesh`` directly from a
+    ``pyvista`` mesh's data containers must work too.
+    """
+
+    @staticmethod
+    def _make_polydata_with_data(n_points: int = 4, n_cells: int = 2):
+        """Build a tiny 2D PolyData carrying scalar and vector data on every container."""
+        points_np = np.array(
+            [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]], dtype=np.float32
+        )[:n_points]
+        # Two triangles sharing an edge.
+        faces_np = np.array([3, 0, 1, 2, 3, 1, 3, 2], dtype=np.int64)[: 4 * n_cells]
+        pv_mesh = pv.PolyData(points_np, faces=faces_np)
+
+        rng = np.random.default_rng(seed=0)
+        pv_mesh.point_data["p_scalar"] = rng.random(n_points, dtype=np.float32)
+        pv_mesh.point_data["p_vector"] = rng.random((n_points, 3), dtype=np.float32)
+        pv_mesh.cell_data["c_scalar"] = rng.random(n_cells, dtype=np.float32)
+        pv_mesh.cell_data["c_vector"] = rng.random((n_cells, 3), dtype=np.float32)
+        pv_mesh.field_data["g_scalar"] = np.array([42.0], dtype=np.float32)
+        return pv_mesh
+
+    def test_cell_data_passed_directly_is_preserved(self):
+        """``Mesh(cell_data=pv_mesh.cell_data, ...)`` must keep every key/value."""
+        pv_mesh = self._make_polydata_with_data()
+        points = torch.from_numpy(pv_mesh.points)
+        cells = torch.from_numpy(pv_mesh.regular_faces).long()
+
+        mesh = Mesh(points=points, cells=cells, cell_data=pv_mesh.cell_data)
+
+        assert set(mesh.cell_data.keys()) == {"c_scalar", "c_vector"}
+        assert mesh.cell_data["c_scalar"].shape == (mesh.n_cells,)
+        assert mesh.cell_data["c_vector"].shape == (mesh.n_cells, 3)
+        assert torch.allclose(
+            mesh.cell_data["c_scalar"], torch.from_numpy(pv_mesh.cell_data["c_scalar"])
+        )
+        assert torch.allclose(
+            mesh.cell_data["c_vector"], torch.from_numpy(pv_mesh.cell_data["c_vector"])
+        )
+
+    def test_point_data_passed_directly_is_preserved(self):
+        """``Mesh(point_data=pv_mesh.point_data, ...)`` must keep every key/value."""
+        pv_mesh = self._make_polydata_with_data()
+        points = torch.from_numpy(pv_mesh.points)
+        cells = torch.from_numpy(pv_mesh.regular_faces).long()
+
+        mesh = Mesh(points=points, cells=cells, point_data=pv_mesh.point_data)
+
+        assert set(mesh.point_data.keys()) == {"p_scalar", "p_vector"}
+        assert torch.allclose(
+            mesh.point_data["p_scalar"],
+            torch.from_numpy(pv_mesh.point_data["p_scalar"]),
+        )
+        assert torch.allclose(
+            mesh.point_data["p_vector"],
+            torch.from_numpy(pv_mesh.point_data["p_vector"]),
+        )
+
+    def test_global_data_passed_directly_is_preserved(self):
+        """``Mesh(global_data=pv_mesh.field_data, ...)`` must keep every key/value."""
+        pv_mesh = self._make_polydata_with_data()
+        points = torch.from_numpy(pv_mesh.points)
+        cells = torch.from_numpy(pv_mesh.regular_faces).long()
+
+        mesh = Mesh(points=points, cells=cells, global_data=pv_mesh.field_data)
+
+        assert "g_scalar" in mesh.global_data
+        assert torch.allclose(
+            mesh.global_data["g_scalar"],
+            torch.from_numpy(pv_mesh.field_data["g_scalar"]),
+        )
+
+    def test_all_data_containers_passed_directly(self):
+        """Every PyVista data container at once must round-trip cleanly."""
+        pv_mesh = self._make_polydata_with_data()
+        points = torch.from_numpy(pv_mesh.points)
+        cells = torch.from_numpy(pv_mesh.regular_faces).long()
+
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            point_data=pv_mesh.point_data,
+            cell_data=pv_mesh.cell_data,
+            global_data=pv_mesh.field_data,
+        )
+
+        # Every key from every container survives the constructor.
+        assert set(mesh.point_data.keys()) == set(pv_mesh.point_data.keys())
+        assert set(mesh.cell_data.keys()) == set(pv_mesh.cell_data.keys())
+        assert set(mesh.global_data.keys()) == set(pv_mesh.field_data.keys())

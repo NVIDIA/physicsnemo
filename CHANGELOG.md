@@ -207,6 +207,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than the `IntEnum` value, and skipping non-numeric VTK arrays
   (strings, objects) when copying point / cell / field data into the
   `Mesh` `TensorDict`s instead of failing the conversion.
+- In PhysicsNeMo-Mesh, the `Mesh` constructor now preserves data when
+  `point_data` / `cell_data` / `global_data` are passed as a non-dict
+  `Mapping` (notably PyVista's `DataSetAttributes`). Previously, with
+  `tensordict >= 0.12`, the `@tensorclass(tensor_only=True)` auto-init
+  silently wrapped such Mappings as `NonTensorData` and dropped every key,
+  so e.g. `Mesh(cell_data=pv_mesh.cell_data, ...)` produced an empty
+  `cell_data`. `Mesh.__post_init__` now detects this wrapping and unwraps
+  the original Mapping before coercing to `TensorDict`. The `tensor_only`
+  fast path is preserved, so internal Mesh constructions (slicing,
+  transforms, `from_pyvista`) keep their full speed. Backed by new direct-
+  construction regression tests, a `cell_data` / `global_data` memmap
+  round-trip test, and a committed `.pmsh` golden fixture that locks the
+  on-disk format against silent breakage in future changes.
 - In PhysicsNeMo-Mesh, `safe_eps(dtype)` is now capped at
   `torch.finfo(dtype).eps`, which fixes a float16 corner case where the
   previous `tiny ** 0.25` floor exceeded machine epsilon and could
