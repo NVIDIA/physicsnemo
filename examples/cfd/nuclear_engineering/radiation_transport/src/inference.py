@@ -57,6 +57,7 @@ from losses import (
 )
 from transforms import denormalize_flux
 
+from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.checkpoint import load_checkpoint
 
 
@@ -64,6 +65,10 @@ from physicsnemo.utils.checkpoint import load_checkpoint
 # Checkpoint loading
 # =========================================================================
 
+# Inference is single-process; avoid PhysicsNeMo checkpoint loading auto-detecting
+# SLURM variables from an interactive allocation and waiting for missing ranks.
+if not DistributedManager.is_initialized():
+    DistributedManager._shared_state["_is_initialized"] = True
 
 def load_hydra_config(checkpoint_dir: Union[str, Path]) -> DictConfig:
     """Load the Hydra config saved next to a checkpoint.
