@@ -680,8 +680,14 @@ def _resolve_data_path(
     cfg: DictConfig,
     cli_data_path: str,
     split_file: Union[str, Path],
+    flux_stats_file: Optional[Union[str, Path]] = None,
 ) -> None:
-    """Override ``case.data_root`` and ``data.input_dir`` to the user-supplied path."""
+    """Override data-source paths in the saved config to the user-supplied locations.
+
+    ``flux_stats_file`` is optional: when ``None`` the saved Hydra config's
+    ``data.flux_normalization_stats_file`` is left untouched (so the path the
+    model was trained against is reused).
+    """
     OmegaConf.update(cfg, "case.data_root", cli_data_path, force_add=True)
     case_type = cfg.case.type
     OmegaConf.update(
@@ -693,13 +699,13 @@ def _resolve_data_path(
         str(Path(cli_data_path) / case_type),
         force_add=True,
     )
-    flux_stats_file = Path(cli_data_path) / "stats" / f"{case_type}_flux_stats.yaml"
-    OmegaConf.update(
-        cfg,
-        "data.flux_normalization_stats_file",
-        str(flux_stats_file),
-        force_add=True,
-    )
+    if flux_stats_file is not None:
+        OmegaConf.update(
+            cfg,
+            "data.flux_normalization_stats_file",
+            str(flux_stats_file),
+            force_add=True,
+        )
     split_file = Path(split_file)
     OmegaConf.update(cfg, "case.split_file", str(split_file), force_add=True)
     OmegaConf.update(cfg, "data.split_file", str(split_file), force_add=True)
@@ -722,7 +728,8 @@ def main():
         "--data_path",
         type=Path,
         required=True,
-        help="Dataset root containing <case>/, splits/, and stats/.",
+        help="Dataset root containing the per-case mesh stores "
+        "(e.g. <DATA_ROOT>/lattice/*.mesh).",
     )
     parser.add_argument(
         "--case_type",
@@ -736,6 +743,15 @@ def main():
         type=Path,
         required=True,
         help="Explicit train/val/test split JSON to use for evaluation.",
+    )
+    parser.add_argument(
+        "--flux_stats_file",
+        type=Path,
+        default=None,
+        help="Override the flux normalization stats YAML recorded in the "
+        "checkpoint's hydra config (e.g. <DATA_ROOT>/stats/<case>_flux_stats.yaml). "
+        "If omitted, the path saved at training time is reused. The matching "
+        "<case>_material_stats.yaml is read from the same directory.",
     )
     parser.add_argument(
         "--output_dir",
@@ -782,7 +798,9 @@ def main():
         OmegaConf.update(cfg, "case.type", args.case_type, force_add=True)
     if not args.split_file.exists():
         raise FileNotFoundError(f"Split file not found: {args.split_file}")
-    _resolve_data_path(cfg, str(args.data_path), args.split_file)
+    if args.flux_stats_file is not None and not args.flux_stats_file.exists():
+        raise FileNotFoundError(f"Flux stats file not found: {args.flux_stats_file}")
+    _resolve_data_path(cfg, str(args.data_path), args.split_file, args.flux_stats_file)
 
     if cfg.model.get("num_spatial_points", -1) != -1:
         OmegaConf.update(cfg, "model.num_spatial_points", -1, force_add=True)

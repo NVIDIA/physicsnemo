@@ -295,14 +295,18 @@ python src/inference.py \
     --output_dir results/lattice
 ```
 
+By default, `--flux_stats_file` is read from the checkpoint's saved hydra
+config — pass `--flux_stats_file <PATH>` to override.
+
 CLI options:
 
 | Flag | Effect |
 |---|---|
 | `--checkpoint_dir DIR` | A directory containing `Transolver.0.0.mdlus` + `checkpoint.0.0.pt`. Pass either a `best_*/` snapshot dir or the run's `checkpoints/` root (where inference will use `top_model`). |
-| `--data_path DIR` | The same `<DATA_ROOT>` you trained against. The script overrides `case.data_root` and stats paths from this. |
+| `--data_path DIR` | The dataset root containing the per-case mesh stores (e.g. `<DATA_ROOT>/lattice/*.mesh`). |
 | `--case_type {lattice,hohlraum}` | Required. |
 | `--split_file FILE` | Required explicit split JSON. |
+| `--flux_stats_file FILE` | Optional override for the flux-normalization YAML recorded in the checkpoint's hydra config. If omitted, the training-time path is reused. The matching `<case>_material_stats.yaml` is read from the same directory. |
 | `--output_dir DIR` | Where to write metrics + figures. Default: `<run_dir>/evaluation`. |
 | `--num_samples N` | Limit to the first `N` test simulations (default: all). |
 | `--device {cpu,cuda,cuda:0,...}` | Defaults to CUDA if available. |
