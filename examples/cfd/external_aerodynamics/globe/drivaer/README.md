@@ -106,7 +106,7 @@ and multiscale kernels parameterized by per-sample reference lengths
 4. Parse reference lengths and force coefficients from CSV files
 5. Cache preprocessed samples as .pt files for fast subsequent loading
 6. At load time, randomly subsample cells for the GLOBE boundary mesh
-   (default 20K faces, configurable via `--boundary-n-faces`)
+   (configurable via `--n_faces_per_boundary`)
 
 ## Expected Training Behavior
 
