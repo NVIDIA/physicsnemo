@@ -79,6 +79,7 @@ class WarmupCosineScheduler(torch.optim.lr_scheduler._LRScheduler):
         super().__init__(optimizer, last_epoch)
 
     def get_lr(self):
+        """Return the per-group learning rates for the current ``last_epoch``."""
         if self.last_epoch < self.warmup_epochs:
             # Linear warmup
             warmup_factor = (self.last_epoch + 1) / max(1, self.warmup_epochs)
@@ -208,7 +209,7 @@ def region_weighted_loss_fn(
         target: Ground truth values (B, N, 1)
         material_labels: Material label per cell (B, N) or (B, N, 1), integer values
         case_type: "hohlraum" or "lattice"
-        loss_type: Type of loss - "mse" or "rmse"
+        loss_type: Type of loss - "mse" or "weighted_rel_l2" (relative-L2 form, not true RMSE)
         padded_value: Value used for padding (will be masked out)
         void_weight: Weight for void (fill gas) regions
         material_weight: Weight for solid material regions
@@ -246,7 +247,7 @@ def region_weighted_loss_fn(
     squared_error = (output - target) ** 2.0
     weighted_error = weights * squared_error
 
-    if loss_type == "rmse":
+    if loss_type == "weighted_rel_l2":
         weighted_target_sq = weights * target**2.0
         loss = torch.sqrt(weighted_error.sum() / (weighted_target_sq.sum() + 1e-8))
     else:  # mse
@@ -341,12 +342,11 @@ def denormalize_flux_from_stats(
     only after validating shapes, so the stats must be available).
     """
     if flux_normalization_stats is None:
-        raise ValueError(
-            "flux_normalization_stats is required for QoI denormalization"
-        )
+        raise ValueError("flux_normalization_stats is required for QoI denormalization")
     # Sibling import is safe: transforms.py is foundational and does not
     # import from losses.py (verified via static cross-module check).
     from transforms import denormalize_flux
+
     return denormalize_flux(normalized_flux, flux_normalization_stats)
 
 
@@ -416,9 +416,7 @@ def compute_lattice_qoi_loss(
         predicted_flux = denormalize_flux_from_stats(
             predicted_flux, flux_normalization_stats
         )
-        target_flux = denormalize_flux_from_stats(
-            target_flux, flux_normalization_stats
-        )
+        target_flux = denormalize_flux_from_stats(target_flux, flux_normalization_stats)
 
     # reshape for QoI computation: (B, 1, N) for single timestep
     predicted_flux_qoi = predicted_flux.unsqueeze(1)  # (B, 1, N)
@@ -500,9 +498,7 @@ def compute_hohlraum_qoi_loss(
         predicted_flux = denormalize_flux_from_stats(
             predicted_flux, flux_normalization_stats
         )
-        target_flux = denormalize_flux_from_stats(
-            target_flux, flux_normalization_stats
-        )
+        target_flux = denormalize_flux_from_stats(target_flux, flux_normalization_stats)
 
     predicted_flux_qoi = predicted_flux.unsqueeze(1)
     target_flux_qoi = target_flux.unsqueeze(1)
@@ -839,9 +835,7 @@ def evaluate_hohlraum_qoi_torch(
     in_vertical = (
         (x < pos_red_left_border) & (y > pos_red_left_bottom) & (y < pos_red_left_top)
     ) | (
-        (x > pos_red_right_border)
-        & (y > pos_red_left_bottom)
-        & (y < pos_red_right_top)
+        (x > pos_red_right_border) & (y > pos_red_left_bottom) & (y < pos_red_right_top)
     )
     in_horizontal = (y > 0.6) | (y < -0.6)
 

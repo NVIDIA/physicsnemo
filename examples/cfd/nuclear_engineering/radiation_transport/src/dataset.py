@@ -104,13 +104,22 @@ class ZarrDataReader(Reader):
         self.cache_static_arrays = cache_static_arrays
         self.max_cache_size = max_cache_size
 
-        # LRU cache for static arrays keyed by filename; values are dicts of
-        # ``torch.Tensor``.
-        self._static_cache: OrderedDict[str, Dict[str, torch.Tensor]] = OrderedDict()
+        # LRU cache for static arrays keyed by ``(filename, load_material_properties,
+        # load_geometric_features, load_sigma_fields)``; values are dicts of
+        # ``torch.Tensor``. Keying on the load-flag tuple prevents a second
+        # caller from getting a stale partial entry that was loaded with a
+        # different set of flags.
+        self._static_cache: OrderedDict[
+            Tuple[str, bool, bool, bool], Dict[str, torch.Tensor]
+        ] = OrderedDict()
         self._cache_hits = 0
         self._cache_misses = 0
         self._cache_evictions = 0
         self._cache_lock = threading.Lock()
+
+        # Per-file metadata cache. Metadata is static so we can reopen zarr
+        # at most once per filename instead of every ``__getitem__`` call.
+        self._metadata_cache: Dict[str, Dict] = {}
 
         if not self.data_path.exists():
             raise ValueError(f"Data path {self.data_path} does not exist")
@@ -159,6 +168,7 @@ class ZarrDataReader(Reader):
         return list(self._filenames)
 
     def get_cache_stats(self) -> Dict[str, float]:
+        """Return current static-array cache hit/miss counters and size."""
         with self._cache_lock:
             total = self._cache_hits + self._cache_misses
             hit_rate = (self._cache_hits / total * 100) if total > 0 else 0.0
@@ -172,6 +182,7 @@ class ZarrDataReader(Reader):
             }
 
     def clear_cache(self):
+        """Drop the static-array cache and reset hit/miss/eviction counters."""
         with self._cache_lock:
             self._static_cache.clear()
             self._cache_hits = 0
@@ -207,6 +218,15 @@ class ZarrDataReader(Reader):
         if not filepath.exists():
             raise FileNotFoundError(f"Zarr store {filepath} not found")
 
+        # Cache key includes load-flag tuple so a second caller asking for
+        # fields not loaded the first time does not get stale partial data.
+        cache_key = (
+            filename,
+            bool(load_material_properties),
+            bool(load_geometric_features),
+            bool(load_sigma_fields),
+        )
+
         z = zarr.open(str(filepath), mode="r")
 
         # ------- flux + timesteps (steady-state first -> final snapshots) -------
@@ -236,12 +256,12 @@ class ZarrDataReader(Reader):
 
         # ------- static-arrays cache lookup -------
         with self._cache_lock:
-            cache_hit = self.cache_static_arrays and filename in self._static_cache
+            cache_hit = self.cache_static_arrays and cache_key in self._static_cache
             cached_entry = None
             if cache_hit:
                 self._cache_hits += 1
-                self._static_cache.move_to_end(filename)
-                cached_entry = dict(self._static_cache[filename])  # shallow copy
+                self._static_cache.move_to_end(cache_key)
+                cached_entry = dict(self._static_cache[cache_key])  # shallow copy
 
         td = TensorDict({}, batch_size=[])
         td["scalar_flux"] = torch.from_numpy(scalar_flux)
@@ -279,7 +299,7 @@ class ZarrDataReader(Reader):
                         td[key] = torch.from_numpy(np.array(z[key], dtype=np.float32))
 
             if self.cache_static_arrays:
-                self._maybe_cache_entry(filename, td)
+                self._maybe_cache_entry(cache_key, td)
 
         # Non-tensor metadata ride as NonTensorData so transforms and adapters
         # that access ``td["metadata"]`` keep working unchanged.
@@ -287,13 +307,17 @@ class ZarrDataReader(Reader):
         td.set_non_tensor("metadata", attrs)
         return td
 
-    def _maybe_cache_entry(self, filename: str, td: TensorDict) -> None:
-        """LRU-cache the static tensor fields of ``td`` under ``filename``."""
+    def _maybe_cache_entry(
+        self,
+        cache_key: Tuple[str, bool, bool, bool],
+        td: TensorDict,
+    ) -> None:
+        """LRU-cache the static tensor fields of ``td`` under ``cache_key``."""
         with self._cache_lock:
             if (
                 self.max_cache_size > 0
                 and len(self._static_cache) >= self.max_cache_size
-                and filename not in self._static_cache
+                and cache_key not in self._static_cache
             ):
                 evicted = next(iter(self._static_cache))
                 del self._static_cache[evicted]
@@ -312,14 +336,22 @@ class ZarrDataReader(Reader):
             ):
                 if key in td:
                     entry[key] = td[key]
-            self._static_cache[filename] = entry
+            self._static_cache[cache_key] = entry
 
     # ------------------------------------------------------------------
     # Metadata helpers
     # ------------------------------------------------------------------
 
     def get_metadata(self, filename: str) -> Dict:
-        """Return metadata without loading full sample data."""
+        """Return metadata without loading full sample data.
+
+        Metadata is static per file, so the result is cached on the reader
+        and subsequent calls for the same ``filename`` skip the zarr open.
+        """
+        cached = self._metadata_cache.get(filename)
+        if cached is not None:
+            return cached
+
         filepath = self.data_path / filename
         z = zarr.open(str(filepath), mode="r")
 
@@ -337,6 +369,8 @@ class ZarrDataReader(Reader):
                 raise ValueError(
                     f"Failed to read sim_times tail from {filename}"
                 ) from exc
+
+        self._metadata_cache[filename] = metadata
         return metadata
 
 

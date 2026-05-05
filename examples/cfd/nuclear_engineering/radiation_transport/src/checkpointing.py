@@ -34,6 +34,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 from omegaconf import DictConfig
@@ -41,6 +42,7 @@ from torch.amp import GradScaler
 from torch.utils.tensorboard import SummaryWriter
 
 from physicsnemo.distributed import DistributedManager
+from physicsnemo.optim import CombinedOptimizer
 from physicsnemo.utils.checkpoint import load_checkpoint
 from physicsnemo.utils.logging.launch import LaunchLogger
 
@@ -182,71 +184,6 @@ def _create_muon_optimizer(
     return CombinedOptimizer(optimizers)
 
 
-class CombinedOptimizer(torch.optim.Optimizer):
-    """Wrapper to combine multiple optimizers into a single interface.
-
-    This allows using Muon for 2D params and Adam for 1D params while
-    maintaining a standard optimizer interface for the training loop.
-    Inherits from ``torch.optim.Optimizer`` for compatibility with LR schedulers.
-    """
-
-    def __init__(self, optimizers: List[torch.optim.Optimizer]):
-        self.optimizers = optimizers
-
-        # Collect all params for the base Optimizer init.
-        all_params = []
-        for opt in optimizers:
-            for group in opt.param_groups:
-                all_params.extend(group["params"])
-
-        # Initialize base Optimizer with dummy defaults; the actual param_groups
-        # come from the wrapped optimizers below.
-        super().__init__(all_params, defaults={})
-
-        # Replace param_groups with the ones from the wrapped optimizers.
-        self.param_groups = []
-        for opt in optimizers:
-            self.param_groups.extend(opt.param_groups)
-
-    def zero_grad(self, set_to_none: bool = True) -> None:
-        """Zero gradients for all wrapped optimizers."""
-        for opt in self.optimizers:
-            opt.zero_grad(set_to_none=set_to_none)
-
-    def step(self, closure=None) -> None:
-        """Step every wrapped optimizer."""
-        for opt in self.optimizers:
-            opt.step(closure=closure)
-
-    def state_dict(self) -> dict:
-        """Return combined state dict."""
-        return {
-            "optimizers": [opt.state_dict() for opt in self.optimizers],
-        }
-
-    def load_state_dict(self, state_dict: dict) -> None:
-        """Load combined state dict."""
-        if "optimizers" not in state_dict:
-            raise KeyError(
-                "Expected CombinedOptimizer state_dict to contain 'optimizers', "
-                f"got keys: {list(state_dict.keys())}"
-            )
-
-        optimizer_states = state_dict["optimizers"]
-        if len(optimizer_states) != len(self.optimizers):
-            raise ValueError(
-                f"State dict contains {len(optimizer_states)} optimizer(s), "
-                f"but this CombinedOptimizer has {len(self.optimizers)} optimizer(s)."
-            )
-
-        for opt, opt_state in zip(self.optimizers, optimizer_states):
-            opt.load_state_dict(opt_state)
-
-        self.param_groups = []
-        for opt in self.optimizers:
-            self.param_groups.extend(opt.param_groups)
-
-
 # =========================================================================
 # Save / load checkpoints
 # =========================================================================
@@ -264,13 +201,46 @@ BEST_QOI_MODEL_DIR = "best_qoi_model"
 LATEST_CHECKPOINT_DIR = "latest_checkpoint"
 
 
+def _capture_rng_state() -> Dict[str, Any]:
+    """Snapshot torch / numpy RNGs for exact-reproducible resume."""
+    state: Dict[str, Any] = {
+        "torch": torch.get_rng_state(),
+        "numpy": np.random.get_state(),
+    }
+    if torch.cuda.is_available():
+        state["torch_cuda_all"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def _require_checkpoint_files(path: Path, *, require_training_state: bool) -> None:
+    """Raise FileNotFoundError if expected checkpoint files are missing."""
+    pt_files = list(path.glob("*.pt"))
+    mdlus_files = list(path.glob("*.mdlus"))
+    missing = []
+    if require_training_state and not pt_files:
+        missing.append("*.pt (training state)")
+    if not mdlus_files:
+        missing.append("*.mdlus (model state)")
+    if missing:
+        present = [f.name for f in path.iterdir() if f.is_file()]
+        raise FileNotFoundError(
+            f"Checkpoint at {path} is incomplete; missing {missing}. "
+            f"Files present: {present}"
+        )
+
+
 def _checkpoint_kwargs_with_metadata(
     checkpoint_kwargs: Dict[str, Any], **metadata_updates
 ) -> Dict[str, Any]:
-    """Return checkpoint kwargs with selected metadata keys refreshed."""
+    """Return checkpoint kwargs with selected metadata keys refreshed.
+
+    Always refreshes ``rng_state`` so every save automatically captures the
+    current torch / numpy RNG state for reproducible resume.
+    """
     updated_kwargs = dict(checkpoint_kwargs)
     metadata = dict(updated_kwargs.get("metadata") or {})
     metadata.update(metadata_updates)
+    metadata["rng_state"] = _capture_rng_state()
     updated_kwargs["metadata"] = metadata
     return updated_kwargs
 
@@ -304,6 +274,10 @@ def save_latest_checkpoint(
     if tmp_path.exists():
         shutil.rmtree(tmp_path)
     tmp_path.mkdir(parents=True, exist_ok=True)
+
+    # Route through metadata helper so every latest checkpoint captures the
+    # current RNG state for reproducible resume.
+    checkpoint_kwargs = _checkpoint_kwargs_with_metadata(checkpoint_kwargs)
 
     save_checkpoint_fn(path=str(tmp_path), epoch=epoch, **checkpoint_kwargs)
 
@@ -655,6 +629,7 @@ def resume_or_pretrain(
                 "train.resume_checkpoint must be a checkpoint directory, "
                 f"not a file: {resume_path}"
             )
+        _require_checkpoint_files(resume_path, require_training_state=True)
 
         if dist.rank == 0:
             logger.info(f"\nResuming from checkpoint: {resume_path}")
@@ -674,6 +649,20 @@ def resume_or_pretrain(
             best_val_losses = metadata["best_val_losses"]
         if "best_qoi_loss" in metadata:
             best_qoi_loss = metadata["best_qoi_loss"]
+
+        rng_state = metadata.get("rng_state")
+        if rng_state:
+            if "torch" in rng_state:
+                torch.set_rng_state(rng_state["torch"].cpu().to(torch.uint8))
+            if "numpy" in rng_state:
+                np.random.set_state(rng_state["numpy"])
+            if "torch_cuda_all" in rng_state and torch.cuda.is_available():
+                cuda_states = [
+                    s.cpu().to(torch.uint8) for s in rng_state["torch_cuda_all"]
+                ]
+                torch.cuda.set_rng_state_all(cuda_states)
+            if dist.rank == 0:
+                logger.info("  RNG state restored from checkpoint")
 
         if dist.rank == 0:
             logger.info(f"  Resumed from epoch {start_epoch}")
@@ -696,6 +685,7 @@ def resume_or_pretrain(
                 "train.pretrain_checkpoint must be a checkpoint directory, "
                 f"not a file: {pretrain_path}"
             )
+        _require_checkpoint_files(pretrain_path, require_training_state=False)
 
         if dist.rank == 0:
             logger.info(

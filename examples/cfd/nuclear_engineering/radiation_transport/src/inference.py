@@ -55,10 +55,8 @@ from losses import (
     evaluate_lattice_qoi_torch,
     extract_geometry_params,
 )
-from trainer import initialize_distributed_manager
 from transforms import denormalize_flux
 
-from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.checkpoint import load_checkpoint
 
 
@@ -133,8 +131,6 @@ def load_model_from_checkpoint(
         device = torch.device(device)
 
     cfg = load_hydra_config(checkpoint_dir)
-
-    initialize_distributed_manager()
 
     # Build model from cfg.model. Strip RTE-specific keys consumed elsewhere.
     cfg_model = OmegaConf.to_container(cfg.model, resolve=True)
@@ -787,13 +783,9 @@ def main():
         raise FileNotFoundError(f"Split file not found: {args.split_file}")
     _resolve_data_path(cfg, str(args.data_path), args.split_file)
 
-    num_spatial_points = cfg.model.get("num_spatial_points", -1)
-    if num_spatial_points != -1:
-        print(
-            "Warning: evaluation will use the checkpoint's "
-            f"num_spatial_points={num_spatial_points}; field metrics and QoI "
-            "are computed on that subsampled point set."
-        )
+    if cfg.model.get("num_spatial_points", -1) != -1:
+        OmegaConf.update(cfg, "model.num_spatial_points", -1, force_add=True)
+        print("Forcing num_spatial_points=-1 for full-mesh evaluation.")
 
     # Output dir defaults to ``<run_dir>/evaluation``.
     if args.output_dir is None:

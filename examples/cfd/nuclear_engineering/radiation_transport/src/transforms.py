@@ -99,7 +99,7 @@ def denormalize_flux(
     std = stats["log_flux_std"]
     clip = stats["clip_threshold"]
     log_flux = normalized_flux * std + mean
-    log_flux = torch.clamp(log_flux, min=-300, max=300)
+    log_flux = torch.clamp(log_flux, min=-38, max=38)
     flux = torch.pow(10.0, log_flux) - clip
     return torch.clamp(flux, min=0.0)
 
@@ -247,6 +247,7 @@ class FourierFeatures(Transform):
         ]
 
     def get_output_dim(self) -> int:
+        """Number of Fourier-feature channels emitted (``2 * num_frequencies * coord_dims``)."""
         return 2 * self.num_frequencies * self.coord_dims
 
     def __call__(self, data: TensorDict) -> TensorDict:
@@ -294,13 +295,26 @@ class SpatialSampler(Transform):
     thousands of cells, far above any practical ``num_points``).
     """
 
+    # Stride used when re-seeding per epoch; large prime keeps streams disjoint.
+    _EPOCH_PRIME: int = 1_000_003
+
     def __init__(self, num_points: int, seed: Optional[int] = None):
         super().__init__()
         self.num_points = num_points
         self.seed = seed
-        self.rng = (
-            np.random.default_rng(seed) if seed is not None else np.random.default_rng()
-        )
+        self.gen = torch.Generator()
+        if seed is not None:
+            self.gen.manual_seed(int(seed))
+
+    def set_epoch(self, epoch: int) -> None:
+        """Re-seed the generator for a new epoch (deterministic reshuffle).
+
+        No-op when ``self.seed`` is ``None`` (caller opted into a non-deterministic
+        run; preserve current generator state).
+        """
+        if self.seed is None:
+            return
+        self.gen.manual_seed(int(self.seed) + int(epoch) * self._EPOCH_PRIME)
 
     def __call__(self, data: TensorDict) -> TensorDict:
         if self.num_points == -1:
@@ -316,8 +330,8 @@ class SpatialSampler(Transform):
                 "than any configured num_points, so this should never happen."
             )
 
-        indices_np = self.rng.choice(num_available, self.num_points, replace=False)
-        indices = torch.from_numpy(indices_np.astype(np.int64))
+        indices = torch.randperm(num_available, generator=self.gen)[: self.num_points]
+        indices = indices.to(torch.int64)
 
         spatial_keys = [
             "coordinates",
@@ -374,6 +388,7 @@ class SteadyStateSampler(Transform):
             int(max_timestep) if max_timestep is not None else int(target_idx),
         )
         return data
+
 
 # =========================================================================
 # Public API

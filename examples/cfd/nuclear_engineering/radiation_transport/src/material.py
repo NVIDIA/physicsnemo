@@ -31,7 +31,11 @@ from transforms import Transform
 
 
 class MaterialPropertyExtractor(Transform):
-    """Stack precomputed sigma fields into a per-cell ``(N, 4)`` tensor."""
+    """Stack precomputed sigma fields into a per-cell ``(N, 4)`` tensor.
+
+    Q must be present in the source data; it may be all-zero for source-free
+    regimes (e.g., hohlraum).
+    """
 
     def __call__(self, data: TensorDict) -> TensorDict:
         for key in ("sigma_a", "sigma_s", "sigma_t", "Q"):

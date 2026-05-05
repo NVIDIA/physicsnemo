@@ -44,6 +44,7 @@ The on-disk YAML schema matches the originals so that ``load_flux_stats`` /
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Dict
@@ -202,50 +203,59 @@ def compute_material_statistics(
     print(f"Dataset loaded: {len(dataset)} samples")
 
     print("\nAccumulating physical_properties...")
-    all_sigma_a, all_sigma_s, all_sigma_t, all_Q = [], [], [], []
+
+    # We track count, running mean, and M2 (sum of squared deviations from
+    # the running mean); the population std is sqrt(M2 / count)
+    prop_names = ("sigma_a", "sigma_s", "sigma_t", "Q")
+    count = 0
+    mean_running = np.zeros(len(prop_names), dtype=np.float64)
+    m2_running = np.zeros(len(prop_names), dtype=np.float64)
+    min_running = np.full(len(prop_names), np.inf, dtype=np.float64)
+    max_running = np.full(len(prop_names), -np.inf, dtype=np.float64)
 
     for i in range(len(dataset)):
         sample = extractor(dataset[i])
         props = sample["physical_properties"]
         if isinstance(props, torch.Tensor):
             props = props.detach().cpu().numpy()
-        all_sigma_a.append(props[:, 0])
-        all_sigma_s.append(props[:, 1])
-        all_sigma_t.append(props[:, 2])
-        all_Q.append(props[:, 3])
+        # Cast to float64 for the accumulator; the on-disk tensors are fp32.
+        props = np.asarray(props, dtype=np.float64)
+        n_i = props.shape[0]
+        if n_i == 0:
+            continue
+
+        # Per-batch sufficient stats (mean and M2) for combination
+        batch_mean = props.mean(axis=0)
+        batch_m2 = ((props - batch_mean) ** 2).sum(axis=0)
+
+        new_count = count + n_i
+        delta = batch_mean - mean_running
+        mean_running = mean_running + delta * (n_i / new_count)
+        m2_running = m2_running + batch_m2 + (delta**2) * (count * n_i / new_count)
+        count = new_count
+
+        np.minimum(min_running, props.min(axis=0), out=min_running)
+        np.maximum(max_running, props.max(axis=0), out=max_running)
+
         if (i + 1) % 100 == 0:
             print(f"  Processed {i + 1}/{len(dataset)} samples")
 
-    all_sigma_a = np.concatenate(all_sigma_a)
-    all_sigma_s = np.concatenate(all_sigma_s)
-    all_sigma_t = np.concatenate(all_sigma_t)
-    all_Q = np.concatenate(all_Q)
+    if count == 0:
+        raise RuntimeError(
+            "compute_material_statistics: dataset produced zero cells; "
+            "cannot compute stats."
+        )
+
+    std_running = np.sqrt(m2_running / count)
 
     stats = {
-        "sigma_a": {
-            "mean": float(np.mean(all_sigma_a)),
-            "std": float(np.std(all_sigma_a)),
-            "min": float(np.min(all_sigma_a)),
-            "max": float(np.max(all_sigma_a)),
-        },
-        "sigma_s": {
-            "mean": float(np.mean(all_sigma_s)),
-            "std": float(np.std(all_sigma_s)),
-            "min": float(np.min(all_sigma_s)),
-            "max": float(np.max(all_sigma_s)),
-        },
-        "sigma_t": {
-            "mean": float(np.mean(all_sigma_t)),
-            "std": float(np.std(all_sigma_t)),
-            "min": float(np.min(all_sigma_t)),
-            "max": float(np.max(all_sigma_t)),
-        },
-        "Q": {
-            "mean": float(np.mean(all_Q)),
-            "std": float(np.std(all_Q)),
-            "min": float(np.min(all_Q)),
-            "max": float(np.max(all_Q)),
-        },
+        name: {
+            "mean": float(mean_running[j]),
+            "std": float(std_running[j]),
+            "min": float(min_running[j]),
+            "max": float(max_running[j]),
+        }
+        for j, name in enumerate(prop_names)
     }
 
     print("\nMaterial statistics:")
@@ -312,6 +322,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """CLI entry: compute and write flux + material statistics YAMLs."""
     args = _parse_args()
 
     output_dir: Path = args.output_dir

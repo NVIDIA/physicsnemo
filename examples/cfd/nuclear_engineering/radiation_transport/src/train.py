@@ -304,7 +304,10 @@ def _parse_amp(cfg: DictConfig) -> Tuple[bool, Optional[torch.dtype], str]:
         return use_amp, torch.bfloat16, dtype_str
     if dtype_str in ("fp16", "float16"):
         return use_amp, torch.float16, dtype_str
-    return use_amp, None, dtype_str
+    raise ValueError(
+        f"Unsupported amp_dtype {dtype_str!r}; "
+        "allowed values are 'bf16', 'bfloat16', 'fp16', 'float16'."
+    )
 
 
 # =========================================================================
@@ -420,8 +423,8 @@ def main(cfg: DictConfig) -> None:
         ``warmup_start_fraction * base`` to ``base`` over the first
         ``warmup_epochs``. After warmup, the weight stays at ``base``.
 
-        Both train and val use the same epoch-specific weight so that the
-        validation ``loss_qoi`` value is comparable across epochs.
+        Validation always uses the unwarmed-up final ``loss_cfg`` so val_loss
+        is comparable across epochs and best-checkpoint selection is meaningful.
         """
         if not use_physics_loss or physics_loss_warmup_epochs <= 0:
             return {}, {}
@@ -438,7 +441,7 @@ def main(cfg: DictConfig) -> None:
                 f"weight={current_weight:.6f} (target={physics_loss_weight_base})"
             )
         epoch_loss_cfg = {**loss_cfg, "physics_loss_weight": current_weight}
-        return {"loss_cfg": epoch_loss_cfg}, {"loss_cfg": epoch_loss_cfg}
+        return {"loss_cfg": epoch_loss_cfg}, {"loss_cfg": loss_cfg}
 
     def after_epoch_fn(epoch, train_log, val_log, val_loss, current_lr):
         train_loss = train_log.epoch_losses.get("loss", 0.0)

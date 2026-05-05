@@ -180,6 +180,9 @@ class TransolverAdapter:
 @register("RTECollateNoPadding")
 def collate_no_padding(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Batch-size-1 collate: unsqueeze each tensor, pass non-tensors through."""
+    assert len(batch) == 1, (
+        f"collate_no_padding requires batch_size=1; got {len(batch)}"
+    )
     item = batch[0]
     return {
         k: v.unsqueeze(0) if isinstance(v, torch.Tensor) else v for k, v in item.items()
@@ -209,7 +212,11 @@ def _build_rte_dataset_kwargs(cfg: DictConfig) -> dict:
         "normalize_coordinates": data_cfg.get("normalize_coordinates", True),
         "flux_clip_threshold": data_cfg.flux_clip_threshold,
         "split_file": cfg.case.split_file,
-        "seed": data_cfg.get("seed") or cfg.get("train", {}).get("seed"),
+        "seed": (
+            data_cfg.get("seed", None)
+            if data_cfg.get("seed", None) is not None
+            else cfg.get("train", {}).get("seed", None)
+        ),
         "cache_static_arrays": data_cfg.get("cache_static_arrays", True),
         "max_cache_size": data_cfg.get("max_cache_size", 200),
         "include_q_in_embedding": cfg.model.get("include_q_in_embedding", True),
@@ -754,6 +761,7 @@ def build_dataloaders(
                     rank=dist.rank,
                     shuffle=cfg.train.sampler.shuffle,
                     drop_last=cfg.train.sampler.get("drop_last", False),
+                    seed=int(cfg.train.get("seed", 0) or 0),
                 )
                 train_sampler = sampler
             else:
@@ -776,9 +784,36 @@ def build_dataloaders(
     return loaders, train_sampler
 
 
+def set_epoch_on_transforms(loader: Optional[DataLoader], epoch: int) -> None:
+    """Forward ``epoch`` to any transform exposing ``set_epoch``.
+
+    Walks ``loader.dataset`` (an ``RTEDataPipe``), pulls the ``Compose`` of
+    transforms, and calls ``set_epoch(epoch)`` on every child that defines
+    one (e.g. ``SpatialSampler``). Safe no-op when the loader, dataset, or
+    transforms are missing.
+    """
+    if loader is None:
+        return
+    dataset = getattr(loader, "dataset", None)
+    transforms = getattr(dataset, "transforms", None)
+    if transforms is None:
+        return
+    # ``Compose`` defines its own ``set_epoch`` that propagates to children.
+    set_epoch = getattr(transforms, "set_epoch", None)
+    if callable(set_epoch):
+        set_epoch(epoch)
+        return
+    # Fallback: iterate manually.
+    for t in transforms:
+        fn = getattr(t, "set_epoch", None)
+        if callable(fn):
+            fn(epoch)
+
+
 __all__ = [
     "TransolverAdapter",
     "collate_no_padding",
     "RTEDataPipe",
     "build_dataloaders",
+    "set_epoch_on_transforms",
 ]

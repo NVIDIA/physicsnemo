@@ -22,7 +22,7 @@ boilerplate that sits beside them:
 
 * DDP primitives — ``set_seed``, ``setup_training_environment``, ``wrap_ddp``,
   ``log_effective_batch_size``, ``synchronize_output_directory``,
-  ``cleanup_sync_marker``, ``aggregate_validation_loss``.
+  ``aggregate_validation_loss``.
 * Per-step / per-epoch helpers — ``compute_losses``, ``grad_step``,
   ``flush_partial_accumulation``.
 * Training loop — ``run_training_loop``.
@@ -31,12 +31,10 @@ Optimizer / scheduler construction and checkpoint save/load live in
 ``checkpointing.py`` and ``losses.py`` respectively.
 """
 
-import hashlib
 import logging
 import math
 import os
 import random
-import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
@@ -58,15 +56,13 @@ from checkpointing import (
     save_best_qoi_checkpoint,
     save_latest_checkpoint,
 )
+from loader import set_epoch_on_transforms
 from losses import compute_physics_loss, masked_mse_loss, region_weighted_loss_fn
 
 
 # =========================================================================
 # DDP primitives & environment setup
 # =========================================================================
-
-# Marker file to signal that output directory is ready
-SYNC_MARKER_FILE = ".rank0_ready"
 
 
 def _setup_logger(name: str, log_file: Optional[str] = None) -> logging.Logger:
@@ -115,21 +111,18 @@ def set_seed(seed: int, deterministic: bool = False) -> None:
 def synchronize_output_directory(
     cfg: DictConfig,
     dist: DistributedManager,
-    max_wait_seconds: int = 300,
-    poll_interval: float = 1.0,
 ) -> str:
-    """Synchronize the output directory across DDP ranks via a file marker.
+    """Synchronize the output directory across DDP ranks via torch broadcast.
 
     Hydra's timestamp-based output paths can otherwise produce one folder per
-    rank. Rank 0 creates the directory and writes a marker file containing the
-    path; other ranks busy-wait on the marker, then read the synchronized path
-    and update ``cfg.output`` in place.
+    rank. Rank 0 creates the directory; the resolved path is broadcast from
+    rank 0 to every other rank, which updates ``cfg.output`` in place if it
+    differs and ensures the directory exists locally. Ends with a barrier so
+    no rank proceeds before the directory is in place.
 
     Args:
         cfg: Hydra configuration with an ``output`` field.
         dist: DistributedManager instance.
-        max_wait_seconds: Maximum time non-rank-0 processes will wait.
-        poll_interval: How often to check for the marker file.
 
     Returns:
         The synchronized output directory path.
@@ -146,73 +139,29 @@ def synchronize_output_directory(
         os.makedirs(output_dir, exist_ok=True)
         return output_dir
 
-    # Use a shared marker location that all ranks can see
-    marker_dir = os.path.dirname(output_dir)
-    os.makedirs(marker_dir, exist_ok=True)
-    path_hash = hashlib.md5(output_dir.encode()).hexdigest()[:8]
-    marker_file = os.path.join(marker_dir, f".sync_{path_hash}")
-
+    # By the time this is called, DistributedManager.initialize() has run, so
+    # torch_dist.is_initialized() is True for distributed runs.
     if dist.rank == 0:
         print(f"[Rank 0] Creating output directory: {output_dir}")
         os.makedirs(output_dir, exist_ok=True)
         os.makedirs(os.path.join(output_dir, "checkpoints"), exist_ok=True)
 
-        with open(marker_file, "w") as f:
-            f.write(output_dir)
+    payload = [output_dir]
+    torch_dist.broadcast_object_list(payload, src=0)
+    synced_output_dir = payload[0]
 
-        print(f"[Rank 0] Marker file created: {marker_file}")
-
-    else:
-        print(f"[Rank {dist.rank}] Waiting for rank 0 to create output directory...")
-
-        waited = 0.0
-        while not os.path.exists(marker_file):
-            if waited >= max_wait_seconds:
-                raise TimeoutError(
-                    f"[Rank {dist.rank}] Timeout waiting for rank 0 to create "
-                    f"output directory. Waited {max_wait_seconds}s for marker "
-                    f"file: {marker_file}"
-                )
-            time.sleep(poll_interval)
-            waited += poll_interval
-
-            if waited % 30 == 0:
-                print(f"[Rank {dist.rank}] Still waiting... ({waited:.0f}s)")
-
-        # Small delay to ensure the file is fully written
-        time.sleep(0.5)
-        with open(marker_file, "r") as f:
-            synced_output_dir = f.read().strip()
-
+    if dist.rank != 0:
         if synced_output_dir != output_dir:
             print(f"[Rank {dist.rank}] Syncing to output: {synced_output_dir}")
             OmegaConf.set_struct(cfg, False)
             cfg.output = synced_output_dir
             OmegaConf.set_struct(cfg, True)
             output_dir = synced_output_dir
-
+        os.makedirs(output_dir, exist_ok=True)
         print(f"[Rank {dist.rank}] Synchronized to output directory: {output_dir}")
 
-    if torch_dist.is_initialized():
-        torch_dist.barrier()
-
+    torch_dist.barrier()
     return output_dir
-
-
-def cleanup_sync_marker(output_dir: str) -> None:
-    """Remove the synchronization marker file at the end of training.
-
-    Should be called by rank 0 only.
-    """
-    marker_dir = os.path.dirname(output_dir)
-    path_hash = hashlib.md5(output_dir.encode()).hexdigest()[:8]
-    marker_file = os.path.join(marker_dir, f".sync_{path_hash}")
-
-    if os.path.exists(marker_file):
-        try:
-            os.remove(marker_file)
-        except OSError:
-            pass
 
 
 def aggregate_validation_loss(
@@ -453,6 +402,12 @@ def compute_losses(
     if not loss_cfg.get("use_physics_loss", False):
         return loss_mse, loss_mse, None, {}
 
+    physics_w = loss_cfg.get("physics_loss_weight", 0.1)
+    if not physics_w:
+        # Zero (or missing/None) weight -> physics loss is disabled; skip the
+        # QoI computation entirely.
+        return loss_mse, loss_mse, None, {}
+
     with autocast(enabled=False, device_type=device.type):
         loss_qoi, qoi_details = compute_physics_loss(
             case_type=case_type,
@@ -468,7 +423,6 @@ def compute_losses(
             qoi_region=loss_cfg.get("qoi_region", "center"),
         )
 
-    physics_w = loss_cfg.get("physics_loss_weight", 0.1)
     mse_w = loss_cfg.get("physics_loss_mse_weight", 1.0)
     loss = mse_w * loss_mse + physics_w * loss_qoi
     return loss, loss_mse, loss_qoi, qoi_details
@@ -633,6 +587,10 @@ def run_training_loop(
         for epoch in range(start_epoch, cfg.train.epochs):
             if train_sampler is not None:
                 train_sampler.set_epoch(epoch)
+            # Propagate epoch to spatial samplers / other stochastic transforms
+            # so each rank reshuffles deterministically per epoch.
+            set_epoch_on_transforms(train_loader, epoch)
+            set_epoch_on_transforms(val_loader, epoch)
 
             train_kw = dict(train_epoch_kwargs)
             val_kw = dict(validate_kwargs)
@@ -823,6 +781,9 @@ def run_training_loop(
             logger.info("\n" + "=" * 70)
             logger.info("Training interrupted by user")
             logger.info("=" * 70)
+        # Re-raise so the process exits non-zero and callers can distinguish
+        # an interrupted run from a clean finish.
+        raise
 
     finally:
         if finally_fn is not None:
@@ -831,20 +792,22 @@ def run_training_loop(
             writer.close()
 
         if dist.rank == 0:
-            logger.info("\n" + "=" * 70)
-            logger.info("Training completed!")
-            loss_strs = [f"{loss:.6f}" for loss, _ in best_val_losses]
-            logger.info(f"Top validation losses: {loss_strs}")
-            if best_qoi_loss < float("inf"):
-                logger.info(f"Best QoI loss: {best_qoi_loss:.6e}")
-            logger.info(f"Checkpoints saved to: {checkpoint_dir}")
-            logger.info("=" * 70)
-
             if training_completed:
+                logger.info("\n" + "=" * 70)
+                logger.info("Training completed!")
+                loss_strs = [f"{loss:.6f}" for loss, _ in best_val_losses]
+                logger.info(f"Top validation losses: {loss_strs}")
+                if best_qoi_loss < float("inf"):
+                    logger.info(f"Best QoI loss: {best_qoi_loss:.6e}")
+                logger.info(f"Checkpoints saved to: {checkpoint_dir}")
+                logger.info("=" * 70)
+
                 completion_marker = os.path.join(checkpoint_dir, ".training_complete")
                 with open(completion_marker, "w") as f:
                     f.write(f"completed_epochs={cfg.train.epochs}\n")
                     f.write(f"target_epochs={cfg.train.epochs}\n")
                 logger.info(f"Training complete marker written to: {completion_marker}")
-
-            cleanup_sync_marker(cfg.output)
+            else:
+                logger.info("\n" + "=" * 70)
+                logger.info("Training interrupted (no completion marker written)")
+                logger.info("=" * 70)
