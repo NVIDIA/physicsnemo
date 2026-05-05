@@ -19,6 +19,7 @@ import torch
 from physicsnemo.core.version_check import OptionalImport
 
 triton = OptionalImport("triton")
+_libdevice = OptionalImport("triton.language.extra.libdevice")
 
 N_FEATURES = 30
 # Layout:
@@ -127,9 +128,9 @@ def local_solar_time(
 
 if triton.available:
     tl = triton.language
-    fsin = triton.language.extra.libdevice.fast_sinf
-    fcos = triton.language.extra.libdevice.fast_cosf
-    isnan = triton.language.extra.libdevice.isnan
+    fsin = _libdevice.fast_sinf
+    fcos = _libdevice.fast_cosf
+    isnan = _libdevice.isnan
 
     @triton.jit
     def _fourier_store(out_ptr, base, offset, x_norm, valid, m, NUM_FREQS: tl.constexpr):
