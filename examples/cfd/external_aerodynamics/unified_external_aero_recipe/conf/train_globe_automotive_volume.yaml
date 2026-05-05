@@ -19,13 +19,10 @@
 # ---------------------------------------------------------------------------
 # Trains GLOBE on DrivAerML volume data (predict velocity / pressure / nut
 # at the interior volume points using the car body surface as the
-# vehicle BC).
-#
-# The volume dataset YAML (drivaer_ml_volume.yaml) keeps the on-disk
-# boundary key `surface` (matching the .pdmsh file layout), so this config
-# uses `boundaries.surface` and `surface` as the BC name -- different from
-# the surface variant which uses `vehicle` (the key set by
-# MeshToDomainMesh).
+# vehicle BC). Mirrors the surface variant: both configs key the body
+# boundary uniformly as `boundaries.vehicle` (the curated DrivAerML
+# .pdmsh files standardize on `vehicle` for the car-body boundary in
+# both surface and volume layouts).
 
 output_dir: "runs"
 checkpoint_dir: null
@@ -44,7 +41,7 @@ output_type: mesh
 forward_kwargs:
   prediction_points: interior.points          # interior volume points
   boundary_meshes:
-    surface: boundaries.surface               # vehicle surface (named per .pdmsh)
+    vehicle: boundaries.vehicle               # car-body surface (curated key)
   reference_lengths:
     L_ref: 1.0                                # nondim
     delta_turb: 0.015                         # nondim
@@ -57,11 +54,11 @@ model:
     velocity: 1                # vector
     pressure: 0                # scalar
     nut: 0                     # scalar
-  # Volume's boundaries.surface.cell_data does not have precomputed
+  # Volume's boundaries.vehicle.cell_data does not have precomputed
   # normals (ComputeSurfaceNormals isn't part of the volume YAML), so
   # GLOBE only sees its own auto-computed cell normals.
   boundary_source_data_ranks:
-    surface: {}
+    vehicle: {}
   reference_length_names: [L_ref, delta_turb]
   reference_area: 0.0868       # 2.170 / 5.0^2 (nondim)
   n_communication_hyperlayers: 2

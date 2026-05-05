@@ -56,6 +56,7 @@ from loss import LossCalculator
 from metrics import MetricCalculator
 from omegaconf import DictConfig, OmegaConf
 from tabulate import tabulate
+from tensordict import TensorDict
 from torch.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 from utils import build_muon_optimizer, parse_target_config, set_seed
@@ -170,35 +171,39 @@ def _recursive_cast_floats(obj, dtype):
     return obj
 
 
-def _normalize_output_to_dict(
+def _normalize_output_to_tensordict(
     output,
     target_config: dict[str, str],
     output_type: str,
     n_spatial_dims: int = 3,
-) -> dict[str, torch.Tensor]:
-    """Adapt a model output into a `dict[name, Tensor]` keyed by target name.
+) -> TensorDict:
+    """Adapt a model output into a `TensorDict` keyed by target name.
 
     For ``output_type == "mesh"``, the output is expected to be a `Mesh`
-    whose `.point_data` contains one tensor per target name (e.g. GLOBE).
+    whose `.point_data` contains one tensor per target name (e.g. GLOBE);
+    we return ``output.point_data.select(*target_config)`` so the result
+    inherits the mesh's batch_size (``[N]``) and device.
 
     For ``output_type == "tensors"``, the output is expected to be a
     ``(B, N, C)`` tensor whose channels are concatenated in
     ``target_config`` order (e.g. GeoTransolver, Transolver, FLARE,
-    DoMINO). DoMINO returns a ``(vol, surf)`` tuple; we take the
-    non-None element automatically.
+    DoMINO); we slice it into a TensorDict with ``batch_size=[B, N]``.
+    DoMINO returns a ``(vol, surf)`` tuple; we take the non-None element
+    automatically.
     """
     if output_type == "mesh":
         if not isinstance(output, Mesh):
             raise TypeError(
                 f"output_type='mesh' but model returned {type(output).__name__}"
             )
-        missing = set(target_config) - set(output.point_data.keys())
+        available = set(output.point_data.keys())
+        missing = [name for name in target_config if name not in available]
         if missing:
             raise KeyError(
-                f"Mesh output is missing target fields {sorted(missing)!r}; "
-                f"available: {sorted(output.point_data.keys())!r}"
+                f"Mesh output is missing target fields {missing!r}; "
+                f"available: {sorted(available)!r}"
             )
-        return {name: output.point_data[name] for name in target_config}
+        return output.point_data.select(*target_config)
 
     if output_type == "tensors":
         if isinstance(output, tuple):
@@ -215,20 +220,18 @@ def _normalize_output_to_dict(
                 f"expected total channels {expected_channels} for "
                 f"target_config={target_config!r}."
             )
-        out: dict[str, torch.Tensor] = {}
+        td_dict: dict[str, torch.Tensor] = {}
         for spec in specs:
             slice_ = output[..., spec.start_index : spec.end_index]
             if spec.field_type == "scalar":
                 slice_ = slice_.squeeze(-1)
-            out[spec.name] = slice_
-        return out
+            td_dict[spec.name] = slice_
+        ### Leading two dims of every leaf are (B, N): scalars are (B, N)
+        ### after the squeeze and vectors are (B, N, D).
+        first_v = next(iter(td_dict.values()))
+        return TensorDict(td_dict, batch_size=first_v.shape[:2], device=first_v.device)
 
     raise ValueError(f"Unknown output_type {output_type!r}")
-
-
-def _cast_dict_to_float32(d: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Cast every tensor in a flat dict to float32 (used right before loss)."""
-    return {k: v.float() if isinstance(v, torch.Tensor) else v for k, v in d.items()}
 
 
 def forward_pass(
@@ -247,15 +250,17 @@ def forward_pass(
     Parameters
     ----------
     batch : dict
-        ``{"forward_kwargs": ..., "targets": dict[str, Tensor]}`` produced
-        by the collate function.
+        ``{"forward_kwargs": ..., "targets": TensorDict}`` produced by the
+        collate function. ``"targets"`` is a TensorDict with batch_size
+        ``[N]`` (mesh-input mode) or ``[1, N]`` (tensor-input mode).
     model : torch.nn.Module
         Model whose ``forward`` accepts the resolved ``forward_kwargs`` as
         keyword arguments.
     precision : str
         One of "float32", "float16", "bfloat16", "float8".
     output_type : str
-        "mesh" or "tensors". Controls how the model output is unpacked.
+        "mesh" or "tensors". Controls how the model output is unpacked
+        into a TensorDict.
     target_config : dict
         ``{name: "scalar"|"vector"}``; used to split tensor outputs and
         validate Mesh outputs.
@@ -267,7 +272,7 @@ def forward_pass(
     loss, metrics_dict, (output, targets)
     """
     forward_kwargs = batch["forward_kwargs"]
-    targets = batch["targets"]
+    targets: TensorDict = batch["targets"]
 
     ### Cast forward_kwargs floats to the autocast dtype. We cast inputs
     ### explicitly (not just rely on autocast) for parity with the legacy
@@ -280,13 +285,13 @@ def forward_pass(
     with get_autocast_context(precision):
         output = model(**forward_kwargs)
 
-    pred_dict = _normalize_output_to_dict(
+    pred_td = _normalize_output_to_tensordict(
         output, target_config, output_type, n_spatial_dims
     )
 
     ### Loss runs in float32 to avoid bf16 precision loss in the reduction.
-    pred_f32 = _cast_dict_to_float32(pred_dict)
-    target_f32 = _cast_dict_to_float32(targets)
+    pred_f32 = pred_td.float()
+    target_f32 = targets.float()
 
     loss, loss_dict = loss_calculator(pred_f32, target_f32)
 
@@ -334,7 +339,8 @@ def train_epoch(
     Parameters
     ----------
     dataloader : DataLoader
-        Training dataloader yielding ``dict[str, Tensor]`` batches.
+        Training dataloader yielding ``{"forward_kwargs": ..., "targets":
+        TensorDict}`` batches as produced by `build_collate_fn`.
     model : torch.nn.Module
         The model to train (already on ``dist_manager.device``).
     optimizer : torch.optim.Optimizer
@@ -498,7 +504,8 @@ def val_epoch(
     Parameters
     ----------
     dataloader : DataLoader
-        Validation dataloader yielding ``dict[str, Tensor]`` batches.
+        Validation dataloader yielding ``{"forward_kwargs": ..., "targets":
+        TensorDict}`` batches as produced by `build_collate_fn`.
     model : torch.nn.Module
         The model to evaluate (already on ``dist_manager.device``).
     loss_calculator : LossCalculator

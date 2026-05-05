@@ -14,12 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Configurable loss calculator on dict-of-tensor inputs.
+"""Configurable loss calculator on TensorDict inputs.
 
-The loss accepts ``dict[str, Tensor]`` predictions and targets keyed by
-field name, matching the recipe's DomainMesh-native flow. For each named
-target field declared in ``target_config``, the loss type is applied
-according to the field type:
+The loss accepts `TensorDict` predictions and targets keyed by field name,
+matching the recipe's DomainMesh-native flow. For each named target field
+declared in ``target_config``, the loss type is applied according to the
+field type:
 
 - ``"scalar"`` : single mean over all elements (matches per-element loss).
 - ``"vector"`` : per-component mean, summed across components (matches
@@ -38,6 +38,7 @@ from typing import Literal
 
 import torch
 import torch.nn.functional as F
+from tensordict import TensorDict
 
 from utils import parse_target_config
 
@@ -115,7 +116,7 @@ def _vector_loss(
 
 
 class LossCalculator:
-    """Per-field loss aggregator over `dict[str, Tensor]` predictions.
+    """Per-field loss aggregator over `TensorDict` predictions.
 
     Args:
         target_config: ``{name: scalar|vector}`` mapping. Iteration order
@@ -161,7 +162,8 @@ class LossCalculator:
         self.delta = delta
 
         ### Field specs are kept around purely to compute total_channels;
-        ### we no longer need start/end indices since we're dict-keyed.
+        ### per-field tensors are looked up by name in the input TensorDict,
+        ### so start/end indices are not needed.
         self._field_specs = parse_target_config(target_config, n_spatial_dims)
         self.total_channels = sum(spec.dim for spec in self._field_specs)
 
@@ -186,23 +188,26 @@ class LossCalculator:
 
     def __call__(
         self,
-        pred: dict[str, torch.Tensor],
-        target: dict[str, torch.Tensor],
+        pred: TensorDict,
+        target: TensorDict,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Compute per-field losses and a (weighted) total.
 
         Args:
-            pred: ``{name: Tensor}`` predictions. Each tensor has shape
-                ``(..., 1)`` or ``(..., D)`` for vectors, or shape
-                ``(...)`` for scalars (with optional leading batch dim).
-            target: Same shape as ``pred``.
+            pred: TensorDict of predictions, one leaf per target field.
+                Per-element scalars are shape ``(..., N)``, per-element
+                vectors are ``(..., N, D)``. Leading batch dims are
+                arbitrary; the loss kernels reduce over them.
+            target: TensorDict of the same structure as ``pred``.
 
         Returns:
             ``(total_loss, loss_dict)``. ``loss_dict`` has one entry per
             field (``"loss/[prefix/]<name>"``) plus a total entry.
         """
-        missing_pred = set(self.target_config) - set(pred)
-        missing_target = set(self.target_config) - set(target)
+        pred_keys = set(pred.keys())
+        target_keys = set(target.keys())
+        missing_pred = set(self.target_config) - pred_keys
+        missing_target = set(self.target_config) - target_keys
         if missing_pred:
             raise KeyError(f"pred is missing target fields {sorted(missing_pred)!r}")
         if missing_target:

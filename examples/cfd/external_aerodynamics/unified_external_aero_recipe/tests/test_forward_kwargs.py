@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+from tensordict import TensorDict
 
 from physicsnemo.mesh import DomainMesh, Mesh
 
@@ -377,7 +378,11 @@ class TestExtractTargets:
     def test_domain_mesh_input(self, simple_domain):
         """Domain mesh input."""
         result = extract_targets(simple_domain, {"pressure": "scalar", "wss": "vector"})
-        assert set(result) == {"pressure", "wss"}
+        ### Result is a TensorDict whose batch_size matches the source
+        ### point_data ([N] for the interior point cloud).
+        assert isinstance(result, TensorDict)
+        assert result.batch_size == torch.Size([10])
+        assert set(result.keys()) == {"pressure", "wss"}
         assert torch.equal(
             result["pressure"], simple_domain.interior.point_data["pressure"]
         )
@@ -393,6 +398,8 @@ class TestExtractTargets:
             point_data={"foo": torch.randn(5)},
         )
         result = extract_targets(mesh, {"foo": "scalar"})
+        assert isinstance(result, TensorDict)
+        assert result.batch_size == torch.Size([5])
         assert torch.equal(result["foo"], mesh.point_data["foo"])
 
     def test_missing_target_raises_keyerror(self, simple_domain):
@@ -409,4 +416,5 @@ class TestExtractTargets:
         ### Only requested fields are returned, even if the mesh has more.
         """Target config subset of available."""
         result = extract_targets(simple_domain, {"pressure": "scalar"})
-        assert set(result) == {"pressure"}
+        assert isinstance(result, TensorDict)
+        assert set(result.keys()) == {"pressure"}

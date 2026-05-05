@@ -88,7 +88,6 @@ pipeline:
     # contract. cell_data_targets are auto-injected from the `targets:` block.
     - _target_: ${dp:MeshToDomainMesh}
       interior_points: cell_centroids
-      boundary_name: vehicle
 
 targets:
   pressure: scalar

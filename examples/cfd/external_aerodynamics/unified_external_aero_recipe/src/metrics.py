@@ -14,10 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Configurable metric calculator on dict-of-tensor inputs.
+"""Configurable metric calculator on TensorDict inputs.
 
-Mirrors the dict-based interface of :class:`LossCalculator`. Each named
-target field declared in ``target_config`` produces:
+Mirrors the TensorDict-based interface of :class:`LossCalculator`. Each
+named target field declared in ``target_config`` produces:
 
 - For ``"scalar"`` types: per-metric values (``l1``, ``l2``, ``mae`` by
   default), keyed ``"<prefix>/<name>_<metric>"``.
@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import torch
 import torch.distributed as dist
+from tensordict import TensorDict
 
 from utils import parse_target_config
 
@@ -90,7 +91,7 @@ VECTOR_COMPONENTS = ("x", "y", "z", "w")
 
 
 class MetricCalculator:
-    """Per-field metric aggregator over `dict[str, Tensor]` predictions.
+    """Per-field metric aggregator over `TensorDict` predictions.
 
     Args:
         target_config: ``{name: scalar|vector}`` mapping.
@@ -157,11 +158,26 @@ class MetricCalculator:
 
     def __call__(
         self,
-        pred: dict[str, torch.Tensor],
-        target: dict[str, torch.Tensor],
+        pred: TensorDict,
+        target: TensorDict,
     ) -> dict[str, torch.Tensor]:
-        missing_pred = set(self.target_config) - set(pred)
-        missing_target = set(self.target_config) - set(target)
+        """Compute per-field metrics over a TensorDict pred / target pair.
+
+        Args:
+            pred: TensorDict of predictions, one leaf per target field.
+            target: TensorDict of the same structure as ``pred``.
+
+        Returns:
+            Flat ``{key: scalar tensor}`` dict suitable for logging. Keys
+            are formed as ``"<prefix>/<name>_<metric>"`` for scalar
+            fields and as ``"<prefix>/<name>_<comp>_<metric>"`` plus
+            ``"<prefix>/<name>_<metric>"`` (aggregate magnitude) for
+            vector fields.
+        """
+        pred_keys = set(pred.keys())
+        target_keys = set(target.keys())
+        missing_pred = set(self.target_config) - pred_keys
+        missing_target = set(self.target_config) - target_keys
         if missing_pred:
             raise KeyError(f"pred is missing target fields {sorted(missing_pred)!r}")
         if missing_target:

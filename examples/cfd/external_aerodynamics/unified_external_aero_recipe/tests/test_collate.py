@@ -20,12 +20,13 @@ Covers the two-mode batching contract:
 
 - ``input_type='tensors'``: tensor values get padded up to ``ndim >= 2``
   and prepended with a batch dim of 1 (so 1-D token features become
-  ``(1, 1, D)`` and per-element features become ``(1, N, C)``); target
-  tensors get only a batch dim (so ``(N,) -> (1, N)`` instead of
-  ``(1, 1, N)``).
+  ``(1, 1, D)`` and per-element features become ``(1, N, C)``); the
+  targets TensorDict gets a single ``unsqueeze(0)`` so its batch_size
+  goes from ``[N]`` to ``[1, N]`` (per-element scalars become ``(1, N)``,
+  per-element vectors become ``(1, N, D)``).
 - ``input_type='mesh'``: forward kwargs and targets pass through
   unchanged; Mesh objects, scalar tensors, and nested dicts all stay
-  in their natural shape.
+  in their natural shape; the targets TensorDict keeps batch_size ``[N]``.
 
 Plus the failure paths: ``batch_size > 1`` raises ``NotImplementedError``;
 unknown ``input_type`` raises ``ValueError``.
@@ -35,10 +36,11 @@ from __future__ import annotations
 
 import pytest
 import torch
+from tensordict import TensorDict
 
 from physicsnemo.mesh import DomainMesh, Mesh
 
-from collate import _add_batch_dim_only, _add_batch_dim_token, build_collate_fn
+from collate import _add_batch_dim_token, build_collate_fn
 
 
 ### ---------------------------------------------------------------------------
@@ -98,21 +100,6 @@ class TestBatchDimHelpers:
         t = torch.randn(10, 5)
         assert tuple(_add_batch_dim_token(t).shape) == (1, 10, 5)
 
-    def test_target_batch_only_one_dim(self):
-        ### Per-element scalar target (N,) -> (1, N) only -- NOT (1, 1, N).
-        """Target batch only one dim."""
-        t = torch.arange(10, dtype=torch.float32)
-        out = _add_batch_dim_only(t)
-        assert tuple(out.shape) == (1, 10)
-        assert torch.equal(out[0], t)
-
-    def test_target_batch_only_two_dim(self):
-        ### Per-element vector target (N, dim) -> (1, N, dim).
-        """Target batch only two dim."""
-        t = torch.randn(10, 3)
-        out = _add_batch_dim_only(t)
-        assert tuple(out.shape) == (1, 10, 3)
-
 
 ### ---------------------------------------------------------------------------
 ### Tensor-input collate (transformer-style models)
@@ -164,17 +151,20 @@ class TestTensorInputCollate:
         assert tuple(w.shape) == (1, 1, 1)
         assert float(w) == pytest.approx(0.42)
 
-    def test_scalar_target_does_not_get_padded(self, domain):
-        ### The asymmetry with forward_kwargs: scalar targets stay (1, N).
-        ### If they were padded to (1, 1, N) they wouldn't match the model's
-        ### (1, N) split-from-(B, N, C) prediction.
-        """Scalar target does not get padded."""
+    def test_targets_become_tensordict_with_batch_dim(self, domain):
+        ### The asymmetry with forward_kwargs: scalar target leaves stay
+        ### (1, N) (not padded to (1, 1, N)) so they match the model's
+        ### (1, N) split-from-(B, N, C) prediction. TensorDict.unsqueeze(0)
+        ### grows batch_size [6] -> [1, 6] and every leaf in lock-step.
+        """Targets become tensordict with batch dim."""
         collate = build_collate_fn(
             "tensors",
             {"geometry": "interior.points"},
             {"pressure": "scalar", "wss": "vector"},
         )
         batch = collate([(domain, {})])
+        assert isinstance(batch["targets"], TensorDict)
+        assert batch["targets"].batch_size == torch.Size([1, 6])
         assert tuple(batch["targets"]["pressure"].shape) == (1, 6)
         assert tuple(batch["targets"]["wss"].shape) == (1, 6, 3)
 
@@ -252,14 +242,17 @@ class TestMeshInputCollate:
             assert t.ndim == 0
             assert float(t) == pytest.approx(expected)
 
-    def test_targets_have_no_batch_dim(self, domain):
-        """Targets have no batch dim."""
+    def test_targets_are_tensordict_without_batch_dim(self, domain):
+        """Targets are tensordict without batch dim."""
         collate = build_collate_fn(
             "mesh",
             {"prediction_points": "interior.points"},
             {"pressure": "scalar", "wss": "vector"},
         )
         batch = collate([(domain, {})])
+        assert isinstance(batch["targets"], TensorDict)
+        ### Mesh-input mode: batch_size matches the source point_data ([N]).
+        assert batch["targets"].batch_size == torch.Size([6])
         assert tuple(batch["targets"]["pressure"].shape) == (6,)
         assert tuple(batch["targets"]["wss"].shape) == (6, 3)
 

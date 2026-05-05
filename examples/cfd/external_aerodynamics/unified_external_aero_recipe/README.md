@@ -98,9 +98,9 @@ flowchart LR
     Model --> Out{"output_type?"}
     Out -- mesh --> mout["Mesh.point_data"]
     Out -- tensors --> tout["(1, N, C) tensor"]
-    mout --> Norm["normalize to dict[name, Tensor]"]
+    mout --> Norm["normalize to TensorDict[name -> Tensor]"]
     tout --> Norm
-    Norm --> Loss["LossCalculator + MetricCalculator (dict interface; optional field_weights)"]
+    Norm --> Loss["LossCalculator + MetricCalculator (TensorDict interface; optional field_weights)"]
 ```
 
 ### Why each step exists
@@ -237,11 +237,13 @@ that follows a simple semantic contract:
   `interior.point_data` and are extracted by the loss / metric
   calculators by name.
 - **`boundaries`** — answers "what are the inputs?". A `dict[str, Mesh]`
-  keyed by boundary name. For surface configs this is
-  `{"vehicle": Mesh[2, 3]}` (the original triangulated surface, with
-  precomputed cell normals available on `cell_data`). For volume
-  configs the boundary key is `"surface"` (matching the .pdmsh on-disk
-  naming).
+  keyed by boundary name. The car / aircraft body is keyed `"vehicle"`
+  in both surface and volume configs (the curated DrivAerML and
+  HighLiftAeroML `.pdmsh` files standardize on `vehicle` as the
+  canonical body-boundary key, so `boundaries.vehicle` resolves
+  uniformly across domains). Surface configs additionally carry
+  precomputed cell normals on `boundaries.vehicle.cell_data` (from
+  `ComputeSurfaceNormals` in the surface dataset pipelines).
 - **`global_data`** — scalar metadata (`U_inf`, `L_ref`, etc.) injected
   from the dataset YAML's `metadata:` block.
 
@@ -331,8 +333,11 @@ with `input_type`, `output_type`, `forward_kwargs`, and `model:` blocks.
 No registry edits needed.
 
 The **loss calculator** (`src/loss.py`) and **metric calculator**
-(`src/metrics.py`) operate on `dict[str, Tensor]` predictions and targets,
+(`src/metrics.py`) operate on `TensorDict` predictions and targets,
 keyed by the field names declared in the dataset YAML's `targets:` block.
+The collate produces the targets `TensorDict` (`batch_size=[N]` in
+mesh-input mode, `[1, N]` in tensor-input mode); the predictions
+`TensorDict` is built from the model output with matching `batch_size`.
 For each field, the loss type is applied per the field's type (`scalar`
 or `vector`); per-field losses are then weighted by the optional
 `training.field_weights` block in the model YAML and summed.
@@ -552,8 +557,8 @@ mlflow:
 | `src/nondim.py` | Recipe-local transform: `NonDimensionalizeByMetadata`. Registered into the global datapipe registry. Supports pressure, stress, velocity, temperature, density, and identity field types. |
 | `src/forward_kwargs.py` | Spec resolver. Walks declarative `forward_kwargs:` specs (paths, lists, nested dicts, `expand_like` modifiers) into actual `model.forward()` kwargs against a DomainMesh. Also provides `extract_targets` (interior.point_data lookup by target name). |
 | `src/collate.py` | `build_collate_fn(input_type, forward_kwargs_spec, target_config)`. Resolves forward kwargs from each `DomainMesh` sample, extracts targets from `interior.point_data`. For `input_type='tensors'`, batch-wraps tensors with the right token / per-element padding; for `input_type='mesh'`, passes Mesh / dict / scalar values through unchanged. |
-| `src/loss.py` | `LossCalculator` — dict-of-tensors loss for mixed scalar/vector fields. Supports Huber, MSE, relative MSE. Optional `field_weights` per-field multiplicative weights. Normalizes total loss by number of output channels. |
-| `src/metrics.py` | `MetricCalculator` — dict-of-tensors metrics (relative L1, relative L2, MAE) with optional distributed all-reduce. Reports per-field and per-component (x/y/z) metrics for vector fields. |
+| `src/loss.py` | `LossCalculator` — TensorDict-based loss for mixed scalar/vector fields. Supports Huber, MSE, relative MSE. Optional `field_weights` per-field multiplicative weights. Normalizes total loss by number of output channels. |
+| `src/metrics.py` | `MetricCalculator` — TensorDict-based metrics (relative L1, relative L2, MAE) with optional distributed all-reduce. Reports per-field and per-component (x/y/z) metrics for vector fields. |
 | `src/utils.py` | `build_muon_optimizer` (Muon+AdamW via `CombinedOptimizer`), `parse_target_config`, `FieldSpec` dataclass, `set_seed`. |
 | `src/train.py` | Training loop with DDP, mixed precision, checkpointing, MLflow / TensorBoard / JSONL logging, I/O benchmarking (`benchmark_io=true`), and profiling. Dispatches forward-pass output unpacking on `output_type` (`mesh` -> extract from `Mesh.point_data`; `tensors` -> split `(B, N, C)` by `FieldSpec`). |
 

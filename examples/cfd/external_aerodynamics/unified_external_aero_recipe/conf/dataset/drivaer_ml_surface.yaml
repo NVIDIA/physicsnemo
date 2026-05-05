@@ -79,7 +79,6 @@ pipeline:
     # auto-injects `cell_data_targets` from the `targets:` block below.
     - _target_: ${dp:MeshToDomainMesh}
       interior_points: cell_centroids
-      boundary_name: vehicle
 
 # Single source of truth for prediction field names + types. Read by both the
 # dataset builder (auto-injected into MeshToDomainMesh above) and the train

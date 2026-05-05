@@ -20,8 +20,11 @@ The collate turns a single dataset sample (a `DomainMesh`) into a dict with
 exactly two keys:
 
 - ``"forward_kwargs"`` : ready to splat into ``model.forward(**...)``.
-- ``"targets"``        : ``dict[str, Tensor]`` of prediction targets
-                          extracted from ``interior.point_data``.
+- ``"targets"``        : `TensorDict` of prediction targets extracted from
+                          ``interior.point_data``. ``batch_size`` is
+                          ``[N]`` in mesh-input mode and ``[1, N]`` in
+                          tensor-input mode (the leading 1 comes from a
+                          ``targets.unsqueeze(0)`` performed here).
 
 Two `input_type`s are supported:
 
@@ -31,9 +34,10 @@ Two `input_type`s are supported:
                    objects pass through, scalar literals stay 0-d.
 - ``"tensors"`` -- transformer / point-cloud model (GeoTransolver,
                    Transolver, FLARE, DoMINO, ...). Every tensor in
-                   ``forward_kwargs`` and ``targets`` is padded to
-                   ``ndim >= 2`` and then prepended with a batch dim of
-                   1. Token-style features ``(D,)`` become ``(1, 1, D)``;
+                   ``forward_kwargs`` is padded to ``ndim >= 2`` and then
+                   prepended with a batch dim of 1; targets get a single
+                   ``unsqueeze(0)`` (TensorDict auto-grows every leaf).
+                   Token-style features ``(D,)`` become ``(1, 1, D)``;
                    per-element features ``(N, C)`` become ``(1, N, C)``.
 
 `batch_size > 1` is not implemented anywhere in the recipe (it raises a
@@ -68,19 +72,6 @@ def _add_batch_dim_token(t: torch.Tensor) -> torch.Tensor:
     """
     while t.ndim < 2:
         t = t.unsqueeze(0)
-    return t.unsqueeze(0)
-
-
-def _add_batch_dim_only(t: torch.Tensor) -> torch.Tensor:
-    """Prepend a batch dim of 1 without any pad-up.
-
-    Used for target tensors -- per-element scalars stay ``(1, N)`` instead
-    of being padded to ``(1, 1, N)``, which would mismatch the model's
-    ``(1, N)`` predicted scalar output.
-
-    - 1-d ``(N,)``    -> ``(1, N)``    (per-element scalar target)
-    - 2-d ``(N, dim)`` -> ``(1, N, dim)`` (per-element vector target)
-    """
     return t.unsqueeze(0)
 
 
@@ -151,13 +142,15 @@ def build_collate_fn(
         if add_batch_dim:
             ### forward_kwargs values get padded up to ndim>=2 first (so 1-D
             ### token features like `U_inf (3,)` become `(1, 1, 3)` tokens
-            ### compatible with `(1, N, C)` per-element features). Targets
-            ### just get a batch dim -- per-element scalars stay `(1, N)`
-            ### so they line up with the model's split (1, N) scalar output.
+            ### compatible with `(1, N, C)` per-element features).
             forward_kwargs = _add_batch_dim_recursive(
                 forward_kwargs, leaf_fn=_add_batch_dim_token
             )
-            targets = _add_batch_dim_recursive(targets, leaf_fn=_add_batch_dim_only)
+            ### TensorDict.unsqueeze grows the batch_size and every leaf in
+            ### lock-step: batch_size [N] -> [1, N]; pressure (N,) -> (1, N);
+            ### wss (N, 3) -> (1, N, 3). Per-element scalars stay (1, N) so
+            ### they line up with the model's (1, N) scalar output.
+            targets = targets.unsqueeze(0)
 
         return {"forward_kwargs": forward_kwargs, "targets": targets}
 

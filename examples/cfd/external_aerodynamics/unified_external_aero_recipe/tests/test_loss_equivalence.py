@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Numerical equivalence + field_weights correctness for the new dict-based loss.
+"""Numerical equivalence + field_weights correctness for the TensorDict-based loss.
 
 The previous (B, N, C)-tensor loss used:
 
@@ -23,9 +23,9 @@ The previous (B, N, C)-tensor loss used:
 - For vector fields: per-component sum of mean Huber.
 - Total: ``sum(per_field_losses) / total_channels``.
 
-The new dict-based ``LossCalculator`` should produce the same total when
-``field_weights`` is None (or all 1.0). This module verifies that and the
-correctness of ``field_weights``.
+The new TensorDict-based ``LossCalculator`` should produce the same total
+when ``field_weights`` is None (or all 1.0). This module verifies that and
+the correctness of ``field_weights``.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from __future__ import annotations
 import pytest
 import torch
 import torch.nn.functional as F
+from tensordict import TensorDict
 
 from loss import DEFAULT_HUBER_DELTA, LossCalculator
 from utils import parse_target_config
@@ -77,16 +78,31 @@ def _split_concat_tensor(
     tensor: torch.Tensor,
     target_config: dict[str, str],
     n_spatial_dims: int = 3,
-) -> dict[str, torch.Tensor]:
-    """Slice a (B, N, C) tensor by FieldSpec into the dict the new loss wants."""
+) -> TensorDict:
+    """Slice a (B, N, C) tensor by FieldSpec into the TensorDict the new loss wants."""
     specs = parse_target_config(target_config, n_spatial_dims=n_spatial_dims)
-    out: dict[str, torch.Tensor] = {}
+    leaves: dict[str, torch.Tensor] = {}
     for spec in specs:
         slice_ = tensor[..., spec.start_index : spec.end_index]
         if spec.field_type == "scalar":
             slice_ = slice_.squeeze(-1)
-        out[spec.name] = slice_
-    return out
+        leaves[spec.name] = slice_
+    ### Leading two dims are (B, N): scalars are (B, N), vectors are (B, N, D).
+    return TensorDict(leaves, batch_size=tensor.shape[:2], device=tensor.device)
+
+
+def _make_td(leaves: dict[str, torch.Tensor]) -> TensorDict:
+    """Wrap a flat ``{name: tensor}`` dict in a TensorDict.
+
+    Uses the leading dims shared by every leaf as ``batch_size`` -- i.e.,
+    ``shape[:min_ndim]`` of any leaf. For the test fixtures here, scalars
+    are ``(B, N)`` and vectors are ``(B, N, D)`` (or ``(N,)`` / ``(N, D)``
+    in the mesh-style no-batch case), so the scalar's shape is always a
+    prefix of every vector's.
+    """
+    min_ndim = min(v.ndim for v in leaves.values())
+    first = next(iter(leaves.values()))
+    return TensorDict(leaves, batch_size=first.shape[:min_ndim], device=first.device)
 
 
 ### ---------------------------------------------------------------------------
@@ -129,15 +145,15 @@ class TestLegacyEquivalence:
         ### Legacy reference total.
         legacy_total = _legacy_total_huber(pred, target, target_config)
 
-        ### New dict-based loss with default (no) weights.
+        ### New TensorDict-based loss with default (no) weights.
         new_loss = LossCalculator(
             target_config=target_config,
             loss_type="huber",
             field_weights=None,
         )
-        pred_dict = _split_concat_tensor(pred, target_config)
-        target_dict = _split_concat_tensor(target, target_config)
-        new_total, new_dict = new_loss(pred_dict, target_dict)
+        pred_td = _split_concat_tensor(pred, target_config)
+        target_td = _split_concat_tensor(target, target_config)
+        new_total, new_dict = new_loss(pred_td, target_td)
 
         ### Bit-exact (modulo floating-point reductions in the same order).
         assert torch.allclose(new_total, legacy_total, atol=1e-7, rtol=1e-6), (
@@ -153,16 +169,14 @@ class TestLegacyEquivalence:
         """Per field keys match target config."""
         torch.manual_seed(0)
         target_config = {"pressure": "scalar", "wss": "vector"}
-        pred_dict = {
-            "pressure": torch.randn(1, 30),
-            "wss": torch.randn(1, 30, 3),
-        }
-        target_dict = {
-            "pressure": torch.randn(1, 30),
-            "wss": torch.randn(1, 30, 3),
-        }
+        pred_td = _make_td(
+            {"pressure": torch.randn(1, 30), "wss": torch.randn(1, 30, 3)}
+        )
+        target_td = _make_td(
+            {"pressure": torch.randn(1, 30), "wss": torch.randn(1, 30, 3)}
+        )
         lc = LossCalculator(target_config=target_config, loss_type=loss_type)
-        _, ldict = lc(pred_dict, target_dict)
+        _, ldict = lc(pred_td, target_td)
         ### Per-field entries plus loss/total.
         assert set(ldict) == {"loss/pressure", "loss/wss", "loss/total"}
 
@@ -179,44 +193,40 @@ class TestFieldWeights:
         """field_weights={...: 1.0} is a no-op vs default (None)."""
         torch.manual_seed(0)
         target_config = {"pressure": "scalar", "wss": "vector"}
-        pred_dict = {
-            "pressure": torch.randn(1, 50),
-            "wss": torch.randn(1, 50, 3),
-        }
-        target_dict = {
-            "pressure": torch.randn(1, 50),
-            "wss": torch.randn(1, 50, 3),
-        }
+        pred_td = _make_td(
+            {"pressure": torch.randn(1, 50), "wss": torch.randn(1, 50, 3)}
+        )
+        target_td = _make_td(
+            {"pressure": torch.randn(1, 50), "wss": torch.randn(1, 50, 3)}
+        )
         no_weights = LossCalculator(target_config=target_config, loss_type="huber")
         unit_weights = LossCalculator(
             target_config=target_config,
             loss_type="huber",
             field_weights={"pressure": 1.0, "wss": 1.0},
         )
-        a, _ = no_weights(pred_dict, target_dict)
-        b, _ = unit_weights(pred_dict, target_dict)
+        a, _ = no_weights(pred_td, target_td)
+        b, _ = unit_weights(pred_td, target_td)
         assert torch.allclose(a, b, atol=1e-7)
 
     def test_single_field_weight_scales_linearly(self):
         """Weighting one field by k scales its per-field contribution by k."""
         torch.manual_seed(0)
         target_config = {"pressure": "scalar", "wss": "vector"}
-        pred_dict = {
-            "pressure": torch.randn(1, 50),
-            "wss": torch.randn(1, 50, 3),
-        }
-        target_dict = {
-            "pressure": torch.randn(1, 50),
-            "wss": torch.randn(1, 50, 3),
-        }
+        pred_td = _make_td(
+            {"pressure": torch.randn(1, 50), "wss": torch.randn(1, 50, 3)}
+        )
+        target_td = _make_td(
+            {"pressure": torch.randn(1, 50), "wss": torch.randn(1, 50, 3)}
+        )
         baseline = LossCalculator(target_config=target_config, loss_type="huber")
         boosted = LossCalculator(
             target_config=target_config,
             loss_type="huber",
             field_weights={"pressure": 1.0, "wss": 100.0},
         )
-        _, base_dict = baseline(pred_dict, target_dict)
-        _, boost_dict = boosted(pred_dict, target_dict)
+        _, base_dict = baseline(pred_td, target_td)
+        _, boost_dict = boosted(pred_td, target_td)
         ### Per-field loss values are weighted in the dict (loss_dict shows
         ### the WEIGHTED per-field loss).
         assert torch.allclose(
@@ -229,19 +239,21 @@ class TestFieldWeights:
         torch.manual_seed(42)
         target_config = {"a": "scalar", "b": "vector", "c": "scalar"}
         n_pts = 40
-        pred_dict = {
-            "a": torch.randn(1, n_pts),
-            "b": torch.randn(1, n_pts, 3),
-            "c": torch.randn(1, n_pts),
-        }
-        target_dict = {k: torch.randn_like(v) for k, v in pred_dict.items()}
+        pred_td = _make_td(
+            {
+                "a": torch.randn(1, n_pts),
+                "b": torch.randn(1, n_pts, 3),
+                "c": torch.randn(1, n_pts),
+            }
+        )
+        target_td = _make_td({name: torch.randn_like(v) for name, v in pred_td.items()})
         weights = {"a": 0.5, "b": 2.0, "c": 1.5}
         lc = LossCalculator(
             target_config=target_config,
             loss_type="huber",
             field_weights=weights,
         )
-        total, dct = lc(pred_dict, target_dict)
+        total, dct = lc(pred_td, target_td)
         expected = (dct["loss/a"] + dct["loss/b"] + dct["loss/c"]) / lc.total_channels
         assert torch.allclose(total, expected, atol=1e-7)
 
@@ -267,18 +279,17 @@ class TestShapeAgnostic:
         """With or without batch dim."""
         torch.manual_seed(7)
         target_config = {"pressure": "scalar", "wss": "vector"}
-        ### Mesh-input style (no batch dim).
-        pred_no_batch = {
-            "pressure": torch.randn(80),
-            "wss": torch.randn(80, 3),
-        }
-        target_no_batch = {
-            "pressure": torch.randn(80),
-            "wss": torch.randn(80, 3),
-        }
-        ### Same data with a leading batch dim of 1.
-        pred_with_batch = {k: v.unsqueeze(0) for k, v in pred_no_batch.items()}
-        target_with_batch = {k: v.unsqueeze(0) for k, v in target_no_batch.items()}
+        ### Mesh-input style (no batch dim) -- batch_size=[80].
+        pred_no_batch = _make_td(
+            {"pressure": torch.randn(80), "wss": torch.randn(80, 3)}
+        )
+        target_no_batch = _make_td(
+            {"pressure": torch.randn(80), "wss": torch.randn(80, 3)}
+        )
+        ### Same data with a leading batch dim of 1 -- batch_size=[1, 80].
+        ### TensorDict.unsqueeze grows the batch_size and every leaf in lock-step.
+        pred_with_batch = pred_no_batch.unsqueeze(0)
+        target_with_batch = target_no_batch.unsqueeze(0)
 
         lc = LossCalculator(target_config=target_config, loss_type="huber")
         loss_no_batch, _ = lc(pred_no_batch, target_no_batch)

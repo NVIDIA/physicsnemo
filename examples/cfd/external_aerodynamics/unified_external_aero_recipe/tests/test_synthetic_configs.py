@@ -48,6 +48,7 @@ import hydra
 import pytest
 import torch
 from omegaconf import DictConfig, OmegaConf
+from tensordict import TensorDict
 
 from physicsnemo.mesh import DomainMesh, Mesh
 
@@ -111,7 +112,7 @@ def _volume_domain_mesh(target_config: dict[str, str], n_pts: int = 200) -> Doma
     - ``interior``: volume point cloud carrying every target plus the
       ``sdf`` / ``sdf_normals`` input features that
       ``ComputeSDFFromBoundary`` produces.
-    - ``boundaries.surface``: triangulated wall with empty ``cell_data``
+    - ``boundaries.vehicle``: triangulated wall with empty ``cell_data``
       (volume YAMLs do not run ``ComputeSurfaceNormals``).
     - ``global_data``: freestream metadata.
     """
@@ -130,15 +131,15 @@ def _volume_domain_mesh(target_config: dict[str, str], n_pts: int = 200) -> Doma
         points=torch.randn(n_pts, 3),
         point_data=interior_point_data,
     )
-    n_surf_pts = max(n_pts // 4, 8)
-    n_surf_cells = max(n_pts // 4, 8)
-    surface = Mesh(
-        points=torch.randn(n_surf_pts, 3) * 2,
-        cells=torch.randint(0, n_surf_pts, (n_surf_cells, 3)),
+    n_vehicle_pts = max(n_pts // 4, 8)
+    n_vehicle_cells = max(n_pts // 4, 8)
+    vehicle = Mesh(
+        points=torch.randn(n_vehicle_pts, 3) * 2,
+        cells=torch.randint(0, n_vehicle_pts, (n_vehicle_cells, 3)),
     )
     return DomainMesh(
         interior=interior,
-        boundaries={"surface": surface},
+        boundaries={"vehicle": vehicle},
         global_data={
             "U_inf": torch.tensor([30.0, 0.0, 0.0]),
             "p_inf": torch.tensor(0.0),
@@ -267,33 +268,35 @@ _TENSOR_INPUT_CONFIGS: list[tuple[str, str, str]] = [
 ### ---------------------------------------------------------------------------
 
 
-def _output_to_dict(
+def _output_to_tensordict(
     output, target_config: dict[str, str], n_spatial_dims: int = 3
-) -> dict[str, torch.Tensor]:
+) -> TensorDict:
     """Mirror the output-normalization step in ``train.forward_pass``.
 
     For tensor outputs (the case for every config in
     :data:`_TENSOR_INPUT_CONFIGS`), this slices the ``(B, N, C)`` tensor
-    by ``target_config`` order using :class:`utils.FieldSpec`.
+    by ``target_config`` order using :class:`utils.FieldSpec` and returns
+    a TensorDict with batch_size ``[B, N]``.
 
-    For mesh outputs (GLOBE), looks up each named field in
-    ``output.point_data``.
+    For mesh outputs (GLOBE), returns ``output.point_data.select(*target_config)``
+    -- a TensorDict with batch_size ``[N]`` matching the mesh's points.
     """
     if isinstance(output, Mesh):
-        return {name: output.point_data[name] for name in target_config}
+        return output.point_data.select(*target_config)
     if isinstance(output, tuple):
         output = next(o for o in output if o is not None)
     assert isinstance(output, torch.Tensor), (
         f"expected tensor or Mesh output, got {type(output).__name__}"
     )
     specs = parse_target_config(target_config, n_spatial_dims=n_spatial_dims)
-    out: dict[str, torch.Tensor] = {}
+    leaves: dict[str, torch.Tensor] = {}
     for spec in specs:
         slice_ = output[..., spec.start_index : spec.end_index]
         if spec.field_type == "scalar":
             slice_ = slice_.squeeze(-1)
-        out[spec.name] = slice_
-    return out
+        leaves[spec.name] = slice_
+    first_v = next(iter(leaves.values()))
+    return TensorDict(leaves, batch_size=first_v.shape[:2], device=first_v.device)
 
 
 @pytest.mark.parametrize(
@@ -350,11 +353,11 @@ def test_tensor_input_config_synthetic_e2e(
     ### Forward and verify output shape matches the target channel count.
     with torch.no_grad():
         output = model(**batch["forward_kwargs"])
-    pred_dict = _output_to_dict(output, target_config)
+    pred_td = _output_to_tensordict(output, target_config)
 
     for name, ftype in target_config.items():
-        assert name in pred_dict, f"{name} missing from pred"
-        pred_t = pred_dict[name]
+        assert name in pred_td.keys(), f"{name} missing from pred"
+        pred_t = pred_td[name]
         target_t = batch["targets"][name]
         assert pred_t.shape == target_t.shape, (
             f"shape mismatch for {name}: pred={tuple(pred_t.shape)} "
@@ -376,7 +379,7 @@ def test_tensor_input_config_synthetic_e2e(
         loss_type=train_cfg.training.loss_type,
         field_weights=field_weights,
     )
-    loss, _ = lc(pred_dict, batch["targets"])
+    loss, _ = lc(pred_td, batch["targets"])
     assert torch.isfinite(loss), f"loss not finite: {float(loss)}"
 
 
@@ -463,11 +466,11 @@ def test_mesh_input_config_synthetic_e2e(
 
     with torch.no_grad():
         output = model(**batch["forward_kwargs"])
-    pred_dict = _output_to_dict(output, target_config)
+    pred_td = _output_to_tensordict(output, target_config)
 
     for name, ftype in target_config.items():
-        assert name in pred_dict, f"{name} missing from pred"
-        pred_t = pred_dict[name]
+        assert name in pred_td.keys(), f"{name} missing from pred"
+        pred_t = pred_td[name]
         target_t = batch["targets"][name]
         assert pred_t.shape == target_t.shape, (
             f"shape mismatch for {name}: pred={tuple(pred_t.shape)} "
@@ -488,5 +491,5 @@ def test_mesh_input_config_synthetic_e2e(
         loss_type=train_cfg.training.loss_type,
         field_weights=field_weights,
     )
-    loss, _ = lc(pred_dict, batch["targets"])
+    loss, _ = lc(pred_td, batch["targets"])
     assert torch.isfinite(loss), f"loss not finite: {float(loss)}"

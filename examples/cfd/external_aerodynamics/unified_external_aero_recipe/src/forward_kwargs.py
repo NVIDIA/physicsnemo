@@ -262,7 +262,7 @@ def resolve_forward_kwargs(
 def extract_targets(
     domain: DomainMesh | Mesh,
     target_config: dict[str, str],
-) -> dict[str, torch.Tensor]:
+) -> TensorDict:
     """Pull target tensors from a DomainMesh's ``interior.point_data`` by name.
 
     Targets always live at ``interior.point_data.<name>`` by the recipe's
@@ -278,7 +278,9 @@ def extract_targets(
             `MetricCalculator`.
 
     Returns:
-        ``{name: tensor}`` -- one entry per key in ``target_config``.
+        TensorDict with exactly the keys in ``target_config`` and the same
+        ``batch_size`` / device as the source ``point_data``. Iteration order
+        matches the order of ``target_config``.
 
     Raises:
         KeyError: If a name in ``target_config`` is not present in
@@ -293,12 +295,11 @@ def extract_targets(
     else:
         raise TypeError(f"Expected DomainMesh or Mesh, got {type(domain).__name__}.")
 
-    out: dict[str, torch.Tensor] = {}
-    for name in target_config:
-        if name not in source_td.keys():
-            raise KeyError(
-                f"Target field {name!r} not found in {location} "
-                f"(available: {sorted(source_td.keys())!r})."
-            )
-        out[name] = source_td[name]
-    return out
+    available = set(source_td.keys())
+    missing = [name for name in target_config if name not in available]
+    if missing:
+        raise KeyError(
+            f"Target fields {missing!r} not found in {location} "
+            f"(available: {sorted(available)!r})."
+        )
+    return source_td.select(*target_config)
