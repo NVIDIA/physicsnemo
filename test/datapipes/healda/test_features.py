@@ -15,19 +15,18 @@
 # limitations under the License.
 """Tests for observation metadata featurization (standard and extended).
 
-The Triton kernel tests require CUDA and validate that the Triton
-implementation matches the reference Python implementation.
+The Triton kernel tests require CUDA and triton, and validate that the Triton
+implementation matches the reference Python implementation.  The CPU reference
+tests run regardless of triton availability.
 """
 
 import pytest
 import torch
 
-triton = pytest.importorskip("triton")
-
-from physicsnemo.experimental.datapipes.healda.transforms import (  # noqa: E402
+from physicsnemo.experimental.datapipes.healda.transforms import (
     obs_features as standard,
 )
-from physicsnemo.experimental.datapipes.healda.transforms import (  # noqa: E402
+from physicsnemo.experimental.datapipes.healda.transforms import (
     obs_features_ext as extended,
 )
 
@@ -69,11 +68,44 @@ def _make_obs_data(n, device, include_lat=False):
     return data
 
 
+@pytest.mark.parametrize("n", [0, 1, 137, 10_000])
+def test_standard_cpu_reference(n):
+    """CPU reference path works without triton."""
+    device = torch.device("cpu")
+    data = _make_obs_data(max(n, 1), device)
+    if n == 0:
+        data = {k: v[:0] for k, v in data.items()}
+
+    ref = standard._compute_unified_metadata_reference(**data)
+    out = standard.compute_unified_metadata(**data)
+
+    assert ref.shape == out.shape == (n, standard.N_FEATURES)
+    if n > 0:
+        torch.testing.assert_close(ref, out)
+
+
+@pytest.mark.parametrize("n", [0, 1, 137, 10_000])
+def test_extended_cpu_reference(n):
+    """CPU reference path works without triton."""
+    device = torch.device("cpu")
+    data = _make_obs_data(max(n, 1), device, include_lat=True)
+    if n == 0:
+        data = {k: v[:0] for k, v in data.items()}
+
+    ref = extended._compute_unified_metadata_reference(**data)
+    out = extended.compute_unified_metadata(**data)
+
+    assert ref.shape == out.shape == (n, extended.N_FEATURES)
+    if n > 0:
+        torch.testing.assert_close(ref, out)
+
+
 @pytest.mark.skipif(
     not torch.cuda.is_available(), reason="CUDA required for Triton kernel"
 )
 @pytest.mark.parametrize("n", [0, 1, 137, 10_000])
 def test_standard_triton_matches_reference(n):
+    pytest.importorskip("triton")
     device = torch.device("cuda")
     data = _make_obs_data(max(n, 1), device)
     if n == 0:
@@ -92,6 +124,7 @@ def test_standard_triton_matches_reference(n):
 )
 @pytest.mark.parametrize("n", [0, 1, 137, 10_000])
 def test_extended_triton_matches_reference(n):
+    pytest.importorskip("triton")
     device = torch.device("cuda")
     data = _make_obs_data(max(n, 1), device, include_lat=True)
     if n == 0:

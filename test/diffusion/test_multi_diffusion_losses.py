@@ -375,6 +375,7 @@ COMPILE_LOSS_CONFIGS = [
 ]
 
 
+@pytest.mark.usefixtures("nop_compile")
 @pytest.mark.parametrize(
     "config_name,prediction_type,img_shape,patch_shape,tag",
     COMPILE_LOSS_CONFIGS,
@@ -414,6 +415,7 @@ class TestMSEDSMLossCompile:
         assert loss_2.ndim == 0 and torch.isfinite(loss_2)
 
 
+@pytest.mark.usefixtures("nop_compile")
 @pytest.mark.parametrize(
     "config_name,prediction_type,img_shape,patch_shape,tag",
     COMPILE_LOSS_CONFIGS,

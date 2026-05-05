@@ -6,10 +6,16 @@ body geometries from the DrivAerML dataset.
 
 ## Problem Description
 
-The DrivAerML dataset contains ~207 scale-resolving simulations (SRS) of a
-parametric DrivAer car in a virtual wind tunnel at 140 km/h.  Each sample
-varies the car body geometry (length, frontal area, shape details) while
-keeping freestream conditions constant.
+The DrivAerML dataset contains 500 CFD simulations of a parametric DrivAer car
+in a wind tunnel.  Each sample varies the car body geometry (length, frontal
+area, shape details) while keeping freestream conditions constant.
+
+Of the 500 simulations, this example uses 484 (436 train + 48 validation),
+inherited verbatim from the upstream [DoMINO DrivAerML
+splits](https://github.com/NVIDIA/physicsnemo-cfd/blob/main/workflows/bench_example/drivaer_ml_files/train.csv)
+so cross-applicability between recipes is preserved.  The 16 missing run IDs
+are: `167, 211, 218, 221, 248, 282, 291, 295, 316, 325, 329, 364, 370, 376, 403,
+473`.
 
 GLOBE learns to map from car body geometry (represented as a triangulated
 surface mesh) to nondimensional surface fields:
@@ -22,7 +28,9 @@ force coefficients (Cd, Cl, Cs) for engineering evaluation.
 
 ## Dataset
 
-The DrivAerML dataset should be available at a path like:
+[The DrivAerML dataset is available from
+HuggingFace](https://huggingface.co/datasets/neashton/drivaerml). Once
+downloaded, it should be available at a path like:
 
 ```text
 drivaer_data_full/
@@ -104,4 +112,16 @@ and multiscale kernels parameterized by per-sample reference lengths
 4. Parse reference lengths and force coefficients from CSV files
 5. Cache preprocessed samples as .pt files for fast subsequent loading
 6. At load time, randomly subsample cells for the GLOBE boundary mesh
-   (default 20K faces, configurable via `--boundary-n-faces`)
+   (default 80K faces, configurable via `--n-faces-per-boundary`)
+
+## Expected Training Behavior
+
+This section describes what a healthy training run with reference settings (as
+of 2026-05-05) looks like, so you can sanity-check your own runs.
+
+- Reference hardware: 4 nodes x 4 B200 192GB
+- Wall time per epoch: 217 seconds
+- Peak VRAM per rank: ~179 GB
+- At epoch 20, train loss ~0.07, validation loss ~0.07; both still decreasing.
+- At epoch 100, train loss ~0.0150, validation loss ~0.0155; both still decreasing.
+- At epoch 500, train loss ~0.0080, validation loss ~0.0085; both still decreasing.

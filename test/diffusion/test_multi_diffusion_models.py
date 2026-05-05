@@ -626,6 +626,7 @@ class TestGradientFlow:
 COMPILE_CONFIGS = ["uncond", "cond_patch", "cond_interp", "cond_vec_img"]
 
 
+@pytest.mark.usefixtures("nop_compile")
 @pytest.mark.parametrize("config_name", COMPILE_CONFIGS, ids=COMPILE_CONFIGS)
 class TestCompile:
     """Tests for torch.compile compatibility across model configurations."""
