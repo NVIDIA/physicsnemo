@@ -268,7 +268,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
         L_ref = gd["L_ref"].float() if "L_ref" in gd else None
         scales = (q_inf, p_inf, U_inf_mag, rho_inf, T_inf, L_ref)
 
-        return domain.apply(
+        return domain.apply_to_meshes(
             lambda m: self._transform_mesh(
                 m,
                 _nondim_field,
