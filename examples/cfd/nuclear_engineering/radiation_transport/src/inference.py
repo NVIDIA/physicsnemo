@@ -70,6 +70,7 @@ from physicsnemo.utils.checkpoint import load_checkpoint
 if not DistributedManager.is_initialized():
     DistributedManager._shared_state["_is_initialized"] = True
 
+
 def load_hydra_config(checkpoint_dir: Union[str, Path]) -> DictConfig:
     """Load the Hydra config saved next to a checkpoint.
 
