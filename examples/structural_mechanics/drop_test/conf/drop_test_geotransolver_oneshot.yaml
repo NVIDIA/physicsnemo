@@ -1,0 +1,70 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Drop test (solid element) experiment using GeoTransolver (one-shot).
+# Usage: from crash dir: python train.py --config-path=../drop_test/conf --config-name=drop_test_geotransolver_oneshot
+# Or copy train.py to drop_test and run from there.
+
+hydra:
+  job:
+    chdir: True
+  run:
+    dir: ./outputs/
+
+experiment_name: "DropTest-GeoTransolver"
+
+defaults:
+  - reader: vtu
+  - datapipe: point_cloud
+  - model: geotransolver_one_shot
+  - training: default
+  - inference: default
+  - _self_
+
+training:
+  raw_data_dir: ???              # set in config or via CLI
+  raw_data_dir_validation: ???   # set in config or via CLI
+  global_features_filepath: ???  # or null if not using global features
+  optimizer: adam
+  grad_clip_norm: 10.0
+
+  num_time_steps: 100
+  num_training_samples: 20
+  num_validation_samples: 4
+
+inference:
+  raw_data_dir_test: ???         # set in config or via CLI
+
+datapipe:
+  static_features: []   # solids have no thickness
+  dynamic_targets: [Von_Mises]
+  log_transform_targets: true
+  global_features:
+  - e_scale_mat1
+  - e_scale_mat4
+  - e_scale_mat5
+  - e_scale_mat8
+  - e_scale_mat9
+  - rwall_orientation_rx
+  - rwall_orientation_ry
+  - rwall_orientation_rz
+  sample_type: all_time_steps
+
+model:
+  functional_dim: 3   # coords only (no thickness)
+  out_dim: 396        
+  global_dim: 8
+  n_layers: 5

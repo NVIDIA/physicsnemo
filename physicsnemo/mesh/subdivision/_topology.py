@@ -18,28 +18,27 @@
 
 This module handles the combinatorial aspects of subdivision: computing
 subdivision patterns and generating child cell connectivity.
-
-Edge extraction is provided by
-:func:`physicsnemo.mesh.utilities._topology.extract_unique_edges`,
-re-exported here for backwards compatibility.
 """
 
 import torch
+from jaxtyping import Int
 
-from physicsnemo.mesh.utilities._topology import extract_unique_edges  # noqa: F401
 
-
-def get_subdivision_pattern(n_manifold_dims: int) -> torch.Tensor:
+def get_subdivision_pattern(
+    n_manifold_dims: int,
+) -> Int[torch.Tensor, "n_children n_vertices_per_child"]:
     """Get the subdivision pattern for splitting an n-simplex.
 
     Returns a pattern tensor that encodes how to split an n-simplex into
     2^n child simplices using edge midpoints.
 
     The pattern uses a specific vertex indexing scheme:
+
     - Indices 0 to n: original vertices
     - Indices n+1 to n+C(n+1,2): edge midpoints, indexed by edge
 
     For each n-simplex:
+
     - n+1 original vertices
     - C(n+1, 2) edges, each gets a midpoint
     - Splits into 2^n child simplices
@@ -53,6 +52,7 @@ def get_subdivision_pattern(n_manifold_dims: int) -> torch.Tensor:
     -------
     torch.Tensor
         Pattern tensor of shape (n_children, n_vertices_per_child) where:
+
         - n_children = 2^n_manifold_dims
         - n_vertices_per_child = n_manifold_dims + 1
 
@@ -63,6 +63,7 @@ def get_subdivision_pattern(n_manifold_dims: int) -> torch.Tensor:
     Examples
     --------
         For a triangle (n=2):
+
         - 3 original vertices: v0, v1, v2
         - 3 edge midpoints: e01, e12, e20
         - Indexing: [v0=0, v1=1, v2=2, e01=3, e12=4, e20=5]
@@ -122,11 +123,16 @@ def get_subdivision_pattern(n_manifold_dims: int) -> torch.Tensor:
 
 
 def generate_child_cells(
-    parent_cells: torch.Tensor,
-    edge_inverse: torch.Tensor,
+    parent_cells: Int[torch.Tensor, "n_parent_cells n_vertices_per_cell"],
+    edge_inverse: Int[torch.Tensor, " n_candidates"],
     n_original_points: int,
-    subdivision_pattern: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    subdivision_pattern: Int[
+        torch.Tensor, "n_children_per_parent n_vertices_per_child"
+    ],
+) -> tuple[
+    Int[torch.Tensor, "n_total_children n_vertices_per_cell"],
+    Int[torch.Tensor, " n_total_children"],
+]:
     """Generate child cells from parent cells using subdivision pattern.
 
     This implementation is fully vectorized using torch operations, avoiding Python loops
@@ -150,6 +156,7 @@ def generate_child_cells(
     -------
     tuple[torch.Tensor, torch.Tensor]
         Tuple of (child_cells, parent_indices):
+
         - child_cells: Child cell connectivity,
           shape (n_parent_cells * n_children_per_parent, n_vertices_per_child)
         - parent_indices: Parent cell index for each child,

@@ -24,9 +24,10 @@ from jaxtyping import Float
 from tensordict import TensorDict
 from torch import Tensor
 
+from physicsnemo.diffusion.base import PredictorType
 from physicsnemo.diffusion.multi_diffusion.models import MultiDiffusionModel2D
 from physicsnemo.diffusion.noise_schedulers import NoiseScheduler
-from physicsnemo.diffusion.utils.utils import apply_loss_weight
+from physicsnemo.diffusion.utils.utils import _unwrap_module, apply_loss_weight
 
 
 class _CompiledPatchX:
@@ -117,12 +118,16 @@ class MultiDiffusionMSEDSMLoss:
         :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.sample_time`,
         :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.add_noise`, and
         :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.loss_weight`.
-    prediction_type : Literal["x0", "score"], default="x0"
+    prediction_type : PredictorType, default="x0"
         Type of prediction the model outputs.
     score_to_x0_fn : Callable[[Tensor, Tensor, Tensor], Tensor], optional
         Callback to convert a score prediction to an
         :math:`\hat{\mathbf{x}}_0` estimate. Required when
         ``prediction_type="score"``.
+    epsilon_to_x0_fn : Callable[[Tensor, Tensor, Tensor], Tensor], optional
+        Callback to convert an epsilon (noise) prediction to an
+        :math:`\hat{\mathbf{x}}_0` estimate. Required when
+        ``prediction_type="epsilon"``.
     reduction : Literal["none", "mean", "sum"], default="mean"
         Reduction applied to the output.
 
@@ -225,31 +230,42 @@ class MultiDiffusionMSEDSMLoss:
         self,
         model: MultiDiffusionModel2D,
         noise_scheduler: NoiseScheduler,
-        prediction_type: Literal["x0", "score"] = "x0",
+        prediction_type: PredictorType = "x0",
         score_to_x0_fn: Callable[
+            [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+        ]
+        | None = None,
+        epsilon_to_x0_fn: Callable[
             [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
         ]
         | None = None,
         reduction: Literal["none", "mean", "sum"] = "mean",
     ) -> None:
         self.model = model
+        self._md_model = _unwrap_module(model, MultiDiffusionModel2D)
         self.noise_scheduler = noise_scheduler
-        self._compiled_patch_x = _CompiledPatchX(model)
+        self._compiled_patch_x = _CompiledPatchX(self._md_model)
 
-        if prediction_type == "x0":
-            self._to_x0 = lambda prediction, x_t, t: prediction
-
-        elif prediction_type == "score":
-            if score_to_x0_fn is None:
+        match prediction_type:
+            case "x0":
+                self._to_x0 = lambda prediction, x_t, t: prediction
+            case "score":
+                if score_to_x0_fn is None:
+                    raise ValueError(
+                        "score_to_x0_fn must be provided when prediction_type='score'."
+                    )
+                self._to_x0 = score_to_x0_fn
+            case "epsilon":
+                if epsilon_to_x0_fn is None:
+                    raise ValueError(
+                        "epsilon_to_x0_fn must be provided when prediction_type='epsilon'."
+                    )
+                self._to_x0 = epsilon_to_x0_fn
+            case _:
                 raise ValueError(
-                    "score_to_x0_fn must be provided when prediction_type='score'."
+                    f"prediction_type must be 'x0', 'score', or 'epsilon', "
+                    f"got '{prediction_type}'."
                 )
-            self._to_x0 = score_to_x0_fn
-
-        else:
-            raise ValueError(
-                f"prediction_type must be 'x0' or 'score', got '{prediction_type}'."
-            )
 
         _reductions = {
             "none": lambda x: x,
@@ -301,7 +317,7 @@ class MultiDiffusionMSEDSMLoss:
             :math:`(P \times B, C, H_p, W_p)`. Otherwise a scalar tensor.
         """
         if reset_patch_indices:
-            self.model.reset_patch_indices()
+            self._md_model.reset_patch_indices()
 
         # Patch x0 and sample per-patch noise
         x0_patched = self._compiled_patch_x(x0)  # (P*B, C, Hp, Wp)
@@ -381,11 +397,16 @@ class MultiDiffusionWeightedMSEDSMLoss:
         :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.sample_time`,
         :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.add_noise`, and
         :meth:`~physicsnemo.diffusion.noise_schedulers.NoiseScheduler.loss_weight`.
-    prediction_type : {"x0", "score"}, default="x0"
+    prediction_type : PredictorType, default="x0"
         Type of prediction the model outputs.
     score_to_x0_fn : callable, optional
         Callback to convert a score prediction to an
-        :math:`\hat{\mathbf{x}}_0` estimate.
+        :math:`\hat{\mathbf{x}}_0` estimate. Required when
+        ``prediction_type="score"``.
+    epsilon_to_x0_fn : callable, optional
+        Callback to convert an epsilon (noise) prediction to an
+        :math:`\hat{\mathbf{x}}_0` estimate. Required when
+        ``prediction_type="epsilon"``.
     reduction : {"none", "mean", "sum"}, default="mean"
         Reduction applied to the output.
 
@@ -472,31 +493,42 @@ class MultiDiffusionWeightedMSEDSMLoss:
         self,
         model: MultiDiffusionModel2D,
         noise_scheduler: NoiseScheduler,
-        prediction_type: Literal["x0", "score"] = "x0",
+        prediction_type: PredictorType = "x0",
         score_to_x0_fn: Callable[
+            [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+        ]
+        | None = None,
+        epsilon_to_x0_fn: Callable[
             [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
         ]
         | None = None,
         reduction: Literal["none", "mean", "sum"] = "mean",
     ) -> None:
         self.model = model
+        self._md_model = _unwrap_module(model, MultiDiffusionModel2D)
         self.noise_scheduler = noise_scheduler
-        self._compiled_patch_x = _CompiledPatchX(model)
+        self._compiled_patch_x = _CompiledPatchX(self._md_model)
 
-        if prediction_type == "x0":
-            self._to_x0 = lambda prediction, x_t, t: prediction
-
-        elif prediction_type == "score":
-            if score_to_x0_fn is None:
+        match prediction_type:
+            case "x0":
+                self._to_x0 = lambda prediction, x_t, t: prediction
+            case "score":
+                if score_to_x0_fn is None:
+                    raise ValueError(
+                        "score_to_x0_fn must be provided when prediction_type='score'."
+                    )
+                self._to_x0 = score_to_x0_fn
+            case "epsilon":
+                if epsilon_to_x0_fn is None:
+                    raise ValueError(
+                        "epsilon_to_x0_fn must be provided when prediction_type='epsilon'."
+                    )
+                self._to_x0 = epsilon_to_x0_fn
+            case _:
                 raise ValueError(
-                    "score_to_x0_fn must be provided when prediction_type='score'."
+                    f"prediction_type must be 'x0', 'score', or 'epsilon', "
+                    f"got '{prediction_type}'."
                 )
-            self._to_x0 = score_to_x0_fn
-
-        else:
-            raise ValueError(
-                f"prediction_type must be 'x0' or 'score', got '{prediction_type}'."
-            )
 
         _reductions = {
             "none": lambda x: x,
@@ -558,7 +590,7 @@ class MultiDiffusionWeightedMSEDSMLoss:
                 )
 
         if reset_patch_indices:
-            self.model.reset_patch_indices()
+            self._md_model.reset_patch_indices()
 
         # Patch x0 and weight, then sample per-patch noise
         x0_patched = self._compiled_patch_x(x0)  # (P*B, C, Hp, Wp)

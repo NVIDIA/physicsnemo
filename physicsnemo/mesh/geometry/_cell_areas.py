@@ -41,45 +41,48 @@ from jaxtyping import Float
 def compute_cell_areas(
     relative_vectors: Float[torch.Tensor, "n_cells n_manifold_dims n_spatial_dims"],
 ) -> Float[torch.Tensor, " n_cells"]:
-    """Compute volumes (areas) of n-simplices from edge vectors.
+    r"""Compute volumes (areas) of n-simplices from edge vectors.
 
     Given the edge vectors ``e_i = v_{i+1} - v_0`` for each simplex, computes
     the n-dimensional volume:
 
     .. math::
-        \\text{vol} = \\frac{1}{n!} \\sqrt{\\lvert \\det(E E^T) \\rvert}
+        \text{vol} = \frac{1}{n!} \sqrt{\lvert \det(E E^T) \rvert}
 
-    where *E* is the matrix whose rows are the edge vectors. Specialized
-    closed-form expressions are used for n <= 3 (see module docstring).
+    where :math:`E` is the matrix whose rows are the edge vectors. Specialized
+    closed-form expressions are used for :math:`n \le 3` (see module docstring).
 
-    Args:
-        relative_vectors: Edge vectors of shape
-            ``(n_cells, n_manifold_dims, n_spatial_dims)``.
-            Row *i* is the vector from vertex 0 to vertex *i+1* of each
-            simplex.
+    Parameters
+    ----------
+    relative_vectors : torch.Tensor
+        Edge vectors of shape ``(n_cells, n_manifold_dims, n_spatial_dims)``.
+        Row ``i`` is the vector from vertex 0 to vertex ``i+1`` of each simplex.
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Tensor of shape ``(n_cells,)`` with the volume of each simplex.
         For 1-simplices this is edge length, for 2-simplices triangle area,
         for 3-simplices tetrahedral volume, etc.
 
-    Examples:
-        >>> # Unit right triangle in 2D
-        >>> vecs = torch.tensor([[[1.0, 0.0], [0.0, 1.0]]])
-        >>> compute_cell_areas(vecs)
-        tensor([0.5000])
+    Examples
+    --------
+    >>> # Unit right triangle in 2D
+    >>> vecs = torch.tensor([[[1.0, 0.0], [0.0, 1.0]]])
+    >>> compute_cell_areas(vecs)
+    tensor([0.5000])
 
-        >>> # Unit edge in 3D
-        >>> vecs = torch.tensor([[[1.0, 0.0, 0.0]]])
-        >>> compute_cell_areas(vecs)
-        tensor([1.])
+    >>> # Unit edge in 3D
+    >>> vecs = torch.tensor([[[1.0, 0.0, 0.0]]])
+    >>> compute_cell_areas(vecs)
+    tensor([1.])
 
-        >>> # Regular tetrahedron
-        >>> vecs = torch.tensor([[[1.0, 0.0, 0.0],
-        ...                       [0.5, 0.866025, 0.0],
-        ...                       [0.5, 0.288675, 0.816497]]])
-        >>> compute_cell_areas(vecs).item()  # doctest: +SKIP
-        0.1178...
+    >>> # Regular tetrahedron
+    >>> vecs = torch.tensor([[[1.0, 0.0, 0.0],
+    ...                       [0.5, 0.866025, 0.0],
+    ...                       [0.5, 0.288675, 0.816497]]])
+    >>> compute_cell_areas(vecs).item()  # doctest: +SKIP
+    0.1178...
     """
     n_manifold_dims = relative_vectors.shape[-2]
 

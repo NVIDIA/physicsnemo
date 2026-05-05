@@ -78,13 +78,60 @@ class Transform(ABC):
         """
         raise NotImplementedError
 
-    def to(self, device: torch.device | str) -> Transform:
-        """
-        Move any internal tensors to the specified device.
+    @property
+    def stochastic(self) -> bool:
+        """Whether this transform uses random sampling.
 
-        This default implementation automatically moves any tensor attributes
-        found in self.__dict__ to the specified device. Override this method
-        if your transform requires custom device handling.
+        Returns ``True`` if the instance has a ``_generator`` attribute
+        (set by stochastic subclasses such as ``SubsamplePoints``).
+        Deterministic transforms return ``False``.
+        """
+        return hasattr(self, "_generator")
+
+    def set_generator(self, generator: torch.Generator) -> None:
+        """Assign a ``torch.Generator`` for reproducible random sampling.
+
+        Only takes effect on stochastic transforms (those that declare
+        ``self._generator``).  Deterministic transforms silently ignore
+        the call.
+
+        Parameters
+        ----------
+        generator : torch.Generator
+            Generator to use for all subsequent random draws.
+        """
+        if self.stochastic:
+            self._generator = generator
+
+    def set_epoch(self, epoch: int) -> None:
+        """Reseed the generator for a new epoch.
+
+        Reseeds ``self._generator`` with ``initial_seed() + epoch`` so
+        each epoch produces a different but deterministic random
+        sequence.  No-op for deterministic transforms or when no
+        generator has been assigned.
+
+        Parameters
+        ----------
+        epoch : int
+            Current epoch number.
+        """
+        if self.stochastic and self._generator is not None:
+            self._generator.manual_seed(self._generator.initial_seed() + epoch)
+
+    def to(self, device: torch.device | str) -> Transform:
+        """Move any internal tensors, generators, and distributions to *device*.
+
+        ``torch.Generator`` objects cannot be moved in-place, so a new
+        generator is created on *device* and seeded with
+        :meth:`~torch.Generator.initial_seed` from the original.
+
+        ``torch.distributions.Distribution`` objects are reconstructed
+        with their parameter tensors moved to *device*, using
+        ``arg_constraints`` to discover parameter names generically.
+
+        Override this method if your transform requires custom device
+        handling.
 
         Parameters
         ----------
@@ -100,6 +147,21 @@ class Transform(ABC):
         for name, value in self.__dict__.items():
             if isinstance(value, torch.Tensor):
                 setattr(self, name, value.to(self._device))
+            elif isinstance(value, torch.Generator):
+                new_gen = torch.Generator(device=self._device)
+                new_gen.manual_seed(value.initial_seed())
+                setattr(self, name, new_gen)
+            elif isinstance(value, torch.distributions.Distribution):
+                dist_cls = type(value)
+                kwargs = {}
+                # Access arg_constraints on the instance (not the class)
+                # because the base Distribution defines it as a @property.
+                for param_name in value.arg_constraints:
+                    p = getattr(value, param_name)
+                    kwargs[param_name] = (
+                        p.to(self._device) if isinstance(p, torch.Tensor) else p
+                    )
+                setattr(self, name, dist_cls(**kwargs, validate_args=False))
         return self
 
     @property

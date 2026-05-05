@@ -21,6 +21,7 @@ from physicsnemo.nn import Mlp
 from test.common import (
     validate_forward_accuracy,
 )
+from test.conftest import requires_module
 
 
 def test_mlp_forward_accuracy(device):
@@ -108,6 +109,7 @@ def test_mlp_use_te_false(device):
     assert isinstance(model.layers[0], torch.nn.Linear)
 
 
+@requires_module(["transformer_engine"])
 def test_mlp_use_te_unavailable(device):
     """Test that use_te=True raises error when TE is not available."""
     import importlib.util

@@ -21,7 +21,7 @@ import torch
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from physicsnemo.experimental.models.globe.field_kernel import ChunkedKernel
+from physicsnemo.experimental.models.globe.field_kernel import Kernel
 
 DEFAULT_RTOL = 1e-5  # Default relative tolerance for comparisons
 DEFAULT_ATOL = 1e-5  # Default absolute tolerance for comparisons
@@ -48,7 +48,7 @@ def make_kernel_and_input_data(
     n_target_points: int = 12,
     device: str | torch.device = "cpu",
     seed: int = DEFAULT_SEED,
-) -> tuple[ChunkedKernel, dict[str, Any]]:
+) -> tuple[Kernel, dict[str, Any]]:
     """Create a kernel and compatible input data for testing.
 
     Returns:
@@ -80,7 +80,7 @@ def make_kernel_and_input_data(
         **{f"global_vector_{i}": 1 for i in range(n_global_vectors)},
     }
 
-    kernel = ChunkedKernel(
+    kernel = Kernel(
         n_spatial_dims=n_spatial_dims,
         output_field_ranks=output_field_ranks,
         source_data_ranks=source_data_ranks,
@@ -132,14 +132,13 @@ def make_kernel_and_input_data(
             global_data_dict,
             device=device,
         ),
-        "chunk_size": None,
     }
 
     return kernel, input_data
 
 
 def evaluate_kernel_with_transform(
-    kernel: ChunkedKernel,
+    kernel: Kernel,
     base_data: dict[str, Any],
     transform_fn: Callable[[dict[str, Any]], dict[str, Any]],
 ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
@@ -267,45 +266,6 @@ def test_kernel_forward(
             assert result[field_name].shape == (11,)
         else:  # vector
             assert result[field_name].shape == (11, n_dims)
-
-
-@device_params
-@pytest.mark.parametrize("chunk_size", [20, 40, "auto"])
-def test_kernel_chunking(
-    device: torch.device,
-    chunk_size: int | str | None,
-):
-    """Verify that varying chunk sizes produces numerically consistent results."""
-    # Build a kernel and common input payload
-    kernel, input_data = make_kernel_and_input_data(
-        n_spatial_dims=2,
-        output_fields={"sfield": "scalar", "vfield": "vector"},
-        device=device,
-        n_source_points=10,
-        n_target_points=100,
-        seed=DEFAULT_SEED,
-    )
-
-    # Always get the reference answer without chunking for comparison
-    reference = kernel(**{**input_data, "chunk_size": None})
-
-    # Skip redundant run for the reference case
-    if chunk_size is None:
-        return
-
-    candidate = kernel(**{**input_data, "chunk_size": chunk_size})
-
-    # Scalars
-    assert torch.allclose(
-        reference["sfield"], candidate["sfield"], atol=CHUNKING_ATOL, rtol=0.0
-    ), f"Scalar mismatch for {chunk_size=}."
-
-    # Vectors
-    assert torch.allclose(
-        reference["vfield"], candidate["vfield"], atol=CHUNKING_ATOL, rtol=0.0
-    ), f"Vector mismatch for {chunk_size=}."
-
-    assert reference.batch_size == candidate.batch_size
 
 
 @device_params

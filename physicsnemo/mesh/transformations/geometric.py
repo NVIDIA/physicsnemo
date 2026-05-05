@@ -91,7 +91,8 @@ def _transform_tensordict(
             raise ValueError(
                 f"Cannot transform {field_type} field {key!r} with shape {value.shape}. "
                 f"First spatial dimension must be {n_spatial_dims}, but got {shape[0]}. "
-                f"Set the corresponding transform_*_data=False to skip this field."
+                f"Use a dict to select specific fields, e.g. "
+                f'transform_{field_type}={{"field_name": True}}.'
             )
 
         ### Vector field: v' = v @ M^T
@@ -440,6 +441,7 @@ def transform(
         Same semantics as ``transform_point_data``, for ``global_data``.
     assume_invertible : bool or None
         Controls cache propagation for square matrices:
+
         - True: Assume matrix is invertible, propagate caches (compile-safe)
         - False: Assume matrix is singular, skip cache propagation (compile-safe)
         - None: Check determinant at runtime (may cause graph breaks under torch.compile)
@@ -452,9 +454,11 @@ def transform(
     Notes
     -----
     Cache Handling:
+
         - areas: For square invertible matrices:
-            - Full-dimensional meshes: scaled by |det|
-            - Codimension-1 manifolds: per-element scaling using |det| × ||M^{-T} n||
+
+            - Full-dimensional meshes: scaled by ``|det|``
+            - Codimension-1 manifolds: per-element scaling using ``|det| * ||M^{-T} n||``
             - Higher codimension: invalidated
         - centroids: Always transformed
         - normals: For square invertible matrices, transformed by inverse-transpose
@@ -575,6 +579,7 @@ def translate(
     Notes
     -----
     Cache Handling:
+
         - areas: Unchanged
         - centroids: Translated
         - normals: Unchanged
@@ -662,6 +667,7 @@ def rotate(
     Notes
     -----
     Cache Handling:
+
         - areas: Unchanged (rotation preserves volumes)
         - centroids: Rotated
         - normals: Rotated
@@ -730,6 +736,7 @@ def scale(
         Same semantics as ``transform_point_data``, for ``global_data``.
     assume_invertible : bool or None
         Controls cache propagation:
+
         - True: Assume all factors are non-zero, propagate caches (compile-safe)
         - False: Assume some factor is zero, skip cache propagation (compile-safe)
         - None: Check determinant at runtime (may cause graph breaks under torch.compile)
@@ -742,6 +749,7 @@ def scale(
     Notes
     -----
     Cache Handling:
+
         - areas: Scaled correctly. For non-isotropic transforms of codimension-1
                  embedded manifolds, per-element scaling is computed using normals.
         - centroids: Scaled

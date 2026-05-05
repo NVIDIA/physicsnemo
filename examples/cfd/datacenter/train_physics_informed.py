@@ -32,8 +32,49 @@ from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
 from apex import optimizers
 import os
 import numpy as np
+from sympy import Function, Number, Symbol
+
+from physicsnemo.sym.eq.pde import PDE
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer
-from physicsnemo.sym.eq.pdes.navier_stokes import NavierStokes
+
+
+class NavierStokes(PDE):
+    """Incompressible Navier-Stokes equations (steady, constant density).
+
+    Simplified from the compressible form in physicsnemo-sym for the case
+    where ``rho`` is constant and ``time=False``.
+
+    Reference: https://turbmodels.larc.nasa.gov/implementrans.html
+    """
+
+    def __init__(self, nu=0.01, rho=1.0, dim=3, time=False):
+        self.dim = dim
+        x, y, z = Symbol("x"), Symbol("y"), Symbol("z")
+        iv = {"x": x, "y": y, "z": z}
+        if dim < 3:
+            iv.pop("z")
+
+        u = Function("u")(*iv.values())
+        v = Function("v")(*iv.values())
+        w = Function("w")(*iv.values()) if dim == 3 else Number(0)
+        p = Function("p")(*iv.values())
+        nu, rho = Number(nu), Number(rho)
+
+        self.equations = {
+            "continuity": u.diff(x) + v.diff(y) + (w.diff(z) if dim == 3 else 0),
+        }
+        for label, vel, axis in [("momentum_x", u, x), ("momentum_y", v, y)] + (
+            [("momentum_z", w, z)] if dim == 3 else []
+        ):
+            self.equations[label] = (
+                u * vel.diff(x)
+                + v * vel.diff(y)
+                + (w * vel.diff(z) if dim == 3 else 0)
+                + (1 / rho) * p.diff(axis)
+                - nu * vel.diff(x, 2)
+                - nu * vel.diff(y, 2)
+                - (nu * vel.diff(z, 2) if dim == 3 else 0)
+            )
 
 
 def dilate_mask_3d(mask, padding_size):
@@ -66,6 +107,7 @@ def reshape_fortran(x, shape):
 def validation_step(
     model, dataset, pos_embed_tensor, epoch, plotting=False, device=None, name="default"
 ):
+    """Validation step for the physics-informed training."""
     loss_epoch = 0.0
     num_samples = 0.0
 
@@ -138,6 +180,7 @@ def validation_step(
     version_base="1.2", config_path="conf", config_name="config_physics_informed"
 )
 def main(cfg: DictConfig) -> None:
+    """Main function for the physics-informed training."""
     logger = PythonLogger("main")  # General python logger
     LaunchLogger.initialize()
 

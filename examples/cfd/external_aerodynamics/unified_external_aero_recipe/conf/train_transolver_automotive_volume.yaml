@@ -1,0 +1,109 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ---------------------------------------------------------------------------
+# Unified External Aerodynamics - Volume Training Configuration (Transolver)
+# ---------------------------------------------------------------------------
+# Trains a Transolver model on volume fields (velocity, pressure, nut)
+# from DrivaerML volume meshes.
+
+output_dir: "runs"
+checkpoint_dir: null
+run_id: "volume_transolver_drivaer_ml"
+
+precision: "bfloat16"
+compile: true
+profile: false
+augment: false
+benchmark_io: false
+broadcast_global: true    # broadcast U_inf (B,1,3) -> (B,N,3) for Transolver
+
+model_type: "volume"
+
+# -- Data-to-model mapping (see src/collate.py MODEL_MAPPINGS) ---------------
+data_mapping: "transolver_automotive_volume"
+
+# -- Model (Transolver) -----------------------------------------------------
+model:
+  _target_: physicsnemo.models.transolver.Transolver
+  functional_dim: 3       # fx = freestream velocity U_inf (3)
+  out_dim: 5              # velocity (3) + pressure (1) + nut (1)
+  embedding_dim: 7        # embedding = points (3) + SDF (1) + SDF normals (3)
+  n_layers: 12
+  n_hidden: 256
+  dropout: 0.0
+  n_head: 8
+  act: "gelu"
+  mlp_ratio: 4
+  slice_num: 256
+  unified_pos: false
+  structured_shape: null  # unstructured mesh
+  use_te: false
+  plus: false
+
+# -- Dataset -----------------------------------------------------------------
+dataset:
+  name: drivaer_ml_volume
+  sampling_resolution: 200000   # override SubsampleMesh n_cells/n_points in all dataset configs
+  targets:
+    velocity: vector
+    pressure: scalar
+    nut: scalar
+  nondim_types:
+    velocity: velocity
+    nut: identity
+  metrics: [l2]
+
+# -- Training ----------------------------------------------------------------
+training:
+  seed: 42              # set to null to leave RNGs unseeded
+  num_epochs: 500
+  save_interval: 25
+  loss_type: "huber"
+  batch_size: 1
+  scheduler_update_mode: "epoch"
+
+  optimizer:
+    lr: 1.0e-3
+    weight_decay: 1.0e-4
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+
+  scheduler:
+    _target_: torch.optim.lr_scheduler.StepLR
+    step_size: 100
+    gamma: 0.5
+
+# -- DataLoader / Dataset Performance Tuning --------------------------------
+dataloader:
+  prefetch_factor: 1
+  num_streams: 1
+  use_streams: false       # SDF computation is not stream-safe
+  num_workers: 1
+  pin_memory: true
+
+# -- Logging -----------------------------------------------------------------
+logging:
+  log_every_n_steps: 10
+
+# -- Data paths --------------------------------------------------------------
+# Splits are read from manifest.json; change train_split / val_split to
+# switch experiments.
+data:
+  drivaer_ml:
+    config: conf/dataset/drivaer_ml_volume.yaml
+    train_split: train
+    val_split: val

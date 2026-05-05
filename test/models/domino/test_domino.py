@@ -29,6 +29,7 @@ import pytest
 import torch
 
 from physicsnemo.models.domino.config import DEFAULT_MODEL_PARAMS as model_params
+from physicsnemo.models.domino.config import Config
 from test.common.fwdaccuracy import save_output
 from test.common.utils import compare_output
 from test.conftest import requires_module
@@ -423,3 +424,185 @@ def test_domino_model_import(pytestconfig):
     assert DoMINO is not None
     assert hasattr(DoMINO, "forward")
     assert hasattr(DoMINO, "__init__")
+
+
+# =============================================================================
+# Batched tests (B > 1)
+# =============================================================================
+
+_SMALL_MODEL_PARAMS = Config(
+    {
+        "model_type": "combined",
+        "activation": "gelu",
+        "interp_res": [16, 16, 16],
+        "use_sdf_in_basis_func": True,
+        "positional_encoding": False,
+        "surface_neighbors": True,
+        "num_neighbors_surface": 4,
+        "num_neighbors_volume": 4,
+        "use_surface_normals": True,
+        "use_surface_area": True,
+        "encode_parameters": False,
+        "combine_volume_surface": False,
+        "geometry_encoding_type": "both",
+        "solution_calculation_mode": "two-loop",
+        "geometry_rep": {
+            "base_filters": 4,
+            "geo_conv": {
+                "base_neurons": 8,
+                "base_neurons_in": 1,
+                "base_neurons_out": 1,
+                "surface_hops": 1,
+                "volume_hops": 1,
+                "volume_radii": [0.5],
+                "volume_neighbors_in_radius": [8],
+                "surface_radii": [0.5],
+                "surface_neighbors_in_radius": [8],
+                "activation": "gelu",
+                "fourier_features": False,
+                "num_modes": 3,
+            },
+            "geo_processor": {
+                "base_filters": 4,
+                "activation": "gelu",
+                "processor_type": "unet",
+                "self_attention": False,
+                "cross_attention": False,
+                "volume_sdf_scaling_factor": [0.04],
+                "surface_sdf_scaling_factor": [0.04],
+            },
+        },
+        "geometry_local": {
+            "base_layer": 64,
+            "volume_neighbors_in_radius": [8],
+            "surface_neighbors_in_radius": [8],
+            "volume_radii": [0.5],
+            "surface_radii": [0.5],
+        },
+        "nn_basis_functions": {
+            "base_layer": 64,
+            "fourier_features": False,
+            "num_modes": 3,
+            "activation": "gelu",
+        },
+        "local_point_conv": {
+            "activation": "gelu",
+        },
+        "aggregation_model": {
+            "base_layer": 64,
+            "activation": "gelu",
+        },
+        "position_encoder": {
+            "base_neurons": 64,
+            "activation": "gelu",
+            "fourier_features": False,
+            "num_modes": 3,
+        },
+        "parameter_model": {
+            "base_layer": 64,
+            "fourier_features": False,
+            "num_modes": 3,
+            "activation": "gelu",
+        },
+    }
+)
+
+
+def _create_small_batched_input_dict(device, params, bsize=2):
+    """Create a small test input dictionary for DoMINO with arbitrary batch size."""
+    nx, ny, nz = params.interp_res
+    num_neigh = params.num_neighbors_surface
+    n_pts = 50
+
+    return {
+        "pos_volume_closest": torch.randn(bsize, n_pts, 3, device=device),
+        "pos_volume_center_of_mass": torch.randn(bsize, n_pts, 3, device=device),
+        "pos_surface_center_of_mass": torch.randn(bsize, n_pts, 3, device=device),
+        "geometry_coordinates": torch.randn(bsize, n_pts, 3, device=device),
+        "grid": torch.randn(bsize, nx, ny, nz, 3, device=device),
+        "surf_grid": torch.randn(bsize, nx, ny, nz, 3, device=device),
+        "sdf_grid": torch.randn(bsize, nx, ny, nz, device=device),
+        "sdf_surf_grid": torch.randn(bsize, nx, ny, nz, device=device),
+        "sdf_nodes": torch.randn(bsize, n_pts, 1, device=device),
+        "surface_mesh_centers": torch.randn(bsize, n_pts, 3, device=device),
+        "surface_mesh_neighbors": torch.randn(
+            bsize, n_pts, num_neigh, 3, device=device
+        ),
+        "surface_normals": torch.randn(bsize, n_pts, 3, device=device),
+        "surface_neighbors_normals": torch.randn(
+            bsize, n_pts, num_neigh, 3, device=device
+        ),
+        "surface_areas": torch.rand(bsize, n_pts, device=device) + 1e-6,
+        "surface_neighbors_areas": torch.rand(bsize, n_pts, num_neigh, device=device)
+        + 1e-6,
+        "volume_mesh_centers": torch.randn(bsize, n_pts, 3, device=device),
+        "volume_min_max": torch.randn(bsize, 2, 3, device=device),
+        "surface_min_max": torch.randn(bsize, 2, 3, device=device),
+        "global_params_values": torch.randn(bsize, 2, 1, device=device),
+        "global_params_reference": torch.randn(bsize, 2, 1, device=device),
+    }
+
+
+@requires_module("warp")
+def test_domino_batch_gt_1(device):
+    """DoMINO should work with batch_size > 1."""
+    from physicsnemo.models.domino import DoMINO
+
+    torch.manual_seed(42)
+
+    model = DoMINO(
+        input_features=3,
+        output_features_vol=4,
+        output_features_surf=5,
+        model_parameters=_SMALL_MODEL_PARAMS,
+    ).to(device)
+    model.eval()
+
+    bsize = 2
+    input_dict = _create_small_batched_input_dict(device, _SMALL_MODEL_PARAMS, bsize)
+
+    with torch.no_grad():
+        vol_out, surf_out = model(input_dict)
+
+    assert vol_out is not None
+    assert surf_out is not None
+    assert vol_out.shape[0] == bsize
+    assert surf_out.shape[0] == bsize
+    assert not torch.isnan(vol_out).any()
+    assert not torch.isnan(surf_out).any()
+
+
+@requires_module("warp")
+def test_domino_batch_gt_1_compile(device):
+    """DoMINO should be compilable with batch_size > 1."""
+    if "cuda" in device:
+        pytest.skip("Skipping DoMINO torch.compile on CUDA")
+    if not hasattr(torch, "compile"):
+        pytest.skip("torch.compile not available")
+
+    from physicsnemo.models.domino import DoMINO
+
+    torch.manual_seed(42)
+
+    model = DoMINO(
+        input_features=3,
+        output_features_vol=4,
+        output_features_surf=5,
+        model_parameters=_SMALL_MODEL_PARAMS,
+    ).to(device)
+    model.eval()
+
+    bsize = 2
+    input_dict = _create_small_batched_input_dict(device, _SMALL_MODEL_PARAMS, bsize)
+
+    with torch.no_grad():
+        eager_vol, eager_surf = model(input_dict)
+
+    compiled_model = torch.compile(model)
+    with torch.no_grad():
+        comp_vol, comp_surf = compiled_model(input_dict)
+
+    assert comp_vol.shape == eager_vol.shape
+    assert comp_surf.shape == eager_surf.shape
+    assert not torch.isnan(comp_vol).any()
+    assert not torch.isnan(comp_surf).any()

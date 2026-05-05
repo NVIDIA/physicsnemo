@@ -17,13 +17,26 @@
 import torch
 from typing import Literal, Any
 
-from physicsnemo.models.domino.utils import unnormalize
-
-from typing import Literal, Any
-
 import torch.cuda.nvtx as nvtx
 
+from physicsnemo.models.domino.utils import unnormalize
 from physicsnemo.models.domino.utils import *
+from physicsnemo.nn.functional.derivatives import mesh_lsq_gradient
+
+
+def _build_csr_from_neighbors(neighbors_list, device):
+    """Build CSR offsets/indices from a ``{node_id: [neighbor_ids]}`` dict."""
+    num_nodes = max(neighbors_list.keys()) + 1
+    offsets_list = [0]
+    indices_list = []
+    for node_id in range(num_nodes):
+        if node_id in neighbors_list:
+            indices_list.extend(neighbors_list[node_id])
+        offsets_list.append(len(indices_list))
+    return (
+        torch.tensor(offsets_list, dtype=torch.int64, device=device),
+        torch.tensor(indices_list, dtype=torch.int64, device=device),
+    )
 
 
 def compute_physics_loss(
@@ -32,12 +45,14 @@ def compute_physics_loss(
     mask: torch.Tensor,
     loss_type: Literal["mse", "rmse"],
     dims: tuple[int, ...] | None,
-    first_deriv: torch.nn.Module,
     eqn: Any,
     bounding_box: torch.Tensor,
     vol_factors: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Compute physics-based loss terms for Navier-Stokes equations.
+
+    Spatial derivatives are computed using ``mesh_lsq_gradient`` from
+    ``physicsnemo.nn.functional.derivatives``.
 
     Args:
         output: Model output containing (output, coords_neighbors, output_neighbors, neighbors_list)
@@ -45,7 +60,6 @@ def compute_physics_loss(
         mask: Mask for valid values
         loss_type: Type of loss to calculate ("mse" or "rmse")
         dims: Dimensions for loss calculation
-        first_deriv: First derivative calculator
         eqn: Equations
         bounding_box: Bounding box for normalization
         vol_factors: Volume factors for normalization
@@ -66,49 +80,33 @@ def compute_physics_loss(
         coords_total, bounding_box[0], bounding_box[1]
     )
 
-    # compute first order gradients on all the nodes from the neighbors_list
-    grad_list = {}
-    for parent_id, neighbor_ids in neighbors_list.items():
-        neighbor_ids_tensor = torch.tensor(neighbor_ids).to(
-            output_total_unnormalized.device
-        )
-        du = (
-            output_total_unnormalized[:, [parent_id]]
-            - output_total_unnormalized[:, neighbor_ids_tensor]
-        )
-        dv = (
-            coords_total_unnormalized[:, [parent_id]]
-            - coords_total_unnormalized[:, neighbor_ids_tensor]
-        )
-        grads = first_deriv.forward(
-            coords=None, connectivity_tensor=None, y=None, du=du, dv=dv
-        )
-        grad = torch.cat(grads, dim=1)
-        grad_list[parent_id] = grad
+    # Build CSR adjacency from the neighbor graph
+    device = output_total_unnormalized.device
+    offsets, indices = _build_csr_from_neighbors(neighbors_list, device)
+    num_nodes = max(neighbors_list.keys()) + 1
 
-    # compute second order gradients on only the center node
-    neighbor_ids_tensor = torch.tensor(neighbors_list[0]).to(
-        output_total_unnormalized.device
-    )
-    grad_neighbors_center = torch.stack([v for v in grad_list.values()], dim=1)
-    grad_neighbors_center = grad_neighbors_center.reshape(
-        batch_size, len(neighbors_list[0]) + 1, -1
-    )
+    # First-order gradients for all nodes using mesh_lsq_gradient
+    first_grads_list = []
+    for b in range(batch_size):
+        coords_b = coords_total_unnormalized[b].detach()
+        values_b = output_total_unnormalized[b]
+        grads_b = mesh_lsq_gradient(coords_b, values_b, offsets, indices)
+        first_grads_list.append(grads_b)
+    grad_neighbors_center = torch.stack(first_grads_list)
 
-    du = grad_neighbors_center[:, [0]] - grad_neighbors_center[:, neighbor_ids_tensor]
-    dv = (
-        coords_total_unnormalized[:, [0]]
-        - coords_total_unnormalized[:, neighbor_ids_tensor]
-    )
+    # Second-order gradients at center node (node 0) via mesh_lsq_gradient
+    # on the first-order gradient results (compose first-order twice)
+    grad_flat = grad_neighbors_center.reshape(batch_size, num_nodes, -1)
+    second_grads_list = []
+    for b in range(batch_size):
+        coords_b = coords_total_unnormalized[b].detach()
+        values_b = grad_flat[b]
+        sg_b = mesh_lsq_gradient(coords_b, values_b, offsets, indices)
+        second_grads_list.append(sg_b)
+    ggrad_all = torch.stack(second_grads_list)
+    ggrad_center = ggrad_all[:, 0, :, :]
 
-    # second order gradients
-    ggrads_center = first_deriv.forward(
-        coords=None, connectivity_tensor=None, y=None, du=du, dv=dv
-    )
-    ggrad_center = torch.cat(ggrads_center, dim=1)
-    grad_neighbors_center = grad_neighbors_center.reshape(
-        batch_size, len(neighbors_list[0]) + 1, 3, -1
-    )
+    grad_neighbors_center = grad_neighbors_center.reshape(batch_size, num_nodes, 3, -1)
 
     # Get the outputs on the original nodes
     fields_center_unnormalized = output_total_unnormalized[:, 0, :]
@@ -242,7 +240,6 @@ def loss_fn_with_physics(
     target: torch.Tensor,
     loss_type: Literal["mse", "rmse"],
     padded_value: float = -10,
-    first_deriv: torch.nn.Module = None,
     eqn: Any = None,
     bounding_box: torch.Tensor = None,
     vol_factors: torch.Tensor = None,
@@ -254,7 +251,6 @@ def loss_fn_with_physics(
         target: Ground truth values
         loss_type: Type of loss to calculate ("mse" or "rmse")
         padded_value: Value used for padding in the tensor
-        first_deriv: First derivative calculator
         eqn: Equations
         bounding_box: Bounding box for normalization
         vol_factors: Volume factors for normalization
@@ -276,7 +272,6 @@ def loss_fn_with_physics(
         mask=mask,
         loss_type=loss_type,
         dims=dims,
-        first_deriv=first_deriv,
         eqn=eqn,
         bounding_box=bounding_box,
         vol_factors=vol_factors,
@@ -381,6 +376,7 @@ def loss_fn_area(
 def integral_loss_fn(
     output, target, area, normals, stream_velocity=None, padded_value=-10
 ):
+    """Compute combined drag + lift integral loss."""
     drag_loss = drag_loss_fn(
         output, target, area, normals, stream_velocity=stream_velocity, padded_value=-10
     )
@@ -391,6 +387,7 @@ def integral_loss_fn(
 
 
 def lift_loss_fn(output, target, area, normals, stream_velocity=None, padded_value=-10):
+    """Compute lift coefficient loss from surface pressure and wall shear."""
     vel_inlet = stream_velocity  # Get this from the dataset
     mask = abs(target - padded_value) > 1e-3
 
@@ -417,6 +414,7 @@ def lift_loss_fn(output, target, area, normals, stream_velocity=None, padded_val
 
 
 def drag_loss_fn(output, target, area, normals, stream_velocity=None, padded_value=-10):
+    """Compute drag coefficient loss from surface pressure and wall shear."""
     vel_inlet = stream_velocity  # Get this from the dataset
     mask = abs(target - padded_value) > 1e-3
     output_true = target * mask * area * (vel_inlet) ** 2.0
@@ -444,7 +442,6 @@ def compute_loss_dict(
     integral_scaling_factor: float,
     surf_loss_scaling: float,
     vol_loss_scaling: float,
-    first_deriv: torch.nn.Module | None = None,
     eqn: Any = None,
     bounding_box: torch.Tensor | None = None,
     vol_factors: torch.Tensor | None = None,
@@ -476,7 +473,6 @@ def compute_loss_dict(
                 target_vol,
                 loss_fn_type.loss_type,
                 padded_value=-10,
-                first_deriv=first_deriv,
                 eqn=eqn,
                 bounding_box=bounding_box,
                 vol_factors=vol_factors,

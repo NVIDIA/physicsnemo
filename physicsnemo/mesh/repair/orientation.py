@@ -23,6 +23,7 @@ in the same general direction.
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Bool, Float, Int
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -30,11 +31,11 @@ if TYPE_CHECKING:
 
 
 def _gather_unoriented_neighbors(
-    front: torch.Tensor,
+    front: Int[torch.Tensor, " n_front"],
     adjacency: "Adjacency",
-    is_oriented: torch.Tensor,
+    is_oriented: Bool[torch.Tensor, " n_cells"],
     max_neighbors: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[Int[torch.Tensor, " n_next"], Int[torch.Tensor, " n_next"]]:
     """Expand a BFS front by one level, returning only unoriented neighbors.
 
     Given the current front of face indices and a CSR adjacency structure,
@@ -104,10 +105,10 @@ def _gather_unoriented_neighbors(
 
 
 def _propagate_flip_from_parents(
-    children: torch.Tensor,
-    parents: torch.Tensor,
-    cell_normals: torch.Tensor,
-    should_flip: torch.Tensor,
+    children: Int[torch.Tensor, " n_next"],
+    parents: Int[torch.Tensor, " n_next"],
+    cell_normals: Float[torch.Tensor, "n_cells n_spatial_dims"],
+    should_flip: Bool[torch.Tensor, " n_cells"],
 ) -> None:
     """Determine flip flags for children based on normal agreement with parents.
 
@@ -159,6 +160,7 @@ def fix_orientation(
     -------
     tuple[Mesh, dict[str, int]]
         Tuple of (oriented_mesh, stats_dict) where stats_dict contains:
+
         - "n_faces_flipped": Number of faces that were flipped
         - "n_components": Number of connected components found
         - "largest_component_size": Size of largest component
@@ -192,9 +194,7 @@ def fix_orientation(
     n_cells = mesh.n_cells
 
     ### Step 1: Build face adjacency graph via shared edges
-    from physicsnemo.mesh.neighbors import get_cell_to_cells_adjacency
-
-    adjacency = get_cell_to_cells_adjacency(mesh, adjacency_codimension=1)
+    adjacency = mesh.get_cell_to_cells_adjacency(adjacency_codimension=1)
 
     ### Step 2: Propagate orientation using iterative BFS (flat state machine)
     is_oriented = torch.zeros(n_cells, dtype=torch.bool, device=device)

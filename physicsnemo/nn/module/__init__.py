@@ -26,6 +26,11 @@ from .activations import (
     get_activation,
 )
 from .ball_query import BQWarp
+from .concrete_dropout import (
+    ConcreteDropout,
+    collect_concrete_dropout_losses,
+    get_concrete_dropout_rates,
+)
 from .conditioning_embedders import (
     ConditioningEmbedder,
     ConditioningEmbedderType,

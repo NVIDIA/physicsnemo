@@ -14,20 +14,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Discrete calculus operators for simplicial meshes.
+r"""Discrete calculus operators for simplicial meshes.
 
 This module implements discrete differential operators using both:
-1. Discrete Exterior Calculus (DEC) - rigorous differential geometry framework
-2. Weighted Least-Squares (LSQ) reconstruction - standard CFD approach
+
+1. Discrete Exterior Calculus (DEC) - rigorous differential geometry framework.
+2. Weighted Least-Squares (LSQ) reconstruction - standard CFD approach.
 
 The DEC implementation follows Desbrun, Hirani, Leok, and Marsden's seminal work
 on discrete exterior calculus (arXiv:math/0508341v2).
 
 Key operators:
-- Gradient: ∇φ (scalar → vector)
-- Divergence: div(v) (vector → scalar)
-- Curl: curl(v) (vector → vector, 3D only)
-- Laplacian: Δφ (scalar → scalar, Laplace-Beltrami operator)
+
+- Gradient: :math:`\nabla \varphi` (scalar -> vector).
+- Divergence: :math:`\operatorname{div}(v)` (vector -> scalar).
+- Curl: :math:`\operatorname{curl}(v)` (vector -> vector, 3D only).
+- Laplacian: :math:`\Delta \varphi` (scalar -> scalar, Laplace-Beltrami operator).
 
 Both intrinsic (manifold tangent space) and extrinsic (ambient space) derivatives
 are supported for manifolds embedded in higher-dimensional spaces.

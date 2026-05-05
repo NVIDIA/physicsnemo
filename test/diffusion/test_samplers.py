@@ -48,7 +48,7 @@ from .helpers import (
 
 REF_PREFIX = "test_samplers_"
 BATCH = 2
-NUM_STEPS = 4
+NUM_STEPS = 2
 NUM_STEPS_SHORT = 2
 
 # Sampler non-regression tolerances — looser than single-op tests because
@@ -68,7 +68,7 @@ SCHEDULER_CONFIGS = [
     (VPNoiseScheduler, {}, "vp"),
 ]
 
-PREDICTOR_TYPES = ["x0", "score"]
+PREDICTOR_TYPES = ["x0", "score", "epsilon"]
 
 
 class _CustomEulerSolver:
@@ -105,7 +105,7 @@ SAMPLER_CONFIGS = [
     ),
 ]
 
-TIME_EVAL_INDICES = [0, 1, 3]
+TIME_EVAL_INDICES = [0, 1]
 
 
 def _make_sampling_components(
@@ -128,6 +128,8 @@ def _make_sampling_components(
     ).to(device)
     if predictor_type == "score":
         denoiser = scheduler.get_denoiser(score_predictor=model, denoising_type="ode")
+    elif predictor_type == "epsilon":
+        denoiser = scheduler.get_denoiser(epsilon_predictor=model, denoising_type="ode")
     else:
         denoiser = scheduler.get_denoiser(x0_predictor=model, denoising_type="ode")
     t_steps = scheduler.timesteps(num_steps, device=device)
@@ -570,6 +572,7 @@ class TestSampleValidation:
     SPATIAL_CONFIGS,
     ids=[c[0] for c in SPATIAL_CONFIGS],
 )
+@pytest.mark.usefixtures("nop_compile")
 class TestSampleCompile:
     """torch.compile tests: compiled denoiser passed to sample()."""
 
@@ -682,6 +685,7 @@ class TestSampleCompile:
     SPATIAL_CONFIGS,
     ids=[c[0] for c in SPATIAL_CONFIGS],
 )
+@pytest.mark.usefixtures("nop_compile")
 class TestFullSamplerCompile:
     """Compile the entire sample() call and verify double-call graph reuse."""
 

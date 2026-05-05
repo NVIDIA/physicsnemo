@@ -23,6 +23,7 @@ from parent cells to child cells, reusing existing aggregation infrastructure.
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Int
 from tensordict import TensorDict
 
 if TYPE_CHECKING:
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
 
 def interpolate_point_data_to_edges(
     point_data: TensorDict,
-    edges: torch.Tensor,
+    edges: Int[torch.Tensor, "n_edges 2"],
     n_original_points: int,
 ) -> TensorDict:
     """Interpolate point_data to edge midpoints.
@@ -56,14 +57,14 @@ def interpolate_point_data_to_edges(
 
     Examples
     --------
-        >>> import torch
-        >>> from tensordict import TensorDict
-        >>> # Original points: 3, edges: 2
-        >>> # New points: 3 + 2 = 5
-        >>> point_data = TensorDict({"temperature": torch.tensor([100., 200., 300.])}, batch_size=[3])
-        >>> edges = torch.tensor([[0, 1], [1, 2]])
-        >>> new_data = interpolate_point_data_to_edges(point_data, edges, 3)
-        >>> # new_data["temperature"] = [100, 200, 300, 150, 250]
+    >>> import torch
+    >>> from tensordict import TensorDict
+    >>> # Original points: 3, edges: 2
+    >>> # New points: 3 + 2 = 5
+    >>> point_data = TensorDict({"temperature": torch.tensor([100., 200., 300.])}, batch_size=[3])
+    >>> edges = torch.tensor([[0, 1], [1, 2]])
+    >>> new_data = interpolate_point_data_to_edges(point_data, edges, 3)
+    >>> # new_data["temperature"] = [100, 200, 300, 150, 250]
     """
     if len(point_data.keys()) == 0:
         # No data to interpolate
@@ -103,7 +104,7 @@ def interpolate_point_data_to_edges(
 
 def propagate_cell_data_to_children(
     cell_data: TensorDict,
-    parent_indices: torch.Tensor,
+    parent_indices: Int[torch.Tensor, " n_children"],
     n_total_children: int,
 ) -> TensorDict:
     """Propagate cell_data from parent cells to child cells.
@@ -128,13 +129,13 @@ def propagate_cell_data_to_children(
 
     Examples
     --------
-        >>> import torch
-        >>> from tensordict import TensorDict
-        >>> # 2 parent cells, each splits into 4 children -> 8 total
-        >>> cell_data = TensorDict({"pressure": torch.tensor([100.0, 200.0])}, batch_size=[2])
-        >>> parent_indices = torch.tensor([0, 0, 0, 0, 1, 1, 1, 1])
-        >>> new_data = propagate_cell_data_to_children(cell_data, parent_indices, 8)
-        >>> # new_data["pressure"] = [100, 100, 100, 100, 200, 200, 200, 200]
+    >>> import torch
+    >>> from tensordict import TensorDict
+    >>> # 2 parent cells, each splits into 4 children -> 8 total
+    >>> cell_data = TensorDict({"pressure": torch.tensor([100.0, 200.0])}, batch_size=[2])
+    >>> parent_indices = torch.tensor([0, 0, 0, 0, 1, 1, 1, 1])
+    >>> new_data = propagate_cell_data_to_children(cell_data, parent_indices, 8)
+    >>> # new_data["pressure"] = [100, 100, 100, 100, 200, 200, 200, 200]
     """
     if len(cell_data.keys()) == 0:
         # No data to propagate

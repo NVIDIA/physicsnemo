@@ -16,11 +16,21 @@
 
 """Protocols and type hints for diffusion model interfaces."""
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 import torch
 from jaxtyping import Float
 from tensordict import TensorDict
+
+PredictorType = Literal["x0", "score", "epsilon"]
+"""Type of prediction produced by a diffusion model.
+
+One of:
+
+- ``"x0"``: clean-data prediction :math:`\\hat{\\mathbf{x}}_0`.
+- ``"score"``: score :math:`\\nabla_{\\mathbf{x}_t} \\log p(\\mathbf{x}_t)`.
+- ``"epsilon"``: noise prediction :math:`\\hat{\\boldsymbol{\\epsilon}}`.
+"""
 
 
 @runtime_checkable

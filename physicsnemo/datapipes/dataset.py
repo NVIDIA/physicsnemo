@@ -25,13 +25,13 @@ and automatic device transfer when device parameter is specified.
 
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
-from typing import Any, Iterator, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.datapipes._rng import fork_generator
+from physicsnemo.datapipes.protocols import DatasetBase, _PrefetchResult
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
@@ -39,19 +39,8 @@ from physicsnemo.datapipes.transforms.compose import Compose
 from physicsnemo.distributed import DistributedManager
 
 
-@dataclass
-class _PrefetchResult:
-    """Result of a prefetch operation."""
-
-    index: int
-    data: Optional[TensorDict] = None
-    metadata: Optional[dict[str, Any]] = None
-    error: Optional[Exception] = None
-    event: Optional[torch.cuda.Event] = None  # For stream sync
-
-
 @register()
-class Dataset:
+class Dataset(DatasetBase):
     """
     A dataset combining a Reader with a transform pipeline.
 
@@ -126,6 +115,8 @@ class Dataset:
         TypeError
             If reader is not a Reader instance.
         """
+        super().__init__(num_workers=num_workers)
+
         if not isinstance(reader, Reader):
             raise TypeError(
                 f"reader must be a Reader instance, got {type(reader).__name__}"
@@ -142,7 +133,6 @@ class Dataset:
             else:
                 device = "cpu"
 
-        # Now, instantiate the device if not already done:
         match device:
             case torch.device():
                 self.target_device = device
@@ -151,7 +141,6 @@ class Dataset:
             case None:
                 self.target_device = None
 
-        # Handle transforms
         if transforms is None:
             self.transforms: Optional[Transform] = None
         elif isinstance(transforms, Transform):
@@ -169,30 +158,92 @@ class Dataset:
                 f"got {type(transforms).__name__}"
             )
 
-        # Share device with transforms so their internal state is on the right device
         if self.target_device is not None and self.transforms is not None:
             self.transforms.to(self.target_device)
 
-        # Prefetch state - using thread-safe dict for results
-        # Key: index, Value: Future[_PrefetchResult]
-        self._prefetch_futures: dict[int, Future[_PrefetchResult]] = {}
-        self._executor: Optional[ThreadPoolExecutor] = None
+    # ------------------------------------------------------------------
+    # DatasetBase implementation
+    # ------------------------------------------------------------------
 
-    def _ensure_executor(self) -> ThreadPoolExecutor:
-        """
-        Lazily create the thread pool executor.
+    def _load(self, index: int) -> tuple[TensorDict, dict[str, Any]]:
+        """Synchronous load: reader → device transfer → transforms."""
+        data, metadata = self.reader[index]
 
-        Returns
-        -------
-        ThreadPoolExecutor
-            The thread pool executor for prefetching.
+        if self.target_device is not None:
+            data = data.to(self.target_device, non_blocking=True)
+
+        if self.transforms is not None:
+            data = self.transforms(data)
+
+        return data, metadata
+
+    def __len__(self) -> int:
+        return len(self.reader)
+
+    # ------------------------------------------------------------------
+    # RNG management
+    # ------------------------------------------------------------------
+
+    def _flat_transforms(self) -> list[Transform]:
+        """Return transforms as a flat list (unwrapping Compose)."""
+        if self.transforms is None:
+            return []
+        if isinstance(self.transforms, Compose):
+            return list(self.transforms.transforms)
+        return [self.transforms]
+
+    def set_generator(self, generator: torch.Generator) -> None:
+        """Distribute forked generators to the reader and every stochastic transform.
+
+        Forks *generator* into ``1 + len(flat_transforms)`` independent
+        children: the first goes to the reader, the rest map 1-to-1 to
+        the transform list (deterministic transforms silently ignore
+        theirs).
+
+        Parameters
+        ----------
+        generator : torch.Generator
+            Parent generator (typically forked from the DataLoader's
+            master generator).
         """
-        if self._executor is None:
-            self._executor = ThreadPoolExecutor(
-                max_workers=self.num_workers,
-                thread_name_prefix="datapipe_prefetch",
-            )
-        return self._executor
+        flat = self._flat_transforms()
+        n_children = 1 + len(flat)
+        children = fork_generator(generator, n_children)
+
+        # Child 0 → reader
+        if hasattr(self.reader, "set_generator"):
+            self.reader.set_generator(children[0])
+
+        # Children 1..N → transforms (deterministic ones ignore via base no-op)
+        for child, t in zip(children[1:], flat):
+            if self.target_device is not None and self.target_device != child.device:
+                dev_gen = torch.Generator(device=self.target_device)
+                dev_gen.manual_seed(child.initial_seed())
+                t.set_generator(dev_gen)
+            else:
+                t.set_generator(child)
+
+    def set_epoch(self, epoch: int) -> None:
+        """Propagate epoch to the reader and every transform.
+
+        Reseeds all generators assigned via :meth:`set_generator` so
+        each epoch produces a different but deterministic random
+        sequence.
+
+        Parameters
+        ----------
+        epoch : int
+            Current epoch number.
+        """
+        if hasattr(self.reader, "set_epoch"):
+            self.reader.set_epoch(epoch)
+
+        for t in self._flat_transforms():
+            t.set_epoch(epoch)
+
+    # ------------------------------------------------------------------
+    # Stream-aware prefetch (overrides DatasetBase defaults)
+    # ------------------------------------------------------------------
 
     def _load_and_transform(
         self,
@@ -200,7 +251,7 @@ class Dataset:
         stream: Optional[torch.cuda.Stream] = None,
     ) -> _PrefetchResult:
         """
-        Load a sample and apply transforms. Called by worker threads.
+        Load a sample and apply transforms with optional CUDA stream.
 
         Parameters
         ----------
@@ -217,10 +268,8 @@ class Dataset:
         result = _PrefetchResult(index=index)
 
         try:
-            # Load from reader (CPU, potentially slow IO)
             data, metadata = self.reader[index]
 
-            # Auto-transfer to target device if specified
             if self.target_device is not None:
                 if stream is not None:
                     with torch.cuda.stream(stream):
@@ -228,12 +277,10 @@ class Dataset:
                 else:
                     data = data.to(self.target_device, non_blocking=True)
 
-            # Apply transforms (data is now on target device if specified)
             if self.transforms is not None:
                 if stream is not None:
                     with torch.cuda.stream(stream):
                         data = self.transforms(data)
-                    # Record event for synchronization
                     result.event = torch.cuda.Event()
                     result.event.record(stream)
                 else:
@@ -255,10 +302,8 @@ class Dataset:
         """
         Start prefetching a sample asynchronously.
 
-        The sample will be loaded in a background thread. If a CUDA stream
-        is provided, GPU operations happen on that stream.
-
-        Call __getitem__ to retrieve the result (it will wait if needed).
+        When a CUDA stream is provided, GPU operations (device transfer
+        and transforms) run on that stream for overlap with computation.
 
         Parameters
         ----------
@@ -267,35 +312,12 @@ class Dataset:
         stream : torch.cuda.Stream, optional
             Optional CUDA stream for GPU operations.
         """
-        # Don't prefetch if already in flight
         if index in self._prefetch_futures:
             return
 
         executor = self._ensure_executor()
         future = executor.submit(self._load_and_transform, index, stream)
         self._prefetch_futures[index] = future
-
-    def prefetch_batch(
-        self,
-        indices: Sequence[int],
-        streams: Optional[Sequence[torch.cuda.Stream]] = None,
-    ) -> None:
-        """
-        Start prefetching multiple samples.
-
-        Parameters
-        ----------
-        indices : Sequence[int]
-            Sample indices to prefetch.
-        streams : Sequence[torch.cuda.Stream], optional
-            Optional CUDA streams, one per index. If shorter than
-            indices, streams are cycled. If None, no streams used.
-        """
-        for i, idx in enumerate(indices):
-            stream = None
-            if streams:
-                stream = streams[i % len(streams)]
-            self.prefetch(idx, stream=stream)
 
     def __getitem__(self, index: int) -> tuple[TensorDict, dict[str, Any]]:
         """
@@ -321,77 +343,21 @@ class Dataset:
         Exception
             If prefetch failed, re-raises the error.
         """
-        # Check if prefetched
         future = self._prefetch_futures.pop(index, None)
 
         if future is not None:
-            # Wait for prefetch to complete
             result = future.result()
 
-            if result.error is not None:
-                raise result.error
+            if isinstance(result, _PrefetchResult):
+                if result.error is not None:
+                    raise result.error
+                if result.event is not None:
+                    torch.cuda.current_stream().wait_event(result.event)
+                return result.data, result.metadata
 
-            # Sync stream if needed
-            if result.event is not None:
-                result.event.synchronize()
+            return result
 
-            return result.data, result.metadata
-
-        # Not prefetched, load synchronously
-        data, metadata = self.reader[index]
-
-        # Auto-transfer to target device if specified
-        if self.target_device is not None:
-            data = data.to(self.target_device, non_blocking=True)
-
-        # Apply transforms
-        if self.transforms is not None:
-            data = self.transforms(data)
-
-        return data, metadata
-
-    def cancel_prefetch(self, index: Optional[int] = None) -> None:
-        """
-        Cancel prefetch requests.
-
-        Note: Already-running tasks will complete, but results are discarded.
-
-        Parameters
-        ----------
-        index : int, optional
-            Specific index to cancel. If None, cancels all.
-        """
-        if index is None:
-            # Cancel all - just clear the dict, let futures complete
-            self._prefetch_futures.clear()
-        else:
-            self._prefetch_futures.pop(index, None)
-
-    def __len__(self) -> int:
-        """
-        Return the number of samples in the dataset.
-
-        Returns
-        -------
-        int
-            Number of samples.
-        """
-        return len(self.reader)
-
-    def __iter__(self) -> Iterator[tuple[TensorDict, dict[str, Any]]]:
-        """
-        Iterate over all samples.
-
-        Note: This does NOT automatically prefetch. For prefetched iteration,
-        use the DataLoader which manages prefetching strategy.
-
-        Yields
-        ------
-        tuple[TensorDict, dict[str, Any]]
-            Tuple of (transformed data, metadata) for each sample.
-        """
-        for i in range(len(self)):
-            yield self[i]
+        return self._load(index)
 
     @property
     def field_names(self) -> list[str]:
@@ -405,18 +371,6 @@ class Dataset:
         """
         return self.reader.field_names
 
-    @property
-    def prefetch_count(self) -> int:
-        """
-        Number of items currently being prefetched.
-
-        Returns
-        -------
-        int
-            Count of in-flight prefetch operations.
-        """
-        return len(self._prefetch_futures)
-
     def close(self) -> None:
         """
         Close the dataset and stop prefetching.
@@ -425,30 +379,8 @@ class Dataset:
         This prevents "cannot schedule new futures after shutdown" errors
         from libraries like zarr that use async I/O internally.
         """
-        # Wait for any in-flight prefetch tasks to complete before shutdown.
-        # This prevents "cannot schedule new futures after shutdown" errors
-        # from libraries like zarr that use async I/O internally.
-        for future in self._prefetch_futures.values():
-            try:
-                future.result(timeout=30.0)  # Wait up to 30s per task
-            except Exception:  # noqa: BLE001, S110
-                pass  # Ignore errors during shutdown
-
-        self._prefetch_futures.clear()
-
-        if self._executor is not None:
-            self._executor.shutdown(wait=True)
-            self._executor = None
-
+        super().close()
         self.reader.close()
-
-    def __enter__(self) -> "Dataset":
-        """Context manager entry."""
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Context manager exit."""
-        self.close()
 
     def __repr__(self) -> str:
         """

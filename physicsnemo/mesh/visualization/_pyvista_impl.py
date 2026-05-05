@@ -16,22 +16,30 @@
 
 """PyVista backend for mesh visualization."""
 
-import importlib
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import torch
+from jaxtyping import Float
 
+from physicsnemo.core.version_check import OptionalImport
+
+### Optional dependency. ``pv`` is a lazy proxy: construction does not
+### import pyvista; the friendly ``ImportError`` (with the ``[mesh-extras]``
+### install hint) fires only on first attribute access. This module is only
+### loaded by ``draw_mesh.draw_mesh(..., backend="pyvista")``, so reaching
+### that first attribute access already implies the user opted in to pyvista.
 if TYPE_CHECKING:
-    from physicsnemo.mesh import Mesh
+    import pyvista as pv
 
-# Dynamic import for optional pyvista dependency (invisible to static analysis)
-pv = importlib.import_module("pyvista")
+    from physicsnemo.mesh import Mesh
+else:
+    pv = OptionalImport("pyvista")
 
 
 def draw_mesh_pyvista(
     mesh: "Mesh",
-    point_scalar_values: torch.Tensor | None,
-    cell_scalar_values: torch.Tensor | None,
+    point_scalar_values: Float[torch.Tensor, " n_points"] | None,
+    cell_scalar_values: Float[torch.Tensor, " n_cells"] | None,
     active_scalar_source: Literal["points", "cells", None],
     scalar_label: str | None,
     show: bool,
@@ -41,9 +49,12 @@ def draw_mesh_pyvista(
     alpha_points: float,
     alpha_cells: float,
     show_edges: bool,
-    **kwargs,
-):
+    plotter: Any = None,
+    **kwargs: Any,
+) -> Any:
     """Draw mesh using PyVista backend.
+
+    Supports all spatial dimensions up to 3D using PyVista's rendering engine.
 
     Parameters
     ----------
@@ -56,29 +67,45 @@ def draw_mesh_pyvista(
     active_scalar_source : {"points", "cells", None}
         Which scalar source is active ("points", "cells", or None).
     scalar_label : str or None
-        Human-readable label for the colorbar title.
+        Human-readable label for the colorbar.
     show : bool
         Whether to call plotter.show().
     cmap : str
         Colormap name.
     vmin : float or None
-        Minimum value for colormap normalization (clim).
+        Minimum value for colormap normalization.
     vmax : float or None
-        Maximum value for colormap normalization (clim).
+        Maximum value for colormap normalization.
     alpha_points : float
         Opacity for points (0-1).
     alpha_cells : float
         Opacity for cells (0-1).
     show_edges : bool
         Whether to draw cell edges.
+    plotter : pyvista.Plotter, optional
+        Existing pyvista Plotter to draw on. If ``None``, a new plotter is
+        created. Use this to overlay multiple meshes on the same scene.
     **kwargs : dict
         Additional backend-specific arguments passed to PyVista.
 
     Returns
     -------
     pyvista.Plotter
-        PyVista plotter object (even if show=True, returns before calling .show()).
+        PyVista plotter object.
     """
+    ### Validate plotter type. ``BasePlotter`` is the common ancestor of
+    ### ``pv.Plotter`` and Qt-backed plotters (e.g.
+    ### ``pyvistaqt.BackgroundPlotter`` -> ``QtInteractor`` -> ``BasePlotter``),
+    ### so accepting it covers every realistic caller. Fall back to
+    ### ``pv.Plotter`` only on ancient versions that predate the split.
+    plotter_base = getattr(pv, "BasePlotter", pv.Plotter)
+    if plotter is not None and not isinstance(plotter, plotter_base):
+        raise ValueError(
+            f"Expected a pyvista.Plotter for the 'plotter' parameter, "
+            f"got {type(plotter).__name__}. "
+            f"Matplotlib Axes are only supported for matplotlib backend."
+        )
+
     ### Convert mesh to PyVista format
     from physicsnemo.mesh.io.io_pyvista import to_pyvista
 
@@ -93,8 +120,9 @@ def draw_mesh_pyvista(
         pv_mesh.cell_data["_viz_scalars"] = cell_scalar_values.float().cpu().numpy()
         scalar_name = "_viz_scalars"
 
-    ### Create plotter
-    plotter = pv.Plotter()
+    ### Create plotter (or reuse existing one)
+    if plotter is None:
+        plotter = pv.Plotter()
 
     ### Determine colors based on active_scalar_source
     if active_scalar_source is None:

@@ -1,0 +1,115 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ---------------------------------------------------------------------------
+# Unified External Aerodynamics - Surface Training Configuration
+#   (GeoTransolver with FLARE Attention / GALE_FA)
+# ---------------------------------------------------------------------------
+# Trains a GeoTransolver model using the GALE_FA attention backbone (FLARE-
+# based self-attention + GALE cross-attention) on surface pressure (Cp) and
+# wall shear stress (Cf) from DrivaerML and/or SHIFT SUV datasets.
+
+output_dir: "runs"
+checkpoint_dir: null
+run_id: "surface_geotransolver_fa_drivaer_ml"
+
+precision: "bfloat16"
+compile: true
+profile: false
+augment: false
+benchmark_io: false
+
+model_type: "surface"
+
+# -- Data-to-model mapping (see src/collate.py MODEL_MAPPINGS) ---------------
+# Same forward interface as standard GeoTransolver.
+data_mapping: "geotransolver_automotive_surface"
+
+# -- Model (GeoTransolver + GALE_FA) ----------------------------------------
+# Uses GALE_FA attention (FLARE self-attention with GALE cross-attention)
+# instead of the default GALE physics attention.  GALE_FA does not support
+# Transformer Engine — use_te must be false.
+model:
+  _target_: physicsnemo.experimental.models.geotransolver.GeoTransolver
+  functional_dim: 6       # local_embedding = geometry coords (3) + normals (3)
+  out_dim: 4              # pressure (1) + wss (3)
+  geometry_dim: 3         # point coordinates
+  global_dim: 3           # inlet velocity (3)
+  n_layers: 12
+  n_hidden: 256
+  dropout: 0.0
+  n_head: 8
+  act: "gelu"
+  mlp_ratio: 4
+  slice_num: 256
+  use_te: false           # GALE_FA does not support TE
+  plus: false
+  attention_type: "GALE_FA"
+  include_local_features: false
+  radii: [0.1, 0.5, 2.0]
+  neighbors_in_radius: [16, 32, 64]
+  n_hidden_local: 32
+  state_mixing_mode: "weighted"  # "weighted" (default) or "concat_project"
+
+# -- Dataset -----------------------------------------------------------------
+dataset:
+  name: drivaer_ml_surface
+  sampling_resolution: 200000   # override SubsampleMesh n_cells/n_points in all dataset configs
+  targets:
+    pressure: scalar
+    wss: vector
+  metrics: [l2]
+
+# -- Training ----------------------------------------------------------------
+training:
+  seed: 42              # set to null to leave RNGs unseeded
+  num_epochs: 500
+  save_interval: 25
+  loss_type: "huber"
+  batch_size: 1
+  scheduler_update_mode: "epoch"
+
+  optimizer:
+    lr: 3.0e-3
+    weight_decay: 1.0e-4
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+
+  scheduler:
+    _target_: torch.optim.lr_scheduler.StepLR
+    step_size: 100
+    gamma: 0.1
+
+# -- DataLoader / Dataset Performance Tuning --------------------------------
+dataloader:
+  prefetch_factor: 1
+  num_streams: 1
+  use_streams: false      # ball query is not stream-safe
+  num_workers: 1
+  pin_memory: true
+
+# -- Logging -----------------------------------------------------------------
+logging:
+  log_every_n_steps: 10
+
+# -- Data paths --------------------------------------------------------------
+# Splits are read from manifest.json; change train_split / val_split to
+# switch experiments.
+data:
+  drivaer_ml:
+    config: conf/dataset/drivaer_ml_surface.yaml
+    train_split: train
+    val_split: val

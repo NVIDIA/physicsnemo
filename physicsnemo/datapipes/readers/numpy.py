@@ -112,6 +112,7 @@ class NumpyReader(Reader):
         self.default_values = default_values or {}
         self.file_pattern = file_pattern
         self.index_key = index_key
+        self._subsample_generator: torch.Generator | None = None
 
         if not self.path.exists():
             raise FileNotFoundError(f"Path not found: {self.path}")
@@ -167,6 +168,17 @@ class NumpyReader(Reader):
             return self._user_fields
         return self._available_fields
 
+    def set_generator(self, generator: torch.Generator) -> None:
+        """Assign a ``torch.Generator`` for reproducible subsampling."""
+        self._subsample_generator = generator
+
+    def set_epoch(self, epoch: int) -> None:
+        """Reseed the subsample RNG for a new epoch."""
+        if self._subsample_generator is not None:
+            self._subsample_generator.manual_seed(
+                self._subsample_generator.initial_seed() + epoch
+            )
+
     def _select_random_sections_from_slice(
         self,
         slice_start: int,
@@ -203,7 +215,12 @@ class NumpyReader(Reader):
                 f"{n_points} requested for subsampling"
             )
 
-        start = np.random.randint(slice_start, slice_stop - n_points + 1)
+        start = torch.randint(
+            slice_start,
+            slice_stop - n_points + 1,
+            (1,),
+            generator=self._subsample_generator,
+        ).item()
         return slice(start, start + n_points)
 
     def _load_from_npz(
