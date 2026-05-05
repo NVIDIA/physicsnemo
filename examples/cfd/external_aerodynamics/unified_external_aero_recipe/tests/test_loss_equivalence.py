@@ -246,7 +246,7 @@ class TestFieldWeights:
                 "c": torch.randn(1, n_pts),
             }
         )
-        target_td = _make_td({name: torch.randn_like(v) for name, v in pred_td.items()})
+        target_td = pred_td.apply(torch.randn_like)
         weights = {"a": 0.5, "b": 2.0, "c": 1.5}
         lc = LossCalculator(
             target_config=target_config,
