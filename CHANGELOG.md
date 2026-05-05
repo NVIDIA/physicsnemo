@@ -167,6 +167,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inversion example to use the consolidated `physicsnemo.diffusion` API
   (preconditioners, samplers, losses, DPS guidance) and removed the
   recipe-local copies of these utilities under `utils/`.
+- Refactored the `examples/generative/topodiff` recipe to use the
+  consolidated `physicsnemo.diffusion` API (`MSEDSMLoss` with
+  `prediction_type="epsilon"`, `sample()`, `DPSScorePredictor`) plus a
+  recipe-local DDPM scheduler, solver, and classifier guidance. Removed
+  the now-unused `Diffusion`, `DatasetTopoDiff`, and `load_data_topodiff`
+  abstractions from `physicsnemo.models.topodiff`.
 - Significantly expanded CI test coverage for `physicsnemo.diffusion`,
   including new tests for samplers, solvers, preconditioners, losses,
   DPS guidance, multi-diffusion, and patching utilities, plus
