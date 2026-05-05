@@ -16,12 +16,9 @@
 
 # Configuration imports:
 import hydra
-from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 import json
-import os
 import time
-from datetime import datetime, timezone
 from math import ceil
 
 # Base PyTorch imports:
@@ -41,8 +38,8 @@ from torch.utils.tensorboard import SummaryWriter
 from utils.testloss import TestLoss
 
 # Model imports from PhysicsNeMo
+from physicsnemo.models.transolver import Transolver
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.optim import CombinedOptimizer
 
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
@@ -57,114 +54,8 @@ from contextlib import nullcontext
 prof = Profiler()
 
 
-_GEOTRANSOLVER_TARGETS = {
-    "physicsnemo.experimental.models.geotransolver.GeoTransolver",
-}
-
-
-def make_model_forward(cfg: DictConfig) -> callable:
-    """
-    Return a forward callable that uses the right keyword arguments for the
-    configured model.
-
-    GeoTransolver uses (local_embedding, geometry) while Transolver/FLARE
-    use (fx, embedding).  The decision is made once at startup from the Hydra
-    config, avoiding fragile isinstance checks through DDP/compile wrappers.
-
-    Args:
-        cfg (DictConfig): Full Hydra config (reads model._target_).
-
-    Returns:
-        callable: ``fn(model, pos, x) -> Tensor``
-    """
-    if cfg.model._target_ in _GEOTRANSOLVER_TARGETS:
-
-        def _forward(model, pos, x):
-            combined_inputs = torch.cat([pos, x.unsqueeze(-1)], dim=-1)
-            return model(
-                local_embedding=combined_inputs, geometry=combined_inputs
-            ).squeeze(-1)
-
-    else:
-
-        def _forward(model, pos, x):
-            return model(embedding=pos, fx=x.unsqueeze(-1)).squeeze(-1)
-
-    return _forward
-
-
-def build_optimizer(
-    model: torch.nn.Module,
-    cfg: DictConfig,
-) -> torch.optim.Optimizer:
-    """
-    Build optimizer based on config.  Supports AdamW and Muon.
-
-    Muon is applied to 2D weight matrices; remaining parameters (biases, norms,
-    embeddings) are handled by AdamW.  When both groups exist they are wrapped in
-    ``CombinedOptimizer``.
-
-    Args:
-        model (torch.nn.Module): The model (possibly DDP-wrapped).
-        cfg (DictConfig): Full Hydra config (reads optimizer.type, scheduler.initial_lr,
-            scheduler.weight_decay).
-
-    Returns:
-        torch.optim.Optimizer: The configured optimizer.
-    """
-    opt_type = cfg.optimizer.type
-    lr = cfg.scheduler.initial_lr
-    weight_decay = cfg.scheduler.weight_decay
-
-    if opt_type == "adamw":
-        return AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-
-    if opt_type == "muon":
-        if not hasattr(torch.optim, "Muon"):
-            raise ImportError(
-                "Muon optimizer requires PyTorch >= 2.9. "
-                "Install a newer PyTorch or use optimizer.type=adamw."
-            )
-        base_model = model.module if hasattr(model, "module") else model
-        muon_params = [p for p in base_model.parameters() if p.ndim == 2]
-        other_params = [p for p in base_model.parameters() if p.ndim != 2]
-
-        if muon_params and other_params:
-            return CombinedOptimizer(
-                [
-                    torch.optim.Muon(
-                        muon_params,
-                        lr=lr,
-                        weight_decay=weight_decay,
-                        adjust_lr_fn="match_rms_adamw",
-                    ),
-                    AdamW(
-                        other_params,
-                        lr=lr,
-                        weight_decay=weight_decay,
-                        betas=(0.9, 0.999),
-                        eps=1.0e-8,
-                    ),
-                ]
-            )
-        elif muon_params:
-            return torch.optim.Muon(
-                muon_params,
-                lr=lr,
-                weight_decay=weight_decay,
-                adjust_lr_fn="match_rms_adamw",
-            )
-        else:
-            return AdamW(other_params, lr=lr, weight_decay=weight_decay)
-
-    raise ValueError(
-        f"Unsupported optimizer type: {opt_type!r}. Use 'adamw' or 'muon'."
-    )
-
-
 def forward_train_full_loop(
     model: torch.nn.Module,
-    model_forward: callable,
     loss_fun: callable,
     optimizer: torch.optim.Optimizer,
     pos: torch.Tensor,
@@ -179,7 +70,6 @@ def forward_train_full_loop(
 
     Args:
         model (torch.nn.Module): The model to train.
-        model_forward (callable): Forward callable from ``make_model_forward``.
         loss_fun (callable): Loss function.
         optimizer (torch.optim.Optimizer): Optimizer.
         pos (torch.Tensor): Position tensor (embedding).
@@ -194,7 +84,7 @@ def forward_train_full_loop(
     """
     dm = DistributedManager()
     with precision_context:
-        pred = model_forward(model, pos, x)
+        pred = model(embedding=pos, fx=x.unsqueeze(-1)).squeeze(-1)
         pred = y_normalizer.decode(pred)
         loss = loss_fun(pred, y)
     if scaler is not None:
@@ -210,7 +100,6 @@ def forward_train_full_loop(
 
 def train_epoch(
     model: torch.nn.Module,
-    model_forward: callable,
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler._LRScheduler,
     train_dataloader: DataLoader,
@@ -224,7 +113,6 @@ def train_epoch(
 
     Args:
         model (torch.nn.Module): The model to train.
-        model_forward (callable): Forward callable from ``make_model_forward``.
         optimizer (torch.optim.Optimizer): Optimizer.
         scheduler (torch.optim.lr_scheduler._LRScheduler): Learning rate scheduler.
         train_dataloader (DataLoader): Training data loader.
@@ -240,7 +128,6 @@ def train_epoch(
         pos, x, y = batch
         loss = forward_train_full_loop(
             model,
-            model_forward,
             loss_fun,
             optimizer,
             pos,
@@ -263,7 +150,6 @@ def train_epoch(
 
 def val_epoch(
     model: torch.nn.Module,
-    model_forward: callable,
     test_dataloader: DataLoader,
     loss_fun: callable,
     y_normalizer,
@@ -273,7 +159,6 @@ def val_epoch(
 
     Args:
         model (torch.nn.Module): The model to validate.
-        model_forward (callable): Forward callable from ``make_model_forward``.
         test_dataloader (DataLoader): Validation data loader.
         loss_fun (callable): Loss function.
         y_normalizer: Normalizer for the target tensor.
@@ -290,7 +175,7 @@ def val_epoch(
     for i, batch in enumerate(test_dataloader):
         pos, x, y = batch
         with torch.no_grad():
-            pred = model_forward(model, pos, x)
+            pred = model(embedding=pos, fx=x.unsqueeze(-1)).squeeze(-1)
             pred = y_normalizer.decode(pred)
             loss = loss_fun(pred, y)
 
@@ -342,20 +227,12 @@ def darcy_trainer(cfg: DictConfig) -> None:
     logger = RankZeroLoggingWrapper(PythonLogger(name="darcy_transolver"), dm)
     logger.file_logging()
 
-    # === TensorBoard SummaryWriters ===
-    # Separate train/val writers so TensorBoard can overlay matching scalars
-    train_writer = None
-    val_writer = None
-    metrics_file = None
+    # === TensorBoard SummaryWriter ===
+    # Only rank 0 writes logs to avoid duplication in DDP
+    writer = None
     if dm.rank == 0:
         log_dir = f"{cfg.output_dir}/runs/{cfg.run_id}"
-        train_writer = SummaryWriter(log_dir=f"{log_dir}/train")
-        val_writer = SummaryWriter(log_dir=f"{log_dir}/val")
-
-        # === JSONL metrics log (append-safe for resumed runs) ===
-        metrics_path = os.path.join(log_dir, "metrics.jsonl")
-        os.makedirs(log_dir, exist_ok=True)
-        metrics_file = open(metrics_path, "a")
+        writer = SummaryWriter(log_dir=log_dir)
 
     ########################################################################
     # Print the configuration to log
@@ -365,8 +242,23 @@ def darcy_trainer(cfg: DictConfig) -> None:
     ########################################################################
     # define model
     ########################################################################
-    model = instantiate(cfg.model).to(dm.device)
-    model_forward = make_model_forward(cfg)
+    model = Transolver(
+        functional_dim=cfg.model.functional_dim,
+        out_dim=cfg.model.out_dim,
+        embedding_dim=cfg.model.embedding_dim,
+        n_layers=cfg.model.n_layers,
+        n_hidden=cfg.model.n_hidden,
+        dropout=cfg.model.dropout,
+        n_head=cfg.model.n_head,
+        act=cfg.model.act,
+        mlp_ratio=cfg.model.mlp_ratio,
+        slice_num=cfg.model.slice_num,
+        unified_pos=cfg.model.unified_pos,
+        ref=cfg.model.ref,
+        structured_shape=[cfg.data.resolution, cfg.data.resolution],
+        use_te=cfg.model.use_te,
+        time_input=cfg.model.time_input,
+    ).to(dm.device)
 
     logger.info(f"\n{torchinfo.summary(model, verbose=0)}")
 
@@ -377,7 +269,11 @@ def darcy_trainer(cfg: DictConfig) -> None:
     # define loss and optimizer
     ########################################################################
     loss_fun = TestLoss(size_average=True)
-    optimizer = build_optimizer(model, cfg)
+    optimizer = AdamW(
+        model.parameters(),
+        lr=cfg.scheduler.initial_lr,
+        weight_decay=cfg.scheduler.weight_decay,
+    )
 
     ########################################################################
     # Create the data pipes and samplers
@@ -427,30 +323,12 @@ def darcy_trainer(cfg: DictConfig) -> None:
         cfg.training.pseudo_epoch_sample_size / cfg.data.batch_size
     )
 
-    total_steps = steps_per_pseudo_epoch * cfg.training.max_pseudo_epochs
-    if cfg.optimizer.type == "muon":
-        warmup_steps = steps_per_pseudo_epoch * 2
-        scheduler = lr_scheduler.SequentialLR(
-            optimizer,
-            schedulers=[
-                lr_scheduler.LinearLR(
-                    optimizer, start_factor=1e-2, total_iters=warmup_steps
-                ),
-                lr_scheduler.CosineAnnealingLR(
-                    optimizer,
-                    T_max=total_steps - warmup_steps,
-                    eta_min=cfg.scheduler.initial_lr * 0.1,
-                ),
-            ],
-            milestones=[warmup_steps],
-        )
-    else:
-        scheduler = lr_scheduler.OneCycleLR(
-            optimizer,
-            max_lr=cfg.scheduler.initial_lr,
-            steps_per_epoch=steps_per_pseudo_epoch,
-            epochs=cfg.training.max_pseudo_epochs,
-        )
+    scheduler = lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=cfg.scheduler.initial_lr,
+        steps_per_epoch=steps_per_pseudo_epoch,
+        epochs=cfg.training.max_pseudo_epochs,
+    )
 
     validator = GridValidator(output_dir=f"{cfg.output_dir}/runs/{cfg.run_id}/plots")
 
@@ -461,9 +339,6 @@ def darcy_trainer(cfg: DictConfig) -> None:
         "models": model,
     }
     loaded_pseudo_epoch = load_checkpoint(device=dm.device, **ckpt_args)
-
-    # Compile after checkpoint loading to avoid triggering recompilation
-    model = torch.compile(model)
 
     validation_iters = ceil(cfg.validation.sample_size / cfg.data.batch_size)
 
@@ -506,7 +381,6 @@ def darcy_trainer(cfg: DictConfig) -> None:
             train_start = time.time()
             loss = train_epoch(
                 model,
-                model_forward,
                 optimizer,
                 scheduler,
                 train_dataloader,
@@ -532,7 +406,7 @@ def darcy_trainer(cfg: DictConfig) -> None:
             logger.info(log_string)
 
             # --- TensorBoard logging (only on rank 0) ---
-            if dm.rank == 0 and train_writer is not None:
+            if dm.rank == 0 and writer is not None:
                 # Images/sec/GPU: (num images processed in train_epoch) / train_time / num_gpus
                 # Each batch processes batch_size // world_size images, for steps_per_pseudo_epoch steps
                 images_per_epoch = len(train_dataloader) * (
@@ -540,28 +414,12 @@ def darcy_trainer(cfg: DictConfig) -> None:
                 )
                 images_per_sec_per_gpu = images_per_epoch / train_time
 
-                train_writer.add_scalar("loss", loss.item(), pseudo_epoch)
-                train_writer.add_scalar("time_per_epoch", train_time, pseudo_epoch)
-                train_writer.add_scalar(
-                    "images_per_sec_per_gpu", images_per_sec_per_gpu, pseudo_epoch
+                writer.add_scalar("loss/train", loss.item(), pseudo_epoch)
+                writer.add_scalar("time_per_epoch/train", train_time, pseudo_epoch)
+                writer.add_scalar(
+                    "images_per_sec_per_gpu/train", images_per_sec_per_gpu, pseudo_epoch
                 )
-                train_writer.add_scalar("learning_rate", lr, pseudo_epoch)
-
-            # --- JSONL metrics record (training fields) ---
-            metrics_record = None
-            if dm.rank == 0 and metrics_file is not None:
-                images_per_epoch = len(train_dataloader) * (
-                    cfg.data.batch_size // dm.world_size
-                )
-                metrics_record = {
-                    "pseudo_epoch": pseudo_epoch,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "train_loss": loss.item(),
-                    "train_time_s": train_time,
-                    "learning_rate": lr,
-                    "images_per_sec_per_gpu": images_per_epoch / train_time,
-                    "gpu_mem_reserved_gb": gpu_mem_reserved,
-                }
+                writer.add_scalar("learning_rate/train", lr, pseudo_epoch)
 
             # save checkpoint
             if pseudo_epoch % cfg.training.rec_results_freq == 0 and dm.rank == 0:
@@ -571,7 +429,7 @@ def darcy_trainer(cfg: DictConfig) -> None:
             if pseudo_epoch % cfg.validation.validation_pseudo_epochs == 0:
                 val_start = time.time()
                 val_loss, pred, y, RL2 = val_epoch(
-                    model, model_forward, test_dataloader, loss_fun, y_normalizer
+                    model, test_dataloader, loss_fun, y_normalizer
                 )
                 val_time = time.time() - val_start
 
@@ -582,49 +440,29 @@ def darcy_trainer(cfg: DictConfig) -> None:
                 logger.info(log_string)
 
                 # --- TensorBoard logging (only on rank 0) ---
-                if dm.rank == 0 and val_writer is not None:
+                if dm.rank == 0 and writer is not None:
                     # Validation images/sec/GPU
                     val_images = validation_iters * (
                         cfg.data.batch_size // dm.world_size
                     )
                     val_images_per_sec_per_gpu = val_images / val_time
-                    val_writer.add_scalar("loss", val_loss.item(), pseudo_epoch)
-                    val_writer.add_scalar("RL2", RL2.item(), pseudo_epoch)
-                    val_writer.add_scalar("time_per_epoch", val_time, pseudo_epoch)
-                    val_writer.add_scalar(
-                        "images_per_sec_per_gpu",
+                    writer.add_scalar("loss/val", val_loss.item(), pseudo_epoch)
+                    writer.add_scalar("RL2/val", RL2.item(), pseudo_epoch)
+                    writer.add_scalar("time_per_epoch/val", val_time, pseudo_epoch)
+                    writer.add_scalar(
+                        "images_per_sec_per_gpu/val",
                         val_images_per_sec_per_gpu,
                         pseudo_epoch,
                     )
 
-                # --- JSONL metrics record (validation fields) ---
-                if metrics_record is not None:
-                    val_images = validation_iters * (
-                        cfg.data.batch_size // dm.world_size
-                    )
-                    metrics_record["val_loss"] = val_loss.item()
-                    metrics_record["val_rl2"] = RL2.item()
-                    metrics_record["val_time_s"] = val_time
-                    metrics_record["val_images_per_sec_per_gpu"] = val_images / val_time
-
-                if dm.rank == 0 and cfg.validation.save_plots:
+                if dm.rank == 0:
                     validator.make_plot(pred, y, pseudo_epoch, test_datapipe.s)
-
-            # --- Flush JSONL record for this pseudo-epoch ---
-            if metrics_record is not None:
-                metrics_file.write(json.dumps(metrics_record) + "\n")
-                metrics_file.flush()
 
         # update learning rate
         # if pseudo_epoch % cfg.scheduler.decay_pseudo_epochs == 0:
 
-    if dm.rank == 0:
-        if train_writer is not None:
-            train_writer.close()
-        if val_writer is not None:
-            val_writer.close()
-        if metrics_file is not None:
-            metrics_file.close()
+    if dm.rank == 0 and writer is not None:
+        writer.close()
     logger.success("Training completed *yay*")
 
 
