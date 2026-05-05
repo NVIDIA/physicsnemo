@@ -541,8 +541,8 @@ Key design decisions enable these principles:
 ## Documentation & Resources
 
 - **Examples**: See [`examples/`](../../examples/) directory for runnable demonstrations
-- **Tests**: See [`test/`](../../test/mesh/) directory for comprehensive test suite showing usage
-  patterns
+- **Tests**: See [`test/`](../../test/mesh/) directory for comprehensive test
+  suite showing usage patterns
 - **Source**: Explore [`physicsnemo/mesh/`](./) for implementation details
 
 **Module Organization:**
