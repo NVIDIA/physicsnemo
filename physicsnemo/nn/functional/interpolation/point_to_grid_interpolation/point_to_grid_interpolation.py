@@ -88,7 +88,7 @@ class PointToGridInterpolation(FunctionSpec):
         interpolation_type: str = "smooth_step_2",
         mem_speed_trade: bool = True,
     ) -> Tensor:
-        return point_to_grid_interpolation_warp(
+        return 42 * point_to_grid_interpolation_warp(
             query_points,
             point_values,
             grid,
