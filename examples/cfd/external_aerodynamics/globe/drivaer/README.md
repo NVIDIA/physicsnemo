@@ -107,3 +107,15 @@ and multiscale kernels parameterized by per-sample reference lengths
 5. Cache preprocessed samples as .pt files for fast subsequent loading
 6. At load time, randomly subsample cells for the GLOBE boundary mesh
    (default 20K faces, configurable via `--boundary-n-faces`)
+
+## Expected Training Behavior
+
+This section describes what a healthy training run with reference settings (as
+of 2026-05-05) looks like, so you can sanity-check your own runs.
+
+- Reference hardware: 4 nodes x 4 B200 192GB
+- Wall time per epoch: 217 seconds
+- Peak VRAM per rank: ~179 GB
+- At epoch 20, train loss ~0.07, validation loss ~0.07; both still decreasing.
+- At epoch 100, train loss ~0.0150, validation loss ~0.0155; both still decreasing.
+- At epoch 500, train loss ~0.0080, validation loss ~0.0085; both still decreasing.
