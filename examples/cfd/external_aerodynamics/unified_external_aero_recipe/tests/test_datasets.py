@@ -83,7 +83,9 @@ class TestInjectMetadataMesh:
 
     def test_does_not_mutate_input_global_data(self):
         """Original mesh's `global_data` keeps its pre-call key set."""
-        mesh = Mesh(points=torch.zeros(3, 3), global_data={"existing": torch.tensor(7.0)})
+        mesh = Mesh(
+            points=torch.zeros(3, 3), global_data={"existing": torch.tensor(7.0)}
+        )
         inj = _InjectMetadata({"U_inf": [1.0, 0.0, 0.0]})
         original_keys = set(mesh.global_data.keys())
         inj(mesh)
@@ -91,7 +93,9 @@ class TestInjectMetadataMesh:
 
     def test_existing_global_keys_are_preserved_alongside_injected_ones(self):
         """Pre-existing fields survive; injected fields are added."""
-        mesh = Mesh(points=torch.zeros(3, 3), global_data={"existing": torch.tensor(7.0)})
+        mesh = Mesh(
+            points=torch.zeros(3, 3), global_data={"existing": torch.tensor(7.0)}
+        )
         inj = _InjectMetadata({"U_inf": [1.0, 0.0, 0.0]})
         out = inj(mesh)
         assert "existing" in out.global_data.keys()
