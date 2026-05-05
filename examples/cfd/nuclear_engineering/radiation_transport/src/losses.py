@@ -711,23 +711,35 @@ def evaluate_lattice_qoi_torch(
 
     Matches KiT-RT SNSolverHPC::IterPostprocessing() exactly. Steady-state
     surrogate ⇒ T=1; ``sim_times`` is accepted for callsite uniformity but
-    not used.
+    not used. ``batch_size=1`` is enforced repo-wide; if a leading batch dim
+    is present we recurse on the squeezed slot and re-add it on the way out.
 
     Args:
-        cell_centers: (N, 3) or (B, N, 3)
-        cell_areas: (N,) or (B, N)
-        sigma_t: (N,) or (B, N)
-        sigma_s: (N,) or (B, N)
-        scalar_flux: (T, N) or (B, T, N) — only T=1 is exercised
-        sim_times: (T,) or (B, T) — unused, kept for callsite uniformity
+        cell_centers: (N, 3) or (1, N, 3)
+        cell_areas: (N,) or (1, N)
+        sigma_t: (N,) or (1, N)
+        sigma_s: (N,) or (1, N)
+        scalar_flux: (T, N) or (1, T, N) — only T=1 is exercised
+        sim_times: (T,) or (1, T) — unused, kept for callsite uniformity
 
     Returns:
-        ``{"cur_absorption": (T,) or (B, T)}``
+        ``{"cur_absorption": (T,) or (1, T)}``
     """
     if cell_centers.ndim == 3:
-        return _evaluate_lattice_qoi_torch_batched(
-            cell_centers, cell_areas, sigma_t, sigma_s, scalar_flux, sim_times
+        if cell_centers.shape[0] != 1:
+            raise NotImplementedError(
+                "evaluate_lattice_qoi_torch only supports batch_size=1; "
+                f"got batch={cell_centers.shape[0]}."
+            )
+        result = evaluate_lattice_qoi_torch(
+            cell_centers[0],
+            cell_areas[0],
+            sigma_t[0],
+            sigma_s[0],
+            scalar_flux[0],
+            sim_times[0] if sim_times.ndim == 2 else sim_times,
         )
+        return {k: v.unsqueeze(0) for k, v in result.items()}
 
     x = cell_centers[:, 0]
     y = cell_centers[:, 1]
@@ -763,27 +775,6 @@ def evaluate_lattice_qoi_torch(
     return {"cur_absorption": cur_absorption}
 
 
-def _evaluate_lattice_qoi_torch_batched(
-    cell_centers, cell_areas, sigma_t, sigma_s, scalar_flux, sim_times
-) -> dict[str, torch.Tensor]:
-    """Batched version for (B, N, 3) inputs."""
-    batch_size = cell_centers.shape[0]
-    results = [
-        evaluate_lattice_qoi_torch(
-            cell_centers[b],
-            cell_areas[b],
-            sigma_t[b],
-            sigma_s[b],
-            scalar_flux[b],
-            sim_times[b] if sim_times.ndim == 2 else sim_times,
-        )
-        for b in range(batch_size)
-    ]
-    return {
-        "cur_absorption": torch.stack([r["cur_absorption"] for r in results]),
-    }
-
-
 def evaluate_hohlraum_qoi_torch(
     cell_centers: torch.Tensor,
     cell_areas: torch.Tensor,
@@ -798,30 +789,37 @@ def evaluate_hohlraum_qoi_torch(
     Matches KiT-RT SNSolverHPC hohlraum geometry exactly (including known KiT-RT
     quirk of using pos_red_left_bottom for both vertical wall sides). Steady-state
     surrogate ⇒ T=1; ``sim_times`` is accepted for callsite uniformity but
-    not used.
+    not used. ``batch_size=1`` is enforced repo-wide; if a leading batch dim
+    is present we recurse on the squeezed slot and re-add it on the way out.
 
     Args:
-        cell_centers: (N, 3) or (B, N, 3)
-        cell_areas: (N,) or (B, N)
-        sigma_t: (N,) or (B, N)
-        sigma_s: (N,) or (B, N)
-        scalar_flux: (T, N) or (B, T, N) — only T=1 is exercised
-        sim_times: (T,) or (B, T) — unused, kept for callsite uniformity
+        cell_centers: (N, 3) or (1, N, 3)
+        cell_areas: (N,) or (1, N)
+        sigma_t: (N,) or (1, N)
+        sigma_s: (N,) or (1, N)
+        scalar_flux: (T, N) or (1, T, N) — only T=1 is exercised
+        sim_times: (T,) or (1, T) — unused, kept for callsite uniformity
         geometry_params: dict with cx, cy, hlr, hrr, llr, ulr, lrr, urr
 
     Returns:
         Dict with ``cur_absorption_{center,vertical,horizontal}``.
     """
     if cell_centers.ndim == 3:
-        return _evaluate_hohlraum_qoi_torch_batched(
-            cell_centers,
-            cell_areas,
-            sigma_t,
-            sigma_s,
-            scalar_flux,
-            sim_times,
+        if cell_centers.shape[0] != 1:
+            raise NotImplementedError(
+                "evaluate_hohlraum_qoi_torch only supports batch_size=1; "
+                f"got batch={cell_centers.shape[0]}."
+            )
+        result = evaluate_hohlraum_qoi_torch(
+            cell_centers[0],
+            cell_areas[0],
+            sigma_t[0],
+            sigma_s[0],
+            scalar_flux[0],
+            sim_times[0] if sim_times.ndim == 2 else sim_times,
             geometry_params,
         )
+        return {k: v.unsqueeze(0) for k, v in result.items()}
 
     x = cell_centers[:, 0]
     y = cell_centers[:, 1]
@@ -863,33 +861,6 @@ def evaluate_hohlraum_qoi_torch(
             absorption_density * in_horizontal.unsqueeze(0).float(), dim=1
         ),
     }
-
-
-def _evaluate_hohlraum_qoi_torch_batched(
-    cell_centers,
-    cell_areas,
-    sigma_t,
-    sigma_s,
-    scalar_flux,
-    sim_times,
-    geometry_params,
-) -> dict[str, torch.Tensor]:
-    """Batched version for (B, N, 3) inputs."""
-    batch_size = cell_centers.shape[0]
-    results = [
-        evaluate_hohlraum_qoi_torch(
-            cell_centers[b],
-            cell_areas[b],
-            sigma_t[b],
-            sigma_s[b],
-            scalar_flux[b],
-            sim_times[b] if sim_times.ndim == 2 else sim_times,
-            geometry_params,
-        )
-        for b in range(batch_size)
-    ]
-    keys = list(results[0].keys())
-    return {k: torch.stack([r[k] for r in results]) for k in keys}
 
 
 __all__ = [
