@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Standalone CLI to compute flux + material statistics over a zarr root.
+"""Standalone CLI to compute flux + material statistics over a mesh data root.
 
 Run this once before training to produce the two YAML statistics files the
 training pipeline expects:
@@ -79,7 +79,7 @@ def compute_flux_statistics(
     """Compute flux normalization statistics from the training split.
 
     Args:
-        data_path: path to the zarr stores for one case.
+        data_path: path to the mesh stores for one case.
         case_type: ``"lattice"`` or ``"hohlraum"``.
         output_file: destination YAML path.
         split_file: split JSON used to select the training split.
@@ -166,7 +166,7 @@ def compute_flux_statistics(
 # Material statistics
 # =========================================================================
 #
-# Reads the precomputed sigma_a / sigma_s / sigma_t / Q fields from each zarr
+# Reads the precomputed sigma_a / sigma_s / sigma_t / Q fields from each mesh
 # store in the training split and accumulates per-property mean / std / min /
 # max across all cells. Schema matches what ``load_material_stats`` expects.
 
@@ -180,7 +180,7 @@ def compute_material_statistics(
     """Compute per-property material statistics from the training split.
 
     Args:
-        data_path: path to the zarr stores for one case.
+        data_path: path to the mesh stores for one case.
         case_type: ``"lattice"`` or ``"hohlraum"``.
         output_file: destination YAML path.
         split_file: split JSON used to select the training split.
@@ -283,8 +283,8 @@ def compute_material_statistics(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Compute flux + material normalization statistics over a zarr root. "
-            "Emits two YAML files: <case>_flux_stats.yaml and "
+            "Compute flux + material normalization statistics over a mesh data "
+            "root. Emits two YAML files: <case>_flux_stats.yaml and "
             "<case>_material_stats.yaml in the output directory."
         )
     )
@@ -292,7 +292,7 @@ def _parse_args() -> argparse.Namespace:
         "--data_path",
         type=Path,
         required=True,
-        help="Path to the zarr root for one case (e.g. <DATA_ROOT>/lattice).",
+        help="Path to the mesh data root for one case (e.g. <DATA_ROOT>/lattice).",
     )
     parser.add_argument(
         "--case_type",
