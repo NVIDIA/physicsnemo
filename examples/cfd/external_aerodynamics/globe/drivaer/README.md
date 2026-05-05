@@ -6,10 +6,16 @@ body geometries from the DrivAerML dataset.
 
 ## Problem Description
 
-The DrivAerML dataset contains ~207 scale-resolving simulations (SRS) of a
-parametric DrivAer car in a virtual wind tunnel at 140 km/h.  Each sample
-varies the car body geometry (length, frontal area, shape details) while
-keeping freestream conditions constant.
+The DrivAerML dataset contains 500 CFD simulations of a parametric DrivAer car
+in a wind tunnel.  Each sample varies the car body geometry (length, frontal
+area, shape details) while keeping freestream conditions constant.
+
+Of the 500 simulations, this example uses 484 (436 train + 48 validation),
+inherited verbatim from the upstream [DoMINO DrivAerML
+splits](https://github.com/NVIDIA/physicsnemo-cfd/blob/main/workflows/bench_example/drivaer_ml_files/train.csv)
+so cross-applicability between recipes is preserved.  The 16 missing run IDs
+are: `167, 211, 218, 221, 248, 282, 291, 295, 316, 325, 329, 364, 370, 376, 403,
+473`.
 
 GLOBE learns to map from car body geometry (represented as a triangulated
 surface mesh) to nondimensional surface fields:
@@ -106,7 +112,7 @@ and multiscale kernels parameterized by per-sample reference lengths
 4. Parse reference lengths and force coefficients from CSV files
 5. Cache preprocessed samples as .pt files for fast subsequent loading
 6. At load time, randomly subsample cells for the GLOBE boundary mesh
-   (configurable via `--n_faces_per_boundary`)
+   (default 80K faces, configurable via `--n-faces-per-boundary`)
 
 ## Expected Training Behavior
 
