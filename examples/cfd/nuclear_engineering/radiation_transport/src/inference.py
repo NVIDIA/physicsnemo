@@ -244,10 +244,7 @@ def compute_sample_qoi(
             cell_centers_t, cell_areas_t, sigma_t_t, sigma_s_t, target_t, sim_times_t
         )
     elif case_type == "hohlraum":
-        filename = metadata.get("filename")
-        if not filename:
-            return None
-        gp = extract_geometry_params(filename)
+        gp = extract_geometry_params(metadata)
         if not gp:
             return None
         qp = evaluate_hohlraum_qoi_torch(

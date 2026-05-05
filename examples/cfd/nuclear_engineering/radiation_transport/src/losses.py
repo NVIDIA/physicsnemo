@@ -572,40 +572,24 @@ def compute_hohlraum_qoi_loss(
     return loss, details
 
 
-def extract_geometry_params(filename) -> dict:
-    """Extract hohlraum geometry parameters from zarr filename."""
-    # handle list (batched) or single string filename
-    if isinstance(filename, (list, tuple)):
-        filename = filename[0] if len(filename) > 0 else ""
+_HOHLRAUM_GEOMETRY_KEYS = ("ulr", "llr", "urr", "lrr", "hlr", "hrr", "cx", "cy")
 
-    if not isinstance(filename, str):
-        filename = str(filename)
 
-    # remove .zarr extension if present
-    filename = filename.replace(".zarr", "")
+def extract_geometry_params(metadata) -> dict:
+    """Extract hohlraum geometry parameters from sample metadata.
 
-    parts = filename.split("_")
+    Reads ``simulation_params.parameters`` out of the sidecar-derived metadata
+    dict and returns the 8-key geometry dict consumed by the hohlraum QoI
+    evaluator (``ulr, llr, urr, lrr, hlr, hrr, cx, cy``). Accepts either a
+    single metadata dict or a batched list of dicts.
+    """
+    if isinstance(metadata, (list, tuple)):
+        metadata = metadata[0] if metadata else {}
+    if not isinstance(metadata, dict):
+        return {}
 
-    geometry_params = {}
-    for part in parts:
-        if part.startswith("ulr"):
-            geometry_params["ulr"] = float(part[3:])
-        elif part.startswith("llr"):
-            geometry_params["llr"] = float(part[3:])
-        elif part.startswith("urr"):
-            geometry_params["urr"] = float(part[3:])
-        elif part.startswith("lrr"):
-            geometry_params["lrr"] = float(part[3:])
-        elif part.startswith("hlr"):
-            geometry_params["hlr"] = float(part[3:])
-        elif part.startswith("hrr"):
-            geometry_params["hrr"] = float(part[3:])
-        elif part.startswith("cx"):
-            geometry_params["cx"] = float(part[2:])
-        elif part.startswith("cy"):
-            geometry_params["cy"] = float(part[2:])
-
-    return geometry_params
+    params = metadata.get("simulation_params", {}).get("parameters", {})
+    return {k: float(params[k]) for k in _HOHLRAUM_GEOMETRY_KEYS if k in params}
 
 
 def compute_physics_loss(
@@ -648,22 +632,14 @@ def compute_physics_loss(
         )
     elif case_type == "hohlraum":
         if metadata is None:
-            raise ValueError("hohlraum physics loss requires metadata with filename")
+            raise ValueError("hohlraum physics loss requires sample metadata")
 
-        if isinstance(metadata, dict):
-            filename = metadata.get("filename", "")
-        elif isinstance(metadata, list) and len(metadata) > 0:
-            filename = metadata[0].get("filename", "")
-        else:
-            raise ValueError(
-                f"hohlraum physics loss requires metadata with filename, got: {type(metadata)}"
-            )
-
-        geometry_params = extract_geometry_params(filename)
+        geometry_params = extract_geometry_params(metadata)
 
         if not geometry_params:
             raise ValueError(
-                f"could not extract geometry parameters from filename: {filename}"
+                "could not read hohlraum geometry parameters from metadata's "
+                "simulation_params.parameters"
             )
 
         return compute_hohlraum_qoi_loss(
