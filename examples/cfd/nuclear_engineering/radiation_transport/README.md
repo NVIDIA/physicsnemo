@@ -8,7 +8,8 @@ steady-state mapping from the initial flux snapshot to the final scalar flux,
 using a physics-informed loss that combines region-weighted MSE with a
 quantity-of-interest (QoI) penalty based on absorption in key regions.
 
-The datasets used for this example were generated using [KiT-RT](https://github.com/KiT-RT)[1].
+The datasets used for this example were generated using
+[KiT-RT](https://github.com/KiT-RT) [^1].
 
 ---
 
@@ -55,6 +56,7 @@ logged each batch.
 ---
 
 ## 2. Installation
+
 Prerequisites:
 
 - **PyTorch ≥ 2.6** — `torch.optim.Muon` is built in. Earlier PyTorch versions
@@ -75,17 +77,24 @@ uv pip install -e ".[model-extras,datapipes-extras]" tensorboard
 
 ### 3.1 Data source
 
-**TODO:** HuggingFace dataset URL. Until then, raw simulation data may be curated from the [KiT-RT repositories](https://github.com/KiT-RT).
+**TODO:** HuggingFace dataset URL. Until then, raw simulation data may be
+curated from the [KiT-RT repositories](https://github.com/KiT-RT).
 
 ### 3.2 Expected on-disk layout
 
-```
+The runtime data format is the PhysicsNeMo `Mesh` memmap layout. Each
+simulation lives in a `<name>.mesh/` directory next to a `<name>.attrs.json`
+sidecar, loaded via `physicsnemo.mesh.Mesh.load(<name>.mesh)`.
+
+```text
 <DATA_ROOT>/
 ├── lattice/
-│   ├── lattice_abs<a>_scatter<s>_p<p>_q<q>.zarr/
+│   ├── lattice_abs<a>_scatter<s>_p<p>_q<q>.mesh/
+│   ├── lattice_abs<a>_scatter<s>_p<p>_q<q>.attrs.json
 │   └── ...
 ├── hohlraum/
-│   ├── hohlraum_variable_cl<...>_q<...>_ulr<...>_llr<...>_<...>.zarr/
+│   ├── hohlraum_variable_cl<...>_q<...>_ulr<...>_llr<...>_<...>.mesh/
+│   ├── hohlraum_variable_cl<...>_q<...>_ulr<...>_llr<...>_<...>.attrs.json
 │   └── ...
 ├── splits/
 │   ├── lattice_splits.json     # train/val/test split lists
@@ -97,20 +106,38 @@ uv pip install -e ".[model-extras,datapipes-extras]" tensorboard
     └── hohlraum_material_stats.yaml
 ```
 
-### 3.3 What's in each zarr store
+### 3.3 What's in each mesh store
 
-Each `*.zarr/` directory is one simulation. The loader uses the first and final
-`scalar_flux` snapshots and ignores intermediate snapshots.
+Each `*.mesh/` directory is one simulation, written by
+`physicsnemo.mesh.Mesh.save(...)`. The loader uses the first and final
+`scalar_flux` snapshots and ignores intermediate snapshots. The fields are:
+
+`Mesh.points` — `(N, 3)` float32 cell-center coordinates.
+
+`Mesh.point_data` (per-cell tensors):
+
+| Key | Shape | Dtype | Notes |
+|---|---|---|---|
+| `cell_areas` | `(N,)` | float32 | per-cell areas — used by physics loss for surface integrals |
+| `sigma_a`, `sigma_s`, `sigma_t` | `(N,)` | float32 | absorption / scattering / total cross-section per cell |
+| `Q` | `(N,)` | float32 | heat source (non-zero in lattice; zeros in hohlraum) |
+| `geometric_features` | `(N, k)` | float32 | optional per-cell geometric features |
+| `material_properties` | `(N,)` | int64 | integer region IDs (consumed by `LatticeMaterialMapper` / `HohlraumMaterialMapper`) |
+| `scalar_flux` | `(N, T)` | float32 | physical flux, transposed to put cells first |
+
+`Mesh.global_data` (per-simulation tensors):
 
 | Key | Shape | Notes |
 |---|---|---|
-| `scalar_flux` | `(T, N)` or `(N,)` | physical flux |
-| `sigma_a`, `sigma_s` | `(N,)` | absorption / scattering coefficients per cell |
-| `Q` | `(N,)` | heat source (lattice only; zeros in hohlraum) |
-| `coordinates` | `(N, 2)` | cell-center positions in physical units |
-| `cell_areas` | `(N,)` | per-cell areas — used by physics loss for surface integrals |
-| `material_labels` | `(N,)` | integer region IDs (consumed by `LatticeMaterialMapper` / `HohlraumMaterialMapper`) |
-| `metadata` | dict | final simulation time, geometry params (hohlraum), filename |
+| `sim_times` | `(T,)` | simulation times for each flux snapshot |
+| `attr__<key>` | scalar / `(...)` | numeric simulation attributes flattened from the source curator |
+
+`<name>.attrs.json` (sidecar):
+A JSON file holding `raw_attrs` (the verbatim source attrs dict — final
+simulation time, geometry params, etc.) and `residue_attrs` (the
+non-numeric attrs that don't fit in `global_data`). `MeshDataReader.load`
+exposes `raw_attrs` as the `metadata` `NonTensorData` entry on the returned
+`TensorDict`.
 
 `N` is the number of cells per simulation (~tens of thousands). Different
 simulations may have different `N` — point-cloud collation handles this.
@@ -136,8 +163,8 @@ JSON document with a `"splits"` key:
 }
 ```
 
-Filenames in the splits arrays are zarr **basenames** without the `.zarr`
-suffix; the reader appends it automatically when opening stores.
+Filenames in the splits arrays are **basenames** without any format
+suffix; the reader appends `.mesh` when opening stores.
 
 If the splits file is named with a different suffix, point at it explicitly:
 
@@ -177,10 +204,11 @@ contains per-channel mean/std/min/max for `{σ_a, σ_s, σ_t, Q}`.
 ## 4. Training
 
 ### 4.1 Quick start
+
 Full-mesh training used at least a 48 GB GPU during development (RTX6000 Ada).
 By default `data.preload_data=true`, so the train and validation splits are
 loaded into host RAM before training. Disable with `data.preload_data=false`
-if RAM is tight, at the cost of slower zarr reads.
+if RAM is tight, at the cost of slower per-epoch reads from disk.
 
 Lattice:
 
@@ -207,7 +235,7 @@ torchrun --nproc_per_node=N src/train.py \
 Use `torchrun` for DDP. A plain `python src/train.py ...` launch runs as a
 single process, even inside an allocated SLURM shell. Set `data.preload_data=true`
 (default) so each rank loads static arrays through a sequenced barrier; this is
-faster than re-reading zarr per epoch but uses host RAM proportional to the
+faster than re-reading the mesh stores per epoch but uses host RAM proportional to the
 training split size.
 
 ### 4.3 Common overrides
@@ -219,7 +247,9 @@ training split size.
 | `train.amp=false` | Disable mixed precision (debug / numerical parity) |
 | `train.physics_loss.qoi_region=center` | Hohlraum-only: backprop on a single region. Default `all` averages the four (center, vertical, horizontal, total). |
 | `train.physics_loss.weight=0.0` | Pure MSE training (disables QoI penalty) |
-| `train.dataloader.num_workers=4` | DataLoader workers |
+| `train.dataloader.num_streams=4` | CUDA streams used by `physicsnemo.datapipes.DataLoader` for prefetch overlap (no CPU fork workers) |
+| `train.dataloader.use_streams=false` | Disable CUDA-stream prefetching — useful for debugging or CPU-only runs |
+| `train.dataloader.prefetch_factor=4` | How many batches to prefetch ahead |
 | `model.num_spatial_points=8192` | Subsample cells per training step (–1 = use all) |
 | `model.n_layers=12 model.n_hidden=384` | Bigger Transolver |
 | `model.use_te=true` | Use NVIDIA TransformerEngine layers (requires `[model-extras]`) |
@@ -230,7 +260,7 @@ training split size.
 
 Per run, under `outputs/${project.name}/${case.type}/${exp_tag}/`:
 
-```
+```text
 outputs/RTE_Transolver/lattice/transolver/
 ├── hydra/
 │   ├── config.yaml          # resolved Hydra config (canonical record of the run)
@@ -246,7 +276,6 @@ outputs/RTE_Transolver/lattice/transolver/
 ├── tensorboard/             # TB event files (open with `tensorboard --logdir tensorboard/`)
 └── train.log
 ```
-
 
 When loading checkpoints, `best_model_epoch_<E>/` and `top_model/` track
 validation loss, while `best_qoi_model/` tracks validation QoI loss.
@@ -276,13 +305,12 @@ CLI options:
 | `--split_file FILE` | Required explicit split JSON. |
 | `--output_dir DIR` | Where to write metrics + figures. Default: `<run_dir>/evaluation`. |
 | `--num_samples N` | Limit to the first `N` test simulations (default: all). |
-| `--num_workers N` | DataLoader workers. |
 | `--device {cpu,cuda,cuda:0,...}` | Defaults to CUDA if available. |
 | `--num_plot_samples N` | Number of `flux_panels_<idx>.png` figures to write (default: 3). |
 
 ### 5.2 Outputs
 
-```
+```text
 <output_dir>/
 ├── metrics.yaml          # field-level metrics over the whole test set
 ├── qoi_metrics.yaml      # per-region QoI relative error
@@ -346,18 +374,21 @@ which helps interpret global flux structure and sharp interface features.
 | Lattice (absorption QoI) | 0.60% | 0.23% |
 | Hohlraum (regional QoI) | 2.06% | 0.52–0.73% |
 
-These observed values come from the default full-training runs with defaults configs. Training logs
-converged to final validation losses of about `2.10e-05` for lattice and
-`1.51e-05` for hohlraum.
+These observed values come from the default full-training runs with defaults
+configs. Training logs converged to final validation losses of about
+`2.10e-05` for lattice and `1.51e-05` for hohlraum.
 
 ### 6.2 Reading the training log
 
 Each epoch logs train/validation MSE, QoI loss, learning rate, and checkpoint
 updates. A typical completed epoch looks like:
 
-```
-Epoch 500: train_loss=1.7081e-05, val_loss=2.0973e-05, train_mse=1.7032e-05, val_mse=2.0900e-05, train_qoi=9.8040e-06, val_qoi=1.4658e-05, lr=1.00e-06
-[checkpoint][INFO] - Saved model state dictionary: ./checkpoints/Transolver.0.500.mdlus
+```text
+Epoch 500: train_loss=1.7081e-05, val_loss=2.0973e-05,
+    train_mse=1.7032e-05, val_mse=2.0900e-05,
+    train_qoi=9.8040e-06,  val_qoi=1.4658e-05, lr=1.00e-06
+[checkpoint][INFO] - Saved model state dictionary:
+    ./checkpoints/Transolver.0.500.mdlus
 Training completed!
 Top validation losses: ['0.000021', '0.000021', '0.000021']
 Best QoI loss: 5.887844e-06
@@ -378,7 +409,7 @@ Best QoI loss: 5.887844e-06
 
 All training hyperparameters live under `src/conf/`, composed by Hydra:
 
-```
+```text
 src/conf/
 ├── config.yaml             # root: composes case / data / model / train
 ├── case/{lattice,hohlraum}.yaml
@@ -416,25 +447,42 @@ The Hydra group structure means `case=hohlraum` swaps the entire
 `train/base.yaml` and `model/transolver.yaml` interpolate from `${case.*}`
 so case-specific overrides propagate automatically.
 
+---
+
+## 8. Tests
+
+Pipeline regression tests live under `tests/test_pipeline.py` and exercise the
+dataset / dataloader contract end-to-end against a small dev split. They skip
+cleanly when the dataset isn't present.
+
+```bash
+python -m pytest examples/cfd/nuclear_engineering/radiation_transport/tests/ -v
+```
+
+The tests expect a converted dev dataset at
+`/home/<user>/Projects/Datasets/RTE/devset/mesh/{lattice,hohlraum}/` (12 mesh
+stores per case) plus the matching `splits/` and `stats/` directories. If your
+layout differs, adjust the `_DATASET_ROOT` constant at the top of the test
+file.
 
 ---
 
 ## References
 
-[1]: Kusch, J., Schotthöfer, S., Stammer, P., Wolters, J., & Xiao, T. (2023).
-    "KiT-RT: An extendable framework for radiative transfer and therapy."
-    *ACM Transactions on Mathematical Software*, **49**(4), 1–24.
+[^1]: Kusch, J., Schotthöfer, S., Stammer, P., Wolters, J., & Xiao, T. (2023).
+"KiT-RT: An extendable framework for radiative transfer and therapy."
+*ACM Transactions on Mathematical Software*, **49**(4), 1–24.
 
-    ```bibtex
-    @article{kitrt2023,
-      title     = {KiT-RT: An extendable framework for radiative transfer and therapy},
-      author    = {Kusch, Jonas and Schotth{\"o}fer, Steffen and Stammer, Pia
-                   and Wolters, Jannick and Xiao, Tianbai},
-      journal   = {ACM Transactions on Mathematical Software},
-      volume    = {49},
-      number    = {4},
-      pages     = {1--24},
-      year      = {2023},
-      publisher = {ACM New York, NY}
-    }
-    ```
+```bibtex
+@article{kitrt2023,
+  title     = {KiT-RT: An extendable framework for radiative transfer and therapy},
+  author    = {Kusch, Jonas and Schotth{\"o}fer, Steffen and Stammer, Pia
+               and Wolters, Jannick and Xiao, Tianbai},
+  journal   = {ACM Transactions on Mathematical Software},
+  volume    = {49},
+  number    = {4},
+  pages     = {1--24},
+  year      = {2023},
+  publisher = {ACM New York, NY}
+}
+```
