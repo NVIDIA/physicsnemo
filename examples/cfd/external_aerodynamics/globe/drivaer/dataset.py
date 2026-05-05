@@ -268,6 +268,8 @@ class DrivAerMLDataSet(CachedPreprocessingDataset):
         Returns:
             Mesh with ``n_cells`` cells and corrected area cache.
         """
+        if n_cells <= 0:
+            raise ValueError(f"{n_cells=!r} must be positive.")
         indices = torch.randperm(mesh.n_cells)[:n_cells]
         boundary = mesh.slice_cells(indices).clean(
             merge_points=False,
