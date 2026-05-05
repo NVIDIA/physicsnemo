@@ -14,12 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""RTE data-source layer: zarr reader, PyTorch Dataset, and stats loaders.
+"""RTE data-source layer: mesh reader, PhysicsNeMo Dataset, and stats loaders.
 
 This module is the bottom of the data dependency tree. It provides the
-low-level Zarr access (``ZarrDataReader``), a thin file-indexed
-``Dataset`` wrapper (``RTEBaseDataset``), and helpers for reading the
-RTE-specific YAML statistics files into PhysicsNeMo ``Normalize`` kwargs.
+low-level Mesh access (``MeshDataReader``), a thin file-indexed
+``physicsnemo.datapipes.Dataset`` subclass (``RTEBaseDataset``), and
+helpers for reading the RTE-specific YAML statistics files into
+PhysicsNeMo ``Normalize`` kwargs.
 """
 
 from __future__ import annotations
@@ -29,23 +30,24 @@ import threading
 import warnings
 from collections import OrderedDict
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
-import numpy as np
 import torch
 import yaml
-import zarr
+from physicsnemo.datapipes.dataset import Dataset as PhysicsNeMoDataset
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
+from physicsnemo.datapipes.transforms.base import Transform
+from physicsnemo.mesh import Mesh
 from tensordict import TensorDict
-from torch.utils.data import Dataset
 
 
 # =========================================================================
-# Zarr reader
+# Mesh reader
 # =========================================================================
 #
-# Low-level reader for RTE simulation data stored in zarr. Inherits from
+# Filename-indexed reader over a directory of ``<name>.mesh/`` memmap
+# directories produced by ``convert_zarr_to_mesh.py``. Inherits from
 # ``physicsnemo.datapipes.readers.base.Reader``; returns ``TensorDict`` from
 # ``load()``. The TensorDict carries both the tensor fields and non-tensor
 # metadata (``metadata``, ``filename``) via ``NonTensorData`` entries.
@@ -56,38 +58,20 @@ from torch.utils.data import Dataset
 # defaults.
 
 
-_TENSOR_FIELD_NAMES = (
-    "coordinates",
-    "cell_areas",
-    "scalar_flux",
-    "sim_times",
-    "material_properties",
-    "geometric_features",
-    "sigma_t",
-    "sigma_s",
-    "sigma_a",
-    "Q",
-)
+@register("RTEMeshReader")
+class MeshDataReader(Reader):
+    """Filename-indexed reader over a directory of RTE Mesh memmap stores.
 
-
-@register("RTEZarrReader")
-class ZarrDataReader(Reader):
-    """Filename-indexed reader over a directory of RTE zarr stores.
-
-    Inherits from ``physicsnemo.datapipes.readers.base.Reader`` so the reader
-    plugs into any PhysicsNeMo-native pipeline via ``__getitem__(int)`` →
-    ``(TensorDict, metadata_dict)``. RTE pipelines still reach it via
-    ``load(filename, **kwargs)`` for the steady-state loader controls the
-    training data loaders rely on.
+    The ``TensorDict`` returned by ``load(filename, ...)`` carries the
+    tensor fields RTE training and inference rely on. The on-disk format
+    is the PhysicsNeMo ``Mesh`` memmap layout (``<name>.mesh/`` +
+    ``<name>.attrs.json`` sidecar) emitted by ``convert_zarr_to_mesh.py``.
 
     Example:
-        >>> reader = ZarrDataReader("/path/to/zarr_stores/lattice")
+        >>> reader = MeshDataReader("/path/to/mesh_stores/lattice")
         >>> filenames = reader.get_filenames()
         >>> td = reader.load(filenames[0])
         >>> print(td["coordinates"].shape)  # (N, 3)
-
-    The LRU cache is retained verbatim: it stores tensor fields keyed by
-    filename and evicts in insertion order when ``max_cache_size`` is hit.
     """
 
     def __init__(
@@ -104,11 +88,6 @@ class ZarrDataReader(Reader):
         self.cache_static_arrays = cache_static_arrays
         self.max_cache_size = max_cache_size
 
-        # LRU cache for static arrays keyed by ``(filename, load_material_properties,
-        # load_geometric_features, load_sigma_fields)``; values are dicts of
-        # ``torch.Tensor``. Keying on the load-flag tuple prevents a second
-        # caller from getting a stale partial entry that was loaded with a
-        # different set of flags.
         self._static_cache: OrderedDict[
             Tuple[str, bool, bool, bool], Dict[str, torch.Tensor]
         ] = OrderedDict()
@@ -117,8 +96,6 @@ class ZarrDataReader(Reader):
         self._cache_evictions = 0
         self._cache_lock = threading.Lock()
 
-        # Per-file metadata cache. Metadata is static so we can reopen zarr
-        # at most once per filename instead of every ``__getitem__`` call.
         self._metadata_cache: Dict[str, Dict] = {}
 
         if not self.data_path.exists():
@@ -126,8 +103,6 @@ class ZarrDataReader(Reader):
         if not self.data_path.is_dir():
             raise ValueError(f"Data path {self.data_path} is not a directory")
 
-        # Discover files once at construction time so ``_load_sample`` has a
-        # stable filename→int mapping for the PhysicsNeMo ``Reader`` protocol.
         self._filenames: List[str] = self._scan_filenames()
 
     # ------------------------------------------------------------------
@@ -138,33 +113,29 @@ class ZarrDataReader(Reader):
         return len(self._filenames)
 
     def _load_sample(self, index: int) -> Dict[str, torch.Tensor]:
-        """Int-indexed load using defaults (load everything, no slicing)."""
         td = self.load(self._filenames[index])
         return {key: td[key] for key in td.keys() if isinstance(td[key], torch.Tensor)}
 
     def _get_sample_metadata(self, index: int) -> Dict:
-        """Return per-sample metadata dict for ``(TensorDict, metadata)`` tuple."""
         filename = self._filenames[index]
         meta = self.get_metadata(filename)
         meta["filename"] = filename
         return meta
 
     # ------------------------------------------------------------------
-    # Filename discovery + caching (unchanged behavior)
+    # Filename discovery + caching
     # ------------------------------------------------------------------
 
     def _scan_filenames(self) -> List[str]:
         filenames = []
         for item in self.data_path.iterdir():
-            if item.suffix == ".zarr" or (
-                item.is_dir() and item.name.endswith(".zarr")
-            ):
+            if item.is_dir() and item.name.endswith(".mesh"):
                 if self.case_type is None or item.name.startswith(self.case_type):
                     filenames.append(item.name)
         return sorted(filenames)
 
     def get_filenames(self) -> List[str]:
-        """Return a fresh list of discovered zarr store names."""
+        """Return a fresh list of discovered mesh store names."""
         return list(self._filenames)
 
     def get_cache_stats(self) -> Dict[str, float]:
@@ -190,6 +161,22 @@ class ZarrDataReader(Reader):
             self._cache_evictions = 0
 
     # ------------------------------------------------------------------
+    # Sidecar + Mesh helpers
+    # ------------------------------------------------------------------
+
+    def _sidecar_path(self, filename: str) -> Path:
+        # ``<name>.mesh`` -> ``<name>.attrs.json``
+        stem = filename[: -len(".mesh")] if filename.endswith(".mesh") else filename
+        return self.data_path / f"{stem}.attrs.json"
+
+    def _read_sidecar(self, filename: str) -> Dict:
+        sidecar = self._sidecar_path(filename)
+        if not sidecar.exists():
+            return {}
+        with open(sidecar, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    # ------------------------------------------------------------------
     # The filename-indexed ``load`` stays the primary entry point
     # ------------------------------------------------------------------
 
@@ -202,24 +189,21 @@ class ZarrDataReader(Reader):
         load_sigma_fields: bool = True,
         load_flux: bool = True,
     ) -> TensorDict:
-        """Load a zarr store into a ``TensorDict``.
+        """Load a Mesh memmap store into a ``TensorDict``.
 
         Tensor fields (``coordinates``, ``cell_areas``, ``scalar_flux``, and
         the optional ``sim_times`` / ``material_properties`` / ``geometric_features``
-        / ``sigma_*`` / ``Q``) are stored as
-        ``torch.Tensor`` entries. The zarr store's ``.attrs`` dict is stored
-        as ``NonTensorData`` under the ``metadata`` key.
+        / ``sigma_*`` / ``Q``) are stored as ``torch.Tensor`` entries. The
+        sidecar attrs dict is stored as ``NonTensorData`` under ``metadata``.
 
         ``load_flux=False`` returns a placeholder ``scalar_flux`` of shape
         ``(1, N)`` — the caller is expected to overwrite it from a memory
-        cache. The sentinel matches the pre-Phase-I behavior.
+        cache.
         """
         filepath = self.data_path / filename
         if not filepath.exists():
-            raise FileNotFoundError(f"Zarr store {filepath} not found")
+            raise FileNotFoundError(f"Mesh store {filepath} not found")
 
-        # Cache key includes load-flag tuple so a second caller asking for
-        # fields not loaded the first time does not get stale partial data.
         cache_key = (
             filename,
             bool(load_material_properties),
@@ -227,32 +211,44 @@ class ZarrDataReader(Reader):
             bool(load_sigma_fields),
         )
 
-        z = zarr.open(str(filepath), mode="r")
+        # ``Mesh.load`` returns memmap-backed tensors. The single-process
+        # ``physicsnemo.datapipes.DataLoader`` (CUDA streams, no fork) keeps
+        # the tensors live in this process, so we let Mesh hand back the
+        # memmap views directly — the prior ``.clone()`` was only needed to
+        # survive cross-process serialization with the legacy
+        # ``torch.utils.data.DataLoader``.
+        mesh = Mesh.load(str(filepath))
+        point_data = mesh.point_data
+        global_data = mesh.global_data
 
         # ------- flux + timesteps (steady-state first -> final snapshots) -------
-        if not load_flux:
-            flux_shape = z["scalar_flux"].shape
-            num_cells = flux_shape[-1]
-            scalar_flux = np.zeros((1, num_cells), dtype=np.float32)
-            sim_times = None
+        if "scalar_flux" in point_data.keys():
+            flux_nT = point_data["scalar_flux"]  # (N, T)
+            num_cells = flux_nT.shape[0]
+            num_timesteps = flux_nT.shape[1] if flux_nT.ndim == 2 else 1
         else:
-            flux_array = z["scalar_flux"]
-            if len(flux_array.shape) == 1:
-                scalar_flux = np.array(flux_array, dtype=np.float32)[None, :]
-                resolved = [0]
+            flux_nT = None
+            num_cells = mesh.points.shape[0]
+            num_timesteps = 1
+
+        if not load_flux:
+            scalar_flux = torch.zeros((1, num_cells), dtype=torch.float32)
+            sim_times_t = None
+        else:
+            if flux_nT is None:
+                raise KeyError(f"scalar_flux missing from {filepath}")
+            full = flux_nT.transpose(0, 1).contiguous().to(torch.float32)  # (T, N)
+            resolved = [0] if num_timesteps == 1 else [0, num_timesteps - 1]
+            scalar_flux = full[resolved].contiguous()
+            if (
+                load_sim_times
+                and "sim_times" in global_data.keys()
+                and global_data["sim_times"].numel() > 0
+            ):
+                sim_t = global_data["sim_times"].to(torch.float32)
+                sim_times_t = sim_t[resolved].contiguous()
             else:
-                num_timesteps = flux_array.shape[0]
-                resolved = [0] if num_timesteps == 1 else [0, num_timesteps - 1]
-                scalar_flux = np.stack(
-                    [np.array(flux_array[idx], dtype=np.float32) for idx in resolved],
-                    axis=0,
-                )
-            if load_sim_times and "sim_times" in z:
-                sim_times = np.array(
-                    [z["sim_times"][idx] for idx in resolved], dtype=np.float32
-                )
-            else:
-                sim_times = None
+                sim_times_t = None
 
         # ------- static-arrays cache lookup -------
         with self._cache_lock:
@@ -261,49 +257,49 @@ class ZarrDataReader(Reader):
             if cache_hit:
                 self._cache_hits += 1
                 self._static_cache.move_to_end(cache_key)
-                cached_entry = dict(self._static_cache[cache_key])  # shallow copy
+                cached_entry = dict(self._static_cache[cache_key])
 
         td = TensorDict({}, batch_size=[])
-        td["scalar_flux"] = torch.from_numpy(scalar_flux)
-        if sim_times is not None:
-            td["sim_times"] = torch.from_numpy(np.asarray(sim_times))
+        td["scalar_flux"] = scalar_flux
+        if sim_times_t is not None:
+            td["sim_times"] = sim_times_t
 
         if cache_hit:
-            # Reuse cached static tensors; copy references, not data.
             for key, tensor in cached_entry.items():
                 td[key] = tensor
         else:
             self._cache_misses += 1
-            td["coordinates"] = torch.from_numpy(
-                np.array(z["cell_centers"], dtype=np.float32)
-            )
-            td["cell_areas"] = torch.from_numpy(
-                np.array(z["cell_areas"], dtype=np.float32)
-            )
-
-            if load_material_properties and "material_properties" in z:
-                td["material_properties"] = torch.from_numpy(
-                    np.array(z["material_properties"], dtype=np.int32)
+            td["coordinates"] = mesh.points.to(torch.float32).contiguous()
+            if "cell_areas" in point_data.keys():
+                td["cell_areas"] = (
+                    point_data["cell_areas"].to(torch.float32).contiguous()
                 )
-            elif load_material_properties and "material_properties" not in z:
+
+            if load_material_properties and "material_properties" in point_data.keys():
+                td["material_properties"] = (
+                    point_data["material_properties"].to(torch.int32).contiguous()
+                )
+            elif (
+                load_material_properties
+                and "material_properties" not in point_data.keys()
+            ):
                 warnings.warn(f"Material properties not found in {filename}.")
 
-            if load_geometric_features and "geometric_features" in z:
-                td["geometric_features"] = torch.from_numpy(
-                    np.array(z["geometric_features"], dtype=np.float32)
+            if load_geometric_features and "geometric_features" in point_data.keys():
+                td["geometric_features"] = (
+                    point_data["geometric_features"].to(torch.float32).contiguous()
                 )
 
             if load_sigma_fields:
                 for key in ("sigma_t", "sigma_s", "sigma_a", "Q"):
-                    if key in z:
-                        td[key] = torch.from_numpy(np.array(z[key], dtype=np.float32))
+                    if key in point_data.keys():
+                        td[key] = point_data[key].to(torch.float32).contiguous()
 
             if self.cache_static_arrays:
                 self._maybe_cache_entry(cache_key, td)
 
-        # Non-tensor metadata ride as NonTensorData so transforms and adapters
-        # that access ``td["metadata"]`` keep working unchanged.
-        attrs = dict(z.attrs) if hasattr(z, "attrs") else {}
+        sidecar = self._read_sidecar(filename)
+        attrs = dict(sidecar.get("raw_attrs", {}))
         td.set_non_tensor("metadata", attrs)
         return td
 
@@ -312,7 +308,6 @@ class ZarrDataReader(Reader):
         cache_key: Tuple[str, bool, bool, bool],
         td: TensorDict,
     ) -> None:
-        """LRU-cache the static tensor fields of ``td`` under ``cache_key``."""
         with self._cache_lock:
             if (
                 self.max_cache_size > 0
@@ -343,28 +338,36 @@ class ZarrDataReader(Reader):
     # ------------------------------------------------------------------
 
     def get_metadata(self, filename: str) -> Dict:
-        """Return metadata without loading full sample data.
-
-        Metadata is static per file, so the result is cached on the reader
-        and subsequent calls for the same ``filename`` skip the zarr open.
-        """
+        """Return metadata (sidecar attrs + shape facts) without a full load."""
         cached = self._metadata_cache.get(filename)
         if cached is not None:
             return cached
 
         filepath = self.data_path / filename
-        z = zarr.open(str(filepath), mode="r")
+        mesh = Mesh.load(str(filepath))
+        point_data = mesh.point_data
+        global_data = mesh.global_data
 
-        metadata = dict(z.attrs) if hasattr(z, "attrs") else {}
-        flux_shape = z["scalar_flux"].shape
-        metadata["num_timesteps"] = flux_shape[0] if len(flux_shape) > 1 else 1
-        metadata["num_cells"] = flux_shape[-1]
-        metadata["has_geometric_features"] = "geometric_features" in z
-        metadata["has_material_properties"] = "material_properties" in z
-        metadata["has_sim_times"] = "sim_times" in z
-        if "sim_times" in z:
+        sidecar = self._read_sidecar(filename)
+        metadata: Dict = dict(sidecar.get("raw_attrs", {}))
+
+        if "scalar_flux" in point_data.keys():
+            flux_shape = point_data["scalar_flux"].shape  # (N, T)
+            metadata["num_cells"] = int(flux_shape[0])
+            metadata["num_timesteps"] = int(flux_shape[1]) if len(flux_shape) > 1 else 1
+        else:
+            metadata["num_cells"] = int(mesh.points.shape[0])
+            metadata["num_timesteps"] = 1
+
+        metadata["has_geometric_features"] = "geometric_features" in point_data.keys()
+        metadata["has_material_properties"] = "material_properties" in point_data.keys()
+        has_sim_times = (
+            "sim_times" in global_data.keys() and global_data["sim_times"].numel() > 0
+        )
+        metadata["has_sim_times"] = has_sim_times
+        if has_sim_times:
             try:
-                metadata["max_sim_time"] = float(z["sim_times"][-1])
+                metadata["max_sim_time"] = float(global_data["sim_times"][-1].item())
             except Exception as exc:  # pragma: no cover — defensive
                 raise ValueError(
                     f"Failed to read sim_times tail from {filename}"
@@ -375,21 +378,30 @@ class ZarrDataReader(Reader):
 
 
 # =========================================================================
-# PyTorch Dataset
+# PhysicsNeMo Dataset
 # =========================================================================
 #
-# Minimal PyTorch ``Dataset`` that wraps ``ZarrDataReader`` and produces
-# per-sample ``TensorDict`` outputs. The reader returns TensorDicts directly;
-# this layer only glues together file selection, the preload cache, and
-# per-sample metadata enrichment.
+# ``RTEBaseDataset`` extends :class:`physicsnemo.datapipes.Dataset` so the
+# example plugs into ``physicsnemo.datapipes.DataLoader`` (CUDA-stream-based,
+# single-process, no fork). The class still owns the file-split logic and
+# the in-memory flux cache; everything device-transfer / thread-prefetch
+# related is inherited from the base class.
 
 
-class RTEBaseDataset(Dataset):
-    """File-indexed steady-state dataset over a directory of zarr stores.
+class RTEBaseDataset(PhysicsNeMoDataset):
+    """File-indexed steady-state dataset over a directory of mesh stores.
 
-    Output of ``__getitem__`` is a ``TensorDict`` with the tensor fields the
-    reader returned, plus ``filename`` (``NonTensorData``), an updated
-    ``metadata`` ``NonTensorData`` entry (``max_timestep`` / ``max_sim_time``).
+    Wraps :class:`MeshDataReader` and produces ``(TensorDict, metadata)``
+    tuples per the :class:`physicsnemo.datapipes.Dataset` contract. The
+    metadata dict carries the source sidecar attrs plus ``filename``,
+    ``max_timestep``, ``max_sim_time`` and the resolved ``sim_time`` so the
+    rest of the pipeline can read them without unpacking ``NonTensorData``.
+
+    The TensorDict still carries the per-sample tensor fields the reader
+    returned (``coordinates``, ``cell_areas``, ``scalar_flux``, etc.).
+    Transforms run on it in order; the trailing model adapter (e.g.
+    :class:`TransolverAdapter`) is wired in by the caller via the
+    ``transforms`` arg.
     """
 
     def __init__(
@@ -404,6 +416,8 @@ class RTEBaseDataset(Dataset):
         load_sigma_fields: bool = True,
         cache_static_arrays: bool = True,
         max_cache_size: int = 200,
+        transforms: Optional[Transform | Sequence[Transform]] = None,
+        device: Optional[Union[str, torch.device]] = None,
     ):
         self.data_path = Path(data_path)
         self.case_type = case_type
@@ -414,7 +428,7 @@ class RTEBaseDataset(Dataset):
         self.load_geometric_features = load_geometric_features
         self.load_sigma_fields = load_sigma_fields
 
-        self.reader = ZarrDataReader(
+        reader = MeshDataReader(
             data_path,
             case_type,
             cache_static_arrays=cache_static_arrays,
@@ -435,6 +449,8 @@ class RTEBaseDataset(Dataset):
         # enabled). Values are ``dict`` mirrors of the cached tensor entries.
         self._memory_cache: Optional[Dict[str, Dict[str, torch.Tensor]]] = None
 
+        super().__init__(reader=reader, transforms=transforms, device=device)
+
     # ------------------------------------------------------------------
     # Split machinery
     # ------------------------------------------------------------------
@@ -452,7 +468,18 @@ class RTEBaseDataset(Dataset):
                 f"Available: {list(split_data['splits'].keys())}"
             )
         filenames = split_data["splits"][self.phase]
-        return [f if f.endswith(".zarr") else f + ".zarr" for f in filenames]
+        # Split files may list basenames with or without a format suffix
+        # (e.g. ``.zarr`` from a legacy split). Strip any known suffix and
+        # append ``.mesh`` so the result always points at a mesh store.
+        normalized: List[str] = []
+        for f in filenames:
+            base = f
+            for known in (".zarr", ".mesh"):
+                if base.endswith(known):
+                    base = base[: -len(known)]
+                    break
+            normalized.append(base + ".mesh")
+        return normalized
 
     def preload_to_memory(self, verbose: bool = True, num_workers: int = 8) -> dict:
         """Preload static arrays and first/final flux snapshots."""
@@ -522,9 +549,8 @@ class RTEBaseDataset(Dataset):
     def __len__(self) -> int:
         return len(self.filenames)
 
-    def __getitem__(self, idx: int) -> TensorDict:
-        filename = self.filenames[idx]
-
+    def _read_sample(self, filename: str) -> TensorDict:
+        """Read one sample, honoring the in-memory flux cache when populated."""
         if self._memory_cache is not None and filename in self._memory_cache:
             cached = self._memory_cache[filename]
             td = self.reader.load(
@@ -546,9 +572,10 @@ class RTEBaseDataset(Dataset):
                 load_sim_times=True,
                 load_sigma_fields=self.load_sigma_fields,
             )
+        return td
 
-        # Enrich metadata with the per-sample info transforms rely on.
-        # ``td["metadata"]`` is a NonTensorData dict of zarr attrs; extend it.
+    def _build_metadata(self, filename: str, td: TensorDict) -> Dict[str, Any]:
+        """Per-sample metadata dict consumed by transforms + downstream code."""
         attrs = dict(td["metadata"]) if "metadata" in td else {}
         file_meta = self.reader.get_metadata(filename)
         attrs["max_timestep"] = file_meta["num_timesteps"] - 1
@@ -557,9 +584,68 @@ class RTEBaseDataset(Dataset):
             attrs["sim_time"] = float(td["sim_times"][-1].item())
         else:
             attrs["sim_time"] = None
-        td.set_non_tensor("metadata", attrs)
-        td.set_non_tensor("filename", filename)
+        attrs["filename"] = filename
+        attrs["case_type"] = self.case_type
+        return attrs
 
+    def _read_one(self, idx: int) -> Tuple[TensorDict, Dict[str, Any]]:
+        """Reader-side hook: load CPU TensorDict + metadata for index ``idx``.
+
+        Routes through ``_read_sample`` (honoring the in-memory flux cache)
+        and ``_build_metadata`` (filename / max_timestep / sim_time). The
+        ``filename`` and ``metadata`` NonTensorData entries are kept on the
+        TensorDict so transforms that read them (e.g. ``SteadyStateSampler``)
+        keep working unchanged.
+        """
+        filename = self.filenames[idx]
+        td = self._read_sample(filename)
+        metadata = self._build_metadata(filename, td)
+        td.set_non_tensor("filename", filename)
+        td.set_non_tensor("metadata", metadata)
+        return td, metadata
+
+    def _load(self, idx: int) -> Tuple[TensorDict, Dict[str, Any]]:
+        """Synchronous load: ``_read_one`` -> device -> transforms."""
+        td, metadata = self._read_one(idx)
+        if self.target_device is not None:
+            td = td.to(self.target_device, non_blocking=True)
+        if self.transforms is not None:
+            td = self.transforms(td)
+        return td, metadata
+
+    def _load_and_transform(self, index, stream=None):
+        """Stream-aware variant of ``_load`` used by the prefetch path."""
+        from physicsnemo.datapipes.protocols import _PrefetchResult
+
+        result = _PrefetchResult(index=index)
+        try:
+            td, metadata = self._read_one(index)
+
+            if self.target_device is not None:
+                if stream is not None:
+                    with torch.cuda.stream(stream):
+                        td = td.to(self.target_device, non_blocking=True)
+                else:
+                    td = td.to(self.target_device, non_blocking=True)
+
+            if self.transforms is not None:
+                if stream is not None:
+                    with torch.cuda.stream(stream):
+                        td = self.transforms(td)
+                    result.event = torch.cuda.Event()
+                    result.event.record(stream)
+                else:
+                    td = self.transforms(td)
+
+            result.data = td
+            result.metadata = metadata
+        except Exception as exc:  # pragma: no cover — surfaced via __getitem__
+            result.error = exc
+        return result
+
+    def get_transformed_sample(self, idx: int) -> TensorDict:
+        """Backwards-compat helper: return the transformed TensorDict only."""
+        td, _ = self._load(idx)
         return td
 
 

@@ -45,8 +45,9 @@ import torch.nn as nn
 import yaml
 from omegaconf import DictConfig, OmegaConf
 from torch.amp import autocast
-from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+from physicsnemo.datapipes import DataLoader
 
 from dataset import load_flux_stats
 from loader import build_dataloaders, collate_no_padding
@@ -752,9 +753,6 @@ def main():
         help="Cap on the number of test samples (default: all).",
     )
     parser.add_argument(
-        "--num_workers", type=int, default=4, help="Test DataLoader workers."
-    )
-    parser.add_argument(
         "--device", type=str, default=None, help="Override torch device."
     )
     parser.add_argument(
@@ -816,7 +814,6 @@ def main():
         collate_fn=collate_no_padding,
         phases=("test",),
         test_batch_size=1,
-        test_num_workers=args.num_workers,
     )
     test_loader = loaders["test"]
     print(f"Test set size: {len(test_loader.dataset)}")

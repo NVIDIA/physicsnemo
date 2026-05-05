@@ -57,10 +57,9 @@ region_weights:
 
 dataloader:
   batch_size: 1                                     # only batch_size=1 is supported (point-cloud adapter)
-  pin_memory: true
-  num_workers: 8
   prefetch_factor: 4
-  persistent_workers: true
+  num_streams: 4
+  use_streams: true
 
 sampler:
   shuffle: true
@@ -69,10 +68,9 @@ sampler:
 val:
   dataloader:
     batch_size: 1
-    pin_memory: true
-    num_workers: 8
     prefetch_factor: 4
-    persistent_workers: true
+    num_streams: 4
+    use_streams: true
   sampler:
     shuffle: false
     drop_last: false

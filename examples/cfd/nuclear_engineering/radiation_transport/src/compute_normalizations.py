@@ -109,7 +109,7 @@ def compute_flux_statistics(
     max_log_flux = float("-inf")
 
     for i in range(len(dataset)):
-        sample = dataset[i]
+        sample, _ = dataset[i]
         flux = sample["scalar_flux"]
         if isinstance(flux, torch.Tensor):
             flux = flux.detach().cpu().numpy()
@@ -214,7 +214,8 @@ def compute_material_statistics(
     max_running = np.full(len(prop_names), -np.inf, dtype=np.float64)
 
     for i in range(len(dataset)):
-        sample = extractor(dataset[i])
+        td, _ = dataset[i]
+        sample = extractor(td)
         props = sample["physical_properties"]
         if isinstance(props, torch.Tensor):
             props = props.detach().cpu().numpy()

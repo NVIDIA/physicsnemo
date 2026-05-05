@@ -14,22 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Data plumbing: TransolverAdapter, collate, datapipe orchestration, DataLoader builder.
+"""Data plumbing: TransolverAdapter (Transform), collate, dataset+loader builder.
 
-This module composes ``RTEBaseDataset`` (data source) with a ``Compose`` of
-transforms and a ``TransolverAdapter``, and exposes a single
-``build_dataloaders`` entry point used by ``train.py`` and ``inference.py``.
+This module composes :class:`RTEBaseDataset` (a
+:class:`physicsnemo.datapipes.Dataset` subclass) with a ``Compose`` of
+transforms — including the trailing :class:`TransolverAdapter` Transform —
+and exposes a single ``build_dataloaders`` entry point used by ``train.py``
+and ``inference.py``.
 
 Sections:
 
-* Adapter — ``TransolverAdapter``.
-* Collation — ``collate_no_padding`` (batch_size=1 unsqueeze).
-* Stats / kwargs translation — ``_build_rte_dataset_kwargs``.
-* Pipeline orchestration — ``RTEDataPipe`` + ``_build_transforms`` +
-  ``_build_rte_datapipe``.
+* Adapter — :class:`TransolverAdapter` (a :class:`Transform`).
+* Collation — :func:`collate_no_padding` (batch_size=1 unsqueeze).
+* Stats / kwargs translation — :func:`_build_rte_dataset_kwargs`.
+* Pipeline orchestration — :func:`_build_transforms` + :func:`_build_rte_dataset`.
 * Distributed preload barrier — file-marker rank-sequencing helpers.
-* DataLoader builder — ``build_dataloaders`` + ``_make_loader`` +
-  ``_log_material_sanity``.
+* DataLoader builder — :func:`build_dataloaders` + :func:`_make_loader` +
+  :func:`_log_material_sanity`.
 """
 
 from __future__ import annotations
@@ -49,18 +50,20 @@ from typing import (
     List,
     Literal,
     Optional,
+    Sequence,
     Tuple,
     Union,
 )
 
-import numpy as np
 import torch
 import torch.distributed as torch_dist
 from omegaconf import DictConfig
+from physicsnemo.datapipes import DataLoader
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms import Compose, Normalize, Scale, Translate
+from physicsnemo.datapipes.transforms.base import Transform
 from tensordict import TensorDict
-from torch.utils.data import DataLoader, Dataset, Sampler
+from torch.utils.data import Dataset, Sampler
 from torch.utils.data.distributed import DistributedSampler
 
 from dataset import (
@@ -85,85 +88,102 @@ from transforms import (
 # Adapter
 # =========================================================================
 #
-# ``TransolverAdapter`` packages a transformed RTE TensorDict into the
-# tensor dict that ``physicsnemo.models.transolver.Transolver`` expects.
-# Only one model is shipped — there is no plug-in dispatcher.
+# ``TransolverAdapter`` is the trailing :class:`Transform` in the RTE pipeline.
+# It rewrites the field-name layout of the TensorDict to match what
+# :class:`physicsnemo.models.transolver.Transolver` expects (``fx``,
+# ``embedding``, ``flux_target``, ...) and drops fields the model never reads.
 
 
 @register("RTETransolverAdapter")
-class TransolverAdapter:
-    """Pack a transformed RTE TensorDict into Transolver-ready tensors.
+class TransolverAdapter(Transform):
+    """Pack a transformed RTE ``TensorDict`` into Transolver-ready fields.
 
-    Output keys:
+    Output TensorDict keys:
+
     * ``fx`` — spatial coordinates (plus Fourier features when enabled).
     * ``embedding`` — material properties ``[sigma_a, sigma_s, sigma_t, Q]``
       (or just the first three when ``include_q_in_embedding=False``).
     * ``flux_target`` — target flux to predict.
 
-    Extra fields (``coordinates_unnormalized``, ``material_labels``,
-    ``cell_areas``, ``sigma_t``, ``sigma_s``, ``sim_time``, and
-    ``flux_normalization_stats``) pass through when present.
+    Pass-through fields when present: ``coordinates_unnormalized``,
+    ``material_labels``, ``cell_areas``, ``sigma_t``, ``sigma_s``,
+    ``sim_time``, and ``flux_normalization_stats`` (NonTensorData).
 
-    The output has no batch dimension; ``collate_no_padding`` adds one.
+    A trimmed ``metadata`` dict (timestep / filename / case_type) is also
+    re-attached as NonTensorData so downstream physics-loss + inference
+    code paths keep their existing ``batch["metadata"]`` access pattern.
+
+    The output has no batch dimension; :func:`collate_no_padding` adds one.
     """
 
     def __init__(self, include_q_in_embedding: bool = True):
+        super().__init__()
         self.include_q_in_embedding = include_q_in_embedding
 
-    def __call__(self, data: TensorDict) -> Dict[str, torch.Tensor]:
-        sample = {k: data[k] for k in data.keys()}
-        result: Dict[str, Any] = {}
+    def __call__(self, data: TensorDict) -> TensorDict:
+        out = TensorDict({}, batch_size=data.batch_size, device=data.device)
 
-        if "coordinates" in sample:
-            result["fx"] = sample["coordinates"]
+        if "coordinates" in data:
+            out["fx"] = data["coordinates"]
 
-        if "physical_properties" in sample:
-            mat_props = sample["physical_properties"]
+        if "physical_properties" in data:
+            mat_props = data["physical_properties"]
             if not self.include_q_in_embedding:
                 mat_props = mat_props[..., :3]
-            result["embedding"] = mat_props
+            out["embedding"] = mat_props
 
-        if "coordinates_unnormalized" in sample:
-            result["coordinates_unnormalized"] = sample["coordinates_unnormalized"]
+        if "coordinates_unnormalized" in data:
+            out["coordinates_unnormalized"] = data["coordinates_unnormalized"]
 
-        if (
-            "material_properties" in sample
-            and sample["material_properties"] is not None
-        ):
-            result["material_labels"] = sample["material_properties"].long()
+        if "material_properties" in data and data["material_properties"] is not None:
+            out["material_labels"] = data["material_properties"].long()
 
-        if "flux_target" in sample:
-            flux_tgt = sample["flux_target"]
+        if "flux_target" in data:
+            flux_tgt = data["flux_target"]
             if flux_tgt.ndim == 1:
                 flux_tgt = flux_tgt.unsqueeze(-1)
-            result["flux_target"] = flux_tgt
+            out["flux_target"] = flux_tgt
 
         for key in ("cell_areas", "sigma_t", "sigma_s"):
-            if key in sample:
-                result[key] = sample[key]
+            if key in data:
+                out[key] = data[key]
 
-        if "sim_times" in sample and sample["sim_times"].numel() > 0:
-            result["sim_time"] = sample["sim_times"][-1].reshape(1).to(torch.float32)
-        elif "sim_times" in sample:
-            result["sim_time"] = torch.tensor([0.0], dtype=torch.float32)
+        if "sim_times" in data and data["sim_times"].numel() > 0:
+            out["sim_time"] = data["sim_times"][-1].reshape(1).to(torch.float32)
+        elif "sim_times" in data:
+            out["sim_time"] = torch.tensor(
+                [0.0], dtype=torch.float32, device=data.device
+            )
 
-        if "flux_normalization_stats" in sample:
-            result["flux_normalization_stats"] = sample["flux_normalization_stats"]
+        if "flux_normalization_stats" in data:
+            out.set_non_tensor(
+                "flux_normalization_stats", data["flux_normalization_stats"]
+            )
 
-        metadata = sample.get("metadata") or {}
-        metadata_dict = {
-            "timestep_input": sample.get("timestep_input"),
-            "timestep_target": sample.get("timestep_target"),
-            "max_timestep": metadata.get("max_timestep"),
-            "filename": sample.get("filename"),
-            "case_type": metadata.get("case_type"),
+        # Trim metadata to the keys downstream code reads. The full metadata
+        # dict is also delivered as the second tuple element by the dataset.
+        src_meta = data["metadata"] if "metadata" in data else {}
+        if not isinstance(src_meta, dict):
+            src_meta = {}
+        trimmed = {
+            "timestep_input": data["timestep_input"]
+            if "timestep_input" in data
+            else None,
+            "timestep_target": data["timestep_target"]
+            if "timestep_target" in data
+            else None,
+            "max_timestep": src_meta.get("max_timestep"),
+            "filename": data["filename"] if "filename" in data else None,
+            "case_type": src_meta.get("case_type"),
         }
-        result["metadata"] = {k: v for k, v in metadata_dict.items() if v is not None}
+        trimmed = {k: v for k, v in trimmed.items() if v is not None}
+        out.set_non_tensor("metadata", trimmed)
+        if "filename" in data:
+            out.set_non_tensor("filename", data["filename"])
+        return out
 
-        return result
-
-    def __repr__(self) -> str:
-        return f"{self.__class__.__name__}(include_q_in_embedding={self.include_q_in_embedding})"
+    def extra_repr(self) -> str:
+        return f"include_q_in_embedding={self.include_q_in_embedding}"
 
 
 # =========================================================================
@@ -173,20 +193,61 @@ class TransolverAdapter:
 # All configs use ``batch_size=1`` with a fixed ``num_spatial_points`` from
 # ``SpatialSampler``, so no padding is needed. ``build_dataloaders_for_training``
 # enforces ``batch_size=1`` upstream, so this collate just unsqueezes the
-# single sample and passes non-tensors through (default torch collate would
-# choke on the ``metadata`` / ``flux_normalization_stats`` dicts).
+# single sample.
+#
+# ``physicsnemo.datapipes.DataLoader`` passes ``list[tuple[TensorDict, dict]]``
+# into the collate function. We unpack the tuple, unsqueeze each tensor in the
+# TensorDict, and merge any TD-side NonTensorData ("metadata",
+# "flux_normalization_stats", "filename") plus the second-element metadata
+# back into the returned dict.
 
 
 @register("RTECollateNoPadding")
-def collate_no_padding(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Batch-size-1 collate: unsqueeze each tensor, pass non-tensors through."""
+def collate_no_padding(
+    batch: Sequence[Tuple[TensorDict, Dict[str, Any]]],
+) -> Dict[str, Any]:
+    """Batch-size-1 collate.
+
+    Expects the :class:`physicsnemo.datapipes.DataLoader` calling convention:
+    ``list[tuple[TensorDict, dict]]``. Returns a plain dict (not a TensorDict)
+    so downstream training code can keep using ``batch["fx"]`` / ``batch["filename"]``
+    etc. without unpacking.
+    """
     assert len(batch) == 1, (
         f"collate_no_padding requires batch_size=1; got {len(batch)}"
     )
     item = batch[0]
-    return {
-        k: v.unsqueeze(0) if isinstance(v, torch.Tensor) else v for k, v in item.items()
-    }
+    # ``physicsnemo.datapipes.DataLoader`` always passes (TensorDict, dict)
+    # tuples through. Be defensive against accidental dict-only inputs from
+    # legacy callers.
+    if isinstance(item, tuple) and len(item) == 2:
+        td, metadata = item
+    else:
+        td = item
+        metadata = {}
+
+    out: Dict[str, Any] = {}
+    if isinstance(td, TensorDict):
+        for key in td.keys():
+            value = td[key]
+            if isinstance(value, torch.Tensor):
+                out[key] = value.unsqueeze(0)
+            else:
+                out[key] = value
+    elif isinstance(td, dict):
+        for key, value in td.items():
+            out[key] = value.unsqueeze(0) if isinstance(value, torch.Tensor) else value
+
+    # Merge the trailing metadata dict back into the batch under "metadata".
+    # ``filename`` is also surfaced at the top level for the legacy access
+    # pattern ``batch["filename"]`` used by some downstream code.
+    if metadata:
+        existing = out.get("metadata") if isinstance(out.get("metadata"), dict) else {}
+        merged_meta = {**metadata, **(existing or {})}
+        out["metadata"] = merged_meta
+        if "filename" in metadata and "filename" not in out:
+            out["filename"] = metadata["filename"]
+    return out
 
 
 # =========================================================================
@@ -194,13 +255,13 @@ def collate_no_padding(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
 # =========================================================================
 #
 # ``_build_rte_dataset_kwargs`` translates a Hydra config into the kwargs
-# ``_build_rte_datapipe`` expects. Required keys (``flux_normalization_stats_file``,
+# ``_build_rte_dataset`` expects. Required keys (``flux_normalization_stats_file``,
 # ``flux_clip_threshold``, ``case.split_file``) raise a clear ``KeyError`` on
 # direct access if missing; no manual ``None``-checking is layered on top.
 
 
 def _build_rte_dataset_kwargs(cfg: DictConfig) -> dict:
-    """Translate a Hydra config into the kwargs ``_build_rte_datapipe`` expects."""
+    """Translate a Hydra config into the kwargs ``_build_rte_dataset`` expects."""
     data_cfg = cfg.data
     use_fourier_features = data_cfg.get("use_fourier_features", False)
     fourier_cfg = data_cfg.get("fourier_features") if use_fourier_features else None
@@ -231,81 +292,12 @@ def _build_rte_dataset_kwargs(cfg: DictConfig) -> dict:
 # Pipeline orchestration
 # =========================================================================
 #
-# ``RTEDataPipe`` composes ``RTEBaseDataset`` (data source) with a ``Compose``
-# of transforms and a ``TransolverAdapter`` (model adapter).
-# ``_build_rte_datapipe`` is the high-level builder used by
-# ``build_dataloaders``; ``compute_normalizations.py`` instantiates
-# ``RTEDataPipe`` directly with a custom transform pipeline and ``adapter=None``.
+# ``_build_rte_dataset`` is the high-level builder used by ``build_dataloaders``;
+# ``compute_normalizations.py`` instantiates ``RTEBaseDataset`` directly with
+# ``transforms=None`` to walk raw samples for stats.
 
 
-@register("RTEDataPipe")
-class RTEDataPipe(Dataset):
-    """``RTEBaseDataset`` + transforms + (optional) adapter, in one ``Dataset``."""
-
-    def __init__(
-        self,
-        data_path: Union[str, Path],
-        transforms: Optional[Compose] = None,
-        adapter: Optional[Any] = None,
-        case_type: Optional[Literal["lattice", "hohlraum"]] = None,
-        phase: Literal["train", "val", "test"] = "train",
-        split_file: Optional[Union[str, Path]] = None,
-        seed: Optional[int] = None,
-        cache_static_arrays: bool = True,
-        max_cache_size: int = 200,
-    ):
-        self.base_dataset = RTEBaseDataset(
-            data_path=data_path,
-            case_type=case_type,
-            phase=phase,
-            split_file=split_file,
-            seed=seed,
-            load_sigma_fields=True,
-            cache_static_arrays=cache_static_arrays,
-            max_cache_size=max_cache_size,
-        )
-        self.transforms = transforms
-        self.adapter = adapter
-
-    def __len__(self) -> int:
-        return len(self.base_dataset)
-
-    def __getitem__(self, idx: int) -> Any:
-        td = self.base_dataset[idx]
-        if self.transforms is not None:
-            td = self.transforms(td)
-        if self.adapter is not None:
-            return self.adapter(td)
-        return td
-
-    def preload_to_memory(self, verbose: bool = True, num_workers: int = 8) -> dict:
-        """Preload all static arrays into main process memory.
-
-        Workers inherit the populated cache via fork, eliminating disk I/O.
-        """
-        return self.base_dataset.preload_to_memory(
-            verbose=verbose, num_workers=num_workers
-        )
-
-    def get_transformed_sample(self, idx: int) -> TensorDict:
-        """Get sample with transforms applied but no adapter (``TensorDict``)."""
-        td = self.base_dataset[idx]
-        if self.transforms is not None:
-            td = self.transforms(td)
-        return td
-
-    def __repr__(self) -> str:
-        lines = [
-            f"{self.__class__.__name__}(",
-            f"  base_dataset={self.base_dataset}",
-            f"  transforms={self.transforms}",
-            f"  adapter={self.adapter}",
-            ")",
-        ]
-        return "\n".join(lines)
-
-
-def _build_rte_datapipe(
+def _build_rte_dataset(
     case_type: Literal["lattice", "hohlraum"],
     data_path: Union[str, Path],
     phase: Literal["train", "val", "test"],
@@ -323,8 +315,9 @@ def _build_rte_datapipe(
     fourier_num_frequencies: Optional[int],
     fourier_coord_dims: Optional[int],
     fourier_base_frequency: Optional[float],
-) -> RTEDataPipe:
-    """Build the canonical training/inference RTE datapipe."""
+    device: Optional[Union[str, torch.device]] = None,
+) -> RTEBaseDataset:
+    """Build the canonical training/inference RTE dataset (transforms baked in)."""
     if case_type not in ("lattice", "hohlraum"):
         raise ValueError(
             f"Unknown case_type: {case_type!r}. Expected 'lattice' or 'hohlraum'."
@@ -342,18 +335,20 @@ def _build_rte_datapipe(
         fourier_num_frequencies=fourier_num_frequencies,
         fourier_coord_dims=fourier_coord_dims,
         fourier_base_frequency=fourier_base_frequency,
+        include_q_in_embedding=include_q_in_embedding,
     )
 
-    return RTEDataPipe(
+    return RTEBaseDataset(
         data_path=data_path,
-        transforms=transforms,
-        adapter=TransolverAdapter(include_q_in_embedding=include_q_in_embedding),
         case_type=case_type,
         phase=phase,
         split_file=split_file,
         seed=seed,
+        load_sigma_fields=True,
         cache_static_arrays=cache_static_arrays,
         max_cache_size=max_cache_size,
+        transforms=transforms,
+        device=device,
     )
 
 
@@ -370,10 +365,11 @@ def _build_transforms(
     fourier_num_frequencies: int,
     fourier_coord_dims: int,
     fourier_base_frequency: float,
+    include_q_in_embedding: bool = True,
 ) -> Compose:
     """Assemble the canonical RTE transform pipeline.
 
-    Normalization steps are delegated to PhysicsNeMo primitives:
+    Steps:
 
     1. ``RTEFluxLogClip`` + ``Normalize`` — flux: log+clip, then z-score.
     2. ``SteadyStateSampler`` — first snapshot input, final snapshot target.
@@ -382,6 +378,7 @@ def _build_transforms(
     5. ``SpatialSampler`` — always.
     6. ``RTEBackupCoords`` + ``Translate`` + ``Scale`` — when normalize_coordinates.
     7. ``FourierFeatures`` — when use_fourier_features.
+    8. ``TransolverAdapter`` — repack into Transolver-ready fields.
     """
     flux_stats = load_flux_stats(flux_normalization_stats_file)
     if abs(flux_stats["clip_threshold"] - flux_clip_threshold) > 1e-10:
@@ -390,7 +387,7 @@ def _build_transforms(
             f"stats computed with {flux_stats['clip_threshold']}"
         )
 
-    transform_list = [
+    transform_list: List[Transform] = [
         RTEFluxLogClip(
             clip_threshold=flux_clip_threshold,
             log_flux_mean=flux_stats["log_flux_mean"],
@@ -400,7 +397,6 @@ def _build_transforms(
     ]
 
     transform_list.append(SteadyStateSampler())
-
     transform_list.append(MaterialPropertyExtractor())
 
     material_stats_path = (
@@ -453,6 +449,10 @@ def _build_transforms(
             )
         )
 
+    transform_list.append(
+        TransolverAdapter(include_q_in_embedding=include_q_in_embedding)
+    )
+
     return Compose(transform_list)
 
 
@@ -460,7 +460,7 @@ def _build_transforms(
 # Distributed preload barrier
 # =========================================================================
 #
-# File-marker rank-sequencing helpers used to serialize the per-rank zarr
+# File-marker rank-sequencing helpers used to serialize the per-rank mesh
 # preload step in multi-GPU training. Sequencing avoids I/O contention and
 # leverages OS page cache reuse across ranks.
 
@@ -577,7 +577,7 @@ def _distributed_preload(
 # ``build_dataloaders`` is the main entry point used by ``train.py`` and
 # ``inference.py``. It orchestrates dataset creation, distributed-preload
 # synchronization, material sanity logging, sampler construction, and
-# per-phase ``DataLoader`` assembly.
+# per-phase :class:`physicsnemo.datapipes.DataLoader` assembly.
 
 
 def _log_material_sanity(dataset, cfg: DictConfig, logger: logging.Logger) -> None:
@@ -585,16 +585,22 @@ def _log_material_sanity(dataset, cfg: DictConfig, logger: logging.Logger) -> No
     if len(dataset) == 0:
         return
     sample = dataset.get_transformed_sample(0)
-    if "physical_properties" not in sample or sample["physical_properties"] is None:
+    # The trailing ``TransolverAdapter`` produces a TensorDict whose material
+    # info lives under ``embedding`` (sigma_a, sigma_s, sigma_t, [Q]). Fall back
+    # to the un-adapted ``physical_properties`` key if the adapter wasn't run.
+    if "embedding" in sample:
+        phys = sample["embedding"]
+    elif "physical_properties" in sample:
+        phys = sample["physical_properties"]
+    else:
         return
 
-    phys = sample["physical_properties"]
     if isinstance(phys, torch.Tensor):
         phys = phys.detach().cpu().numpy()
 
     sigma_a = phys[:, 0]
     sigma_s = phys[:, 1]
-    Q = phys[:, 3]
+    Q = phys[:, 3] if phys.shape[1] >= 4 else None
 
     logger.info("\nMaterial property ranges (first sample):")
     logger.info(
@@ -605,7 +611,8 @@ def _log_material_sanity(dataset, cfg: DictConfig, logger: logging.Logger) -> No
         f"  sigma_s: [{sigma_s.min():.2f}, {sigma_s.max():.2f}] "
         f"(unique: {len(set(sigma_s.tolist()))})"
     )
-    logger.info(f"  Q: {sorted(set(Q.tolist()))}")
+    if Q is not None:
+        logger.info(f"  Q: {sorted(set(Q.tolist()))}")
     if len(set(sigma_a.tolist())) > 1 or len(set(sigma_s.tolist())) > 1:
         logger.info(f"  Heterogeneous materials detected ({cfg.case.type})")
     else:
@@ -619,46 +626,45 @@ def _make_loader(
     sampler: Optional[Sampler],
     collate_fn: Optional[Callable],
     test_batch_size: int,
-    test_num_workers: int,
 ) -> DataLoader:
-    """Assemble a ``DataLoader`` for one phase, reading per-phase config.
+    """Assemble a :class:`physicsnemo.datapipes.DataLoader` for one phase.
 
     The ``test`` phase has no matching ``cfg.test.*`` block; callers pass
-    ``test_batch_size`` / ``test_num_workers`` explicitly.
+    ``test_batch_size`` explicitly. Stream-based prefetching defaults
+    (``num_streams=4``, ``use_streams=true``) come from the per-phase
+    Hydra config when present.
     """
     if phase == "test":
         return DataLoader(
             dataset,
             batch_size=test_batch_size,
-            num_workers=test_num_workers,
             shuffle=False,
-            pin_memory=False,
             collate_fn=collate_fn,
         )
 
     phase_cfg = cfg.train.dataloader if phase == "train" else cfg.train.val.dataloader
     sampler_cfg = cfg.train.sampler if phase == "train" else cfg.train.val.sampler
-    num_workers = phase_cfg.num_workers
 
     # sampler handles shuffling when present; keep ``shuffle=False`` to avoid
-    # the PyTorch "sampler is incompatible with shuffle" error.
+    # the "sampler is incompatible with shuffle" path inside the DataLoader.
     shuffle_train = sampler_cfg.shuffle if phase == "train" else False
     shuffle = shuffle_train if sampler is None else False
 
-    kwargs = {
-        "batch_size": phase_cfg.batch_size,
-        "pin_memory": phase_cfg.pin_memory,
-        "num_workers": num_workers,
-        "shuffle": shuffle,
-        "drop_last": sampler_cfg.get("drop_last", False),
-        "sampler": sampler,
-        "collate_fn": collate_fn,
-    }
-    if num_workers > 0:
-        kwargs["prefetch_factor"] = phase_cfg.get("prefetch_factor", 2)
-        kwargs["persistent_workers"] = phase_cfg.get("persistent_workers", False)
+    seed = cfg.train.get("seed", None)
+    seed = int(seed) if seed is not None else None
 
-    return DataLoader(dataset, **kwargs)
+    return DataLoader(
+        dataset,
+        batch_size=phase_cfg.batch_size,
+        shuffle=shuffle,
+        drop_last=sampler_cfg.get("drop_last", False),
+        sampler=sampler,
+        collate_fn=collate_fn,
+        prefetch_factor=phase_cfg.get("prefetch_factor", 2),
+        num_streams=phase_cfg.get("num_streams", 4),
+        use_streams=phase_cfg.get("use_streams", True),
+        seed=seed,
+    )
 
 
 class DistributedEvalSampler(Sampler[int]):
@@ -685,18 +691,16 @@ def build_dataloaders(
     collate_fn: Optional[Callable] = None,
     phases: Iterable[str] = ("train", "val"),
     test_batch_size: int = 1,
-    test_num_workers: int = 0,
     logger: Optional[logging.Logger] = None,
 ) -> Tuple[Dict[str, DataLoader], Optional[DistributedSampler]]:
-    """Build per-phase ``DataLoader`` s for training and/or evaluation.
+    """Build per-phase DataLoaders for training and/or evaluation.
 
     Args:
         cfg: Hydra configuration (training cfg or a loaded checkpoint cfg).
         dist: ``DistributedManager`` for training; ``None`` for eval.
-        collate_fn: Collate function. Defaults to ``collate_no_padding``.
+        collate_fn: Collate function. Defaults to :func:`collate_no_padding`.
         phases: Which splits to build (subset of ``{"train", "val", "test"}``).
-        test_batch_size / test_num_workers: Used only when ``test`` is in
-            ``phases``.
+        test_batch_size: Used only when ``test`` is in ``phases``.
         logger: Optional logger; defaults to module logger.
 
     Returns:
@@ -728,8 +732,17 @@ def build_dataloaders(
                 f"Data caching: LRU max_cache_size={common_kwargs['max_cache_size']}"
             )
 
+    # Pick a sensible device default. The PhysicsNeMo Dataset will move
+    # tensors there before transforms run; transforms then operate on GPU.
+    if dist is not None and getattr(dist, "device", None) is not None:
+        device = dist.device
+    else:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
     datasets = {
-        phase: _build_rte_datapipe(cfg.case.type, phase=phase, **common_kwargs)
+        phase: _build_rte_dataset(
+            cfg.case.type, phase=phase, device=device, **common_kwargs
+        )
         for phase in phases
     }
 
@@ -778,42 +791,14 @@ def build_dataloaders(
             sampler,
             collate_fn,
             test_batch_size=test_batch_size,
-            test_num_workers=test_num_workers,
         )
 
     return loaders, train_sampler
 
 
-def set_epoch_on_transforms(loader: Optional[DataLoader], epoch: int) -> None:
-    """Forward ``epoch`` to any transform exposing ``set_epoch``.
-
-    Walks ``loader.dataset`` (an ``RTEDataPipe``), pulls the ``Compose`` of
-    transforms, and calls ``set_epoch(epoch)`` on every child that defines
-    one (e.g. ``SpatialSampler``). Safe no-op when the loader, dataset, or
-    transforms are missing.
-    """
-    if loader is None:
-        return
-    dataset = getattr(loader, "dataset", None)
-    transforms = getattr(dataset, "transforms", None)
-    if transforms is None:
-        return
-    # ``Compose`` defines its own ``set_epoch`` that propagates to children.
-    set_epoch = getattr(transforms, "set_epoch", None)
-    if callable(set_epoch):
-        set_epoch(epoch)
-        return
-    # Fallback: iterate manually.
-    for t in transforms:
-        fn = getattr(t, "set_epoch", None)
-        if callable(fn):
-            fn(epoch)
-
-
 __all__ = [
     "TransolverAdapter",
     "collate_no_padding",
-    "RTEDataPipe",
     "build_dataloaders",
-    "set_epoch_on_transforms",
+    "DistributedEvalSampler",
 ]

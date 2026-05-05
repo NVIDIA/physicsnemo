@@ -316,6 +316,17 @@ class SpatialSampler(Transform):
             return
         self.gen.manual_seed(int(self.seed) + int(epoch) * self._EPOCH_PRIME)
 
+    def to(self, device):
+        """Override base ``Transform.to`` to keep ``self.gen`` on CPU.
+
+        ``torch.randperm`` insists the generator's device match the output
+        tensor's device. We pin index draws on CPU and ``.to(device)`` only
+        the selected indices below, so leaving the generator on CPU keeps
+        the transform device-agnostic.
+        """
+        self._device = torch.device(device) if isinstance(device, str) else device
+        return self
+
     def __call__(self, data: TensorDict) -> TensorDict:
         if self.num_points == -1:
             return data
@@ -331,7 +342,7 @@ class SpatialSampler(Transform):
             )
 
         indices = torch.randperm(num_available, generator=self.gen)[: self.num_points]
-        indices = indices.to(torch.int64)
+        indices = indices.to(torch.int64).to(data["coordinates"].device)
 
         spatial_keys = [
             "coordinates",

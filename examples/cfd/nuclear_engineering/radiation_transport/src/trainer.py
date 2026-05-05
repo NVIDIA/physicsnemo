@@ -45,8 +45,7 @@ import torch.nn as nn
 from omegaconf import DictConfig, OmegaConf
 from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
-from torch.utils.data import DataLoader
-
+from physicsnemo.datapipes import DataLoader
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.checkpoint import save_checkpoint
 from physicsnemo.utils.logging.launch import LaunchLogger
@@ -56,7 +55,6 @@ from checkpointing import (
     save_best_qoi_checkpoint,
     save_latest_checkpoint,
 )
-from loader import set_epoch_on_transforms
 from losses import compute_physics_loss, masked_mse_loss, region_weighted_loss_fn
 
 
@@ -585,12 +583,12 @@ def run_training_loop(
     training_completed = False
     try:
         for epoch in range(start_epoch, cfg.train.epochs):
-            if train_sampler is not None:
-                train_sampler.set_epoch(epoch)
-            # Propagate epoch to spatial samplers / other stochastic transforms
-            # so each rank reshuffles deterministically per epoch.
-            set_epoch_on_transforms(train_loader, epoch)
-            set_epoch_on_transforms(val_loader, epoch)
+            # ``physicsnemo.datapipes.DataLoader.set_epoch`` propagates the
+            # epoch to (1) the sampler — including DistributedSampler — and
+            # (2) the dataset, which in turn forwards it to the reader and
+            # every transform in the Compose chain (e.g. ``SpatialSampler``).
+            train_loader.set_epoch(epoch)
+            val_loader.set_epoch(epoch)
 
             train_kw = dict(train_epoch_kwargs)
             val_kw = dict(validate_kwargs)

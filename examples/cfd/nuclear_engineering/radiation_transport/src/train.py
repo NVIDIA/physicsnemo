@@ -40,8 +40,8 @@ import torch
 import torch.nn as nn
 from omegaconf import DictConfig, OmegaConf
 from torch.amp import GradScaler, autocast
-from torch.utils.data import DataLoader
 
+from physicsnemo.datapipes import DataLoader
 from physicsnemo.utils.logging.launch import LaunchLogger
 
 from checkpointing import create_training_components, resume_or_pretrain
