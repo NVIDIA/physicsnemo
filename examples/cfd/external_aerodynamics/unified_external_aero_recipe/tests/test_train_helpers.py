@@ -23,12 +23,16 @@ down that explicit handling for:
 
 - :func:`train._recursive_to_device`: must move TensorDict leaves to the
   requested device, including when the TD is nested under a plain dict.
-- :func:`train._recursive_cast_floats`: must cast only floating-point
-  leaves of a TensorDict, leaving int leaves (e.g., mesh cell indices)
-  untouched.
+- :func:`train._recursive_cast_floats`: tensor-aware containers (Mesh,
+  DomainMesh, TensorDict) propagate the conditional cast via their
+  auto-injected ``.apply()``, so float leaves move to the autocast
+  dtype and int leaves (e.g., ``Mesh.cells``) are preserved. Made
+  possible upstream by the fix in PR NVIDIA/physicsnemo#1621 -- before
+  that fix, ``DomainMesh.apply`` was a silent no-op on nested fields,
+  which forced the previous workaround of passthrough for all three.
 - :func:`train._walk_batch_for_logging`: must yield ``(name, tensor)``
-  pairs from TensorDict leaves, both at the top level and when the TD
-  is nested under a plain dict.
+  pairs from TensorDict leaves -- including correctly producing dotted
+  paths for nested TDs via ``TD.flatten_keys('.')``.
 
 The regression-test trick used for `_recursive_to_device` is:
 ``TensorDict(..., batch_size=[N])`` without an explicit ``device`` has
@@ -52,9 +56,14 @@ from tensordict import TensorDict
 pytest.importorskip("tensorboard")
 
 from train import (  # noqa: E402  -- after the importorskip guard
+    _normalize_output_to_tensordict,
     _recursive_cast_floats,
     _recursive_to_device,
     _walk_batch_for_logging,
+)
+from physicsnemo.mesh import (  # noqa: E402  -- after the importorskip guard
+    DomainMesh,
+    Mesh,
 )
 
 
@@ -110,8 +119,19 @@ class TestRecursiveToDevice:
 class TestRecursiveCastFloats:
     """Tests for `_recursive_cast_floats`."""
 
-    def test_tensordict_casts_only_float_leaves(self):
-        """Float leaf -> dtype; int leaf -> unchanged."""
+    def test_tensor_aware_containers_cast_floats_via_apply(self):
+        """Mesh, DomainMesh, and TensorDict propagate the conditional cast.
+
+        Each container's auto-injected ``.apply()`` recurses through every
+        tensor leaf: float leaves move to the new dtype while int leaves
+        (e.g. ``Mesh.cells``) are preserved by the same
+        ``is_floating_point()`` guard used in the Tensor branch.
+
+        The DomainMesh assertions are the load-bearing ones for the
+        upstream ``DomainMesh.apply`` fix (PR NVIDIA/physicsnemo#1621):
+        pre-fix, the nested ``interior`` / ``boundaries`` / ``global_data``
+        fields silently stayed at float32 and these assertions would fail.
+        """
         td = TensorDict(
             {
                 "f": torch.zeros(3, dtype=torch.float32),
@@ -119,16 +139,52 @@ class TestRecursiveCastFloats:
             },
             batch_size=[3],
         )
+        mesh = Mesh(
+            points=torch.zeros(5, 3),
+            cells=torch.zeros(2, 3, dtype=torch.int64),
+            point_data={"p": torch.zeros(5)},
+            cell_data={"normals": torch.zeros(2, 3)},
+        )
+        dm = DomainMesh(
+            interior=Mesh(points=torch.zeros(3, 3), point_data={"p": torch.zeros(3)}),
+            boundaries={
+                "v": Mesh(
+                    points=torch.zeros(2, 3),
+                    cells=torch.zeros(1, 3, dtype=torch.int64),
+                )
+            },
+            global_data={"U_inf": torch.zeros(3)},
+        )
 
-        result = _recursive_cast_floats(td, torch.bfloat16)
-        assert isinstance(result, TensorDict)
-        assert result["f"].dtype == torch.bfloat16
-        ### Critical regression check: int leaves must NOT be silently cast,
-        ### otherwise mesh cell indices (int64) would be corrupted.
-        assert result["i"].dtype == torch.int64
-        ### Structure (batch_size, key set) is preserved.
-        assert result.batch_size == torch.Size([3])
-        assert set(result.keys()) == {"f", "i"}
+        td_cast = _recursive_cast_floats(td, torch.bfloat16)
+        assert isinstance(td_cast, TensorDict)
+        assert td_cast["f"].dtype == torch.bfloat16
+        assert td_cast["i"].dtype == torch.int64
+
+        mesh_cast = _recursive_cast_floats(mesh, torch.bfloat16)
+        assert isinstance(mesh_cast, Mesh)
+        assert mesh_cast.points.dtype == torch.bfloat16
+        assert mesh_cast.cells.dtype == torch.int64
+        assert mesh_cast.point_data["p"].dtype == torch.bfloat16
+        assert mesh_cast.cell_data["normals"].dtype == torch.bfloat16
+
+        dm_cast = _recursive_cast_floats(dm, torch.bfloat16)
+        ### CRITICAL: nested fields under DomainMesh now cast (was a
+        ### silent no-op pre-PR-1621).
+        assert isinstance(dm_cast, DomainMesh)
+        assert dm_cast.interior.points.dtype == torch.bfloat16
+        assert dm_cast.interior.point_data["p"].dtype == torch.bfloat16
+        assert dm_cast.boundaries["v"].points.dtype == torch.bfloat16
+        assert dm_cast.boundaries["v"].cells.dtype == torch.int64
+        assert dm_cast.global_data["U_inf"].dtype == torch.bfloat16
+
+    def test_plain_float_tensor_still_cast(self):
+        """Plain Tensor leaves are still pre-cast (legacy parity)."""
+        t = torch.zeros(3, dtype=torch.float32)
+        assert _recursive_cast_floats(t, torch.bfloat16).dtype == torch.bfloat16
+        ### Int tensors are not cast.
+        i = torch.zeros(3, dtype=torch.int64)
+        assert _recursive_cast_floats(i, torch.bfloat16).dtype == torch.int64
 
 
 ### ---------------------------------------------------------------------------
@@ -165,3 +221,84 @@ class TestWalkBatchForLogging:
         ### nor `targets.wss` would appear in the output.
         assert set(items) == {"targets.pressure", "targets.wss"}
         assert items["targets.pressure"].shape == torch.Size([5])
+
+    def test_walk_handles_nested_tensordict_via_flatten_keys(self):
+        """A TD nested under another TD: ``flatten_keys`` produces dotted paths.
+
+        This exercises the idiomatic-TD path: ``flatten_keys('.')`` on a
+        nested TD returns a flat TD whose keys are dotted leaf paths.
+        Without that delegation, a manual ``.items()`` walk would still
+        work for flat TDs but would silently mishandle nested ones.
+        """
+        td = TensorDict(
+            {
+                "scalar": torch.zeros(3),
+                "nested": TensorDict({"x": torch.zeros(3)}, batch_size=[3]),
+            },
+            batch_size=[3],
+        )
+        items = dict(_walk_batch_for_logging(td))
+        assert set(items) == {"scalar", "nested.x"}
+        ### And under a plain dict prefix, paths cascade correctly:
+        items_with_prefix = dict(_walk_batch_for_logging({"targets": td}))
+        assert set(items_with_prefix) == {"targets.scalar", "targets.nested.x"}
+
+
+### ---------------------------------------------------------------------------
+### _normalize_output_to_tensordict
+### ---------------------------------------------------------------------------
+
+
+class TestNormalizeOutputToTensordict:
+    """Tests for `_normalize_output_to_tensordict`."""
+
+    def test_tensors_output_three_dim_splits_correctly(self):
+        """Standard (B, N, total_C) output splits into per-field leaves."""
+        target_config = {"pressure": "scalar", "wss": "vector"}
+        out = torch.randn(1, 50, 4)  # 1 scalar + 1 vector(3) = 4 channels
+        td = _normalize_output_to_tensordict(out, target_config, "tensors")
+        assert tuple(td["pressure"].shape) == (1, 50)  # squeezed scalar
+        assert tuple(td["wss"].shape) == (1, 50, 3)
+        assert td.batch_size == torch.Size([1, 50])
+
+    def test_tensors_output_two_dim_raises_clearly(self):
+        ### Pre-fix, a (B, N) output for a single-scalar target produced a
+        ### confusing "channel dim N does not match expected 1" message
+        ### because the per-element axis was being mistaken for the channel
+        ### axis. The explicit ``ndim < 3`` guard now points the user at
+        ### the missing trailing channel dim.
+        """Two-D output (missing channel dim) raises a clear shape error."""
+        target_config = {"pressure": "scalar"}
+        out = torch.randn(1, 50)
+        with pytest.raises(ValueError, match=r"expects a \(B, N, C\) tensor"):
+            _normalize_output_to_tensordict(out, target_config, "tensors")
+
+    def test_tensors_output_channel_mismatch_still_raises(self):
+        """Three-D output with wrong channel count still raises the channel error."""
+        target_config = {"pressure": "scalar"}
+        out = torch.randn(1, 50, 3)  # expected 1 channel
+        with pytest.raises(ValueError, match="does not match the expected"):
+            _normalize_output_to_tensordict(out, target_config, "tensors")
+
+    def test_mesh_output_extracts_target_fields(self):
+        """Mesh output: ``point_data.select(*target_config)`` keeps batch_size [N]."""
+        target_config = {"pressure": "scalar", "wss": "vector"}
+        mesh = Mesh(
+            points=torch.randn(7, 3),
+            point_data={
+                "pressure": torch.randn(7),
+                "wss": torch.randn(7, 3),
+                ### A non-target field that must NOT appear in the result.
+                "extra": torch.randn(7),
+            },
+        )
+        td = _normalize_output_to_tensordict(mesh, target_config, "mesh")
+        assert set(td.keys()) == {"pressure", "wss"}
+        assert td.batch_size == torch.Size([7])
+
+    def test_mesh_output_missing_target_raises(self):
+        """Missing target field on a Mesh output is reported clearly."""
+        target_config = {"pressure": "scalar"}
+        mesh = Mesh(points=torch.randn(7, 3), point_data={"other": torch.randn(7)})
+        with pytest.raises(KeyError, match="missing target fields"):
+            _normalize_output_to_tensordict(mesh, target_config, "mesh")

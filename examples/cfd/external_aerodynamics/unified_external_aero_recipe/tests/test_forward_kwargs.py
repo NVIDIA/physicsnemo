@@ -348,6 +348,18 @@ class TestResolveForwardKwargs:
         with pytest.raises(TypeError, match="source must resolve to a tensor"):
             resolve_forward_kwargs(spec, simple_domain)
 
+    def test_expand_like_one_d_reference_raises_clearly(self, simple_domain):
+        ### A 1-D reference (e.g. a per-element scalar field) has no axis -2;
+        ### the resolver must catch that explicitly instead of leaking the
+        ### bare `IndexError: tuple index out of range` from `ref.shape[-2]`.
+        """Expand like one d reference raises clearly."""
+        spec = {
+            "embedding": "interior.point_data.pressure",  # 1-D, shape (N,)
+            "fx": {"source": "global_data.U_inf", "expand_like": "embedding"},
+        }
+        with pytest.raises(ValueError, match="must be at least 2-D"):
+            resolve_forward_kwargs(spec, simple_domain)
+
     def test_expand_like_resolution_order_independent(self, simple_domain):
         ### Whether `fx` is declared before or after `embedding`, both
         ### orderings should resolve correctly because pass 1 handles

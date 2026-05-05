@@ -131,8 +131,10 @@ def build_collate_fn(
         ### Single-sample contract; train.py raises a clearer error upstream.
         if len(samples) != 1:
             raise NotImplementedError(
-                f"batch_size > 1 is not supported in this recipe. "
-                f"Got len(samples)={len(samples)}."
+                f"This recipe requires exactly 1 sample per batch, got "
+                f"len(samples)={len(samples)}. Every model in the recipe "
+                f"assumes B=1; the YAML batch_size field is reserved for "
+                f"future use."
             )
         domain, _metadata = samples[0]
 

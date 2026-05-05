@@ -101,7 +101,7 @@ training:
 dataloader:
   prefetch_factor: 1
   num_streams: 1
-  use_streams: true       # SDF computation is not stream-safe
+  use_streams: false      # SDF computation is not stream-safe
   num_workers: 1
   pin_memory: true
 

@@ -325,7 +325,7 @@ Available training configs:
 | `train_highlift_volume` | GeoTransolver | High-lift volume (P, T, rho, U) |
 | `train_globe_automotive_surface` | GLOBE | Automotive surface (Cp, Cf) |
 | `train_globe_automotive_volume` | GLOBE | Automotive volume (U, p, nut) |
-| `train_domino_automotive_surface` | DoMINO | Automotive surface (Cp, Cf) — wiring complete; needs DoMINO-specific data prep |
+| `train_domino_automotive_surface` | DoMINO | Automotive surface (Cp, Cf) — `forward_kwargs` spec only; the dataset pipeline doesn't yet expose the per-cell neighbor / grid features DoMINO's `forward()` consumes (see YAML notes) |
 | `train_domino_automotive_volume` | DoMINO | Automotive volume (U, p, nut) — same caveat |
 
 To add a new model, write a top-level `train_<model>_<domain>.yaml`

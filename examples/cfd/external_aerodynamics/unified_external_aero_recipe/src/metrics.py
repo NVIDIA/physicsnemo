@@ -81,6 +81,11 @@ METRIC_FUNCTIONS = {
     "l2": _relative_l2,
 }
 
+### Default metrics computed when the user doesn't override `metrics:` in
+### the dataset YAML. Exposed as a constant so train.py can fall back to
+### the same list when the dataset YAML omits the block.
+DEFAULT_METRICS: tuple[str, ...] = ("l1", "l2", "mae")
+
 
 ### ---------------------------------------------------------------------------
 ### MetricCalculator
@@ -101,7 +106,7 @@ class MetricCalculator:
             components when ``> len(VECTOR_COMPONENTS)`` falls back to
             integer indices).
         metrics: Names of metrics to compute. Subset of
-            ``METRIC_FUNCTIONS``. Defaults to ``["l1", "l2", "mae"]``.
+            ``METRIC_FUNCTIONS``. Defaults to :data:`DEFAULT_METRICS`.
         prefix: Optional prefix on the returned metric keys.
     """
 
@@ -117,7 +122,7 @@ class MetricCalculator:
         self.process_group = process_group
         self.n_spatial_dims = n_spatial_dims
         self.metric_names = (
-            list(metrics) if metrics is not None else ["l1", "l2", "mae"]
+            list(metrics) if metrics is not None else list(DEFAULT_METRICS)
         )
         self.prefix = prefix
 

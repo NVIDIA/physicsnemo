@@ -96,7 +96,11 @@ def walk_path(source: Any, path: str) -> Any:
             ### only have to handle one type.
             try:
                 obj = obj[part]
-            except (TypeError, KeyError, ValueError, IndexError, LookupError) as e:
+            ### LookupError covers KeyError (dict / TensorDict) and
+            ### IndexError (out-of-range numeric); TypeError covers plain
+            ### tensors not supporting string indexing; ValueError covers
+            ### tensorclass rejecting non-indexable strings.
+            except (TypeError, ValueError, LookupError) as e:
                 raise KeyError(
                     f"Cannot resolve segment {part!r} of {path!r} on "
                     f"{type(obj).__name__}: {e}"
@@ -207,8 +211,20 @@ def _apply_modifier(
                 f"expand_like source must resolve to a tensor, got "
                 f"{type(src_value).__name__}."
             )
-        ### Pad source to at least 2-D so axis -2 exists, then expand.
-        while src_value.ndim < max(2, ref.ndim):
+        ### `expand_like` broadcasts source along the reference's per-element
+        ### (axis -2) dimension, so the reference must have one. A 0-D or 1-D
+        ### reference (e.g. a per-element scalar field at axis -1) is almost
+        ### always a config bug; fail fast with a useful message instead of
+        ### the bare IndexError that ref.shape[-2] would produce.
+        if ref.ndim < 2:
+            raise ValueError(
+                f"expand_like reference {ref_key!r} must be at least 2-D so "
+                f"axis -2 exists; got shape {tuple(ref.shape)} (ndim="
+                f"{ref.ndim}). For a 1-D per-element reference, drop the "
+                f"expand_like modifier and use a plain path spec instead."
+            )
+        ### Pad source to ref.ndim (which is >= 2) so axis -2 exists.
+        while src_value.ndim < ref.ndim:
             src_value = src_value.unsqueeze(0)
         target_shape = list(src_value.shape)
         target_shape[-2] = ref.shape[-2]

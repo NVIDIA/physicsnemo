@@ -21,9 +21,10 @@
 # wall shear stress (Cf) from DrivaerML datasets.
 #
 # DoMINO uses a geometry-encoding UNet + basis-function architecture that
-# natively handles SDF grids and surface neighbor information.  Its forward
-# method accepts a single data_dict; the collate layer wraps batch tensors
-# into data_dict automatically (see _wrap_as in MODEL_MAPPINGS).
+# natively handles SDF grids and surface neighbor information. Its forward
+# method accepts a single ``data_dict`` argument; the recipe's
+# ``forward_kwargs:`` resolver builds that dict by recursing into the
+# nested-dict spec below (see ``src/forward_kwargs.py``).
 
 output_dir: "runs"
 checkpoint_dir: null

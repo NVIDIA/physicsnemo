@@ -36,7 +36,13 @@ import sys
 from pathlib import Path
 from typing import Iterator
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+### Make this folder importable by its bare module names (`nondim`, `sdf`)
+### regardless of whether the caller invoked `python src/train.py` (which
+### already adds `src/` to sys.path[0]) or imported `datasets` from a
+### different working directory. Guarded so repeated imports are no-ops.
+_SRC_DIR = str(Path(__file__).resolve().parent)
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
 
 import torch
 from torch.utils.data import Sampler
@@ -45,6 +51,7 @@ from omegaconf import DictConfig, OmegaConf
 
 import physicsnemo.datapipes  # noqa: F401  (registers ${dp:...} resolvers)
 from physicsnemo.datapipes import MeshDataset, MultiDataset
+from physicsnemo.datapipes.transforms.mesh import MeshTransform
 from physicsnemo.mesh import DomainMesh, Mesh
 
 import nondim  # noqa: F401  (registers NonDimensionalizeByMetadata)
@@ -119,56 +126,71 @@ def _maybe_inject_targets(t_cfg: DictConfig, target_names: list[str]) -> DictCon
     return t_cfg
 
 
-def _make_metadata_injector(metadata: dict):
-    """Create a callable that injects dataset metadata into ``global_data``.
+class _InjectMetadata(MeshTransform):
+    """Inject dataset-wide metadata fields into a sample's ``global_data``.
 
-    Handles both :class:`Mesh` (single-mesh) and :class:`DomainMesh`
-    (domain with interior + boundaries).  For ``DomainMesh``, metadata
-    is merged into the domain-level ``global_data`` so that
-    domain-aware transforms like ``NonDimensionalizeByMetadata`` can
-    read freestream quantities from ``domain.global_data``.
+    The dataset YAML's ``metadata:`` block carries freestream conditions
+    (``U_inf``, ``rho_inf``, ``p_inf``, ``L_ref``, ...) that downstream
+    transforms like ``NonDimensionalizeByMetadata`` need to consume from
+    ``global_data``. This transform writes those values into the sample's
+    ``global_data`` (matching the sample's device/dtype) on every call.
 
-    The returned callable is prepended to the transform list so that
-    downstream transforms can read freestream quantities from
-    ``global_data``.
+    For :class:`DomainMesh` inputs the values land in the domain-level
+    ``global_data`` (so they're visible to domain-aware transforms);
+    for :class:`Mesh` inputs they land in the mesh's ``global_data``.
+    Subclasses :class:`MeshTransform` so the recipe's dataset builder
+    can hand it to :class:`MeshDataset` alongside any other transform.
     """
-    fields: dict[str, torch.Tensor] = {}
-    for k, v in metadata.items():
-        if isinstance(v, torch.Tensor):
-            fields[k] = v.float()
-        elif isinstance(v, (list, tuple)):
-            fields[k] = torch.tensor(v, dtype=torch.float32)
-        else:
-            fields[k] = torch.tensor(v, dtype=torch.float32)
 
-    def inject(data):
-        if isinstance(data, DomainMesh):
-            new_gd = data.global_data.clone()
-            device = data.interior.points.device
-            dtype = data.interior.points.dtype
-            for k, v in fields.items():
-                new_gd[k] = v.to(device=device, dtype=dtype)
-            return DomainMesh(
-                interior=data.interior,
-                boundaries=data.boundaries,
-                global_data=new_gd,
-            )
-        # Single Mesh path
-        new_gd = data.global_data.clone()
-        for k, v in fields.items():
-            new_gd[k] = v.to(device=data.points.device, dtype=data.points.dtype)
+    def __init__(self, metadata: dict) -> None:
+        super().__init__()
+        ### Coerce every field to a 1-D / 0-D float32 tensor up front so
+        ### that downstream `.to(device=..., dtype=...)` is the only work
+        ### done per-sample.
+        self._fields: dict[str, torch.Tensor] = {}
+        for k, v in metadata.items():
+            if isinstance(v, torch.Tensor):
+                self._fields[k] = v.float()
+            else:
+                ### Accepts list / tuple / scalar uniformly.
+                self._fields[k] = torch.as_tensor(v, dtype=torch.float32)
+
+    def _materialize(
+        self, base_gd: torch.Tensor, device: torch.device, dtype: torch.dtype
+    ) -> torch.Tensor:
+        """Clone ``base_gd`` and merge the metadata fields onto it."""
+        new_gd = base_gd.clone()
+        for k, v in self._fields.items():
+            new_gd[k] = v.to(device=device, dtype=dtype)
+        return new_gd
+
+    def __call__(self, mesh: Mesh) -> Mesh:
+        new_gd = self._materialize(
+            mesh.global_data, mesh.points.device, mesh.points.dtype
+        )
         return Mesh(
-            points=data.points,
-            cells=data.cells,
-            point_data=data.point_data,
-            cell_data=data.cell_data,
+            points=mesh.points,
+            cells=mesh.cells,
+            point_data=mesh.point_data,
+            cell_data=mesh.cell_data,
             global_data=new_gd,
         )
 
-    # MeshDataset calls t.apply_to_domain(data) for DomainMesh inputs,
-    # so the plain function needs this attribute.
-    inject.apply_to_domain = inject
-    return inject
+    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
+        """Inject metadata into ``domain.global_data``."""
+        new_gd = self._materialize(
+            domain.global_data,
+            domain.interior.points.device,
+            domain.interior.points.dtype,
+        )
+        return DomainMesh(
+            interior=domain.interior,
+            boundaries=domain.boundaries,
+            global_data=new_gd,
+        )
+
+    def extra_repr(self) -> str:
+        return f"fields={sorted(self._fields)}"
 
 
 def build_surface_dataset(
@@ -225,7 +247,7 @@ def build_surface_dataset(
 
     # Inject dataset metadata into global_data as the first transform
     if metadata:
-        resolved.append(_make_metadata_injector(metadata))
+        resolved.append(_InjectMetadata(metadata))
 
     target_names = list(
         OmegaConf.to_container(

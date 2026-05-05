@@ -85,10 +85,15 @@ training:
   num_epochs: 500
   save_interval: 25
   loss_type: "huber"
+  ### `field_weights:` is currently a no-op (every weight is 1.0, the
+  ### default) -- it's listed here as a placeholder so a maintainer can
+  ### see at a glance which fields exist for tuning. The volume targets
+  ### have not been calibrated yet; bump nut / velocity weights here once
+  ### the per-field loss curves diverge in real training.
   field_weights:
     velocity: 1.0
     pressure: 1.0
-    nut: 1.0                   # tune empirically; placeholder defaults
+    nut: 1.0
   batch_size: 1
   scheduler_update_mode: "epoch"
 

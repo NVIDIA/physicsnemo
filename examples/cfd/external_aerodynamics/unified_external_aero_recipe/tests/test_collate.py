@@ -275,7 +275,7 @@ class TestFailures:
         collate = build_collate_fn(
             "tensors", {"geometry": "interior.points"}, {"pressure": "scalar"}
         )
-        with pytest.raises(NotImplementedError, match="batch_size > 1"):
+        with pytest.raises(NotImplementedError, match=r"len\(samples\)=2"):
             collate([(domain, {}), (domain, {})])
 
     def test_empty_batch_raises(self, domain):
@@ -283,7 +283,7 @@ class TestFailures:
         collate = build_collate_fn(
             "tensors", {"geometry": "interior.points"}, {"pressure": "scalar"}
         )
-        with pytest.raises(NotImplementedError, match="len\\(samples\\)=0"):
+        with pytest.raises(NotImplementedError, match=r"len\(samples\)=0"):
             collate([])
 
     def test_missing_target_in_mesh_raises(self, domain):
