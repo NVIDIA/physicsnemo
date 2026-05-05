@@ -28,20 +28,23 @@ class RadiusSearch(FunctionSpec):
 
     Can use brute-force methods with PyTorch, or an accelerated spatial decomposition method with Warp.
 
-    This function does not currently accept a batch index.
+    Accepts both unbatched inputs of shape ``(N, 3)`` and batched inputs of shape ``(B, N, 3)``.
+    When unbatched inputs are provided, they are treated as ``B=1`` internally and the batch
+    dimension is stripped from the output. Only ranks 2 and 3 are accepted; higher-rank inputs
+    raise ``ValueError``.
 
     This function has differing behavior based on the argument for max_points.  If max_points is None,
     the function will find ALL points within the radius and return a flattened list of indices,
-    (optionally) distances, and (optionally) points.  The indices will have a shape of
-    (2, N) where N is the aggregate number of neighbors found for all queries.  The 0th index of the
-    output represents the index of the query points, and the 1st index represents the index of the
-    neighbor points within the search space.
+    (optionally) distances, and (optionally) points.  For unbatched inputs the indices will have a
+    shape of ``(2, N)`` where N is the aggregate number of neighbors found for all queries. The 0th
+    row is the query index and the 1st row is the point index. For batched inputs the indices will
+    have shape ``(3, N)`` where the 0th row is the batch index, the 1st row is the query index, and
+    the 2nd row is the point index.
 
     If max_points is not None, the function will find the max_points closest points within the radius
     and return a statically sized array of indices, (optionally) distances, and (optionally) points.
-    The indices will have a shape of (queries.shape[0], max_points).  Each row i of the indices will be
-    neighbors of queries[i]. If there are fewer points than max_points, then the unused indices will be
-    set to 0 and the distances and points will be set to 0 for unused points.
+    For unbatched inputs the indices will have shape ``(Q, max_points)``. For batched inputs the
+    indices will have shape ``(B, Q, max_points)``. Unused slots are filled with 0.
 
     Because the shape when max_points=None is dynamic, this function is incompatible with torch.compile
     in that case.  When max_points is set, this function is compatible with torch.compile regardless of
@@ -58,10 +61,8 @@ class RadiusSearch(FunctionSpec):
         and results will be returned in their original precision.
 
     Args:
-        points (torch.Tensor): The reference point cloud tensor of shape (N, 3) where N is the number
-            of points.
-        queries (torch.Tensor): The query points tensor of shape (M, 3) where M is the number of
-            query points.
+        points (torch.Tensor): The reference point cloud tensor of shape ``(N, 3)`` or ``(B, N, 3)``.
+        queries (torch.Tensor): The query points tensor of shape ``(M, 3)`` or ``(B, M, 3)``.
         radius (float): The search radius. Points within or at this radius of a query point will be
             considered neighbors.
         max_points (int | None, optional): Maximum number of neighbors to return for each query point.
@@ -84,41 +85,46 @@ class RadiusSearch(FunctionSpec):
     Raises:
         KeyError: If an explicit implementation name is not registered.
         ImportError: If the selected implementation is unavailable.
+        ValueError: If inputs are not rank 2 or 3.
 
     """
 
     _BENCHMARK_CASES = (
-        ("small-p1024-q512-r0p1-m32", 1024, 512, 0.1, 32),
-        ("medium-p4096-q2048-r0p1-m32", 4096, 2048, 0.1, 32),
-        ("large-p8192-q4096-r0p1-m32", 8192, 4096, 0.1, 32),
+        ("small-p1024-q512-r0p1-m32", 1, 1024, 512, 0.1, 32),
+        ("medium-p4096-q2048-r0p1-m32", 1, 4096, 2048, 0.1, 32),
+        ("large-p8192-q4096-r0p1-m32", 1, 8192, 4096, 0.1, 32),
+        ("batched-b4-p1024-q512-r0p1-m32", 4, 1024, 512, 0.1, 32),
     )
     _BACKWARD_BENCHMARK_CASES = (
-        ("small-bwd-p1024-q512-r0p1-m32", 1024, 512, 0.1, 32),
-        ("medium-bwd-p4096-q2048-r0p1-m32", 4096, 2048, 0.1, 32),
+        ("small-bwd-p1024-q512-r0p1-m32", 1, 1024, 512, 0.1, 32),
+        ("medium-bwd-p4096-q2048-r0p1-m32", 1, 4096, 2048, 0.1, 32),
+        ("batched-bwd-b4-p1024-q512-r0p1-m32", 4, 1024, 512, 0.1, 32),
     )
 
     @FunctionSpec.register(name="warp", required_imports=("warp>=0.6.0",), rank=0)
     def warp_forward(
-        points: Float[torch.Tensor, "num_points 3"],
-        queries: Float[torch.Tensor, "num_queries 3"],
+        points: Float[torch.Tensor, "*batch num_points 3"],
+        queries: Float[torch.Tensor, "*batch num_queries 3"],
         radius: float,
         max_points: int | None = None,
         return_dists: bool = False,
         return_points: bool = False,
     ) -> tuple[torch.Tensor, ...]:
+        """Warp-accelerated radius search using spatial hash grids."""
         return radius_search_warp(
             points, queries, radius, max_points, return_dists, return_points
         )
 
     @FunctionSpec.register(name="torch", rank=1, baseline=True)
     def torch_forward(
-        points: Float[torch.Tensor, "num_points 3"],
-        queries: Float[torch.Tensor, "num_queries 3"],
+        points: Float[torch.Tensor, "*batch num_points 3"],
+        queries: Float[torch.Tensor, "*batch num_queries 3"],
         radius: float,
         max_points: int | None = None,
         return_dists: bool = False,
         return_points: bool = False,
     ) -> tuple[torch.Tensor, ...]:
+        """Pure-PyTorch brute-force radius search via cdist."""
         return radius_search_torch(
             points, queries, radius, max_points, return_dists, return_points
         )
@@ -128,10 +134,22 @@ class RadiusSearch(FunctionSpec):
         cls,
         device: torch.device | str = "cpu",
     ):
+        """Yield ``(label, args, kwargs)`` tuples for forward-pass benchmarking."""
         device = torch.device(device)
-        for label, num_points, num_queries, radius, max_points in cls._BENCHMARK_CASES:
-            points = torch.rand(num_points, 3, device=device)
-            queries = torch.rand(num_queries, 3, device=device)
+        for (
+            label,
+            batch_size,
+            num_points,
+            num_queries,
+            radius,
+            max_points,
+        ) in cls._BENCHMARK_CASES:
+            if batch_size == 1:
+                points = torch.rand(num_points, 3, device=device)
+                queries = torch.rand(num_queries, 3, device=device)
+            else:
+                points = torch.rand(batch_size, num_points, 3, device=device)
+                queries = torch.rand(batch_size, num_queries, 3, device=device)
             yield (
                 label,
                 (points, queries, radius),
@@ -147,16 +165,26 @@ class RadiusSearch(FunctionSpec):
         cls,
         device: torch.device | str = "cpu",
     ):
+        """Yield ``(label, args, kwargs)`` tuples for backward-pass benchmarking."""
         device = torch.device(device)
         for (
             label,
+            batch_size,
             num_points,
             num_queries,
             radius,
             max_points,
         ) in cls._BACKWARD_BENCHMARK_CASES:
-            points = torch.rand(num_points, 3, device=device, requires_grad=True)
-            queries = torch.rand(num_queries, 3, device=device, requires_grad=True)
+            if batch_size == 1:
+                points = torch.rand(num_points, 3, device=device, requires_grad=True)
+                queries = torch.rand(num_queries, 3, device=device, requires_grad=True)
+            else:
+                points = torch.rand(
+                    batch_size, num_points, 3, device=device, requires_grad=True
+                )
+                queries = torch.rand(
+                    batch_size, num_queries, 3, device=device, requires_grad=True
+                )
             yield (
                 label,
                 (points, queries, radius),
@@ -169,6 +197,7 @@ class RadiusSearch(FunctionSpec):
 
     @classmethod
     def compare_forward(cls, output: tuple, reference: tuple) -> None:
+        """Order-invariant comparison of two forward-pass outputs."""
         # Radius-search backends can return neighbors in different orders.
         if len(output) != len(reference):
             raise AssertionError("output and reference tuples must have equal length")
@@ -176,7 +205,7 @@ class RadiusSearch(FunctionSpec):
         dynamic_output = (
             len(output) > 0
             and output[0].ndim == 2
-            and output[0].shape[0] == 2
+            and output[0].shape[0] in (2, 3)
             and output[0].dtype in (torch.int32, torch.int64)
         )
 
@@ -231,6 +260,7 @@ class RadiusSearch(FunctionSpec):
 
     @classmethod
     def compare_backward(cls, output: torch.Tensor, reference: torch.Tensor) -> None:
+        """Element-wise comparison of two backward-pass gradient tensors."""
         torch.testing.assert_close(output, reference, atol=1e-5, rtol=1e-5)
 
 

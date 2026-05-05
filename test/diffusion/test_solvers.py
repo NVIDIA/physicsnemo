@@ -302,6 +302,7 @@ class TestStepNonRegression:
     SPATIAL_CONFIGS,
     ids=[c[0] for c in SPATIAL_CONFIGS],
 )
+@pytest.mark.usefixtures("nop_compile")
 class TestStepCompile:
     """Double-call compile tests for solver step()."""
 

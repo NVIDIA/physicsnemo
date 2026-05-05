@@ -19,7 +19,7 @@ This layer is a compilable, ball-query operation.
 
 By default, it will project a grid of points to a 1D set of points.
 
-It does not support batch size > 1.
+Supports arbitrary batch sizes.
 """
 
 import torch
@@ -36,7 +36,7 @@ class BQWarp(nn.Module):
     This layer uses an accelerated ball query implementation to efficiently find points
     within a specified radius of query points.
 
-    Only supports batch size 1.
+    Supports arbitrary batch sizes.
     """
 
     def __init__(
@@ -68,22 +68,20 @@ class BQWarp(nn.Module):
         - Reverse mapping: Find points from p_grid that are near x points (reverse_mapping=True)
 
         Args:
-            x: Tensor of shape (batch_size, num_points, 3+features) containing point coordinates
-               and their features
-            p_grid: Tensor of shape (batch_size, grid_x, grid_y, grid_z, 3) containing grid point
-                   coordinates
+            x: Tensor of shape (batch_size, num_points, 3) containing point coordinates
+            p_grid: Tensor of shape (batch_size, ..., 3) containing grid point
+                   coordinates. Can be 3D, 4D, or 5D.
             reverse_mapping: Boolean flag to control the direction of the mapping:
                             - True: Find p_grid points near x points
                             - False: Find x points near p_grid points
 
         Returns:
             tuple containing:
-                - mapping: Tensor containing indices of neighboring points
-                - outputs: Tensor containing coordinates of the neighboring points
+                - mapping: Tensor containing indices of neighboring points.
+                  Shape (B, Q, max_points) when neighbors_in_radius is set.
+                - outputs: Tensor containing coordinates of the neighboring points.
+                  Shape (B, Q, max_points, 3) when neighbors_in_radius is set.
         """
-
-        if x.shape[0] != 1 or p_grid.shape[0] != 1:
-            raise ValueError("BQWarp only supports batch size 1")
 
         if p_grid.shape[-1] != x.shape[-1] or x.shape[-1] != 3:
             raise ValueError("The last dimension of p_grid and x must be 3")
@@ -98,23 +96,19 @@ class BQWarp(nn.Module):
 
         if reverse_mapping:
             mapping, outputs = radius_search(
-                x[0],
-                p_grid[0],
+                x,
+                p_grid,
                 self.radius,
                 self.neighbors_in_radius,
                 return_points=True,
             )
-            mapping = mapping.unsqueeze(0)
-            outputs = outputs.unsqueeze(0)
         else:
             mapping, outputs = radius_search(
-                p_grid[0],
-                x[0],
+                p_grid,
+                x,
                 self.radius,
                 self.neighbors_in_radius,
                 return_points=True,
             )
-            mapping = mapping.unsqueeze(0)
-            outputs = outputs.unsqueeze(0)
 
         return mapping, outputs

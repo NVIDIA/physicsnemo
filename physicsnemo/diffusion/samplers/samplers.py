@@ -227,9 +227,11 @@ def sample(
         :class:`Solver` instance. See individual solver classes for available
         options.
     time_eval : List[int] | None, default=None
-        Indices of time-steps at which to return intermediate samples. If
-        provided, returns a list of tensors. If ``None``, returns only the
-        final denoised latent state :math:`\mathbf{x}_0`.
+        Indices of time-steps at which to return intermediate samples. Must
+        contain values in ``range(0, num_steps)`` (or ``range(0,
+        len(time_steps) - 1)`` when ``time_steps`` is provided). If provided,
+        returns a list of tensors. If ``None``, returns only the final
+        denoised latent state :math:`\mathbf{x}_0`.
 
     Returns
     -------
@@ -384,6 +386,14 @@ def sample(
     samples: List[Tensor] = []
     x = xN
     n_steps = len(t_steps) - 1  # Last element is 0 (final time)
+
+    if time_eval is not None:
+        out_of_range = [i for i in time_eval if i < 0 or i >= n_steps]
+        if out_of_range:
+            raise ValueError(
+                f"time_eval contains out-of-range indices {out_of_range}; "
+                f"valid indices are in range(0, {n_steps})."
+            )
 
     for i in range(n_steps):
         t_cur = t_steps[i]
