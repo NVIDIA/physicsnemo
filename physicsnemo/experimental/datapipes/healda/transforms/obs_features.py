@@ -16,9 +16,11 @@
 from typing import Literal
 import math
 import torch
-import triton
-import triton.language as tl
-from triton.language.extra.libdevice import fast_sinf as fsin, fast_cosf as fcos, isnan
+
+from physicsnemo.core.version_check import OptionalImport
+
+triton = OptionalImport("triton")
+_libdevice = OptionalImport("triton.language.extra.libdevice")
 
 N_FEATURES = 28
 
@@ -197,125 +199,129 @@ def local_solar_time(
 # Triton implementations
 #########################################################
 
+if triton.available:
+    tl = triton.language
+    fsin = _libdevice.fast_sinf
+    fcos = _libdevice.fast_cosf
+    isnan = _libdevice.isnan
 
-@triton.jit
-def _fourier_store(out_ptr, base, offset, angle, valid, m, NUM_FREQS: tl.constexpr):
-    """Store fourier features [sin(k*angle), cos(k*angle)] for k=1..NUM_FREQS, zeroed when !valid."""
-    for k in tl.static_range(1, NUM_FREQS + 1):
+    @triton.jit
+    def _fourier_store(out_ptr, base, offset, angle, valid, m, NUM_FREQS: tl.constexpr):
+        """Store fourier features [sin(k*angle), cos(k*angle)] for k=1..NUM_FREQS, zeroed when !valid."""
+        for k in tl.static_range(1, NUM_FREQS + 1):
+            tl.store(
+                out_ptr + base + offset + k - 1,
+                tl.where(valid, fsin(angle * k), 0.0),
+                mask=m,
+            )
+            tl.store(
+                out_ptr + base + offset + NUM_FREQS + k - 1,
+                tl.where(valid, fcos(angle * k), 0.0),
+                mask=m,
+            )
+
+    @triton.jit
+    def _metadata_kernel(
+        lon_ptr,
+        time_ptr,
+        target_ptr,
+        height_ptr,
+        press_ptr,
+        scan_ptr,
+        sat_ptr,
+        sol_ptr,
+        out_ptr,
+        N,
+        BLOCK: tl.constexpr,
+    ):
+        """Compute unified metadata using a single Triton kernel.
+        Using torch.compile on compute_unified_metadata runs into issues with torch dynamo when using DistributedDataParallel.
+        Seems compiling a function that isn't in main network/main thread does not work.
+        """
+
+        pid = tl.program_id(0)
+        off = pid * BLOCK + tl.arange(0, BLOCK)
+        m = off < N
+
+        lon = tl.load(lon_ptr + off, mask=m, other=0.0).to(tl.float32)
+        time_ns = tl.load(time_ptr + off, mask=m, other=0)
+        target_s = tl.load(target_ptr + off, mask=m, other=0)
+        height = tl.load(height_ptr + off, mask=m, other=0.0).to(tl.float32)
+        pressure = tl.load(press_ptr + off, mask=m, other=0.0).to(tl.float32)
+        scan = tl.load(scan_ptr + off, mask=m, other=0.0).to(tl.float32)
+        sat_zen = tl.load(sat_ptr + off, mask=m, other=0.0).to(tl.float32)
+        sol_zen = tl.load(sol_ptr + off, mask=m, other=0.0).to(tl.float32)
+
+        # Fields are NaN when the observation type doesn't carry that metadata
+        # (e.g. satellite obs lack height/pressure, conventional obs lack zenith angles).
+        height_valid = ~isnan(height)
+        pressure_valid = ~isnan(pressure)
+        scan_valid = ~isnan(scan)
+        sat_zen_valid = ~isnan(sat_zen)
+        sol_zen_valid = ~isnan(sol_zen)
+
+        TWO_PI: tl.constexpr = 6.283185307179586
+        DEG2RAD: tl.constexpr = 0.017453292519943295
+        base = off * 28
+        idx = 0
+
+        # ======== Local Solar Time — fourier(2) -> 4 features ========
+        sod = (time_ns // 1000000000) % 86400
+        utc_hr = sod.to(tl.float32) / 3600.0
+        lst = (utc_hr + lon / 15.0) % 24.0
+        lst_angle = lst / 24.0 * TWO_PI
+        _fourier_store(out_ptr, base, idx, lst_angle, True, m, 2)
+        idx += 4  # 2 freqs * 2 (sin+cos)
+
+        # ======== Relative Time -> 2 features ========
+        dt_days = (time_ns - target_s * 1000000000).to(tl.float32) * 1e-9 / 86400.0
+        tl.store(out_ptr + base + idx, dt_days, mask=m)
+        tl.store(out_ptr + base + idx + 1, dt_days * dt_days, mask=m)
+        idx += 2
+
+        # ======== Height — fourier(4) -> 8 features ========
+        height_angle = tl.where(
+            height_valid, tl.minimum(tl.maximum(height / 60000.0, 0.0), 1.0) * TWO_PI, 0.0
+        )
+        _fourier_store(out_ptr, base, idx, height_angle, height_valid, m, 4)
+        idx += 8  # 4 freqs * 2
+
+        # ======== Pressure — fourier(4) -> 8 features ========
+        press_angle = tl.where(
+            pressure_valid,
+            tl.minimum(tl.maximum(pressure / 1100.0, 0.0), 1.0) * TWO_PI,
+            0.0,
+        )
+        _fourier_store(out_ptr, base, idx, press_angle, pressure_valid, m, 4)
+        idx += 8  # 4 freqs * 2
+
+        # ======== Scan Angle -> 2 features ========
+        scan_norm = tl.where(scan_valid, scan / 50.0, 0.0)
+        tl.store(out_ptr + base + idx, tl.where(scan_valid, scan_norm, 0.0), mask=m)
         tl.store(
-            out_ptr + base + offset + k - 1,
-            tl.where(valid, fsin(angle * k), 0.0),
+            out_ptr + base + idx + 1,
+            tl.where(scan_valid, scan_norm * scan_norm, 0.0),
             mask=m,
         )
+        idx += 2
+
+        # ======== Satellite Zenith -> 2 features ========
+        cos_sat = fcos(tl.where(sat_zen_valid, sat_zen * DEG2RAD, 0.0))
+        tl.store(out_ptr + base + idx, tl.where(sat_zen_valid, cos_sat, 0.0), mask=m)
         tl.store(
-            out_ptr + base + offset + NUM_FREQS + k - 1,
-            tl.where(valid, fcos(angle * k), 0.0),
+            out_ptr + base + idx + 1,
+            tl.where(sat_zen_valid, cos_sat * cos_sat, 0.0),
             mask=m,
         )
+        idx += 2
 
-
-@triton.jit
-def _metadata_kernel(
-    lon_ptr,
-    time_ptr,
-    target_ptr,
-    height_ptr,
-    press_ptr,
-    scan_ptr,
-    sat_ptr,
-    sol_ptr,
-    out_ptr,
-    N,
-    BLOCK: tl.constexpr,
-):
-    """Compute unified metadata using a single Triton kernel.
-    Using torch.compile on compute_unified_metadata runs into issues with torch dynamo when using DistributedDataParallel.
-    Seems compiling a function that isn't in main network/main thread does not work.
-    """
-
-    pid = tl.program_id(0)
-    off = pid * BLOCK + tl.arange(0, BLOCK)
-    m = off < N
-
-    lon = tl.load(lon_ptr + off, mask=m, other=0.0).to(tl.float32)
-    time_ns = tl.load(time_ptr + off, mask=m, other=0)
-    target_s = tl.load(target_ptr + off, mask=m, other=0)
-    height = tl.load(height_ptr + off, mask=m, other=0.0).to(tl.float32)
-    pressure = tl.load(press_ptr + off, mask=m, other=0.0).to(tl.float32)
-    scan = tl.load(scan_ptr + off, mask=m, other=0.0).to(tl.float32)
-    sat_zen = tl.load(sat_ptr + off, mask=m, other=0.0).to(tl.float32)
-    sol_zen = tl.load(sol_ptr + off, mask=m, other=0.0).to(tl.float32)
-
-    # Fields are NaN when the observation type doesn't carry that metadata
-    # (e.g. satellite obs lack height/pressure, conventional obs lack zenith angles).
-    height_valid = ~isnan(height)
-    pressure_valid = ~isnan(pressure)
-    scan_valid = ~isnan(scan)
-    sat_zen_valid = ~isnan(sat_zen)
-    sol_zen_valid = ~isnan(sol_zen)
-
-    TWO_PI: tl.constexpr = 6.283185307179586
-    DEG2RAD: tl.constexpr = 0.017453292519943295
-    base = off * 28
-    idx = 0
-
-    # ======== Local Solar Time — fourier(2) -> 4 features ========
-    sod = (time_ns // 1000000000) % 86400
-    utc_hr = sod.to(tl.float32) / 3600.0
-    lst = (utc_hr + lon / 15.0) % 24.0
-    lst_angle = lst / 24.0 * TWO_PI
-    _fourier_store(out_ptr, base, idx, lst_angle, True, m, 2)
-    idx += 4  # 2 freqs * 2 (sin+cos)
-
-    # ======== Relative Time -> 2 features ========
-    dt_days = (time_ns - target_s * 1000000000).to(tl.float32) * 1e-9 / 86400.0
-    tl.store(out_ptr + base + idx, dt_days, mask=m)
-    tl.store(out_ptr + base + idx + 1, dt_days * dt_days, mask=m)
-    idx += 2
-
-    # ======== Height — fourier(4) -> 8 features ========
-    height_angle = tl.where(
-        height_valid, tl.minimum(tl.maximum(height / 60000.0, 0.0), 1.0) * TWO_PI, 0.0
-    )
-    _fourier_store(out_ptr, base, idx, height_angle, height_valid, m, 4)
-    idx += 8  # 4 freqs * 2
-
-    # ======== Pressure — fourier(4) -> 8 features ========
-    press_angle = tl.where(
-        pressure_valid,
-        tl.minimum(tl.maximum(pressure / 1100.0, 0.0), 1.0) * TWO_PI,
-        0.0,
-    )
-    _fourier_store(out_ptr, base, idx, press_angle, pressure_valid, m, 4)
-    idx += 8  # 4 freqs * 2
-
-    # ======== Scan Angle -> 2 features ========
-    scan_norm = tl.where(scan_valid, scan / 50.0, 0.0)
-    tl.store(out_ptr + base + idx, tl.where(scan_valid, scan_norm, 0.0), mask=m)
-    tl.store(
-        out_ptr + base + idx + 1,
-        tl.where(scan_valid, scan_norm * scan_norm, 0.0),
-        mask=m,
-    )
-    idx += 2
-
-    # ======== Satellite Zenith -> 2 features ========
-    cos_sat = fcos(tl.where(sat_zen_valid, sat_zen * DEG2RAD, 0.0))
-    tl.store(out_ptr + base + idx, tl.where(sat_zen_valid, cos_sat, 0.0), mask=m)
-    tl.store(
-        out_ptr + base + idx + 1,
-        tl.where(sat_zen_valid, cos_sat * cos_sat, 0.0),
-        mask=m,
-    )
-    idx += 2
-
-    # ======== Solar Zenith -> 2 features ========
-    sol_rad = tl.where(sol_zen_valid, sol_zen * DEG2RAD, 0.0)
-    tl.store(out_ptr + base + idx, tl.where(sol_zen_valid, fcos(sol_rad), 0.0), mask=m)
-    tl.store(
-        out_ptr + base + idx + 1, tl.where(sol_zen_valid, fsin(sol_rad), 0.0), mask=m
-    )
-    idx += 2
+        # ======== Solar Zenith -> 2 features ========
+        sol_rad = tl.where(sol_zen_valid, sol_zen * DEG2RAD, 0.0)
+        tl.store(out_ptr + base + idx, tl.where(sol_zen_valid, fcos(sol_rad), 0.0), mask=m)
+        tl.store(
+            out_ptr + base + idx + 1, tl.where(sol_zen_valid, fsin(sol_rad), 0.0), mask=m
+        )
+        idx += 2
 
 
 def compute_unified_metadata(
@@ -328,7 +334,7 @@ def compute_unified_metadata(
     sat_zenith_angle: torch.Tensor,
     sol_zenith_angle: torch.Tensor,
 ) -> torch.Tensor:
-    if not lon.is_cuda:
+    if not lon.is_cuda or not triton.available:
         return _compute_unified_metadata_reference(
             target_time_sec,
             lon=lon,
