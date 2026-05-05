@@ -14,16 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""TopoDiff models and utilities."""
+"""TopoDiff models."""
 
-from .diffusion import Diffusion
 from .topodiff import TopoDiff, UNetEncoder
-from .utils import DatasetTopoDiff, load_data_topodiff
 
 __all__ = [
     "TopoDiff",
     "UNetEncoder",
-    "Diffusion",
-    "DatasetTopoDiff",
-    "load_data_topodiff",
 ]

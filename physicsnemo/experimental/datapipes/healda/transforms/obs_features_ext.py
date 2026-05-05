@@ -15,9 +15,11 @@
 # limitations under the License.
 import math
 import torch
-import triton
-import triton.language as tl
-from triton.language.extra.libdevice import fast_sinf as fsin, fast_cosf as fcos, isnan
+
+from physicsnemo.core.version_check import OptionalImport
+
+triton = OptionalImport("triton")
+_libdevice = OptionalImport("triton.language.extra.libdevice")
 
 N_FEATURES = 30
 # Layout:
@@ -124,120 +126,124 @@ def local_solar_time(
 # Triton implementations
 #########################################################
 
+if triton.available:
+    tl = triton.language
+    fsin = _libdevice.fast_sinf
+    fcos = _libdevice.fast_cosf
+    isnan = _libdevice.isnan
 
-@triton.jit
-def _fourier_store(out_ptr, base, offset, x_norm, valid, m, NUM_FREQS: tl.constexpr):
-    """Store sin(kx), cos(kx) for k=1..NUM_FREQS.  Matches fourier_features()."""
-    for k in tl.static_range(1, NUM_FREQS + 1):
-        angle = x_norm * k
-        tl.store(
-            out_ptr + base + offset + k - 1,
-            tl.where(valid, fsin(angle), 0.0),
-            mask=m,
-        )
-        tl.store(
-            out_ptr + base + offset + NUM_FREQS + k - 1,
-            tl.where(valid, fcos(angle), 0.0),
-            mask=m,
-        )
+    @triton.jit
+    def _fourier_store(out_ptr, base, offset, x_norm, valid, m, NUM_FREQS: tl.constexpr):
+        """Store sin(kx), cos(kx) for k=1..NUM_FREQS.  Matches fourier_features()."""
+        for k in tl.static_range(1, NUM_FREQS + 1):
+            angle = x_norm * k
+            tl.store(
+                out_ptr + base + offset + k - 1,
+                tl.where(valid, fsin(angle), 0.0),
+                mask=m,
+            )
+            tl.store(
+                out_ptr + base + offset + NUM_FREQS + k - 1,
+                tl.where(valid, fcos(angle), 0.0),
+                mask=m,
+            )
 
+    @triton.jit
+    def _metadata_kernel(
+        lat_ptr,
+        lon_ptr,
+        time_ptr,
+        target_ptr,
+        height_ptr,
+        press_ptr,
+        scan_ptr,
+        sat_ptr,
+        sol_ptr,
+        out_ptr,
+        N,
+        BLOCK: tl.constexpr,
+        N_FEAT: tl.constexpr,
+    ):
+        """Extended observation metadata — 30 features per observation.
 
-@triton.jit
-def _metadata_kernel(
-    lat_ptr,
-    lon_ptr,
-    time_ptr,
-    target_ptr,
-    height_ptr,
-    press_ptr,
-    scan_ptr,
-    sat_ptr,
-    sol_ptr,
-    out_ptr,
-    N,
-    BLOCK: tl.constexpr,
-    N_FEAT: tl.constexpr,
-):
-    """Extended observation metadata — 30 features per observation.
+        Compared to the standard 28-feature encoding (obs_features.py):
+        - Adds latitude encoding (sin/cos) as shared features [8:10).
+        - Uses Fourier encoding for relative time instead of raw polynomial only.
+        - Replaces NaN-padded conv/sat columns with mutually exclusive branches:
+          slots 10-29 are written by exactly one branch per row (conv or sat,
+          selected by NaN in height), so every feature carries signal.
 
-    Compared to the standard 28-feature encoding (obs_features.py):
-    - Adds latitude encoding (sin/cos) as shared features [8:10).
-    - Uses Fourier encoding for relative time instead of raw polynomial only.
-    - Replaces NaN-padded conv/sat columns with mutually exclusive branches:
-      slots 10-29 are written by exactly one branch per row (conv or sat,
-      selected by NaN in height), so every feature carries signal.
+        Triton implementation because torch.compile on the equivalent
+        `_compute_unified_metadata_reference()` hits dynamo errors under
+        multi-gpu DDP training (compiling a function in a non-main thread).
+        """
+        pid = tl.program_id(0)
+        off = pid * BLOCK + tl.arange(0, BLOCK)
+        m = off < N
 
-    Triton implementation because torch.compile on the equivalent
-    `_compute_unified_metadata_reference()` hits dynamo errors under
-    multi-gpu DDP training (compiling a function in a non-main thread).
-    """
-    pid = tl.program_id(0)
-    off = pid * BLOCK + tl.arange(0, BLOCK)
-    m = off < N
+        lat = tl.load(lat_ptr + off, mask=m, other=0.0).to(tl.float32)
+        lon = tl.load(lon_ptr + off, mask=m, other=0.0).to(tl.float32)
+        time_ns = tl.load(time_ptr + off, mask=m, other=0)
+        target_s = tl.load(target_ptr + off, mask=m, other=0)
+        height = tl.load(height_ptr + off, mask=m, other=0.0).to(tl.float32)
+        pressure = tl.load(press_ptr + off, mask=m, other=0.0).to(tl.float32)
+        scan = tl.load(scan_ptr + off, mask=m, other=0.0).to(tl.float32)
+        sat_zen = tl.load(sat_ptr + off, mask=m, other=0.0).to(tl.float32)
+        sol_zen = tl.load(sol_ptr + off, mask=m, other=0.0).to(tl.float32)
 
-    lat = tl.load(lat_ptr + off, mask=m, other=0.0).to(tl.float32)
-    lon = tl.load(lon_ptr + off, mask=m, other=0.0).to(tl.float32)
-    time_ns = tl.load(time_ptr + off, mask=m, other=0)
-    target_s = tl.load(target_ptr + off, mask=m, other=0)
-    height = tl.load(height_ptr + off, mask=m, other=0.0).to(tl.float32)
-    pressure = tl.load(press_ptr + off, mask=m, other=0.0).to(tl.float32)
-    scan = tl.load(scan_ptr + off, mask=m, other=0.0).to(tl.float32)
-    sat_zen = tl.load(sat_ptr + off, mask=m, other=0.0).to(tl.float32)
-    sol_zen = tl.load(sol_ptr + off, mask=m, other=0.0).to(tl.float32)
+        is_conv = ~isnan(height)
+        m_conv = m & is_conv
+        m_sat = m & ~is_conv
 
-    is_conv = ~isnan(height)
-    m_conv = m & is_conv
-    m_sat = m & ~is_conv
+        DEG2RAD: tl.constexpr = 0.017453292519943295
+        base = off * N_FEAT
+        idx = 0
+        TWO_PI: tl.constexpr = 6.283185307179586
+        # ======== Shared: LST fourier(2) -> 4 features ========
+        sod = (time_ns // 1000000000) % 86400
+        utc_hr = sod.to(tl.float32) / 3600.0
+        lst = (utc_hr + lon / 15.0) % 24.0
+        lst_norm = lst / 24.0
+        _fourier_store(out_ptr, base, idx, lst_norm * TWO_PI, True, m, 2)
+        idx += 4
 
-    DEG2RAD: tl.constexpr = 0.017453292519943295
-    base = off * N_FEAT
-    idx = 0
-    TWO_PI: tl.constexpr = 6.283185307179586
-    # ======== Shared: LST fourier(2) -> 4 features ========
-    sod = (time_ns // 1000000000) % 86400
-    utc_hr = sod.to(tl.float32) / 3600.0
-    lst = (utc_hr + lon / 15.0) % 24.0
-    lst_norm = lst / 24.0
-    _fourier_store(out_ptr, base, idx, lst_norm * TWO_PI, True, m, 2)
-    idx += 4
+        # ======== Shared: Relative time polynomial -> 2 features ========
+        dt_days = (time_ns - target_s * 1000000000).to(tl.float32) * 1e-9 / 86400.0
+        tl.store(out_ptr + base + idx, dt_days, mask=m)
+        tl.store(out_ptr + base + idx + 1, dt_days * dt_days, mask=m)
+        idx += 2
 
-    # ======== Shared: Relative time polynomial -> 2 features ========
-    dt_days = (time_ns - target_s * 1000000000).to(tl.float32) * 1e-9 / 86400.0
-    tl.store(out_ptr + base + idx, dt_days, mask=m)
-    tl.store(out_ptr + base + idx + 1, dt_days * dt_days, mask=m)
-    idx += 2
+        # ======== Shared: Relative time fourier(1) -> 2 features ========
+        _fourier_store(out_ptr, base, idx, dt_days, True, m, 1)
+        idx += 2
 
-    # ======== Shared: Relative time fourier(1) -> 2 features ========
-    _fourier_store(out_ptr, base, idx, dt_days, True, m, 1)
-    idx += 2
+        # ======== Shared: Latitude -> 2 features ========
+        lat_rad = lat * DEG2RAD
+        tl.store(out_ptr + base + idx, fsin(lat_rad), mask=m)
+        tl.store(out_ptr + base + idx + 1, fcos(lat_rad), mask=m)
+        idx += 2
 
-    # ======== Shared: Latitude -> 2 features ========
-    lat_rad = lat * DEG2RAD
-    tl.store(out_ptr + base + idx, fsin(lat_rad), mask=m)
-    tl.store(out_ptr + base + idx + 1, fcos(lat_rad), mask=m)
-    idx += 2
+        # ======== Conv branch [idx:idx+20) — guarded by m_conv ========
+        branch = idx
+        h_norm = tl.minimum(tl.maximum(height / 60000.0, 0.0), 1.0) * TWO_PI
+        _fourier_store(out_ptr, base, branch, h_norm, True, m_conv, 5)
+        branch += 10
 
-    # ======== Conv branch [idx:idx+20) — guarded by m_conv ========
-    branch = idx
-    h_norm = tl.minimum(tl.maximum(height / 60000.0, 0.0), 1.0) * TWO_PI
-    _fourier_store(out_ptr, base, branch, h_norm, True, m_conv, 5)
-    branch += 10
+        p_norm = tl.minimum(tl.maximum(pressure / 1100.0, 0.0), 1.0) * TWO_PI
+        _fourier_store(out_ptr, base, branch, p_norm, True, m_conv, 5)
 
-    p_norm = tl.minimum(tl.maximum(pressure / 1100.0, 0.0), 1.0) * TWO_PI
-    _fourier_store(out_ptr, base, branch, p_norm, True, m_conv, 5)
+        # ======== Sat branch [idx:idx+20) — guarded by m_sat ========
+        branch = idx
+        scan_norm = scan / 50.0 * TWO_PI
+        _fourier_store(out_ptr, base, branch, scan_norm, True, m_sat, 3)
+        branch += 6
 
-    # ======== Sat branch [idx:idx+20) — guarded by m_sat ========
-    branch = idx
-    scan_norm = scan / 50.0 * TWO_PI
-    _fourier_store(out_ptr, base, branch, scan_norm, True, m_sat, 3)
-    branch += 6
+        sat_norm = sat_zen / 90.0 * TWO_PI
+        _fourier_store(out_ptr, base, branch, sat_norm, True, m_sat, 4)
+        branch += 8
 
-    sat_norm = sat_zen / 90.0 * TWO_PI
-    _fourier_store(out_ptr, base, branch, sat_norm, True, m_sat, 4)
-    branch += 8
-
-    sol_norm = sol_zen / 180.0 * TWO_PI
-    _fourier_store(out_ptr, base, branch, sol_norm, True, m_sat, 3)
+        sol_norm = sol_zen / 180.0 * TWO_PI
+        _fourier_store(out_ptr, base, branch, sol_norm, True, m_sat, 3)
 
 
 def compute_unified_metadata(
@@ -282,7 +288,7 @@ def compute_unified_metadata(
         if tensor.shape[0] != N:
             raise ValueError(f"{name} has length {tensor.shape[0]}, expected {N}")
 
-    if not lon.is_cuda:
+    if not lon.is_cuda or not triton.available:
         return _compute_unified_metadata_reference(
             target_time_sec,
             lon=lon,

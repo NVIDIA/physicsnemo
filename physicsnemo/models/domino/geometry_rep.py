@@ -195,7 +195,7 @@ class GeoConvOut(Module):
             self.grid_resolution[1],
             self.grid_resolution[2],
         )
-        grid = grid.reshape(1, nx * ny * nz, 3, 1)
+        grid = grid.reshape(grid.shape[0], nx * ny * nz, 3, 1)
 
         # Rearrange input to flatten spatial and neighbor dimensions
         x = rearrange(
