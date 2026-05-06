@@ -47,20 +47,19 @@ runs:
       shell: bash
       env:
         HF_TOKEN: ${{ inputs.hf-token }}
-        # Needed for Ubuntu 24.04+ containers where system python is
-        # externally-managed (PEP 668).
-        PIP_BREAK_SYSTEM_PACKAGES: "1"
+        HF_REPO: ${{ inputs.hf-repo }}
+        DATA_DIR_INPUT: ${{ inputs.data-dir }}
       run: |
         set -euo pipefail
-        data_dir="${{ inputs.data-dir }}"
+        data_dir="${DATA_DIR_INPUT}"
         if [ -z "$data_dir" ]; then
           data_dir="${RUNNER_TEMP:-/tmp}"
         fi
 
-        if ! command -v huggingface-cli >/dev/null 2>&1; then
-          pip install --quiet huggingface_hub[hf_xet]
+        if ! command -v hf >/dev/null 2>&1; then
+          uv pip install --system --quiet huggingface_hub[hf_xet]
         fi
-        huggingface-cli download "${{ inputs.hf-repo }}" \
+        hf download "${HF_REPO}" \
           --repo-type dataset \
           --local-dir "${data_dir}/physicsnemo-data" \
           --token "$HF_TOKEN"
