@@ -247,9 +247,7 @@ def _recursive_cast_floats(obj: Any, dtype: torch.dtype) -> Any:
     integer leaves stay integer (a plain ``container.to(dtype)`` would
     cast them too).
     """
-    return _recursive_apply(
-        obj, lambda t: t.to(dtype) if t.is_floating_point() else t
-    )
+    return _recursive_apply(obj, lambda t: t.to(dtype) if t.is_floating_point() else t)
 
 
 def forward_pass(

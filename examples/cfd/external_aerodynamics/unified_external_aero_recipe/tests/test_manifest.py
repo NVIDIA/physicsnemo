@@ -88,12 +88,7 @@ class TestLoadManifest:
         """One-per-line text manifest, with comments and blank lines stripped."""
         path = tmp_path / "manifest.txt"
         path.write_text(
-            "# this is a comment\n"
-            "run_2\n"
-            "\n"
-            "run_1\n"
-            "  # indented comment\n"
-            "run_3\n"
+            "# this is a comment\nrun_2\n\nrun_1\n  # indented comment\nrun_3\n"
         )
         result = load_manifest(path)
         assert result == ["run_1", "run_2", "run_3"]
