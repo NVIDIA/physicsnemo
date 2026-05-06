@@ -740,24 +740,20 @@ def benchmark_io_epoch(
     )
 
 
-def _extract_pipeline_transforms(datasets: list) -> tuple:
-    """Find NormalizeMeshFields and NonDimensionalizeByMetadata in transform chains.
+def _find_normalizer(datasets: list) -> "NormalizeMeshFields | None":
+    """Return the first ``NormalizeMeshFields`` instance across *datasets*' pipelines.
 
-    Returns (normalizer, nondim) instances from the first dataset that has them,
-    or (None, None) if not found.
+    Used at checkpoint-save time to persist normalization stats alongside the
+    model weights so inference can re-apply the inverse. Returns ``None`` when
+    no dataset has a ``NormalizeMeshFields`` transform.
     """
     from physicsnemo.datapipes.transforms.mesh import NormalizeMeshFields
-    from nondim import NonDimensionalizeByMetadata
 
-    normalizer = None
-    nondim = None
     for ds in datasets:
         for t in getattr(ds, "transforms", []):
-            if isinstance(t, NormalizeMeshFields) and normalizer is None:
-                normalizer = t
-            if isinstance(t, NonDimensionalizeByMetadata) and nondim is None:
-                nondim = t
-    return normalizer, nondim
+            if isinstance(t, NormalizeMeshFields):
+                return t
+    return None
 
 
 def _validate_dataset_consistency(
@@ -1123,7 +1119,7 @@ def build_dataloaders(cfg: DictConfig):
     if not train_datasets:
         raise RuntimeError("No valid datasets found. Check data paths in config.")
 
-    normalizer, nondim_transform = _extract_pipeline_transforms(train_datasets)
+    normalizer = _find_normalizer(train_datasets)
     collate_fn = _build_collate(cfg, first_targets or {})
     train_dataset = _combine_datasets(train_datasets)
 
@@ -1178,7 +1174,7 @@ def build_dataloaders(cfg: DictConfig):
         "targets": first_targets or {},
         "metrics": first_metrics or list(DEFAULT_METRICS),
     }
-    return train_loader, val_loader, normalizer, nondim_transform, dataset_info
+    return train_loader, val_loader, normalizer, dataset_info
 
 
 @profile
@@ -1231,7 +1227,7 @@ def main(cfg: DictConfig):
 
     logger.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
 
-    train_loader, val_loader, normalizer, _, dataset_info = build_dataloaders(cfg)
+    train_loader, val_loader, normalizer, dataset_info = build_dataloaders(cfg)
     target_config: dict[str, str] = dataset_info["targets"]
     metrics_list: list[str] = dataset_info["metrics"]
     ds_metadata: dict = dataset_info["metadata"]

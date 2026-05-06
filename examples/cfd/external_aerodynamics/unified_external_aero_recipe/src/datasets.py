@@ -50,7 +50,7 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 
 import physicsnemo.datapipes  # noqa: F401  (registers ${dp:...} resolvers)
-from physicsnemo.datapipes import MeshDataset, MultiDataset
+from physicsnemo.datapipes import MeshDataset
 from physicsnemo.datapipes.transforms.mesh import MeshTransform
 from physicsnemo.mesh import DomainMesh, Mesh
 
@@ -285,22 +285,6 @@ def build_surface_dataset(
 
 # Mesh-type-agnostic alias -- build_surface_dataset is fully generic.
 build_dataset = build_surface_dataset
-
-
-def build_multi_surface_dataset(*cfgs: DictConfig) -> MultiDataset:
-    """Build a MultiDataset from multiple Hydra-style pipeline configs.
-
-    Parameters
-    ----------
-    *cfgs : DictConfig
-        One config per dataset, each with a ``pipeline:`` block.
-
-    Returns
-    -------
-    MultiDataset
-    """
-    datasets = [build_surface_dataset(c) for c in cfgs]
-    return MultiDataset(*datasets, output_strict=False)
 
 
 # ---------------------------------------------------------------------------

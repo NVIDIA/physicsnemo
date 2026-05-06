@@ -379,9 +379,9 @@ torchrun --nproc_per_node=N src/train.py
 python src/train.py precision=float32 training.num_epochs=100 training.batch_size=1
 ```
 
-Supports checkpointing (auto-resume), MLflow logging, mixed precision
-(float16/bfloat16/float8 via Transformer Engine), `torch.compile`, and
-NVIDIA profiling.
+Supports checkpointing (auto-resume), TensorBoard + JSONL logging,
+mixed precision (float16/bfloat16/float8 via Transformer Engine),
+`torch.compile`, and NVIDIA profiling.
 
 ### Benchmark datapipe throughput
 
@@ -536,31 +536,32 @@ For datasets without a manifest (e.g. SHIFT SUV), separate
 
 No Python code changes are needed.
 
-### MLflow experiment tracking
+### Logging
 
-Training metrics are logged to MLflow.  By default, experiments are
-stored in a local `./mlruns` directory.  To use a remote tracking
-server, set `mlflow.tracking_uri` in the training config:
+Training and validation metrics are logged in two places per run:
 
-```yaml
-mlflow:
-  tracking_uri: "http://YOUR_MLFLOW_SERVER:5000"
-  experiment_name: "unified_external_aero"
-  log_every_n_steps: 10
-```
+- **TensorBoard** under `${output_dir}/${run_id}/tb/{train,val}/`. Per-step
+  loss / per-field loss / per-field metrics / learning rate / step time /
+  GPU memory go in the `train/` writer; per-epoch summaries (loss + metrics)
+  go in both writers.
+- **JSONL** at `${output_dir}/${run_id}/metrics.jsonl`. One line per
+  config snapshot, dataset summary, training step, and train / val epoch.
+  Easy to grep, easy to ship to an external store.
+
+Rank-0 only; no external tracker required.
 
 ## Source modules
 
 | Module | Purpose |
 |---|---|
-| `src/datasets.py` | Factory functions: `build_dataset`, `build_multi_surface_dataset`, `load_dataset_config`. Hydra-instantiates readers and transforms from YAML; injects metadata into `global_data`. Auto-injects target names from the YAML's `targets:` block into `MeshToDomainMesh`. Also provides `load_manifest`, `resolve_manifest_indices`, and `ManifestSampler` for manifest-based splitting. |
+| `src/datasets.py` | Factory functions: `build_dataset`, `load_dataset_config`. Hydra-instantiates readers and transforms from YAML; injects metadata into `global_data`. Auto-injects target names from the YAML's `targets:` block into `MeshToDomainMesh`. Also provides `load_manifest`, `resolve_manifest_indices`, and `ManifestSampler` for manifest-based splitting. |
 | `src/nondim.py` | Recipe-local transform: `NonDimensionalizeByMetadata`. Registered into the global datapipe registry. Supports pressure, stress, velocity, temperature, density, and identity field types. |
 | `src/forward_kwargs.py` | Spec resolver. Walks declarative `forward_kwargs:` specs (paths, lists, nested dicts, `expand_like` modifiers) into actual `model.forward()` kwargs against a DomainMesh. Also provides `extract_targets` (interior.point_data lookup by target name). |
 | `src/collate.py` | `build_collate_fn(input_type, forward_kwargs_spec, target_config)`. Resolves forward kwargs from each `DomainMesh` sample, extracts targets from `interior.point_data`. For `input_type='tensors'`, batch-wraps tensors with the right token / per-element padding; for `input_type='mesh'`, passes Mesh / dict / scalar values through unchanged. |
 | `src/loss.py` | `LossCalculator` — TensorDict-based loss for mixed scalar/vector fields. Supports Huber, MSE, relative MSE. Optional `field_weights` per-field multiplicative weights. Normalizes total loss by number of output channels. |
 | `src/metrics.py` | `MetricCalculator` — TensorDict-based metrics (relative L1, relative L2, MAE) with optional distributed all-reduce. Reports per-field and per-component (x/y/z) metrics for vector fields. |
 | `src/utils.py` | `build_muon_optimizer` (Muon+AdamW via `CombinedOptimizer`), `parse_target_config`, `FieldSpec` dataclass, `set_seed`. |
-| `src/train.py` | Training loop with DDP, mixed precision, checkpointing, MLflow / TensorBoard / JSONL logging, I/O benchmarking (`benchmark_io=true`), and profiling. Dispatches forward-pass output unpacking on `output_type` (`mesh` -> extract from `Mesh.point_data`; `tensors` -> split `(B, N, C)` by `FieldSpec`). |
+| `src/train.py` | Training loop with DDP, mixed precision, checkpointing, TensorBoard + JSONL logging, I/O benchmarking (`benchmark_io=true`), and profiling. Dispatches forward-pass output unpacking on `output_type` (`mesh` -> extract from `Mesh.point_data`; `tensors` -> split `(B, N, C)` by `FieldSpec`). |
 
 ## Design decisions
 
