@@ -30,7 +30,6 @@ Usage::
 """
 
 import argparse
-import os
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional, Tuple, Union
 
@@ -206,8 +205,8 @@ def aggregate_metrics(per_sample: list[Dict[str, float]]) -> Dict[str, float]:
 # =========================================================================
 #
 # QoI geometry (lattice block layout, hohlraum region predicates) lives in
-# ``losses.evaluate_*_qoi_torch``. Inference reuses those torch evaluators on
-# (T=1, N) tensors built from the per-sample numpy metadata.
+# ``losses.evaluate_*_qoi_torch``. Inference reuses those torch evaluators
+# on the on-device tensors yielded by ``run_evaluation``.
 
 
 def compute_sample_qoi(
@@ -916,7 +915,7 @@ def main():
     }
     with open(output_dir / "metrics.yaml", "w") as f:
         yaml.safe_dump(metrics_out, f, sort_keys=False)
-    print(f"\nMetrics:")
+    print("\nMetrics:")
     for k, v in overall_metrics.items():
         print(f"  {k}: {v:.6e}")
 
@@ -947,9 +946,9 @@ def main():
     )
 
     print(f"\nResults written to: {output_dir}")
-    print(f"  metrics.yaml")
+    print("  metrics.yaml")
     if per_sample_qoi:
-        print(f"  qoi_metrics.yaml")
+        print("  qoi_metrics.yaml")
     print(f"  figures/ ({len(plot_indices)} flux panels + 2 global plots)")
 
 

@@ -36,15 +36,11 @@ threshold the training pipeline must use. The material statistics walk the
 training split, read the precomputed ``sigma_a / sigma_s / sigma_t / Q``
 fields from each store, and accumulate per-property (mean, std, min, max)
 across all cells.
-
-The on-disk YAML schema matches the originals so that ``load_flux_stats`` /
-``load_material_stats`` in ``dataset.py`` consume them unchanged.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 from typing import Dict
@@ -60,11 +56,6 @@ from material import MaterialPropertyExtractor
 # =========================================================================
 # Flux statistics
 # =========================================================================
-#
-# Walks the training split of ``RTEBaseDataset`` (no transforms, no
-# adapter). For each simulation, applies the same log-clip preprocessing
-# the training pipeline uses, and accumulates global mean / std / min / max
-# in single precision.
 
 
 def compute_flux_statistics(
