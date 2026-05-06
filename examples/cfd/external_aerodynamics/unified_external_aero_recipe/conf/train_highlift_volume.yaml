@@ -74,7 +74,7 @@ dataset:
 # -- Training ----------------------------------------------------------------
 training:
   seed: 42
-  num_epochs: 1
+  num_epochs: 200
   save_interval: 25
   loss_type: "huber"
   batch_size: 1
