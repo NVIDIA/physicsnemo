@@ -140,6 +140,15 @@ class MetricCalculator:
         )
 
     def _make_key(self, *parts: str) -> str:
+        """Build a flat metric key, ``"<prefix>/<part1>_<part2>_..."``.
+
+        ``"_"`` joins the parts (e.g. ``"pressure_x_l2"``) because metric
+        names are leaf-level dashboard entries; the optional ``prefix/``
+        carries the namespacing. Compare with
+        :class:`LossCalculator._make_key`, which uses ``"/"`` everywhere
+        because loss keys feed into TensorBoard's nested-tag hierarchy
+        (``"loss/surface/pressure"``).
+        """
         key = "_".join(parts)
         return f"{self.prefix}/{key}" if self.prefix else key
 

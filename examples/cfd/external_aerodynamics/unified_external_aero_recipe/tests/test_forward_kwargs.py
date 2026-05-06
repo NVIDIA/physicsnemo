@@ -60,27 +60,15 @@ def simple_mesh() -> Mesh:
 
 @pytest.fixture
 def simple_domain() -> DomainMesh:
-    """A DomainMesh with an interior point cloud and one boundary."""
-    interior = Mesh(
-        points=torch.randn(10, 3),
-        point_data={
-            "pressure": torch.randn(10),
-            "wss": torch.randn(10, 3),
-        },
-    )
-    vehicle = Mesh(
-        points=torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-            dtype=torch.float32,
-        ),
-        cells=torch.tensor([[0, 1, 2]], dtype=torch.int64),
-        cell_data={"normals": torch.tensor([[0.0, 0.0, 1.0]])},
-    )
-    return DomainMesh(
-        interior=interior,
-        boundaries={"vehicle": vehicle},
-        global_data={"U_inf": torch.tensor([30.0, 0.0, 0.0])},
-    )
+    """A DomainMesh with a 10-point interior and one ``vehicle`` boundary.
+
+    Wraps the shared :func:`conftest.make_surface_domain_mesh` factory
+    with ``n_cells=10`` so the ``forward_kwargs`` tests can assert on
+    ``(10, 3)`` / ``(10, 6)`` / ``(10, 4)`` shapes.
+    """
+    from conftest import make_surface_domain_mesh
+
+    return make_surface_domain_mesh(n_cells=10)
 
 
 ### ---------------------------------------------------------------------------

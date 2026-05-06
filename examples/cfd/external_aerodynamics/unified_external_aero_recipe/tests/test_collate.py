@@ -49,29 +49,14 @@ from collate import _add_batch_dim_token, build_collate_fn
 
 
 @pytest.fixture
-def domain() -> DomainMesh:
-    """A small DomainMesh with surface-style structure (interior at cell
-    centroids, vehicle boundary with normals).
+def domain(surface_domain_mesh) -> DomainMesh:
+    """Small surface DomainMesh used by the collate tests.
+
+    Wraps the shared ``surface_domain_mesh`` fixture (interior at cell
+    centroids, vehicle boundary with normals) under the local name
+    ``domain`` that the collate suite has historically used.
     """
-    n_cells = 6
-    interior = Mesh(
-        points=torch.randn(n_cells, 3),
-        point_data={
-            "pressure": torch.arange(n_cells, dtype=torch.float32),
-            "wss": torch.arange(n_cells * 3, dtype=torch.float32).reshape(n_cells, 3),
-        },
-    )
-    n_pts = 12
-    vehicle = Mesh(
-        points=torch.randn(n_pts, 3),
-        cells=torch.randint(0, n_pts, (n_cells, 3)),
-        cell_data={"normals": torch.randn(n_cells, 3)},
-    )
-    return DomainMesh(
-        interior=interior,
-        boundaries={"vehicle": vehicle},
-        global_data={"U_inf": torch.tensor([30.0, 0.0, 0.0])},
-    )
+    return surface_domain_mesh
 
 
 ### ---------------------------------------------------------------------------

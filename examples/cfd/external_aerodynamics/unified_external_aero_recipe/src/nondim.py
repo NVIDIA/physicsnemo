@@ -34,17 +34,6 @@ from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.mesh import DomainMesh, Mesh
 
 
-def _get_mesh_section(mesh: Mesh, section: str) -> TensorDict:
-    """Look up a Mesh data section by name."""
-    if section == "point_data":
-        return mesh.point_data
-    if section == "cell_data":
-        return mesh.cell_data
-    if section == "global_data":
-        return mesh.global_data
-    raise ValueError(f"Unknown mesh section: {section!r}")
-
-
 def _freestream_scales(
     global_data: TensorDict,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
@@ -216,7 +205,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
             q_inf, p_inf, U_inf_mag, rho_inf, T_inf = _freestream_scales(gd)
             L_ref = gd["L_ref"].float() if "L_ref" in gd else None
 
-        td = _get_mesh_section(mesh, self._section)
+        td = mesh.get_section(self._section)
         new_td = td.clone()
 
         for field_name, ftype in self._fields.items():

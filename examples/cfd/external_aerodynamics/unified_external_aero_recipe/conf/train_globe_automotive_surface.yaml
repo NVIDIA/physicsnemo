@@ -34,12 +34,15 @@
 # - Reference lengths are NONDIM in this config: positions are scaled by
 #   `metadata.L_ref=5.0` via the dataset's `NonDimensionalizeByMetadata`
 #   transform, so kernel lengths must be in nondim space too. v1 uses
-#   constants in this YAML; per-sample reference lengths land in a
-#   follow-up (see globe_unified_recipe_needs.md, A3).
+#   constants in this YAML; per-sample reference lengths (read from
+#   per-run `geo_ref_*.csv` files in the standalone GLOBE recipe) land in
+#   a follow-up.
 # - `field_weights: {wss: 100.0}` mimics the standalone GLOBE recipe's
 #   `error_scales = {C_p: 1.0, C_f: 0.01}` weighting (residual divided by
 #   0.01 -> loss scales as ~1/0.01 = 100 for C_f).
-# - Single boundary BC (`vehicle`) for v1; floor BCs deferred (see A2).
+# - Single boundary BC (`vehicle`) for v1; floor BCs (slip / no-slip) used
+#   by the standalone GLOBE recipe are deferred until DomainMesh on disk
+#   supports surface-mode multi-boundary curation.
 
 output_dir: "runs"
 checkpoint_dir: null

@@ -19,8 +19,6 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
-from typing import Literal
 
 import numpy as np
 import torch
@@ -112,30 +110,8 @@ def build_muon_optimizer(
 
 
 # ---------------------------------------------------------------------------
-# Field specification for target configurations
+# Field type helpers for target configurations
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class FieldSpec:
-    """Specification for a single target field.
-
-    Attributes:
-        name: Human-readable name for the field (used in metric/loss keys).
-        field_type: Either "scalar" or "vector".
-        start_index: Starting index in the channel dimension.
-        end_index: Ending index (exclusive) in the channel dimension.
-    """
-
-    name: str
-    field_type: Literal["scalar", "vector"]
-    start_index: int
-    end_index: int
-
-    @property
-    def dim(self) -> int:
-        """Number of channels for this field."""
-        return self.end_index - self.start_index
 
 
 def field_dim(field_type: str, n_spatial_dims: int = 3) -> int:
@@ -156,48 +132,6 @@ def field_dim(field_type: str, n_spatial_dims: int = 3) -> int:
     raise ValueError(
         f"Unknown field type {field_type!r}. Expected 'scalar' or 'vector'."
     )
-
-
-def parse_target_config(
-    target_config: dict[str, str], n_spatial_dims: int = 3
-) -> list[FieldSpec]:
-    """Parse target configuration to field specifications.
-
-    Args:
-        target_config: Mapping of field names to types ("scalar" or "vector").
-                      Order determines channel indices.
-        n_spatial_dims: Dimensionality of vector fields. Default is 3.
-
-    Returns:
-        List of FieldSpec objects describing each field.
-
-    Raises:
-        ValueError: If an unknown field type is specified.
-
-    Example:
-        >>> config = {"pressure": "scalar", "velocity": "vector"}
-        >>> specs = parse_target_config(config)
-        >>> specs[0]
-        FieldSpec(name='pressure', field_type='scalar', start_index=0, end_index=1)
-        >>> specs[1]
-        FieldSpec(name='velocity', field_type='vector', start_index=1, end_index=4)
-    """
-    specs = []
-    current_index = 0
-
-    for name, field_type in target_config.items():
-        dim = field_dim(field_type, n_spatial_dims)
-        specs.append(
-            FieldSpec(
-                name=name,
-                field_type=field_type.lower(),
-                start_index=current_index,
-                end_index=current_index + dim,
-            )
-        )
-        current_index += dim
-
-    return specs
 
 
 def align_scalar_shapes(

@@ -57,11 +57,12 @@ from datasets import (
 from loss import LossCalculator
 from metrics import DEFAULT_METRICS, MetricCalculator
 from omegaconf import DictConfig, OmegaConf
+from output_normalize import normalize_output_to_tensordict
 from tabulate import tabulate
 from tensordict import TensorDict
 from torch.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
-from utils import build_muon_optimizer, parse_target_config, set_seed
+from utils import build_muon_optimizer, set_seed
 
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.core.version_check import OptionalImport
@@ -159,123 +160,70 @@ def get_autocast_context(precision: str):
         return nullcontext()
 
 
+def _recursive_apply(obj, leaf_fn, *, container_fn=None):
+    """Walk a nested structure, applying ``leaf_fn`` to every Tensor leaf.
+
+    Tensor-aware containers (Mesh, DomainMesh, TensorDict) are routed
+    through ``container_fn``. By default, ``container_fn`` delegates to
+    ``container.apply(leaf_fn)``, which walks every tensor leaf in
+    lock-step but does NOT touch container-level metadata
+    (``TensorDict.device`` in particular stays at whatever it was).
+    Override ``container_fn`` (e.g. ``lambda c: c.to(device)``) when the
+    metadata change matters -- ``TensorDict`` treats ``device is None``
+    as "leaves may be on any device", so device moves must go through
+    ``.to(device)`` to be observable on the container.
+
+    Plain dicts / lists / tuples are walked recursively. Note that
+    ``TensorDict`` is matched in the container branch above, so it does
+    NOT fall into the ``isinstance(obj, dict)`` branch (it isn't a
+    ``dict`` subclass, but the explicit container check is what makes
+    this work). Anything else passes through unchanged.
+    """
+    if container_fn is None:
+        container_fn = lambda c: c.apply(leaf_fn)  # noqa: E731
+    if isinstance(obj, torch.Tensor):
+        return leaf_fn(obj)
+    if isinstance(obj, (Mesh, DomainMesh, TensorDict)):
+        return container_fn(obj)
+    if isinstance(obj, dict):
+        return {
+            k: _recursive_apply(v, leaf_fn, container_fn=container_fn)
+            for k, v in obj.items()
+        }
+    if isinstance(obj, (list, tuple)):
+        return type(obj)(
+            _recursive_apply(v, leaf_fn, container_fn=container_fn) for v in obj
+        )
+    return obj
+
+
 def _recursive_to_device(obj, device):
     """Move every tensor / Mesh / DomainMesh / TensorDict in a nested value to *device*.
 
-    Pure device move: dtypes are preserved, integer index tensors stay
-    integer, and Mesh / DomainMesh / TensorDict objects use their tensor-
-    class `.to()` (which moves every leaf in lock-step). Note that
-    ``TensorDict`` is not a ``dict`` subclass, so it must be matched
-    explicitly here -- otherwise the ``isinstance(obj, dict)`` branch
-    below would silently skip it and the leaves would stay on whatever
-    device they arrived on.
+    Containers go through ``.to(device)`` (not ``.apply(...)``) so that
+    ``TensorDict.device`` is updated alongside the leaves; otherwise a
+    later consumer reading ``td.device`` would still see ``None`` even
+    though the underlying tensors have already moved.
     """
-    if isinstance(obj, (torch.Tensor, Mesh, DomainMesh, TensorDict)):
-        return obj.to(device)
-    if isinstance(obj, dict):
-        return {k: _recursive_to_device(v, device) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return type(obj)(_recursive_to_device(v, device) for v in obj)
-    return obj
+    return _recursive_apply(
+        obj,
+        lambda t: t.to(device),
+        container_fn=lambda c: c.to(device),
+    )
 
 
 def _recursive_cast_floats(obj, dtype):
     """Cast floating-point tensors in a nested value to *dtype*; skip everything else.
 
-    - Non-float tensors (e.g. ``Mesh.cells`` in int64) pass through unchanged.
-    - Tensor-aware containers (Mesh, DomainMesh, TensorDict) propagate the
-      conditional cast through their auto-injected ``.apply()`` -- one C++
-      batched call per container, traversing every tensor leaf and
-      preserving structure / batch_size / device metadata. Float leaves
-      move to the new dtype; int leaves (e.g. ``Mesh.cells``) are
-      preserved by the same ``is_floating_point()`` guard used in the
-      Tensor branch above.
-    - Dicts and lists/tuples are walked recursively.
+    Non-float tensors (e.g. ``Mesh.cells`` in int64) pass through
+    unchanged via the same ``is_floating_point()`` guard at every level.
+    Tensor-aware containers use the default ``.apply(leaf_fn)`` path so
+    integer leaves stay integer (a plain ``container.to(dtype)`` would
+    cast them too).
     """
-    if isinstance(obj, torch.Tensor):
-        return obj.to(dtype) if obj.is_floating_point() else obj
-    if isinstance(obj, (Mesh, DomainMesh, TensorDict)):
-        return obj.apply(lambda t: t.to(dtype) if t.is_floating_point() else t)
-    if isinstance(obj, dict):
-        return {k: _recursive_cast_floats(v, dtype) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return type(obj)(_recursive_cast_floats(v, dtype) for v in obj)
-    return obj
-
-
-def _normalize_output_to_tensordict(
-    output,
-    target_config: dict[str, str],
-    output_type: str,
-    n_spatial_dims: int = 3,
-) -> TensorDict:
-    """Adapt a model output into a `TensorDict` keyed by target name.
-
-    For ``output_type == "mesh"``, the output is expected to be a `Mesh`
-    whose `.point_data` contains one tensor per target name (e.g. GLOBE);
-    we return ``output.point_data.select(*target_config)`` so the result
-    inherits the mesh's batch_size (``[N]``) and device.
-
-    For ``output_type == "tensors"``, the output is expected to be a
-    ``(B, N, C)`` tensor whose channels are concatenated in
-    ``target_config`` order (e.g. GeoTransolver, Transolver, FLARE,
-    DoMINO); we slice it into a TensorDict with ``batch_size=[B, N]``.
-    DoMINO returns a ``(vol, surf)`` tuple; we take the non-None element
-    automatically.
-    """
-    if output_type == "mesh":
-        if not isinstance(output, Mesh):
-            raise TypeError(
-                f"output_type='mesh' but model returned {type(output).__name__}"
-            )
-        available = set(output.point_data.keys())
-        missing = [name for name in target_config if name not in available]
-        if missing:
-            raise KeyError(
-                f"Mesh output is missing target fields {missing!r}; "
-                f"available: {sorted(available)!r}"
-            )
-        return output.point_data.select(*target_config)
-
-    if output_type == "tensors":
-        if isinstance(output, tuple):
-            output = next(o for o in output if o is not None)
-        if not isinstance(output, torch.Tensor):
-            raise TypeError(
-                f"output_type='tensors' but model returned {type(output).__name__}"
-            )
-        specs = parse_target_config(target_config, n_spatial_dims=n_spatial_dims)
-        expected_channels = sum(spec.dim for spec in specs)
-        ### A 2-D output (B, N) is almost certainly a model that dropped the
-        ### channel dim for a single-scalar target. Diagnose that explicitly
-        ### before the channel-count check, otherwise the user sees
-        ### "expected 1, got N" which mistakes the per-element axis for the
-        ### channel axis.
-        if output.ndim < 3:
-            raise ValueError(
-                f"output_type='tensors' expects a (B, N, C) tensor; got "
-                f"shape {tuple(output.shape)} (ndim={output.ndim}). If your "
-                f"model returns (B, N) for a single-scalar target, add a "
-                f"trailing channel dim (e.g. ``out.unsqueeze(-1)``)."
-            )
-        if output.shape[-1] != expected_channels:
-            raise ValueError(
-                f"Output channel dim {output.shape[-1]} does not match the "
-                f"expected total channels {expected_channels} for "
-                f"target_config={target_config!r}."
-            )
-        td_dict: dict[str, torch.Tensor] = {}
-        for spec in specs:
-            slice_ = output[..., spec.start_index : spec.end_index]
-            if spec.field_type == "scalar":
-                slice_ = slice_.squeeze(-1)
-            td_dict[spec.name] = slice_
-        ### Leading two dims of every leaf are (B, N): scalars are (B, N)
-        ### after the squeeze and vectors are (B, N, D).
-        first_v = next(iter(td_dict.values()))
-        return TensorDict(td_dict, batch_size=first_v.shape[:2], device=first_v.device)
-
-    raise ValueError(f"Unknown output_type {output_type!r}")
+    return _recursive_apply(
+        obj, lambda t: t.to(dtype) if t.is_floating_point() else t
+    )
 
 
 def forward_pass(
@@ -316,9 +264,19 @@ def forward_pass(
     forward_kwargs = batch["forward_kwargs"]
     targets: TensorDict = batch["targets"]
 
-    ### Cast forward_kwargs floats to the autocast dtype. We cast inputs
-    ### explicitly (not just rely on autocast) for parity with the legacy
-    ### behavior; integer mesh cells are skipped automatically.
+    ### Pre-cast float kwargs to the autocast dtype before entering the
+    ### autocast context. This is load-bearing for mesh-input models like
+    ### GLOBE: torch.autocast intercepts the first op of each tensor it
+    ### sees, but it does NOT reach inside Mesh / DomainMesh / TensorDict
+    ### leaves -- the cells / point_data / boundary tensors stay at their
+    ### original dtype unless we materialize the cast here. For tensor-
+    ### input models, the pre-cast is partially redundant with autocast
+    ### but matches the legacy recipe behavior.
+    ###
+    ### `_recursive_cast_floats` skips integer tensors (e.g. Mesh.cells)
+    ### so connectivity stays valid through bf16 / fp16 training. fp8 and
+    ### fp32 fall through (no pre-cast) -- fp8 is handled inside
+    ### `te.fp8_autocast`, fp32 needs no cast at all.
     dtype_map = {"float16": torch.float16, "bfloat16": torch.bfloat16}
     dtype = dtype_map.get(precision)
     if dtype is not None:
@@ -327,7 +285,7 @@ def forward_pass(
     with get_autocast_context(precision):
         output = model(**forward_kwargs)
 
-    pred_td = _normalize_output_to_tensordict(output, target_config, output_type)
+    pred_td = normalize_output_to_tensordict(output, target_config, output_type)
 
     ### Loss runs in float32 to avoid bf16 precision loss in the reduction.
     pred_f32 = pred_td.float()
@@ -1006,9 +964,23 @@ def build_dataloaders(cfg: DictConfig):
         ds_cfg_block = cfg.data[ds_key]
         config_path = recipe_root / ds_cfg_block.config
         if not config_path.exists():
+            ### Surface a clear warning instead of silently dropping the
+            ### dataset; users typo `config:` paths often enough that an
+            ### invisible skip was the most common config failure mode.
+            _LOGGER_BUILD_DATALOADERS.warning(
+                f"Skipping dataset {ds_key!r}: config file not found at "
+                f"{str(config_path)!r}. Check `data.{ds_key}.config` in the "
+                f"training YAML."
+            )
             continue
         train_dir = ds_cfg_block.get("train_dir", "")
         if train_dir and not Path(train_dir).exists():
+            _LOGGER_BUILD_DATALOADERS.warning(
+                f"Skipping dataset {ds_key!r}: train_dir {str(train_dir)!r} "
+                f"does not exist. Check `data.{ds_key}.train_dir` in the "
+                f"training YAML or the `dataset_paths` interpolation it "
+                f"resolves to."
+            )
             continue
 
         ds_yaml = load_dataset_config(config_path)

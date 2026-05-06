@@ -148,8 +148,8 @@ def resolve_spec(spec: Any, source: Any) -> Any:
     if isinstance(spec, str):
         return walk_path(source, spec)
 
-    if isinstance(spec, bool) or isinstance(spec, (int, float)):
-        ### bool is a subclass of int; check it first so True/False -> 0-d float.
+    if isinstance(spec, (int, float)):
+        ### bool is a subclass of int, so True / False also resolves to 0-d float here.
         return torch.tensor(float(spec), dtype=torch.float32)
 
     if isinstance(spec, list):

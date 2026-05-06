@@ -36,7 +36,8 @@ import torch.nn.functional as F
 from tensordict import TensorDict
 
 from loss import DEFAULT_HUBER_DELTA, LossCalculator
-from utils import parse_target_config
+from output_normalize import split_concat_by_target
+from utils import field_dim
 
 
 def _legacy_total_huber(
@@ -53,13 +54,14 @@ def _legacy_total_huber(
     - Vector fields: sum across components of per-component mean Huber.
     - Total: sum(per-field) / total_channels.
     """
-    specs = parse_target_config(target_config, n_spatial_dims=n_spatial_dims)
-    total_channels = sum(s.dim for s in specs)
+    total_channels = sum(field_dim(t, n_spatial_dims) for t in target_config.values())
     total = torch.zeros((), dtype=pred.dtype, device=pred.device)
-    for spec in specs:
-        p = pred[..., spec.start_index : spec.end_index]
-        t = target[..., spec.start_index : spec.end_index]
-        if spec.field_type == "scalar":
+    idx = 0
+    for name, ftype in target_config.items():
+        dim = field_dim(ftype, n_spatial_dims)
+        p = pred[..., idx : idx + dim]
+        t = target[..., idx : idx + dim]
+        if ftype.lower() == "scalar":
             total = total + F.huber_loss(
                 p.squeeze(-1),
                 t.squeeze(-1),
@@ -67,28 +69,12 @@ def _legacy_total_huber(
                 delta=DEFAULT_HUBER_DELTA,
             )
         else:  # vector: per-component mean, summed
-            for i in range(spec.dim):
+            for i in range(dim):
                 total = total + F.huber_loss(
                     p[..., i], t[..., i], reduction="mean", delta=DEFAULT_HUBER_DELTA
                 )
+        idx += dim
     return total / total_channels
-
-
-def _split_concat_tensor(
-    tensor: torch.Tensor,
-    target_config: dict[str, str],
-    n_spatial_dims: int = 3,
-) -> TensorDict:
-    """Slice a (B, N, C) tensor by FieldSpec into the TensorDict the new loss wants."""
-    specs = parse_target_config(target_config, n_spatial_dims=n_spatial_dims)
-    leaves: dict[str, torch.Tensor] = {}
-    for spec in specs:
-        slice_ = tensor[..., spec.start_index : spec.end_index]
-        if spec.field_type == "scalar":
-            slice_ = slice_.squeeze(-1)
-        leaves[spec.name] = slice_
-    ### Leading two dims are (B, N): scalars are (B, N), vectors are (B, N, D).
-    return TensorDict(leaves, batch_size=tensor.shape[:2], device=tensor.device)
 
 
 def _make_td(leaves: dict[str, torch.Tensor]) -> TensorDict:
@@ -135,8 +121,7 @@ class TestLegacyEquivalence:
         """Huber equivalence."""
         torch.manual_seed(123)
 
-        specs = parse_target_config(target_config)
-        total_channels = sum(s.dim for s in specs)
+        total_channels = sum(field_dim(t) for t in target_config.values())
 
         ### Concatenated (1, N, C) tensors -- the old loss interface.
         pred = torch.randn(1, 50, total_channels)
@@ -151,8 +136,8 @@ class TestLegacyEquivalence:
             loss_type="huber",
             field_weights=None,
         )
-        pred_td = _split_concat_tensor(pred, target_config)
-        target_td = _split_concat_tensor(target, target_config)
+        pred_td = split_concat_by_target(pred, target_config)
+        target_td = split_concat_by_target(target, target_config)
         new_total, new_dict = new_loss(pred_td, target_td)
 
         ### Bit-exact (modulo floating-point reductions in the same order).

@@ -34,6 +34,7 @@ preserving the previous total-loss scale when all weights are 1.
 
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 import torch
@@ -41,6 +42,8 @@ import torch.nn.functional as F
 from tensordict import TensorDict
 
 from utils import align_scalar_shapes, field_dim
+
+_LOGGER = logging.getLogger("training.loss")
 
 DEFAULT_HUBER_DELTA = 1.0
 
@@ -59,7 +62,20 @@ def _scalar_loss(
     delta: float,
     eps: float = 1e-8,
 ) -> torch.Tensor:
-    """Element-wise loss reduced to a scalar (matches legacy scalar behavior)."""
+    """Element-wise loss reduced to a scalar (matches legacy scalar behavior).
+
+    A defensive shape check guards against config bugs where a ``"scalar"``
+    target is fed a vector tensor (or vice versa). After
+    :func:`align_scalar_shapes`, both tensors should share the same
+    shape; if they don't, broadcasting would silently inflate the loss
+    rather than fail loudly.
+    """
+    if pred.shape != target.shape:
+        raise ValueError(
+            f"pred and target shapes must match for scalar loss, got "
+            f"{tuple(pred.shape)} vs {tuple(target.shape)}; check that the "
+            f"target_config field type matches the actual tensor rank."
+        )
     if loss_type == "huber":
         return F.huber_loss(pred, target, reduction="mean", delta=delta)
     if loss_type == "mse":
@@ -182,7 +198,26 @@ class LossCalculator:
             name: float(weights.get(name, 1.0)) for name in self.target_config
         }
 
+        ### Surface partial-coverage so missing entries are auditable in
+        ### the run logs. Only fires when the user supplies *some* but
+        ### not *all* names: an empty / None dict is the documented
+        ### "all 1.0" path and doesn't deserve a per-construction line.
+        if weights and len(weights) < len(self.target_config):
+            inferred = sorted(set(self.target_config) - set(weights))
+            _LOGGER.info(
+                f"LossCalculator field_weights: {self.field_weights} "
+                f"(fields {inferred!r} defaulted to 1.0)."
+            )
+
     def _make_key(self, *parts: str) -> str:
+        """Build a TensorBoard-tag-shaped key, ``"loss/<prefix>/<part>/.../<part>"``.
+
+        Slash-separated so the result feeds directly into TB scalar tags
+        (which use ``/`` as the dashboard hierarchy separator). Compare
+        with :class:`MetricCalculator._make_key`, which uses ``"_"`` to
+        join the metric-name suffix because metric names like
+        ``pressure_l2`` are flat dashboard names rather than nested tags.
+        """
         segments = ["loss"]
         if self.prefix:
             segments.append(self.prefix)

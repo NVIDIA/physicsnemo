@@ -14,15 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for the private TensorDict-aware walkers in `src/train.py`.
+"""Unit tests for `src/train.py`'s private TensorDict-aware walkers and for `src/output_normalize.py`.
 
 `TensorDict` is not a `dict` subclass; the bare ``isinstance(obj, dict)``
-branches in the recipe's three recursive helpers therefore silently skip
+branches in the recipe's recursive helpers therefore silently skip
 TensorDict inputs unless an explicit branch is added. These tests pin
 down that explicit handling for:
 
 - :func:`train._recursive_to_device`: must move TensorDict leaves to the
   requested device, including when the TD is nested under a plain dict.
+  The test asserts on ``result.device == cpu`` because a fresh
+  ``TensorDict(..., batch_size=[N])`` has ``device is None`` while
+  ``td.to("cpu")`` updates ``.device`` -- so the post-fix behaviour is
+  distinguishable from a silent skip (which would leave ``device is None``).
 - :func:`train._recursive_cast_floats`: tensor-aware containers (Mesh,
   DomainMesh, TensorDict) propagate the conditional cast via their
   auto-injected ``.apply()``, so float leaves move to the autocast
@@ -33,14 +37,10 @@ down that explicit handling for:
 - :func:`train._walk_batch_for_logging`: must yield ``(name, tensor)``
   pairs from TensorDict leaves -- including correctly producing dotted
   paths for nested TDs via ``TD.flatten_keys('.')``.
-
-The regression-test trick used for `_recursive_to_device` is:
-``TensorDict(..., batch_size=[N])`` without an explicit ``device`` has
-``td.device is None``, while ``td.to("cpu")`` sets ``.device`` to
-``torch.device("cpu")``. So the assertion ``result.device == cpu``
-distinguishes the post-fix behaviour (TD went through ``.to``) from
-the pre-fix behaviour (TD was returned untouched and would still have
-``.device is None``).
+- :func:`output_normalize.normalize_output_to_tensordict`: routes a
+  model output (``Mesh`` or ``(B, N, C)`` tensor) to a per-target
+  TensorDict, with clear error messages on shape / channel-count
+  mismatches.
 """
 
 from __future__ import annotations
@@ -53,14 +53,16 @@ from tensordict import TensorDict
 ### load, which transitively requires the `tensorboard` package. That
 ### dep is not declared in pyproject.toml; CI / training environments
 ### have it installed, but bare dev sandboxes might not. Skip cleanly.
+### `output_normalize` itself is tensorboard-free, so we import it
+### directly (no skip).
 pytest.importorskip("tensorboard")
 
 from train import (  # noqa: E402  -- after the importorskip guard
-    _normalize_output_to_tensordict,
     _recursive_cast_floats,
     _recursive_to_device,
     _walk_batch_for_logging,
 )
+from output_normalize import normalize_output_to_tensordict  # noqa: E402
 from physicsnemo.mesh import (  # noqa: E402  -- after the importorskip guard
     DomainMesh,
     Mesh,
@@ -245,18 +247,18 @@ class TestWalkBatchForLogging:
 
 
 ### ---------------------------------------------------------------------------
-### _normalize_output_to_tensordict
+### normalize_output_to_tensordict
 ### ---------------------------------------------------------------------------
 
 
 class TestNormalizeOutputToTensordict:
-    """Tests for `_normalize_output_to_tensordict`."""
+    """Tests for `normalize_output_to_tensordict`."""
 
     def test_tensors_output_three_dim_splits_correctly(self):
         """Standard (B, N, total_C) output splits into per-field leaves."""
         target_config = {"pressure": "scalar", "wss": "vector"}
         out = torch.randn(1, 50, 4)  # 1 scalar + 1 vector(3) = 4 channels
-        td = _normalize_output_to_tensordict(out, target_config, "tensors")
+        td = normalize_output_to_tensordict(out, target_config, "tensors")
         assert tuple(td["pressure"].shape) == (1, 50)  # squeezed scalar
         assert tuple(td["wss"].shape) == (1, 50, 3)
         assert td.batch_size == torch.Size([1, 50])
@@ -271,14 +273,14 @@ class TestNormalizeOutputToTensordict:
         target_config = {"pressure": "scalar"}
         out = torch.randn(1, 50)
         with pytest.raises(ValueError, match=r"expects a \(B, N, C\) tensor"):
-            _normalize_output_to_tensordict(out, target_config, "tensors")
+            normalize_output_to_tensordict(out, target_config, "tensors")
 
     def test_tensors_output_channel_mismatch_still_raises(self):
         """Three-D output with wrong channel count still raises the channel error."""
         target_config = {"pressure": "scalar"}
         out = torch.randn(1, 50, 3)  # expected 1 channel
         with pytest.raises(ValueError, match="does not match the expected"):
-            _normalize_output_to_tensordict(out, target_config, "tensors")
+            normalize_output_to_tensordict(out, target_config, "tensors")
 
     def test_mesh_output_extracts_target_fields(self):
         """Mesh output: ``point_data.select(*target_config)`` keeps batch_size [N]."""
@@ -292,7 +294,7 @@ class TestNormalizeOutputToTensordict:
                 "extra": torch.randn(7),
             },
         )
-        td = _normalize_output_to_tensordict(mesh, target_config, "mesh")
+        td = normalize_output_to_tensordict(mesh, target_config, "mesh")
         assert set(td.keys()) == {"pressure", "wss"}
         assert td.batch_size == torch.Size([7])
 
@@ -301,4 +303,4 @@ class TestNormalizeOutputToTensordict:
         target_config = {"pressure": "scalar"}
         mesh = Mesh(points=torch.randn(7, 3), point_data={"other": torch.randn(7)})
         with pytest.raises(KeyError, match="missing target fields"):
-            _normalize_output_to_tensordict(mesh, target_config, "mesh")
+            normalize_output_to_tensordict(mesh, target_config, "mesh")

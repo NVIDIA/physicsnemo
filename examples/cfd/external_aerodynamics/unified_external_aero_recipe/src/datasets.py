@@ -22,10 +22,11 @@ Each config's ``pipeline:`` block declares a ``reader:`` and ``transforms:``
 list with ``_target_: ${dp:ComponentName}`` entries, instantiated via
 ``hydra.utils.instantiate()``.
 
-The main builder (``build_surface_dataset``) is fully generic and works
-for both surface and volume mesh configs -- the distinction is purely in
-the YAML transform chain.  ``build_dataset`` is provided as a
-mesh-type-agnostic alias.
+The single builder ``build_dataset`` is mesh-type-agnostic: it works
+identically for surface and volume mesh configs because the distinction
+is entirely in the YAML transform chain (volume YAMLs already produce a
+``DomainMesh`` natively via ``DomainMeshReader``; surface YAMLs append a
+``MeshToDomainMesh`` terminal transform to reach the same shape).
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ import json
 import math
 import sys
 from pathlib import Path
-from typing import Iterator
+from collections.abc import Iterator
 
 ### Make this folder importable by its bare module names (`nondim`, `sdf`)
 ### regardless of whether the caller invoked `python src/train.py` (which
@@ -205,7 +206,7 @@ class _InjectMetadata(MeshTransform):
         return f"fields={sorted(self._fields)}"
 
 
-def build_surface_dataset(
+def build_dataset(
     cfg: DictConfig,
     base_dir: Path | None = None,
     augment: bool = False,
@@ -287,10 +288,6 @@ def build_surface_dataset(
     return MeshDataset(
         reader, transforms=transforms, device=device, num_workers=num_workers
     )
-
-
-# Mesh-type-agnostic alias -- build_surface_dataset is fully generic.
-build_dataset = build_surface_dataset
 
 
 # ---------------------------------------------------------------------------

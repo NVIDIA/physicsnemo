@@ -54,99 +54,33 @@ from physicsnemo.mesh import DomainMesh, Mesh
 
 from collate import build_collate_fn
 from loss import LossCalculator
-from utils import parse_target_config
+from output_normalize import normalize_output_to_tensordict
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
 ### ---------------------------------------------------------------------------
-### Synthetic post-pipeline DomainMesh builders
+### Synthetic DomainMesh builders
 ### ---------------------------------------------------------------------------
+###
+### These wrap the shared `conftest.make_*_domain_mesh` factories with the
+### larger N (80 surface cells / 200 volume points) the synthetic E2E
+### pipeline needs in order for the shrunk transformer / GLOBE models to
+### produce non-degenerate outputs.
+
+from conftest import make_surface_domain_mesh, make_volume_domain_mesh  # noqa: E402
 
 
 def _surface_domain_mesh(
     target_config: dict[str, str], n_cells: int = 80
 ) -> DomainMesh:
-    """Mimic the output of a surface dataset YAML's pipeline + ``MeshToDomainMesh``.
-
-    - ``interior``: point cloud at ``(N_cells, 3)`` random points; ``point_data``
-      contains every target as a random tensor of the right shape.
-    - ``boundaries.vehicle``: triangulated surface with ``N_cells`` cells and
-      a precomputed ``normals`` cell_data field (matching what
-      ``ComputeSurfaceNormals`` produces in every surface dataset YAML).
-    - ``global_data``: freestream metadata that downstream specs may extract.
-    """
-    n_pts = max(n_cells * 2, 8)
-    interior_point_data: dict[str, torch.Tensor] = {}
-    for name, ftype in target_config.items():
-        if ftype == "scalar":
-            interior_point_data[name] = torch.randn(n_cells)
-        elif ftype == "vector":
-            interior_point_data[name] = torch.randn(n_cells, 3)
-        else:
-            raise ValueError(f"Unknown field type {ftype!r}")
-    interior = Mesh(
-        points=torch.randn(n_cells, 3),
-        point_data=interior_point_data,
-    )
-    vehicle = Mesh(
-        points=torch.randn(n_pts, 3) * 2,
-        cells=torch.randint(0, n_pts, (n_cells, 3)),
-        cell_data={"normals": torch.randn(n_cells, 3)},
-    )
-    return DomainMesh(
-        interior=interior,
-        boundaries={"vehicle": vehicle},
-        global_data={
-            "U_inf": torch.tensor([30.0, 0.0, 0.0]),
-            "p_inf": torch.tensor(0.0),
-            "rho_inf": torch.tensor(1.225),
-            "L_ref": torch.tensor(5.0),
-        },
-    )
+    """Surface DomainMesh sized for synthetic E2E testing (80 cells default)."""
+    return make_surface_domain_mesh(target_config, n_cells=n_cells)
 
 
 def _volume_domain_mesh(target_config: dict[str, str], n_pts: int = 200) -> DomainMesh:
-    """Mimic the output of a volume dataset YAML's native ``DomainMesh``.
-
-    - ``interior``: volume point cloud carrying every target plus the
-      ``sdf`` / ``sdf_normals`` input features that
-      ``ComputeSDFFromBoundary`` produces.
-    - ``boundaries.vehicle``: triangulated wall with empty ``cell_data``
-      (volume YAMLs do not run ``ComputeSurfaceNormals``).
-    - ``global_data``: freestream metadata.
-    """
-    interior_point_data: dict[str, torch.Tensor] = {
-        "sdf": torch.randn(n_pts),
-        "sdf_normals": torch.randn(n_pts, 3),
-    }
-    for name, ftype in target_config.items():
-        if ftype == "scalar":
-            interior_point_data[name] = torch.randn(n_pts)
-        elif ftype == "vector":
-            interior_point_data[name] = torch.randn(n_pts, 3)
-        else:
-            raise ValueError(f"Unknown field type {ftype!r}")
-    interior = Mesh(
-        points=torch.randn(n_pts, 3),
-        point_data=interior_point_data,
-    )
-    n_vehicle_pts = max(n_pts // 4, 8)
-    n_vehicle_cells = max(n_pts // 4, 8)
-    vehicle = Mesh(
-        points=torch.randn(n_vehicle_pts, 3) * 2,
-        cells=torch.randint(0, n_vehicle_pts, (n_vehicle_cells, 3)),
-    )
-    return DomainMesh(
-        interior=interior,
-        boundaries={"vehicle": vehicle},
-        global_data={
-            "U_inf": torch.tensor([30.0, 0.0, 0.0]),
-            "p_inf": torch.tensor(0.0),
-            "rho_inf": torch.tensor(1.225),
-            "L_ref": torch.tensor(5.0),
-        },
-    )
+    """Volume DomainMesh sized for synthetic E2E testing (200 points default)."""
+    return make_volume_domain_mesh(target_config, n_pts=n_pts)
 
 
 ### ---------------------------------------------------------------------------
@@ -273,30 +207,18 @@ def _output_to_tensordict(
 ) -> TensorDict:
     """Mirror the output-normalization step in ``train.forward_pass``.
 
-    For tensor outputs (the case for every config in
-    :data:`_TENSOR_INPUT_CONFIGS`), this slices the ``(B, N, C)`` tensor
-    by ``target_config`` order using :class:`utils.FieldSpec` and returns
-    a TensorDict with batch_size ``[B, N]``.
-
-    For mesh outputs (GLOBE), returns ``output.point_data.select(*target_config)``
-    -- a TensorDict with batch_size ``[N]`` matching the mesh's points.
+    Dispatches on output type the same way the production code does:
+    ``Mesh`` outputs use ``output.point_data.select(*target_config)``;
+    tensor outputs go through :func:`split_concat_by_target` (with
+    DoMINO-style ``(vol, surf)`` tuple unwrapping). The choice of
+    ``output_type`` is inferred here from the value's runtime type so a
+    single helper can drive both the tensor- and mesh-input parametrized
+    suites.
     """
-    if isinstance(output, Mesh):
-        return output.point_data.select(*target_config)
-    if isinstance(output, tuple):
-        output = next(o for o in output if o is not None)
-    assert isinstance(output, torch.Tensor), (
-        f"expected tensor or Mesh output, got {type(output).__name__}"
+    output_type = "mesh" if isinstance(output, Mesh) else "tensors"
+    return normalize_output_to_tensordict(
+        output, target_config, output_type, n_spatial_dims
     )
-    specs = parse_target_config(target_config, n_spatial_dims=n_spatial_dims)
-    leaves: dict[str, torch.Tensor] = {}
-    for spec in specs:
-        slice_ = output[..., spec.start_index : spec.end_index]
-        if spec.field_type == "scalar":
-            slice_ = slice_.squeeze(-1)
-        leaves[spec.name] = slice_
-    first_v = next(iter(leaves.values()))
-    return TensorDict(leaves, batch_size=first_v.shape[:2], device=first_v.device)
 
 
 @pytest.mark.parametrize(
