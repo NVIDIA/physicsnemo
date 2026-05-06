@@ -18,6 +18,7 @@
 
 import pytest
 import torch
+import torch.distributions as D
 from tensordict import TensorDict
 
 from physicsnemo.datapipes.transforms.base import Transform
@@ -40,6 +41,19 @@ class SimpleScaleTransform(Transform):
 
     def extra_repr(self) -> str:
         return f"scale={self.scale}"
+
+
+class StochasticTransform(Transform):
+    """A transform with a generator and distribution for .to() testing."""
+
+    def __init__(self, distribution: D.Distribution | None = None):
+        super().__init__()
+        self._generator = torch.Generator()
+        self._generator.manual_seed(12345)
+        self._distribution = distribution or D.Normal(0.0, 1.0)
+
+    def __call__(self, data: TensorDict) -> TensorDict:
+        return data
 
 
 class TransformWithState(Transform):
@@ -131,6 +145,72 @@ class TestTransformDevice:
 
         assert transform.device == torch.device("cuda:0")
         assert transform.scale_tensor.device == torch.device("cuda:0")
+
+    def test_to_moves_generator(self):
+        """to() should recreate the generator on the target device."""
+        transform = StochasticTransform()
+        original_seed = transform._generator.initial_seed()
+
+        transform.to("cpu")
+
+        assert transform._generator.device == torch.device("cpu")
+        assert transform._generator.initial_seed() == original_seed
+
+    def test_to_preserves_distribution_type(self):
+        """to() should preserve the distribution class."""
+        transform = StochasticTransform(distribution=D.Laplace(0.0, 1.0))
+
+        transform.to("cpu")
+
+        assert isinstance(transform._distribution, D.Laplace)
+
+    def test_to_moves_distribution_scalar_params(self):
+        """to() should produce a working distribution after moving."""
+        transform = StochasticTransform(distribution=D.Normal(5.0, 0.01))
+
+        transform.to("cpu")
+
+        sample = transform._distribution.sample()
+        assert sample.device == torch.device("cpu")
+        assert sample.item() == pytest.approx(5.0, abs=0.1)
+
+    def test_to_moves_batched_distribution_params(self):
+        """to() should move batched tensor params on the distribution."""
+        dist = D.Uniform(
+            torch.tensor([-1.0, -2.0]),
+            torch.tensor([1.0, 2.0]),
+        )
+        transform = StochasticTransform(distribution=dist)
+
+        transform.to("cpu")
+
+        assert transform._distribution.low.device == torch.device("cpu")
+        assert transform._distribution.high.device == torch.device("cpu")
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_to_cuda_moves_generator(self):
+        """to('cuda:0') should place the generator on CUDA."""
+        transform = StochasticTransform()
+        original_seed = transform._generator.initial_seed()
+
+        transform.to("cuda:0")
+
+        assert transform._generator.device == torch.device("cuda:0")
+        assert transform._generator.initial_seed() == original_seed
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_to_cuda_moves_distribution(self):
+        """to('cuda:0') should move distribution tensor params to CUDA."""
+        dist = D.Uniform(
+            torch.tensor([-1.0, -2.0]),
+            torch.tensor([1.0, 2.0]),
+        )
+        transform = StochasticTransform(distribution=dist)
+
+        transform.to("cuda:0")
+
+        assert transform._distribution.low.device == torch.device("cuda:0")
+        assert transform._distribution.high.device == torch.device("cuda:0")
 
     def test_chaining_to_calls(self):
         """Test that .to() calls can be chained."""

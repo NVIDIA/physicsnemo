@@ -30,7 +30,12 @@ if TYPE_CHECKING:
 def marching_cubes(
     field: Float[torch.Tensor, "nx ny nz"],
     threshold: float = 0.0,
-    coords: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
+    coords: tuple[
+        Float[torch.Tensor, " nx"],
+        Float[torch.Tensor, " ny"],
+        Float[torch.Tensor, " nz"],
+    ]
+    | None = None,
 ) -> "Mesh":
     r"""Extract an isosurface from a 3D scalar field using marching cubes.
 

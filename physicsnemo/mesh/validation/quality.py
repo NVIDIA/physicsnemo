@@ -23,15 +23,19 @@ skewness, and angles. Higher quality = better shaped cells.
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float
 from tensordict import TensorDict
 
 from physicsnemo.mesh.geometry._angles import compute_vertex_angles
+from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
 
-def compute_cell_edge_lengths(mesh: "Mesh") -> torch.Tensor:
+def compute_cell_edge_lengths(
+    mesh: "Mesh",
+) -> Float[torch.Tensor, "n_cells n_edges_per_cell"]:
     """Compute all pairwise edge lengths within each cell.
 
     For an n-simplex with (n+1) vertices, there are C(n+1, 2) edges per cell.
@@ -82,6 +86,7 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     """Compute geometric quality metrics for all cells.
 
     Returns TensorDict with per-cell quality metrics:
+
     - aspect_ratio: max_edge / min_altitude (lower is better, 1.0 is equilateral)
     - min_angle: Minimum interior angle in radians
     - max_angle: Maximum interior angle in radians
@@ -123,7 +128,8 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     max_edge = edge_lengths.max(dim=1).values
     min_edge = edge_lengths.min(dim=1).values
 
-    edge_length_ratio = max_edge / (min_edge + 1e-10)
+    eps = safe_eps(dtype)
+    edge_length_ratio = max_edge / min_edge.clamp(min=eps)
 
     ### Compute aspect ratio (approximation using area and edges)
     areas = mesh.cell_areas
@@ -131,8 +137,8 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     # For triangles: aspect_ratio ≈ max_edge / (4*area/perimeter)
     # For general: use max_edge / characteristic_length
     perimeter = edge_lengths.sum(dim=1)
-    characteristic_length = areas * n_verts_per_cell / (perimeter + 1e-10)
-    aspect_ratio = max_edge / (characteristic_length + 1e-10)
+    characteristic_length = areas * n_verts_per_cell / perimeter.clamp(min=eps)
+    aspect_ratio = max_edge / characteristic_length.clamp(min=eps)
 
     ### Compute interior angles at each vertex of each cell
     if mesh.n_manifold_dims >= 2:
@@ -169,7 +175,7 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
         angle_quality = (min_angle_quality + max_angle_quality) / 2
     elif mesh.n_manifold_dims >= 3:
         # For tets and higher: use min/max ratio (1.0 for regular simplex)
-        angle_quality = torch.clamp(min_angle / (max_angle + 1e-10), max=1.0)
+        angle_quality = torch.clamp(min_angle / max_angle.clamp(min=eps), max=1.0)
     else:
         angle_quality = torch.ones((n_cells,), dtype=dtype, device=device)
 

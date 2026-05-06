@@ -28,14 +28,16 @@ Reference: Charles Loop, "Smooth Subdivision Surfaces Based on Triangles" (1987)
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float, Int
 
 from physicsnemo.mesh.neighbors._adjacency import build_adjacency_from_pairs
 from physicsnemo.mesh.subdivision._data import propagate_cell_data_to_children
 from physicsnemo.mesh.subdivision._topology import (
-    extract_unique_edges,
     generate_child_cells,
     get_subdivision_pattern,
 )
+from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
+from physicsnemo.mesh.utilities._topology import extract_unique_edges
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -43,8 +45,8 @@ if TYPE_CHECKING:
 
 def reposition_original_vertices_2d(
     mesh: "Mesh",
-    unique_edges: torch.Tensor | None = None,
-) -> torch.Tensor:
+    unique_edges: Int[torch.Tensor, "n_edges 2"] | None = None,
+) -> Float[torch.Tensor, "n_points n_spatial_dims"]:
     """Reposition original vertices using Loop's valence-based formula.
 
     For each vertex, compute new position as:
@@ -77,16 +79,19 @@ def reposition_original_vertices_2d(
         # edges from cells, which is the expensive part of get_point_to_points_adjacency)
         sources = torch.cat([unique_edges[:, 0], unique_edges[:, 1]])
         targets = torch.cat([unique_edges[:, 1], unique_edges[:, 0]])
-        adjacency = build_adjacency_from_pairs(sources, targets, n_sources=n_points)
+        adjacency = build_adjacency_from_pairs(
+            sources,
+            targets,
+            n_sources=n_points,
+            n_targets=n_points,
+        )
     else:
-        from physicsnemo.mesh.neighbors import get_point_to_points_adjacency
-
-        adjacency = get_point_to_points_adjacency(mesh)
+        adjacency = mesh.get_point_to_points_adjacency()
 
     ### Compute valences for all points at once
     # valences[i] = offsets[i+1] - offsets[i]
     # Shape: (n_points,)
-    valences = adjacency.offsets[1:] - adjacency.offsets[:-1]
+    valences = adjacency.counts
 
     ### Compute beta weights for all valences at once
     # Vectorize the beta formula
@@ -145,8 +150,8 @@ def reposition_original_vertices_2d(
 
 def compute_loop_edge_positions_2d(
     mesh: "Mesh",
-    unique_edges: torch.Tensor,
-) -> torch.Tensor:
+    unique_edges: Int[torch.Tensor, "n_edges 2"],
+) -> Float[torch.Tensor, "n_edges n_spatial_dims"]:
     """Compute new edge vertex positions using Loop's edge rule.
 
     For an interior edge with endpoints v0, v1 and opposite vertices opp0, opp1:
@@ -177,9 +182,9 @@ def compute_loop_edge_positions_2d(
         manifold_codimension=mesh.n_manifold_dims - 1,
     )
 
-    _, inverse_indices = torch.unique(
+    _, inverse_indices = unique_index_tuples(
         candidate_edges,
-        dim=0,
+        index_bound=mesh.n_points,
         return_inverse=True,
     )
 
@@ -285,6 +290,7 @@ def subdivide_loop(mesh: "Mesh") -> "Mesh":
     3. Connects vertices to form 4 triangles per original triangle
 
     Properties:
+
     - Approximating: original vertices move to new positions
     - Produces C² smooth limit surfaces for regular meshes
     - Designed for 2D manifolds (triangular meshes)
@@ -310,11 +316,11 @@ def subdivide_loop(mesh: "Mesh") -> "Mesh":
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-        >>> # Smooth a rough triangulated surface
-        >>> mesh = sphere_icosahedral.load(subdivisions=2)
-        >>> smooth = subdivide_loop(mesh)
-        >>> # Original vertices have moved; result is smoother
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    >>> # Smooth a rough triangulated surface
+    >>> mesh = sphere_icosahedral.load(subdivisions=2)
+    >>> smooth = subdivide_loop(mesh)
+    >>> # Original vertices have moved; result is smoother
     """
     from physicsnemo.mesh.mesh import Mesh
 

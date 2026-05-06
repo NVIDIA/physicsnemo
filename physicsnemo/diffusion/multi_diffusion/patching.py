@@ -725,12 +725,17 @@ def image_batching(
     padded_shape_y = stride_y * (patch_num_y - 1) + patch_shape_y + boundary_pix
     patch_num = patch_num_x * patch_num_y
 
-    # Reflection-pad to fit the grid
+    # Reflection-pad to fit the grid. Use the functional form (not
+    # ``torch.nn.ReflectionPad2d(...)(input)``) to avoid instantiating a fresh
+    # nn.Module on every call, which is much less friendly to ``torch.compile``
+    # / AOT autograd tracing.
     pad_x_right = padded_shape_x - img_shape_x - boundary_pix
     pad_y_right = padded_shape_y - img_shape_y - boundary_pix
-    input_padded = torch.nn.ReflectionPad2d(
-        (boundary_pix, pad_x_right, boundary_pix, pad_y_right)
-    )(input)
+    input_padded = torch.nn.functional.pad(
+        input,
+        (boundary_pix, pad_x_right, boundary_pix, pad_y_right),
+        mode="reflect",
+    )
 
     # Integer dtypes are not supported by unfold — cast temporarily
     if input.dtype == torch.int32:

@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 import torch
 import torch.nn.functional as F
+from jaxtyping import Float, Int
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -28,9 +29,9 @@ if TYPE_CHECKING:
 
 def sample_random_points_on_cells(
     mesh: "Mesh",
-    cell_indices: Sequence[int] | torch.Tensor | None = None,
+    cell_indices: Sequence[int] | Int[torch.Tensor, " n_samples"] | None = None,
     alpha: float = 1.0,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "n_samples n_spatial_dims"]:
     """Sample random points uniformly distributed on specified cells of the mesh.
 
     Uses a Dirichlet distribution to generate barycentric coordinates, which are
@@ -50,6 +51,7 @@ def sample_random_points_on_cells(
     alpha : float
         Concentration parameter for the Dirichlet distribution. Controls how
         samples are distributed within each cell:
+
         - alpha = 1.0: Uniform distribution over the simplex (default)
         - alpha > 1.0: Concentrates samples toward the center of each cell
         - alpha < 1.0: Concentrates samples toward vertices and edges

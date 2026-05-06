@@ -69,6 +69,11 @@ class GALE(PhysicsAttentionIrregularMesh):
         Whether to use Transolver++ features. Default is False.
     context_dim : int, optional
         Dimension of the context vector for cross-attention. Default is 0.
+    state_mixing_mode : str, optional
+        How to blend self-attention and cross-attention outputs.         ``"weighted"`` uses
+        a learnable sigmoid-gated weighted sum. ``"concat_project"``
+        concatenates the two along the head dimension and projects back with a
+        linear layer. Default is ``"weighted"``.
 
     Forward
     -------
@@ -121,8 +126,16 @@ class GALE(PhysicsAttentionIrregularMesh):
         plus: bool = False,
         context_dim: int = 0,
         concrete_dropout: bool = False,
+        state_mixing_mode: str = "weighted",
     ) -> None:
         super().__init__(dim, heads, dim_head, dropout, slice_num, use_te, plus)
+
+        if state_mixing_mode not in ("weighted", "concat_project"):
+            raise ValueError(
+                f"Invalid state_mixing_mode: {state_mixing_mode!r}. "
+                f"Expected 'weighted' or 'concat_project'."
+            )
+        self.state_mixing_mode = state_mixing_mode
 
         linear_layer = te.Linear if self.use_te else nn.Linear
 
@@ -131,9 +144,17 @@ class GALE(PhysicsAttentionIrregularMesh):
         self.cross_k = linear_layer(context_dim, dim_head)
         self.cross_v = linear_layer(context_dim, dim_head)
 
-        # Learnable mixing weight between self and cross attention
-        # Initialize near 0.0 since sigmoid(0) = 0.5, giving balanced initial mixing
-        self.state_mixing = nn.Parameter(torch.tensor(0.0))
+        # Mixing layers for blending self-attention and cross-attention
+        if state_mixing_mode == "weighted":
+            # Learnable mixing weight between self and cross attention
+            # Initialize near 0.0 since sigmoid(0) = 0.5, giving balanced initial mixing
+            self.state_mixing = nn.Parameter(torch.tensor(0.0))
+        else:
+            # Concatenate self and cross attention and project back to dim_head
+            self.concat_project = nn.Sequential(
+                linear_layer(2 * dim_head, dim_head),
+                nn.GELU(),
+            )
 
         # Replace inherited out_dropout with ConcreteDropout when enabled
         if concrete_dropout:
@@ -277,12 +298,18 @@ class GALE(PhysicsAttentionIrregularMesh):
                 for _slice_token in slice_tokens
             ]
 
-            # Blend self-attention and cross-attention with learnable mixing weight
-            mixing_weight = torch.sigmoid(self.state_mixing)
-            out_slice_token = [
-                mixing_weight * sst + (1 - mixing_weight) * cst
-                for sst, cst in zip(self_slice_token, cross_slice_token)
-            ]
+            # Blend self-attention and cross-attention
+            if self.state_mixing_mode == "weighted":
+                mixing_weight = torch.sigmoid(self.state_mixing)
+                out_slice_token = [
+                    mixing_weight * sst + (1 - mixing_weight) * cst
+                    for sst, cst in zip(self_slice_token, cross_slice_token)
+                ]
+            else:
+                out_slice_token = [
+                    self.concat_project(torch.cat([sst, cst], dim=-1))
+                    for sst, cst in zip(self_slice_token, cross_slice_token)
+                ]
         else:
             # Use only self-attention when no context is provided
             out_slice_token = self_slice_token
@@ -330,6 +357,11 @@ class GALE_block(nn.Module):
     attention_type : str, optional
         attention_type is used to choose the attention type (GALE or GALE_FA). 
         Default is ``"GALE"``.
+    state_mixing_mode : str, optional
+        How to blend self-attention and cross-attention outputs.         ``"weighted"`` uses
+        a learnable sigmoid-gated weighted sum. ``"concat_project"``
+        concatenates the two along the head dimension and projects back with a
+        linear layer. Default is ``"weighted"``.
 
     Forward
     -------
@@ -384,6 +416,7 @@ class GALE_block(nn.Module):
         context_dim: int = 0,
         attention_type: str = "GALE",
         concrete_dropout: bool = False,
+        state_mixing_mode: str = "weighted",
     ) -> None:
         super().__init__()
 
@@ -414,6 +447,7 @@ class GALE_block(nn.Module):
                     plus=plus,
                     context_dim=context_dim,
                     concrete_dropout=concrete_dropout,
+                    state_mixing_mode=state_mixing_mode,
                 )
             case 'GALE_FA':
                 self.Attn = GALE_FA(
@@ -425,6 +459,7 @@ class GALE_block(nn.Module):
                     use_te=use_te,
                     context_dim=context_dim,
                     concrete_dropout=concrete_dropout,
+                    state_mixing_mode=state_mixing_mode,
                 )
             case _:
                 raise ValueError(

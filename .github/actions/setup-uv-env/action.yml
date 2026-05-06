@@ -73,7 +73,7 @@ runs:
     # download.
     - name: Restore uv download cache
       id: restore-uv-cache
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v5
       with:
         path: ~/.cache/uv
         key: ${{ inputs.uv-cache-key-prefix }}-${{ inputs.uv-cache-key-suffix }}

@@ -35,12 +35,14 @@ def embed(
     in their respective dimensions.
 
     Key behaviors:
+
         - Manifold dimension (n_manifold_dims) is preserved
         - Topology (cell connectivity) is preserved
         - Point/cell/global data are preserved as-is
         - Cached geometric properties are cleared (they depend on spatial embedding)
 
     Use cases:
+
         - [2, 2] -> [2, 3]: Embed a flat 2D surface into 3D space
           (e.g., to enable surface normal computation via codimension-1)
         - [1, 2] -> [1, 3]: Embed a 2D curve into 3D space
@@ -70,6 +72,7 @@ def embed(
     -------
     Mesh
         New mesh with increased spatial dimensions:
+
         - points shape: ``(n_points, target_n_spatial_dims)``
         - n_manifold_dims: unchanged
         - cells: unchanged
@@ -115,6 +118,7 @@ def embed(
     -----
     When spatial dimensions change, all cached geometric properties are cleared
     because they depend on the spatial embedding. This includes:
+
     - Cell/point normals (codimension changes)
     - Cell centroids (coordinate count changes)
     - Cell areas (intrinsically unchanged but cache is cleared for consistency)

@@ -75,6 +75,25 @@ class Pade(Module):
     use_separate_mlps : bool, optional, default=True
         If ``True``, uses separate MLPs for numerator and denominator.
         If ``False``, uses a single MLP with split outputs.
+    self_regularization_beta : float or None, optional, default=None
+        If not ``None``, adds :math:`\beta \, \varphi_n^2` to the
+        denominator. The effect on output magnitude depends on
+        ``numerator_order`` (:math:`N`):
+
+        * :math:`N = 1` (default): :math:`|f|` is bounded above by
+          :math:`1 / (2 \sqrt{\beta})`, with the maximum attained at
+          :math:`|\varphi_n| = 1/\sqrt{\beta}`.
+        * :math:`N = 2`: :math:`|f| < 1/\beta`, the far-field
+          asymptote as :math:`|\varphi_n| \to \infty`.
+        * :math:`N \geq 3`: the term tempers but does not bound the
+          output (it scales as :math:`|\varphi_n|^{N-2}/\beta` at
+          large :math:`|\varphi_n|`).
+
+        The term :math:`\varphi_n^2` is :math:`C^\infty` smooth and
+        preserves the :math:`N = D = 2` constant far-field asymptote.
+        Typical value: ``0.01`` (bounds output magnitude below ``5``
+        at the default :math:`N = 1`, or below ``100`` at
+        :math:`N = 2`).
 
     Forward
     -------
@@ -119,9 +138,16 @@ class Pade(Module):
         denominator_order: int = 2,
         share_denominator_across_channels: bool = True,
         use_separate_mlps: bool = True,
+        self_regularization_beta: float | None = None,
     ):
         if activation_function is None:
             activation_function = nn.SiLU()
+
+        if self_regularization_beta is not None and self_regularization_beta <= 0:
+            raise ValueError(
+                f"self_regularization_beta must be positive (use None to disable), "
+                f"got {self_regularization_beta=!r}"
+            )
 
         super().__init__()
 
@@ -138,6 +164,7 @@ class Pade(Module):
         self.denominator_order = denominator_order
         self.share_denominator_across_channels = share_denominator_across_channels
         self.use_separate_mlps = use_separate_mlps
+        self.self_regularization_beta = self_regularization_beta
 
         ### Create the MLPs
         mlp_kwargs = dict(
@@ -216,5 +243,10 @@ class Pade(Module):
 
         numerator = apply_power(raw_numerator, self.numerator_order, even=False)
         denominator = apply_power(raw_denominator, self.denominator_order, even=True)
+
+        if self.self_regularization_beta is not None:
+            denominator = (
+                denominator + self.self_regularization_beta * raw_numerator.pow(2)
+            )
 
         return numerator / (1 + denominator)

@@ -19,6 +19,7 @@
 from typing import Literal
 
 import torch
+from jaxtyping import Float
 from tensordict import TensorDict
 
 
@@ -27,13 +28,18 @@ def process_scalars(
     data_dict: TensorDict,
     n_expected: int,
     name: str,
-) -> tuple[torch.Tensor | None, Literal["points", "cells", None], str | None]:
+) -> tuple[
+    Float[torch.Tensor, " n_expected"] | None,
+    Literal["points", "cells", None],
+    str | None,
+]:
     """Process scalar specification into concrete tensor values.
 
     Parameters
     ----------
     scalar_spec : torch.Tensor or str or tuple[str, ...] or None
         Scalar specification, can be:
+
         - None: no scalars to display
         - torch.Tensor: direct tensor values
         - str or tuple[str, ...]: key(s) to lookup in data_dict
@@ -48,6 +54,7 @@ def process_scalars(
     -------
     tuple
         Tuple of (scalar_values, source_type, label) where:
+
         - scalar_values is None if scalar_spec is None, otherwise a 1D tensor
         - source_type indicates whether this is "points", "cells", or None
         - label is a human-readable name for the colorbar (or None)
@@ -128,8 +135,8 @@ def validate_and_process_scalars(
     n_points: int,
     n_cells: int,
 ) -> tuple[
-    torch.Tensor | None,
-    torch.Tensor | None,
+    Float[torch.Tensor, " n_points"] | None,
+    Float[torch.Tensor, " n_cells"] | None,
     Literal["points", "cells", None],
     str | None,
 ]:

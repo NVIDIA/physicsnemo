@@ -53,7 +53,7 @@ def repair_mesh(
     mesh : Mesh
         Input mesh to repair.
     merge_points : bool, optional
-        Merge coincident points within *tolerance*.
+        Merge coincident points within ``tolerance``.
     remove_degenerates : bool, optional
         Remove zero-area cells and cells with duplicate vertices.
     remove_isolated : bool, optional

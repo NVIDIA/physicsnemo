@@ -606,6 +606,7 @@ class TestGradientFlow:
     SPATIAL_CONFIGS,
     ids=[c[0] for c in SPATIAL_CONFIGS],
 )
+@pytest.mark.usefixtures("nop_compile")
 class TestCompileSingleGuidance:
     """torch.compile tests for DPSScorePredictor with single guidance."""
 
@@ -653,6 +654,7 @@ class TestCompileSingleGuidance:
     SPATIAL_CONFIGS,
     ids=[c[0] for c in SPATIAL_CONFIGS],
 )
+@pytest.mark.usefixtures("nop_compile")
 class TestCompileMultiGuidance:
     """torch.compile tests for DPSScorePredictor with multiple guidances."""
 
