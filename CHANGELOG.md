@@ -160,6 +160,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `physicsnemo.mesh.curvature._utils` to `physicsnemo.mesh.geometry._angles`.
   The old private path is no longer available; use the
   `physicsnemo.mesh.geometry` re-export instead.
+- &#9888;&#65039; **BC-impact (pre-release rename):** in PhysicsNeMo-Mesh,
+  `DomainMesh.apply` was renamed to `DomainMesh.apply_to_meshes`. The
+  original name shadowed the recursive `Tensor -> Tensor` `apply` method
+  that `@tensorclass` auto-injects, breaking duck-type symmetry with
+  `Mesh.apply` for any code that handled both classes. After the rename,
+  `dm.apply(tensor_fn)` works as expected (recurses through every leaf
+  tensor in `interior`, `boundaries`, and `global_data`); the original
+  Mesh-to-Mesh broadcast is now `dm.apply_to_meshes(mesh_fn)`. Early
+  adopters of the unreleased `DomainMesh` API should rename their
+  `.apply(...)` callsites to `.apply_to_meshes(...)`.
 - Refactored the patching utilities under
   `physicsnemo.diffusion.multi_diffusion.patching`. Patching and fusion
   operations are now more performant and `torch.compile`-friendly (e.g.
