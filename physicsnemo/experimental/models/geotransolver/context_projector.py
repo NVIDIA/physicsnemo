@@ -23,8 +23,6 @@ Classes
 -------
 ContextProjector
     Projects context features onto physical state slices.
-StructuredContextProjector
-    Context projector with Conv2d/Conv3d geometry encoding on structured grids.
 GeometricFeatureProcessor
     Processes geometric features at a single spatial scale using BQWarp.
 MultiScaleFeatureExtractor
@@ -41,12 +39,9 @@ from einops import rearrange
 from jaxtyping import Float
 
 from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.nn import gumbel_softmax
 from physicsnemo.nn import BQWarp
 from physicsnemo.nn import Mlp
-from physicsnemo.nn.module.physics_attention import (
-    _compute_slices_from_projections,
-    _project_input,
-)
 
 from physicsnemo.nn import ConcreteDropout
 
@@ -56,148 +51,7 @@ if TE_AVAILABLE:
     import transformer_engine.pytorch as te
 
 
-def _structured_grid_to_conv_input(
-    x: Float[torch.Tensor, "batch tokens channels"],
-    batch: int,
-    tokens: int,
-    channels: int,
-    ndim: int,
-    spatial_shape: tuple[int, ...],
-) -> Float[torch.Tensor, "batch channels ..."]:
-    r"""Reshape flat token tensor to spatial layout for Conv2d/Conv3d.
-
-    Converts :math:`(B, N, C)` to :math:`(B, C, H, W)` for 2D or
-    :math:`(B, C, H, W, D)` for 3D so that structured context projectors
-    can apply spatial convolutions. Validates that :math:`N` matches the
-    grid size.
-
-    Parameters
-    ----------
-    x : torch.Tensor
-        Input tensor of shape :math:`(B, N, C)` (batch, tokens, channels).
-    batch : int
-        Batch size :math:`B`.
-    tokens : int
-        Number of tokens :math:`N` (must equal :math:`H \\times W` or
-        :math:`H \\times W \\times D`).
-    channels : int
-        Channel dimension :math:`C`.
-    ndim : int
-        Number of spatial dimensions; must be 2 or 3.
-    spatial_shape : tuple[int, ...]
-        :math:`(H, W)` for 2D or :math:`(H, W, D)` for 3D.
-
-    Returns
-    -------
-    torch.Tensor
-        Reshaped tensor of shape :math:`(B, C, H, W)` or
-        :math:`(B, C, H, W, D)` for use as conv input.
-
-    Raises
-    ------
-    ValueError
-        If ``tokens`` does not match the product of ``spatial_shape``.
-    """
-    if ndim == 2:
-        H, W = spatial_shape
-        if tokens != H * W:
-            raise ValueError(
-                f"Expected N={H * W} tokens for 2D grid, got N={tokens}"
-            )
-        return x.view(batch, H, W, channels).permute(0, 3, 1, 2)
-    H, W, D = spatial_shape
-    if tokens != H * W * D:
-        raise ValueError(
-            f"Expected N={H * W * D} tokens for 3D grid, got N={tokens}"
-        )
-    return x.view(batch, H, W, D, channels).permute(0, 4, 1, 2, 3)
-
-
-class _SliceToContextMixin:
-    r"""Internal mixin providing shared slice-to-context init and slice aggregation.
-
-    Used by :class:`ContextProjector` and :class:`StructuredContextProjector` to
-    avoid duplicating ``in_project_slice``, ``temperature``, ``proj_temperature``,
-    and the call to
-    :func:`~physicsnemo.nn.module.physics_attention._compute_slices_from_projections`.
-    """
-
-    def _init_slice_components(
-        self,
-        dim_head: int,
-        slice_num: int,
-        heads: int,
-        use_te: bool,
-        plus: bool,
-    ) -> None:
-        r"""Initialize slice projection, temperature, and optional adaptive temperature.
-
-        Sets ``in_project_slice``, ``temperature``, and (when ``plus`` is True)
-        ``proj_temperature`` on this instance. Uses Transformer Engine linear
-        when ``use_te`` is True and TE is available.
-
-        Parameters
-        ----------
-        dim_head : int
-            Head dimension for the slice projection input.
-        slice_num : int
-            Number of slices (output dimension of ``in_project_slice``).
-        heads : int
-            Number of heads (used for temperature shape).
-        use_te : bool
-            Whether to prefer Transformer Engine for linear layers.
-        plus : bool
-            If True, add ``proj_temperature`` for Transolver++.
-        """
-        linear_layer = te.Linear if (use_te and TE_AVAILABLE) else nn.Linear
-        self.in_project_slice = linear_layer(dim_head, slice_num)
-        self.temperature = nn.Parameter(torch.ones([1, 1, heads, 1]) * 0.5)
-        if plus:
-            self.proj_temperature = nn.Sequential(
-                linear_layer(dim_head, slice_num),
-                nn.GELU(),
-                linear_layer(slice_num, 1),
-                nn.GELU(),
-            )
-
-    def _compute_slices(
-        self,
-        slice_projections: Float[torch.Tensor, "batch tokens heads slices"],
-        fx: Float[torch.Tensor, "batch tokens heads dim"],
-    ) -> tuple[
-        Float[torch.Tensor, "batch tokens heads slices"],
-        Float[torch.Tensor, "batch heads slices dim"],
-    ]:
-        r"""Compute slice weights and slice tokens from projections and latent features.
-
-        Delegates to :func:`~physicsnemo.nn.module.physics_attention._compute_slices_from_projections`,
-        the shared free function that also backs
-        :meth:`~physicsnemo.nn.module.physics_attention.PhysicsAttentionBase._compute_slices_from_projections`.
-
-        Parameters
-        ----------
-        slice_projections : torch.Tensor
-            Shape :math:`(B, N, H, S)`.
-        fx : torch.Tensor
-            Shape :math:`(B, N, H, D)`.
-
-        Returns
-        -------
-        tuple[torch.Tensor, torch.Tensor]
-            ``(slice_weights, slice_token)`` with shapes :math:`(B, N, H, S)`
-            and :math:`(B, H, S, D)`.
-        """
-        proj_temp = getattr(self, "proj_temperature", None) if self.plus else None
-        return _compute_slices_from_projections(
-            slice_projections,
-            fx,
-            self.temperature,
-            self.plus,
-            proj_temperature=proj_temp,
-        )
-
-
-class ContextProjector(_SliceToContextMixin, nn.Module):
+class ContextProjector(nn.Module):
     r"""Projects context features onto physical state space.
 
     This context projector is conceptually similar to half of a GALE attention layer.
@@ -284,8 +138,19 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
 
         # Attention components
         self.softmax = nn.Softmax(dim=-1)
+        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
 
-        self._init_slice_components(dim_head, slice_num, heads, use_te, plus)
+        # Transolver++ adaptive temperature projection
+        if plus:
+            self.proj_temperature = nn.Sequential(
+                linear_layer(self.dim_head, slice_num),
+                nn.GELU(),
+                linear_layer(slice_num, 1),
+                nn.GELU(),
+            )
+
+        # Slice projection layer maps from head dimension to slice space
+        self.in_project_slice = linear_layer(dim_head, slice_num)
 
         # Concrete dropout on the output slice tokens
         if concrete_dropout:
@@ -299,10 +164,10 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
     def project_input_onto_slices(
         self, x: Float[torch.Tensor, "batch tokens channels"]
     ) -> (
-        Float[torch.Tensor, "batch tokens heads dim"]
+        Float[torch.Tensor, "batch heads tokens dim"]
         | tuple[
-            Float[torch.Tensor, "batch tokens heads dim"],
-            Float[torch.Tensor, "batch tokens heads dim"],
+            Float[torch.Tensor, "batch heads tokens dim"],
+            Float[torch.Tensor, "batch heads tokens dim"],
         ]
     ):
         r"""Project the input onto the slice space.
@@ -316,16 +181,94 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
         Returns
         -------
         torch.Tensor or tuple[torch.Tensor, torch.Tensor]
-            If ``plus=True``, returns single tensor of shape :math:`(B, N, H, D)` where
+            If ``plus=True``, returns single tensor of shape :math:`(B, H, N, D)` where
             :math:`H` is number of heads and :math:`D` is head dimension. If ``plus=False``,
-            returns tuple of two tensors both of shape :math:`(B, N, H, D)`, representing
+            returns tuple of two tensors both of shape :math:`(B, H, N, D)`, representing
             the query and key projections respectively.
         """
-        fx = None if self.plus else self.in_project_fx
-        return _project_input(
-            x, self.in_project_x, self.heads, self.dim_head,
-            "B N (H D) -> B N H D", project_fx=fx,
+        # Project input to multi-head representation: (B, N, C) -> (B, H, N, D)
+        projected_x = rearrange(
+            self.in_project_x(x), "B N (h d) -> B h N d", h=self.heads, d=self.dim_head
         )
+
+        if self.plus:
+            # Transolver++ uses single projection for both paths
+            return projected_x
+        else:
+            # Standard Transolver uses separate query and key projections
+            feature_projection = rearrange(
+                self.in_project_fx(x),
+                "B N (h d) -> B h N d",
+                h=self.heads,
+                d=self.dim_head,
+            )
+            return projected_x, feature_projection
+
+    def compute_slices_from_projections(
+        self,
+        slice_projections: Float[torch.Tensor, "batch heads tokens slices"],
+        fx: Float[torch.Tensor, "batch heads tokens dim"],
+    ) -> tuple[
+        Float[torch.Tensor, "batch heads tokens slices"],
+        Float[torch.Tensor, "batch heads slices dim"],
+    ]:
+        r"""Compute slice weights and slice tokens from input projections and latent features.
+
+        Parameters
+        ----------
+        slice_projections : torch.Tensor
+            Projected input tensor of shape :math:`(B, H, N, S)` where :math:`B` is batch size,
+            :math:`H` is number of heads, :math:`N` is number of tokens, and :math:`S` is number of
+            slices, representing the projection of each token onto each slice for each
+            attention head.
+        fx : torch.Tensor
+            Latent feature tensor of shape :math:`(B, H, N, D)` where :math:`D` is head dimension,
+            representing the learned states to be aggregated by the slice weights.
+
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor]
+            - ``slice_weights``: Tensor of shape :math:`(B, H, N, S)`, normalized weights for
+              each slice per token and head.
+            - ``slice_token``: Tensor of shape :math:`(B, H, S, D)`, aggregated latent features
+              for each slice, head, and batch.
+
+        Notes
+        -----
+        The function computes a temperature-scaled softmax over the slice projections to
+        obtain slice weights, then aggregates the latent features for each slice using
+        these weights. The aggregated features are normalized by the sum of weights for
+        numerical stability.
+        """
+        # Compute temperature-adjusted softmax weights
+        if self.plus:
+            # Transolver++ uses adaptive temperature with Gumbel softmax
+            temperature = self.temperature + self.proj_temperature(fx)
+            clamped_temp = torch.clamp(temperature, min=0.01).to(
+                slice_projections.dtype
+            )
+            slice_weights = gumbel_softmax(slice_projections, clamped_temp)
+        else:
+            # Standard Transolver uses fixed temperature with regular softmax
+            clamped_temp = torch.clamp(self.temperature, min=0.5, max=5).to(
+                slice_projections.dtype
+            )
+            slice_weights = nn.functional.softmax(
+                slice_projections / clamped_temp, dim=-1
+            )
+
+        # Ensure weights match the computation dtype
+        slice_weights = slice_weights.to(slice_projections.dtype)
+
+        # Aggregate features by slice weights with normalization
+        # Normalize first to prevent overflow in reduced precision
+        slice_norm = slice_weights.sum(2)  # Sum over tokens: (B, H, S)
+        normed_weights = slice_weights / (slice_norm[:, :, None, :] + 1e-2)
+
+        # Weighted aggregation: (B, H, S, N) @ (B, H, N, D) -> (B, H, S, D)
+        slice_token = torch.matmul(normed_weights.transpose(2, 3), fx)
+
+        return slice_weights, slice_token
 
     def forward(
         self, x: Float[torch.Tensor, "batch tokens channels"]
@@ -370,120 +313,11 @@ class ContextProjector(_SliceToContextMixin, nn.Module):
         else:
             projected_x, feature_projection = self.project_input_onto_slices(x)
 
-        # Project latent representations onto physical state slices: (B, N, H, D) -> (B, N, H, S)
+        # Project latent representations onto physical state slices: (B, H, N, D) -> (B, H, N, S)
         slice_projections = self.in_project_slice(projected_x)
 
         # Compute weighted aggregation of features into slice tokens
-        _, slice_tokens = self._compute_slices(
-            slice_projections, feature_projection
-        )
-
-        # Apply concrete dropout to output slice tokens
-        if self.output_dropout is not None:
-            slice_tokens = self.output_dropout(slice_tokens)
-
-        return slice_tokens
-
-
-class StructuredContextProjector(_SliceToContextMixin, nn.Module):
-    r"""Context projector with Conv2d/Conv3d geometry encoding on structured grids.
-
-    Same output interface as :class:`ContextProjector`—slice tokens
-    :math:`(B, H, S, D)`—but projects per-cell geometry via spatial convolutions
-    aligned with structured GALE attention.
-    """
-
-    def __init__(
-        self,
-        dim: int,
-        spatial_shape: tuple[int, ...],
-        heads: int = 8,
-        dim_head: int = 64,
-        dropout: float = 0.0,
-        slice_num: int = 64,
-        kernel: int = 3,
-        use_te: bool = True,
-        plus: bool = False,
-        concrete_dropout: bool = False,
-    ) -> None:
-        super().__init__()
-        if len(spatial_shape) not in (2, 3):
-            raise ValueError(
-                f"StructuredContextProjector expects spatial_shape of length 2 or 3, got {spatial_shape!r}"
-            )
-        inner_dim = dim_head * heads
-        self.dim_head = dim_head
-        self.heads = heads
-        self.plus = plus
-        self.use_te = use_te
-        self.spatial_shape = tuple(int(s) for s in spatial_shape)
-        self._nd = len(self.spatial_shape)
-        pad = kernel // 2
-        if self._nd == 2:
-            H, W = self.spatial_shape
-            self.H, self.W = H, W
-            self.in_project_x = nn.Conv2d(dim, inner_dim, kernel, 1, pad)
-            if not plus:
-                self.in_project_fx = nn.Conv2d(dim, inner_dim, kernel, 1, pad)
-        else:
-            H, W, D_ = self.spatial_shape
-            self.H, self.W, self.D = H, W, D_
-            self.in_project_x = nn.Conv3d(dim, inner_dim, kernel, 1, pad)
-            if not plus:
-                self.in_project_fx = nn.Conv3d(dim, inner_dim, kernel, 1, pad)
-
-        self.softmax = nn.Softmax(dim=-1)
-        self.dropout = nn.Dropout(dropout)
-        self._init_slice_components(dim_head, slice_num, heads, use_te, plus)
-
-        # Concrete dropout on the output slice tokens
-        if concrete_dropout:
-            self.output_dropout = ConcreteDropout(
-                in_features=dim_head,
-                init_p=max(dropout, 0.05),
-            )
-        else:
-            self.output_dropout = None
-
-    def _grid_project(
-        self, x: Float[torch.Tensor, "batch tokens channels"]
-    ) -> (
-        Float[torch.Tensor, "batch tokens heads dim"]
-        | tuple[
-            Float[torch.Tensor, "batch tokens heads dim"],
-            Float[torch.Tensor, "batch tokens heads dim"],
-        ]
-    ):
-        B, N, C = x.shape
-        grid = _structured_grid_to_conv_input(
-            x, B, N, C, self._nd, self.spatial_shape
-        )
-        pattern = (
-            "B (H D) h w -> B (h w) H D"
-            if self._nd == 2
-            else "B (H D) h w d -> B (h w d) H D"
-        )
-        fx = None if self.plus else self.in_project_fx
-        return _project_input(
-            grid, self.in_project_x, self.heads, self.dim_head,
-            pattern, project_fx=fx,
-        )
-
-    def forward(
-        self, x: Float[torch.Tensor, "batch tokens channels"]
-    ) -> Float[torch.Tensor, "batch heads slices dim"]:
-        if not torch.compiler.is_compiling():
-            if x.ndim != 3:
-                raise ValueError(
-                    f"Expected 3D input (B, N, C), got {x.ndim}D shape {tuple(x.shape)}"
-                )
-        if self.plus:
-            projected_x = self._grid_project(x)
-            feature_projection = projected_x
-        else:
-            projected_x, feature_projection = self._grid_project(x)
-        slice_projections = self.in_project_slice(projected_x)
-        _, slice_tokens = self._compute_slices(
+        _, slice_tokens = self.compute_slices_from_projections(
             slice_projections, feature_projection
         )
 
@@ -805,10 +639,6 @@ class GlobalContextBuilder(nn.Module):
         Whether to use Transolver++ features. Default is ``False``.
     include_local_features : bool, optional
         Enable local feature extraction. Default is ``False``.
-    structured_shape : tuple[int, ...] | None, optional
-        If set, disables ball-query extractors and uses
-        :class:`StructuredContextProjector` for geometry when ``geometry_dim``
-        is set. Default is ``None``.
 
     Forward
     -------
@@ -857,7 +687,6 @@ class GlobalContextBuilder(nn.Module):
         use_te: bool = True,
         plus: bool = False,
         include_local_features: bool = False,
-        structured_shape: tuple[int, ...] | None = None,
         concrete_dropout: bool = False,
     ) -> None:
         super().__init__()
@@ -870,17 +699,9 @@ class GlobalContextBuilder(nn.Module):
 
         dim_head = n_hidden // n_head
         context_dim = 0
-        self.structured_shape = structured_shape
-
-        # Ball-query local features are not used on structured grids
-        use_local_bq = (
-            geometry_dim is not None
-            and include_local_features
-            and structured_shape is None
-        )
 
         # Multi-scale extractors for local features (one per functional dim)
-        if use_local_bq:
+        if geometry_dim is not None and include_local_features:
             self.local_extractors = nn.ModuleList(
                 [
                     MultiScaleFeatureExtractor(
@@ -905,23 +726,16 @@ class GlobalContextBuilder(nn.Module):
 
         # Geometry tokenizer for global geometry context
         if geometry_dim is not None:
-            if structured_shape is not None:
-                self.geometry_tokenizer = StructuredContextProjector(
-                    geometry_dim,
-                    structured_shape,
-                    n_head,
-                    dim_head,
-                    dropout,
-                    slice_num,
-                    use_te=use_te,
-                    plus=plus,
-                    concrete_dropout=concrete_dropout,
-                )
-            else:
-                self.geometry_tokenizer = ContextProjector(
-                    geometry_dim, n_head, dim_head, dropout, slice_num, use_te, plus=plus, 
-                    concrete_dropout=concrete_dropout,
-                )
+            self.geometry_tokenizer = ContextProjector(
+                geometry_dim,
+                n_head,
+                dim_head,
+                dropout,
+                slice_num,
+                use_te,
+                plus,
+                concrete_dropout=concrete_dropout,
+            )
             context_dim += dim_head
         else:
             self.geometry_tokenizer = None

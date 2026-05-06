@@ -35,6 +35,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
+import importlib
 from abc import ABC, abstractmethod
 
 import torch
@@ -44,165 +45,19 @@ from jaxtyping import Float
 from torch.autograd.profiler import record_function
 from torch.distributed.tensor.placement_types import Replicate
 
-from physicsnemo.core.version_check import OptionalImport
+from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.nn import gumbel_softmax
 
 # Note: We use duck typing to check for ShardTensor instead of importing it
 # directly to avoid circular imports (domain_parallel imports from nn).
 # ShardTensor has a `redistribute` method that we check for.
 
-te = OptionalImport("transformer_engine.pytorch")
+TE_AVAILABLE = check_version_spec("transformer_engine", hard_fail=False)
 
-
-def _project_input(
-    x: torch.Tensor,
-    project_x: nn.Module,
-    heads: int,
-    dim_head: int,
-    pattern: str,
-    project_fx: nn.Module | None = None,
-) -> (
-    Float[torch.Tensor, "B N H D"]
-    | tuple[
-        Float[torch.Tensor, "B N H D"],
-        Float[torch.Tensor, "B N H D"],
-    ]
-):
-    r"""Project input through one or two learned layers and rearrange to multi-head format.
-
-    Universal building block for the ``(B, N, C) -> (B, N, H, D)`` projection
-    used by low attention mechanism in the repo: slice-based (Transolver /
-    GALE), FLARE, and future linear-attention variants.
-
-    For structured grids the caller reshapes to spatial layout *before* calling
-    this function and passes the appropriate einops ``pattern``; the output is
-    always ``(B, N, H, D)`` with tokens in position 1, preserving
-    domain-parallel sharding over N.
-
-    Parameters
-    ----------
-    x : torch.Tensor
-        Input tensor. For irregular meshes this is ``(B, N, C)``; for
-        structured grids it has already been reshaped to conv-friendly layout
-        (e.g. ``(B, C, H_s, W_s)``).
-    project_x : nn.Module
-        Primary projection layer (``nn.Linear``, ``nn.Conv2d``, etc.).
-    heads : int
-        Number of attention heads ``H``.
-    dim_head : int
-        Dimension per head ``D``.
-    pattern : str
-        Einops rearrange pattern that maps the projection output to
-        ``(B, N, H, D)``.  Examples:
-
-        - ``"B N (H D) -> B N H D"`` for linear projection
-        - ``"B (H D) h w -> B (h w) H D"`` for 2-D convolution
-        - ``"B (H D) h w d -> B (h w d) H D"`` for 3-D convolution
-    project_fx : nn.Module or None, optional
-        If provided, a second projection is applied to ``x`` and the function
-        returns a ``(px, pfx)`` tuple.  Omit for single-projection callers
-        (Transolver++ ``plus=True``, FLARE, etc.).  Default is ``None``.
-
-    Returns
-    -------
-    torch.Tensor or tuple[torch.Tensor, torch.Tensor]
-        Single tensor of shape :math:`(B, N, H, D)` when ``project_fx`` is
-        ``None``; otherwise a tuple ``(px, pfx)`` both of shape
-        :math:`(B, N, H, D)`.
-    """
-    px = rearrange(project_x(x), pattern, H=heads, D=dim_head)
-    if project_fx is None:
-        return px
-    return px, rearrange(project_fx(x), pattern, H=heads, D=dim_head)
-
-
-def _compute_slices_from_projections(
-    slice_projections: Float[torch.Tensor, "B N H S"],
-    fx: Float[torch.Tensor, "B N H D"],
-    temperature: torch.Tensor,
-    plus: bool,
-    proj_temperature: nn.Module | None = None,
-) -> tuple[
-    Float[torch.Tensor, "B N H S"],
-    Float[torch.Tensor, "B H S D"],
-]:
-    r"""Compute slice weights and slice tokens from input projections.
-
-    Standalone implementation of the temperature-scaled softmax slice
-    aggregation used by :class:`PhysicsAttentionBase` and reusable by any
-    module that needs the same project-to-slices-then-aggregate pattern
-    (e.g. :class:`~physicsnemo.experimental.models.geotransolver.context_projector.ContextProjector`).
-
-    In domain-parallel settings, this performs an implicit allreduce when
-    summing over the sharded token dimension.
-
-    Parameters
-    ----------
-    slice_projections : torch.Tensor
-        Projected input of shape :math:`(B, N, H, S)` where :math:`H` is
-        number of attention heads and :math:`S` is number of physics slices.
-    fx : torch.Tensor
-        Latent features of shape :math:`(B, N, H, D)` where :math:`D` is
-        dimension per head.
-    temperature : torch.Tensor
-        Scalar temperature for softmax/gumbel, shape broadcastable to
-        ``slice_projections`` (typically :math:`(1, 1, H, 1)`).
-    plus : bool
-        If ``True``, use Gumbel softmax with optional adaptive temperature.
-    proj_temperature : nn.Module or None, optional
-        If ``plus`` is ``True``, module mapping :math:`(B, N, H, D)` to
-        adaptive temperature; ignored otherwise. Default is ``None``.
-
-    Returns
-    -------
-    tuple[torch.Tensor, torch.Tensor]
-        - ``slice_weights``: Shape :math:`(B, N, H, S)`, normalized weights
-          for each slice per token.
-        - ``slice_token``: Shape :math:`(B, H, S, D)`, aggregated features
-          per slice.
-    """
-    # Compute temperature-scaled softmax over slices
-    if plus and proj_temperature is not None:
-        # Transolver++ uses learned per-token temperature
-        temp = temperature + proj_temperature(fx)
-        clamped_temp = torch.clamp(temp, min=0.01).to(slice_projections.dtype)
-        slice_weights = gumbel_softmax(slice_projections, clamped_temp)  # (B, N, H, S)
-    else:
-        # Standard Transolver uses global temperature
-        clamped_temp = torch.clamp(temperature, min=0.5, max=5).to(
-            slice_projections.dtype
-        )
-        slice_weights = nn.functional.softmax(
-            slice_projections / clamped_temp, dim=-1
-        )  # (B, N, H, S)
-
-    # Cast to the computation type (since the parameter is probably fp32)
-    slice_weights = slice_weights.to(slice_projections.dtype)
-
-    # Computing the slice tokens is a matmul followed by a normalization.
-    # It can, unfortunately, overflow in reduced precision, so normalize first:
-    slice_norm = slice_weights.sum(1) + 1e-2  # (B, H, S)
-    # Sharded note: slice_norm will be a partial sum at this point.
-    # That's because the we're summing over the tokens, which are distributed
-    normed_weights = slice_weights / (slice_norm[:, None, :, :])
-    # Normed weights has shape (B, N, H, S)
-
-    # Sharded note: normed_weights will resolve the partial slice_norm
-    # and the output normed_weights will be sharded.
-    # fx has shape (B, N, H, D)
-    # This matmul needs to contract over the tokens
-    # This should produce an output with shape (B, H, S, D)
-
-    # Like the weight norm, this sum is a **partial** sum since we are summing
-    # over the tokens
-
-    # Aggregate features: (B, N, H, S)^T @ (B, N, H, D) -> (B, H, S, D)
-    slice_token = torch.matmul(
-        normed_weights.permute(0, 2, 3, 1), fx.permute(0, 2, 1, 3)
-    )
-
-    # Return the original weights, not the normed weights:
-    return slice_weights, slice_token
+if TE_AVAILABLE:
+    te = importlib.import_module("transformer_engine.pytorch")
+else:
+    te = None
 
 
 class PhysicsAttentionBase(nn.Module, ABC):
@@ -370,9 +225,6 @@ class PhysicsAttentionBase(nn.Module, ABC):
         In domain-parallel settings, this performs an implicit allreduce when
         summing over the sharded token dimension.
 
-        Delegates to the module-level
-        :func:`_compute_slices_from_projections` free function.
-
         Parameters
         ----------
         slice_projections : torch.Tensor
@@ -390,10 +242,55 @@ class PhysicsAttentionBase(nn.Module, ABC):
             - ``slice_token``: Shape :math:`(B, H, S, D)`, aggregated features
               per slice.
         """
-        proj_temp = getattr(self, "proj_temperature", None) if self.plus else None
-        return _compute_slices_from_projections(
-            slice_projections, fx, self.temperature, self.plus, proj_temp
+        # Compute temperature-scaled softmax over slices
+        if self.plus:
+            # Transolver++ uses learned per-token temperature
+            temperature = self.temperature + self.proj_temperature(fx)
+            clamped_temp = torch.clamp(temperature, min=0.01).to(
+                slice_projections.dtype
+            )
+            slice_weights = gumbel_softmax(
+                slice_projections, clamped_temp
+            )  # (B, N, H, S)
+        else:
+            # Standard Transolver uses global temperature
+            clamped_temp = torch.clamp(self.temperature, min=0.5, max=5).to(
+                slice_projections.dtype
+            )
+            slice_weights = nn.functional.softmax(
+                slice_projections / clamped_temp, dim=-1
+            )  # (B, N, H, S)
+
+        # Cast to the computation type (since the parameter is probably fp32)
+        slice_weights = slice_weights.to(slice_projections.dtype)
+
+        # This does the projection of the latent space fx by the weights:
+
+        # Computing the slice tokens is a matmul followed by a normalization.
+        # It can, unfortunately, overflow in reduced precision, so normalize first:
+        slice_norm = slice_weights.sum(1) + 1e-2  # (B, H, S)
+        # Sharded note: slice_norm will be a partial sum at this point.
+        # That's because the we're summing over the tokens, which are distributed
+        normed_weights = slice_weights / (slice_norm[:, None, :, :])
+        # Normed weights has shape (B, N, H, S)
+
+        # Sharded note: normed_weights will resolve the partial slice_norm
+        # and the output normed_weights will be sharded.
+        # fx has shape (B, N, H, D)
+        # This matmul needs to contract over the tokens
+        # This should produce an output with shape (B, H, S, D)
+
+        # Like the weight norm, this sum is a **partial** sum since we are summing
+        # over the tokens
+
+        # Aggregate features: (B, N, H, S)^T @ (B, N, H, D) -> (B, H, S, D)
+        slice_token = torch.matmul(
+            normed_weights.permute(0, 2, 3, 1), fx.permute(0, 2, 1, 3)
         )
+
+        # Return the original weights, not the normed weights:
+
+        return slice_weights, slice_token
 
     def _compute_slice_attention_te(
         self, slice_tokens: Float[torch.Tensor, "B H S D"]
@@ -647,15 +544,21 @@ class PhysicsAttentionIrregularMesh(PhysicsAttentionBase):
             Projected tensors of shape :math:`(B, N, H, D)` where :math:`H` is
             number of attention heads and :math:`D` is dimension per head.
         """
-        fx = None if self.plus else self.in_project_fx
-        return _project_input(
-            x,
-            self.in_project_x,
-            self.heads,
-            self.dim_head,
-            "B N (H D) -> B N H D",
-            project_fx=fx,
+        # Project and reshape to multi-head format
+        x_mid = rearrange(
+            self.in_project_x(x), "B N (H D) -> B N H D", H=self.heads, D=self.dim_head
         )
+
+        if self.plus:
+            return x_mid
+        else:
+            fx_mid = rearrange(
+                self.in_project_fx(x),
+                "B N (H D) -> B N H D",
+                H=self.heads,
+                D=self.dim_head,
+            )
+            return x_mid, fx_mid
 
 
 class PhysicsAttentionStructuredMesh2D(PhysicsAttentionBase):
@@ -770,15 +673,26 @@ class PhysicsAttentionStructuredMesh2D(PhysicsAttentionBase):
         x = x.view(B, self.H, self.W, C)
         x = x.permute(0, 3, 1, 2)
 
-        fx = None if self.plus else self.in_project_fx
-        return _project_input(
-            x,
-            self.in_project_x,
-            self.heads,
-            self.dim_head,
+        # Apply 2D convolution and reshape to multi-head format
+        input_projected_x = self.in_project_x(x)
+        input_projected_x = rearrange(
+            input_projected_x,
             "B (H D) h w -> B (h w) H D",
-            project_fx=fx,
+            D=self.dim_head,
+            H=self.heads,
         )
+
+        if self.plus:
+            return input_projected_x
+        else:
+            input_projected_fx = self.in_project_fx(x)
+            input_projected_fx = rearrange(
+                input_projected_fx,
+                "B (H D) h w -> B (h w) H D",
+                D=self.dim_head,
+                H=self.heads,
+            )
+            return input_projected_x, input_projected_fx
 
 
 class PhysicsAttentionStructuredMesh3D(PhysicsAttentionBase):
@@ -894,12 +808,23 @@ class PhysicsAttentionStructuredMesh3D(PhysicsAttentionBase):
         x = x.view(B, self.H, self.W, self.D, C)
         x = x.permute(0, 4, 1, 2, 3)
 
-        fx = None if self.plus else self.in_project_fx
-        return _project_input(
-            x,
-            self.in_project_x,
-            self.heads,
-            self.dim_head,
-            "B (H D) h w d -> B (h w d) H D",
-            project_fx=fx,
+        # Apply 3D convolution and reshape to multi-head format
+        input_projected_x = self.in_project_x(x)
+        input_projected_x = rearrange(
+            input_projected_x,
+            "B (H D) height width depth -> B (height width depth) H D",
+            D=self.dim_head,
+            H=self.heads,
         )
+
+        if self.plus:
+            return input_projected_x
+        else:
+            input_projected_fx = self.in_project_fx(x)
+            input_projected_fx = rearrange(
+                input_projected_fx,
+                "B (H D) height width depth -> B (height width depth) H D",
+                D=self.dim_head,
+                H=self.heads,
+            )
+            return input_projected_x, input_projected_fx

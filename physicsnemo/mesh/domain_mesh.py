@@ -174,7 +174,7 @@ class DomainMesh:
                         f"has n_spatial_dims={bc_mesh.n_spatial_dims}."
                     )
 
-    def apply(
+    def apply_to_meshes(
         self,
         fn: Callable[[Mesh], Mesh],
         *,
@@ -190,6 +190,11 @@ class DomainMesh:
 
         All built-in operations (``translate``, ``rotate``, ``subdivide``,
         ``clean``, etc.) delegate here.
+
+        This is distinct from the inherited tensorclass :meth:`apply`, which
+        recursively maps a ``Tensor -> Tensor`` callable across every leaf
+        tensor. Use :meth:`apply` for tensor-level transforms (e.g. dtype
+        casting) and :meth:`apply_to_meshes` for mesh-level transforms.
 
         Parameters
         ----------
@@ -209,11 +214,11 @@ class DomainMesh:
         --------
         Convert every mesh to a point cloud (drop connectivity):
 
-        >>> dm_cloud = dm.apply(lambda m: Mesh(points=m.points))  # doctest: +SKIP
+        >>> dm_cloud = dm.apply_to_meshes(lambda m: Mesh(points=m.points))  # doctest: +SKIP
 
         Subdivide only the boundaries (e.g. to match a finer interior):
 
-        >>> dm2 = dm.apply(  # doctest: +SKIP
+        >>> dm2 = dm.apply_to_meshes(  # doctest: +SKIP
         ...     lambda m: m.subdivide(levels=1), boundaries=True, interior=False
         ... )
         """
@@ -380,7 +385,7 @@ class DomainMesh:
         DomainMesh
             New domain with translated geometry.
         """
-        return self.apply(lambda m: m.translate(offset=offset))
+        return self.apply_to_meshes(lambda m: m.translate(offset=offset))
 
     def rotate(
         self,
@@ -568,7 +573,7 @@ class DomainMesh:
         DomainMesh
             New domain with transformed geometry.
         """
-        result = self.apply(
+        result = self.apply_to_meshes(
             lambda m: m.transform(
                 matrix=matrix,
                 transform_point_data=transform_point_data,
@@ -621,7 +626,7 @@ class DomainMesh:
         DomainMesh
             New domain with cleaned meshes.
         """
-        return self.apply(
+        return self.apply_to_meshes(
             lambda m: m.clean(
                 tolerance=tolerance,
                 merge_points=merge_points,
@@ -640,7 +645,7 @@ class DomainMesh:
         DomainMesh
             New domain with all cached values cleared.
         """
-        return self.apply(lambda m: m.strip_caches())
+        return self.apply_to_meshes(lambda m: m.strip_caches())
 
     def subdivide(
         self,
@@ -663,7 +668,7 @@ class DomainMesh:
         DomainMesh
             New domain with subdivided meshes.
         """
-        return self.apply(lambda m: m.subdivide(levels=levels, filter=filter))
+        return self.apply_to_meshes(lambda m: m.subdivide(levels=levels, filter=filter))
 
     ### Data Operations
 
@@ -682,7 +687,7 @@ class DomainMesh:
         DomainMesh
             New domain with converted data on all meshes.
         """
-        return self.apply(
+        return self.apply_to_meshes(
             lambda m: m.cell_data_to_point_data(overwrite_keys=overwrite_keys)
         )
 
@@ -701,7 +706,7 @@ class DomainMesh:
         DomainMesh
             New domain with converted data on all meshes.
         """
-        return self.apply(
+        return self.apply_to_meshes(
             lambda m: m.point_data_to_cell_data(overwrite_keys=overwrite_keys)
         )
 
@@ -729,7 +734,7 @@ class DomainMesh:
         DomainMesh
             Domain with gradient fields added to each mesh's ``point_data``.
         """
-        return self.apply(
+        return self.apply_to_meshes(
             lambda m: m.compute_point_derivatives(
                 keys=keys, method=method, gradient_type=gradient_type
             )
@@ -759,7 +764,7 @@ class DomainMesh:
         DomainMesh
             Domain with gradient fields added to each mesh's ``cell_data``.
         """
-        return self.apply(
+        return self.apply_to_meshes(
             lambda m: m.compute_cell_derivatives(
                 keys=keys, method=method, gradient_type=gradient_type
             )

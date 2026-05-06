@@ -19,9 +19,9 @@ import torch
 
 from physicsnemo.experimental.models.geotransolver.gale import (
     GALE,
-    GALE_FA,
     GALE_block,
 )
+from physicsnemo.experimental.models.geotransolver.gale_fa import GALE_FA
 
 # =============================================================================
 # GALE (Geometry-Aware Latent Embeddings) Attention Tests

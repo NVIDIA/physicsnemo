@@ -29,48 +29,10 @@ from einops import rearrange
 from jaxtyping import Float
 
 from physicsnemo.core.version_check import check_version_spec, OptionalImport
-from physicsnemo.nn.module.physics_attention import _project_input
 
 # Check optional dependency availability
 TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
 te = OptionalImport("transformer_engine.pytorch", "0.1.0")
-
-
-def _flare_self_attention(
-    x_mid: Float[torch.Tensor, "B H N D"],
-    q_global: nn.Parameter,
-    self_k: nn.Module,
-    self_v: nn.Module,
-    scale: float,
-) -> Float[torch.Tensor, "B H N D"]:
-    r"""FLARE two-pass self-attention kernel.
-
-    Computes low-rank attention via learned global queries: first aggregate
-    token values into global slots, then distribute back to tokens.
-
-    Parameters
-    ----------
-    x_mid : torch.Tensor
-        Projected input of shape :math:`(B, H, N, D)`.
-    q_global : nn.Parameter
-        Learned global queries of shape :math:`(1, H, S, D)`.
-    self_k : nn.Module
-        Key projection applied to ``x_mid``.
-    self_v : nn.Module
-        Value projection applied to ``x_mid``.
-    scale : float
-        Attention scale factor.
-
-    Returns
-    -------
-    torch.Tensor
-        Self-attended output of shape :math:`(B, H, N, D)`.
-    """
-    G = q_global.to(dtype=x_mid.dtype).expand(x_mid.shape[0], -1, -1, -1)
-    k = self_k(x_mid)
-    v = self_v(x_mid)
-    z = F.scaled_dot_product_attention(G, k, v, scale=scale)
-    return F.scaled_dot_product_attention(k, G, z, scale=scale)
 
 
 class FLARE(nn.Module):
@@ -175,17 +137,35 @@ class FLARE(nn.Module):
             Output tensor of shape :math:`(B, N, C)`, same shape as inputs.
         """
 
-        x_mid = _project_input(
-            x, self.in_project_x, self.heads, self.dim_head,
-            "B N (H D) -> B N H D",
+        x_mid = self.in_project_x(x)
+        x_mid = rearrange(
+            x_mid, "B N (h d) -> B N h d", h=self.heads, d=self.dim_head
         )
-        x_mid = x_mid.permute(0, 2, 1, 3)  # (B, N, H, D) -> (B, H, N, D)
+        x_mid = x_mid.permute(0, 2, 1, 3)  # [B, H, N, D]
+        G = self.q_global.to(dtype=x_mid.dtype).expand(x_mid.shape[0], -1, -1, -1)
+        k = self.self_k(x_mid)
+        v = self.self_v(x_mid)
 
-        y = _flare_self_attention(
-            x_mid, self.q_global, self.self_k, self.self_v, self.scale,
-        )
+        # FLARE: Fast Low-rank Attention Routing Engine
+        if self.use_te:
+            # Transformer Engine expects (B, S, H, D) format
+            G = rearrange(G, "b h s d -> b s h d")
+            k = rearrange(k, "b h s d -> b s h d")
+            v = rearrange(v, "b h s d -> b s h d")
+            z = self.attn_fn(G, k, v)
+            z = rearrange(
+                z, "b s (h d) -> b s h d", h=self.heads, d=self.dim_head
+            )
+            self_attention = self.attn_fn(k, G, z)
+            y = rearrange(
+                self_attention, "b s (h d) -> b h s d", h=self.heads, d=self.dim_head
+            )
+        else:
+            # Use PyTorch's scaled dot-product attention
+            z = F.scaled_dot_product_attention(G, k, v, scale=self.scale)
+            y = F.scaled_dot_product_attention(k, G, z, scale=self.scale)
 
-        out_x = y.permute(0, 2, 1, 3)  # (B, H, N, D) -> (B, N, H, D)
+        out_x = y.permute(0, 2, 1, 3)  # [B, N, H, D]
         out_x = rearrange(out_x, "b n h d -> b n (h d)")
         out_x = self.out_linear(out_x)
         return self.out_dropout(out_x)

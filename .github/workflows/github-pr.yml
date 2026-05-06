@@ -63,6 +63,8 @@ env:
   UV_CACHE_KEY_PREFIX:   "uv-cache-nightly-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12-uv0.11.7"
   TESTMON_CACHE_KEY_PREFIX:  "testmon-nightly"
   COVERAGE_CACHE_KEY_PREFIX: "coverage-nightly"
+  JIT_CACHE_KEY_PREFIX: "jit-cache-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12"
+  JIT_CACHE_DIR: "/root/.cache/jit"
 
   # ---- uv read-only defaults --------------------------------------------
   UV_FROZEN: "1"
@@ -117,7 +119,17 @@ jobs:
         restore-keys: |
           ${{ env.TESTMON_CACHE_KEY_PREFIX }}-
 
+    - name: Restore JIT compilation cache from nightly
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ env.JIT_CACHE_DIR }}
+        key: ${{ env.JIT_CACHE_KEY_PREFIX }}-latest
+
     - name: Run core tests (with testmon)
+      env:
+        WARP_CACHE_PATH: ${{ env.JIT_CACHE_DIR }}/warp
+        TRITON_CACHE_DIR: ${{ env.JIT_CACHE_DIR }}/triton
+        TORCHINDUCTOR_CACHE_DIR: ${{ env.JIT_CACHE_DIR }}/inductor
       run: |
         uv run --no-sync python -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*"
 
@@ -164,11 +176,25 @@ jobs:
         restore-keys: |
           ${{ env.COVERAGE_CACHE_KEY_PREFIX }}-
 
+    - name: Restore JIT compilation cache from nightly
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ env.JIT_CACHE_DIR }}
+        key: ${{ env.JIT_CACHE_KEY_PREFIX }}-latest
+
     - name: Run core tests for coverage report (testmon-selected)
+      env:
+        WARP_CACHE_PATH: ${{ env.JIT_CACHE_DIR }}/warp
+        TRITON_CACHE_DIR: ${{ env.JIT_CACHE_DIR }}/triton
+        TORCHINDUCTOR_CACHE_DIR: ${{ env.JIT_CACHE_DIR }}/inductor
       run: |
         uv run --no-sync coverage run --rcfile='test/coverage.pytest.rc' -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*"
 
     - name: Run doc tests (testmon not supported for doctests)
+      env:
+        WARP_CACHE_PATH: ${{ env.JIT_CACHE_DIR }}/warp
+        TRITON_CACHE_DIR: ${{ env.JIT_CACHE_DIR }}/triton
+        TORCHINDUCTOR_CACHE_DIR: ${{ env.JIT_CACHE_DIR }}/inductor
       run: |
         uv run --no-sync coverage run --rcfile='test/coverage.docstring.rc' -m pytest --doctest-modules physicsnemo/ --ignore-glob="*internal*" --ignore-glob="*experimental*"
 

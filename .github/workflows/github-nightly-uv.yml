@@ -89,6 +89,8 @@ env:
   UV_CACHE_KEY_PREFIX:   "uv-cache-nightly-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12-uv0.11.7"
   TESTMON_CACHE_KEY_PREFIX:  "testmon-nightly"
   COVERAGE_CACHE_KEY_PREFIX: "coverage-nightly"
+  JIT_CACHE_KEY_PREFIX: "jit-cache-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12"
+  JIT_CACHE_DIR: "/root/.cache/jit"
 
   # ---- uv read-only defaults --------------------------------------------
   # Belt-and-braces against the historical bug class where an unguarded
@@ -248,11 +250,64 @@ jobs:
         uv-cache-key-suffix: "latest"
         extras: ${{ env.EXTRAS_TAG }}
 
+    # Restore compiled JIT artifacts (warp, triton, inductor) from the
+    # previous nightly so kernel compilation is skipped when source hasn't
+    # changed.  Fail-open: a miss only costs compilation time.
+    - name: Restore JIT compilation cache
+      id: jit-cache-restore
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ env.JIT_CACHE_DIR }}
+        key: ${{ env.JIT_CACHE_KEY_PREFIX }}-latest
+
     - name: Run core tests (collect all for testmon)
+      env:
+        WARP_CACHE_PATH: ${{ env.JIT_CACHE_DIR }}/warp
+        TRITON_CACHE_DIR: ${{ env.JIT_CACHE_DIR }}/triton
+        TORCHINDUCTOR_CACHE_DIR: ${{ env.JIT_CACHE_DIR }}/inductor
       run: |
         # Workflow-level UV_NO_SYNC=1 + UV_FROZEN=1 keep `uv run` strictly
         # read-only, so the .venv cannot be mutated mid-job.
         uv run --no-sync python -m pytest --testmon --ignore-glob="*docs*" --ignore-glob="*examples*"
+
+    # --- JIT compilation cache (static key, delete-before-save) ---
+    #
+    # Same pattern as the uv download cache: the `-latest` key is a
+    # mutable slot.  GitHub Actions caches are immutable, so we delete
+    # the old entry before saving.  The cache is additive and each
+    # compiler handles its own source-hash invalidation, so it survives
+    # lockfile and kernel-source changes safely.
+    - name: Delete stale JIT cache entry
+      if: always()
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        JIT_CACHE_KEY: ${{ env.JIT_CACHE_KEY_PREFIX }}-latest
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        if ! command -v gh >/dev/null 2>&1; then
+          echo "::warning::gh CLI not on PATH; skipping JIT cache save."
+          exit 0
+        fi
+        existing="$(gh cache list \
+          --repo "$REPO" \
+          --key "$JIT_CACHE_KEY" \
+          --json key \
+          --jq '.[].key' \
+          | grep -Fx "$JIT_CACHE_KEY" || true)"
+        if [ -n "$existing" ]; then
+          gh cache delete "$JIT_CACHE_KEY" --repo "$REPO"
+          echo "deleted stale JIT cache: $JIT_CACHE_KEY"
+        else
+          echo "no existing JIT cache to delete: $JIT_CACHE_KEY"
+        fi
+
+    - name: Save JIT compilation cache
+      if: always()
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ env.JIT_CACHE_DIR }}
+        key: ${{ env.JIT_CACHE_KEY_PREFIX }}-latest
 
     - name: Save testmon database to cache
       uses: actions/cache/save@v5

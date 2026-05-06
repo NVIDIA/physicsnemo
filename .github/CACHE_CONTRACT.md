@@ -1,13 +1,13 @@
-# Nightly UV Cache Contract
+# Nightly Cache Contract
 
 This document is the authoritative reference for how the
 `Nightly Github UV Workflow`
 ([.github/workflows/github-nightly-uv.yml](workflows/github-nightly-uv.yml))
-publishes a uv download cache and how downstream PR workflows consume
-it. PR gating relies on this contract being honored on both sides; do
-not weaken it without updating this document.
+publishes caches and how downstream PR workflows consume them.  PR
+gating relies on these contracts being honored on both sides; do not
+weaken them without updating this document.
 
-## One cache, one contract
+## Caches
 
 ### uv download cache (`~/.cache/uv`)
 
@@ -25,6 +25,37 @@ not weaken it without updating this document.
 The uv download cache is purely a speed optimisation. Correctness comes
 from three independent sources: a pinned CUDA container image, a pinned
 `uv` version, and `uv sync --frozen` against the committed lockfile.
+
+### JIT compilation cache (`/root/.cache/jit`)
+
+| Property | Value |
+|---|---|
+| Key | `<JIT_CACHE_KEY_PREFIX>-latest` |
+| Prefix encodes | container image + Python version |
+| Suffix | literal `latest` (mutable slot, refreshed via delete-before-save) |
+| Contents | compiled artifacts from warp (`warp/`), triton (`triton/`), and torch inductor (`inductor/`); additive across lockfile and kernel-source changes |
+| Invalidates when | container image or Python version changes (prefix change → new slot) |
+| Does **not** invalidate on | `uv.lock`, `pyproject.toml`, or kernel source changes (each compiler handles its own source-hash invalidation internally) |
+| Restore semantics | **fail-open**; missing cache only costs compilation time, never correctness |
+| Save semantics | nightly `testmon` job only, via delete-before-save; PR workflows restore but never save |
+
+The JIT compilation cache bundles all JIT compiler artifact directories
+under a single umbrella path.  Each compiler writes to a subdirectory
+controlled by its own environment variable:
+
+- **Warp**: `WARP_CACHE_PATH` → `$JIT_CACHE_DIR/warp`
+- **Triton**: `TRITON_CACHE_DIR` → `$JIT_CACHE_DIR/triton`
+- **torch.compile / Inductor**: `TORCHINDUCTOR_CACHE_DIR` → `$JIT_CACHE_DIR/inductor`
+
+The cache is additive and survives lockfile changes.  Correctness is
+guaranteed by each compiler's built-in source-hash invalidation: Warp
+hashes kernel source and recompiles changed kernels; Triton and
+Inductor hash computational graphs.  Warp also namespaces its cache by
+version, so upgrading warp simply adds new entries without invalidating
+old ones.
+
+To add a new JIT backend: create a subdirectory under `$JIT_CACHE_DIR`,
+set the backend's cache-path env var in the test step, done.
 
 ## Why no `.venv` cache
 
@@ -109,11 +140,12 @@ version, or extras tag, you must update both:
    [.github/workflows/github-nightly-uv.yml](workflows/github-nightly-uv.yml)
    and
    [.github/workflows/github-pr.yml](workflows/github-pr.yml).
-2. The corresponding literal embedded in `UV_CACHE_KEY_PREFIX`
-   (GitHub Actions does not support env-to-env references within the
-   same `env:` block, so these are kept in lockstep manually).
+2. The corresponding literals embedded in `UV_CACHE_KEY_PREFIX` and
+   `JIT_CACHE_KEY_PREFIX` (GitHub Actions does not support env-to-env
+   references within the same `env:` block, so these are kept in
+   lockstep manually).
 
-The first nightly run after a baseline bump will miss the cache, do a
-full download, and republish under the new prefix. Existing PR workflows
-that pin to the old prefix will silently fall back to cold-cache (slow
-but correct) until they are updated.
+The first nightly run after a baseline bump will miss all caches, do a
+full download/compilation, and republish under the new prefix.  Existing
+PR workflows that pin to the old prefix will silently fall back to
+cold-cache (slow but correct) until they are updated.
