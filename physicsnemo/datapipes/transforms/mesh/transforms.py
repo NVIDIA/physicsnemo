@@ -20,7 +20,7 @@ Deterministic mesh transforms (Mesh -> Mesh) and terminal conversions.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, TypeAlias, get_args
 
 import torch
 from jaxtyping import Float, Int
@@ -29,7 +29,14 @@ from tensordict import TensorDict
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.datapipes.transforms.subsample import poisson_sample_indices_fixed
-from physicsnemo.mesh import DomainMesh, Mesh, MeshSection
+from physicsnemo.mesh import DomainMesh, Mesh
+
+### Local mirror of `Mesh`'s three public data sections, kept in this
+### module so transforms don't take a typing dependency on
+### `physicsnemo.mesh`. The runtime tuple is derived from the `Literal`
+### via `get_args` so the two stay in lockstep.
+_MeshSection: TypeAlias = Literal["point_data", "cell_data", "global_data"]
+_MESH_SECTION_NAMES: tuple[_MeshSection, ...] = get_args(_MeshSection)
 
 
 @register()
@@ -510,12 +517,16 @@ class NormalizeMeshFields(MeshTransform):
 
     def __init__(
         self,
-        section: MeshSection = "point_data",
+        section: _MeshSection = "point_data",
         fields: dict[str, dict] | None = None,
         stats_file: str | None = None,
         eps: float = 1e-8,
     ) -> None:
         super().__init__()
+        if section not in _MESH_SECTION_NAMES:
+            raise ValueError(
+                f"section must be one of {_MESH_SECTION_NAMES!r}, got {section!r}"
+            )
         self._section = section
         self._eps = eps
 
@@ -535,9 +546,9 @@ class NormalizeMeshFields(MeshTransform):
             raise ValueError("Provide one of 'stats_file' or 'fields'")
 
     def __call__(self, mesh: Mesh) -> Mesh:
-        td = mesh.get_section(self._section)
-        new_td = td.clone()
-
+        ### Clone and z-score the targeted section in place; fields absent
+        ### from `_stats` (or absent from the mesh) are left untouched.
+        new_td = getattr(mesh, self._section).clone()
         for field_name, stats in self._stats.items():
             if field_name not in new_td.keys():
                 continue
@@ -546,15 +557,15 @@ class NormalizeMeshFields(MeshTransform):
             std = stats["std"].to(dtype=val.dtype, device=val.device)
             new_td[field_name] = (val - mean) / (std + self._eps)
 
-        kwargs: dict = {
-            "points": mesh.points,
-            "cells": mesh.cells,
-            "point_data": mesh.point_data,
-            "cell_data": mesh.cell_data,
-            "global_data": mesh.global_data,
-        }
-        kwargs[self._section] = new_td
-        return Mesh(**kwargs)
+        ### Shallow-copy the mesh and overwrite the single section. This
+        ### shares `points`, `cells`, untouched data sections, and the
+        ### geometric `_cache` (centroids/areas/normals) -- a full
+        ### `Mesh(points=..., cells=..., ...)` rebuild would silently drop
+        ### the cache. `Mesh.copy` is provided dynamically by `tensorclass`
+        ### and not surfaced in `Mesh`'s static surface, hence the ignore.
+        new_mesh = mesh.copy()  # ty: ignore[unresolved-attribute]
+        setattr(new_mesh, self._section, new_td)
+        return new_mesh
 
     def inverse_tensor(
         self,

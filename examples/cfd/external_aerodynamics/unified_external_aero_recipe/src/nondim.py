@@ -34,7 +34,7 @@ from tensordict import TensorDict
 
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
-from physicsnemo.mesh import DomainMesh, Mesh, MeshSection
+from physicsnemo.mesh import DomainMesh, Mesh
 
 ### Recognized non-dimensionalization recipes. Each names a specific
 ### algebraic transform applied to the matching field; see the
@@ -43,11 +43,13 @@ NondimFieldType: TypeAlias = Literal[
     "pressure", "stress", "velocity", "temperature", "density", "identity"
 ]
 
-### Tuple form of `MeshSection` for runtime membership checks at
-### construction time (Hydra hands us strings from YAML, so the static
-### `Literal` type is not enforced). Derived from the imported alias so
-### a fourth section added upstream automatically extends the validator.
-_MESH_SECTION_NAMES: tuple[MeshSection, ...] = get_args(MeshSection)
+### Local mirror of `Mesh`'s three public data sections. Defined here so
+### the recipe doesn't take a typing dependency on `physicsnemo.mesh`.
+### Hydra hands us a plain `str` from YAML, so the runtime tuple
+### (derived from the `Literal` via `get_args`) is what actually guards
+### config-time validation.
+_MeshSection: TypeAlias = Literal["point_data", "cell_data", "global_data"]
+_MESH_SECTION_NAMES: tuple[_MeshSection, ...] = get_args(_MeshSection)
 
 
 def _freestream_scales(
@@ -190,7 +192,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
     def __init__(
         self,
         fields: dict[str, NondimFieldType],
-        section: MeshSection = "point_data",
+        section: _MeshSection = "point_data",
     ) -> None:
         super().__init__()
         if section not in _MESH_SECTION_NAMES:
@@ -250,7 +252,9 @@ class NonDimensionalizeByMetadata(MeshTransform):
         ### Shallow-copy the mesh and overwrite the single section. Sharing
         ### `points`, `cells`, untouched data sections, and the `_cache` is
         ### safe here because none of them depend on `self._section`.
-        new_mesh = mesh.copy()
+        ### `Mesh.copy` is provided dynamically by `tensorclass` and not
+        ### surfaced in `Mesh`'s static surface, hence the ignore.
+        new_mesh = mesh.copy()  # ty: ignore[unresolved-attribute]
         setattr(new_mesh, self._section, new_td)
 
         ### When `L_ref` is present, geometry is scaled into nondim space
