@@ -26,7 +26,7 @@ Import this module before Hydra instantiation to register the transform.
 
 from __future__ import annotations
 
-from typing import Literal, TypeAlias
+from typing import Literal, TypeAlias, get_args
 
 import torch
 from jaxtyping import Float
@@ -42,6 +42,12 @@ from physicsnemo.mesh import DomainMesh, Mesh, MeshSection
 NondimFieldType: TypeAlias = Literal[
     "pressure", "stress", "velocity", "temperature", "density", "identity"
 ]
+
+### Tuple form of `MeshSection` for runtime membership checks at
+### construction time (Hydra hands us strings from YAML, so the static
+### `Literal` type is not enforced). Derived from the imported alias so
+### a fourth section added upstream automatically extends the validator.
+_MESH_SECTION_NAMES: tuple[MeshSection, ...] = get_args(MeshSection)
 
 
 def _freestream_scales(
@@ -187,6 +193,10 @@ class NonDimensionalizeByMetadata(MeshTransform):
         section: MeshSection = "point_data",
     ) -> None:
         super().__init__()
+        if section not in _MESH_SECTION_NAMES:
+            raise ValueError(
+                f"section must be one of {_MESH_SECTION_NAMES!r}, got {section!r}"
+            )
         for name, ftype in fields.items():
             if ftype not in _FIELD_TYPES:
                 raise ValueError(
@@ -221,9 +231,8 @@ class NonDimensionalizeByMetadata(MeshTransform):
             q_inf, p_inf, U_inf_mag, rho_inf, T_inf = _freestream_scales(gd)
             L_ref = gd["L_ref"].float() if "L_ref" in gd else None
 
-        td = mesh.get_section(self._section)
-        new_td = td.clone()
-
+        ### Clone and non-dimensionalize the targeted section in place.
+        new_td = getattr(mesh, self._section).clone()
         for field_name, ftype in self._fields.items():
             if skip_missing and field_name not in new_td.keys():
                 continue
@@ -238,19 +247,21 @@ class NonDimensionalizeByMetadata(MeshTransform):
                 T_inf=T_inf,
             )
 
-        points = mesh.points
-        if L_ref is not None:
-            points = points * L_ref if inverse else points / L_ref
+        ### Shallow-copy the mesh and overwrite the single section. Sharing
+        ### `points`, `cells`, untouched data sections, and the `_cache` is
+        ### safe here because none of them depend on `self._section`.
+        new_mesh = mesh.copy()
+        setattr(new_mesh, self._section, new_td)
 
-        kwargs: dict = {
-            "points": points,
-            "cells": mesh.cells,
-            "point_data": mesh.point_data,
-            "cell_data": mesh.cell_data,
-            "global_data": mesh.global_data,
-        }
-        kwargs[self._section] = new_td
-        return Mesh(**kwargs)
+        ### When `L_ref` is present, geometry is scaled into nondim space
+        ### (`x* = x / L_ref`, or `x = x* * L_ref` on the inverse pass).
+        ### `Mesh.scale` returns a fresh Mesh and propagates cached geometry
+        ### through the linear transform rather than discarding it.
+        if L_ref is not None:
+            factor = L_ref if inverse else 1.0 / L_ref
+            new_mesh = new_mesh.scale(factor)
+
+        return new_mesh
 
     def __call__(self, mesh: Mesh) -> Mesh:
         return self._transform_mesh(mesh, _nondim_field, inverse=False)

@@ -37,6 +37,7 @@ import json
 import logging
 import os
 import time
+from collections import defaultdict
 from collections.abc import Callable, Iterator
 from contextlib import nullcontext
 from datetime import datetime, timezone
@@ -123,23 +124,27 @@ def _flatten_config(
 
 def _log_to_tensorboard(
     writer: SummaryWriter | None,
-    values: dict[str, float | torch.Tensor],
+    values: dict[str, float],
     tag_prefix: str,
     global_step: int,
 ) -> None:
-    """Write a flat dict of scalars to TensorBoard under ``tag_prefix/<key>``.
+    """Write a flat dict of Python-float scalars to TensorBoard under ``tag_prefix/<key>``.
 
     ``tag_prefix`` is the dispatch hook: the caller decides whether these
     are loss entries (e.g. ``"iteration"`` -> ``iteration/loss/pressure``,
     where the key already starts with ``loss/``) or metric entries
     (e.g. ``"iteration/metrics"`` -> ``iteration/metrics/pressure_l2``).
     The function itself does not inspect keys.
+
+    Every caller in the recipe coerces tensor values into Python floats
+    before this point (``forward_pass``'s inlined ``.item()`` and the
+    ``defaultdict(float)`` running averages in ``_run_epoch``), so this
+    helper assumes ``values`` is ``dict[str, float]``.
     """
     if writer is None:
         return
     for k, v in values.items():
-        val = v if isinstance(v, (int, float)) else v.item()
-        writer.add_scalar(f"{tag_prefix}/{k}", val, global_step=global_step)
+        writer.add_scalar(f"{tag_prefix}/{k}", v, global_step=global_step)
 
 
 def get_autocast_context(precision: Precision):
@@ -315,22 +320,14 @@ def forward_pass(
     loss, loss_td = loss_calculator(pred_f32, target_f32)
     with torch.no_grad():
         metric_td = metric_calculator(pred_f32, target_f32)
-    return loss, _to_python_scalars(loss_td), _to_python_scalars(metric_td)
-
-
-def _to_python_scalars(d: dict[str, Any]) -> dict[str, float]:
-    """Convert a ``{name: tensor|float|int}`` dict into a ``{name: float}``."""
-    return {
-        k: v.item() if isinstance(v, torch.Tensor) else float(v) for k, v in d.items()
-    }
-
-
-def _accumulate_metrics(
-    total: dict[str, float], new: dict[str, float | torch.Tensor]
-) -> None:
-    """In-place: ``total[k] += float(new[k])`` for every key in *new*."""
-    for k, v in new.items():
-        total[k] = total.get(k, 0.0) + (v if isinstance(v, float) else v.item())
+    ### Move every per-field tensor off-device into a plain Python float
+    ### before returning so the caller can sum / log without holding on
+    ### to autograd graph fragments or device tensors.
+    return (
+        loss,
+        {k: v.item() for k, v in loss_td.items()},
+        {k: v.item() for k, v in metric_td.items()},
+    )
 
 
 def _run_epoch(
@@ -383,8 +380,8 @@ def _run_epoch(
     log_prefix = "Epoch" if is_train else "Val Epoch"
 
     total_loss = 0.0
-    total_losses: dict[str, float] = {}
-    total_metrics: dict[str, float] = {}
+    total_losses: dict[str, float] = defaultdict(float)
+    total_metrics: dict[str, float] = defaultdict(float)
     precision = getattr(cfg, "precision", "float32")
     n_batches = 0
     num_steps = len(dataloader)
@@ -420,8 +417,14 @@ def _run_epoch(
             this_loss = loss.detach().item()
             total_loss += this_loss
             n_batches += 1
-            _accumulate_metrics(total_losses, losses)
-            _accumulate_metrics(total_metrics, metrics)
+            ### `losses` and `metrics` are already `dict[str, float]` (the
+            ### Tensor->float coercion happens once in `forward_pass`'s
+            ### inlined `.item()` calls), so the per-key write here just
+            ### sums through `defaultdict(float)`'s automatic 0.0 seeding.
+            for k, v in losses.items():
+                total_losses[k] += v
+            for k, v in metrics.items():
+                total_metrics[k] += v
 
             step_dt = time.perf_counter() - step_t0
             mem_gb = (

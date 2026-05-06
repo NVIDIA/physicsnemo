@@ -212,14 +212,9 @@ class DropBoundary(MeshTransform):
         DomainMesh
             Domain mesh without the dropped boundaries.
         """
-        filtered = {
-            name: bnd
-            for name, bnd in domain.boundaries.items()
-            if name not in self.names
-        }
         return DomainMesh(
             interior=domain.interior,
-            boundaries=filtered,
+            boundaries=domain.boundaries.exclude(*self.names),
             global_data=domain.global_data,
         )
 
