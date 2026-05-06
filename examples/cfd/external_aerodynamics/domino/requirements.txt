@@ -1,5 +1,4 @@
 torchinfo
-warp-lang>=1.13.0
 tensorboard
 cuml-cu13==25.10.*
 einops
