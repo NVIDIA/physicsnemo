@@ -35,7 +35,7 @@ import torch
 import torch.distributed as dist
 from tensordict import TensorDict
 
-from utils import parse_target_config
+from utils import align_scalar_shapes, field_dim
 
 
 ### ---------------------------------------------------------------------------
@@ -118,7 +118,9 @@ class MetricCalculator:
         metrics: list[str] | None = None,
         prefix: str = "",
     ) -> None:
-        self.target_config = dict(target_config)
+        ### Lowercase types up front so per-call branches can compare with
+        ### literal "scalar" / "vector" without re-lowering each time.
+        self.target_config = {k: v.lower() for k, v in target_config.items()}
         self.process_group = process_group
         self.n_spatial_dims = n_spatial_dims
         self.metric_names = (
@@ -132,10 +134,10 @@ class MetricCalculator:
                     f"Unknown metric {m!r}; available {list(METRIC_FUNCTIONS)!r}"
                 )
 
-        ### parse_target_config validates field types and assigns dims; we
-        ### keep it for symmetry with LossCalculator and for total_channels.
-        self._field_specs = parse_target_config(target_config, n_spatial_dims)
-        self.total_channels = sum(spec.dim for spec in self._field_specs)
+        ### `field_dim` raises on unknown field types, validating the config.
+        self.total_channels = sum(
+            field_dim(t, n_spatial_dims) for t in self.target_config.values()
+        )
 
     def _make_key(self, *parts: str) -> str:
         key = "_".join(parts)
@@ -192,15 +194,10 @@ class MetricCalculator:
 
         out: dict[str, torch.Tensor] = {}
         with torch.no_grad():
-            for spec in self._field_specs:
-                name = spec.name
-                p = pred[name]
-                t = target[name]
-                if spec.field_type == "scalar":
-                    if p.ndim > 0 and p.shape[-1] == 1 and p.ndim > t.ndim:
-                        p = p.squeeze(-1)
-                    if t.ndim > 0 and t.shape[-1] == 1 and t.ndim > p.ndim:
-                        t = t.squeeze(-1)
+            for name, field_type in self.target_config.items():
+                p, t = pred[name], target[name]
+                if field_type == "scalar":
+                    p, t = align_scalar_shapes(p, t)
                     out.update(self._metrics_for_tensor(p, t, (name,)))
                 else:  # vector
                     n_components = p.shape[-1]
@@ -223,9 +220,7 @@ class MetricCalculator:
         return out
 
     def __repr__(self) -> str:
-        fields_str = ", ".join(
-            f"{spec.name}:{spec.field_type}" for spec in self._field_specs
-        )
+        fields_str = ", ".join(f"{n}:{t}" for n, t in self.target_config.items())
         return (
             f"MetricCalculator(fields=[{fields_str}], "
             f"metrics={self.metric_names}, prefix='{self.prefix}')"

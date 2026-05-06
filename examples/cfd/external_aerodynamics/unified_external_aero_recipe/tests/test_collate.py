@@ -124,11 +124,7 @@ class TestTensorInputCollate:
         collate = build_collate_fn("tensors", spec, {"pressure": "scalar"})
         batch = collate([(domain, {})])
         ### interior.points is (6, 3) -> (1, 6, 3).
-        assert tuple(batch["forward_kwargs"]["geometry"].shape) == (6, 3)[:0] + (
-            1,
-            6,
-            3,
-        )
+        assert tuple(batch["forward_kwargs"]["geometry"].shape) == (1, 6, 3)
 
     def test_global_feature_gets_token_padding(self, domain):
         """Global feature gets token padding."""

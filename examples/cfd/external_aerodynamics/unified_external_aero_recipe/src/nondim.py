@@ -160,15 +160,12 @@ class NonDimensionalizeByMetadata(MeshTransform):
     by it to produce non-dimensional coordinates: ``x* = x / L_ref``.
     This normalises point clouds and cell centroids computed downstream.
 
-    Parameters
-    ----------
-    fields : dict[str, str]
-        Mapping of ``{field_name: field_type}`` where *field_type* is one
-        of ``"pressure"``, ``"stress"``, ``"velocity"``, ``"temperature"``,
-        ``"density"``, or ``"identity"``.
-    section : str
-        Mesh data section containing the fields (``"point_data"`` or
-        ``"cell_data"``).
+    Args:
+        fields: Mapping of ``{field_name: field_type}`` where *field_type*
+            is one of ``"pressure"``, ``"stress"``, ``"velocity"``,
+            ``"temperature"``, ``"density"``, or ``"identity"``.
+        section: Mesh data section containing the fields
+            (``"point_data"`` or ``"cell_data"``).
 
     Example YAML::
 
@@ -205,13 +202,12 @@ class NonDimensionalizeByMetadata(MeshTransform):
     ) -> Mesh:
         """Shared implementation for forward and inverse mesh transforms.
 
-        Parameters
-        ----------
-        scales : tuple or None
-            Pre-computed ``(q_inf, p_inf, U_inf_mag, rho_inf, T_inf, L_ref)``
-            to use instead of deriving them from ``mesh.global_data``.
-        skip_missing : bool
-            If *True*, silently skip fields not present in the mesh section.
+        Args:
+            scales: Pre-computed
+                ``(q_inf, p_inf, U_inf_mag, rho_inf, T_inf, L_ref)``
+                to use instead of deriving them from ``mesh.global_data``.
+            skip_missing: If ``True``, silently skip fields not present in
+                the mesh section.
         """
         if scales is not None:
             q_inf, p_inf, U_inf_mag, rho_inf, T_inf, L_ref = scales
@@ -285,14 +281,11 @@ class NonDimensionalizeByMetadata(MeshTransform):
         ``p_inf``, and optionally ``L_ref``) to convert non-dimensional
         fields and geometry back to physical units.
 
-        Parameters
-        ----------
-        mesh : Mesh
-            Mesh with non-dimensionalized fields and metadata in ``global_data``.
+        Args:
+            mesh: Mesh with non-dimensionalized fields and metadata in
+                ``global_data``.
 
-        Returns
-        -------
-        Mesh
+        Returns:
             Mesh with re-dimensionalized fields.
         """
         return self._transform_mesh(mesh, _redim_field, inverse=True)
@@ -311,33 +304,28 @@ class NonDimensionalizeByMetadata(MeshTransform):
         """Re-dimensionalize a concatenated output tensor.
 
         Operates on model output tensors (shape ``(*, C)``) where channels
-        are ordered according to *field_types*.  This is useful at inference
-        time when you have a raw model prediction rather than a Mesh.
+        are ordered according to *field_types*. Useful at inference time
+        when you have a raw model prediction rather than a Mesh.
 
-        Parameters
-        ----------
-        tensor : Tensor
-            Shape ``(*, C)`` with channels ordered by *field_types*.
-        field_types : dict[str, str]
-            Ordered mapping of ``{field_name: nondim_type}`` where
-            *nondim_type* is one of ``"pressure"``, ``"stress"``,
-            ``"velocity"``, ``"temperature"``, ``"density"``, or
-            ``"identity"``.
-            Uses the model's output field names (e.g. after renaming),
-            not the original mesh field names.
-        q_inf, p_inf, U_inf_mag : Tensor
-            Reference quantities (scalars or broadcastable).
-        rho_inf : Tensor or None
-            Freestream density.  Required when *field_types* contains
-            ``"density"``.
-        T_inf : Tensor or None
-            Freestream temperature.  Required when *field_types* contains
-            ``"temperature"``.
+        Args:
+            tensor: Shape ``(*, C)`` with channels ordered by *field_types*.
+            field_types: Ordered mapping of ``{field_name: nondim_type}``
+                where *nondim_type* is one of ``"pressure"``, ``"stress"``,
+                ``"velocity"``, ``"temperature"``, ``"density"``, or
+                ``"identity"``. Uses the model's output field names
+                (e.g. after renaming), not the original mesh field names.
+            q_inf: Reference dynamic pressure (scalar or broadcastable).
+            p_inf: Reference static pressure (scalar or broadcastable).
+            U_inf_mag: Reference freestream-velocity magnitude
+                (scalar or broadcastable).
+            rho_inf: Freestream density. Required when *field_types*
+                contains ``"density"``.
+            T_inf: Freestream temperature. Required when *field_types*
+                contains ``"temperature"``.
 
-        Returns
-        -------
-        Tensor
-            Same shape, with each field's channels re-dimensionalized.
+        Returns:
+            Same shape as *tensor*, with each field's channels
+            re-dimensionalized.
         """
         out = tensor.clone()
         idx = 0

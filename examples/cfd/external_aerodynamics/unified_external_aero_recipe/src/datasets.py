@@ -72,18 +72,30 @@ def load_dataset_config(yaml_path: str | Path) -> DictConfig:
     return OmegaConf.merge({"dataset_paths": paths}, cfg)
 
 
+### Transform-config kwargs whose values are file paths and should be
+### resolved against the recipe root before Hydra instantiates the
+### transform. Add new entries here when introducing transforms with
+### path arguments (e.g. an ``index_file`` for a future indexing
+### transform). Matched by exact key name; values that are already
+### absolute paths or that don't exist on disk are passed through
+### unchanged so the underlying transform owns the error message.
 _PATH_KEYS = {"stats_file"}
-_CENTER_MESH_SUFFIX = "CenterMesh"
+
+### Match `.CenterMesh` (with leading dot) on the fully-qualified
+### `_target_` so a hypothetical sibling like `CenterMeshAdjusted`
+### doesn't silently capture the augmentation insertion point.
+_CENTER_MESH_TARGET_SUFFIX = ".CenterMesh"
 _MESH_TO_DOMAIN_MESH_SUFFIX = "MeshToDomainMesh"
 
 
 def _resolve_transform_paths(t_cfg: DictConfig, base_dir: Path) -> DictConfig:
     """Resolve relative file paths in a transform config against *base_dir*.
 
-    Transforms like ``NormalizeMeshFields`` accept ``stats_file``
-    parameters that may be relative.  When Hydra changes the working
-    directory these would break, so we resolve them to absolute paths
-    before instantiation.
+    Walks the keys in :data:`_PATH_KEYS` and, for each that resolves to
+    a relative existing path under *base_dir*, rewrites it to an absolute
+    path so Hydra's working-directory change doesn't break the
+    instantiation. Transforms like ``NormalizeMeshFields``'s
+    ``stats_file`` parameter rely on this.
     """
     for key in _PATH_KEYS:
         val = OmegaConf.select(t_cfg, key, default=None)
@@ -203,36 +215,30 @@ def build_surface_dataset(
 ) -> MeshDataset:
     """Build a single MeshDataset from a Hydra-style pipeline config.
 
-    Parameters
-    ----------
-    cfg : DictConfig
-        Dataset config with a ``pipeline:`` block containing ``reader:``
-        and ``transforms:`` entries.  An optional ``pipeline.augmentations``
-        list defines stochastic augmentation transforms (e.g.
-        ``RandomRotateMesh``, ``RandomTranslateMesh``) that are inserted
-        after ``CenterMesh`` when *augment* is ``True``.  If a top-level
-        ``metadata:`` block is present, its values are injected into
-        ``mesh.global_data`` as the first transform step.
-    base_dir : Path, optional
-        Root directory for resolving relative paths in transform configs
-        (e.g. ``stats_file``).  Defaults to the recipe root
-        (two levels above this file).
-    augment : bool, optional
-        When ``True``, ``pipeline.augmentations`` transforms are inserted
-        into the pipeline after ``CenterMesh``.  Should be ``False`` for
-        validation / test datasets.  Default ``False``.
-    device : str or torch.device, optional
-        Device to transfer mesh data to before transforms.  When ``None``,
-        data stays on CPU.
-    num_workers : int, default=1
-        Number of worker threads for the MeshDataset prefetch pool.
-    pin_memory : bool, default=False
-        If True, the reader places tensors in pinned (page-locked) memory
-        for faster async CPU-to-GPU transfers.
+    Args:
+        cfg: Dataset config with a ``pipeline:`` block containing
+            ``reader:`` and ``transforms:`` entries. An optional
+            ``pipeline.augmentations`` list defines stochastic
+            augmentation transforms (e.g. ``RandomRotateMesh``,
+            ``RandomTranslateMesh``) that are inserted after
+            ``CenterMesh`` when *augment* is ``True``. If a top-level
+            ``metadata:`` block is present, its values are injected into
+            ``mesh.global_data`` as the first transform step.
+        base_dir: Root directory for resolving relative paths in
+            transform configs (e.g. ``stats_file``). Defaults to the
+            recipe root (two levels above this file).
+        augment: When ``True``, ``pipeline.augmentations`` transforms
+            are inserted into the pipeline after ``CenterMesh``. Should
+            be ``False`` for validation / test datasets.
+        device: Device to transfer mesh data to before transforms. When
+            ``None``, data stays on CPU.
+        num_workers: Number of worker threads for the MeshDataset
+            prefetch pool.
+        pin_memory: If True, the reader places tensors in pinned
+            (page-locked) memory for faster async CPU-to-GPU transfers.
 
-    Returns
-    -------
-    MeshDataset
+    Returns:
+        Configured ``MeshDataset`` ready to be wrapped in a DataLoader.
     """
     if base_dir is None:
         base_dir = Path(__file__).resolve().parent.parent
@@ -271,7 +277,7 @@ def build_surface_dataset(
                 (
                     offset + i + 1
                     for i, t_cfg in enumerate(cfg.pipeline.transforms)
-                    if t_cfg.get("_target_", "").endswith(_CENTER_MESH_SUFFIX)
+                    if t_cfg.get("_target_", "").endswith(_CENTER_MESH_TARGET_SUFFIX)
                 ),
                 len(resolved),
             )
@@ -304,26 +310,18 @@ def load_manifest(path: str | Path, *, split: str | None = None) -> list[str]:
     - **Text** (without *split*): one sub-path per line (blank lines and
       ``#`` comments are stripped).
 
-    Parameters
-    ----------
-    path : str or Path
-        Path to the manifest file.
-    split : str, optional
-        Key to extract from a JSON dict manifest (e.g.
-        ``"single_aoa_4_train"``).  Required when the manifest is a dict,
-        ignored for flat list / text manifests.
+    Args:
+        path: Path to the manifest file.
+        split: Key to extract from a JSON dict manifest (e.g.
+            ``"single_aoa_4_train"``). Required when the manifest is a
+            dict; ignored for flat list / text manifests.
 
-    Returns
-    -------
-    list[str]
+    Returns:
         Sorted list of sub-path strings.
 
-    Raises
-    ------
-    KeyError
-        If *split* is given but not found in the manifest dict.
-    ValueError
-        If the manifest format doesn't match expectations.
+    Raises:
+        KeyError: If *split* is given but not found in the manifest dict.
+        ValueError: If the manifest format doesn't match expectations.
     """
     p = Path(path)
     text = p.read_text()
@@ -371,22 +369,17 @@ def resolve_manifest_indices(
     A reader path matches if any of its parent directories (relative to
     the reader root) equals the manifest entry.
 
-    Parameters
-    ----------
-    reader : MeshReader or DomainMeshReader
-        An instantiated reader with ``_root`` and ``_paths`` attributes.
-    manifest_entries : list[str]
-        Sub-path strings from the manifest (e.g. ``["run_1", "run_5"]``).
+    Args:
+        reader: An instantiated reader (``MeshReader`` or
+            ``DomainMeshReader``) with ``_root`` and ``_paths`` attributes.
+        manifest_entries: Sub-path strings from the manifest
+            (e.g. ``["run_1", "run_5"]``).
 
-    Returns
-    -------
-    list[int]
+    Returns:
         Sorted list of reader indices whose paths match the manifest.
 
-    Raises
-    ------
-    ValueError
-        If no reader paths match any manifest entry.
+    Raises:
+        ValueError: If no reader paths match any manifest entry.
     """
     entry_set = set(manifest_entries)
     indices = []
@@ -419,20 +412,15 @@ class ManifestSampler(Sampler[int]):
 
     Supports shuffling with epoch-aware seeding and distributed sharding.
 
-    Parameters
-    ----------
-    indices : list[int]
-        Dataset indices that belong to this split.
-    shuffle : bool
-        Whether to shuffle indices each epoch.
-    seed : int
-        Base random seed for reproducible shuffling.
-    rank : int
-        Current process rank (for distributed sharding). 0 for single-GPU.
-    world_size : int
-        Total number of processes. 1 for single-GPU.
-    drop_last : bool
-        If True, drop tail indices so every rank gets the same count.
+    Args:
+        indices: Dataset indices that belong to this split.
+        shuffle: Whether to shuffle indices each epoch.
+        seed: Base random seed for reproducible shuffling.
+        rank: Current process rank (for distributed sharding). 0 for
+            single-GPU.
+        world_size: Total number of processes. 1 for single-GPU.
+        drop_last: If True, drop tail indices so every rank gets the
+            same count.
     """
 
     def __init__(

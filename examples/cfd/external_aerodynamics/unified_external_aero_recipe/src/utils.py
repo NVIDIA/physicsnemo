@@ -54,15 +54,12 @@ def build_muon_optimizer(
     Muon handles 2-D parameters (linear/attention weight matrices) while AdamW
     handles everything else (biases, layer-norm, embeddings, etc.).
 
-    Parameters
-    ----------
-    model : torch.nn.Module
-        The model (may be DDP-wrapped).
-    cfg : DictConfig
-        Full Hydra config.  Reads ``cfg.training.optimizer.*`` for lr,
-        weight_decay, betas, and eps.
-    compile_optimizer : bool
-        If True, compile the optimizer step functions with ``torch.compile``.
+    Args:
+        model: The model (may be DDP-wrapped).
+        cfg: Full Hydra config. Reads ``cfg.training.optimizer.*`` for lr,
+            weight_decay, betas, and eps.
+        compile_optimizer: If True, compile the optimizer step functions
+            with ``torch.compile``.
     """
     base_model = model.module if hasattr(model, "module") else model
     muon_params = [p for p in base_model.parameters() if p.ndim == 2]
@@ -141,6 +138,26 @@ class FieldSpec:
         return self.end_index - self.start_index
 
 
+def field_dim(field_type: str, n_spatial_dims: int = 3) -> int:
+    """Number of channels a single ``"scalar"`` or ``"vector"`` field occupies.
+
+    Args:
+        field_type: ``"scalar"`` or ``"vector"`` (case-insensitive).
+        n_spatial_dims: Dimensionality of vector fields. Default 3.
+
+    Raises:
+        ValueError: If ``field_type`` is not ``"scalar"`` or ``"vector"``.
+    """
+    ftype = field_type.lower()
+    if ftype == "scalar":
+        return 1
+    if ftype == "vector":
+        return n_spatial_dims
+    raise ValueError(
+        f"Unknown field type {field_type!r}. Expected 'scalar' or 'vector'."
+    )
+
+
 def parse_target_config(
     target_config: dict[str, str], n_spatial_dims: int = 3
 ) -> list[FieldSpec]:
@@ -169,21 +186,11 @@ def parse_target_config(
     current_index = 0
 
     for name, field_type in target_config.items():
-        field_type = field_type.lower()
-        if field_type == "scalar":
-            dim = 1
-        elif field_type == "vector":
-            dim = n_spatial_dims
-        else:
-            raise ValueError(
-                f"Unknown field type '{field_type}' for field '{name}'. "
-                "Expected 'scalar' or 'vector'."
-            )
-
+        dim = field_dim(field_type, n_spatial_dims)
         specs.append(
             FieldSpec(
                 name=name,
-                field_type=field_type,
+                field_type=field_type.lower(),
                 start_index=current_index,
                 end_index=current_index + dim,
             )
@@ -193,3 +200,19 @@ def parse_target_config(
     return specs
 
 
+def align_scalar_shapes(
+    p: torch.Tensor, t: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Align a ``(...)`` / ``(..., 1)`` shape mismatch by squeezing one side.
+
+    Used in scalar-field loss / metric paths where the prediction may
+    arrive as ``(B, N, 1)`` (sliced from a concatenated ``(B, N, C)``
+    tensor before squeeze) while the target is ``(B, N)`` (per-element
+    scalar from a TensorDict), or vice versa. After alignment both
+    tensors share the same shape (or were already equal-shape).
+    """
+    if p.ndim > t.ndim and p.shape[-1] == 1:
+        p = p.squeeze(-1)
+    elif t.ndim > p.ndim and t.shape[-1] == 1:
+        t = t.squeeze(-1)
+    return p, t

@@ -41,6 +41,7 @@ from collections.abc import Iterator
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Literal
 
 import hydra
 import omegaconf
@@ -64,7 +65,7 @@ from utils import build_muon_optimizer, parse_target_config, set_seed
 
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.core.version_check import OptionalImport
-from physicsnemo.datapipes import DataLoader
+from physicsnemo.datapipes import DataLoader, MultiDataset
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.utils import load_checkpoint, save_checkpoint
@@ -81,6 +82,23 @@ TE_AVAILABLE = te.available
 ### pipeline as `PythonLogger`, so it shows up in the configured handlers.
 _LOGGER_BUILD_DATALOADERS = logging.getLogger("training.build_dataloaders")
 
+### When `cfg.profile` is set, every train / val epoch breaks out of its
+### batch loop after this many steps. Keeps profiling traces short enough
+### to be useful without changing the rest of the training contract.
+_PROFILE_MAX_STEPS = 10
+
+
+def _resolve_dict(cfg: DictConfig, path: str) -> dict | None:
+    """Resolve `cfg.<path>` to a plain dict, or ``None`` if missing/empty.
+
+    Wraps the OmegaConf incantation
+    ``OmegaConf.to_container(OmegaConf.select(cfg, path, default=...), resolve=True) or None``
+    that would otherwise repeat at every read site.
+    """
+    selected = OmegaConf.select(cfg, path, default=OmegaConf.create({}))
+    container = OmegaConf.to_container(selected, resolve=True)
+    return container or None
+
 
 def _flatten_config(d: dict, parent: str = "", sep: str = ".") -> dict[str, str]:
     """Recursively flatten a nested dict into dot-separated key/value pairs."""
@@ -96,40 +114,34 @@ def _flatten_config(d: dict, parent: str = "", sep: str = ".") -> dict[str, str]
 
 def _log_to_tensorboard(
     writer: SummaryWriter | None,
-    metrics_dict: dict[str, float | torch.Tensor],
-    prefix: str,
+    values: dict[str, float | torch.Tensor],
+    tag_prefix: str,
     global_step: int,
 ) -> None:
-    """Write metrics to TensorBoard with structured tag prefixes.
+    """Write a flat dict of scalars to TensorBoard under ``tag_prefix/<key>``.
 
-    Loss entries (keys starting with ``loss/``) are logged as
-    ``{prefix}/{key}`` (e.g. ``iteration/loss/pressure``).  All other
-    entries are treated as evaluation metrics and logged as
-    ``{prefix}/metrics/{key}`` (e.g. ``epoch/metrics/pressure_l2``).
+    ``tag_prefix`` is the dispatch hook: the caller decides whether these
+    are loss entries (e.g. ``"iteration"`` -> ``iteration/loss/pressure``,
+    where the key already starts with ``loss/``) or metric entries
+    (e.g. ``"iteration/metrics"`` -> ``iteration/metrics/pressure_l2``).
+    The function itself does not inspect keys.
     """
     if writer is None:
         return
-    for k, v in metrics_dict.items():
-        if k.startswith("loss/"):
-            tag = f"{prefix}/{k}"
-        else:
-            tag = f"{prefix}/metrics/{k}"
+    for k, v in values.items():
         val = v if isinstance(v, (int, float)) else v.item()
-        writer.add_scalar(tag, val, global_step=global_step)
+        writer.add_scalar(f"{tag_prefix}/{k}", val, global_step=global_step)
 
 
 def get_autocast_context(precision: str):
     """Return an autocast context manager for the given precision.
 
-    Parameters
-    ----------
-    precision : str
-        One of ``"float16"``, ``"bfloat16"``, ``"float8"``, or ``"float32"``.
-        For ``"float8"``, Transformer Engine must be available.
+    Args:
+        precision: One of ``"float16"``, ``"bfloat16"``, ``"float8"``, or
+            ``"float32"``. For ``"float8"``, Transformer Engine must be
+            available.
 
-    Returns
-    -------
-    contextlib.AbstractContextManager
+    Returns:
         An autocast context manager for the requested precision, or a
         no-op ``nullcontext`` when no casting is needed.
     """
@@ -275,36 +287,31 @@ def forward_pass(
     *,
     output_type: str,
     target_config: dict[str, str],
-    n_spatial_dims: int = 3,
-) -> tuple[torch.Tensor, dict[str, float]]:
-    """Run forward pass, compute loss and metrics.
+) -> tuple[torch.Tensor, dict[str, float], dict[str, float]]:
+    """Run a forward pass + loss + metrics on one collated batch.
 
-    Parameters
-    ----------
-    batch : dict
-        ``{"forward_kwargs": ..., "targets": TensorDict}`` produced by the
-        collate function. ``"targets"`` is a TensorDict with batch_size
-        ``[N]`` (mesh-input mode) or ``[1, N]`` (tensor-input mode).
-    model : torch.nn.Module
-        Model whose ``forward`` accepts the resolved ``forward_kwargs`` as
-        keyword arguments.
-    precision : str
-        One of "float32", "float16", "bfloat16", "float8".
-    output_type : str
-        "mesh" or "tensors". Controls how the model output is unpacked
-        into a TensorDict.
-    target_config : dict
-        ``{name: "scalar"|"vector"}``; used to split tensor outputs and
-        validate Mesh outputs.
-    n_spatial_dims : int
-        Vector field dimensionality (3 for the recipe's automotive cases).
+    Args:
+        batch: ``{"forward_kwargs": ..., "targets": TensorDict}`` produced
+            by the collate function. ``"targets"`` is a TensorDict with
+            batch_size ``[N]`` (mesh-input mode) or ``[1, N]``
+            (tensor-input mode).
+        model: Model whose ``forward`` accepts the resolved
+            ``forward_kwargs`` as keyword arguments.
+        precision: One of ``"float32"``, ``"float16"``, ``"bfloat16"``,
+            ``"float8"``. Float kwargs are pre-cast to this dtype before
+            the autocast context wraps the forward call.
+        loss_calculator: Returns ``(loss, loss_dict)`` from
+            ``(pred, target)`` TensorDicts.
+        metric_calculator: Returns a flat ``{name: scalar}`` metrics dict.
+        output_type: ``"mesh"`` or ``"tensors"``; controls how the model
+            output is unpacked into a TensorDict.
+        target_config: ``{name: "scalar"|"vector"}``; used to split tensor
+            outputs and validate Mesh outputs.
 
-    Returns
-    -------
-    loss : torch.Tensor
-        Scalar training loss.
-    metrics_dict : dict[str, float]
-        Per-field loss values plus evaluation metrics (L1, L2, MAE, ...).
+    Returns:
+        ``(loss, loss_dict, metric_dict)``. The two dicts are kept
+        separate so callers can route them to different log namespaces
+        without textual key inspection.
     """
     forward_kwargs = batch["forward_kwargs"]
     targets: TensorDict = batch["targets"]
@@ -320,30 +327,210 @@ def forward_pass(
     with get_autocast_context(precision):
         output = model(**forward_kwargs)
 
-    pred_td = _normalize_output_to_tensordict(
-        output, target_config, output_type, n_spatial_dims
-    )
+    pred_td = _normalize_output_to_tensordict(output, target_config, output_type)
 
     ### Loss runs in float32 to avoid bf16 precision loss in the reduction.
     pred_f32 = pred_td.float()
     target_f32 = targets.float()
 
-    loss, loss_dict = loss_calculator(pred_f32, target_f32)
-
-    metrics: dict[str, float] = {
-        k: v.item() if isinstance(v, torch.Tensor) else float(v)
-        for k, v in loss_dict.items()
-    }
+    loss, loss_td = loss_calculator(pred_f32, target_f32)
     with torch.no_grad():
-        metric_dict = metric_calculator(pred_f32, target_f32)
-        metrics.update(
-            {
-                k: v.item() if isinstance(v, torch.Tensor) else float(v)
-                for k, v in metric_dict.items()
-            }
-        )
+        metric_td = metric_calculator(pred_f32, target_f32)
+    return loss, _to_python_scalars(loss_td), _to_python_scalars(metric_td)
 
-    return loss, metrics
+
+def _to_python_scalars(d: dict[str, Any]) -> dict[str, float]:
+    """Convert a ``{name: tensor|float|int}`` dict into a ``{name: float}``."""
+    return {
+        k: v.item() if isinstance(v, torch.Tensor) else float(v) for k, v in d.items()
+    }
+
+
+def _accumulate_metrics(
+    total: dict[str, float], new: dict[str, float | torch.Tensor]
+) -> None:
+    """In-place: ``total[k] += float(new[k])`` for every key in *new*."""
+    for k, v in new.items():
+        total[k] = total.get(k, 0.0) + (v if isinstance(v, float) else v.item())
+
+
+def _run_epoch(
+    dataloader,
+    model: torch.nn.Module,
+    loss_calculator: LossCalculator,
+    metric_calculator: MetricCalculator,
+    logger,
+    epoch: int,
+    cfg: DictConfig,
+    dist_manager: DistributedManager,
+    *,
+    mode: Literal["train", "val"],
+    output_type: str,
+    target_config: dict[str, str],
+    optimizer: torch.optim.Optimizer | None = None,
+    scheduler=None,
+    scaler: GradScaler | None = None,
+    writer: SummaryWriter | None = None,
+    log_jsonl=None,
+) -> tuple[float, dict[str, float]]:
+    """Run one training-or-validation epoch.
+
+    Train and val share the same per-batch loop (``forward_pass`` +
+    metric accumulation + per-step console log + per-epoch summary).
+    Train mode additionally runs the backward / optimizer / scheduler
+    step and emits per-step TensorBoard + JSONL entries; val mode wraps
+    the loop in ``torch.no_grad()`` and skips the per-step writer logging.
+
+    Args:
+        mode: ``"train"`` or ``"val"``. ``"train"`` requires *optimizer*
+            and *scheduler*; ``"val"`` ignores them.
+        scaler: GradScaler for fp16 (train mode only).
+        writer: TensorBoard writer for the matching split. Per-epoch
+            metrics are written to it on rank 0; per-step metrics are
+            written only in train mode.
+        log_jsonl: Optional ``record -> None`` callback for JSONL logs.
+            See ``forward_pass`` and ``main`` docstrings for the rest of
+            the parameters.
+    """
+    is_train = mode == "train"
+    if is_train and (optimizer is None or scheduler is None):
+        raise ValueError("train mode requires both optimizer and scheduler")
+    if is_train:
+        model.train()
+    else:
+        model.eval()
+
+    grad_ctx = nullcontext() if is_train else torch.no_grad()
+    log_prefix = "Epoch" if is_train else "Val Epoch"
+
+    total_loss = 0.0
+    total_losses: dict[str, float] = {}
+    total_metrics: dict[str, float] = {}
+    precision = getattr(cfg, "precision", "float32")
+    n_batches = 0
+    num_steps = len(dataloader)
+    epoch_t0 = time.perf_counter()
+
+    with grad_ctx:
+        step_t0 = time.perf_counter()
+        for i, batch in enumerate(dataloader):
+            batch = _recursive_to_device(batch, dist_manager.device)
+
+            loss, losses, metrics = forward_pass(
+                batch,
+                model,
+                precision,
+                loss_calculator,
+                metric_calculator,
+                output_type=output_type,
+                target_config=target_config,
+            )
+
+            if is_train:
+                optimizer.zero_grad()
+                if precision == "float16" and scaler is not None:
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    optimizer.step()
+                if cfg.training.get("scheduler_update_mode", "epoch") == "step":
+                    scheduler.step()
+
+            this_loss = loss.detach().item()
+            total_loss += this_loss
+            n_batches += 1
+            _accumulate_metrics(total_losses, losses)
+            _accumulate_metrics(total_metrics, metrics)
+
+            step_dt = time.perf_counter() - step_t0
+            mem_gb = (
+                torch.cuda.memory_reserved() / 1024**3
+                if torch.cuda.is_available()
+                else 0
+            )
+            ### Train mode includes Mem in the per-step line; val drops it
+            ### because the no_grad path is the lowest-noise place to look.
+            mem_str = f" Mem: {mem_gb:.2f}GB" if is_train else ""
+            logger.info(
+                f"{log_prefix} {epoch} [{i + 1}/{num_steps}] "
+                f"Loss: {this_loss:.6f} "
+                f"Step: {step_dt:.3f}s"
+                f"{mem_str}"
+            )
+
+            ### Per-step TensorBoard + JSONL: train only. Val emits one
+            ### epoch-level entry below to keep dashboards uncluttered.
+            if is_train and dist_manager.rank == 0:
+                global_step = epoch * num_steps + i
+                if writer is not None:
+                    ### Loss keys already start with `loss/`, so the iteration
+                    ### prefix yields tags like `iteration/loss/pressure`;
+                    ### metric tags get an explicit `iteration/metrics/...`
+                    ### namespace so we never have to split by string prefix.
+                    _log_to_tensorboard(writer, losses, "iteration", global_step)
+                    _log_to_tensorboard(
+                        writer, metrics, "iteration/metrics", global_step
+                    )
+                    writer.add_scalar(
+                        "iteration/lr",
+                        scheduler.get_last_lr()[0],
+                        global_step=global_step,
+                    )
+                    writer.add_scalar(
+                        "iteration/performance/mem_gb",
+                        mem_gb,
+                        global_step=global_step,
+                    )
+                    writer.add_scalar(
+                        "iteration/performance/step_time_s",
+                        step_dt,
+                        global_step=global_step,
+                    )
+                if log_jsonl is not None:
+                    log_jsonl(
+                        {
+                            "phase": "step",
+                            "global_step": global_step,
+                            "loss": this_loss,
+                            "mem_gb": mem_gb,
+                            "step_time_s": step_dt,
+                            **losses,
+                            **metrics,
+                        }
+                    )
+
+            if cfg.profile and i >= _PROFILE_MAX_STEPS:
+                break
+            step_t0 = time.perf_counter()
+
+    epoch_dt = time.perf_counter() - epoch_t0
+    n = max(n_batches, 1)
+    avg_loss = total_loss / n
+    avg_losses = {k: v / n for k, v in total_losses.items()}
+    avg_metrics = {k: v / n for k, v in total_metrics.items()}
+
+    logger.info(
+        f"Epoch {epoch} {mode} done in {epoch_dt:.1f}s "
+        f"({n_batches} steps, {epoch_dt / n:.3f}s/step avg)"
+    )
+
+    if dist_manager.rank == 0:
+        _log_to_tensorboard(writer, avg_losses, "epoch", epoch)
+        _log_to_tensorboard(writer, avg_metrics, "epoch/metrics", epoch)
+        if log_jsonl is not None:
+            log_jsonl(
+                {
+                    "phase": mode,
+                    "epoch": epoch,
+                    "loss": avg_loss,
+                    **avg_losses,
+                    **avg_metrics,
+                }
+            )
+
+    return avg_loss, {**avg_losses, **avg_metrics}
 
 
 @profile
@@ -362,159 +549,28 @@ def train_epoch(
     *,
     output_type: str,
     target_config: dict[str, str],
-    n_spatial_dims: int = 3,
     train_writer: SummaryWriter | None = None,
     log_jsonl=None,
 ) -> tuple[float, dict[str, float]]:
-    """Run one training epoch over the dataloader.
-
-    Iterates through all batches, computes forward pass, back-propagates
-    gradients, and logs per-step and per-epoch statistics to TensorBoard and JSONL.
-
-    Parameters
-    ----------
-    dataloader : DataLoader
-        Training dataloader yielding ``{"forward_kwargs": ..., "targets":
-        TensorDict}`` batches as produced by `build_collate_fn`.
-    model : torch.nn.Module
-        The model to train (already on ``dist_manager.device``).
-    optimizer : torch.optim.Optimizer
-        Optimizer instance.
-    scheduler : torch.optim.lr_scheduler._LRScheduler
-        Learning-rate scheduler.  Updated per step or per epoch depending
-        on ``cfg.training.scheduler_update_mode``.
-    loss_calculator : LossCalculator
-        Computes the training loss from model outputs and targets.
-    metric_calculator : MetricCalculator
-        Computes evaluation metrics (L1, L2, MAE, etc.).
-    logger : RankZeroLoggingWrapper
-        Logger for console output.
-    epoch : int
-        Current epoch index (0-based).
-    cfg : DictConfig
-        Full Hydra config; uses ``cfg.profile`` and ``cfg.training``.
-    dist_manager : DistributedManager
-        Distributed training manager.
-    scaler : torch.amp.GradScaler or None, optional
-        Gradient scaler for mixed-precision (float16) training.
-    output_type : str
-        "mesh" or "tensors". Forwarded to :func:`forward_pass` so the
-        model output is unpacked the right way for loss/metrics.
-    target_config : dict
-        ``{name: scalar|vector}`` declared by the dataset YAML.
-    n_spatial_dims : int
-        Vector field dimensionality (defaults to 3).
-
-    Returns
-    -------
-    avg_loss : float
-        Mean training loss over all batches.
-    avg_metrics : dict[str, float]
-        Mean per-metric values over all batches.
-    """
-    model.train()
-    total_loss = 0.0
-    total_metrics: dict[str, float] = {}
-    precision = getattr(cfg, "precision", "float32")
-    n_batches = 0
-    num_steps = len(dataloader)
-    epoch_t0 = time.perf_counter()
-
-    step_t0 = time.perf_counter()
-    for i, batch in enumerate(dataloader):
-        batch = _recursive_to_device(batch, dist_manager.device)
-
-        loss, metrics = forward_pass(
-            batch,
-            model,
-            precision,
-            loss_calculator,
-            metric_calculator,
-            output_type=output_type,
-            target_config=target_config,
-            n_spatial_dims=n_spatial_dims,
-        )
-
-        optimizer.zero_grad()
-        if precision == "float16" and scaler is not None:
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss.backward()
-            optimizer.step()
-
-        if cfg.training.get("scheduler_update_mode", "epoch") == "step":
-            scheduler.step()
-
-        this_loss = loss.detach().item()
-        total_loss += this_loss
-        n_batches += 1
-
-        for k, v in metrics.items():
-            total_metrics[k] = total_metrics.get(k, 0.0) + (
-                v if isinstance(v, float) else v.item()
-            )
-
-        step_dt = time.perf_counter() - step_t0
-
-        mem_gb = (
-            torch.cuda.memory_reserved() / 1024**3 if torch.cuda.is_available() else 0
-        )
-        logger.info(
-            f"Epoch {epoch} [{i + 1}/{num_steps}] "
-            f"Loss: {this_loss:.6f} "
-            f"Step: {step_dt:.3f}s "
-            f"Mem: {mem_gb:.2f}GB"
-        )
-
-        # Per-step TensorBoard + JSONL logging
-        global_step = epoch * num_steps + i
-        if dist_manager.rank == 0:
-            if train_writer is not None:
-                _log_to_tensorboard(train_writer, metrics, "iteration", global_step)
-                current_lr = scheduler.get_last_lr()[0]
-                train_writer.add_scalar(
-                    "iteration/lr", current_lr, global_step=global_step
-                )
-                train_writer.add_scalar(
-                    "iteration/performance/mem_gb", mem_gb, global_step=global_step
-                )
-                train_writer.add_scalar(
-                    "iteration/performance/step_time_s",
-                    step_dt,
-                    global_step=global_step,
-                )
-            if log_jsonl is not None:
-                step_metrics = {
-                    "loss": this_loss,
-                    "mem_gb": mem_gb,
-                    "step_time_s": step_dt,
-                }
-                step_metrics.update(metrics)
-                log_jsonl({"phase": "step", "global_step": global_step, **step_metrics})
-
-        if cfg.profile and i >= 10:
-            break
-        step_t0 = time.perf_counter()
-
-    epoch_dt = time.perf_counter() - epoch_t0
-    avg_loss = total_loss / max(n_batches, 1)
-    avg_metrics = {k: v / max(n_batches, 1) for k, v in total_metrics.items()}
-
-    logger.info(
-        f"Epoch {epoch} train done in {epoch_dt:.1f}s "
-        f"({n_batches} steps, {epoch_dt / max(n_batches, 1):.3f}s/step avg)"
+    """Run one training epoch (delegates to :func:`_run_epoch` in train mode)."""
+    return _run_epoch(
+        dataloader,
+        model,
+        loss_calculator,
+        metric_calculator,
+        logger,
+        epoch,
+        cfg,
+        dist_manager,
+        mode="train",
+        output_type=output_type,
+        target_config=target_config,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        scaler=scaler,
+        writer=train_writer,
+        log_jsonl=log_jsonl,
     )
-
-    if dist_manager.rank == 0:
-        _log_to_tensorboard(train_writer, avg_metrics, "epoch", epoch)
-        if log_jsonl is not None:
-            epoch_log = {"loss": avg_loss}
-            epoch_log.update(avg_metrics)
-            log_jsonl({"phase": "train", "epoch": epoch, **epoch_log})
-
-    return avg_loss, avg_metrics
 
 
 @profile
@@ -530,104 +586,25 @@ def val_epoch(
     *,
     output_type: str,
     target_config: dict[str, str],
-    n_spatial_dims: int = 3,
     val_writer: SummaryWriter | None = None,
     log_jsonl=None,
 ) -> tuple[float, dict[str, float]]:
-    """Run one validation epoch.
-
-    Parameters
-    ----------
-    dataloader : DataLoader
-        Validation dataloader yielding ``{"forward_kwargs": ..., "targets":
-        TensorDict}`` batches as produced by `build_collate_fn`.
-    model : torch.nn.Module
-        The model to evaluate (already on ``dist_manager.device``).
-    loss_calculator : LossCalculator
-        Computes the validation loss.
-    metric_calculator : MetricCalculator
-        Computes normalised-space metrics.
-    logger : RankZeroLoggingWrapper
-        Logger for console output.
-    epoch : int
-        Current epoch index (0-based).
-    cfg : DictConfig
-        Full Hydra config; uses ``cfg.profile`` and ``cfg.precision``.
-    dist_manager : DistributedManager
-        Distributed training manager.
-    output_type : str
-        "mesh" or "tensors". Forwarded to :func:`forward_pass`.
-    target_config : dict
-        ``{name: scalar|vector}``.
-    n_spatial_dims : int
-        Vector field dimensionality (defaults to 3).
-
-    Returns
-    -------
-    avg_loss : float
-        Mean validation loss over all batches.
-    avg_metrics : dict[str, float]
-        Mean normalised-space metrics.
-    """
-    model.eval()
-    total_loss = 0.0
-    total_metrics: dict[str, float] = {}
-    precision = getattr(cfg, "precision", "float32")
-    n_batches = 0
-    num_steps = len(dataloader)
-    epoch_t0 = time.perf_counter()
-
-    with torch.no_grad():
-        step_t0 = time.perf_counter()
-        for i, batch in enumerate(dataloader):
-            batch = _recursive_to_device(batch, dist_manager.device)
-
-            loss, metrics = forward_pass(
-                batch,
-                model,
-                precision,
-                loss_calculator,
-                metric_calculator,
-                output_type=output_type,
-                target_config=target_config,
-                n_spatial_dims=n_spatial_dims,
-            )
-
-            step_dt = time.perf_counter() - step_t0
-            total_loss += loss.item()
-            n_batches += 1
-            for k, v in metrics.items():
-                total_metrics[k] = total_metrics.get(k, 0.0) + (
-                    v if isinstance(v, float) else v.item()
-                )
-
-            logger.info(
-                f"Val Epoch {epoch} [{i + 1}/{num_steps}] "
-                f"Loss: {loss.item():.6f} "
-                f"Step: {step_dt:.3f}s"
-            )
-
-            if cfg.profile and i >= 10:
-                break
-            step_t0 = time.perf_counter()
-
-    epoch_dt = time.perf_counter() - epoch_t0
-    avg_loss = total_loss / max(n_batches, 1)
-    avg_metrics = {k: v / max(n_batches, 1) for k, v in total_metrics.items()}
-
-    logger.info(
-        f"Epoch {epoch} val done in {epoch_dt:.1f}s "
-        f"({n_batches} steps, {epoch_dt / max(n_batches, 1):.3f}s/step avg)"
+    """Run one validation epoch (delegates to :func:`_run_epoch` in val mode)."""
+    return _run_epoch(
+        dataloader,
+        model,
+        loss_calculator,
+        metric_calculator,
+        logger,
+        epoch,
+        cfg,
+        dist_manager,
+        mode="val",
+        output_type=output_type,
+        target_config=target_config,
+        writer=val_writer,
+        log_jsonl=log_jsonl,
     )
-
-    if dist_manager.rank == 0:
-        _log_to_tensorboard(val_writer, avg_metrics, "epoch", epoch)
-        if log_jsonl is not None:
-            val_log = {"loss": avg_loss}
-            val_log.update(avg_metrics)
-            log_jsonl({"phase": "val", "epoch": epoch, **val_log})
-
-    return avg_loss, avg_metrics
 
 
 def _walk_batch_for_logging(
@@ -655,18 +632,30 @@ def _walk_batch_for_logging(
         for i, v in enumerate(value):
             sub = f"{prefix}[{i}]" if prefix else f"[{i}]"
             yield from _walk_batch_for_logging(v, sub)
-    elif isinstance(value, (Mesh, DomainMesh)):
-        ### For benchmarking we just log a few key tensors per Mesh.
-        if isinstance(value, DomainMesh):
-            yield from _walk_batch_for_logging(value.interior, f"{prefix}.interior")
-            for bname in value.boundary_names:
-                yield from _walk_batch_for_logging(
-                    value.boundaries[bname], f"{prefix}.boundaries.{bname}"
-                )
-        else:  # Mesh
-            yield (f"{prefix}.points", value.points)
-            if value.n_cells > 0:
-                yield (f"{prefix}.cells", value.cells)
+    elif isinstance(value, DomainMesh):
+        ### Recurse into interior, boundaries, and domain-level global_data
+        ### so I/O benchmarks see every leaf the model would actually
+        ### consume (point_data targets, boundary cell_data inputs, etc).
+        yield from _walk_batch_for_logging(value.interior, f"{prefix}.interior")
+        for bname in value.boundary_names:
+            yield from _walk_batch_for_logging(
+                value.boundaries[bname], f"{prefix}.boundaries.{bname}"
+            )
+        if value.global_data.keys():
+            yield from _walk_batch_for_logging(
+                value.global_data, f"{prefix}.global_data"
+            )
+    elif isinstance(value, Mesh):
+        ### Mesh-level inputs: emit geometry tensors + every per-element /
+        ### per-vertex / per-sample field. Each *_data attribute is itself
+        ### a TensorDict, so the TD branch above handles dotted leaf paths.
+        yield (f"{prefix}.points", value.points)
+        if value.n_cells > 0:
+            yield (f"{prefix}.cells", value.cells)
+        for section in ("point_data", "cell_data", "global_data"):
+            td = getattr(value, section)
+            if td.keys():
+                yield from _walk_batch_for_logging(td, f"{prefix}.{section}")
 
 
 @profile
@@ -678,16 +667,13 @@ def benchmark_io_epoch(
 ) -> None:
     """Iterate a dataloader without any model logic and report I/O timing.
 
-    Parameters
-    ----------
-    dataloader : DataLoader
-        Dataloader to benchmark.
-    label : str
-        Human-readable label for logging (e.g. ``"train"`` or ``"val"``).
-    logger : RankZeroLoggingWrapper
-        Logger for console output.
-    max_steps : int or None, optional
-        Stop after this many batches.  ``None`` means exhaust the loader.
+    Args:
+        dataloader: Dataloader to benchmark.
+        label: Human-readable label for logging (e.g. ``"train"`` or
+            ``"val"``).
+        logger: Logger for console output.
+        max_steps: Stop after this many batches. ``None`` means exhaust
+            the loader.
     """
     import statistics
 
@@ -881,10 +867,7 @@ def _build_collate(cfg: DictConfig, target_config: dict[str, str]):
         raise ValueError(
             "Training YAML must declare `input_type` (one of 'mesh', 'tensors')."
         )
-    forward_kwargs_spec = OmegaConf.to_container(
-        OmegaConf.select(cfg, "forward_kwargs", default=OmegaConf.create({})),
-        resolve=True,
-    )
+    forward_kwargs_spec = _resolve_dict(cfg, "forward_kwargs")
     if not forward_kwargs_spec:
         raise ValueError(
             "Training YAML must declare a non-empty `forward_kwargs:` block."
@@ -900,9 +883,6 @@ def _combine_datasets(datasets: list):
     """Wrap a list of `MeshDataset`s in a `MultiDataset` if there's more than one."""
     if len(datasets) == 1:
         return datasets[0]
-    ### Lazy-import: MultiDataset is rarely needed and not used in tests.
-    from physicsnemo.datapipes import MultiDataset
-
     return MultiDataset(*datasets, output_strict=False)
 
 
@@ -1190,12 +1170,11 @@ def main(cfg: DictConfig):
     4. Otherwise, instantiate the model, optimizer, and run the normal
        train/val epoch loop with checkpointing.
 
-    Parameters
-    ----------
-    cfg : DictConfig
-        Hydra config containing ``model``, ``training``, ``dataset``,
-        ``data``, ``output_dir``, ``run_id``, ``precision``, ``compile``,
-        ``profile``, ``benchmark_io``, ``logging``, and related keys.
+    Args:
+        cfg: Hydra config containing ``model``, ``training``, ``dataset``,
+            ``data``, ``output_dir``, ``run_id``, ``precision``,
+            ``compile``, ``profile``, ``benchmark_io``, ``logging``, and
+            related keys.
     """
     DistributedManager.initialize()
     dist_manager = DistributedManager()
@@ -1326,15 +1305,7 @@ def main(cfg: DictConfig):
     if metrics_override is not None:
         metrics_list = OmegaConf.to_container(metrics_override, resolve=True)
 
-    field_weights = (
-        OmegaConf.to_container(
-            OmegaConf.select(
-                cfg, "training.field_weights", default=OmegaConf.create({})
-            ),
-            resolve=True,
-        )
-        or None
-    )
+    field_weights = _resolve_dict(cfg, "training.field_weights")
 
     metric_calculator = MetricCalculator(
         target_config=target_config,
@@ -1350,7 +1321,6 @@ def main(cfg: DictConfig):
         raise ValueError(
             "Training YAML must declare `output_type` (one of 'mesh', 'tensors')."
         )
-    n_spatial_dims = int(cfg.get("n_spatial_dims", 3))
     logger.info(f"Loss: {loss_calculator}")
     logger.info(f"Metrics: {metric_calculator}")
     logger.info(
@@ -1391,7 +1361,6 @@ def main(cfg: DictConfig):
                 scaler,
                 output_type=output_type,
                 target_config=target_config,
-                n_spatial_dims=n_spatial_dims,
                 train_writer=train_writer,
                 log_jsonl=log_jsonl,
             )
@@ -1407,7 +1376,6 @@ def main(cfg: DictConfig):
                 dist_manager,
                 output_type=output_type,
                 target_config=target_config,
-                n_spatial_dims=n_spatial_dims,
                 val_writer=val_writer,
                 log_jsonl=log_jsonl,
             )
@@ -1459,11 +1427,9 @@ def main(cfg: DictConfig):
 def launch(cfg: DictConfig):
     """Hydra entry point: configure profiling and delegate to :func:`main`.
 
-    Parameters
-    ----------
-    cfg : DictConfig
-        Hydra-composed config (override with ``--config-name``).
-        When ``cfg.profile`` is truthy, torch profiling is enabled.
+    Args:
+        cfg: Hydra-composed config (override with ``--config-name``).
+            When ``cfg.profile`` is truthy, torch profiling is enabled.
     """
     profiler = Profiler()
     if cfg.profile:

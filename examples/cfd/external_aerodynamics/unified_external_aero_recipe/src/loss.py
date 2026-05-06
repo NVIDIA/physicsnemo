@@ -40,7 +40,7 @@ import torch
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from utils import parse_target_config
+from utils import align_scalar_shapes, field_dim
 
 DEFAULT_HUBER_DELTA = 1.0
 
@@ -154,29 +154,32 @@ class LossCalculator:
                 f"Unknown loss_type {loss_type!r}; expected one of "
                 f"'huber', 'mse', 'rmse'."
             )
-        self.target_config = dict(target_config)
+        ### Normalize types to lowercase up front so per-call branches can
+        ### compare with literal "scalar" / "vector" without re-lowering.
+        self.target_config = {k: v.lower() for k, v in target_config.items()}
         self.loss_type = loss_type
         self.n_spatial_dims = n_spatial_dims
         self.prefix = prefix
         self.normalize_by_channels = normalize_by_channels
         self.delta = delta
 
-        ### Field specs are kept around purely to compute total_channels;
-        ### per-field tensors are looked up by name in the input TensorDict,
-        ### so start/end indices are not needed.
-        self._field_specs = parse_target_config(target_config, n_spatial_dims)
-        self.total_channels = sum(spec.dim for spec in self._field_specs)
+        ### Per-field tensors are looked up by name in the input TensorDict,
+        ### so we just need a per-field dim count for total_channels.
+        ### `field_dim` raises on unknown field types, validating the config.
+        self.total_channels = sum(
+            field_dim(t, n_spatial_dims) for t in self.target_config.values()
+        )
 
         ### Per-field weights default to 1.0 for any field not in the dict.
         weights = dict(field_weights or {})
-        unknown = set(weights) - set(target_config)
+        unknown = set(weights) - set(self.target_config)
         if unknown:
             raise ValueError(
                 f"field_weights references unknown fields {sorted(unknown)!r}; "
-                f"target_config has {sorted(target_config)!r}."
+                f"target_config has {sorted(self.target_config)!r}."
             )
         self.field_weights: dict[str, float] = {
-            name: float(weights.get(name, 1.0)) for name in target_config
+            name: float(weights.get(name, 1.0)) for name in self.target_config
         }
 
     def _make_key(self, *parts: str) -> str:
@@ -220,17 +223,12 @@ class LossCalculator:
         total_loss = torch.zeros((), device=any_pred.device, dtype=any_pred.dtype)
         loss_dict: dict[str, torch.Tensor] = {}
 
-        for spec in self._field_specs:
-            name = spec.name
-            p = pred[name]
-            t = target[name]
-            if spec.field_type == "scalar":
-                ### Strip a trailing singleton dim if present so the loss is
-                ### invariant to whether the caller passed (..., 1) or (...).
-                if p.ndim > 0 and p.shape[-1] == 1 and p.ndim > t.ndim:
-                    p = p.squeeze(-1)
-                if t.ndim > 0 and t.shape[-1] == 1 and t.ndim > p.ndim:
-                    t = t.squeeze(-1)
+        for name, field_type in self.target_config.items():
+            p, t = pred[name], target[name]
+            if field_type == "scalar":
+                ### Caller may pass scalar fields as (..., 1) or (...);
+                ### normalize to a single shape so the loss is shape-agnostic.
+                p, t = align_scalar_shapes(p, t)
                 field_loss = _scalar_loss(p, t, self.loss_type, self.delta)
             else:  # vector
                 field_loss = _vector_loss(p, t, self.loss_type, self.delta)
@@ -247,9 +245,7 @@ class LossCalculator:
         return total_loss, loss_dict
 
     def __repr__(self) -> str:
-        fields_str = ", ".join(
-            f"{spec.name}:{spec.field_type}" for spec in self._field_specs
-        )
+        fields_str = ", ".join(f"{n}:{t}" for n, t in self.target_config.items())
         weights_str = ", ".join(
             f"{name}={w}" for name, w in self.field_weights.items() if w != 1.0
         )
