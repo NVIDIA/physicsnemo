@@ -100,6 +100,7 @@ def is_manifold(
         Input simplicial mesh to check
     check_level : {"facets", "edges", "full"}, optional
         Level of checking to perform:
+
         - "facets": Only check codimension-1 facets (each appears 1-2 times)
         - "edges": Check facets + edge neighborhoods (for 2D/3D meshes)
         - "full": Complete manifold validation (default)
@@ -361,6 +362,7 @@ def _check_vertices_manifold(mesh: "Mesh") -> bool:
 
     For a manifold, the link of each vertex (the set of cells incident to the vertex)
     must form a valid topological structure:
+
     - For 2D: The edges around each vertex form a single cycle or fan
     - For 3D: The faces around each vertex form a single connected surface
 

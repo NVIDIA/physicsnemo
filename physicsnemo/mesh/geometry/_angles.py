@@ -41,9 +41,10 @@ For 1D manifolds (edge meshes), the relevant curvature quantity is the
 inter-cell turning angle, which is computed in
 :mod:`physicsnemo.mesh.curvature._angles`.
 
-Reference:
-    Van Oosterom, A. & Strackee, J. (1983). "The Solid Angle of a Plane
-    Triangle." IEEE Trans. Biomed. Eng. BME-30(2):125-126.
+References
+----------
+Van Oosterom, A. & Strackee, J. (1983). "The Solid Angle of a Plane
+Triangle." IEEE Trans. Biomed. Eng. BME-30(2):125-126.
 """
 
 from typing import TYPE_CHECKING

@@ -14,17 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Hodge star operator for Discrete Exterior Calculus.
+r"""Hodge star operator for Discrete Exterior Calculus.
 
-The Hodge star ⋆ maps k-forms to (n-k)-forms, where n is the manifold dimension.
-It's used for defining inner products on forms and building higher-level DEC operators.
+The Hodge star :math:`\star` maps :math:`k`-forms to :math:`(n-k)`-forms,
+where :math:`n` is the manifold dimension. It's used for defining inner
+products on forms and building higher-level DEC operators.
 
-Key property: ⋆⋆ = (-1)^(k(n-k)) on k-forms
+Key property: :math:`\star \star = (-1)^{k(n-k)}` on :math:`k`-forms.
 
 The discrete Hodge star preserves averages between primal and dual cells:
-    ⟨α, σ⟩/|σ| = ⟨⋆α, ⋆σ⟩/|⋆σ|
 
-Reference: Desbrun et al., "Discrete Exterior Calculus", Section 4
+.. math::
+
+    \frac{\langle \alpha, \sigma \rangle}{|\sigma|}
+        = \frac{\langle \star \alpha, \star \sigma \rangle}{|\star \sigma|}.
+
+Reference: Desbrun et al. (2005), *Discrete Exterior Calculus*, §6
+(Hodge Star and Codifferential).
 """
 
 from typing import TYPE_CHECKING
@@ -40,28 +46,34 @@ def hodge_star_0(
     mesh: "Mesh",
     primal_0form: Float[torch.Tensor, "n_points ..."],
 ) -> Float[torch.Tensor, "n_points ..."]:
-    """Apply Hodge star to 0-form (vertex values).
+    r"""Apply Hodge star to 0-form (vertex values).
 
-    Maps ⋆₀: Ω⁰(K) → Ωⁿ(⋆K)
+    Maps :math:`\star_0 : \Omega^0(K) \to \Omega^n(\star K)`.
 
-    Takes values at vertices (0-simplices) to values at dual n-cells.
-    In the dual mesh, each vertex corresponds to a dual n-cell (Voronoi region).
+    Takes values at vertices (0-simplices) to values at dual :math:`n`-cells.
+    In the dual mesh, each vertex corresponds to a dual :math:`n`-cell
+    (Voronoi region).
 
-    Formula: ⟨⋆f, ⋆v⟩/|⋆v| = ⟨f, v⟩/|v| = f(v) (since |v|=1 for 0-simplex)
-    Therefore: ⋆f(⋆v) = f(v) × |⋆v|
+    .. math::
+
+        \frac{\langle \star f, \star v \rangle}{|\star v|}
+            = \frac{\langle f, v \rangle}{|v|} = f(v),
+
+    since :math:`|v| = 1` for a 0-simplex; therefore
+    :math:`\star f(\star v) = f(v) \, |\star v|`.
 
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh
-    primal_0form : torch.Tensor
-        Values at vertices, shape (n_points,) or (n_points, ...)
+        Simplicial mesh.
+    primal_0form : Float[torch.Tensor, "n_points ..."]
+        Values at vertices.
 
     Returns
     -------
-    torch.Tensor
-        Dual n-form values (one per cell in dual mesh = one per vertex in primal),
-        shape (n_points,) or (n_points, ...)
+    Float[torch.Tensor, "n_points ..."]
+        Dual :math:`n`-form values (one per cell in the dual mesh, i.e. one
+        per vertex in the primal).
 
     Examples
     --------
@@ -94,30 +106,35 @@ def hodge_star_1(
     primal_1form: Float[torch.Tensor, "n_edges ..."],
     edges: Int[torch.Tensor, "n_edges 2"],
 ) -> Float[torch.Tensor, "n_edges ..."]:
-    """Apply Hodge star to 1-form (edge values).
+    r"""Apply Hodge star to 1-form (edge values).
 
-    Maps ⋆₁: Ω¹(K) → Ω^(n-1)(⋆K)
+    Maps :math:`\star_1 : \Omega^1(K) \to \Omega^{n-1}(\star K)`.
 
-    Takes values at edges (1-simplices) to values at dual (n-1)-cells.
+    Takes values at edges (1-simplices) to values at dual
+    :math:`(n-1)`-cells. From
 
-    Formula: ⟨⋆α, ⋆e⟩/|⋆e| = ⟨α, e⟩/|e|
-    Therefore: ⋆α(⋆e) = α(e) × |⋆e|/|e| = α(e) × w_ij
+    .. math::
 
-    where w_ij is the FEM cotangent weight for the edge.
+        \frac{\langle \star \alpha, \star e \rangle}{|\star e|}
+            = \frac{\langle \alpha, e \rangle}{|e|}
+
+    we obtain
+    :math:`\star \alpha(\star e) = \alpha(e) \, |\star e| / |e| = \alpha(e) \, w_{ij}`,
+    where :math:`w_{ij}` is the FEM cotangent weight for the edge.
 
     Parameters
     ----------
     mesh : Mesh
         Simplicial mesh of any manifold dimension.
-    primal_1form : torch.Tensor
-        Values on edges, shape (n_edges,) or (n_edges, ...)
-    edges : torch.Tensor
-        Edge connectivity, shape (n_edges, 2)
+    primal_1form : Float[torch.Tensor, "n_edges ..."]
+        Values on edges.
+    edges : Int[torch.Tensor, "n_edges 2"]
+        Edge connectivity.
 
     Returns
     -------
-    torch.Tensor
-        Dual (n-1)-form values, shape (n_edges,) or (n_edges, ...)
+    Float[torch.Tensor, "n_edges ..."]
+        Dual :math:`(n-1)`-form values.
     """
     from physicsnemo.mesh.geometry.dual_meshes import compute_cotan_weights_fem
     from physicsnemo.mesh.utilities._edge_lookup import find_edges_in_reference

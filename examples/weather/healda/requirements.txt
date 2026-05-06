@@ -1,0 +1,8 @@
+nvidia-physicsnemo[datapipes-extras]
+pyarrow>=14.0.0
+triton>=3.0.0
+fsspec>=2023.5.0
+dotenv
+earth2grid @ git+https://github.com/NVlabs/earth2grid.git@main
+matplotlib
+joblib

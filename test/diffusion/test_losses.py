@@ -413,6 +413,7 @@ COMPILE_CONFIGS = [
 ]
 
 
+@pytest.mark.usefixtures("nop_compile")
 @pytest.mark.parametrize("prediction_type", PREDICTION_TYPES, ids=PREDICTION_TYPES)
 @pytest.mark.parametrize(
     "sched_cls,sched_kwargs,sched_name",
@@ -453,6 +454,7 @@ class TestMSEDSMLossCompile:
         assert loss_2.ndim == 0 and torch.isfinite(loss_2)
 
 
+@pytest.mark.usefixtures("nop_compile")
 @pytest.mark.parametrize("prediction_type", PREDICTION_TYPES, ids=PREDICTION_TYPES)
 @pytest.mark.parametrize(
     "sched_cls,sched_kwargs,sched_name",

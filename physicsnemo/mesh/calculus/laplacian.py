@@ -14,20 +14,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Laplace-Beltrami operator for scalar fields.
+r"""Laplace-Beltrami operator for scalar fields.
 
 The Laplace-Beltrami operator is the generalization of the Laplacian to
 curved manifolds.
 
-This implementation uses the analyst's sign convention:
-    Δf(v₀) = (1/|⋆v₀|) Σ_{edges from v₀} (|⋆e|/|e|)(f(v) - f(v₀))
+This implementation uses the analyst's sign convention,
 
-which is positive for locally convex functions (e.g., Δ(x²) = 2).
+.. math::
+
+    \Delta f(v_0) = \frac{1}{|{\star}v_0|}
+        \sum_{\text{edges from } v_0}
+            \frac{|{\star}e|}{|e|} \, \bigl(f(v) - f(v_0)\bigr),
+
+which is positive for locally convex functions (e.g. :math:`\Delta(x^2) = 2`).
 
 For functions (0-forms), this gives the discrete Laplace-Beltrami operator
-which reduces to the standard Laplacian on flat manifolds.
-
-This is the cotangent Laplacian, intrinsic to the manifold.
+which reduces to the standard Laplacian on flat manifolds. This is the
+cotangent Laplacian, intrinsic to the manifold.
 """
 
 from typing import TYPE_CHECKING
@@ -42,34 +46,40 @@ if TYPE_CHECKING:
 
 
 def _apply_cotan_laplacian_operator(
-    n_vertices: int,
+    n_points: int,
     edges: Int[torch.Tensor, "n_edges 2"],
     cotan_weights: Float[torch.Tensor, " n_edges"],
-    data: Float[torch.Tensor, "n_vertices ..."],
-) -> Float[torch.Tensor, "n_vertices ..."]:
-    """Apply cotangent Laplacian operator to data via scatter-add.
+    data: Float[torch.Tensor, "n_points ..."],
+) -> Float[torch.Tensor, "n_points ..."]:
+    r"""Apply cotangent Laplacian operator to data via scatter-add.
 
-    Computes: (L @ data)[i] = Σ_{j adjacent to i} w_ij * (data[j] - data[i])
+    For data :math:`f` indexed by vertex with neighborhood :math:`N(i)`,
+    computes
 
-    This is the core scatter-add pattern shared by all cotangent Laplacian computations.
-    Used by both compute_laplacian_points_dec() for scalar fields and
-    compute_laplacian_at_points() in curvature module for point coordinates.
+    .. math::
+
+        (L f)_i = \sum_{j \in N(i)} w_{ij} \, (f_j - f_i).
+
+    This is the core scatter-add pattern shared by all cotangent Laplacian
+    computations. Used by :func:`compute_laplacian_points_dec` for scalar
+    fields and by ``compute_laplacian_at_points`` in the curvature module for
+    point coordinates.
 
     Parameters
     ----------
-    n_vertices : int
-        Number of vertices
-    edges : torch.Tensor
-        Edge connectivity, shape (n_edges, 2)
-    cotan_weights : torch.Tensor
-        Cotangent weights for each edge, shape (n_edges,)
-    data : torch.Tensor
-        Data at vertices, shape (n_vertices, *data_shape)
+    n_points : int
+        Number of points (vertices).
+    edges : Int[torch.Tensor, "n_edges 2"]
+        Edge connectivity.
+    cotan_weights : Float[torch.Tensor, " n_edges"]
+        Cotangent weight for each edge.
+    data : Float[torch.Tensor, "n_points ..."]
+        Data at points.
 
     Returns
     -------
-    torch.Tensor
-        Laplacian applied to data, shape (n_vertices, *data_shape)
+    Float[torch.Tensor, "n_points ..."]
+        Laplacian applied to data, same shape as ``data``.
 
     Examples
     --------
@@ -83,7 +93,7 @@ def _apply_cotan_laplacian_operator(
     ### Initialize output with same shape as data
     device = data.device
     if data.ndim == 1:
-        laplacian = torch.zeros(n_vertices, dtype=data.dtype, device=device)
+        laplacian = torch.zeros(n_points, dtype=data.dtype, device=device)
     else:
         laplacian = torch.zeros_like(data)
 
@@ -106,7 +116,7 @@ def _apply_cotan_laplacian_operator(
         contrib_v1 = weights_expanded * (data[v0_indices] - data[v1_indices])
 
         # Flatten for scatter_add
-        laplacian_flat = laplacian.reshape(n_vertices, -1)
+        laplacian_flat = laplacian.reshape(n_points, -1)
         contrib_v0_flat = contrib_v0.reshape(len(edges), -1)
         contrib_v1_flat = contrib_v1.reshape(len(edges), -1)
 
@@ -125,29 +135,33 @@ def compute_laplacian_points_dec(
     mesh: "Mesh",
     point_values: Float[torch.Tensor, "n_points ..."],
 ) -> Float[torch.Tensor, "n_points ..."]:
-    """Compute Laplace-Beltrami at vertices using DEC cotangent formula.
+    r"""Compute Laplace-Beltrami at vertices using DEC cotangent formula.
 
-    This is the INTRINSIC Laplacian - it automatically respects the manifold structure.
+    This is the **intrinsic** Laplacian - it automatically respects the
+    manifold structure.
 
-    Formula: Δf(v₀) = (1/|⋆v₀|) Σ_{edges from v₀} (|⋆e|/|e|)(f(v) - f(v₀))
+    .. math::
 
-    Where:
-    - |⋆v₀| is the dual 0-cell volume (Voronoi cell around vertex)
-    - |⋆e| is the dual 1-cell volume (dual to edge)
-    - |e| is the edge length
-    - The ratio |⋆e|/|e| are the cotangent weights
+        \Delta f(v_0) = \frac{1}{|{\star}v_0|}
+            \sum_{\text{edges from } v_0}
+                \frac{|{\star}e|}{|e|} \, \bigl(f(v) - f(v_0)\bigr),
+
+    where :math:`|{\star}v_0|` is the dual 0-cell volume (Voronoi cell around
+    the vertex), :math:`|{\star}e|` is the dual 1-cell volume (dual to the
+    edge), :math:`|e|` is the edge length, and the ratio
+    :math:`|{\star}e| / |e|` is the cotangent weight.
 
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh
-    point_values : torch.Tensor
-        Values at vertices, shape (n_points,) or (n_points, ...)
+        Simplicial mesh.
+    point_values : Float[torch.Tensor, "n_points ..."]
+        Values at vertices.
 
     Returns
     -------
-    torch.Tensor
-        Laplacian at vertices, same shape as input
+    Float[torch.Tensor, "n_points ..."]
+        Laplacian at vertices, same shape as ``point_values``.
     """
     from physicsnemo.mesh.geometry.dual_meshes import (
         compute_cotan_weights_fem,
@@ -159,7 +173,7 @@ def compute_laplacian_points_dec(
 
     ### Apply cotangent Laplacian operator using shared utility
     laplacian = _apply_cotan_laplacian_operator(
-        n_vertices=mesh.n_points,
+        n_points=mesh.n_points,
         edges=sorted_edges,
         cotan_weights=cotan_weights,
         data=point_values,

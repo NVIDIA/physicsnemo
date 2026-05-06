@@ -33,10 +33,12 @@ def get_subdivision_pattern(
     2^n child simplices using edge midpoints.
 
     The pattern uses a specific vertex indexing scheme:
+
     - Indices 0 to n: original vertices
     - Indices n+1 to n+C(n+1,2): edge midpoints, indexed by edge
 
     For each n-simplex:
+
     - n+1 original vertices
     - C(n+1, 2) edges, each gets a midpoint
     - Splits into 2^n child simplices
@@ -50,6 +52,7 @@ def get_subdivision_pattern(
     -------
     torch.Tensor
         Pattern tensor of shape (n_children, n_vertices_per_child) where:
+
         - n_children = 2^n_manifold_dims
         - n_vertices_per_child = n_manifold_dims + 1
 
@@ -60,6 +63,7 @@ def get_subdivision_pattern(
     Examples
     --------
         For a triangle (n=2):
+
         - 3 original vertices: v0, v1, v2
         - 3 edge midpoints: e01, e12, e20
         - Indexing: [v0=0, v1=1, v2=2, e01=3, e12=4, e20=5]
@@ -152,6 +156,7 @@ def generate_child_cells(
     -------
     tuple[torch.Tensor, torch.Tensor]
         Tuple of (child_cells, parent_indices):
+
         - child_cells: Child cell connectivity,
           shape (n_parent_cells * n_children_per_parent, n_vertices_per_child)
         - parent_indices: Parent cell index for each child,

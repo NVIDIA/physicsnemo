@@ -14,17 +14,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Discrete exterior derivative operators for DEC.
+r"""Discrete exterior derivative operators for DEC.
 
-The exterior derivative d maps k-forms to (k+1)-forms. In the discrete setting,
-d is the coboundary operator, dual to the boundary operator ∂.
+The exterior derivative :math:`d` maps :math:`k`-forms to
+:math:`(k+1)`-forms. In the discrete setting, :math:`d` is the coboundary
+operator, dual to the boundary operator :math:`\partial`.
 
-Fundamental property: d² = 0 (applying d twice always gives zero)
+Fundamental property: :math:`d^2 = 0` (applying :math:`d` twice always gives
+zero).
 
 This implements the discrete Stokes theorem exactly:
-    ⟨dα, c⟩ = ⟨α, ∂c⟩  (true by definition)
 
-Reference: Desbrun et al., "Discrete Exterior Calculus", Section 3
+.. math::
+
+    \langle d \alpha, c \rangle = \langle \alpha, \partial c \rangle
+    \quad \text{(true by definition)}.
+
+Reference: Desbrun et al. (2005), *Discrete Exterior Calculus*, §5
+(Differential Forms and Exterior Derivative).
 """
 
 from typing import TYPE_CHECKING
@@ -40,28 +47,34 @@ def exterior_derivative_0(
     mesh: "Mesh",
     vertex_0form: Float[torch.Tensor, "n_points ..."],
 ) -> tuple[Float[torch.Tensor, "n_edges ..."], Int[torch.Tensor, "n_edges 2"]]:
-    """Compute exterior derivative of 0-form (function on vertices).
+    r"""Compute exterior derivative of 0-form (function on vertices).
 
-    Maps Ω⁰(K) → Ω¹(K): takes vertex values to edge values.
+    Maps :math:`\Omega^0(K) \to \Omega^1(K)`: takes vertex values to edge values.
 
-    For an oriented edge [v_i, v_j]:
-        df([v_i, v_j]) = f(v_j) - f(v_i)
+    For an oriented edge :math:`[v_i, v_j]`,
+
+    .. math::
+
+        df([v_i, v_j]) = f(v_j) - f(v_i).
 
     This is the discrete gradient, represented as a 1-form on edges.
 
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh
-    vertex_0form : torch.Tensor
-        Values at vertices, shape (n_points,) or (n_points, ...)
+        Simplicial mesh.
+    vertex_0form : Float[torch.Tensor, "n_points ..."]
+        Values at vertices.
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor]
-        Tuple of (edge_values, edge_connectivity):
-        - edge_values: 1-form values on edges, shape (n_edges,) or (n_edges, ...)
-        - edge_connectivity: Edge vertex indices, shape (n_edges, 2)
+    tuple[Float[torch.Tensor, "n_edges ..."], Int[torch.Tensor, "n_edges 2"]]
+        Tuple of ``(edge_values, edge_connectivity)``:
+
+        - ``edge_values``: 1-form values on edges, shape
+          ``(n_edges, ...)``.
+        - ``edge_connectivity``: edge vertex indices, shape
+          ``(n_edges, 2)``.
 
     Examples
     --------
@@ -115,35 +128,44 @@ def exterior_derivative_1(
     Float[torch.Tensor, "n_faces ..."],
     Int[torch.Tensor, "n_faces n_vertices_per_face"],
 ]:
-    """Compute exterior derivative of 1-form (values on edges).
+    r"""Compute exterior derivative of 1-form (values on edges).
 
-    Maps Ω¹(K) → Ω²(K): takes edge values to face values (2-cells or higher).
+    Maps :math:`\Omega^1(K) \to \Omega^2(K)`: takes edge values to face values
+    (2-cells or higher).
 
-    For a 2-simplex (triangle) with boundary edges [v₀,v₁], [v₁,v₂], [v₂,v₀]:
-        dα(triangle) = α([v₁,v₂]) - α([v₀,v₂]) + α([v₀,v₁])
+    For a 2-simplex :math:`\sigma` (triangle) with boundary edges
+    :math:`[v_0, v_1]`, :math:`[v_1, v_2]`, :math:`[v_2, v_0]`:
+
+    .. math::
+
+        d\alpha(\sigma)
+            = \alpha([v_1, v_2]) - \alpha([v_0, v_2]) + \alpha([v_0, v_1]).
 
     This implements the discrete curl in 2D, or the circulation around faces.
 
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh
-    edge_1form : torch.Tensor
-        Values on edges, shape (n_edges,) or (n_edges, ...)
-    edges : torch.Tensor
-        Edge connectivity, shape (n_edges, 2)
+        Simplicial mesh.
+    edge_1form : Float[torch.Tensor, "n_edges ..."]
+        Values on edges.
+    edges : Int[torch.Tensor, "n_edges 2"]
+        Edge connectivity.
 
     Returns
     -------
-    tuple[torch.Tensor, torch.Tensor]
-        Tuple of (face_values, face_connectivity):
-        - face_values: 2-form values on 2-simplices, shape (n_faces,) or (n_faces, ...)
-        - face_connectivity: Face vertex indices
+    tuple[Float[torch.Tensor, "n_faces ..."], Int[torch.Tensor, "n_faces n_vertices_per_face"]]
+        Tuple of ``(face_values, face_connectivity)``:
+
+        - ``face_values``: 2-form values on 2-simplices, shape
+          ``(n_faces, ...)``.
+        - ``face_connectivity``: face vertex indices.
 
     Notes
     -----
-    For n_manifold_dims = 2 (triangle mesh), faces are the triangles themselves.
-    For n_manifold_dims = 3 (tet mesh), faces are the triangular facets.
+    For ``n_manifold_dims = 2`` (triangle mesh), faces are the triangles
+    themselves. For ``n_manifold_dims = 3`` (tet mesh), faces are the
+    triangular facets.
     """
     if mesh.n_manifold_dims < 2:
         # Cannot compute d₁ for manifolds of dimension < 2

@@ -51,9 +51,9 @@ if TYPE_CHECKING:
 
 def _resolve_field(
     mesh: "Mesh",
-    field: str | tuple[str, ...] | torch.Tensor,
+    field: str | tuple[str, ...] | Float[torch.Tensor, "n ..."],
     data_source: Literal["cells", "points"],
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "n ..."]:
     r"""Resolve a field specification to a concrete tensor.
 
     Parameters
@@ -62,7 +62,7 @@ def _resolve_field(
         Source mesh.
     field : str, tuple, or torch.Tensor
         A string or tuple is looked up in ``cell_data`` or ``point_data``
-        depending on *data_source*.  A tensor is returned as-is.
+        depending on ``data_source``.  A tensor is returned as-is.
     data_source : {"cells", "points"}
         Which data dictionary to use for string key lookups.
 
@@ -100,7 +100,7 @@ def integrate_cell_data(
     .. math::
         \int_\Omega f\,d\Omega = \sum_c f_c \,|\sigma_c|
 
-    NaN values in *field* are excluded from the sum (treated as zero
+    NaN values in ``field`` are excluded from the sum (treated as zero
     contribution), which is appropriate for fields with patched-out
     regions (e.g. non-physical points in CFD solutions).
 
@@ -191,14 +191,14 @@ def integrate_point_data(
 
 def integrate(
     mesh: "Mesh",
-    field: str | tuple[str, ...] | torch.Tensor,
+    field: str | tuple[str, ...] | Float[torch.Tensor, "n_cells_or_points ..."],
     data_source: Literal["cells", "points"] = "cells",
-) -> torch.Tensor:
+) -> Float[torch.Tensor, " ..."]:
     r"""Integrate a field over the mesh domain.
 
     This is the unified entry point for mesh integration.  It dispatches to
     :func:`integrate_cell_data` or :func:`integrate_point_data` based on
-    *data_source*, and resolves *field* from a string key or tensor.
+    ``data_source``, and resolves ``field`` from a string key or tensor.
 
     Parameters
     ----------
@@ -208,10 +208,10 @@ def integrate(
         Field to integrate.
 
         - ``str`` or ``tuple``: looked up in ``cell_data`` or ``point_data``
-          according to *data_source*.
+          according to ``data_source``.
         - ``torch.Tensor``: used directly.
     data_source : {"cells", "points"}
-        Whether *field* is cell-centered (P0) or vertex-centered (P1).
+        Whether ``field`` is cell-centered (P0) or vertex-centered (P1).
 
     Returns
     -------
@@ -222,10 +222,10 @@ def integrate(
     Raises
     ------
     KeyError
-        If *field* is a string key not present in the specified data source.
+        If ``field`` is a string key not present in the specified data source.
     ValueError
         If the mesh has no cells, or if a raw tensor has the wrong leading
-        dimension for the specified *data_source*.
+        dimension for the specified ``data_source``.
 
     Examples
     --------
@@ -261,9 +261,11 @@ def integrate(
 
 def integrate_flux(
     mesh: "Mesh",
-    field: str | tuple[str, ...] | torch.Tensor,
+    field: str
+    | tuple[str, ...]
+    | Float[torch.Tensor, "n_cells_or_points n_spatial_dims"],
     data_source: Literal["cells", "points"] = "cells",
-) -> torch.Tensor:
+) -> Float[torch.Tensor, ""]:
     r"""Compute the surface flux integral for codimension-1 meshes.
 
     Computes the oriented flux of a vector field through the mesh surface:
@@ -297,7 +299,7 @@ def integrate_flux(
         Vector field to integrate.  Must have last dimension equal to
         ``n_spatial_dims``.
     data_source : {"cells", "points"}
-        Whether *field* is cell-centered or vertex-centered.
+        Whether ``field`` is cell-centered or vertex-centered.
 
     Returns
     -------
@@ -307,7 +309,7 @@ def integrate_flux(
     Raises
     ------
     KeyError
-        If *field* is a string key not present in the specified data source.
+        If ``field`` is a string key not present in the specified data source.
     ValueError
         If the mesh is not codimension-1, if the field leading dimension
         does not match the expected entity count, or if the field does

@@ -38,19 +38,19 @@ if TYPE_CHECKING:
 
 
 def merge_duplicate_points(
-    points: Float[torch.Tensor, "n_points n_dims"],
-    cells: Int[torch.Tensor, "n_cells n_verts"],
+    points: Float[torch.Tensor, "n_points n_spatial_dims"],
+    cells: Int[torch.Tensor, "n_cells n_vertices_per_cell"],
     point_data: TensorDict,
     tolerance: float = 1e-12,
 ) -> tuple[
-    Float[torch.Tensor, "n_unique_points n_dims"],
-    Int[torch.Tensor, "n_cells n_verts"],
+    Float[torch.Tensor, "n_unique_points n_spatial_dims"],
+    Int[torch.Tensor, "n_cells n_vertices_per_cell"],
     TensorDict,
     Int[torch.Tensor, " n_points"],
 ]:
     """Merge duplicate points within tolerance.
 
-    Points whose L2 distance is below *tolerance* are merged into a single
+    Points whose L2 distance is below ``tolerance`` are merged into a single
     representative, and cell connectivity is updated accordingly.
 
     Parameters
@@ -193,10 +193,10 @@ def _merge_point_data(
 
 
 def remove_duplicate_cells(
-    cells: Int[torch.Tensor, "n_cells n_verts"],
+    cells: Int[torch.Tensor, "n_cells n_vertices_per_cell"],
     cell_data: TensorDict,
     index_bound: int | None = None,
-) -> tuple[Int[torch.Tensor, "n_unique_cells n_verts"], TensorDict]:
+) -> tuple[Int[torch.Tensor, "n_unique_cells n_vertices_per_cell"], TensorDict]:
     """Remove duplicate cells from mesh.
 
     Cells are considered duplicates if they contain the same set of vertex indices
@@ -288,12 +288,12 @@ def remove_duplicate_cells(
 
 
 def remove_unused_points(
-    points: Float[torch.Tensor, "n_points n_dims"],
-    cells: Int[torch.Tensor, "n_cells n_verts"],
+    points: Float[torch.Tensor, "n_points n_spatial_dims"],
+    cells: Int[torch.Tensor, "n_cells n_vertices_per_cell"],
     point_data: TensorDict,
 ) -> tuple[
-    Float[torch.Tensor, "n_used_points n_dims"],
-    Int[torch.Tensor, "n_cells n_verts"],
+    Float[torch.Tensor, "n_used_points n_spatial_dims"],
+    Int[torch.Tensor, "n_cells n_vertices_per_cell"],
     TensorDict,
     Int[torch.Tensor, " n_points"],
 ]:
@@ -380,7 +380,7 @@ def clean_mesh(
     merge_points: bool = True,
     deduplicate_cells: bool = True,
     drop_unused_points: bool = True,
-) -> tuple["Mesh", dict]:
+) -> tuple["Mesh", dict[str, int]]:
     """Clean and repair a mesh.
 
     Performs various cleaning operations to fix common mesh issues:
@@ -405,6 +405,7 @@ def clean_mesh(
     -------
     tuple[Mesh, dict]
         Tuple of (cleaned_mesh, stats) where stats tracks what was done:
+
         - ``"n_points_before_merge"`` / ``"n_points_after_merge"``
         - ``"n_cells_before_dedup"`` / ``"n_cells_after_dedup"``
         - ``"n_points_before_drop"`` / ``"n_points_after_drop"``
@@ -425,7 +426,7 @@ def clean_mesh(
     point_data = mesh.point_data
     cell_data = mesh.cell_data
     global_data = mesh.global_data
-    stats: dict = {}
+    stats: dict[str, int] = {}
 
     ### Step 1: Merge duplicate points
     if merge_points:
@@ -492,6 +493,7 @@ def remove_isolated_points(
     -------
     tuple[Mesh, dict[str, int]]
         Tuple of (cleaned_mesh, stats_dict) where stats_dict contains:
+
         - "n_isolated_removed": Number of isolated points removed
         - "n_points_original": Original number of points
         - "n_points_final": Final number of points

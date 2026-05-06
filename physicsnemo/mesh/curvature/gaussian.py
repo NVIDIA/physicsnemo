@@ -14,16 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Gaussian curvature computation for simplicial meshes.
+r"""Gaussian curvature computation for simplicial meshes.
 
-Implements intrinsic Gaussian curvature using angle defect method.
-Works for any codimension (intrinsic property).
+Implements intrinsic Gaussian curvature using the angle-defect method. Works
+for any codimension (intrinsic property).
 
-For 2D surfaces: K = k1 * k2 where k1, k2 are principal curvatures
-For 1D curves: K represents discrete turning angle
-For 3D volumes: K represents volumetric angle defect
+- For 2D surfaces: :math:`K = k_1 \, k_2` where :math:`k_1, k_2` are
+  principal curvatures.
+- For 1D curves: :math:`K` represents the discrete turning angle.
+- For 3D volumes: :math:`K` represents the volumetric angle defect.
 
-Reference: Meyer et al. (2003), Discrete Gauss-Bonnet theorem
+Reference: Meyer et al. (2003), *Discrete Differential-Geometry Operators for
+Triangulated 2-Manifolds*, §4.2 (Discrete Gaussian Curvature Operator), Eq. 9.
 """
 
 from typing import TYPE_CHECKING
@@ -41,45 +43,65 @@ if TYPE_CHECKING:
 
 
 def gaussian_curvature_vertices(mesh: "Mesh") -> Float[torch.Tensor, " n_points"]:
-    """Compute intrinsic Gaussian curvature at mesh vertices.
+    r"""Compute intrinsic Gaussian curvature at mesh vertices.
 
-    Uses the angle defect formula from discrete differential geometry:
-        K_vertex = angle_defect / voronoi_area
-    where:
-        angle_defect = full_angle(n) - Σ(angles at vertex in incident cells)
+    Uses the angle-defect formula from discrete differential geometry. For a
+    vertex :math:`v` with incident cells :math:`\sigma \ni v` and interior
+    angle :math:`\theta_\sigma(v)` at :math:`v` in each :math:`\sigma`,
+    define the angle defect
 
-    This is an intrinsic measure of curvature that works for any codimension,
-    as it depends only on distances measured within the manifold (Theorema Egregium).
+    .. math::
+
+        \Theta(v) = \Theta_n - \sum_{\sigma \ni v} \theta_\sigma(v),
+
+    where :math:`\Theta_n` is the full angle in an :math:`n`-dimensional
+    manifold (e.g. :math:`2\pi` for surfaces). The discrete Gaussian
+    curvature is then
+
+    .. math::
+
+        K(v) = \frac{\Theta(v)}{|{\star}v|},
+
+    where :math:`|{\star}v|` is the dual 0-cell (Voronoi) volume at
+    :math:`v`. This is an intrinsic measure of curvature that works for any
+    codimension, as it depends only on distances measured within the manifold
+    (Theorema Egregium).
 
     Signed curvature:
-    - Positive: Elliptic point (sphere-like)
-    - Zero: Flat/parabolic point (plane-like)
-    - Negative: Hyperbolic point (saddle-like)
+
+    - Positive: elliptic point (sphere-like).
+    - Zero: flat/parabolic point (plane-like).
+    - Negative: hyperbolic point (saddle-like).
 
     Parameters
     ----------
     mesh : Mesh
-        Input simplicial mesh (1D, 2D, or 3D manifold)
+        Input simplicial mesh (1D, 2D, or 3D manifold).
 
     Returns
     -------
-    torch.Tensor
-        Tensor of shape (n_points,) containing signed Gaussian curvature at each vertex.
-        For isolated vertices (no incident cells), curvature is NaN.
+    Float[torch.Tensor, " n_points"]
+        Signed Gaussian curvature at each vertex, shape ``(n_points,)``.
+        For isolated vertices (no incident cells), curvature is ``NaN``.
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-        >>> # Sphere of radius r has K = 1/r² everywhere
-        >>> sphere_mesh = sphere_icosahedral.load(radius=2.0, subdivisions=3)
-        >>> K = gaussian_curvature_vertices(sphere_mesh)
-        >>> # K.mean() ≈ 0.25 (= 1/(2.0)²)
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    >>> # Sphere of radius r has K = 1/r^2 everywhere
+    >>> sphere_mesh = sphere_icosahedral.load(radius=2.0, subdivisions=3)
+    >>> K = gaussian_curvature_vertices(sphere_mesh)
+    >>> # K.mean() approx 0.25 (= 1 / 2.0^2)
 
     Notes
     -----
-    Satisfies discrete Gauss-Bonnet theorem:
-        Σ_vertices (K_i * A_i) = 2π * χ(M)
-    where χ(M) is the Euler characteristic.
+    Satisfies the discrete Gauss-Bonnet theorem,
+
+    .. math::
+
+        \sum_v K(v) \, |{\star}v| = 2 \pi \, \chi(M),
+
+    where the sum is over vertices and :math:`\chi(M)` is the Euler
+    characteristic.
     """
     n_manifold_dims = mesh.n_manifold_dims
 
@@ -116,7 +138,7 @@ def gaussian_curvature_vertices(mesh: "Mesh") -> Float[torch.Tensor, " n_points"
 
 
 def gaussian_curvature_cells(mesh: "Mesh") -> Float[torch.Tensor, " n_cells"]:
-    """Compute Gaussian curvature at cell centers.
+    r"""Compute Gaussian curvature at cell centers.
 
     Averages the intrinsic vertex-based Gaussian curvature (angle defect)
     over each cell's vertices. This gives a cell-centered curvature field
@@ -126,20 +148,20 @@ def gaussian_curvature_cells(mesh: "Mesh") -> Float[torch.Tensor, " n_cells"]:
     Parameters
     ----------
     mesh : Mesh
-        Input simplicial mesh
+        Input simplicial mesh.
 
     Returns
     -------
-    torch.Tensor
-        Tensor of shape (n_cells,) containing Gaussian curvature at each cell.
-        Cells whose vertices all have NaN curvature are set to NaN.
+    Float[torch.Tensor, " n_cells"]
+        Gaussian curvature at each cell, shape ``(n_cells,)``.
+        Cells whose vertices all have ``NaN`` curvature are set to ``NaN``.
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-        >>> sphere_mesh = sphere_icosahedral.load(subdivisions=2)
-        >>> K_cells = gaussian_curvature_cells(sphere_mesh)
-        >>> # Should be positive for sphere
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    >>> sphere_mesh = sphere_icosahedral.load(subdivisions=2)
+    >>> K_cells = gaussian_curvature_cells(sphere_mesh)
+    >>> # Should be positive for sphere
     """
     device = mesh.points.device
     n_cells = mesh.n_cells

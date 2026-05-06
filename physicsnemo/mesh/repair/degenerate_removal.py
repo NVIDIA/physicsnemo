@@ -48,6 +48,7 @@ def remove_degenerate_cells(
     -------
     tuple[Mesh, dict[str, int]]
         Tuple of (cleaned_mesh, stats_dict) where stats_dict contains:
+
         - "n_zero_area_cells": Number of cells removed for zero area
         - "n_duplicate_vertex_cells": Number of cells with duplicate vertices
         - "n_cells_original": Original number of cells
