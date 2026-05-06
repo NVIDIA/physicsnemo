@@ -64,9 +64,7 @@ from material import MaterialPropertyExtractor
 # Walks the training split of ``RTEBaseDataset`` (no transforms, no
 # adapter). For each simulation, applies the same log-clip preprocessing
 # the training pipeline uses, and accumulates global mean / std / min / max
-# in single precision. Output schema matches the legacy
-# ``compute_flux_statistics.py`` so the existing ``load_flux_stats`` reader
-# works unchanged.
+# in single precision.
 
 
 def compute_flux_statistics(

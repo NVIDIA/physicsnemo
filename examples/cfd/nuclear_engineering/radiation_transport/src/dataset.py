@@ -47,10 +47,10 @@ from tensordict import TensorDict
 # =========================================================================
 #
 # Filename-indexed reader over a directory of ``<name>.mesh/`` memmap
-# directories produced by ``convert_zarr_to_mesh.py``. Inherits from
-# ``physicsnemo.datapipes.readers.base.Reader``; returns ``TensorDict`` from
-# ``load()``. The TensorDict carries both the tensor fields and non-tensor
-# metadata (``metadata``, ``filename``) via ``NonTensorData`` entries.
+# directories. Inherits from ``physicsnemo.datapipes.readers.base.Reader``;
+# returns ``TensorDict`` from ``load()``. The TensorDict carries both the
+# tensor fields and non-tensor metadata (``metadata``, ``filename``) via
+# ``NonTensorData`` entries.
 #
 # RTE-specific kwargs (``load_flux``, optional field loading, etc.) live on the
 # filename-indexed ``load(filename, ...)`` entry. The int-indexed
@@ -65,7 +65,7 @@ class MeshDataReader(Reader):
     The ``TensorDict`` returned by ``load(filename, ...)`` carries the
     tensor fields RTE training and inference rely on. The on-disk format
     is the PhysicsNeMo ``Mesh`` memmap layout (``<name>.mesh/`` +
-    ``<name>.attrs.json`` sidecar) emitted by ``convert_zarr_to_mesh.py``.
+    ``<name>.attrs.json`` sidecar).
 
     Example:
         >>> reader = MeshDataReader("/path/to/mesh_stores/lattice")
@@ -214,9 +214,7 @@ class MeshDataReader(Reader):
         # ``Mesh.load`` returns memmap-backed tensors. The single-process
         # ``physicsnemo.datapipes.DataLoader`` (CUDA streams, no fork) keeps
         # the tensors live in this process, so we let Mesh hand back the
-        # memmap views directly — the prior ``.clone()`` was only needed to
-        # survive cross-process serialization with the legacy
-        # ``torch.utils.data.DataLoader``.
+        # memmap views directly
         mesh = Mesh.load(str(filepath))
         point_data = mesh.point_data
         global_data = mesh.global_data
@@ -468,16 +466,11 @@ class RTEBaseDataset(PhysicsNeMoDataset):
                 f"Available: {list(split_data['splits'].keys())}"
             )
         filenames = split_data["splits"][self.phase]
-        # Split files may list basenames with or without a format suffix
-        # (e.g. ``.zarr`` from a legacy split). Strip any known suffix and
-        # append ``.mesh`` so the result always points at a mesh store.
+        # Split files may list basenames with or without a ``.mesh`` suffix.
+        # Normalize to always point at a mesh store.
         normalized: List[str] = []
         for f in filenames:
-            base = f
-            for known in (".zarr", ".mesh"):
-                if base.endswith(known):
-                    base = base[: -len(known)]
-                    break
+            base = f[: -len(".mesh")] if f.endswith(".mesh") else f
             normalized.append(base + ".mesh")
         return normalized
 

@@ -36,6 +36,7 @@ from __future__ import annotations
 # Imports
 # =========================================================================
 
+import math
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
@@ -194,12 +195,12 @@ class RTEFluxLogClip(Transform):
 
 GLOBAL_DOMAIN_BOUNDS = {
     "lattice": {
-        "min": np.array([-3.5, -3.5, -0.01], dtype=np.float32),
-        "max": np.array([3.5, 3.5, 0.01], dtype=np.float32),
+        "min": torch.tensor([-3.5, -3.5, -0.01], dtype=torch.float32),
+        "max": torch.tensor([3.5, 3.5, 0.01], dtype=torch.float32),
     },
     "hohlraum": {
-        "min": np.array([-0.65, -0.65, -0.01], dtype=np.float32),
-        "max": np.array([0.65, 0.65, 0.01], dtype=np.float32),
+        "min": torch.tensor([-0.65, -0.65, -0.01], dtype=torch.float32),
+        "max": torch.tensor([0.65, 0.65, 0.01], dtype=torch.float32),
     },
 }
 
@@ -254,7 +255,7 @@ class FourierFeatures(Transform):
         coords = data["coordinates"]
         coords_subset = coords[:, : self.coord_dims].to(dtype=torch.float32)
 
-        two_pi = 2.0 * np.pi
+        two_pi = 2.0 * math.pi
         parts = []
         for freq_mult in self.frequency_multipliers:
             angle = two_pi * float(freq_mult) * coords_subset

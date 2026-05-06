@@ -16,7 +16,7 @@
 
 """Material-property transform for radiation-transport surrogates.
 
-The shipped zarr stores carry precomputed cross-section fields
+The shipped mesh stores carry precomputed cross-section fields
 (``sigma_a``, ``sigma_s``, ``sigma_t``, ``Q``) per cell. ``MaterialPropertyExtractor``
 stacks them into a single ``physical_properties`` tensor of shape ``(N, 4)``
 in the order ``[sigma_a, sigma_s, sigma_t, Q]``.
@@ -41,7 +41,7 @@ class MaterialPropertyExtractor(Transform):
         for key in ("sigma_a", "sigma_s", "sigma_t", "Q"):
             if key not in data:
                 raise KeyError(
-                    f"Zarr store is missing required field {key!r}. "
+                    f"Mesh store is missing required field {key!r}. "
                     "All four fields (sigma_a, sigma_s, sigma_t, Q) must be precomputed."
                 )
 

@@ -211,53 +211,42 @@ def aggregate_metrics(per_sample: list[Dict[str, float]]) -> Dict[str, float]:
 
 
 def compute_sample_qoi(
-    pred: np.ndarray,
-    target: np.ndarray,
-    metadata: Dict[str, Any],
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    cell_centers: torch.Tensor,
+    cell_areas: torch.Tensor,
+    sigma_t: torch.Tensor,
+    sigma_s: torch.Tensor,
+    raw_metadata: Dict[str, Any],
     case_type: str,
 ) -> Optional[Dict[str, Dict[str, float]]]:
-    """Compute QoI(pred) vs QoI(target) for one sample.
+    """Compute QoI(pred) vs QoI(target) for one sample on the tensors' device.
 
-    Returns a dict ``{region: {predicted, ground_truth, absolute_error,
-    relative_error_pct}}`` or ``None`` if metadata is incomplete.
+    All tensor inputs may live on GPU; only the scalar QoI values are
+    materialized to host (via ``.item()``). Returns ``{region: {predicted,
+    ground_truth, absolute_error, relative_error_pct}}`` or ``None`` for the
+    hohlraum case when geometry params are missing from ``raw_metadata``.
     """
-    coords = metadata.get("coordinates")
-    cell_areas = metadata.get("cell_areas")
-    sigma_t = metadata.get("sigma_t")
-    sigma_s = metadata.get("sigma_s")
-    if coords is None or cell_areas is None or sigma_t is None or sigma_s is None:
-        return None
-
-    cell_centers_t = torch.from_numpy(np.asarray(coords)).float()
-    cell_areas_t = torch.from_numpy(np.asarray(cell_areas)).float()
-    sigma_t_t = torch.from_numpy(np.asarray(sigma_t)).float()
-    sigma_s_t = torch.from_numpy(np.asarray(sigma_s)).float()
-    pred_t = torch.from_numpy(np.asarray(pred)).float().reshape(1, -1)
-    target_t = torch.from_numpy(np.asarray(target)).float().reshape(1, -1)
-    sim_times_t = torch.zeros(1)  # unused by the steady-state QoI
+    pred_t = pred.float().reshape(1, -1)
+    target_t = target.float().reshape(1, -1)
+    centers = cell_centers.float()
+    areas = cell_areas.float().flatten()
+    st = sigma_t.float().flatten()
+    ss = sigma_s.float().flatten()
+    sim_times_t = torch.zeros(1, device=pred.device)  # unused by the steady-state QoI
 
     if case_type == "lattice":
-        qp = evaluate_lattice_qoi_torch(
-            cell_centers_t, cell_areas_t, sigma_t_t, sigma_s_t, pred_t, sim_times_t
-        )
-        qt = evaluate_lattice_qoi_torch(
-            cell_centers_t, cell_areas_t, sigma_t_t, sigma_s_t, target_t, sim_times_t
-        )
+        qp = evaluate_lattice_qoi_torch(centers, areas, st, ss, pred_t, sim_times_t)
+        qt = evaluate_lattice_qoi_torch(centers, areas, st, ss, target_t, sim_times_t)
     elif case_type == "hohlraum":
-        gp = extract_geometry_params(metadata)
+        gp = extract_geometry_params(raw_metadata)
         if not gp:
             return None
         qp = evaluate_hohlraum_qoi_torch(
-            cell_centers_t, cell_areas_t, sigma_t_t, sigma_s_t, pred_t, sim_times_t, gp
+            centers, areas, st, ss, pred_t, sim_times_t, gp
         )
         qt = evaluate_hohlraum_qoi_torch(
-            cell_centers_t,
-            cell_areas_t,
-            sigma_t_t,
-            sigma_s_t,
-            target_t,
-            sim_times_t,
-            gp,
+            centers, areas, st, ss, target_t, sim_times_t, gp
         )
     else:
         raise ValueError(f"Unknown case_type: {case_type}")
@@ -594,9 +583,9 @@ def plot_qoi_error_histograms(
 # =========================================================================
 
 
-def _denormalize(flux_norm: torch.Tensor, stats: Dict[str, float]) -> np.ndarray:
-    """Apply ``denormalize_flux`` (RTEFluxLogClip + Normalize inverse)."""
-    return denormalize_flux(flux_norm.detach().cpu(), stats).numpy()
+def _denormalize(flux_norm: torch.Tensor, stats: Dict[str, float]) -> torch.Tensor:
+    """Apply ``denormalize_flux`` (RTEFluxLogClip + Normalize inverse) on-device."""
+    return denormalize_flux(flux_norm, stats)
 
 
 @torch.no_grad()
@@ -605,16 +594,21 @@ def run_evaluation(
     dataloader: DataLoader,
     device: torch.device,
     flux_stats: Dict[str, float],
+    case_type: str,
     *,
     use_amp: bool = True,
     max_samples: Optional[int] = None,
-) -> Iterator[Tuple[np.ndarray, np.ndarray, Dict[str, Any]]]:
-    """Yield ``(prediction, target, metadata)`` for each test sample.
+) -> Iterator[
+    Tuple[np.ndarray, np.ndarray, Optional[Dict[str, Dict[str, float]]], Dict[str, Any]]
+]:
+    """Yield ``(prediction, target, qoi, metadata)`` for each test sample.
 
-    Predictions and targets are returned as flattened numpy arrays in
-    physical-flux units (denormalized). ``metadata`` carries the per-sample
-    coordinates / cell areas / sigma fields / filename needed for QoI and
-    plotting.
+    Predictions and targets are denormalized to physical-flux units and
+    returned as flattened numpy arrays for downstream pointwise metrics and
+    plotting. The QoI dict (or ``None``) is computed on-device before the
+    GPU→CPU transfer to avoid round-tripping per-mesh tensors through numpy.
+    ``metadata`` carries the per-sample coordinates / cell areas / sigma
+    fields / filename for follow-up plotting.
     """
     model.eval()
     n = 0
@@ -640,33 +634,63 @@ def run_evaluation(
         if isinstance(stats, list):
             stats = stats[0] if stats else flux_stats
 
+        coords_t = batch.get("coordinates_unnormalized")
+        if coords_t is None:
+            coords_t = batch.get("fx")
+        cell_areas_t = batch.get("cell_areas")
+        sigma_t_t = batch.get("sigma_t")
+        sigma_s_t = batch.get("sigma_s")
+        raw_meta = batch.get("metadata") or {}
+        if isinstance(raw_meta, list):
+            raw_meta = raw_meta[0] if raw_meta else {}
+
         # Batches always carry an outer batch dim of 1 (collate_no_padding).
         for b in range(pred.shape[0]):
-            pred_phys = _denormalize(pred[b].squeeze(-1), stats).flatten()
-            target_phys = _denormalize(target[b].squeeze(-1), stats).flatten()
+            pred_phys_t = _denormalize(pred[b].squeeze(-1), stats).flatten()
+            target_phys_t = _denormalize(target[b].squeeze(-1), stats).flatten()
+
+            qoi: Optional[Dict[str, Dict[str, float]]] = None
+            if (
+                coords_t is not None
+                and cell_areas_t is not None
+                and sigma_t_t is not None
+                and sigma_s_t is not None
+            ):
+                qoi = compute_sample_qoi(
+                    pred_phys_t,
+                    target_phys_t,
+                    coords_t[b],
+                    cell_areas_t[b],
+                    sigma_t_t[b],
+                    sigma_s_t[b],
+                    raw_meta,
+                    case_type,
+                )
 
             metadata: Dict[str, Any] = {}
-            coords = batch.get("coordinates_unnormalized")
-            if coords is None:
-                coords = batch.get("fx")
-            if coords is not None:
-                metadata["coordinates"] = coords[b].detach().cpu().numpy()
-            for key in ("cell_areas", "sigma_t", "sigma_s"):
-                if key in batch:
-                    metadata[key] = batch[key][b].detach().cpu().numpy().flatten()
+            if coords_t is not None:
+                metadata["coordinates"] = coords_t[b].detach().cpu().numpy()
+            for key, t in (
+                ("cell_areas", cell_areas_t),
+                ("sigma_t", sigma_t_t),
+                ("sigma_s", sigma_s_t),
+            ):
+                if t is not None:
+                    metadata[key] = t[b].detach().cpu().numpy().flatten()
             sim_time = batch.get("sim_time")
             if sim_time is not None:
                 metadata["sim_time"] = float(sim_time[b].flatten()[0].item())
-
-            raw_meta = batch.get("metadata") or {}
-            if isinstance(raw_meta, list):
-                raw_meta = raw_meta[0] if raw_meta else {}
             filename = raw_meta.get("filename") if isinstance(raw_meta, dict) else None
             if filename:
                 metadata["filename"] = filename
 
             n += 1
-            yield pred_phys, target_phys, metadata
+            yield (
+                pred_phys_t.detach().cpu().numpy(),
+                target_phys_t.detach().cpu().numpy(),
+                qoi,
+                metadata,
+            )
             if max_samples is not None and n >= max_samples:
                 return
 
@@ -851,17 +875,17 @@ def main():
         step = max(n_total // max(args.num_plot_samples, 1), 1)
         plot_indices = set(range(0, n_total, step))
 
-    for idx, (pred, target, meta) in enumerate(
+    for idx, (pred, target, qoi, meta) in enumerate(
         run_evaluation(
             model,
             test_loader,
             device,
             flux_stats,
+            args.case_type,
             max_samples=args.num_samples,
         )
     ):
         per_sample_metrics.append(compute_metrics(pred, target))
-        qoi = compute_sample_qoi(pred, target, meta, args.case_type)
         if qoi is not None:
             per_sample_qoi.append(qoi)
         all_targets.append(target)

@@ -218,8 +218,7 @@ def collate_no_padding(
     )
     item = batch[0]
     # ``physicsnemo.datapipes.DataLoader`` always passes (TensorDict, dict)
-    # tuples through. Be defensive against accidental dict-only inputs from
-    # legacy callers.
+    # tuples through. Be defensive against accidental dict-only inputs.
     if isinstance(item, tuple) and len(item) == 2:
         td, metadata = item
     else:
@@ -239,8 +238,8 @@ def collate_no_padding(
             out[key] = value.unsqueeze(0) if isinstance(value, torch.Tensor) else value
 
     # Merge the trailing metadata dict back into the batch under "metadata".
-    # ``filename`` is also surfaced at the top level for the legacy access
-    # pattern ``batch["filename"]`` used by some downstream code.
+    # ``filename`` is also surfaced at the top level so downstream code can
+    # use ``batch["filename"]`` directly.
     if metadata:
         existing = out.get("metadata") if isinstance(out.get("metadata"), dict) else {}
         merged_meta = {**metadata, **(existing or {})}
