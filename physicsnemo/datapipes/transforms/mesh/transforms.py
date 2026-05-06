@@ -29,7 +29,7 @@ from tensordict import TensorDict
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.datapipes.transforms.subsample import poisson_sample_indices_fixed
-from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh import DomainMesh, Mesh, MeshSection
 
 
 @register()
@@ -444,19 +444,24 @@ class SetGlobalField(MeshTransform):
 
     def __init__(
         self,
-        fields: dict[str, Float[torch.Tensor, " *shape"] | list[float]],
+        fields: dict[str, torch.Tensor | list[float]],
     ) -> None:
         super().__init__()
-        self._fields: dict[str, Float[torch.Tensor, " *shape"]] = {}
+        ### Coerce + bundle into a single TensorDict so the per-sample
+        ### path in __call__ can collapse to a batched ``td.to(...)`` plus
+        ### ``new_gd.update(...)`` (no Python-level per-key loop).
+        coerced: dict[str, torch.Tensor] = {}
         for k, v in fields.items():
             if not isinstance(v, torch.Tensor):
                 v = torch.tensor(v, dtype=torch.float32)
-            self._fields[k] = v
+            coerced[k] = v
+        self._fields: TensorDict = TensorDict(coerced, batch_size=[])
 
     def __call__(self, mesh: Mesh) -> Mesh:
         new_gd = mesh.global_data.clone()
-        for k, v in self._fields.items():
-            new_gd[k] = v.to(device=mesh.points.device, dtype=mesh.points.dtype)
+        new_gd.update(
+            self._fields.to(device=mesh.points.device, dtype=mesh.points.dtype)
+        )
         return Mesh(
             points=mesh.points,
             cells=mesh.cells,
@@ -468,17 +473,6 @@ class SetGlobalField(MeshTransform):
     def extra_repr(self) -> str:
         shapes = {k: tuple(v.shape) for k, v in self._fields.items()}
         return f"fields={shapes}"
-
-
-def _get_mesh_section(mesh: Mesh, section: str) -> TensorDict:
-    """Look up a Mesh data section by name."""
-    if section == "point_data":
-        return mesh.point_data
-    if section == "cell_data":
-        return mesh.cell_data
-    if section == "global_data":
-        return mesh.global_data
-    raise ValueError(f"Unknown mesh section: {section!r}")
 
 
 @register()
@@ -516,7 +510,7 @@ class NormalizeMeshFields(MeshTransform):
 
     def __init__(
         self,
-        section: str = "point_data",
+        section: MeshSection = "point_data",
         fields: dict[str, dict] | None = None,
         stats_file: str | None = None,
         eps: float = 1e-8,
@@ -541,7 +535,7 @@ class NormalizeMeshFields(MeshTransform):
             raise ValueError("Provide one of 'stats_file' or 'fields'")
 
     def __call__(self, mesh: Mesh) -> Mesh:
-        td = _get_mesh_section(mesh, self._section)
+        td = mesh.get_section(self._section)
         new_td = td.clone()
 
         for field_name, stats in self._stats.items():
@@ -885,7 +879,13 @@ class MeshToDomainMesh(MeshTransform):
           :class:`Mesh[0, n_spatial_dims]` at ``mesh.points``.
     boundary_name : str, default ``'vehicle'``
         Key used in the output ``DomainMesh``'s ``boundaries`` dict for the
-        input mesh.
+        input mesh. The default ``'vehicle'`` matches the curated DrivAerML
+        and HighLiftAeroML ``.pdmsh`` files, which standardize on
+        ``vehicle`` as the body-boundary key in both their surface and
+        volume layouts; downstream code can then resolve
+        ``boundaries.vehicle`` uniformly across domains. Override with a
+        more descriptive name when working outside that convention (e.g.
+        ``'wing'``, ``'turbine_blade'``).
 
     Raises
     ------
@@ -931,10 +931,12 @@ class MeshToDomainMesh(MeshTransform):
         self,
         cell_data_targets: list[str] | None = None,
         point_data_targets: list[str] | None = None,
-        interior_points: str = "cell_centroids",
+        interior_points: Literal["cell_centroids", "vertices"] = "cell_centroids",
         boundary_name: str = "vehicle",
     ) -> None:
         super().__init__()
+        ### Defensive runtime check: YAML / Hydra inputs bypass static
+        ### typing, so we still validate against the implemented tuple.
         if interior_points not in self._IMPLEMENTED_INTERIOR_POINTS:
             raise ValueError(
                 f"interior_points must be one of "

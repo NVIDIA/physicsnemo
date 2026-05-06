@@ -39,9 +39,10 @@ from typing import Literal
 
 import torch
 import torch.nn.functional as F
+from jaxtyping import Float
 from tensordict import TensorDict
 
-from utils import align_scalar_shapes, field_dim
+from utils import FieldType, align_scalar_shapes, field_dim
 
 _LOGGER = logging.getLogger("training.loss")
 
@@ -61,7 +62,7 @@ def _scalar_loss(
     loss_type: LossType,
     delta: float,
     eps: float = 1e-8,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, ""]:
     """Element-wise loss reduced to a scalar (matches legacy scalar behavior).
 
     A defensive shape check guards against config bugs where a ``"scalar"``
@@ -88,12 +89,12 @@ def _scalar_loss(
 
 
 def _vector_loss(
-    pred: torch.Tensor,
-    target: torch.Tensor,
+    pred: Float[torch.Tensor, "*batch d"],
+    target: Float[torch.Tensor, "*batch d"],
     loss_type: LossType,
     delta: float,
     eps: float = 1e-8,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, ""]:
     """Per-component scalar loss summed across components.
 
     Matches the legacy ``compute_huber_vector`` / ``compute_mse_vector`` /
@@ -157,7 +158,7 @@ class LossCalculator:
 
     def __init__(
         self,
-        target_config: dict[str, str],
+        target_config: dict[str, FieldType],
         loss_type: LossType = "huber",
         n_spatial_dims: int = 3,
         field_weights: dict[str, float] | None = None,
@@ -170,9 +171,10 @@ class LossCalculator:
                 f"Unknown loss_type {loss_type!r}; expected one of "
                 f"'huber', 'mse', 'rmse'."
             )
-        ### Normalize types to lowercase up front so per-call branches can
-        ### compare with literal "scalar" / "vector" without re-lowering.
-        self.target_config = {k: v.lower() for k, v in target_config.items()}
+        ### `target_config` values are required to be lowercase per the
+        ### `FieldType` contract; we copy the dict verbatim so callers can
+        ### mutate their original without affecting us.
+        self.target_config: dict[str, FieldType] = dict(target_config)
         self.loss_type = loss_type
         self.n_spatial_dims = n_spatial_dims
         self.prefix = prefix

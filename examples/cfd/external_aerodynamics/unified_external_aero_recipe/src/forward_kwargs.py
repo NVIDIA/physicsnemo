@@ -57,6 +57,8 @@ from tensordict import TensorDict
 
 from physicsnemo.mesh import DomainMesh, Mesh
 
+from utils import FieldType
+
 
 ### ---------------------------------------------------------------------------
 ### Path walking
@@ -182,7 +184,7 @@ def resolve_spec(spec: Any, source: Any) -> Any:
 
 def _apply_modifier(
     mod_spec: dict[str, Any],
-    source: Any,
+    source: DomainMesh | Mesh,
     resolved_kwargs: dict[str, Any],
 ) -> Any:
     """Apply a modifier spec (e.g., ``{source: ..., expand_like: ...}``).
@@ -235,7 +237,7 @@ def _apply_modifier(
 
 def resolve_forward_kwargs(
     spec_dict: dict[str, Any],
-    source: Any,
+    source: DomainMesh | Mesh,
 ) -> dict[str, Any]:
     """Resolve a top-level forward_kwargs spec into actual model.forward kwargs.
 
@@ -277,7 +279,7 @@ def resolve_forward_kwargs(
 
 def extract_targets(
     domain: DomainMesh | Mesh,
-    target_config: dict[str, str],
+    target_config: dict[str, FieldType],
 ) -> TensorDict:
     """Pull target tensors from a DomainMesh's ``interior.point_data`` by name.
 

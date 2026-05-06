@@ -26,23 +26,39 @@ Import this module before Hydra instantiation to register the transform.
 
 from __future__ import annotations
 
+from typing import Literal, TypeAlias
+
 import torch
+from jaxtyping import Float
 from tensordict import TensorDict
 
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
-from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh import DomainMesh, Mesh, MeshSection
+
+### Recognized non-dimensionalization recipes. Each names a specific
+### algebraic transform applied to the matching field; see the
+### `NonDimensionalizeByMetadata` docstring for the formulas.
+NondimFieldType: TypeAlias = Literal[
+    "pressure", "stress", "velocity", "temperature", "density", "identity"
+]
 
 
 def _freestream_scales(
     global_data: TensorDict,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
+) -> tuple[
+    Float[torch.Tensor, ""],
+    Float[torch.Tensor, ""],
+    Float[torch.Tensor, ""],
+    Float[torch.Tensor, ""],
+    Float[torch.Tensor, ""] | None,
+]:
     """Derive reference scales from freestream metadata (cast to float32 once).
 
     Returns ``(q_inf, p_inf, U_inf_mag, rho_inf, T_inf)`` where
     ``q_inf = 0.5 * rho_inf * |U_inf|^2``.  ``T_inf`` is ``None``
     when the metadata does not contain a freestream temperature (e.g.
-    incompressible datasets).
+    incompressible datasets). Each scale is a 0-d float32 tensor.
     """
     U_inf = global_data["U_inf"].float()
     rho_inf = global_data["rho_inf"].float()
@@ -54,12 +70,12 @@ def _freestream_scales(
     return q_inf, p_inf, U_inf_mag, rho_inf, T_inf
 
 
-_FIELD_TYPES = frozenset(
+_FIELD_TYPES: frozenset[NondimFieldType] = frozenset(
     {"pressure", "stress", "velocity", "temperature", "density", "identity"}
 )
 
 # Number of tensor channels each field type occupies.
-_FIELD_CHANNELS = {
+_FIELD_CHANNELS: dict[NondimFieldType, int] = {
     "pressure": 1,
     "stress": 3,
     "velocity": 3,
@@ -71,13 +87,13 @@ _FIELD_CHANNELS = {
 
 def _nondim_field(
     val: torch.Tensor,
-    ftype: str,
-    q_inf: torch.Tensor,
-    p_inf: torch.Tensor,
-    U_inf_mag: torch.Tensor,
+    ftype: NondimFieldType,
+    q_inf: Float[torch.Tensor, ""],
+    p_inf: Float[torch.Tensor, ""],
+    U_inf_mag: Float[torch.Tensor, ""],
     *,
-    rho_inf: torch.Tensor | None = None,
-    T_inf: torch.Tensor | None = None,
+    rho_inf: Float[torch.Tensor, ""] | None = None,
+    T_inf: Float[torch.Tensor, ""] | None = None,
 ) -> torch.Tensor:
     """Apply forward non-dimensionalization to a single field."""
     if ftype == "identity":
@@ -101,13 +117,13 @@ def _nondim_field(
 
 def _redim_field(
     val: torch.Tensor,
-    ftype: str,
-    q_inf: torch.Tensor,
-    p_inf: torch.Tensor,
-    U_inf_mag: torch.Tensor,
+    ftype: NondimFieldType,
+    q_inf: Float[torch.Tensor, ""],
+    p_inf: Float[torch.Tensor, ""],
+    U_inf_mag: Float[torch.Tensor, ""],
     *,
-    rho_inf: torch.Tensor | None = None,
-    T_inf: torch.Tensor | None = None,
+    rho_inf: Float[torch.Tensor, ""] | None = None,
+    T_inf: Float[torch.Tensor, ""] | None = None,
 ) -> torch.Tensor:
     """Reverse non-dimensionalization for a single field."""
     if ftype == "identity":
@@ -167,8 +183,8 @@ class NonDimensionalizeByMetadata(MeshTransform):
 
     def __init__(
         self,
-        fields: dict[str, str],
-        section: str = "point_data",
+        fields: dict[str, NondimFieldType],
+        section: MeshSection = "point_data",
     ) -> None:
         super().__init__()
         for name, ftype in fields.items():
@@ -281,15 +297,15 @@ class NonDimensionalizeByMetadata(MeshTransform):
 
     def inverse_tensor(
         self,
-        tensor: torch.Tensor,
-        field_types: dict[str, str],
-        q_inf: torch.Tensor,
-        p_inf: torch.Tensor,
-        U_inf_mag: torch.Tensor,
+        tensor: Float[torch.Tensor, "*batch C"],
+        field_types: dict[str, NondimFieldType],
+        q_inf: Float[torch.Tensor, ""],
+        p_inf: Float[torch.Tensor, ""],
+        U_inf_mag: Float[torch.Tensor, ""],
         *,
-        rho_inf: torch.Tensor | None = None,
-        T_inf: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+        rho_inf: Float[torch.Tensor, ""] | None = None,
+        T_inf: Float[torch.Tensor, ""] | None = None,
+    ) -> Float[torch.Tensor, "*batch C"]:
         """Re-dimensionalize a concatenated output tensor.
 
         Operates on model output tensors (shape ``(*, C)``) where channels

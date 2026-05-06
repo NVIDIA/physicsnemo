@@ -34,8 +34,9 @@ from __future__ import annotations
 import json
 import math
 import sys
-from pathlib import Path
 from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
 
 ### Make this folder importable by its bare module names (`nondim`, `sdf`)
 ### regardless of whether the caller invoked `python src/train.py` (which
@@ -45,10 +46,11 @@ _SRC_DIR = str(Path(__file__).resolve().parent)
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-import torch
-from torch.utils.data import Sampler
 import hydra
+import torch
 from omegaconf import DictConfig, OmegaConf
+from tensordict import TensorDict
+from torch.utils.data import Sampler
 
 import physicsnemo.datapipes  # noqa: F401  (registers ${dp:...} resolvers)
 from physicsnemo.datapipes import MeshDataset
@@ -155,31 +157,25 @@ class _InjectMetadata(MeshTransform):
     can hand it to :class:`MeshDataset` alongside any other transform.
     """
 
-    def __init__(self, metadata: dict) -> None:
+    def __init__(self, metadata: dict[str, Any]) -> None:
         super().__init__()
-        ### Coerce every field to a 1-D / 0-D float32 tensor up front so
-        ### that downstream `.to(device=..., dtype=...)` is the only work
-        ### done per-sample.
-        self._fields: dict[str, torch.Tensor] = {}
+        ### Coerce every field to a 0-D / 1-D float32 tensor up front and
+        ### pack the bundle into a single ``TensorDict``. Per-sample work
+        ### then collapses to one batched ``td.to(device, dtype)`` plus
+        ### one ``new_gd.update(...)`` -- no Python-level loop.
+        coerced: dict[str, torch.Tensor] = {}
         for k, v in metadata.items():
             if isinstance(v, torch.Tensor):
-                self._fields[k] = v.float()
+                coerced[k] = v.float()
             else:
                 ### Accepts list / tuple / scalar uniformly.
-                self._fields[k] = torch.as_tensor(v, dtype=torch.float32)
-
-    def _materialize(
-        self, base_gd: torch.Tensor, device: torch.device, dtype: torch.dtype
-    ) -> torch.Tensor:
-        """Clone ``base_gd`` and merge the metadata fields onto it."""
-        new_gd = base_gd.clone()
-        for k, v in self._fields.items():
-            new_gd[k] = v.to(device=device, dtype=dtype)
-        return new_gd
+                coerced[k] = torch.as_tensor(v, dtype=torch.float32)
+        self._fields: TensorDict = TensorDict(coerced, batch_size=[])
 
     def __call__(self, mesh: Mesh) -> Mesh:
-        new_gd = self._materialize(
-            mesh.global_data, mesh.points.device, mesh.points.dtype
+        new_gd = mesh.global_data.clone()
+        new_gd.update(
+            self._fields.to(device=mesh.points.device, dtype=mesh.points.dtype)
         )
         return Mesh(
             points=mesh.points,
@@ -191,10 +187,10 @@ class _InjectMetadata(MeshTransform):
 
     def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
         """Inject metadata into ``domain.global_data``."""
-        new_gd = self._materialize(
-            domain.global_data,
-            domain.interior.points.device,
-            domain.interior.points.dtype,
+        interior_pts = domain.interior.points
+        new_gd = domain.global_data.clone()
+        new_gd.update(
+            self._fields.to(device=interior_pts.device, dtype=interior_pts.dtype)
         )
         return DomainMesh(
             interior=domain.interior,
@@ -203,7 +199,7 @@ class _InjectMetadata(MeshTransform):
         )
 
     def extra_repr(self) -> str:
-        return f"fields={sorted(self._fields)}"
+        return f"fields={sorted(self._fields.keys())}"
 
 
 def build_dataset(

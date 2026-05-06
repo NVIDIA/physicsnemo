@@ -19,12 +19,18 @@
 from __future__ import annotations
 
 import random
+from typing import Literal, TypeAlias
 
 import numpy as np
 import torch
-
 from omegaconf import DictConfig
+
 from physicsnemo.optim import CombinedOptimizer
+
+### Recipe-wide type aliases. Re-exported for use in loss.py, metrics.py,
+### output_normalize.py, forward_kwargs.py, collate.py, train.py, and the
+### tests so that ``target_config`` values share a single source of truth.
+FieldType: TypeAlias = Literal["scalar", "vector"]
 
 
 def set_seed(seed: int | None, rank: int = 0) -> None:
@@ -114,20 +120,23 @@ def build_muon_optimizer(
 # ---------------------------------------------------------------------------
 
 
-def field_dim(field_type: str, n_spatial_dims: int = 3) -> int:
+def field_dim(field_type: FieldType, n_spatial_dims: int = 3) -> int:
     """Number of channels a single ``"scalar"`` or ``"vector"`` field occupies.
 
+    The type tag is always lowercase by contract -- the recipe normalises
+    YAML inputs at the LossCalculator / MetricCalculator boundary. Pass
+    pre-lowercased strings here.
+
     Args:
-        field_type: ``"scalar"`` or ``"vector"`` (case-insensitive).
+        field_type: ``"scalar"`` or ``"vector"``.
         n_spatial_dims: Dimensionality of vector fields. Default 3.
 
     Raises:
         ValueError: If ``field_type`` is not ``"scalar"`` or ``"vector"``.
     """
-    ftype = field_type.lower()
-    if ftype == "scalar":
+    if field_type == "scalar":
         return 1
-    if ftype == "vector":
+    if field_type == "vector":
         return n_spatial_dims
     raise ValueError(
         f"Unknown field type {field_type!r}. Expected 'scalar' or 'vector'."

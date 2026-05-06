@@ -31,11 +31,18 @@ loss, not in diagnostic summaries.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
+from typing import Literal, TypeAlias
+
 import torch
 import torch.distributed as dist
+from jaxtyping import Float
 from tensordict import TensorDict
 
-from utils import align_scalar_shapes, field_dim
+from utils import FieldType, align_scalar_shapes, field_dim
+
+### Recipe-wide alias for the metric-name enum that the dataset YAMLs use.
+MetricName: TypeAlias = Literal["mae", "l1", "l2"]
 
 
 ### ---------------------------------------------------------------------------
@@ -43,14 +50,16 @@ from utils import align_scalar_shapes, field_dim
 ### ---------------------------------------------------------------------------
 
 
-def _mean_absolute_error(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+def _mean_absolute_error(
+    pred: torch.Tensor, target: torch.Tensor
+) -> Float[torch.Tensor, ""]:
     """Mean absolute error over all elements."""
     return torch.mean(torch.abs(pred - target))
 
 
 def _relative_l1(
     pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-8
-) -> torch.Tensor:
+) -> Float[torch.Tensor, ""]:
     """``sum|pred - target| / sum|target|``, computed over the spatial axis."""
     abs_diff = torch.abs(pred - target)
     if pred.ndim == 0:
@@ -64,7 +73,7 @@ def _relative_l1(
 
 def _relative_l2(
     pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-8
-) -> torch.Tensor:
+) -> Float[torch.Tensor, ""]:
     """``sqrt(sum diff^2) / sqrt(sum target^2)``, over the spatial axis."""
     diff_sq = (pred - target) ** 2
     if pred.ndim == 0:
@@ -75,7 +84,7 @@ def _relative_l2(
     return torch.mean(num / (denom + eps))
 
 
-METRIC_FUNCTIONS = {
+METRIC_FUNCTIONS: dict[MetricName, Callable[..., torch.Tensor]] = {
     "mae": _mean_absolute_error,
     "l1": _relative_l1,
     "l2": _relative_l2,
@@ -84,7 +93,7 @@ METRIC_FUNCTIONS = {
 ### Default metrics computed when the user doesn't override `metrics:` in
 ### the dataset YAML. Exposed as a constant so train.py can fall back to
 ### the same list when the dataset YAML omits the block.
-DEFAULT_METRICS: tuple[str, ...] = ("l1", "l2", "mae")
+DEFAULT_METRICS: tuple[MetricName, ...] = ("l1", "l2", "mae")
 
 
 ### ---------------------------------------------------------------------------
@@ -112,15 +121,16 @@ class MetricCalculator:
 
     def __init__(
         self,
-        target_config: dict[str, str],
+        target_config: dict[str, FieldType],
         process_group: dist.ProcessGroup | None = None,
         n_spatial_dims: int = 3,
-        metrics: list[str] | None = None,
+        metrics: Sequence[MetricName] | None = None,
         prefix: str = "",
     ) -> None:
-        ### Lowercase types up front so per-call branches can compare with
-        ### literal "scalar" / "vector" without re-lowering each time.
-        self.target_config = {k: v.lower() for k, v in target_config.items()}
+        ### `target_config` values are required to be lowercase per the
+        ### `FieldType` contract; copy verbatim so callers can mutate their
+        ### original without affecting us.
+        self.target_config: dict[str, FieldType] = dict(target_config)
         self.process_group = process_group
         self.n_spatial_dims = n_spatial_dims
         self.metric_names = (

@@ -51,8 +51,11 @@ from collections.abc import Callable
 from typing import Any
 
 import torch
+from jaxtyping import Float
 
 from forward_kwargs import extract_targets, resolve_forward_kwargs
+from output_normalize import IOType
+from utils import FieldType
 
 
 ### ---------------------------------------------------------------------------
@@ -60,7 +63,7 @@ from forward_kwargs import extract_targets, resolve_forward_kwargs
 ### ---------------------------------------------------------------------------
 
 
-def _add_batch_dim_token(t: torch.Tensor) -> torch.Tensor:
+def _add_batch_dim_token(t: torch.Tensor) -> Float[torch.Tensor, "1 n c"]:
     """Pad a tensor up to ``ndim >= 2`` and prepend a batch dim of 1.
 
     Used for forward_kwargs values so token-style features (`(D,)` global
@@ -99,9 +102,9 @@ def _add_batch_dim_recursive(value: Any, *, leaf_fn) -> Any:
 
 
 def build_collate_fn(
-    input_type: str,
+    input_type: IOType,
     forward_kwargs_spec: dict[str, Any],
-    target_config: dict[str, str],
+    target_config: dict[str, FieldType],
 ) -> Callable[[list[tuple[Any, Any]]], dict[str, Any]]:
     """Build a collate function for a given model contract.
 

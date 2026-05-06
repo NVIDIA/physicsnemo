@@ -37,13 +37,13 @@ from tensordict import TensorDict
 
 from loss import DEFAULT_HUBER_DELTA, LossCalculator
 from output_normalize import split_concat_by_target
-from utils import field_dim
+from utils import FieldType, field_dim
 
 
 def _legacy_total_huber(
     pred: torch.Tensor,
     target: torch.Tensor,
-    target_config: dict[str, str],
+    target_config: dict[str, FieldType],
     n_spatial_dims: int = 3,
 ) -> torch.Tensor:
     """Reference implementation matching the pre-refactor (B, N, C) loss formula.
@@ -61,7 +61,7 @@ def _legacy_total_huber(
         dim = field_dim(ftype, n_spatial_dims)
         p = pred[..., idx : idx + dim]
         t = target[..., idx : idx + dim]
-        if ftype.lower() == "scalar":
+        if ftype == "scalar":
             total = total + F.huber_loss(
                 p.squeeze(-1),
                 t.squeeze(-1),

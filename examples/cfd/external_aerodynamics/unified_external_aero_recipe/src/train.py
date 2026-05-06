@@ -37,11 +37,11 @@ import json
 import logging
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 import hydra
 import omegaconf
@@ -55,18 +55,19 @@ from datasets import (
     resolve_manifest_indices,
 )
 from loss import LossCalculator
-from metrics import DEFAULT_METRICS, MetricCalculator
+from metrics import DEFAULT_METRICS, MetricCalculator, MetricName
 from omegaconf import DictConfig, OmegaConf
-from output_normalize import normalize_output_to_tensordict
+from output_normalize import IOType, normalize_output_to_tensordict
 from tabulate import tabulate
 from tensordict import TensorDict
 from torch.amp import GradScaler, autocast
+from torch.utils.data import Sampler
 from torch.utils.tensorboard import SummaryWriter
-from utils import build_muon_optimizer, set_seed
+from utils import FieldType, build_muon_optimizer, set_seed
 
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.core.version_check import OptionalImport
-from physicsnemo.datapipes import DataLoader, MultiDataset
+from physicsnemo.datapipes import DataLoader, MeshDataset, MultiDataset
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.utils import load_checkpoint, save_checkpoint
@@ -88,8 +89,13 @@ _LOGGER_BUILD_DATALOADERS = logging.getLogger("training.build_dataloaders")
 ### to be useful without changing the rest of the training contract.
 _PROFILE_MAX_STEPS = 10
 
+### Allowed mixed-precision modes for the autocast context + input pre-cast.
+### Validated only structurally (via the type), not at runtime: an unknown
+### value falls through to a no-op autocast in `get_autocast_context`.
+Precision: TypeAlias = Literal["float32", "float16", "bfloat16", "float8"]
 
-def _resolve_dict(cfg: DictConfig, path: str) -> dict | None:
+
+def _resolve_dict(cfg: DictConfig, path: str) -> dict[str, Any] | None:
     """Resolve `cfg.<path>` to a plain dict, or ``None`` if missing/empty.
 
     Wraps the OmegaConf incantation
@@ -101,7 +107,9 @@ def _resolve_dict(cfg: DictConfig, path: str) -> dict | None:
     return container or None
 
 
-def _flatten_config(d: dict, parent: str = "", sep: str = ".") -> dict[str, str]:
+def _flatten_config(
+    d: dict[str, Any], parent: str = "", sep: str = "."
+) -> dict[str, str]:
     """Recursively flatten a nested dict into dot-separated key/value pairs."""
     items: dict[str, str] = {}
     for k, v in d.items():
@@ -134,7 +142,7 @@ def _log_to_tensorboard(
         writer.add_scalar(f"{tag_prefix}/{k}", val, global_step=global_step)
 
 
-def get_autocast_context(precision: str):
+def get_autocast_context(precision: Precision):
     """Return an autocast context manager for the given precision.
 
     Args:
@@ -160,7 +168,20 @@ def get_autocast_context(precision: str):
         return nullcontext()
 
 
-def _recursive_apply(obj, leaf_fn, *, container_fn=None):
+### Callable types for the recursive walker. ``LeafFn`` is the per-Tensor
+### transform (mandatory); ``ContainerFn`` is the optional override
+### applied to tensor-aware containers (Mesh / DomainMesh / TensorDict)
+### when the default ``container.apply(leaf_fn)`` semantics aren't enough.
+LeafFn = Callable[[torch.Tensor], torch.Tensor]
+ContainerFn = Callable[[Any], Any]
+
+
+def _recursive_apply(
+    obj: Any,
+    leaf_fn: LeafFn,
+    *,
+    container_fn: ContainerFn | None = None,
+) -> Any:
     """Walk a nested structure, applying ``leaf_fn`` to every Tensor leaf.
 
     Tensor-aware containers (Mesh, DomainMesh, TensorDict) are routed
@@ -197,7 +218,7 @@ def _recursive_apply(obj, leaf_fn, *, container_fn=None):
     return obj
 
 
-def _recursive_to_device(obj, device):
+def _recursive_to_device(obj: Any, device: torch.device | str) -> Any:
     """Move every tensor / Mesh / DomainMesh / TensorDict in a nested value to *device*.
 
     Containers go through ``.to(device)`` (not ``.apply(...)``) so that
@@ -212,7 +233,7 @@ def _recursive_to_device(obj, device):
     )
 
 
-def _recursive_cast_floats(obj, dtype):
+def _recursive_cast_floats(obj: Any, dtype: torch.dtype) -> Any:
     """Cast floating-point tensors in a nested value to *dtype*; skip everything else.
 
     Non-float tensors (e.g. ``Mesh.cells`` in int64) pass through
@@ -227,14 +248,14 @@ def _recursive_cast_floats(obj, dtype):
 
 
 def forward_pass(
-    batch: dict,
+    batch: dict[str, Any],
     model: torch.nn.Module,
-    precision: str,
+    precision: Precision,
     loss_calculator: LossCalculator,
     metric_calculator: MetricCalculator,
     *,
-    output_type: str,
-    target_config: dict[str, str],
+    output_type: IOType,
+    target_config: dict[str, FieldType],
 ) -> tuple[torch.Tensor, dict[str, float], dict[str, float]]:
     """Run a forward pass + loss + metrics on one collated batch.
 
@@ -313,23 +334,23 @@ def _accumulate_metrics(
 
 
 def _run_epoch(
-    dataloader,
+    dataloader: DataLoader,
     model: torch.nn.Module,
     loss_calculator: LossCalculator,
     metric_calculator: MetricCalculator,
-    logger,
+    logger: Any,
     epoch: int,
     cfg: DictConfig,
     dist_manager: DistributedManager,
     *,
     mode: Literal["train", "val"],
-    output_type: str,
-    target_config: dict[str, str],
+    output_type: IOType,
+    target_config: dict[str, FieldType],
     optimizer: torch.optim.Optimizer | None = None,
-    scheduler=None,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
     scaler: GradScaler | None = None,
     writer: SummaryWriter | None = None,
-    log_jsonl=None,
+    log_jsonl: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[float, dict[str, float]]:
     """Run one training-or-validation epoch.
 
@@ -493,22 +514,22 @@ def _run_epoch(
 
 @profile
 def train_epoch(
-    dataloader,
+    dataloader: DataLoader,
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
-    scheduler,
+    scheduler: torch.optim.lr_scheduler.LRScheduler,
     loss_calculator: LossCalculator,
     metric_calculator: MetricCalculator,
-    logger,
+    logger: Any,
     epoch: int,
     cfg: DictConfig,
     dist_manager: DistributedManager,
     scaler: GradScaler | None = None,
     *,
-    output_type: str,
-    target_config: dict[str, str],
+    output_type: IOType,
+    target_config: dict[str, FieldType],
     train_writer: SummaryWriter | None = None,
-    log_jsonl=None,
+    log_jsonl: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[float, dict[str, float]]:
     """Run one training epoch (delegates to :func:`_run_epoch` in train mode)."""
     return _run_epoch(
@@ -533,19 +554,19 @@ def train_epoch(
 
 @profile
 def val_epoch(
-    dataloader,
+    dataloader: DataLoader,
     model: torch.nn.Module,
     loss_calculator: LossCalculator,
     metric_calculator: MetricCalculator,
-    logger,
+    logger: Any,
     epoch: int,
     cfg: DictConfig,
     dist_manager: DistributedManager,
     *,
-    output_type: str,
-    target_config: dict[str, str],
+    output_type: IOType,
+    target_config: dict[str, FieldType],
     val_writer: SummaryWriter | None = None,
-    log_jsonl=None,
+    log_jsonl: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[float, dict[str, float]]:
     """Run one validation epoch (delegates to :func:`_run_epoch` in val mode)."""
     return _run_epoch(
@@ -566,7 +587,7 @@ def val_epoch(
 
 
 def _walk_batch_for_logging(
-    value, prefix: str = ""
+    value: Any, prefix: str = ""
 ) -> Iterator[tuple[str, torch.Tensor]]:
     """Yield ``(dotted_name, Tensor)`` pairs from a batch (nested dicts / TensorDicts of tensors / Mesh).
 
@@ -618,9 +639,9 @@ def _walk_batch_for_logging(
 
 @profile
 def benchmark_io_epoch(
-    dataloader,
+    dataloader: DataLoader,
     label: str,
-    logger,
+    logger: Any,
     max_steps: int | None = None,
 ) -> None:
     """Iterate a dataloader without any model logic and report I/O timing.
@@ -684,7 +705,9 @@ def benchmark_io_epoch(
     )
 
 
-def _find_normalizer(datasets: list) -> "NormalizeMeshFields | None":
+def _find_normalizer(
+    datasets: list[MeshDataset],
+) -> "NormalizeMeshFields | None":
     """Return the first ``NormalizeMeshFields`` instance across *datasets*' pipelines.
 
     Used at checkpoint-save time to persist normalization stats alongside the
@@ -702,12 +725,12 @@ def _find_normalizer(datasets: list) -> "NormalizeMeshFields | None":
 
 def _validate_dataset_consistency(
     ds_key: str,
-    ds_targets: dict,
-    ds_metrics: list,
-    ds_metadata: dict,
-    first_targets: dict,
-    first_metrics: list,
-    first_metadata: dict,
+    ds_targets: dict[str, FieldType],
+    ds_metrics: list[MetricName],
+    ds_metadata: dict[str, Any],
+    first_targets: dict[str, FieldType],
+    first_metrics: list[MetricName],
+    first_metadata: dict[str, Any],
 ) -> None:
     """Reject ``targets:`` mismatch across multi-dataset training; warn on softer drift.
 
@@ -788,7 +811,7 @@ def _resolve_manifest_spec(
 
 
 def _resolve_manifest_indices_from_spec(
-    reader, manifest_spec: dict
+    reader: Any, manifest_spec: dict[str, Any]
 ) -> tuple[list[int], list[int] | None]:
     """Resolve a manifest spec to ``(train_indices, val_indices_or_None)``."""
     if manifest_spec["train_manifest"] is not None:
@@ -812,7 +835,9 @@ def _resolve_manifest_indices_from_spec(
     return train_indices, val_indices
 
 
-def _build_collate(cfg: DictConfig, target_config: dict[str, str]):
+def _build_collate(
+    cfg: DictConfig, target_config: dict[str, FieldType]
+) -> Callable[[list[tuple[Any, Any]]], dict[str, Any]]:
     """Build the per-sample collate from the training YAML's I/O contract."""
     if not target_config:
         raise ValueError(
@@ -837,7 +862,9 @@ def _build_collate(cfg: DictConfig, target_config: dict[str, str]):
     )
 
 
-def _combine_datasets(datasets: list):
+def _combine_datasets(
+    datasets: list[MeshDataset],
+) -> MeshDataset | MultiDataset:
     """Wrap a list of `MeshDataset`s in a `MultiDataset` if there's more than one."""
     if len(datasets) == 1:
         return datasets[0]
@@ -845,8 +872,12 @@ def _combine_datasets(datasets: list):
 
 
 def _build_directory_samplers(
-    train_dataset, val_dataset, *, use_distributed: bool, sampler_seed: int
-):
+    train_dataset: Any,
+    val_dataset: Any,
+    *,
+    use_distributed: bool,
+    sampler_seed: int,
+) -> tuple[Sampler | None, Sampler | None]:
     """Per-split DistributedSamplers (or `(None, None)` on a single rank)."""
     if not use_distributed:
         return None, None
@@ -865,7 +896,7 @@ def _build_manifest_samplers(
     *,
     dist_manager: DistributedManager,
     sampler_seed: int,
-):
+) -> tuple[ManifestSampler, ManifestSampler]:
     """ManifestSamplers (with distributed sharding when world_size > 1)."""
     use_distributed = dist_manager.world_size > 1
     rank = dist_manager.rank if use_distributed else 0
@@ -895,7 +926,9 @@ def _build_manifest_samplers(
     return train_sampler, val_sampler
 
 
-def build_dataloaders(cfg: DictConfig):
+def build_dataloaders(
+    cfg: DictConfig,
+) -> tuple[DataLoader, DataLoader, "NormalizeMeshFields | None", dict[str, Any]]:
     """Build train and val dataloaders from dataset configs.
 
     Supports two split strategies:
@@ -1130,7 +1163,7 @@ def build_dataloaders(cfg: DictConfig):
 
 
 @profile
-def main(cfg: DictConfig):
+def main(cfg: DictConfig) -> None:
     """Run the full training loop, or I/O-only benchmark when ``benchmark_io=true``.
 
     Orchestrates the complete training workflow:
@@ -1179,8 +1212,8 @@ def main(cfg: DictConfig):
     logger.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
 
     train_loader, val_loader, normalizer, dataset_info = build_dataloaders(cfg)
-    target_config: dict[str, str] = dataset_info["targets"]
-    metrics_list: list[str] = dataset_info["metrics"]
+    target_config: dict[str, FieldType] = dataset_info["targets"]
+    metrics_list: list[MetricName] = dataset_info["metrics"]
     ds_metadata: dict = dataset_info["metadata"]
     logger.info(f"Train samples: {len(train_loader.sampler)}")
     logger.info(f"Val samples: {len(val_loader.sampler)}")
@@ -1396,7 +1429,7 @@ def main(cfg: DictConfig):
     config_path="../conf",
     config_name="train_geotransolver_automotive_surface",
 )
-def launch(cfg: DictConfig):
+def launch(cfg: DictConfig) -> None:
     """Hydra entry point: configure profiling and delegate to :func:`main`.
 
     Args:

@@ -58,6 +58,8 @@ import torch  # noqa: E402
 
 from physicsnemo.mesh import DomainMesh, Mesh  # noqa: E402
 
+from utils import FieldType  # noqa: E402
+
 
 ### ---------------------------------------------------------------------------
 ### Shared DomainMesh factories
@@ -65,7 +67,7 @@ from physicsnemo.mesh import DomainMesh, Mesh  # noqa: E402
 
 
 def make_surface_domain_mesh(
-    target_config: dict[str, str] | None = None,
+    target_config: dict[str, FieldType] | None = None,
     *,
     n_cells: int = 6,
     n_pts_factor: int = 2,
@@ -114,7 +116,7 @@ def make_surface_domain_mesh(
 
 
 def make_volume_domain_mesh(
-    target_config: dict[str, str] | None = None,
+    target_config: dict[str, FieldType] | None = None,
     *,
     n_pts: int = 200,
 ) -> DomainMesh:
