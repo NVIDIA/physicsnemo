@@ -16,24 +16,26 @@
 
 """Unit tests for `src/train.py`'s private TensorDict-aware walkers and for `src/output_normalize.py`.
 
-`TensorDict` is not a `dict` subclass; the bare ``isinstance(obj, dict)``
-branches in the recipe's recursive helpers therefore silently skip
-TensorDict inputs unless an explicit branch is added. These tests pin
-down that explicit handling for:
+``TensorDict`` is not a ``dict`` subclass, so the bare
+``isinstance(obj, dict)`` branches in the recipe's recursive helpers
+must be paired with explicit ``isinstance(obj, TensorDict)`` branches
+for TD inputs to be walked at all. These tests pin that explicit
+handling for:
 
-- :func:`train._recursive_to_device`: must move TensorDict leaves to the
-  requested device, including when the TD is nested under a plain dict.
-  The test asserts on ``result.device == cpu`` because a fresh
-  ``TensorDict(..., batch_size=[N])`` has ``device is None`` while
-  ``td.to("cpu")`` updates ``.device`` -- so the post-fix behaviour is
-  distinguishable from a silent skip (which would leave ``device is None``).
-- :func:`train._recursive_cast_floats`: tensor-aware containers (Mesh,
-  DomainMesh, TensorDict) propagate the conditional cast via their
-  auto-injected ``.apply()``, so float leaves move to the autocast
-  dtype and int leaves (e.g., ``Mesh.cells``) are preserved. Made
-  possible upstream by the fix in PR NVIDIA/physicsnemo#1621 -- before
-  that fix, ``DomainMesh.apply`` was a silent no-op on nested fields,
-  which forced the previous workaround of passthrough for all three.
+- :func:`train._recursive_to_device`: must move TensorDict leaves to
+  the requested device, including when the TD is nested under a plain
+  dict. The tests assert ``result.device == cpu`` -- a freshly built
+  ``TensorDict(..., batch_size=[N])`` has ``device is None``, and
+  ``td.to("cpu")`` updates ``.device``, so this assertion fails if the
+  walker skips the TD branch.
+- :func:`train._recursive_cast_floats`: ``Mesh``, ``DomainMesh``, and
+  ``TensorDict`` propagate the conditional cast via their
+  auto-injected ``.apply()`` -- float leaves move to the requested
+  dtype, integer leaves (e.g. ``Mesh.cells``) are kept by the same
+  ``is_floating_point()`` guard as the bare ``Tensor`` branch. Relies
+  on ``DomainMesh.apply`` recursing into ``interior``, ``boundaries``,
+  and ``global_data`` (physicsnemo >= the fix in
+  NVIDIA/physicsnemo#1621).
 - :func:`train._walk_batch_for_logging`: must yield ``(name, tensor)``
   pairs from TensorDict leaves -- including correctly producing dotted
   paths for nested TDs via ``TD.flatten_keys('.')``.
@@ -89,8 +91,9 @@ class TestRecursiveToDevice:
 
         result = _recursive_to_device(td, cpu)
         assert isinstance(result, TensorDict)
-        ### Post-fix: TD went through .to(cpu), which sets .device.
-        ### Pre-fix (silent skip), this would still be None.
+        ### `.to(cpu)` sets `.device`, so a non-None `.device` here is
+        ### proof the walker recursed into the TD branch (a skipped TD
+        ### would leave `.device` at its initial `None`).
         assert result.device == cpu
         assert result["pressure"].device == cpu
         assert result["wss"].device == cpu
@@ -127,12 +130,13 @@ class TestRecursiveCastFloats:
         Each container's auto-injected ``.apply()`` recurses through every
         tensor leaf: float leaves move to the new dtype while int leaves
         (e.g. ``Mesh.cells``) are preserved by the same
-        ``is_floating_point()`` guard used in the Tensor branch.
+        ``is_floating_point()`` guard used in the bare-Tensor branch.
 
-        The DomainMesh assertions are the load-bearing ones for the
-        upstream ``DomainMesh.apply`` fix (PR NVIDIA/physicsnemo#1621):
-        pre-fix, the nested ``interior`` / ``boundaries`` / ``global_data``
-        fields silently stayed at float32 and these assertions would fail.
+        The DomainMesh assertions exercise the upstream invariant that
+        ``DomainMesh.apply`` recurses into ``interior``, ``boundaries``,
+        and ``global_data`` (provided by physicsnemo >=
+        NVIDIA/physicsnemo#1621). If any of those fields stops being
+        walked, these assertions are the canary.
         """
         td = TensorDict(
             {
@@ -171,8 +175,9 @@ class TestRecursiveCastFloats:
         assert mesh_cast.cell_data["normals"].dtype == torch.bfloat16
 
         dm_cast = _recursive_cast_floats(dm, torch.bfloat16)
-        ### CRITICAL: nested fields under DomainMesh now cast (was a
-        ### silent no-op pre-PR-1621).
+        ### Every leaf inside the DomainMesh -- interior, boundaries, and
+        ### global_data alike -- must end up at the requested dtype, with
+        ### integer leaves (e.g. cells) untouched.
         assert isinstance(dm_cast, DomainMesh)
         assert dm_cast.interior.points.dtype == torch.bfloat16
         assert dm_cast.interior.point_data["p"].dtype == torch.bfloat16
@@ -181,7 +186,7 @@ class TestRecursiveCastFloats:
         assert dm_cast.global_data["U_inf"].dtype == torch.bfloat16
 
     def test_plain_float_tensor_still_cast(self):
-        """Plain Tensor leaves are still pre-cast (legacy parity)."""
+        """Plain float tensors cast; plain int tensors pass through unchanged."""
         t = torch.zeros(3, dtype=torch.float32)
         assert _recursive_cast_floats(t, torch.bfloat16).dtype == torch.bfloat16
         ### Int tensors are not cast.
@@ -264,12 +269,15 @@ class TestNormalizeOutputToTensordict:
         assert td.batch_size == torch.Size([1, 50])
 
     def test_tensors_output_two_dim_raises_clearly(self):
-        ### Pre-fix, a (B, N) output for a single-scalar target produced a
-        ### confusing "channel dim N does not match expected 1" message
-        ### because the per-element axis was being mistaken for the channel
-        ### axis. The explicit ``ndim < 3`` guard now points the user at
-        ### the missing trailing channel dim.
-        """Two-D output (missing channel dim) raises a clear shape error."""
+        """Two-D output (missing channel dim) raises a clear shape error.
+
+        A ``(B, N)`` output for a single-scalar target is a config bug:
+        without the explicit ``ndim < 3`` guard the per-element axis ``N``
+        gets compared to the expected channel count ``C``, yielding a
+        confusing "channel dim ``N`` does not match expected ``1``" error.
+        The guard surfaces the actual problem (missing trailing channel
+        dimension) directly.
+        """
         target_config = {"pressure": "scalar"}
         out = torch.randn(1, 50)
         with pytest.raises(ValueError, match=r"expects a \(B, N, C\) tensor"):

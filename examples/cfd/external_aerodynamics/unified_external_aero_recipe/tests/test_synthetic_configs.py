@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Synthetic end-to-end smoke tests for every migrated training config.
+"""Synthetic end-to-end smoke tests for every training config in ``conf/``.
 
 Each test:
 
@@ -235,7 +235,9 @@ def test_tensor_input_config_synthetic_e2e(
     train_cfg = OmegaConf.load(train_path)
     dataset_cfg = OmegaConf.load(dataset_path)
 
-    ### Both YAMLs must declare the new contract.
+    ### Both YAMLs must declare `input_type` and `output_type`; the
+    ### `tensors` value is what `_run_tensor_input_config` is parametrized
+    ### over.
     assert OmegaConf.select(train_cfg, "input_type") == "tensors", (
         f"{train_name} input_type is not 'tensors'"
     )

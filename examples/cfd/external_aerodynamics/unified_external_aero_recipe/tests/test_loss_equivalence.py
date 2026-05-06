@@ -14,18 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Numerical equivalence + field_weights correctness for the TensorDict-based loss.
+"""Numerical correctness for ``LossCalculator``.
 
-The previous (B, N, C)-tensor loss used:
+These tests pin two things:
 
-- For scalar fields: ``F.huber_loss(pred[..., spec.start:end].squeeze(-1),
-                                     target[..., spec.start:end].squeeze(-1))``.
-- For vector fields: per-component sum of mean Huber.
-- Total: ``sum(per_field_losses) / total_channels``.
-
-The new TensorDict-based ``LossCalculator`` should produce the same total
-when ``field_weights`` is None (or all 1.0). This module verifies that and
-the correctness of ``field_weights``.
+1. The total produced by ``LossCalculator`` for a flat-tensor input
+   matches an explicit per-field reference formula
+   (``sum(per_field_losses) / total_channels``, where per-field is mean
+   Huber for scalars and per-component sum of mean Huber for vectors)
+   when ``field_weights`` is ``None`` (or all 1.0).
+2. ``field_weights`` correctly multiplies each per-field loss before
+   summation; unknown field names raise.
 """
 
 from __future__ import annotations
@@ -40,19 +39,21 @@ from output_normalize import split_concat_by_target
 from utils import FieldType, field_dim
 
 
-def _legacy_total_huber(
+def _reference_total_huber(
     pred: torch.Tensor,
     target: torch.Tensor,
     target_config: dict[str, FieldType],
     n_spatial_dims: int = 3,
 ) -> torch.Tensor:
-    """Reference implementation matching the pre-refactor (B, N, C) loss formula.
+    """Per-field-and-summed Huber total for a concatenated ``(B, N, C)`` tensor.
 
-    Mirrors the pre-refactor `LossCalculator` exactly:
     - Scalar fields: ``F.huber_loss(pred_field, target_field, reduction='mean')``
-      with the channel dim squeezed off (so input is (B, N)).
+      with the channel dim squeezed off (so input is ``(B, N)``).
     - Vector fields: sum across components of per-component mean Huber.
-    - Total: sum(per-field) / total_channels.
+    - Total: ``sum(per_field) / total_channels``.
+
+    Used as the reference value that :class:`~loss.LossCalculator` is
+    pinned to by :class:`TestReferenceTotal`.
     """
     total_channels = sum(field_dim(t, n_spatial_dims) for t in target_config.values())
     total = torch.zeros((), dtype=pred.dtype, device=pred.device)
@@ -92,12 +93,12 @@ def _make_td(leaves: dict[str, torch.Tensor]) -> TensorDict:
 
 
 ### ---------------------------------------------------------------------------
-### Equivalence with legacy formula (no field_weights)
+### Reference total (no field_weights)
 ### ---------------------------------------------------------------------------
 
 
-class TestLegacyEquivalence:
-    """Tests for legacy equivalence."""
+class TestReferenceTotal:
+    """``LossCalculator`` reproduces :func:`_reference_total_huber` for unit weights."""
 
     @pytest.mark.parametrize(
         "target_config",
@@ -116,38 +117,35 @@ class TestLegacyEquivalence:
         ],
         ids=["pressure_wss", "vel_p_nut", "scalar_only", "vector_only", "highlift"],
     )
-    def test_huber_equivalence(self, target_config):
+    def test_huber_total_matches_reference(self, target_config):
+        """Total Huber matches the reference per-field-and-summed formula."""
         ### Pin RNG so the comparison is deterministic.
-        """Huber equivalence."""
         torch.manual_seed(123)
 
         total_channels = sum(field_dim(t) for t in target_config.values())
 
-        ### Concatenated (1, N, C) tensors -- the old loss interface.
+        ### Concatenated (1, N, C) tensors -- the flat-tensor loss interface.
         pred = torch.randn(1, 50, total_channels)
         target = torch.randn(1, 50, total_channels)
 
-        ### Legacy reference total.
-        legacy_total = _legacy_total_huber(pred, target, target_config)
+        ref_total = _reference_total_huber(pred, target, target_config)
 
-        ### New TensorDict-based loss with default (no) weights.
-        new_loss = LossCalculator(
+        ### TensorDict-based loss with default (no) weights.
+        loss = LossCalculator(
             target_config=target_config,
             loss_type="huber",
             field_weights=None,
         )
         pred_td = split_concat_by_target(pred, target_config)
         target_td = split_concat_by_target(target, target_config)
-        new_total, new_dict = new_loss(pred_td, target_td)
+        total, loss_dict = loss(pred_td, target_td)
 
         ### Bit-exact (modulo floating-point reductions in the same order).
-        assert torch.allclose(new_total, legacy_total, atol=1e-7, rtol=1e-6), (
-            f"new={float(new_total):.10f} legacy={float(legacy_total):.10f}"
+        assert torch.allclose(total, ref_total, atol=1e-7, rtol=1e-6), (
+            f"got={float(total):.10f} reference={float(ref_total):.10f}"
         )
-        assert "loss/total" in new_dict
-        assert torch.allclose(
-            new_dict["loss/total"], legacy_total, atol=1e-7, rtol=1e-6
-        )
+        assert "loss/total" in loss_dict
+        assert torch.allclose(loss_dict["loss/total"], ref_total, atol=1e-7, rtol=1e-6)
 
     @pytest.mark.parametrize("loss_type", ["huber", "mse"])
     def test_per_field_keys_match_target_config(self, loss_type):

@@ -49,10 +49,9 @@ benchmark_io: false
 #
 # NOTE: DoMINO is still in progress in this recipe. The dataset YAML
 # (drivaer_ml_surface.yaml) does not yet expose all the per-cell neighbor /
-# grid features that DoMINO's full forward expects (see the original
-# domino_automotive_surface mapping in the legacy MODEL_MAPPINGS for the
-# full list). The references below are illustrative; running this config
-# end-to-end requires extending the dataset pipeline with a DoMINO-specific
+# grid features that DoMINO's full `forward(data_dict)` expects. The
+# references below are illustrative; running this config end-to-end
+# requires extending the dataset pipeline with a DoMINO-specific
 # pre-processing stage.
 input_type: tensors
 output_type: tensors

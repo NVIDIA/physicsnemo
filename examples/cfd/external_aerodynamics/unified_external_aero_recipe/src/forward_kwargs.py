@@ -37,12 +37,11 @@ Spec value semantics:
 - "Modifier" dicts -- dicts containing a ``"source"`` key plus one of the
   recognized modifier keys (currently only ``"expand_like"``) -- are
   deferred to a second resolution pass so they may reference other already-
-  resolved kwargs.
-
-The ``"expand_like"`` modifier replaces the legacy ``broadcast_global``
-flag. ``{source: <path>, expand_like: <other_kwarg>}`` extracts ``source``
-and expands the result along axis ``-2`` to match the resolved value of
-``<other_kwarg>``.
+  resolved kwargs. ``{source: <path>, expand_like: <other_kwarg>}``
+  extracts ``source`` and expands the result along axis ``-2`` to match
+  the resolved value of ``<other_kwarg>``; this is how a per-sample tensor
+  (e.g. a freestream vector) gets broadcast across the per-cell axis of a
+  per-element kwarg.
 
 Targets are extracted separately by :func:`extract_targets` from the
 DomainMesh's ``interior.point_data``, by convention.

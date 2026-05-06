@@ -557,12 +557,10 @@ class NormalizeMeshFields(MeshTransform):
             std = stats["std"].to(dtype=val.dtype, device=val.device)
             new_td[field_name] = (val - mean) / (std + self._eps)
 
-        ### Shallow-copy the mesh and overwrite the single section. This
-        ### shares `points`, `cells`, untouched data sections, and the
-        ### geometric `_cache` (centroids/areas/normals) -- a full
-        ### `Mesh(points=..., cells=..., ...)` rebuild would silently drop
-        ### the cache. `Mesh.copy` is provided dynamically by `tensorclass`
-        ### and not surfaced in `Mesh`'s static surface, hence the ignore.
+        ### `Mesh.copy` is a tensorclass-provided shallow copy: `points`,
+        ### `cells`, the untouched data sections, and the geometric `_cache`
+        ### (centroids / areas / normals) are all shared with `mesh`, then
+        ### `setattr` swaps in the freshly-cloned section.
         new_mesh = mesh.copy()  # ty: ignore[unresolved-attribute]
         setattr(new_mesh, self._section, new_td)
         return new_mesh

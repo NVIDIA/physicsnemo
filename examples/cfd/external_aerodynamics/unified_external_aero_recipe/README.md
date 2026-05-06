@@ -267,7 +267,7 @@ The `forward_kwargs:` spec syntax is intentionally minimal:
 | `1.0` (number) | A 0-d float32 tensor literal. |
 | `[a, b, c]` | Each element resolved, then `torch.cat` along the last dim. Used for tensor-input models that want concatenated feature vectors (e.g. `[interior.points, boundaries.vehicle.cell_data.normals]`). |
 | `{a: ..., b: ...}` | Each value resolved, returned as a dict. Used for dict-valued kwargs (e.g. GLOBE's `boundary_meshes: {vehicle: boundaries.vehicle}` and `reference_lengths: {L_ref: 1.0, delta_turb: 0.015}`). |
-| `{source: <path>, expand_like: <other_kwarg>}` | Resolve `source` then expand its axis -2 to match `<other_kwarg>`'s axis -2. Replaces the legacy `broadcast_global` flag for Transolver / FLARE-style models that need a global feature broadcast across the spatial axis. |
+| `{source: <path>, expand_like: <other_kwarg>}` | Resolve `source` then expand its axis -2 to match `<other_kwarg>`'s axis -2. Used by Transolver / FLARE-style models that need a per-sample feature (e.g. freestream velocity) broadcast across the per-element axis of another kwarg. |
 
 For tensor-input models, scalars and 1-D vectors in `forward_kwargs`
 are padded up to ndim>=2 before the batch dim is added (so `U_inf`

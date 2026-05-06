@@ -37,7 +37,8 @@ output_type: tensors
 # Transolver concats `[embedding, fx]` along the last dim, so `fx` must
 # match `embedding`'s spatial dim. The `expand_like` modifier broadcasts
 # the freestream `U_inf` (a per-sample vector) across the per-cell axis
-# of `embedding`, replacing the legacy `broadcast_global` flag.
+# of `embedding`, so `fx` ends up shaped to align with the per-cell
+# features in `embedding`.
 forward_kwargs:
   embedding:
     - interior.points

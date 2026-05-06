@@ -27,22 +27,22 @@
 # resolver pulls the right pieces from the DomainMesh.
 #
 # Notes specific to GLOBE in this recipe:
-# - `compile: false` because GLOBE needs three Dynamo flags
+# - `compile: false`: GLOBE needs three Dynamo flags
 #   (force_parameter_static_shapes, capture_scalar_outputs,
-#    cache_size_limit) that the unified recipe does not set. Compile
-#   support is a follow-up.
+#    cache_size_limit) that the unified recipe does not set, so
+#   `torch.compile` is left off here.
 # - Reference lengths are NONDIM in this config: positions are scaled by
 #   `metadata.L_ref=5.0` via the dataset's `NonDimensionalizeByMetadata`
-#   transform, so kernel lengths must be in nondim space too. v1 uses
-#   constants in this YAML; per-sample reference lengths (read from
-#   per-run `geo_ref_*.csv` files in the standalone GLOBE recipe) land in
-#   a follow-up.
-# - `field_weights: {wss: 100.0}` mimics the standalone GLOBE recipe's
+#   transform, so kernel lengths must be in nondim space too. The values
+#   below are constants for now; per-sample reference lengths (read from
+#   per-run `geo_ref_*.csv` files in the standalone GLOBE recipe) are a
+#   planned follow-up.
+# - `field_weights: {wss: 100.0}` mirrors the standalone GLOBE recipe's
 #   `error_scales = {C_p: 1.0, C_f: 0.01}` weighting (residual divided by
 #   0.01 -> loss scales as ~1/0.01 = 100 for C_f).
-# - Single boundary BC (`vehicle`) for v1; floor BCs (slip / no-slip) used
-#   by the standalone GLOBE recipe are deferred until DomainMesh on disk
-#   supports surface-mode multi-boundary curation.
+# - Only the `vehicle` boundary is wired up here; floor BCs (slip /
+#   no-slip) used by the standalone GLOBE recipe are not wired in until
+#   DomainMesh on disk supports surface-mode multi-boundary curation.
 
 output_dir: "runs"
 checkpoint_dir: null

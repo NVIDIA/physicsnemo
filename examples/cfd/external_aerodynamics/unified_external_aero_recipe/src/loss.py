@@ -21,15 +21,16 @@ matching the recipe's DomainMesh-native flow. For each named target field
 declared in ``target_config``, the loss type is applied according to the
 field type:
 
-- ``"scalar"`` : single mean over all elements (matches per-element loss).
-- ``"vector"`` : per-component mean, summed across components (matches
-                  the legacy per-component summing convention).
+- ``"scalar"``: single mean over all elements.
+- ``"vector"``: per-component mean, summed across components, so the
+  contribution of a ``D``-dimensional vector field scales as ``D`` rather
+  than ``1``.
 
-Per-field weights (``field_weights``) replace the legacy implicit equal
-weighting. Each per-field loss is multiplied by ``field_weights[name]``
-(default 1.0) before summation. The total is normalized by the total
-channel count (sum of per-field dims) when ``normalize_by_channels=True``,
-preserving the previous total-loss scale when all weights are 1.
+Per-field weights (``field_weights``) multiply each per-field loss
+(default ``1.0``) before the per-field losses are summed into a total.
+When ``normalize_by_channels=True`` the total is divided by the total
+channel count (``sum(per_field_dims)``) so the total scale is invariant
+to how many channels each field contributes.
 """
 
 from __future__ import annotations
@@ -63,13 +64,13 @@ def _scalar_loss(
     delta: float,
     eps: float = 1e-8,
 ) -> Float[torch.Tensor, ""]:
-    """Element-wise loss reduced to a scalar (matches legacy scalar behavior).
+    """Element-wise loss reduced to a scalar.
 
     A defensive shape check guards against config bugs where a ``"scalar"``
-    target is fed a vector tensor (or vice versa). After
-    :func:`align_scalar_shapes`, both tensors should share the same
-    shape; if they don't, broadcasting would silently inflate the loss
-    rather than fail loudly.
+    target is fed a vector tensor (or vice versa): after
+    :func:`align_scalar_shapes`, ``pred`` and ``target`` are required to
+    share the same shape, since broadcasting a mismatched pair would
+    silently inflate the loss instead of raising.
     """
     if pred.shape != target.shape:
         raise ValueError(
@@ -97,10 +98,9 @@ def _vector_loss(
 ) -> Float[torch.Tensor, ""]:
     """Per-component scalar loss summed across components.
 
-    Matches the legacy ``compute_huber_vector`` / ``compute_mse_vector`` /
-    ``compute_relative_mse`` semantics: for a vector field of dimension
-    ``D``, the result is ``D * mean_huber_over_all_elements`` (or the MSE /
-    RMSE analogue), not a single mean over the flattened tensor.
+    For a vector field of dimension ``D``, the result is
+    ``D * mean_huber_over_all_elements`` (or the MSE / RMSE analogue),
+    not a single mean over the flattened tensor.
     """
     if pred.shape != target.shape:
         raise ValueError(
@@ -148,8 +148,8 @@ class LossCalculator:
         prefix: Optional prefix for the keys in the returned loss dict
             (e.g. ``"surface"`` produces ``"loss/surface/pressure"``).
         normalize_by_channels: When ``True`` (default), divide the
-            (weighted) total loss by ``sum(per_field_dims)``. Matches the
-            legacy normalization semantics when all weights are 1.
+            (weighted) total loss by ``sum(per_field_dims)`` so the total
+            is invariant to how many channels each field contributes.
 
     The returned loss dict contains one entry per field
     (``"loss/[prefix/]<name>"``) plus ``"loss/total"`` (or

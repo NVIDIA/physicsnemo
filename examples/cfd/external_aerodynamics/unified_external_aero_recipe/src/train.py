@@ -297,7 +297,7 @@ def forward_pass(
     ### leaves -- the cells / point_data / boundary tensors stay at their
     ### original dtype unless we materialize the cast here. For tensor-
     ### input models, the pre-cast is partially redundant with autocast
-    ### but matches the legacy recipe behavior.
+    ### but harmless and keeps a single code path.
     ###
     ### `_recursive_cast_floats` skips integer tensors (e.g. Mesh.cells)
     ### so connectivity stays valid through bf16 / fp16 training. fp8 and
@@ -1000,9 +1000,9 @@ def build_dataloaders(
         ds_cfg_block = cfg.data[ds_key]
         config_path = recipe_root / ds_cfg_block.config
         if not config_path.exists():
-            ### Surface a clear warning instead of silently dropping the
-            ### dataset; users typo `config:` paths often enough that an
-            ### invisible skip was the most common config failure mode.
+            ### Warn-and-skip on a missing dataset config so a typo in
+            ### `data.<key>.config` surfaces in the run log rather than
+            ### vanishing as an empty dataloader at training time.
             _LOGGER_BUILD_DATALOADERS.warning(
                 f"Skipping dataset {ds_key!r}: config file not found at "
                 f"{str(config_path)!r}. Check `data.{ds_key}.config` in the "

@@ -249,18 +249,16 @@ class NonDimensionalizeByMetadata(MeshTransform):
                 T_inf=T_inf,
             )
 
-        ### Shallow-copy the mesh and overwrite the single section. Sharing
-        ### `points`, `cells`, untouched data sections, and the `_cache` is
-        ### safe here because none of them depend on `self._section`.
-        ### `Mesh.copy` is provided dynamically by `tensorclass` and not
-        ### surfaced in `Mesh`'s static surface, hence the ignore.
+        ### `Mesh.copy` is a tensorclass-provided shallow copy: `points`,
+        ### `cells`, the untouched data sections, and the geometric `_cache`
+        ### are all shared with `mesh`; only the cloned section is swapped.
         new_mesh = mesh.copy()  # ty: ignore[unresolved-attribute]
         setattr(new_mesh, self._section, new_td)
 
-        ### When `L_ref` is present, geometry is scaled into nondim space
-        ### (`x* = x / L_ref`, or `x = x* * L_ref` on the inverse pass).
-        ### `Mesh.scale` returns a fresh Mesh and propagates cached geometry
-        ### through the linear transform rather than discarding it.
+        ### Scale geometry into nondim space (`x* = x / L_ref`) on the
+        ### forward pass, and back to physical units (`x = x* * L_ref`)
+        ### on the inverse. `Mesh.scale` propagates `_cache` through the
+        ### linear transform.
         if L_ref is not None:
             factor = L_ref if inverse else 1.0 / L_ref
             new_mesh = new_mesh.scale(factor)
