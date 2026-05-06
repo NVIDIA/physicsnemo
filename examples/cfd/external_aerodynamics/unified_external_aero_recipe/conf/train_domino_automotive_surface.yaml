@@ -17,8 +17,15 @@
 # ---------------------------------------------------------------------------
 # Unified External Aerodynamics - Surface Training Configuration (DoMINO)
 # ---------------------------------------------------------------------------
-# Trains a DoMINO model in surface-only mode on surface pressure (Cp) and
-# wall shear stress (Cf) from DrivaerML datasets.
+#
+# >>> DRAFT: this config does NOT run end-to-end yet.
+#
+# The dataset YAML (drivaer_ml_surface.yaml) does not yet expose all the
+# per-cell neighbor / grid features that DoMINO's `forward()` consumes.
+# The `forward_kwargs:` block below is illustrative; running this config
+# requires extending the dataset pipeline with a DoMINO-specific
+# pre-processing stage (and is excluded from the synthetic E2E test
+# suite for that reason). See `tests/test_synthetic_configs.py`.
 #
 # DoMINO uses a geometry-encoding UNet + basis-function architecture that
 # natively handles SDF grids and surface neighbor information. Its forward

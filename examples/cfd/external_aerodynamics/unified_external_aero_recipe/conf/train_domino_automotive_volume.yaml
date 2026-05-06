@@ -17,8 +17,15 @@
 # ---------------------------------------------------------------------------
 # Unified External Aerodynamics - Volume Training Configuration (DoMINO)
 # ---------------------------------------------------------------------------
-# Trains a DoMINO model in volume-only mode on volume fields (velocity,
-# pressure, nut) from DrivaerML volume meshes.
+#
+# >>> DRAFT: this config does NOT run end-to-end yet.
+#
+# The dataset YAML (drivaer_ml_volume.yaml) does not yet expose the
+# volume-grid / neighbor features that DoMINO's `forward()` consumes.
+# The `forward_kwargs:` block below is illustrative; running this config
+# requires extending the dataset pipeline with a DoMINO-specific
+# pre-processing stage (and is excluded from the synthetic E2E test
+# suite for that reason). See `tests/test_synthetic_configs.py`.
 #
 # DoMINO uses a geometry-encoding UNet + basis-function architecture that
 # natively handles SDF grids and volume neighbor information. Its forward
