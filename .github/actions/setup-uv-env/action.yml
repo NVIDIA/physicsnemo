@@ -175,14 +175,18 @@ runs:
     # this step layers on top without invalidating that guarantee.
     #
     # Spec coupling notes:
-    #   * Pure-PyPI specs mirror Dockerfile:240-246 to keep container and
+    #   * Pure-PyPI specs mirror Dockerfile:240-243 to keep container and
     #     CI environments in lockstep.
-    #   * The earth2grid commit pin matches Dockerfile:246.
     #   * The pyg_lib --find-links URL encodes the locked torch version
     #     (see uv.lock entry for torch 2.11.0+cu128).  Bump the
     #     torch-X.Y.Z+cu128 segment in lockstep when the torch pin moves
     #     -- same hand-maintained coupling already documented for the
     #     natten wheel index in pyproject.toml.
+    #
+    # earth2grid is intentionally NOT installed here: the source build
+    # (see Dockerfile:246 for the canonical pin) is fragile in the CI
+    # container.  HEALPix tests will continue to skip via @requires_module
+    # until earth2grid ships a wheel or the build is fixed.
     - name: Install CI-only test dependencies
       shell: bash
       env:
@@ -199,8 +203,6 @@ runs:
           "multi-storage-client[boto3]>=0.33.0" \
           "tensorstore" \
           "pyarrow"
-        uv pip install --python .venv/bin/python --no-deps --no-build-isolation \
-          "git+https://github.com/NVlabs/earth2grid.git@11dcf1b0787a7eb6a8497a3a5a5e1fdcc31232d3"
         uv pip install --python .venv/bin/python pyg_lib \
           --find-links https://data.pyg.org/whl/torch-2.11.0+cu128.html
         echo "::endgroup::"
