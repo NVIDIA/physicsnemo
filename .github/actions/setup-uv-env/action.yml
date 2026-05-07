@@ -165,6 +165,46 @@ runs:
           exit 1
         fi
 
+    # --- CI-only test dependencies ----------------------------------------
+    # These modules are referenced by tests in test/ via @requires_module
+    # or pytest.importorskip but have no home in pyproject extras (either
+    # because they are pure CI test tooling like moto, or because they
+    # require special install paths like the PyG wheel index).  Installed
+    # via `uv pip install` AFTER the lockfile-mutation guard so uv.lock
+    # remains the single source of truth for the synced environment, and
+    # this step layers on top without invalidating that guarantee.
+    #
+    # Spec coupling notes:
+    #   * Pure-PyPI specs mirror Dockerfile:240-246 to keep container and
+    #     CI environments in lockstep.
+    #   * The earth2grid commit pin matches Dockerfile:246.
+    #   * The pyg_lib --find-links URL encodes the locked torch version
+    #     (see uv.lock entry for torch 2.11.0+cu128).  Bump the
+    #     torch-X.Y.Z+cu128 segment in lockstep when the torch pin moves
+    #     -- same hand-maintained coupling already documented for the
+    #     natten wheel index in pyproject.toml.
+    - name: Install CI-only test dependencies
+      shell: bash
+      env:
+        UV_LINK_MODE: copy
+      run: |
+        set -euo pipefail
+        echo "::group::install CI-only test dependencies"
+        uv pip install --python .venv/bin/python \
+          "moto[s3]>=5.0.28" \
+          "numpy-stl" \
+          "scikit-image>=0.24.0" \
+          "sparse-dot-mkl" \
+          "shapely" \
+          "multi-storage-client[boto3]>=0.33.0" \
+          "tensorstore" \
+          "pyarrow"
+        uv pip install --python .venv/bin/python --no-deps --no-build-isolation \
+          "git+https://github.com/NVlabs/earth2grid.git@11dcf1b0787a7eb6a8497a3a5a5e1fdcc31232d3"
+        uv pip install --python .venv/bin/python pyg_lib \
+          --find-links https://data.pyg.org/whl/torch-2.11.0+cu128.html
+        echo "::endgroup::"
+
     - name: Report cache sizes
       shell: bash
       run: |
