@@ -334,6 +334,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `CrossUnet` photovoltaic-power forecaster
+  (`physicsnemo.experimental.models.pv_power.CrossUnet`), a hierarchical
+  patch-Transformer with channel-correlation conditioning. Includes a Hydra
+  training example with synthetic data
+  (`examples/weather/pv_power_cross_unet`).
 - Adds GLOBE model (`physicsnemo.experimental.models.globe.model.GLOBE`),
   including new variant that uses a dual tree traversal algorithm to reduce the
   complexity of the kernel evaluations from O(N^2) to O(N).

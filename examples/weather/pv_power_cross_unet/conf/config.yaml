@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+hydra:
+  job:
+    chdir: True
+  run:
+    dir: ./outputs/
+
+# Data
+seed: 0
+num_train_samples: 256
+num_valid_samples: 32
+seq_len: 96         # 24 h at 15-min cadence
+pred_len: 16        # 4 h forecast horizon
+target_channels: 4  # 3 history channels + 1 current power channel
+weather_channels: 3 # irradiance, temperature proxy, humidity proxy
+
+# Model
+seg_len: 12
+e_layers: 2
+d_model: 64
+n_heads: 4
+d_ff: 128
+dropout: 0.0
+attention_kind: two_stage
+merge_kind: seg_merge
+use_bottleneck_in_decoder: True
+
+# Optimization
+batch_size: 8
+batch_size_valid: 8
+max_epochs: 2
+start_lr: 1.0e-3
+lr_scheduler_gamma: 0.99
+checkpoint_save_freq: 1
