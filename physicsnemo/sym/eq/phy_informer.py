@@ -59,6 +59,18 @@ class PhysicsInformer:
     compute_connectivity : bool
         If True and using ``"least_squares"``, build the connectivity tensor
         on the fly from ``"nodes"`` and ``"edges"`` in the input dict.
+    detach_names : list[str] or None
+        Names of variables (and their derivatives) whose tensors will be
+        detached from the computational graph before the compiled PDE
+        equations are evaluated.  When a name appears in this list, its
+        value is passed through ``torch.Tensor.detach()`` inside the
+        ``SympyToTorch`` forward call, so no gradient flows through it
+        during back-propagation.  This is useful for **inverse
+        problems**: for example, when inverting for viscosity ``nu`` the
+        flow-field variables and their spatial derivatives
+        (``["u", "u__x", "u__x__x", ...]``) should be detached so that
+        the physics loss updates only the inversion network for ``nu``
+        while the flow network is trained solely on data-fitting loss.
     device : str or torch.device or None
         Target device.
 
@@ -99,6 +111,7 @@ class PhysicsInformer:
         fd_dx: Union[float, List[float]] = 0.001,
         bounds: List[float] | None = None,
         compute_connectivity: bool = True,
+        detach_names: List[str] | None = None,
         device: Optional[str] = None,
     ):
         if bounds is None:
@@ -114,7 +127,7 @@ class PhysicsInformer:
         self.device = device if device is not None else torch.device("cpu")
 
         self.grad_calc = GradientCalculator(device=self.device)
-        self.computations = self.equations.make_computations()
+        self.computations = self.equations.make_computations(detach_names=detach_names)
 
         self.require_mixed_derivs = False
         self.graph = self._create_graph()
