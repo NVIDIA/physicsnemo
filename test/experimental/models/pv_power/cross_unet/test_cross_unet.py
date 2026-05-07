@@ -21,12 +21,16 @@
 #   test twice (the first pass writes; the second passes).
 
 import random
+from pathlib import Path
 
 import pytest
 import torch
+import torch.nn.functional as F
+from omegaconf import OmegaConf
 
 from physicsnemo.core.module import Module
 from physicsnemo.experimental.models.pv_power import CrossUnet
+from physicsnemo.experimental.models.pv_power.embedding import PositionalEmbedding
 from test.common import validate_checkpoint, validate_forward_accuracy
 
 
@@ -43,9 +47,7 @@ def _make_inputs(
     x_enc = torch.randn(batch_size, seq_len, target_channels, generator=g).to(device)
     w_enc = torch.randn(batch_size, seq_len, weather_channels, generator=g).to(device)
     hist_w = torch.randn(batch_size, seq_len, weather_channels, generator=g).to(device)
-    hist_x = torch.randn(batch_size, seq_len, target_channels - 1, generator=g).to(
-        device
-    )
+    hist_x = torch.randn(batch_size, seq_len, target_channels, generator=g).to(device)
     return x_enc, w_enc, hist_w, hist_x
 
 
@@ -155,10 +157,168 @@ def test_cross_unet_forward_no_weather(device):
 
     g = torch.Generator(device="cpu").manual_seed(1)
     x_enc = torch.randn(4, 48, 4, generator=g).to(device)
-    hist_x = torch.randn(4, 48, 3, generator=g).to(device)
+    hist_x = torch.randn(4, 48, 4, generator=g).to(device)
 
     out = model(x_enc, None, None, hist_x)
     assert out.shape == (4, 24, 4)
+
+
+def test_cross_unet_source_compatible_correlation_shape(device):
+    """Correlation input has one extra target column and returns model-channel mixing."""
+    model = CrossUnet(
+        target_channels=4,
+        weather_channels=3,
+        seq_len=96,
+        pred_len=16,
+        seg_len=12,
+        e_layers=3,
+        d_model=32,
+        n_heads=4,
+        d_ff=64,
+    ).to(device)
+
+    g = torch.Generator(device="cpu").manual_seed(2)
+    samples = torch.randn(2, 96, model.total_channels + 1, generator=g).to(device)
+
+    corr = model._compute_channel_correlation(samples)
+    raw_corr = torch.vmap(lambda sample: torch.corrcoef(sample.T))(samples)
+    corr_to_target = torch.nan_to_num(raw_corr[:, :-1, -1], nan=0.0).clamp(min=0.0)
+    expected = (
+        F.softmax(corr_to_target, dim=-1)
+        .unsqueeze(-1)
+        .repeat(1, 1, model.total_channels)
+    )
+
+    assert corr.shape == (2, model.total_channels, model.total_channels)
+    assert torch.allclose(corr, expected)
+
+
+def test_cross_unet_correlation_single_channel_fallback(device):
+    """Direct helper calls with a single input channel should not crash."""
+    model = CrossUnet(
+        target_channels=1,
+        weather_channels=0,
+        seq_len=4,
+        pred_len=4,
+        seg_len=2,
+        e_layers=1,
+        d_model=8,
+        n_heads=2,
+        d_ff=16,
+    ).to(device)
+
+    samples = torch.randn(3, 4, 1, device=device)
+
+    corr = model._compute_channel_correlation(samples)
+    assert corr.shape == (3, 1, 1)
+    assert torch.allclose(corr, torch.ones_like(corr))
+
+
+def test_cross_unet_forward_single_target_channel_no_weather(device):
+    """Forward should work for the minimal target-only channel configuration."""
+    model = CrossUnet(
+        target_channels=1,
+        weather_channels=0,
+        seq_len=12,
+        pred_len=6,
+        seg_len=6,
+        e_layers=2,
+        d_model=16,
+        n_heads=4,
+        d_ff=32,
+    ).to(device)
+
+    g = torch.Generator(device="cpu").manual_seed(3)
+    x_enc = torch.randn(2, 12, 1, generator=g).to(device)
+    hist_x = torch.randn(2, 12, 1, generator=g).to(device)
+
+    out = model(x_enc, None, None, hist_x)
+    assert out.shape == (2, 6, 1)
+
+
+def test_cross_unet_short_horizon_without_bottleneck_decoder(device):
+    """Short decoder grids are allowed when the decoder does not add the bottleneck."""
+    model = CrossUnet(
+        target_channels=2,
+        weather_channels=0,
+        seq_len=96,
+        pred_len=6,
+        seg_len=12,
+        e_layers=2,
+        d_model=16,
+        n_heads=4,
+        d_ff=32,
+        use_bottleneck_in_decoder=False,
+    ).to(device)
+
+    g = torch.Generator(device="cpu").manual_seed(4)
+    x_enc = torch.randn(2, 96, 2, generator=g).to(device)
+    hist_x = torch.randn(2, 96, 2, generator=g).to(device)
+
+    out = model(x_enc, None, None, hist_x)
+    assert out.shape == (2, 6, 2)
+
+
+def test_cross_unet_nonlinear_correlation_projection_forward(device):
+    """Nonlinear source-style correlation projection should match model channels."""
+    model = CrossUnet(
+        target_channels=3,
+        weather_channels=2,
+        seq_len=24,
+        pred_len=12,
+        seg_len=6,
+        e_layers=2,
+        d_model=16,
+        n_heads=4,
+        d_ff=32,
+        nonlinear_correlation_proj=True,
+    ).to(device)
+
+    x_enc, w_enc, hist_w, hist_x = _make_inputs(
+        device,
+        batch_size=2,
+        seq_len=24,
+        target_channels=3,
+        weather_channels=2,
+    )
+
+    out = model(x_enc, w_enc, hist_w, hist_x)
+    assert out.shape == (2, 12, 5)
+
+
+def test_cross_unet_positional_embedding_odd_d_model():
+    """Odd-width sinusoidal embeddings should construct successfully."""
+    embedding = PositionalEmbedding(d_model=3, max_len=8)
+    out = embedding(torch.zeros(2, 5, 3))
+    assert out.shape == (1, 5, 3)
+
+
+def test_cross_unet_example_default_config_constructs_model():
+    """The example's default Hydra config should describe a runnable model."""
+    config_path = (
+        Path(__file__).parents[5]
+        / "examples/weather/pv_power_cross_unet/conf/config.yaml"
+    )
+    cfg = OmegaConf.load(config_path)
+
+    model = CrossUnet(
+        target_channels=cfg.target_channels,
+        weather_channels=cfg.weather_channels,
+        seq_len=cfg.seq_len,
+        pred_len=cfg.pred_len,
+        seg_len=cfg.seg_len,
+        e_layers=cfg.e_layers,
+        d_model=cfg.d_model,
+        n_heads=cfg.n_heads,
+        d_ff=cfg.d_ff,
+        dropout=cfg.dropout,
+        nonlinear_correlation_proj=cfg.nonlinear_correlation_proj,
+        attention_kind=cfg.attention_kind,
+        merge_kind=cfg.merge_kind,
+        use_bottleneck_in_decoder=cfg.use_bottleneck_in_decoder,
+    )
+
+    assert model.nonlinear_correlation_proj is True
 
 
 def test_cross_unet_checkpoint(device):
@@ -211,7 +371,7 @@ def test_cross_unet_forward_validation(device):
 
     # Wrong seq_x_hist channel count
     with pytest.raises(ValueError, match="seq_x_hist"):
-        model(x_enc, w_enc, hist_w, hist_x[:, :, :2])
+        model(x_enc, w_enc, hist_w, hist_x[:, :, :3])
 
 
 def test_cross_unet_constructor_validation():

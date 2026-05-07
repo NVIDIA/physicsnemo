@@ -31,11 +31,12 @@ weather_channels: 3 # irradiance, temperature proxy, humidity proxy
 
 # Model
 seg_len: 12
-e_layers: 2
+e_layers: 3
 d_model: 64
 n_heads: 4
 d_ff: 128
 dropout: 0.0
+nonlinear_correlation_proj: True
 attention_kind: two_stage
 merge_kind: seg_merge
 use_bottleneck_in_decoder: True

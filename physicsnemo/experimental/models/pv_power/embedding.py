@@ -47,7 +47,7 @@ class PositionalEmbedding(nn.Module):
             torch.arange(0, d_model, 2).float() * -(math.log(10000.0) / d_model)
         ).exp()
         pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term[: pe[:, 1::2].shape[1]])
         self.register_buffer("pe", pe.unsqueeze(0))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

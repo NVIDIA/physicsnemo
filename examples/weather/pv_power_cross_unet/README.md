@@ -42,6 +42,9 @@ deterministic series:
 - Target features = `target_channels - 1` lagged copies of power followed by
   the current power channel (the last channel is the "primary" signal whose
   cross-channel correlations condition the attention).
+- `seq_x_hist` contains the full target/history window with `target_channels`
+  columns, matching `x_enc`; Cross_Unet appends the primary current target
+  channel internally when constructing the correlation input.
 
 ## Real datasets
 

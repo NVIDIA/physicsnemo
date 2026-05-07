@@ -18,12 +18,11 @@ r"""Cross_Unet photovoltaic-power forecasting model.
 
 Adapted from the upstream open-source PV-power benchmark suite (Apache-2.0,
 2023 Yunhao Zhang & Junchi Yan). The PhysicsNeMo port refactors the upstream
-``Model(configs)`` API to explicit typed kwargs, drops dead modules, and makes
-the channel-correlation conditioning self-consistent (the upstream
-``corr[:, :-1, -1]`` slice is padded with an identity row/column so the
-downstream channel-mixing ``bmm`` operates on the full :math:`C \times C`
-channel grid rather than :math:`(C - 1) \times (C - 1)` mismatched against
-:math:`C` channels).
+``Model(configs)`` API to explicit typed kwargs and drops dead modules while
+preserving the upstream channel-correlation construction: correlations are
+computed from historical weather channels, the full historical target window,
+and the current primary target channel, then reduced to the model's
+:math:`C \times C` channel-mixing grid.
 """
 
 from __future__ import annotations
@@ -114,9 +113,9 @@ class CrossUnet(Module):
       disable the weather branch entirely).
 
     Internally the network operates on ``total_channels = target_channels +
-    weather_channels`` channels everywhere; the channel-correlation matrix is
-    padded with an identity row/column so the downstream ``bmm`` channel
-    mixing is shape-consistent.
+    weather_channels`` channels. The channel-correlation matrix is computed
+    from one extra correlation input channel: the full historical target
+    window plus the current primary target channel.
 
     Adapted from the upstream `PV-power Cross_Unet
     <https://github.com/Z-Yh1/PV-power>`_ (Apache-2.0).
@@ -177,11 +176,11 @@ class CrossUnet(Module):
         compute the channel-correlation matrix. May be ``None`` only when
         ``weather_channels == 0``.
     seq_x_hist : torch.Tensor
-        Historical non-target channels of shape
-        :math:`(B, L, C_{tgt} - 1)`. Concatenated with ``seq_w_nwp_hist``
-        and the last channel of ``x_enc`` to produce a
-        ``(B, L, C_{tgt} + C_{wx})`` matrix on which Pearson correlations
-        are evaluated.
+        Historical target/history channels of shape
+        :math:`(B, L, C_{tgt})`. Concatenated with ``seq_w_nwp_hist`` and
+        the last channel of ``x_enc`` to produce a
+        ``(B, L, C_{tgt} + C_{wx} + 1)`` matrix on which Pearson
+        correlations are evaluated.
 
     Outputs
     -------
@@ -201,7 +200,7 @@ class CrossUnet(Module):
     >>> x_enc = torch.randn(2, 96, 4)
     >>> w_enc = torch.randn(2, 96, 3)
     >>> hist_w = torch.randn(2, 96, 3)
-    >>> hist_x = torch.randn(2, 96, 3)
+    >>> hist_x = torch.randn(2, 96, 4)
     >>> out = model(x_enc, w_enc, hist_w, hist_x)
     >>> out.shape
     torch.Size([2, 16, 7])
@@ -259,9 +258,9 @@ class CrossUnet(Module):
         in_seg_num = pad_in_len // seg_len
         out_seg_num = ceil(in_seg_num / (win_size ** (e_layers - 1)))
         dec_seg_num = pad_out_len // seg_len
-        # Decoder must be at least as long as the encoder bottleneck so the
-        # bottleneck->decoder skip-add in ``Decoder.forward`` is shape-valid.
-        if dec_seg_num < out_seg_num:
+        # Decoder must be at least as long as the encoder bottleneck only when
+        # the bottleneck skip-add is enabled in ``Decoder.forward``.
+        if use_bottleneck_in_decoder and dec_seg_num < out_seg_num:
             raise ValueError(
                 f"pred_len={pred_len} (decoder segments={dec_seg_num}) is shorter "
                 f"than the encoder bottleneck (segments={out_seg_num}) implied by "
@@ -354,7 +353,7 @@ class CrossUnet(Module):
 
         # Optional non-linear correlation projection.
         if nonlinear_correlation_proj:
-            corr_dim = self.total_channels - 1
+            corr_dim = self.total_channels
             self.channel_proj1 = nn.Sequential(
                 nn.Linear(corr_dim, corr_dim * 4, bias=False),
                 nn.Sigmoid(),
@@ -367,49 +366,48 @@ class CrossUnet(Module):
             )
 
     def _compute_channel_correlation(self, samples: Tensor) -> Tensor:
-        r"""Pearson channel correlations broadcast to a mixing matrix.
+        r"""Pearson correlations reduced to a source-style mixing matrix.
 
         Parameters
         ----------
         samples : torch.Tensor
-            Tensor of shape :math:`(B, L, C)` whose channel axis the
-            correlations are computed over.
+            Tensor of shape :math:`(B, L, C + 1)` whose final channel is the
+            primary target signal used as the correlation reference.
 
         Returns
         -------
         torch.Tensor
-            Padded mixing matrix of shape :math:`(B, C, C)`. The last
-            row and column are an identity slice so that the primary target
-            channel is preserved through the downstream ``bmm`` mixing.
+            Mixing matrix of shape :math:`(B, C, C)` for the model channels.
         """
         b, _, c = samples.shape
+        if c <= 1:
+            return torch.ones(b, 1, 1, dtype=samples.dtype, device=samples.device)
+
         # Pearson correlation matrix per sample, shape (B, C, C).
         corr = vmap(_pearson_correlation)(samples)
-        # Pull "feature -> target" column (excluding the diagonal).
+        # Pull "feature -> target" column (excluding the target's diagonal).
         corr_to_target = corr[:, :-1, -1]  # (B, C - 1)
         corr_to_target = torch.nan_to_num(
             corr_to_target, nan=0.0, posinf=0.0, neginf=0.0
         )
         corr_to_target = corr_to_target.clamp(min=0.0)
+        corr_dim = c - 1
 
         if self.nonlinear_correlation_proj:
             # Project, broadcast, project, softmax.
             v = corr_to_target.unsqueeze(-1)  # (B, C - 1, 1)
             v = self.channel_proj1(v.permute(0, 2, 1)).permute(0, 2, 1)
-            v = v.repeat(1, 1, c - 1)  # (B, C - 1, C - 1)
-            flat = v.view(b, (c - 1) * (c - 1))
+            v = v.repeat(1, 1, corr_dim)  # (B, C - 1, C - 1)
+            flat = v.view(b, corr_dim * corr_dim)
             flat = self.channel_proj2(flat)
-            mixing = F.softmax(flat, dim=-1).view(b, c - 1, c - 1)
+            mixing = F.softmax(flat, dim=-1).view(b, corr_dim, corr_dim)
         else:
-            # Rank-1 mixing: every row of the (C-1, C-1) matrix is the same softmax.
+            # Source-style rank-1 mixing: each feature-target softmax weight is
+            # broadcast across the destination-channel axis.
             row = F.softmax(corr_to_target, dim=-1)  # (B, C - 1)
-            mixing = row.unsqueeze(-1).repeat(1, 1, c - 1)  # (B, C - 1, C - 1)
+            mixing = row.unsqueeze(-1).repeat(1, 1, corr_dim)
 
-        # Pad to (B, C, C) with identity for the target channel.
-        padded = torch.zeros(b, c, c, dtype=mixing.dtype, device=mixing.device)
-        padded[:, : c - 1, : c - 1] = mixing
-        padded[:, -1, -1] = 1.0
-        return padded
+        return mixing
 
     def _forecast(self, x: Tensor, corr: Tensor) -> Tensor:
         # ``x``: (B, L, C); ``corr``: (B, C, C).
@@ -432,14 +430,15 @@ class CrossUnet(Module):
         x_enc: Float[Tensor, "batch seq_len target_channels"],
         w_enc: Optional[Float[Tensor, "batch seq_len weather_channels"]],
         seq_w_nwp_hist: Optional[Float[Tensor, "batch seq_len weather_channels"]],
-        seq_x_hist: Float[Tensor, "batch seq_len target_minus_one"],
+        seq_x_hist: Float[Tensor, "batch seq_len target_channels"],
     ) -> Float[Tensor, "batch pred_len total_channels"]:
         # Validate input shapes (skip under torch.compile per MOD-005).
         if not torch.compiler.is_compiling():
             self._validate_forward_inputs(x_enc, w_enc, seq_w_nwp_hist, seq_x_hist)
 
         # Build the correlation-conditioning input: weather history + target
-        # history + the primary target channel from the current window.
+        # history + full target history + the primary target channel from the
+        # current window.
         if self.use_weather and w_enc is not None and seq_w_nwp_hist is not None:
             corr_input = torch.cat(
                 [seq_w_nwp_hist, seq_x_hist, x_enc[:, :, -1:]], dim=-1
@@ -466,10 +465,10 @@ class CrossUnet(Module):
                 f"Expected x_enc of shape (B, {self.seq_len}, {self.target_channels}) "
                 f"but got tensor of shape {tuple(x_enc.shape)}."
             )
-        if seq_x_hist.shape != (batch, self.seq_len, self.target_channels - 1):
+        if seq_x_hist.shape != (batch, self.seq_len, self.target_channels):
             raise ValueError(
                 f"Expected seq_x_hist of shape "
-                f"(B, {self.seq_len}, {self.target_channels - 1}) "
+                f"(B, {self.seq_len}, {self.target_channels}) "
                 f"but got tensor of shape {tuple(seq_x_hist.shape)}."
             )
         if self.use_weather:

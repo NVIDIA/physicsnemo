@@ -122,7 +122,7 @@ class SyntheticPVDataset(Dataset):
         # synthetic example; in real deployments this would be a separate
         # measurement stream.
         seq_w_nwp_hist = w_enc.clone()
-        seq_x_hist = x_enc[:, :-1].clone()  # (L, target_channels - 1)
+        seq_x_hist = x_enc.clone()  # (L, target_channels)
         target = self.targets[window_end:target_end]  # (H, target_channels)
         return {
             "x_enc": x_enc,
@@ -176,6 +176,7 @@ def main(cfg: DictConfig) -> None:
         n_heads=cfg.n_heads,
         d_ff=cfg.d_ff,
         dropout=cfg.dropout,
+        nonlinear_correlation_proj=cfg.nonlinear_correlation_proj,
         attention_kind=cfg.attention_kind,
         merge_kind=cfg.merge_kind,
         use_bottleneck_in_decoder=cfg.use_bottleneck_in_decoder,
