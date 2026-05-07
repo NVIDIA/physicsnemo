@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+hydra:
+  job:
+    chdir: False
+  run:
+    dir: .
+
+# train or predict
+mode: train
+
+# Data
+dataset_root: ./dataset
+station_name: KDASC
+weather_source: nwp   # nwp or satellite; KDASC always uses SWR
+seq_len: 96
+pred_len: 16
+max_train_samples: null
+max_valid_samples: null
+max_predict_samples: null
+
+# Model
+seg_len: 12
+e_layers: 3
+d_model: 64
+n_heads: 4
+d_ff: 128
+dropout: 0.0
+nonlinear_correlation_proj: True
+attention_kind: two_stage
+merge_kind: seg_merge
+use_bottleneck_in_decoder: True
+
+# Optimization
+seed: 0
+batch_size: 16
+batch_size_valid: 16
+max_epochs: 5
+early_stop_patience: 5
+start_lr: 1.0e-3
+lr_scheduler_gamma: 0.99
+
+# Outputs
+output_dir: ./outputs/real_cross_unet
+checkpoint_path: null
+prediction_path: null
