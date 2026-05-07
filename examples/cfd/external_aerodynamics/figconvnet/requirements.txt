@@ -4,5 +4,4 @@ omegaconf>=2.3.0
 pyvista>=0.40.1
 torchinfo>=1.8
 wandb>=0.13.7
-warp-lang>=1.0
 webdataset>=0.2

@@ -38,6 +38,14 @@ runs:
         ln -sf /usr/bin/python3 /usr/bin/python
         rm -rf /var/lib/apt/lists/*
 
+    - name: Install Hugging Face CLI
+      shell: bash
+      env:
+        PIP_BREAK_SYSTEM_PACKAGES: "1"
+      run: |
+        set -euo pipefail
+        pip install --quiet huggingface_hub[hf_xet]
+
     - name: Install uv (pinned)
       shell: bash
       env:

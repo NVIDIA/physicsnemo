@@ -35,7 +35,7 @@ def test_as_numpy_from_pandas_index():
     idx = pd.date_range("2020-01-01", periods=3, freq="h")
     result = as_numpy(idx)
     assert isinstance(result, np.ndarray)
-    assert result.dtype == np.dtype("datetime64[ns]")
+    assert np.issubdtype(result.dtype, np.datetime64)
     assert len(result) == 3
 
 

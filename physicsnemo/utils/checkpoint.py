@@ -113,6 +113,34 @@ def _cpu_offload_state_dict(state_dict: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _force_standard_contiguous(state_dict: dict[str, Any]) -> dict[str, Any]:
+    """Make positive-dim, non-DTensor tensors standard-contiguous.
+
+    Compensates for a layout-blind broadcast inside DCP's
+    ``set_model_state_dict`` / ``set_optimizer_state_dict``: the rank-0→others
+    transfer goes through ``dist.broadcast``, which is happy to send a
+    ``channels_last`` tensor (its contiguity check passes for that format) but
+    moves bytes in *storage* order. Receivers on non-zero ranks allocate via
+    ``torch.empty(shape, dtype, device)`` (standard NCHW), so CL bytes land
+    in NCHW positions and values are silently permuted on receive.
+
+    Forcing standard contiguity on rank 0 makes the broadcast layout-consistent.
+    ``.contiguous()`` is a no-op for tensors that are already standard-contig,
+    a value-preserving (logical) copy for ``channels_last`` /
+    ``channels_last_3d``, and is intentionally skipped for ``DTensor`` (whose
+    contiguity semantics differ).
+    """
+    out: dict[str, Any] = {}
+    for k, v in state_dict.items():
+        if isinstance(v, torch.Tensor) and not isinstance(v, DTensor) and v.dim() > 0:
+            out[k] = v.contiguous()
+        elif isinstance(v, dict):
+            out[k] = _force_standard_contiguous(v)
+        else:
+            out[k] = v
+    return out
+
+
 def _get_dtensor_param_placements(
     model: torch.nn.Module,
 ) -> dict[str, tuple[Any, tuple[Any, ...]]]:
@@ -237,6 +265,88 @@ def _fsdp_uses_flat_param_optim(model: torch.nn.Module | None) -> bool:
     return not getattr(model, "_use_orig_params", True)
 
 
+def _strides_match_channels_last(
+    shape: tuple[int, ...] | torch.Size,
+    stride: tuple[int, ...],
+) -> bool:
+    """True iff *stride* matches the canonical NHWC / NDHWC stride formula.
+
+    For 4-D ``(N, C, H, W)`` the channels_last layout has strides
+    ``(C*H*W, 1, W*C, C)``; for 5-D ``(N, C, D, H, W)`` channels_last_3d
+    has strides ``(D*H*W*C, 1, H*W*C, W*C, C)``. Anything else -- including
+    standard-contig tensors that happen to satisfy ``stride[1] == 1`` because
+    of trailing-1 dims -- returns False.
+    """
+    if len(shape) != len(stride):
+        return False
+    if len(shape) == 4:
+        n, c, h, w = shape
+        return tuple(stride) == (c * h * w, 1, w * c, c)
+    if len(shape) == 5:
+        n, c, d, h, w = shape
+        return tuple(stride) == (d * h * w * c, 1, h * w * c, w * c, c)
+    return False
+
+
+def _get_cl_param_fqns(opt_model: torch.nn.Module | None) -> set[str]:
+    """Return FQNs of FSDP-managed original params recorded as channels_last.
+
+    For every FSDP submodule in *opt_model*, reads ``flat_param._fqns`` /
+    ``_shapes`` / ``_strides`` / ``_contiguities`` and returns the set of
+    original-parameter FQNs whose ``_contiguities[i] is False`` and whose
+    recorded strides match the canonical ``channels_last`` (4-D) or
+    ``channels_last_3d`` (5-D) formula. That is the same bit
+    ``_get_unflat_views`` consults to decide ``view`` vs ``as_strided`` on
+    save -- so ``_contiguities[i] is False`` plus a CL stride pattern is
+    exactly the signal that the destination ``FlatParameter`` slot expects
+    NHWC storage order at load time.
+
+    Returns an empty set when *opt_model* isn't FSDP+``use_orig_params=False``
+    (the only configuration where the flatten/unflatten asymmetry exists).
+
+    Each FQN is built as ``{module_path_to_FSDP}.{flat_param._fqns[i]}``,
+    matching DCP's ``_get_fqns`` convention -- specifically, FSDP's
+    ``_fsdp_wrapped_module`` segments are stripped from the path so the
+    returned FQNs line up with the keys in ``optim_sd["state"]``.
+
+    The ``_orig_mod.`` (``torch.compile``) prefix is also stripped, matching
+    the normalization ``save_checkpoint`` applies to optimizer
+    ``param_names``.
+    """
+    if not _fsdp_uses_flat_param_optim(opt_model):
+        return set()
+
+    cl_fqns: set[str] = set()
+    for module_name, module in opt_model.named_modules():
+        if not isinstance(module, FSDP):
+            continue
+        flat_param = getattr(module, "_flat_param", None)
+        if flat_param is None:
+            continue
+        # DCP's ``_get_fqns`` skips the ``_fsdp_wrapped_module`` attribute
+        # when building parameter FQNs; mirror that by removing the segment
+        # from the module path.
+        path_segments = [
+            seg
+            for seg in module_name.split(".")
+            if seg and seg != "_fsdp_wrapped_module"
+        ]
+        prefix = ".".join(path_segments)
+        if prefix:
+            prefix += "."
+        for fqn, shape, stride, contig in zip(
+            flat_param._fqns,
+            flat_param._shapes,
+            flat_param._strides,
+            flat_param._contiguities,
+        ):
+            if contig:
+                continue
+            if _strides_match_channels_last(shape, stride):
+                cl_fqns.add((prefix + fqn).removeprefix("_orig_mod."))
+    return cl_fqns
+
+
 def _remap_channels_last_optim_sd(
     opt_model: torch.nn.Module | None,
     optim_sd: dict[str, Any],
@@ -254,23 +364,26 @@ def _remap_channels_last_optim_sd(
     For a 4-D Conv2d weight in ``channels_last`` format the two orders
     differ, so the round-trip silently corrupts the optimizer state.
 
-    Detect channels_last entries directly on *optim_sd* (the saved tensor
-    preserves its memory format through ``torch.save`` / ``torch.load``)
-    and pre-permute them so the loader's ``torch.flatten`` produces the
-    same byte sequence the ``FlatParameter`` was originally filled with.
-    Other entries (and ranks that received an empty ``optim_sd`` for the
-    broadcast-from-rank-0 path) pass through unchanged.
+    The remap is gated on the **destination** ``FlatParameter`` slot's
+    expected byte order (via ``flat_param._contiguities``), not on the
+    saved tensor's layout. That's the only signal that always matches what
+    the load-side ``_flatten_tensor_optim_state`` will do, so it works for
+    every save/load layout combination -- in particular for
+    ``FSDP+ShardTensor`` configurations where ``distribute_module`` calls
+    ``.contiguous()`` and silently strips channels_last before FSDP wraps,
+    making saved tensors standard-contig even though the conceptual model
+    has CL conv weights.
+
+    Inputs are also normalized to standard contiguity before the layout
+    decision: a CL tensor that *isn't* getting permuted (because the
+    destination is non-CL) would otherwise survive into DCP's per-tensor
+    ``dist.broadcast`` and hit the same layout-blind broadcast bug
+    ``_force_standard_contiguous`` fixes for model state.
 
     Only fires when *opt_model* is FSDP-wrapped with
     ``use_orig_params=False`` -- with ``use_orig_params=True`` the
     asymmetry doesn't exist and the remap would *cause* the corruption it
     is meant to prevent.
-
-    Note: we cannot inspect the live model to find channels_last params --
-    with ``use_orig_params=False`` the original parameters are hidden
-    behind plain tensor attributes and ``named_parameters()`` only sees
-    the 1-D ``FlatParameter``. So detection is on the saved tensors
-    instead.
 
     See ``torch/distributed/fsdp/_optim_utils.py::_flatten_tensor_optim_state``
     and ``_flat_param.py::flatten_tensors``.
@@ -280,12 +393,21 @@ def _remap_channels_last_optim_sd(
     if not _fsdp_uses_flat_param_optim(opt_model):
         return optim_sd
 
-    def _maybe_remap(t: torch.Tensor) -> torch.Tensor:
-        if isinstance(t, DTensor):
+    cl_fqns = _get_cl_param_fqns(opt_model)
+
+    def _normalize(t: torch.Tensor, is_cl_dest: bool) -> torch.Tensor:
+        if isinstance(t, DTensor) or t.dim() == 0:
             return t
-        if t.dim() == 4 and t.is_contiguous(memory_format=torch.channels_last):
+        # Force standard contiguity first so any saved-CL bytes are
+        # rewritten in NCHW storage order before the layout decision; this
+        # makes the subsequent broadcast inside DCP layout-safe whether or
+        # not we permute.
+        t = t.contiguous()
+        if not is_cl_dest:
+            return t
+        if t.dim() == 4:
             return t.permute(0, 2, 3, 1).contiguous().view(*t.shape)
-        if t.dim() == 5 and t.is_contiguous(memory_format=torch.channels_last_3d):
+        if t.dim() == 5:
             return t.permute(0, 2, 3, 4, 1).contiguous().view(*t.shape)
         return t
 
@@ -294,9 +416,10 @@ def _remap_channels_last_optim_sd(
         if not isinstance(pstate, dict):
             new_state[pname] = pstate
             continue
+        is_cl_dest = pname.removeprefix("_orig_mod.") in cl_fqns
         new_ps: dict[str, Any] = {}
         for k, v in pstate.items():
-            new_ps[k] = _maybe_remap(v) if isinstance(v, torch.Tensor) else v
+            new_ps[k] = _normalize(v, is_cl_dest) if isinstance(v, torch.Tensor) else v
         new_state[pname] = new_ps
 
     return {**optim_sd, "state": new_state}
@@ -1101,8 +1224,13 @@ def _load_checkpoint_distributed(
                 set_model_state_dict(model, sd, options=full_options)
             else:
                 # FSDP-managed DTensors (FULL_SHARD/SHARD_GRAD_OP) or no
-                # DTensors at all — broadcast_from_rank0 handles both.
+                # DTensors at all — broadcast_from_rank0 handles both. Force
+                # standard contiguity on rank 0 first so the per-tensor
+                # broadcast inside DCP doesn't permute channels_last params on
+                # receive (see ``_force_standard_contiguous`` for the why).
                 sd = model_state_dicts.get(name, {}) if is_rank0 else {}
+                if is_rank0:
+                    sd = _force_standard_contiguous(sd)
                 set_model_state_dict(model, sd, options=broadcast_options)
         else:
             # A mix of distributed and non-distributed models is valid
@@ -1122,16 +1250,32 @@ def _load_checkpoint_distributed(
         path, index=epoch, model_type="pt", distributed=True
     )
 
+    # Broadcast file existence so all ranks agree on whether to enter the
+    # (collective) optimizer load. Without this, a rundir that has model
+    # weights but no training checkpoint -- e.g. fine-tuning from a
+    # weights-only export -- would have rank 0 enter ``set_optimizer_state_dict``
+    # with an empty dict and trip the "missing 'state'" error inside DCP.
+    ckpt_exists = fs.exists(checkpoint_filename) if is_rank0 else None
+    ckpt_flags: list[Any] = [ckpt_exists]
+    torch.distributed.broadcast_object_list(ckpt_flags, src=0)
+    ckpt_exists = ckpt_flags[0]
+
+    if not ckpt_exists:
+        checkpoint_logging.warning(
+            f"No training checkpoint at {checkpoint_filename}; "
+            "skipping optimizer/scheduler/scaler load"
+        )
+        return 0
+
     checkpoint_dict: dict[str, Any] = {}
     if is_rank0:
-        if fs.exists(checkpoint_filename):
-            file_to_load = _cache_if_needed(checkpoint_filename)
-            checkpoint_dict = torch.load(
-                file_to_load, map_location=device, weights_only=False
-            )
-            checkpoint_logging.success(
-                f"Loaded checkpoint file {checkpoint_filename} to device {device}"
-            )
+        file_to_load = _cache_if_needed(checkpoint_filename)
+        checkpoint_dict = torch.load(
+            file_to_load, map_location=device, weights_only=False
+        )
+        checkpoint_logging.success(
+            f"Loaded checkpoint file {checkpoint_filename} to device {device}"
+        )
 
     # Optimizer state via DCP (collective)
     if optimizer:

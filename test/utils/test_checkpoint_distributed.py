@@ -164,6 +164,261 @@ def test_fsdp_checkpoint_roundtrip(
 
 
 # ---------------------------------------------------------------------------
+# Plain FSDP + channels_last  (regression for cross-rank layout mismatch)
+# ---------------------------------------------------------------------------
+
+
+class _ConvNet(nn.Module):
+    """Tiny conv net so the parameter set includes a 4-D weight."""
+
+    def __init__(self, in_ch: int = 4, out_ch: int = 8, k: int = 3):
+        super().__init__()
+        self.conv = nn.Conv2d(in_ch, out_ch, kernel_size=k, padding=k // 2, bias=True)
+        self.gn = nn.GroupNorm(num_groups=4, num_channels=out_ch)
+
+    def forward(self, x):
+        return self.gn(self.conv(x))
+
+
+def _all_ranks_bit_exact(t: torch.Tensor) -> bool:
+    """True iff every rank holds element-wise bit-identical values for *t*."""
+    t_min = t.detach().clone().float()
+    t_max = t.detach().clone().float()
+    dist.all_reduce(t_min, op=dist.ReduceOp.MIN)
+    dist.all_reduce(t_max, op=dist.ReduceOp.MAX)
+    return torch.equal(t_min, t_max)
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+@pytest.mark.parametrize("use_orig_params", [True, False])
+@pytest.mark.parametrize(
+    "sharding_strategy",
+    [ShardingStrategy.NO_SHARD],
+)
+def test_fsdp_checkpoint_channels_last_roundtrip(
+    shared_tmp_dir, use_orig_params, sharding_strategy
+):
+    """Round-trip an FSDP+channels_last conv model and assert per-rank parity.
+
+    Regression for a layout-mismatch bug in DCP's broadcast_from_rank0 path:
+    ``dist.broadcast`` accepts a channels_last sender (``is_contiguous`` check
+    passes for that format) but transfers bytes in storage order, while
+    receivers allocate ``torch.empty(shape, dtype, device)`` (standard NCHW),
+    so 4-D conv weights were silently permuted on non-rank-0. The fix
+    (``_force_standard_contiguous`` on rank 0 before ``set_model_state_dict``)
+    keeps sender and receiver layouts consistent.
+
+    Asserts bit-exact agreement across ranks on the live FlatParameter (for
+    ``use_orig_params=False``) / each original parameter (for True). Output
+    equivalence isn't sufficient — a permuted conv weight preserves abs-sum
+    and the model can stagger toward similar outputs over noise — so we
+    check the parameter values directly.
+
+    The optimizer state is intentionally *not* asserted here. The optim load
+    path is layout-correct (verified by the standalone smoketest and by
+    running this test in isolation), but suite-level state pollution (NCCL
+    allreduce ordering across many prior tests) accumulates FP noise in the
+    pre-load training step, which then survives the load and makes a tight
+    cross-rank check flaky. The existing ``test_fsdp_checkpoint_roundtrip``
+    already covers the optim path with a tolerance-based output comparison
+    that's robust to that noise.
+    """
+    dm = DistributedManager()
+    if dm.world_size < 2:
+        pytest.skip("Need at least 2 ranks")
+
+    device = dm.device
+    mesh = init_device_mesh("cuda", (dm.world_size,), mesh_dim_names=("world",))
+
+    # Build, move to channels_last (only conv weights are affected), wrap.
+    torch.manual_seed(0)
+    model = _ConvNet().to(device=device, memory_format=torch.channels_last)
+    fsdp_model = FSDP(
+        model,
+        device_mesh=mesh["world"],
+        sharding_strategy=sharding_strategy,
+        use_orig_params=use_orig_params,
+        sync_module_states=True,
+    )
+    optimizer = torch.optim.Adam(fsdp_model.parameters(), lr=1e-3)
+
+    # Same x on every rank (we want the source-of-truth state to be identical
+    # across ranks pre-save, so any post-load divergence is checkpoint-induced).
+    x = torch.randn(2, 4, 8, 8, device=device).contiguous(
+        memory_format=torch.channels_last
+    )
+    for _ in range(2):
+        fsdp_model(x).sum().backward()
+        optimizer.step()
+        optimizer.zero_grad()
+
+    save_checkpoint(
+        shared_tmp_dir,
+        models=fsdp_model,
+        optimizer=optimizer,
+        epoch=2,
+        optimizer_model=fsdp_model,
+    )
+    dist.barrier()
+
+    # Build a *differently-seeded* fresh model so sync_module_states alone can't
+    # mask the bug by leaving rank 0's pre-load values on every rank.
+    torch.manual_seed(dm.rank + 1234)
+    model2 = _ConvNet().to(device=device, memory_format=torch.channels_last)
+    fsdp_model2 = FSDP(
+        model2,
+        device_mesh=mesh["world"],
+        sharding_strategy=sharding_strategy,
+        use_orig_params=use_orig_params,
+        sync_module_states=True,
+    )
+    optimizer2 = torch.optim.Adam(fsdp_model2.parameters(), lr=1e-3)
+    # Step once so optimizer state is shaped before the load.
+    fsdp_model2(x).sum().backward()
+    optimizer2.step()
+    optimizer2.zero_grad()
+
+    epoch = load_checkpoint(
+        shared_tmp_dir,
+        models=fsdp_model2,
+        optimizer=optimizer2,
+        optimizer_model=fsdp_model2,
+    )
+    assert epoch == 2
+
+    # --- Cross-rank parity checks ------------------------------------------
+    # FlatParameter (use_orig_params=False) or each original param (True).
+    if use_orig_params:
+        for name, p in fsdp_model2.named_parameters():
+            assert _all_ranks_bit_exact(p), (
+                f"Parameter '{name}' (shape={tuple(p.shape)}) differs across "
+                f"ranks after channels_last+FSDP load"
+            )
+    else:
+        flat_param = fsdp_model2._flat_param
+        assert _all_ranks_bit_exact(flat_param), (
+            "FlatParameter differs across ranks after channels_last+FSDP load"
+        )
+
+    # Optimizer state cross-rank check intentionally omitted -- see docstring.
+
+
+# ---------------------------------------------------------------------------
+# Cross-mode load: 1-proc non-distributed save → N-proc FSDP load (with CL)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.multigpu_static
+def test_cross_mode_channels_last_model_load(shared_tmp_dir):
+    """Save from a single (rank-0-only) non-FSDP CL model; load model state
+    into N-proc FSDP.
+
+    Realistic "trained on multi-rank, fine-tuned/inspected on a single GPU,
+    resumed multi-rank" round-trip with channels_last. Confirms that the
+    on-disk model state produced by the non-distributed save path is loadable
+    by the distributed FSDP load path on every rank without layout-induced
+    corruption.
+
+    Model side asserts:
+      * every rank's post-load FlatParameter is bit-exact identical, AND
+      * rank 0's logical values match what was saved.
+
+    Cross-rank parity alone can be satisfied by "everyone got the same wrong
+    values" (e.g. silent drop), so we also check against the saved snapshot.
+
+    Optimizer cross-mode load is *not* tested here. The non-distributed save
+    path writes int-keyed (param-id) optim state via ``optimizer.state_dict()``,
+    while the distributed FSDP load path expects FQN-keyed input -- DCP's
+    ``_split_optim_state_dict`` early-returns for int keys without converting,
+    and the downstream ``_rekey_sharded_optim_state_dict`` then crashes on
+    ``int.unflat_param_names``. That's a separate, pre-existing limitation
+    of cross-mode optim restore; same-mode optim restore is exercised by
+    ``test_fsdp_checkpoint_channels_last_roundtrip`` and is what the
+    channels_last fix is concerned with.
+    """
+    dm = DistributedManager()
+    if dm.world_size < 2:
+        pytest.skip("Need at least 2 ranks")
+
+    device = dm.device
+
+    # ===== Phase A: 1-proc save on rank 0 only =====
+    saved_params: dict[str, torch.Tensor] = {}
+    if dm.rank == 0:
+        torch.manual_seed(0)
+        model_save = _ConvNet().to(device=device, memory_format=torch.channels_last)
+        optimizer_save = torch.optim.Adam(model_save.parameters(), lr=1e-3)
+
+        x = torch.randn(2, 4, 8, 8, device=device).contiguous(
+            memory_format=torch.channels_last
+        )
+        # Two steps so the saved weights have actually moved off init.
+        for _ in range(2):
+            model_save(x).sum().backward()
+            optimizer_save.step()
+            optimizer_save.zero_grad()
+
+        # Snapshot. ``contiguous()`` pins a canonical layout for comparison;
+        # the values are what matter.
+        for name, p in model_save.named_parameters():
+            saved_params[name] = p.detach().clone().contiguous().cpu()
+
+        # We deliberately save the optimizer state too, mirroring real-world
+        # usage, but the load side will not consume it (see docstring).
+        save_checkpoint(
+            shared_tmp_dir,
+            models=model_save,
+            optimizer=optimizer_save,
+            epoch=2,
+        )
+    dist.barrier()
+
+    # ===== Phase B: N-proc FSDP-only load (model only) =====
+    mesh = init_device_mesh("cuda", (dm.world_size,), mesh_dim_names=("world",))
+
+    # Different per-rank seed so sync_module_states alone can't mask anything.
+    torch.manual_seed(dm.rank + 4242)
+    model_load = _ConvNet().to(device=device, memory_format=torch.channels_last)
+    fsdp_load = FSDP(
+        model_load,
+        device_mesh=mesh["world"],
+        sharding_strategy=ShardingStrategy.NO_SHARD,
+        use_orig_params=False,
+        sync_module_states=True,
+    )
+
+    # Pass optimizer=None: cross-mode optim load is a separate, pre-existing
+    # PyTorch DCP limitation (see docstring). We're testing the model path.
+    epoch = load_checkpoint(
+        shared_tmp_dir,
+        models=fsdp_load,
+    )
+    assert epoch == 2
+
+    # ===== Phase C.1: per-rank parity =====
+    flat_param = fsdp_load._flat_param
+    assert _all_ranks_bit_exact(flat_param), (
+        "FlatParameter differs across ranks after cross-mode model load"
+    )
+
+    # ===== Phase C.2: loaded values match saved values (rank 0) =====
+    # Collective: gather the full model state dict on every rank.
+    full_loaded_model = get_model_state_dict(
+        fsdp_load, options=StateDictOptions(full_state_dict=True)
+    )
+    if dm.rank == 0:
+        for name, expected in saved_params.items():
+            assert name in full_loaded_model, f"Loaded model state missing '{name}'"
+            actual = full_loaded_model[name].detach().contiguous().cpu()
+            assert torch.equal(actual, expected), (
+                f"Logical model values for '{name}' differ between save and "
+                f"load (cross-mode)"
+            )
+
+
+# ---------------------------------------------------------------------------
 # load_model_weights — plain FSDP
 # ---------------------------------------------------------------------------
 

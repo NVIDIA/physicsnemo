@@ -126,6 +126,30 @@ class TestMemmapRoundTrip:
             loaded.point_data["velocity"], mesh.point_data["velocity"]
         )
 
+    def test_with_cell_and_global_data(self, tmp_path):
+        """cell_data and global_data survive memmap round-trip on a real mesh."""
+        # Use a 2-triangle mesh so n_cells > 0 (cell_data is non-trivial).
+        mesh = two_triangles_2d.load()
+        mesh.point_data["p_scalar"] = torch.randn(mesh.n_points)
+        mesh.point_data["p_vector"] = torch.randn(mesh.n_points, 3)
+        mesh.cell_data["c_scalar"] = torch.randn(mesh.n_cells)
+        mesh.cell_data["c_vector"] = torch.randn(mesh.n_cells, 3)
+        mesh.global_data["g_scalar"] = torch.tensor(1.5)
+        mesh.global_data["g_vector"] = torch.tensor([1.0, 2.0, 3.0])
+
+        mesh.save(tmp_path / "mesh.pt")
+        loaded = Mesh.load(tmp_path / "mesh.pt")
+
+        assert set(loaded.point_data.keys()) == {"p_scalar", "p_vector"}
+        assert set(loaded.cell_data.keys()) == {"c_scalar", "c_vector"}
+        assert set(loaded.global_data.keys()) == {"g_scalar", "g_vector"}
+
+        for field in ("point_data", "cell_data", "global_data"):
+            for key in getattr(mesh, field).keys():
+                assert torch.allclose(
+                    getattr(loaded, field)[key], getattr(mesh, field)[key]
+                ), f"{field}[{key!r}] mismatch after round-trip"
+
     def test_all_dimension_configs(self, tmp_path, dims_all):
         """All (n_spatial_dims, n_manifold_dims) configurations survive memmap round-trip."""
         from test.mesh.conftest import create_simple_mesh

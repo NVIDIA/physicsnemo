@@ -87,7 +87,7 @@ class LossMHDVecPot_PhysicsNeMo(LossMHD):
         self.DA_weight = DA_weight
         # Define 2D MHD PDEs
         self.mhd_pde_eq = MHD_PDE(self.nu, self.eta, self.rho0)
-        self.mhd_pde_node = self.mhd_pde_eq.make_nodes()
+        self.mhd_pde_node = self.mhd_pde_eq.make_computations()
 
     def compute_loss(self, pred, true, inputs):
         "Compute weighted loss"

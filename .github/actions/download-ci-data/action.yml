@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Download CI test data
+description: |
+  Download PhysicsNeMo CI test data from a private Hugging Face dataset
+  repository and export TEST_DATA_DIR for the pytest nfs_data_dir fixture.
+
+inputs:
+  hf-token:
+    description: Hugging Face token with read access to the CI data repo
+    required: true
+  hf-repo:
+    description: Hugging Face dataset repo ID
+    required: false
+    default: "NVIDIA/PhysicsNeMo-CI-Data"
+  data-dir:
+    description: |
+      Parent directory for the downloaded data.  The dataset contents land
+      in <data-dir>/physicsnemo-data/.  Defaults to $RUNNER_TEMP if set, else /tmp.
+    required: false
+    default: ""
+
+outputs:
+  test-data-dir:
+    description: The parent directory containing physicsnemo-data/ (set as TEST_DATA_DIR)
+    value: ${{ steps.download.outputs.test_data_dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Download CI test data from Hugging Face
+      id: download
+      shell: bash
+      env:
+        HF_TOKEN: ${{ inputs.hf-token }}
+        HF_REPO: ${{ inputs.hf-repo }}
+        DATA_DIR_INPUT: ${{ inputs.data-dir }}
+      run: |
+        set -euo pipefail
+        data_dir="${DATA_DIR_INPUT}"
+        if [ -z "$data_dir" ]; then
+          data_dir="${RUNNER_TEMP:-/tmp}"
+        fi
+
+        if ! command -v hf >/dev/null 2>&1; then
+          uv pip install --system --quiet huggingface_hub[hf_xet]
+        fi
+        hf download "${HF_REPO}" \
+          --repo-type dataset \
+          --local-dir "${data_dir}/physicsnemo-data" \
+          --token "$HF_TOKEN"
+
+        echo "test_data_dir=${data_dir}" >> "$GITHUB_OUTPUT"
+        echo "TEST_DATA_DIR=${data_dir}" >> "$GITHUB_ENV"
+
+        # Verify the download produced the expected directory structure.
+        # conftest.py resolves TEST_DATA_DIR/physicsnemo-data/datasets/...
+        if [ ! -d "${data_dir}/physicsnemo-data/datasets" ]; then
+          echo "::error::Expected ${data_dir}/physicsnemo-data/datasets/ but it does not exist."
+          echo "Contents of ${data_dir}/physicsnemo-data/:"
+          ls -la "${data_dir}/physicsnemo-data/" 2>/dev/null || echo "  (directory missing entirely)"
+          exit 1
+        fi
+        echo "Downloaded CI test data to ${data_dir}/physicsnemo-data/"
+        ls "${data_dir}/physicsnemo-data/datasets/"

@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   including new variant that uses a dual tree traversal algorithm to reduce the
   complexity of the kernel evaluations from O(N^2) to O(N).
 - Adds GLOBE AirFRANS example case (`examples/cfd/external_aerodynamics/globe/airfrans`)
+- Adds GLOBE DrivAerML example case (`examples/cfd/external_aerodynamics/globe/drivaer`)
 - Adds drop-test dynamics recipe.
 - Adds concrete dropout uncertainty quantification for GeoTransolver. Learnable
   per-layer dropout rates enable MC-Dropout inference for uncertainty
@@ -90,6 +91,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Flare, GeoTransolver with Flare-attention, bring your own!).  Leverages
   mesh datasets and non-dimensionalization to enable dataset mixing and
   matching at runtime.  Train with surface or volume data.
+- Adds a new `physicsnemo.diffusion.multi_diffusion` subpackage that
+  scales 2D diffusion models to large domains via patch-based training
+  and inference. Provides `MultiDiffusionModel2D` (wraps a base model and
+  handles state patching, conditioning preprocessing, positional-embedding
+  injection, and per-patch output fusion), the
+  `MultiDiffusionMSEDSMLoss` / `MultiDiffusionWeightedMSEDSMLoss` losses
+  for patch-based DSM training, and `MultiDiffusionPredictor` for
+  sampling (plugs straight into `sample()` / `get_denoiser()` and the
+  standard solvers). Patching primitives (`BasePatching2D`,
+  `GridPatching2D`, `RandomPatching2D`) are exposed under the same
+  subpackage and are `torch.compile`-friendly with `fullgraph=True`.
+- Adds `"epsilon"` as a supported prediction type throughout the diffusion
+  framework, alongside the existing `"x0"` and `"score"` modes. A new
+  `PredictorType = Literal["x0", "score", "epsilon"]` alias in
+  `physicsnemo.diffusion.base` is wired through losses (`MSEDSMLoss`,
+  `WeightedMSEDSMLoss`, and the multi-diffusion losses), preconditioners,
+  samplers / solvers, DPS guidance, and noise schedulers, enabling
+  end-to-end training and sampling of epsilon-parameterized models.
+  Losses gain an `epsilon_to_x0_fn` kwarg used for the epsilon-to-x0
+  conversion required during DSM training.
 - Added support for Batched radius search, which enables Domino
   and GeoTransolver with local features and batch size > 1.
 
@@ -139,6 +160,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `physicsnemo.mesh.curvature._utils` to `physicsnemo.mesh.geometry._angles`.
   The old private path is no longer available; use the
   `physicsnemo.mesh.geometry` re-export instead.
+- &#9888;&#65039; **BC-impact (pre-release rename):** in PhysicsNeMo-Mesh,
+  `DomainMesh.apply` was renamed to `DomainMesh.apply_to_meshes`. The
+  original name shadowed the recursive `Tensor -> Tensor` `apply` method
+  that `@tensorclass` auto-injects, breaking duck-type symmetry with
+  `Mesh.apply` for any code that handled both classes. After the rename,
+  `dm.apply(tensor_fn)` works as expected (recurses through every leaf
+  tensor in `interior`, `boundaries`, and `global_data`); the original
+  Mesh-to-Mesh broadcast is now `dm.apply_to_meshes(mesh_fn)`. Early
+  adopters of the unreleased `DomainMesh` API should rename their
+  `.apply(...)` callsites to `.apply_to_meshes(...)`.
+- Refactored the patching utilities under
+  `physicsnemo.diffusion.multi_diffusion.patching`. Patching and fusion
+  operations are now more performant and `torch.compile`-friendly (e.g.
+  `fullgraph=True`,`error_on_recompile=True`).
+- Refactored the `examples/geophysics/diffusion_fwi` full-waveform
+  inversion example to use the consolidated `physicsnemo.diffusion` API
+  (preconditioners, samplers, losses, DPS guidance) and removed the
+  recipe-local copies of these utilities under `utils/`.
+- Refactored the `examples/generative/topodiff` recipe to use the
+  consolidated `physicsnemo.diffusion` API (`MSEDSMLoss` with
+  `prediction_type="epsilon"`, `sample()`, `DPSScorePredictor`) plus a
+  recipe-local DDPM scheduler, solver, and classifier guidance. Removed
+  the now-unused `Diffusion`, `DatasetTopoDiff`, and `load_data_topodiff`
+  abstractions from `physicsnemo.models.topodiff`.
+- Significantly expanded CI test coverage for `physicsnemo.diffusion`,
+  including new tests for samplers, solvers, preconditioners, losses,
+  DPS guidance, multi-diffusion, and patching utilities, plus
+  combined-workflow and from-checkpoint round-trip tests. Most tests
+  run with `fullgraph=True` and `error_on_recompile` to catch
+  `torch.compile` regressions.
 
 ### Deprecated
 
@@ -166,6 +217,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than the `IntEnum` value, and skipping non-numeric VTK arrays
   (strings, objects) when copying point / cell / field data into the
   `Mesh` `TensorDict`s instead of failing the conversion.
+- In PhysicsNeMo-Mesh, the `Mesh` constructor now preserves data when
+  `point_data` / `cell_data` / `global_data` are passed as a non-dict
+  `Mapping` (notably PyVista's `DataSetAttributes`). Previously, with
+  `tensordict >= 0.12`, the `@tensorclass(tensor_only=True)` auto-init
+  silently wrapped such Mappings as `NonTensorData` and dropped every key,
+  so e.g. `Mesh(cell_data=pv_mesh.cell_data, ...)` produced an empty
+  `cell_data`. `Mesh.__post_init__` now detects this wrapping and unwraps
+  the original Mapping before coercing to `TensorDict`. The `tensor_only`
+  fast path is preserved, so internal Mesh constructions (slicing,
+  transforms, `from_pyvista`) keep their full speed. Backed by new direct-
+  construction regression tests, a `cell_data` / `global_data` memmap
+  round-trip test, and a committed `.pmsh` golden fixture that locks the
+  on-disk format against silent breakage in future changes.
 - In PhysicsNeMo-Mesh, `safe_eps(dtype)` is now capped at
   `torch.finfo(dtype).eps`, which fixes a float16 corner case where the
   previous `tiny ** 0.25` floor exceeded machine epsilon and could
@@ -173,11 +237,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `smooth_laplacian` and `compute_quality_metrics` have been replaced
   with the dtype-aware `.clamp(min=safe_eps(dtype))` to avoid silently
   zeroing fp16 weights.
-- Fixed a silent bug in loading of optimizer state from checkpoint for
+- Fixed a silent bug in loading state from checkpoint for
   FSDP-backed models with `use_orig_params=False` and channels last
   memory format.
 - Fixed issues with physicsnemo.nn.functional's `radius_search` that
   caused crashes when used with torch.compile.
+- Fixed the sinusoidal positional embeddings formula in `SongUNet` and
+  `MultiDiffusionModel2D` so it now follows the standard `sin / cos`
+  convention. Affected reference data was regenerated.
 
 ### Security
 

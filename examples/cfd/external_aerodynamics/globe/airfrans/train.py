@@ -69,6 +69,7 @@ from physicsnemo.experimental.utils import (
 from physicsnemo.optim import CombinedOptimizer
 from physicsnemo.utils.checkpoint import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils.profiling import Profiler
 
 mpl.use("agg")  # Allows headless plotting
 disable_autotune_printing()
@@ -114,7 +115,7 @@ def main(
     network_type: Literal["pade", "mlp"] = "pade",
     self_regularization_beta: float | None = 0.01,
     latent_compression_scale: float | None = 100.0,
-    expand_far_targets: bool = False,
+    expand_far_targets: bool = True,
 ):
     """Train the GLOBE model on AirFRANS dataset.
 
@@ -217,13 +218,9 @@ def main(
     profiling_dir = output_dir / "profiling"
     shutdown_file = output_dir / "SHUTDOWN"
 
+    for directory in (checkpoint_dir, torch_compile_cache_dir, profiling_dir):
+        directory.mkdir(parents=True, exist_ok=True)
     if dist.rank == 0:
-        for directory in (
-            checkpoint_dir,
-            torch_compile_cache_dir,
-            profiling_dir,
-        ):
-            directory.mkdir(parents=True, exist_ok=True)
         shutdown_file.unlink(missing_ok=True)
 
     ### [PyTorch Configuration]
@@ -341,7 +338,7 @@ def main(
             decoupled_weight_decay=True,
             foreach=True,
         )
-    patience_epochs = patience_steps // len(dataloaders["train"])
+    patience_epochs = max(1, patience_steps // len(dataloaders["train"]))
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode="min",
@@ -542,7 +539,7 @@ def main(
                 for k, v in batch_loss_components.items():
                     all_batch_loss_components[k].append(v.detach().clone())
 
-            if training and profiler is not None:
+            if training:
                 profiler.step()
 
             ### Disable all first-launch diagnostics after the first batch.
@@ -581,21 +578,20 @@ def main(
         return epoch_loss, epoch_loss_components
 
     ### [Profiler Setup]
-    use_profiler = (
-        use_profiler and dist.rank == 0 and (not any(profiling_dir.iterdir()))
-    )
-    profiler_ctx = (
-        torch.profiler.profile(
+    profiler = Profiler()
+    if use_profiler and dist.rank == 0 and (not any(profiling_dir.iterdir())):
+        profiler.enable("torch").reconfigure(
             schedule=torch.profiler.schedule(wait=5, warmup=1, active=1, repeat=1),
-            on_trace_ready=torch.profiler.tensorboard_trace_handler(
-                str(profiling_dir), worker_name=f"worker_{dist.rank}"
-            ),
+            on_trace_ready_path=profiling_dir,
             with_stack=False,
         )
-        if use_profiler
-        else contextlib.nullcontext()
-    )
-    with mlflow_run_ctx, profiler_ctx as profiler:
+    # Co-locate the optional summary tables (cpu_time.txt, gpu_time.txt)
+    # next to the trace JSON in `profiling_dir/torch/`, instead of the
+    # default `./physicsnemo_profiling_outputs/torch/` (cwd-relative).
+    profiler.output_path = profiling_dir
+    profiler.initialize()
+
+    with mlflow_run_ctx, profiler:
         ### [Training Loop]
 
         if dist.rank == 0:

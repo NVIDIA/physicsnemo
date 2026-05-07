@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Literal, Self, Sequence, cast
 
 import torch
 import torch.nn.functional as F
-from tensordict import TensorDict, tensorclass
+from tensordict import NonTensorData, TensorDict, tensorclass
 
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
 from physicsnemo.mesh.geometry._cell_normals import compute_cell_normals
@@ -328,33 +328,31 @@ class Mesh:
         if self.cells is None:
             self.cells = torch.zeros(0, 1, dtype=torch.long, device=self.points.device)
 
-        ### point_data: coerce dict -> TensorDict and enforce batch_size
-        if isinstance(self.point_data, TensorDict):
-            self.point_data.batch_size = torch.Size([self.n_points])
-        else:
-            self.point_data = TensorDict(
-                {} if self.point_data is None else dict(self.point_data),
-                batch_size=torch.Size([self.n_points]),
-                device=self.points.device,
-            )
-
-        ### cell_data: coerce dict -> TensorDict and enforce batch_size
-        if isinstance(self.cell_data, TensorDict):
-            self.cell_data.batch_size = torch.Size([self.n_cells])
-        else:
-            self.cell_data = TensorDict(
-                {} if self.cell_data is None else dict(self.cell_data),
-                batch_size=torch.Size([self.n_cells]),
-                device=self.cells.device,
-            )
-
-        ### global_data: coerce dict -> TensorDict and enforce batch_size
-        if isinstance(self.global_data, TensorDict):
-            self.global_data.batch_size = torch.Size([])
-        else:
-            self.global_data = TensorDict(
-                {} if self.global_data is None else dict(self.global_data),
-                device=self.points.device,
+        ### Coerce every data field to a TensorDict with the right batch_size.
+        # The auto-init's ``tensor_only=True`` fast path silently wraps any
+        # non-dict ``Mapping`` (e.g. PyVista ``DataSetAttributes``) as
+        # ``NonTensorData(data=<original Mapping>)`` instead of converting it
+        # to a ``TensorDict``.  We unwrap that here so all data fields end up
+        # as proper ``TensorDict`` instances regardless of what the user passed.
+        for field_name, batch_size in (
+            ("point_data", torch.Size([self.n_points])),
+            ("cell_data", torch.Size([self.n_cells])),
+            ("global_data", torch.Size([])),
+        ):
+            value = getattr(self, field_name)
+            if isinstance(value, TensorDict):
+                value.batch_size = batch_size
+                continue
+            if isinstance(value, NonTensorData):
+                value = value.data  # extract original Mapping from fast-path wrapper
+            setattr(
+                self,
+                field_name,
+                TensorDict(
+                    {} if value is None else dict(value),
+                    batch_size=batch_size,
+                    device=self.points.device,
+                ),
             )
 
         ### _cache: default empty cache structure

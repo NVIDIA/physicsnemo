@@ -103,49 +103,51 @@ class TestProperties:
         assert tet_domain.boundary_names == ["inlet", "wall"]
 
 
-### apply
+### apply_to_meshes
 
 
-class TestApply:
-    """Tests for DomainMesh.apply."""
+class TestApplyToMeshes:
+    """Tests for DomainMesh.apply_to_meshes."""
 
     def test_applies_fn_to_interior(self, tet_domain):
         original_points = tet_domain.interior.points.clone()
-        dm2 = tet_domain.apply(lambda m: m.translate([1, 0, 0]))
+        dm2 = tet_domain.apply_to_meshes(lambda m: m.translate([1, 0, 0]))
         expected = original_points + torch.tensor([1.0, 0.0, 0.0])
         assert torch.allclose(dm2.interior.points, expected)
 
     def test_applies_fn_to_all_boundaries(self, tet_domain):
         offset = torch.tensor([0.0, 0.0, 1.0])
-        dm2 = tet_domain.apply(lambda m: m.translate([0, 0, 1]))
+        dm2 = tet_domain.apply_to_meshes(lambda m: m.translate([0, 0, 1]))
         for name in tet_domain.boundary_names:
             original = tet_domain.boundaries[name].points
             assert torch.allclose(dm2.boundaries[name].points, original + offset)
 
     def test_preserves_global_data(self, tet_domain):
-        dm2 = tet_domain.apply(lambda m: m.translate([1, 1, 1]))
+        dm2 = tet_domain.apply_to_meshes(lambda m: m.translate([1, 1, 1]))
         assert torch.equal(dm2.global_data["Re"], tet_domain.global_data["Re"])
         assert torch.equal(dm2.global_data["AoA"], tet_domain.global_data["AoA"])
 
     def test_global_data_is_independent_copy(self, tet_domain):
         """Mutating transformed domain's global_data must not affect original."""
         original_re = tet_domain.global_data["Re"].clone()
-        dm2 = tet_domain.apply(lambda m: m.translate([1, 0, 0]))
+        dm2 = tet_domain.apply_to_meshes(lambda m: m.translate([1, 0, 0]))
         dm2.global_data["Re"].fill_(0.0)
         assert torch.equal(tet_domain.global_data["Re"], original_re)
 
     def test_works_with_no_boundaries(self, no_boundary_domain):
-        dm2 = no_boundary_domain.apply(lambda m: m.translate([1, 0, 0]))
+        dm2 = no_boundary_domain.apply_to_meshes(lambda m: m.translate([1, 0, 0]))
         assert dm2.n_boundaries == 0
         assert dm2.interior.points[0, 0].item() == pytest.approx(1.0)
 
     def test_returns_domain_mesh(self, tet_domain):
-        dm2 = tet_domain.apply(lambda m: m)
+        dm2 = tet_domain.apply_to_meshes(lambda m: m)
         assert isinstance(dm2, DomainMesh)
 
     def test_interior_only(self, tet_domain):
-        """apply with boundaries=False should leave boundaries unchanged."""
-        dm2 = tet_domain.apply(lambda m: m.translate([1, 0, 0]), boundaries=False)
+        """apply_to_meshes with boundaries=False should leave boundaries unchanged."""
+        dm2 = tet_domain.apply_to_meshes(
+            lambda m: m.translate([1, 0, 0]), boundaries=False
+        )
         assert not torch.equal(dm2.interior.points, tet_domain.interior.points)
         for name in tet_domain.boundary_names:
             assert torch.equal(
@@ -153,8 +155,10 @@ class TestApply:
             )
 
     def test_boundaries_only(self, tet_domain):
-        """apply with interior=False should leave interior unchanged."""
-        dm2 = tet_domain.apply(lambda m: m.translate([1, 0, 0]), interior=False)
+        """apply_to_meshes with interior=False should leave interior unchanged."""
+        dm2 = tet_domain.apply_to_meshes(
+            lambda m: m.translate([1, 0, 0]), interior=False
+        )
         assert torch.equal(dm2.interior.points, tet_domain.interior.points)
         for name in tet_domain.boundary_names:
             assert not torch.equal(
