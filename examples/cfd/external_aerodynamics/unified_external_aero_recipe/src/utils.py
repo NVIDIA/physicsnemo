@@ -19,14 +19,18 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypeAlias
 
 import numpy as np
 import torch
-
 from omegaconf import DictConfig
+
 from physicsnemo.optim import CombinedOptimizer
+
+### Recipe-wide type aliases. Re-exported for use in loss.py, metrics.py,
+### output_normalize.py, forward_kwargs.py, collate.py, train.py, and the
+### tests so that ``target_config`` values share a single source of truth.
+FieldType: TypeAlias = Literal["scalar", "vector"]
 
 
 def set_seed(seed: int | None, rank: int = 0) -> None:
@@ -54,15 +58,12 @@ def build_muon_optimizer(
     Muon handles 2-D parameters (linear/attention weight matrices) while AdamW
     handles everything else (biases, layer-norm, embeddings, etc.).
 
-    Parameters
-    ----------
-    model : torch.nn.Module
-        The model (may be DDP-wrapped).
-    cfg : DictConfig
-        Full Hydra config.  Reads ``cfg.training.optimizer.*`` for lr,
-        weight_decay, betas, and eps.
-    compile_optimizer : bool
-        If True, compile the optimizer step functions with ``torch.compile``.
+    Args:
+        model: The model (may be DDP-wrapped).
+        cfg: Full Hydra config. Reads ``cfg.training.optimizer.*`` for lr,
+            weight_decay, betas, and eps.
+        compile_optimizer: If True, compile the optimizer step functions
+            with ``torch.compile``.
     """
     base_model = model.module if hasattr(model, "module") else model
     muon_params = [p for p in base_model.parameters() if p.ndim == 2]
@@ -115,152 +116,46 @@ def build_muon_optimizer(
 
 
 # ---------------------------------------------------------------------------
-# Field specification for target configurations
+# Field type helpers for target configurations
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class FieldSpec:
-    """Specification for a single target field.
+def field_dim(field_type: FieldType, n_spatial_dims: int = 3) -> int:
+    """Number of channels a single ``"scalar"`` or ``"vector"`` field occupies.
 
-    Attributes:
-        name: Human-readable name for the field (used in metric/loss keys).
-        field_type: Either "scalar" or "vector".
-        start_index: Starting index in the channel dimension.
-        end_index: Ending index (exclusive) in the channel dimension.
-    """
-
-    name: str
-    field_type: Literal["scalar", "vector"]
-    start_index: int
-    end_index: int
-
-    @property
-    def dim(self) -> int:
-        """Number of channels for this field."""
-        return self.end_index - self.start_index
-
-
-def parse_target_config(
-    target_config: dict[str, str], n_spatial_dims: int = 3
-) -> list[FieldSpec]:
-    """Parse target configuration to field specifications.
+    The type tag is always lowercase by contract -- the recipe normalises
+    YAML inputs at the LossCalculator / MetricCalculator boundary. Pass
+    pre-lowercased strings here.
 
     Args:
-        target_config: Mapping of field names to types ("scalar" or "vector").
-                      Order determines channel indices.
-        n_spatial_dims: Dimensionality of vector fields. Default is 3.
-
-    Returns:
-        List of FieldSpec objects describing each field.
+        field_type: ``"scalar"`` or ``"vector"``.
+        n_spatial_dims: Dimensionality of vector fields. Default 3.
 
     Raises:
-        ValueError: If an unknown field type is specified.
-
-    Example:
-        >>> config = {"pressure": "scalar", "velocity": "vector"}
-        >>> specs = parse_target_config(config)
-        >>> specs[0]
-        FieldSpec(name='pressure', field_type='scalar', start_index=0, end_index=1)
-        >>> specs[1]
-        FieldSpec(name='velocity', field_type='vector', start_index=1, end_index=4)
+        ValueError: If ``field_type`` is not ``"scalar"`` or ``"vector"``.
     """
-    specs = []
-    current_index = 0
-
-    for name, field_type in target_config.items():
-        field_type = field_type.lower()
-        if field_type == "scalar":
-            dim = 1
-        elif field_type == "vector":
-            dim = n_spatial_dims
-        else:
-            raise ValueError(
-                f"Unknown field type '{field_type}' for field '{name}'. "
-                "Expected 'scalar' or 'vector'."
-            )
-
-        specs.append(
-            FieldSpec(
-                name=name,
-                field_type=field_type,
-                start_index=current_index,
-                end_index=current_index + dim,
-            )
-        )
-        current_index += dim
-
-    return specs
+    if field_type == "scalar":
+        return 1
+    if field_type == "vector":
+        return n_spatial_dims
+    raise ValueError(
+        f"Unknown field type {field_type!r}. Expected 'scalar' or 'vector'."
+    )
 
 
-# This function, below, is to turn non-dimensionalized data back into
-# dimensional data.  It's useful for inference scripts which may want to compute
-# metrics on dimensional data, of course.
+def align_scalar_shapes(
+    p: torch.Tensor, t: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Align a ``(...)`` / ``(..., 1)`` shape mismatch by squeezing one side.
 
-# It's not used at the moment.  But it will be, in the near future, so while it's
-# dead code currently it won't be for long.
-
-_NONDIM_TYPE_MAP = {"scalar": "pressure", "vector": "stress"}
-
-
-def _to_physical(
-    tensor: torch.Tensor,
-    target_config: dict[str, str],
-    normalizer,
-    nondim_transform,
-    metadata: dict,
-    nondim_type_overrides: dict[str, str] | None = None,
-) -> torch.Tensor:
-    """Convert a model-space tensor (normalized + non-dim) back to physical units.
-
-    Chains two inverse operations using the existing transform instances:
-    1. ``NormalizeMeshFields.inverse_tensor`` -- undo z-score normalization
-    2. ``NonDimensionalizeByMetadata.inverse_tensor`` -- undo non-dimensionalization
-
-    Parameters
-    ----------
-    nondim_type_overrides : dict or None
-        Optional per-field mapping of ``{field_name: nondim_type}`` (e.g.
-        ``{"temperature": "temperature", "density": "density"}``).  When
-        provided, overrides the default ``_NONDIM_TYPE_MAP`` lookup for
-        fields that don't follow the simple scalar=pressure / vector=stress
-        convention.
+    Used in scalar-field loss / metric paths where the prediction may
+    arrive as ``(B, N, 1)`` (sliced from a concatenated ``(B, N, C)``
+    tensor before squeeze) while the target is ``(B, N)`` (per-element
+    scalar from a TensorDict), or vice versa. After alignment both
+    tensors share the same shape (or were already equal-shape).
     """
-    if not metadata:
-        return tensor
-
-    out = tensor
-    device, dtype = tensor.device, tensor.dtype
-
-    # Step 1: undo z-score normalization
-    if normalizer is not None:
-        out = normalizer.inverse_tensor(out, target_config)
-
-    # Step 2: undo non-dimensionalization
-    if nondim_transform is not None:
-        overrides = nondim_type_overrides or {}
-        nondim_fields = {
-            name: overrides.get(name, _NONDIM_TYPE_MAP.get(ftype, ftype))
-            for name, ftype in target_config.items()
-        }
-        U_inf = torch.tensor(metadata["U_inf"], dtype=dtype, device=device)
-        rho_inf = torch.tensor(metadata["rho_inf"], dtype=dtype, device=device)
-        p_inf = torch.tensor(metadata["p_inf"], dtype=dtype, device=device)
-        q_inf = 0.5 * rho_inf * (U_inf * U_inf).sum()
-        U_inf_mag = (U_inf * U_inf).sum().sqrt()
-
-        T_inf = None
-        if "T_inf" in metadata:
-            T_inf = torch.tensor(metadata["T_inf"], dtype=dtype, device=device)
-
-        out = nondim_transform.inverse_tensor(
-            out,
-            nondim_fields,
-            q_inf,
-            p_inf,
-            U_inf_mag,
-            rho_inf=rho_inf,
-            T_inf=T_inf,
-        )
-
-    return out
+    if p.ndim > t.ndim and p.shape[-1] == 1:
+        p = p.squeeze(-1)
+    elif t.ndim > p.ndim and t.shape[-1] == 1:
+        t = t.squeeze(-1)
+    return p, t

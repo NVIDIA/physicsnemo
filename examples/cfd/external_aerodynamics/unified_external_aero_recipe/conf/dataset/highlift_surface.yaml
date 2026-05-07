@@ -84,20 +84,10 @@ pipeline:
         density:     {type: scalar, mean:  1.0, std: 0.02}
         velocity:    {type: vector, mean: [0.00, 0.00, 0.00], std: 0.20}
         tau_wall:    {type: scalar, mean: [0.00, 0.00, 0.00], std: 0.003}
-    - _target_: ${dp:MeshToTensorDict}
-    - _target_: ${dp:ComputeCellCentroids}
-    - _target_: ${dp:RestructureTensorDict}
-      groups:
-        input:
-          points: cell_centroids
-          normals: cell_data.normals
-          U_inf: global_data.U_inf
-        output:
-          pressure: cell_data.pressure
-          temperature: cell_data.temperature
-          density: cell_data.density
-          velocity: cell_data.velocity
-          tau_wall: cell_data.tau_wall
+    # Terminal: convert the surface Mesh into a DomainMesh per the recipe
+    # contract. cell_data_targets are auto-injected from the `targets:` block.
+    - _target_: ${dp:MeshToDomainMesh}
+      interior_points: cell_centroids
 
 targets:
   pressure: scalar

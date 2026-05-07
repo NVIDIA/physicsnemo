@@ -17,13 +17,21 @@
 # ---------------------------------------------------------------------------
 # Unified External Aerodynamics - Volume Training Configuration (DoMINO)
 # ---------------------------------------------------------------------------
-# Trains a DoMINO model in volume-only mode on volume fields (velocity,
-# pressure, nut) from DrivaerML volume meshes.
+#
+# >>> DRAFT: this config does NOT run end-to-end yet.
+#
+# The dataset YAML (drivaer_ml_volume.yaml) does not yet expose the
+# volume-grid / neighbor features that DoMINO's `forward()` consumes.
+# The `forward_kwargs:` block below is illustrative; running this config
+# requires extending the dataset pipeline with a DoMINO-specific
+# pre-processing stage (and is excluded from the synthetic E2E test
+# suite for that reason). See `tests/test_synthetic_configs.py`.
 #
 # DoMINO uses a geometry-encoding UNet + basis-function architecture that
-# natively handles SDF grids and volume neighbor information.  Its forward
-# method accepts a single data_dict; the collate layer wraps batch tensors
-# into data_dict automatically (see _wrap_as in MODEL_MAPPINGS).
+# natively handles SDF grids and volume neighbor information. Its forward
+# method accepts a single ``data_dict`` argument; the recipe's
+# ``forward_kwargs:`` resolver builds that dict by recursing into the
+# nested-dict spec below (see ``src/forward_kwargs.py``).
 
 output_dir: "runs"
 checkpoint_dir: null
@@ -35,10 +43,21 @@ profile: false
 augment: false
 benchmark_io: false
 
-model_type: "volume"
+# -- Data contract -----------------------------------------------------------
+# NOTE: DoMINO is still in progress in this recipe (the dataset pipeline
+# does not yet expose all the volume-grid / neighbor features DoMINO's full
+# forward expects). The spec below is illustrative; see the surface variant
+# for context.
+input_type: tensors
+output_type: tensors
 
-# -- Data-to-model mapping (see src/collate.py MODEL_MAPPINGS) ---------------
-data_mapping: "domino_automotive_volume"
+forward_kwargs:
+  data_dict:
+    geometry_coordinates: interior.points
+    volume_mesh_centers: interior.points
+    sdf_nodes: interior.point_data.sdf
+    global_params_values: global_data.U_inf
+    global_params_reference: global_data.U_inf
 
 # -- Model (DoMINO, volume-only) --------------------------------------------
 model:
@@ -58,13 +77,6 @@ model:
 dataset:
   name: drivaer_ml_volume
   sampling_resolution: 200000
-  targets:
-    velocity: vector
-    pressure: scalar
-    nut: scalar
-  nondim_types:
-    velocity: velocity
-    nut: identity
   metrics: [l2]
 
 # -- Training ----------------------------------------------------------------

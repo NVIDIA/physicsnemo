@@ -29,12 +29,23 @@ compile: true
 profile: false
 augment: false
 benchmark_io: false
-broadcast_global: true    # broadcast U_inf (B,1,3) -> (B,N,3) for Transolver
 
-model_type: "surface"
+# -- Data contract -----------------------------------------------------------
+input_type: tensors
+output_type: tensors
 
-# -- Data-to-model mapping (see src/collate.py MODEL_MAPPINGS) ---------------
-data_mapping: "transolver_automotive_surface"
+# Transolver concats `[embedding, fx]` along the last dim, so `fx` must
+# match `embedding`'s spatial dim. The `expand_like` modifier broadcasts
+# the freestream `U_inf` (a per-sample vector) across the per-cell axis
+# of `embedding`, so `fx` ends up shaped to align with the per-cell
+# features in `embedding`.
+forward_kwargs:
+  embedding:
+    - interior.points
+    - boundaries.vehicle.cell_data.normals
+  fx:
+    source: global_data.U_inf
+    expand_like: embedding
 
 # -- Model (Transolver) -----------------------------------------------------
 model:
@@ -57,10 +68,7 @@ model:
 # -- Dataset -----------------------------------------------------------------
 dataset:
   name: drivaer_ml_surface
-  sampling_resolution: 200000   # override SubsampleMesh n_cells/n_points in all dataset configs
-  targets:
-    pressure: scalar
-    wss: vector
+  sampling_resolution: 200000
   metrics: [l2]
 
 # -- Training ----------------------------------------------------------------
