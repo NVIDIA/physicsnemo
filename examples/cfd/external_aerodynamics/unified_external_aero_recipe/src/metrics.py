@@ -184,9 +184,7 @@ class MetricCalculator:
         stacked = torch.stack([metrics[k] for k in keys])
         dist.all_reduce(stacked, group=self.process_group)
         stacked = stacked / world_size
-        return TensorDict(
-            {k: stacked[i] for i, k in enumerate(keys)}, batch_size=[]
-        )
+        return TensorDict({k: stacked[i] for i, k in enumerate(keys)}, batch_size=[])
 
     def __call__(
         self,

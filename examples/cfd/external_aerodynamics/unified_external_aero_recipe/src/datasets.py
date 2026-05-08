@@ -268,9 +268,7 @@ def validate_dataset_consistency(
         )
 
 
-def resolve_manifest_spec(
-    ds_yaml: DictConfig, ds_cfg_block: DictConfig
-) -> dict | None:
+def resolve_manifest_spec(ds_yaml: DictConfig, ds_cfg_block: DictConfig) -> dict | None:
     """Resolve a `data.<key>` block's manifest config; return ``None`` for directory mode.
 
     Two manifest styles are recognised:

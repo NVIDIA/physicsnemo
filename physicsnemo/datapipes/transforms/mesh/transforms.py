@@ -621,6 +621,7 @@ class NormalizeMeshFields(MeshTransform):
             New TensorDict (same keys, batch_size, and device as *td*)
             whose leaves are in physical units.
         """
+
         ### ``named_apply`` walks every leaf and collects the returns
         ### into a fresh TD; leaves whose name is absent from
         ### ``self._stats`` pass through unchanged.

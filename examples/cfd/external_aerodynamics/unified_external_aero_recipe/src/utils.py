@@ -282,10 +282,7 @@ def to_physical_units(
         ### match ``freestream_scales``'s convention (precision-stable
         ### reference scales, even when ``pred_td`` is bfloat16 / fp16).
         metadata_td = TensorDict(
-            {
-                k: torch.as_tensor(v, dtype=torch.float32)
-                for k, v in metadata.items()
-            },
+            {k: torch.as_tensor(v, dtype=torch.float32) for k, v in metadata.items()},
         )
         q_inf, p_inf, U_inf_mag, rho_inf, T_inf = freestream_scales(metadata_td)
 

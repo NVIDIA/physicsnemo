@@ -158,9 +158,5 @@ class TestNormalizeMeshFieldsInverseConsistency:
         td_recovered = normalizer.inverse_td(normalized_td)
         flat_recovered = normalizer.inverse_tensor(flat, target_config)
 
-        torch.testing.assert_close(
-            td_recovered["pressure"], flat_recovered[..., 0]
-        )
-        torch.testing.assert_close(
-            td_recovered["wss"], flat_recovered[..., 1:4]
-        )
+        torch.testing.assert_close(td_recovered["pressure"], flat_recovered[..., 0])
+        torch.testing.assert_close(td_recovered["wss"], flat_recovered[..., 1:4])

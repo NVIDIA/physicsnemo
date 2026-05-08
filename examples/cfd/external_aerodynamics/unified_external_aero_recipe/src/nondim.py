@@ -399,6 +399,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
             New TensorDict (same keys, batch_size, and device as *td*)
             whose leaves are in physical units.
         """
+
         ### ``named_apply`` walks every leaf in ``td`` and collects the
         ### returns into a fresh TD; leaves whose name is absent from
         ### ``field_types`` pass through unchanged.
