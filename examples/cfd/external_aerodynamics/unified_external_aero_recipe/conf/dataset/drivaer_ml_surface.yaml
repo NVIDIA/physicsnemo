@@ -56,13 +56,13 @@ pipeline:
       fields:
         pMeanTrim: pressure
         wallShearStressMeanTrim: stress
-      section: cell_data
+      association: cell_data
     - _target_: ${dp:RenameMeshFields}
       cell_data:
         pMeanTrim: pressure
         wallShearStressMeanTrim: wss
     - _target_: ${dp:NormalizeMeshFields}
-      section: cell_data
+      association: cell_data
       fields:
         wss: {type: vector, mean: [0.0, 0.0, 0.0], std: 0.00313}
     - _target_: ${dp:ComputeSurfaceNormals}

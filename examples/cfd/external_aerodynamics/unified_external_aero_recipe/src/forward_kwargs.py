@@ -149,8 +149,19 @@ def resolve_spec(spec: Any, source: Any) -> Any:
     if isinstance(spec, str):
         return walk_path(source, spec)
 
+    ### `bool` is a subclass of `int`, so without this guard `True` /
+    ### `False` would silently coerce to `tensor(1.0)` / `tensor(0.0)` --
+    ### almost always a config bug (e.g. someone meant a numeric flag).
+    ### Reject explicitly so the YAML author sees an actionable error
+    ### rather than a downstream shape / dtype mismatch.
+    if isinstance(spec, bool):
+        raise TypeError(
+            f"Boolean spec values are not supported in forward_kwargs "
+            f"(got {spec!r}). Use 0 / 1 explicitly if you really meant a "
+            f"numeric flag, or wire the bool through a different mechanism."
+        )
+
     if isinstance(spec, (int, float)):
-        ### bool is a subclass of int, so True / False also resolves to 0-d float here.
         return torch.tensor(float(spec), dtype=torch.float32)
 
     if isinstance(spec, list):

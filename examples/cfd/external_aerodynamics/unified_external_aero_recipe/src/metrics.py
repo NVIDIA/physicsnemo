@@ -170,23 +170,29 @@ class MetricCalculator:
             for m in self.metric_names
         }
 
-    def _all_reduce(self, metrics: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def _all_reduce(self, metrics: TensorDict) -> TensorDict:
         if self.process_group is None:
             return metrics
         world_size = dist.get_world_size(self.process_group)
         if world_size == 1:
             return metrics
-        keys = list(metrics)
+        ### Single all_reduce over a stacked 1-D tensor (vs. one comm
+        ### per leaf) -- one collective beats N regardless of the
+        ### container type. Rebuild a TensorDict from the reduced
+        ### stack so callers see the same per-key access pattern.
+        keys = list(metrics.keys())
         stacked = torch.stack([metrics[k] for k in keys])
         dist.all_reduce(stacked, group=self.process_group)
         stacked = stacked / world_size
-        return {k: stacked[i] for i, k in enumerate(keys)}
+        return TensorDict(
+            {k: stacked[i] for i, k in enumerate(keys)}, batch_size=[]
+        )
 
     def __call__(
         self,
         pred: TensorDict,
         target: TensorDict,
-    ) -> dict[str, torch.Tensor]:
+    ) -> TensorDict:
         """Compute per-field metrics over a TensorDict pred / target pair.
 
         Args:
@@ -194,11 +200,13 @@ class MetricCalculator:
             target: TensorDict of the same structure as ``pred``.
 
         Returns:
-            Flat ``{key: scalar tensor}`` dict suitable for logging. Keys
-            are formed as ``"<prefix>/<name>_<metric>"`` for scalar
-            fields and as ``"<prefix>/<name>_<comp>_<metric>"`` plus
+            0-D ``TensorDict`` (``batch_size=[]``) keyed by
+            ``"<prefix>/<name>_<metric>"`` for scalar fields and by
+            ``"<prefix>/<name>_<comp>_<metric>"`` plus
             ``"<prefix>/<name>_<metric>"`` (aggregate magnitude) for
-            vector fields.
+            vector fields. Slash-containing keys are stored verbatim;
+            TensorDict only treats ``/`` as nested when the caller
+            explicitly invokes ``flatten_keys("/")``.
         """
         pred_keys = set(pred.keys())
         target_keys = set(target.keys())
@@ -211,6 +219,10 @@ class MetricCalculator:
                 f"target is missing target fields {sorted(missing_target)!r}"
             )
 
+        ### Build the per-field bag as a plain dict during the loop so
+        ### the inner ``out.update(...)`` calls stay simple, then wrap
+        ### into a 0-D TensorDict at the boundary so callers get
+        ### TensorDict's batched ops (``.detach()``, ``.add_()``, ...).
         out: dict[str, torch.Tensor] = {}
         with torch.no_grad():
             for name, field_type in self.target_config.items():
@@ -235,8 +247,7 @@ class MetricCalculator:
                     t_mag = torch.linalg.vector_norm(t, dim=-1)
                     out.update(self._metrics_for_tensor(p_mag, t_mag, (name,)))
 
-            out = self._all_reduce(out)
-        return out
+        return self._all_reduce(TensorDict(out, batch_size=[]))
 
     def __repr__(self) -> str:
         fields_str = ", ".join(f"{n}:{t}" for n, t in self.target_config.items())

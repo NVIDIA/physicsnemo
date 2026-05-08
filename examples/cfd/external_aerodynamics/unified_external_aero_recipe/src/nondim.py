@@ -26,7 +26,7 @@ Import this module before Hydra instantiation to register the transform.
 
 from __future__ import annotations
 
-from typing import Literal, TypeAlias, get_args
+from typing import Literal, TypeAlias
 
 import torch
 from jaxtyping import Float
@@ -34,7 +34,12 @@ from tensordict import TensorDict
 
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
-from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh import (
+    MESH_FIELD_ASSOCIATIONS,
+    DomainMesh,
+    Mesh,
+    MeshFieldAssociation,
+)
 
 ### Recognized non-dimensionalization recipes. Each names a specific
 ### algebraic transform applied to the matching field; see the
@@ -42,14 +47,6 @@ from physicsnemo.mesh import DomainMesh, Mesh
 NondimFieldType: TypeAlias = Literal[
     "pressure", "stress", "velocity", "temperature", "density", "identity"
 ]
-
-### Local mirror of `Mesh`'s three public data sections. Defined here so
-### the recipe doesn't take a typing dependency on `physicsnemo.mesh`.
-### Hydra hands us a plain `str` from YAML, so the runtime tuple
-### (derived from the `Literal` via `get_args`) is what actually guards
-### config-time validation.
-_MeshSection: TypeAlias = Literal["point_data", "cell_data", "global_data"]
-_MESH_SECTION_NAMES: tuple[_MeshSection, ...] = get_args(_MeshSection)
 
 
 def _freestream_scales(
@@ -177,7 +174,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
         fields: Mapping of ``{field_name: field_type}`` where *field_type*
             is one of ``"pressure"``, ``"stress"``, ``"velocity"``,
             ``"temperature"``, ``"density"``, or ``"identity"``.
-        section: Mesh data section containing the fields
+        association: Mesh field association containing the fields
             (``"point_data"`` or ``"cell_data"``).
 
     Example YAML::
@@ -186,18 +183,19 @@ class NonDimensionalizeByMetadata(MeshTransform):
           fields:
             pMeanTrim: pressure
             wallShearStressMeanTrim: stress
-          section: point_data
+          association: point_data
     """
 
     def __init__(
         self,
         fields: dict[str, NondimFieldType],
-        section: _MeshSection = "point_data",
+        association: MeshFieldAssociation = "point_data",
     ) -> None:
         super().__init__()
-        if section not in _MESH_SECTION_NAMES:
+        if association not in MESH_FIELD_ASSOCIATIONS:
             raise ValueError(
-                f"section must be one of {_MESH_SECTION_NAMES!r}, got {section!r}"
+                f"association must be one of {MESH_FIELD_ASSOCIATIONS!r}, "
+                f"got {association!r}"
             )
         for name, ftype in fields.items():
             if ftype not in _FIELD_TYPES:
@@ -206,7 +204,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
                     f"Must be one of {sorted(_FIELD_TYPES)}."
                 )
         self._fields = fields
-        self._section = section
+        self._association = association
 
     def _transform_mesh(
         self,
@@ -224,7 +222,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
                 ``(q_inf, p_inf, U_inf_mag, rho_inf, T_inf, L_ref)``
                 to use instead of deriving them from ``mesh.global_data``.
             skip_missing: If ``True``, silently skip fields not present in
-                the mesh section.
+                the mesh association.
         """
         if scales is not None:
             q_inf, p_inf, U_inf_mag, rho_inf, T_inf, L_ref = scales
@@ -233,8 +231,9 @@ class NonDimensionalizeByMetadata(MeshTransform):
             q_inf, p_inf, U_inf_mag, rho_inf, T_inf = _freestream_scales(gd)
             L_ref = gd["L_ref"].float() if "L_ref" in gd else None
 
-        ### Clone and non-dimensionalize the targeted section in place.
-        new_td = getattr(mesh, self._section).clone()
+        ### Clone and non-dimensionalize the targeted association's
+        ### TensorDict in place.
+        new_td = getattr(mesh, self._association).clone()
         for field_name, ftype in self._fields.items():
             if skip_missing and field_name not in new_td.keys():
                 continue
@@ -250,10 +249,10 @@ class NonDimensionalizeByMetadata(MeshTransform):
             )
 
         ### `Mesh.copy` is a tensorclass-provided shallow copy: `points`,
-        ### `cells`, the untouched data sections, and the geometric `_cache`
-        ### are all shared with `mesh`; only the cloned section is swapped.
+        ### `cells`, the untouched associations, and the geometric `_cache`
+        ### are all shared with `mesh`; only the cloned association is swapped.
         new_mesh = mesh.copy()  # ty: ignore[unresolved-attribute]
-        setattr(new_mesh, self._section, new_td)
+        setattr(new_mesh, self._association, new_td)
 
         ### Scale geometry into nondim space (`x* = x / L_ref`) on the
         ### forward pass, and back to physical units (`x = x* * L_ref`)
@@ -361,5 +360,70 @@ class NonDimensionalizeByMetadata(MeshTransform):
             idx += n
         return out
 
+    def inverse_td(
+        self,
+        td: TensorDict,
+        field_types: dict[str, NondimFieldType],
+        q_inf: Float[torch.Tensor, ""],
+        p_inf: Float[torch.Tensor, ""],
+        U_inf_mag: Float[torch.Tensor, ""],
+        *,
+        rho_inf: Float[torch.Tensor, ""] | None = None,
+        T_inf: Float[torch.Tensor, ""] | None = None,
+    ) -> TensorDict:
+        """Re-dimensionalize a per-field :class:`~tensordict.TensorDict`.
+
+        Companion to :meth:`inverse_tensor` for the per-field
+        TensorDict-keyed I/O flow used by recipes that consume named
+        prediction fields directly. Each leaf is independently
+        re-dimensionalized using the formula matching its
+        ``field_types`` entry; leaves whose names are absent from
+        ``field_types`` are passed through unchanged.
+
+        Args:
+            td: Per-field TensorDict whose leaves are non-dimensional
+                predictions keyed by field name.
+            field_types: Ordered mapping of ``{field_name: nondim_type}``
+                where *nondim_type* is one of ``"pressure"``, ``"stress"``,
+                ``"velocity"``, ``"temperature"``, ``"density"``, or
+                ``"identity"``. Names absent from *td* are silently skipped.
+            q_inf: Reference dynamic pressure (scalar or broadcastable).
+            p_inf: Reference static pressure (scalar or broadcastable).
+            U_inf_mag: Reference freestream-velocity magnitude.
+            rho_inf: Freestream density. Required when *field_types*
+                contains ``"density"``.
+            T_inf: Freestream temperature. Required when *field_types*
+                contains ``"temperature"``.
+
+        Returns:
+            New TensorDict (same keys, batch_size, and device as *td*)
+            whose leaves are in physical units.
+        """
+        ### `named_apply` walks every leaf and collects the per-leaf
+        ### return values into a fresh TensorDict (no separate clone
+        ### needed). Iteration is over `td`'s leaves rather than
+        ### `field_types`, so leaves whose names are absent from
+        ### `field_types` are returned unchanged -- equivalent to the
+        ### previous loop's "skip" branch on the recipe's flat per-
+        ### field TDs (one leaf per target name).
+        def _redim(name: str, val: torch.Tensor) -> torch.Tensor:
+            ftype = field_types.get(name)
+            if ftype is None:
+                return val
+            return _redim_field(
+                val,
+                ftype,
+                q_inf,
+                p_inf,
+                U_inf_mag,
+                rho_inf=rho_inf,
+                T_inf=T_inf,
+            )
+
+        ### `named_apply` is typed `TensorDict | None` because of the
+        ### in-place mode; we only ever use the out-of-place path so
+        ### the runtime type is always `TensorDict`.
+        return td.named_apply(_redim)  # ty: ignore[invalid-return-type]
+
     def extra_repr(self) -> str:
-        return f"fields={self._fields}, section={self._section}"
+        return f"fields={self._fields}, association={self._association!r}"

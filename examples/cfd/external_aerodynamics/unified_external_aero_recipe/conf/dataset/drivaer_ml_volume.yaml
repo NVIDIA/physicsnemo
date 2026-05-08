@@ -62,7 +62,7 @@ pipeline:
         UMeanTrim: velocity
         pMeanTrim: pressure
         nutMeanTrim: identity
-      section: point_data
+      association: point_data
     - _target_: ${dp:ComputeSDFFromBoundary}
       boundary_name: stl_geometry
       sdf_field: sdf
@@ -76,7 +76,7 @@ pipeline:
         pMeanTrim: pressure
         nutMeanTrim: nut
     - _target_: ${dp:NormalizeMeshFields}
-      section: point_data
+      association: point_data
       fields:
         nut: {type: scalar, mean: 4.8e-4, std: 9.4e-4}
     # No terminal MeshToTensorDict / RestructureTensorDict: the volume YAML
