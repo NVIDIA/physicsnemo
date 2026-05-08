@@ -57,7 +57,6 @@ from physicsnemo.datapipes.transforms.mesh import (
     SetGlobalField,
     SubsampleMesh,
     TranslateMesh,
-    apply_to_tensordict_mesh,
 )
 from physicsnemo.datapipes.transforms.normalize import Normalize
 from physicsnemo.datapipes.transforms.spatial import (
@@ -109,7 +108,6 @@ __all__ = [
     "ConstantField",
     # Mesh
     "MeshTransform",
-    "apply_to_tensordict_mesh",
     "ComputeCellCentroids",
     "ComputeSurfaceNormals",
     "ScaleMesh",

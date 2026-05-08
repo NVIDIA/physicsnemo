@@ -57,15 +57,17 @@ simulated data.  We observe that the error in each of these cases is relatively 
 
 We will demonstrate the use of data loss and physics constraints,
 specifically the equation residual loss, to create accurate predictions.
-the `physicsnemo.sym` module (install with `pip install "nvidia-physicsnemo[sym]"`)
-has utilities tailored for physics-informed machine learning. It also presents
-abstracted APIs that allow users to think and model the problem from the lens of
-equations, constraints, etc. In this example, we will only leverage the physics-informed
-utilities to see how we can add physics to an existing data-driven model with ease while
-still maintaining the flexibility to define our own training loop and other details.
-For a more abstracted definition of these type of problems, where the training loop
-definition and other things is taken care of implicitly, you may refer
-the `physicsnemo.sym` module (install with `pip install "nvidia-physicsnemo[sym]"`)
+The `physicsnemo.sym` module (install with `pip install "nvidia-physicsnemo[sym]"`)
+has utilities tailored for physics-informed machine learning, and we leverage them
+here to add physics to an existing data-driven model with ease while keeping a
+fully explicit training loop.
+
+If you previously used the (now archived)
+[`physicsnemo-sym`](https://github.com/NVIDIA/physicsnemo-sym) repository,
+where the `Solver` / `Domain` / `Constraint` abstractions handled the
+training loop and physics losses implicitly, see the
+[PhysicsNeMo v2.0 Migration Guide](../../../v2.0-MIGRATION-GUIDE.md#physicsnemo-sym--physicsnemosym)
+for how the equivalent pieces look in this newer, explicit style.
 
 ## Dataset
 

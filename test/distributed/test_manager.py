@@ -33,6 +33,18 @@ distributed_test = pytest.mark.skipif(
 
 
 @pytest.fixture(autouse=True)
+def clean_distributed_state():
+    """Ensure torch.distributed and DistributedManager are clean for each test."""
+    DistributedManager._shared_state = {}
+    if torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
+    yield
+    DistributedManager._shared_state = {}
+    if torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
+
+
+@pytest.fixture(autouse=True)
 def skip_on_cpu(device):
     if device == "cpu":
         pytest.skip("Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu")

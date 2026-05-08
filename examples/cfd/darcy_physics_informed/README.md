@@ -7,16 +7,18 @@ Numerical derivatives (PINO).
 ## Problem overview
 
 This is an extension of the 2D Darcy flow data-driven problem. In addition to the
-data loss, we will demonstrate the use of physics constranints, specifically
-the equation residual loss. the `physicsnemo.sym` module (install with `pip install "nvidia-physicsnemo[sym]"`)
-has utilities tailored for physics-informed machine learning. It also presents an
-abstracted APIs that allows users to think and model the problem from the lens of
-equations, constraints, etc. In this example, we will only levarage the physics-informed
-utilities to see how we can add physics to an existing data-driven model with ease while
-still maintaining the flexibility to define our own training loop and other details.
-For a more abstracted definition of these type of problems, where the training loop
-definition and other things is taken care of implictily, you may refer
-the `physicsnemo.sym` module (install with `pip install "nvidia-physicsnemo[sym]"`)
+data loss, we will demonstrate the use of physics constraints, specifically
+the equation residual loss. The `physicsnemo.sym` module
+(install with `pip install "nvidia-physicsnemo[sym]"`) has utilities tailored for
+physics-informed machine learning, and we leverage them here to add physics to an
+existing data-driven model with ease while keeping a fully explicit training loop.
+
+If you previously used the (now archived)
+[`physicsnemo-sym`](https://github.com/NVIDIA/physicsnemo-sym) repository,
+where the `Solver` / `Domain` / `Constraint` abstractions handled the
+training loop and physics losses implicitly, see the
+[PhysicsNeMo v2.0 Migration Guide](../../../v2.0-MIGRATION-GUIDE.md#physicsnemo-sym--physicsnemosym)
+for how the equivalent pieces look in this newer, explicit style.
 
 ## Dataset
 

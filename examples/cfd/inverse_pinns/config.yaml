@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+training:
+  max_steps: 50000
+  log_freq: 1000
+  batch_size: 1024
+
+scheduler:
+  initial_lr: 1.e-3
+  decay_rate: 0.95
+  decay_steps: 500
+
+# How to parameterise the unknown coefficients (nu, D).
+#  - ``scalar``: a single learnable scalar per coefficient (in log-space, so
+#    positivity is enforced). The right inductive bias when the truth is a
+#    constant. Default.
+#  - ``field``:  an MLP coords -> coefficient, i.e. a spatial field. Use when
+#    the unknown could vary spatially (e.g. heterogeneous porous medium).
+inversion:
+  mode: scalar
+  init_value: 0.1  # only used by ``scalar`` mode
+
+# Per-residual weights inside the physics loss. The advection-diffusion
+# residual is naturally much smaller than the Navier-Stokes residuals on this
+# dataset (because the scaled temperature ``c = T/T_base - 1`` is O(0.1)), but
+# our experiments show that boosting ``ad`` does not actually improve ``D``
+# recovery -- so the default is uniform weighting. Override via the CLI
+# (e.g. ``loss_weights.ad=10.0``) if you want to experiment.
+loss_weights:
+  ns: 1.0
+  ad: 1.0
+
+data:
+  csv_url: "https://api.ngc.nvidia.com/v2/resources/org/nvidia/team/physicsnemo/physicsnemo_sym_examples_supplemental_materials/0.0.1/files?redirect=true&path=examples/three_fin_2d/openfoam/heat_sink_Pr5_clipped2.csv"
+  csv_file: "heat_sink_Pr5_clipped2.csv"
+  base_temp: 293.498

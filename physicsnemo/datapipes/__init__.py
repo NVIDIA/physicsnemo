@@ -96,7 +96,6 @@ from physicsnemo.datapipes.transforms import (
     Transform,
     Translate,
     TranslateMesh,
-    apply_to_tensordict_mesh,
 )
 
 # Auto-register OmegaConf resolvers so ${dp:ComponentName} works in Hydra configs
@@ -142,7 +141,6 @@ __all__ = [
     "ComputeCellCentroids",
     "ComputeSurfaceNormals",
     "MeshToTensorDict",
-    "apply_to_tensordict_mesh",
     "ScaleMesh",
     "TranslateMesh",
     "RotateMesh",

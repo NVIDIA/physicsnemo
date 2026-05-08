@@ -19,14 +19,35 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 import numpy as np
 import torch
-
 from omegaconf import DictConfig
+from tensordict import TensorDict
+
 from physicsnemo.optim import CombinedOptimizer
+
+if TYPE_CHECKING:
+    from nondim import NondimFieldType, NonDimensionalizeByMetadata
+    from physicsnemo.datapipes.transforms.mesh import NormalizeMeshFields
+
+### Recipe-wide type aliases. Re-exported for use in loss.py, metrics.py,
+### output_normalize.py, forward_kwargs.py, collate.py, train.py, and the
+### tests so that ``target_config`` values share a single source of truth.
+FieldType: TypeAlias = Literal["scalar", "vector"]
+
+### Default mapping from a field's `target_config` type to the nondim
+### recipe used by `NonDimensionalizeByMetadata`. Surface CFD predictions
+### follow this convention by default (pressure scalars are non-dim'd as
+### Cp; vector fields like wall shear stress are non-dim'd as Cf via the
+### dynamic-pressure scaling). Override per-field via
+### `nondim_type_overrides` when a field doesn't follow it (e.g.
+### temperature scalars or velocity vectors).
+_DEFAULT_NONDIM_TYPE_FROM_FIELD_TYPE: dict[FieldType, "NondimFieldType"] = {
+    "scalar": "pressure",
+    "vector": "stress",
+}
 
 
 def set_seed(seed: int | None, rank: int = 0) -> None:
@@ -54,15 +75,12 @@ def build_muon_optimizer(
     Muon handles 2-D parameters (linear/attention weight matrices) while AdamW
     handles everything else (biases, layer-norm, embeddings, etc.).
 
-    Parameters
-    ----------
-    model : torch.nn.Module
-        The model (may be DDP-wrapped).
-    cfg : DictConfig
-        Full Hydra config.  Reads ``cfg.training.optimizer.*`` for lr,
-        weight_decay, betas, and eps.
-    compile_optimizer : bool
-        If True, compile the optimizer step functions with ``torch.compile``.
+    Args:
+        model: The model (may be DDP-wrapped).
+        cfg: Full Hydra config. Reads ``cfg.training.optimizer.*`` for lr,
+            weight_decay, betas, and eps.
+        compile_optimizer: If True, compile the optimizer step functions
+            with ``torch.compile``.
     """
     base_model = model.module if hasattr(model, "module") else model
     muon_params = [p for p in base_model.parameters() if p.ndim == 2]
@@ -115,145 +133,167 @@ def build_muon_optimizer(
 
 
 # ---------------------------------------------------------------------------
-# Field specification for target configurations
+# Field type helpers for target configurations
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class FieldSpec:
-    """Specification for a single target field.
+def field_dim(field_type: FieldType, n_spatial_dims: int = 3) -> int:
+    """Number of channels a single ``"scalar"`` or ``"vector"`` field occupies.
 
-    Attributes:
-        name: Human-readable name for the field (used in metric/loss keys).
-        field_type: Either "scalar" or "vector".
-        start_index: Starting index in the channel dimension.
-        end_index: Ending index (exclusive) in the channel dimension.
-    """
-
-    name: str
-    field_type: Literal["scalar", "vector"]
-    start_index: int
-    end_index: int
-
-    @property
-    def dim(self) -> int:
-        """Number of channels for this field."""
-        return self.end_index - self.start_index
-
-
-def parse_target_config(
-    target_config: dict[str, str], n_spatial_dims: int = 3
-) -> list[FieldSpec]:
-    """Parse target configuration to field specifications.
+    The type tag is always lowercase by contract -- the recipe normalises
+    YAML inputs at the LossCalculator / MetricCalculator boundary. Pass
+    pre-lowercased strings here.
 
     Args:
-        target_config: Mapping of field names to types ("scalar" or "vector").
-                      Order determines channel indices.
-        n_spatial_dims: Dimensionality of vector fields. Default is 3.
-
-    Returns:
-        List of FieldSpec objects describing each field.
+        field_type: ``"scalar"`` or ``"vector"``.
+        n_spatial_dims: Dimensionality of vector fields. Default 3.
 
     Raises:
-        ValueError: If an unknown field type is specified.
-
-    Example:
-        >>> config = {"pressure": "scalar", "velocity": "vector"}
-        >>> specs = parse_target_config(config)
-        >>> specs[0]
-        FieldSpec(name='pressure', field_type='scalar', start_index=0, end_index=1)
-        >>> specs[1]
-        FieldSpec(name='velocity', field_type='vector', start_index=1, end_index=4)
+        ValueError: If ``field_type`` is not ``"scalar"`` or ``"vector"``.
     """
-    specs = []
-    current_index = 0
-
-    for name, field_type in target_config.items():
-        field_type = field_type.lower()
-        if field_type == "scalar":
-            dim = 1
-        elif field_type == "vector":
-            dim = n_spatial_dims
-        else:
-            raise ValueError(
-                f"Unknown field type '{field_type}' for field '{name}'. "
-                "Expected 'scalar' or 'vector'."
-            )
-
-        specs.append(
-            FieldSpec(
-                name=name,
-                field_type=field_type,
-                start_index=current_index,
-                end_index=current_index + dim,
-            )
-        )
-        current_index += dim
-
-    return specs
+    if field_type == "scalar":
+        return 1
+    if field_type == "vector":
+        return n_spatial_dims
+    raise ValueError(
+        f"Unknown field type {field_type!r}. Expected 'scalar' or 'vector'."
+    )
 
 
-# This function, below, is to turn non-dimensionalized data back into
-# dimensional data.  It's useful for inference scripts which may want to compute
-# metrics on dimensional data, of course.
+def align_scalar_shapes(
+    p: torch.Tensor, t: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Align a ``(...)`` / ``(..., 1)`` shape mismatch by squeezing one side.
 
-# It's not used at the moment.  But it will be, in the near future, so while it's
-# dead code currently it won't be for long.
+    Used in scalar-field loss / metric paths where the prediction may
+    arrive as ``(B, N, 1)`` (sliced from a concatenated ``(B, N, C)``
+    tensor before squeeze) while the target is ``(B, N)`` (per-element
+    scalar from a TensorDict), or vice versa. After alignment both
+    tensors share the same shape (or were already equal-shape).
+    """
+    if p.ndim > t.ndim and p.shape[-1] == 1:
+        p = p.squeeze(-1)
+    elif t.ndim > p.ndim and t.shape[-1] == 1:
+        t = t.squeeze(-1)
+    return p, t
 
-_NONDIM_TYPE_MAP = {"scalar": "pressure", "vector": "stress"}
+
+def validate_field_coverage(
+    target_config: dict[str, FieldType],
+    pred: TensorDict,
+    target: TensorDict,
+) -> None:
+    """Raise ``KeyError`` if *pred* or *target* is missing any field in *target_config*.
+
+    Shared precondition check at the top of :class:`loss.LossCalculator` and
+    :class:`metrics.MetricCalculator`. The error message identifies which
+    side (``pred`` vs ``target``) is missing fields so config bugs surface
+    against the right tensor.
+    """
+    for label, source in (("pred", pred), ("target", target)):
+        missing = set(target_config) - set(source.keys())
+        if missing:
+            raise KeyError(f"{label} is missing target fields {sorted(missing)!r}")
 
 
-def _to_physical(
-    tensor: torch.Tensor,
-    target_config: dict[str, str],
-    normalizer,
-    nondim_transform,
-    metadata: dict,
-    nondim_type_overrides: dict[str, str] | None = None,
-) -> torch.Tensor:
-    """Convert a model-space tensor (normalized + non-dim) back to physical units.
+# ---------------------------------------------------------------------------
+# Re-dimensionalization (model-space -> physical units)
+# ---------------------------------------------------------------------------
 
-    Chains two inverse operations using the existing transform instances:
-    1. ``NormalizeMeshFields.inverse_tensor`` -- undo z-score normalization
-    2. ``NonDimensionalizeByMetadata.inverse_tensor`` -- undo non-dimensionalization
+
+def to_physical_units(
+    pred_td: TensorDict,
+    target_config: dict[str, FieldType],
+    normalizer: "NormalizeMeshFields | None",
+    nondim_transform: "NonDimensionalizeByMetadata | None",
+    metadata: dict[str, Any],
+    nondim_type_overrides: dict[str, "NondimFieldType"] | None = None,
+) -> TensorDict:
+    """Convert a per-field model-space TensorDict back to physical units.
+
+    Symmetric inverse of the dataset's normalize + non-dim pipeline.
+    Chains the two existing per-field inverses (rather than going via
+    a flat tensor) so the inference path can stay TensorDict-native:
+
+    1. :meth:`NormalizeMeshFields.inverse_td` undoes z-score
+       normalization (additive shift / multiplicative scale per field).
+    2. :meth:`NonDimensionalizeByMetadata.inverse_td` undoes the
+       freestream-conditioned non-dimensionalization
+       (e.g. Cp -> p in Pa).
+
+    Either step is skipped if the corresponding transform is ``None``,
+    so callers can use this with a partially-configured pipeline (e.g.
+    a model that was only normalized, or only non-dim'd).
 
     Parameters
     ----------
-    nondim_type_overrides : dict or None
-        Optional per-field mapping of ``{field_name: nondim_type}`` (e.g.
-        ``{"temperature": "temperature", "density": "density"}``).  When
-        provided, overrides the default ``_NONDIM_TYPE_MAP`` lookup for
-        fields that don't follow the simple scalar=pressure / vector=stress
-        convention.
+    pred_td : TensorDict
+        Predictions keyed by field name, in model-space (post-normalize,
+        post-nondim). Each leaf can be any shape.
+    target_config : dict[str, FieldType]
+        ``{field_name: "scalar"|"vector"}`` for every key in
+        ``pred_td``. Drives the default nondim recipe lookup
+        (``scalar`` -> ``pressure``, ``vector`` -> ``stress``).
+    normalizer : NormalizeMeshFields | None
+        The dataset's normalizer (or ``None`` to skip the inverse-norm
+        step).
+    nondim_transform : NonDimensionalizeByMetadata | None
+        The dataset's non-dim transform (or ``None`` to skip the
+        inverse-nondim step).
+    metadata : dict[str, Any]
+        Freestream conditions used to compute reference scales:
+        requires ``U_inf`` and ``rho_inf`` (and ``p_inf`` for pressure-
+        like fields). ``T_inf`` is required only when a field is mapped
+        to ``"temperature"``. Each value is coerced to a 0-D float32
+        tensor (matching the convention of
+        :func:`nondim.freestream_scales`); float32 scales stay
+        precision-stable through the inverse multiply even when
+        ``pred_td`` is in bfloat16 / fp16.
+    nondim_type_overrides : dict[str, NondimFieldType] | None
+        Per-field overrides to the default nondim-type lookup. Use for
+        fields where the default ``scalar -> pressure`` /
+        ``vector -> stress`` mapping doesn't apply (e.g.
+        ``{"temperature": "temperature"}``).
+
+    Returns
+    -------
+    TensorDict
+        New TensorDict (same keys, batch_size, and device as *pred_td*)
+        with leaves in physical units. Returned as-is when both
+        transforms are ``None`` and *metadata* is empty (no work to do).
     """
-    if not metadata:
-        return tensor
+    if normalizer is None and (nondim_transform is None or not metadata):
+        return pred_td
 
-    out = tensor
-    device, dtype = tensor.device, tensor.dtype
-
-    # Step 1: undo z-score normalization
+    out = pred_td
     if normalizer is not None:
-        out = normalizer.inverse_tensor(out, target_config)
+        out = normalizer.inverse_td(out)
 
-    # Step 2: undo non-dimensionalization
-    if nondim_transform is not None:
+    if nondim_transform is not None and metadata:
+        ### Lazy import keeps the recipe's module-level dependency graph
+        ### narrow -- ``utils`` is at the bottom of the import chain and
+        ### only ``to_physical_units`` reaches into the non-dim module.
+        from nondim import freestream_scales
+
+        ### Build a 0-D TensorDict from the YAML-decoded ``metadata``
+        ### dict so we can delegate the q_inf / U_inf_mag math to the
+        ### canonical ``freestream_scales`` helper rather than
+        ### reimplementing it here. Cast each entry to float32 to
+        ### match ``freestream_scales``'s convention (precision-stable
+        ### reference scales, even when ``pred_td`` is bfloat16 / fp16).
+        metadata_td = TensorDict(
+            {k: torch.as_tensor(v, dtype=torch.float32) for k, v in metadata.items()},
+        )
+        q_inf, p_inf, U_inf_mag, rho_inf, T_inf = freestream_scales(metadata_td)
+
+        ### Resolve each field's nondim recipe: explicit override wins,
+        ### otherwise fall back on the scalar/vector default mapping.
         overrides = nondim_type_overrides or {}
-        nondim_fields = {
-            name: overrides.get(name, _NONDIM_TYPE_MAP.get(ftype, ftype))
+        nondim_fields: dict[str, NondimFieldType] = {
+            name: overrides.get(name, _DEFAULT_NONDIM_TYPE_FROM_FIELD_TYPE[ftype])
             for name, ftype in target_config.items()
         }
-        U_inf = torch.tensor(metadata["U_inf"], dtype=dtype, device=device)
-        rho_inf = torch.tensor(metadata["rho_inf"], dtype=dtype, device=device)
-        p_inf = torch.tensor(metadata["p_inf"], dtype=dtype, device=device)
-        q_inf = 0.5 * rho_inf * (U_inf * U_inf).sum()
-        U_inf_mag = (U_inf * U_inf).sum().sqrt()
-
-        T_inf = None
-        if "T_inf" in metadata:
-            T_inf = torch.tensor(metadata["T_inf"], dtype=dtype, device=device)
-
-        out = nondim_transform.inverse_tensor(
+        out = nondim_transform.inverse_td(
             out,
             nondim_fields,
             q_inf,

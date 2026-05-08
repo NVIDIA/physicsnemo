@@ -15,7 +15,11 @@
 # limitations under the License.
 
 """
-Base for mesh transforms: Mesh -> Mesh and TensorDict[str, Mesh] -> TensorDict[str, Mesh].
+Base for mesh transforms (Mesh -> Mesh).
+
+To apply a :class:`MeshTransform` across a ``TensorDict[str, Mesh]``,
+use the underlying TensorDict API:
+``td.apply(transform, call_on_nested=True)``.
 """
 
 from __future__ import annotations
@@ -24,39 +28,17 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 import torch
-from tensordict import TensorDict
 
 from physicsnemo.mesh import DomainMesh, Mesh
-
-
-def apply_to_tensordict_mesh(
-    data: TensorDict,
-    transform: MeshTransform,
-) -> TensorDict:
-    """Apply a Mesh -> Mesh transform to each value in a TensorDict of Mesh.
-
-    Parameters
-    ----------
-    data : TensorDict
-        TensorDict whose values are Mesh instances.
-    transform : MeshTransform
-        Transform instance; called on each mesh.
-
-    Returns
-    -------
-    TensorDict
-        New TensorDict with transformed meshes (same keys).
-    """
-    out = {k: transform(v) for k, v in data.items()}
-    return TensorDict(out, batch_size=[])
 
 
 class MeshTransform(ABC):
     r"""
     Base for transforms that take a Mesh and return a Mesh.
 
-    Use for single-mesh pipelines. For multi-mesh (TensorDict[str, Mesh]),
-    apply the same transform to each value or use apply_to_tensordict_mesh.
+    Use for single-mesh pipelines. To broadcast across a multi-mesh
+    container (``TensorDict[str, Mesh]``), use the TensorDict API
+    directly: ``td.apply(transform, call_on_nested=True)``.
     """
 
     def __init__(self) -> None:
