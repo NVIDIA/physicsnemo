@@ -124,47 +124,6 @@ def _flatten_config(
     return items
 
 
-def _avg_to_floats(
-    total_losses_td: TensorDict | None,
-    total_metrics_td: TensorDict | None,
-    n: int,
-) -> tuple[dict[str, float], dict[str, float]]:
-    """Divide on-device accumulators by *n* and convert to floats with one D2H transfer.
-
-    Stacks the per-field 0-D tensors from both TensorDicts into a
-    single 1-D tensor, divides once, then ``.tolist()`` issues a
-    single blocking D2H copy that produces a plain list of Python
-    floats. Cheaper than calling ``(v / n).item()`` on each leaf
-    individually -- N small copies become one larger copy with one
-    sync instead of N.
-
-    Either accumulator being ``None`` (the "not yet seeded" sentinel
-    used for zero-step epochs) returns ``({}, {})``.
-    """
-    if total_losses_td is None or total_metrics_td is None:
-        return {}, {}
-    ### `cast` is for the static type checker only -- our calculators
-    ### only ever build flat 0-D TensorDicts whose keys are str and
-    ### whose leaves are scalar tensors, so the wider TensorDict API
-    ### (tuple keys for nested access, ``TensorCollection`` leaves)
-    ### never appears at runtime. Casting once on construction keeps
-    ### the ``torch.stack`` / ``dict(zip(...))`` calls below cleanly
-    ### typed without scattering casts everywhere.
-    loss_keys = cast(list[str], list(total_losses_td.keys()))
-    metric_keys = cast(list[str], list(total_metrics_td.keys()))
-    loss_tensors = cast(list[torch.Tensor], [total_losses_td[k] for k in loss_keys])
-    metric_tensors = cast(
-        list[torch.Tensor], [total_metrics_td[k] for k in metric_keys]
-    )
-    stacked = torch.stack(loss_tensors + metric_tensors) / n
-    flat = stacked.tolist()
-    n_loss = len(loss_keys)
-    return (
-        dict(zip(loss_keys, flat[:n_loss])),
-        dict(zip(metric_keys, flat[n_loss:])),
-    )
-
-
 def _log_to_tensorboard(
     writer: SummaryWriter | None,
     values: Mapping[str, float | torch.Tensor],
@@ -567,11 +526,35 @@ def _run_epoch(
     epoch_dt = time.perf_counter() - epoch_t0
     n = max(n_batches, 1)
     avg_loss = total_loss / n
-    ### One batched D2H transfer for both dicts: stack into a single 1-D
-    ### tensor, divide once, then `.tolist()` syncs once and produces a
-    ### plain list of floats. Avoids N back-to-back `.item()` calls and
-    ### gives the GPU one large copy instead of N tiny ones.
-    avg_losses, avg_metrics = _avg_to_floats(total_losses_td, total_metrics_td, n)
+    ### Convert the on-device per-field accumulators to Python floats
+    ### with a single batched D2H transfer: stack both dicts' 0-D
+    ### tensors into a single 1-D tensor, divide once, then ``tolist``
+    ### issues one blocking copy that produces a plain list of floats.
+    ### Avoids N back-to-back ``.item()`` calls (one large copy
+    ### instead of N tiny ones). The two accumulators are seeded
+    ### together (see the loop above), so the ``None`` check covers
+    ### the zero-step epoch case.
+    if total_losses_td is None or total_metrics_td is None:
+        avg_losses: dict[str, float] = {}
+        avg_metrics: dict[str, float] = {}
+    else:
+        ### `cast` is for the static type checker only -- our
+        ### calculators only ever build flat 0-D TensorDicts whose
+        ### keys are str and whose leaves are scalar Tensors, so the
+        ### wider TensorDict API (tuple keys, ``TensorCollection``
+        ### leaves) never appears at runtime.
+        loss_keys = cast(list[str], list(total_losses_td.keys()))
+        metric_keys = cast(list[str], list(total_metrics_td.keys()))
+        loss_tensors = cast(
+            list[torch.Tensor], [total_losses_td[k] for k in loss_keys]
+        )
+        metric_tensors = cast(
+            list[torch.Tensor], [total_metrics_td[k] for k in metric_keys]
+        )
+        flat = (torch.stack(loss_tensors + metric_tensors) / n).tolist()
+        n_loss = len(loss_keys)
+        avg_losses = dict(zip(loss_keys, flat[:n_loss]))
+        avg_metrics = dict(zip(metric_keys, flat[n_loss:]))
 
     logger.info(
         f"Epoch {epoch} {mode} done in {epoch_dt:.1f}s "
