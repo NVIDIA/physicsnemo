@@ -12,16 +12,14 @@ a number of recipes, across a range of models, all working on different models
 with unique data handling, pipelines, model architectures, metrics, training
 paradigms, etc.  While there is nothing wrong with that, it does make comparison
 challenging and development of new models somewhat challenging.  In this folder,
-we have unified the external aerodynamic recipes for most of our best models.
+we have unified the external aerodynamic recipes for most of our best models (notably
+missing is our newest model, still in development for large 3D use cases: GLOBE).
 
 Here, you're able to train the following models:
 - [Transolver](https://arxiv.org/abs/2402.02366)
 - [GeoTransolver](https://arxiv.org/abs/2512.20399)
 - [FLARE](https://arxiv.org/abs/2508.12594)
 - GeoTransolver also supports using the FLARE attention mechanism backend
-- [GLOBE](https://arxiv.org/abs/2511.15856) (mesh-native; first member of a
-  growing class of models that consume Mesh / DomainMesh objects directly
-  rather than flat tensor batches).
 - DoMINO is coming shortly
 
 We currently support the following datasets:
@@ -323,8 +321,6 @@ Available training configs:
 | `train_flare_automotive_volume` | FLARE | Automotive volume (U, p, nut) |
 | `train_highlift_surface` | GeoTransolver | High-lift surface (P, T, rho, U, tau_wall) |
 | `train_highlift_volume` | GeoTransolver | High-lift volume (P, T, rho, U) |
-| `train_globe_automotive_surface` | GLOBE | Automotive surface (Cp, Cf) |
-| `train_globe_automotive_volume` | GLOBE | Automotive volume (U, p, nut) |
 | `train_domino_automotive_surface` | DoMINO | Automotive surface (Cp, Cf) - **DRAFT, does not run yet**: dataset pipeline doesn't expose the per-cell neighbor / grid features DoMINO needs |
 | `train_domino_automotive_volume` | DoMINO | Automotive volume (U, p, nut) - **DRAFT, does not run yet**: same reason |
 
@@ -429,7 +425,7 @@ pipeline:
   reader:
     _target_: ${dp:MeshReader}
     path: ${train_datadir}
-    pattern: "**/*.pdmsh/_tensordict/boundaries/surface"
+    pattern: "**/*.pdmsh/_tensordict/boundaries/vehicle"
     subsample_n_cells: ${sampling_resolution}
   augmentations:
     - _target_: ${dp:RandomRotateMesh}
@@ -450,13 +446,13 @@ pipeline:
       fields:
         pMeanTrim: pressure
         wallShearStressMeanTrim: stress
-      section: cell_data
+      association: cell_data
     - _target_: ${dp:RenameMeshFields}
       cell_data:
         pMeanTrim: pressure
         wallShearStressMeanTrim: wss
     - _target_: ${dp:NormalizeMeshFields}
-      section: cell_data
+      association: cell_data
       fields:
         wss: {type: vector, mean: [0.0, 0.0, 0.0], std: 0.00313}
     - _target_: ${dp:ComputeSurfaceNormals}
@@ -520,9 +516,8 @@ For datasets without a manifest (e.g. SHIFT SUV), separate
    Use `MeshReader` for single-mesh files or `DomainMeshReader` for
    domain meshes that contain both interior and boundary sub-meshes.
 3. Declare the correct `metadata:` block with freestream conditions.
-4. Choose the right `section:` (`point_data` or `cell_data`) in
-   `NonDimensionalizeByMetadata`, `RenameMeshFields`, and
-   `NormalizeMeshFields`.
+4. Choose the right `association:` (`point_data` or `cell_data`) in
+   `NonDimensionalizeByMetadata` and `NormalizeMeshFields`.
 5. For cell-based surface data, add `ComputeSurfaceNormals` to compute
    per-cell normals (kept on the boundary's `cell_data`).
 6. Add inline normalization stats to `NormalizeMeshFields` (or point

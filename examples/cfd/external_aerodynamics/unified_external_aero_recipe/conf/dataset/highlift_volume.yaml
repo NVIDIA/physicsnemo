@@ -62,7 +62,7 @@ pipeline:
     #     avg(T): temperature
     #     avg(rho): density
     #     avg(u): velocity
-    #   section: point_data
+    #   association: point_data
     - _target_: ${dp:ComputeSDFFromBoundary}
       boundary_name: stl_geometry
       sdf_field: sdf
@@ -78,7 +78,7 @@ pipeline:
         avg(u): velocity
     # z-score normalization — leave empty until stats are computed
     # - _target_: ${dp:NormalizeMeshFields}
-    #   section: point_data
+    #   association: point_data
     #   fields: {}
     # No terminal MeshToTensorDict / RestructureTensorDict: the volume YAML
     # already produces a DomainMesh natively. Each model YAML's

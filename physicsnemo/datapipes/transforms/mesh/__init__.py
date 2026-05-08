@@ -17,8 +17,9 @@
 """
 Mesh transforms and augmentations.
 
-Transforms operate on Mesh (single-mesh) or TensorDict[str, Mesh] (multi-mesh).
-Type-based only; no key-based filtering.
+Transforms operate on Mesh (single-mesh) or, via ``td.apply(transform,
+call_on_nested=True)``, on a ``TensorDict[str, Mesh]``. Type-based
+only; no key-based filtering.
 """
 
 from physicsnemo.datapipes.transforms.mesh.augmentations import (
@@ -26,10 +27,7 @@ from physicsnemo.datapipes.transforms.mesh.augmentations import (
     RandomScaleMesh,
     RandomTranslateMesh,
 )
-from physicsnemo.datapipes.transforms.mesh.base import (
-    MeshTransform,
-    apply_to_tensordict_mesh,
-)
+from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.datapipes.transforms.mesh.transforms import (
     CenterMesh,
     ComputeCellCentroids,
@@ -49,7 +47,6 @@ from physicsnemo.datapipes.transforms.mesh.transforms import (
 
 __all__ = [
     "MeshTransform",
-    "apply_to_tensordict_mesh",
     "ComputeCellCentroids",
     "ComputeSurfaceNormals",
     "ScaleMesh",

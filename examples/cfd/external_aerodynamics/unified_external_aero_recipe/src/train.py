@@ -37,12 +37,11 @@ import json
 import logging
 import os
 import time
-from collections import defaultdict
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal, TypeAlias, cast
 
 import hydra
 import omegaconf
@@ -51,9 +50,12 @@ from collate import build_collate_fn
 from datasets import (
     ManifestSampler,
     build_dataset,
+    find_normalizer,
     load_dataset_config,
     load_manifest,
     resolve_manifest_indices,
+    resolve_manifest_spec,
+    validate_dataset_consistency,
 )
 from loss import LossCalculator
 from metrics import DEFAULT_METRICS, MetricCalculator, MetricName
@@ -70,7 +72,7 @@ from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes import DataLoader, MeshDataset, MultiDataset
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh import MESH_FIELD_ASSOCIATIONS, DomainMesh, Mesh
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.utils.profiling import Profiler, profile
@@ -79,11 +81,7 @@ te = OptionalImport("transformer_engine.pytorch")
 te_recipe = OptionalImport("transformer_engine.common.recipe")
 TE_AVAILABLE = te.available
 
-### Module-level logger used for warnings emitted from helpers that run
-### before the rank-aware training logger is constructed in `main()`
-### (e.g. `build_dataloaders`). Goes through the same Python logging
-### pipeline as `PythonLogger`, so it shows up in the configured handlers.
-_LOGGER_BUILD_DATALOADERS = logging.getLogger("training.build_dataloaders")
+_LOGGER = logging.getLogger("training.build_dataloaders")
 
 ### When `cfg.profile` is set, every train / val epoch breaks out of its
 ### batch loop after this many steps. Keeps profiling traces short enough
@@ -122,24 +120,47 @@ def _flatten_config(
     return items
 
 
+def _to_float_dicts(
+    losses_td: TensorDict | None,
+    metrics_td: TensorDict | None,
+    *,
+    n: int = 1,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Stack both TDs' 0-D leaves, divide by *n*, and ``.tolist()`` in one D2H sync.
+
+    Used at both per-step (``n=1``) and per-epoch (``n=batch_count``)
+    boundaries: collapses ``2 * n_fields`` ``.item()`` calls into a single
+    ``.tolist()`` over a stacked 1-D tensor. Either TD being ``None``
+    (the "not yet seeded" sentinel for zero-step epochs) returns
+    ``({}, {})``.
+    """
+    if losses_td is None or metrics_td is None:
+        return {}, {}
+    ### Bridge TensorDict's wider key/value types to the runtime contract
+    ### this recipe enforces: every loss / metric leaf is a 0-D scalar
+    ### Tensor keyed by str.
+    loss_keys = cast(list[str], list(losses_td.keys()))
+    metric_keys = cast(list[str], list(metrics_td.keys()))
+    loss_tensors = cast(list[torch.Tensor], list(losses_td.values()))
+    metric_tensors = cast(list[torch.Tensor], list(metrics_td.values()))
+    flat = (torch.stack(loss_tensors + metric_tensors) / n).tolist()
+    n_loss = len(loss_keys)
+    return (
+        dict(zip(loss_keys, flat[:n_loss])),
+        dict(zip(metric_keys, flat[n_loss:])),
+    )
+
+
 def _log_to_tensorboard(
     writer: SummaryWriter | None,
-    values: dict[str, float],
+    values: Mapping[str, float | torch.Tensor],
     tag_prefix: str,
     global_step: int,
 ) -> None:
-    """Write a flat dict of Python-float scalars to TensorBoard under ``tag_prefix/<key>``.
+    """Write a flat ``{name: scalar}`` mapping to TensorBoard under ``tag_prefix/<name>``.
 
-    ``tag_prefix`` is the dispatch hook: the caller decides whether these
-    are loss entries (e.g. ``"iteration"`` -> ``iteration/loss/pressure``,
-    where the key already starts with ``loss/``) or metric entries
-    (e.g. ``"iteration/metrics"`` -> ``iteration/metrics/pressure_l2``).
-    The function itself does not inspect keys.
-
-    Every caller in the recipe coerces tensor values into Python floats
-    before this point (``forward_pass``'s inlined ``.item()`` and the
-    ``defaultdict(float)`` running averages in ``_run_epoch``), so this
-    helper assumes ``values`` is ``dict[str, float]``.
+    No-op when *writer* is ``None``. The caller chooses *tag_prefix* to
+    namespace the entries (e.g. ``"epoch"`` vs ``"iteration/metrics"``).
     """
     if writer is None:
         return
@@ -259,7 +280,7 @@ def forward_pass(
     *,
     output_type: IOType,
     target_config: dict[str, FieldType],
-) -> tuple[torch.Tensor, dict[str, float], dict[str, float]]:
+) -> tuple[torch.Tensor, TensorDict, TensorDict]:
     """Run a forward pass + loss + metrics on one collated batch.
 
     Args:
@@ -272,18 +293,22 @@ def forward_pass(
         precision: One of ``"float32"``, ``"float16"``, ``"bfloat16"``,
             ``"float8"``. Float kwargs are pre-cast to this dtype before
             the autocast context wraps the forward call.
-        loss_calculator: Returns ``(loss, loss_dict)`` from
+        loss_calculator: Returns ``(loss, loss_td)`` from
             ``(pred, target)`` TensorDicts.
-        metric_calculator: Returns a flat ``{name: scalar}`` metrics dict.
+        metric_calculator: Returns a per-field metrics ``TensorDict``.
         output_type: ``"mesh"`` or ``"tensors"``; controls how the model
             output is unpacked into a TensorDict.
         target_config: ``{name: "scalar"|"vector"}``; used to split tensor
             outputs and validate Mesh outputs.
 
     Returns:
-        ``(loss, loss_dict, metric_dict)``. The two dicts are kept
+        ``(loss, loss_td, metric_td)``. The two TensorDicts are kept
         separate so callers can route them to different log namespaces
-        without textual key inspection.
+        without textual key inspection. Per-field values are returned
+        as **detached, on-device 0-D tensors** (no ``.item()`` sync
+        here): the caller decides when to sync, so the loss kernels can
+        overlap with backward instead of being serialised by an
+        in-line D2H transfer.
     """
     forward_kwargs = batch["forward_kwargs"]
     targets: TensorDict = batch["targets"]
@@ -318,14 +343,11 @@ def forward_pass(
     loss, loss_td = loss_calculator(pred_f32, target_f32)
     with torch.no_grad():
         metric_td = metric_calculator(pred_f32, target_f32)
-    ### Move every per-field tensor off-device into a plain Python float
-    ### before returning so the caller can sum / log without holding on
-    ### to autograd graph fragments or device tensors.
-    return (
-        loss,
-        {k: v.item() for k, v in loss_td.items()},
-        {k: v.item() for k, v in metric_td.items()},
-    )
+    ### Detach (don't sync) the per-field TDs so the caller controls when
+    ### a D2H copy happens; running ``.item()`` here would serialise the
+    ### forward kernels against the host. ``TensorDict.detach()`` walks
+    ### every leaf in one fast-apply pass.
+    return loss, loss_td.detach(), metric_td.detach()
 
 
 def _run_epoch(
@@ -377,9 +399,15 @@ def _run_epoch(
     grad_ctx = nullcontext() if is_train else torch.no_grad()
     log_prefix = "Epoch" if is_train else "Val Epoch"
 
+    ### `total_loss` is a Python float fed by the per-step print line's
+    ### sync; `total_losses_td` / `total_metrics_td` are on-device
+    ### TensorDict accumulators (one 0-D leaf per field) that defer
+    ### their D2H transfer to the single batched ``.tolist()`` at
+    ### end-of-epoch. ``None`` here means "not yet seeded"; the first
+    ### iteration clones the per-step TensorDict to break aliasing.
     total_loss = 0.0
-    total_losses: dict[str, float] = defaultdict(float)
-    total_metrics: dict[str, float] = defaultdict(float)
+    total_losses_td: TensorDict | None = None
+    total_metrics_td: TensorDict | None = None
     precision = getattr(cfg, "precision", "float32")
     n_batches = 0
     num_steps = len(dataloader)
@@ -412,17 +440,24 @@ def _run_epoch(
                 if cfg.training.get("scheduler_update_mode", "epoch") == "step":
                     scheduler.step()
 
+            ### Accumulate on-device with no sync. First iteration clones
+            ### so subsequent in-place ``add_`` calls don't alias the
+            ### per-step TDs; both accumulators are seeded in lock-step
+            ### (the joint ``is None`` check exists to satisfy the type
+            ### checker, which can't see the invariant from per-variable
+            ### narrowing).
+            if total_losses_td is None or total_metrics_td is None:
+                total_losses_td = losses.clone()
+                total_metrics_td = metrics.clone()
+            else:
+                total_losses_td.add_(losses)
+                total_metrics_td.add_(metrics)
+            n_batches += 1
+
+            ### Per-step sync for the print line; lands after backward +
+            ### optimizer.step so it overlaps with queued GPU work.
             this_loss = loss.detach().item()
             total_loss += this_loss
-            n_batches += 1
-            ### `losses` and `metrics` are already `dict[str, float]` (the
-            ### Tensor->float coercion happens once in `forward_pass`'s
-            ### inlined `.item()` calls), so the per-key write here just
-            ### sums through `defaultdict(float)`'s automatic 0.0 seeding.
-            for k, v in losses.items():
-                total_losses[k] += v
-            for k, v in metrics.items():
-                total_metrics[k] += v
 
             step_dt = time.perf_counter() - step_t0
             mem_gb = (
@@ -444,14 +479,15 @@ def _run_epoch(
             ### epoch-level entry below to keep dashboards uncluttered.
             if is_train and dist_manager.rank == 0:
                 global_step = epoch * num_steps + i
+                losses_floats, metrics_floats = _to_float_dicts(losses, metrics)
                 if writer is not None:
                     ### Loss keys already start with `loss/`, so the iteration
                     ### prefix yields tags like `iteration/loss/pressure`;
                     ### metric tags get an explicit `iteration/metrics/...`
                     ### namespace so we never have to split by string prefix.
-                    _log_to_tensorboard(writer, losses, "iteration", global_step)
+                    _log_to_tensorboard(writer, losses_floats, "iteration", global_step)
                     _log_to_tensorboard(
-                        writer, metrics, "iteration/metrics", global_step
+                        writer, metrics_floats, "iteration/metrics", global_step
                     )
                     writer.add_scalar(
                         "iteration/lr",
@@ -476,8 +512,8 @@ def _run_epoch(
                             "loss": this_loss,
                             "mem_gb": mem_gb,
                             "step_time_s": step_dt,
-                            **losses,
-                            **metrics,
+                            **losses_floats,
+                            **metrics_floats,
                         }
                     )
 
@@ -488,8 +524,7 @@ def _run_epoch(
     epoch_dt = time.perf_counter() - epoch_t0
     n = max(n_batches, 1)
     avg_loss = total_loss / n
-    avg_losses = {k: v / n for k, v in total_losses.items()}
-    avg_metrics = {k: v / n for k, v in total_metrics.items()}
+    avg_losses, avg_metrics = _to_float_dicts(total_losses_td, total_metrics_td, n=n)
 
     logger.info(
         f"Epoch {epoch} {mode} done in {epoch_dt:.1f}s "
@@ -632,7 +667,7 @@ def _walk_batch_for_logging(
         yield (f"{prefix}.points", value.points)
         if value.n_cells > 0:
             yield (f"{prefix}.cells", value.cells)
-        for section in ("point_data", "cell_data", "global_data"):
+        for section in MESH_FIELD_ASSOCIATIONS:
             td = getattr(value, section)
             if td.keys():
                 yield from _walk_batch_for_logging(td, f"{prefix}.{section}")
@@ -706,111 +741,6 @@ def benchmark_io_epoch(
     )
 
 
-def _find_normalizer(
-    datasets: list[MeshDataset],
-) -> "NormalizeMeshFields | None":
-    """Return the first ``NormalizeMeshFields`` instance across *datasets*' pipelines.
-
-    Used at checkpoint-save time to persist normalization stats alongside the
-    model weights so inference can re-apply the inverse. Returns ``None`` when
-    no dataset has a ``NormalizeMeshFields`` transform.
-    """
-    from physicsnemo.datapipes.transforms.mesh import NormalizeMeshFields
-
-    for ds in datasets:
-        for t in getattr(ds, "transforms", []):
-            if isinstance(t, NormalizeMeshFields):
-                return t
-    return None
-
-
-def _validate_dataset_consistency(
-    ds_key: str,
-    ds_targets: dict[str, FieldType],
-    ds_metrics: list[MetricName],
-    ds_metadata: dict[str, Any],
-    first_targets: dict[str, FieldType],
-    first_metrics: list[MetricName],
-    first_metadata: dict[str, Any],
-) -> None:
-    """Reject ``targets:`` mismatch across multi-dataset training; warn on softer drift.
-
-    ``targets:`` is the loss / metric contract; mismatched names or types
-    silently produces wrong per-field losses (only the first dataset's
-    keys are honored downstream). ``metrics:`` and ``metadata:`` are
-    softer -- the recipe still uses the first dataset's view -- but
-    drift is almost always a config bug, so we warn loudly.
-    """
-    if ds_targets != first_targets:
-        raise ValueError(
-            f"Dataset {ds_key!r} declares targets={ds_targets!r}, "
-            f"which does not match the first dataset's targets="
-            f"{first_targets!r}. All datasets in `cfg.data` must "
-            f"declare the same `targets:` block (same names, same "
-            f"types, same iteration order)."
-        )
-    if ds_metrics != first_metrics:
-        _LOGGER_BUILD_DATALOADERS.warning(
-            f"Dataset {ds_key!r} declares metrics={ds_metrics!r}, "
-            f"which differs from the first dataset's metrics="
-            f"{first_metrics!r}. Using the first dataset's metrics."
-        )
-    if ds_metadata != first_metadata:
-        _LOGGER_BUILD_DATALOADERS.warning(
-            f"Dataset {ds_key!r} has metadata that differs from the "
-            f"first dataset's; using the first dataset's metadata "
-            f"for the loss / non-dim back-conversion. Per-dataset "
-            f"metadata is still injected into each sample's "
-            f"global_data by the dataset builder."
-        )
-
-
-def _resolve_manifest_spec(
-    ds_yaml: DictConfig, ds_cfg_block: DictConfig
-) -> dict | None:
-    """Resolve a `data.<key>` block's manifest config; return ``None`` for directory mode.
-
-    Two manifest styles are recognised:
-
-    - **Style A (separate files):** ``train_manifest`` / ``val_manifest``
-      point at flat lists of run subpaths.
-    - **Style B (single dict manifest):** ``manifest`` + ``train_split`` /
-      ``val_split`` keys into a JSON dict. If ``manifest`` is omitted, we
-      look for a sibling ``manifest.json`` next to the dataset YAML's
-      ``train_datadir``.
-
-    Returns a flat dict with both styles' fields present (extras are
-    ``None``); returns ``None`` if neither style is configured.
-    """
-    train_manifest = ds_cfg_block.get("train_manifest", None)
-    val_manifest = ds_cfg_block.get("val_manifest", None)
-    manifest = ds_cfg_block.get("manifest", None)
-    train_split = ds_cfg_block.get("train_split", None)
-    val_split = ds_cfg_block.get("val_split", None)
-
-    ### Auto-derive manifest path from `train_datadir/manifest.json` when
-    ### the user gave a split key but no explicit manifest path.
-    if manifest is None and train_split is not None:
-        train_datadir = OmegaConf.select(ds_yaml, "train_datadir", default=None)
-        if train_datadir:
-            derived = Path(str(train_datadir)) / "manifest.json"
-            if derived.exists():
-                manifest = str(derived)
-
-    has_manifest = train_manifest is not None or (
-        manifest is not None and train_split is not None
-    )
-    if not has_manifest:
-        return None
-    return {
-        "train_manifest": train_manifest,
-        "val_manifest": val_manifest,
-        "manifest": manifest,
-        "train_split": train_split,
-        "val_split": val_split,
-    }
-
-
 def _resolve_manifest_indices_from_spec(
     reader: Any, manifest_spec: dict[str, Any]
 ) -> tuple[list[int], list[int] | None]:
@@ -879,7 +809,14 @@ def _build_directory_samplers(
     use_distributed: bool,
     sampler_seed: int,
 ) -> tuple[Sampler | None, Sampler | None]:
-    """Per-split DistributedSamplers (or `(None, None)` on a single rank)."""
+    """Per-split :class:`DistributedSampler` pair for **directory-mode** datasets.
+
+    Used when each split has its own dataset (separate ``train_datadir``
+    and ``val_datadir`` in the dataset YAML); manifest-mode shares a
+    single dataset across splits and uses :func:`_build_manifest_samplers`
+    instead. Returns ``(None, None)`` on a single rank, where torch's
+    default sequential sampler is sufficient.
+    """
     if not use_distributed:
         return None, None
     train_sampler = torch.utils.data.distributed.DistributedSampler(
@@ -911,11 +848,11 @@ def _build_manifest_samplers(
         world_size=world_size,
         drop_last=True,
     )
+    ### When no explicit val split is configured, fall back to the train
+    ### indices but build a separate non-shuffled, no-drop sampler so val
+    ### iteration is deterministic and covers every sample.
     if val_indices is None:
-        ### Fall back to the train sampler so val_loader still has a
-        ### deterministic order; callers that want a real val split must
-        ### either provide val_split / val_manifest or use directory mode.
-        return train_sampler, train_sampler
+        val_indices = train_indices
     val_sampler = ManifestSampler(
         val_indices,
         shuffle=False,
@@ -1001,7 +938,7 @@ def build_dataloaders(
             ### Warn-and-skip on a missing dataset config so a typo in
             ### `data.<key>.config` surfaces in the run log rather than
             ### vanishing as an empty dataloader at training time.
-            _LOGGER_BUILD_DATALOADERS.warning(
+            _LOGGER.warning(
                 f"Skipping dataset {ds_key!r}: config file not found at "
                 f"{str(config_path)!r}. Check `data.{ds_key}.config` in the "
                 f"training YAML."
@@ -1009,7 +946,7 @@ def build_dataloaders(
             continue
         train_dir = ds_cfg_block.get("train_dir", "")
         if train_dir and not Path(train_dir).exists():
-            _LOGGER_BUILD_DATALOADERS.warning(
+            _LOGGER.warning(
                 f"Skipping dataset {ds_key!r}: train_dir {str(train_dir)!r} "
                 f"does not exist. Check `data.{ds_key}.train_dir` in the "
                 f"training YAML or the `dataset_paths` interpolation it "
@@ -1044,7 +981,7 @@ def build_dataloaders(
                 ds_metadata,
             )
         else:
-            _validate_dataset_consistency(
+            validate_dataset_consistency(
                 ds_key,
                 ds_targets,
                 ds_metrics,
@@ -1054,7 +991,7 @@ def build_dataloaders(
                 first_metadata,
             )
 
-        manifest_spec = _resolve_manifest_spec(ds_yaml, ds_cfg_block)
+        manifest_spec = resolve_manifest_spec(ds_yaml, ds_cfg_block)
         if manifest_spec is not None:
             using_manifests = True
             ### Manifest mode: the reader must see ALL runs under one
@@ -1105,7 +1042,7 @@ def build_dataloaders(
     if not train_datasets:
         raise RuntimeError("No valid datasets found. Check data paths in config.")
 
-    normalizer = _find_normalizer(train_datasets)
+    normalizer = find_normalizer(train_datasets)
     collate_fn = _build_collate(cfg, first_targets or {})
     train_dataset = _combine_datasets(train_datasets)
 
@@ -1221,7 +1158,6 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Targets (from dataset YAML): {target_config}")
 
     # -- Log dataset metadata (rank 0) --------------------------------------------
-    recipe_root = Path(__file__).resolve().parent.parent
     if dist_manager.rank == 0 and log_jsonl is not None:
         log_jsonl(
             {
@@ -1271,9 +1207,10 @@ def main(cfg: DictConfig) -> None:
         )
 
     if normalizer is not None:
-        logger.info(
-            f"Normalization: {', '.join(f'{k}({v["type"]})' for k, v in normalizer.stats.items())}"
+        norm_summary = ", ".join(
+            f"{k}({v['type']})" for k, v in normalizer.stats.items()
         )
+        logger.info(f"Normalization: {norm_summary}")
 
     optimizer = build_muon_optimizer(model, cfg, compile_optimizer=cfg.compile)
     logger.info(f"Optimizer: {optimizer}")

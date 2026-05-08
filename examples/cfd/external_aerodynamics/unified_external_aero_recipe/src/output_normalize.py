@@ -144,7 +144,20 @@ def normalize_output_to_tensordict(
 
     if output_type == "tensors":
         if isinstance(output, tuple):
-            output = next(o for o in output if o is not None)
+            ### DoMINO returns ``(vol, surf)`` with the unused branch as
+            ### ``None``; pick the first non-None entry. A tuple of all
+            ### Nones means the model was misconfigured for both modes,
+            ### which the bare ``next(...)`` would surface as a cryptic
+            ### ``StopIteration``; raise an explicit, actionable error here
+            ### instead.
+            non_none = [o for o in output if o is not None]
+            if not non_none:
+                raise ValueError(
+                    f"output_type='tensors' got a tuple of all-None values; "
+                    f"expected at least one non-None tensor in the tuple. "
+                    f"Got {output!r}."
+                )
+            output = non_none[0]
         if not isinstance(output, torch.Tensor):
             raise TypeError(
                 f"output_type='tensors' but model returned {type(output).__name__}"

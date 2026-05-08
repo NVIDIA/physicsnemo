@@ -52,13 +52,13 @@ pipeline:
       fields:
         pressure_average: pressure
         wall_shear_stress_average: stress
-      section: cell_data
+      association: cell_data
     - _target_: ${dp:RenameMeshFields}
       cell_data:
         pressure_average: pressure
         wall_shear_stress_average: wss
     - _target_: ${dp:NormalizeMeshFields}
-      section: cell_data
+      association: cell_data
       fields:
         wss: {type: vector, mean: [0.0, 0.0, 0.0], std: 0.00183}
     - _target_: ${dp:ComputeSurfaceNormals}

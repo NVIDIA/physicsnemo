@@ -20,7 +20,7 @@ Deterministic mesh transforms (Mesh -> Mesh) and terminal conversions.
 
 from __future__ import annotations
 
-from typing import Literal, TypeAlias, get_args
+from typing import Literal
 
 import torch
 from jaxtyping import Float, Int
@@ -29,14 +29,12 @@ from tensordict import TensorDict
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
 from physicsnemo.datapipes.transforms.subsample import poisson_sample_indices_fixed
-from physicsnemo.mesh import DomainMesh, Mesh
-
-### Local mirror of `Mesh`'s three public data sections, kept in this
-### module so transforms don't take a typing dependency on
-### `physicsnemo.mesh`. The runtime tuple is derived from the `Literal`
-### via `get_args` so the two stay in lockstep.
-_MeshSection: TypeAlias = Literal["point_data", "cell_data", "global_data"]
-_MESH_SECTION_NAMES: tuple[_MeshSection, ...] = get_args(_MeshSection)
+from physicsnemo.mesh import (
+    MESH_FIELD_ASSOCIATIONS,
+    DomainMesh,
+    Mesh,
+    MeshFieldAssociation,
+)
 
 
 @register()
@@ -313,11 +311,18 @@ class SubsampleMesh(MeshTransform):
 
 
 def _rename_td_keys(td: TensorDict, mapping: dict[str, str]) -> TensorDict:
-    """Rename keys in a TensorDict, returning a new TensorDict."""
+    """Rename keys in a TensorDict, returning a new TensorDict.
+
+    Uses :meth:`tensordict.TensorDict.rename_key_` for each entry --
+    that's the named TensorDict API for the operation, equivalent to
+    ``td[new] = td.pop(old)`` but explicit. Missing source keys are
+    silently skipped.
+    """
     out = td.clone()
+    present = set(out.keys())
     for old_key, new_key in mapping.items():
-        if old_key in out.keys():
-            out[new_key] = out.pop(old_key)
+        if old_key in present:
+            out.rename_key_(old_key, new_key)
     return out
 
 
@@ -342,33 +347,15 @@ class DropMeshFields(MeshTransform):
         self._global_data_keys = global_data or []
 
     def __call__(self, mesh: Mesh) -> Mesh:
-        new_pd = mesh.point_data
-        if self._point_data_keys:
-            new_pd = new_pd.clone()
-            for k in self._point_data_keys:
-                if k in new_pd.keys():
-                    del new_pd[k]
-
-        new_cd = mesh.cell_data
-        if self._cell_data_keys:
-            new_cd = new_cd.clone()
-            for k in self._cell_data_keys:
-                if k in new_cd.keys():
-                    del new_cd[k]
-
-        new_gd = mesh.global_data
-        if self._global_data_keys:
-            new_gd = new_gd.clone()
-            for k in self._global_data_keys:
-                if k in new_gd.keys():
-                    del new_gd[k]
-
+        ### ``TensorDict.exclude(*keys)`` is null-safe: it returns a
+        ### fresh TD minus the named keys (silently tolerating missing
+        ### ones) and is a no-op clone when the key list is empty.
         return Mesh(
             points=mesh.points,
             cells=mesh.cells,
-            point_data=new_pd,
-            cell_data=new_cd,
-            global_data=new_gd,
+            point_data=mesh.point_data.exclude(*self._point_data_keys),
+            cell_data=mesh.cell_data.exclude(*self._cell_data_keys),
+            global_data=mesh.global_data.exclude(*self._global_data_keys),
         )
 
     def extra_repr(self) -> str:
@@ -503,7 +490,7 @@ class NormalizeMeshFields(MeshTransform):
     Example YAML (inline)::
 
         - _target_: ${dp:NormalizeMeshFields}
-          section: point_data
+          association: point_data
           fields:
             pressure: {type: scalar, mean: -0.15, std: 0.45}
             wss: {type: vector, mean: [0.003, 0.0, 0.0], std: 0.005}
@@ -511,23 +498,24 @@ class NormalizeMeshFields(MeshTransform):
     Example YAML (from .pt file)::
 
         - _target_: ${dp:NormalizeMeshFields}
-          section: point_data
+          association: point_data
           stats_file: /path/to/norm_stats.pt
     """
 
     def __init__(
         self,
-        section: _MeshSection = "point_data",
+        association: MeshFieldAssociation = "point_data",
         fields: dict[str, dict] | None = None,
         stats_file: str | None = None,
         eps: float = 1e-8,
     ) -> None:
         super().__init__()
-        if section not in _MESH_SECTION_NAMES:
+        if association not in MESH_FIELD_ASSOCIATIONS:
             raise ValueError(
-                f"section must be one of {_MESH_SECTION_NAMES!r}, got {section!r}"
+                f"association must be one of {MESH_FIELD_ASSOCIATIONS!r}, "
+                f"got {association!r}"
             )
-        self._section = section
+        self._association = association
         self._eps = eps
 
         if stats_file is not None:
@@ -546,9 +534,10 @@ class NormalizeMeshFields(MeshTransform):
             raise ValueError("Provide one of 'stats_file' or 'fields'")
 
     def __call__(self, mesh: Mesh) -> Mesh:
-        ### Clone and z-score the targeted section in place; fields absent
-        ### from `_stats` (or absent from the mesh) are left untouched.
-        new_td = getattr(mesh, self._section).clone()
+        ### Clone and z-score the targeted association's TensorDict in
+        ### place; fields absent from `_stats` (or absent from the mesh)
+        ### are left untouched.
+        new_td = getattr(mesh, self._association).clone()
         for field_name, stats in self._stats.items():
             if field_name not in new_td.keys():
                 continue
@@ -558,11 +547,11 @@ class NormalizeMeshFields(MeshTransform):
             new_td[field_name] = (val - mean) / (std + self._eps)
 
         ### `Mesh.copy` is a tensorclass-provided shallow copy: `points`,
-        ### `cells`, the untouched data sections, and the geometric `_cache`
+        ### `cells`, the untouched associations, and the geometric `_cache`
         ### (centroids / areas / normals) are all shared with `mesh`, then
-        ### `setattr` swaps in the freshly-cloned section.
+        ### `setattr` swaps in the freshly-cloned association.
         new_mesh = mesh.copy()  # ty: ignore[unresolved-attribute]
-        setattr(new_mesh, self._section, new_td)
+        setattr(new_mesh, self._association, new_td)
         return new_mesh
 
     def inverse_tensor(
@@ -608,6 +597,45 @@ class NormalizeMeshFields(MeshTransform):
             idx += dim
         return out
 
+    def inverse_td(self, td: TensorDict) -> TensorDict:
+        r"""Un-normalize a per-field :class:`~tensordict.TensorDict` back to physical units.
+
+        Companion to :meth:`inverse_tensor` for the per-field
+        TensorDict-keyed I/O flow used by recipes that consume named
+        prediction fields directly (rather than a concatenated
+        ``(*, C)`` tensor). Each leaf is independently un-normalized
+        using the stored stats; leaves whose names are absent from the
+        stats dict are passed through unchanged.
+
+        Parameters
+        ----------
+        td : TensorDict
+            Per-field TensorDict whose leaves are normalized predictions
+            keyed by field name. Each leaf can be any shape -- mean and
+            std are broadcast against it -- as long as the trailing
+            dim(s) match the stats' shape.
+
+        Returns
+        -------
+        TensorDict
+            New TensorDict (same keys, batch_size, and device as *td*)
+            whose leaves are in physical units.
+        """
+        ### ``named_apply`` walks every leaf and collects the returns
+        ### into a fresh TD; leaves whose name is absent from
+        ### ``self._stats`` pass through unchanged.
+        def _inverse_field(name: str, val: torch.Tensor) -> torch.Tensor:
+            stats = self._stats.get(name)
+            if stats is None:
+                return val
+            mean = stats["mean"].to(dtype=val.dtype, device=val.device)
+            std = stats["std"].to(dtype=val.dtype, device=val.device)
+            return val * (std + self._eps) + mean
+
+        ### ``named_apply`` is typed ``TensorDict | None`` for its
+        ### in-place mode; the out-of-place path always returns a TD.
+        return td.named_apply(_inverse_field)  # ty: ignore[invalid-return-type]
+
     @property
     def stats(self) -> dict:
         """Normalization statistics dict (for serialization)."""
@@ -617,7 +645,7 @@ class NormalizeMeshFields(MeshTransform):
         parts = []
         for name, s in self._stats.items():
             parts.append(f"{name}({s['type']}): mean={s['mean']}, std={s['std']}")
-        return f"section={self._section}, " + ", ".join(parts)
+        return f"association={self._association!r}, " + ", ".join(parts)
 
 
 @register()
