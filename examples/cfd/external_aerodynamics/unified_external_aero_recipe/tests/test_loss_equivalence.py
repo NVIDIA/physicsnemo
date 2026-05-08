@@ -160,8 +160,10 @@ class TestReferenceTotal:
         )
         lc = LossCalculator(target_config=target_config, loss_type=loss_type)
         _, ldict = lc(pred_td, target_td)
-        ### Per-field entries plus loss/total.
-        assert set(ldict) == {"loss/pressure", "loss/wss", "loss/total"}
+        ### Per-field entries plus loss/total. ``ldict`` is a 0-D TensorDict;
+        ### iterating it directly raises StopIteration (no batch dim to walk),
+        ### so we materialise the keys explicitly.
+        assert set(ldict.keys()) == {"loss/pressure", "loss/wss", "loss/total"}
 
 
 ### ---------------------------------------------------------------------------

@@ -37,6 +37,8 @@ from datasets import (
     ManifestSampler,
     load_manifest,
     resolve_manifest_indices,
+    resolve_manifest_spec,
+    validate_dataset_consistency,
 )
 
 
@@ -242,19 +244,12 @@ class TestManifestSampler:
 
 
 ### ---------------------------------------------------------------------------
-### _validate_dataset_consistency  (lives in train.py, behind the tensorboard guard)
+### validate_dataset_consistency
 ### ---------------------------------------------------------------------------
 
 
-### `train.py` pulls in tensorboard at import time; skip cleanly when
-### that dep is absent so the manifest-side tests above can still run.
-pytest.importorskip("tensorboard")
-
-from train import _validate_dataset_consistency  # noqa: E402
-
-
 class TestValidateDatasetConsistency:
-    """Tests for `train._validate_dataset_consistency`."""
+    """Tests for :func:`datasets.validate_dataset_consistency`."""
 
     @staticmethod
     def _first():
@@ -268,7 +263,7 @@ class TestValidateDatasetConsistency:
         """All-equal blocks: no raise, no warning."""
         first_targets, first_metrics, first_metadata = self._first()
         with caplog.at_level(logging.WARNING):
-            _validate_dataset_consistency(
+            validate_dataset_consistency(
                 ds_key="ds_b",
                 ds_targets=dict(first_targets),
                 ds_metrics=list(first_metrics),
@@ -283,7 +278,7 @@ class TestValidateDatasetConsistency:
         """Targets mismatch is the loss-correctness contract -- must raise."""
         first_targets, first_metrics, first_metadata = self._first()
         with pytest.raises(ValueError, match="does not match the first dataset"):
-            _validate_dataset_consistency(
+            validate_dataset_consistency(
                 ds_key="ds_b",
                 ds_targets={"pressure": "scalar"},  # missing wss
                 ds_metrics=list(first_metrics),
@@ -297,7 +292,7 @@ class TestValidateDatasetConsistency:
         """Metrics mismatch is a soft drift -- warns, doesn't raise."""
         first_targets, first_metrics, first_metadata = self._first()
         with caplog.at_level(logging.WARNING, logger="training.build_dataloaders"):
-            _validate_dataset_consistency(
+            validate_dataset_consistency(
                 ds_key="ds_b",
                 ds_targets=dict(first_targets),
                 ds_metrics=["l2"],  # softer
@@ -312,7 +307,7 @@ class TestValidateDatasetConsistency:
         """Metadata mismatch is a soft drift -- warns, doesn't raise."""
         first_targets, first_metrics, first_metadata = self._first()
         with caplog.at_level(logging.WARNING, logger="training.build_dataloaders"):
-            _validate_dataset_consistency(
+            validate_dataset_consistency(
                 ds_key="ds_b",
                 ds_targets=dict(first_targets),
                 ds_metrics=list(first_metrics),
@@ -325,21 +320,18 @@ class TestValidateDatasetConsistency:
 
 
 ### ---------------------------------------------------------------------------
-### _resolve_manifest_spec
+### resolve_manifest_spec
 ### ---------------------------------------------------------------------------
 
 
-from train import _resolve_manifest_spec  # noqa: E402
-
-
 class TestResolveManifestSpec:
-    """Tests for `train._resolve_manifest_spec`."""
+    """Tests for :func:`datasets.resolve_manifest_spec`."""
 
     def test_directory_mode_returns_none(self):
         """Neither manifest style configured -> directory mode -> None."""
         ds_yaml = OmegaConf.create({"train_datadir": "/data/foo"})
         ds_block = OmegaConf.create({})
-        assert _resolve_manifest_spec(ds_yaml, ds_block) is None
+        assert resolve_manifest_spec(ds_yaml, ds_block) is None
 
     def test_style_a_separate_files(self, tmp_path: Path):
         """``train_manifest`` / ``val_manifest`` (style A)."""
@@ -354,7 +346,7 @@ class TestResolveManifestSpec:
                 "val_manifest": str(val_path),
             }
         )
-        spec = _resolve_manifest_spec(ds_yaml, ds_block)
+        spec = resolve_manifest_spec(ds_yaml, ds_block)
         assert spec is not None
         assert spec["train_manifest"] == str(train_path)
         assert spec["val_manifest"] == str(val_path)
@@ -374,7 +366,7 @@ class TestResolveManifestSpec:
                 "val_split": "val",
             }
         )
-        spec = _resolve_manifest_spec(ds_yaml, ds_block)
+        spec = resolve_manifest_spec(ds_yaml, ds_block)
         assert spec is not None
         assert spec["manifest"] == str(manifest)
         assert spec["train_split"] == "train"
@@ -386,7 +378,7 @@ class TestResolveManifestSpec:
         derived.write_text(json.dumps({"train": ["run_1"]}))
         ds_yaml = OmegaConf.create({"train_datadir": str(tmp_path)})
         ds_block = OmegaConf.create({"train_split": "train"})
-        spec = _resolve_manifest_spec(ds_yaml, ds_block)
+        spec = resolve_manifest_spec(ds_yaml, ds_block)
         assert spec is not None
         assert spec["manifest"] == str(derived)
         assert spec["train_split"] == "train"
@@ -399,4 +391,4 @@ class TestResolveManifestSpec:
         ds_block = OmegaConf.create({"train_split": "train"})
         ### tmp_path has no manifest.json sibling -> can't derive -> falls
         ### back to directory mode (returns None).
-        assert _resolve_manifest_spec(ds_yaml, ds_block) is None
+        assert resolve_manifest_spec(ds_yaml, ds_block) is None

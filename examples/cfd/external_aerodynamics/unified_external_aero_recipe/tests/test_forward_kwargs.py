@@ -159,13 +159,14 @@ class TestResolveSpec:
         assert result.dtype == torch.float32
         assert float(result) == pytest.approx(0.015)
 
-    def test_bool_literal_becomes_scalar_tensor(self, simple_domain):
-        ### bool is a subclass of int -- check the resolver casts to float.
-        """Bool literal becomes scalar tensor."""
-        result = resolve_spec(True, simple_domain)
-        assert isinstance(result, torch.Tensor)
-        assert result.ndim == 0
-        assert float(result) == 1.0
+    def test_bool_literal_raises_typeerror(self, simple_domain):
+        ### bool is a subclass of int, so a missing guard would silently
+        ### coerce True / False to tensor(1.0) / tensor(0.0). resolve_spec
+        ### raises explicitly so the YAML author sees an actionable error
+        ### (almost always a "did you mean a numeric flag?" config bug).
+        """Bool literal raises TypeError."""
+        with pytest.raises(TypeError, match="Boolean spec values are not supported"):
+            resolve_spec(True, simple_domain)
 
     def test_list_concatenates_on_last_dim(self, simple_domain):
         ### Both interior.points (10, 3) and a fake (10, 3) tensor.
