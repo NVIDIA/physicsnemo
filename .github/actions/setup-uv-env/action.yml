@@ -200,10 +200,18 @@ runs:
       env:
         UV_LINK_MODE: copy
         PYG_WHL_INDEX: "https://data.pyg.org/whl/torch-2.11.0+cu128.html"
+        # cuml-cu12 -> cudf -> numba caps numpy at <=2.2; uv.lock pins
+        # numpy 2.2.6 under the cu12 extra precisely for this reason.
+        # Without an explicit constraint here, uv pip install resolves
+        # transitive deps (e.g. tensorstore, pyarrow) freely and bumps
+        # numpy to 2.4.x, which crashes every test that touches cuml.
+        # Re-applying the cap on each layered install keeps numba happy.
+        NUMPY_PIN: "numpy<2.3"
       run: |
         set -euo pipefail
         echo "::group::install CI-only test dependencies"
         uv pip install --python .venv/bin/python \
+          "$NUMPY_PIN" \
           "moto[s3]>=5.0.28" \
           "numpy-stl" \
           "scikit-image>=0.24.0" \
@@ -212,6 +220,7 @@ runs:
           "tensorstore" \
           "pyarrow"
         uv pip install --python .venv/bin/python --reinstall \
+          "$NUMPY_PIN" \
           torch_scatter torch_sparse torch_cluster pyg_lib \
           --find-links "$PYG_WHL_INDEX"
         echo "::endgroup::"
