@@ -77,16 +77,13 @@ model:
   output_field_ranks:
     pressure: 0                # scalar
     wss: 1                     # vector
-  # The dataset's `ComputeSurfaceNormals` puts a `normals` field in
-  # boundaries.vehicle.cell_data (other recipe models consume it). GLOBE
-  # also auto-adds its own cell_normals, so the precomputed normals end
-  # up as a redundant input. Declaring `normals: 1` here lets GLOBE see
-  # the field rather than crashing on a feature-count mismatch. (A future
-  # follow-up could strip cell_data normals from the boundary just for
-  # GLOBE via a new spec syntax.)
+  # GLOBE auto-injects cell_normals from the boundary mesh's geometry,
+  # and only pulls leaves it declared here from cell_data; anything else
+  # the dataset puts on the boundary (e.g. the `normals` field that
+  # `ComputeSurfaceNormals` writes for other recipe models) is silently
+  # ignored. Empty here means "geometry-only boundary input".
   boundary_source_data_ranks:
-    vehicle:
-      normals: 1
+    vehicle: {}
   reference_length_names: [L_ref, delta_turb]
   reference_area: 0.0868       # 2.170 / 5.0^2 (nondim, since positions / L_ref)
   n_communication_hyperlayers: 2
