@@ -244,8 +244,11 @@ def to_physical_units(
         Freestream conditions used to compute reference scales:
         requires ``U_inf`` and ``rho_inf`` (and ``p_inf`` for pressure-
         like fields). ``T_inf`` is required only when a field is mapped
-        to ``"temperature"``. Coerced to tensors of ``pred_td``'s dtype
-        and device.
+        to ``"temperature"``. Each value is coerced to a 0-D float32
+        tensor (matching the convention of
+        :func:`nondim.freestream_scales`); float32 scales stay
+        precision-stable through the inverse multiply even when
+        ``pred_td`` is in bfloat16 / fp16.
     nondim_type_overrides : dict[str, NondimFieldType] | None
         Per-field overrides to the default nondim-type lookup. Use for
         fields where the default ``scalar -> pressure`` /
@@ -267,20 +270,24 @@ def to_physical_units(
         out = normalizer.inverse_td(out)
 
     if nondim_transform is not None and metadata:
-        ### Reference scales must match the predictions' dtype/device
-        ### so the per-field arithmetic stays on-device and dtype-stable.
-        any_leaf = next(iter(out.values()))
-        device, dtype = any_leaf.device, any_leaf.dtype
+        ### Lazy import keeps the recipe's module-level dependency graph
+        ### narrow -- ``utils`` is at the bottom of the import chain and
+        ### only ``to_physical_units`` reaches into the non-dim module.
+        from nondim import freestream_scales
 
-        def _scalar(name: str) -> torch.Tensor:
-            return torch.as_tensor(metadata[name], dtype=dtype, device=device)
-
-        U_inf = _scalar("U_inf")
-        rho_inf = _scalar("rho_inf")
-        p_inf = _scalar("p_inf")
-        q_inf = 0.5 * rho_inf * (U_inf * U_inf).sum()
-        U_inf_mag = (U_inf * U_inf).sum().sqrt()
-        T_inf = _scalar("T_inf") if "T_inf" in metadata else None
+        ### Build a 0-D TensorDict from the YAML-decoded ``metadata``
+        ### dict so we can delegate the q_inf / U_inf_mag math to the
+        ### canonical ``freestream_scales`` helper rather than
+        ### reimplementing it here. Cast each entry to float32 to
+        ### match ``freestream_scales``'s convention (precision-stable
+        ### reference scales, even when ``pred_td`` is bfloat16 / fp16).
+        metadata_td = TensorDict(
+            {
+                k: torch.as_tensor(v, dtype=torch.float32)
+                for k, v in metadata.items()
+            },
+        )
+        q_inf, p_inf, U_inf_mag, rho_inf, T_inf = freestream_scales(metadata_td)
 
         ### Resolve each field's nondim recipe: explicit override wins,
         ### otherwise fall back on the scalar/vector default mapping.

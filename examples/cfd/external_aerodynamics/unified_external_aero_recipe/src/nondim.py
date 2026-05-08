@@ -228,7 +228,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
             q_inf, p_inf, U_inf_mag, rho_inf, T_inf, L_ref = scales
         else:
             gd = mesh.global_data
-            q_inf, p_inf, U_inf_mag, rho_inf, T_inf = _freestream_scales(gd)
+            q_inf, p_inf, U_inf_mag, rho_inf, T_inf = freestream_scales(gd)
             L_ref = gd["L_ref"].float() if "L_ref" in gd else None
 
         ### Clone and non-dimensionalize the targeted association's
@@ -277,7 +277,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
         boundary) are silently skipped.
         """
         gd = domain.global_data
-        q_inf, p_inf, U_inf_mag, rho_inf, T_inf = _freestream_scales(gd)
+        q_inf, p_inf, U_inf_mag, rho_inf, T_inf = freestream_scales(gd)
         L_ref = gd["L_ref"].float() if "L_ref" in gd else None
         scales = (q_inf, p_inf, U_inf_mag, rho_inf, T_inf, L_ref)
 

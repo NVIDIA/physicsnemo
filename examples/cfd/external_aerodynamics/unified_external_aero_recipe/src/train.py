@@ -157,18 +157,10 @@ def _log_to_tensorboard(
     tag_prefix: str,
     global_step: int,
 ) -> None:
-    """Write a flat dict of scalars to TensorBoard under ``tag_prefix/<key>``.
+    """Write a flat ``{name: scalar}`` mapping to TensorBoard under ``tag_prefix/<name>``.
 
-    ``tag_prefix`` is the dispatch hook: the caller decides whether these
-    are loss entries (e.g. ``"iteration"`` -> ``iteration/loss/pressure``,
-    where the key already starts with ``loss/``) or metric entries
-    (e.g. ``"iteration/metrics"`` -> ``iteration/metrics/pressure_l2``).
-    The function itself does not inspect keys.
-
-    Values may be Python floats or 0-D tensors -- ``SummaryWriter.add_scalar``
-    accepts either. Tensor inputs trigger an internal D2H sync per call;
-    callers that want a single sync per step should pre-convert values
-    to floats with a single batched ``.item()`` walk first.
+    No-op when *writer* is ``None``. The caller chooses *tag_prefix* to
+    namespace the entries (e.g. ``"epoch"`` vs ``"iteration/metrics"``).
     """
     if writer is None:
         return
