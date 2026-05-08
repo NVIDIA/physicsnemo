@@ -252,6 +252,7 @@ physicsnemo/models/vfgn/ @mnabian
 # Experimental deliberately has no codeowner
 physicsnemo/experimental/
 physicsnemo/experimental/datapipes/healda/ @pzharrington
+physicsnemo/experimental/models/globe/ @peterdsharpe
 
 # ==============================================================================
 # EXAMPLES - Active Learning
@@ -281,6 +282,7 @@ examples/cfd/external_aerodynamics/figconvnet/ @coreyjadams
 examples/cfd/external_aerodynamics/globe/ @peterdsharpe
 examples/cfd/external_aerodynamics/moe/ @mnabian
 examples/cfd/external_aerodynamics/transformer_models/ @coreyjadams @RishikeshRanade
+examples/cfd/external_aerodynamics/unified_external_aero_recipe/ @coreyjadams @peterdsharpe
 examples/cfd/external_aerodynamics/xaeronet/ @mnabian
 examples/cfd/flow_reconstruction_diffusion/
 examples/cfd/gray_scott_rnn/
