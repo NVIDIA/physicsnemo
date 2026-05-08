@@ -17,7 +17,16 @@
 import math
 import types
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Self, Sequence, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    Self,
+    Sequence,
+    TypeAlias,
+    cast,
+    get_args,
+)
 
 import torch
 import torch.nn.functional as F
@@ -39,6 +48,24 @@ from physicsnemo.mesh.visualization.draw_mesh import draw_mesh
 if TYPE_CHECKING:
     import matplotlib.axes
     import pyvista
+
+
+# A field on a `Mesh` is "associated with" either points (e.g. a per-vertex
+# temperature), cells (e.g. a per-element pressure), or the mesh-as-a-whole
+# (e.g. a freestream Reynolds number stored once per sample). These three
+# associations correspond to the three TensorDict attributes `point_data` /
+# `cell_data` / `global_data`, and the `MeshFieldAssociation` literal names
+# exactly those keys so a single string can index both the type system and the
+# runtime `getattr(mesh, name)`.
+#
+# Re-exported from `physicsnemo.mesh` for downstream consumers so they don't
+# each carry a "local mirror" alias that can drift from the actual `Mesh` API.
+# The runtime tuple is derived from the typed `Literal` via `get_args` so the
+# two stay in lockstep.
+MeshFieldAssociation: TypeAlias = Literal["point_data", "cell_data", "global_data"]
+MESH_FIELD_ASSOCIATIONS: tuple[MeshFieldAssociation, ...] = get_args(
+    MeshFieldAssociation
+)
 
 
 @tensorclass(tensor_only=True, shadow=True)
