@@ -347,11 +347,9 @@ class DropMeshFields(MeshTransform):
         self._global_data_keys = global_data or []
 
     def __call__(self, mesh: Mesh) -> Mesh:
-        ### `TensorDict.exclude(*keys)` returns a fresh TD without the
-        ### named keys (silently tolerating missing ones), so we don't
-        ### have to clone + iterate + del. Calling with an empty key
-        ### list is a no-op clone, which keeps the behavior identical
-        ### to the previous "skip when no keys configured" branch.
+        ### ``TensorDict.exclude(*keys)`` is null-safe: it returns a
+        ### fresh TD minus the named keys (silently tolerating missing
+        ### ones) and is a no-op clone when the key list is empty.
         return Mesh(
             points=mesh.points,
             cells=mesh.cells,
@@ -623,10 +621,9 @@ class NormalizeMeshFields(MeshTransform):
             New TensorDict (same keys, batch_size, and device as *td*)
             whose leaves are in physical units.
         """
-        ### `named_apply` walks every leaf and collects the per-leaf
-        ### return values into a fresh TensorDict (no separate clone
-        ### needed). Leaves absent from `self._stats` are returned
-        ### unchanged, matching the previous "skip" branch.
+        ### ``named_apply`` walks every leaf and collects the returns
+        ### into a fresh TD; leaves whose name is absent from
+        ### ``self._stats`` pass through unchanged.
         def _inverse_field(name: str, val: torch.Tensor) -> torch.Tensor:
             stats = self._stats.get(name)
             if stats is None:
@@ -635,9 +632,8 @@ class NormalizeMeshFields(MeshTransform):
             std = stats["std"].to(dtype=val.dtype, device=val.device)
             return val * (std + self._eps) + mean
 
-        ### `named_apply` is typed `TensorDict | None` because of the
-        ### in-place mode; we only ever use the out-of-place path so
-        ### the runtime type is always `TensorDict`.
+        ### ``named_apply`` is typed ``TensorDict | None`` for its
+        ### in-place mode; the out-of-place path always returns a TD.
         return td.named_apply(_inverse_field)  # ty: ignore[invalid-return-type]
 
     @property

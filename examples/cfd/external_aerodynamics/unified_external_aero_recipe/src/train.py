@@ -72,7 +72,7 @@ from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes import DataLoader, MeshDataset, MultiDataset
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh import MESH_FIELD_ASSOCIATIONS, DomainMesh, Mesh
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.utils.profiling import Profiler, profile
@@ -81,11 +81,7 @@ te = OptionalImport("transformer_engine.pytorch")
 te_recipe = OptionalImport("transformer_engine.common.recipe")
 TE_AVAILABLE = te.available
 
-### Module-level logger used for warnings emitted from helpers that run
-### before the rank-aware training logger is constructed in `main()`
-### (e.g. `build_dataloaders`). Goes through the same Python logging
-### pipeline as `PythonLogger`, so it shows up in the configured handlers.
-_LOGGER_BUILD_DATALOADERS = logging.getLogger("training.build_dataloaders")
+_LOGGER = logging.getLogger("training.build_dataloaders")
 
 ### When `cfg.profile` is set, every train / val epoch breaks out of its
 ### batch loop after this many steps. Keeps profiling traces short enough
@@ -122,6 +118,37 @@ def _flatten_config(
         else:
             items[key] = str(v)
     return items
+
+
+def _to_float_dicts(
+    losses_td: TensorDict | None,
+    metrics_td: TensorDict | None,
+    *,
+    n: int = 1,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Stack both TDs' 0-D leaves, divide by *n*, and ``.tolist()`` in one D2H sync.
+
+    Used at both per-step (``n=1``) and per-epoch (``n=batch_count``)
+    boundaries: collapses ``2 * n_fields`` ``.item()`` calls into a single
+    ``.tolist()`` over a stacked 1-D tensor. Either TD being ``None``
+    (the "not yet seeded" sentinel for zero-step epochs) returns
+    ``({}, {})``.
+    """
+    if losses_td is None or metrics_td is None:
+        return {}, {}
+    ### Bridge TensorDict's wider key/value types to the runtime contract
+    ### this recipe enforces: every loss / metric leaf is a 0-D scalar
+    ### Tensor keyed by str.
+    loss_keys = cast(list[str], list(losses_td.keys()))
+    metric_keys = cast(list[str], list(metrics_td.keys()))
+    loss_tensors = cast(list[torch.Tensor], list(losses_td.values()))
+    metric_tensors = cast(list[torch.Tensor], list(metrics_td.values()))
+    flat = (torch.stack(loss_tensors + metric_tensors) / n).tolist()
+    n_loss = len(loss_keys)
+    return (
+        dict(zip(loss_keys, flat[:n_loss])),
+        dict(zip(metric_keys, flat[n_loss:])),
+    )
 
 
 def _log_to_tensorboard(
@@ -324,14 +351,10 @@ def forward_pass(
     loss, loss_td = loss_calculator(pred_f32, target_f32)
     with torch.no_grad():
         metric_td = metric_calculator(pred_f32, target_f32)
-    ### Detach per-field values to drop the autograd graph but keep the
-    ### tensors on-device. The previous implementation called ``.item()``
-    ### here, which forced a blocking D2H sync per field BEFORE backward
-    ### even started -- serialising the forward kernels with the host.
-    ### Callers ``_run_epoch`` / consumers do the (now batched) sync
-    ### themselves, after backward + optimizer.step have queued more
-    ### work for the GPU to chew on. ``TensorDict.detach()`` returns a
-    ### new TD with every leaf detached in one fast-apply walk.
+    ### Detach (don't sync) the per-field TDs so the caller controls when
+    ### a D2H copy happens; running ``.item()`` here would serialise the
+    ### forward kernels against the host. ``TensorDict.detach()`` walks
+    ### every leaf in one fast-apply pass.
     return loss, loss_td.detach(), metric_td.detach()
 
 
@@ -425,15 +448,12 @@ def _run_epoch(
                 if cfg.training.get("scheduler_update_mode", "epoch") == "step":
                     scheduler.step()
 
-            ### Accumulate on-device with no sync. First-iteration values
-            ### are cloned so the in-place ``add_`` on subsequent
-            ### iterations doesn't mutate the per-step ``losses`` /
-            ### ``metrics`` TensorDicts. ``TensorDict.add_(other_td)``
-            ### is a single batched op that walks every leaf in
-            ### lockstep -- one Python-level call instead of N.
-            ### The two accumulators are seeded together; the type
-            ### checker can't see this invariant from the per-variable
-            ### narrowing alone, hence the explicit assert.
+            ### Accumulate on-device with no sync. First iteration clones
+            ### so subsequent in-place ``add_`` calls don't alias the
+            ### per-step TDs; both accumulators are seeded in lock-step
+            ### (the joint ``is None`` check exists to satisfy the type
+            ### checker, which can't see the invariant from per-variable
+            ### narrowing).
             if total_losses_td is None or total_metrics_td is None:
                 total_losses_td = losses.clone()
                 total_metrics_td = metrics.clone()
@@ -442,10 +462,8 @@ def _run_epoch(
                 total_metrics_td.add_(metrics)
             n_batches += 1
 
-            ### Single per-step sync for the print line. By landing here
-            ### *after* backward + optimizer.step, the queued kernels are
-            ### already chewing on something else, so this `.item()` waits
-            ### only for the loss kernel rather than serialising forward.
+            ### Per-step sync for the print line; lands after backward +
+            ### optimizer.step so it overlaps with queued GPU work.
             this_loss = loss.detach().item()
             total_loss += this_loss
 
@@ -469,19 +487,7 @@ def _run_epoch(
             ### epoch-level entry below to keep dashboards uncluttered.
             if is_train and dist_manager.rank == 0:
                 global_step = epoch * num_steps + i
-                ### Convert per-field tensors to floats once, here, so TB
-                ### + JSONL share the same batched D2H walk and we don't
-                ### ``.item()`` each value twice. The ``cast`` is for the
-                ### static type checker only -- our calculators only ever
-                ### emit flat 0-D scalar Tensor leaves keyed by str; the
-                ### wider ``Tensor | TensorCollection`` value type from
-                ### TensorDict.items() never appears at runtime.
-                losses_floats = {
-                    k: cast(torch.Tensor, v).item() for k, v in losses.items()
-                }
-                metrics_floats = {
-                    k: cast(torch.Tensor, v).item() for k, v in metrics.items()
-                }
+                losses_floats, metrics_floats = _to_float_dicts(losses, metrics)
                 if writer is not None:
                     ### Loss keys already start with `loss/`, so the iteration
                     ### prefix yields tags like `iteration/loss/pressure`;
@@ -526,35 +532,7 @@ def _run_epoch(
     epoch_dt = time.perf_counter() - epoch_t0
     n = max(n_batches, 1)
     avg_loss = total_loss / n
-    ### Convert the on-device per-field accumulators to Python floats
-    ### with a single batched D2H transfer: stack both dicts' 0-D
-    ### tensors into a single 1-D tensor, divide once, then ``tolist``
-    ### issues one blocking copy that produces a plain list of floats.
-    ### Avoids N back-to-back ``.item()`` calls (one large copy
-    ### instead of N tiny ones). The two accumulators are seeded
-    ### together (see the loop above), so the ``None`` check covers
-    ### the zero-step epoch case.
-    if total_losses_td is None or total_metrics_td is None:
-        avg_losses: dict[str, float] = {}
-        avg_metrics: dict[str, float] = {}
-    else:
-        ### `cast` is for the static type checker only -- our
-        ### calculators only ever build flat 0-D TensorDicts whose
-        ### keys are str and whose leaves are scalar Tensors, so the
-        ### wider TensorDict API (tuple keys, ``TensorCollection``
-        ### leaves) never appears at runtime.
-        loss_keys = cast(list[str], list(total_losses_td.keys()))
-        metric_keys = cast(list[str], list(total_metrics_td.keys()))
-        loss_tensors = cast(
-            list[torch.Tensor], [total_losses_td[k] for k in loss_keys]
-        )
-        metric_tensors = cast(
-            list[torch.Tensor], [total_metrics_td[k] for k in metric_keys]
-        )
-        flat = (torch.stack(loss_tensors + metric_tensors) / n).tolist()
-        n_loss = len(loss_keys)
-        avg_losses = dict(zip(loss_keys, flat[:n_loss]))
-        avg_metrics = dict(zip(metric_keys, flat[n_loss:]))
+    avg_losses, avg_metrics = _to_float_dicts(total_losses_td, total_metrics_td, n=n)
 
     logger.info(
         f"Epoch {epoch} {mode} done in {epoch_dt:.1f}s "
@@ -697,7 +675,7 @@ def _walk_batch_for_logging(
         yield (f"{prefix}.points", value.points)
         if value.n_cells > 0:
             yield (f"{prefix}.cells", value.cells)
-        for section in ("point_data", "cell_data", "global_data"):
+        for section in MESH_FIELD_ASSOCIATIONS:
             td = getattr(value, section)
             if td.keys():
                 yield from _walk_batch_for_logging(td, f"{prefix}.{section}")
@@ -879,11 +857,8 @@ def _build_manifest_samplers(
         drop_last=True,
     )
     ### When no explicit val split is configured, fall back to the train
-    ### *indices* but build a separate non-shuffled, no-drop sampler so the
-    ### val loader sees a deterministic, full-coverage iteration order. The
-    ### previous behavior (returning the same shuffled / drop_last sampler
-    ### for both) made val metrics non-reproducible across epochs and
-    ### silently dropped the last partial batch.
+    ### indices but build a separate non-shuffled, no-drop sampler so val
+    ### iteration is deterministic and covers every sample.
     if val_indices is None:
         val_indices = train_indices
     val_sampler = ManifestSampler(
@@ -971,7 +946,7 @@ def build_dataloaders(
             ### Warn-and-skip on a missing dataset config so a typo in
             ### `data.<key>.config` surfaces in the run log rather than
             ### vanishing as an empty dataloader at training time.
-            _LOGGER_BUILD_DATALOADERS.warning(
+            _LOGGER.warning(
                 f"Skipping dataset {ds_key!r}: config file not found at "
                 f"{str(config_path)!r}. Check `data.{ds_key}.config` in the "
                 f"training YAML."
@@ -979,7 +954,7 @@ def build_dataloaders(
             continue
         train_dir = ds_cfg_block.get("train_dir", "")
         if train_dir and not Path(train_dir).exists():
-            _LOGGER_BUILD_DATALOADERS.warning(
+            _LOGGER.warning(
                 f"Skipping dataset {ds_key!r}: train_dir {str(train_dir)!r} "
                 f"does not exist. Check `data.{ds_key}.train_dir` in the "
                 f"training YAML or the `dataset_paths` interpolation it "
@@ -1191,7 +1166,6 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Targets (from dataset YAML): {target_config}")
 
     # -- Log dataset metadata (rank 0) --------------------------------------------
-    recipe_root = Path(__file__).resolve().parent.parent
     if dist_manager.rank == 0 and log_jsonl is not None:
         log_jsonl(
             {
@@ -1241,9 +1215,10 @@ def main(cfg: DictConfig) -> None:
         )
 
     if normalizer is not None:
-        logger.info(
-            f"Normalization: {', '.join(f'{k}({v["type"]})' for k, v in normalizer.stats.items())}"
+        norm_summary = ", ".join(
+            f"{k}({v['type']})" for k, v in normalizer.stats.items()
         )
+        logger.info(f"Normalization: {norm_summary}")
 
     optimizer = build_muon_optimizer(model, cfg, compile_optimizer=cfg.compile)
     logger.info(f"Optimizer: {optimizer}")

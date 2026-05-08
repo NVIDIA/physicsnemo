@@ -39,7 +39,7 @@ import torch.distributed as dist
 from jaxtyping import Float
 from tensordict import TensorDict
 
-from utils import FieldType, align_scalar_shapes, field_dim
+from utils import FieldType, align_scalar_shapes, field_dim, validate_field_coverage
 
 ### Recipe-wide alias for the metric-name enum that the dataset YAMLs use.
 MetricName: TypeAlias = Literal["mae", "l1", "l2"]
@@ -208,16 +208,7 @@ class MetricCalculator:
             TensorDict only treats ``/`` as nested when the caller
             explicitly invokes ``flatten_keys("/")``.
         """
-        pred_keys = set(pred.keys())
-        target_keys = set(target.keys())
-        missing_pred = set(self.target_config) - pred_keys
-        missing_target = set(self.target_config) - target_keys
-        if missing_pred:
-            raise KeyError(f"pred is missing target fields {sorted(missing_pred)!r}")
-        if missing_target:
-            raise KeyError(
-                f"target is missing target fields {sorted(missing_target)!r}"
-            )
+        validate_field_coverage(self.target_config, pred, target)
 
         ### Build the per-field bag as a plain dict during the loop so
         ### the inner ``out.update(...)`` calls stay simple, then wrap

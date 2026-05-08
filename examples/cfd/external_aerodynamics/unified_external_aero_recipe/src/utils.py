@@ -178,6 +178,24 @@ def align_scalar_shapes(
     return p, t
 
 
+def validate_field_coverage(
+    target_config: dict[str, FieldType],
+    pred: TensorDict,
+    target: TensorDict,
+) -> None:
+    """Raise ``KeyError`` if *pred* or *target* is missing any field in *target_config*.
+
+    Shared precondition check at the top of :class:`loss.LossCalculator` and
+    :class:`metrics.MetricCalculator`. The error message identifies which
+    side (``pred`` vs ``target``) is missing fields so config bugs surface
+    against the right tensor.
+    """
+    for label, source in (("pred", pred), ("target", target)):
+        missing = set(target_config) - set(source.keys())
+        if missing:
+            raise KeyError(f"{label} is missing target fields {sorted(missing)!r}")
+
+
 # ---------------------------------------------------------------------------
 # Re-dimensionalization (model-space -> physical units)
 # ---------------------------------------------------------------------------

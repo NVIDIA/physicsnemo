@@ -43,7 +43,7 @@ import torch.nn.functional as F
 from jaxtyping import Float
 from tensordict import TensorDict
 
-from utils import FieldType, align_scalar_shapes, field_dim
+from utils import FieldType, align_scalar_shapes, field_dim, validate_field_coverage
 
 _LOGGER = logging.getLogger("training.loss")
 
@@ -247,16 +247,7 @@ class LossCalculator:
             ``/`` as nested when the caller explicitly invokes
             ``flatten_keys("/")``.
         """
-        pred_keys = set(pred.keys())
-        target_keys = set(target.keys())
-        missing_pred = set(self.target_config) - pred_keys
-        missing_target = set(self.target_config) - target_keys
-        if missing_pred:
-            raise KeyError(f"pred is missing target fields {sorted(missing_pred)!r}")
-        if missing_target:
-            raise KeyError(
-                f"target is missing target fields {sorted(missing_target)!r}"
-            )
+        validate_field_coverage(self.target_config, pred, target)
 
         ### Find a tensor we can use to seed the accumulator's dtype/device.
         any_pred = next(iter(pred.values()))

@@ -49,7 +49,7 @@ NondimFieldType: TypeAlias = Literal[
 ]
 
 
-def _freestream_scales(
+def freestream_scales(
     global_data: TensorDict,
 ) -> tuple[
     Float[torch.Tensor, ""],
@@ -399,13 +399,9 @@ class NonDimensionalizeByMetadata(MeshTransform):
             New TensorDict (same keys, batch_size, and device as *td*)
             whose leaves are in physical units.
         """
-        ### `named_apply` walks every leaf and collects the per-leaf
-        ### return values into a fresh TensorDict (no separate clone
-        ### needed). Iteration is over `td`'s leaves rather than
-        ### `field_types`, so leaves whose names are absent from
-        ### `field_types` are returned unchanged -- equivalent to the
-        ### previous loop's "skip" branch on the recipe's flat per-
-        ### field TDs (one leaf per target name).
+        ### ``named_apply`` walks every leaf in ``td`` and collects the
+        ### returns into a fresh TD; leaves whose name is absent from
+        ### ``field_types`` pass through unchanged.
         def _redim(name: str, val: torch.Tensor) -> torch.Tensor:
             ftype = field_types.get(name)
             if ftype is None:
@@ -420,9 +416,8 @@ class NonDimensionalizeByMetadata(MeshTransform):
                 T_inf=T_inf,
             )
 
-        ### `named_apply` is typed `TensorDict | None` because of the
-        ### in-place mode; we only ever use the out-of-place path so
-        ### the runtime type is always `TensorDict`.
+        ### ``named_apply`` is typed ``TensorDict | None`` for its
+        ### in-place mode; the out-of-place path always returns a TD.
         return td.named_apply(_redim)  # ty: ignore[invalid-return-type]
 
     def extra_repr(self) -> str:
