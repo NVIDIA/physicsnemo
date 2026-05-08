@@ -88,9 +88,9 @@ _LOGGER = logging.getLogger("training.build_dataloaders")
 ### to be useful without changing the rest of the training contract.
 _PROFILE_MAX_STEPS = 10
 
-### Allowed mixed-precision modes for the autocast context + input pre-cast.
-### Validated only structurally (via the type), not at runtime: an unknown
-### value falls through to a no-op autocast in `get_autocast_context`.
+### Allowed mixed-precision modes for the autocast context. Validated only
+### structurally (via the type), not at runtime: an unknown value falls
+### through to a no-op autocast in `get_autocast_context`.
 Precision: TypeAlias = Literal["float32", "float16", "bfloat16", "float8"]
 
 
@@ -259,18 +259,6 @@ def _recursive_to_device(obj: Any, device: torch.device | str) -> Any:
     )
 
 
-def _recursive_cast_floats(obj: Any, dtype: torch.dtype) -> Any:
-    """Cast floating-point tensors in a nested value to *dtype*; skip everything else.
-
-    Non-float tensors (e.g. ``Mesh.cells`` in int64) pass through
-    unchanged via the same ``is_floating_point()`` guard at every level.
-    Tensor-aware containers use the default ``.apply(leaf_fn)`` path so
-    integer leaves stay integer (a plain ``container.to(dtype)`` would
-    cast them too).
-    """
-    return _recursive_apply(obj, lambda t: t.to(dtype) if t.is_floating_point() else t)
-
-
 def forward_pass(
     batch: dict[str, Any],
     model: torch.nn.Module,
@@ -291,8 +279,8 @@ def forward_pass(
         model: Model whose ``forward`` accepts the resolved
             ``forward_kwargs`` as keyword arguments.
         precision: One of ``"float32"``, ``"float16"``, ``"bfloat16"``,
-            ``"float8"``. Float kwargs are pre-cast to this dtype before
-            the autocast context wraps the forward call.
+            ``"float8"``. Wraps the forward call in the matching
+            ``torch.autocast`` context; inputs keep their native dtype.
         loss_calculator: Returns ``(loss, loss_td)`` from
             ``(pred, target)`` TensorDicts.
         metric_calculator: Returns a per-field metrics ``TensorDict``.
@@ -313,24 +301,7 @@ def forward_pass(
     forward_kwargs = batch["forward_kwargs"]
     targets: TensorDict = batch["targets"]
 
-    ### Pre-cast float kwargs to the autocast dtype before entering the
-    ### autocast context. This is load-bearing for mesh-input models like
-    ### GLOBE: torch.autocast intercepts the first op of each tensor it
-    ### sees, but it does NOT reach inside Mesh / DomainMesh / TensorDict
-    ### leaves -- the cells / point_data / boundary tensors stay at their
-    ### original dtype unless we materialize the cast here. For tensor-
-    ### input models, the pre-cast is partially redundant with autocast
-    ### but harmless and keeps a single code path.
-    ###
-    ### `_recursive_cast_floats` skips integer tensors (e.g. Mesh.cells)
-    ### so connectivity stays valid through bf16 / fp16 training. fp8 and
-    ### fp32 fall through (no pre-cast) -- fp8 is handled inside
-    ### `te.fp8_autocast`, fp32 needs no cast at all.
-    dtype_map = {"float16": torch.float16, "bfloat16": torch.bfloat16}
-    dtype = dtype_map.get(precision)
-    if dtype is not None:
-        forward_kwargs = _recursive_cast_floats(forward_kwargs, dtype)
-
+    ### Inputs keep their native dtype; autocast handles model-internal precision.
     with get_autocast_context(precision):
         output = model(**forward_kwargs)
 
