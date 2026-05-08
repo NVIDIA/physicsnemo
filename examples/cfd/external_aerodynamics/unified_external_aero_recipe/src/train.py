@@ -813,11 +813,14 @@ def _build_manifest_samplers(
         world_size=world_size,
         drop_last=True,
     )
+    ### When no explicit val split is configured, fall back to the train
+    ### *indices* but build a separate non-shuffled, no-drop sampler so the
+    ### val loader sees a deterministic, full-coverage iteration order. The
+    ### previous behavior (returning the same shuffled / drop_last sampler
+    ### for both) made val metrics non-reproducible across epochs and
+    ### silently dropped the last partial batch.
     if val_indices is None:
-        ### Fall back to the train sampler so val_loader still has a
-        ### deterministic order; callers that want a real val split must
-        ### either provide val_split / val_manifest or use directory mode.
-        return train_sampler, train_sampler
+        val_indices = train_indices
     val_sampler = ManifestSampler(
         val_indices,
         shuffle=False,
