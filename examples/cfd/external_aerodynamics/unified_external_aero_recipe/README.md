@@ -12,21 +12,20 @@ a number of recipes, across a range of models, all working on different models
 with unique data handling, pipelines, model architectures, metrics, training
 paradigms, etc.  While there is nothing wrong with that, it does make comparison
 challenging and development of new models somewhat challenging.  In this folder,
-we have unified the external aerodynamic recipes for most of our best models (notably
-missing is our newest model, still in development for large 3D use cases: GLOBE).
+we have unified the external aerodynamic recipes for our best models, including
+GLOBE (our newest model, designed for large 3D use cases).
 
 Here, you're able to train the following models:
 - [Transolver](https://arxiv.org/abs/2402.02366)
-- [GeoTransolver](https://arxiv.org/abs/2512.20399)
-- [FLARE](https://arxiv.org/abs/2508.12594)
-- GeoTransolver also supports using the FLARE attention mechanism backend
+- [GeoTransolver](https://arxiv.org/abs/2512.20399), optionally using the [FLARE](https://arxiv.org/abs/2508.12594) attention mechanism backend
+- [GLOBE](https://arxiv.org/abs/2511.15856) (mesh-native; configs available for the DrivAerML surface and volume datasets)
 - DoMINO is coming shortly
 
 We currently support the following datasets:
 - DrivaerML
 
 Support for these datasets is coming imminently, with pre-processing support from
-physicsnemo curator:
+PhysicsNeMo-Curator:
 - ShiftSUV Estate
 - ShiftSUV Fastback
 - ShiftWING
@@ -319,6 +318,8 @@ Available training configs:
 | `train_transolver_automotive_volume` | Transolver | Automotive volume (U, p, nut) |
 | `train_flare_automotive_surface` | FLARE | Automotive surface (Cp, Cf) |
 | `train_flare_automotive_volume` | FLARE | Automotive volume (U, p, nut) |
+| `train_globe_automotive_surface` | GLOBE | Automotive surface (Cp, Cf) |
+| `train_globe_automotive_volume` | GLOBE | Automotive volume (U, p, nut) |
 | `train_highlift_surface` | GeoTransolver | High-lift surface (P, T, rho, U, tau_wall) |
 | `train_highlift_volume` | GeoTransolver | High-lift volume (P, T, rho, U) |
 | `train_domino_automotive_surface` | DoMINO | Automotive surface (Cp, Cf) - **DRAFT, does not run yet**: dataset pipeline doesn't expose the per-cell neighbor / grid features DoMINO needs |
