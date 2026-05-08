@@ -51,9 +51,12 @@ from collate import build_collate_fn
 from datasets import (
     ManifestSampler,
     build_dataset,
+    find_normalizer,
     load_dataset_config,
     load_manifest,
     resolve_manifest_indices,
+    resolve_manifest_spec,
+    validate_dataset_consistency,
 )
 from loss import LossCalculator
 from metrics import DEFAULT_METRICS, MetricCalculator, MetricName
@@ -949,7 +952,7 @@ def build_dataloaders(
                 ds_metadata,
             )
         else:
-            _validate_dataset_consistency(
+            validate_dataset_consistency(
                 ds_key,
                 ds_targets,
                 ds_metrics,
@@ -959,7 +962,7 @@ def build_dataloaders(
                 first_metadata,
             )
 
-        manifest_spec = _resolve_manifest_spec(ds_yaml, ds_cfg_block)
+        manifest_spec = resolve_manifest_spec(ds_yaml, ds_cfg_block)
         if manifest_spec is not None:
             using_manifests = True
             ### Manifest mode: the reader must see ALL runs under one
@@ -1010,7 +1013,7 @@ def build_dataloaders(
     if not train_datasets:
         raise RuntimeError("No valid datasets found. Check data paths in config.")
 
-    normalizer = _find_normalizer(train_datasets)
+    normalizer = find_normalizer(train_datasets)
     collate_fn = _build_collate(cfg, first_targets or {})
     train_dataset = _combine_datasets(train_datasets)
 
