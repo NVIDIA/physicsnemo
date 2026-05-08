@@ -774,7 +774,14 @@ def _build_directory_samplers(
     use_distributed: bool,
     sampler_seed: int,
 ) -> tuple[Sampler | None, Sampler | None]:
-    """Per-split DistributedSamplers (or `(None, None)` on a single rank)."""
+    """Per-split :class:`DistributedSampler` pair for **directory-mode** datasets.
+
+    Used when each split has its own dataset (separate ``train_datadir``
+    and ``val_datadir`` in the dataset YAML); manifest-mode shares a
+    single dataset across splits and uses :func:`_build_manifest_samplers`
+    instead. Returns ``(None, None)`` on a single rank, where torch's
+    default sequential sampler is sufficient.
+    """
     if not use_distributed:
         return None, None
     train_sampler = torch.utils.data.distributed.DistributedSampler(
