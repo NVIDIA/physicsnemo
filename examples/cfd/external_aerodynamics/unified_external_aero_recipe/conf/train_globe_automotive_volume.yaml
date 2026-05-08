@@ -65,8 +65,8 @@ model:
   hidden_layer_sizes: [256, 256, 256]
   n_latent_scalars: 8
   n_latent_vectors: 4
-  n_spherical_harmonics: 4
-  theta: 1.0
+  n_spherical_harmonics: 1
+  theta: 10.0
   leaf_size: 1
   network_type: "pade"
   self_regularization_beta: 0.01
@@ -76,13 +76,13 @@ model:
 # -- Dataset -----------------------------------------------------------------
 dataset:
   name: drivaer_ml_volume
-  sampling_resolution: 80000
+  sampling_resolution: 50000
   metrics: [l2]
 
 # -- Training ----------------------------------------------------------------
 training:
   seed: 42
-  num_epochs: 500
+  num_epochs: 10000
   save_interval: 25
   loss_type: "huber"
   ### `field_weights:` is currently a no-op (every weight is 1.0, the
