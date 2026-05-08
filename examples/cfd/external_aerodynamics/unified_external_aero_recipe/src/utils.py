@@ -19,18 +19,35 @@
 from __future__ import annotations
 
 import random
-from typing import Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 import numpy as np
 import torch
 from omegaconf import DictConfig
+from tensordict import TensorDict
 
 from physicsnemo.optim import CombinedOptimizer
+
+if TYPE_CHECKING:
+    from nondim import NondimFieldType, NonDimensionalizeByMetadata
+    from physicsnemo.datapipes.transforms.mesh import NormalizeMeshFields
 
 ### Recipe-wide type aliases. Re-exported for use in loss.py, metrics.py,
 ### output_normalize.py, forward_kwargs.py, collate.py, train.py, and the
 ### tests so that ``target_config`` values share a single source of truth.
 FieldType: TypeAlias = Literal["scalar", "vector"]
+
+### Default mapping from a field's `target_config` type to the nondim
+### recipe used by `NonDimensionalizeByMetadata`. Surface CFD predictions
+### follow this convention by default (pressure scalars are non-dim'd as
+### Cp; vector fields like wall shear stress are non-dim'd as Cf via the
+### dynamic-pressure scaling). Override per-field via
+### `nondim_type_overrides` when a field doesn't follow it (e.g.
+### temperature scalars or velocity vectors).
+_DEFAULT_NONDIM_TYPE_FROM_FIELD_TYPE: dict[FieldType, "NondimFieldType"] = {
+    "scalar": "pressure",
+    "vector": "stress",
+}
 
 
 def set_seed(seed: int | None, rank: int = 0) -> None:
@@ -159,3 +176,109 @@ def align_scalar_shapes(
     elif t.ndim > p.ndim and t.shape[-1] == 1:
         t = t.squeeze(-1)
     return p, t
+
+
+# ---------------------------------------------------------------------------
+# Re-dimensionalization (model-space -> physical units)
+# ---------------------------------------------------------------------------
+
+
+def to_physical_units(
+    pred_td: TensorDict,
+    target_config: dict[str, FieldType],
+    normalizer: "NormalizeMeshFields | None",
+    nondim_transform: "NonDimensionalizeByMetadata | None",
+    metadata: dict[str, Any],
+    nondim_type_overrides: dict[str, "NondimFieldType"] | None = None,
+) -> TensorDict:
+    """Convert a per-field model-space TensorDict back to physical units.
+
+    Symmetric inverse of the dataset's normalize + non-dim pipeline.
+    Chains the two existing per-field inverses (rather than going via
+    a flat tensor) so the inference path can stay TensorDict-native:
+
+    1. :meth:`NormalizeMeshFields.inverse_td` undoes z-score
+       normalization (additive shift / multiplicative scale per field).
+    2. :meth:`NonDimensionalizeByMetadata.inverse_td` undoes the
+       freestream-conditioned non-dimensionalization
+       (e.g. Cp -> p in Pa).
+
+    Either step is skipped if the corresponding transform is ``None``,
+    so callers can use this with a partially-configured pipeline (e.g.
+    a model that was only normalized, or only non-dim'd).
+
+    Parameters
+    ----------
+    pred_td : TensorDict
+        Predictions keyed by field name, in model-space (post-normalize,
+        post-nondim). Each leaf can be any shape.
+    target_config : dict[str, FieldType]
+        ``{field_name: "scalar"|"vector"}`` for every key in
+        ``pred_td``. Drives the default nondim recipe lookup
+        (``scalar`` -> ``pressure``, ``vector`` -> ``stress``).
+    normalizer : NormalizeMeshFields | None
+        The dataset's normalizer (or ``None`` to skip the inverse-norm
+        step).
+    nondim_transform : NonDimensionalizeByMetadata | None
+        The dataset's non-dim transform (or ``None`` to skip the
+        inverse-nondim step).
+    metadata : dict[str, Any]
+        Freestream conditions used to compute reference scales:
+        requires ``U_inf`` and ``rho_inf`` (and ``p_inf`` for pressure-
+        like fields). ``T_inf`` is required only when a field is mapped
+        to ``"temperature"``. Coerced to tensors of ``pred_td``'s dtype
+        and device.
+    nondim_type_overrides : dict[str, NondimFieldType] | None
+        Per-field overrides to the default nondim-type lookup. Use for
+        fields where the default ``scalar -> pressure`` /
+        ``vector -> stress`` mapping doesn't apply (e.g.
+        ``{"temperature": "temperature"}``).
+
+    Returns
+    -------
+    TensorDict
+        New TensorDict (same keys, batch_size, and device as *pred_td*)
+        with leaves in physical units. Returned as-is when both
+        transforms are ``None`` and *metadata* is empty (no work to do).
+    """
+    if normalizer is None and (nondim_transform is None or not metadata):
+        return pred_td
+
+    out = pred_td
+    if normalizer is not None:
+        out = normalizer.inverse_td(out)
+
+    if nondim_transform is not None and metadata:
+        ### Reference scales must match the predictions' dtype/device
+        ### so the per-field arithmetic stays on-device and dtype-stable.
+        any_leaf = next(iter(out.values()))
+        device, dtype = any_leaf.device, any_leaf.dtype
+
+        def _scalar(name: str) -> torch.Tensor:
+            return torch.as_tensor(metadata[name], dtype=dtype, device=device)
+
+        U_inf = _scalar("U_inf")
+        rho_inf = _scalar("rho_inf")
+        p_inf = _scalar("p_inf")
+        q_inf = 0.5 * rho_inf * (U_inf * U_inf).sum()
+        U_inf_mag = (U_inf * U_inf).sum().sqrt()
+        T_inf = _scalar("T_inf") if "T_inf" in metadata else None
+
+        ### Resolve each field's nondim recipe: explicit override wins,
+        ### otherwise fall back on the scalar/vector default mapping.
+        overrides = nondim_type_overrides or {}
+        nondim_fields: dict[str, NondimFieldType] = {
+            name: overrides.get(name, _DEFAULT_NONDIM_TYPE_FROM_FIELD_TYPE[ftype])
+            for name, ftype in target_config.items()
+        }
+        out = nondim_transform.inverse_td(
+            out,
+            nondim_fields,
+            q_inf,
+            p_inf,
+            U_inf_mag,
+            rho_inf=rho_inf,
+            T_inf=T_inf,
+        )
+
+    return out

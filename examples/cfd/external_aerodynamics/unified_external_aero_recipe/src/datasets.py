@@ -32,6 +32,7 @@ is entirely in the YAML transform chain (volume YAMLs already produce a
 from __future__ import annotations
 
 import json
+import logging
 import math
 import sys
 from collections.abc import Iterator
@@ -54,11 +55,19 @@ from torch.utils.data import Sampler
 
 import physicsnemo.datapipes  # noqa: F401  (registers ${dp:...} resolvers)
 from physicsnemo.datapipes import MeshDataset
-from physicsnemo.datapipes.transforms.mesh import MeshTransform
+from physicsnemo.datapipes.transforms.mesh import MeshTransform, NormalizeMeshFields
 from physicsnemo.mesh import DomainMesh, Mesh
 
 import nondim  # noqa: F401  (registers NonDimensionalizeByMetadata)
 import sdf  # noqa: F401  (registers ComputeSDFFromBoundary, DropBoundary)
+from metrics import MetricName
+from utils import FieldType
+
+### Module-level logger used for warnings emitted from helpers below
+### (e.g. ``validate_dataset_consistency``). Goes through the same Python
+### logging pipeline as the recipe's ``PythonLogger``, so it shows up in
+### whatever handlers the training script has configured.
+_LOGGER = logging.getLogger("training.datasets")
 
 
 def load_dataset_config(yaml_path: str | Path) -> DictConfig:
@@ -200,6 +209,109 @@ class _InjectMetadata(MeshTransform):
 
     def extra_repr(self) -> str:
         return f"fields={sorted(self._fields.keys())}"
+
+
+def find_normalizer(
+    datasets: list[MeshDataset],
+) -> NormalizeMeshFields | None:
+    """Return the first :class:`NormalizeMeshFields` found across *datasets* pipelines.
+
+    Used at checkpoint-save time to persist normalization stats alongside
+    the model weights so inference can re-apply the inverse. Returns
+    ``None`` when no dataset has a ``NormalizeMeshFields`` transform.
+    """
+    for ds in datasets:
+        for t in getattr(ds, "transforms", []):
+            if isinstance(t, NormalizeMeshFields):
+                return t
+    return None
+
+
+def validate_dataset_consistency(
+    ds_key: str,
+    ds_targets: dict[str, FieldType],
+    ds_metrics: list[MetricName],
+    ds_metadata: dict[str, Any],
+    first_targets: dict[str, FieldType],
+    first_metrics: list[MetricName],
+    first_metadata: dict[str, Any],
+) -> None:
+    """Reject ``targets:`` mismatch across multi-dataset training; warn on softer drift.
+
+    ``targets:`` is the loss / metric contract; mismatched names or types
+    silently produces wrong per-field losses (only the first dataset's
+    keys are honored downstream). ``metrics:`` and ``metadata:`` are
+    softer -- the recipe still uses the first dataset's view -- but
+    drift is almost always a config bug, so we warn loudly.
+    """
+    if ds_targets != first_targets:
+        raise ValueError(
+            f"Dataset {ds_key!r} declares targets={ds_targets!r}, "
+            f"which does not match the first dataset's targets="
+            f"{first_targets!r}. All datasets in `cfg.data` must "
+            f"declare the same `targets:` block (same names, same "
+            f"types, same iteration order)."
+        )
+    if ds_metrics != first_metrics:
+        _LOGGER.warning(
+            f"Dataset {ds_key!r} declares metrics={ds_metrics!r}, "
+            f"which differs from the first dataset's metrics="
+            f"{first_metrics!r}. Using the first dataset's metrics."
+        )
+    if ds_metadata != first_metadata:
+        _LOGGER.warning(
+            f"Dataset {ds_key!r} has metadata that differs from the "
+            f"first dataset's; using the first dataset's metadata "
+            f"for the loss / non-dim back-conversion. Per-dataset "
+            f"metadata is still injected into each sample's "
+            f"global_data by the dataset builder."
+        )
+
+
+def resolve_manifest_spec(
+    ds_yaml: DictConfig, ds_cfg_block: DictConfig
+) -> dict | None:
+    """Resolve a `data.<key>` block's manifest config; return ``None`` for directory mode.
+
+    Two manifest styles are recognised:
+
+    - **Style A (separate files):** ``train_manifest`` / ``val_manifest``
+      point at flat lists of run subpaths.
+    - **Style B (single dict manifest):** ``manifest`` + ``train_split`` /
+      ``val_split`` keys into a JSON dict. If ``manifest`` is omitted, we
+      look for a sibling ``manifest.json`` next to the dataset YAML's
+      ``train_datadir``.
+
+    Returns a flat dict with both styles' fields present (extras are
+    ``None``); returns ``None`` if neither style is configured.
+    """
+    train_manifest = ds_cfg_block.get("train_manifest", None)
+    val_manifest = ds_cfg_block.get("val_manifest", None)
+    manifest = ds_cfg_block.get("manifest", None)
+    train_split = ds_cfg_block.get("train_split", None)
+    val_split = ds_cfg_block.get("val_split", None)
+
+    ### Auto-derive manifest path from `train_datadir/manifest.json` when
+    ### the user gave a split key but no explicit manifest path.
+    if manifest is None and train_split is not None:
+        train_datadir = OmegaConf.select(ds_yaml, "train_datadir", default=None)
+        if train_datadir:
+            derived = Path(str(train_datadir)) / "manifest.json"
+            if derived.exists():
+                manifest = str(derived)
+
+    has_manifest = train_manifest is not None or (
+        manifest is not None and train_split is not None
+    )
+    if not has_manifest:
+        return None
+    return {
+        "train_manifest": train_manifest,
+        "val_manifest": val_manifest,
+        "manifest": manifest,
+        "train_split": train_split,
+        "val_split": val_split,
+    }
 
 
 def build_dataset(
