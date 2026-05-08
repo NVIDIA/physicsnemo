@@ -12,21 +12,19 @@ a number of recipes, across a range of models, all working on different models
 with unique data handling, pipelines, model architectures, metrics, training
 paradigms, etc.  While there is nothing wrong with that, it does make comparison
 challenging and development of new models somewhat challenging.  In this folder,
-we have unified the external aerodynamic recipes for most of our best models (notably
-missing is our newest model, still in development for large 3D use cases: GLOBE).
+we have unified the external aerodynamic recipes for our best models, including
+GLOBE (our newest model, designed for large 3D use cases).
 
 Here, you're able to train the following models:
 - [Transolver](https://arxiv.org/abs/2402.02366)
-- [GeoTransolver](https://arxiv.org/abs/2512.20399)
-- [FLARE](https://arxiv.org/abs/2508.12594)
-- GeoTransolver also supports using the FLARE attention mechanism backend
+- [GeoTransolver](https://arxiv.org/abs/2512.20399), optionally using the [FLARE](https://arxiv.org/abs/2508.12594) attention mechanism backend
 - DoMINO is coming shortly
 
 We currently support the following datasets:
 - DrivaerML
 
 Support for these datasets is coming imminently, with pre-processing support from
-physicsnemo curator:
+PhysicsNeMo-Curator:
 - ShiftSUV Estate
 - ShiftSUV Fastback
 - ShiftWING
