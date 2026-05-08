@@ -399,12 +399,19 @@ class NonDimensionalizeByMetadata(MeshTransform):
             New TensorDict (same keys, batch_size, and device as *td*)
             whose leaves are in physical units.
         """
-        out = td.clone()
-        for name, ftype in field_types.items():
-            if name not in out.keys():
-                continue
-            out[name] = _redim_field(
-                out[name],
+        ### `named_apply` walks every leaf and collects the per-leaf
+        ### return values into a fresh TensorDict (no separate clone
+        ### needed). Iteration is over `td`'s leaves rather than
+        ### `field_types`, so leaves whose names are absent from
+        ### `field_types` are returned unchanged -- equivalent to the
+        ### previous loop's "skip" branch on the recipe's flat per-
+        ### field TDs (one leaf per target name).
+        def _redim(name: str, val: torch.Tensor) -> torch.Tensor:
+            ftype = field_types.get(name)
+            if ftype is None:
+                return val
+            return _redim_field(
+                val,
                 ftype,
                 q_inf,
                 p_inf,
@@ -412,7 +419,11 @@ class NonDimensionalizeByMetadata(MeshTransform):
                 rho_inf=rho_inf,
                 T_inf=T_inf,
             )
-        return out
+
+        ### `named_apply` is typed `TensorDict | None` because of the
+        ### in-place mode; we only ever use the out-of-place path so
+        ### the runtime type is always `TensorDict`.
+        return td.named_apply(_redim)  # ty: ignore[invalid-return-type]
 
     def extra_repr(self) -> str:
         return f"fields={self._fields}, association={self._association!r}"

@@ -446,13 +446,13 @@ pipeline:
       fields:
         pMeanTrim: pressure
         wallShearStressMeanTrim: stress
-      section: cell_data
+      association: cell_data
     - _target_: ${dp:RenameMeshFields}
       cell_data:
         pMeanTrim: pressure
         wallShearStressMeanTrim: wss
     - _target_: ${dp:NormalizeMeshFields}
-      section: cell_data
+      association: cell_data
       fields:
         wss: {type: vector, mean: [0.0, 0.0, 0.0], std: 0.00313}
     - _target_: ${dp:ComputeSurfaceNormals}
@@ -516,9 +516,8 @@ For datasets without a manifest (e.g. SHIFT SUV), separate
    Use `MeshReader` for single-mesh files or `DomainMeshReader` for
    domain meshes that contain both interior and boundary sub-meshes.
 3. Declare the correct `metadata:` block with freestream conditions.
-4. Choose the right `section:` (`point_data` or `cell_data`) in
-   `NonDimensionalizeByMetadata`, `RenameMeshFields`, and
-   `NormalizeMeshFields`.
+4. Choose the right `association:` (`point_data` or `cell_data`) in
+   `NonDimensionalizeByMetadata` and `NormalizeMeshFields`.
 5. For cell-based surface data, add `ComputeSurfaceNormals` to compute
    per-cell normals (kept on the boundary's `cell_data`).
 6. Add inline normalization stats to `NormalizeMeshFields` (or point

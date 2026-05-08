@@ -37,12 +37,11 @@ import json
 import logging
 import os
 import time
-from collections import defaultdict
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal, TypeAlias, cast
 
 import hydra
 import omegaconf
@@ -125,13 +124,54 @@ def _flatten_config(
     return items
 
 
+def _avg_to_floats(
+    total_losses_td: TensorDict | None,
+    total_metrics_td: TensorDict | None,
+    n: int,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Divide on-device accumulators by *n* and convert to floats with one D2H transfer.
+
+    Stacks the per-field 0-D tensors from both TensorDicts into a
+    single 1-D tensor, divides once, then ``.tolist()`` issues a
+    single blocking D2H copy that produces a plain list of Python
+    floats. Cheaper than calling ``(v / n).item()`` on each leaf
+    individually -- N small copies become one larger copy with one
+    sync instead of N.
+
+    Either accumulator being ``None`` (the "not yet seeded" sentinel
+    used for zero-step epochs) returns ``({}, {})``.
+    """
+    if total_losses_td is None or total_metrics_td is None:
+        return {}, {}
+    ### `cast` is for the static type checker only -- our calculators
+    ### only ever build flat 0-D TensorDicts whose keys are str and
+    ### whose leaves are scalar tensors, so the wider TensorDict API
+    ### (tuple keys for nested access, ``TensorCollection`` leaves)
+    ### never appears at runtime. Casting once on construction keeps
+    ### the ``torch.stack`` / ``dict(zip(...))`` calls below cleanly
+    ### typed without scattering casts everywhere.
+    loss_keys = cast(list[str], list(total_losses_td.keys()))
+    metric_keys = cast(list[str], list(total_metrics_td.keys()))
+    loss_tensors = cast(list[torch.Tensor], [total_losses_td[k] for k in loss_keys])
+    metric_tensors = cast(
+        list[torch.Tensor], [total_metrics_td[k] for k in metric_keys]
+    )
+    stacked = torch.stack(loss_tensors + metric_tensors) / n
+    flat = stacked.tolist()
+    n_loss = len(loss_keys)
+    return (
+        dict(zip(loss_keys, flat[:n_loss])),
+        dict(zip(metric_keys, flat[n_loss:])),
+    )
+
+
 def _log_to_tensorboard(
     writer: SummaryWriter | None,
-    values: dict[str, float],
+    values: Mapping[str, float | torch.Tensor],
     tag_prefix: str,
     global_step: int,
 ) -> None:
-    """Write a flat dict of Python-float scalars to TensorBoard under ``tag_prefix/<key>``.
+    """Write a flat dict of scalars to TensorBoard under ``tag_prefix/<key>``.
 
     ``tag_prefix`` is the dispatch hook: the caller decides whether these
     are loss entries (e.g. ``"iteration"`` -> ``iteration/loss/pressure``,
@@ -139,10 +179,10 @@ def _log_to_tensorboard(
     (e.g. ``"iteration/metrics"`` -> ``iteration/metrics/pressure_l2``).
     The function itself does not inspect keys.
 
-    Every caller in the recipe coerces tensor values into Python floats
-    before this point (``forward_pass``'s inlined ``.item()`` and the
-    ``defaultdict(float)`` running averages in ``_run_epoch``), so this
-    helper assumes ``values`` is ``dict[str, float]``.
+    Values may be Python floats or 0-D tensors -- ``SummaryWriter.add_scalar``
+    accepts either. Tensor inputs trigger an internal D2H sync per call;
+    callers that want a single sync per step should pre-convert values
+    to floats with a single batched ``.item()`` walk first.
     """
     if writer is None:
         return
@@ -262,7 +302,7 @@ def forward_pass(
     *,
     output_type: IOType,
     target_config: dict[str, FieldType],
-) -> tuple[torch.Tensor, dict[str, float], dict[str, float]]:
+) -> tuple[torch.Tensor, TensorDict, TensorDict]:
     """Run a forward pass + loss + metrics on one collated batch.
 
     Args:
@@ -275,18 +315,22 @@ def forward_pass(
         precision: One of ``"float32"``, ``"float16"``, ``"bfloat16"``,
             ``"float8"``. Float kwargs are pre-cast to this dtype before
             the autocast context wraps the forward call.
-        loss_calculator: Returns ``(loss, loss_dict)`` from
+        loss_calculator: Returns ``(loss, loss_td)`` from
             ``(pred, target)`` TensorDicts.
-        metric_calculator: Returns a flat ``{name: scalar}`` metrics dict.
+        metric_calculator: Returns a per-field metrics ``TensorDict``.
         output_type: ``"mesh"`` or ``"tensors"``; controls how the model
             output is unpacked into a TensorDict.
         target_config: ``{name: "scalar"|"vector"}``; used to split tensor
             outputs and validate Mesh outputs.
 
     Returns:
-        ``(loss, loss_dict, metric_dict)``. The two dicts are kept
+        ``(loss, loss_td, metric_td)``. The two TensorDicts are kept
         separate so callers can route them to different log namespaces
-        without textual key inspection.
+        without textual key inspection. Per-field values are returned
+        as **detached, on-device 0-D tensors** (no ``.item()`` sync
+        here): the caller decides when to sync, so the loss kernels can
+        overlap with backward instead of being serialised by an
+        in-line D2H transfer.
     """
     forward_kwargs = batch["forward_kwargs"]
     targets: TensorDict = batch["targets"]
@@ -321,14 +365,15 @@ def forward_pass(
     loss, loss_td = loss_calculator(pred_f32, target_f32)
     with torch.no_grad():
         metric_td = metric_calculator(pred_f32, target_f32)
-    ### Move every per-field tensor off-device into a plain Python float
-    ### before returning so the caller can sum / log without holding on
-    ### to autograd graph fragments or device tensors.
-    return (
-        loss,
-        {k: v.item() for k, v in loss_td.items()},
-        {k: v.item() for k, v in metric_td.items()},
-    )
+    ### Detach per-field values to drop the autograd graph but keep the
+    ### tensors on-device. The previous implementation called ``.item()``
+    ### here, which forced a blocking D2H sync per field BEFORE backward
+    ### even started -- serialising the forward kernels with the host.
+    ### Callers ``_run_epoch`` / consumers do the (now batched) sync
+    ### themselves, after backward + optimizer.step have queued more
+    ### work for the GPU to chew on. ``TensorDict.detach()`` returns a
+    ### new TD with every leaf detached in one fast-apply walk.
+    return loss, loss_td.detach(), metric_td.detach()
 
 
 def _run_epoch(
@@ -380,9 +425,15 @@ def _run_epoch(
     grad_ctx = nullcontext() if is_train else torch.no_grad()
     log_prefix = "Epoch" if is_train else "Val Epoch"
 
+    ### `total_loss` is a Python float fed by the per-step print line's
+    ### sync; `total_losses_td` / `total_metrics_td` are on-device
+    ### TensorDict accumulators (one 0-D leaf per field) that defer
+    ### their D2H transfer to the single batched ``.tolist()`` at
+    ### end-of-epoch. ``None`` here means "not yet seeded"; the first
+    ### iteration clones the per-step TensorDict to break aliasing.
     total_loss = 0.0
-    total_losses: dict[str, float] = defaultdict(float)
-    total_metrics: dict[str, float] = defaultdict(float)
+    total_losses_td: TensorDict | None = None
+    total_metrics_td: TensorDict | None = None
     precision = getattr(cfg, "precision", "float32")
     n_batches = 0
     num_steps = len(dataloader)
@@ -415,17 +466,29 @@ def _run_epoch(
                 if cfg.training.get("scheduler_update_mode", "epoch") == "step":
                     scheduler.step()
 
+            ### Accumulate on-device with no sync. First-iteration values
+            ### are cloned so the in-place ``add_`` on subsequent
+            ### iterations doesn't mutate the per-step ``losses`` /
+            ### ``metrics`` TensorDicts. ``TensorDict.add_(other_td)``
+            ### is a single batched op that walks every leaf in
+            ### lockstep -- one Python-level call instead of N.
+            ### The two accumulators are seeded together; the type
+            ### checker can't see this invariant from the per-variable
+            ### narrowing alone, hence the explicit assert.
+            if total_losses_td is None or total_metrics_td is None:
+                total_losses_td = losses.clone()
+                total_metrics_td = metrics.clone()
+            else:
+                total_losses_td.add_(losses)
+                total_metrics_td.add_(metrics)
+            n_batches += 1
+
+            ### Single per-step sync for the print line. By landing here
+            ### *after* backward + optimizer.step, the queued kernels are
+            ### already chewing on something else, so this `.item()` waits
+            ### only for the loss kernel rather than serialising forward.
             this_loss = loss.detach().item()
             total_loss += this_loss
-            n_batches += 1
-            ### `losses` and `metrics` are already `dict[str, float]` (the
-            ### Tensor->float coercion happens once in `forward_pass`'s
-            ### inlined `.item()` calls), so the per-key write here just
-            ### sums through `defaultdict(float)`'s automatic 0.0 seeding.
-            for k, v in losses.items():
-                total_losses[k] += v
-            for k, v in metrics.items():
-                total_metrics[k] += v
 
             step_dt = time.perf_counter() - step_t0
             mem_gb = (
@@ -447,14 +510,27 @@ def _run_epoch(
             ### epoch-level entry below to keep dashboards uncluttered.
             if is_train and dist_manager.rank == 0:
                 global_step = epoch * num_steps + i
+                ### Convert per-field tensors to floats once, here, so TB
+                ### + JSONL share the same batched D2H walk and we don't
+                ### ``.item()`` each value twice. The ``cast`` is for the
+                ### static type checker only -- our calculators only ever
+                ### emit flat 0-D scalar Tensor leaves keyed by str; the
+                ### wider ``Tensor | TensorCollection`` value type from
+                ### TensorDict.items() never appears at runtime.
+                losses_floats = {
+                    k: cast(torch.Tensor, v).item() for k, v in losses.items()
+                }
+                metrics_floats = {
+                    k: cast(torch.Tensor, v).item() for k, v in metrics.items()
+                }
                 if writer is not None:
                     ### Loss keys already start with `loss/`, so the iteration
                     ### prefix yields tags like `iteration/loss/pressure`;
                     ### metric tags get an explicit `iteration/metrics/...`
                     ### namespace so we never have to split by string prefix.
-                    _log_to_tensorboard(writer, losses, "iteration", global_step)
+                    _log_to_tensorboard(writer, losses_floats, "iteration", global_step)
                     _log_to_tensorboard(
-                        writer, metrics, "iteration/metrics", global_step
+                        writer, metrics_floats, "iteration/metrics", global_step
                     )
                     writer.add_scalar(
                         "iteration/lr",
@@ -479,8 +555,8 @@ def _run_epoch(
                             "loss": this_loss,
                             "mem_gb": mem_gb,
                             "step_time_s": step_dt,
-                            **losses,
-                            **metrics,
+                            **losses_floats,
+                            **metrics_floats,
                         }
                     )
 
@@ -491,8 +567,11 @@ def _run_epoch(
     epoch_dt = time.perf_counter() - epoch_t0
     n = max(n_batches, 1)
     avg_loss = total_loss / n
-    avg_losses = {k: v / n for k, v in total_losses.items()}
-    avg_metrics = {k: v / n for k, v in total_metrics.items()}
+    ### One batched D2H transfer for both dicts: stack into a single 1-D
+    ### tensor, divide once, then `.tolist()` syncs once and produces a
+    ### plain list of floats. Avoids N back-to-back `.item()` calls and
+    ### gives the GPU one large copy instead of N tiny ones.
+    avg_losses, avg_metrics = _avg_to_floats(total_losses_td, total_metrics_td, n)
 
     logger.info(
         f"Epoch {epoch} {mode} done in {epoch_dt:.1f}s "

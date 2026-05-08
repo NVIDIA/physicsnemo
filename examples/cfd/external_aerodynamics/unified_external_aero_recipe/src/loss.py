@@ -230,19 +230,22 @@ class LossCalculator:
         self,
         pred: TensorDict,
         target: TensorDict,
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    ) -> tuple[torch.Tensor, TensorDict]:
         """Compute per-field losses and a (weighted) total.
 
         Args:
             pred: TensorDict of predictions, one leaf per target field.
-                Per-element scalars are shape ``(..., N)``, per-element
-                vectors are ``(..., N, D)``. Leading batch dims are
-                arbitrary; the loss kernels reduce over them.
+                Per-element scalars are shape ``(..., N)``, per-element vectors
+                are ``(..., N, D)``. Leading batch dims are arbitrary; the loss
+                kernels reduce over them.
             target: TensorDict of the same structure as ``pred``.
 
         Returns:
-            ``(total_loss, loss_dict)``. ``loss_dict`` has one entry per
-            field (``"loss/[prefix/]<name>"``) plus a total entry.
+            ``(total_loss, loss_td)``. ``loss_td`` is a 0-D ``TensorDict`` keyed
+            by ``"loss/[prefix/]<name>"`` (one entry per field) plus the total.
+            Slash-containing keys are stored verbatim; TensorDict only treats
+            ``/`` as nested when the caller explicitly invokes
+            ``flatten_keys("/")``.
         """
         pred_keys = set(pred.keys())
         target_keys = set(target.keys())
@@ -258,6 +261,10 @@ class LossCalculator:
         ### Find a tensor we can use to seed the accumulator's dtype/device.
         any_pred = next(iter(pred.values()))
         total_loss = torch.zeros((), device=any_pred.device, dtype=any_pred.dtype)
+        ### Build the per-field bag as a plain dict during the loop so the
+        ### inner ``loss_dict[key] = ...`` assignment stays simple, then
+        ### wrap into a 0-D TensorDict at the boundary so callers get
+        ### TensorDict's batched ops (``.detach()``, ``.add_()``, ...).
         loss_dict: dict[str, torch.Tensor] = {}
 
         for name, field_type in self.target_config.items():
@@ -279,7 +286,7 @@ class LossCalculator:
 
         total_key = f"loss/{self.prefix}" if self.prefix else "loss/total"
         loss_dict[total_key] = total_loss
-        return total_loss, loss_dict
+        return total_loss, TensorDict(loss_dict)
 
     def __repr__(self) -> str:
         fields_str = ", ".join(f"{n}:{t}" for n, t in self.target_config.items())
