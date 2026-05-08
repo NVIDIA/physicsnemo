@@ -425,7 +425,7 @@ pipeline:
   reader:
     _target_: ${dp:MeshReader}
     path: ${train_datadir}
-    pattern: "**/*.pdmsh/_tensordict/boundaries/surface"
+    pattern: "**/*.pdmsh/_tensordict/boundaries/vehicle"
     subsample_n_cells: ${sampling_resolution}
   augmentations:
     - _target_: ${dp:RandomRotateMesh}
