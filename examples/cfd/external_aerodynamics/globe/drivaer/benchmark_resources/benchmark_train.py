@@ -529,7 +529,7 @@ def prepare_case_data(
     """
     torch.manual_seed(seed)
 
-    boundary = DrivAerMLDataSet._subsample_mesh(
+    boundary = DrivAerMLDataSet.subsample_mesh(
         raw_sample.prediction_mesh, n_faces_per_boundary
     )
     ### Precompute lazy geometry on CPU before transfer (same as train.py)

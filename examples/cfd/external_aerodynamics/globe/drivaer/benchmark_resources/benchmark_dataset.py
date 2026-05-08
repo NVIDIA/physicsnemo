@@ -24,7 +24,7 @@ where CPU time is spent and what can be optimized.
 The pipeline under test (per-sample) is:
 
     1. torch.load(.pt cache file from Lustre)
-    2. _subsample_mesh: randperm + slice_cells + clean + area recompute
+    2. subsample_mesh: randperm + slice_cells + clean + area recompute
     3. train.py main-thread preprocessing:
        a. slice_points (subsample surface prediction points)
        b. mesh.pad (pad boundary to fixed size)
@@ -187,7 +187,7 @@ def profile_single_sample(
     surface_n_cells = raw_sample.prediction_mesh.n_cells
     surface_n_points = raw_sample.prediction_mesh.n_points
 
-    ### Phase 2a: prediction_mesh.cell_areas.sum() (in _subsample_mesh)
+    ### Phase 2a: prediction_mesh.cell_areas.sum() (in subsample_mesh)
     t0 = perf_counter()
     total_area = raw_sample.prediction_mesh.cell_areas.sum()
     t1 = perf_counter()
