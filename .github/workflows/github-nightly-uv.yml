@@ -127,6 +127,11 @@ jobs:
     runs-on: linux-amd64-cpu8
     container:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+      # /dev/shm defaults to 64 MiB in docker, which DALI's multiprocess
+      # worker pool exhausts via SemLock allocations and trips ENOSPC
+      # ("No space left on device") in datapipes tests.  2 GiB is plenty
+      # for the test suite and matches the PyTorch container default.
+      options: --shm-size=2g
 
     steps:
     - uses: actions/checkout@v5
@@ -238,6 +243,11 @@ jobs:
     runs-on: linux-amd64-gpu-h100-latest-1
     container:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+      # /dev/shm defaults to 64 MiB in docker, which DALI's multiprocess
+      # worker pool exhausts via SemLock allocations and trips ENOSPC
+      # ("No space left on device") in datapipes tests.  2 GiB is plenty
+      # for the test suite and matches the PyTorch container default.
+      options: --shm-size=2g
 
     steps:
     - uses: actions/checkout@v5
@@ -339,6 +349,11 @@ jobs:
     runs-on: linux-amd64-gpu-h100-latest-1
     container:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+      # /dev/shm defaults to 64 MiB in docker, which DALI's multiprocess
+      # worker pool exhausts via SemLock allocations and trips ENOSPC
+      # ("No space left on device") in datapipes tests.  2 GiB is plenty
+      # for the test suite and matches the PyTorch container default.
+      options: --shm-size=2g
 
     steps:
     - uses: actions/checkout@v5

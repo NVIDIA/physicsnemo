@@ -177,8 +177,8 @@ runs:
     # Spec coupling notes:
     #   * Pure-PyPI specs mirror Dockerfile:240-243 to keep container and
     #     CI environments in lockstep.
-    #   * The pyg_lib --find-links URL encodes the locked torch version
-    #     (see uv.lock entry for torch 2.11.0+cu128).  Bump the
+    #   * The PyG --find-links URL encodes the locked torch version (see
+    #     uv.lock entry for torch 2.11.0+cu128).  Bump the
     #     torch-X.Y.Z+cu128 segment in lockstep when the torch pin moves
     #     -- same hand-maintained coupling already documented for the
     #     natten wheel index in pyproject.toml.
@@ -187,10 +187,19 @@ runs:
     # (see Dockerfile:246 for the canonical pin) is fragile in the CI
     # container.  HEALPix tests will continue to skip via @requires_module
     # until earth2grid ships a wheel or the build is fixed.
+    #
+    # torch_scatter / torch_sparse / torch_cluster are pulled in as a
+    # source build via the gnns extra.  Without CUDA toolchain visible
+    # at build time uv lands the CPU-only wheel, which makes FigConvNet
+    # (and any model calling torch_scatter.segment_csr / similar on a
+    # CUDA tensor) fail with "Not compiled with CUDA support".  Force a
+    # reinstall from the PyG wheel index, which ships pre-built CUDA
+    # wheels matching the locked torch version.
     - name: Install CI-only test dependencies
       shell: bash
       env:
         UV_LINK_MODE: copy
+        PYG_WHL_INDEX: "https://data.pyg.org/whl/torch-2.11.0+cu128.html"
       run: |
         set -euo pipefail
         echo "::group::install CI-only test dependencies"
@@ -198,13 +207,13 @@ runs:
           "moto[s3]>=5.0.28" \
           "numpy-stl" \
           "scikit-image>=0.24.0" \
-          "sparse-dot-mkl" \
           "shapely" \
           "multi-storage-client[boto3]>=0.33.0" \
           "tensorstore" \
           "pyarrow"
-        uv pip install --python .venv/bin/python pyg_lib \
-          --find-links https://data.pyg.org/whl/torch-2.11.0+cu128.html
+        uv pip install --python .venv/bin/python --reinstall \
+          torch_scatter torch_sparse torch_cluster pyg_lib \
+          --find-links "$PYG_WHL_INDEX"
         echo "::endgroup::"
 
     - name: Report cache sizes

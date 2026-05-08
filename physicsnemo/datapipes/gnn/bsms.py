@@ -226,7 +226,6 @@ from physicsnemo.nn.module.gnn_layers.utils import GraphType
 
 # Lazy imports for optional dependencies
 scipy_sparse = OptionalImport("scipy.sparse")
-sparse_dot_mkl = OptionalImport("sparse_dot_mkl")
 
 
 _INF = 1 + 1e10
@@ -398,8 +397,11 @@ class BistrideMultiLayerGraph:
 
         combined_idx_kept = list(combined_idx_kept)
         combined_idx_kept.sort()
+        # Sparse adjacency squaring (one BFS hop -> two-hop reach).  Was
+        # sparse_dot_mkl.dot_product_mkl previously; scipy's @ on CSR is
+        # equivalent and removes the libmkl_rt runtime dependency.
         adj_mat = adj_mat.tocsr().astype(float)
-        adj_mat = sparse_dot_mkl.dot_product_mkl(adj_mat, adj_mat)
+        adj_mat = adj_mat @ adj_mat
         adj_mat.setdiag(0)
         new_g = BistrideMultiLayerGraph.pool_edge(adj_mat, n, combined_idx_kept)
 

@@ -27,7 +27,7 @@ def ahmed_data_dir(nfs_data_dir):
     return nfs_data_dir.joinpath("datasets/ahmed_body")
 
 
-@requires_module(["sparse_dot_mkl", "torch_geometric", "torch_scatter"])
+@requires_module(["torch_geometric", "torch_scatter"])
 def test_bsms_mgn_forward(pytestconfig, device, set_physicsnemo_force_te):
     import torch_geometric as pyg
 
@@ -136,7 +136,7 @@ def test_bsms_mgn_constructor(device, pytestconfig, set_physicsnemo_force_te):
     assert hasattr(model, "bistride_processor")
 
 
-@requires_module(["sparse_dot_mkl", "torch_geometric", "torch_scatter"])
+@requires_module(["torch_geometric", "torch_scatter"])
 def test_bsms_mgn_shape_validation(pytestconfig, device, set_physicsnemo_force_te):
     """Test shape validation errors for BiStrideMeshGraphNet.forward"""
     import torch_geometric as pyg
@@ -189,7 +189,7 @@ def test_bsms_mgn_shape_validation(pytestconfig, device, set_physicsnemo_force_t
         _ = model(good_node, bad_edge_rank, graph, ms_edges, ms_ids)
 
 
-@requires_module(["sparse_dot_mkl", "torch_geometric", "torch_scatter"])
+@requires_module(["torch_geometric", "torch_scatter"])
 def test_bsms_mgn_ahmed(pytestconfig, ahmed_data_dir):
     from physicsnemo.datapipes.gnn.ahmed_body_dataset import AhmedBodyDataset
     from physicsnemo.datapipes.gnn.bsms import BistrideMultiLayerGraphDataset
