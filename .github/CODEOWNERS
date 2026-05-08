@@ -70,12 +70,15 @@ physicsnemo/core/ @coreyjadams @CharlelieLrt @ktangsali
 # Reusable neural network building blocks
 physicsnemo/nn/ @loliverhennigh
 
+# Symbolic PDE residual computation (PhysicsInformer)
+physicsnemo/sym/ @ktangsali
+
 # Functional operations (KNN, radius search, SDF)
 physicsnemo/nn/functional/ @loliverhennigh
-physicsnemo/nn/functional/knn/ @coreyjadams @peterdsharpe @loliverhennigh
-physicsnemo/nn/functional/radius_search/ @coreyjadams @peterdsharpe @loliverhennigh
-physicsnemo/nn/functional/natten/ @pzharrington
-physicsnemo/nn/functional/sdf.py @RishikeshRanade @loliverhennigh
+physicsnemo/nn/functional/neighbors/knn/ @coreyjadams @peterdsharpe @loliverhennigh
+physicsnemo/nn/functional/neighbors/radius_search/ @coreyjadams @peterdsharpe @loliverhennigh
+physicsnemo/nn/functional/natten.py @pzharrington
+physicsnemo/nn/functional/geometry/sdf.py @RishikeshRanade @loliverhennigh
 
 # Module layers
 physicsnemo/nn/module/ @loliverhennigh
@@ -87,6 +90,7 @@ physicsnemo/nn/module/fourier_layers.py
 physicsnemo/nn/module/fully_connected_layers.py
 physicsnemo/nn/module/transformer_layers.py
 physicsnemo/nn/module/unet_layers.py @CharlelieLrt
+physicsnemo/nn/module/pade.py @peterdsharpe
 
 # ==============================================================================
 # DISTRIBUTED & DOMAIN PARALLELISM
@@ -247,6 +251,7 @@ physicsnemo/models/vfgn/ @mnabian
 
 # Experimental deliberately has no codeowner
 physicsnemo/experimental/
+physicsnemo/experimental/datapipes/healda/ @pzharrington
 
 # ==============================================================================
 # EXAMPLES - Active Learning

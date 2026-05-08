@@ -30,7 +30,7 @@ This means you can work with:
 - 2D triangles in 3D space (surface meshes for graphics/CFD)
 - 3D tetrahedra in 3D space (volume meshes for FEM/CFD)
 - 1D edges in 3D space (curve meshes for path planning)
-- Any other n-dimensional manifold in m-dimensional space (where n ≤ m)
+- Any other $n$-dimensional manifold in $m$-dimensional space (where $n \leq m$)
 
 all with the same API. PhysicsNeMo-Mesh's API design takes heavy inspiration from
 [PyVista](https://pyvista.org/), but it is designed to be a) end-to-end
@@ -85,7 +85,7 @@ performance benefits.
 **Mesh Operations:**
 
 - **Subdivision**: Linear, [Loop](https://en.wikipedia.org/wiki/Loop_subdivision_surface)
-  (C²), and [Butterfly](https://en.wikipedia.org/wiki/Butterfly_subdivision_surface)
+  ($C^2$), and [Butterfly](https://en.wikipedia.org/wiki/Butterfly_subdivision_surface)
   (interpolating) schemes
 - **Smoothing**: [Laplacian smoothing](https://en.wikipedia.org/wiki/Laplacian_smoothing)
   with feature preservation
@@ -193,7 +193,7 @@ graphics/CAD mesh.
 
 Then, with `mesh.draw()`, you can visualize the mesh:
 
-![Airplane Mesh](examples/readme_examples/airplane.png)
+![Airplane Mesh](../../docs/img/mesh/airplane.png)
 
 ### Computing Curvature
 
@@ -210,7 +210,7 @@ mesh.draw(
 )
 ```
 
-![Gaussian Curvature](examples/readme_examples/airplane_gaussian_curvature.png)
+![Gaussian Curvature](../../docs/img/mesh/airplane_gaussian_curvature.png)
 
 *Warmer colors indicate positive Gaussian curvature (convex regions), cooler colors
 indicate negative Gaussian curvature (concave regions).*
@@ -226,7 +226,7 @@ mesh.draw(
 )
 ```
 
-![Mean Curvature](examples/readme_examples/airplane_mean_curvature.png)
+![Mean Curvature](../../docs/img/mesh/airplane_mean_curvature.png)
 
 *Warmer colors indicate positive mean curvature (convex regions), cooler colors
 indicate negative mean curvature (concave regions).*
@@ -242,7 +242,7 @@ mesh_with_grad = mesh.compute_point_derivatives(keys="temperature", method="lsq"
 grad_T = mesh_with_grad.point_data["temperature_gradient"]
 
 print(f"Gradient shape: {grad_T.shape}")  # (n_points, n_spatial_dims)
-print(f"∇T = {grad_T[0]}")  # tensor([1.0000, 2.0000])
+print(f"grad T = {grad_T[0]}")  # tensor([1.0000, 2.0000])
 ```
 
 ### Moving to GPU
@@ -295,7 +295,7 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | Mean curvature | ✅ | [Cotangent Laplacian](https://en.wikipedia.org/wiki/Discrete_Laplace_operator#Mesh_Laplacians) |
 | **Subdivision** | | |
 | Linear | ✅ | Midpoint subdivision |
-| Loop | ✅ | C² smooth, approximating |
+| Loop | ✅ | $C^2$ smooth, approximating |
 | Butterfly | ✅ | Interpolating |
 | **Smoothing** | | |
 | Laplacian smoothing | ✅ | |
@@ -422,7 +422,7 @@ neighbors of mesh elements (i.e., based on the mesh connectivity,as opposed to
 Note that these use an efficient sparse (`indices`, `offsets`) encoding of the
 adjacency relationships, which is used internally for all computations. (See the
 dedicated
-[`physicsnemo.mesh.neighbors._adjacency.py`](physicsnemo/mesh/neighbors/_adjacency.py)
+[`physicsnemo.mesh.neighbors._adjacency.py`](./neighbors/_adjacency.py)
 module.) You can convert these to a typical ragged list-of-lists representation
 with `.to_list()`, which is useful for debugging or interoperability, at the
 cost of performance:
@@ -540,35 +540,35 @@ Key design decisions enable these principles:
 
 ## Documentation & Resources
 
-- **Examples**: See [`examples/`](examples/) directory for runnable demonstrations
-- **Tests**: See [`test/`](test/) directory for comprehensive test suite showing usage
-  patterns
-- **Source**: Explore [`physicsnemo/mesh/`](physicsnemo/mesh/) for implementation details
+- **Examples**: See [`examples/`](../../examples/) directory for runnable demonstrations
+- **Tests**: See [`test/`](../../test/mesh/) directory for comprehensive test
+  suite showing usage patterns
+- **Source**: Explore [`physicsnemo/mesh/`](./) for implementation details
 
 **Module Organization:**
 
-- [`physicsnemo.mesh.calculus`](physicsnemo/mesh/calculus/) - Discrete differential
+- [`physicsnemo.mesh.calculus`](./calculus/) - Discrete differential
   operators
-- [`physicsnemo.mesh.curvature`](physicsnemo/mesh/curvature/) - Gaussian and mean
+- [`physicsnemo.mesh.curvature`](./curvature/) - Gaussian and mean
   curvature
-- [`physicsnemo.mesh.subdivision`](physicsnemo/mesh/subdivision/) - Mesh refinement
+- [`physicsnemo.mesh.subdivision`](./subdivision/) - Mesh refinement
   schemes
-- [`physicsnemo.mesh.boundaries`](physicsnemo/mesh/boundaries/) - Boundary detection
+- [`physicsnemo.mesh.boundaries`](./boundaries/) - Boundary detection
   and facet extraction
-- [`physicsnemo.mesh.neighbors`](physicsnemo/mesh/neighbors/) - Adjacency computations
-- [`physicsnemo.mesh.spatial`](physicsnemo/mesh/spatial/) - BVH and spatial queries
-- [`physicsnemo.mesh.sampling`](physicsnemo/mesh/sampling/) - Point sampling and
+- [`physicsnemo.mesh.neighbors`](./neighbors/) - Adjacency computations
+- [`physicsnemo.mesh.spatial`](./spatial/) - BVH and spatial queries
+- [`physicsnemo.mesh.sampling`](./sampling/) - Point sampling and
   interpolation
-- [`physicsnemo.mesh.transformations`](physicsnemo/mesh/transformations/) - Geometric
+- [`physicsnemo.mesh.transformations`](./transformations/) - Geometric
   operations
-- [`physicsnemo.mesh.repair`](physicsnemo/mesh/repair/) - Mesh cleaning and topology
+- [`physicsnemo.mesh.repair`](./repair/) - Mesh cleaning and topology
   repair
-- [`physicsnemo.mesh.validation`](physicsnemo/mesh/validation/) - Quality metrics
+- [`physicsnemo.mesh.validation`](./validation/) - Quality metrics
   and statistics
-- [`physicsnemo.mesh.visualization`](physicsnemo/mesh/visualization/) - Matplotlib
+- [`physicsnemo.mesh.visualization`](./visualization/) - Matplotlib
   and PyVista backends
-- [`physicsnemo.mesh.io`](physicsnemo/mesh/io/) - PyVista import/export
-- [`physicsnemo.mesh.examples`](physicsnemo/mesh/examples/) - Example mesh generators
+- [`physicsnemo.mesh.io`](./io/) - PyVista import/export
+- [`physicsnemo.mesh.primitives`](./primitives/) - Example mesh generators
 
 ---
 

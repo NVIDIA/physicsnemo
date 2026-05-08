@@ -20,6 +20,7 @@ Dimensional: 2D manifold in 2D space.
 """
 
 import torch
+from jaxtyping import Int
 
 from physicsnemo.mesh.mesh import Mesh
 
@@ -112,7 +113,7 @@ def _triangulate_pole_fan(
     n_angular: int,
     pole_is_north: bool,
     device: torch.device | str,
-) -> torch.Tensor:
+) -> Int[torch.Tensor, "n_angular 3"]:
     """Triangulate a fan from a pole to an adjacent ring (vectorized).
 
     Parameters
@@ -148,7 +149,7 @@ def _triangulate_pole_fan(
 
 def _triangulate_ring_quads(
     n_rings: int, n_angular: int, ring_offset: int, device: torch.device | str
-) -> torch.Tensor:
+) -> Int[torch.Tensor, "n_triangles 3"]:
     """Triangulate quads between concentric rings (vectorized).
 
     Parameters

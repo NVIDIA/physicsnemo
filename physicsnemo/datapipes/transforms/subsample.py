@@ -32,7 +32,14 @@ from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
 
 
-def poisson_sample_indices_fixed(N: int, k: int, device=None) -> torch.Tensor:
+def poisson_sample_indices_fixed(
+    N: int,
+    k: int,
+    device=None,
+    generator: torch.Generator | None = None,
+    *,
+    replacement: bool = False,
+) -> torch.Tensor:
     """
     Near-uniform sampler of indices for very large arrays.
 
@@ -42,7 +49,14 @@ def poisson_sample_indices_fixed(N: int, k: int, device=None) -> torch.Tensor:
     randomize the entire tensor of indices.
 
     The sampling uses exponentially distributed gaps to achieve near-uniform
-    coverage without replacement.
+    coverage. Two modes are available:
+
+    - ``replacement=False`` (default): each gap is constrained to be at least
+      one index unit, so the resulting indices are strictly increasing and
+      therefore unique. Requires ``k < N`` strictly.
+    - ``replacement=True``: raw exponential gaps are used. The gaps can be
+      arbitrarily small, so consecutive indices may collide after flooring,
+      i.e. duplicates are possible.
 
     Parameters
     ----------
@@ -52,11 +66,22 @@ def poisson_sample_indices_fixed(N: int, k: int, device=None) -> torch.Tensor:
         Number of indices to sample.
     device : torch.device, optional
         Device for the output tensor.
+    generator : torch.Generator, optional
+        Random generator for reproducibility.
+    replacement : bool, keyword-only, default=False
+        If ``False``, sample without replacement (no duplicate indices). If
+        ``True``, sample with replacement (duplicates possible).
 
     Returns
     -------
     torch.Tensor
         Tensor of shape :math:`(k,)` containing sampled indices.
+
+    Raises
+    ------
+    ValueError
+        If ``replacement=False`` and ``k >= N``, since sampling ``k`` unique
+        indices from ``N`` requires ``k < N``.
 
     Examples
     --------
@@ -64,21 +89,58 @@ def poisson_sample_indices_fixed(N: int, k: int, device=None) -> torch.Tensor:
     >>> print(indices.shape)
     torch.Size([10000])
     """
-    # Draw exponential gaps off of random initializations
-    gaps = torch.rand(k, device=device).exponential_()
+    if replacement:
+        # Draw exponential gaps off of random initializations
+        gaps = torch.rand(k, device=device, generator=generator).exponential_()
 
-    summed = gaps.sum()
+        summed = gaps.sum()
 
-    # Normalize so total cumulative sum == N
-    gaps *= N / summed
+        # Normalize so total cumulative sum == N
+        gaps *= N / summed
 
-    # Compute cumulative positions
+        # Compute cumulative positions
+        idx = torch.cumsum(gaps, dim=0)
+
+        # Shift down so range starts at 0 and ends below N
+        idx -= gaps[0] / 2
+
+        # Round to nearest integer index
+        idx = torch.clamp(idx.floor().long(), min=0, max=N - 1)
+
+        return idx
+
+    # Without-replacement path: enforce a minimum gap of 1 index unit so that
+    # flooring cumulative positions yields strictly increasing (unique) indices.
+    if k >= N:
+        raise ValueError(
+            f"poisson_sample_indices_fixed requires k < N when "
+            f"replacement=False, but got k={k} and N={N}."
+        )
+
+    # Draw exponential gaps off of random initializations. Use float64 for the
+    # cumulative arithmetic: with N up to ~1e8+, float32 precision near the top
+    # of the range (~8) would swallow the +1 minimum-gap shift and let
+    # consecutive floored positions collide.
+    gaps = torch.rand(
+        k, device=device, generator=generator, dtype=torch.float64
+    ).exponential_()
+
+    # Scale so the raw exponential portion sums to (N - k); adding 1 to every
+    # gap then makes the minimum gap >= 1 while keeping the total sum == N.
+    gaps *= (N - k) / gaps.sum()
+    gaps += 1.0
+
+    # Compute cumulative positions; positions span [gaps[0], N] with each
+    # successive position differing by at least 1.
     idx = torch.cumsum(gaps, dim=0)
 
-    # Shift down so range starts at 0 and ends below N
-    idx -= gaps[0] / 2
+    # Shift down so the first index lands near 0 (still >= 0 since gaps[0] >= 1)
+    idx -= gaps[0]
 
-    # Round to nearest integer index
+    # Floor to integer indices. Because every gap is >= 1 and the cumulative
+    # sum is computed in float64 (preserving the +1 separation even at large
+    # N), floor(pos_{i+1}) is strictly greater than floor(pos_i), so the
+    # resulting indices are unique.
     idx = torch.clamp(idx.floor().long(), min=0, max=N - 1)
 
     return idx
@@ -88,6 +150,7 @@ def shuffle_array(
     points: torch.Tensor,
     n_points: int,
     weights: Optional[torch.Tensor] = None,
+    generator: torch.Generator | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Sample points with or without weights.
@@ -101,6 +164,8 @@ def shuffle_array(
     weights : torch.Tensor, optional
         Optional weights for sampling, shape :math:`(N,)`.
         If None, uses uniform sampling.
+    generator : torch.Generator, optional
+        Random generator for reproducibility.
 
     Returns
     -------
@@ -119,15 +184,19 @@ def shuffle_array(
 
     if weights is not None:
         # Weighted sampling
-        indices = torch.multinomial(weights, n_points, replacement=False)
+        indices = torch.multinomial(
+            weights, n_points, replacement=False, generator=generator
+        )
     else:
         # Uniform sampling
         if N > 2**24:
             # Use Poisson sampling for very large arrays
-            indices = poisson_sample_indices_fixed(N, n_points, device=device)
+            indices = poisson_sample_indices_fixed(
+                N, n_points, device=device, generator=generator
+            )
         else:
             # Use standard multinomial for smaller arrays
-            indices = torch.randperm(N, device=device)[:n_points]
+            indices = torch.randperm(N, device=device, generator=generator)[:n_points]
 
     sampled_points = points[indices]
     return sampled_points, indices
@@ -236,6 +305,7 @@ class SubsamplePoints(Transform):
         self.n_points = n_points
         self.algorithm = algorithm
         self.weights_key = weights_key
+        self._generator: torch.Generator | None = None
 
     def __call__(self, data: TensorDict) -> TensorDict:
         """
@@ -300,12 +370,27 @@ class SubsamplePoints(Transform):
         device = first_tensor.device
         if weights is not None:
             # Weighted sampling
-            _, indices = shuffle_array(first_tensor, self.n_points, weights=weights)
+            _, indices = shuffle_array(
+                first_tensor,
+                self.n_points,
+                weights=weights,
+                generator=self._generator,
+            )
         elif self.algorithm == "poisson_fixed" and N > 2**24:
-            indices = poisson_sample_indices_fixed(N, self.n_points, device=device)
+            indices = poisson_sample_indices_fixed(
+                N,
+                self.n_points,
+                device=device,
+                generator=self._generator,
+                replacement=False,
+            )
         else:
             # Use uniform sampling
-            indices = torch.randperm(N, device=device)[: self.n_points]
+            indices = torch.randperm(
+                N,
+                device=device,
+                generator=self._generator,
+            )[: self.n_points]
 
         # Apply indices to all keys
         updates = {}

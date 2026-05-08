@@ -167,6 +167,35 @@ class TestMortonCodes:
         codes = _compute_morton_codes(points)
         assert (codes == codes[0]).all()
 
+    def test_codes_are_deterministic_for_known_centroids(self):
+        """Repeated CPU calls on known centroids produce identical codes."""
+        centroids = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 1.0, 1.0],
+            ]
+        )
+        codes_a = _compute_morton_codes(centroids)
+        codes_b = _compute_morton_codes(centroids)
+        assert torch.equal(codes_a, codes_b)
+        assert len(torch.unique(codes_a)) == len(centroids)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+    def test_cuda_codes_match_cpu_for_primitive_mesh_centroids(self):
+        """CUDA vectorized path matches CPU bit-loop path on primitive mesh data."""
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        mesh = sphere_icosahedral.load(subdivisions=2)
+        centroids = mesh.points[mesh.cells].mean(dim=1)
+
+        cpu_codes = _compute_morton_codes(centroids)
+        cuda_codes = _compute_morton_codes(centroids.cuda()).cpu()
+
+        assert torch.equal(cuda_codes, cpu_codes)
+
     def test_rejects_integer_input(self):
         """Integer centroids should be rejected (would silently corrupt quantization)."""
         with pytest.raises(TypeError, match="floating-point"):

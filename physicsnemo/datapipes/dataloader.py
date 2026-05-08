@@ -31,8 +31,9 @@ import torch
 from tensordict import TensorDict
 from torch.utils.data import RandomSampler, Sampler, SequentialSampler
 
+from physicsnemo.datapipes._rng import fork_generator
 from physicsnemo.datapipes.collate import Collator, get_collator
-from physicsnemo.datapipes.dataset import Dataset
+from physicsnemo.datapipes.protocols import DatasetBase
 from physicsnemo.datapipes.registry import register
 
 
@@ -79,7 +80,7 @@ class DataLoader:
 
     def __init__(
         self,
-        dataset: Dataset,
+        dataset: DatasetBase,
         *,
         batch_size: int = 1,
         shuffle: bool = False,
@@ -96,14 +97,16 @@ class DataLoader:
         prefetch_factor: int = 2,
         num_streams: int = 4,
         use_streams: bool = True,
+        seed: int | None = None,
     ) -> None:
         """
         Initialize the DataLoader.
 
         Parameters
         ----------
-        dataset : Dataset
-            Dataset to load from.
+        dataset : DatasetBase
+            Dataset to load from. Any subclass of :class:`DatasetBase`
+            (e.g. :class:`Dataset`, :class:`MeshDataset`).
         batch_size : int, default=1
             Number of samples per batch.
         shuffle : bool, default=False
@@ -125,6 +128,12 @@ class DataLoader:
         use_streams : bool, default=True
             If True, use CUDA streams for overlap. Set False for debugging
             or CPU-only operation.
+        seed : int, optional
+            Master seed for all pipeline randomness.  When set, the
+            DataLoader derives independent generators for the sampler,
+            reader, and every stochastic transform, making the full
+            pipeline reproducible.  Use :meth:`set_epoch` to vary the
+            random sequence across epochs while staying deterministic.
 
         Raises
         ------
@@ -141,12 +150,29 @@ class DataLoader:
         self.prefetch_factor = prefetch_factor
         self.num_streams = num_streams
         self.use_streams = use_streams and torch.cuda.is_available()
+        self._seed = seed
+
+        # Build master generator and fork for sampler + dataset
+        sampler_generator: torch.Generator | None = None
+        if seed is not None:
+            master = torch.Generator()
+            master.manual_seed(seed)
+            # Fork: child 0 → sampler, child 1 → dataset
+            forks = fork_generator(master, 2)
+            sampler_generator = forks[0]
+            if hasattr(dataset, "set_generator"):
+                dataset.set_generator(forks[1])
 
         # Handle sampler
         if sampler is not None:
             self.sampler = sampler
+            # For DistributedSampler, propagate seed if available
+            if seed is not None and hasattr(sampler, "seed"):
+                # DistributedSampler exposes seed as a constructor arg
+                # but it's read-only; users should pass seed at construction.
+                pass
         elif shuffle:
-            self.sampler = RandomSampler(dataset)
+            self.sampler = RandomSampler(dataset, generator=sampler_generator)
         else:
             self.sampler = SequentialSampler(dataset)
 
@@ -286,9 +312,12 @@ class DataLoader:
 
     def set_epoch(self, epoch: int) -> None:
         """
-        Set the epoch for the sampler.
+        Set the epoch for the sampler and the full data pipeline.
 
-        Required for DistributedSampler to shuffle properly across epochs.
+        Propagates the epoch to the sampler (for
+        :class:`~torch.utils.data.distributed.DistributedSampler`),
+        the dataset, reader, and every stochastic transform so all
+        RNG streams are reseeded deterministically.
 
         Parameters
         ----------
@@ -297,6 +326,8 @@ class DataLoader:
         """
         if hasattr(self.sampler, "set_epoch"):
             self.sampler.set_epoch(epoch)
+        if hasattr(self.dataset, "set_epoch"):
+            self.dataset.set_epoch(epoch)
 
     def enable_prefetch(self) -> None:
         """

@@ -25,6 +25,7 @@ from typing import Any, Iterator, Sequence
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.datapipes._rng import fork_generator
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
 
@@ -103,6 +104,34 @@ class Compose(Transform):
         for transform in self.transforms:
             data = transform(data)
         return data
+
+    @property
+    def stochastic(self) -> bool:
+        """True if any child transform is stochastic."""
+        return any(t.stochastic for t in self.transforms)
+
+    def set_generator(self, generator: torch.Generator) -> None:
+        """Fork *generator* and distribute one child per transform.
+
+        Parameters
+        ----------
+        generator : torch.Generator
+            Parent generator to fork from.
+        """
+        children = fork_generator(generator, len(self.transforms))
+        for child, t in zip(children, self.transforms):
+            t.set_generator(child)
+
+    def set_epoch(self, epoch: int) -> None:
+        """Propagate epoch to every child transform.
+
+        Parameters
+        ----------
+        epoch : int
+            Current epoch number.
+        """
+        for t in self.transforms:
+            t.set_epoch(epoch)
 
     def to(self, device: torch.device | str) -> Compose:
         """

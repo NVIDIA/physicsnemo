@@ -24,24 +24,23 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterable, Iterator
-from typing import Any, TypeAlias
+from typing import Any
 
 import torch
 
 from benchmarks.physicsnemo.nn.functional._spec_utils import (
     PHASE_ORDER,
+    BenchmarkKey,
+    build_benchmark_plan,
     case_by_index,
-    case_labels,
 )
 from benchmarks.physicsnemo.nn.functional.registry import FUNCTIONAL_SPECS
+from physicsnemo.core.function_spec import FunctionSpec
 
 # Environment variable names used by this benchmark runner.
 _ENV_DEVICE = "PHYSICSNEMO_ASV_DEVICE"
 _ENV_PHASES = "PHYSICSNEMO_ASV_PHASES"
 _ENV_FUNCTIONALS = "PHYSICSNEMO_ASV_FUNCTIONALS"
-
-# ASV benchmark key format: (phase, spec_name, implementation_name, case_index).
-BenchmarkKey: TypeAlias = tuple[str, str, str, int]
 
 
 def _parse_csv_env(name: str) -> tuple[str, ...]:
@@ -87,7 +86,9 @@ def _resolve_phases() -> tuple[str, ...]:
     return phases
 
 
-def _resolve_specs(specs: Iterable[type]) -> tuple[type, ...]:
+def _resolve_specs(
+    specs: Iterable[type[FunctionSpec]],
+) -> tuple[type[FunctionSpec], ...]:
     """Resolve the spec subset requested by environment filtering."""
 
     requested = set(_parse_csv_env(_ENV_FUNCTIONALS))
@@ -161,42 +162,11 @@ def _loss_from_output(output: Any) -> torch.Tensor:
     return loss
 
 
-def _build_plan(
-    *,
-    device: torch.device,
-    phases: tuple[str, ...],
-    selected_specs: tuple[type, ...],
-) -> tuple[list[BenchmarkKey], dict[BenchmarkKey, type]]:
-    """Build benchmark keys and key-to-spec lookup for ASV parameterization."""
-
-    keys: list[BenchmarkKey] = []
-    key_to_spec: dict[BenchmarkKey, type] = {}
-
-    # Build keys in deterministic order so ASV output labels are stable.
-    for spec in selected_specs:
-        implementations = spec.available_implementations()
-        if not implementations:
-            continue
-
-        for phase in phases:
-            labels = case_labels(spec=spec, phase=phase, device=device)
-            if not labels:
-                continue
-
-            for implementation_name in implementations:
-                for case_index, _ in enumerate(labels):
-                    key = (phase, spec.__name__, implementation_name, case_index)
-                    keys.append(key)
-                    key_to_spec[key] = spec
-
-    return keys, key_to_spec
-
-
 # Resolve all benchmark metadata once at import for ASV.
 _DEVICE = _resolve_device()
 _PHASES = _resolve_phases()
 _SELECTED_SPECS = _resolve_specs(FUNCTIONAL_SPECS)
-_BENCHMARK_KEYS, _KEY_TO_SPEC = _build_plan(
+_BENCHMARK_KEYS, _KEY_TO_SPEC = build_benchmark_plan(
     device=_DEVICE,
     phases=_PHASES,
     selected_specs=_SELECTED_SPECS,

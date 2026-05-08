@@ -40,6 +40,7 @@ def project(
     information in the removed dimensions is permanently lost.
 
     Two calling conventions are supported:
+
         - ``project(mesh, target_n_spatial_dims=N)``: keep the first N dimensions.
         - ``project(mesh, keep_dims=[i, j, ...])``: keep specific dimensions by
           index, in the order they should appear in the output.
@@ -47,6 +48,7 @@ def project(
     Exactly one of ``target_n_spatial_dims`` or ``keep_dims`` must be specified.
 
     Key behaviors:
+
         - Manifold dimension (n_manifold_dims) is preserved
         - Topology (cell connectivity) is preserved
         - By default, point/cell/global data are preserved as-is
@@ -56,6 +58,7 @@ def project(
         - **Information in removed dimensions is discarded**
 
     Use cases:
+
         - [2, 3] -> [2, 2]: Project a 3D surface to the xy-plane
         - [1, 3] -> [1, 2]: Project a 3D curve down to 2D
         - [2, 3] -> [2, 2] via ``keep_dims=[0, 2]``: Project to the xz-plane
@@ -86,6 +89,7 @@ def project(
     -------
     Mesh
         New mesh with reduced spatial dimensions:
+
         - points shape: ``(n_points, len(keep_dims))`` or
           ``(n_points, target_n_spatial_dims)``
         - n_manifold_dims: unchanged

@@ -21,6 +21,7 @@ category and dimensional configuration. All meshes are generated at runtime and
 can be used for tutorials, testing, and experimentation.
 
 Categories:
+
     - basic: Minimal test meshes (single cells, few cells)
     - curves: 1D manifolds in 1D, 2D, and 3D spaces
     - planar: 2D manifolds in 2D space (triangle meshes)

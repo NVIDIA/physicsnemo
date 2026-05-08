@@ -41,15 +41,17 @@ simulated data.  We observe that the error in each of these cases is relatively 
 
 We will demonstrate the use of data loss and physics constraints,
 specifically the equation residual loss, to create accurate predictions.
-[PhysicsNeMo Sym](https://github.com/NVIDIA/physicsnemo-sym)
-has utilities tailored for physics-informed machine learning. It also presents
-abstracted APIs that allow users to think and model the problem from the lens of
-equations, constraints, etc. In this example, we will only leverage the physics-informed
-utilities to see how we can add physics to an existing data-driven model with ease while
-still maintaining the flexibility to define our own training loop and other details.
-For a more abstracted definition of these type of problems, where the training loop
-definition and other things is taken care of implicitly, you may refer
-[PhysicsNeMo Sym](https://github.com/NVIDIA/physicsnemo-sym)
+The `physicsnemo.sym` module (install with `pip install "nvidia-physicsnemo[sym]"`)
+has utilities tailored for physics-informed machine learning, and we leverage them
+here to add physics to an existing data-driven model with ease while keeping a
+fully explicit training loop.
+
+If you previously used the (now archived)
+[`physicsnemo-sym`](https://github.com/NVIDIA/physicsnemo-sym) repository,
+where the `Solver` / `Domain` / `Constraint` abstractions handled the
+training loop and physics losses implicitly, see the
+[PhysicsNeMo v2.0 Migration Guide](../../../v2.0-MIGRATION-GUIDE.md#physicsnemo-sym--physicsnemosym)
+for how the equivalent pieces look in this newer, explicit style.
 
 ## Dataset
 
@@ -67,14 +69,15 @@ derivatives in a PINO style, using Numerical differentiation with Fourier deriva
 With this example, we intend to demonstrate how to implement multiple
 equations into the loss function.
 
-In this example, we will also use the `PDE` class from PhysicsNeMo-Sym to symbolically define
-the PDEs. This is very convenient and most natural way to define these PDEs and allows
+In this example, we will also use the `PDE` class from
+`physicsnemo.sym` to symbolically define the PDEs.
+This is a convenient and natural way to define PDEs and allows
 us to print the equations to check for correctness. This also abstracts out the
-complexity of converting the equation into a pytorch representation. PhysicsNeMo Sym also
+complexity of converting the equation into a pytorch representation. `physicsnemo.sym` also
 provides several complex, well-tested PDEs like 3D Navier-Stokes, Linear elasticity,
 Electromagnetics, etc. pre-defined which can be used directly in physics-informing
 applications. We will also give you the option to choose between the
-derivative functions from PhysicsNeMo-Sym or from the original paper.
+derivative functions from `physicsnemo.sym` or from the original paper.
 
 ## Prerequisites
 
@@ -82,7 +85,7 @@ Install the requirements using:
 
 ```bash
 pip install -r requirements.txt
-pip install nvidia-physicsnemo.sym --no-build-isolation
+pip install "nvidia-physicsnemo[sym]"
 ```
 
 ## Getting Started

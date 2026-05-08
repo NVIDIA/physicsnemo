@@ -25,12 +25,13 @@ import numpy as np
 import xarray as xr
 from dask.diagnostics import ProgressBar
 from omegaconf import DictConfig, OmegaConf
+from transform.transform import transform_registry
+from utils import get_filesystem
 
 # Add eval to OmegaConf TODO: Remove when OmegaConf is updated
 OmegaConf.register_new_resolver("eval", eval)
 
-from utils import get_filesystem
-from transform.transform import transform_registry
+ZARR_FORMAT = 3
 
 
 class CurateERA5:
@@ -103,12 +104,20 @@ class CurateERA5:
             if not isinstance(variable, str):  # TODO: better way to check if list
                 pressure_variable = self.era5[variable[0]].sel(level=variable[1])
                 pressure_variable = pressure_variable.drop("level")
+                if "time" not in pressure_variable.dims:
+                    pressure_variable = pressure_variable.expand_dims(
+                        time=self.era5.time, axis=0
+                    )
                 pressure_variable = pressure_variable.rename(
                     {"level": "predicted_channel"}
                 )
                 xarray_predicted_variables.append(pressure_variable)
             else:
                 single_variable = self.era5[variable]
+                if "time" not in single_variable.dims:
+                    single_variable = single_variable.expand_dims(
+                        time=self.era5.time, axis=0
+                    )
                 single_variable = single_variable.expand_dims(
                     "predicted_channel", axis=1
                 )
@@ -120,12 +129,20 @@ class CurateERA5:
             if not isinstance(variable, str):  # TODO: better way to check if list
                 pressure_variable = self.era5[variable[0]].sel(level=variable[1])
                 pressure_variable = pressure_variable.drop("level")
+                if "time" not in pressure_variable.dims:
+                    pressure_variable = pressure_variable.expand_dims(
+                        time=self.era5.time, axis=0
+                    )
                 pressure_variable = pressure_variable.rename(
                     {"level": "unpredicted_channel"}
                 )
                 xarray_unpredicted_variables.append(pressure_variable)
             else:
                 single_variable = self.era5[variable]
+                if "time" not in single_variable.dims:
+                    single_variable = single_variable.expand_dims(
+                        time=self.era5.time, axis=0
+                    )
                 single_variable = single_variable.expand_dims(
                     "unpredicted_channel", axis=1
                 )
@@ -135,10 +152,10 @@ class CurateERA5:
         self.era5_subset = xr.Dataset()
         self.era5_subset["predicted"] = xr.concat(
             xarray_predicted_variables, dim="predicted_channel"
-        )
+        ).transpose("time", "predicted_channel", ...)
         self.era5_subset["unpredicted"] = xr.concat(
             xarray_unpredicted_variables, dim="unpredicted_channel"
-        )
+        ).transpose("time", "unpredicted_channel", ...)
         self.era5_subset["time"] = self.era5["time"]
 
         # Chunk channels
@@ -172,7 +189,13 @@ class CurateERA5:
 
         # Save
         mapper = self.fs.get_mapper(self.curated_dataset_filename)
-        delayed_obj = self.era5_subset.to_zarr(mapper, consolidated=True, compute=False)
+        delayed_obj = self.era5_subset.drop_encoding().to_zarr(
+            mapper,
+            consolidated=True,
+            compute=False,
+            mode="w",
+            zarr_format=ZARR_FORMAT,
+        )
 
         # Wait for save to finish (Single-threaded legacy issue)
         with ProgressBar():

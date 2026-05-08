@@ -14,20 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hydra
+import numpy as np
 import torch
 import torch.nn.functional as F
+from omegaconf import DictConfig
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LinearLR
-import numpy as np
+from utils import DDPMLinearNoiseScheduler, load_data_classifier
 
-
-import hydra
-from omegaconf import DictConfig
-
-from physicsnemo.models.topodiff import Diffusion
 from physicsnemo.models.topodiff import UNetEncoder
 from physicsnemo.utils.logging import PythonLogger
-from utils import load_data_classifier
 
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
@@ -44,7 +41,7 @@ def main(cfg: DictConfig) -> None:
 
     classifier = UNetEncoder(in_channels=1, out_channels=2).to(device)
 
-    diffusion = Diffusion(n_steps=cfg.diffusion_steps, device=device)
+    noise_scheduler = DDPMLinearNoiseScheduler(n_steps=cfg.diffusion_steps)
 
     batch_size = cfg.batch_size
 
@@ -64,8 +61,8 @@ def main(cfg: DictConfig) -> None:
         batch = torch.tensor(train_img[idx]).float().unsqueeze(1).to(device) * 2 - 1
         batch_labels = torch.tensor(train_labels[idx]).long().to(device)
 
-        t = torch.randint(0, cfg.diffusion_steps, (batch.shape[0],)).to(device)
-        batch = diffusion.q_sample(batch, t)
+        t = noise_scheduler.sample_time(batch.shape[0], device=device)
+        batch = noise_scheduler.add_noise(batch, t)
         logits = classifier(batch, time_steps=t)
 
         loss = F.cross_entropy(logits, batch_labels)
@@ -83,8 +80,8 @@ def main(cfg: DictConfig) -> None:
                 batch_labels = torch.tensor(valid_labels[idx]).long().to(device)
 
                 # Sample diffusion steps and get noised images
-                t = torch.randint(0, cfg.diffusion_steps, (batch.shape[0],)).to(device)
-                batch = diffusion.q_sample(batch, t)
+                t = noise_scheduler.sample_time(batch.shape[0], device=device)
+                batch = noise_scheduler.add_noise(batch, t)
 
                 # Forward pass
                 logits = classifier(batch, time_steps=t)

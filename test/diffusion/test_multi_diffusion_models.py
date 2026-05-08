@@ -24,9 +24,15 @@ from tensordict import TensorDict
 
 from physicsnemo.core import Module
 from physicsnemo.diffusion.multi_diffusion import MultiDiffusionModel2D
+from physicsnemo.diffusion.multi_diffusion.patching import (
+    GridPatching2D,
+    RandomPatching2D,
+)
+from physicsnemo.diffusion.preconditioners import EDMPreconditioner
 
 from .conftest import GLOBAL_SEED
 from .helpers import (
+    Conv2dX0Predictor,
     compare_outputs,
     instantiate_model_deterministic,
     load_or_create_checkpoint,
@@ -35,6 +41,10 @@ from .helpers import (
 )
 
 REF_PREFIX = "test_multi_diffusion_models_"
+
+# sigma_data consistent between EDMPreconditioner and EDMNoiseScheduler,
+# mirroring the realistic SDA recipe pattern.
+SIGMA_DATA = 1.0
 
 # =============================================================================
 # Test Model Definitions
@@ -209,6 +219,20 @@ def _make_condition(config_name, img_shape=(IMG_H, IMG_W), device="cpu"):
     return TensorDict(td, batch_size=[BATCH])
 
 
+def _create_md_model_edm_precond(img_shape=(IMG_H, IMG_W), seed=0):
+    """MultiDiffusionModel2D wrapping an EDMPreconditioner.
+
+    Mirrors the realistic SDA recipe: EDMPreconditioner(backbone) is the inner
+    model passed to MultiDiffusionModel2D, with sigma_data=SIGMA_DATA consistent
+    with the EDMNoiseScheduler used in downstream loss tests.
+    """
+    backbone = instantiate_model_deterministic(
+        Conv2dX0Predictor, seed=seed, channels=CHANNELS
+    )
+    precond = EDMPreconditioner(backbone, sigma_data=SIGMA_DATA)
+    return MultiDiffusionModel2D(model=precond, global_spatial_shape=img_shape)
+
+
 # =============================================================================
 # Constructor Tests
 # =============================================================================
@@ -225,7 +249,7 @@ class TestConstructor:
     def test_attributes(self, config_name):
         md = _create_md_model(config_name)
         assert md.global_spatial_shape == (IMG_H, IMG_W)
-        assert md._patching_type is None
+        assert md._patching is None
         assert isinstance(md.model, Module)
 
     def test_positional_embedding_sinusoidal(self):
@@ -252,13 +276,13 @@ class TestConstructor:
     def test_set_random_patching(self):
         md = _create_md_model("uncond")
         md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
-        assert md._patching_type == "random"
+        assert isinstance(md._patching, RandomPatching2D)
         assert md._patching.patch_num == PATCH_NUM
 
     def test_set_grid_patching(self):
         md = _create_md_model("uncond")
         md.set_grid_patching(patch_shape=PATCH_SHAPE, overlap_pix=2, fuse=True)
-        assert md._patching_type == "grid"
+        assert isinstance(md._patching, GridPatching2D)
         assert md._fuse is True
 
 
@@ -475,6 +499,52 @@ class TestNonRegression:
         ref = load_or_create_reference(ref_file, lambda: {"out1": out.cpu()})
         compare_outputs(out, ref["out1"], **tolerances)
 
+    def test_patch_x_from_checkpoint(
+        self, deterministic_settings, device, tolerances, config_name
+    ):
+        """patch_x from loaded checkpoint matches reference produced by fresh instantiation."""
+
+        def create_fn():
+            return _create_md_model(config_name)
+
+        ckpt_file = f"{REF_PREFIX}{config_name}.mdlus"
+        md = load_or_create_checkpoint(ckpt_file, create_fn).to(device)
+        md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
+
+        x = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device)
+        out1 = md.patch_x(x)
+        md.reset_patch_indices()
+        out2 = md.patch_x(x)
+
+        # Reuse the same reference files created by test_patch_x_non_regression.
+        ref_file = f"{REF_PREFIX}{config_name}_patch_x.pth"
+        ref = load_or_create_reference(
+            ref_file, lambda: {"out1": out1.cpu(), "out2": out2.cpu()}
+        )
+        compare_outputs(out1, ref["out1"], **tolerances)
+        compare_outputs(out2, ref["out2"], **tolerances)
+
+    def test_fuse_from_checkpoint(
+        self, deterministic_settings, device, tolerances, config_name
+    ):
+        """fuse from loaded checkpoint produces correct output for no-overlap grid."""
+
+        def create_fn():
+            return _create_md_model(config_name)
+
+        ckpt_file = f"{REF_PREFIX}{config_name}.mdlus"
+        md = load_or_create_checkpoint(ckpt_file, create_fn).to(device)
+        md.set_grid_patching(patch_shape=PATCH_SHAPE, overlap_pix=0, fuse=True)
+
+        x = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device)
+        fused = md.fuse(md.patch_x(x), batch_size=BATCH)
+
+        assert fused.shape == x.shape
+
+        ref_file = f"{REF_PREFIX}{config_name}_fuse.pth"
+        ref = load_or_create_reference(ref_file, lambda: {"fused": fused.cpu()})
+        compare_outputs(fused, ref["fused"], **tolerances)
+
 
 # =============================================================================
 # Gradient Flow Tests
@@ -556,6 +626,7 @@ class TestGradientFlow:
 COMPILE_CONFIGS = ["uncond", "cond_patch", "cond_interp", "cond_vec_img"]
 
 
+@pytest.mark.usefixtures("nop_compile")
 @pytest.mark.parametrize("config_name", COMPILE_CONFIGS, ids=COMPILE_CONFIGS)
 class TestCompile:
     """Tests for torch.compile compatibility across model configurations."""
@@ -606,3 +677,53 @@ class TestCompile:
 
         out_compiled_2 = compiled_fn(x, t)
         torch.testing.assert_close(out_eager, out_compiled_2)
+
+
+# =============================================================================
+# Combined Workflow Tests — EDMPreconditioner as inner model
+# =============================================================================
+
+
+class TestWithPreconditionedInnerModel:
+    """Tests for MultiDiffusionModel2D wrapping an EDMPreconditioner.
+
+    Verifies the critical wrapping order: EDMPreconditioner(backbone) is the
+    inner model passed to MultiDiffusionModel2D, mirroring the realistic SDA
+    recipe. Both non-regression (fresh instantiation) and from_checkpoint
+    variants compare against the same reference to detect backward-compat breaks.
+    """
+
+    def test_forward_random_non_regression(
+        self, deterministic_settings, device, tolerances
+    ):
+        """Forward with random patching matches reference (fresh instantiation)."""
+        md = _create_md_model_edm_precond().to(device)
+        md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
+
+        x0 = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device)
+        t = make_input((BATCH,), seed=GLOBAL_SEED + 1, device=device).abs() + 0.1
+
+        out = md(x0, t)
+        assert out.shape == (PATCH_NUM * BATCH, CHANNELS, *PATCH_SHAPE)
+
+        ref_file = f"{REF_PREFIX}edm_precond_fwd_rand.pth"
+        ref = load_or_create_reference(ref_file, lambda: {"out": out.cpu()})
+        compare_outputs(out, ref["out"], **tolerances)
+
+    def test_forward_from_checkpoint(self, deterministic_settings, device, tolerances):
+        """Forward from loaded checkpoint matches same reference as fresh instantiation."""
+        md = load_or_create_checkpoint(
+            f"{REF_PREFIX}edm_precond.mdlus", _create_md_model_edm_precond
+        ).to(device)
+        md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
+
+        x0 = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device)
+        t = make_input((BATCH,), seed=GLOBAL_SEED + 1, device=device).abs() + 0.1
+
+        out = md(x0, t)
+        assert out.shape == (PATCH_NUM * BATCH, CHANNELS, *PATCH_SHAPE)
+
+        # Reuse the same reference as test_forward_random_non_regression.
+        ref_file = f"{REF_PREFIX}edm_precond_fwd_rand.pth"
+        ref = load_or_create_reference(ref_file, lambda: {"out": out.cpu()})
+        compare_outputs(out, ref["out"], **tolerances)

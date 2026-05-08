@@ -166,7 +166,7 @@ With that, launching diffusion training for the default StormCast configuration 
 ```bash
 python train.py --config-name diffusion training.experiment_name=diffusion
 ```
-To test signle GPU diffusion training:
+To test single GPU diffusion training:
 
 - Use `--config-name diffusion_lite` (U-Net with StormCast training data)
 - Use `--config-name test_diffusion_unet` (U-Net without data) 

@@ -1,0 +1,89 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# DrivaerML surface dataset
+# Reads the boundary surface Mesh directly from DomainMesh .pdmsh files
+# by navigating into the on-disk tensordict directory structure.
+# Triangulated surface mesh. Fields live in cell_data.
+# Splits are controlled by manifest.json + train_split/val_split in the training config.
+
+name: drivaer_ml_surface
+
+train_datadir: ${dataset_paths.drivaer_ml}
+
+metadata:
+  U_inf:  [30.0, 0.0, 0.0] # freestream velocity
+  p_inf: 0.0 # reference pressure, drivaerml is gauge pressure
+  rho_inf: 1.225 # freestream density
+  nu: 1
+  L_ref: 5.0                # reference length [m]
+
+pipeline:
+  reader:
+    _target_: ${dp:MeshReader}
+    path: ${train_datadir}
+    pattern: "**/*.pdmsh/_tensordict/boundaries/surface"
+    subsample_n_cells: ${sampling_resolution}
+  augmentations:
+    - _target_: ${dp:RandomRotateMesh}
+      axes: ["z"]
+      transform_cell_data: true
+      transform_global_data: true
+    - _target_: ${dp:RandomTranslateMesh}
+      distribution:
+        _target_: torch.distributions.Uniform
+        low: [-1.0, -1.0, 0.0]
+        high: [1.0, 1.0, 0.0]
+  transforms:
+    - _target_: ${dp:DropMeshFields}
+      global_data: [TimeValue]
+    - _target_: ${dp:CenterMesh}
+      use_area_weighting: false
+    - _target_: ${dp:NonDimensionalizeByMetadata}
+      fields:
+        pMeanTrim: pressure
+        wallShearStressMeanTrim: stress
+      section: cell_data
+    - _target_: ${dp:RenameMeshFields}
+      cell_data:
+        pMeanTrim: pressure
+        wallShearStressMeanTrim: wss
+    - _target_: ${dp:NormalizeMeshFields}
+      section: cell_data
+      fields:
+        wss: {type: vector, mean: [0.0, 0.0, 0.0], std: 0.00313}
+    - _target_: ${dp:ComputeSurfaceNormals}
+      store_as: cell_data
+      field_name: normals
+    - _target_: ${dp:SubsampleMesh}
+      n_cells: ${sampling_resolution}
+    - _target_: ${dp:MeshToTensorDict}
+    - _target_: ${dp:ComputeCellCentroids}
+    - _target_: ${dp:RestructureTensorDict}
+      groups:
+        input:
+          points: cell_centroids
+          normals: cell_data.normals
+          U_inf: global_data.U_inf
+        output:
+          pressure: cell_data.pressure
+          wss: cell_data.wss
+
+targets:
+  pressure: scalar
+  wss: vector
+
+metrics: [l1, l2, mae]

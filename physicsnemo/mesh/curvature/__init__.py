@@ -14,35 +14,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Curvature computation for simplicial meshes.
+r"""Curvature computation for simplicial meshes.
 
 This module provides discrete differential geometry tools for computing
 intrinsic and extrinsic curvatures on n-dimensional simplicial manifolds.
 
-Gaussian Curvature (Intrinsic):
-- Angle defect method: K = (full_angle - Σ angles) / voronoi_area
-- Works for any codimension (intrinsic property)
-- Measures intrinsic geometry (Theorema Egregium)
+**Gaussian curvature (intrinsic)**:
 
-Mean Curvature (Extrinsic):
-- Cotangent Laplacian method: H = ||L @ points|| / (2 * voronoi_area)
-- Requires codimension-1 (needs normal vectors)
-- Measures extrinsic bending
+- Angle-defect method:
+  :math:`K(v) = \Theta(v) / |{\star}v|`, where :math:`\Theta(v)` is the
+  angle defect at vertex :math:`v` (full angle minus the sum of incident
+  cell angles) and :math:`|{\star}v|` is the dual 0-cell (Voronoi) volume.
+- Works for any codimension (intrinsic property).
+- Measures intrinsic geometry (Theorema Egregium).
 
-Example:
-    >>> from physicsnemo.mesh.curvature import gaussian_curvature_vertices, mean_curvature_vertices
-    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-    >>> mesh = sphere_icosahedral.load(subdivisions=2)
-    >>>
-    >>> # Compute Gaussian curvature
-    >>> K = gaussian_curvature_vertices(mesh)
-    >>>
-    >>> # Compute mean curvature (codimension-1 only)
-    >>> H = mean_curvature_vertices(mesh)
-    >>>
-    >>> # Or use Mesh properties:
-    >>> K = mesh.gaussian_curvature_vertices
-    >>> H = mesh.mean_curvature_vertices
+**Mean curvature (extrinsic)**:
+
+- Cotangent-Laplacian method:
+  :math:`H(v) = \|L\, p\| / (2 \, |{\star}v|)`, where :math:`p` is the
+  vertex position vector and :math:`L` is the cotangent Laplacian.
+- Requires codimension-1 (needs normal vectors).
+- Measures extrinsic bending.
+
+Examples
+--------
+>>> from physicsnemo.mesh.curvature import gaussian_curvature_vertices, mean_curvature_vertices
+>>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+>>> mesh = sphere_icosahedral.load(subdivisions=2)
+>>> # Compute Gaussian curvature
+>>> K = gaussian_curvature_vertices(mesh)
+>>> # Compute mean curvature (codimension-1 only)
+>>> H = mean_curvature_vertices(mesh)
+>>> # Or use Mesh properties:
+>>> K = mesh.gaussian_curvature_vertices
+>>> H = mesh.mean_curvature_vertices
 """
 
 from physicsnemo.mesh.curvature.gaussian import (

@@ -38,6 +38,7 @@ def compute_mesh_statistics(
     """Compute summary statistics for mesh.
 
     Returns dictionary with mesh statistics:
+
     - n_points: Number of vertices
     - n_cells: Number of cells
     - n_manifold_dims: Manifold dimension

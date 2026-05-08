@@ -1,0 +1,100 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# DrivaerML volume dataset (DomainMesh)
+# Loads domain_*.pmsh files containing interior volume mesh + surface boundary + global_data.
+# Interior: tetrahedral volume mesh with fields in point_data.
+# Boundary: triangulated surface mesh ("surface").
+# global_data: U_inf, rho_inf (baked into .pmsh); p_inf, nu, L_ref injected from metadata below.
+# Splits are controlled by manifest.json + train_split/val_split in the training config.
+
+name: drivaer_ml_volume
+
+train_datadir: ${dataset_paths.drivaer_ml}
+
+metadata:
+  U_inf:  [30.0, 0.0, 0.0] # freestream velocity
+  p_inf: 0.0 # reference pressure, drivaerml is gauge pressure
+  rho_inf: 1.225 # freestream density
+  nu: 1
+  L_ref: 5.0                # reference length [m]
+
+pipeline:
+  reader:
+    _target_: ${dp:DomainMeshReader}
+    path: ${train_datadir}
+    pattern: "**/domain_*.pdmsh"
+    subsample_n_points: ${sampling_resolution}
+    subsample_n_cells: ${sampling_resolution}
+    extra_boundaries:
+      stl_geometry:
+        pattern: "*_single_solid.stl.pmsh"
+  augmentations:
+    - _target_: ${dp:RandomRotateMesh}
+      axes: ["z"]
+      transform_point_data: true
+      transform_global_data: true
+    - _target_: ${dp:RandomTranslateMesh}
+      distribution:
+        _target_: torch.distributions.Uniform
+        low: [-1.0, -1.0, 0.0]
+        high: [1.0, 1.0, 0.0]
+  transforms:
+    - _target_: ${dp:DropMeshFields}
+      global_data: [TimeValue]
+    - _target_: ${dp:CenterMesh}
+      use_area_weighting: false
+    - _target_: ${dp:NonDimensionalizeByMetadata}
+      fields:
+        UMeanTrim: velocity
+        pMeanTrim: pressure
+        nutMeanTrim: identity
+      section: point_data
+    - _target_: ${dp:ComputeSDFFromBoundary}
+      boundary_name: stl_geometry
+      sdf_field: sdf
+      normals_field: sdf_normals
+      use_winding_number: true
+    - _target_: ${dp:DropBoundary}
+      names: [stl_geometry]
+    - _target_: ${dp:RenameMeshFields}
+      point_data:
+        UMeanTrim: velocity
+        pMeanTrim: pressure
+        nutMeanTrim: nut
+    - _target_: ${dp:NormalizeMeshFields}
+      section: point_data
+      fields:
+        nut: {type: scalar, mean: 4.8e-4, std: 9.4e-4}
+    - _target_: ${dp:MeshToTensorDict}
+    - _target_: ${dp:RestructureTensorDict}
+      groups:
+        input:
+          points: interior.points
+          U_inf: global_data.U_inf
+          sdf: interior.point_data.sdf
+          sdf_normals: interior.point_data.sdf_normals
+        output:
+          velocity: interior.point_data.velocity
+          pressure: interior.point_data.pressure
+          nut: interior.point_data.nut
+
+targets:
+  velocity: vector
+  pressure: scalar
+  nut: scalar
+
+metrics: [l1, l2, mae]

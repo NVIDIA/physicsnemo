@@ -23,6 +23,7 @@ rather than solving in ambient space and projecting. This avoids ill-conditionin
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Float
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
@@ -32,9 +33,9 @@ if TYPE_CHECKING:
 
 def compute_point_gradient_lsq_intrinsic(
     mesh: "Mesh",
-    point_values: torch.Tensor,
+    point_values: Float[torch.Tensor, "n_points ..."],
     weight_power: float = 2.0,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "n_points n_spatial_dims ..."]:
     """Compute intrinsic gradient on manifold using tangent-space LSQ.
 
     For surfaces in 3D, solves LSQ in the local 2D tangent plane at each vertex.
@@ -167,9 +168,9 @@ def compute_point_gradient_lsq_intrinsic(
 
 
 def _build_tangent_bases_vectorized(
-    normals: torch.Tensor,
+    normals: Float[torch.Tensor, "n_points n_spatial_dims"],
     n_manifold_dims: int,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "n_points n_spatial_dims n_manifold_dims"]:
     """Build orthonormal tangent space bases from normal vectors (vectorized).
 
     Parameters

@@ -156,6 +156,7 @@ def test_step(model, dataloader, log, cfg, swe_nl_node, device, option):
 
 @hydra.main(version_base="1.3", config_path=".", config_name="config_pino.yaml")
 def main(cfg: DictConfig):
+    """Main function"""
     # CUDA support
     if torch.cuda.is_available():
         device = torch.device("cuda")
@@ -166,7 +167,7 @@ def main(cfg: DictConfig):
 
     # Define 2D Nonlinear Shallow Waters PDEs
     swe_nl = SWE_NL(g=cfg.data.g, nu=cfg.data.nu)
-    swe_nl_node = swe_nl.make_nodes()
+    swe_nl_node = swe_nl.make_computations()
 
     # Load in dataset and make dataloader
     data = torch.load(

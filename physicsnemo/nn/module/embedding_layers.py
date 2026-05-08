@@ -127,7 +127,16 @@ class PositionalEmbedding(torch.nn.Module):
         freqs = torch.arange(start=0, end=self.freq_embed_dim // 2, dtype=torch.float32)
         freqs = freqs / (self.freq_embed_dim // 2 - (1 if self.endpoint else 0))
         freqs = (1 / self.max_positions) ** freqs
-        self.register_buffer("freqs", freqs, persistent=False)
+        self.register_buffer("freqs", freqs)
+        self.register_load_state_dict_pre_hook(self._fill_missing_freqs)
+
+    @staticmethod
+    def _fill_missing_freqs(module, state_dict, prefix, *_args, **_kwargs):
+        """Backward compat: old checkpoints saved freqs as non-persistent.
+        This hook will add them to the state_dict."""
+        key = prefix + "freqs"
+        if key not in state_dict:
+            state_dict[key] = module.freqs.clone()
 
     def forward(self, x):
         x = torch.outer(x, self.freqs)

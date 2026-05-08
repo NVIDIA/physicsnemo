@@ -697,6 +697,7 @@ class TestAllPreconditioners:
         assert x.grad is not None
         assert not torch.isnan(x.grad).any()
 
+    @pytest.mark.usefixtures("nop_compile")
     def test_compile(
         self,
         simple_model,

@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import datetime
+
 import dask
 import fsspec
 import hydra
@@ -22,11 +23,12 @@ import numpy as np
 import xarray as xr
 from dask.diagnostics import ProgressBar
 from omegaconf import DictConfig, OmegaConf
-
 from utils import get_filesystem
 
 # Add eval to OmegaConf TODO: Remove when OmegaConf is updated
 OmegaConf.register_new_resolver("eval", eval)
+
+ZARR_FORMAT = 3
 
 
 @hydra.main(version_base="1.2", config_path="conf", config_name="config")
@@ -67,11 +69,6 @@ def main(cfg: DictConfig) -> None:
         ):
             arco_era5 = arco_era5.drop(variable)
 
-    # Make encoding for chunking pressure level variables
-    encoding = {}
-    for variable in cfg.dataset.pressure_level_variables:
-        encoding[variable] = {"chunks": (1, 1, 721, 1440)}
-
     # Subsample time
     arco_era5 = arco_era5.sel(
         time=slice(
@@ -83,15 +80,23 @@ def main(cfg: DictConfig) -> None:
         time=arco_era5.time.dt.hour.isin(np.arange(0, 24, cfg.dataset.dt))
     )
 
+    # Clear source storage metadata so xarray/Zarr can choose v3-compatible codecs.
+    arco_era5 = arco_era5.drop_encoding()
+
     # Save data
     print("Saving Data")
+    zarr_kwargs = {
+        "consolidated": True,
+        "mode": "w",
+        "zarr_format": ZARR_FORMAT,
+    }
     with ProgressBar():
         # TODO: Remove single_threaded when machine updated
         if cfg.dataset.single_threaded:
             with dask.config.set(scheduler="single-threaded"):
-                arco_era5.to_zarr(save_mapper, consolidated=True, encoding=encoding)
+                arco_era5.to_zarr(save_mapper, **zarr_kwargs)
         else:
-            arco_era5.to_zarr(save_mapper, consolidated=True, encoding=encoding)
+            arco_era5.to_zarr(save_mapper, **zarr_kwargs)
 
 
 if __name__ == "__main__":
