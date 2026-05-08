@@ -311,11 +311,18 @@ class SubsampleMesh(MeshTransform):
 
 
 def _rename_td_keys(td: TensorDict, mapping: dict[str, str]) -> TensorDict:
-    """Rename keys in a TensorDict, returning a new TensorDict."""
+    """Rename keys in a TensorDict, returning a new TensorDict.
+
+    Uses :meth:`tensordict.TensorDict.rename_key_` for each entry --
+    that's the named TensorDict API for the operation, equivalent to
+    ``td[new] = td.pop(old)`` but explicit. Missing source keys are
+    silently skipped.
+    """
     out = td.clone()
+    present = set(out.keys())
     for old_key, new_key in mapping.items():
-        if old_key in out.keys():
-            out[new_key] = out.pop(old_key)
+        if old_key in present:
+            out.rename_key_(old_key, new_key)
     return out
 
 
@@ -340,33 +347,17 @@ class DropMeshFields(MeshTransform):
         self._global_data_keys = global_data or []
 
     def __call__(self, mesh: Mesh) -> Mesh:
-        new_pd = mesh.point_data
-        if self._point_data_keys:
-            new_pd = new_pd.clone()
-            for k in self._point_data_keys:
-                if k in new_pd.keys():
-                    del new_pd[k]
-
-        new_cd = mesh.cell_data
-        if self._cell_data_keys:
-            new_cd = new_cd.clone()
-            for k in self._cell_data_keys:
-                if k in new_cd.keys():
-                    del new_cd[k]
-
-        new_gd = mesh.global_data
-        if self._global_data_keys:
-            new_gd = new_gd.clone()
-            for k in self._global_data_keys:
-                if k in new_gd.keys():
-                    del new_gd[k]
-
+        ### `TensorDict.exclude(*keys)` returns a fresh TD without the
+        ### named keys (silently tolerating missing ones), so we don't
+        ### have to clone + iterate + del. Calling with an empty key
+        ### list is a no-op clone, which keeps the behavior identical
+        ### to the previous "skip when no keys configured" branch.
         return Mesh(
             points=mesh.points,
             cells=mesh.cells,
-            point_data=new_pd,
-            cell_data=new_cd,
-            global_data=new_gd,
+            point_data=mesh.point_data.exclude(*self._point_data_keys),
+            cell_data=mesh.cell_data.exclude(*self._cell_data_keys),
+            global_data=mesh.global_data.exclude(*self._global_data_keys),
         )
 
     def extra_repr(self) -> str:
