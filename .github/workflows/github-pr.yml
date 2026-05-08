@@ -125,6 +125,11 @@ jobs:
         path: ${{ env.JIT_CACHE_DIR }}
         key: ${{ env.JIT_CACHE_KEY_PREFIX }}-latest
 
+    - name: Download CI test data
+      uses: ./.github/actions/download-ci-data
+      with:
+        hf-token: ${{ secrets.HF_CI_DATA_TOKEN }}
+
     - name: Run core tests (with testmon)
       env:
         WARP_CACHE_PATH: ${{ env.JIT_CACHE_DIR }}/warp
@@ -181,6 +186,11 @@ jobs:
       with:
         path: ${{ env.JIT_CACHE_DIR }}
         key: ${{ env.JIT_CACHE_KEY_PREFIX }}-latest
+
+    - name: Download CI test data
+      uses: ./.github/actions/download-ci-data
+      with:
+        hf-token: ${{ secrets.HF_CI_DATA_TOKEN }}
 
     - name: Run core tests for coverage report (testmon-selected)
       env:
