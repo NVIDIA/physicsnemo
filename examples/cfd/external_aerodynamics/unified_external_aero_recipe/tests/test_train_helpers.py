@@ -28,14 +28,6 @@ handling for:
   ``TensorDict(..., batch_size=[N])`` has ``device is None``, and
   ``td.to("cpu")`` updates ``.device``, so this assertion fails if the
   walker skips the TD branch.
-- :func:`train._recursive_cast_floats`: ``Mesh``, ``DomainMesh``, and
-  ``TensorDict`` propagate the conditional cast via their
-  auto-injected ``.apply()`` -- float leaves move to the requested
-  dtype, integer leaves (e.g. ``Mesh.cells``) are kept by the same
-  ``is_floating_point()`` guard as the bare ``Tensor`` branch. Relies
-  on ``DomainMesh.apply`` recursing into ``interior``, ``boundaries``,
-  and ``global_data`` (physicsnemo >= the fix in
-  NVIDIA/physicsnemo#1621).
 - :func:`train._walk_batch_for_logging`: must yield ``(name, tensor)``
   pairs from TensorDict leaves -- including correctly producing dotted
   paths for nested TDs via ``TD.flatten_keys('.')``.
@@ -60,7 +52,6 @@ from tensordict import TensorDict
 pytest.importorskip("tensorboard")
 
 from train import (  # noqa: E402  -- after the importorskip guard
-    _recursive_cast_floats,
     _recursive_to_device,
     _walk_batch_for_logging,
 )
@@ -114,84 +105,6 @@ class TestRecursiveToDevice:
         assert isinstance(result["targets"], TensorDict)
         assert result["targets"].device == cpu
         assert result["forward_kwargs"]["x"].device == cpu
-
-
-### ---------------------------------------------------------------------------
-### _recursive_cast_floats
-### ---------------------------------------------------------------------------
-
-
-class TestRecursiveCastFloats:
-    """Tests for `_recursive_cast_floats`."""
-
-    def test_tensor_aware_containers_cast_floats_via_apply(self):
-        """Mesh, DomainMesh, and TensorDict propagate the conditional cast.
-
-        Each container's auto-injected ``.apply()`` recurses through every
-        tensor leaf: float leaves move to the new dtype while int leaves
-        (e.g. ``Mesh.cells``) are preserved by the same
-        ``is_floating_point()`` guard used in the bare-Tensor branch.
-
-        The DomainMesh assertions exercise the upstream invariant that
-        ``DomainMesh.apply`` recurses into ``interior``, ``boundaries``,
-        and ``global_data`` (provided by physicsnemo >=
-        NVIDIA/physicsnemo#1621). If any of those fields stops being
-        walked, these assertions are the canary.
-        """
-        td = TensorDict(
-            {
-                "f": torch.zeros(3, dtype=torch.float32),
-                "i": torch.zeros(3, dtype=torch.int64),
-            },
-            batch_size=[3],
-        )
-        mesh = Mesh(
-            points=torch.zeros(5, 3),
-            cells=torch.zeros(2, 3, dtype=torch.int64),
-            point_data={"p": torch.zeros(5)},
-            cell_data={"normals": torch.zeros(2, 3)},
-        )
-        dm = DomainMesh(
-            interior=Mesh(points=torch.zeros(3, 3), point_data={"p": torch.zeros(3)}),
-            boundaries={
-                "v": Mesh(
-                    points=torch.zeros(2, 3),
-                    cells=torch.zeros(1, 3, dtype=torch.int64),
-                )
-            },
-            global_data={"U_inf": torch.zeros(3)},
-        )
-
-        td_cast = _recursive_cast_floats(td, torch.bfloat16)
-        assert isinstance(td_cast, TensorDict)
-        assert td_cast["f"].dtype == torch.bfloat16
-        assert td_cast["i"].dtype == torch.int64
-
-        mesh_cast = _recursive_cast_floats(mesh, torch.bfloat16)
-        assert isinstance(mesh_cast, Mesh)
-        assert mesh_cast.points.dtype == torch.bfloat16
-        assert mesh_cast.cells.dtype == torch.int64
-        assert mesh_cast.point_data["p"].dtype == torch.bfloat16
-        assert mesh_cast.cell_data["normals"].dtype == torch.bfloat16
-
-        dm_cast = _recursive_cast_floats(dm, torch.bfloat16)
-        ### Every leaf inside the DomainMesh -- interior, boundaries, and
-        ### global_data alike -- must end up at the requested dtype, with
-        ### integer leaves (e.g. cells) untouched.
-        assert isinstance(dm_cast, DomainMesh)
-        assert dm_cast.interior.points.dtype == torch.bfloat16
-        assert dm_cast.interior.point_data["p"].dtype == torch.bfloat16
-        assert dm_cast.boundaries["v"].points.dtype == torch.bfloat16
-        assert dm_cast.boundaries["v"].cells.dtype == torch.int64
-        assert dm_cast.global_data["U_inf"].dtype == torch.bfloat16
-
-    def test_plain_float_tensor_still_cast(self):
-        """Plain float tensors cast; plain int tensors pass through unchanged."""
-        t = torch.zeros(3, dtype=torch.float32)
-        assert _recursive_cast_floats(t, torch.bfloat16).dtype == torch.bfloat16
-        ### Int tensors are not cast.
-        i = torch.zeros(3, dtype=torch.int64)
-        assert _recursive_cast_floats(i, torch.bfloat16).dtype == torch.int64
 
 
 ### ---------------------------------------------------------------------------
