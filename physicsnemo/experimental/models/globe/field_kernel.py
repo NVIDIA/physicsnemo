@@ -17,7 +17,7 @@
 import itertools
 import logging
 import operator
-from functools import cached_property, reduce
+from functools import cache, cached_property, reduce
 from math import ceil, comb, prod
 from typing import TYPE_CHECKING, Literal, Sequence
 
@@ -55,6 +55,26 @@ if TYPE_CHECKING:
         DualInteractionPlan,
         SourceAggregates,
     )
+
+
+### Static, per-device memory-budget helpers used by chunk-size sizing.
+
+# Fraction of total device memory we are willing to spend on a single
+# kernel evaluation's chunked autograd state (peak intermediate footprint
+# for one (Phase A | B | C | D) call).  Conservative because parameters,
+# DDP buckets, and activations from other kernels coexist on-device.
+_CHUNK_MEMORY_BUDGET_FRACTION = 0.25
+
+
+@cache
+def _device_total_memory_bytes(device: torch.device) -> int:
+    """Cached lookup of ``torch.cuda.get_device_properties.total_memory``."""
+    return int(torch.cuda.get_device_properties(device).total_memory)
+
+
+def _device_chunk_budget_bytes(device: torch.device) -> int:
+    """Static memory budget for a single chunked kernel evaluation."""
+    return int(_device_total_memory_bytes(device) * _CHUNK_MEMORY_BUDGET_FRACTION)
 
 
 class Kernel(Module):
@@ -1331,12 +1351,22 @@ class BarnesHutKernel(Kernel):
     def _auto_chunk_size(self, n_total_pairs: int, device: torch.device) -> int:
         """Determine chunk size for pair-batched kernel evaluation.
 
-        Estimates peak memory per pair from the kernel's feature engineering
-        pipeline and sizes chunks to fit within ~50% of GPU memory. During
-        inference (no grad), the autograd overhead multiplier is dropped,
-        allowing larger chunks.
+        Sizes chunks to fit within a fixed fraction of total device memory
+        from the kernel's per-pair feature-engineering footprint estimate.
+        During inference (no grad), the autograd overhead multiplier is
+        dropped, allowing larger chunks.
 
-        Returns ``n_total_pairs`` (i.e., no chunking) when the estimated
+        Uses a static budget derived from
+        :func:`torch.cuda.get_device_properties` (cached) instead of
+        ``torch.cuda.mem_get_info``.  ``mem_get_info`` is a synchronizing
+        driver query - calling it on every kernel evaluation produced
+        ~60 syncs per training step in profiling.  Trading "exactly fits
+        in current free memory" for "fits in 25% of total device memory"
+        is fine when total_memory is large (e.g. 197 GB GB200) and the
+        non-kernel resident state (parameters + activations elsewhere) is
+        well under the remaining 75%.
+
+        Returns ``n_total_pairs`` (i.e. no chunking) when the estimated
         peak fits comfortably, or when running on CPU.
         """
         if device.type != "cuda":
@@ -1356,8 +1386,7 @@ class BarnesHutKernel(Kernel):
             * element_bytes
             * autograd_overhead
         )
-        free_bytes, total_bytes = torch.cuda.mem_get_info(device)
-        target_bytes = free_bytes // 2
+        target_bytes = _device_chunk_budget_bytes(device)
 
         n_chunks = max(1, ceil(approx_peak_bytes / target_bytes))
         chunk_size = max(1, ceil(n_total_pairs / n_chunks))
@@ -1365,9 +1394,11 @@ class BarnesHutKernel(Kernel):
         if not torch.compiler.is_compiling():
             logger.debug(
                 "auto_chunk_size: %d pairs -> %d chunks of %d "
-                "(%.1f MB est. peak, %.1f MB free / %.1f MB total GPU)",
+                "(%.1f MB est. peak, %.1f MB budget / %.1f MB total GPU)",
                 n_total_pairs, n_chunks, chunk_size,
-                approx_peak_bytes / 1e6, free_bytes / 1e6, total_bytes / 1e6,
+                approx_peak_bytes / 1e6,
+                target_bytes / 1e6,
+                _device_total_memory_bytes(device) / 1e6,
             )
 
         return chunk_size
@@ -1712,7 +1743,9 @@ class MultiscaleKernel(Module):
         # (int64 checkpoint-saved indices + multiply/scatter graph nodes).
         # Branch checkpointing avoids holding all branches' graphs
         # simultaneously, which is essential at large N (800k+ faces)
-        # but a pure compute overhead at small N (20k faces).
+        # but a pure compute overhead at small N.  Compared against a
+        # static fraction of total device memory rather than free memory
+        # (mem_get_info is a synchronizing driver query).
         _AUTOGRAD_BYTES_PER_PAIR = 34
         n_branches = len(self.reference_length_names)
         use_branch_ckpt = False
@@ -1721,19 +1754,19 @@ class MultiscaleKernel(Module):
             per_branch_bytes = n_total_pairs * _AUTOGRAD_BYTES_PER_PAIR
             all_branches_bytes = per_branch_bytes * n_branches
             if device.type == "cuda":
-                free_bytes = torch.cuda.mem_get_info(device)[0]
-                use_branch_ckpt = all_branches_bytes > free_bytes * 0.1
+                budget_bytes = _device_chunk_budget_bytes(device)
+                use_branch_ckpt = all_branches_bytes > budget_bytes
             else:
                 use_branch_ckpt = False
 
             if not torch.compiler.is_compiling():
                 logger.debug(
                     "branch checkpoint: %s (est. %.1f MB/branch, "
-                    "%.1f MB all branches, %.1f MB free, %d branches)",
+                    "%.1f MB all branches, %.1f MB budget, %d branches)",
                     "ENABLED" if use_branch_ckpt else "DISABLED",
                     per_branch_bytes / 1e6,
                     all_branches_bytes / 1e6,
-                    free_bytes / 1e6 if device.type == "cuda" else 0,
+                    _device_chunk_budget_bytes(device) / 1e6,
                     n_branches,
                 )
 
