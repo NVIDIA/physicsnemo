@@ -536,17 +536,13 @@ class Kernel(Module):
             dtype = torch.get_autocast_dtype(device.type)
             scalars = scalars.to(dtype=dtype)
             vectors = vectors.to(dtype=dtype)
-        else:
-            dtype = None
 
-        smoothing_radius = torch.tensor(
-            self.smoothing_radius, device=device, dtype=dtype
-        )
+        smoothing_radius_sq = self.smoothing_radius**2
 
         ### Vector magnitude, direction, and log-magnitude features
         with record_function("kernel::feature_engineering"):
             vectors_mag_squared: TensorDict = (
-                (vectors * vectors).sum(dim=-1).apply(lambda x: x + smoothing_radius**2)
+                (vectors * vectors).sum(dim=-1).apply(lambda x: x + smoothing_radius_sq)
             )
             vectors_mag = vectors_mag_squared.sqrt()
             vectors_hat = vectors / vectors_mag.unsqueeze(-1)
