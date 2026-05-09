@@ -347,8 +347,6 @@ def main(
         min_lr=learning_rate / 64,
         threshold=1e-3,
     )
-    scaler = torch.amp.GradScaler(device=device.type, enabled=amp)
-
     ### [Checkpoint Save/Load]
     metadata_dict: dict[str, Any] = {}
     epoch = load_checkpoint(
@@ -356,7 +354,6 @@ def main(
         models=base_model,
         optimizer=optimizer,
         scheduler=scheduler,
-        scaler=scaler,
         metadata_dict=metadata_dict,
         device=dist.device,
     )
@@ -430,7 +427,6 @@ def main(
                 **config_settings,
                 "optimizer": optimizer.__class__.__name__,
                 "scheduler": scheduler.__class__.__name__,
-                "scaler": scaler.__class__.__name__,
                 "physicsnemo_pkg_info": get_physicsnemo_pkg_info(),
                 "world_size": dist.world_size,
                 **{f"n_{split}_samples": len(sample_paths[split]) for split in splits},
@@ -526,15 +522,13 @@ def main(
                     if torch.isnan(batch_loss):
                         warnings.warn(f"{batch_loss=} at: {dist.rank=}, {epoch=}")
                     with record_function("backward"):
-                        scaler.scale(batch_loss).backward()
+                        batch_loss.backward()
                     if gradient_clip_norm is not None:
-                        scaler.unscale_(optimizer)
                         torch.nn.utils.clip_grad_norm_(
                             model.parameters(), max_norm=gradient_clip_norm
                         )
                     with record_function("optimizer_step"):
-                        scaler.step(optimizer)
-                        scaler.update()
+                        optimizer.step()
                 all_batch_losses.append(batch_loss.detach().clone())
                 for k, v in batch_loss_components.items():
                     all_batch_loss_components[k].append(v.detach().clone())
@@ -614,7 +608,6 @@ def main(
                 models=base_model,
                 optimizer=optimizer,
                 scheduler=scheduler,
-                scaler=scaler,
                 epoch=epoch,
                 metadata=checkpoint_metadata(),
             )
