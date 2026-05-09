@@ -65,16 +65,17 @@ class MetaData(ModelMetaData):
 class GLOBE(Module):
     r"""Green's-function-Like Operator for Boundary Element PDEs.
 
-    GLOBE is a neural surrogate architecture for boundary-driven elliptic PDEs that
-    combines learnable Green's-function-like kernels with equivariant ML. The model
-    represents solutions as superpositions of kernel evaluations from boundary faces
-    to target points, with communication hyperlayers enabling boundary-to-boundary
-    information propagation before final interior evaluation.
+    GLOBE is a neural surrogate architecture for boundary-driven elliptic PDEs
+    that combines learnable Green's-function-like kernels with equivariant ML.
+    The model represents solutions as superpositions of kernel evaluations from
+    boundary faces to target points, with communication hyperlayers enabling
+    boundary-to-boundary information propagation before final interior
+    evaluation.
 
     The architecture is designed to satisfy fundamental physical requirements:
 
-    - Translation-, rotation-, and parity-equivariant through relative positions and
-      local basis reprojection
+    - Translation-, rotation-, and parity-equivariant through relative positions
+      and local basis reprojection
     - Discretization-invariant via area-weighted boundary integrals
     - Units-invariant through rigorous nondimensionalization
     - Global receptive field through all-to-all boundary-to-target evaluation
@@ -101,20 +102,21 @@ class GLOBE(Module):
     boundary_source_data_ranks : dict[str, TensorDict]
         Mapping of boundary condition type names to rank-spec TensorDicts
         describing the per-face source features for each BC type. The keys
-        implicitly define the set of boundary condition names. The face
-        normal vector is automatically added, so don't include it.
+        implicitly define the set of boundary condition names. The face normal
+        vector is automatically added, so don't include it.
     reference_length_names : Sequence[str]
-        Sequence of identifiers for reference length scales
-        (e.g., ``["viscous_length", "chord_length"]``). Each creates a separate
-        kernel branch in the multiscale composition.
+        Sequence of identifiers for reference length scales (e.g.,
+        ``["viscous_length", "chord_length"]``). Each creates a separate kernel
+        branch in the multiscale composition.
     reference_area : float
         Scalar used to nondimensionalize face areas. Typically a characteristic
         area of the problem (e.g., chord^2 for airfoils).
     global_data_ranks : TensorDict or None, optional
-        Rank-spec TensorDict for global conditioning features. Defaults to
-        empty (no global conditioning).
+        Rank-spec TensorDict for global conditioning features. Defaults to empty
+        (no global conditioning).
     n_communication_hyperlayers : int, optional, default=2
-        Number of boundary-to-boundary communication layers before final evaluation.
+        Number of boundary-to-boundary communication layers before final
+        evaluation.
     n_latent_scalars : int, optional, default=12
         Number of scalar latent channels propagated between hyperlayers.
     n_latent_vectors : int, optional, default=6
@@ -129,11 +131,11 @@ class GLOBE(Module):
         kernel functions.
     theta : float, optional, default=1.0
         Barnes-Hut opening angle controlling the near/far-field split in the
-        dual-tree traversal. The criterion is
-        :math:`(D_T + D_S) / r < \theta`, where :math:`D_T` and :math:`D_S`
-        are AABB diagonals and :math:`r` is the minimum inter-AABB distance.
-        Larger values approximate more aggressively; ``0`` forces all
-        interactions to be exact (no far-field approximation).
+        dual-tree traversal. The criterion is :math:`(D_T + D_S) / r < \theta`,
+        where :math:`D_T` and :math:`D_S` are AABB diagonals and :math:`r` is
+        the minimum inter-AABB distance. Larger values approximate more
+        aggressively; ``0`` forces all interactions to be exact (no far-field
+        approximation).
     leaf_size : int, optional, default=1
         Maximum number of source points per leaf node in the cluster tree.
         Larger values produce shallower trees (fewer traversal iterations) at
@@ -143,6 +145,11 @@ class GLOBE(Module):
         converting ``(far, far)`` pairs into ``(near, far)`` pairs. This
         eliminates the target-side approximation at the cost of more kernel
         evaluations.
+    use_gradient_checkpointing : bool, optional, default=True
+        If ``True``, applies ``torch.utils.checkpoint.checkpoint`` to each
+        kernel evaluation during training, trading compute for memory. See
+        :class:`~physicsnemo.experimental.models.globe.field_kernel.Kernel` for
+        details.
 
     Forward
     -------
@@ -164,22 +171,23 @@ class GLOBE(Module):
         A point-cloud :class:`~physicsnemo.mesh.Mesh` (0-dimensional manifold)
         whose ``.points`` attribute equals the input ``prediction_points``. The
         predicted fields are in ``.point_data``, keyed by the names from
-        ``output_field_ranks``.
-        Scalar fields have shape :math:`(N_{points},)`, vector fields have shape
-        :math:`(N_{points}, D)`. Cells are empty (shape ``(0, 1)``).
-        ``global_data`` is passed through from the input.
+        ``output_field_ranks``. Scalar fields have shape :math:`(N_{points},)`,
+        vector fields have shape :math:`(N_{points}, D)`. Cells are empty (shape
+        ``(0, 1)``). ``global_data`` is passed through from the input.
 
     Notes
     -----
     - ``kernel_layers`` is a :class:`~torch.nn.ModuleList` of communication
-      hyperlayers, each containing a :class:`~torch.nn.ModuleDict` mapping BC type
-      names to :class:`~physicsnemo.experimental.models.globe.field_kernel.MultiscaleKernel`
+      hyperlayers, each containing a :class:`~torch.nn.ModuleDict` mapping BC
+      type names to
+      :class:`~physicsnemo.experimental.models.globe.field_kernel.MultiscaleKernel`
       instances.
     - ``final_field_transforms`` is a :class:`~torch.nn.ModuleList` of per-field
       linear calibration layers, ordered alphabetically by field name.
     - Cell areas are automatically normalized by ``reference_area`` to preserve
       discretization-invariance.
-    - The cell normal vector is automatically added to source data for each mesh.
+    - The cell normal vector is automatically added to source data for each
+      mesh.
     - The ``Mesh["n-1", "n"]`` type annotations assume the PDE domain fills the
       full ambient space (domain manifold dim = spatial dim), so boundary meshes
       are codimension-1 in the ambient space. For a PDE on a ``d``-dimensional
@@ -227,6 +235,7 @@ class GLOBE(Module):
         self_regularization_beta: float | None = None,
         latent_compression_scale: float | None = None,
         expand_far_targets: bool = False,
+        use_gradient_checkpointing: bool = True,
     ):
         if hidden_layer_sizes is None:
             hidden_layer_sizes = [64, 64, 64]
@@ -295,6 +304,7 @@ class GLOBE(Module):
         self.network_type = network_type
         self.self_regularization_beta = self_regularization_beta
         self.expand_far_targets = expand_far_targets
+        self.use_gradient_checkpointing = use_gradient_checkpointing
 
         ### Build the intermediate output-field rank spec for communication
         # hyperlayers. Only the final hyperlayer emits output_field_ranks.
@@ -331,6 +341,7 @@ class GLOBE(Module):
                         leaf_size=leaf_size,
                         network_type=network_type,
                         self_regularization_beta=self_regularization_beta,
+                        use_gradient_checkpointing=use_gradient_checkpointing,
                     )
                     for bc_type in boundary_condition_names
                 }
