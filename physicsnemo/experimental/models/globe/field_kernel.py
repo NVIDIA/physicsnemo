@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Literal, Sequence
 
 import torch
 import torch.nn as nn
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from tensordict import TensorDict
 from torch.profiler import record_function
 from torch.utils.checkpoint import checkpoint
@@ -301,6 +301,24 @@ class Kernel(Module):
             1  # r_hat
             + 2 * (n_vectors_in - 1)  # All non-r vectors
         )
+
+    @cached_property
+    def _output_packing(self) -> tuple[tuple[str, ...], tuple[int, ...], int]:
+        """Canonical-ordered output keys, per-key feature widths, and total width.
+
+        Used by :class:`BarnesHutKernel` to pack the per-phase scatter
+        targets into a single ``(n_targets, total_features)`` buffer.  The
+        backward pass through ``aten::scatter_add`` was the largest single
+        GPU kernel time in profiling (``indexing_backward_kernel_stride_1``,
+        ~1 s out of 4.5 s total GPU time per training step), and packing
+        cuts that cost proportional to the number of output fields.
+        """
+        ranks_dict = flatten_rank_spec(self.output_field_ranks)
+        keys = tuple(sorted(ranks_dict.keys()))
+        features_per_key = tuple(
+            1 if ranks_dict[k] == 0 else self.n_spatial_dims for k in keys
+        )
+        return keys, features_per_key, sum(features_per_key)
 
     def forward(
         self,
@@ -939,9 +957,6 @@ class BarnesHutKernel(Kernel):
                     100.0 * n_near / max(n_dense, 1),
                 )
 
-            if n_near == 0 and n_nf == 0 and n_fn == 0 and n_far_nodes == 0:
-                return self._empty_result(n_targets, device)
-
             ### Prepare aggregate data for far-field and (near,far) phases
             if n_far_nodes > 0 or n_nf > 0:
                 if aggregates.node_source_data is not None:
@@ -958,8 +973,31 @@ class BarnesHutKernel(Kernel):
                     [cluster_tree.n_nodes, self.n_spatial_dims]
                 )
 
-        ### Initialize output buffers
-        output_bufs: dict[str, torch.Tensor] = {}
+        ### Packed output buffer.  All four phases scatter into this single
+        ### tensor; the per-phase loops over output keys (one ``scatter_add_``
+        ### per key) are replaced with one packed ``scatter_add_`` per phase.
+        ### ``indexing_backward`` was the top GPU kernel by time in profiling
+        ### (~23% of total GPU time); packing cuts this by the number of
+        ### output fields (~4x for ``C_p`` + ``C_f`` on DrivAerML).
+        ###
+        ### Buffer dtype must match the dtype of ``weighted = chunk * weights``
+        ### that the four phases will scatter in (``index_add_`` requires
+        ### exact dtype match).  ``chunk`` comes from the MLP at the
+        ### autocast dtype (or ``source_points.dtype`` outside autocast);
+        ### ``weights`` carries ``source_strengths.dtype``.  Their product
+        ### is the type-promoted dtype, which is what the previous
+        ### lazy-allocated buffers used to capture - we now compute it
+        ### eagerly so a single buffer can be allocated up front.
+        _, _, total_features = self._output_packing
+        chunk_dtype = (
+            torch.get_autocast_dtype(device.type)
+            if torch.is_autocast_enabled(device.type)
+            else source_points.dtype
+        )
+        buffer_dtype = torch.promote_types(chunk_dtype, source_strengths.dtype)
+        packed_buf = torch.zeros(
+            (n_targets, total_features), dtype=buffer_dtype, device=device
+        )
 
         # ==================================================================
         # Phase A: Near-field (individual target-source pairs, chunked)
@@ -986,39 +1024,19 @@ class BarnesHutKernel(Kernel):
                 # the gathered float data (~300 bytes/pair).  This is a
                 # ~37x reduction in checkpoint-saved memory per branch.
                 with record_function("bh_kernel::near_chunk"):
-                    if self.training and self.use_gradient_checkpointing:
-                        chunk_result = checkpoint(
-                            self._gather_and_evaluate,
-                            chunk_tgt_ids, chunk_src_ids,
-                            target_points, source_points,
-                            source_scalars, source_vectors,
-                            global_scalars, global_vectors,
-                            reference_length, device,
-                            use_reentrant=False,
-                        )
-                    else:
-                        chunk_result = self._gather_and_evaluate(
-                            chunk_tgt_ids, chunk_src_ids,
-                            target_points, source_points,
-                            source_scalars, source_vectors,
-                            global_scalars, global_vectors,
-                            reference_length, device,
-                        )
+                    chunk_result = self._maybe_checkpointed_evaluate(
+                        chunk_tgt_ids, chunk_src_ids,
+                        target_points, source_points,
+                        source_scalars, source_vectors,
+                        global_scalars, global_vectors,
+                        reference_length, device,
+                    )
 
                 with record_function("bh_kernel::near_scatter"):
                     chunk_strengths = source_strengths[chunk_src_ids]
-                    for k, v in chunk_result.items():
-                        weighted = v * chunk_strengths.view(-1, *([1] * (v.ndim - 1)))
-                        if k not in output_bufs:
-                            output_bufs[k] = torch.zeros(
-                                (n_targets,) + v.shape[1:],
-                                dtype=weighted.dtype,
-                                device=device,
-                            )
-                        idx = chunk_tgt_ids.view(
-                            -1, *([1] * (v.ndim - 1))
-                        ).expand_as(weighted)
-                        output_bufs[k].scatter_add_(0, idx, weighted)
+                    self._pack_and_scatter(
+                        chunk_result, chunk_strengths, chunk_tgt_ids, packed_buf
+                    )
 
         # ==================================================================
         # Phase B: Far-field node pairs (evaluate once, broadcast to targets)
@@ -1031,24 +1049,13 @@ class BarnesHutKernel(Kernel):
             # Same gather-inside-checkpoint pattern: the checkpoint saves
             # only the node ID indices, not the gathered aggregate data.
             with record_function("bh_kernel::far_node_evaluate"):
-                if self.training and self.use_gradient_checkpointing:
-                    far_result = checkpoint(
-                        self._gather_and_evaluate,
-                        far_tgt_nids, far_src_nids,
-                        target_centroids, aggregates.node_centroid,
-                        agg_scalars, agg_vectors,
-                        global_scalars, global_vectors,
-                        reference_length, device,
-                        use_reentrant=False,
-                    )
-                else:
-                    far_result = self._gather_and_evaluate(
-                        far_tgt_nids, far_src_nids,
-                        target_centroids, aggregates.node_centroid,
-                        agg_scalars, agg_vectors,
-                        global_scalars, global_vectors,
-                        reference_length, device,
-                    )
+                far_result = self._maybe_checkpointed_evaluate(
+                    far_tgt_nids, far_src_nids,
+                    target_centroids, aggregates.node_centroid,
+                    agg_scalars, agg_vectors,
+                    global_scalars, global_vectors,
+                    reference_length, device,
+                )
 
             ### Broadcast node-level results to individual targets.
             with record_function("bh_kernel::far_node_broadcast"):
@@ -1059,19 +1066,14 @@ class BarnesHutKernel(Kernel):
                 positions, pair_ids = _ragged_arange(node_starts, node_counts)
                 expanded_tgt_ids = target_tree.sorted_source_order[positions]
 
-                for k, v in far_result.items():
-                    weighted = v * far_strengths.view(-1, *([1] * (v.ndim - 1)))
-                    expanded = weighted[pair_ids]
-                    if k not in output_bufs:
-                        output_bufs[k] = torch.zeros(
-                            (n_targets,) + v.shape[1:],
-                            dtype=expanded.dtype,
-                            device=device,
-                        )
-                    idx = expanded_tgt_ids.view(
-                        -1, *([1] * (v.ndim - 1))
-                    ).expand_as(expanded)
-                    output_bufs[k].scatter_add_(0, idx, expanded)
+                ### Broadcast node-level outputs to individual targets via
+                ### ``pair_ids`` (which point back into the per-node result
+                ### tensor).  Packing the broadcast lets us do one expand +
+                ### one scatter_add instead of one per output field.
+                self._pack_and_scatter(
+                    far_result, far_strengths, expanded_tgt_ids,
+                    packed_buf, broadcast_pair_ids=pair_ids,
+                )
 
         # ==================================================================
         # Phase C: (near,far) - individual targets × source node centroids
@@ -1083,39 +1085,19 @@ class BarnesHutKernel(Kernel):
             ### Same evaluation as Phase B (source centroids + aggregates),
             # but same scatter as Phase A (per-target, no broadcast).
             with record_function("bh_kernel::nf_evaluate"):
-                if self.training and self.use_gradient_checkpointing:
-                    nf_result = checkpoint(
-                        self._gather_and_evaluate,
-                        nf_tgt_ids, nf_src_nids,
-                        target_points, aggregates.node_centroid,
-                        agg_scalars, agg_vectors,
-                        global_scalars, global_vectors,
-                        reference_length, device,
-                        use_reentrant=False,
-                    )
-                else:
-                    nf_result = self._gather_and_evaluate(
-                        nf_tgt_ids, nf_src_nids,
-                        target_points, aggregates.node_centroid,
-                        agg_scalars, agg_vectors,
-                        global_scalars, global_vectors,
-                        reference_length, device,
-                    )
+                nf_result = self._maybe_checkpointed_evaluate(
+                    nf_tgt_ids, nf_src_nids,
+                    target_points, aggregates.node_centroid,
+                    agg_scalars, agg_vectors,
+                    global_scalars, global_vectors,
+                    reference_length, device,
+                )
 
             with record_function("bh_kernel::nf_scatter"):
                 nf_strengths = node_total_strength[nf_src_nids]
-                for k, v in nf_result.items():
-                    weighted = v * nf_strengths.view(-1, *([1] * (v.ndim - 1)))
-                    if k not in output_bufs:
-                        output_bufs[k] = torch.zeros(
-                            (n_targets,) + v.shape[1:],
-                            dtype=weighted.dtype,
-                            device=device,
-                        )
-                    idx = nf_tgt_ids.view(
-                        -1, *([1] * (v.ndim - 1))
-                    ).expand_as(weighted)
-                    output_bufs[k].scatter_add_(0, idx, weighted)
+                self._pack_and_scatter(
+                    nf_result, nf_strengths, nf_tgt_ids, packed_buf
+                )
 
         # ==================================================================
         # Phase D: (far,near) - target node centroid × individual sources,
@@ -1129,24 +1111,13 @@ class BarnesHutKernel(Kernel):
             # Uses target centroids (like Phase B) but individual source
             # points and data (like Phase A).
             with record_function("bh_kernel::fn_evaluate"):
-                if self.training and self.use_gradient_checkpointing:
-                    fn_result = checkpoint(
-                        self._gather_and_evaluate,
-                        fn_tgt_nids, fn_src_ids,
-                        target_centroids, source_points,
-                        source_scalars, source_vectors,
-                        global_scalars, global_vectors,
-                        reference_length, device,
-                        use_reentrant=False,
-                    )
-                else:
-                    fn_result = self._gather_and_evaluate(
-                        fn_tgt_nids, fn_src_ids,
-                        target_centroids, source_points,
-                        source_scalars, source_vectors,
-                        global_scalars, global_vectors,
-                        reference_length, device,
-                    )
+                fn_result = self._maybe_checkpointed_evaluate(
+                    fn_tgt_nids, fn_src_ids,
+                    target_centroids, source_points,
+                    source_scalars, source_vectors,
+                    global_scalars, global_vectors,
+                    reference_length, device,
+                )
 
             ### Broadcast to stage-1 survivors via the ragged mapping.
             with record_function("bh_kernel::fn_broadcast"):
@@ -1158,35 +1129,135 @@ class BarnesHutKernel(Kernel):
                 )
                 expanded_tgt_ids = dual_plan.fn_broadcast_targets[positions]
 
-                for k, v in fn_result.items():
-                    weighted = v * fn_strengths.view(-1, *([1] * (v.ndim - 1)))
-                    expanded = weighted[pair_ids]
-                    if k not in output_bufs:
-                        output_bufs[k] = torch.zeros(
-                            (n_targets,) + v.shape[1:],
-                            dtype=expanded.dtype,
-                            device=device,
-                        )
-                    idx = expanded_tgt_ids.view(
-                        -1, *([1] * (v.ndim - 1))
-                    ).expand_as(expanded)
-                    output_bufs[k].scatter_add_(0, idx, expanded)
+                self._pack_and_scatter(
+                    fn_result, fn_strengths, expanded_tgt_ids,
+                    packed_buf, broadcast_pair_ids=pair_ids,
+                )
 
-        if not output_bufs:
-            return self._empty_result(n_targets, device)
+        return self._unpack_buf(packed_buf, n_targets, device)
 
-        return TensorDict(
-            output_bufs,
-            batch_size=torch.Size([n_targets]),
-            device=device,
-        )
+    def _maybe_checkpointed_evaluate(self, *args: object) -> TensorDict:
+        """Run :meth:`_gather_and_evaluate` with optional gradient checkpointing.
+
+        The four BH-kernel phases (near, far_node, nf, fn) all wrap the
+        same ``_gather_and_evaluate`` call in an ``if self.training and
+        self.use_gradient_checkpointing`` branch with identical
+        checkpoint kwargs.  Hoisting the branch removes ~30 lines of
+        duplicated forward/checkpoint plumbing across the four phases
+        and keeps the gradient-checkpointing policy in one place.
+        """
+        if self.training and self.use_gradient_checkpointing:
+            return checkpoint(
+                self._gather_and_evaluate, *args, use_reentrant=False
+            )
+        return self._gather_and_evaluate(*args)
+
+    def _pack_and_scatter(
+        self,
+        chunk_result: TensorDict,
+        weights: Float[torch.Tensor, " n_pairs"],
+        tgt_ids: Int[torch.Tensor, " n_pairs_or_expanded"],
+        packed_buf: Float[torch.Tensor, "n_targets total_features"],
+        *,
+        broadcast_pair_ids: Int[torch.Tensor, " n_pairs_or_expanded"] | None = None,
+    ) -> None:
+        """Pack output fields, weight, and ``scatter_add_`` into ``packed_buf``.
+
+        Replaces the per-key ``scatter_add_`` loop inside each phase with
+        a single packed scatter.  Packing collapses the per-key
+        ``indexing_backward`` kernel calls (the largest GPU cost in
+        profiling) into one per phase, which roughly halves backward
+        scatter cost on DrivAerML (``C_p``: 1 ch + ``C_f``: 3 ch = 4 chs).
+
+        Parameters
+        ----------
+        chunk_result : TensorDict
+            Output of one ``_evaluate_interactions`` call.  Contains the
+            keys declared in ``self.output_field_ranks``; values have
+            ``batch_size=(n_pairs,)``.
+        weights : Float[torch.Tensor, "n_pairs"]
+            Per-pair scalar multipliers (e.g. source strengths).
+        tgt_ids : Int[torch.Tensor, "n_pairs_or_expanded"]
+            Target index for each scatter contribution.  When
+            ``broadcast_pair_ids`` is ``None``, length matches
+            ``n_pairs``; otherwise it matches the broadcast-expanded
+            length and ``broadcast_pair_ids`` indexes back into the
+            ``n_pairs`` dimension.
+        packed_buf : Float[torch.Tensor, "n_targets total_features"]
+            Shared output buffer for the four-phase loop.
+        broadcast_pair_ids : Int[torch.Tensor, "n_pairs_or_expanded"] | None
+            Used by Phase B and Phase D, where each evaluated pair is
+            broadcast to many targets via a ragged-arange mapping.  When
+            given, weighting is applied first (over ``n_pairs``) and
+            broadcasting second (lower memory than the reverse).
+        """
+        keys, _, _ = self._output_packing
+        ### Pack output fields in canonical order; trailing feature dims
+        ### are flattened so we end up with a 2D ``(n_pairs, total_F)``.
+        parts = [
+            chunk_result[k].reshape(chunk_result[k].shape[0], -1) for k in keys
+        ]
+        packed = torch.cat(parts, dim=-1)
+
+        weighted = packed * weights.unsqueeze(-1)
+        if broadcast_pair_ids is not None:
+            weighted = weighted[broadcast_pair_ids]
+
+        ### ``index_add_`` rather than ``scatter_add_`` with broadcasted
+        ### indices: equivalent semantics, but ``index_add_`` takes a 1-D
+        ### ``index`` and avoids the ``unsqueeze`` + ``expand_as`` overhead
+        ### that ``scatter_add_`` requires.  In addition to the direct
+        ### speedup, ``index_add_`` has a more compact backward (no index
+        ### broadcasting in the saved tensors), which compounds with the
+        ### packing optimization above.
+        packed_buf.index_add_(0, tgt_ids, weighted)
+
+    def _unpack_buf(
+        self,
+        packed_buf: Float[torch.Tensor, "n_targets total_features"],
+        n_targets: int,
+        device: torch.device,
+    ) -> TensorDict:
+        """Slice ``packed_buf`` back into a per-output-field TensorDict.
+
+        Counterpart to :meth:`_pack_and_scatter`.  Scalar fields lose the
+        trailing length-1 dim so the returned shapes are
+        ``(n_targets,)`` for scalars and ``(n_targets, D)`` for vectors.
+        Empty inputs flow through correctly: an all-zero ``packed_buf``
+        unpacks to all-zero per-field tensors, so the four-phase loop
+        does not need a separate degenerate-case branch.
+        """
+        keys, features_per_key, _ = self._output_packing
+        ranks_dict = flatten_rank_spec(self.output_field_ranks)
+        fields: dict[str, torch.Tensor] = {}
+        offset = 0
+        for key, n_features in zip(keys, features_per_key):
+            slice_ = packed_buf[:, offset : offset + n_features]
+            if ranks_dict[key] == 0:
+                ### Scalar fields: drop the trailing length-1 dim so
+                ### shape stays ``(n_targets,)`` as before packing.
+                fields[key] = slice_.squeeze(-1)
+            else:
+                fields[key] = slice_
+            offset += n_features
+        return TensorDict(fields, batch_size=torch.Size([n_targets]), device=device)
 
     def _compute_node_strengths(
         self,
         tree: "ClusterTree",
         source_strengths: Float[torch.Tensor, " n_sources"],
     ) -> Float[torch.Tensor, " n_nodes"]:
-        """Compute total source strength per tree node via bottom-up summation.
+        """Compute total source strength per tree node.
+
+        Each node covers a contiguous range
+        ``[node_range_start, node_range_start + node_range_count)`` in
+        morton-sorted source order, so the total strength in a node's
+        subtree is just a range sum: ``prefix_sum[end] - prefix_sum[start]``.
+        This replaces the previous bottom-up Python loop over tree levels
+        - which launched a fresh batch of gather + add + scatter kernels at
+        every level - with a single ``cumsum`` + gather + subtract.  In
+        profiling, the level loop was the largest single contributor to
+        ``cluster_tree::bottom_up_propagation`` GPU and CPU time.
 
         Parameters
         ----------
@@ -1202,62 +1273,19 @@ class BarnesHutKernel(Kernel):
         """
         device = source_strengths.device
         n_nodes = tree.n_nodes
-        node_strengths = torch.zeros(n_nodes, dtype=source_strengths.dtype, device=device)
+        if n_nodes == 0:
+            return torch.zeros(0, dtype=source_strengths.dtype, device=device)
 
-        is_leaf = tree.leaf_count > 0
-        leaf_ids = torch.where(is_leaf)[0]
-
-        if leaf_ids.numel() == 0:
-            return node_strengths
-
-        ### Sum strengths within each leaf
-        leaf_starts = tree.leaf_start[leaf_ids]
-        leaf_counts = tree.leaf_count[leaf_ids]
-        n_leaves = leaf_ids.shape[0]
-
-        if int(leaf_counts.sum()) > 0:
-            from physicsnemo.mesh.spatial._ragged import _ragged_arange
-
-            positions, seg_ids = _ragged_arange(
-                leaf_starts, leaf_counts, total=tree.n_sources,
-            )
-            sorted_strengths = source_strengths[tree.sorted_source_order[positions]]
-            leaf_sums = torch.zeros(n_leaves, dtype=source_strengths.dtype, device=device)
-            leaf_sums.scatter_add_(0, seg_ids, sorted_strengths)
-            node_strengths[leaf_ids] = leaf_sums
-
-        ### Bottom-up propagation using cached level ordering
-        for level_ids in reversed(tree.internal_nodes_per_level):
-            node_strengths[level_ids] = (
-                node_strengths[tree.node_left_child[level_ids]]
-                + node_strengths[tree.node_right_child[level_ids]]
-            )
-
-        return node_strengths
-
-    def _empty_result(
-        self,
-        n_targets: int,
-        device: torch.device,
-    ) -> TensorDict[str, Float[torch.Tensor, "n_targets ..."]]:
-        """Produce a zero-valued result TensorDict for the degenerate case."""
-        # Match the dtype that AMP autocast would produce for real activations,
-        # so downstream ops don't hit a float32-vs-half mismatch.
-        dtype = (
-            torch.get_autocast_dtype(device.type)
-            if torch.is_autocast_enabled(device.type)
-            else torch.float32
+        sorted_strengths = source_strengths[tree.sorted_source_order]
+        ### Pad with a leading zero so that ``cumsum[i]`` is the sum of
+        ### sorted_strengths[:i] - both endpoints index identically.
+        prefix_sum = torch.nn.functional.pad(
+            torch.cumsum(sorted_strengths, dim=0), (1, 0)
         )
-        ranks_dict = flatten_rank_spec(self.output_field_ranks)
-        fields: dict[str, torch.Tensor] = {}
-        for name, rank in sorted(ranks_dict.items()):
-            if rank == 0:
-                fields[name] = torch.zeros(n_targets, device=device, dtype=dtype)
-            else:
-                fields[name] = torch.zeros(
-                    n_targets, self.n_spatial_dims, device=device, dtype=dtype
-                )
-        return TensorDict(fields, batch_size=torch.Size([n_targets]), device=device)
+
+        starts = tree.node_range_start
+        ends = starts + tree.node_range_count
+        return prefix_sum[ends] - prefix_sum[starts]
 
     def _gather_and_evaluate(
         self,

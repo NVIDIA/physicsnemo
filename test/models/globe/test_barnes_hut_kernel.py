@@ -382,80 +382,6 @@ class TestClusterTree:
             agg.node_source_data["v"][0], expected_v, atol=1e-5, rtol=1e-5
         )
 
-    # -- Precomputed leaf field consistency tests ----------------------------
-
-    @pytest.mark.parametrize(
-        "n_points, leaf_size, n_dims",
-        [
-            (50, 4, 3),
-            (1, 4, 2),
-            (10, 100, 2),
-            (20, 1, 3),
-        ],
-        ids=["normal", "single_point", "root_only_leaf", "one_per_leaf"],
-    )
-    def test_precomputed_leaf_node_ids(
-        self,
-        n_points: int,
-        leaf_size: int,
-        n_dims: int,
-    ):
-        """Precomputed leaf_node_ids matches torch.where(leaf_count > 0)."""
-        torch.manual_seed(DEFAULT_SEED)
-        points = torch.randn(n_points, n_dims)
-        tree = ClusterTree.from_points(points, leaf_size=leaf_size)
-
-        expected = torch.where(tree.leaf_count > 0)[0]
-        assert torch.equal(tree.leaf_node_ids, expected)
-        assert tree.n_leaves == expected.shape[0]
-
-    @pytest.mark.parametrize(
-        "n_points, leaf_size, n_dims",
-        [
-            (50, 4, 3),
-            (1, 4, 2),
-            (10, 100, 2),
-            (20, 1, 3),
-        ],
-        ids=["normal", "single_point", "root_only_leaf", "one_per_leaf"],
-    )
-    def test_precomputed_leaf_seg_ids(
-        self,
-        n_points: int,
-        leaf_size: int,
-        n_dims: int,
-    ):
-        """Precomputed leaf_seg_ids matches on-the-fly _ragged_arange computation."""
-        torch.manual_seed(DEFAULT_SEED)
-        points = torch.randn(n_points, n_dims)
-        tree = ClusterTree.from_points(points, leaf_size=leaf_size)
-
-        assert tree.leaf_seg_ids.shape == (n_points,)
-        assert tree.leaf_seg_ids.dtype == torch.long
-        if n_points > 0:
-            assert tree.leaf_seg_ids.max() < tree.n_leaves
-
-        # Rebuild seg_ids from scratch and compare
-        leaf_starts = tree.leaf_start[tree.leaf_node_ids]
-        leaf_counts = tree.leaf_count[tree.leaf_node_ids]
-        positions, compact_ids = _ragged_arange(
-            leaf_starts,
-            leaf_counts,
-            total=n_points,
-        )
-        expected = torch.zeros(n_points, dtype=torch.long)
-        expected[positions] = compact_ids
-
-        assert torch.equal(tree.leaf_seg_ids, expected)
-
-    def test_precomputed_leaf_fields_empty_tree(self):
-        """Empty tree has empty leaf_node_ids and leaf_seg_ids."""
-        tree = ClusterTree.from_points(torch.empty(0, 2), leaf_size=4)
-
-        assert tree.leaf_node_ids.numel() == 0
-        assert tree.leaf_seg_ids.numel() == 0
-        assert tree.n_leaves == 0
-
     def test_compute_source_aggregates_single_point(self):
         """Single-point tree centroid equals the point itself."""
         point = torch.tensor([[3.0, -1.0, 7.0]])
@@ -473,7 +399,9 @@ class TestClusterTree:
         areas = torch.rand(n) + 0.1
         tree = ClusterTree.from_points(points, leaf_size=100, areas=areas)
 
-        assert tree.n_leaves == 1, "Expected single leaf (root)"
+        ### leaf_size > n means the root is the only leaf (single node tree).
+        assert tree.n_nodes == 1
+        assert int((tree.leaf_count > 0).sum()) == 1
         agg = tree.compute_source_aggregates(points, areas)
 
         expected = (points * areas.unsqueeze(-1)).sum(0) / areas.sum()
@@ -1545,6 +1473,155 @@ def test_four_quadrant_per_category_accuracy(
         atol=1e-4,
         rtol=1e-3,
         msg="Low theta (0.01) not close enough to exact",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Autocast / mixed-precision regression guards
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "output_fields",
+    [
+        {"p": "scalar"},
+        {"u": "vector"},
+        {"p": "scalar", "u": "vector"},
+    ],
+    ids=["scalar_only", "vector_only", "scalar_and_vector"],
+)
+def test_bh_forward_under_bf16_autocast(
+    output_fields: dict[str, Literal["scalar", "vector"]],
+) -> None:
+    """BarnesHutKernel.forward must run under bf16 autocast with fp32 strengths.
+
+    Production training enables ``torch.autocast(..., dtype=torch.bfloat16)``
+    around the forward pass and passes fp32 ``source_strengths``.  The MLP
+    output is then bf16 while the strengths multiplicand is fp32, so
+    ``weighted = chunk * strengths`` is promoted to fp32 before
+    ``packed_buf.index_add_`` runs.  This test catches the bug where the
+    packed scatter buffer was allocated in the bf16 autocast dtype, causing
+    ``index_add_`` to raise ``RuntimeError: self (BFloat16) and source
+    (Float) must have the same scalar type`` on the first BH call.
+
+    The check is twofold:
+
+    1. The forward completes without raising (catches the dtype mismatch
+       directly).
+    2. The output approximately matches the fp32 baseline within bf16
+       tolerance (catches a future regression where the fix instead
+       silently downcasts the result, losing accumulation precision).
+    """
+    bh_kernel, _, data = _make_bh_kernel_and_data(
+        n_spatial_dims=2,
+        n_source_scalars=0,
+        n_source_vectors=1,
+        output_fields=output_fields,
+        hidden_layer_sizes=[16, 16],
+        n_source_points=20,
+        n_target_points=15,
+        leaf_size=DEFAULT_LEAF_SIZE,
+    )
+
+    with torch.no_grad():
+        baseline = bh_kernel(**data)
+
+    with (
+        torch.no_grad(),
+        torch.autocast(device_type="cpu", dtype=torch.bfloat16),
+    ):
+        autocast_output = bh_kernel(**data)
+
+    ### Output keys + shapes must match the fp32 baseline exactly.
+    assert set(autocast_output.keys()) == set(baseline.keys())
+    for key in baseline.keys():
+        assert autocast_output[key].shape == baseline[key].shape, (
+            f"shape mismatch for {key}: autocast={autocast_output[key].shape} "
+            f"baseline={baseline[key].shape}"
+        )
+
+    ### Values close within bf16 tolerance.  bf16 has ~3 decimal digits of
+    ### mantissa precision, and our scatter accumulates O(n_pairs) values,
+    ### so a few percent relative error is expected.
+    for key in baseline.keys():
+        torch.testing.assert_close(
+            autocast_output[key].float(),
+            baseline[key],
+            atol=5e-2,
+            rtol=5e-2,
+            msg=f"autocast output diverges from fp32 baseline for field {key!r}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Sync-budget regression guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA required for sync-event counting"
+)
+@pytest.mark.parametrize(
+    "n_points, leaf_size, theta",
+    [
+        (200, 1, 1.0),
+        (200, 4, 1.0),
+        (1000, 4, 0.5),
+    ],
+)
+def test_dual_traversal_sync_budget(
+    n_points: int, leaf_size: int, theta: float
+) -> None:
+    """Cluster-tree construction + dual traversal stays within a sync budget.
+
+    Profiling identified ``cudaStreamSynchronize`` as the dominant CPU
+    stall in GLOBE training (9919 calls / ~3 s in a 10.5 s training step,
+    most of them from ``find_dual_interaction_pairs``).  Phase 2 of the
+    perf optimization moved that section to a deferred-compaction
+    structure that pays at most a handful of syncs per call.
+
+    This test counts ``cudaStreamSynchronize`` events inside one tree
+    build + one dual traversal and asserts the count stays under a
+    generous budget.  The budget is set well above the current count to
+    accommodate small implementation variations, but tight enough to
+    catch the kind of regression we fixed (per-iteration ``.any()`` /
+    ``.item()`` / boolean-mask compactions in the traversal loop).
+    """
+    device = torch.device("cuda")
+    torch.manual_seed(DEFAULT_SEED)
+    points = torch.randn(n_points, 3, device=device)
+
+    ### Warm up: first calls allocate / JIT, which can fire one-off syncs
+    ### unrelated to the algorithmic structure under test.
+    tree_warm = ClusterTree.from_points(points, leaf_size=leaf_size)
+    tree_warm.find_dual_interaction_pairs(target_tree=tree_warm, theta=theta)
+    torch.cuda.synchronize()
+
+    with torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CUDA],
+        record_shapes=False,
+    ) as prof:
+        tree = ClusterTree.from_points(points, leaf_size=leaf_size)
+        tree.find_dual_interaction_pairs(target_tree=tree, theta=theta)
+        torch.cuda.synchronize()
+
+    sync_count = sum(
+        1 for ev in prof.events() if ev.name == "cudaStreamSynchronize"
+    )
+
+    ### Budget: ~3-5 syncs per traversal iteration is what the new
+    ### implementation pays (boolean compaction for the new active set,
+    ### one for ``active[near_leaf_leaf]``, one inside ``_ragged_arange``).
+    ### A 200-point leaf_size=1 tree takes ~10 traversal iterations; the
+    ### top_down build adds a handful more.  Setting the budget at 100
+    ### catches the ``.any()``-per-branch regression (~12 syncs / iter)
+    ### that this work eliminated, while leaving headroom.
+    budget = 100
+    assert sync_count <= budget, (
+        f"dual_traversal sync count {sync_count} exceeds budget {budget} for "
+        f"{n_points=}, {leaf_size=}, {theta=}.  Did a `.any()`, `.item()`, or "
+        f"data-dependent boolean indexing creep back into the dual-traversal "
+        f"hot loop?"
     )
 
 

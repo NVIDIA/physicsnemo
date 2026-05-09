@@ -896,6 +896,6 @@ class GLOBE(Module):
                 key = tuple(name.split("."))
                 t = output_mesh.point_data[key]
                 output_mesh.point_data[key] = self.final_field_transforms[idx](
-                    t.view(-1, 1)
-                ).view(t.shape)
+                    t.reshape(-1, 1)
+                ).reshape(t.shape)
         return output_mesh
