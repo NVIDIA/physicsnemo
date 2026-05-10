@@ -18,8 +18,8 @@ import itertools
 import logging
 import operator
 from functools import cache, cached_property, reduce
-from math import ceil, comb, prod
-from typing import TYPE_CHECKING, Literal, Sequence
+from math import comb, prod
+from typing import TYPE_CHECKING, Final, Literal, Sequence
 
 import torch
 import torch.nn as nn
@@ -63,7 +63,32 @@ if TYPE_CHECKING:
 # kernel evaluation's chunked autograd state (peak intermediate footprint
 # for one (Phase A | B | C | D) call).  Conservative because parameters,
 # DDP buckets, and activations from other kernels coexist on-device.
-_CHUNK_MEMORY_BUDGET_FRACTION = 0.25
+#
+# Expressed as an integer percent (rather than e.g. ``0.25``) so that
+# ``_device_chunk_budget_bytes`` stays in pure-integer arithmetic.  Under
+# ``torch.compile`` with the default ``specialize_float=False``, a
+# module-level Python float is treated as an unbacked symbolic float
+# ("zf" symbol), which then infects every ``chunk_size`` derivation
+# downstream and crashes Dynamo at the ``checkpoint`` boundary in
+# ``_gather_and_evaluate`` with "Source of '...' is None when lifting it
+# to input of top-level".
+_CHUNK_MEMORY_BUDGET_PERCENT: Final[int] = 25
+
+
+def _ceil_div(a: int, b: int) -> int:
+    """Integer ceiling division: equivalent to ``math.ceil(a / b)`` for
+    non-negative ``a`` and positive ``b``, but with no Python ``float``
+    intermediate.
+
+    Used here because, under ``torch.compile`` with the default
+    ``specialize_float=False``, a Python ``float`` in the trace is treated
+    as an unbacked symbolic free variable that propagates into the chunk
+    size and crashes Dynamo at the ``checkpoint`` boundary in
+    :meth:`BarnesHutKernel._gather_and_evaluate`.  ``-(-a // b)`` is the
+    standard Python idiom: floor division rounds toward negative infinity,
+    so negating both ends produces a ceiling on the original quotient.
+    """
+    return -(-a // b)
 
 
 @cache
@@ -74,7 +99,7 @@ def _device_total_memory_bytes(device: torch.device) -> int:
 
 def _device_chunk_budget_bytes(device: torch.device) -> int:
     """Static memory budget for a single chunked kernel evaluation."""
-    return int(_device_total_memory_bytes(device) * _CHUNK_MEMORY_BUDGET_FRACTION)
+    return _device_total_memory_bytes(device) * _CHUNK_MEMORY_BUDGET_PERCENT // 100
 
 
 class Kernel(Module):
@@ -1430,8 +1455,8 @@ class BarnesHutKernel(Kernel):
         )
         target_bytes = _device_chunk_budget_bytes(device)
 
-        n_chunks = max(1, ceil(approx_peak_bytes / target_bytes))
-        chunk_size = max(1, ceil(n_total_pairs / n_chunks))
+        n_chunks = max(1, _ceil_div(approx_peak_bytes, target_bytes))
+        chunk_size = max(1, _ceil_div(n_total_pairs, n_chunks))
 
         if not torch.compiler.is_compiling():
             logger.debug(
