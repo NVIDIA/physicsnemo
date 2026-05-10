@@ -711,14 +711,26 @@ class ClusterTree:
         # leaf-aggregation + bottom-up Python loop, which were the
         # dominant CPU + GPU costs in ``compute_source_aggregates``
         # (~2 s combined per training step in profiling).
+        #
+        # The cumsum and the range subtract are done in fp64 because fp32
+        # suffers catastrophic cancellation when ``range_sum << cumsum_total``,
+        # which is the regime of small leaves (``leaf_size=1``) in a large
+        # tree built over offset (e.g. all-positive) coordinates.  At
+        # drivaer scale (``N=1M``, coords ~5 m), fp32 leaf centroids had
+        # median ~2 % relative error and p99 ~100 % wrong.  Lifting the
+        # cumsum to fp64 brings this back to fp32 epsilon (~1e-7) and adds
+        # <1 % wall-clock to the training step (cumsum is ~2.3x slower in
+        # fp64, but cumsum is a tiny fraction of step time).  CUDA fp32
+        # cumsum is also non-deterministic across runs (pytorch#75240);
+        # fp64 cumsum is much less affected.
         sorted_points = source_points[self.sorted_source_order]
         sorted_areas = areas[self.sorted_source_order]
-        weighted_points = sorted_points * sorted_areas.unsqueeze(-1)
+        weighted_points_64 = (sorted_points * sorted_areas.unsqueeze(-1)).double()
 
         ### Leading-zero padding makes ``prefix[i]`` the sum of the first
         ### ``i`` elements, so subtraction gives the half-open range sum.
         cumsum_weighted_points = torch.nn.functional.pad(
-            torch.cumsum(weighted_points, dim=0), (0, 0, 1, 0)
+            torch.cumsum(weighted_points_64, dim=0), (0, 0, 1, 0)
         )
 
         starts = self.node_range_start
@@ -728,28 +740,33 @@ class ClusterTree:
         )
         ### ``self.node_total_area`` was filled during tree construction
         ### via the bottom-up AABB pass; reuse it instead of recomputing.
-        safe_areas = self.node_total_area.clamp(min=1e-30)
+        ### Promote to fp64 here so the divide stays in fp64 alongside the
+        ### range-sum; cast back to ``source_points.dtype`` at the end.
+        safe_areas_64 = self.node_total_area.double().clamp(min=1e-30)
         with record_function("cluster_tree::node_centroids"):
-            centroid_buf = node_total_weighted_pts / safe_areas.unsqueeze(-1)
+            centroid_buf = (
+                node_total_weighted_pts / safe_areas_64.unsqueeze(-1)
+            ).to(source_points.dtype)
 
         node_source_data: TensorDict | None = None
         if source_data is not None:
             sorted_source_data = source_data[self.sorted_source_order]
-            inv_safe_areas = 1.0 / safe_areas
+            inv_safe_areas_64 = 1.0 / safe_areas_64
 
             def _aggregate_via_prefix_sum(tensor: torch.Tensor) -> torch.Tensor:
                 trailing_shape = tensor.shape[1:]
                 ### Flatten trailing dims so the prefix sum is over a
                 ### single feature axis - avoids materialising a
-                ### per-feature kernel chain inside ``cumsum``.
+                ### per-feature kernel chain inside ``cumsum``.  Same fp64
+                ### upcast rationale as the centroid branch above.
                 flat = tensor.reshape(tensor.shape[0], -1)
-                weighted = flat * sorted_areas.unsqueeze(-1)
+                weighted_64 = (flat * sorted_areas.unsqueeze(-1)).double()
                 cumsum_weighted = torch.nn.functional.pad(
-                    torch.cumsum(weighted, dim=0), (0, 0, 1, 0)
+                    torch.cumsum(weighted_64, dim=0), (0, 0, 1, 0)
                 )
                 node_weighted_sum = cumsum_weighted[ends] - cumsum_weighted[starts]
-                node_avg = node_weighted_sum * inv_safe_areas.unsqueeze(-1)
-                return node_avg.reshape((n_nodes,) + trailing_shape)
+                node_avg = node_weighted_sum * inv_safe_areas_64.unsqueeze(-1)
+                return node_avg.reshape((n_nodes,) + trailing_shape).to(tensor.dtype)
 
             with record_function("cluster_tree::node_source_data"):
                 node_source_data = sorted_source_data.apply(

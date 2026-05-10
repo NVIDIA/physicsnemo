@@ -412,6 +412,79 @@ class TestClusterTree:
             rtol=1e-5,
         )
 
+    @pytest.mark.parametrize(
+        "n_points, coord_offset, coord_scale, leaf_size",
+        [
+            (10_000, 0.0, 5.0, 1),
+            (10_000, 5.0, 2.5, 1),
+            (10_000, 5.0, 2.5, 4),
+            (1_000, 50.0, 5.0, 1),
+        ],
+        ids=[
+            "centered_large",
+            "offset_large",
+            "offset_larger_leaves",
+            "small_extreme_offset",
+        ],
+    )
+    def test_compute_source_aggregates_precision_at_scale(
+        self,
+        n_points: int,
+        coord_offset: float,
+        coord_scale: float,
+        leaf_size: int,
+    ):
+        """Precision regression guard for the cumsum-cancellation regime.
+
+        An earlier implementation (commit ``de1b8c93``) ran the cumsum
+        and the range-subtract in fp32, which produced 1-100 % relative
+        error on small-leaf centroids when ``cumsum_total >> range_sum``
+        (large ``N`` with all-positive / offset coordinates - the regime
+        real car / airfoil surface meshes produce).  The current
+        implementation lifts the cumsum to fp64 internally and casts back;
+        this test checks that fp32 inputs agree with fp64 inputs to
+        within fp32 epsilon, which would not be true under the old
+        fp32-cumsum implementation.
+
+        CPU-only so the deterministic fp64 path is the reference (CUDA
+        cumsum has warp-level non-determinism even in fp64).
+        """
+        torch.manual_seed(DEFAULT_SEED)
+        pts = (torch.rand(n_points, 3) - 0.5) * (2.0 * coord_scale) + coord_offset
+        areas = (torch.rand(n_points) * 0.9 + 0.1) * 1e-3
+        normals = torch.nn.functional.normalize(
+            torch.randn(n_points, 3), dim=-1
+        )
+        sd = TensorDict({"face_normal": normals}, batch_size=[n_points])
+
+        tree = ClusterTree.from_points(pts, leaf_size=leaf_size, areas=areas)
+        actual = tree.compute_source_aggregates(pts, areas, source_data=sd)
+        expected = tree.compute_source_aggregates(
+            pts.double(),
+            areas.double(),
+            source_data=TensorDict(
+                {"face_normal": normals.double()}, batch_size=[n_points]
+            ),
+        )
+
+        torch.testing.assert_close(
+            actual.node_centroid.double(),
+            expected.node_centroid,
+            atol=1e-5,
+            rtol=1e-5,
+        )
+        ### Looser tolerance for ``face_normal``: averaging unit vectors
+        ### whose directions partially cancel can leave near-zero
+        ### components, making the relative error metric sensitive even
+        ### in the precise-arithmetic limit.  Absolute tolerance keeps
+        ### the assertion meaningful for non-degenerate components.
+        torch.testing.assert_close(
+            actual.node_source_data["face_normal"].double(),
+            expected.node_source_data["face_normal"],
+            atol=1e-4,
+            rtol=1e-4,
+        )
+
 
 # ---------------------------------------------------------------------------
 # BarnesHutKernel convergence tests
@@ -1551,6 +1624,39 @@ def test_bh_forward_under_bf16_autocast(
             rtol=5e-2,
             msg=f"autocast output diverges from fp32 baseline for field {key!r}",
         )
+
+
+def test_compute_node_strengths_precision_at_scale() -> None:
+    """Precision regression guard for ``BarnesHutKernel._compute_node_strengths``.
+
+    Same cumsum-cancellation regime as
+    :py:meth:`TestClusterTree.test_compute_source_aggregates_precision_at_scale`,
+    but for the per-node strength sum used to weight far-field kernel
+    contributions in :class:`BarnesHutKernel`.  The fp32-cumsum
+    implementation produced relative errors up to 186 % on individual
+    leaf strengths at drivaer scale; the current fp64-cumsum
+    implementation must agree with an fp64-input reference within fp32
+    epsilon.  CPU-only for the same reproducibility reasons.
+    """
+    torch.manual_seed(DEFAULT_SEED)
+    n_points = 10_000
+    pts = (torch.rand(n_points, 3) - 0.5) * 5.0 + 5.0
+    areas = (torch.rand(n_points) * 0.9 + 0.1) * 1e-3
+    strengths = areas.clone()
+
+    tree = ClusterTree.from_points(pts, leaf_size=1, areas=areas)
+    bh, _, _ = _make_bh_kernel_and_data(
+        n_spatial_dims=3,
+        hidden_layer_sizes=[8, 8],
+        n_source_points=n_points,
+        n_target_points=10,
+    )
+
+    actual = bh._compute_node_strengths(tree, strengths)
+    expected = bh._compute_node_strengths(tree, strengths.double())
+    torch.testing.assert_close(
+        actual.double(), expected, atol=1e-5, rtol=1e-5
+    )
 
 
 # ---------------------------------------------------------------------------
