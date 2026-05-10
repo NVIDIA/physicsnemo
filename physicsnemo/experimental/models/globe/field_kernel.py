@@ -1270,16 +1270,20 @@ class BarnesHutKernel(Kernel):
         if n_nodes == 0:
             return torch.zeros(0, dtype=source_strengths.dtype, device=device)
 
-        sorted_strengths = source_strengths[tree.sorted_source_order]
+        ### Cumsum and range-subtract in fp64 to avoid catastrophic
+        ### cancellation when ``cumsum_total >> range_sum`` - the regime
+        ### of small leaves in a large tree built over offset coordinates.
+        ### See the matching note in :meth:`ClusterTree.compute_source_aggregates`.
+        sorted_strengths_64 = source_strengths[tree.sorted_source_order].double()
         ### Pad with a leading zero so that ``cumsum[i]`` is the sum of
         ### sorted_strengths[:i] - both endpoints index identically.
         prefix_sum = torch.nn.functional.pad(
-            torch.cumsum(sorted_strengths, dim=0), (1, 0)
+            torch.cumsum(sorted_strengths_64, dim=0), (1, 0)
         )
 
         starts = tree.node_range_start
         ends = starts + tree.node_range_count
-        return prefix_sum[ends] - prefix_sum[starts]
+        return (prefix_sum[ends] - prefix_sum[starts]).to(source_strengths.dtype)
 
     def _gather_and_evaluate(
         self,
