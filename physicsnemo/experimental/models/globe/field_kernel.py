@@ -17,6 +17,7 @@
 import itertools
 import logging
 import operator
+import os
 from functools import cache, cached_property, reduce
 from math import comb, prod
 from typing import TYPE_CHECKING, Final, Literal, Sequence
@@ -91,12 +92,52 @@ def _ceil_div(a: int, b: int) -> int:
     return -(-a // b)
 
 
+@torch.compiler.disable
 @cache
 def _device_total_memory_bytes(device: torch.device) -> int:
-    """Cached lookup of ``torch.cuda.get_device_properties.total_memory``."""
-    return int(torch.cuda.get_device_properties(device).total_memory)
+    """Cached lookup of total physical memory available on ``device``.
+
+    On CUDA, returns ``torch.cuda.get_device_properties.total_memory``.
+    On CPU, returns total system RAM via :mod:`psutil` if installed,
+    otherwise via ``os.sysconf`` on POSIX, otherwise a 16 GB sentinel.
+    The CPU path is debug-only - production runs on CUDA - so a
+    rough estimate is fine.
+
+    ``@torch.compiler.disable`` is layered above ``@cache`` so Dynamo
+    bails on the outer call and never traces the device query here.
+    Without this, Dynamo treats ``torch.cuda.get_device_properties``
+    as an opaque Python function and tries to evaluate it as a
+    constant during graph capture, which crashes on CPU-only hosts
+    (``RuntimeError: Found no NVIDIA driver``) and produces unbacked
+    symbolic ints on CUDA hosts that poison downstream chunk-size
+    arithmetic.
+    """
+    if device.type == "cuda":
+        return int(torch.cuda.get_device_properties(device).total_memory)
+    if device.type == "cpu":
+        ### psutil is the cross-platform option; soft-imported because
+        ### it is not a hard physicsnemo dep (only used by some example
+        ### scripts).  ``os.sysconf`` works on POSIX hosts without
+        ### psutil.  The 16 GB sentinel is a debug-only floor.
+        try:
+            import psutil
+            return int(psutil.virtual_memory().total)
+        except ImportError:
+            pass
+        if hasattr(os, "sysconf") and "SC_PHYS_PAGES" in os.sysconf_names:
+            return int(os.sysconf("SC_PAGE_SIZE")) * int(
+                os.sysconf("SC_PHYS_PAGES")
+            )
+        logger.warning(
+            "Could not determine CPU total memory (no psutil, no sysconf); "
+            "defaulting to 16 GB.  Install psutil for accurate CPU memory "
+            "budgets."
+        )
+        return 16 * 1024**3
+    raise ValueError(f"Unsupported {device.type=!r}")
 
 
+@torch.compiler.disable
 def _device_chunk_budget_bytes(device: torch.device) -> int:
     """Static memory budget for a single chunked kernel evaluation."""
     return _device_total_memory_bytes(device) * _CHUNK_MEMORY_BUDGET_PERCENT // 100
@@ -1415,6 +1456,7 @@ class BarnesHutKernel(Kernel):
 
         return self._evaluate_interactions(scalars=scalars, vectors=vectors, device=device)
 
+    @torch.compiler.disable
     def _auto_chunk_size(self, n_total_pairs: int, device: torch.device) -> int:
         """Determine chunk size for pair-batched kernel evaluation.
 
@@ -1424,7 +1466,7 @@ class BarnesHutKernel(Kernel):
         dropped, allowing larger chunks.
 
         Uses a static budget derived from
-        :func:`torch.cuda.get_device_properties` (cached) instead of
+        :func:`_device_total_memory_bytes` (cached) instead of
         ``torch.cuda.mem_get_info``.  ``mem_get_info`` is a synchronizing
         driver query - calling it on every kernel evaluation produced
         ~60 syncs per training step in profiling.  Trading "exactly fits
@@ -1433,18 +1475,14 @@ class BarnesHutKernel(Kernel):
         non-kernel resident state (parameters + activations elsewhere) is
         well under the remaining 75%.
 
-        Returns ``n_total_pairs`` (i.e. no chunking) when the estimated
-        peak fits comfortably, or when running on CPU.
+        On CPU the same algorithm runs against system RAM (debug-only;
+        production runs on CUDA).  Returns at least 1.
         """
-        if device.type != "cuda":
-            return n_total_pairs
-
-        if torch.is_autocast_enabled(device.type):
-            element_bytes = torch.tensor(
-                [], dtype=torch.get_autocast_dtype(device.type)
-            ).element_size()
-        else:
-            element_bytes = 4  # fp32
+        element_bytes = (
+            torch.get_autocast_dtype(device.type).itemsize
+            if torch.is_autocast_enabled(device.type)
+            else 4  # fp32
+        )
 
         autograd_overhead = 5 if torch.is_grad_enabled() else 1
         approx_peak_bytes = (
@@ -1461,11 +1499,12 @@ class BarnesHutKernel(Kernel):
         if not torch.compiler.is_compiling():
             logger.debug(
                 "auto_chunk_size: %d pairs -> %d chunks of %d "
-                "(%.1f MB est. peak, %.1f MB budget / %.1f MB total GPU)",
+                "(%.1f MB est. peak, %.1f MB budget / %.1f MB total %s)",
                 n_total_pairs, n_chunks, chunk_size,
                 approx_peak_bytes / 1e6,
                 target_bytes / 1e6,
                 _device_total_memory_bytes(device) / 1e6,
+                device.type.upper(),
             )
 
         return chunk_size
@@ -1820,11 +1859,11 @@ class MultiscaleKernel(Module):
             n_total_pairs = dual_plan.n_near + dual_plan.n_nf + dual_plan.n_fn
             per_branch_bytes = n_total_pairs * _AUTOGRAD_BYTES_PER_PAIR
             all_branches_bytes = per_branch_bytes * n_branches
-            if device.type == "cuda":
-                budget_bytes = _device_chunk_budget_bytes(device)
-                use_branch_ckpt = all_branches_bytes > budget_bytes
-            else:
-                use_branch_ckpt = False
+            ### Compares against a fraction of total device memory
+            ### (CUDA: VRAM; CPU: RAM).  ``_device_chunk_budget_bytes``
+            ### handles both via ``_device_total_memory_bytes``.
+            budget_bytes = _device_chunk_budget_bytes(device)
+            use_branch_ckpt = all_branches_bytes > budget_bytes
 
             if not torch.compiler.is_compiling():
                 logger.debug(
@@ -1833,7 +1872,7 @@ class MultiscaleKernel(Module):
                     "ENABLED" if use_branch_ckpt else "DISABLED",
                     per_branch_bytes / 1e6,
                     all_branches_bytes / 1e6,
-                    _device_chunk_budget_bytes(device) / 1e6,
+                    budget_bytes / 1e6,
                     n_branches,
                 )
 
