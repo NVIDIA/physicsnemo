@@ -189,6 +189,22 @@ class Kernel(Module):
         self.n_spherical_harmonics = n_spherical_harmonics
         self.use_gradient_checkpointing = use_gradient_checkpointing
 
+        ### Pre-squared smoothing radius as a registered tensor buffer.
+        ### A buffer (rather than a Python float) is required because
+        ### ``_evaluate_interactions`` adds this scalar to a TensorDict
+        ### inside a checkpoint sub-graph; Python free variables cannot
+        ### be lifted across nested Dynamo SubgraphTracers (the lift
+        ### chain bottoms out at the root tracer with no parent and
+        ### asserts ``lift_tracked_freevar_to_input should not be
+        ### called on root SubgraphTracer``).  As a buffer, the
+        ### tensor is a tracked module attribute that Dynamo treats as
+        ### a graph leaf, so no lift is needed.
+        self.register_buffer(
+            "_smoothing_radius_sq",
+            torch.tensor(smoothing_radius**2, dtype=torch.float32),
+            persistent=False,
+        )
+
         in_features = self.network_in_features
         hidden_features = list(self.hidden_layer_sizes)
         out_features = self.network_out_features
@@ -540,7 +556,7 @@ class Kernel(Module):
         ### Vector magnitude, direction, and log-magnitude features
         with record_function("kernel::feature_engineering"):
             vectors_mag_squared: TensorDict = (
-                (vectors * vectors).sum(dim=-1) + (self.smoothing_radius**2)
+                (vectors * vectors).sum(dim=-1) + self._smoothing_radius_sq
             )
             vectors_mag = vectors_mag_squared.sqrt()
             vectors_hat = vectors / vectors_mag.unsqueeze(-1)
