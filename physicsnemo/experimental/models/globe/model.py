@@ -567,9 +567,7 @@ class GLOBE(Module):
             kernel_source_keys = (
                 flatten_rank_spec(kernel.source_data_ranks).keys() - {"normals"}
             )
-            source_data = _flatten_keys(
-                mesh.cell_data.exclude("strengths")
-            ).select(*kernel_source_keys)
+            source_data = _flatten_keys(mesh.cell_data).select(*kernel_source_keys)
             source_data["normals"] = mesh.cell_normals
 
             kernel_result: TensorDict[str, Float[torch.Tensor, "n_targets ..."]] = kernel(
