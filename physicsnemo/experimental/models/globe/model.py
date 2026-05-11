@@ -150,6 +150,17 @@ class GLOBE(Module):
         kernel evaluation during training, trading compute for memory. See
         :class:`~physicsnemo.experimental.models.globe.field_kernel.Kernel` for
         details.
+    tree_build_device : torch.device or str or None, optional, default=None
+        Device on which to build cluster trees and run the dual-tree Barnes-Hut
+        traversal in :meth:`_build_trees_and_plans` and
+        :meth:`_build_prediction_plans`.  Trees and plans are transferred back
+        to the input's device at function exit (a no-op when the devices
+        match).  ``None`` (default) uses the input's device.  ``"cpu"`` can be
+        faster for small problems (~a few thousand boundary cells) where CUDA
+        launch latency and ``cudaStreamSynchronize`` round-trips dominate the
+        real work in tree traversal; for large problems (hundreds of thousands
+        of cells) the GPU's parallelism wins and the input's device is the
+        right choice.
 
     Forward
     -------
@@ -236,6 +247,7 @@ class GLOBE(Module):
         latent_compression_scale: float | None = None,
         expand_far_targets: bool = False,
         use_gradient_checkpointing: bool = True,
+        tree_build_device: torch.device | str | None = None,
     ):
         if hidden_layer_sizes is None:
             hidden_layer_sizes = [64, 64, 64]
@@ -305,6 +317,9 @@ class GLOBE(Module):
         self.self_regularization_beta = self_regularization_beta
         self.expand_far_targets = expand_far_targets
         self.use_gradient_checkpointing = use_gradient_checkpointing
+        self.tree_build_device: torch.device | None = (
+            torch.device(tree_build_device) if tree_build_device is not None else None
+        )
 
         ### Build the intermediate output-field rank spec for communication
         # hyperlayers. Only the final hyperlayer emits output_field_ranks.
@@ -415,40 +430,70 @@ class GLOBE(Module):
         """
         from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
 
-        cluster_trees: dict[str, ClusterTree] = {}
-        bc_areas: dict[str, torch.Tensor] = {}
-        for bc_type, mesh in boundary_meshes.items():
-            areas = mesh.cell_areas / self.reference_area
-            bc_areas[bc_type] = areas
-            cluster_trees[bc_type] = ClusterTree.from_points(
-                mesh.cell_centroids, leaf_size=self.leaf_size, areas=areas
-            )
+        ### ``no_grad`` is safe: tree inputs (centroids, areas) carry no grad
+        ### and the outputs are consumed downstream as integer indices and as
+        ### a non-grad-tracked area divisor in ``compute_source_aggregates``.
+        ### Without it we'd pay autograd bookkeeping on dozens of tensor ops
+        ### inside the ``@torch.compiler.disable`` body for nothing.  See the
+        ### ``tree_build_device`` docstring on :class:`GLOBE` for why building
+        ### on CPU can be faster than on CUDA at small ``N``.
+        original_device = (
+            next(iter(boundary_meshes.values())).points.device
+            if boundary_meshes
+            else self.reference_area.device
+        )
+        build_device = self.tree_build_device or original_device
 
-        ### Build interaction plans for all (source, destination) BC pairs.
-        comm_plans: dict[str, dict[str, DualInteractionPlan]] = {}
-        for dst_bc in boundary_meshes:
-            comm_plans[dst_bc] = {
-                src_bc: cluster_trees[src_bc].find_dual_interaction_pairs(
-                    target_tree=cluster_trees[dst_bc], theta=self.theta,
-                    expand_far_targets=self.expand_far_targets,
+        with torch.no_grad():
+            ### Pass 1: build one tree per BC.  Must complete before pass 2
+            ### so every plan can see every tree.
+            cluster_trees_built: dict[str, ClusterTree] = {}
+            bc_areas_built: dict[str, torch.Tensor] = {}
+            for bc_type, mesh in boundary_meshes.items():
+                centroids = mesh.cell_centroids.to(build_device)
+                areas = (mesh.cell_areas / self.reference_area).to(build_device)
+                bc_areas_built[bc_type] = areas
+                cluster_trees_built[bc_type] = ClusterTree.from_points(
+                    centroids, leaf_size=self.leaf_size, areas=areas,
                 )
-                for src_bc in boundary_meshes
+
+            ### Pass 2: build B^2 plans + log each in-line.
+            comm_plans_built: dict[str, dict[str, DualInteractionPlan]] = {}
+            for dst_bc, dst_mesh in boundary_meshes.items():
+                n_dst = dst_mesh.n_cells
+                comm_plans_built[dst_bc] = {}
+                for src_bc, src_mesh in boundary_meshes.items():
+                    n_src = src_mesh.n_cells
+                    plan = cluster_trees_built[src_bc].find_dual_interaction_pairs(
+                        target_tree=cluster_trees_built[dst_bc], theta=self.theta,
+                        expand_far_targets=self.expand_far_targets,
+                    )
+                    comm_plans_built[dst_bc][src_bc] = plan
+                    logger.logger.debug(
+                        "comm plan [%s -> %s]: %d near + %d nf + %d fn + %d far_node "
+                        "(%.2f%% near-field, %d src x %d dst faces, "
+                        "theta=%.2f, leaf_size=%d)",
+                        src_bc, dst_bc,
+                        plan.n_near, plan.n_nf, plan.n_fn, plan.n_far_nodes,
+                        100.0 * plan.n_near / max(n_src * n_dst, 1),
+                        n_src, n_dst, self.theta, self.leaf_size,
+                    )
+
+        ### Transfer to the original device.  ``ClusterTree`` and
+        ### ``DualInteractionPlan`` are both ``@tensorclass``, so ``.to`` moves
+        ### all member tensors at once.  No-op when devices already match.
+        cluster_trees = {
+            bc: t.to(original_device)  # ty: ignore[unresolved-attribute]
+            for bc, t in cluster_trees_built.items()
+        }
+        bc_areas = {bc: a.to(original_device) for bc, a in bc_areas_built.items()}
+        comm_plans = {
+            dst: {
+                src: p.to(original_device)  # ty: ignore[unresolved-attribute]
+                for src, p in plans.items()
             }
-
-        for dst_bc, plans_for_dst in comm_plans.items():
-            n_dst = boundary_meshes[dst_bc].n_cells
-            for src_bc, plan in plans_for_dst.items():
-                n_src = boundary_meshes[src_bc].n_cells
-                logger.logger.debug(
-                    "comm plan [%s -> %s]: %d near + %d nf + %d fn + %d far_node "
-                    "(%.2f%% near-field, %d src x %d dst faces, "
-                    "theta=%.2f, leaf_size=%d)",
-                    src_bc, dst_bc,
-                    plan.n_near, plan.n_nf, plan.n_fn, plan.n_far_nodes,
-                    100.0 * plan.n_near / max(n_src * n_dst, 1),
-                    n_src, n_dst, self.theta, self.leaf_size,
-                )
-
+            for dst, plans in comm_plans_built.items()
+        }
         return cluster_trees, bc_areas, comm_plans
 
     @torch.compiler.disable
@@ -472,27 +517,41 @@ class GLOBE(Module):
         """
         from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
 
-        pred_target_tree = ClusterTree.from_points(
-            prediction_points, leaf_size=self.leaf_size,
-        )
-        pred_plans = {
-            bc_type: tree.find_dual_interaction_pairs(
-                target_tree=pred_target_tree, theta=self.theta,
-                expand_far_targets=self.expand_far_targets,
-            )
-            for bc_type, tree in cluster_trees.items()
-        }
+        ### See ``_build_trees_and_plans`` for the ``no_grad`` + build-device
+        ### rationale.  ``cluster_trees`` arrive on the caller's device from
+        ### that earlier call, so we move them to ``build_device`` for the
+        ### dual traversal and transfer both the new prediction-point tree
+        ### and the resulting plans back at function exit.
+        original_device = prediction_points.device
+        build_device = self.tree_build_device or original_device
 
         n_pred = prediction_points.shape[0]
-        for bc_type, plan in pred_plans.items():
-            n_src = cluster_trees[bc_type].n_sources
-            logger.logger.debug(
-                "pred plan [%s]: %d near + %d nf + %d fn + %d far_node "
-                "(%d sources x %d targets, theta=%.2f)",
-                bc_type, plan.n_near, plan.n_nf, plan.n_fn, plan.n_far_nodes,
-                n_src, n_pred, self.theta,
+        with torch.no_grad():
+            pred_target_tree_built = ClusterTree.from_points(
+                prediction_points.to(build_device), leaf_size=self.leaf_size,
             )
+            ### Single pass: each iteration is independent - transfer the
+            ### source tree to ``build_device``, run the dual traversal
+            ### against the shared ``pred_target_tree_built``, log inline.
+            pred_plans_built: dict[str, DualInteractionPlan] = {}
+            for bc_type, tree in cluster_trees.items():
+                plan = tree.to(build_device).find_dual_interaction_pairs(  # ty: ignore[unresolved-attribute]
+                    target_tree=pred_target_tree_built, theta=self.theta,
+                    expand_far_targets=self.expand_far_targets,
+                )
+                pred_plans_built[bc_type] = plan
+                logger.logger.debug(
+                    "pred plan [%s]: %d near + %d nf + %d fn + %d far_node "
+                    "(%d sources x %d targets, theta=%.2f)",
+                    bc_type, plan.n_near, plan.n_nf, plan.n_fn, plan.n_far_nodes,
+                    tree.n_sources, n_pred, self.theta,
+                )
 
+        pred_target_tree = pred_target_tree_built.to(original_device)  # ty: ignore[unresolved-attribute]
+        pred_plans = {
+            bc: p.to(original_device)  # ty: ignore[unresolved-attribute]
+            for bc, p in pred_plans_built.items()
+        }
         return pred_target_tree, pred_plans
 
     def _evaluate_hyperlayer(
