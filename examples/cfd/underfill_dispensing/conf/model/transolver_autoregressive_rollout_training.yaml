@@ -14,14 +14,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Experimental neural network components for PhysicsNemo.
 
-This subpackage contains experimental neural network layers and utilities
-that are under active development. These components may have breaking API
-changes between releases.
-"""
+_target_: rollout.TransolverAutoregressiveRollout
+_convert_: all
+# --- INPUT DIMENSION CORRECTION ---
+# Math: 
+#   1 (Epoxy VOF)
+# + 1 (Pressure)
+# + 3 (Velocity Vector)
+# + 1 (Time Embedding)
+# = 6 Total Input Channels
+#functional_dim: 6  
+functional_dim: 16     # epoxy_vof(1) + fourier features
 
-from .flare_attention import FLARE
-from .diffusion_unet_3d_blocks import UNetBlock3D, Conv3D, GroupNorm3D, UNetAttention3D
+# --- OUTPUT DIMENSION CORRECTION ---
+# Math:
+#   The model predicts the next state of the physics fields.
+#   1 (Epoxy VOF) + 1 (Pressure) + 3 (Velocity) = 5
+#out_dim: 5
+out_dim: 1            # epoxy_vof prediction
 
-__all__ = ["FLARE", "UNetBlock3D", "Conv3D", "GroupNorm3D", "UNetAttention3D"]
+geometry_dim: 3
+slice_num: 64
+n_layers: 5
+use_te: false
+time_input: false
+include_local_features: true
+num_time_steps: ${training.num_time_steps}
+dt: 5e-3
+
+
+

@@ -14,14 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Experimental neural network components for PhysicsNemo.
+from .diffusion_unet_3d import DiffusionUNet3D
 
-This subpackage contains experimental neural network layers and utilities
-that are under active development. These components may have breaking API
-changes between releases.
-"""
-
-from .flare_attention import FLARE
-from .diffusion_unet_3d_blocks import UNetBlock3D, Conv3D, GroupNorm3D, UNetAttention3D
-
-__all__ = ["FLARE", "UNetBlock3D", "Conv3D", "GroupNorm3D", "UNetAttention3D"]
+__all__ = ["DiffusionUNet3D"]

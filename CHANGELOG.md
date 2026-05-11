@@ -111,8 +111,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   end-to-end training and sampling of epsilon-parameterized models.
   Losses gain an `epsilon_to_x0_fn` kwarg used for the epsilon-to-x0
   conversion required during DSM training.
+- Adds `DiffusionUNet3D` 3D U-Net diffusion backbone for volumetric data at
+  `physicsnemo.experimental.models.diffusion_unets`. Implements the
+  `DiffusionModel` protocol. Exposes reusable 3D building blocks
+  (`Conv3D`, `GroupNorm3D`, `UNetAttention3D`, `UNetBlock3D`) at
+  `physicsnemo.experimental.nn`.
 - Added support for Batched radius search, which enables Domino
   and GeoTransolver with local features and batch size > 1.
+- Added the underfill recipe.
 
 ### Changed
 

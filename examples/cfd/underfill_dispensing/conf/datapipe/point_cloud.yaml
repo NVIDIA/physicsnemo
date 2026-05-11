@@ -14,14 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Experimental neural network components for PhysicsNemo.
+_target_: datapipe.UnderfillDataset
+_convert_: all
+data_dir: ${training.raw_data_dir}
+stats_dir: null  # Default: <hydra.run.dir>/stats/ (i.e., ./outputs/stats/)
+num_samples: ${training.num_samples}
+num_steps: ${training.num_time_steps}
+dt: 5e-3
 
-This subpackage contains experimental neural network layers and utilities
-that are under active development. These components may have breaking API
-changes between releases.
-"""
-
-from .flare_attention import FLARE
-from .diffusion_unet_3d_blocks import UNetBlock3D, Conv3D, GroupNorm3D, UNetAttention3D
-
-__all__ = ["FLARE", "UNetBlock3D", "Conv3D", "GroupNorm3D", "UNetAttention3D"]
+# Only epoxy_vof - no need to specify features list since it's hardcoded
+debug: ${training.debug}

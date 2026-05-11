@@ -14,14 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Experimental neural network components for PhysicsNemo.
+hydra:
+  job:
+    chdir: True
+  run:
+    dir: ./outputs/
 
-This subpackage contains experimental neural network layers and utilities
-that are under active development. These components may have breaking API
-changes between releases.
-"""
+experiment_name: "Unified-Training"
+experiment_desc: "unified training recipe for underfill dispensing model"
+run_desc: "unified training recipe for underfill dispensing model"
 
-from .flare_attention import FLARE
-from .diffusion_unet_3d_blocks import UNetBlock3D, Conv3D, GroupNorm3D, UNetAttention3D
+defaults:
+  - datapipe: point_cloud   # will be overridden by model configs
+  - model: transolver_autoregressive_rollout_training
+  - training: default
+  - inference: default
+  - _self_
 
-__all__ = ["FLARE", "UNetBlock3D", "Conv3D", "GroupNorm3D", "UNetAttention3D"]
+reader:
+  _target_: vtp_reader.Reader
+  debug: ${training.debug}
