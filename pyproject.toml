@@ -22,7 +22,9 @@ dynamic = ["version", "optional_dependencies"]
 
 dependencies = [
     "onnx>=1.14.0",
-    "warp-lang>=1.5.0",
+    # Pin to the post-cleanup public device API (wp.Device, get_device, set_device);
+    # warp.context was removed in 1.13.
+    "warp-lang>=1.13.0",
     "pandas>=2.2.0",
     "nvtx>=0.2.10",
     "treelib>=1.2.5",

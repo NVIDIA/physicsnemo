@@ -33,11 +33,19 @@ profile: false
 augment: false
 benchmark_io: false
 
-model_type: "surface"
+# -- Data contract -----------------------------------------------------------
+# Same forward interface as standard GeoTransolver -- only the attention
+# backbone differs (GALE_FA vs GALE).
+input_type: tensors
+output_type: tensors
 
-# -- Data-to-model mapping (see src/collate.py MODEL_MAPPINGS) ---------------
-# Same forward interface as standard GeoTransolver.
-data_mapping: "geotransolver_highlift_surface"
+forward_kwargs:
+  geometry: interior.points
+  local_embedding:
+    - interior.points
+    - boundaries.vehicle.cell_data.normals
+  local_positions: interior.points
+  global_embedding: global_data.U_inf
 
 # -- Model (GeoTransolver + GALE_FA) ----------------------------------------
 # Uses GALE_FA attention (FLARE self-attention with GALE cross-attention)
@@ -69,19 +77,6 @@ model:
 dataset:
   name: highlift_surface
   sampling_resolution: 100000
-  targets:
-    pressure: scalar
-    temperature: scalar
-    density: scalar
-    velocity: vector
-    tau_wall: vector
-  # Explicit nondim type per output field for physical-space metric inversion.
-  nondim_types:
-    pressure: pressure
-    temperature: temperature
-    density: density
-    velocity: velocity
-    tau_wall: stress
   metrics: [l2]
 
 # -- Training ----------------------------------------------------------------
@@ -108,7 +103,7 @@ training:
 dataloader:
   prefetch_factor: 4
   num_streams: 1
-  use_streams: true      # ball query is not stream-safe
+  use_streams: false     # ball query is not stream-safe
   num_workers: 4
   pin_memory: true
 

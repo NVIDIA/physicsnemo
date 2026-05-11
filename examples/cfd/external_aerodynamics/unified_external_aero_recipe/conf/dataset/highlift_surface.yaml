@@ -65,7 +65,7 @@ pipeline:
         PROJ(AVG(RHO)): density
         PROJ(AVG(U)): velocity
         AVG(TAU_WALL): stress
-      section: cell_data
+      association: cell_data
     - _target_: ${dp:RenameMeshFields}
       cell_data:
         PROJ(AVG(P)): pressure
@@ -77,27 +77,17 @@ pipeline:
     # Stats are post-nondimensionalization values.
     # TODO: recompute stats for cell-centered data (these are vertex-projected estimates)
     - _target_: ${dp:NormalizeMeshFields}
-      section: cell_data
+      association: cell_data
       fields:
         pressure:    {type: scalar, mean: -0.5,  std: 1.0}
         temperature: {type: scalar, mean:  1.00, std: 0.002}
         density:     {type: scalar, mean:  1.0, std: 0.02}
         velocity:    {type: vector, mean: [0.00, 0.00, 0.00], std: 0.20}
         tau_wall:    {type: scalar, mean: [0.00, 0.00, 0.00], std: 0.003}
-    - _target_: ${dp:MeshToTensorDict}
-    - _target_: ${dp:ComputeCellCentroids}
-    - _target_: ${dp:RestructureTensorDict}
-      groups:
-        input:
-          points: cell_centroids
-          normals: cell_data.normals
-          U_inf: global_data.U_inf
-        output:
-          pressure: cell_data.pressure
-          temperature: cell_data.temperature
-          density: cell_data.density
-          velocity: cell_data.velocity
-          tau_wall: cell_data.tau_wall
+    # Terminal: convert the surface Mesh into a DomainMesh per the recipe
+    # contract. cell_data_targets are auto-injected from the `targets:` block.
+    - _target_: ${dp:MeshToDomainMesh}
+      interior_points: cell_centroids
 
 targets:
   pressure: scalar

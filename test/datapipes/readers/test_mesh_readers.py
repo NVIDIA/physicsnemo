@@ -29,7 +29,6 @@ from physicsnemo.datapipes.transforms.mesh import (
     CenterMesh,
     RandomScaleMesh,
     ScaleMesh,
-    apply_to_tensordict_mesh,
 )
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.mesh.primitives.basic import (
@@ -453,8 +452,11 @@ class TestDomainMeshReaderExtraBoundaries:
             _ = reader[0]
 
 
-class TestApplyToTensorDictMesh:
-    """Tests for apply_to_tensordict_mesh helper (standalone utility)."""
+class TestTensorDictMeshApply:
+    """Verifies the recipe-pipeline contract: ``td.apply(transform,
+    call_on_nested=True)`` invokes the transform on each top-level
+    ``Mesh`` value rather than recursing into its tensor leaves.
+    """
 
     def test_scale_each(self):
         from tensordict import TensorDict
@@ -462,7 +464,7 @@ class TestApplyToTensorDictMesh:
         mesh = two_triangles_2d.load()
         original_points = mesh.points.clone()
         td = TensorDict({"x": mesh, "y": mesh.clone()}, batch_size=[])
-        out = apply_to_tensordict_mesh(td, ScaleMesh(3.0))
+        out = td.apply(ScaleMesh(3.0), call_on_nested=True)
         assert out["x"].n_points == mesh.n_points
         assert "x" in out
         assert "y" in out

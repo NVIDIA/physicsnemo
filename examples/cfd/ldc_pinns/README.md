@@ -13,9 +13,12 @@ residual and boundary condition losses.
 
 This example takes a non-abstracted way to define the problem. The
 boundary condition constraints, residual constraints, and the subsequent physics loss
-computation are defined explicitly. For a more abstracted version of this workflow,
-where some of these steps are automated and abstracted, we recommend the
-[Introductory example tutorial from `physicsnemo.sym`](v2.0-MIGRATION-GUIDE.md#physicsnemo-sym--physicsnemosym).
+computation are defined explicitly. If you previously used the (now archived)
+[`physicsnemo-sym`](https://github.com/NVIDIA/physicsnemo-sym) repository,
+where the `Solver` / `Domain` / `Constraint` abstractions handled these steps
+implicitly, see the
+[PhysicsNeMo v2.0 Migration Guide](../../../v2.0-MIGRATION-GUIDE.md#physicsnemo-sym--physicsnemosym)
+for how the equivalent pieces look in this newer, explicit style.
 
 ## Getting Started
 
@@ -35,13 +38,15 @@ python train.py
 This should start training the model. Since this is training in a purely Physics based
 fashion, there is no dataset required.
 
-Instead, we generate the geometry using the the `physicsnemo.mesh` module and sample
-point cloud using `GeometryDatapipe` utility. For more details refer documentation
-[here](v2.0-MIGRATION-GUIDE.md#physicsnemo-sym--physicsnemosym)
+Instead, we generate the geometry using the `physicsnemo.mesh` module and sample
+the point cloud using the `GeometryDatapipe` utility. The
+[PhysicsNeMo v2.0 Migration Guide](../../../v2.0-MIGRATION-GUIDE.md#physicsnemo-sym--physicsnemosym)
+shows how this maps from the older `physicsnemo-sym` geometry primitives.
 
 For computing the physics losses, we will use the `PhysicsInformer` utility from
-`physicsnemo.sym`. For more details, refer documentation
-[here](v2.0-MIGRATION-GUIDE.md#physicsnemo-sym--physicsnemosym)
+`physicsnemo.sym`. The
+[PhysicsNeMo v2.0 Migration Guide](../../../v2.0-MIGRATION-GUIDE.md#physicsnemo-sym--physicsnemosym)
+shows how this maps from the older `physicsnemo-sym` PDE / `make_nodes` workflow.
 
 The results would get saved in the `./outputs/` directory.
 

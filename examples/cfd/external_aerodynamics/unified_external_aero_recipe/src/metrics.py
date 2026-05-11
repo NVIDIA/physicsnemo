@@ -14,234 +14,232 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Flexible metric calculator for configurable target fields."""
+"""Configurable metric calculator on TensorDict inputs.
+
+Mirrors the TensorDict-based interface of :class:`LossCalculator`. Each
+named target field declared in ``target_config`` produces:
+
+- For ``"scalar"`` types: per-metric values (``l1``, ``l2``, ``mae`` by
+  default), keyed ``"<prefix>/<name>_<metric>"``.
+- For ``"vector"`` types: per-component values
+  (``"<prefix>/<name>_x_<metric>"`` etc.) plus aggregate magnitude values
+  (``"<prefix>/<name>_<metric>"``).
+
+Metrics are reported unweighted -- per-field weighting belongs in the
+loss, not in diagnostic summaries.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
+from typing import Literal, TypeAlias
+
 import torch
 import torch.distributed as dist
+from jaxtyping import Float
+from tensordict import TensorDict
 
-from utils import FieldSpec, parse_target_config
+from utils import FieldType, align_scalar_shapes, field_dim, validate_field_coverage
+
+### Recipe-wide alias for the metric-name enum that the dataset YAMLs use.
+MetricName: TypeAlias = Literal["mae", "l1", "l2"]
 
 
-# ---------------------------------------------------------------------------
-# Core metric functions operating on [batch, points] tensors
-# ---------------------------------------------------------------------------
+### ---------------------------------------------------------------------------
+### Per-tensor metric kernels
+### ---------------------------------------------------------------------------
 
 
-def compute_mae(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    """Mean Absolute Error (absolute)."""
+def _mean_absolute_error(
+    pred: torch.Tensor, target: torch.Tensor
+) -> Float[torch.Tensor, ""]:
+    """Mean absolute error over all elements."""
     return torch.mean(torch.abs(pred - target))
 
 
-def compute_relative_l1(
+def _relative_l1(
     pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-8
-) -> torch.Tensor:
-    """Relative L1: sum|diff| / sum|target| per sample, then mean."""
+) -> Float[torch.Tensor, ""]:
+    """``sum|pred - target| / sum|target|``, computed over the spatial axis."""
     abs_diff = torch.abs(pred - target)
-    l1_num = torch.sum(abs_diff, dim=1)
-    l1_denom = torch.sum(torch.abs(target), dim=1)
-    return torch.mean(l1_num / (l1_denom + eps))
+    if pred.ndim == 0:
+        return abs_diff / (torch.abs(target) + eps)
+    ### Sum over the spatial axis (treat all leading dims as batch).
+    spatial_axis = -1
+    num = torch.sum(abs_diff, dim=spatial_axis)
+    denom = torch.sum(torch.abs(target), dim=spatial_axis)
+    return torch.mean(num / (denom + eps))
 
 
-def compute_relative_l2(
+def _relative_l2(
     pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-8
-) -> torch.Tensor:
-    """Relative L2: sqrt(sum(diff^2)) / sqrt(sum(target^2)) per sample, then mean."""
-    diff = pred - target
-    l2_num = torch.sqrt(torch.sum(diff**2, dim=1))
-    l2_denom = torch.sqrt(torch.sum(target**2, dim=1))
-    return torch.mean(l2_num / (l2_denom + eps))
+) -> Float[torch.Tensor, ""]:
+    """``sqrt(sum diff^2) / sqrt(sum target^2)``, over the spatial axis."""
+    diff_sq = (pred - target) ** 2
+    if pred.ndim == 0:
+        return torch.sqrt(diff_sq) / (torch.sqrt(target**2) + eps)
+    spatial_axis = -1
+    num = torch.sqrt(torch.sum(diff_sq, dim=spatial_axis))
+    denom = torch.sqrt(torch.sum(target**2, dim=spatial_axis))
+    return torch.mean(num / (denom + eps))
 
 
-METRIC_FUNCTIONS = {
-    "mae": compute_mae,
-    "l1": compute_relative_l1,
-    "l2": compute_relative_l2,
+METRIC_FUNCTIONS: dict[MetricName, Callable[..., torch.Tensor]] = {
+    "mae": _mean_absolute_error,
+    "l1": _relative_l1,
+    "l2": _relative_l2,
 }
 
+### Default metrics computed when the user doesn't override `metrics:` in
+### the dataset YAML. Exposed as a constant so train.py can fall back to
+### the same list when the dataset YAML omits the block.
+DEFAULT_METRICS: tuple[MetricName, ...] = ("l1", "l2", "mae")
 
-# ---------------------------------------------------------------------------
-# MetricCalculator class
-# ---------------------------------------------------------------------------
+
+### ---------------------------------------------------------------------------
+### MetricCalculator
+### ---------------------------------------------------------------------------
+
+
+VECTOR_COMPONENTS = ("x", "y", "z", "w")
 
 
 class MetricCalculator:
-    """Configurable metric calculator for scalar and vector target fields.
+    """Per-field metric aggregator over `TensorDict` predictions.
 
-    Computes L1, L2, and MAE metrics for each configured target field.
-    For vector fields, computes both elementwise metrics (per component)
-    and aggregate metrics (magnitude-based).
-
-    Parameters
-    ----------
-    target_config : dict[str, str]
-        Mapping of field names to types. Order determines channel indices.
-        Example: {"pressure": "scalar", "velocity": "vector", "turbulence": "scalar"}
-    process_group : dist.ProcessGroup | None, optional
-        Process group for distributed all-reduce. If None, no reduction is performed.
-    n_spatial_dims : int, optional
-        Dimensionality of vector fields. Default is 3.
-    metrics : list[str] | None, optional
-        Which metrics to compute. Options: "l1", "l2", "mae".
-        Default is all three: ["l1", "l2", "mae"].
-    prefix : str, optional
-        Prefix for all metric names (e.g., "surface" -> "surface/pressure_l1").
-        Default is empty string.
-
-    Examples
-    --------
-    >>> calc = MetricCalculator(
-    ...     target_config={"pressure": "scalar", "velocity": "vector"},
-    ...     prefix="surface",
-    ... )
-    >>> pred = torch.randn(2, 100, 4)  # [batch, points, channels]
-    >>> target = torch.randn(2, 100, 4)
-    >>> metrics = calc(pred, target)
+    Args:
+        target_config: ``{name: scalar|vector}`` mapping.
+        process_group: Optional distributed process group for all-reduce.
+            When ``None`` (default), no reduction is performed.
+        n_spatial_dims: Vector field dimensionality (used to label
+            components when ``> len(VECTOR_COMPONENTS)`` falls back to
+            integer indices).
+        metrics: Names of metrics to compute. Subset of
+            ``METRIC_FUNCTIONS``. Defaults to :data:`DEFAULT_METRICS`.
+        prefix: Optional prefix on the returned metric keys.
     """
-
-    VECTOR_COMPONENTS = ("x", "y", "z")
 
     def __init__(
         self,
-        target_config: dict[str, str],
+        target_config: dict[str, FieldType],
         process_group: dist.ProcessGroup | None = None,
         n_spatial_dims: int = 3,
-        metrics: list[str] | None = None,
+        metrics: Sequence[MetricName] | None = None,
         prefix: str = "",
-    ):
+    ) -> None:
+        ### `target_config` values are required to be lowercase per the
+        ### `FieldType` contract; copy verbatim so callers can mutate their
+        ### original without affecting us.
+        self.target_config: dict[str, FieldType] = dict(target_config)
         self.process_group = process_group
         self.n_spatial_dims = n_spatial_dims
-        self.metric_names = metrics if metrics is not None else ["l1", "l2", "mae"]
+        self.metric_names = (
+            list(metrics) if metrics is not None else list(DEFAULT_METRICS)
+        )
         self.prefix = prefix
 
-        # Validate metric names
         for m in self.metric_names:
             if m not in METRIC_FUNCTIONS:
                 raise ValueError(
-                    f"Unknown metric '{m}'. Available: {list(METRIC_FUNCTIONS.keys())}"
+                    f"Unknown metric {m!r}; available {list(METRIC_FUNCTIONS)!r}"
                 )
 
-        # Parse target config to build field specifications using shared utility
-        self.field_specs = parse_target_config(target_config, n_spatial_dims)
-        self.total_channels = sum(spec.dim for spec in self.field_specs)
+        ### `field_dim` raises on unknown field types, validating the config.
+        self.total_channels = sum(
+            field_dim(t, n_spatial_dims) for t in self.target_config.values()
+        )
 
     def _make_key(self, *parts: str) -> str:
-        """Construct a metric key with optional prefix."""
+        """Build a flat metric key, ``"<prefix>/<part1>_<part2>_..."``.
+
+        ``"_"`` joins the parts (e.g. ``"pressure_x_l2"``) because metric
+        names are leaf-level dashboard entries; the optional ``prefix/``
+        carries the namespacing. Compare with
+        :class:`LossCalculator._make_key`, which uses ``"/"`` everywhere
+        because loss keys feed into TensorBoard's nested-tag hierarchy
+        (``"loss/surface/pressure"``).
+        """
         key = "_".join(parts)
         return f"{self.prefix}/{key}" if self.prefix else key
 
-    def _compute_metrics_for_field(
-        self,
-        pred: torch.Tensor,
-        target: torch.Tensor,
-        name: str,
+    def _metrics_for_tensor(
+        self, pred: torch.Tensor, target: torch.Tensor, name_parts: tuple[str, ...]
     ) -> dict[str, torch.Tensor]:
-        """Compute all configured metrics for a [batch, points] field."""
         return {
-            self._make_key(name, m): METRIC_FUNCTIONS[m](pred, target)
+            self._make_key(*name_parts, m): METRIC_FUNCTIONS[m](pred, target)
             for m in self.metric_names
         }
 
-    def _compute_scalar_metrics(
-        self,
-        pred: torch.Tensor,
-        target: torch.Tensor,
-        name: str,
-    ) -> dict[str, torch.Tensor]:
-        """Compute metrics for a scalar field [batch, points]."""
-        return self._compute_metrics_for_field(pred, target, name)
-
-    def _compute_vector_metrics(
-        self,
-        pred: torch.Tensor,
-        target: torch.Tensor,
-        name: str,
-    ) -> dict[str, torch.Tensor]:
-        """Compute metrics for a vector field [batch, points, dim].
-
-        Computes elementwise (per component) and aggregate (magnitude) metrics.
-        """
-        metrics = {}
-
-        # Elementwise metrics (per component)
-        for i, comp in enumerate(self.VECTOR_COMPONENTS[: pred.shape[-1]]):
-            comp_metrics = self._compute_metrics_for_field(
-                pred[:, :, i], target[:, :, i], f"{name}_{comp}"
-            )
-            metrics.update(comp_metrics)
-
-        # Aggregate metrics (magnitude)
-        pred_mag = torch.linalg.vector_norm(pred, dim=-1)
-        target_mag = torch.linalg.vector_norm(target, dim=-1)
-        metrics.update(self._compute_metrics_for_field(pred_mag, target_mag, name))
-
-        return metrics
-
-    def _all_reduce(self, metrics: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        """All-reduce metrics across the process group."""
+    def _all_reduce(self, metrics: TensorDict) -> TensorDict:
         if self.process_group is None:
             return metrics
-
         world_size = dist.get_world_size(self.process_group)
         if world_size == 1:
             return metrics
-
+        ### Single all_reduce over a stacked 1-D tensor (vs. one comm
+        ### per leaf) -- one collective beats N regardless of the
+        ### container type. Rebuild a TensorDict from the reduced
+        ### stack so callers see the same per-key access pattern.
         keys = list(metrics.keys())
         stacked = torch.stack([metrics[k] for k in keys])
-
         dist.all_reduce(stacked, group=self.process_group)
         stacked = stacked / world_size
-
-        return {k: stacked[i] for i, k in enumerate(keys)}
+        return TensorDict({k: stacked[i] for i, k in enumerate(keys)}, batch_size=[])
 
     def __call__(
         self,
-        pred: torch.Tensor,
-        target: torch.Tensor,
-    ) -> dict[str, torch.Tensor]:
-        """Compute all configured metrics.
+        pred: TensorDict,
+        target: TensorDict,
+    ) -> TensorDict:
+        """Compute per-field metrics over a TensorDict pred / target pair.
 
         Args:
-            pred: Predicted values, shape [batch, points, channels].
-            target: Target values, shape [batch, points, channels].
+            pred: TensorDict of predictions, one leaf per target field.
+            target: TensorDict of the same structure as ``pred``.
 
         Returns:
-            Dictionary of metric name -> scalar tensor value.
+            0-D ``TensorDict`` (``batch_size=[]``) keyed by
+            ``"<prefix>/<name>_<metric>"`` for scalar fields and by
+            ``"<prefix>/<name>_<comp>_<metric>"`` plus
+            ``"<prefix>/<name>_<metric>"`` (aggregate magnitude) for
+            vector fields. Slash-containing keys are stored verbatim;
+            TensorDict only treats ``/`` as nested when the caller
+            explicitly invokes ``flatten_keys("/")``.
         """
-        if pred.shape[-1] != self.total_channels:
-            raise ValueError(
-                f"Expected {self.total_channels} channels based on target config, "
-                f"but got {pred.shape[-1]}."
-            )
+        validate_field_coverage(self.target_config, pred, target)
 
-        metrics = {}
-
+        ### Build the per-field bag as a plain dict during the loop so
+        ### the inner ``out.update(...)`` calls stay simple, then wrap
+        ### into a 0-D TensorDict at the boundary so callers get
+        ### TensorDict's batched ops (``.detach()``, ``.add_()``, ...).
+        out: dict[str, torch.Tensor] = {}
         with torch.no_grad():
-            for spec in self.field_specs:
-                pred_field = pred[:, :, spec.start_index : spec.end_index]
-                target_field = target[:, :, spec.start_index : spec.end_index]
+            for name, field_type in self.target_config.items():
+                p, t = pred[name], target[name]
+                if field_type == "scalar":
+                    p, t = align_scalar_shapes(p, t)
+                    out.update(self._metrics_for_tensor(p, t, (name,)))
+                else:  # vector
+                    n_components = p.shape[-1]
+                    ### Per-component metrics.
+                    for i in range(n_components):
+                        comp = (
+                            VECTOR_COMPONENTS[i]
+                            if i < len(VECTOR_COMPONENTS)
+                            else str(i)
+                        )
+                        out.update(
+                            self._metrics_for_tensor(p[..., i], t[..., i], (name, comp))
+                        )
+                    ### Aggregate magnitude metric.
+                    p_mag = torch.linalg.vector_norm(p, dim=-1)
+                    t_mag = torch.linalg.vector_norm(t, dim=-1)
+                    out.update(self._metrics_for_tensor(p_mag, t_mag, (name,)))
 
-                if spec.field_type == "scalar":
-                    field_metrics = self._compute_scalar_metrics(
-                        pred_field.squeeze(-1), target_field.squeeze(-1), spec.name
-                    )
-                else:
-                    field_metrics = self._compute_vector_metrics(
-                        pred_field, target_field, spec.name
-                    )
-
-                metrics.update(field_metrics)
-
-            metrics = self._all_reduce(metrics)
-
-        return metrics
+        return self._all_reduce(TensorDict(out, batch_size=[]))
 
     def __repr__(self) -> str:
-        fields_str = ", ".join(
-            f"{s.name}:{s.field_type}[{s.start_index}:{s.end_index}]"
-            for s in self.field_specs
-        )
+        fields_str = ", ".join(f"{n}:{t}" for n, t in self.target_config.items())
         return (
             f"MetricCalculator(fields=[{fields_str}], "
             f"metrics={self.metric_names}, prefix='{self.prefix}')"

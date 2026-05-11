@@ -15,4 +15,4 @@
 # limitations under the License.
 
 from physicsnemo.mesh.domain_mesh import DomainMesh
-from physicsnemo.mesh.mesh import Mesh
+from physicsnemo.mesh.mesh import MESH_FIELD_ASSOCIATIONS, Mesh, MeshFieldAssociation

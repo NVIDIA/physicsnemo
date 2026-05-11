@@ -35,7 +35,7 @@ pipeline:
   reader:
     _target_: ${dp:MeshReader}
     path: ${train_datadir}
-    pattern: "**/*.pdmsh/_tensordict/boundaries/surface"
+    pattern: "**/*.pdmsh/_tensordict/boundaries/vehicle"
     subsample_n_cells: ${sampling_resolution}
   augmentations:
     - _target_: ${dp:RandomRotateMesh}
@@ -56,13 +56,13 @@ pipeline:
       fields:
         pMeanTrim: pressure
         wallShearStressMeanTrim: stress
-      section: cell_data
+      association: cell_data
     - _target_: ${dp:RenameMeshFields}
       cell_data:
         pMeanTrim: pressure
         wallShearStressMeanTrim: wss
     - _target_: ${dp:NormalizeMeshFields}
-      section: cell_data
+      association: cell_data
       fields:
         wss: {type: vector, mean: [0.0, 0.0, 0.0], std: 0.00313}
     - _target_: ${dp:ComputeSurfaceNormals}
@@ -70,18 +70,19 @@ pipeline:
       field_name: normals
     - _target_: ${dp:SubsampleMesh}
       n_cells: ${sampling_resolution}
-    - _target_: ${dp:MeshToTensorDict}
-    - _target_: ${dp:ComputeCellCentroids}
-    - _target_: ${dp:RestructureTensorDict}
-      groups:
-        input:
-          points: cell_centroids
-          normals: cell_data.normals
-          U_inf: global_data.U_inf
-        output:
-          pressure: cell_data.pressure
-          wss: cell_data.wss
+    # Terminal transform: convert the surface Mesh into a DomainMesh per the
+    # recipe's prediction-vs-input contract. `interior` becomes a Mesh[0, 3]
+    # point cloud at the cell centroids (where the model predicts), with the
+    # target fields moved into `interior.point_data`. `boundaries.vehicle` is
+    # the original triangulated surface, with non-target cell features
+    # (normals) preserved on the boundary's cell_data. The dataset builder
+    # auto-injects `cell_data_targets` from the `targets:` block below.
+    - _target_: ${dp:MeshToDomainMesh}
+      interior_points: cell_centroids
 
+# Single source of truth for prediction field names + types. Read by both the
+# dataset builder (auto-injected into MeshToDomainMesh above) and the train
+# loop (used to build LossCalculator and MetricCalculator).
 targets:
   pressure: scalar
   wss: vector

@@ -85,13 +85,13 @@ class MockProfiler(PhysicsNeMoProfilerWrapper, metaclass=_Profiler_Singleton):
 @pytest.fixture(autouse=True)
 def reset_profiler():
     Profiler._clear_instance()
+    Profiler._profilers.clear()
+    Profiler._initialized = False
+    Profiler._decoration_registry.clear()
     ProfileRegistry._clear()
     _register_profilers()
-    # Reset and re-register the mock profiler
     MockProfiler._clear_instance()
-
     ProfileRegistry.register_profiler("mock", MockProfiler)
-    # Reset the singleton instance
 
 
 def test_profiler_initialization():

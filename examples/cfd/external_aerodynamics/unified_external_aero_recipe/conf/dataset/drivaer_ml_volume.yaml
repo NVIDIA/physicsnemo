@@ -15,9 +15,9 @@
 # limitations under the License.
 
 # DrivaerML volume dataset (DomainMesh)
-# Loads domain_*.pmsh files containing interior volume mesh + surface boundary + global_data.
+# Loads domain_*.pmsh files containing interior volume mesh + vehicle boundary + global_data.
 # Interior: tetrahedral volume mesh with fields in point_data.
-# Boundary: triangulated surface mesh ("surface").
+# Boundary: triangulated car-body surface mesh keyed `vehicle` (curated layout).
 # global_data: U_inf, rho_inf (baked into .pmsh); p_inf, nu, L_ref injected from metadata below.
 # Splits are controlled by manifest.json + train_split/val_split in the training config.
 
@@ -62,7 +62,7 @@ pipeline:
         UMeanTrim: velocity
         pMeanTrim: pressure
         nutMeanTrim: identity
-      section: point_data
+      association: point_data
     - _target_: ${dp:ComputeSDFFromBoundary}
       boundary_name: stl_geometry
       sdf_field: sdf
@@ -76,21 +76,15 @@ pipeline:
         pMeanTrim: pressure
         nutMeanTrim: nut
     - _target_: ${dp:NormalizeMeshFields}
-      section: point_data
+      association: point_data
       fields:
         nut: {type: scalar, mean: 4.8e-4, std: 9.4e-4}
-    - _target_: ${dp:MeshToTensorDict}
-    - _target_: ${dp:RestructureTensorDict}
-      groups:
-        input:
-          points: interior.points
-          U_inf: global_data.U_inf
-          sdf: interior.point_data.sdf
-          sdf_normals: interior.point_data.sdf_normals
-        output:
-          velocity: interior.point_data.velocity
-          pressure: interior.point_data.pressure
-          nut: interior.point_data.nut
+    # No terminal MeshToTensorDict / RestructureTensorDict: the volume YAML
+    # already produces a DomainMesh natively (interior = volume mesh with
+    # target fields in point_data; boundaries = {"vehicle": car body}).
+    # The recipe's collate consumes the DomainMesh directly using each
+    # model YAML's `forward_kwargs:` spec. Targets are extracted from
+    # interior.point_data.<name> by the `targets:` block below.
 
 targets:
   velocity: vector
