@@ -452,9 +452,7 @@ class TestClusterTree:
         torch.manual_seed(DEFAULT_SEED)
         pts = (torch.rand(n_points, 3) - 0.5) * (2.0 * coord_scale) + coord_offset
         areas = (torch.rand(n_points) * 0.9 + 0.1) * 1e-3
-        normals = torch.nn.functional.normalize(
-            torch.randn(n_points, 3), dim=-1
-        )
+        normals = torch.nn.functional.normalize(torch.randn(n_points, 3), dim=-1)
         sd = TensorDict({"face_normal": normals}, batch_size=[n_points])
 
         tree = ClusterTree.from_points(pts, leaf_size=leaf_size, areas=areas)
@@ -1654,9 +1652,7 @@ def test_compute_node_strengths_precision_at_scale() -> None:
 
     actual = bh._compute_node_strengths(tree, strengths)
     expected = bh._compute_node_strengths(tree, strengths.double())
-    torch.testing.assert_close(
-        actual.double(), expected, atol=1e-5, rtol=1e-5
-    )
+    torch.testing.assert_close(actual.double(), expected, atol=1e-5, rtol=1e-5)
 
 
 # ---------------------------------------------------------------------------
@@ -1711,9 +1707,7 @@ def test_dual_traversal_sync_budget(
         tree.find_dual_interaction_pairs(target_tree=tree, theta=theta)
         torch.cuda.synchronize()
 
-    sync_count = sum(
-        1 for ev in prof.events() if ev.name == "cudaStreamSynchronize"
-    )
+    sync_count = sum(1 for ev in prof.events() if ev.name == "cudaStreamSynchronize")
 
     ### Budget: ~3-5 syncs per traversal iteration is what the new
     ### implementation pays (boolean compaction for the new active set,
