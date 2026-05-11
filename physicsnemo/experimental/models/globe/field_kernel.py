@@ -17,11 +17,11 @@
 import itertools
 import logging
 import operator
-import os
 from functools import cache, cached_property, reduce
 from math import comb, prod
 from typing import TYPE_CHECKING, Final, Literal, Sequence
 
+import psutil
 import torch
 import torch.nn as nn
 from jaxtyping import Float, Int
@@ -98,10 +98,8 @@ def _device_total_memory_bytes(device: torch.device) -> int:
     """Cached lookup of total physical memory available on ``device``.
 
     On CUDA, returns ``torch.cuda.get_device_properties.total_memory``.
-    On CPU, returns total system RAM via :mod:`psutil` if installed,
-    otherwise via ``os.sysconf`` on POSIX, otherwise a 16 GB sentinel.
-    The CPU path is debug-only - production runs on CUDA - so a
-    rough estimate is fine.
+    On CPU, returns total system RAM via :func:`psutil.virtual_memory`.
+    The CPU path is debug-only - production runs on CUDA.
 
     ``@torch.compiler.disable`` is layered above ``@cache`` so Dynamo
     bails on the outer call and never traces the device query here.
@@ -115,25 +113,7 @@ def _device_total_memory_bytes(device: torch.device) -> int:
     if device.type == "cuda":
         return int(torch.cuda.get_device_properties(device).total_memory)
     if device.type == "cpu":
-        ### psutil is the cross-platform option; soft-imported because
-        ### it is not a hard physicsnemo dep (only used by some example
-        ### scripts).  ``os.sysconf`` works on POSIX hosts without
-        ### psutil.  The 16 GB sentinel is a debug-only floor.
-        try:
-            import psutil
-            return int(psutil.virtual_memory().total)
-        except ImportError:
-            pass
-        if hasattr(os, "sysconf") and "SC_PHYS_PAGES" in os.sysconf_names:
-            return int(os.sysconf("SC_PAGE_SIZE")) * int(
-                os.sysconf("SC_PHYS_PAGES")
-            )
-        logger.warning(
-            "Could not determine CPU total memory (no psutil, no sysconf); "
-            "defaulting to 16 GB.  Install psutil for accurate CPU memory "
-            "budgets."
-        )
-        return 16 * 1024**3
+        return int(psutil.virtual_memory().total)
     raise ValueError(f"Unsupported {device.type=!r}")
 
 
