@@ -260,15 +260,20 @@ def _expand_dual_leaf_hits(
     dist_sq_t = (target_pts - clamped_t).pow(2).sum(dim=-1)
     target_is_far = dist_sq_t * theta_sq > source_tree.node_diameter_sq[src_leaf_per_target]
 
-    ### (near, far) output
-    nf_target_ids = target_point_ids[target_is_far]
-    nf_source_node_ids = src_leaf_per_target[target_is_far]
+    ### (near, far) output.  ``target_is_far`` is consumed by two
+    ### indexings; doing one ``nonzero`` and reusing the integer index
+    ### saves one sync (each ``tensor[bool_mask]`` lowers to a
+    ### synchronizing ``aten::nonzero`` to size the output).
+    far_idx_t = target_is_far.nonzero(as_tuple=True)[0]
+    nf_target_ids = target_point_ids[far_idx_t]
+    nf_source_node_ids = src_leaf_per_target[far_idx_t]
 
     ### Survivors: targets that failed the per-target test.  Empty
     ### survivors are fine; downstream ops produce empty tensors.
-    surv_mask = ~target_is_far
-    surv_point_ids = target_point_ids[surv_mask]
-    surv_lp_ids = leaf_pair_ids_t[surv_mask]
+    ### Same dedup trick as ``far_idx_t`` above.
+    surv_idx = (~target_is_far).nonzero(as_tuple=True)[0]
+    surv_point_ids = target_point_ids[surv_idx]
+    surv_lp_ids = leaf_pair_ids_t[surv_idx]
 
     # ==================================================================
     # Stage 2: per-source test against target leaf AABBs
@@ -286,10 +291,13 @@ def _expand_dual_leaf_hits(
     dist_sq_s = (src_pts - clamped_s).pow(2).sum(dim=-1)
     source_is_far = dist_sq_s * theta_sq > target_tree.node_diameter_sq[tgt_leaf_per_src]
 
-    ### (far, near) output: source points far from the target leaf
-    fn_source_ids = src_point_ids[source_is_far]
-    fn_target_node_ids = tgt_leaf_per_src[source_is_far]
-    fn_lp_ids = leaf_pair_ids_s[source_is_far]
+    ### (far, near) output: source points far from the target leaf.
+    ### Three indexings off the same mask collapse to one ``nonzero`` +
+    ### integer indexing, saving two syncs.
+    far_idx_s = source_is_far.nonzero(as_tuple=True)[0]
+    fn_source_ids = src_point_ids[far_idx_s]
+    fn_target_node_ids = tgt_leaf_per_src[far_idx_s]
+    fn_lp_ids = leaf_pair_ids_s[far_idx_s]
 
     # ==================================================================
     # Build (far, near) broadcast mapping
@@ -304,8 +312,10 @@ def _expand_dual_leaf_hits(
     has_fn_source[fn_lp_ids] = True
     fn_active_mask = has_fn_source[surv_lp_ids]
 
-    active_surv_ids = surv_point_ids[fn_active_mask]
-    active_surv_lp_ids = surv_lp_ids[fn_active_mask]
+    ### Shared mask -> dedup the boolean indexing (saves one sync).
+    fn_active_idx = fn_active_mask.nonzero(as_tuple=True)[0]
+    active_surv_ids = surv_point_ids[fn_active_idx]
+    active_surv_lp_ids = surv_lp_ids[fn_active_idx]
 
     surv_sort = active_surv_lp_ids.argsort(stable=True)
     fn_broadcast_targets = active_surv_ids[surv_sort]
@@ -319,9 +329,11 @@ def _expand_dual_leaf_hits(
     # ==================================================================
     # Reduced Cartesian product: survivors × close sources only
     # ==================================================================
-    close_mask = ~source_is_far
-    close_src_ids = src_point_ids[close_mask]
-    close_lp_ids = leaf_pair_ids_s[close_mask]
+    ### Survivors of the per-source far test.  Shared mask + dedup as
+    ### above.
+    close_idx = (~source_is_far).nonzero(as_tuple=True)[0]
+    close_src_ids = src_point_ids[close_idx]
+    close_lp_ids = leaf_pair_ids_s[close_idx]
 
     ### Group close sources by leaf pair for contiguous access.  When
     ### either side is empty the per-segment counts are all zero and
@@ -939,16 +951,18 @@ class ClusterTree:
 
                 ### 2. Near-field, both leaves: two-stage filtered expansion.
                 # ``_expand_dual_leaf_hits`` operates on a packed batch of
-                # (target_leaf_id, source_leaf_id) pairs, so we still pay
-                # one boolean indexing sync here per iteration.
+                # (target_leaf_id, source_leaf_id) pairs.  Two indexings
+                # share the ``near_leaf_leaf`` mask, so dedup the
+                # ``nonzero`` call: one sync per iteration instead of two.
+                nll_idx = near_leaf_leaf.nonzero(as_tuple=True)[0]
                 (
                     nn_tgts, nn_srcs,
                     nf_tgts, nf_snids,
                     fn_tnids, fn_sids,
                     fn_btgts, fn_bstarts, fn_bcounts,
                 ) = _expand_dual_leaf_hits(
-                    active_tgt_nodes[near_leaf_leaf],
-                    active_src_nodes[near_leaf_leaf],
+                    active_tgt_nodes[nll_idx],
+                    active_src_nodes[nll_idx],
                     target_tree,
                     source_tree,
                     theta,
