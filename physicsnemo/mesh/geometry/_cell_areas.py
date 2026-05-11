@@ -88,13 +88,19 @@ def compute_cell_areas(
 
     match n_manifold_dims:
         case 1:
-            return _edge_lengths(relative_vectors)
+            result = _edge_lengths(relative_vectors)
         case 2:
-            return _triangle_areas(relative_vectors)
+            result = _triangle_areas(relative_vectors)
         case 3:
-            return _tetrahedron_volumes(relative_vectors)
+            result = _tetrahedron_volumes(relative_vectors)
         case _:
-            return _gram_det_volumes(relative_vectors)
+            result = _gram_det_volumes(relative_vectors)
+
+    # Lock the dtype contract: under CUDA ``torch.autocast`` (e.g. bf16),
+    # reductions like ``aten::sum`` that the closed-form branches rely on are on
+    # the fp32 cast list, so the result can silently come back as fp32 even when
+    # ``relative_vectors`` is bf16.
+    return result.to(relative_vectors.dtype)
 
 
 # ---------------------------------------------------------------------------

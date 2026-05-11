@@ -26,34 +26,44 @@ Import this module before Hydra instantiation to register the transform.
 
 from __future__ import annotations
 
+from typing import Literal, TypeAlias
+
 import torch
+from jaxtyping import Float
 from tensordict import TensorDict
 
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.mesh.base import MeshTransform
-from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.mesh import (
+    MESH_FIELD_ASSOCIATIONS,
+    DomainMesh,
+    Mesh,
+    MeshFieldAssociation,
+)
+
+### Recognized non-dimensionalization recipes. Each names a specific
+### algebraic transform applied to the matching field; see the
+### `NonDimensionalizeByMetadata` docstring for the formulas.
+NondimFieldType: TypeAlias = Literal[
+    "pressure", "stress", "velocity", "temperature", "density", "identity"
+]
 
 
-def _get_mesh_section(mesh: Mesh, section: str) -> TensorDict:
-    """Look up a Mesh data section by name."""
-    if section == "point_data":
-        return mesh.point_data
-    if section == "cell_data":
-        return mesh.cell_data
-    if section == "global_data":
-        return mesh.global_data
-    raise ValueError(f"Unknown mesh section: {section!r}")
-
-
-def _freestream_scales(
+def freestream_scales(
     global_data: TensorDict,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
+) -> tuple[
+    Float[torch.Tensor, ""],
+    Float[torch.Tensor, ""],
+    Float[torch.Tensor, ""],
+    Float[torch.Tensor, ""],
+    Float[torch.Tensor, ""] | None,
+]:
     """Derive reference scales from freestream metadata (cast to float32 once).
 
     Returns ``(q_inf, p_inf, U_inf_mag, rho_inf, T_inf)`` where
     ``q_inf = 0.5 * rho_inf * |U_inf|^2``.  ``T_inf`` is ``None``
     when the metadata does not contain a freestream temperature (e.g.
-    incompressible datasets).
+    incompressible datasets). Each scale is a 0-d float32 tensor.
     """
     U_inf = global_data["U_inf"].float()
     rho_inf = global_data["rho_inf"].float()
@@ -65,12 +75,12 @@ def _freestream_scales(
     return q_inf, p_inf, U_inf_mag, rho_inf, T_inf
 
 
-_FIELD_TYPES = frozenset(
+_FIELD_TYPES: frozenset[NondimFieldType] = frozenset(
     {"pressure", "stress", "velocity", "temperature", "density", "identity"}
 )
 
 # Number of tensor channels each field type occupies.
-_FIELD_CHANNELS = {
+_FIELD_CHANNELS: dict[NondimFieldType, int] = {
     "pressure": 1,
     "stress": 3,
     "velocity": 3,
@@ -82,13 +92,13 @@ _FIELD_CHANNELS = {
 
 def _nondim_field(
     val: torch.Tensor,
-    ftype: str,
-    q_inf: torch.Tensor,
-    p_inf: torch.Tensor,
-    U_inf_mag: torch.Tensor,
+    ftype: NondimFieldType,
+    q_inf: Float[torch.Tensor, ""],
+    p_inf: Float[torch.Tensor, ""],
+    U_inf_mag: Float[torch.Tensor, ""],
     *,
-    rho_inf: torch.Tensor | None = None,
-    T_inf: torch.Tensor | None = None,
+    rho_inf: Float[torch.Tensor, ""] | None = None,
+    T_inf: Float[torch.Tensor, ""] | None = None,
 ) -> torch.Tensor:
     """Apply forward non-dimensionalization to a single field."""
     if ftype == "identity":
@@ -112,13 +122,13 @@ def _nondim_field(
 
 def _redim_field(
     val: torch.Tensor,
-    ftype: str,
-    q_inf: torch.Tensor,
-    p_inf: torch.Tensor,
-    U_inf_mag: torch.Tensor,
+    ftype: NondimFieldType,
+    q_inf: Float[torch.Tensor, ""],
+    p_inf: Float[torch.Tensor, ""],
+    U_inf_mag: Float[torch.Tensor, ""],
     *,
-    rho_inf: torch.Tensor | None = None,
-    T_inf: torch.Tensor | None = None,
+    rho_inf: Float[torch.Tensor, ""] | None = None,
+    T_inf: Float[torch.Tensor, ""] | None = None,
 ) -> torch.Tensor:
     """Reverse non-dimensionalization for a single field."""
     if ftype == "identity":
@@ -160,15 +170,12 @@ class NonDimensionalizeByMetadata(MeshTransform):
     by it to produce non-dimensional coordinates: ``x* = x / L_ref``.
     This normalises point clouds and cell centroids computed downstream.
 
-    Parameters
-    ----------
-    fields : dict[str, str]
-        Mapping of ``{field_name: field_type}`` where *field_type* is one
-        of ``"pressure"``, ``"stress"``, ``"velocity"``, ``"temperature"``,
-        ``"density"``, or ``"identity"``.
-    section : str
-        Mesh data section containing the fields (``"point_data"`` or
-        ``"cell_data"``).
+    Args:
+        fields: Mapping of ``{field_name: field_type}`` where *field_type*
+            is one of ``"pressure"``, ``"stress"``, ``"velocity"``,
+            ``"temperature"``, ``"density"``, or ``"identity"``.
+        association: Mesh field association containing the fields
+            (``"point_data"`` or ``"cell_data"``).
 
     Example YAML::
 
@@ -176,15 +183,20 @@ class NonDimensionalizeByMetadata(MeshTransform):
           fields:
             pMeanTrim: pressure
             wallShearStressMeanTrim: stress
-          section: point_data
+          association: point_data
     """
 
     def __init__(
         self,
-        fields: dict[str, str],
-        section: str = "point_data",
+        fields: dict[str, NondimFieldType],
+        association: MeshFieldAssociation = "point_data",
     ) -> None:
         super().__init__()
+        if association not in MESH_FIELD_ASSOCIATIONS:
+            raise ValueError(
+                f"association must be one of {MESH_FIELD_ASSOCIATIONS!r}, "
+                f"got {association!r}"
+            )
         for name, ftype in fields.items():
             if ftype not in _FIELD_TYPES:
                 raise ValueError(
@@ -192,7 +204,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
                     f"Must be one of {sorted(_FIELD_TYPES)}."
                 )
         self._fields = fields
-        self._section = section
+        self._association = association
 
     def _transform_mesh(
         self,
@@ -205,24 +217,23 @@ class NonDimensionalizeByMetadata(MeshTransform):
     ) -> Mesh:
         """Shared implementation for forward and inverse mesh transforms.
 
-        Parameters
-        ----------
-        scales : tuple or None
-            Pre-computed ``(q_inf, p_inf, U_inf_mag, rho_inf, T_inf, L_ref)``
-            to use instead of deriving them from ``mesh.global_data``.
-        skip_missing : bool
-            If *True*, silently skip fields not present in the mesh section.
+        Args:
+            scales: Pre-computed
+                ``(q_inf, p_inf, U_inf_mag, rho_inf, T_inf, L_ref)``
+                to use instead of deriving them from ``mesh.global_data``.
+            skip_missing: If ``True``, silently skip fields not present in
+                the mesh association.
         """
         if scales is not None:
             q_inf, p_inf, U_inf_mag, rho_inf, T_inf, L_ref = scales
         else:
             gd = mesh.global_data
-            q_inf, p_inf, U_inf_mag, rho_inf, T_inf = _freestream_scales(gd)
+            q_inf, p_inf, U_inf_mag, rho_inf, T_inf = freestream_scales(gd)
             L_ref = gd["L_ref"].float() if "L_ref" in gd else None
 
-        td = _get_mesh_section(mesh, self._section)
-        new_td = td.clone()
-
+        ### Clone and non-dimensionalize the targeted association's
+        ### TensorDict in place.
+        new_td = getattr(mesh, self._association).clone()
         for field_name, ftype in self._fields.items():
             if skip_missing and field_name not in new_td.keys():
                 continue
@@ -237,19 +248,21 @@ class NonDimensionalizeByMetadata(MeshTransform):
                 T_inf=T_inf,
             )
 
-        points = mesh.points
-        if L_ref is not None:
-            points = points * L_ref if inverse else points / L_ref
+        ### `Mesh.copy` is a tensorclass-provided shallow copy: `points`,
+        ### `cells`, the untouched associations, and the geometric `_cache`
+        ### are all shared with `mesh`; only the cloned association is swapped.
+        new_mesh = mesh.copy()  # ty: ignore[unresolved-attribute]
+        setattr(new_mesh, self._association, new_td)
 
-        kwargs: dict = {
-            "points": points,
-            "cells": mesh.cells,
-            "point_data": mesh.point_data,
-            "cell_data": mesh.cell_data,
-            "global_data": mesh.global_data,
-        }
-        kwargs[self._section] = new_td
-        return Mesh(**kwargs)
+        ### Scale geometry into nondim space (`x* = x / L_ref`) on the
+        ### forward pass, and back to physical units (`x = x* * L_ref`)
+        ### on the inverse. `Mesh.scale` propagates `_cache` through the
+        ### linear transform.
+        if L_ref is not None:
+            factor = L_ref if inverse else 1.0 / L_ref
+            new_mesh = new_mesh.scale(factor)
+
+        return new_mesh
 
     def __call__(self, mesh: Mesh) -> Mesh:
         return self._transform_mesh(mesh, _nondim_field, inverse=False)
@@ -264,7 +277,7 @@ class NonDimensionalizeByMetadata(MeshTransform):
         boundary) are silently skipped.
         """
         gd = domain.global_data
-        q_inf, p_inf, U_inf_mag, rho_inf, T_inf = _freestream_scales(gd)
+        q_inf, p_inf, U_inf_mag, rho_inf, T_inf = freestream_scales(gd)
         L_ref = gd["L_ref"].float() if "L_ref" in gd else None
         scales = (q_inf, p_inf, U_inf_mag, rho_inf, T_inf, L_ref)
 
@@ -285,59 +298,51 @@ class NonDimensionalizeByMetadata(MeshTransform):
         ``p_inf``, and optionally ``L_ref``) to convert non-dimensional
         fields and geometry back to physical units.
 
-        Parameters
-        ----------
-        mesh : Mesh
-            Mesh with non-dimensionalized fields and metadata in ``global_data``.
+        Args:
+            mesh: Mesh with non-dimensionalized fields and metadata in
+                ``global_data``.
 
-        Returns
-        -------
-        Mesh
+        Returns:
             Mesh with re-dimensionalized fields.
         """
         return self._transform_mesh(mesh, _redim_field, inverse=True)
 
     def inverse_tensor(
         self,
-        tensor: torch.Tensor,
-        field_types: dict[str, str],
-        q_inf: torch.Tensor,
-        p_inf: torch.Tensor,
-        U_inf_mag: torch.Tensor,
+        tensor: Float[torch.Tensor, "*batch C"],
+        field_types: dict[str, NondimFieldType],
+        q_inf: Float[torch.Tensor, ""],
+        p_inf: Float[torch.Tensor, ""],
+        U_inf_mag: Float[torch.Tensor, ""],
         *,
-        rho_inf: torch.Tensor | None = None,
-        T_inf: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+        rho_inf: Float[torch.Tensor, ""] | None = None,
+        T_inf: Float[torch.Tensor, ""] | None = None,
+    ) -> Float[torch.Tensor, "*batch C"]:
         """Re-dimensionalize a concatenated output tensor.
 
         Operates on model output tensors (shape ``(*, C)``) where channels
-        are ordered according to *field_types*.  This is useful at inference
-        time when you have a raw model prediction rather than a Mesh.
+        are ordered according to *field_types*. Useful at inference time
+        when you have a raw model prediction rather than a Mesh.
 
-        Parameters
-        ----------
-        tensor : Tensor
-            Shape ``(*, C)`` with channels ordered by *field_types*.
-        field_types : dict[str, str]
-            Ordered mapping of ``{field_name: nondim_type}`` where
-            *nondim_type* is one of ``"pressure"``, ``"stress"``,
-            ``"velocity"``, ``"temperature"``, ``"density"``, or
-            ``"identity"``.
-            Uses the model's output field names (e.g. after renaming),
-            not the original mesh field names.
-        q_inf, p_inf, U_inf_mag : Tensor
-            Reference quantities (scalars or broadcastable).
-        rho_inf : Tensor or None
-            Freestream density.  Required when *field_types* contains
-            ``"density"``.
-        T_inf : Tensor or None
-            Freestream temperature.  Required when *field_types* contains
-            ``"temperature"``.
+        Args:
+            tensor: Shape ``(*, C)`` with channels ordered by *field_types*.
+            field_types: Ordered mapping of ``{field_name: nondim_type}``
+                where *nondim_type* is one of ``"pressure"``, ``"stress"``,
+                ``"velocity"``, ``"temperature"``, ``"density"``, or
+                ``"identity"``. Uses the model's output field names
+                (e.g. after renaming), not the original mesh field names.
+            q_inf: Reference dynamic pressure (scalar or broadcastable).
+            p_inf: Reference static pressure (scalar or broadcastable).
+            U_inf_mag: Reference freestream-velocity magnitude
+                (scalar or broadcastable).
+            rho_inf: Freestream density. Required when *field_types*
+                contains ``"density"``.
+            T_inf: Freestream temperature. Required when *field_types*
+                contains ``"temperature"``.
 
-        Returns
-        -------
-        Tensor
-            Same shape, with each field's channels re-dimensionalized.
+        Returns:
+            Same shape as *tensor*, with each field's channels
+            re-dimensionalized.
         """
         out = tensor.clone()
         idx = 0
@@ -355,5 +360,66 @@ class NonDimensionalizeByMetadata(MeshTransform):
             idx += n
         return out
 
+    def inverse_td(
+        self,
+        td: TensorDict,
+        field_types: dict[str, NondimFieldType],
+        q_inf: Float[torch.Tensor, ""],
+        p_inf: Float[torch.Tensor, ""],
+        U_inf_mag: Float[torch.Tensor, ""],
+        *,
+        rho_inf: Float[torch.Tensor, ""] | None = None,
+        T_inf: Float[torch.Tensor, ""] | None = None,
+    ) -> TensorDict:
+        """Re-dimensionalize a per-field :class:`~tensordict.TensorDict`.
+
+        Companion to :meth:`inverse_tensor` for the per-field
+        TensorDict-keyed I/O flow used by recipes that consume named
+        prediction fields directly. Each leaf is independently
+        re-dimensionalized using the formula matching its
+        ``field_types`` entry; leaves whose names are absent from
+        ``field_types`` are passed through unchanged.
+
+        Args:
+            td: Per-field TensorDict whose leaves are non-dimensional
+                predictions keyed by field name.
+            field_types: Ordered mapping of ``{field_name: nondim_type}``
+                where *nondim_type* is one of ``"pressure"``, ``"stress"``,
+                ``"velocity"``, ``"temperature"``, ``"density"``, or
+                ``"identity"``. Names absent from *td* are silently skipped.
+            q_inf: Reference dynamic pressure (scalar or broadcastable).
+            p_inf: Reference static pressure (scalar or broadcastable).
+            U_inf_mag: Reference freestream-velocity magnitude.
+            rho_inf: Freestream density. Required when *field_types*
+                contains ``"density"``.
+            T_inf: Freestream temperature. Required when *field_types*
+                contains ``"temperature"``.
+
+        Returns:
+            New TensorDict (same keys, batch_size, and device as *td*)
+            whose leaves are in physical units.
+        """
+
+        ### ``named_apply`` walks every leaf in ``td`` and collects the
+        ### returns into a fresh TD; leaves whose name is absent from
+        ### ``field_types`` pass through unchanged.
+        def _redim(name: str, val: torch.Tensor) -> torch.Tensor:
+            ftype = field_types.get(name)
+            if ftype is None:
+                return val
+            return _redim_field(
+                val,
+                ftype,
+                q_inf,
+                p_inf,
+                U_inf_mag,
+                rho_inf=rho_inf,
+                T_inf=T_inf,
+            )
+
+        ### ``named_apply`` is typed ``TensorDict | None`` for its
+        ### in-place mode; the out-of-place path always returns a TD.
+        return td.named_apply(_redim)  # ty: ignore[invalid-return-type]
+
     def extra_repr(self) -> str:
-        return f"fields={self._fields}, section={self._section}"
+        return f"fields={self._fields}, association={self._association!r}"

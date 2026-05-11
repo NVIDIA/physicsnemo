@@ -62,7 +62,7 @@ pipeline:
     #     avg(T): temperature
     #     avg(rho): density
     #     avg(u): velocity
-    #   section: point_data
+    #   association: point_data
     - _target_: ${dp:ComputeSDFFromBoundary}
       boundary_name: stl_geometry
       sdf_field: sdf
@@ -78,21 +78,11 @@ pipeline:
         avg(u): velocity
     # z-score normalization — leave empty until stats are computed
     # - _target_: ${dp:NormalizeMeshFields}
-    #   section: point_data
+    #   association: point_data
     #   fields: {}
-    - _target_: ${dp:MeshToTensorDict}
-    - _target_: ${dp:RestructureTensorDict}
-      groups:
-        input:
-          points: interior.points
-          U_inf: global_data.U_inf
-          sdf: interior.point_data.sdf
-          sdf_normals: interior.point_data.sdf_normals
-        output:
-          pressure: interior.point_data.pressure
-          temperature: interior.point_data.temperature
-          density: interior.point_data.density
-          velocity: interior.point_data.velocity
+    # No terminal MeshToTensorDict / RestructureTensorDict: the volume YAML
+    # already produces a DomainMesh natively. Each model YAML's
+    # `forward_kwargs:` spec maps DomainMesh paths to its forward kwargs.
 
 targets:
   pressure: scalar

@@ -17,13 +17,21 @@
 # ---------------------------------------------------------------------------
 # Unified External Aerodynamics - Surface Training Configuration (DoMINO)
 # ---------------------------------------------------------------------------
-# Trains a DoMINO model in surface-only mode on surface pressure (Cp) and
-# wall shear stress (Cf) from DrivaerML datasets.
+#
+# >>> DRAFT: this config does NOT run end-to-end yet.
+#
+# The dataset YAML (drivaer_ml_surface.yaml) does not yet expose all the
+# per-cell neighbor / grid features that DoMINO's `forward()` consumes.
+# The `forward_kwargs:` block below is illustrative; running this config
+# requires extending the dataset pipeline with a DoMINO-specific
+# pre-processing stage (and is excluded from the synthetic E2E test
+# suite for that reason). See `tests/test_synthetic_configs.py`.
 #
 # DoMINO uses a geometry-encoding UNet + basis-function architecture that
-# natively handles SDF grids and surface neighbor information.  Its forward
-# method accepts a single data_dict; the collate layer wraps batch tensors
-# into data_dict automatically (see _wrap_as in MODEL_MAPPINGS).
+# natively handles SDF grids and surface neighbor information. Its forward
+# method accepts a single ``data_dict`` argument; the recipe's
+# ``forward_kwargs:`` resolver builds that dict by recursing into the
+# nested-dict spec below (see ``src/forward_kwargs.py``).
 
 output_dir: "runs"
 checkpoint_dir: null
@@ -35,10 +43,26 @@ profile: false
 augment: false
 benchmark_io: false
 
-model_type: "surface"
+# -- Data contract -----------------------------------------------------------
+# DoMINO's forward signature is `forward(self, data_dict)`; the nested-dict
+# spec below resolves to `model.forward(data_dict={...})` automatically.
+#
+# NOTE: DoMINO is still in progress in this recipe. The dataset YAML
+# (drivaer_ml_surface.yaml) does not yet expose all the per-cell neighbor /
+# grid features that DoMINO's full `forward(data_dict)` expects. The
+# references below are illustrative; running this config end-to-end
+# requires extending the dataset pipeline with a DoMINO-specific
+# pre-processing stage.
+input_type: tensors
+output_type: tensors
 
-# -- Data-to-model mapping (see src/collate.py MODEL_MAPPINGS) ---------------
-data_mapping: "domino_automotive_surface"
+forward_kwargs:
+  data_dict:
+    geometry_coordinates: interior.points
+    surface_mesh_centers: interior.points
+    surface_normals: boundaries.vehicle.cell_data.normals
+    global_params_values: global_data.U_inf
+    global_params_reference: global_data.U_inf
 
 # -- Model (DoMINO, surface-only) -------------------------------------------
 model:
@@ -60,9 +84,6 @@ model:
 dataset:
   name: drivaer_ml_surface
   sampling_resolution: 200000
-  targets:
-    pressure: scalar
-    wss: vector
   metrics: [l2]
 
 # -- Training ----------------------------------------------------------------

@@ -35,6 +35,7 @@ from physicsnemo.experimental.models.globe.field_kernel import MultiscaleKernel
 from physicsnemo.experimental.models.globe.utilities.rank_spec import (
     RankSpecDict,
     flatten_rank_spec,
+    validate_data_contains_ranks,
 )
 from physicsnemo.mesh import Mesh
 from physicsnemo.utils.logging import PythonLogger
@@ -541,10 +542,25 @@ class GLOBE(Module):
                 )
             )
 
-            source_data = _flatten_keys(mesh.cell_data.exclude("strengths"))
+            kernel: MultiscaleKernel = self.kernel_layers[layer_idx][bc_type]  # ty: ignore[not-subscriptable]
+            ### Pull only the leaves the kernel was built to consume.
+            ### `kernel.source_data_ranks` covers the per-bc declared
+            ### `physical.<X>` plus, in layers >= 1, `latent.<...>` added
+            ### by the previous communication step.  `"normals"` is
+            ### excluded here because we auto-inject it from
+            ### `mesh.cell_normals` on the next line; pulling it from
+            ### `cell_data` too would double-count.  Extras in cell_data
+            ### are silently dropped by ``select`` -- the contract is
+            ### enforced by ``validate_data_contains_ranks`` at
+            ### ``GLOBE.forward`` entry.
+            kernel_source_keys = (
+                flatten_rank_spec(kernel.source_data_ranks).keys() - {"normals"}
+            )
+            source_data = _flatten_keys(
+                mesh.cell_data.exclude("strengths")
+            ).select(*kernel_source_keys)
             source_data["normals"] = mesh.cell_normals
 
-            kernel: MultiscaleKernel = self.kernel_layers[layer_idx][bc_type]  # ty: ignore[not-subscriptable]
             kernel_result: TensorDict[str, Float[torch.Tensor, "n_targets ..."]] = kernel(
                 source_points=mesh.cell_centroids,
                 source_data=source_data,
@@ -682,6 +698,18 @@ class GLOBE(Module):
         if global_data is None:
             global_data = TensorDict({}, device=device)
 
+        ### Filter `global_data` down to declared leaves before any
+        ### downstream code sees it. Mirrors the per-bc cell_data filter
+        ### in `_evaluate_hyperlayer`: extras are silently dropped, so
+        ### users can pass the recipe's full mesh `global_data` (which
+        ### may carry e.g. metadata fields) without polluting the kernel
+        ### feature stream. A user-supplied leaf that's missing from the
+        ### declaration is caught by `validate_data_contains_ranks`
+        ### below.
+        global_data = global_data.select(
+            *flatten_rank_spec(self.global_data_ranks).keys()
+        )
+
         ### Input validation
         if not torch.compiler.is_compiling():
             if prediction_points.ndim != 2:
@@ -700,13 +728,9 @@ class GLOBE(Module):
                     f"{set(self.reference_length_names)!r},\n"
                     f"but the forward-method input gives {set(reference_lengths.keys())!r}."
                 )
-            for bc_type, mesh in boundary_meshes.items():
-                if mesh.n_spatial_dims != self.n_spatial_dims:
-                    raise ValueError(
-                        f"Boundary mesh for BC type {bc_type!r} has "
-                        f"{mesh.n_spatial_dims} spatial dims, but the model expects "
-                        f"{self.n_spatial_dims}"
-                    )
+            ### Check the bc-types subset BEFORE the per-bc loop so a typo'd
+            ### bc name fails with a clear message instead of crashing on
+            ### `self.boundary_source_data_ranks[bc_type]` lookup below.
             bc_types_from_input = set(boundary_meshes.keys())
             if not bc_types_from_input.issubset(self.boundary_condition_names):
                 raise ValueError(
@@ -716,6 +740,34 @@ class GLOBE(Module):
                     f"{self.boundary_condition_names!r}\n"
                     f"Please ensure that the input boundary meshes are a subset of the model's boundary condition types."
                 )
+            for bc_type, mesh in boundary_meshes.items():
+                if mesh.n_spatial_dims != self.n_spatial_dims:
+                    raise ValueError(
+                        f"Boundary mesh for BC type {bc_type!r} has "
+                        f"{mesh.n_spatial_dims} spatial dims, but the model expects "
+                        f"{self.n_spatial_dims}"
+                    )
+                ### Subset cell_data contract: every leaf declared in
+                ### `boundary_source_data_ranks[bc_type]` must be present
+                ### in `mesh.cell_data` with the declared rank. Extras
+                ### are silently dropped by the `select` in
+                ### `_evaluate_hyperlayer`. Catches typo'd declarations
+                ### and shape regressions with a friendlier error than
+                ### the bare KeyError that `select(strict=True)` would
+                ### otherwise raise on a missing leaf.
+                validate_data_contains_ranks(
+                    data=mesh.cell_data,
+                    declared_ranks=self.boundary_source_data_ranks[bc_type],
+                    source_label=f"`boundary_meshes[{bc_type!r}].cell_data`",
+                )
+            ### Same subset contract for `global_data`. The pre-filter
+            ### above already dropped extras, so this only fires when a
+            ### declared leaf was missing or had a rank mismatch.
+            validate_data_contains_ranks(
+                data=global_data,
+                declared_ranks=self.global_data_ranks,
+                source_label="`global_data`",
+            )
 
         ### Phase 1: Enrich boundary meshes with initial (all-ones) strengths.
         with record_function("globe::enrich_meshes"):

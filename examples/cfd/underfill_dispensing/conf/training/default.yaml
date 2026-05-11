@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# ┌───────────────────────────────────────────┐
+# │                   Data                    │
+# └───────────────────────────────────────────┘  
+
+raw_data_dir:  ???
+raw_data_dir_validation:  ???
+max_workers_preprocessing: 64  # Maximum parallel workers
+debug: True # Debug mode (verbose output)
+
+# ┌───────────────────────────────────────────┐
+# │                 Training                  │
+# └───────────────────────────────────────────┘  
+epochs: 1601
+num_time_steps: 20
+amp: true             # Automatic Mixed Precision
+use_apex: false       # Use Apex FusedAdam if available
+num_dataloader_workers: 8
+start_lr: 0.0002
+end_lr:  0.000001
+scheduler_T0: 50       # restart period in epochs (first cycle length)
+scheduler_T_mult: 2    # multiply period by this factor after each restart
+
+num_samples: 23
+num_validation_samples: 5
+validation_freq: 25
+save_chckpoint_freq: 25
+
+interface_mask:
+  vof_lo: 0.01         # nodes with VOF > this AND < vof_hi are "interface"
+  vof_hi: 0.99
+  band_fraction: 0.05 # dilate by 10% of domain extent along interface-normal axis
+  interface_axis: -1    # -1 = auto-detect per sample
+  absolute_expansion: null  # null = use band_fraction; set a float to override
+
+ckpt_path: "./checkpoints"
+tensorboard_log_dir: ./tensorboard_logs
+
+
