@@ -390,7 +390,12 @@ class Natten2DSelfAttention(AttentionModuleBase):
     >>> from physicsnemo.nn.module.dit_layers import Natten2DSelfAttention
     >>> attn = Natten2DSelfAttention(hidden_size=64, num_heads=4, attn_kernel=3)
     >>> x = torch.randn(2, 16, 64)
-    >>> out = attn(x, latent_hw=(4, 4))
+    >>> # natten's CPU backend (FlexAttention) does not support backward on
+    >>> # CPU, and raises if any tensor on the autograd path requires grad.
+    >>> # ``torch.no_grad()`` keeps the forward pass off the autograd path
+    >>> # so the doctest runs on the CPU coverage box.
+    >>> with torch.no_grad():
+    ...     out = attn(x, latent_hw=(4, 4))
     >>> out.shape
     torch.Size([2, 16, 64])
     """
