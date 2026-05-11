@@ -269,6 +269,121 @@ class RandomQueryStrategy(QueryStrategy):
         )
 
 
+class ClassBalancedRandomQueryStrategy(QueryStrategy):
+    """Stratified random selection: equal-as-possible per class from the unlabeled pool.
+
+    For pools with K classes and ``max_samples=N``, this picks roughly
+    ``N // K`` samples per class. Any remainder is distributed deterministically
+    across classes in sorted-name order so that all DDP ranks compute the
+    same target counts. If a class lacks enough unlabeled samples to meet its
+    target, the deficit is redistributed to other classes that still have
+    headroom.
+
+    Useful as a fairer baseline than uniform random when the underlying pool
+    is class-imbalanced or when one wants to test whether UQ-driven acquisition
+    contributes anything beyond enforced class balancing.
+
+    Parameters
+    ----------
+    max_samples : int
+        Number of samples to select per round.
+    seed : int | None
+        Random seed for reproducibility (shared across DDP ranks).
+    """
+
+    __protocol_name__ = "ClassBalancedRandomQueryStrategy"
+    __protocol_type__ = ActiveLearningPhase.QUERY
+
+    def __init__(self, max_samples: int = 50, seed: int | None = None) -> None:
+        self.max_samples = max_samples
+        self.seed = seed
+        self.driver = None
+        self._rng = np.random.default_rng(seed)
+        self.selection_history: list[dict[str, Any]] = []
+
+    def attach(self, other: object) -> None:
+        self.driver = other
+
+    @property
+    def is_attached(self) -> bool:
+        return self.driver is not None
+
+    def sample(self, query_queue: AbstractQueue, *args: Any, **kwargs: Any) -> None:
+        pool = self.driver.training_pool
+        unlabeled = pool.unlabeled_indices().numpy()
+
+        if len(unlabeled) == 0:
+            return
+
+        buckets: dict[str, list[int]] = defaultdict(list)
+        for idx in unlabeled:
+            buckets[pool.class_of(int(idx))].append(int(idx))
+
+        classes = sorted(buckets.keys())
+        n_classes = len(classes)
+
+        base = self.max_samples // n_classes
+        remainder = self.max_samples - base * n_classes
+        targets = {
+            c: base + (1 if i < remainder else 0)
+            for i, c in enumerate(classes)
+        }
+
+        picks_by_class: dict[str, list[int]] = {}
+        deficit = 0
+        for c in classes:
+            n_avail = len(buckets[c])
+            n_want = targets[c]
+            if n_avail <= n_want:
+                picks_by_class[c] = list(buckets[c])
+                deficit += n_want - n_avail
+            else:
+                idx_arr = self._rng.choice(buckets[c], size=n_want, replace=False)
+                picks_by_class[c] = [int(x) for x in idx_arr]
+
+        # Redistribute deficit deterministically across classes that still
+        # have unselected unlabeled samples.
+        while deficit > 0:
+            progressed = False
+            for c in classes:
+                if deficit == 0:
+                    break
+                already = set(picks_by_class[c])
+                remaining = [i for i in buckets[c] if i not in already]
+                if remaining:
+                    extra = self._rng.choice(remaining, size=1, replace=False)
+                    picks_by_class[c].append(int(extra[0]))
+                    deficit -= 1
+                    progressed = True
+            if not progressed:
+                break
+
+        chosen: list[int] = []
+        for c in classes:
+            chosen.extend(picks_by_class[c])
+
+        round_record = {
+            "selected": [],
+            "step": getattr(self.driver, "active_learning_step_idx", -1),
+            "targets": targets,
+        }
+        for flat_idx in chosen:
+            query_queue.put(int(flat_idx))
+            round_record["selected"].append({
+                "flat_idx": int(flat_idx),
+                "class": pool.class_of(int(flat_idx)),
+            })
+        self.selection_history.append(round_record)
+
+        class_counts = defaultdict(int)
+        for entry in round_record["selected"]:
+            class_counts[entry["class"]] += 1
+        self.logger.info(
+            f"Class-balanced random selected {len(chosen)} samples: "
+            f"{dict(class_counts)} (target: {targets})"
+        )
+
+
 class DummyLabelStrategy(LabelStrategy):
     """Pass-through: labels already exist in the dataset.
 
@@ -350,6 +465,12 @@ class DragMetrologyStrategy(MetrologyStrategy):
         n_val = len(val_pool)
         my_indices = list(range(rank, n_val, world_size))
 
+        # Build class<->index map dynamically from the validation pool so the
+        # metrology works for any set of class labels (F/N/E, SE/SF, etc.).
+        unique_classes = sorted(set(val_pool.class_labels))
+        cls_to_idx = {c: i for i, c in enumerate(unique_classes)}
+        idx_to_cls = {i: c for c, i in cls_to_idx.items()}
+
         local_rows = []
         for count, i in enumerate(my_indices):
             if count % 10 == 0 and rank == 0:
@@ -397,7 +518,7 @@ class DragMetrologyStrategy(MetrologyStrategy):
 
             field_mse = F.mse_loss(outputs, batch["fields"]).item()
 
-            cls_idx = {"F": 0, "N": 1, "E": 2}.get(cls_label, -1)
+            cls_idx = cls_to_idx.get(cls_label, -1)
             local_rows.append([true_cd, gp_cd, trans_cd, field_mse, float(cls_idx)])
 
         local_t = torch.tensor(local_rows, dtype=torch.float64, device=device)
@@ -419,7 +540,6 @@ class DragMetrologyStrategy(MetrologyStrategy):
         drag_r2_gp = _r2(true_arr, gp_arr)
         drag_r2_trans = _r2(true_arr, trans_arr) if trans_arr.any() else None
 
-        idx_to_cls = {0: "F", 1: "N", 2: "E"}
         per_class_r2_gp = {}
         per_class_r2_trans = {}
         per_class_field_mse = {}

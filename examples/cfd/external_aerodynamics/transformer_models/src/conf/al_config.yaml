@@ -65,7 +65,7 @@ profile: false
 
 # --- Training overrides ---
 training:
-  save_interval: 10
+  save_interval: 5
   gradient_accumulation_steps: 8
 
 model:

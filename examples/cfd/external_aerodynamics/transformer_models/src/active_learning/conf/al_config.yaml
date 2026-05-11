@@ -41,8 +41,17 @@ consistency_detach_transolver: false
 al_rounds: 5                   # Number of query-train-evaluate rounds
 samples_per_round: 50          # Samples selected per round
 test_samples_per_class: 100    # Held out for fixed test set (rest goes to pool)
-acquisition: "joint_uq"        # "joint_uq" or "random"
-random_seed: 42                # Seed for random baseline (used when acquisition=random)
+acquisition: "joint_uq"        # "joint_uq", "random", or "class_balanced_random"
+random_seed: 42                # Seed for random baselines (used when acquisition=random or class_balanced_random)
+
+# --- Replay cap (continual-learning style) ---
+# When null, every fine-tune step replays the full Fastback training corpus
+# (~3252 samples) which dominates over the AL-selected samples (≤250 by end
+# of run). Set to an integer (e.g. 100) to instead replay only that many
+# Fastback samples per round, freshly resampled each round, so AL-selected
+# samples have a chance to actually move the gradient.
+replay_cap: null
+replay_seed_base: 12345        # Per-round replay subset uses seed = replay_seed_base + al_round
 
 # --- Fine-tuning schedule ---
 fine_tune_epochs: 20           # Epochs per AL round

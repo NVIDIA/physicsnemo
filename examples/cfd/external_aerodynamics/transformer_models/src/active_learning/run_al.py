@@ -82,6 +82,7 @@ from gp_utils import (
 
 from aero_data_pool import AeroDataPool, load_manifests
 from strategies import (
+    ClassBalancedRandomQueryStrategy,
     DragMetrologyStrategy,
     DummyLabelStrategy,
     JointUQQueryStrategy,
@@ -176,6 +177,7 @@ def main(cfg: DictConfig) -> None:
     consistency_detach = getattr(cfg, "consistency_detach_transolver", False)
     consistency_every_n = getattr(cfg, "consistency_every_n_steps", 1)
     accumulation_steps = getattr(cfg.training, "gradient_accumulation_steps", 1)
+    save_interval = getattr(cfg.training, "save_interval", 10)
 
     initial_checkpoint = cfg.initial_checkpoint
     if initial_checkpoint is None:
@@ -295,25 +297,82 @@ def main(cfg: DictConfig) -> None:
 
     # ---- Resume from previous run if checkpoints exist ----
     resume_round = 0
-    existing_ckpts = sorted(out_dir.glob("checkpoint_round_*"))
+    resume_epoch = -1
+    resuming_mid_round = False
+    existing_ckpts = sorted(
+        out_dir.glob("checkpoint_round_*"),
+        key=lambda p: int(p.name.split("_")[-1]),
+    )
     if existing_ckpts:
         last_ckpt = existing_ckpts[-1]
         round_num = int(last_ckpt.name.split("_")[-1])
         indices_path = last_ckpt / "train_indices.pt"
+
         if indices_path.exists():
-            resume_round = round_num
-            logger.info(f"Resuming from round {resume_round} checkpoint: {last_ckpt}")
-            load_checkpoint(
-                path=str(last_ckpt),
-                models=[model, embedding_reduction, gp],
-                device=device,
+            is_incomplete = (
+                (last_ckpt / "round_started").exists()
+                and not (last_ckpt / "round_complete").exists()
             )
-            restored_indices = torch.load(indices_path, weights_only=True)
-            train_pool.train_indices = restored_indices
-            logger.info(
-                f"Restored training pool: {len(train_pool)} samples "
-                f"from {indices_path}"
-            )
+
+            if is_incomplete:
+                has_training_state = any(last_ckpt.glob("checkpoint.*.pt"))
+                if has_training_state:
+                    loaded_epoch = load_checkpoint(
+                        path=str(last_ckpt),
+                        models=[model, embedding_reduction, gp],
+                        device=device,
+                    )
+                    resume_epoch = loaded_epoch
+                    logger.info(
+                        f"Resuming incomplete round {round_num} from epoch "
+                        f"{loaded_epoch + 1}/{fine_tune_epochs}: {last_ckpt}"
+                    )
+                else:
+                    # Selection saved but training not started yet; load
+                    # model from the previous completed round if available.
+                    prev_ckpt = out_dir / f"checkpoint_round_{round_num - 1}"
+                    if (
+                        prev_ckpt.exists()
+                        and (prev_ckpt / "train_indices.pt").exists()
+                    ):
+                        load_checkpoint(
+                            path=str(prev_ckpt),
+                            models=[model, embedding_reduction, gp],
+                            device=device,
+                        )
+                    logger.info(
+                        f"Resuming incomplete round {round_num} from start "
+                        f"(selection preserved): {last_ckpt}"
+                    )
+
+                train_pool.train_indices = torch.load(
+                    indices_path, weights_only=True
+                )
+                resume_round = round_num - 1
+                resuming_mid_round = True
+                logger.info(
+                    f"Restored training pool: {len(train_pool)} samples "
+                    f"from {indices_path}"
+                )
+            else:
+                # Fully completed round (has sentinel or old-style checkpoint)
+                resume_round = round_num
+                logger.info(
+                    f"Resuming from completed round {resume_round}: "
+                    f"{last_ckpt}"
+                )
+                load_checkpoint(
+                    path=str(last_ckpt),
+                    models=[model, embedding_reduction, gp],
+                    device=device,
+                )
+                train_pool.train_indices = torch.load(
+                    indices_path, weights_only=True
+                )
+                logger.info(
+                    f"Restored training pool: {len(train_pool)} samples "
+                    f"from {indices_path}"
+                )
 
     # ---- DDP ----
     if dist_manager.world_size > 1:
@@ -328,9 +387,18 @@ def main(cfg: DictConfig) -> None:
         query_strategy = JointUQQueryStrategy(
             max_samples=samples_per_round, precision=precision
         )
-    else:
+    elif acquisition == "class_balanced_random":
+        query_strategy = ClassBalancedRandomQueryStrategy(
+            max_samples=samples_per_round, seed=random_seed
+        )
+    elif acquisition == "random":
         query_strategy = RandomQueryStrategy(
             max_samples=samples_per_round, seed=random_seed
+        )
+    else:
+        raise ValueError(
+            f"Unknown acquisition strategy: {acquisition!r}. "
+            f"Expected one of: 'joint_uq', 'random', 'class_balanced_random'."
         )
 
     metrology = DragMetrologyStrategy(precision=precision)
@@ -365,14 +433,14 @@ def main(cfg: DictConfig) -> None:
 
     # ---- Load existing metrology records if resuming ----
     metrics_path = out_dir / "validation_metrics.json"
-    if resume_round > 0 and metrics_path.exists():
+    if (resume_round > 0 or resuming_mid_round) and metrics_path.exists():
         metrology.load_records(metrics_path)
         logger.info(f"Loaded {len(metrology.records)} existing metric records")
 
     is_rank0 = dist_manager.rank == 0
 
     # ---- Initial evaluation (round 0, no training) — skip if resuming ----
-    if resume_round == 0:
+    if resume_round == 0 and not resuming_mid_round:
         logger.info("=== Round 0: baseline evaluation ===")
         metrology.compute(**strategy_kwargs)
         if is_rank0:
@@ -382,39 +450,55 @@ def main(cfg: DictConfig) -> None:
     start_round = resume_round + 1
     for al_round in range(start_round, al_rounds + 1):
         driver_stub.active_learning_step_idx = al_round
+        ckpt_dir = out_dir / f"checkpoint_round_{al_round}"
         logger.info(f"\n{'='*60}")
         logger.info(f"=== Active Learning Round {al_round}/{al_rounds} ===")
-        logger.info(f"Training pool size: {len(train_pool)}")
-        logger.info(f"Unlabeled pool size: {len(train_pool.unlabeled_indices())}")
 
-        # ---- Query (all ranks score in parallel via _padded_all_gather) ----
-        query_queue: Queue = Queue()
-        query_strategy.sample(query_queue, **strategy_kwargs)
+        if resuming_mid_round:
+            logger.info(
+                f"Resuming mid-round (skipping sample selection). "
+                f"Training pool size: {len(train_pool)}"
+            )
+            resuming_mid_round = False
+        else:
+            logger.info(f"Training pool size: {len(train_pool)}")
+            logger.info(
+                f"Unlabeled pool size: {len(train_pool.unlabeled_indices())}"
+            )
 
-        # All ranks have the same query_queue after all_gather, extract indices
-        selected_indices: list[int] = []
-        label_queue: Queue = Queue()
-        label_strategy.label(query_queue, label_queue)
-        while not label_queue.empty():
-            selected_indices.append(label_queue.get())
+            # ---- Query (all ranks score in parallel) ----
+            query_queue: Queue = Queue()
+            query_strategy.sample(query_queue, **strategy_kwargs)
 
-        # ---- Add to training pool (all ranks, same indices) ----
-        for flat_idx in selected_indices:
-            train_pool.append(flat_idx)
+            selected_indices: list[int] = []
+            label_queue: Queue = Queue()
+            label_strategy.label(query_queue, label_queue)
+            while not label_queue.empty():
+                selected_indices.append(label_queue.get())
 
-        logger.info(f"Training pool after selection: {len(train_pool)}")
+            # ---- Add to training pool (all ranks, same indices) ----
+            for flat_idx in selected_indices:
+                train_pool.append(flat_idx)
 
-        # ---- Persist selection history immediately (survives slurm timeouts) ----
-        if is_rank0:
-            history_path = out_dir / "selection_history.json"
-            existing_history = []
-            if history_path.exists():
-                with open(history_path) as f:
-                    existing_history = json.load(f)
-            existing_history.extend(query_strategy.selection_history)
-            with open(history_path, "w") as f:
-                json.dump(existing_history, f, indent=2)
-            query_strategy.selection_history.clear()
+            logger.info(f"Training pool after selection: {len(train_pool)}")
+
+            # ---- Persist selection + train indices immediately ----
+            if is_rank0:
+                history_path = out_dir / "selection_history.json"
+                existing_history = []
+                if history_path.exists():
+                    with open(history_path) as f:
+                        existing_history = json.load(f)
+                existing_history.extend(query_strategy.selection_history)
+                with open(history_path, "w") as f:
+                    json.dump(existing_history, f, indent=2)
+                query_strategy.selection_history.clear()
+
+                ckpt_dir.mkdir(parents=True, exist_ok=True)
+                torch.save(
+                    train_pool.train_indices, ckpt_dir / "train_indices.pt"
+                )
+                (ckpt_dir / "round_started").touch()
 
         # ---- Fine-tune ----
         # Fresh optimizer + cosine schedule each round (Ash & Adams, NeurIPS 2020).
@@ -449,27 +533,70 @@ def main(cfg: DictConfig) -> None:
             optimizer, T_max=fine_tune_epochs, eta_min=base_lr * 0.01
         )
 
+        # Restore optimizer/scheduler state if resuming mid-round
+        if resume_epoch >= 0:
+            load_checkpoint(
+                path=str(ckpt_dir),
+                optimizer=optimizer,
+                scheduler=scheduler,
+                epoch=resume_epoch,
+            )
+            start_epoch = resume_epoch + 1
+            logger.info(
+                f"Restored optimizer/scheduler from epoch {resume_epoch}, "
+                f"continuing from epoch {start_epoch}"
+            )
+            resume_epoch = -1
+        else:
+            start_epoch = 0
+
         # Build DDP-sharded DataLoaders for both data sources
         num_replicas = dist_manager.world_size
         data_rank = dist_manager.rank
+
+        # ---- Replay cap (CAL-style partial replay) ----
+        # If replay_cap is set, each round draws a fresh random subset of
+        # `replay_cap` Fastback samples instead of replaying the full base
+        # training corpus.  Subset is deterministic across DDP ranks via a
+        # per-round seed so all ranks shard the same indices.
+        replay_cap = getattr(cfg, "replay_cap", None)
+        replay_seed_base = int(getattr(cfg, "replay_seed_base", 12345))
+        if base_train_datapipe is not None and replay_cap is not None:
+            full_n = len(base_train_datapipe.dataset)
+            cap = min(int(replay_cap), full_n)
+            replay_gen = torch.Generator()
+            replay_gen.manual_seed(replay_seed_base + al_round)
+            replay_indices = torch.randperm(full_n, generator=replay_gen)[:cap].tolist()
+            base_dataset_for_round = torch.utils.data.Subset(
+                base_train_datapipe.dataset, replay_indices
+            )
+            if is_rank0:
+                logger.info(
+                    f"  Replay cap: {cap}/{full_n} Fastback samples this round "
+                    f"(replay seed={replay_seed_base + al_round})"
+                )
+        elif base_train_datapipe is not None:
+            base_dataset_for_round = base_train_datapipe.dataset
+        else:
+            base_dataset_for_round = None
 
         # Base Fastback training data with DistributedSampler
         base_sampler = None
         base_dl = None
         n_base = 0
-        if base_train_datapipe is not None:
+        if base_dataset_for_round is not None:
             base_sampler = torch.utils.data.distributed.DistributedSampler(
-                base_train_datapipe.dataset,
+                base_dataset_for_round,
                 num_replicas=num_replicas,
                 rank=data_rank,
                 shuffle=True,
                 drop_last=True,
             )
             base_dl = torch.utils.data.DataLoader(
-                base_train_datapipe.dataset, batch_size=1,
+                base_dataset_for_round, batch_size=1,
                 sampler=base_sampler, num_workers=0,
             )
-            n_base = len(base_train_datapipe.dataset)
+            n_base = len(base_dataset_for_round)
 
         # AL-selected data with DistributedSampler
         al_sampler = None
@@ -498,7 +625,7 @@ def main(cfg: DictConfig) -> None:
             f"GP variational/kernel={base_lr * 10:.2e})"
         )
 
-        for epoch in range(fine_tune_epochs):
+        for epoch in range(start_epoch, fine_tune_epochs):
             epoch_loss = 0.0
             n_batches = 0
 
@@ -543,24 +670,29 @@ def main(cfg: DictConfig) -> None:
                     f"({n_batches} batches)"
                 )
 
+            # Periodic intra-round checkpoint (survives Slurm timeouts)
+            if is_rank0 and (
+                (epoch + 1) % save_interval == 0
+                or epoch == fine_tune_epochs - 1
+            ):
+                ckpt_dir.mkdir(parents=True, exist_ok=True)
+                save_checkpoint(
+                    path=str(ckpt_dir),
+                    models=[backbone_model, embedding_reduction, gp],
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    epoch=epoch,
+                )
+
         # ---- Evaluate (all ranks compute, rank 0 saves) ----
         metrology.compute(**strategy_kwargs)
         if is_rank0:
             metrology.serialize_records(metrics_path)
 
-        # ---- Save checkpoint ----
+        # ---- Mark round as complete ----
         if is_rank0:
-            ckpt_dir = out_dir / f"checkpoint_round_{al_round}"
             ckpt_dir.mkdir(parents=True, exist_ok=True)
-            save_checkpoint(
-                path=str(ckpt_dir),
-                models=[
-                    model.module if hasattr(model, "module") else model,
-                    embedding_reduction,
-                    gp,
-                ],
-            )
-            torch.save(train_pool.train_indices, ckpt_dir / "train_indices.pt")
+            (ckpt_dir / "round_complete").touch()
 
     if is_rank0:
         logger.info(f"Saved selection history to {out_dir / 'selection_history.json'}")
