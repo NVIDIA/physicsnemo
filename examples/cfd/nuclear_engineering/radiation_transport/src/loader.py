@@ -316,7 +316,7 @@ def _build_transforms(
     if not material_stats_path.exists():
         raise FileNotFoundError(
             f"Material statistics file not found: {material_stats_path}\n"
-            f"Run scripts/compute_normalizations.py to generate it."
+            f"Run src/compute_normalizations.py to generate it."
         )
     material_stats = load_material_stats(material_stats_path)
     transform_list.append(
