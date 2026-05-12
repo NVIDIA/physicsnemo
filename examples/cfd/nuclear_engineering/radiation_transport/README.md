@@ -35,10 +35,16 @@ inverted via `transforms.denormalize_flux` to recover the physical flux.
 A square domain partitioned into a 7×7 grid of material blocks. Each block is
 either **absorber** (high `σ_a`, low `σ_s`), **scatterer** (low `σ_a`, high
 `σ_s`), or **source** (interior `Q > 0`). The model has to capture sharp flux
-discontinuities at material interfaces and reproduce the instantaneous
-absorption rate in the absorbing regions.
+discontinuities at material interfaces and reproduce the integrated
+absorption in the absorbing regions.
 
-QoI: instantaneous absorption `σ_a · φ · A` over the absorbing blocks.
+**QoI** — matches **QoI-3** of the reference paper (Kusch et al. 2025, §3.1):
+the final-time radiation absorption over the absorbing blocks `B`:
+
+$$\mathrm{QoI}_{\mathrm{Lattice}} = \int_{B} \sigma_a(x)\,\phi(x, T)\,dx.$$
+
+In code this is `cur_absorption`, computed as
+`Σ_{c ∈ B} σ_a,c · φ_c · A_c` over absorber cells.
 
 ### 1.2 Hohlraum benchmark
 
@@ -48,10 +54,18 @@ interior heat source — flux enters from boundary conditions and propagates
 through the cavity. Geometry parameters (upper/lower laser-entry radii,
 center offsets) vary across simulations.
 
-QoI: per-region instantaneous absorption over
-`{center, vertical strip, horizontal strip}` plus the total. The
-training-time physics loss averages all four (mean-of-regions) so every
-region contributes to the gradient.
+**QoI** — variation of **QoI-2** of the reference paper (Kusch et al.
+2025, §3.2): per-material final-time absorption, evaluated separately
+over each of three regions `S ∈ {G ∪ B, R, K}`:
+
+$$\mathrm{QoI}_{\mathrm{Hohlraum}, S} = \int_{S} \sigma_a(x)\,\phi(x, T)\,dx.$$
+
+In code the three regions are labeled
+`cur_absorption_{center, vertical, horizontal}` and each is computed as
+`Σ_{c ∈ S} σ_a,c · φ_c · A_c`. The training-time physics loss
+additionally synthesizes a fourth `total` term as the mean of the three,
+so every region contributes to the gradient (mean-of-four). Inference
+reports the three component QoIs only.
 
 ---
 
@@ -371,16 +385,11 @@ which helps interpret global flux structure and sharp interface features.
 
 ## 6. Interpreting model performance
 
-### 6.1 What "good" looks like (after full training, ~500 epochs)
+### 6.1 What "good" looks like
 
-| Benchmark | l2_relative_error | QoI mean_relative_error_pct |
-|---|---|---|
-| Lattice (absorption QoI) | 0.60% | 0.23% |
-| Hohlraum (regional QoI) | 2.06% | 0.52–0.73% |
-
-These observed values come from the default full-training runs with defaults
-configs. Training logs converged to final validation losses of about
-`2.10e-05` for lattice and `1.51e-05` for hohlraum.
+A converged model on either benchmark typically reaches `l2_relative_error`
+in the **1–2%** range and per-region QoI `mean_relative_error_pct` **below
+1%**.
 
 ### 6.2 Reading the training log
 
