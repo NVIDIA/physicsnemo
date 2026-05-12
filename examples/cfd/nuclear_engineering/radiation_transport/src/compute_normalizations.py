@@ -24,7 +24,7 @@ training pipeline expects:
 
 Usage::
 
-    python compute_normalizations.py \\
+    python src/compute_normalizations.py \\
         --data_path <DATA_ROOT>/lattice \\
         --case_type lattice \\
         --split_file <DATA_ROOT>/splits/lattice_splits.json \\
@@ -50,12 +50,7 @@ import torch
 import yaml
 
 from dataset import RTEBaseDataset
-from material import MaterialPropertyExtractor
-
-
-# =========================================================================
-# Flux statistics
-# =========================================================================
+from transforms import MaterialPropertyExtractor
 
 
 def compute_flux_statistics(
@@ -149,15 +144,6 @@ def compute_flux_statistics(
     print(f"\nSaved to: {output_file}")
 
     return stats
-
-
-# =========================================================================
-# Material statistics
-# =========================================================================
-#
-# Reads the precomputed sigma_a / sigma_s / sigma_t / Q fields from each mesh
-# store in the training split and accumulates per-property mean / std / min /
-# max across all cells. Schema matches what ``load_material_stats`` expects.
 
 
 def compute_material_statistics(
@@ -262,11 +248,6 @@ def compute_material_statistics(
     print(f"\nSaved to: {output_file}")
 
     return stats
-
-
-# =========================================================================
-# CLI entry
-# =========================================================================
 
 
 def _parse_args() -> argparse.Namespace:
