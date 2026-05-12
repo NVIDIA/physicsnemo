@@ -19,6 +19,7 @@ defaults:
   - data: lattice
   - model: transolver
   - train: base
+  - inference: default
   - _self_
 
 project:

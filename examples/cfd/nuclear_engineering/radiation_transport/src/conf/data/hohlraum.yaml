@@ -19,8 +19,6 @@ flux_normalization_stats_file: ${case.data_root}/stats/hohlraum_flux_stats.yaml
 flux_clip_threshold: 1.0e-8
 normalize_coordinates: true
 cache_static_arrays: true
-max_cache_size: -1
-preload_data: true
 
 use_fourier_features: true
 fourier_features:

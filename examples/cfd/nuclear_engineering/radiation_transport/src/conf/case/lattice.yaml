@@ -25,7 +25,6 @@ split_file: ${case.data_root}/splits/lattice_splits.json
 
 # Physics-loss configuration (lattice-specific)
 physics_loss_weight: 0.005
-qoi_region: center                                  # Note: lattice QoI uses cur_absorption regardless of this value.
 
 # Embedding/material configuration
 include_q_in_embedding: true                        # lattice has a heat source

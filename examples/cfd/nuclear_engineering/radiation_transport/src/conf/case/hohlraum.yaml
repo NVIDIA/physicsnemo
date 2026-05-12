@@ -25,7 +25,6 @@ split_file: ${case.data_root}/splits/hohlraum_splits.json
 
 # Physics-loss configuration (hohlraum-specific override).
 physics_loss_weight: 0.01
-qoi_region: all                                     # all (mean of 4) | center | vertical | horizontal | total
 
 # Embedding/material configuration: hohlraum has no Q field.
 include_q_in_embedding: false
