@@ -14,161 +14,66 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Losses: MSE / region-weighted / physics-informed / QoI helpers + LR schedulers.
-
-This module consolidates every "loss" concept the trainer touches:
-
-* Learning-rate schedulers (warmup + cosine, plus a constant fallback).
-* Regression losses on the (possibly padded) flux tensor: ``loss_fn``,
-  ``masked_mse_loss``, ``region_weighted_loss_fn``.
-* Physics-informed loss for the radiation-transport surrogate: per-case
-  QoI loss (lattice / hohlraum) computed in physical flux space using the
-  differentiable PyTorch QoI evaluators, plus a ``compute_physics_loss``
-  dispatcher that ``train.py`` drives.
-* Differentiable PyTorch QoI evaluators
-  (``evaluate_lattice_qoi_torch`` / ``evaluate_hohlraum_qoi_torch``)
-  used by the physics loss above. The numpy-side evaluators used by
-  ``inference.py`` live in ``inference.py``.
-* ``parse_loss_config`` — pulls the ``train.physics_loss`` and
-  ``train.region_weights`` blocks out of the Hydra config into a flat dict
-  the trainer consumes.
-
-Module is pure compute: it has no dependency on sibling source files.
-``denormalize_flux_from_stats`` delegates to ``transforms.denormalize_flux`` so the physics loss
-can convert log-normalized model outputs back to physical flux space
-without importing from ``transforms.py``.
-"""
-
 from __future__ import annotations
 
-import math
 from typing import Any, Mapping, Optional
 
 import torch
 from omegaconf import DictConfig
 
+from qoi import (
+    evaluate_hohlraum_qoi_torch,
+    evaluate_lattice_qoi_torch,
+    extract_geometry_params,
+)
+from transforms import denormalize_flux
 
-# =========================================================================
-# Schedulers
-# =========================================================================
-
-
-class WarmupCosineScheduler(torch.optim.lr_scheduler._LRScheduler):
-    """
-    Learning rate scheduler with linear warmup followed by cosine annealing.
-
-    During warmup (epochs 0 to warmup_epochs-1):
-        lr = min_lr + (max_lr - min_lr) * (epoch / warmup_epochs)
-
-    After warmup (epochs warmup_epochs to total_epochs):
-        lr = min_lr + 0.5 * (max_lr - min_lr) * (1 + cos(pi * progress))
-        where progress = (epoch - warmup_epochs) / (total_epochs - warmup_epochs)
-    """
-
-    def __init__(
-        self,
-        optimizer: torch.optim.Optimizer,
-        warmup_epochs: int,
-        total_epochs: int,
-        min_lr: float = 1e-6,
-        last_epoch: int = -1,
-    ):
-        self.warmup_epochs = warmup_epochs
-        self.total_epochs = total_epochs
-        self.min_lr = min_lr
-        super().__init__(optimizer, last_epoch)
-
-    def get_lr(self):
-        """Return the per-group learning rates for the current ``last_epoch``."""
-        if self.last_epoch < self.warmup_epochs:
-            # Linear warmup
-            warmup_factor = (self.last_epoch + 1) / max(1, self.warmup_epochs)
-            return [
-                self.min_lr + (base_lr - self.min_lr) * warmup_factor
-                for base_lr in self.base_lrs
-            ]
-        else:
-            # Cosine annealing
-            progress = (self.last_epoch - self.warmup_epochs) / max(
-                1, self.total_epochs - self.warmup_epochs
-            )
-            cosine_factor = 0.5 * (1 + math.cos(math.pi * progress))
-            return [
-                self.min_lr + (base_lr - self.min_lr) * cosine_factor
-                for base_lr in self.base_lrs
-            ]
+__all__ = [
+    # Schedulers
+    "create_scheduler",
+    # Regression losses
+    "region_weighted_loss_fn",
+    "parse_loss_config",
+    "physics_loss_weight_for_epoch",
+    # Physics loss
+    "compute_physics_loss",
+    "compute_lattice_qoi_loss",
+    "compute_hohlraum_qoi_loss",
+]
 
 
 def create_scheduler(cfg: DictConfig, optimizer: torch.optim.Optimizer, logger=None):
-    """Create the LR scheduler.
-
-    Supports:
-    - cosine: Warmup + cosine annealing (recommended; default)
-    - constant: No decay (useful for overfit tests)
-    """
-    scheduler_type = cfg.train.get("scheduler_type", "cosine")
+    """Build the LR scheduler: linear warmup chained into cosine annealing."""
     warmup_epochs = cfg.train.get("warmup_epochs", 5)
+    peak_lr = cfg.train.learning_rate
     min_lr = cfg.train.get("min_learning_rate", 1e-6)
+    total_epochs = cfg.train.epochs
 
     if logger:
-        logger.info("\nLearning rate schedule:")
-        logger.info(f"  Type: {scheduler_type}")
-        logger.info(f"  Peak LR: {cfg.train.learning_rate}")
+        logger.info("\nLearning rate schedule (warmup + cosine):")
+        logger.info(f"  Peak LR: {peak_lr}")
         logger.info(f"  Min LR: {min_lr}")
-        if warmup_epochs > 0:
-            logger.info(f"  Warmup epochs: {warmup_epochs}")
+        logger.info(f"  Warmup epochs: {warmup_epochs}")
 
-    if scheduler_type == "constant":
-        return torch.optim.lr_scheduler.ConstantLR(
-            optimizer,
-            factor=1.0,
-            total_iters=cfg.train.epochs,
-        )
-    if scheduler_type == "cosine":
-        return WarmupCosineScheduler(
-            optimizer,
-            warmup_epochs=warmup_epochs,
-            total_epochs=cfg.train.epochs,
-            min_lr=min_lr,
-        )
-    raise ValueError(
-        f"Unknown scheduler_type {scheduler_type!r}; expected 'cosine' or 'constant'."
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=min_lr / peak_lr,
+        end_factor=1.0,
+        total_iters=max(warmup_epochs, 1),
+    )
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=max(total_epochs - warmup_epochs, 1),
+        eta_min=min_lr,
+    )
+    return torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup, cosine],
+        milestones=[warmup_epochs],
     )
 
 
-# =========================================================================
-# Regression losses
-# =========================================================================
-
-
-def masked_mse_loss(
-    output: torch.Tensor, target: torch.Tensor, mask: torch.Tensor = None
-) -> torch.Tensor:
-    """
-    Calculate MSE loss with optional masking for padded values.
-
-    Used by Transolver training.
-
-    Args:
-        output: Predicted values (B, N, 1)
-        target: Ground truth values (B, N, 1)
-        mask: Boolean mask (B, N) - True for real points, False for padding
-
-    Returns:
-        Scalar loss value
-    """
-    squared_error = (output - target) ** 2
-
-    if mask is not None:
-        # expand mask to match output shape
-        mask_expanded = mask.unsqueeze(-1)
-        # only compute loss on non-padded points
-        masked_error = squared_error * mask_expanded
-        loss = masked_error.sum() / mask_expanded.sum()
-    else:
-        loss = torch.mean(squared_error)
-
-    return loss
+_VOID_LABELS = {"hohlraum": 4, "lattice": 2}
 
 
 def region_weighted_loss_fn(
@@ -176,84 +81,48 @@ def region_weighted_loss_fn(
     target: torch.Tensor,
     material_labels: torch.Tensor,
     case_type: str,
-    loss_type: str = "mse",
-    padded_value: float = -10,
     void_weight: float = 3.0,
     material_weight: float = 1.0,
 ) -> torch.Tensor:
-    """
-    Calculate region-weighted loss based on material labels.
+    """Weighted MSE that penalizes void cells more than material cells.
 
-    Uses discrete material labels from the material mappers to identify regions:
-    - Void (fill gas): radiation streams through, creates fine features
-    - Material (walls, capsule, absorbers): solid regions
+    Material-label definitions (set by ``MaterialPropertyExtractor``):
 
-    Weights void regions more heavily than material regions to improve
-    fine feature learning where radiation streaming occurs.
+    * Hohlraum: ``0`` black wall, ``1`` red wall, ``2`` green wall,
+      ``3`` blue capsule (all material); ``4`` white fill gas (void).
+    * Lattice: ``0`` blue absorber, ``1`` red scattering source
+      (material); ``2`` white background (void).
 
-    Material label definitions:
-        Hohlraum:
-            0: Black (walls) - material
-            1: Red (walls) - material
-            2: Green (walls) - material
-            3: Blue (capsule) - material
-            4: White (fill gas) - void
-
-        Lattice:
-            0: Blue (absorber) - material
-            1: Red (scattering source) - material
-            2: White (background) - void
+    Void cells are where radiation streams through and the surrogate has
+    to capture fine flux features, so we weight their squared error more
+    heavily.
 
     Args:
-        output: Predicted values (B, N, 1)
-        target: Ground truth values (B, N, 1)
-        material_labels: Material label per cell (B, N) or (B, N, 1), integer values
-        case_type: "hohlraum" or "lattice"
-        loss_type: Type of loss - "mse" or "weighted_rel_l2" (relative-L2 form, not true RMSE)
-        padded_value: Value used for padding (will be masked out)
-        void_weight: Weight for void (fill gas) regions
-        material_weight: Weight for solid material regions
+        output, target: Predicted vs ground-truth flux, shape ``(B, N, 1)``.
+        material_labels: Per-cell label, shape ``(B, N)`` or ``(B, N, 1)``.
+        case_type: ``"hohlraum"`` or ``"lattice"``.
+        void_weight, material_weight: Per-region weights.
 
     Returns:
-        Scalar loss value
+        Scalar weighted-MSE loss.
     """
-    # Create padding mask
-    mask = (abs(target - padded_value) > 1e-3).float()
+    if case_type not in _VOID_LABELS:
+        raise ValueError(
+            f"Unknown case_type: {case_type}. Must be 'hohlraum' or 'lattice'."
+        )
 
-    # Squeeze material_labels if needed
     labels = (
         material_labels.squeeze(-1) if material_labels.dim() == 3 else material_labels
     )
+    is_void = labels == _VOID_LABELS[case_type]  # (B, N) bool
+    weights = (
+        torch.where(is_void, float(void_weight), float(material_weight))
+        .to(dtype=torch.float32)
+        .unsqueeze(-1)
+    )  # (B, N, 1)
 
-    # Identify void regions based on case type
-    # Void label: 4 for hohlraum (white/fill gas), 2 for lattice (white/background)
-    if case_type.lower() == "hohlraum":
-        is_void = (labels == 4).float()  # (B, N)
-    elif case_type.lower() == "lattice":
-        is_void = (labels == 2).float()  # (B, N)
-    else:
-        raise ValueError(
-            f"Unknown case_type: {case_type}. Must be 'hohlraum' or 'lattice'"
-        )
-
-    # Compute per-point weights
-    weights = is_void * void_weight + (1.0 - is_void) * material_weight  # (B, N)
-    weights = weights.unsqueeze(-1)  # (B, N, 1) to match output shape
-
-    # Apply padding mask to weights
-    weights = weights * mask
-
-    # Compute weighted squared error
-    squared_error = (output - target) ** 2.0
-    weighted_error = weights * squared_error
-
-    if loss_type == "weighted_rel_l2":
-        weighted_target_sq = weights * target**2.0
-        loss = torch.sqrt(weighted_error.sum() / (weighted_target_sq.sum() + 1e-8))
-    else:  # mse
-        loss = weighted_error.sum() / (weights.sum() + 1e-8)
-
-    return loss
+    squared_error = (output - target) ** 2
+    return (weights * squared_error).sum() / (weights.sum() + 1e-8)
 
 
 def parse_loss_config(
@@ -263,7 +132,11 @@ def parse_loss_config(
 ) -> dict:
     """
     Parse the common loss configuration options shared across all models:
-    physics loss, region-weighted loss.
+    physics loss (including warmup schedule), region-weighted loss.
+
+    The returned ``physics_loss_weight`` is the **base** weight; per-epoch
+    warmup ramping is applied by :func:`physics_loss_weight_for_epoch` inside
+    the trainer loop.
 
     Args:
         cfg: Hydra config
@@ -271,18 +144,24 @@ def parse_loss_config(
         logger: Logger
 
     Returns:
-        Dict with keys: use_physics_loss, physics_loss_weight, physics_loss_mse_weight,
-        qoi_region, use_region_weighted_loss, region_weight_cfg
+        Dict with keys: ``use_physics_loss``, ``physics_loss_weight``,
+        ``physics_loss_mse_weight``, ``physics_loss_warmup_epochs``,
+        ``physics_loss_warmup_start_fraction``,
+        ``use_region_weighted_loss``, ``region_weight_cfg``.
     """
     use_physics_loss = cfg.train.get("use_physics_loss", False)
     if use_physics_loss:
         physics_loss_weight = cfg.train.physics_loss.weight
         physics_loss_mse_weight = cfg.train.physics_loss.mse_weight
-        qoi_region = cfg.train.physics_loss.get("qoi_region", "center")
+        physics_loss_warmup_epochs = cfg.train.physics_loss.get("warmup_epochs", 0)
+        physics_loss_warmup_start_fraction = cfg.train.physics_loss.get(
+            "warmup_start_fraction", 0.0
+        )
     else:
         physics_loss_weight = 0.0
         physics_loss_mse_weight = 1.0
-        qoi_region = "center"
+        physics_loss_warmup_epochs = 0
+        physics_loss_warmup_start_fraction = 0.0
 
     use_region_weighted_loss = cfg.train.get("use_region_weighted_loss", False)
     region_weight_cfg = {
@@ -297,7 +176,11 @@ def parse_loss_config(
             logger.info("\nPhysics loss configuration:")
             logger.info(f"  Weight: {physics_loss_weight}")
             logger.info(f"  MSE weight: {physics_loss_mse_weight}")
-            logger.info(f"  QoI region: {qoi_region}")
+            if physics_loss_warmup_epochs > 0:
+                logger.info(f"  Warmup epochs: {physics_loss_warmup_epochs}")
+                logger.info(
+                    f"  Warmup start fraction: {physics_loss_warmup_start_fraction}"
+                )
         if use_region_weighted_loss:
             logger.info("Region-weighted loss: enabled")
             logger.info(f"  Void weight: {region_weight_cfg['void_weight']}")
@@ -307,68 +190,62 @@ def parse_loss_config(
         "use_physics_loss": use_physics_loss,
         "physics_loss_weight": physics_loss_weight,
         "physics_loss_mse_weight": physics_loss_mse_weight,
-        "qoi_region": qoi_region,
+        "physics_loss_warmup_epochs": physics_loss_warmup_epochs,
+        "physics_loss_warmup_start_fraction": physics_loss_warmup_start_fraction,
         "use_region_weighted_loss": use_region_weighted_loss,
         "region_weight_cfg": region_weight_cfg,
     }
 
 
-# =========================================================================
-# Physics loss
-# =========================================================================
-#
-# Physics-based loss functions using QoI computations.
-#
-# Compares physics-based quantities of interest (QoIs) computed from model
-# predictions against ground truth.
-#
-# - QoIs (absorption integrals) are defined in **physical flux space**.
-#   If your model is trained on a normalized/log-transformed flux, you must
-#   denormalize before computing QoIs, otherwise the "physics loss" is
-#   optimizing a different (non-physical) quantity.
-# - QoI computations can be numerically sensitive under AMP/FP16 due to large
-#   reductions (sums over many cells). Prefer running these in FP32 (disable
-#   autocast) in the training loop.
+def physics_loss_weight_for_epoch(loss_cfg: dict, epoch: int) -> float:
+    """Linear ramp of the physics-loss weight over the warmup window.
 
-
-def denormalize_flux_from_stats(
-    normalized_flux: torch.Tensor,
-    flux_normalization_stats: Mapping[str, Any],
-) -> torch.Tensor:
-    """Invert the ``RTEFluxLogClip + Normalize`` chain for QoI evaluation.
-
-    Thin wrapper over ``transforms.denormalize_flux`` that enforces the
-    presence of the stats dict (callers in physics-loss code reach here
-    only after validating shapes, so the stats must be available).
+    Ramps from ``warmup_start_fraction * base`` at epoch 0 to ``base`` at
+    ``warmup_epochs``, then stays at ``base``. With no warmup configured
+    (``warmup_epochs <= 0``), returns ``base`` unchanged.
     """
-    if flux_normalization_stats is None:
-        raise ValueError("flux_normalization_stats is required for QoI denormalization")
-    # Sibling import is safe: transforms.py is foundational and does not
-    # import from losses.py (verified via static cross-module check).
-    from transforms import denormalize_flux
-
-    return denormalize_flux(normalized_flux, flux_normalization_stats)
+    base = loss_cfg.get("physics_loss_weight", 0.0)
+    warmup_epochs = loss_cfg.get("physics_loss_warmup_epochs", 0)
+    if warmup_epochs <= 0 or epoch >= warmup_epochs:
+        return base
+    start_frac = loss_cfg.get("physics_loss_warmup_start_fraction", 0.0)
+    progress = epoch / max(1, warmup_epochs)
+    return (start_frac + (1.0 - start_frac) * progress) * base
 
 
 def _relative_squared_error_loss(
     pred: torch.Tensor,
     target: torch.Tensor,
-    device: torch.device,
     epsilon: float = 1e-10,
-) -> tuple[torch.Tensor, dict]:
-    """Compute mean relative squared error between pred and target vectors."""
-    relative_error = (pred - target) / (torch.abs(target) + epsilon)
-    squared_error = relative_error**2
+) -> torch.Tensor:
+    """Mean of ``((pred - target) / |target|)^2`` over finite cells.
 
-    is_valid = (
-        torch.isfinite(squared_error) & torch.isfinite(pred) & torch.isfinite(target)
-    )
-
+    Returns ``0.0`` (no graph) when every cell is non-finite — degenerate but
+    keeps the trainer alive instead of propagating NaN.
+    """
+    squared = ((pred - target) / (torch.abs(target) + epsilon)) ** 2
+    is_valid = torch.isfinite(squared) & torch.isfinite(pred) & torch.isfinite(target)
     if not is_valid.any():
-        return torch.tensor(0.0, device=device, requires_grad=True), {}
+        return torch.zeros((), device=pred.device)
+    return squared[is_valid].mean()
 
-    loss = squared_error[is_valid].mean()
-    return loss, {}
+
+def _prepare_for_qoi(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    sim_time: torch.Tensor,
+    stats: Optional[Mapping[str, Any]],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Squeeze ``(B, N, 1) -> (B, N)``, denormalize, then ``(B, 1, N)`` for QoI."""
+    if pred.ndim == 3:
+        pred = pred.squeeze(-1)
+    if target.ndim == 3:
+        target = target.squeeze(-1)
+    if stats is not None:
+        pred = denormalize_flux(pred, stats)
+        target = denormalize_flux(target, stats)
+    sim_times = sim_time.unsqueeze(-1) if sim_time.ndim == 1 else sim_time
+    return pred.unsqueeze(1), target.unsqueeze(1), sim_times
 
 
 def compute_lattice_qoi_loss(
@@ -382,80 +259,38 @@ def compute_lattice_qoi_loss(
     flux_normalization_stats: Optional[Mapping[str, Any]] = None,
     epsilon: float = 1e-10,
 ) -> tuple[torch.Tensor, dict[str, float]]:
+    """Relative-squared-error loss on the lattice absorption QoI.
+
+    QoIs are evaluated in physical flux space; if normalization stats are
+    supplied, both flux tensors are denormalized first. Differentiable end
+    to end so the loss backprops into the model.
     """
-    Compute QoI-based physics loss for lattice problems.
-
-    Computes instantaneous absorption QoI from predicted flux and target flux,
-    then compares them using relative squared error to provide scale-invariant gradients.
-
-    QoIs are computed in physical flux space. If `flux_normalization_stats` is provided,
-    both `predicted_flux` and `target_flux` are denormalized before QoI evaluation.
-
-    Uses PyTorch operations throughout to maintain gradient flow for backpropagation.
-
-    Args:
-        predicted_flux: Model predictions (normalized), shape (B, N, 1) or (B, N)
-        target_flux: Ground truth flux (normalized), shape (B, N, 1) or (B, N)
-        cell_centers: Cell center coordinates (unnormalized), shape (B, N, 3)
-        cell_areas: Cell areas, shape (B, N)
-        sigma_t: Total cross-section, shape (B, N)
-        sigma_s: Scattering cross-section, shape (B, N)
-        sim_time: Simulation time for each sample, shape (B,)
-
-    Returns:
-        Scalar tensor with relative squared error loss between predicted and target QoI
-    """
-    # ensure correct shape: (B, N)
-    if predicted_flux.ndim == 3:
-        predicted_flux = predicted_flux.squeeze(-1)  # (B, N, 1) -> (B, N)
-    if target_flux.ndim == 3:
-        target_flux = target_flux.squeeze(-1)  # (B, N, 1) -> (B, N)
-
-    # compute QoIs in physical flux space
-    if flux_normalization_stats is not None:
-        predicted_flux = denormalize_flux_from_stats(
-            predicted_flux, flux_normalization_stats
-        )
-        target_flux = denormalize_flux_from_stats(target_flux, flux_normalization_stats)
-
-    # reshape for QoI computation: (B, 1, N) for single timestep
-    predicted_flux_qoi = predicted_flux.unsqueeze(1)  # (B, 1, N)
-    target_flux_qoi = target_flux.unsqueeze(1)  # (B, 1, N)
-
-    # prepare sim_times: (B, 1)
-    sim_times = sim_time.unsqueeze(-1) if sim_time.ndim == 1 else sim_time  # (B, 1)
-
-    # compute QoI for predicted flux using differentiable PyTorch implementation
-    qoi_pred = evaluate_lattice_qoi_torch(
-        cell_centers=cell_centers,  # (B, N, 3)
-        cell_areas=cell_areas,  # (B, N)
-        sigma_t=sigma_t,  # (B, N)
-        sigma_s=sigma_s,  # (B, N)
-        scalar_flux=predicted_flux_qoi,  # (B, 1, N)
-        sim_times=sim_times,  # (B, 1)
+    pred_qoi, target_qoi, sim_times = _prepare_for_qoi(
+        predicted_flux, target_flux, sim_time, flux_normalization_stats
     )
-
-    # compute QoI for target flux (no gradients needed for target)
+    qoi_pred = evaluate_lattice_qoi_torch(
+        cell_centers,
+        cell_areas,
+        sigma_t,
+        sigma_s,
+        pred_qoi,
+        sim_times,
+    )
     with torch.no_grad():
         qoi_target = evaluate_lattice_qoi_torch(
-            cell_centers=cell_centers,
-            cell_areas=cell_areas,
-            sigma_t=sigma_t,
-            sigma_s=sigma_s,
-            scalar_flux=target_flux_qoi,
-            sim_times=sim_times,
+            cell_centers,
+            cell_areas,
+            sigma_t,
+            sigma_s,
+            target_qoi,
+            sim_times,
         )
-
-    # extract instantaneous absorption: (B, 1) -> (B,)
-    qoi_pred_value = qoi_pred["cur_absorption"][:, 0]
-    qoi_target_value = qoi_target["cur_absorption"][:, 0]
-
-    loss, loss_details = _relative_squared_error_loss(
-        qoi_pred_value, qoi_target_value, predicted_flux.device, epsilon
+    loss = _relative_squared_error_loss(
+        qoi_pred["cur_absorption"][:, 0],
+        qoi_target["cur_absorption"][:, 0],
+        epsilon,
     )
-    loss_details["loss_qoi_absorption"] = loss.item()
-
-    return loss, loss_details
+    return loss, {"loss_qoi_absorption": loss.item()}
 
 
 def compute_hohlraum_qoi_loss(
@@ -467,129 +302,55 @@ def compute_hohlraum_qoi_loss(
     sigma_s: torch.Tensor,
     sim_time: torch.Tensor,
     geometry_params: dict,
-    qoi_region: str = "all",
     flux_normalization_stats: Optional[Mapping[str, Any]] = None,
     epsilon: float = 1e-10,
 ) -> tuple[torch.Tensor, dict[str, float]]:
+    """Mean of the four hohlraum region relative-squared-error losses.
+
+    Loss = mean of {center, vertical, horizontal, total} so every region
+    contributes to the gradient. All four are recorded in the details dict.
     """
-    Compute QoI-based physics loss for hohlraum problems.
-
-    The loss used for backpropagation is determined by ``qoi_region``:
-      - "all" (default): mean of the four region losses (center, vertical,
-        horizontal, total) — every region contributes to the gradient
-      - "center" | "vertical" | "horizontal": loss on that single region
-      - "total":  loss on the integrated absorption over the whole domain
-        (computed from the sum of the three spatial regions)
-
-    All four region losses are *always* recorded in the details dict so they
-    are visible in the training log regardless of which region drives the
-    gradient.
-
-    Returns:
-        Tuple of (loss_tensor, details_dict).
-    """
-    # ensure correct shape: (B, N)
-    if predicted_flux.ndim == 3:
-        predicted_flux = predicted_flux.squeeze(-1)
-    if target_flux.ndim == 3:
-        target_flux = target_flux.squeeze(-1)
-
-    if flux_normalization_stats is not None:
-        predicted_flux = denormalize_flux_from_stats(
-            predicted_flux, flux_normalization_stats
-        )
-        target_flux = denormalize_flux_from_stats(target_flux, flux_normalization_stats)
-
-    predicted_flux_qoi = predicted_flux.unsqueeze(1)
-    target_flux_qoi = target_flux.unsqueeze(1)
-    sim_times = sim_time.unsqueeze(-1) if sim_time.ndim == 1 else sim_time
-
-    qoi_pred = evaluate_hohlraum_qoi_torch(
-        cell_centers=cell_centers,
-        cell_areas=cell_areas,
-        sigma_t=sigma_t,
-        sigma_s=sigma_s,
-        scalar_flux=predicted_flux_qoi,
-        sim_times=sim_times,
-        geometry_params=geometry_params,
+    pred_qoi, target_qoi, sim_times = _prepare_for_qoi(
+        predicted_flux, target_flux, sim_time, flux_normalization_stats
     )
-
+    qoi_pred = evaluate_hohlraum_qoi_torch(
+        cell_centers,
+        cell_areas,
+        sigma_t,
+        sigma_s,
+        pred_qoi,
+        sim_times,
+        geometry_params,
+    )
     with torch.no_grad():
         qoi_target = evaluate_hohlraum_qoi_torch(
-            cell_centers=cell_centers,
-            cell_areas=cell_areas,
-            sigma_t=sigma_t,
-            sigma_s=sigma_s,
-            scalar_flux=target_flux_qoi,
-            sim_times=sim_times,
-            geometry_params=geometry_params,
+            cell_centers,
+            cell_areas,
+            sigma_t,
+            sigma_s,
+            target_qoi,
+            sim_times,
+            geometry_params,
         )
 
-    region_keys = (
+    region_losses: dict[str, torch.Tensor] = {}
+    pred_sum = target_sum = None
+    for key in (
         "cur_absorption_center",
         "cur_absorption_vertical",
         "cur_absorption_horizontal",
-    )
-    details: dict[str, float] = {}
-
-    total_pred = torch.zeros(predicted_flux.shape[0], device=predicted_flux.device)
-    total_target = torch.zeros_like(total_pred)
-    region_losses: dict[str, torch.Tensor] = {}
-
-    for key in region_keys:
-        p = qoi_pred[key][:, 0]
-        t = qoi_target[key][:, 0]
-        region_loss, _ = _relative_squared_error_loss(
-            p, t, predicted_flux.device, epsilon
+    ):
+        p, t = qoi_pred[key][:, 0], qoi_target[key][:, 0]
+        region_losses[key.removeprefix("cur_absorption_")] = (
+            _relative_squared_error_loss(p, t, epsilon)
         )
-        short = key.replace("cur_absorption_", "")
-        region_losses[short] = region_loss
-        total_pred = total_pred + p
-        total_target = total_target + t
+        pred_sum = p if pred_sum is None else pred_sum + p
+        target_sum = t if target_sum is None else target_sum + t
+    region_losses["total"] = _relative_squared_error_loss(pred_sum, target_sum, epsilon)
 
-    total_loss, _ = _relative_squared_error_loss(
-        total_pred, total_target, predicted_flux.device, epsilon
-    )
-    region_losses["total"] = total_loss
-
-    # Always log every region's loss so all four are visible in train.log
-    # regardless of which region(s) drive the gradient.
-    for region_name, region_loss in region_losses.items():
-        details[f"loss_qoi_{region_name}"] = region_loss.item()
-
-    if qoi_region == "all":
-        # Mean of the four region losses — every region contributes to the gradient.
-        loss = torch.stack(list(region_losses.values())).mean()
-        details["loss_qoi_all"] = loss.item()
-    elif qoi_region in region_losses:
-        loss = region_losses[qoi_region]
-    else:
-        raise ValueError(
-            f"Unknown qoi_region: {qoi_region}. "
-            f"Must be 'all' or one of: {list(region_losses.keys())}"
-        )
-
+    loss = torch.stack(list(region_losses.values())).mean()
+    details = {f"loss_qoi_{name}": val.item() for name, val in region_losses.items()}
     return loss, details
-
-
-_HOHLRAUM_GEOMETRY_KEYS = ("ulr", "llr", "urr", "lrr", "hlr", "hrr", "cx", "cy")
-
-
-def extract_geometry_params(metadata) -> dict:
-    """Extract hohlraum geometry parameters from sample metadata.
-
-    Reads ``simulation_params.parameters`` out of the sidecar-derived metadata
-    dict and returns the 8-key geometry dict consumed by the hohlraum QoI
-    evaluator (``ulr, llr, urr, lrr, hlr, hrr, cx, cy``). Accepts either a
-    single metadata dict or a batched list of dicts.
-    """
-    if isinstance(metadata, (list, tuple)):
-        metadata = metadata[0] if metadata else {}
-    if not isinstance(metadata, dict):
-        return {}
-
-    params = metadata.get("simulation_params", {}).get("parameters", {})
-    return {k: float(params[k]) for k in _HOHLRAUM_GEOMETRY_KEYS if k in params}
 
 
 def compute_physics_loss(
@@ -604,250 +365,29 @@ def compute_physics_loss(
     metadata: list = None,
     flux_normalization_stats: dict | None = None,
     qoi_epsilon: float = 1e-10,
-    qoi_region: str = "all",
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    """
-    Compute physics loss based on case type.
-
-    For hohlraum, ``qoi_region`` selects which region(s) drive the gradient:
-    ``"all"`` (default) averages the four region losses (center, vertical,
-    horizontal, total) so every region contributes; ``"center"`` /
-    ``"vertical"`` / ``"horizontal"`` / ``"total"`` use that single region.
-    Either way, all four region losses are recorded in the details dict.
-
-    Returns:
-        Tuple of (loss_tensor, details_dict) with per-region QoI losses for logging.
-    """
+    """Dispatch the per-case QoI loss; returns ``(loss, per-region details)``."""
+    common = dict(
+        predicted_flux=predicted_flux,
+        target_flux=target_flux,
+        cell_centers=cell_centers,
+        cell_areas=cell_areas,
+        sigma_t=sigma_t,
+        sigma_s=sigma_s,
+        sim_time=sim_time,
+        flux_normalization_stats=flux_normalization_stats,
+        epsilon=qoi_epsilon,
+    )
     if case_type == "lattice":
-        return compute_lattice_qoi_loss(
-            predicted_flux=predicted_flux,
-            target_flux=target_flux,
-            cell_centers=cell_centers,
-            cell_areas=cell_areas,
-            sigma_t=sigma_t,
-            sigma_s=sigma_s,
-            sim_time=sim_time,
-            flux_normalization_stats=flux_normalization_stats,
-            epsilon=qoi_epsilon,
-        )
-    elif case_type == "hohlraum":
-        if metadata is None:
-            raise ValueError("hohlraum physics loss requires sample metadata")
-
-        geometry_params = extract_geometry_params(metadata)
-
+        return compute_lattice_qoi_loss(**common)
+    if case_type == "hohlraum":
+        geometry_params = extract_geometry_params(metadata) if metadata else {}
         if not geometry_params:
             raise ValueError(
-                "could not read hohlraum geometry parameters from metadata's "
+                "hohlraum physics loss requires sample metadata with "
                 "simulation_params.parameters"
             )
-
-        return compute_hohlraum_qoi_loss(
-            predicted_flux=predicted_flux,
-            target_flux=target_flux,
-            cell_centers=cell_centers,
-            cell_areas=cell_areas,
-            sigma_t=sigma_t,
-            sigma_s=sigma_s,
-            sim_time=sim_time,
-            geometry_params=geometry_params,
-            qoi_region=qoi_region,
-            flux_normalization_stats=flux_normalization_stats,
-            epsilon=qoi_epsilon,
-        )
-    else:
-        raise ValueError(
-            f"unknown case type: {case_type}. must be 'lattice' or 'hohlraum'"
-        )
-
-
-# =========================================================================
-# QoI helpers (torch)
-# =========================================================================
-#
-# Differentiable PyTorch QoI evaluators used by the physics loss above.
-# These match KiT-RT SNSolverHPC::IterPostprocessing() exactly.
-# The numpy-side equivalents (``evaluate_lattice_qoi``,
-# ``evaluate_hohlraum_qoi``) live in ``inference.py``.
-
-
-def evaluate_lattice_qoi_torch(
-    cell_centers: torch.Tensor,
-    cell_areas: torch.Tensor,
-    sigma_t: torch.Tensor,
-    sigma_s: torch.Tensor,
-    scalar_flux: torch.Tensor,
-    sim_times: torch.Tensor,
-) -> dict[str, torch.Tensor]:
-    """Compute lattice absorption QoI using PyTorch (differentiable).
-
-    Matches KiT-RT SNSolverHPC::IterPostprocessing() exactly. Steady-state
-    surrogate ⇒ T=1; ``sim_times`` is accepted for callsite uniformity but
-    not used. ``batch_size=1`` is enforced repo-wide; if a leading batch dim
-    is present we recurse on the squeezed slot and re-add it on the way out.
-
-    Args:
-        cell_centers: (N, 3) or (1, N, 3)
-        cell_areas: (N,) or (1, N)
-        sigma_t: (N,) or (1, N)
-        sigma_s: (N,) or (1, N)
-        scalar_flux: (T, N) or (1, T, N) — only T=1 is exercised
-        sim_times: (T,) or (1, T) — unused, kept for callsite uniformity
-
-    Returns:
-        ``{"cur_absorption": (T,) or (1, T)}``
-    """
-    if cell_centers.ndim == 3:
-        if cell_centers.shape[0] != 1:
-            raise NotImplementedError(
-                "evaluate_lattice_qoi_torch only supports batch_size=1; "
-                f"got batch={cell_centers.shape[0]}."
-            )
-        result = evaluate_lattice_qoi_torch(
-            cell_centers[0],
-            cell_areas[0],
-            sigma_t[0],
-            sigma_s[0],
-            scalar_flux[0],
-            sim_times[0] if sim_times.ndim == 2 else sim_times,
-        )
-        return {k: v.unsqueeze(0) for k, v in result.items()}
-
-    x = cell_centers[:, 0]
-    y = cell_centers[:, 1]
-    sigma_a = sigma_t - sigma_s
-
-    xy_corrector = -3.5
-    lbounds = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0]) + xy_corrector
-    ubounds = torch.tensor([2.0, 3.0, 4.0, 5.0, 6.0]) + xy_corrector
-
-    in_absorption = torch.zeros_like(x, dtype=torch.bool)
-    for k in range(5):
-        for l in range(5):  # noqa: E741
-            if (l + k) % 2 == 1:
-                continue
-            if (k == 2 and l == 2) or (k == 2 and l == 4):
-                continue
-            in_square = (
-                (x >= lbounds[k])
-                & (x <= ubounds[k])
-                & (y >= lbounds[l])
-                & (y <= ubounds[l])
-            )
-            in_absorption = in_absorption | in_square
-
-    if scalar_flux.ndim != 2:
-        raise ValueError(f"Expected scalar_flux shape (T, N), got {scalar_flux.shape}")
-
-    absorption_density = scalar_flux * sigma_a.unsqueeze(0) * cell_areas.unsqueeze(0)
-    cur_absorption = torch.sum(
-        absorption_density * in_absorption.unsqueeze(0).float(), dim=1
+        return compute_hohlraum_qoi_loss(**common, geometry_params=geometry_params)
+    raise ValueError(
+        f"Unknown case type: {case_type}. Must be 'lattice' or 'hohlraum'."
     )
-
-    return {"cur_absorption": cur_absorption}
-
-
-def evaluate_hohlraum_qoi_torch(
-    cell_centers: torch.Tensor,
-    cell_areas: torch.Tensor,
-    sigma_t: torch.Tensor,
-    sigma_s: torch.Tensor,
-    scalar_flux: torch.Tensor,
-    sim_times: torch.Tensor,
-    geometry_params: dict[str, float],
-) -> dict[str, torch.Tensor]:
-    """Compute hohlraum absorption QoI using PyTorch (differentiable).
-
-    Matches KiT-RT SNSolverHPC hohlraum geometry exactly (including known KiT-RT
-    quirk of using pos_red_left_bottom for both vertical wall sides). Steady-state
-    surrogate ⇒ T=1; ``sim_times`` is accepted for callsite uniformity but
-    not used. ``batch_size=1`` is enforced repo-wide; if a leading batch dim
-    is present we recurse on the squeezed slot and re-add it on the way out.
-
-    Args:
-        cell_centers: (N, 3) or (1, N, 3)
-        cell_areas: (N,) or (1, N)
-        sigma_t: (N,) or (1, N)
-        sigma_s: (N,) or (1, N)
-        scalar_flux: (T, N) or (1, T, N) — only T=1 is exercised
-        sim_times: (T,) or (1, T) — unused, kept for callsite uniformity
-        geometry_params: dict with cx, cy, hlr, hrr, llr, ulr, lrr, urr
-
-    Returns:
-        Dict with ``cur_absorption_{center,vertical,horizontal}``.
-    """
-    if cell_centers.ndim == 3:
-        if cell_centers.shape[0] != 1:
-            raise NotImplementedError(
-                "evaluate_hohlraum_qoi_torch only supports batch_size=1; "
-                f"got batch={cell_centers.shape[0]}."
-            )
-        result = evaluate_hohlraum_qoi_torch(
-            cell_centers[0],
-            cell_areas[0],
-            sigma_t[0],
-            sigma_s[0],
-            scalar_flux[0],
-            sim_times[0] if sim_times.ndim == 2 else sim_times,
-            geometry_params,
-        )
-        return {k: v.unsqueeze(0) for k, v in result.items()}
-
-    x = cell_centers[:, 0]
-    y = cell_centers[:, 1]
-
-    cx = geometry_params["cx"]
-    cy = geometry_params["cy"]
-    pos_red_left_border = geometry_params["hlr"]
-    pos_red_right_border = geometry_params["hrr"]
-    pos_red_left_bottom = geometry_params["llr"]
-    pos_red_left_top = geometry_params["ulr"]
-    pos_red_right_top = geometry_params["urr"]
-
-    sigma_a = sigma_t - sigma_s
-
-    in_center = (x > -0.2 + cx) & (x < 0.2 + cx) & (y > -0.4 + cy) & (y < 0.4 + cy)
-    # IMPORTANT: matches KiT-RT's behavior of using pos_red_left_bottom for both sides
-    in_vertical = (
-        (x < pos_red_left_border) & (y > pos_red_left_bottom) & (y < pos_red_left_top)
-    ) | (
-        (x > pos_red_right_border) & (y > pos_red_left_bottom) & (y < pos_red_right_top)
-    )
-    in_horizontal = (y > 0.6) | (y < -0.6)
-
-    if scalar_flux.ndim != 2:
-        raise ValueError(f"Expected scalar_flux shape (T, N), got {scalar_flux.shape}")
-
-    absorption_density = scalar_flux * sigma_a.unsqueeze(0) * cell_areas.unsqueeze(0)
-
-    return {
-        "cur_absorption_center": torch.sum(
-            absorption_density * in_center.unsqueeze(0).float(), dim=1
-        ),
-        "cur_absorption_vertical": torch.sum(
-            absorption_density * in_vertical.unsqueeze(0).float(), dim=1
-        ),
-        "cur_absorption_horizontal": torch.sum(
-            absorption_density * in_horizontal.unsqueeze(0).float(), dim=1
-        ),
-    }
-
-
-__all__ = [
-    # Schedulers
-    "WarmupCosineScheduler",
-    "create_scheduler",
-    # Regression losses
-    "masked_mse_loss",
-    "region_weighted_loss_fn",
-    "parse_loss_config",
-    # Physics loss
-    "compute_physics_loss",
-    "compute_lattice_qoi_loss",
-    "compute_hohlraum_qoi_loss",
-    "denormalize_flux_from_stats",
-    "extract_geometry_params",
-    # QoI helpers (torch)
-    "evaluate_lattice_qoi_torch",
-    "evaluate_hohlraum_qoi_torch",
-]
