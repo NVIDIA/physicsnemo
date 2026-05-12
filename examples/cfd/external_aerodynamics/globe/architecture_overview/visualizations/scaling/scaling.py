@@ -72,9 +72,8 @@ SEED = 39
 # reservation across an N sweep exhausts the GPU.  13 geometrically-
 # spaced points gives a per-step ratio of ~1.55x for nicely sampled curves.
 N_VALUES_BH = sorted(
-    set(np.round(np.geomspace(500, 100_000, 13)).astype(int).tolist())
+    set(np.round(np.geomspace(500, 500_000, 51)).astype(int).tolist())
 )
-N_VALUES_DENSE = [n for n in N_VALUES_BH if n <= 5_000]
 THETA_SCALING = [0.5, 1.0, 2.0]
 N_WARMUP = 3
 N_TRIALS = 4
@@ -324,7 +323,7 @@ mem_baseline_mb = memory_mb()
 print(f"  Memory baseline = {mem_baseline_mb:.1f} MB")
 for theta_val in all_thetas:
     is_dense = theta_val == 0.0
-    n_values = N_VALUES_DENSE if is_dense else N_VALUES_BH
+    n_values = N_VALUES_BH
     label = "dense (theta=0)" if is_dense else f"theta={theta_val}"
     Ns_used: list[int] = []
     wall_mins: list[float] = []
