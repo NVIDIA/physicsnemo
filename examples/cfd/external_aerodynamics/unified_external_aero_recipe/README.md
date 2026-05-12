@@ -18,6 +18,7 @@ GLOBE (our newest model, designed for large 3D use cases).
 Here, you're able to train the following models:
 - [Transolver](https://arxiv.org/abs/2402.02366)
 - [GeoTransolver](https://arxiv.org/abs/2512.20399), optionally using the [FLARE](https://arxiv.org/abs/2508.12594) attention mechanism backend
+- [GLOBE](https://arxiv.org/abs/2511.15856)
 - DoMINO is coming shortly
 
 We currently support the following datasets:
