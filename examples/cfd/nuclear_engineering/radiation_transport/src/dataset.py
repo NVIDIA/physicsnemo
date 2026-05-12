@@ -14,21 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""RTE data-source layer: mesh reader, PhysicsNeMo Dataset, and stats loaders.
-
-This module is the bottom of the data dependency tree. It provides the
-low-level Mesh access (``MeshDataReader``), a thin file-indexed
-``physicsnemo.datapipes.Dataset`` subclass (``RTEBaseDataset``), and
-helpers for reading the RTE-specific YAML statistics files into
-PhysicsNeMo ``Normalize`` kwargs.
-"""
-
 from __future__ import annotations
 
 import json
-import threading
 import warnings
-from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -42,30 +31,14 @@ from physicsnemo.mesh import Mesh
 from tensordict import TensorDict
 
 
-# =========================================================================
-# Mesh reader
-# =========================================================================
-#
-# Filename-indexed reader over a directory of ``<name>.mesh/`` memmap
-# directories. Inherits from ``physicsnemo.datapipes.readers.base.Reader``;
-# returns ``TensorDict`` from ``load()``. The TensorDict carries both the
-# tensor fields and non-tensor metadata (``metadata``, ``filename``) via
-# ``NonTensorData`` entries.
-#
-# RTE-specific kwargs (``load_flux``, optional field loading, etc.) live on the
-# filename-indexed ``load(filename, ...)`` entry. The int-indexed
-# ``_load_sample(index)`` required by the PhysicsNeMo ``Reader`` contract uses
-# defaults.
-
-
 @register("RTEMeshReader")
 class MeshDataReader(Reader):
     """Filename-indexed reader over a directory of RTE Mesh memmap stores.
 
-    The ``TensorDict`` returned by ``load(filename, ...)`` carries the
-    tensor fields RTE training and inference rely on. The on-disk format
-    is the PhysicsNeMo ``Mesh`` memmap layout (``<name>.mesh/`` +
-    ``<name>.attrs.json`` sidecar).
+    The ``TensorDict`` returned by ``load(filename)`` carries the tensor
+    fields RTE training and inference rely on. The on-disk format is the
+    PhysicsNeMo ``Mesh`` memmap layout (``<name>.pmsh/`` + ``<name>.attrs.json``
+    sidecar).
 
     Example:
         >>> reader = MeshDataReader("/path/to/mesh_stores/lattice")
@@ -79,22 +52,17 @@ class MeshDataReader(Reader):
         data_path: Path | str,
         case_type: Optional[str] = None,
         cache_static_arrays: bool = True,
-        max_cache_size: int = 200,
     ):
         super().__init__(pin_memory=False, include_index_in_metadata=False)
 
         self.data_path = Path(data_path)
         self.case_type = case_type
         self.cache_static_arrays = cache_static_arrays
-        self.max_cache_size = max_cache_size
 
-        self._static_cache: OrderedDict[
-            Tuple[str, bool, bool, bool], Dict[str, torch.Tensor]
-        ] = OrderedDict()
-        self._cache_hits = 0
-        self._cache_misses = 0
-        self._cache_evictions = 0
-        self._cache_lock = threading.Lock()
+        # Plain dict cache of static-only fields keyed by filename. Mesh
+        # stores are small enough that the full train+val split fits in RAM
+        # without eviction.
+        self._static_cache: Dict[str, Dict[str, torch.Tensor]] = {}
 
         self._metadata_cache: Dict[str, Dict] = {}
 
@@ -104,10 +72,6 @@ class MeshDataReader(Reader):
             raise ValueError(f"Data path {self.data_path} is not a directory")
 
         self._filenames: List[str] = self._scan_filenames()
-
-    # ------------------------------------------------------------------
-    # PhysicsNeMo ``Reader`` contract
-    # ------------------------------------------------------------------
 
     def __len__(self) -> int:
         return len(self._filenames)
@@ -122,14 +86,10 @@ class MeshDataReader(Reader):
         meta["filename"] = filename
         return meta
 
-    # ------------------------------------------------------------------
-    # Filename discovery + caching
-    # ------------------------------------------------------------------
-
     def _scan_filenames(self) -> List[str]:
         filenames = []
         for item in self.data_path.iterdir():
-            if item.is_dir() and item.name.endswith(".mesh"):
+            if item.is_dir() and item.name.endswith(".pmsh"):
                 if self.case_type is None or item.name.startswith(self.case_type):
                     filenames.append(item.name)
         return sorted(filenames)
@@ -138,35 +98,9 @@ class MeshDataReader(Reader):
         """Return a fresh list of discovered mesh store names."""
         return list(self._filenames)
 
-    def get_cache_stats(self) -> Dict[str, float]:
-        """Return current static-array cache hit/miss counters and size."""
-        with self._cache_lock:
-            total = self._cache_hits + self._cache_misses
-            hit_rate = (self._cache_hits / total * 100) if total > 0 else 0.0
-            return {
-                "cache_size": len(self._static_cache),
-                "max_cache_size": self.max_cache_size,
-                "cache_hits": self._cache_hits,
-                "cache_misses": self._cache_misses,
-                "cache_evictions": self._cache_evictions,
-                "hit_rate": hit_rate,
-            }
-
-    def clear_cache(self):
-        """Drop the static-array cache and reset hit/miss/eviction counters."""
-        with self._cache_lock:
-            self._static_cache.clear()
-            self._cache_hits = 0
-            self._cache_misses = 0
-            self._cache_evictions = 0
-
-    # ------------------------------------------------------------------
-    # Sidecar + Mesh helpers
-    # ------------------------------------------------------------------
-
     def _sidecar_path(self, filename: str) -> Path:
-        # ``<name>.mesh`` -> ``<name>.attrs.json``
-        stem = filename[: -len(".mesh")] if filename.endswith(".mesh") else filename
+        # ``<name>.pmsh`` -> ``<name>.attrs.json``
+        stem = filename[: -len(".pmsh")] if filename.endswith(".pmsh") else filename
         return self.data_path / f"{stem}.attrs.json"
 
     def _read_sidecar(self, filename: str) -> Dict:
@@ -176,164 +110,79 @@ class MeshDataReader(Reader):
         with open(sidecar, "r", encoding="utf-8") as f:
             return json.load(f)
 
-    # ------------------------------------------------------------------
-    # The filename-indexed ``load`` stays the primary entry point
-    # ------------------------------------------------------------------
-
-    def load(
-        self,
-        filename: str,
-        load_material_properties: bool = True,
-        load_geometric_features: bool = True,
-        load_sim_times: bool = True,
-        load_sigma_fields: bool = True,
-        load_flux: bool = True,
-    ) -> TensorDict:
+    def load(self, filename: str) -> TensorDict:
         """Load a Mesh memmap store into a ``TensorDict``.
 
-        Tensor fields (``coordinates``, ``cell_areas``, ``scalar_flux``, and
-        the optional ``sim_times`` / ``material_properties`` / ``geometric_features``
-        / ``sigma_*`` / ``Q``) are stored as ``torch.Tensor`` entries. The
+        Tensor fields (``coordinates``, ``cell_areas``, ``scalar_flux``,
+        ``sim_times``, ``material_properties``, ``geometric_features``,
+        ``sigma_*``, ``Q``) are stored as ``torch.Tensor`` entries. The
         sidecar attrs dict is stored as ``NonTensorData`` under ``metadata``.
-
-        ``load_flux=False`` returns a placeholder ``scalar_flux`` of shape
-        ``(1, N)`` — the caller is expected to overwrite it from a memory
-        cache.
         """
         filepath = self.data_path / filename
         if not filepath.exists():
             raise FileNotFoundError(f"Mesh store {filepath} not found")
 
-        cache_key = (
-            filename,
-            bool(load_material_properties),
-            bool(load_geometric_features),
-            bool(load_sigma_fields),
-        )
-
-        # ``Mesh.load`` returns memmap-backed tensors. The single-process
-        # ``physicsnemo.datapipes.DataLoader`` (CUDA streams, no fork) keeps
-        # the tensors live in this process, so we let Mesh hand back the
-        # memmap views directly
         mesh = Mesh.load(str(filepath))
         point_data = mesh.point_data
         global_data = mesh.global_data
 
-        # ------- flux + timesteps (steady-state first -> final snapshots) -------
-        if "scalar_flux" in point_data.keys():
-            flux_nT = point_data["scalar_flux"]  # (N, T)
-            num_cells = flux_nT.shape[0]
-            num_timesteps = flux_nT.shape[1] if flux_nT.ndim == 2 else 1
-        else:
-            flux_nT = None
-            num_cells = mesh.points.shape[0]
-            num_timesteps = 1
-
-        if not load_flux:
-            scalar_flux = torch.zeros((1, num_cells), dtype=torch.float32)
-            sim_times_t = None
-        else:
-            if flux_nT is None:
-                raise KeyError(f"scalar_flux missing from {filepath}")
-            full = flux_nT.transpose(0, 1).contiguous().to(torch.float32)  # (T, N)
-            resolved = [0] if num_timesteps == 1 else [0, num_timesteps - 1]
-            scalar_flux = full[resolved].contiguous()
-            if (
-                load_sim_times
-                and "sim_times" in global_data.keys()
-                and global_data["sim_times"].numel() > 0
-            ):
-                sim_t = global_data["sim_times"].to(torch.float32)
-                sim_times_t = sim_t[resolved].contiguous()
-            else:
-                sim_times_t = None
-
-        # ------- static-arrays cache lookup -------
-        with self._cache_lock:
-            cache_hit = self.cache_static_arrays and cache_key in self._static_cache
-            cached_entry = None
-            if cache_hit:
-                self._cache_hits += 1
-                self._static_cache.move_to_end(cache_key)
-                cached_entry = dict(self._static_cache[cache_key])
+        # Flux + timesteps (steady-state first -> final snapshots).
+        if "scalar_flux" not in point_data.keys():
+            raise KeyError(f"scalar_flux missing from {filepath}")
+        flux_nT = point_data["scalar_flux"]  # (N, T)
+        num_timesteps = flux_nT.shape[1] if flux_nT.ndim == 2 else 1
+        full = flux_nT.transpose(0, 1).contiguous().to(torch.float32)  # (T, N)
+        resolved = [0] if num_timesteps == 1 else [0, num_timesteps - 1]
 
         td = TensorDict({}, batch_size=[])
-        td["scalar_flux"] = scalar_flux
-        if sim_times_t is not None:
-            td["sim_times"] = sim_times_t
+        td["scalar_flux"] = full[resolved].contiguous()
+        if "sim_times" in global_data.keys() and global_data["sim_times"].numel() > 0:
+            td["sim_times"] = (
+                global_data["sim_times"].to(torch.float32)[resolved].contiguous()
+            )
 
-        if cache_hit:
-            for key, tensor in cached_entry.items():
+        if self.cache_static_arrays and filename in self._static_cache:
+            for key, tensor in self._static_cache[filename].items():
                 td[key] = tensor
         else:
-            self._cache_misses += 1
             td["coordinates"] = mesh.points.to(torch.float32).contiguous()
             if "cell_areas" in point_data.keys():
                 td["cell_areas"] = (
                     point_data["cell_areas"].to(torch.float32).contiguous()
                 )
-
-            if load_material_properties and "material_properties" in point_data.keys():
+            if "material_properties" in point_data.keys():
                 td["material_properties"] = (
                     point_data["material_properties"].to(torch.int32).contiguous()
                 )
-            elif (
-                load_material_properties
-                and "material_properties" not in point_data.keys()
-            ):
+            else:
                 warnings.warn(f"Material properties not found in {filename}.")
-
-            if load_geometric_features and "geometric_features" in point_data.keys():
+            if "geometric_features" in point_data.keys():
                 td["geometric_features"] = (
                     point_data["geometric_features"].to(torch.float32).contiguous()
                 )
-
-            if load_sigma_fields:
-                for key in ("sigma_t", "sigma_s", "sigma_a", "Q"):
-                    if key in point_data.keys():
-                        td[key] = point_data[key].to(torch.float32).contiguous()
+            for key in ("sigma_t", "sigma_s", "sigma_a", "Q"):
+                if key in point_data.keys():
+                    td[key] = point_data[key].to(torch.float32).contiguous()
 
             if self.cache_static_arrays:
-                self._maybe_cache_entry(cache_key, td)
+                self._static_cache[filename] = {
+                    k: td[k]
+                    for k in (
+                        "coordinates",
+                        "cell_areas",
+                        "material_properties",
+                        "geometric_features",
+                        "sigma_t",
+                        "sigma_s",
+                        "sigma_a",
+                        "Q",
+                    )
+                    if k in td
+                }
 
         sidecar = self._read_sidecar(filename)
-        attrs = dict(sidecar.get("raw_attrs", {}))
-        td.set_non_tensor("metadata", attrs)
+        td.set_non_tensor("metadata", dict(sidecar.get("raw_attrs", {})))
         return td
-
-    def _maybe_cache_entry(
-        self,
-        cache_key: Tuple[str, bool, bool, bool],
-        td: TensorDict,
-    ) -> None:
-        with self._cache_lock:
-            if (
-                self.max_cache_size > 0
-                and len(self._static_cache) >= self.max_cache_size
-                and cache_key not in self._static_cache
-            ):
-                evicted = next(iter(self._static_cache))
-                del self._static_cache[evicted]
-                self._cache_evictions += 1
-
-            entry: Dict[str, torch.Tensor] = {}
-            for key in (
-                "coordinates",
-                "cell_areas",
-                "material_properties",
-                "geometric_features",
-                "sigma_t",
-                "sigma_s",
-                "sigma_a",
-                "Q",
-            ):
-                if key in td:
-                    entry[key] = td[key]
-            self._static_cache[cache_key] = entry
-
-    # ------------------------------------------------------------------
-    # Metadata helpers
-    # ------------------------------------------------------------------
 
     def get_metadata(self, filename: str) -> Dict:
         """Return metadata (sidecar attrs + shape facts) without a full load."""
@@ -375,17 +224,6 @@ class MeshDataReader(Reader):
         return metadata
 
 
-# =========================================================================
-# PhysicsNeMo Dataset
-# =========================================================================
-#
-# ``RTEBaseDataset`` extends :class:`physicsnemo.datapipes.Dataset` so the
-# example plugs into ``physicsnemo.datapipes.DataLoader`` (CUDA-stream-based,
-# single-process, no fork). The class still owns the file-split logic and
-# the in-memory flux cache; everything device-transfer / thread-prefetch
-# related is inherited from the base class.
-
-
 class RTEBaseDataset(PhysicsNeMoDataset):
     """File-indexed steady-state dataset over a directory of mesh stores.
 
@@ -409,11 +247,7 @@ class RTEBaseDataset(PhysicsNeMoDataset):
         phase: str = "train",
         split_file: Optional[Path | str] = None,
         seed: Optional[int] = None,
-        load_material_properties: bool = True,
-        load_geometric_features: bool = True,
-        load_sigma_fields: bool = True,
         cache_static_arrays: bool = True,
-        max_cache_size: int = 200,
         transforms: Optional[Transform | Sequence[Transform]] = None,
         device: Optional[Union[str, torch.device]] = None,
     ):
@@ -422,15 +256,11 @@ class RTEBaseDataset(PhysicsNeMoDataset):
         self.phase = phase
         self.split_file = Path(split_file) if split_file else None
         self.seed = seed
-        self.load_material_properties = load_material_properties
-        self.load_geometric_features = load_geometric_features
-        self.load_sigma_fields = load_sigma_fields
 
         reader = MeshDataReader(
             data_path,
             case_type,
             cache_static_arrays=cache_static_arrays,
-            max_cache_size=max_cache_size,
         )
 
         if self.split_file is None:
@@ -443,15 +273,7 @@ class RTEBaseDataset(PhysicsNeMoDataset):
         if not self.filenames:
             raise ValueError(f"No files in {phase} split")
 
-        # In-memory cache for flux data (populated by preload_to_memory when
-        # enabled). Values are ``dict`` mirrors of the cached tensor entries.
-        self._memory_cache: Optional[Dict[str, Dict[str, torch.Tensor]]] = None
-
         super().__init__(reader=reader, transforms=transforms, device=device)
-
-    # ------------------------------------------------------------------
-    # Split machinery
-    # ------------------------------------------------------------------
 
     def _load_split_from_file(self) -> List[str]:
         if not self.split_file.exists():
@@ -466,109 +288,19 @@ class RTEBaseDataset(PhysicsNeMoDataset):
                 f"Available: {list(split_data['splits'].keys())}"
             )
         filenames = split_data["splits"][self.phase]
-        # Split files may list basenames with or without a ``.mesh`` suffix.
+        # Split files may list basenames with or without a ``.pmsh`` suffix.
         # Normalize to always point at a mesh store.
         normalized: List[str] = []
         for f in filenames:
-            base = f[: -len(".mesh")] if f.endswith(".mesh") else f
-            normalized.append(base + ".mesh")
+            base = f[: -len(".pmsh")] if f.endswith(".pmsh") else f
+            normalized.append(base + ".pmsh")
         return normalized
-
-    def preload_to_memory(self, verbose: bool = True, num_workers: int = 8) -> dict:
-        """Preload static arrays and first/final flux snapshots."""
-        import time
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        num_files = len(self.filenames)
-        self._memory_cache = {}
-
-        if verbose:
-            print(
-                f"Preloading {num_files} files (first+final flux, {num_workers} workers)..."
-            )
-
-        start = time.perf_counter()
-
-        def load_one(filename: str):
-            td = self.reader.load(
-                filename,
-                load_material_properties=self.load_material_properties,
-                load_geometric_features=self.load_geometric_features,
-                load_sim_times=True,
-                load_sigma_fields=self.load_sigma_fields,
-            )
-            entry: Dict[str, torch.Tensor] = {
-                "scalar_flux": td["scalar_flux"].clone(),
-            }
-            if "sim_times" in td:
-                entry["sim_times"] = td["sim_times"].clone()
-            return filename, entry
-
-        completed = 0
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            futures = {executor.submit(load_one, fn): fn for fn in self.filenames}
-            for fut in as_completed(futures):
-                filename, entry = fut.result()
-                completed += 1
-                self._memory_cache[filename] = entry
-                if verbose and completed % 50 == 0:
-                    elapsed = time.perf_counter() - start
-                    rate = completed / elapsed
-                    eta = (num_files - completed) / rate if rate > 0 else 0
-                    print(
-                        f"  Preloaded {completed}/{num_files} files "
-                        f"({rate:.1f} files/s, ETA: {eta:.0f}s)"
-                    )
-
-        elapsed = time.perf_counter() - start
-        cache_stats = self.reader.get_cache_stats()
-        if verbose:
-            print(
-                f"Preload complete: {num_files} files in {elapsed:.1f}s "
-                f"({num_files / elapsed:.1f} files/s)."
-            )
-
-        return {
-            "num_files": num_files,
-            "elapsed_seconds": elapsed,
-            "cache_stats": cache_stats,
-            "flux_cached": True,
-        }
-
-    # ------------------------------------------------------------------
-    # Dataset protocol
-    # ------------------------------------------------------------------
 
     def __len__(self) -> int:
         return len(self.filenames)
 
-    def _read_sample(self, filename: str) -> TensorDict:
-        """Read one sample, honoring the in-memory flux cache when populated."""
-        if self._memory_cache is not None and filename in self._memory_cache:
-            cached = self._memory_cache[filename]
-            td = self.reader.load(
-                filename,
-                load_material_properties=self.load_material_properties,
-                load_geometric_features=self.load_geometric_features,
-                load_sim_times=False,
-                load_sigma_fields=self.load_sigma_fields,
-                load_flux=False,
-            )
-            td["scalar_flux"] = cached["scalar_flux"]
-            if "sim_times" in cached:
-                td["sim_times"] = cached["sim_times"]
-        else:
-            td = self.reader.load(
-                filename,
-                load_material_properties=self.load_material_properties,
-                load_geometric_features=self.load_geometric_features,
-                load_sim_times=True,
-                load_sigma_fields=self.load_sigma_fields,
-            )
-        return td
-
     def _build_metadata(self, filename: str, td: TensorDict) -> Dict[str, Any]:
-        """Per-sample metadata dict consumed by transforms + downstream code."""
+        """Per-sample metadata dict: sidecar attrs + filename + sim-time facts."""
         attrs = dict(td["metadata"]) if "metadata" in td else {}
         file_meta = self.reader.get_metadata(filename)
         attrs["max_timestep"] = file_meta["num_timesteps"] - 1
@@ -581,25 +313,22 @@ class RTEBaseDataset(PhysicsNeMoDataset):
         attrs["case_type"] = self.case_type
         return attrs
 
-    def _read_one(self, idx: int) -> Tuple[TensorDict, Dict[str, Any]]:
-        """Reader-side hook: load CPU TensorDict + metadata for index ``idx``.
+    def _load(self, idx: int) -> Tuple[TensorDict, Dict[str, Any]]:
+        """Synchronous load: filename-indexed reader -> device -> transforms.
 
-        Routes through ``_read_sample`` (honoring the in-memory flux cache)
-        and ``_build_metadata`` (filename / max_timestep / sim_time). The
-        ``filename`` and ``metadata`` NonTensorData entries are kept on the
-        TensorDict so transforms that read them (e.g. ``SteadyStateSampler``)
-        keep working unchanged.
+        Overrides the base ``Dataset._load`` because its int-indexed path
+        (``self.reader[index]``) goes through ``Reader.__getitem__`` ->
+        ``_load_sample``, which returns only ``dict[str, Tensor]`` and so
+        drops the NonTensorData entries (``filename`` / ``metadata``) that
+        RTE transforms and :class:`TransolverAdapter` read directly off
+        the TensorDict.
         """
         filename = self.filenames[idx]
-        td = self._read_sample(filename)
+        td = self.reader.load(filename)
         metadata = self._build_metadata(filename, td)
         td.set_non_tensor("filename", filename)
         td.set_non_tensor("metadata", metadata)
-        return td, metadata
 
-    def _load(self, idx: int) -> Tuple[TensorDict, Dict[str, Any]]:
-        """Synchronous load: ``_read_one`` -> device -> transforms."""
-        td, metadata = self._read_one(idx)
         if self.target_device is not None:
             td = td.to(self.target_device, non_blocking=True)
         if self.transforms is not None:
@@ -607,50 +336,29 @@ class RTEBaseDataset(PhysicsNeMoDataset):
         return td, metadata
 
     def _load_and_transform(self, index, stream=None):
-        """Stream-aware variant of ``_load`` used by the prefetch path."""
+        """Stream-aware variant of ``_load`` used by the prefetch path.
+
+        The base class's prefetch path goes through ``self.reader[index]``
+        directly (skipping ``self._load``), so we override here too. Thread
+        pool + CUDA-stream wiring is inherited from the base class.
+        """
         from physicsnemo.datapipes.protocols import _PrefetchResult
 
         result = _PrefetchResult(index=index)
         try:
-            td, metadata = self._read_one(index)
-
-            if self.target_device is not None:
-                if stream is not None:
-                    with torch.cuda.stream(stream):
-                        td = td.to(self.target_device, non_blocking=True)
-                else:
-                    td = td.to(self.target_device, non_blocking=True)
-
-            if self.transforms is not None:
-                if stream is not None:
-                    with torch.cuda.stream(stream):
-                        td = self.transforms(td)
+            if stream is not None:
+                with torch.cuda.stream(stream):
+                    td, metadata = self._load(index)
+                if self.transforms is not None:
                     result.event = torch.cuda.Event()
                     result.event.record(stream)
-                else:
-                    td = self.transforms(td)
-
+            else:
+                td, metadata = self._load(index)
             result.data = td
             result.metadata = metadata
         except Exception as exc:  # pragma: no cover — surfaced via __getitem__
             result.error = exc
         return result
-
-    def get_transformed_sample(self, idx: int) -> TensorDict:
-        """Backwards-compat helper: return the transformed TensorDict only."""
-        td, _ = self._load(idx)
-        return td
-
-
-# =========================================================================
-# Stats loaders
-# =========================================================================
-#
-# Non-breaking stats-file shim for PhysicsNeMo ``Normalize``. RTE's custom
-# normalization transforms are replaced with
-# ``physicsnemo.datapipes.transforms.Normalize``. The on-disk YAML stats files
-# stay in their current RTE-specific schema; these helpers read them and
-# produce the ``(means, stds)`` dicts PhysicsNeMo expects.
 
 
 def load_flux_stats(path: Union[str, Path]) -> dict:
@@ -733,44 +441,3 @@ def material_normalize_kwargs(
         "means": {field: means},
         "stds": {field: stds},
     }
-
-
-def coord_bounds_for_case(case_type: str) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Return ``(bbox_min, bbox_max)`` as float32 tensors for a known case.
-
-    Shared with ``loader._build_transforms``; encapsulates the per-case
-    global domain bounds that were hardcoded in ``CoordinateNormalizer``.
-    """
-    # Sibling import deferred to call time to avoid a circular import at
-    # module load (transforms.py is allowed to import from dataset.py if it
-    # ever needs stats helpers, though currently it does not).
-    from transforms import GLOBAL_DOMAIN_BOUNDS
-
-    if case_type not in GLOBAL_DOMAIN_BOUNDS:
-        raise ValueError(
-            f"Unknown case_type '{case_type}'. "
-            f"Expected one of: {list(GLOBAL_DOMAIN_BOUNDS.keys())}"
-        )
-    bounds = GLOBAL_DOMAIN_BOUNDS[case_type]
-    return (
-        torch.as_tensor(bounds["min"], dtype=torch.float32),
-        torch.as_tensor(bounds["max"], dtype=torch.float32),
-    )
-
-
-def coord_translate_scale_params(
-    case_type: str,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Compute ``(center, half_extent)`` for ``Translate`` + ``Scale``.
-
-    RTE's ``CoordinateNormalizer`` produced ``(x - bbox_min) * 2 / (bbox_max -
-    bbox_min) - 1``. Equivalently: subtract the bbox center, then divide by the
-    bbox half-extent. This helper returns the two tensors in that form so the
-    caller can wire them straight into
-    ``Translate(center_key_or_value=center, subtract=True)`` followed by
-    ``Scale(scale=half_extent, divide=True)``.
-    """
-    bbox_min, bbox_max = coord_bounds_for_case(case_type)
-    center = 0.5 * (bbox_min + bbox_max)
-    half_extent = 0.5 * (bbox_max - bbox_min)
-    return center, half_extent
