@@ -1678,16 +1678,43 @@ def test_dual_traversal_sync_budget(
 
     Profiling identified ``cudaStreamSynchronize`` as the dominant CPU
     stall in GLOBE training (9919 calls / ~3 s in a 10.5 s training step,
-    most of them from ``find_dual_interaction_pairs``).  Phase 2 of the
-    perf optimization moved that section to a deferred-compaction
-    structure that pays at most a handful of syncs per call.
+    most of them from ``find_dual_interaction_pairs``).  The perf-pass
+    moved every output stream (near/far/(near,far)/(far,near)/broadcast)
+    to a deferred-compaction protocol where the per-iteration tensors
+    are accumulated unfiltered with a validity mask, and a single
+    boolean compaction is paid per stream at the end of the traversal.
 
-    This test counts ``cudaStreamSynchronize`` events inside one tree
-    build + one dual traversal and asserts the count stays under a
-    generous budget.  The budget is set well above the current count to
-    accommodate small implementation variations, but tight enough to
-    catch the kind of regression we fixed (per-iteration ``.any()`` /
-    ``.item()`` / boolean-mask compactions in the traversal loop).
+    With those changes the structural syncs remaining per call are:
+
+    - Three ``_ragged_arange`` calls inside each ``_expand_dual_leaf_hits``
+      invocation, each of which forces a ``torch.arange(scalar_tensor)``
+      host read to size its output (data-dependent total).  Iterations
+      without any leaf-leaf pair short-circuit before paying these.
+    - One ``aten::nonzero`` per dual-traversal iteration to materialise
+      the integer index for ``active_tgt_nodes[keep_idx]`` and
+      ``active_src_nodes[keep_idx]`` (the new active set), shared with
+      the symmetric source-side indexing.
+    - One ``aten::nonzero`` per dual-traversal iteration for
+      ``near_leaf_leaf.nonzero()`` (used to filter the leaf-leaf input
+      to ``_expand_dual_leaf_hits``; cannot be deferred because the
+      function requires strictly (leaf, leaf) pairs for the AABB tests
+      to be valid).
+    - One ``torch.where`` per ``from_points`` top-down level for
+      ``internal_indices = torch.where(is_internal_seg)[0]``.
+    - Four end-of-traversal compactions (one each for the far, (near,far),
+      (far,near), and fn-broadcast-targets streams).
+    - ~5-6 syncs from the eager-only ``DualInteractionPlan.validate()``
+      call at the end of every traversal (``(t < 0).any()``,
+      ``nonzero.any()``, ``.max().item()``, plus a couple of boolean
+      indexings); zero under ``torch.compile``.
+
+    The remaining syncs are structural - they read data-dependent shapes
+    that PyTorch cannot infer at trace time.  Together they observe well
+    below ``budget`` for the parametrisations tested below.  Headroom
+    above the observed values is sized to catch the kind of regression
+    we eliminated (a per-iteration ``.any()`` / ``.item()`` /
+    boolean-indexing regrowth, which would add ~5-10 syncs/iter and blow
+    past the budget on any non-trivial tree).
     """
     device = torch.device("cuda")
     torch.manual_seed(DEFAULT_SEED)
@@ -1709,13 +1736,14 @@ def test_dual_traversal_sync_budget(
 
     sync_count = sum(1 for ev in prof.events() if ev.name == "cudaStreamSynchronize")
 
-    ### Budget: ~3-5 syncs per traversal iteration is what the new
-    ### implementation pays (boolean compaction for the new active set,
-    ### one for ``active[near_leaf_leaf]``, one inside ``_ragged_arange``).
-    ### A 200-point leaf_size=1 tree takes ~10 traversal iterations; the
-    ### top_down build adds a handful more.  Setting the budget at 100
-    ### catches the ``.any()``-per-branch regression (~12 syncs / iter)
-    ### that this work eliminated, while leaving headroom.
+    ### Observed at time of test authorship on an RTX 4090 with
+    ### PyTorch 2.11: 59 / 67 / 83 syncs for the three parametrisations
+    ### below.  Setting the budget at 100 gives ~20 % headroom for
+    ### platform-specific profiler-overhead variation (Kineto/CUPTI emit
+    ### a handful of extra ``cudaStreamSynchronize`` events at activity
+    ### boundaries that vary by driver / CUDA version), while staying
+    ### tight enough to catch a regression that re-introduces ~5+
+    ### syncs/iter into the dual-traversal loop.
     budget = 100
     assert sync_count <= budget, (
         f"dual_traversal sync count {sync_count} exceeds budget {budget} for "
