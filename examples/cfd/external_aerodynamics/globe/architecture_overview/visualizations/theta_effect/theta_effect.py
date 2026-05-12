@@ -7,6 +7,10 @@ Produces six figures:
 3.  Kernel scalar field comparison (exact vs approximate)
 4.  Approximation error fields
 5.  Error convergence and computational cost vs theta
+
+The empirical wall-clock scaling figure (dense vs Barnes-Hut on synthetic 3D
+data) lives in ``../scaling/scaling.py`` because it is by far the slowest
+visualization in this directory and benefits from being run on its own.
 """
 
 from pathlib import Path
@@ -17,6 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from matplotlib.colors import LogNorm
+from matplotlib.transforms import Bbox
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from tensordict import TensorDict
 
@@ -115,12 +120,59 @@ def evaluate_on_grid(kernel_obj, **extra_kwargs) -> dict[str, np.ndarray]:
     }
 
 
+def _pixel_tight_bbox(fig: plt.Figure, *, pad_in: float = 0.05) -> Bbox:
+    """Compute a tight bbox (in figure inches) around the actually-rendered pixels.
+
+    Workaround for ``bbox_inches="tight"`` treating the empty 3D-viewport
+    rectangle as visible content; we instead scan the rendered RGBA buffer
+    for any non-white pixel and convert that pixel-space bbox back to the
+    figure-inch bbox that ``savefig(bbox_inches=...)`` expects.
+    """
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    ### Need an Agg canvas to read raw pixels. Constructing one rebinds
+    ### `fig.canvas`, but the original is recoverable by drawing again with
+    ### the prior canvas type if needed - here we just take the side effect.
+    canvas: FigureCanvasAgg = (
+        fig.canvas
+        if isinstance(fig.canvas, FigureCanvasAgg)
+        else FigureCanvasAgg(fig)
+    )
+    canvas.draw()
+    buf = np.asarray(canvas.buffer_rgba())
+    h, _ = buf.shape[:2]
+    is_bg = np.all(buf[..., :3] > 235, axis=-1)
+    rows = np.where(np.any(~is_bg, axis=1))[0]
+    cols = np.where(np.any(~is_bg, axis=0))[0]
+    if rows.size == 0 or cols.size == 0:
+        return Bbox.from_extents(0, 0, *fig.get_size_inches())
+    dpi = fig.dpi
+    return Bbox.from_extents(
+        cols[0] / dpi,
+        (h - rows[-1] - 1) / dpi,
+        (cols[-1] + 1) / dpi,
+        (h - rows[0]) / dpi,
+    ).padded(pad_in)
+
+
 def save_figure(fig: plt.Figure, *, stem: str) -> None:
-    """Save figure as both PDF and PNG."""
+    """Save figure as both PDF and PNG, with tight cropping that handles 3D axes.
+
+    For 2D figures, ``bbox_inches="tight"`` already produces a clean crop. For
+    figures containing a 3D axis, however, matplotlib's tight bbox includes
+    the entire 3D viewport rectangle - most of which is empty space at typical
+    elevation/azimuth angles - so we instead compute a pixel-driven bbox.
+    """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    has_3d = any(ax.name == "3d" for ax in fig.axes)
+    save_kwargs: dict
+    if has_3d:
+        save_kwargs = {"bbox_inches": _pixel_tight_bbox(fig, pad_in=0.05)}
+    else:
+        save_kwargs = {"bbox_inches": "tight", "pad_inches": 0.05}
     for ext in ("pdf", "png"):
         path = OUTPUT_DIR / f"{stem}.{ext}"
-        fig.savefig(path, bbox_inches="tight", pad_inches=0.05, dpi=200)
+        fig.savefig(path, dpi=200, **save_kwargs)
         print(f"Saved {path}")
 
 
@@ -267,10 +319,10 @@ ax.scatter(
 )
 ax.set_xlabel(r"$x$")
 ax.set_ylabel(r"$y$")
-# ax.set_zlabel("Depth")
-ax.set_title("ClusterTree AABB hierarchy (3D)")
-# ax.set_zticks([i * Z_SPACING for i in range(max_depth + 1)])
-# ax.set_zticklabels([f"depth {max_depth - i}" for i in range(max_depth + 1)])
+### Suppress all z-axis labelling: stacking depth is already encoded by the
+### viridis colormap, and removing z-ticks lets `save_figure` crop the empty
+### 3D viewport tightly for a publication-ready figure.
+ax.set_zticks([])
 ax.view_init(elev=30, azim=-50)
 p.show_plot(show=False)
 save_figure(fig, stem="tree_hierarchy_3d")
