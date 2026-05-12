@@ -334,14 +334,26 @@ for theta_val in all_thetas:
         src_tree = ClusterTree.from_points(src, leaf_size=1)
         tgt_tree = ClusterTree.from_points(tgt, leaf_size=1)
         ### [Plan counts - lets us see the per-phase fan-out]
-        dual_plan = src_tree.find_dual_interaction_pairs(
-            target_tree=tgt_tree, theta=theta_val,
-        )
-        n_near = dual_plan.n_near
-        n_far_nodes = dual_plan.n_far_nodes
-        n_nf = dual_plan.n_nf
-        n_fn = dual_plan.n_fn
-        del dual_plan
+        # Wrap in try/except: the dual-plan computation itself can OOM at
+        # very large N because its O(n_pairs) intermediates (e.g. the
+        # `_ragged_arange` cumsum) are allocated *before* the explicit
+        # Phase-B budget check below has any chance to short-circuit.
+        try:
+            dual_plan = src_tree.find_dual_interaction_pairs(
+                target_tree=tgt_tree, theta=theta_val,
+            )
+            n_near = dual_plan.n_near
+            n_far_nodes = dual_plan.n_far_nodes
+            n_nf = dual_plan.n_nf
+            n_fn = dual_plan.n_fn
+            del dual_plan
+        except torch.cuda.OutOfMemoryError:
+            print(
+                f"  {label}, N={n}: OOM during dual-plan computation, "
+                f"stopping curve."
+            )
+            del src, tgt, strengths, data, src_tree, tgt_tree
+            break
         ### [Phase-B memory check - abort before allocator pressure kicks in]
         phase_b_bytes = n_far_nodes * FLOATS_PER_INTERACTION * 4
         if phase_b_bytes > PHASE_B_SAFE_BYTES:
@@ -365,7 +377,7 @@ for theta_val in all_thetas:
                 near_chunk_size=NEAR_CHUNK_SIZE,
             )
         except torch.cuda.OutOfMemoryError:
-            print(f"  {label}, N={n}: OOM, stopping curve.")
+            print(f"  {label}, N={n}: OOM during forward pass, stopping curve.")
             del src, tgt, strengths, data, src_tree, tgt_tree
             break
         if res is None:
