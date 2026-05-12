@@ -14,6 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .dps_guidance import (
+    MultiDiffusionDataConsistencyDPSGuidance,
+    MultiDiffusionDPSGuidance,
+    MultiDiffusionDPSScorePredictor,
+    MultiDiffusionModelConsistencyDPSGuidance,
+)
 from .losses import MultiDiffusionMSEDSMLoss, MultiDiffusionWeightedMSEDSMLoss
 from .models import MultiDiffusionModel2D
 from .patching import (

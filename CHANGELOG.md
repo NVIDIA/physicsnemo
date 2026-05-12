@@ -102,6 +102,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   standard solvers). Patching primitives (`BasePatching2D`,
   `GridPatching2D`, `RandomPatching2D`) are exposed under the same
   subpackage and are `torch.compile`-friendly with `fullgraph=True`.
+  `MultiDiffusionPredictor` supports memory-efficient inference on
+  large domains via `chunk_size` and `use_checkpointing`. The
+  subpackage also ships patch-local DPS guidance:
+  `MultiDiffusionDPSScorePredictor` (drop-in score predictor that plugs
+  into the standard sampling stack),
+  `MultiDiffusionDataConsistencyDPSGuidance` for inpainting and sparse
+  data assimilation, and `MultiDiffusionModelConsistencyDPSGuidance` for
+  generic patch-local observation operators. Use these instead of the
+  global `DPSScorePredictor` to run guided sampling on domains that
+  would otherwise OOM.
 - Adds `"epsilon"` as a supported prediction type throughout the diffusion
   framework, alongside the existing `"x0"` and `"score"` modes. A new
   `PredictorType = Literal["x0", "score", "epsilon"]` alias in
