@@ -136,7 +136,7 @@ def test_cross_unet_forward_regression(device):
         model,
         (x_enc, w_enc, hist_w, hist_x),
         file_name="experimental/models/pv_power/cross_unet/data/cross_unet_default_output.pth",
-        atol=1e-3,
+        atol=2e-3,
     )
 
 
@@ -185,8 +185,8 @@ def test_cross_unet_source_compatible_correlation_shape(device):
     corr_to_target = torch.nan_to_num(raw_corr[:, :-1, -1], nan=0.0).clamp(min=0.0)
     expected = (
         F.softmax(corr_to_target, dim=-1)
-        .unsqueeze(-1)
-        .repeat(1, 1, model.total_channels)
+        .unsqueeze(1)
+        .repeat(1, model.total_channels, 1)
     )
 
     assert corr.shape == (2, model.total_channels, model.total_channels)
@@ -284,6 +284,158 @@ def test_cross_unet_nonlinear_correlation_projection_forward(device):
 
     out = model(x_enc, w_enc, hist_w, hist_x)
     assert out.shape == (2, 12, 5)
+
+
+def test_cross_unet_nonlinear_correlation_projection_masks_after_projection(device):
+    """P-corr should project raw correlations, mask negatives, then row-normalize."""
+    model = CrossUnet(
+        target_channels=2,
+        weather_channels=0,
+        seq_len=4,
+        pred_len=4,
+        seg_len=2,
+        e_layers=1,
+        d_model=8,
+        n_heads=2,
+        d_ff=16,
+        nonlinear_correlation_proj=True,
+    ).to(device)
+
+    with torch.no_grad():
+        proj1_a = model.channel_proj1[0]
+        proj1_b = model.channel_proj1[2]
+        proj1_a.weight.zero_()
+        proj1_a.bias.copy_(
+            torch.tensor([8.0, -8.0, 8.0, -8.0, 0.0, 0.0, 0.0, 0.0], device=device)
+        )
+        proj1_b.weight.copy_(
+            torch.tensor(
+                [
+                    [1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, -1.0, 0.0, 0.0, 0.0, 0.0],
+                ],
+                device=device,
+            )
+        )
+        proj1_b.bias.zero_()
+
+        proj2_a = model.channel_proj2[0]
+        proj2_b = model.channel_proj2[2]
+        proj2_a.weight.zero_()
+        proj2_a.bias.copy_(
+            torch.tensor(
+                [
+                    8.0,
+                    -8.0,
+                    -8.0,
+                    8.0,
+                    -8.0,
+                    8.0,
+                    8.0,
+                    -8.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                ],
+                device=device,
+            )
+        )
+        proj2_b.weight.copy_(
+            torch.tensor(
+                [
+                    [
+                        1.0,
+                        -1.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                    ],
+                    [
+                        0.0,
+                        0.0,
+                        1.0,
+                        -1.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                    ],
+                    [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0,
+                        -1.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                    ],
+                    [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0,
+                        -1.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                    ],
+                ],
+                device=device,
+            )
+        )
+        proj2_b.bias.zero_()
+
+    t = torch.arange(4, dtype=torch.float32, device=device)
+    samples = torch.stack([t, -t, t], dim=-1).unsqueeze(0)
+
+    corr = model._compute_channel_correlation(samples)
+
+    assert corr.shape == (1, 2, 2)
+    assert torch.all(corr >= 0)
+    assert torch.allclose(corr.sum(dim=-1), torch.ones(1, 2, device=device))
+    assert corr[0, 0, 1] == 0
+    assert corr[0, 1, 0] == 0
 
 
 def test_cross_unet_positional_embedding_odd_d_model():

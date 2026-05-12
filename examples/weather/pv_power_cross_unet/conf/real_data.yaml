@@ -14,12 +14,14 @@ mode: train
 # Data
 dataset_root: ./dataset
 station_name: KDASC
-weather_source: nwp   # nwp or satellite; KDASC always uses SWR
+weather_source: nwp   # nwp, satellite, or ai; KDASC always uses SWR
 seq_len: 96
 pred_len: 16
 max_train_samples: null
 max_valid_samples: null
 max_predict_samples: null
+paper_preset: False
+normalization: standard  # standard or minmax; paper_preset switches to minmax
 
 # Model
 seg_len: 12
@@ -46,3 +48,5 @@ lr_scheduler_gamma: 0.99
 output_dir: ./outputs/real_cross_unet
 checkpoint_path: null
 prediction_path: null
+metrics_csv_path: ./outputs/paper_repro/metrics.csv
+metric_report_path: ./outputs/paper_repro/report.md

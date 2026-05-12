@@ -355,14 +355,14 @@ class CrossUnet(Module):
         if nonlinear_correlation_proj:
             corr_dim = self.total_channels
             self.channel_proj1 = nn.Sequential(
-                nn.Linear(corr_dim, corr_dim * 4, bias=False),
+                nn.Linear(corr_dim, corr_dim * 4, bias=True),
                 nn.Sigmoid(),
-                nn.Linear(corr_dim * 4, corr_dim, bias=False),
+                nn.Linear(corr_dim * 4, corr_dim, bias=True),
             )
             self.channel_proj2 = nn.Sequential(
-                nn.Linear(corr_dim * corr_dim, corr_dim * corr_dim * 4, bias=False),
+                nn.Linear(corr_dim * corr_dim, corr_dim * corr_dim * 4, bias=True),
                 nn.Sigmoid(),
-                nn.Linear(corr_dim * corr_dim * 4, corr_dim * corr_dim, bias=False),
+                nn.Linear(corr_dim * corr_dim * 4, corr_dim * corr_dim, bias=True),
             )
 
     def _compute_channel_correlation(self, samples: Tensor) -> Tensor:
@@ -390,24 +390,28 @@ class CrossUnet(Module):
         corr_to_target = torch.nan_to_num(
             corr_to_target, nan=0.0, posinf=0.0, neginf=0.0
         )
-        corr_to_target = corr_to_target.clamp(min=0.0)
         corr_dim = c - 1
 
         if self.nonlinear_correlation_proj:
-            # Project, broadcast, project, softmax.
+            # Project raw correlations, then mask negative projected values.
             v = corr_to_target.unsqueeze(-1)  # (B, C - 1, 1)
             v = self.channel_proj1(v.permute(0, 2, 1)).permute(0, 2, 1)
             v = v.repeat(1, 1, corr_dim)  # (B, C - 1, C - 1)
             flat = v.view(b, corr_dim * corr_dim)
             flat = self.channel_proj2(flat)
-            mixing = F.softmax(flat, dim=-1).view(b, corr_dim, corr_dim)
+            mixing = flat.view(b, corr_dim, corr_dim).clamp(min=0.0)
         else:
-            # Source-style rank-1 mixing: each feature-target softmax weight is
-            # broadcast across the destination-channel axis.
+            # Source-style rank-1 mixing: each feature-target softmax weight
+            # is broadcast across destination rows for ``corr @ x``.
+            corr_to_target = corr_to_target.clamp(min=0.0)
             row = F.softmax(corr_to_target, dim=-1)  # (B, C - 1)
-            mixing = row.unsqueeze(-1).repeat(1, 1, corr_dim)
+            mixing = row.unsqueeze(1).repeat(1, corr_dim, 1)
 
-        return mixing
+        row_sum = mixing.sum(dim=-1, keepdim=True)
+        uniform = torch.full_like(mixing, 1.0 / corr_dim)
+        return torch.where(
+            row_sum > 1.0e-12, mixing / row_sum.clamp_min(1.0e-12), uniform
+        )
 
     def _forecast(self, x: Tensor, corr: Tensor) -> Tensor:
         # ``x``: (B, L, C); ``corr``: (B, C, C).
