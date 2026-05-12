@@ -248,23 +248,24 @@ print(f"  Pinned near_chunk_size = {NEAR_CHUNK_SIZE:,}")
 ### [Phase-B memory budget]
 # `BarnesHutKernel.forward` only chunks the near-field (Phase A); Phases B,
 # C, and D evaluate a single unchunked (n_pairs, floats_per_interaction)
-# tensor.  Empirically there is a sharp performance cliff when this
-# allocation exceeds ~1.5-1.8 GB:  on a 17 GB-free GPU we observe ~180 ms
-# forward passes at 1.5 GB Phase B *jumping* to ~1.1 s at 2.0 GB Phase B
-# (5-10x slowdown).  The cliff is too sharp to be memory-pressure (we have
-# 15+ GB free); it's almost certainly cuBLAS picking a different GEMM
-# algorithm above some M-dimension threshold, or PyTorch's caching
-# allocator's `max_split_size` behavior at ~2 GB.  We use the *minimum*
-# of (80% of free GPU memory) and a hard 1.6 GB cap to keep every
-# measurement on the fast side of the cliff.  Setting the env var
-# `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` may push the cliff
-# higher (untested here).
+# tensor.  Under the default PyTorch caching allocator we observed a sharp
+# performance cliff when this allocation exceeded ~1.5-1.8 GB: on a 17 GB-
+# free GPU, ~180 ms forward passes at 1.5 GB Phase B *jumped* to ~1.1 s at
+# 2.0 GB Phase B (5-10x slowdown).  The cliff was too sharp to be memory
+# pressure (15+ GB free); it is almost certainly cuBLAS picking a different
+# GEMM algorithm above some M-dimension threshold, or the caching
+# allocator's `max_split_size` behavior at ~2 GB.  Setting
+# `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` (done at the top of
+# this script) eliminates the cliff, so we cap Phase B at the GPU's
+# actual total VRAM (queried dynamically via `torch.cuda.mem_get_info`)
+# rather than at a fixed safety value.  The safe budget is then the
+# minimum of (80% of free GPU memory) and that total-VRAM cap.
 FLOATS_PER_INTERACTION = kernel_3d._floats_per_interaction
-PHASE_B_HARD_CAP_BYTES = 1_600_000_000  # 1.6 GB - below the empirical cliff
 if USE_CUDA:
     free_bytes, total_bytes = torch.cuda.mem_get_info(torch.device(device))
 else:
     free_bytes, total_bytes = 0, 0
+PHASE_B_HARD_CAP_BYTES = total_bytes if USE_CUDA else 10**12
 PHASE_B_SAFE_BYTES = (
     min(int(free_bytes * 0.80), PHASE_B_HARD_CAP_BYTES) if USE_CUDA else 10**12
 )
