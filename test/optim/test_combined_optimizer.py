@@ -383,6 +383,14 @@ class TestStateDict:
 class TestIntegration:
     """Tests for CombinedOptimizer interoperability with PyTorch utilities."""
 
+    # Intentionally exercises the LR scheduler in isolation (no
+    # ``optimizer.step()`` is called).  PyTorch warns when ``scheduler.step()``
+    # is invoked before any ``optimizer.step()``; suppress that single
+    # warning here rather than restructuring the test, since the test's
+    # purpose is to verify the scheduler's gamma application.
+    @pytest.mark.filterwarnings(
+        "ignore:Detected call of `lr_scheduler.step\\(\\)` before `optimizer.step\\(\\)`:UserWarning"
+    )
     def test_lr_scheduler(self, combined_optimizer):
         """Verify StepLR correctly adjusts learning rates across all param groups."""
         scheduler = torch.optim.lr_scheduler.StepLR(
