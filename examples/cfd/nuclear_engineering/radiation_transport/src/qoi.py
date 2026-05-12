@@ -22,7 +22,7 @@ training-time physics loss (losses.py) and the evaluation-time QoI metrics
 
 https://github.com/KiT-RT/kitrt_code/blob/d257b1a3c6fb3fa13d8a346adca5360a95101932/src/solvers/snsolver_hpc.cpp#L594
 
-The evaluators are differentiable and steady-state (T=1); ``sim_times`` is
+The evaluators are differentiable and final-time (T=1); ``sim_times`` is
 accepted only for callsite uniformity with the time-dependent variants.
 """
 

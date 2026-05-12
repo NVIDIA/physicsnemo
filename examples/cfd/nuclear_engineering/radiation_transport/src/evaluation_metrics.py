@@ -93,7 +93,7 @@ def compute_sample_qoi(
     areas = cell_areas.float().flatten()
     sigma_t_flat = sigma_t.float().flatten()
     sigma_s_flat = sigma_s.float().flatten()
-    # Placeholder — the steady-state QoI evaluators accept ``sim_times`` only
+    # Placeholder — the final-time QoI evaluators accept ``sim_times`` only
     # for callsite uniformity with the time-dependent variants.
     sim_times = torch.zeros(1, device=pred.device)
 

@@ -4,7 +4,7 @@ A PhysicsNeMo example that trains a [Transolver](https://arxiv.org/abs/2402.0236
 surrogate model for the 2-D linear radiation transport benchmark defined in
 [Reference solutions for linear radiation transport: the Hohlraum and Lattice
 benchmarks](https://arxiv.org/pdf/2505.17284). The pipeline learns the
-steady-state mapping from the initial flux snapshot to the final scalar flux,
+final-time mapping from the initial flux snapshot to the final scalar flux,
 using a physics-informed loss that combines region-weighted MSE with a
 quantity-of-interest (QoI) penalty based on absorption in key regions.
 
@@ -15,8 +15,10 @@ The datasets used for this example were generated using
 
 ## 1. The science
 
-The model solves the steady-state radiative-transfer equation for a scalar
-flux field `φ(x)` over a 2-D domain. Inputs to the surrogate are:
+The model approximates the final-time scalar flux `φ(x)` of the 2-D linear
+radiative-transfer equation. The simulator is run forward in time and the
+training target is the last snapshot — the underlying transport problem
+is not run to convergence. Inputs to the surrogate are:
 
 - **Coordinates** `(x, y)` per cell, normalized to `[-1, 1]` and augmented with
   Fourier features (3 frequencies × 2 axes × {sin, cos} = 12 extra channels).
@@ -46,12 +48,10 @@ interior heat source — flux enters from boundary conditions and propagates
 through the cavity. Geometry parameters (upper/lower laser-entry radii,
 center offsets) vary across simulations.
 
-QoI: per-region instantaneous absorption over `{center, vertical strip,
-horizontal strip, total domain}`. By default `train.physics_loss.qoi_region=all`
-averages all four region losses so every region contributes to the gradient;
-set it to a single region (`center`, `vertical`, `horizontal`, `total`) to
-backprop on that region alone. Either way, all four region losses are
-logged each batch.
+QoI: per-region instantaneous absorption over
+`{center, vertical strip, horizontal strip}` plus the total. The
+training-time physics loss averages all four (mean-of-regions) so every
+region contributes to the gradient.
 
 ---
 
@@ -59,8 +59,9 @@ logged each batch.
 
 Prerequisites:
 
-- **PyTorch ≥ 2.6** — `torch.optim.Muon` is built in. Earlier PyTorch versions
-  work if you stick to the default `train.optimizer.type=adam`.
+- **PyTorch ≥ 2.6** for the default `train.optimizer.type=adam` path.
+  `train.optimizer.type=muon` additionally requires **PyTorch ≥ 2.9**
+  (uses `torch.optim.Muon` with `adjust_lr_fn="match_rms_adamw"`).
 - **PhysicsNeMo** — install the host repo with `[model-extras,datapipes-extras]`
   to get `physicsnemo.models.transolver.Transolver` and the `tensordict`-based
   data utilities.
@@ -83,17 +84,17 @@ curated from the [KiT-RT repositories](https://github.com/KiT-RT).
 ### 3.2 Expected on-disk layout
 
 The runtime data format is the PhysicsNeMo `Mesh` memmap layout. Each
-simulation lives in a `<name>.mesh/` directory next to a `<name>.attrs.json`
-sidecar, loaded via `physicsnemo.mesh.Mesh.load(<name>.mesh)`.
+simulation lives in a `<name>.pmsh/` directory next to a `<name>.attrs.json`
+sidecar, loaded via `physicsnemo.mesh.Mesh.load(<name>.pmsh)`.
 
 ```text
 <DATA_ROOT>/
 ├── lattice/
-│   ├── lattice_abs<a>_scatter<s>_p<p>_q<q>.mesh/
+│   ├── lattice_abs<a>_scatter<s>_p<p>_q<q>.pmsh/
 │   ├── lattice_abs<a>_scatter<s>_p<p>_q<q>.attrs.json
 │   └── ...
 ├── hohlraum/
-│   ├── hohlraum_variable_cl<...>_q<...>_ulr<...>_llr<...>_<...>.mesh/
+│   ├── hohlraum_variable_cl<...>_q<...>_ulr<...>_llr<...>_<...>.pmsh/
 │   ├── hohlraum_variable_cl<...>_q<...>_ulr<...>_llr<...>_<...>.attrs.json
 │   └── ...
 ├── splits/
@@ -108,7 +109,7 @@ sidecar, loaded via `physicsnemo.mesh.Mesh.load(<name>.mesh)`.
 
 ### 3.3 What's in each mesh store
 
-Each `*.mesh/` directory is one simulation, written by
+Each `*.pmsh/` directory is one simulation, written by
 `physicsnemo.mesh.Mesh.save(...)`. The loader uses the first and final
 `scalar_flux` snapshots and ignores intermediate snapshots. The fields are:
 
@@ -135,9 +136,9 @@ Each `*.mesh/` directory is one simulation, written by
 `<name>.attrs.json` (sidecar):
 A JSON file holding `raw_attrs` (the verbatim source attrs dict — final
 simulation time, geometry params, etc.) and `residue_attrs` (the
-non-numeric attrs that don't fit in `global_data`). `MeshDataReader.load`
-exposes `raw_attrs` as the `metadata` `NonTensorData` entry on the returned
-`TensorDict`.
+non-numeric attrs that don't fit in `global_data`). `RTEBaseDataset._load`
+reads the sidecar and exposes `raw_attrs` as the `metadata`
+`NonTensorData` entry on the returned `TensorDict`.
 
 `N` is the number of cells per simulation (~tens of thousands). Different
 simulations may have different `N` — point-cloud collation handles this.
@@ -164,7 +165,7 @@ JSON document with a `"splits"` key:
 ```
 
 Filenames in the splits arrays are **basenames** without any format
-suffix; the reader appends `.mesh` when opening stores.
+suffix; the reader appends `.pmsh` when opening stores.
 
 If the splits file is named with a different suffix, point at it explicitly:
 
@@ -206,9 +207,6 @@ contains per-channel mean/std/min/max for `{σ_a, σ_s, σ_t, Q}`.
 ### 4.1 Quick start
 
 Full-mesh training used at least a 48 GB GPU during development (RTX6000 Ada).
-By default `data.preload_data=true`, so the train and validation splits are
-loaded into host RAM before training. Disable with `data.preload_data=false`
-if RAM is tight, at the cost of slower per-epoch reads from disk.
 
 Lattice:
 
@@ -222,7 +220,7 @@ Hohlraum:
 python src/train.py case=hohlraum data=hohlraum case.data_root=<DATA_ROOT>
 ```
 
-Single-process default: 501 epochs, AMP-bf16, cosine LR with 10 warmup epochs,
+Single-process default: 500 epochs, AMP-bf16, cosine LR with 10 warmup epochs,
 peak LR 3e-5, physics loss enabled at weight 0.005 (lattice) / 0.01 (hohlraum).
 
 ### 4.2 Multi-GPU
@@ -233,10 +231,7 @@ torchrun --nproc_per_node=N src/train.py \
 ```
 
 Use `torchrun` for DDP. A plain `python src/train.py ...` launch runs as a
-single process, even inside an allocated SLURM shell. Set `data.preload_data=true`
-(default) so each rank loads static arrays through a sequenced barrier; this is
-faster than re-reading the mesh stores per epoch but uses host RAM proportional to the
-training split size.
+single process.
 
 ### 4.3 Common overrides
 
@@ -245,7 +240,6 @@ training split size.
 | `train.epochs=200` | Shorter run |
 | `train.optimizer.type=muon` | Use `torch.optim.Muon` for 2-D weights, Adam for biases / norms |
 | `train.amp=false` | Disable mixed precision (debug / numerical parity) |
-| `train.physics_loss.qoi_region=center` | Hohlraum-only: backprop on a single region. Default `all` averages the four (center, vertical, horizontal, total). |
 | `train.physics_loss.weight=0.0` | Pure MSE training (disables QoI penalty) |
 | `train.dataloader.num_streams=4` | CUDA streams used by `physicsnemo.datapipes.DataLoader` for prefetch overlap (no CPU fork workers) |
 | `train.dataloader.use_streams=false` | Disable CUDA-stream prefetching — useful for debugging or CPU-only runs |
@@ -253,8 +247,7 @@ training split size.
 | `model.num_spatial_points=8192` | Subsample cells per training step (–1 = use all) |
 | `model.n_layers=12 model.n_hidden=384` | Bigger Transolver |
 | `model.use_te=true` | Use NVIDIA TransformerEngine layers (requires `[model-extras]`) |
-| `train.resume_checkpoint=.../checkpoints/latest_checkpoint` | Resume from a checkpoint directory |
-| `train.latest_checkpoint_interval=0` | Disable the rolling `latest_checkpoint/` directory (`null` also works) |
+| `train.resume_checkpoint=.../checkpoints/best_model` | Resume from a checkpoint directory |
 
 ### 4.4 Output structure
 
@@ -267,18 +260,16 @@ outputs/RTE_Transolver/lattice/transolver/
 │   ├── hydra.yaml
 │   └── overrides.yaml
 ├── checkpoints/
-│   ├── checkpoint.0.0.pt              # periodic training-state checkpoint (every train.checkpoint_interval)
-│   ├── Transolver.0.0.mdlus           # periodic model weights
-│   ├── latest_checkpoint/             # rolling full-state resume checkpoint (train.latest_checkpoint_interval)
-│   ├── best_model_epoch_<E>/          # snapshot of the lowest val_loss epoch
-│   ├── best_qoi_model/                # snapshot of the lowest validation QoI-loss epoch
-│   └── top_model/                     # current top-1 by val_loss
+│   └── best_model/                 # the lowest-val_loss snapshot to date
+│       ├── checkpoint.0.0.pt       # training state (optimizer, scheduler, scaler, metadata)
+│       └── Transolver.0.0.mdlus    # model state dict
 ├── tensorboard/             # TB event files (open with `tensorboard --logdir tensorboard/`)
 └── train.log
 ```
 
-When loading checkpoints, `best_model_epoch_<E>/` and `top_model/` track
-validation loss, while `best_qoi_model/` tracks validation QoI loss.
+Inference defaults to `checkpoints/best_model/` — the single
+best-by-val_loss checkpoint maintained during training. No periodic,
+rolling, or per-epoch snapshots are kept.
 
 ---
 
@@ -286,42 +277,49 @@ validation loss, while `best_qoi_model/` tracks validation QoI loss.
 
 ### 5.1 Run inference
 
+Inference is Hydra-driven; supply the checkpoint path, data root, and split
+file as standard Hydra overrides:
+
 ```bash
+RUN=outputs/RTE_Transolver/lattice/transolver
 python src/inference.py \
-    --checkpoint_dir outputs/RTE_Transolver/lattice/transolver/checkpoints/top_model \
-    --data_path <DATA_ROOT> \
-    --case_type lattice \
-    --split_file <DATA_ROOT>/splits/lattice_splits.json \
-    --output_dir results/lattice
+    case=lattice data=lattice \
+    case.data_root=/path/to/data_root \
+    case.split_file=/path/to/splits.json \
+    inference.checkpoint_path=$RUN/checkpoints/best_model \
+    inference.output_dir=$RUN/evaluation
 ```
 
-By default, `--flux_stats_file` is read from the checkpoint's saved hydra
-config — pass `--flux_stats_file <PATH>` to override.
+The flux normalization stats file is read from
+`cfg.data.flux_normalization_stats_file` (interpolated from `case.data_root`
+by default); override it directly via
+`data.flux_normalization_stats_file=<PATH>` if you keep stats elsewhere.
 
-CLI options:
+Inference-specific config keys (under `inference.*`):
 
-| Flag | Effect |
+| Key | Effect |
 |---|---|
-| `--checkpoint_dir DIR` | A directory containing `Transolver.0.0.mdlus` + `checkpoint.0.0.pt`. Pass either a `best_*/` snapshot dir or the run's `checkpoints/` root (where inference will use `top_model`). |
-| `--data_path DIR` | The dataset root containing the per-case mesh stores (e.g. `<DATA_ROOT>/lattice/*.mesh`). |
-| `--case_type {lattice,hohlraum}` | Required. |
-| `--split_file FILE` | Required explicit split JSON. |
-| `--flux_stats_file FILE` | Optional override for the flux-normalization YAML recorded in the checkpoint's hydra config. If omitted, the training-time path is reused. The matching `<case>_material_stats.yaml` is read from the same directory. |
-| `--output_dir DIR` | Where to write metrics + figures. Default: `<run_dir>/evaluation`. |
-| `--num_samples N` | Limit to the first `N` test simulations (default: all). |
-| `--device {cpu,cuda,cuda:0,...}` | Defaults to CUDA if available. |
-| `--num_plot_samples N` | Number of `flux_panels_<idx>.png` figures to write (default: 3). |
+| `inference.checkpoint_path` | Required. Directory containing `Transolver.0.0.mdlus` + `checkpoint.0.0.pt`. Point at the `best_model/` directory under the run's `checkpoints/`. |
+| `inference.output_dir` | Required. Where to write `metrics.yaml`, `qoi_metrics.yaml`, and `figures/`. |
+| `inference.num_samples` | Cap on the number of test simulations (default: `null` = all). |
+| `inference.num_plot_samples` | Number of `flux_panels_<idx>.png` figures to write (default: 3, evenly sampled across the test set). |
+| `inference.device` | Override torch device (default: `null` = CUDA if available). |
+| `inference.use_amp` | Autocast in eval; bf16 on CUDA, off on CPU (default: `true`). |
+
+The case (`lattice` / `hohlraum`) is selected the same way as in training:
+`case=<name> data=<name>`. The dataset root, split file, and material/flux
+stats paths interpolate from `case.data_root` exactly as during training.
 
 ### 5.2 Outputs
 
 ```text
 <output_dir>/
-├── metrics.yaml          # field-level metrics over the whole test set
-├── qoi_metrics.yaml      # per-region QoI relative error
+├── metrics.yaml             # field-level metrics over the whole test set
+├── qoi_metrics.yaml         # per-region QoI relative error
 └── figures/
-    ├── flux_panels_<idx>.png   # target / prediction / error 3-panel for sample <idx>
-    ├── true_vs_pred.png        # scatter of all (true, pred) flux values
-    └── error_histogram.png     # distribution of pointwise absolute error
+    ├── flux_panels_0000.png # target / prediction / error 3-panel per plotted sample
+    ├── ...
+    └── qoi_true_vs_pred.png # predicted vs ground-truth QoI scatter (one panel per region)
 ```
 
 ### 5.3 Metric definitions
@@ -354,8 +352,10 @@ dominating the mean).
 | `max_relative_error_pct` | worst single-simulation relative error |
 
 For lattice, the only region is `cur_absorption`. For hohlraum, inference
-reports center, vertical, horizontal, and total QoI components when metadata is
-available.
+reports `cur_absorption_{center, vertical, horizontal}` when geometry
+metadata is available on the sample (the training-time physics loss
+additionally averages in a synthesized `total` term across those three
+regions; inference does not).
 
 ### 5.4 Comparing runs
 
@@ -384,28 +384,26 @@ configs. Training logs converged to final validation losses of about
 
 ### 6.2 Reading the training log
 
-Each epoch logs train/validation MSE, QoI loss, learning rate, and checkpoint
-updates. A typical completed epoch looks like:
+Each epoch logs train/validation loss and any per-component sub-losses
+present (`mse`, `qoi`, `qoi_<region>`, ...) followed by the current
+learning rate. A typical line looks like:
 
 ```text
 Epoch 500: train_loss=1.7081e-05, val_loss=2.0973e-05,
     train_mse=1.7032e-05, val_mse=2.0900e-05,
-    train_qoi=9.8040e-06,  val_qoi=1.4658e-05, lr=1.00e-06
-[checkpoint][INFO] - Saved model state dictionary:
-    ./checkpoints/Transolver.0.500.mdlus
-Training completed!
-Top validation losses: ['0.000021', '0.000021', '0.000021']
-Best QoI loss: 5.887844e-06
+    train_qoi=9.8040e-06, val_qoi=1.4658e-05, lr=1.00e-06
 ```
+
+A `best_model/` checkpoint is written whenever `val_loss` improves; no
+periodic per-epoch snapshots are kept.
 
 ### 6.3 Reading the inference figures
 
-- **`flux_panels_<idx>.png`** — three panels: target, prediction, absolute
-  error.
-- **`true_vs_pred.png`** — points should lie close to the `y = x` diagonal
-  across the full dynamic range.
-- **`error_histogram.png`** — distribution of pointwise absolute error; lower
-  and thinner tails are better.
+- **`flux_panels_<idx>.png`** — three panels per sample: target,
+  prediction, absolute error.
+- **`qoi_true_vs_pred.png`** — predicted vs ground-truth QoI scatter, one
+  panel per region. Points should lie close to the `y = x` diagonal
+  across the full test set.
 
 ---
 
@@ -415,11 +413,12 @@ All training hyperparameters live under `src/conf/`, composed by Hydra:
 
 ```text
 src/conf/
-├── config.yaml             # root: composes case / data / model / train
+├── config.yaml             # root: composes case / data / model / train / inference
 ├── case/{lattice,hohlraum}.yaml
 ├── data/{lattice,hohlraum}.yaml
 ├── model/transolver.yaml
-└── train/base.yaml
+├── train/base.yaml
+└── inference/default.yaml
 ```
 
 `config.yaml` defaults list:
@@ -430,6 +429,7 @@ defaults:
   - data: lattice
   - model: transolver
   - train: base
+  - inference: default
   - _self_
 ```
 
@@ -446,28 +446,10 @@ python src/train.py \
 ```
 
 The Hydra group structure means `case=hohlraum` swaps the entire
-`case/hohlraum.yaml` (including `physics_loss_weight`, `qoi_region`,
+`case/hohlraum.yaml` (including `physics_loss_weight`,
 `include_q_in_embedding`, and `embedding_dim_override`). The downstream
 `train/base.yaml` and `model/transolver.yaml` interpolate from `${case.*}`
 so case-specific overrides propagate automatically.
-
----
-
-## 8. Tests
-
-Pipeline regression tests live under `tests/test_pipeline.py` and exercise the
-dataset / dataloader contract end-to-end against a small dev split. They skip
-cleanly when the dataset isn't present.
-
-```bash
-python -m pytest examples/cfd/nuclear_engineering/radiation_transport/tests/ -v
-```
-
-The tests expect a converted dev dataset at
-`/home/<user>/Projects/Datasets/RTE/devset/mesh/{lattice,hohlraum}/` (12 mesh
-stores per case) plus the matching `splits/` and `stats/` directories. If your
-layout differs, adjust the `_DATASET_ROOT` constant at the top of the test
-file.
 
 ---
 

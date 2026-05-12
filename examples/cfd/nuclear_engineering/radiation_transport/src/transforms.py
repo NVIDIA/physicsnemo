@@ -35,7 +35,7 @@ __all__ = [
     "coord_translate_scale_params",
     "MaterialPropertyExtractor",
     "SpatialSampler",
-    "SteadyStateSampler",
+    "FinalTimeSampler",
 ]
 
 
@@ -273,9 +273,9 @@ class SpatialSampler(Transform):
         return f"num_points={self.num_points}"
 
 
-@register("RTESteadyStateSampler")
-class SteadyStateSampler(Transform):
-    """Extract the fixed steady-state mapping: first flux -> final flux."""
+@register("RTEFinalTimeSampler")
+class FinalTimeSampler(Transform):
+    """Extract the fixed final-time mapping: first flux -> final flux."""
 
     def __init__(self):
         super().__init__()

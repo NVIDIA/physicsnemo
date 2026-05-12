@@ -126,7 +126,7 @@ class MeshDataReader(Reader):
         point_data = mesh.point_data
         global_data = mesh.global_data
 
-        # Flux + timesteps (steady-state first -> final snapshots).
+        # Flux + timesteps (first -> final-time snapshots).
         if "scalar_flux" not in point_data.keys():
             raise KeyError(f"scalar_flux missing from {filepath}")
         flux_nT = point_data["scalar_flux"]  # (N, T)
@@ -225,7 +225,7 @@ class MeshDataReader(Reader):
 
 
 class RTEBaseDataset(PhysicsNeMoDataset):
-    """File-indexed steady-state dataset over a directory of mesh stores.
+    """File-indexed final-time dataset over a directory of mesh stores.
 
     Wraps :class:`MeshDataReader` and produces ``(TensorDict, metadata)``
     tuples per the :class:`physicsnemo.datapipes.Dataset` contract. The

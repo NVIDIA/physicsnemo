@@ -53,7 +53,7 @@ from transforms import (
     RTEBackupCoords,
     RTEFluxLogClip,
     SpatialSampler,
-    SteadyStateSampler,
+    FinalTimeSampler,
     coord_translate_scale_params,
 )
 
@@ -307,7 +307,7 @@ def _build_transforms(
         Normalize(**flux_normalize_kwargs(flux_stats, field="scalar_flux")),
     ]
 
-    transform_list.append(SteadyStateSampler())
+    transform_list.append(FinalTimeSampler())
     transform_list.append(MaterialPropertyExtractor())
 
     material_stats_path = (
@@ -447,7 +447,7 @@ def build_dataloaders(
     common_kwargs = _build_rte_dataset_kwargs(cfg)
 
     if rank_zero:
-        logger.info("Mapping mode: steady-state first-to-final flux")
+        logger.info("Mapping mode: first-snapshot -> final-time flux")
         if common_kwargs["split_file"]:
             logger.info(f"Using predefined splits from: {common_kwargs['split_file']}")
 
