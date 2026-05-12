@@ -14,76 +14,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Transform framework + flux / coordinates / sampling transforms.
-
-This module consolidates the RTE transform framework with the concrete
-preprocessing transforms used by the Transolver pipeline. It is intentionally
-flat (no submodules) so the standalone example can be read top-to-bottom:
-
-* ``Transform`` and ``Compose`` are re-exports from PhysicsNeMo
-  (``physicsnemo.datapipes.transforms``); RTE transforms subclass ``Transform``
-  and operate on ``tensordict.TensorDict`` instances.
-* The ``@register(...)`` decorator from
-  ``physicsnemo.datapipes.registry`` populates the global PhysicsNeMo registry;
-  we apply it for config-driven instantiation if needed.
-
-Material transforms live in the sibling ``material.py``.
-"""
-
 from __future__ import annotations
 
-# =========================================================================
-# Imports
-# =========================================================================
-
 import math
-from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Tuple
 
-import numpy as np
 import torch
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms import Transform
 from tensordict import TensorDict
 
-
-# =========================================================================
-# Framework: Transform base + TensorDict utilities
-# =========================================================================
-#
-# ``Transform`` is imported above. RTE transforms subclass it and operate on
-# ``TensorDict``. The TensorDict helpers below
-# bridge numpy / torch / non-tensor (str, dict, None) values that flow through
-# the pipeline.
-
-
-def td_get(data: TensorDict, key: str, default: Any = None) -> Any:
-    """``td[key]``-equivalent lookup with a default for missing keys.
-
-    ``TensorDict.get`` returns the raw ``NonTensorData`` wrapper; bracket access
-    unwraps it but raises ``KeyError`` for missing keys. This helper combines
-    both semantics.
-    """
-    if key in data:
-        return data[key]
-    return default
-
-
-def to_numpy(value: Any) -> np.ndarray:
-    """Coerce a torch tensor / numpy array / array-like into a numpy array."""
-    if isinstance(value, torch.Tensor):
-        return value.detach().cpu().numpy()
-    return np.asarray(value)
-
-
-# =========================================================================
-# Flux
-# =========================================================================
-#
-# ``RTEFluxLogClip`` is the canonical pre-step that clamps flux and applies
-# log10 before z-score normalization (the latter performed by
-# ``physicsnemo.datapipes.transforms.Normalize``). ``denormalize_flux`` inverts
-# the full ``RTEFluxLogClip + Normalize`` chain for evaluation.
+__all__ = [
+    "Transform",
+    "RTEFluxLogClip",
+    "denormalize_flux",
+    "GLOBAL_DOMAIN_BOUNDS",
+    "RTEBackupCoords",
+    "FourierFeatures",
+    "coord_bounds_for_case",
+    "coord_translate_scale_params",
+    "MaterialPropertyExtractor",
+    "SpatialSampler",
+    "SteadyStateSampler",
+]
 
 
 def denormalize_flux(
@@ -116,48 +69,18 @@ class RTEFluxLogClip(Transform):
         ``scalar_flux`` -- same shape, ``log10(clamp(x, clip) + clip)``.
         ``flux_normalization_stats`` -- non-tensor dict with ``log_flux_mean``,
         ``log_flux_std``, ``clip_threshold`` for downstream denormalization.
-
-    Args:
-        clip_threshold: minimum flux value before log.
-        log_flux_mean / log_flux_std: stats to record for denorm; if a
-            ``normalization_stats_file`` is provided these are read from it.
-        normalization_stats_file: optional path to the RTE flux stats YAML
-            (``load_flux_stats``). When provided, overrides the inline args
-            and validates ``clip_threshold`` against the file's value.
     """
 
     def __init__(
         self,
-        clip_threshold: float = 1e-8,
-        log_flux_mean: Optional[float] = None,
-        log_flux_std: Optional[float] = None,
-        normalization_stats_file: Optional[Union[str, Path]] = None,
+        clip_threshold: float,
+        log_flux_mean: float,
+        log_flux_std: float,
     ) -> None:
         super().__init__()
-
-        if normalization_stats_file is not None:
-            # Imported lazily to avoid a circular import: ``dataset.py`` itself
-            # may pull symbols from this module via the flat-import shim.
-            from dataset import load_flux_stats
-
-            stats = load_flux_stats(normalization_stats_file)
-            if abs(stats["clip_threshold"] - clip_threshold) > 1e-10:
-                raise ValueError(
-                    f"Clip threshold mismatch: got {clip_threshold}, "
-                    f"stats computed with {stats['clip_threshold']}"
-                )
-            self.clip_threshold = float(stats["clip_threshold"])
-            self.log_flux_mean = float(stats["log_flux_mean"])
-            self.log_flux_std = float(stats["log_flux_std"])
-        elif log_flux_mean is not None and log_flux_std is not None:
-            self.clip_threshold = float(clip_threshold)
-            self.log_flux_mean = float(log_flux_mean)
-            self.log_flux_std = float(log_flux_std)
-        else:
-            raise ValueError(
-                "Either normalization_stats_file or (log_flux_mean, log_flux_std) "
-                "must be provided."
-            )
+        self.clip_threshold = float(clip_threshold)
+        self.log_flux_mean = float(log_flux_mean)
+        self.log_flux_std = float(log_flux_std)
 
     def __call__(self, data: TensorDict) -> TensorDict:
         flux = data["scalar_flux"]
@@ -180,17 +103,6 @@ class RTEFluxLogClip(Transform):
             f"log_flux_mean={self.log_flux_mean:.4f}, "
             f"log_flux_std={self.log_flux_std:.4f}"
         )
-
-
-# =========================================================================
-# Coordinates (Fourier features)
-# =========================================================================
-#
-# The default coordinate-normalization chain is
-# ``[RTEBackupCoords, Translate, Scale]`` (the latter two are stock PhysicsNeMo
-# transforms). ``GLOBAL_DOMAIN_BOUNDS`` is the canonical per-case bbox table
-# referenced from the config-build site and direct consumers.
-# ``FourierFeatures`` has no PhysicsNeMo equivalent and stays custom.
 
 
 GLOBAL_DOMAIN_BOUNDS = {
@@ -279,14 +191,6 @@ class FourierFeatures(Transform):
         )
 
 
-# =========================================================================
-# Sampling (spatial + steady-state)
-# =========================================================================
-#
-# ``SpatialSampler`` randomly subsamples point clouds to a target size.
-# ``SteadyStateSampler`` extracts the fixed initial->final flux mapping.
-
-
 @register("RTESpatialSampler")
 class SpatialSampler(Transform):
     """Randomly subsample spatial points to ``num_points``.
@@ -318,14 +222,10 @@ class SpatialSampler(Transform):
         self.gen.manual_seed(int(self.seed) + int(epoch) * self._EPOCH_PRIME)
 
     def to(self, device):
-        """Override base ``Transform.to`` to keep ``self.gen`` on CPU.
-
-        ``torch.randperm`` insists the generator's device match the output
-        tensor's device. We pin index draws on CPU and ``.to(device)`` only
-        the selected indices below, so leaving the generator on CPU keeps
-        the transform device-agnostic.
+        """No-op device move. ``self.gen`` stays pinned to CPU because
+        ``torch.randperm`` requires its generator and output to share a
+        device; selected indices are moved inside ``__call__``.
         """
-        self._device = torch.device(device) if isinstance(device, str) else device
         return self
 
     def __call__(self, data: TensorDict) -> TensorDict:
@@ -387,7 +287,7 @@ class SteadyStateSampler(Transform):
 
         input_idx = 0
         target_idx = flux_all.shape[0] - 1
-        metadata = td_get(data, "metadata", default={}) or {}
+        metadata = data["metadata"] if "metadata" in data else {}
         max_timestep = (
             metadata.get("max_timestep") if isinstance(metadata, dict) else None
         )
@@ -402,23 +302,54 @@ class SteadyStateSampler(Transform):
         return data
 
 
-# =========================================================================
-# Public API
-# =========================================================================
+@register("RTEMaterialPropertyExtractor")
+class MaterialPropertyExtractor(Transform):
+    """Stack precomputed sigma fields into a per-cell ``(N, 4)`` tensor.
 
-__all__ = [
-    # Framework
-    "Transform",
-    "td_get",
-    "to_numpy",
-    # Flux
-    "RTEFluxLogClip",
-    "denormalize_flux",
-    # Coordinates
-    "GLOBAL_DOMAIN_BOUNDS",
-    "RTEBackupCoords",
-    "FourierFeatures",
-    # Sampling
-    "SpatialSampler",
-    "SteadyStateSampler",
-]
+    Q must be present in the source data; it may be all-zero for source-free
+    regimes (e.g., hohlraum).
+    """
+
+    def __call__(self, data: TensorDict) -> TensorDict:
+        for key in ("sigma_a", "sigma_s", "sigma_t", "Q"):
+            if key not in data:
+                raise KeyError(
+                    f"Mesh store is missing required field {key!r}. "
+                    "All four fields (sigma_a, sigma_s, sigma_t, Q) must be precomputed."
+                )
+
+        data["physical_properties"] = torch.stack(
+            [data["sigma_a"], data["sigma_s"], data["sigma_t"], data["Q"]],
+            dim=-1,
+        ).to(dtype=torch.float32)
+        return data
+
+
+def coord_bounds_for_case(case_type: str) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Return ``(bbox_min, bbox_max)`` as float32 tensors for a known case."""
+    if case_type not in GLOBAL_DOMAIN_BOUNDS:
+        raise ValueError(
+            f"Unknown case_type '{case_type}'. "
+            f"Expected one of: {list(GLOBAL_DOMAIN_BOUNDS.keys())}"
+        )
+    bounds = GLOBAL_DOMAIN_BOUNDS[case_type]
+    return (
+        torch.as_tensor(bounds["min"], dtype=torch.float32),
+        torch.as_tensor(bounds["max"], dtype=torch.float32),
+    )
+
+
+def coord_translate_scale_params(
+    case_type: str,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Compute ``(center, half_extent)`` for ``Translate`` + ``Scale``.
+
+    Returns the tensors so the caller can wire them straight into
+    ``Translate(center_key_or_value=center, subtract=True)`` followed by
+    ``Scale(scale=half_extent, divide=True)`` — i.e. the standard
+    ``(x - center) / half_extent`` normalization into ``[-1, 1]``.
+    """
+    bbox_min, bbox_max = coord_bounds_for_case(case_type)
+    center = 0.5 * (bbox_min + bbox_max)
+    half_extent = 0.5 * (bbox_max - bbox_min)
+    return center, half_extent
