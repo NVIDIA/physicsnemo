@@ -16,27 +16,62 @@ inputs:
 runs:
   using: composite
   steps:
+    # System packages split into two named groups for clarity:
+    #
+    #   * toolchain  -- everything needed to run uv/pip/git and to build
+    #                   Python wheels from source (torch_sparse, torch_scatter,
+    #                   torch_cluster, etc. that uv pulls in via the
+    #                   gnns extra).
+    #
+    #   * rendering  -- VTK (and therefore pyvista, used by the mesh
+    #                   tests under PYVISTA_OFF_SCREEN=true) acquires an
+    #                   OpenGL context during render-window init even in
+    #                   off-screen mode.  The bare CUDA container ships
+    #                   neither libGL nor a display server, so without
+    #                   these libs + Xvfb (started below) VTK segfaults.
+    #                   Ubuntu 24.04 dropped libgl1-mesa-glx; libgl1 is
+    #                   the replacement -- do not re-add the old name.
     - name: Install system dependencies
       shell: bash
       run: |
         set -euo pipefail
         export DEBIAN_FRONTEND=noninteractive
+
+        toolchain=(
+          ca-certificates curl git gh zstd
+          build-essential cmake pkg-config
+          python3 python3-dev python3-venv python3-pip
+        )
+        rendering=(
+          xvfb libgl1 libglu1-mesa libxrender1 libxext6 libsm6
+        )
+
         apt-get update
         apt-get install -y --no-install-recommends \
-          ca-certificates \
-          curl \
-          git \
-          gh \
-          build-essential \
-          cmake \
-          pkg-config \
-          python3 \
-          python3-dev \
-          python3-venv \
-          python3-pip \
-          zstd
+          "${toolchain[@]}" "${rendering[@]}"
         ln -sf /usr/bin/python3 /usr/bin/python
         rm -rf /var/lib/apt/lists/*
+
+    # Start a virtual framebuffer on :99 and publish DISPLAY to every
+    # subsequent step in the job.  Required by VTK/pyvista (rationale in
+    # the install step above).  Background processes started inside a
+    # composite-action step persist for the rest of the job container's
+    # lifetime, so this single daemon covers setup-uv-env, the test-data
+    # download, and pytest itself.
+    - name: Start Xvfb (headless display for VTK/pyvista)
+      shell: bash
+      run: |
+        set -euo pipefail
+        Xvfb :99 -screen 0 1024x768x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
+        xvfb_pid=$!
+        sleep 1  # let Xvfb bind the display socket
+        if ! kill -0 "$xvfb_pid" 2>/dev/null; then
+          echo "::error::Xvfb failed to start; log follows:"
+          cat /tmp/xvfb.log || true
+          exit 1
+        fi
+        echo "DISPLAY=:99" >> "$GITHUB_ENV"
+        echo "Xvfb running on :99 (pid=${xvfb_pid})"
 
     - name: Install Hugging Face CLI
       shell: bash

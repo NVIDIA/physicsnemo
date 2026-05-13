@@ -102,6 +102,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   standard solvers). Patching primitives (`BasePatching2D`,
   `GridPatching2D`, `RandomPatching2D`) are exposed under the same
   subpackage and are `torch.compile`-friendly with `fullgraph=True`.
+  `MultiDiffusionPredictor` supports memory-efficient inference on
+  large domains via `chunk_size` and `use_checkpointing`. The
+  subpackage also ships patch-local DPS guidance:
+  `MultiDiffusionDPSScorePredictor` (drop-in score predictor that plugs
+  into the standard sampling stack),
+  `MultiDiffusionDataConsistencyDPSGuidance` for inpainting and sparse
+  data assimilation, and `MultiDiffusionModelConsistencyDPSGuidance` for
+  generic patch-local observation operators. Use these instead of the
+  global `DPSScorePredictor` to run guided sampling on domains that
+  would otherwise OOM.
 - Adds `"epsilon"` as a supported prediction type throughout the diffusion
   framework, alongside the existing `"x0"` and `"score"` modes. A new
   `PredictorType = Literal["x0", "score", "epsilon"]` alias in
@@ -111,6 +121,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   end-to-end training and sampling of epsilon-parameterized models.
   Losses gain an `epsilon_to_x0_fn` kwarg used for the epsilon-to-x0
   conversion required during DSM training.
+- Adds `DiffusionUNet3D` 3D U-Net diffusion backbone for volumetric data at
+  `physicsnemo.experimental.models.diffusion_unets`. Implements the
+  `DiffusionModel` protocol. Exposes reusable 3D building blocks
+  (`Conv3D`, `GroupNorm3D`, `UNetAttention3D`, `UNetBlock3D`) at
+  `physicsnemo.experimental.nn`.
 - Added support for Batched radius search, which enables Domino
   and GeoTransolver with local features and batch size > 1.
 - Added the underfill recipe.
@@ -203,6 +218,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed `physicsnemo.utils.get_checkpoint_dir` returning paths with `\`
+  separators on Windows (e.g. `.\checkpoints_model`), which was inconsistent
+  with the `/`-based paths used elsewhere in the checkpoint utilities and
+  broke the `test_get_checkpoint_dir` CI test on Windows. The function now
+  always joins with `/`, working uniformly for local paths and `fsspec`
+  URIs (`msc://`, etc.) across operating systems.
 - Fixed functional benchmark plot fallback labeling so unlabeled ASV results use
   the same key ordering as the benchmark runner.
 - Fixed graph break caused by `FunctionSpec` dispatch (`max(key=)` is not supported by `torch.compile`)

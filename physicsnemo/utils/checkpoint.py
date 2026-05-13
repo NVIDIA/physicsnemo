@@ -1337,30 +1337,30 @@ def _load_checkpoint_distributed(
 def get_checkpoint_dir(base_dir: Path | str, model_name: str) -> str:
     r"""Build a model-specific checkpoint directory path.
 
-    Returns ``"{base_dir}/checkpoints_{model_name}"``, handling both
-    local paths and ``msc://`` URIs.
+    Returns ``"{base_dir}/checkpoints_{model_name}"``, handling both local
+    paths and ``fsspec`` URIs (e.g. ``msc://``).  Always uses ``/`` as the
+    appended separator so the result is identical across operating systems
+    and remains a valid URI when ``base_dir`` is a remote scheme. This
+    matches the path convention used elsewhere in this module (see e.g.
+    :func:`_get_checkpoint_filename`).
 
     Parameters
     ----------
     base_dir : Path | str
         Root directory under which the checkpoint subdirectory is placed.
+        Any trailing ``/`` or ``\\`` is stripped before concatenation, so
+        ``"foo"``, ``"foo/"``, and (on Windows) ``"foo\\"`` all behave
+        identically.
     model_name : str
         Model name used as the directory suffix.
 
     Returns
     -------
     str
-        Full path to the checkpoint directory.
+        Full path to the checkpoint directory, always joined with ``/``.
     """
-    base_dir = str(base_dir)
-    top_level_dir = f"checkpoints_{model_name}"
-    protocol = fsspec.utils.get_protocol(base_dir)
-    if protocol == "msc":
-        if not base_dir.endswith("/"):
-            base_dir += "/"
-        return base_dir + top_level_dir
-    else:
-        return os.path.join(base_dir, top_level_dir)
+    base_dir = str(base_dir).rstrip("/\\")
+    return f"{base_dir}/checkpoints_{model_name}"
 
 
 def _cache_if_needed(path: str) -> str:

@@ -16,16 +16,18 @@
 
 import io
 import logging
+from typing import Tuple, Union
 
 import torch
 import torch.nn as nn
 
-try:
-    import onnxruntime as ort
-except ImportError:
-    ort = None
+from physicsnemo.core.version_check import OptionalImport
 
-from typing import Tuple, Union
+# Lazy import: keeps onnxruntime out of physicsnemo's static import graph
+# so import-linter does not require it as a core dependency.  Attribute
+# access on `ort` triggers the import and raises ImportError with a
+# helpful install hint when the package is missing.
+ort = OptionalImport("onnxruntime")
 
 Tensor = torch.Tensor
 logger = logging.getLogger("__name__")
@@ -35,12 +37,11 @@ def check_ort_install(func):
     """Decorator to check if ONNX runtime is installed"""
 
     def _wrapper_ort_install(*args, **kwargs):
-        if ort is None:
+        if not ort.available:
             raise ModuleNotFoundError(
                 "ONNXRuntime is not installed. 'pip install \
                 onnxruntime onnxruntime_gpu'"
             )
-        func(*args, **kwargs)
         return func(*args, **kwargs)
 
     return _wrapper_ort_install
