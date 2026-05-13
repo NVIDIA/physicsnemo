@@ -1,0 +1,8 @@
+# requirements.txt
+# examples/structural_mechanics/ensemble_uq/
+#
+# Following EXT-001: example-only dependencies must not leak into the
+# core package. Install with:
+#   pip install -r examples/structural_mechanics/ensemble_uq/requirements.txt
+
+matplotlib>=3.7.0
