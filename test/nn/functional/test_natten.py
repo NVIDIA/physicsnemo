@@ -117,7 +117,19 @@ class TestNA1D:
         k = torch.randn(B, L, H, D, device=device, requires_grad=True)
         v = torch.randn(B, L, H, D, device=device, requires_grad=True)
 
-        out = na1d(q, k, v, kernel_size=3)
+        try:
+            out = na1d(q, k, v, kernel_size=3)
+        except NotImplementedError as e:
+            # natten's default CPU backend is FlexAttention, whose
+            # forward refuses requires_grad inputs on CPU.  Skip only
+            # in that specific case -- if natten picks a different
+            # backend (e.g. "reference") that supports CPU backward,
+            # the test should still run.
+            if "FlexAttention does not support backward on CPU" in str(e):
+                pytest.skip(
+                    "natten chose FlexAttention backend; CPU backward unsupported"
+                )
+            raise
         out.sum().backward()
 
         for name, t in [("q", q), ("k", k), ("v", v)]:
@@ -199,7 +211,19 @@ class TestNA2D:
         k = torch.randn(B, Ht, W, H, D, device=device, requires_grad=True)
         v = torch.randn(B, Ht, W, H, D, device=device, requires_grad=True)
 
-        out = na2d(q, k, v, kernel_size=3)
+        try:
+            out = na2d(q, k, v, kernel_size=3)
+        except NotImplementedError as e:
+            # natten's default CPU backend is FlexAttention, whose
+            # forward refuses requires_grad inputs on CPU.  Skip only
+            # in that specific case -- if natten picks a different
+            # backend (e.g. "reference") that supports CPU backward,
+            # the test should still run.
+            if "FlexAttention does not support backward on CPU" in str(e):
+                pytest.skip(
+                    "natten chose FlexAttention backend; CPU backward unsupported"
+                )
+            raise
         out.sum().backward()
 
         for name, t in [("q", q), ("k", k), ("v", v)]:
@@ -279,7 +303,19 @@ class TestNA3D:
         k = torch.randn(B, X, Y, Z, H, D, device=device, requires_grad=True)
         v = torch.randn(B, X, Y, Z, H, D, device=device, requires_grad=True)
 
-        out = na3d(q, k, v, kernel_size=3)
+        try:
+            out = na3d(q, k, v, kernel_size=3)
+        except NotImplementedError as e:
+            # natten's default CPU backend is FlexAttention, whose
+            # forward refuses requires_grad inputs on CPU.  Skip only
+            # in that specific case -- if natten picks a different
+            # backend (e.g. "reference") that supports CPU backward,
+            # the test should still run.
+            if "FlexAttention does not support backward on CPU" in str(e):
+                pytest.skip(
+                    "natten chose FlexAttention backend; CPU backward unsupported"
+                )
+            raise
         out.sum().backward()
 
         for name, t in [("q", q), ("k", k), ("v", v)]:
