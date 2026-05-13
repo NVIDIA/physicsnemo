@@ -3,3 +3,4 @@ tensorboard
 cuml-cu13==25.10.*
 einops
 tensorstore
+tabulate

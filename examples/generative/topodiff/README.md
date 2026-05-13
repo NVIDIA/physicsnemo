@@ -20,6 +20,14 @@ Download the dataset and set the path to the dataset in the [config file](conf/c
 <img src="../../../docs/img/topodiff_doc/topology_generated.png" width="840" />
 </p>
 
+## Prerequisites
+
+Install the requirements using:
+
+```bash
+pip install -r requirements.txt
+```
+
 ### Model training 
 
 Before training the model, take a loo at the `Dataset Configuration & Paths` section of the [config file](conf/config.yaml)
