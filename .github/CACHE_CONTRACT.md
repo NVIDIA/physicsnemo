@@ -37,7 +37,7 @@ from three independent sources: a pinned CUDA container image, a pinned
 | Invalidates when | container image or Python version changes (prefix change → new slot) |
 | Does **not** invalidate on | `uv.lock`, `pyproject.toml`, or kernel source changes (each compiler handles its own source-hash invalidation internally) |
 | Restore semantics | **fail-open**; missing cache only costs compilation time, never correctness |
-| Save semantics | nightly `testmon` job only, via delete-before-save; PR workflows restore but never save |
+| Save semantics | nightly `testmon` job only, via the `replace-cache` action; PR workflows restore but never save |
 
 The JIT compilation cache bundles all JIT compiler artifact directories
 under a single umbrella path.  Each compiler writes to a subdirectory
@@ -56,6 +56,74 @@ old ones.
 
 To add a new JIT backend: create a subdirectory under `$JIT_CACHE_DIR`,
 set the backend's cache-path env var in the test step, done.
+
+### Testmon database cache (`.testmondata*`)
+
+| Property | Value |
+|---|---|
+| Key | `<TESTMON_CACHE_KEY_PREFIX>-latest` |
+| Prefix encodes | nightly identity (`testmon-nightly`) |
+| Suffix | literal `latest` (mutable slot, refreshed via delete-before-save) |
+| Contents | `.testmondata`, `.testmondata-shm`, `.testmondata-wal` -- testmon's per-test dependency graph and last-run signatures |
+| Invalidates when | prefix is bumped (essentially never, by design) |
+| Does **not** invalidate on | `uv.lock` or `pyproject.toml` changes -- testmon detects changed dependency hashes itself and re-runs only the affected tests |
+| Restore semantics | **fail-open**; a miss only costs full-suite runtime, never correctness, and testmon handles stale DBs gracefully |
+| Save semantics | nightly `testmon` job only, via the `replace-cache` action with `if: always()` so partial DBs from flaky runs still publish |
+
+Historical note: the key was previously suffixed with
+`hashFiles('uv.lock', 'pyproject.toml')`.  Because GitHub Actions
+caches are immutable, two consecutive nightlies with an unchanged
+lockfile (the common case) collided on the same key, and the second
+save logged `Failed to save: Unable to reserve cache` only as a
+*warning*.  The stale DB persisted for days, PRs restored it via the
+prefix fallback, and testmon then invalidated everything because the
+realized environment had drifted away from what the cached DB
+recorded.  Switching to a `-latest` mutable slot via `replace-cache`
+fixes the save bug, and the embedded verify step turns any future
+silent save failure into a hard job failure.
+
+### Coverage baseline cache (`.coverage*`)
+
+| Property | Value |
+|---|---|
+| Key | `<COVERAGE_CACHE_KEY_PREFIX>-latest` |
+| Prefix encodes | nightly identity (`coverage-nightly`) |
+| Suffix | literal `latest` (mutable slot, refreshed via delete-before-save) |
+| Contents | parallel-mode coverage shards (`.coverage.*`) produced by the nightly's full-suite pytest run, before `coverage combine` |
+| Invalidates when | prefix is bumped |
+| Does **not** invalidate on | `uv.lock` or `pyproject.toml` changes |
+| Restore semantics | **fail-open**; PR coverage merges its own shards on top of the restored baseline |
+| Save semantics | nightly `coverage` job only, via the `replace-cache` action |
+
+Same immutable-key bug class as testmon; migrated to the `-latest`
+slot for parity.
+
+## Reusable building blocks
+
+### `replace-cache` action ([.github/actions/replace-cache/action.yml](actions/replace-cache/action.yml))
+
+All four mutable-slot caches above (uv, JIT, testmon, coverage) share
+the same delete-before-save recipe: GitHub Actions cache slots are
+immutable, so refreshing a `-latest` key requires deleting the
+existing entry, calling `actions/cache/save`, and (because the save
+silently no-ops on key collision) re-querying `gh cache list` to
+confirm the slot now exists.  The `replace-cache` composite action
+encapsulates that recipe:
+
+```yaml
+- name: Replace <some> cache
+  if: <caller-supplied gate>
+  uses: ./.github/actions/replace-cache
+  with:
+    path: <one or more paths>
+    key:  <foo>-latest
+    description: <human-readable label>
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+The verify step is on by default (`verify: "true"`).  Disable only
+when verification is genuinely undesirable; the default exists
+because silent save failures are how stale slots persist for days.
 
 ## Why no `.venv` cache
 
@@ -114,10 +182,12 @@ Guarantees:
 - **Concurrency**: the nightly workflow declares
   `concurrency: nightly-github-uv` with `cancel-in-progress: false` so
   two overlapping runs cannot race on the static `-latest` uv cache key.
-- **Save verification**: after `actions/cache/save@v4` writes the uv
-  download cache slot, the workflow re-queries `gh cache list` to
-  confirm the entry exists. `cache/save` silently no-ops on key
-  collision; without verification a corrupted slot can persist for days.
+- **Save verification**: every mutable-slot save (uv download, JIT,
+  testmon, coverage) goes through the `replace-cache` action, which
+  re-queries `gh cache list` after `actions/cache/save` and fails the
+  job if the slot is not visible.  `cache/save` silently no-ops on
+  key collision and only logs a warning on reservation failure;
+  without verification a corrupted slot can persist for days.
 - **Lockfile-mutation guard**: [.github/actions/setup-uv-env/action.yml](actions/setup-uv-env/action.yml)
   snapshots `sha256(uv.lock)` and `sha256(pyproject.toml)` before any uv
   command runs and compares them again at the end. Any drift (caused by

@@ -174,14 +174,36 @@ runs:
     # remains the single source of truth for the synced environment, and
     # this step layers on top without invalidating that guarantee.
     #
+    # All specs below are pinned with `==` because testmon hashes
+    # site-packages content into its DB environment fingerprint.  When
+    # this step used `>=` lower bounds, any upstream release on PyPI
+    # between the nightly that built the testmon DB and the PR that
+    # consumed it would shift the fingerprint and trigger
+    #   "testmon: The packages installed in your Python environment have
+    #   been changed.  All tests have to be re-executed."
+    # invalidating the entire testmon cache on every PR.  Bumping any of
+    # these pins is a deliberate change: `uv pip install` will resolve
+    # to the new versions on the next nightly, repopulate the testmon
+    # DB cache against the new fingerprint, and PRs will start hitting
+    # again.  Pinning here only stabilises *direct* deps; transitive
+    # churn (e.g. `boto3` -> `urllib3`) can still trigger invalidations,
+    # in which case the next escalation is a `constraints.txt` passed
+    # via `uv pip install -c ...`.
+    #
     # Spec coupling notes:
-    #   * Pure-PyPI specs mirror Dockerfile:240-243 to keep container and
-    #     CI environments in lockstep.
+    #   * Dockerfile:240-243 still uses `>=` lower bounds for the
+    #     pure-PyPI specs; bring them into lockstep when bumping any
+    #     pin here.  The container is built rarely so the unpinned
+    #     `>=` there is less harmful but should be tightened in a
+    #     follow-up.
     #   * The PyG --find-links URL encodes the locked torch version (see
     #     uv.lock entry for torch 2.11.0+cu128).  Bump the
     #     torch-X.Y.Z+cu128 segment in lockstep when the torch pin moves
     #     -- same hand-maintained coupling already documented for the
-    #     natten wheel index in pyproject.toml.
+    #     natten wheel index in pyproject.toml.  PyG wheels carry a
+    #     local-version label (e.g. `2.1.2+pt211cu128`); a `==2.1.2`
+    #     pin matches that label per PEP 440 without us hard-coding the
+    #     full local segment.
     #
     # earth2grid is intentionally NOT installed here: the source build
     # (see Dockerfile:246 for the canonical pin) is fragile in the CI
@@ -212,16 +234,19 @@ runs:
         echo "::group::install CI-only test dependencies"
         uv pip install --python .venv/bin/python \
           "$NUMPY_PIN" \
-          "moto[s3]>=5.0.28" \
-          "numpy-stl" \
-          "scikit-image>=0.24.0" \
-          "shapely" \
-          "multi-storage-client[boto3]>=0.33.0" \
-          "tensorstore" \
-          "pyarrow"
+          "moto[s3]==5.2.1" \
+          "numpy-stl==3.2.0" \
+          "scikit-image==0.26.0" \
+          "shapely==2.1.2" \
+          "multi-storage-client[boto3]==0.48.0" \
+          "tensorstore==0.1.83" \
+          "pyarrow==24.0.0"
         uv pip install --python .venv/bin/python --reinstall \
           "$NUMPY_PIN" \
-          torch_scatter torch_sparse torch_cluster pyg_lib \
+          "torch_scatter==2.1.2" \
+          "torch_sparse==0.6.18" \
+          "torch_cluster==1.6.3" \
+          "pyg_lib==0.6.0" \
           --find-links "$PYG_WHL_INDEX"
         echo "::endgroup::"
 
