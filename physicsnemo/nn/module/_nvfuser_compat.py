@@ -54,8 +54,7 @@ def _try_import():
             return importlib.import_module(name), name
         except ImportError as e:
             logger.warning(
-                "Found %s on sys.path but failed to import (%s); "
-                "trying next backend.",
+                "Found %s on sys.path but failed to import (%s); trying next backend.",
                 name,
                 e,
             )
