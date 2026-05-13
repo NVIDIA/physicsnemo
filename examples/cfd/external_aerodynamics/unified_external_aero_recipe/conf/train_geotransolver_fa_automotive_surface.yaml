@@ -32,11 +32,19 @@ profile: false
 augment: false
 benchmark_io: false
 
-model_type: "surface"
+# -- Data contract -----------------------------------------------------------
+# Same forward interface as standard GeoTransolver -- only the attention
+# backbone differs (GALE_FA vs GALE).
+input_type: tensors
+output_type: tensors
 
-# -- Data-to-model mapping (see src/collate.py MODEL_MAPPINGS) ---------------
-# Same forward interface as standard GeoTransolver.
-data_mapping: "geotransolver_automotive_surface"
+forward_kwargs:
+  geometry: interior.points
+  local_embedding:
+    - interior.points
+    - boundaries.vehicle.cell_data.normals
+  local_positions: interior.points
+  global_embedding: global_data.U_inf
 
 # -- Model (GeoTransolver + GALE_FA) ----------------------------------------
 # Uses GALE_FA attention (FLARE self-attention with GALE cross-attention)
@@ -67,10 +75,7 @@ model:
 # -- Dataset -----------------------------------------------------------------
 dataset:
   name: drivaer_ml_surface
-  sampling_resolution: 200000   # override SubsampleMesh n_cells/n_points in all dataset configs
-  targets:
-    pressure: scalar
-    wss: vector
+  sampling_resolution: 200000
   metrics: [l2]
 
 # -- Training ----------------------------------------------------------------

@@ -1,0 +1,147 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ---------------------------------------------------------------------------
+# Unified External Aerodynamics - Surface Training Configuration (GLOBE)
+# ---------------------------------------------------------------------------
+# Trains GLOBE on DrivAerML surface data (predict C_p / C_f at the cell
+# centroids of the car body surface).
+#
+# GLOBE is mesh-native: its `forward()` takes Mesh objects (boundary
+# meshes) and a 2-D point tensor (prediction points) directly. The recipe
+# preserves the DomainMesh end-to-end for `input_type: mesh`, so no
+# adapter / wrapper is needed -- GLOBE is instantiated via Hydra and the
+# resolver pulls the right pieces from the DomainMesh.
+#
+# Notes specific to GLOBE in this recipe:
+# - `compile: false`: GLOBE needs three Dynamo flags
+#   (force_parameter_static_shapes, capture_scalar_outputs,
+#    cache_size_limit) that the unified recipe does not set, so
+#   `torch.compile` is left off here.
+# - Reference lengths are NONDIM in this config: positions are scaled by
+#   `metadata.L_ref=5.0` via the dataset's `NonDimensionalizeByMetadata`
+#   transform, so kernel lengths must be in nondim space too. The values
+#   below are constants for now; per-sample reference lengths (read from
+#   per-run `geo_ref_*.csv` files in the standalone GLOBE recipe) are a
+#   planned follow-up.
+# - `field_weights: {wss: 100.0}` mirrors the standalone GLOBE recipe's
+#   `error_scales = {C_p: 1.0, C_f: 0.01}` weighting (residual divided by
+#   0.01 -> loss scales as ~1/0.01 = 100 for C_f).
+# - Only the `vehicle` boundary is wired up here; floor BCs (slip /
+#   no-slip) used by the standalone GLOBE recipe are not wired in until
+#   DomainMesh on disk supports surface-mode multi-boundary curation.
+
+output_dir: "runs"
+checkpoint_dir: null
+run_id: "surface_globe_drivaer_ml"
+
+precision: "bfloat16"
+compile: false
+profile: false
+augment: false
+benchmark_io: false
+
+# -- Data contract -----------------------------------------------------------
+input_type: mesh
+output_type: mesh
+
+forward_kwargs:
+  prediction_points: interior.points          # (K_cells, 3) point cloud
+  boundary_meshes:
+    vehicle: boundaries.vehicle               # Mesh[2, 3] with K_cells cells
+  reference_lengths:
+    L_ref: 1.0                                # nondim (positions scaled by L_ref=5)
+    delta_turb: 0.015                         # nondim (= 0.075 m / 5 m)
+
+# -- Model (GLOBE) ----------------------------------------------------------
+# `output_field_ranks` keys must match the dataset YAML's `targets:` block
+# so the loss can find each predicted field in the output Mesh's point_data.
+# `boundary_source_data_ranks` keys must match the dataset's boundary_name
+# (set to `vehicle` by MeshToDomainMesh in drivaer_ml_surface.yaml).
+model:
+  _target_: physicsnemo.experimental.models.globe.GLOBE
+  n_spatial_dims: 3
+  output_field_ranks:
+    pressure: 0                # scalar
+    wss: 1                     # vector
+  # GLOBE auto-injects cell_normals from the boundary mesh's geometry,
+  # and only pulls leaves it declared here from cell_data; anything else
+  # the dataset puts on the boundary (e.g. the `normals` field that
+  # `ComputeSurfaceNormals` writes for other recipe models) is silently
+  # ignored. Empty here means "geometry-only boundary input".
+  boundary_source_data_ranks:
+    vehicle: {}
+  reference_length_names: [L_ref, delta_turb]
+  reference_area: 0.0868       # 2.170 / 5.0^2 (nondim, since positions / L_ref)
+  n_communication_hyperlayers: 2
+  hidden_layer_sizes: [256, 256, 256]
+  n_latent_scalars: 8
+  n_latent_vectors: 4
+  n_spherical_harmonics: 1
+  theta: 10.0
+  leaf_size: 1
+  network_type: "pade"
+  self_regularization_beta: 0.01
+  latent_compression_scale: 100.0
+  expand_far_targets: true
+
+# -- Dataset -----------------------------------------------------------------
+dataset:
+  name: drivaer_ml_surface
+  sampling_resolution: 50000   # GLOBE is heavier per cell than transformers
+  metrics: [l2]
+
+# -- Training ----------------------------------------------------------------
+training:
+  seed: 42
+  num_epochs: 10000
+  save_interval: 25
+  loss_type: "huber"
+  field_weights:
+    pressure: 1.0
+    wss: 100.0                 # mimic standalone error_scale = {C_f: 0.01}
+  batch_size: 1
+  scheduler_update_mode: "epoch"
+
+  optimizer:
+    lr: 1.0e-2
+    weight_decay: 1.0e-4
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+
+  scheduler:
+    _target_: torch.optim.lr_scheduler.StepLR
+    step_size: 100
+    gamma: 0.5
+
+# -- DataLoader / Dataset Performance Tuning --------------------------------
+dataloader:
+  prefetch_factor: 1
+  num_streams: 1
+  use_streams: false
+  num_workers: 1
+  pin_memory: true
+
+# -- Logging -----------------------------------------------------------------
+logging:
+  log_every_n_steps: 10
+
+# -- Data paths --------------------------------------------------------------
+data:
+  drivaer_ml:
+    config: conf/dataset/drivaer_ml_surface.yaml
+    train_split: train
+    val_split: val

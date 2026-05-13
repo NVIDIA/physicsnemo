@@ -35,8 +35,6 @@ Import this module before Hydra instantiation to register the components.
 
 from __future__ import annotations
 
-from typing import Optional
-
 import torch
 
 from physicsnemo.datapipes.registry import register
@@ -77,7 +75,7 @@ class ComputeSDFFromBoundary(MeshTransform):
         self,
         boundary_name: str = "stl_geometry",
         sdf_field: str = "sdf",
-        normals_field: Optional[str] = "sdf_normals",
+        normals_field: str | None = "sdf_normals",
         *,
         use_winding_number: bool = True,
     ) -> None:
@@ -214,14 +212,9 @@ class DropBoundary(MeshTransform):
         DomainMesh
             Domain mesh without the dropped boundaries.
         """
-        filtered = {
-            name: bnd
-            for name, bnd in domain.boundaries.items()
-            if name not in self.names
-        }
         return DomainMesh(
             interior=domain.interior,
-            boundaries=filtered,
+            boundaries=domain.boundaries.exclude(*self.names),
             global_data=domain.global_data,
         )
 

@@ -31,13 +31,19 @@ compile: true
 profile: false
 augment: false
 benchmark_io: false
-broadcast_global: false
 
-model_type: "volume"
+# -- Data contract -----------------------------------------------------------
+input_type: tensors
+output_type: tensors
 
-# -- Data-to-model mapping (see src/collate.py MODEL_MAPPINGS) ---------------
-# Same forward interface as standard GeoTransolver.
-data_mapping: "geotransolver_automotive_volume"
+forward_kwargs:
+  geometry: interior.points
+  local_embedding:
+    - interior.points
+    - interior.point_data.sdf
+    - interior.point_data.sdf_normals
+  local_positions: interior.points
+  global_embedding: global_data.U_inf
 
 # -- Model (GeoTransolver + GALE_FA) ----------------------------------------
 # Uses GALE_FA attention (FLARE self-attention with GALE cross-attention)
@@ -68,14 +74,7 @@ model:
 # -- Dataset -----------------------------------------------------------------
 dataset:
   name: drivaer_ml_volume
-  sampling_resolution: 100000   # override SubsampleMesh n_cells/n_points in all dataset configs
-  targets:
-    velocity: vector
-    pressure: scalar
-    nut: scalar
-  nondim_types:
-    velocity: velocity
-    nut: identity
+  sampling_resolution: 100000
   metrics: [l2, l1]
 
 # -- Training ----------------------------------------------------------------

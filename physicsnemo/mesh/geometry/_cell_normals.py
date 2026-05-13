@@ -74,11 +74,17 @@ def compute_cell_normals(
 
     match n_spatial_dims:
         case 2:
-            return _normals_2d(relative_vectors)
+            result = _normals_2d(relative_vectors)
         case 3:
-            return _normals_3d(relative_vectors)
+            result = _normals_3d(relative_vectors)
         case _:
-            return _normals_general(relative_vectors)
+            result = _normals_general(relative_vectors)
+
+    # Lock the dtype contract: under CUDA ``torch.autocast`` (e.g. bf16),
+    # ``F.normalize`` calls ``aten::norm`` which is on the fp32 cast list, so
+    # the closed-form branches can silently return fp32 even when
+    # ``relative_vectors`` is bf16.
+    return result.to(relative_vectors.dtype)
 
 
 # ---------------------------------------------------------------------------

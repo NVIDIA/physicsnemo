@@ -30,10 +30,24 @@ profile: false
 augment: false
 benchmark_io: false
 
-model_type: "surface"
+# -- Data contract -----------------------------------------------------------
+# This model consumes batched flat tensors (B=1) and emits a (1, N, C) output
+# tensor with channels concatenated in the dataset YAML's `targets:` order.
+input_type: tensors
+output_type: tensors
 
-# -- Data-to-model mapping (see src/collate.py MODEL_MAPPINGS) ---------------
-data_mapping: "geotransolver_automotive_surface"
+# Maps DomainMesh paths to GeoTransolver.forward kwargs. The dataset YAML
+# (drivaer_ml_surface.yaml) produces a DomainMesh whose `interior` is a
+# Mesh[0, 3] point cloud at the (subsampled) surface cell centroids and
+# whose `boundaries.vehicle` is the original triangulated surface with
+# precomputed cell normals.
+forward_kwargs:
+  geometry: interior.points
+  local_embedding:
+    - interior.points
+    - boundaries.vehicle.cell_data.normals
+  local_positions: interior.points
+  global_embedding: global_data.U_inf
 
 # -- Model (GeoTransolver) --------------------------------------------------
 model:
@@ -61,10 +75,7 @@ model:
 dataset:
   name: drivaer_ml_surface
   sampling_resolution: 200000   # override SubsampleMesh n_cells/n_points in all dataset configs
-  targets:
-    pressure: scalar
-    wss: vector
-  metrics: [l2]
+  metrics: [l2]                 # subset of dataset YAML's `metrics:` list
 
 # -- Training ----------------------------------------------------------------
 training:

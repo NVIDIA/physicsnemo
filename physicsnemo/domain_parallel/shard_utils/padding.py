@@ -209,7 +209,7 @@ def generic_pad_nd_wrapper(
             mesh_coords = list(self_mesh_coords)
             mesh_coords[mesh_dim] = i
             output_shape, local_padding = compute_local_padding_and_output_shape(
-                local_input.shape, pad, mesh_coords, mesh_sizes, tensor_sharding_map
+                local_shape, pad, mesh_coords, mesh_sizes, tensor_sharding_map
             )
 
             # Catch and cache the one that applies to this rank:

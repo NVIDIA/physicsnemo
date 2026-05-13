@@ -14,11 +14,74 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import random
+
 import pytest
+import torch
+import torch._dynamo
 
 from physicsnemo.core.version_check import check_version_spec
 
 _APEX_AVAILABLE = check_version_spec("apex", hard_fail=False)
+
+_GLOBAL_SEED = 42
+
+
+def _nop_backend(gm, _inputs):
+    def forward(*args, **kwargs):
+        return gm.forward(*args, **kwargs)
+
+    return forward
+
+
+@pytest.fixture(autouse=True)
+def reset_dynamo():
+    """Reset torch._dynamo state between tests to avoid cross-test recompile errors."""
+    torch._dynamo.reset()
+    torch._dynamo.config.error_on_recompile = False
+    yield
+    torch._dynamo.reset()
+    torch._dynamo.config.error_on_recompile = False
+
+
+@pytest.fixture
+def nop_compile(monkeypatch):
+    """Redirect torch.compile to a no-op backend for fast compile-shape tests."""
+    original = torch.compile
+    monkeypatch.setattr(
+        torch,
+        "compile",
+        lambda fn, *args, backend=_nop_backend, **kwargs: original(
+            fn, *args, backend=backend, **kwargs
+        ),
+    )
+
+
+@pytest.fixture
+def deterministic_settings():
+    """Set deterministic settings for reproducibility, then restore old state."""
+    old_cudnn_deterministic = torch.backends.cudnn.deterministic
+    old_cudnn_benchmark = torch.backends.cudnn.benchmark
+    old_matmul_tf32 = torch.backends.cuda.matmul.allow_tf32
+    old_cudnn_tf32 = torch.backends.cudnn.allow_tf32
+    old_random_state = random.getstate()
+
+    try:
+        random.seed(_GLOBAL_SEED)
+        torch.manual_seed(_GLOBAL_SEED)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(_GLOBAL_SEED)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+        yield
+    finally:
+        torch.backends.cudnn.deterministic = old_cudnn_deterministic
+        torch.backends.cudnn.benchmark = old_cudnn_benchmark
+        torch.backends.cuda.matmul.allow_tf32 = old_matmul_tf32
+        torch.backends.cudnn.allow_tf32 = old_cudnn_tf32
+        random.setstate(old_random_state)
 
 
 @pytest.fixture

@@ -52,13 +52,13 @@ pipeline:
       fields:
         pressure_average: pressure
         wall_shear_stress_average: stress
-      section: cell_data
+      association: cell_data
     - _target_: ${dp:RenameMeshFields}
       cell_data:
         pressure_average: pressure
         wall_shear_stress_average: wss
     - _target_: ${dp:NormalizeMeshFields}
-      section: cell_data
+      association: cell_data
       fields:
         wss: {type: vector, mean: [0.0, 0.0, 0.0], std: 0.00183}
     - _target_: ${dp:ComputeSurfaceNormals}
@@ -66,17 +66,10 @@ pipeline:
       field_name: normals
     - _target_: ${dp:SubsampleMesh}
       n_cells: ${sampling_resolution}
-    - _target_: ${dp:MeshToTensorDict}
-    - _target_: ${dp:ComputeCellCentroids}
-    - _target_: ${dp:RestructureTensorDict}
-      groups:
-        input:
-          points: cell_centroids
-          normals: cell_data.normals
-          U_inf: global_data.U_inf
-        output:
-          pressure: cell_data.pressure
-          wss: cell_data.wss
+    # Terminal: convert the surface Mesh into a DomainMesh per the recipe
+    # contract. cell_data_targets are auto-injected from the `targets:` block.
+    - _target_: ${dp:MeshToDomainMesh}
+      interior_points: cell_centroids
 
 targets:
   pressure: scalar
