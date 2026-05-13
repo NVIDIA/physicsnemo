@@ -23,14 +23,19 @@ helpers are dimension-agnostic and support 2D, 3D, or 4D spatial layouts.
 Tensor layouts used here:
 - 2D spatial samples:  ``(B, H, W, T, C)``
 - 3D spatial samples:  ``(B, X, Y, Z, T, C)``
+
+This module is private (leading underscore): the helpers are part of the
+xdeeponet package's internal API surface only and may be renamed or
+restructured without notice.
 """
 
 from __future__ import annotations
 
-from typing import Sequence, Tuple
+from typing import Sequence
 
 import torch
 import torch.nn.functional as F
+from jaxtyping import Shaped
 from torch import Tensor
 
 
@@ -39,7 +44,7 @@ def compute_right_pad_to_multiple(
     *,
     multiple: int = 8,
     min_right_pad: int = 0,
-) -> Tuple[int, ...]:
+) -> tuple[int, ...]:
     """Compute right-side padding to reach a multiple of *multiple*.
 
     Parameters
@@ -53,7 +58,7 @@ def compute_right_pad_to_multiple(
 
     Returns
     -------
-    Tuple[int, ...]
+    tuple[int, ...]
         Right-side padding per dimension such that ``(d + pad)`` is a multiple
         of *multiple* and ``pad >= min_right_pad``.
     """
@@ -80,18 +85,39 @@ def compute_right_pad_to_multiple(
 
 
 def pad_right_nd(
-    x: Tensor,
+    x: Shaped[Tensor, "..."],
     *,
     dims: Sequence[int],
     right_pad: Sequence[int],
     mode: str = "replicate",
     constant_value: float = 0.0,
-) -> Tensor:
+) -> Shaped[Tensor, "..."]:
     """Right-pad arbitrary dimensions of an N-D tensor.
 
     Implemented manually so it works for ``mode="replicate"`` even when
     :func:`torch.nn.functional.pad` does not support the tensor rank
     (e.g. 6D tensors in the 3D-spatial case).
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        Input tensor of any rank and dtype.
+    dims : Sequence[int]
+        Dimensions to right-pad.  Negative indices are supported.
+    right_pad : Sequence[int]
+        Right-side padding amounts per ``dims`` entry.  Non-positive
+        entries are no-ops.
+    mode : str, optional
+        ``"replicate"`` (default) repeats the last slice along each
+        padded dim; ``"constant"`` uses ``constant_value``.
+    constant_value : float, optional
+        Fill value when ``mode="constant"`` (default ``0.0``).
+
+    Returns
+    -------
+    torch.Tensor
+        Tensor of the same rank and dtype as ``x`` with the specified
+        dimensions right-padded.
     """
     if len(dims) != len(right_pad):
         raise ValueError("dims and right_pad must have the same length")
@@ -131,16 +157,38 @@ def pad_right_nd(
 
 
 def pad_spatial_right(
-    x: Tensor,
+    x: Shaped[Tensor, "..."],
     *,
     spatial_ndim: int,
     right_pad: Sequence[int],
     mode: str = "replicate",
     constant_value: float = 0.0,
-) -> Tensor:
+) -> Shaped[Tensor, "..."]:
     """Right-pad the first *spatial_ndim* dimensions after the batch dim.
 
     Assumes ``x`` is shaped ``(B, *spatial, *rest)``.
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        Input tensor shaped ``(B, *spatial, *rest)``; any dtype is
+        accepted.  Must satisfy ``x.dim() >= 1 + spatial_ndim``.
+    spatial_ndim : int
+        Number of spatial dimensions immediately following the batch
+        dim.  Must be ``2``, ``3``, or ``4``.
+    right_pad : Sequence[int]
+        Right-side padding amounts per spatial dimension; must have
+        length ``spatial_ndim``.  Non-positive entries are no-ops.
+    mode : str, optional
+        ``"replicate"`` (default) or ``"constant"``.
+    constant_value : float, optional
+        Fill value when ``mode="constant"`` (default ``0.0``).
+
+    Returns
+    -------
+    torch.Tensor
+        Tensor of the same rank and dtype as ``x`` with the spatial
+        dimensions right-padded.
     """
     if spatial_ndim not in (2, 3, 4):
         raise ValueError(f"spatial_ndim must be 2, 3, or 4, got {spatial_ndim}")

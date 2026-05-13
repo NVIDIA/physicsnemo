@@ -36,7 +36,7 @@ These wrappers are the recommended public entry points for xDeepONet.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 import torch
 from jaxtyping import Float
@@ -50,7 +50,7 @@ from physicsnemo.experimental.models.xdeeponet.deeponet import (
     _DecoderTypeStr,
     _VariantStr,
 )
-from physicsnemo.experimental.models.xdeeponet.padding import (
+from physicsnemo.experimental.models.xdeeponet._padding import (
     compute_right_pad_to_multiple,
     pad_spatial_right,
 )
@@ -149,14 +149,14 @@ class DeepONetWrapper(Module):
         padding: int = 8,
         variant: _VariantStr = "u_deeponet",
         width: int = 64,
-        branch1_config: Dict[str, Any] = None,
-        branch2_config: Dict[str, Any] = None,
-        trunk_config: Dict[str, Any] = None,
+        branch1_config: dict[str, Any] | None = None,
+        branch2_config: dict[str, Any] | None = None,
+        trunk_config: dict[str, Any] | None = None,
         decoder_type: _DecoderTypeStr = "mlp",
         decoder_width: int = 128,
         decoder_layers: int = 2,
         decoder_activation_fn: str = "relu",
-        output_window: Optional[int] = None,
+        output_window: int | None = None,
     ):
         super().__init__(meta=_DeepONetWrapperMetaData())
 
@@ -186,8 +186,6 @@ class DeepONetWrapper(Module):
             decoder_activation_fn=decoder_activation_fn,
             output_window=output_window,
         )
-        self._temporal_projection = self.model._temporal_projection
-
     def set_output_window(self, K: int):
         """Delegate to the inner :class:`DeepONet` model."""
         self.model.set_output_window(K)
@@ -195,8 +193,8 @@ class DeepONetWrapper(Module):
     def forward(
         self,
         x: Float[Tensor, "batch height width time channels"],
-        x_branch2: Optional[Float[Tensor, "..."]] = None,
-        target_times: Optional[Float[Tensor, "..."]] = None,
+        x_branch2: Float[Tensor, "..."] | None = None,
+        target_times: Float[Tensor, "..."] | None = None,
     ) -> Float[Tensor, "batch height width time_out"]:
         """Forward pass through the 2D wrapper.
 
@@ -236,7 +234,7 @@ class DeepONetWrapper(Module):
                 mode="replicate",
             )
 
-        x_spatial = x.permute(0, 4, 1, 2, 3)[..., 0].permute(0, 2, 3, 1)
+        x_spatial = x[:, :, :, 0, :]
 
         if target_times is not None:
             if self.trunk_input == "grid":
@@ -315,14 +313,14 @@ class DeepONet3DWrapper(Module):
         padding: int = 8,
         variant: _VariantStr = "u_deeponet",
         width: int = 64,
-        branch1_config: Dict[str, Any] = None,
-        branch2_config: Dict[str, Any] = None,
-        trunk_config: Dict[str, Any] = None,
+        branch1_config: dict[str, Any] | None = None,
+        branch2_config: dict[str, Any] | None = None,
+        trunk_config: dict[str, Any] | None = None,
         decoder_type: _DecoderTypeStr = "mlp",
         decoder_width: int = 128,
         decoder_layers: int = 2,
         decoder_activation_fn: str = "relu",
-        output_window: Optional[int] = None,
+        output_window: int | None = None,
     ):
         super().__init__(meta=_DeepONet3DWrapperMetaData())
 
@@ -352,8 +350,6 @@ class DeepONet3DWrapper(Module):
             decoder_activation_fn=decoder_activation_fn,
             output_window=output_window,
         )
-        self._temporal_projection = self.model._temporal_projection
-
     def set_output_window(self, K: int):
         """Delegate to the inner :class:`DeepONet3D` model."""
         self.model.set_output_window(K)
@@ -361,8 +357,8 @@ class DeepONet3DWrapper(Module):
     def forward(
         self,
         x: Float[Tensor, "batch X Y Z time channels"],
-        x_branch2: Optional[Float[Tensor, "..."]] = None,
-        target_times: Optional[Float[Tensor, "..."]] = None,
+        x_branch2: Float[Tensor, "..."] | None = None,
+        target_times: Float[Tensor, "..."] | None = None,
     ) -> Float[Tensor, "batch X Y Z time_out"]:
         """Forward pass through the 3D wrapper.
 

@@ -34,8 +34,6 @@ both spatial dimensionalities.
 
 from __future__ import annotations
 
-from typing import List, Optional
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -59,6 +57,18 @@ class _UNet2DFromUNet3D(nn.Module):
     enough to survive the UNet's ``model_depth`` pooling stages), runs the
     3D UNet, and averages the result back to 2D.  Channel-first layout
     :math:`(B, C, H, W)` is preserved on input and output.
+
+    .. important::
+
+        Selecting ``num_unet_layers > 0`` in a 2D
+        :class:`~physicsnemo.experimental.models.xdeeponet.SpatialBranch`
+        (i.e. when this 2D adapter is used) makes the UNet branch operate
+        on a tiled :math:`2^{\text{model\_depth}}`-deep volume.  With the
+        default ``model_depth=3`` this is an **8x** memory and compute
+        cost relative to a native 2D UNet of the same width and depth.
+        This overhead is a property of the upstream library UNet being
+        3D-only, not of this branch.  When ``num_unet_layers == 0`` the
+        branch is bypassed and there is no overhead.
     """
 
     def __init__(
@@ -67,7 +77,7 @@ class _UNet2DFromUNet3D(nn.Module):
         out_channels: int,
         kernel_size: int = 3,
         model_depth: int = 3,
-        feature_map_channels: Optional[List[int]] = None,
+        feature_map_channels: list[int] | None = None,
     ):
         super().__init__()
         if feature_map_channels is None:
@@ -111,7 +121,7 @@ class _UNet3DFromUNet3D(nn.Module):
         out_channels: int,
         kernel_size: int = 3,
         model_depth: int = 3,
-        feature_map_channels: Optional[List[int]] = None,
+        feature_map_channels: list[int] | None = None,
     ):
         super().__init__()
         if feature_map_channels is None:
@@ -395,7 +405,7 @@ class SpatialBranch(nn.Module):
         kernel_size: int = 3,
         dropout: float = 0.0,  # noqa: ARG002 - kept for config compatibility
         activation_fn: str = "gelu",
-        internal_resolution: Optional[list] = None,
+        internal_resolution: list | None = None,
     ):
         super().__init__()
 
@@ -548,7 +558,7 @@ class SpatialBranch3D(nn.Module):
         kernel_size: int = 3,
         dropout: float = 0.0,  # noqa: ARG002 - kept for config compatibility
         activation_fn: str = "gelu",
-        internal_resolution: Optional[list] = None,
+        internal_resolution: list | None = None,
     ):
         super().__init__()
 

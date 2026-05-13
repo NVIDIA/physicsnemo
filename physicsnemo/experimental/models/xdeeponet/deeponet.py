@@ -53,7 +53,7 @@ References
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Literal, Optional, get_args
+from typing import Any, Literal, get_args
 
 import torch
 import torch.nn as nn
@@ -267,12 +267,15 @@ class DeepONet(Module):
     width : int
         Latent width.
     branch1_config : dict, optional
-        Primary branch configuration.  See module docstring for schema.
+        Primary branch configuration; see the *Branch configuration*
+        section below for the schema.
     branch2_config : dict, optional
         Secondary branch configuration, required for the ``"mionet"``,
-        ``"fourier_mionet"``, and ``"tno"`` variants.
+        ``"fourier_mionet"``, and ``"tno"`` variants.  Same schema as
+        ``branch1_config``.
     trunk_config : dict, optional
-        Trunk network configuration.
+        Trunk network configuration; see the *Trunk configuration*
+        section below for the schema.
     decoder_type : Literal["mlp", "conv", "temporal_projection"], optional
         Decoder choice: ``"mlp"`` queries the trunk at each target
         timestep and applies an MLP decoder; ``"conv"`` uses a
@@ -311,6 +314,80 @@ class DeepONet(Module):
         Operator output of shape :math:`(B, H, W, T)` for spatial branches
         or :math:`(B, T)` for MLP branches.
 
+    Notes
+    -----
+    **Branch configuration** (``branch1_config`` / ``branch2_config``).
+    A nested dict with three top-level keys, all optional.  Missing keys
+    fall back to the defaults below.
+
+    .. code-block:: python
+
+        {
+            "encoder": {
+                "type": "linear",           # "linear" | "mlp" | "conv"
+                "activation_fn": "sin",     # any name accepted by
+                                            #   ``physicsnemo.nn.get_activation``
+                                            #   plus the ``"sin"`` alias
+                "num_layers": 1,            # only used when ``type`` is
+                                            #   "mlp" or "conv"
+                "hidden_width": width // 2, # only used when ``num_layers > 1``
+            },
+            "layers": {
+                "num_fourier_layers": 0,
+                "num_unet_layers": 0,
+                "num_conv_layers": 0,
+                "modes1": 12,               # Fourier modes along the 1st
+                                            #   spatial axis
+                "modes2": 12,               # Fourier modes along the 2nd
+                                            #   spatial axis
+                "modes3": 12,               # 3D only; modes along Z
+                "kernel_size": 3,           # for UNet and Conv layers
+                "dropout": 0.0,
+                "activation_fn": <encoder.activation_fn>,
+            },
+            "in_channels": 12,              # 2D default; 3D default is 11
+            "internal_resolution": None,    # list[int] (per spatial dim).
+                                            #   When set, the branch input is
+                                            #   resampled to this shape
+                                            #   before the spectral / UNet
+                                            #   stack and resampled back at
+                                            #   the end of the branch.
+        }
+
+    Setting all three ``num_*_layers`` to ``0`` together with
+    ``encoder.type="mlp"`` selects the MLP-only branch path
+    (:class:`MLPBranch`).  Otherwise the spatial branch
+    (:class:`SpatialBranch`) is built and the layer composition follows
+    the requested variant; the constructor rejects combinations that
+    silently degrade to a different variant.
+
+    **Trunk configuration** (``trunk_config``).  A flat dict; all keys
+    optional.
+
+    .. code-block:: python
+
+        {
+            "in_features": 1,               # auto-set by the wrappers when
+                                            #   "input_type" is given (see below)
+            "hidden_width": 128,
+            "num_layers": 6,
+            "activation_fn": "sin",
+            "output_activation": True,      # False = linear final layer (e.g. TNO)
+        }
+
+    When using
+    :class:`~physicsnemo.experimental.models.xdeeponet.DeepONetWrapper`
+    or
+    :class:`~physicsnemo.experimental.models.xdeeponet.DeepONet3DWrapper`,
+    an additional ``"input_type"`` key controls how trunk coordinates
+    are extracted from the packed input tensor:
+
+    - ``"time"`` (default) — the last input channel is treated as time;
+      ``in_features`` is forced to ``1``.
+    - ``"grid"`` — the last :math:`d+1` channels are treated as
+      ``(x, y, [z,] t)``; ``in_features`` is forced to ``3`` (2D
+      wrapper) or ``4`` (3D wrapper).
+
     Examples
     --------
     >>> import torch
@@ -335,14 +412,14 @@ class DeepONet(Module):
         self,
         variant: _VariantStr = "u_deeponet",
         width: int = 64,
-        branch1_config: Dict[str, Any] = None,
-        branch2_config: Dict[str, Any] = None,
-        trunk_config: Dict[str, Any] = None,
+        branch1_config: dict[str, Any] | None = None,
+        branch2_config: dict[str, Any] | None = None,
+        trunk_config: dict[str, Any] | None = None,
         decoder_type: _DecoderTypeStr = "mlp",
         decoder_width: int = 128,
         decoder_layers: int = 2,
         decoder_activation_fn: str = "relu",
-        output_window: Optional[int] = None,
+        output_window: int | None = None,
     ):
         super().__init__(meta=_DeepONetMetaData())
 
@@ -459,6 +536,16 @@ class DeepONet(Module):
                 decoder_activation_fn,
             )
 
+    @property
+    def has_temporal_projection(self) -> bool:
+        """Whether the model was constructed with the temporal-projection
+        decoder (``decoder_type="temporal_projection"``).
+
+        Public read-only view of the internal flag; preferred over reaching
+        into the private attribute from outside the class.
+        """
+        return self._temporal_projection
+
     def set_output_window(self, K: int):
         """Create the temporal-projection head for K output timesteps.
 
@@ -545,7 +632,7 @@ class DeepONet(Module):
         self,
         x_branch1: Float[Tensor, "..."],
         x_time: Float[Tensor, "..."],
-        x_branch2: Optional[Float[Tensor, "..."]] = None,
+        x_branch2: Float[Tensor, "..."] | None = None,
     ) -> Float[Tensor, "..."]:
         """Forward pass through the DeepONet.
 
@@ -702,14 +789,14 @@ class DeepONet3D(Module):
         self,
         variant: _VariantStr = "u_deeponet",
         width: int = 64,
-        branch1_config: Dict[str, Any] = None,
-        branch2_config: Dict[str, Any] = None,
-        trunk_config: Dict[str, Any] = None,
+        branch1_config: dict[str, Any] | None = None,
+        branch2_config: dict[str, Any] | None = None,
+        trunk_config: dict[str, Any] | None = None,
         decoder_type: _DecoderTypeStr = "mlp",
         decoder_width: int = 128,
         decoder_layers: int = 2,
         decoder_activation_fn: str = "relu",
-        output_window: Optional[int] = None,
+        output_window: int | None = None,
     ):
         super().__init__(meta=_DeepONet3DMetaData())
 
@@ -826,6 +913,16 @@ class DeepONet3D(Module):
                 decoder_activation_fn,
             )
 
+    @property
+    def has_temporal_projection(self) -> bool:
+        """Whether the model was constructed with the temporal-projection
+        decoder (``decoder_type="temporal_projection"``).
+
+        Public read-only view of the internal flag; preferred over reaching
+        into the private attribute from outside the class.
+        """
+        return self._temporal_projection
+
     def set_output_window(self, K: int):
         """Create the temporal-projection head for K output timesteps.
 
@@ -913,7 +1010,7 @@ class DeepONet3D(Module):
         self,
         x_branch1: Float[Tensor, "..."],
         x_time: Float[Tensor, "..."],
-        x_branch2: Optional[Float[Tensor, "..."]] = None,
+        x_branch2: Float[Tensor, "..."] | None = None,
     ) -> Float[Tensor, "..."]:
         """Forward pass through the 3D DeepONet.
 
