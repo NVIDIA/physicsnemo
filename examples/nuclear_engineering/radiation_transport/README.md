@@ -73,9 +73,6 @@ reports the three component QoIs only.
 
 Prerequisites:
 
-- **PyTorch ≥ 2.6** for the default `train.optimizer.type=adam` path.
-  `train.optimizer.type=muon` additionally requires **PyTorch ≥ 2.9**
-  (uses `torch.optim.Muon` with `adjust_lr_fn="match_rms_adamw"`).
 - **PhysicsNeMo** — install the host repo with `[model-extras,datapipes-extras]`
   to get `physicsnemo.models.transolver.Transolver` and the `tensordict`-based
   data utilities.
