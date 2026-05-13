@@ -15,26 +15,23 @@
 # limitations under the License.
 
 import functools
-import importlib
 import logging
 from typing import Tuple
 
 import torch
 from torch.autograd import Function
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.nn.module._nvfuser_compat import (
+    NV_FUSER_AVAILABLE,
+    DataType,
+    FusionDefinition,
+    compute_contiguity,
+)
 
 logger = logging.getLogger(__name__)
 
-NV_FUSER_AVAILABLE = check_version_spec("nvfuser", hard_fail=False)
-
 
 if NV_FUSER_AVAILABLE:
-    nvfuser = importlib.import_module("nvfuser")
-
-    FusionDefinition = nvfuser.FusionDefinition
-    DataType = nvfuser.DataType
-
     _torch_dtype_to_nvfuser = {
         torch.double: DataType.Double,
         torch.float: DataType.Float,
@@ -79,10 +76,10 @@ if NV_FUSER_AVAILABLE:
 
         x = fd.define_tensor(
             shape=[-1] * dim,
-            contiguity=nvfuser.compute_contiguity(size, stride),
+            contiguity=compute_contiguity(size, stride),
             dtype=dtype,
         )
-        one = fd.define_constant(1.0)
+        one = fd.define_scalar(1.0, dtype=DataType.Double)
 
         # y = sigmoid(x)
         y = fd.ops.sigmoid(x)
@@ -125,10 +122,10 @@ if NV_FUSER_AVAILABLE:
 
         x = fd.define_tensor(
             shape=[-1] * dim,
-            contiguity=nvfuser.compute_contiguity(size, stride),
+            contiguity=compute_contiguity(size, stride),
             dtype=dtype,
         )
-        one = fd.define_constant(1.0)
+        one = fd.define_scalar(1.0, dtype=DataType.Double)
 
         # y = sigmoid(x)
         y = fd.ops.sigmoid(x)
@@ -180,11 +177,11 @@ if NV_FUSER_AVAILABLE:
 
         x = fd.define_tensor(
             shape=[-1] * dim,
-            contiguity=nvfuser.compute_contiguity(size, stride),
+            contiguity=compute_contiguity(size, stride),
             dtype=dtype,
         )
-        one = fd.define_constant(1.0)
-        two = fd.define_constant(2.0)
+        one = fd.define_scalar(1.0, dtype=DataType.Double)
+        two = fd.define_scalar(2.0, dtype=DataType.Double)
 
         # y = sigmoid(x)
         y = fd.ops.sigmoid(x)
