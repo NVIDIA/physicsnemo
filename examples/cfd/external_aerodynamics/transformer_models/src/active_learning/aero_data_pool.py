@@ -150,6 +150,28 @@ class AeroDataPool(Dataset):
         raw_sample = self._raw_datasets[ds_idx][local_idx]
         return self._datapipes[ds_idx](raw_sample)
 
+    def prefetch(self, flat_idx: int) -> None:
+        """Asynchronously schedule a read for the sample at ``flat_idx``.
+
+        Backed by :py:meth:`physicsnemo.datapipes.cae.cae_dataset.CAEDataset.preload`
+        which uses an in-process ``ThreadPoolExecutor``.  Calling this before
+        ``__getitem__`` lets file I/O overlap with the previous step's
+        GPU compute.  Idempotent: a re-prefetch of an in-flight index is a
+        no-op.  The eventual ``__getitem__`` will consume the preloaded
+        result if it has landed, or block on the future otherwise.
+
+        This stays in-process on purpose: per-class ``CAEDataset`` instances
+        hold zarr handles and the datapipe holds GPU-resident
+        ``surface_factors``; neither is safe to pickle across DataLoader
+        worker subprocess boundaries.
+        """
+        if not (0 <= flat_idx < self._total_samples):
+            return
+        ds_idx, local_idx = self._flat_to_local[flat_idx]
+        preload = getattr(self._raw_datasets[ds_idx], "preload", None)
+        if preload is not None:
+            preload(local_idx)
+
     def unlabeled_indices(self) -> torch.LongTensor:
         """Return flat indices not yet in the training set."""
         all_idx = torch.arange(self._total_samples)
