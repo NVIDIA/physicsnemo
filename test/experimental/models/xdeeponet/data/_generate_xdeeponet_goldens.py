@@ -18,12 +18,22 @@
 
 Run from the repository root::
 
-    python test/experimental/models/data/_generate_xdeeponet_goldens.py
+    python test/experimental/models/xdeeponet/data/_generate_xdeeponet_goldens.py
 
 Overwrites the committed fixtures with freshly-seeded model outputs.
 Invoke this deliberately whenever model numerics intentionally change
 (architecture edit, default-argument change, etc.) and commit the
 resulting ``.pth`` files.
+
+The set of fixtures is driven by :data:`_FIXTURE_REGISTRY` in
+``test_xdeeponet.py`` — adding a new scenario there automatically
+extends this generator.
+
+Each fixture stores a dict with three keys:
+
+- ``"args"``: tuple of positional forward arguments
+- ``"y"``: stored output for the non-regression assertion
+- ``"state_dict"``: model parameters
 """
 
 from __future__ import annotations
@@ -37,33 +47,33 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 # Repo root: so ``import physicsnemo...`` resolves.
 # xdeeponet test dir: so ``import test_xdeeponet`` resolves.
 sys.path.insert(0, str(_REPO_ROOT))
-sys.path.insert(
-    0, str(_REPO_ROOT / "test" / "experimental" / "models" / "xdeeponet")
-)
+sys.path.insert(0, str(_REPO_ROOT / "test" / "experimental" / "models" / "xdeeponet"))
 
 from test_xdeeponet import (  # noqa: E402
-    _GOLDEN_2D,
-    _GOLDEN_3D,
+    _FIXTURE_REGISTRY,
     _init_lazy,
-    _wrapper_2d,
-    _wrapper_3d,
 )
 
 
 def _write(path: Path, builder) -> None:
+    """Materialise lazy weights, run forward, and save the golden payload."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    model, x = builder()
-    _init_lazy(model, x)
+    model, args = builder()
+    _init_lazy(model, *args)
     with torch.no_grad():
-        y = model(x)
-    torch.save({"x": x, "y": y, "state_dict": model.state_dict()}, path)
+        y = model(*args)
+    torch.save(
+        {"args": tuple(args), "y": y, "state_dict": model.state_dict()},
+        path,
+    )
+    arg_shapes = [tuple(a.shape) for a in args]
     print(
         f"wrote {path.relative_to(_REPO_ROOT)} "
-        f"x={tuple(x.shape)} y={tuple(y.shape)} "
+        f"args={arg_shapes} y={tuple(y.shape)} "
         f"size={path.stat().st_size}B"
     )
 
 
 if __name__ == "__main__":
-    _write(_GOLDEN_2D, _wrapper_2d)
-    _write(_GOLDEN_3D, _wrapper_3d)
+    for _name, _builder, _golden_path in _FIXTURE_REGISTRY:
+        _write(_golden_path, _builder)

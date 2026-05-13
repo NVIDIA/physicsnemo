@@ -14,11 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Right-side spatial padding helpers used by the xDeepONet wrappers.
+"""Right-side spatial padding helpers used by the xDeepONet packed-input
+forward path.
 
-The wrappers align spatial dimensions to a multiple (typically 8) so that
-spectral and convolutional sub-branches operate on compatible shapes.  These
-helpers are dimension-agnostic and support 2D, 3D, or 4D spatial layouts.
+When :class:`~physicsnemo.experimental.models.xdeeponet.DeepONet` is
+constructed with ``auto_pad=True`` it aligns spatial dimensions to a
+multiple (typically 8) so that spectral and convolutional sub-branches
+operate on compatible shapes.  These helpers are dimension-agnostic and
+support 2D, 3D, or 4D spatial layouts.
 
 Tensor layouts used here:
 - 2D spatial samples:  ``(B, H, W, T, C)``

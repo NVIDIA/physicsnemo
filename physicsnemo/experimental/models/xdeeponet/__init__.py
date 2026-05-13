@@ -16,33 +16,34 @@
 
 """xDeepONet — the extended DeepONet family.
 
-Config-driven assembly of eight DeepONet-based architectures sharing a
-common branch/trunk/decoder pattern:
+A single :class:`DeepONet` class assembles operator-learning
+architectures spanning the DeepONet and FNO families:
 
 - ``deeponet``, ``u_deeponet``, ``fourier_deeponet``, ``conv_deeponet``,
-  ``hybrid_deeponet`` — single-branch variants.
-- ``mionet``, ``fourier_mionet`` — two-branch multi-input variants.
-- ``tno`` — Temporal Neural Operator (branch2 = previous solution).
+  ``hybrid_deeponet`` — single-branch + trunk variants.
+- ``mionet``, ``fourier_mionet`` — two-branch multi-input + trunk variants.
+- ``tno`` — Temporal Neural Operator (branch2 = previous solution) + trunk.
+- ``ufno`` / xFNO-style trunkless operators — trunkless spatial branch
+  with composable Fourier / UNet / Conv layers; the last spatial axis
+  can be interpreted as time for autoregressive bundling via the
+  :attr:`DeepONet.time_modes` parameter.
 
-Both 2D and 3D spatial versions are provided.  :class:`DeepONetWrapper` and
-:class:`DeepONet3DWrapper` are the recommended entry points; see their class
-docstrings for usage examples and the branch/trunk configuration schema.
+The :class:`DeepONet` class is dimension-generic (``dimension=2|3``
+constructor argument; per-dimension primitives are dispatched
+internally) and dispatches forward by two flags
+(:attr:`auto_pad`, :attr:`trunk`-is-None) over six valid call
+conventions: packed-input vs core-input × trunked vs trunkless,
+plus the ``temporal_projection`` decoder variant.  See the
+:class:`DeepONet` class docstring for the full matrix and worked
+examples; see :class:`SpatialBranch` for the spatial-encoder
+composition options (Fourier / UNet / Conv layers, multi-layer
+pointwise lift, optional coordinate-feature channels).
 """
 
-from .branches import MLPBranch, SpatialBranch, SpatialBranch3D, TrunkNet
-from .deeponet import DeepONet, DeepONet3D
-from .wrappers import DeepONet3DWrapper, DeepONetWrapper
+from .branches import SpatialBranch
+from .deeponet import DeepONet
 
 __all__ = [
-    # Core architectures
     "DeepONet",
-    "DeepONet3D",
-    # Convenience wrappers (recommended entry points)
-    "DeepONetWrapper",
-    "DeepONet3DWrapper",
-    # Building blocks
-    "TrunkNet",
-    "MLPBranch",
     "SpatialBranch",
-    "SpatialBranch3D",
 ]
