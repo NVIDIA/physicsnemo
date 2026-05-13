@@ -80,13 +80,22 @@ env:
   PYTHON_VERSION: "3.12"
   UV_VERSION: "0.11.7"
   CONTAINER_ID: "cuda12.8.1-cudnn-devel-ubuntu24.04"
-  EXTRAS_TAG: "cu12"
+  # All feature extras + cu12 backend + matching natten wheel index.  This
+  # powers the @requires_module / pytest.importorskip tests that would
+  # otherwise be skipped due to missing optional dependencies.  Modules
+  # with no extras home (moto, scikit-image, pyg_lib, earth2grid, ...) are
+  # installed by the `Install CI-only test dependencies` step inside the
+  # setup-uv-env composite action.
+  EXTRAS_TAG: "cu12,natten-cu12,utils-extras,mesh-extras,nn-extras,model-extras,datapipes-extras,uq-extras,gnns,sym,perf"
 
   # ---- Cache key prefixes ------------------------------------------------
   # Inlined literally because GitHub Actions does not allow env-to-env
   # references within the same env: block.  Bump in lockstep with the
-  # baseline values above.
-  UV_CACHE_KEY_PREFIX:   "uv-cache-nightly-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12-uv0.11.7"
+  # baseline values above.  The `-fullextras` suffix is bumped relative
+  # to the previous prefix so the first run under the expanded EXTRAS_TAG
+  # rebuilds the wheel cache from scratch instead of layering on top of
+  # a stale narrower cache.
+  UV_CACHE_KEY_PREFIX:   "uv-cache-nightly-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12-uv0.11.7-fullextras"
   TESTMON_CACHE_KEY_PREFIX:  "testmon-nightly"
   COVERAGE_CACHE_KEY_PREFIX: "coverage-nightly"
   JIT_CACHE_KEY_PREFIX: "jit-cache-cuda12.8.1-cudnn-devel-ubuntu24.04-py3.12"
@@ -118,6 +127,11 @@ jobs:
     runs-on: linux-amd64-cpu8
     container:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+      # /dev/shm defaults to 64 MiB in docker, which DALI's multiprocess
+      # worker pool exhausts via SemLock allocations and trips ENOSPC
+      # ("No space left on device") in datapipes tests.  2 GiB is plenty
+      # for the test suite and matches the PyTorch container default.
+      options: --shm-size=2g
 
     steps:
     - uses: actions/checkout@v5
@@ -229,6 +243,11 @@ jobs:
     runs-on: linux-amd64-gpu-h100-latest-1
     container:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+      # /dev/shm defaults to 64 MiB in docker, which DALI's multiprocess
+      # worker pool exhausts via SemLock allocations and trips ENOSPC
+      # ("No space left on device") in datapipes tests.  2 GiB is plenty
+      # for the test suite and matches the PyTorch container default.
+      options: --shm-size=2g
 
     steps:
     - uses: actions/checkout@v5
@@ -330,6 +349,11 @@ jobs:
     runs-on: linux-amd64-gpu-h100-latest-1
     container:
       image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+      # /dev/shm defaults to 64 MiB in docker, which DALI's multiprocess
+      # worker pool exhausts via SemLock allocations and trips ENOSPC
+      # ("No space left on device") in datapipes tests.  2 GiB is plenty
+      # for the test suite and matches the PyTorch container default.
+      options: --shm-size=2g
 
     steps:
     - uses: actions/checkout@v5

@@ -165,6 +165,66 @@ runs:
           exit 1
         fi
 
+    # --- CI-only test dependencies ----------------------------------------
+    # These modules are referenced by tests in test/ via @requires_module
+    # or pytest.importorskip but have no home in pyproject extras (either
+    # because they are pure CI test tooling like moto, or because they
+    # require special install paths like the PyG wheel index).  Installed
+    # via `uv pip install` AFTER the lockfile-mutation guard so uv.lock
+    # remains the single source of truth for the synced environment, and
+    # this step layers on top without invalidating that guarantee.
+    #
+    # Spec coupling notes:
+    #   * Pure-PyPI specs mirror Dockerfile:240-243 to keep container and
+    #     CI environments in lockstep.
+    #   * The PyG --find-links URL encodes the locked torch version (see
+    #     uv.lock entry for torch 2.11.0+cu128).  Bump the
+    #     torch-X.Y.Z+cu128 segment in lockstep when the torch pin moves
+    #     -- same hand-maintained coupling already documented for the
+    #     natten wheel index in pyproject.toml.
+    #
+    # earth2grid is intentionally NOT installed here: the source build
+    # (see Dockerfile:246 for the canonical pin) is fragile in the CI
+    # container.  HEALPix tests will continue to skip via @requires_module
+    # until earth2grid ships a wheel or the build is fixed.
+    #
+    # torch_scatter / torch_sparse / torch_cluster are pulled in as a
+    # source build via the gnns extra.  Without CUDA toolchain visible
+    # at build time uv lands the CPU-only wheel, which makes FigConvNet
+    # (and any model calling torch_scatter.segment_csr / similar on a
+    # CUDA tensor) fail with "Not compiled with CUDA support".  Force a
+    # reinstall from the PyG wheel index, which ships pre-built CUDA
+    # wheels matching the locked torch version.
+    - name: Install CI-only test dependencies
+      shell: bash
+      env:
+        UV_LINK_MODE: copy
+        PYG_WHL_INDEX: "https://data.pyg.org/whl/torch-2.11.0+cu128.html"
+        # cuml-cu12 -> cudf -> numba caps numpy at <=2.2; uv.lock pins
+        # numpy 2.2.6 under the cu12 extra precisely for this reason.
+        # Without an explicit constraint here, uv pip install resolves
+        # transitive deps (e.g. tensorstore, pyarrow) freely and bumps
+        # numpy to 2.4.x, which crashes every test that touches cuml.
+        # Re-applying the cap on each layered install keeps numba happy.
+        NUMPY_PIN: "numpy<2.3"
+      run: |
+        set -euo pipefail
+        echo "::group::install CI-only test dependencies"
+        uv pip install --python .venv/bin/python \
+          "$NUMPY_PIN" \
+          "moto[s3]>=5.0.28" \
+          "numpy-stl" \
+          "scikit-image>=0.24.0" \
+          "shapely" \
+          "multi-storage-client[boto3]>=0.33.0" \
+          "tensorstore" \
+          "pyarrow"
+        uv pip install --python .venv/bin/python --reinstall \
+          "$NUMPY_PIN" \
+          torch_scatter torch_sparse torch_cluster pyg_lib \
+          --find-links "$PYG_WHL_INDEX"
+        echo "::endgroup::"
+
     - name: Report cache sizes
       shell: bash
       run: |
