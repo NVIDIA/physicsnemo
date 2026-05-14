@@ -33,7 +33,7 @@ from checkpointing import create_optimizer, resume_if_available
 from loader import build_dataloaders, collate_no_padding
 from losses import create_scheduler, parse_loss_config
 from trainer import (
-    _parse_amp,
+    parse_amp,
     run_training_loop,
     set_seed,
     setup_training_environment,
@@ -85,7 +85,7 @@ def main(cfg: DictConfig) -> None:
         logger.info("Random seed: not set (non-reproducible)")
 
     grad_accum_steps = cfg.train.get("gradient_accumulation_steps", 1)
-    use_amp, amp_dtype = _parse_amp(cfg)
+    use_amp, amp_dtype = parse_amp(cfg)
 
     amp_info = (
         f"ENABLED (dtype={cfg.train.get('amp_dtype', 'bf16')})"

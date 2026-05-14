@@ -58,7 +58,7 @@ _AMP_DTYPES: Dict[str, torch.dtype] = {
 }
 
 
-def _parse_amp(cfg: DictConfig) -> Tuple[bool, torch.dtype]:
+def parse_amp(cfg: DictConfig) -> Tuple[bool, torch.dtype]:
     """Read ``cfg.train.amp`` and ``cfg.train.amp_dtype`` into ``(use_amp, dtype)``."""
     name = cfg.train.get("amp_dtype", "bf16")
     if name not in _AMP_DTYPES:
@@ -373,7 +373,7 @@ def train_epoch(
     :func:`losses.parse_loss_config` and varies per epoch via warmup).
     """
     case_type = cfg.case.type
-    use_amp, amp_dtype = _parse_amp(cfg)
+    use_amp, amp_dtype = parse_amp(cfg)
     accum_steps = cfg.train.get("gradient_accumulation_steps", 1)
     max_grad_norm = float(cfg.train.get("max_grad_norm", 10.0))
 
@@ -441,7 +441,7 @@ def validate(
 ) -> Tuple[float, int, Dict[str, float], Dict[str, int]]:
     """Run validation and return loss plus metric sums/counts for DDP reduce."""
     case_type = cfg.case.type
-    use_amp, amp_dtype = _parse_amp(cfg)
+    use_amp, amp_dtype = parse_amp(cfg)
 
     model.eval()
     eval_model = model.module if hasattr(model, "module") else model
