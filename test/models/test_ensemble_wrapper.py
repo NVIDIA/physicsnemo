@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from physicsnemo.nn import FullyConnected
+from physicsnemo.models.mlp import FullyConnected
 from physicsnemo.experimental.models.ensemble_wrapper import (
     EnsembleWrapper,
     EnsemblePrediction,

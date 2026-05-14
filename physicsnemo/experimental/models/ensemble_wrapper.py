@@ -66,8 +66,8 @@ from typing import List, Type, Union
 import torch
 import torch.nn as nn
 
-from physicsnemo import Module
-from physicsnemo.models.meta import ModelMetaData
+from physicsnemo.core import Module
+from physicsnemo.core import ModelMetaData
 
 
 # ---------------------------------------------------------------------------

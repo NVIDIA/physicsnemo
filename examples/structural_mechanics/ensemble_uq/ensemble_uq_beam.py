@@ -57,7 +57,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from physicsnemo.nn import FullyConnected
+from physicsnemo.models.mlp import FullyConnected
 from physicsnemo.experimental.models.ensemble_wrapper import EnsembleWrapper
 
 # ---------------------------------------------------------------------------
