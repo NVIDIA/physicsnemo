@@ -256,6 +256,7 @@ single process.
 | `train.optimizer.type=muon` | Use `torch.optim.Muon` for 2-D weights, Adam for biases / norms |
 | `train.amp=false` | Disable mixed precision (debug / numerical parity) |
 | `train.physics_loss.weight=0.0` | Pure MSE training (disables QoI penalty) |
+| `train.max_grad_norm=1.0` | Tighter gradient L2-norm clip (default `10.0`) |
 | `train.dataloader.num_streams=4` | CUDA streams used by `physicsnemo.datapipes.DataLoader` for prefetch overlap (no CPU fork workers) |
 | `train.dataloader.use_streams=false` | Disable CUDA-stream prefetching — useful for debugging or CPU-only runs |
 | `train.dataloader.prefetch_factor=4` | How many batches to prefetch ahead |
