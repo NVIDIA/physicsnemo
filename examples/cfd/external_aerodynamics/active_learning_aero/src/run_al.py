@@ -70,13 +70,15 @@ from utils import (
     loss_fn,
 )
 from gp_utils import (
-    DRAG_COEFF_SCALE,
     apply_spectral_norm_to_model,
-    compute_drag_from_subsampled_outputs,
-    compute_drag_target_from_batch,
     create_embedding_reduction,
     gp_ramp_weight,
     sync_non_ddp_gradients,
+)
+from aero_physics import (
+    DRAG_COEFF_SCALE,
+    compute_drag_from_subsampled_outputs,
+    compute_drag_target_from_batch,
 )
 
 from data_pool import AeroDataPool, load_manifests

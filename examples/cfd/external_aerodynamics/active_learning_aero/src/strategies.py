@@ -42,9 +42,9 @@ from physicsnemo.active_learning.protocols import (
 
 import torch.distributed as dist
 
-from gp_utils import (
+from utils import cast_precisions
+from aero_physics import (
     DRAG_COEFF_SCALE,
-    cast_precisions,
     compute_drag_from_subsampled_outputs,
     compute_drag_target_from_batch,
 )
