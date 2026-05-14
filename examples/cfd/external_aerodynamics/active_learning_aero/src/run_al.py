@@ -45,7 +45,6 @@ import hydra
 import numpy as np
 import omegaconf
 import torch
-import torch.nn.functional as F
 from omegaconf import DictConfig
 
 torch.serialization.add_safe_globals([omegaconf.listconfig.ListConfig])
@@ -63,89 +62,22 @@ from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.experimental.uq import VariationalGPHead
 
-from utils import (
-    CombinedOptimizer,
-    get_autocast_context,
-    cast_precisions,
-    loss_fn,
-)
+from utils import CombinedOptimizer
 from gp_utils import (
     apply_spectral_norm_to_model,
     create_embedding_reduction,
     gp_ramp_weight,
-    sync_non_ddp_gradients,
-)
-from aero_physics import (
-    DRAG_COEFF_SCALE,
-    compute_drag_from_subsampled_outputs,
-    compute_drag_target_from_batch,
 )
 
 from data_pool import AeroDataPool, load_manifests
 from strategies import (
     ClassBalancedRandomQueryStrategy,
-    DragMetrologyStrategy,
     DummyLabelStrategy,
     JointUQQueryStrategy,
     RandomQueryStrategy,
 )
-
-
-def _train_one_batch(
-    batch, backbone_model, embedding_reduction, gp,
-    surface_factors, device, precision, optimizer,
-    lambda_gp, lambda_consistency, consistency_detach,
-    consistency_every_n, step_idx, dist_manager,
-):
-    """Run a single training step and return the loss value."""
-    features = cast_precisions(batch["fx"], precision)
-    embeddings = cast_precisions(batch["embeddings"], precision)
-    geometry = (
-        cast_precisions(batch["geometry"], precision)
-        if "geometry" in batch
-        else None
-    )
-
-    with get_autocast_context(precision):
-        local_positions = embeddings[:, :, :3]
-        outputs, embedding_states = backbone_model(
-            global_embedding=features,
-            local_embedding=embeddings,
-            geometry=geometry,
-            local_positions=local_positions,
-            return_embedding_states=True,
-        )
-        mse_loss = torch.mean(loss_fn(outputs, batch["fields"]))
-
-    reduced = embedding_reduction(embedding_states.flatten(1, 2))
-    drag_target = compute_drag_target_from_batch(
-        batch, surface_factors, device
-    ).to(reduced.dtype)
-
-    head_mean, head_loss = gp.forward_and_loss(reduced, drag_target)
-
-    c_loss = torch.tensor(0.0, device=device)
-    if lambda_consistency > 0 and (step_idx % consistency_every_n == 0):
-        if "surface_areas_sub" in batch and "surface_normals_sub" in batch:
-            trans_cd = compute_drag_from_subsampled_outputs(
-                outputs, batch, surface_factors, device
-            ).to(head_mean.dtype)
-            if consistency_detach:
-                trans_cd = trans_cd.detach()
-            c_loss = F.mse_loss(head_mean, trans_cd)
-
-    total_loss = mse_loss + lambda_gp * head_loss + lambda_consistency * c_loss
-
-    optimizer.zero_grad()
-    total_loss.backward()
-
-    if dist_manager.world_size > 1:
-        sync_non_ddp_gradients(
-            [embedding_reduction, gp], dist_manager.world_size
-        )
-
-    optimizer.step()
-    return total_loss.item()
+from aero_metrology import DragMetrologyStrategy
+from al_train_step import train_one_batch
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="al_config")
@@ -640,7 +572,7 @@ def main(cfg: DictConfig) -> None:
                     )
                     batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
                              for k, v in batch.items()}
-                    epoch_loss += _train_one_batch(
+                    epoch_loss += train_one_batch(
                         batch, backbone_model, embedding_reduction, gp,
                         surface_factors, device, precision, optimizer,
                         lambda_gp, lambda_consistency, consistency_detach,
@@ -654,7 +586,7 @@ def main(cfg: DictConfig) -> None:
                 for batch in al_dl:
                     batch = {k: v.squeeze(0).to(device) if isinstance(v, torch.Tensor) else v
                              for k, v in batch.items()}
-                    epoch_loss += _train_one_batch(
+                    epoch_loss += train_one_batch(
                         batch, backbone_model, embedding_reduction, gp,
                         surface_factors, device, precision, optimizer,
                         lambda_gp, lambda_consistency, consistency_detach,

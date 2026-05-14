@@ -16,7 +16,8 @@
 
 """Local helpers for the active learning example.
 
-These helpers are copied verbatim from
+The training-loop helpers (tensorwise / CombinedOptimizer / autocast +
+loss) are copied verbatim from
 ``examples/cfd/external_aerodynamics/transformer_models/src/{utils.py,train.py}``
 to keep this example self-contained. If you change them upstream, sync
 manually.
@@ -32,6 +33,8 @@ Contents:
 * ``cast_precisions`` — casts a tensor (or list of tensors) to the given
   precision.
 * ``loss_fn`` — MSE loss used during pre-training and AL fine-tuning.
+* ``padded_all_gather`` — DDP helper that gathers 2-D tensors of
+  potentially different per-rank row counts into a single tensor.
 """
 
 import functools
@@ -40,6 +43,7 @@ from contextlib import nullcontext
 from typing import Any, Callable
 
 import torch
+import torch.distributed as dist
 from torch.amp import autocast
 from torch.optim import Optimizer
 
@@ -262,3 +266,47 @@ def cast_precisions(tensor: torch.Tensor, precision: str) -> torch.Tensor:
 def loss_fn(outputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     """MSE loss used during pre-training and AL fine-tuning."""
     return torch.nn.functional.mse_loss(outputs, targets)
+
+
+# ---------------------------------------------------------------------------
+# Distributed helpers
+# ---------------------------------------------------------------------------
+
+
+def padded_all_gather(
+    local_tensor: torch.Tensor, device: torch.device
+) -> torch.Tensor:
+    """All-gather 2-D tensors that may have different row counts per rank.
+
+    Pads each rank's tensor to the global max row count with NaN, runs
+    ``dist.all_gather``, then strips the padding rows. Returns the local
+    tensor unchanged when distributed mode is not initialised or world
+    size is 1. Assumes the input is shape ``(N_local, cols)``; padding
+    rows are filled with NaN so they can be filtered from the gathered
+    output by checking the first column.
+    """
+    if not dist.is_initialized() or dist.get_world_size() == 1:
+        return local_tensor
+
+    local_size = torch.tensor(
+        [local_tensor.shape[0]], dtype=torch.long, device=device
+    )
+    all_sizes = [
+        torch.zeros(1, dtype=torch.long, device=device)
+        for _ in range(dist.get_world_size())
+    ]
+    dist.all_gather(all_sizes, local_size)
+    max_size = max(s.item() for s in all_sizes)
+
+    cols = local_tensor.shape[1]
+    padded = torch.full(
+        (max_size, cols), float("nan"), dtype=local_tensor.dtype, device=device
+    )
+    padded[: local_tensor.shape[0]] = local_tensor
+
+    gathered = [torch.zeros_like(padded) for _ in range(dist.get_world_size())]
+    dist.all_gather(gathered, padded)
+    all_data = torch.cat(gathered, dim=0)
+
+    valid_mask = ~torch.isnan(all_data[:, 0])
+    return all_data[valid_mask]
