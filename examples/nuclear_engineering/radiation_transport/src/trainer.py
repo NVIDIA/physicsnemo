@@ -663,7 +663,7 @@ def run_training_loop(
                     scaler=scaler,
                     epoch=epoch,
                     metadata={
-                        "best_val_loss": best_val_loss,
+                        "best_val_loss": val_loss,
                         "train_loss": train_loss,
                         "val_loss": val_loss,
                         "val_loss_qoi": val_loss_qoi,
