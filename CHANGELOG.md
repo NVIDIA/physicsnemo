@@ -218,6 +218,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Replaced three plain-string regex / docstring literals containing invalid
+  escape sequences with raw-string equivalents
+  (`physicsnemo/utils/logging/launch.py`,
+  `physicsnemo/metrics/general/calibration.py`,
+  `physicsnemo/metrics/general/crps.py`); these were `SyntaxWarning`s today
+  and become `SyntaxError`s in Python 3.16.
+- Various test cleanups to remove self-inflicted warnings in CI output:
+  disabled pytest collection for `TestModelA`/`TestModelB` helpers in
+  `test/core/test_registry.py` via `__test__ = False`; migrated
+  `test/nn/module/test_interpolation.py` to call the non-deprecated
+  `grid_to_point_interpolation` and added a dedicated test for the
+  deprecation alias; scoped a `lr_scheduler.step()`-before-`optimizer.step()`
+  `UserWarning` filter to a single test in
+  `test/optim/test_combined_optimizer.py`; guarded the
+  `DistributedManager.initialize()` calls in `test/utils/test_checkpoint.py`
+  with `is_initialized()`; and suppressed the import-time
+  `ExperimentalFeatureWarning` in `test/datapipes/healda/test_features.py`
+  via `warnings.catch_warnings()`.
 - Fixed `physicsnemo.utils.get_checkpoint_dir` returning paths with `\`
   separators on Windows (e.g. `.\checkpoints_model`), which was inconsistent
   with the `/`-based paths used elsewhere in the checkpoint utilities and
