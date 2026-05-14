@@ -14,12 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""DataPool for multi-class DrivAerStar active learning.
+"""DataPool + small data-setup helpers for multi-class DrivAerStar AL.
 
 Wraps the transolver datapipe with index tracking to support the
 physicsnemo active learning ``DataPool`` protocol.  Each sample is
-tagged with its vehicle class (F/N/E) for composition analysis.
-Supports loading from pre-built JSON manifests for reproducibility.
+tagged with its vehicle class (F/N/E, SE/SF, …) for composition
+analysis.  Supports loading from pre-built JSON manifests for
+reproducibility.
+
+Also exposes two thin factory helpers shared by the AL pipeline,
+the from-scratch ceiling trainer, and the inference script:
+
+* ``build_surface_factors`` — build per-channel ``{mean, std}``
+  factors for ``surface_fields``, either by physics
+  non-dimensionalisation (Cp / Cf) from freestream metadata or by
+  loading ``surface_fields_normalization.npz`` from disk.
+* ``build_pool`` — construct an ``AeroDataPool`` with every sample
+  in the pool marked as "in training" (i.e. iterable).
 """
 
 from __future__ import annotations
@@ -28,10 +39,12 @@ import json
 from pathlib import Path
 from typing import Any, Iterator
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 
 import omegaconf
+from omegaconf import DictConfig, OmegaConf
 from physicsnemo.datapipes.cae.transolver_datapipe import create_transolver_dataset
 
 
@@ -202,3 +215,82 @@ class AeroDataPool(Dataset):
     def set_indices(self, indices: list[int]) -> None:
         """Directly set the training indices (for DDP sampler compatibility)."""
         self.train_indices = torch.LongTensor(indices)
+
+
+# ---------------------------------------------------------------------------
+# Factory helpers shared by run_al / train_ceiling / infer_aero
+# ---------------------------------------------------------------------------
+
+
+def build_surface_factors(
+    cfg: DictConfig, device: torch.device, logger
+) -> dict[str, torch.Tensor]:
+    """Build per-channel ``{mean, std}`` factors for ``surface_fields``.
+
+    Two modes, selected by ``cfg.data.physics_nondim.enabled``:
+
+    * **Physics non-dim (Cp / Cf):** factors computed in memory from freestream
+      metadata.  Combined with the dataloader's existing ``mean_std_scaling``,
+      ``(p - p_inf) / q_inf`` lands as Cp and ``wss / (q_inf * wss_factor)``
+      lands as Cf divided by an extra std factor that matches the unified
+      recipe (``shift_suv_fastback.yaml`` uses ``std=0.00183``).  Geometry
+      non-dim is orthogonal and set via ``data.reference_scale=[L_ref]*3``.
+    * **File mode (default):** load ``mean`` and ``std`` from
+      ``surface_fields_normalization.npz`` in ``cfg.data.normalization_dir``
+      (the legacy Fastback path).
+    """
+    pn = OmegaConf.select(cfg, "data.physics_nondim", default=None)
+    if pn is not None and bool(OmegaConf.select(pn, "enabled", default=False)):
+        U_inf = float(OmegaConf.select(pn, "U_inf", default=30.0))
+        rho_inf = float(OmegaConf.select(pn, "rho_inf", default=1.225))
+        p_inf = float(OmegaConf.select(pn, "p_inf", default=0.0))
+        wss_factor = float(OmegaConf.select(pn, "wss_factor", default=0.00183))
+        q_inf = 0.5 * rho_inf * U_inf * U_inf
+        mean = torch.tensor(
+            [p_inf, 0.0, 0.0, 0.0], device=device, dtype=torch.float32
+        )
+        wss_std = q_inf * wss_factor
+        std = torch.tensor(
+            [q_inf, wss_std, wss_std, wss_std], device=device, dtype=torch.float32
+        )
+        logger.info(
+            f"Surface factors: physics non-dim (U_inf={U_inf}, rho_inf={rho_inf}, "
+            f"p_inf={p_inf}, q_inf={q_inf:.4f}, wss_factor={wss_factor}) -> "
+            f"mean={mean.tolist()}, std={std.tolist()}"
+        )
+        return {"mean": mean, "std": std}
+
+    norm_dir = getattr(cfg.data, "normalization_dir", ".")
+    norm_file = str(Path(norm_dir) / "surface_fields_normalization.npz")
+    norm_data = np.load(norm_file)
+    factors = {
+        "mean": torch.from_numpy(norm_data["mean"]).to(device),
+        "std": torch.from_numpy(norm_data["std"]).to(device),
+    }
+    logger.info(
+        f"Surface factors: loaded from {norm_file} -> "
+        f"mean={factors['mean'].tolist()}, std={factors['std'].tolist()}"
+    )
+    return factors
+
+
+def build_pool(
+    data_cfg: DictConfig,
+    paths_by_class: dict[str, str],
+    indices_by_class: dict[str, list[int]],
+    surface_factors: dict,
+) -> AeroDataPool:
+    """Build an ``AeroDataPool`` with all listed indices marked as 'in training'.
+
+    For both the train and val pools we want every sample iterable, so we
+    populate ``train_indices`` with the full flat range up-front.
+    """
+    pool = AeroDataPool(
+        data_cfg=data_cfg,
+        class_paths=paths_by_class,
+        surface_factors=surface_factors,
+        local_indices_by_class=indices_by_class,
+        train_indices=torch.LongTensor([]),
+    )
+    pool.train_indices = torch.arange(pool.total_samples).long()
+    return pool
