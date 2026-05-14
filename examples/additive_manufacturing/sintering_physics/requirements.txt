@@ -9,3 +9,4 @@ pyvista
 vtk
 natsort
 scikit-learn
+tensorboard
