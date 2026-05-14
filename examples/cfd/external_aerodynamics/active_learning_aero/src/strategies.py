@@ -42,8 +42,6 @@ from physicsnemo.active_learning.protocols import (
 
 import torch.distributed as dist
 
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from gp_utils import (
     DRAG_COEFF_SCALE,
     cast_precisions,

@@ -1,0 +1,21 @@
+# Run artifacts and outputs
+runs/
+outputs/
+
+# Local copies of normalization stats (sourced from
+# transformer_models/src/, kept here for the smoke / paper experiments;
+# not committed in the productizable example).
+src/*.npz
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor / OS
+.DS_Store
+*.swp
+
+# Local backup snapshots (e.g. manifest_class_*.json.bak_*)
+*.bak
+*.bak_*

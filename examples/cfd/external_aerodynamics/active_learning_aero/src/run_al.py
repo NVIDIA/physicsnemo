@@ -63,8 +63,7 @@ from physicsnemo.utils import load_checkpoint, save_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.experimental.uq import VariationalGPHead
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from train import (
+from utils import (
     CombinedOptimizer,
     get_autocast_context,
     cast_precisions,
@@ -80,7 +79,7 @@ from gp_utils import (
     sync_non_ddp_gradients,
 )
 
-from aero_data_pool import AeroDataPool, load_manifests
+from data_pool import AeroDataPool, load_manifests
 from strategies import (
     ClassBalancedRandomQueryStrategy,
     DragMetrologyStrategy,
@@ -147,7 +146,7 @@ def _train_one_batch(
     return total_loss.item()
 
 
-@hydra.main(version_base=None, config_path="../conf", config_name="al_config")
+@hydra.main(version_base=None, config_path="conf", config_name="al_config")
 def main(cfg: DictConfig) -> None:
     """Run the active learning experiment."""
     DistributedManager.initialize()
