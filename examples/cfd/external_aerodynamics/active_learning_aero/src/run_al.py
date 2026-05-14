@@ -45,7 +45,7 @@ import hydra
 import numpy as np
 import omegaconf
 import torch
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 torch.serialization.add_safe_globals([omegaconf.listconfig.ListConfig])
 torch.serialization.add_safe_globals([omegaconf.base.ContainerMetadata])
@@ -111,6 +111,9 @@ def main(cfg: DictConfig) -> None:
     consistency_every_n = getattr(cfg, "consistency_every_n_steps", 1)
     accumulation_steps = getattr(cfg.training, "gradient_accumulation_steps", 1)
     save_interval = getattr(cfg.training, "save_interval", 10)
+    prefetch_depth = int(
+        OmegaConf.select(cfg, "dataloader.prefetch_depth", default=0)
+    )
 
     initial_checkpoint = cfg.initial_checkpoint
     if initial_checkpoint is None:
@@ -555,7 +558,8 @@ def main(cfg: DictConfig) -> None:
             f"{n_base} base + {n_al} AL = {n_base + n_al} total "
             f"(~{per_gpu_base + per_gpu_al} per GPU) "
             f"(LR: backbone={base_lr * 0.1:.2e}, embed={base_lr:.2e}, "
-            f"GP variational/kernel={base_lr * 10:.2e})"
+            f"GP variational/kernel={base_lr * 10:.2e}, "
+            f"prefetch_depth={prefetch_depth})"
         )
 
         for epoch in range(start_epoch, fine_tune_epochs):
@@ -583,7 +587,31 @@ def main(cfg: DictConfig) -> None:
             # AL-selected samples (DDP-sharded)
             if al_dl is not None:
                 al_sampler.set_epoch(epoch)
-                for batch in al_dl:
+                ### In-process prefetch via ``AeroDataPool.prefetch`` (mirrors
+                ### the same hook in train_ceiling.py).  ``prefetch_depth=0``
+                ### preserves the legacy synchronous behavior; >0 materializes
+                ### the per-rank sampler permutation -- deterministic for this
+                ### (seed, epoch) -- and submits reads ahead on each per-class
+                ### CAEDataset's ThreadPoolExecutor so file I/O overlaps GPU
+                ### compute.  In-process on purpose: AeroDataPool holds
+                ### GPU-resident surface_factors that are not safe to pickle
+                ### across DataLoader worker subprocess boundaries.
+                al_sampler_order: list[int] = []
+                if prefetch_depth > 0:
+                    al_sampler_order = list(iter(al_sampler))
+                    for j in range(min(prefetch_depth, len(al_sampler_order))):
+                        local_idx = al_sampler_order[j]
+                        flat_idx = int(train_pool.train_indices[local_idx].item())
+                        train_pool.prefetch(flat_idx)
+                for i, batch in enumerate(al_dl):
+                    if prefetch_depth > 0:
+                        next_j = i + prefetch_depth
+                        if next_j < len(al_sampler_order):
+                            next_local = al_sampler_order[next_j]
+                            next_flat = int(
+                                train_pool.train_indices[next_local].item()
+                            )
+                            train_pool.prefetch(next_flat)
                     batch = {k: v.squeeze(0).to(device) if isinstance(v, torch.Tensor) else v
                              for k, v in batch.items()}
                     epoch_loss += train_one_batch(
