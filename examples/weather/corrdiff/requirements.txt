@@ -12,3 +12,6 @@ scipy>=1.15.1
 typer>=0.16.0
 psutil>=6.0.0
 tensorboard
+zarr
+joblib
+matplotlib

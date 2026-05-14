@@ -5,3 +5,5 @@ hydra-core
 gcsfs
 dask
 xarray
+zarr
+nvidia-dali-cuda130
