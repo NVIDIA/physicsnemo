@@ -34,14 +34,6 @@ from utils import get_filesystem
 # Add eval to OmegaConf TODO: Remove when OmegaConf is updated
 OmegaConf.register_new_resolver("eval", eval)
 
-try:
-    from apex import optimizers as apex_optimizers
-except:
-    raise ImportError(
-        "training requires apex package for optimizer."
-        + "See https://github.com/nvidia/apex for install details."
-    )
-
 from physicsnemo import Module
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.logging import (
@@ -119,12 +111,10 @@ def main(cfg: DictConfig) -> None:
             )
         torch.cuda.current_stream().wait_stream(ddps)
 
-    # Initialize optimizer (TODO: unify optimizer handling)
-    if cfg.training.optimizer.framework == "apex":
-        optimizers = apex_optimizers
-    elif cfg.training.optimizer.framework == "torch":
-        optimizers = torch_optimizers
-    OptimizerClass = getattr(optimizers, cfg.training.optimizer.name)
+    # Initialize optimizer. Native PyTorch now provides fused implementations
+    # of Adam/AdamW/SGD via the `fused=True` arg, so apex.optimizers is no
+    # longer required. Pick any optimizer from torch.optim by name.
+    OptimizerClass = getattr(torch_optimizers, cfg.training.optimizer.name)
     optimizer = OptimizerClass(model.parameters(), **cfg.training.optimizer.args)
 
     # Normalizer (TODO: Maybe wrap this into model)

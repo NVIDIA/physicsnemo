@@ -17,4 +17,5 @@
 defaults:
   - adam
 
-_target_: apex.optimizers.FusedAdam
+_target_: torch.optim.Adam
+fused: true
