@@ -21,6 +21,9 @@ on:
     branches: [main, v2.0-refactor]
   merge_group:
 
+permissions:
+  contents: read
+
 jobs:
   pre-commit:
     name: Run pre-commit hooks

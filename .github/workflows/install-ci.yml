@@ -10,6 +10,9 @@ on:
   workflow_dispatch:  # Allows manual triggering from GitHub UI
   merge_group:
 
+permissions:
+  contents: read
+
 jobs:
   test-pip:
     name: Test with pip (Python ${{ matrix.python-version }}, OS ${{ matrix.os }})
