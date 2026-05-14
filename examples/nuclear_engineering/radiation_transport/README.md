@@ -222,13 +222,17 @@ Full-mesh training used at least a 48 GB GPU during development (RTX6000 Ada).
 Lattice:
 
 ```bash
-python src/train.py case=lattice data=lattice case.data_root=<DATA_ROOT>
+python src/train.py case=lattice data=lattice \
+    case.data_root=<DATA_ROOT> \
+    case.split_file=./path/to/lattice_splits.json
 ```
 
 Hohlraum:
 
 ```bash
-python src/train.py case=hohlraum data=hohlraum case.data_root=<DATA_ROOT>
+python src/train.py case=hohlraum data=hohlraum \
+    case.data_root=<DATA_ROOT> \
+    case.split_file=./path/to/hohlraum_splits.json
 ```
 
 Single-process default: 500 epochs, AMP-bf16, cosine LR with 10 warmup epochs,
