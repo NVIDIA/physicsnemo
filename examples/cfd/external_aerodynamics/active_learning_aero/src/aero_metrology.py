@@ -16,11 +16,12 @@
 
 """External-aerodynamics metrology for the active-learning example.
 
-The metrology strategy here is the CFD-specific evaluator that reports
-field MSE and drag accuracy on a fixed validation pool. It is split out
-from ``strategies.py`` so that the generic strategies (query / label)
-do not depend on aero physics. To adapt this example to a different
-problem, replace this module.
+Provides ``FieldMetrologyStrategy``: a metrology strategy that
+evaluates surface-field MSE on a fixed validation pool, broken down
+by dataset class. Lives in this aero-flavoured module because the
+per-sample loop knows the AeroDataPool batch layout (``fx``,
+``embeddings``, ``geometry``, ``fields``); to adapt to a different
+dataset, replace this module.
 """
 
 from __future__ import annotations
@@ -39,25 +40,31 @@ from physicsnemo.active_learning.protocols import (
 )
 
 from utils import cast_precisions, padded_all_gather
-from aero_physics import (
-    DRAG_COEFF_SCALE,
-    compute_drag_from_subsampled_outputs,
-    compute_drag_target_from_batch,
-)
 
 
-class DragMetrologyStrategy(MetrologyStrategy):
-    """Evaluate field MSE and drag R^2 on a fixed validation set.
+class FieldMetrologyStrategy(MetrologyStrategy):
+    """Evaluate per-class surface-field MSE on a fixed validation pool.
+
+    DDP-parallel: each rank processes a strided slice of the validation
+    pool, then results are all-gathered for a global summary. The
+    output record per AL round is::
+
+        {
+            "step": <al_round>,
+            "n_train": <num training samples>,
+            "field_mse": <global mean field MSE>,
+            "per_class_field_mse": {<class_label>: <mean field MSE>},
+        }
 
     Parameters
     ----------
     precision : str
-        Model precision.
+        Model precision used during the evaluation forward pass.
     chunk_size : int
-        Chunk size for full-mesh GeoTransolver inference.
+        Reserved for future chunked inference; currently unused.
     """
 
-    __protocol_name__ = "DragMetrologyStrategy"
+    __protocol_name__ = "FieldMetrologyStrategy"
     __protocol_type__ = ActiveLearningPhase.METROLOGY
 
     def __init__(self, precision: str = "float32", chunk_size: int = 51200) -> None:
@@ -75,12 +82,9 @@ class DragMetrologyStrategy(MetrologyStrategy):
 
     @torch.no_grad()
     def compute(self, *args: Any, **kwargs: Any) -> None:
-        """Run DDP-parallel evaluation on the validation pool."""
+        """Run DDP-parallel field-MSE evaluation on the validation pool."""
         val_pool = self.driver.validation_pool
         model = self.driver.learner
-        gp = kwargs.get("gp_head")
-        embedding_reduction = kwargs.get("embedding_reduction")
-        surface_factors = kwargs.get("surface_factors")
         device = kwargs.get("device", torch.device("cuda"))
         rank = kwargs.get("rank", 0)
         world_size = kwargs.get("world_size", 1)
@@ -88,8 +92,6 @@ class DragMetrologyStrategy(MetrologyStrategy):
 
         backbone = model.module if hasattr(model, "module") else model
         backbone.eval()
-        embedding_reduction.eval()
-        gp.eval()
 
         n_val = len(val_pool)
         my_indices = list(range(rank, n_val, world_size))
@@ -119,88 +121,45 @@ class DragMetrologyStrategy(MetrologyStrategy):
             )
             local_positions = embeddings[:, :, :3]
 
-            outputs, embedding_states = backbone(
+            outputs, _ = backbone(
                 global_embedding=features,
                 local_embedding=embeddings,
                 geometry=geometry,
                 local_positions=local_positions,
                 return_embedding_states=True,
             )
-            reduced = embedding_reduction(embedding_states.flatten(1, 2))
-
-            mean_scaled, var_scaled, _, _ = gp.predict(reduced)
-            gp_cd = mean_scaled.item() * DRAG_COEFF_SCALE
-
-            trans_cd = 0.0
-            if "surface_areas_sub" in batch and "surface_normals_sub" in batch:
-                trans_cd = (
-                    compute_drag_from_subsampled_outputs(
-                        outputs, batch, surface_factors, device
-                    ).item()
-                    * DRAG_COEFF_SCALE
-                )
-
-            target_scaled = compute_drag_target_from_batch(
-                batch, surface_factors, device
-            )
-            true_cd = target_scaled.item() * DRAG_COEFF_SCALE
 
             field_mse = F.mse_loss(outputs, batch["fields"]).item()
-
             cls_idx = cls_to_idx.get(cls_label, -1)
-            local_rows.append([true_cd, gp_cd, trans_cd, field_mse, float(cls_idx)])
+            local_rows.append([field_mse, float(cls_idx)])
 
         local_t = torch.tensor(local_rows, dtype=torch.float64, device=device)
         if local_t.ndim == 1:
             local_t = local_t.unsqueeze(0)
         all_data = padded_all_gather(local_t, device).cpu().numpy()
 
-        true_arr = all_data[:, 0]
-        gp_arr = all_data[:, 1]
-        trans_arr = all_data[:, 2]
-        mse_arr = all_data[:, 3]
-        cls_arr = all_data[:, 4].astype(int)
+        mse_arr = all_data[:, 0]
+        cls_arr = all_data[:, 1].astype(int)
 
-        def _r2(y_true, y_pred):
-            ss_res = np.sum((y_true - y_pred) ** 2)
-            ss_tot = np.sum((y_true - y_true.mean()) ** 2)
-            return 1.0 - ss_res / (ss_tot + 1e-12)
-
-        drag_r2_gp = _r2(true_arr, gp_arr)
-        drag_r2_trans = _r2(true_arr, trans_arr) if trans_arr.any() else None
-
-        per_class_r2_gp = {}
-        per_class_r2_trans = {}
         per_class_field_mse = {}
         for ci, cls_label in idx_to_cls.items():
             mask = cls_arr == ci
             if mask.sum() == 0:
                 continue
-            t = true_arr[mask]
-            per_class_r2_gp[cls_label] = float(_r2(t, gp_arr[mask]))
-            if trans_arr.any():
-                per_class_r2_trans[cls_label] = float(_r2(t, trans_arr[mask]))
             per_class_field_mse[cls_label] = float(np.mean(mse_arr[mask]))
 
         step = getattr(self.driver, "active_learning_step_idx", -1)
         record = {
             "step": step,
             "n_train": n_train,
-            "drag_r2": float(drag_r2_gp),
-            "drag_r2_transolver": float(drag_r2_trans) if drag_r2_trans is not None else None,
             "field_mse": float(np.mean(mse_arr)),
-            "per_class_r2": per_class_r2_gp,
-            "per_class_r2_transolver": per_class_r2_trans if per_class_r2_trans else None,
             "per_class_field_mse": per_class_field_mse,
         }
         self.records.append(record)
         if rank == 0:
-            trans_str = f" | R²_trans={drag_r2_trans:.4f}" if drag_r2_trans is not None else ""
             self.logger.info(
-                f"Step {step} | n_train={n_train} | R²_gp={drag_r2_gp:.4f}{trans_str} | "
+                f"Step {step} | n_train={n_train} | "
                 f"field_MSE={np.mean(mse_arr):.6f} | "
-                f"per_class_gp={per_class_r2_gp} | "
-                f"per_class_trans={per_class_r2_trans} | "
                 f"per_class_fmse={per_class_field_mse}"
             )
 

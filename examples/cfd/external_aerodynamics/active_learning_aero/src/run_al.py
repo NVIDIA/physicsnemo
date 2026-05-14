@@ -76,7 +76,7 @@ from strategies import (
     JointUQQueryStrategy,
     RandomQueryStrategy,
 )
-from aero_metrology import DragMetrologyStrategy
+from aero_metrology import FieldMetrologyStrategy
 from al_train_step import train_one_batch
 
 
@@ -334,7 +334,7 @@ def main(cfg: DictConfig) -> None:
             f"Expected one of: 'joint_uq', 'random', 'class_balanced_random'."
         )
 
-    metrology = DragMetrologyStrategy(precision=precision)
+    metrology = FieldMetrologyStrategy(precision=precision)
     label_strategy = DummyLabelStrategy()
 
     strategy_kwargs = {
