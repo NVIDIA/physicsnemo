@@ -80,8 +80,6 @@ def compute_flux_statistics(
         case_type=case_type,
         phase="train",
         split_file=split_file,
-        load_material_properties=False,
-        load_geometric_features=False,
     )
 
     print(f"\nProcessing {len(dataset)} training simulations...")
@@ -172,7 +170,6 @@ def compute_material_statistics(
         case_type=case_type,
         phase="train",
         split_file=split_file,
-        load_geometric_features=False,
     )
     extractor = MaterialPropertyExtractor()
     print(f"Dataset loaded: {len(dataset)} samples")
