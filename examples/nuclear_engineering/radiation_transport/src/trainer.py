@@ -375,7 +375,7 @@ def train_epoch(
     case_type = cfg.case.type
     use_amp, amp_dtype = _parse_amp(cfg)
     accum_steps = cfg.train.get("gradient_accumulation_steps", 1)
-    max_grad_norm = 10.0
+    max_grad_norm = float(cfg.train.get("max_grad_norm", 10.0))
 
     model.train()
     epoch_len = len(dataloader)

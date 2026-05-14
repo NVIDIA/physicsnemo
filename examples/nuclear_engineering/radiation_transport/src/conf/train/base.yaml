@@ -30,6 +30,7 @@ optimizer:
 learning_rate: 3.0e-5
 min_learning_rate: 1.0e-6
 warmup_epochs: 10
+max_grad_norm: 10.0                                 # gradient L2-norm clip applied each optimizer step
 
 pretrain_checkpoint: null
 resume_checkpoint: null
