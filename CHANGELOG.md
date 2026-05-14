@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds radiation transport example (`examples/nuclear_engineering/radiation_transport`)
 - Adds GLOBE model (`physicsnemo.experimental.models.globe.model.GLOBE`),
   including new variant that uses a dual tree traversal algorithm to reduce the
   complexity of the kernel evaluations from O(N^2) to O(N).
