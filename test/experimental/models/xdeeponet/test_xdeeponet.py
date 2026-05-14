@@ -400,14 +400,11 @@ def _init_lazy(model, *args) -> None:
 
 
 def _load_golden(path: Path) -> dict[str, torch.Tensor | dict]:
-    """Load a golden fixture; ``pytest.skip`` with a regen hint if missing.
+    """Load a golden fixture; fail with a regen hint if missing.
 
     Fixtures under ``test/experimental/models/xdeeponet/data/`` are
     committed alongside this file and updated deliberately when model
-    numerics intentionally change.  When a fixture is missing — for
-    example because a new scenario has been added but its ``.pth`` has
-    not yet been generated and committed — the test is skipped (not
-    failed) so CI remains green; regenerate with::
+    numerics intentionally change.  Regenerate with::
 
         python test/experimental/models/xdeeponet/data/\\
             _generate_xdeeponet_goldens.py
@@ -415,8 +412,8 @@ def _load_golden(path: Path) -> dict[str, torch.Tensor | dict]:
     and commit the resulting ``.pth`` file.
     """
     if not path.exists():
-        pytest.skip(
-            f"Golden fixture {path.name} is not yet committed. "
+        pytest.fail(
+            f"Golden fixture {path.name} is missing. "
             f"Regenerate with "
             f"``python test/experimental/models/xdeeponet/data/"
             f"_generate_xdeeponet_goldens.py`` and commit the "
