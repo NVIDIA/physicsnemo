@@ -134,13 +134,7 @@ This example also requires the `pyvista`, `shapely` and `vtk` libraries. Install
 pip install pyvista shapely vtk
 ```
 
-BSMS MGN model requires additional dependency:
-
-```bash
-pip install sparse_dot_mkl
-```
-
-Additionally, if you are using the [PhysicsNeMo Docker Container](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/physicsnemo/containers/physicsnemo),
+If you are using the [PhysicsNeMo Docker Container](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/physicsnemo/containers/physicsnemo),
 install a few system-level packages with
 
 ```bash

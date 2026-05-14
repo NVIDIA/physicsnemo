@@ -25,6 +25,16 @@ from torch import Tensor
 from physicsnemo.diffusion.base import Predictor
 
 
+def _lp_loss_fn(p: int) -> Callable[[Tensor, Tensor], Tensor]:
+    """Return a per-batch-element Lp loss function with exponent ``p``."""
+
+    def _loss(y_pred: Tensor, y_true: Tensor) -> Tensor:
+        residual = (y_pred - y_true).reshape(y_pred.shape[0], -1)
+        return residual.abs().pow(p).sum(dim=1)
+
+    return _loss
+
+
 @runtime_checkable
 class DPSGuidance(Protocol):
     r"""
@@ -658,7 +668,10 @@ class ModelConsistencyDPSGuidance(DPSGuidance):
         self.observation_operator = observation_operator
         self.y = y
         self.std_y = std_y
-        self.norm = norm
+        if isinstance(norm, int):
+            self._loss_fn: Callable[[Tensor, Tensor], Tensor] = _lp_loss_fn(norm)
+        else:
+            self._loss_fn = norm
         self.gamma = gamma
         self.sigma_fn = (
             sigma_fn if sigma_fn is not None else lambda t: torch.zeros_like(t)
@@ -708,17 +721,8 @@ class ModelConsistencyDPSGuidance(DPSGuidance):
         y = self.y.to(dtype=x.dtype, device=x.device)
 
         with torch.enable_grad():
-            # Compute predicted observations
             y_pred = self.observation_operator(x_0)
-
-            # Compute loss
-            if callable(self.norm):
-                loss = self.norm(y_pred, y)
-            else:
-                residual = (y_pred - y).reshape(y_pred.shape[0], -1)
-                loss = residual.abs().pow(self.norm).sum(dim=1)
-
-            # Compute gradient of loss w.r.t. x (backprop through x_0)
+            loss = self._loss_fn(y_pred, y)
             grad_x = torch.autograd.grad(
                 outputs=loss.sum(),
                 inputs=x,
@@ -956,7 +960,7 @@ class DataConsistencyDPSGuidance(DPSGuidance):
         std_y: float,
         norm: int
         | Callable[
-            [Float[Tensor, "B *dims"], Float[Tensor, "B *dims"]],  # noqa: F821
+            [Float[Tensor, " B *dims"], Float[Tensor, " B *dims"]],  # noqa: F821
             Float[Tensor, " B"],
         ] = 2,
         gamma: float = 0.0,
@@ -972,7 +976,10 @@ class DataConsistencyDPSGuidance(DPSGuidance):
         self.mask = mask.float()
         self.y = y
         self.std_y = std_y
-        self.norm = norm
+        if isinstance(norm, int):
+            self._loss_fn: Callable[[Tensor, Tensor], Tensor] = _lp_loss_fn(norm)
+        else:
+            self._loss_fn = norm
         self.gamma = gamma
         self.sigma_fn = (
             sigma_fn if sigma_fn is not None else lambda t: torch.zeros_like(t)
@@ -1023,18 +1030,9 @@ class DataConsistencyDPSGuidance(DPSGuidance):
         y = self.y.to(dtype=x.dtype, device=x.device)
 
         with torch.enable_grad():
-            # Compute masked predicted and observed values
             y_pred = mask * x_0
             y_true = mask * y
-
-            # Compute loss
-            if callable(self.norm):
-                loss = self.norm(y_pred, y_true)
-            else:
-                residual = (y_pred - y_true).reshape(x_0.shape[0], -1)
-                loss = residual.abs().pow(self.norm).sum(dim=1)
-
-            # Compute gradient of loss w.r.t. x (backprop through x_0)
+            loss = self._loss_fn(y_pred, y_true)
             grad_x = torch.autograd.grad(
                 outputs=loss.sum(),
                 inputs=x,

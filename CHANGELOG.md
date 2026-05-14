@@ -102,6 +102,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   standard solvers). Patching primitives (`BasePatching2D`,
   `GridPatching2D`, `RandomPatching2D`) are exposed under the same
   subpackage and are `torch.compile`-friendly with `fullgraph=True`.
+  `MultiDiffusionPredictor` supports memory-efficient inference on
+  large domains via `chunk_size` and `use_checkpointing`. The
+  subpackage also ships patch-local DPS guidance:
+  `MultiDiffusionDPSScorePredictor` (drop-in score predictor that plugs
+  into the standard sampling stack),
+  `MultiDiffusionDataConsistencyDPSGuidance` for inpainting and sparse
+  data assimilation, and `MultiDiffusionModelConsistencyDPSGuidance` for
+  generic patch-local observation operators. Use these instead of the
+  global `DPSScorePredictor` to run guided sampling on domains that
+  would otherwise OOM.
 - Adds `"epsilon"` as a supported prediction type throughout the diffusion
   framework, alongside the existing `"x0"` and `"score"` modes. A new
   `PredictorType = Literal["x0", "score", "epsilon"]` alias in
@@ -111,6 +121,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   end-to-end training and sampling of epsilon-parameterized models.
   Losses gain an `epsilon_to_x0_fn` kwarg used for the epsilon-to-x0
   conversion required during DSM training.
+- Adds `DiffusionUNet3D` 3D U-Net diffusion backbone for volumetric data at
+  `physicsnemo.experimental.models.diffusion_unets`. Implements the
+  `DiffusionModel` protocol. Exposes reusable 3D building blocks
+  (`Conv3D`, `GroupNorm3D`, `UNetAttention3D`, `UNetBlock3D`) at
+  `physicsnemo.experimental.nn`.
 - Added support for Batched radius search, which enables Domino
   and GeoTransolver with local features and batch size > 1.
 - Added the underfill recipe.
@@ -203,6 +218,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Replaced three plain-string regex / docstring literals containing invalid
+  escape sequences with raw-string equivalents
+  (`physicsnemo/utils/logging/launch.py`,
+  `physicsnemo/metrics/general/calibration.py`,
+  `physicsnemo/metrics/general/crps.py`); these were `SyntaxWarning`s today
+  and become `SyntaxError`s in Python 3.16.
+- Various test cleanups to remove self-inflicted warnings in CI output:
+  disabled pytest collection for `TestModelA`/`TestModelB` helpers in
+  `test/core/test_registry.py` via `__test__ = False`; migrated
+  `test/nn/module/test_interpolation.py` to call the non-deprecated
+  `grid_to_point_interpolation` and added a dedicated test for the
+  deprecation alias; scoped a `lr_scheduler.step()`-before-`optimizer.step()`
+  `UserWarning` filter to a single test in
+  `test/optim/test_combined_optimizer.py`; guarded the
+  `DistributedManager.initialize()` calls in `test/utils/test_checkpoint.py`
+  with `is_initialized()`; and suppressed the import-time
+  `ExperimentalFeatureWarning` in `test/datapipes/healda/test_features.py`
+  via `warnings.catch_warnings()`.
+- Fixed `physicsnemo.utils.get_checkpoint_dir` returning paths with `\`
+  separators on Windows (e.g. `.\checkpoints_model`), which was inconsistent
+  with the `/`-based paths used elsewhere in the checkpoint utilities and
+  broke the `test_get_checkpoint_dir` CI test on Windows. The function now
+  always joins with `/`, working uniformly for local paths and `fsspec`
+  URIs (`msc://`, etc.) across operating systems.
 - Fixed functional benchmark plot fallback labeling so unlabeled ASV results use
   the same key ordering as the benchmark runner.
 - Fixed graph break caused by `FunctionSpec` dispatch (`max(key=)` is not supported by `torch.compile`)

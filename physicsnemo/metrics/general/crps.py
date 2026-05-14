@@ -49,7 +49,7 @@ def _kernel_crps_implementation(pred: Tensor, obs: Tensor, biased: bool) -> Tens
 
 
 def kcrps(pred: Tensor, obs: Tensor, dim: int = 0, biased: bool = True):
-    """Estimate the CRPS from a finite ensemble
+    r"""Estimate the CRPS from a finite ensemble
 
     Computes the local Continuous Ranked Probability Score (CRPS) by using
     the kernel version of CRPS. The cost is O(m log m).

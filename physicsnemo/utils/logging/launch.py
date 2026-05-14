@@ -324,7 +324,7 @@ class LaunchLogger(object):
                 if value is None:
                     continue
                 # Keys only allow alpha numeric, ., -, /, _ and spaces
-                key = re.sub("[^a-zA-Z0-9\.\-\s\/\_]+", "", key)
+                key = re.sub(r"[^a-zA-Z0-9\.\-\s\/\_]+", "", key)
                 self.mlflow_client.log_metric(
                     self.mlflow_run.info.run_id, key, value, step=step[1]
                 )

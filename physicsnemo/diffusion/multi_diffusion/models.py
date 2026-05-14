@@ -384,6 +384,10 @@ class MultiDiffusionModel2D(Module):
     torch.Size([2, 3, 16, 16])
     """
 
+    # Class-level type annotation so static type checkers resolve the subscript
+    # operations on _patch_shape (set in __init__ via register_buffer).
+    _patch_shape: Tensor
+
     def __init__(
         self,
         model: Module,
@@ -401,6 +405,11 @@ class MultiDiffusionModel2D(Module):
         self._patching: RandomPatching2D | GridPatching2D | None = None
         self._fuse: bool = False
         self._skip_positional_embedding_injection: bool = False
+        # Persistent buffer so that patch_shape survives checkpoint save/load.
+        # Zeros sentinel means "not yet configured".
+        self.register_buffer(
+            "_patch_shape", torch.zeros(2, dtype=torch.long), persistent=True
+        )
         # Normalise condition flags to defaultdict for uniform access
         if not isinstance(condition_patch, (bool, dict)):
             raise TypeError(
@@ -482,6 +491,39 @@ class MultiDiffusionModel2D(Module):
         """Whether conditioning tensors are interpolated to patch resolution."""
         return self._condition_interp
 
+    @property
+    def patch_shape(self) -> tuple[int, int] | None:
+        r"""Spatial shape :math:`(H_p, W_p)` of each patch, or ``None`` if no
+        patching strategy has been configured yet.
+
+        The value is read from the live patching object when available, and
+        falls back to the persistent checkpoint buffer when the model was
+        loaded from a checkpoint but ``set_grid_patching`` / ``set_random_patching``
+        have not been called yet.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.core import Module
+        >>> from physicsnemo.diffusion.multi_diffusion import MultiDiffusionModel2D
+        >>> class M(Module):
+        ...     def __init__(self): super().__init__(); self.net = torch.nn.Conv2d(3,3,1)
+        ...     def forward(self, x, t, condition=None): return self.net(x)
+        >>> md = MultiDiffusionModel2D(M(), global_spatial_shape=(16, 16))
+        >>> md.patch_shape is None
+        True
+        >>> md.set_grid_patching(patch_shape=(8, 8))
+        >>> md.patch_shape
+        (8, 8)
+        """
+        patching = self._patching
+        if patching is not None:
+            return patching.patch_shape
+        ps = self._patch_shape
+        if int(ps[0]) > 0 or int(ps[1]) > 0:
+            return (int(ps[0]), int(ps[1]))
+        return None
+
     # ------------------------------------------------------------------
     # Patching strategy configuration
     # ------------------------------------------------------------------
@@ -534,6 +576,8 @@ class MultiDiffusionModel2D(Module):
             patch_num=patch_num,
         )
         self._fuse = False
+        self._patch_shape[0] = patch_shape[0]
+        self._patch_shape[1] = patch_shape[1]
 
     def reset_patch_indices(self) -> None:
         r"""Re-draw random patch positions for the current random patching
@@ -601,6 +645,8 @@ class MultiDiffusionModel2D(Module):
             boundary_pix=boundary_pix,
         )
         self._fuse = fuse
+        self._patch_shape[0] = patch_shape[0]
+        self._patch_shape[1] = patch_shape[1]
 
     # ------------------------------------------------------------------
     # Public patching utilities
@@ -904,16 +950,25 @@ class MultiDiffusionModel2D(Module):
 
         P = patching.patch_num
 
-        # Determine original batch size B
+        # B is only consumed by PE injection and fusing. When neither runs
+        # (e.g., MultiDiffusionPredictor calls into this method with both
+        # disabled to stream partial chunks), B is unused — skip computing
+        # and validating it so partial (K, C, Hp, Wp) tensors with K < P
+        # can be passed through.
+        _b_consumed = (
+            self.pos_embd is not None and not self._skip_positional_embedding_injection
+        ) or self._fuse
         if x_is_patched:
-            if not torch.compiler.is_compiling():
-                if x.shape[0] % P != 0:
-                    raise ValueError(
-                        f"x_is_patched=True but x batch dim "
-                        f"({x.shape[0]}) is not divisible by patch_num "
-                        f"({P})."
-                    )
-            B = x.shape[0] // P
+            if (
+                _b_consumed
+                and not torch.compiler.is_compiling()
+                and x.shape[0] % P != 0
+            ):
+                raise ValueError(
+                    f"x_is_patched=True but x batch dim ({x.shape[0]}) is "
+                    f"not divisible by patch_num ({P})."
+                )
+            B = x.shape[0] // P if _b_consumed else 0
         else:
             B = x.shape[0]
 

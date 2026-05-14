@@ -38,7 +38,6 @@ from .test_multi_diffusion_models import (
     IMG_W,
     INPUT_SHAPE,
     MD_CONFIGS,
-    PATCH_NUM,
     PATCH_SHAPE,
     _create_md_model,
     _create_md_model_edm_precond,
@@ -72,7 +71,9 @@ def _create_predictor(
         fuse=fuse,
     )
     condition = _make_condition(config_name, img_shape=img_shape, device=device)
-    return MultiDiffusionPredictor(md, condition=condition, fuse=fuse)
+    pred = MultiDiffusionPredictor(md, condition=condition, fuse=fuse)
+    pred.set_patching(overlap_pix=overlap_pix, boundary_pix=boundary_pix)
+    return pred
 
 
 # =============================================================================
@@ -88,18 +89,22 @@ class TestConstructor:
     to end by the non-regression tests.
     """
 
-    @pytest.mark.parametrize(
-        "setup",
-        ["none", "random"],
-        ids=["no_patching", "random_patching"],
-    )
-    def test_requires_grid_patching(self, setup):
-        """Predictor construction raises when grid patching is not active."""
+    def test_set_patching_requires_patch_shape(self):
+        """set_patching raises when no patch_shape is available on the model
+        and none is provided explicitly."""
         md = _create_md_model("uncond")
-        if setup == "random":
-            md.set_random_patching(patch_shape=PATCH_SHAPE, patch_num=PATCH_NUM)
-        with pytest.raises(RuntimeError, match="grid patching"):
-            MultiDiffusionPredictor(md)
+        pred = MultiDiffusionPredictor(md)
+        with pytest.raises(RuntimeError, match="patch_shape"):
+            pred.set_patching(overlap_pix=0, boundary_pix=0)
+
+    def test_methods_require_set_patching(self):
+        """Predictor methods raise when set_patching has not been called."""
+        md = _create_md_model("uncond")
+        pred = MultiDiffusionPredictor(md)
+        x = make_input(INPUT_SHAPE, seed=GLOBAL_SEED)
+        t = torch.rand(BATCH)
+        with pytest.raises(RuntimeError, match="set_patching"):
+            pred(x, t)
 
     @pytest.mark.parametrize("fuse", [True, False], ids=["fuse_true", "fuse_false"])
     @pytest.mark.parametrize(
@@ -114,10 +119,9 @@ class TestConstructor:
         assert pred.fuse is fuse
         # .model is the MultiDiffusionModel2D the predictor wraps
         assert isinstance(pred.model, MultiDiffusionModel2D)
-        # .fuse setter round-trips and is reflected on the wrapped model
+        # .fuse setter round-trips on the predictor
         pred.fuse = not fuse
         assert pred.fuse is (not fuse)
-        assert pred.model._fuse is (not fuse)
 
 
 # =============================================================================
@@ -219,6 +223,7 @@ class TestNonRegression:
         md.set_grid_patching(patch_shape=PATCH_SHAPE, fuse=True)
         condition = _make_condition(config_name, device=device)
         pred = MultiDiffusionPredictor(md, condition=condition, fuse=True)
+        pred.set_patching(overlap_pix=0, boundary_pix=0)
 
         x = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device)
         t = make_input((BATCH,), seed=GLOBAL_SEED + 1, device=device).abs() + 0.1
@@ -263,6 +268,7 @@ class TestGradientFlow:
         cond_img = make_input(INPUT_SHAPE, seed=99, device=device).requires_grad_(True)
         condition = TensorDict({"image": cond_img}, batch_size=[BATCH])
         pred = MultiDiffusionPredictor(md, condition=condition, fuse=True)
+        pred.set_patching(overlap_pix=0, boundary_pix=0)
 
         x = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device).requires_grad_(
             True
@@ -277,6 +283,7 @@ class TestGradientFlow:
         md.set_grid_patching(patch_shape=PATCH_SHAPE, fuse=True)
         condition = _make_condition("posembd_learn", device=device)
         pred = MultiDiffusionPredictor(md, condition=condition, fuse=True)
+        pred.set_patching(overlap_pix=0, boundary_pix=0)
 
         x = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device).requires_grad_(
             True
@@ -346,6 +353,7 @@ class TestWithPreconditionedInnerModel:
         md = _create_md_model_edm_precond().to(device)
         md.set_grid_patching(patch_shape=PATCH_SHAPE, fuse=True)
         pred = MultiDiffusionPredictor(md, fuse=True)
+        pred.set_patching(overlap_pix=0, boundary_pix=0)
 
         x = make_input(INPUT_SHAPE, seed=GLOBAL_SEED, device=device)
         t = make_input((BATCH,), seed=GLOBAL_SEED + 1, device=device).abs() + 0.1

@@ -106,6 +106,7 @@ def _make_sampling_components(
     )
     condition = _make_condition(md_config, img_shape=img_shape, device=device)
     predictor = MultiDiffusionPredictor(md, condition=condition, fuse=True)
+    predictor.set_patching(overlap_pix=overlap_pix, boundary_pix=boundary_pix)
     denoiser = scheduler.get_denoiser(x0_predictor=predictor)
 
     H, W = img_shape
