@@ -150,7 +150,7 @@ class DeepONet(Module):
         Secondary branch for MIONet / TNO variants.  Must produce the same
         output rank as ``branch1`` (both spatial or both flat); the
         constructor rejects mixed configurations up front.
-    dimension : int, optional
+    dimension : Literal[2, 3], optional
         Spatial dimensionality of the inputs.  Must be ``2`` (default) or
         ``3``.
     width : int, optional
@@ -174,7 +174,12 @@ class DeepONet(Module):
     decoder_layers : int, optional
         Decoder layer count.
     decoder_activation_fn : str, optional
-        Activation function name for the decoder.
+        Activation function name for the decoder.  Resolved at decoder
+        construction time via
+        :func:`physicsnemo.nn.module.activations.get_activation`; see
+        :data:`physicsnemo.nn.module.activations.ACT2FN` for the full
+        set of supported names (e.g. ``"relu"``, ``"gelu"``, ``"silu"``,
+        ``"tanh"``, ``"sin"``).  Default ``"relu"``.
     output_window : int, optional
         Output window length K for the ``"temporal_projection"`` decoder.
         When supplied the temporal head is constructed at ``__init__``, which
@@ -205,10 +210,6 @@ class DeepONet(Module):
         :math:`\max(T_{in} + K, 2 \cdot \texttt{time\_modes})` before the
         branch runs, then cropped to the K future steps.  Must equal
         the Fourier-modes count along the time axis of the branch.
-    variant : str, optional
-        Free-form variant label (e.g. ``"u_deeponet"``, ``"fourier_mionet"``).
-        Not validated; stored for documentation / introspection only.
-
     Forward
     -------
     Six valid call conventions, dispatched by :attr:`auto_pad` and
@@ -261,7 +262,6 @@ class DeepONet(Module):
     ...     branch1=branch1, trunk=trunk,
     ...     dimension=2, width=64, out_channels=1,
     ...     decoder_type="mlp", decoder_width=64, decoder_layers=2,
-    ...     variant="u_deeponet",
     ... )
     >>> x_branch = torch.randn(2, 32, 32, 5)
     >>> x_time = torch.linspace(0, 1, 3).unsqueeze(-1)
@@ -281,7 +281,6 @@ class DeepONet(Module):
     ...     decoder_type="mlp", decoder_width=32, decoder_layers=2,
     ...     auto_pad=True, padding=8,
     ...     time_modes=8,                              # enables time-extend
-    ...     variant="ufno",
     ... )
     >>> x = torch.randn(1, 32, 32, 4, 2)               # (B, H, W, T_in=4, C)
     >>> y = model(x)                                    # (1, 32, 32, 4, 1) -- predict same length
@@ -295,7 +294,7 @@ class DeepONet(Module):
         *,
         trunk: nn.Module | None = None,
         branch2: nn.Module | None = None,
-        dimension: int = 2,
+        dimension: Literal[2, 3] = 2,
         width: int = 64,
         out_channels: int = 1,
         decoder_type: _DecoderTypeStr = "mlp",
@@ -307,7 +306,6 @@ class DeepONet(Module):
         padding: int = 8,
         trunk_input: Literal["time", "grid"] = "time",
         time_modes: int | None = None,
-        variant: str | None = None,
     ):
         super().__init__(meta=_DeepONetMetaData())
 
@@ -373,9 +371,6 @@ class DeepONet(Module):
         self.time_modes = time_modes
 
         self.width = width
-        # ``variant`` is a free-form documentation label (e.g.
-        # ``"u_deeponet"``, ``"fourier_mionet"``); not validated.
-        self.variant = variant.lower() if variant else None
 
         # Cached forward-time permute / ndim values; computed once at
         # construction so the forward path can stay dimension-agnostic
@@ -735,6 +730,13 @@ class DeepONet(Module):
         # Index = (slice(None),) * (1 + dim) + (0, slice(None))
         idx_strip_T = (slice(None),) * (1 + dim) + (0, slice(None))
         x_spatial = x[idx_strip_T]
+        # Symmetric handling for branch2: when it's also a packed
+        # (B, *spatial, T, C) tensor, strip its time axis the same way so
+        # the second spatial branch sees a 4D (B, *spatial, C) tensor.
+        # 2D (B, D_in) and already-stripped (B, *spatial, C) inputs are
+        # left untouched so MLP/spatial-branch consumers stay valid.
+        if x_branch2 is not None and x_branch2.ndim == expected_ndim:
+            x_branch2 = x_branch2[idx_strip_T]
 
         # Build the trunk input.  All paths produce a (T_out, in_features) tensor.
         if target_times is not None:
@@ -928,7 +930,8 @@ class DeepONet(Module):
                 )
             if self.has_branch2 and x_branch2 is None:
                 raise ValueError(
-                    f"variant='{self.variant}' requires x_branch2 but got None"
+                    "branch2 is configured but x_branch2 was not provided "
+                    "to forward()."
                 )
 
         b1_out = self.branch1(x_branch1)
@@ -1060,10 +1063,6 @@ class DeepONet(Module):
         cf = branch_out.permute(*self._trunkless_channel_first_permute)
         cf = self.decoder(cf)
         return cf.permute(*self._trunkless_channel_last_permute)
-
-    def count_params(self) -> int:
-        """Return the number of trainable parameters."""
-        return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 
 __all__ = [

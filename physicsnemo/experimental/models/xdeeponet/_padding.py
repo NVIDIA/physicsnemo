@@ -34,7 +34,8 @@ restructured without notice.
 
 from __future__ import annotations
 
-from typing import Sequence
+import math
+from typing import Literal, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -92,7 +93,7 @@ def pad_right_nd(
     *,
     dims: Sequence[int],
     right_pad: Sequence[int],
-    mode: str = "replicate",
+    mode: Literal["replicate", "constant"] = "replicate",
     constant_value: float = 0.0,
 ) -> Shaped[Tensor, "..."]:
     """Right-pad arbitrary dimensions of an N-D tensor.
@@ -164,7 +165,7 @@ def pad_spatial_right(
     *,
     spatial_ndim: int,
     right_pad: Sequence[int],
-    mode: str = "replicate",
+    mode: Literal["replicate", "constant"] = "replicate",
     constant_value: float = 0.0,
 ) -> Shaped[Tensor, "..."]:
     """Right-pad the first *spatial_ndim* dimensions after the batch dim.
@@ -221,9 +222,7 @@ def pad_spatial_right(
     b = x.shape[0]
     spatial_shape = x.shape[1 : 1 + spatial_ndim]
     rest_shape = x.shape[1 + spatial_ndim :]
-    rest_prod = (
-        1 if len(rest_shape) == 0 else int(torch.tensor(rest_shape).prod().item())
-    )
+    rest_prod = math.prod(rest_shape)
 
     x_reshaped = x.reshape(b, *spatial_shape, rest_prod).permute(
         0, spatial_ndim + 1, *range(1, 1 + spatial_ndim)

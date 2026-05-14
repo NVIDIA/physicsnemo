@@ -172,14 +172,6 @@ class CappedGELU(torch.nn.Module):
 class Sin(nn.Module):
     """Elementwise sine activation: :math:`y = \\sin(x)`.
 
-    A trivial :class:`torch.nn.Module` wrapper around :func:`torch.sin`
-    used by the xDeepONet trunk network and other operator-learning
-    architectures (DeepONet, MIONet) where periodic basis functions are
-    a natural fit for representing solutions to PDEs on bounded
-    domains.  See Lu et al., *Learning nonlinear operators via DeepONet
-    based on the universal approximation theorem of operators*
-    (Nat. Mach. Intell. 3, 2021).
-
     Example
     -------
     >>> sin_func = physicsnemo.nn.Sin()

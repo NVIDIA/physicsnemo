@@ -59,6 +59,17 @@ _GOLDEN_PACKED_2D_FOURIER = _DATA_DIR / "xdeeponet_packed_2d_fourier_v1.pth"
 _GOLDEN_PACKED_2D_MIONET = _DATA_DIR / "xdeeponet_packed_2d_mionet_v1.pth"
 _GOLDEN_PACKED_2D_TEMPORAL = _DATA_DIR / "xdeeponet_packed_2d_temporal_v1.pth"
 _GOLDEN_PACKED_2D_MULTICHANNEL = _DATA_DIR / "xdeeponet_packed_2d_multichannel_v1.pth"
+# Kitchen-sink scenarios: every major code path turned on simultaneously.
+# - 2D variant: packed-input mode + ``temporal_projection`` decoder +
+#   ``output_window > 1`` + ``trunk_input="grid"`` + multi-layer lift +
+#   ``coord_features`` asymmetry across branches.
+# - 3D variant: core mode (``auto_pad=False``) + ``decoder_type="conv"``
+#   + mionet dual-branch + deeper trunk (3 layers, no output activation)
+#   + ``lift_hidden_width`` set explicitly + a different activation
+#   palette (celu / leaky_relu / elu / tanh).
+# Together they exercise nearly every constructor knob the model exposes.
+_GOLDEN_PACKED_2D_KITCHEN_SINK = _DATA_DIR / "xdeeponet_packed_2d_kitchen_sink_v1.pth"
+_GOLDEN_CORE_3D_KITCHEN_SINK = _DATA_DIR / "xdeeponet_core_3d_kitchen_sink_v1.pth"
 # Trunkless packed-input (xFNO-style) scenarios.
 _GOLDEN_XFNO_PACKED_3D = _DATA_DIR / "xdeeponet_xfno_packed_3d_v1.pth"
 _GOLDEN_XFNO_PACKED_3D_EXTEND = _DATA_DIR / "xdeeponet_xfno_packed_3d_extend_v1.pth"
@@ -170,7 +181,6 @@ def _wrapper_2d() -> tuple[DeepONet, tuple[torch.Tensor, ...]]:
         auto_pad=True,
         padding=8,
         trunk_input="time",
-        variant="u_deeponet",
     )
     x = torch.randn(1, 8, 8, 2, 2)
     return model, (x,)
@@ -190,7 +200,6 @@ def _wrapper_3d() -> tuple[DeepONet, tuple[torch.Tensor, ...]]:
         auto_pad=True,
         padding=8,
         trunk_input="time",
-        variant="u_deeponet",
     )
     x = torch.randn(1, 8, 8, 8, 2, 2)
     return model, (x,)
@@ -210,7 +219,6 @@ def _wrapper_2d_fourier() -> tuple[DeepONet, tuple[torch.Tensor, ...]]:
         auto_pad=True,
         padding=8,
         trunk_input="time",
-        variant="fourier_deeponet",
     )
     x = torch.randn(1, 8, 8, 2, 2)
     return model, (x,)
@@ -231,7 +239,6 @@ def _wrapper_2d_mionet() -> tuple[DeepONet, tuple[torch.Tensor, ...]]:
         auto_pad=True,
         padding=8,
         trunk_input="time",
-        variant="mionet",
     )
     x = torch.randn(1, 8, 8, 2, 2)
     x_branch2 = torch.randn(1, 8, 8, 2, 2)
@@ -253,7 +260,6 @@ def _wrapper_2d_temporal() -> tuple[DeepONet, tuple[torch.Tensor, ...]]:
         auto_pad=True,
         padding=8,
         trunk_input="time",
-        variant="u_deeponet",
     )
     x = torch.randn(1, 8, 8, 2, 2)
     return model, (x,)
@@ -293,7 +299,6 @@ def _xfno_packed_3d() -> tuple[DeepONet, tuple[torch.Tensor, ...]]:
         decoder_layers=1,
         auto_pad=True,
         padding=8,
-        variant="ufno",
     )
     x = torch.randn(1, 8, 8, 4, 2)  # (B, H, W, T_in, C)
     return model, (x,)
@@ -333,7 +338,6 @@ def _xfno_packed_3d_extend() -> tuple[DeepONet, tuple[torch.Tensor, ...]]:
         auto_pad=True,
         padding=8,
         time_modes=2,
-        variant="ufno",
     )
     x = torch.randn(1, 8, 8, 4, 2)  # (B, H, W, T_in=4, C)
     return model, (x,)
@@ -359,10 +363,178 @@ def _packed_2d_multichannel() -> tuple[DeepONet, tuple[torch.Tensor, ...]]:
         auto_pad=True,
         padding=8,
         trunk_input="time",
-        variant="u_deeponet",
     )
     x = torch.randn(1, 8, 8, 2, 2)
     return model, (x,)
+
+
+def _packed_2d_kitchen_sink() -> tuple[DeepONet, tuple[torch.Tensor, ...]]:
+    """Kitchen-sink 2D builder exercising every major code path.
+
+    Turns on every :class:`SpatialBranch` sub-stack (Fourier + UNet +
+    Conv) on **both** primary and secondary branches, the mionet
+    dual-branch Hadamard product, the ``temporal_projection`` decoder
+    with ``output_window > 1``, multi-channel output
+    (``out_channels=2``), ``trunk_input="grid"`` (trunk sees the full
+    ``(x, y, t)`` coordinate), a multi-layer pointwise lift network on
+    branch1, asymmetric ``coord_features`` and activation functions
+    between the two branches, and the Sin trunk activation.
+
+    This is the most complex single configuration the model exposes;
+    if anything regresses across these knobs the recorded golden
+    payload (or the companion :class:`TestDeepONetStress` checks) will
+    surface the regression early.
+    """
+    torch.manual_seed(_SEED)
+    # ``trunk_input="grid"`` in 2D reads the last ``dim+1 = 3`` channels
+    # of ``x`` (the (x, y, t) coords) to build the trunk input.  Both
+    # branches therefore see ``in_channels=3``; ``coord_features=True``
+    # on branch1 lifts to 5 effective channels before the linear lift.
+    branch1 = SpatialBranch(
+        dimension=2,
+        in_channels=3,
+        width=8,
+        num_fourier_layers=1,
+        num_unet_layers=1,
+        num_conv_layers=1,
+        modes1=2,
+        modes2=2,
+        kernel_size=3,
+        activation_fn="gelu",
+        coord_features=True,
+        lift_layers=2,
+    )
+    branch2 = SpatialBranch(
+        dimension=2,
+        in_channels=3,
+        width=8,
+        num_fourier_layers=1,
+        num_unet_layers=1,
+        num_conv_layers=1,
+        modes1=2,
+        modes2=2,
+        kernel_size=3,
+        activation_fn="silu",
+        coord_features=False,
+        lift_layers=1,
+    )
+    trunk = _make_trunk(
+        in_features=3,
+        out_features=8,
+        hidden_width=16,
+        num_layers=2,
+        activation_fn="sin",
+    )
+    model = DeepONet(
+        branch1=branch1,
+        branch2=branch2,
+        trunk=trunk,
+        dimension=2,
+        width=8,
+        out_channels=2,
+        decoder_type="temporal_projection",
+        decoder_width=8,
+        decoder_layers=2,
+        decoder_activation_fn="tanh",
+        output_window=3,
+        auto_pad=True,
+        padding=8,
+        trunk_input="grid",
+    )
+    x = torch.randn(1, 8, 8, 2, 3)
+    x_branch2 = torch.randn(1, 8, 8, 2, 3)
+    return model, (x, x_branch2)
+
+
+def _core_3d_kitchen_sink() -> tuple[DeepONet, tuple[torch.Tensor, ...]]:
+    """Core-mode 3D mionet builder hitting code paths the other fixtures skip.
+
+    Distinct from :func:`_packed_2d_kitchen_sink` along several axes
+    that no other fixture exercises:
+
+    - ``auto_pad=False`` (core mode) in 3D with a trunk and a spatial
+      branch — the packed-input wrapper path is bypassed entirely;
+      ``forward`` dispatches through the ``(x_branch1, x_time,
+      x_branch2)`` core entry point.
+    - ``decoder_type="conv"`` — exercises the convolutional decoder
+      head (``Conv3dFCLayer`` stack with channel-first permute), which
+      no other fixture covers.
+    - 3D mionet — :func:`_wrapper_2d_mionet` covers the 2D path; this
+      is the 3D counterpart.
+    - Fourier + UNet + Conv sub-stacks composed on **both** 3D
+      branches (``_wrapper_3d`` is UNet-only, ``_xfno_packed_3d`` has
+      no Conv stack).
+    - ``lift_layers=3`` with ``lift_hidden_width`` set explicitly on
+      branch1 — exercises the multi-layer pointwise lift network with
+      a custom hidden width.
+    - Trunk with ``num_layers=3`` and ``output_activation=False`` — no
+      other fixture builds a 3-layer trunk or skips the trailing
+      activation wrapper.
+    - Activation palette: ``celu`` (branch1), ``leaky_relu`` (branch2),
+      ``tanh`` (trunk), ``elu`` (decoder).  None of these appear in
+      another fixture.
+
+    The 8x8x8 spatial input is chosen so the UNet sub-stack's pool
+    chain doesn't collapse to a 1x1x1 BatchNorm input (training mode
+    forbids that with batch_size=1).
+    """
+    torch.manual_seed(_SEED)
+    branch1 = SpatialBranch(
+        dimension=3,
+        in_channels=2,
+        width=8,
+        num_fourier_layers=1,
+        num_unet_layers=1,
+        num_conv_layers=1,
+        modes1=2,
+        modes2=2,
+        modes3=2,
+        kernel_size=3,
+        activation_fn="celu",
+        coord_features=True,
+        lift_layers=3,
+        lift_hidden_width=12,
+    )
+    branch2 = SpatialBranch(
+        dimension=3,
+        in_channels=2,
+        width=8,
+        num_fourier_layers=1,
+        num_unet_layers=1,
+        num_conv_layers=1,
+        modes1=2,
+        modes2=2,
+        modes3=2,
+        kernel_size=3,
+        activation_fn="leaky_relu",
+        coord_features=True,
+        lift_layers=2,
+    )
+    trunk = _make_trunk(
+        in_features=1,
+        out_features=8,
+        hidden_width=12,
+        num_layers=3,
+        activation_fn="tanh",
+        output_activation=False,
+    )
+    model = DeepONet(
+        branch1=branch1,
+        branch2=branch2,
+        trunk=trunk,
+        dimension=3,
+        width=8,
+        out_channels=2,
+        decoder_type="conv",
+        decoder_width=16,
+        decoder_layers=2,
+        decoder_activation_fn="elu",
+        auto_pad=False,
+    )
+    x_branch1 = torch.randn(1, 8, 8, 8, 2)
+    x_time = torch.linspace(0, 1, 3).unsqueeze(-1)
+    x_branch2 = torch.randn(1, 8, 8, 8, 2)
+    return model, (x_branch1, x_time, x_branch2)
 
 
 def _core_2d_mlpbranch() -> tuple[DeepONet, tuple[torch.Tensor, ...]]:
@@ -386,7 +558,6 @@ def _core_2d_mlpbranch() -> tuple[DeepONet, tuple[torch.Tensor, ...]]:
         decoder_type="mlp",
         decoder_width=8,
         decoder_layers=1,
-        variant="deeponet",
     )
     x_branch1 = torch.randn(2, 4)  # (B, D_in)
     x_time = torch.linspace(0, 1, 3).unsqueeze(-1)  # (T, 1)
@@ -436,6 +607,8 @@ _FIXTURE_REGISTRY = [
     ("mionet_packed_2d", _wrapper_2d_mionet, _GOLDEN_PACKED_2D_MIONET),
     ("temporal_packed_2d", _wrapper_2d_temporal, _GOLDEN_PACKED_2D_TEMPORAL),
     ("packed_2d_multichannel", _packed_2d_multichannel, _GOLDEN_PACKED_2D_MULTICHANNEL),
+    ("kitchen_sink_packed_2d", _packed_2d_kitchen_sink, _GOLDEN_PACKED_2D_KITCHEN_SINK),
+    ("kitchen_sink_core_3d", _core_3d_kitchen_sink, _GOLDEN_CORE_3D_KITCHEN_SINK),
     ("xfno_packed_3d", _xfno_packed_3d, _GOLDEN_XFNO_PACKED_3D),
     ("xfno_packed_3d_extend", _xfno_packed_3d_extend, _GOLDEN_XFNO_PACKED_3D_EXTEND),
     ("mlpbranch_core_2d", _core_2d_mlpbranch, _GOLDEN_CORE_2D_MLPBRANCH),
@@ -453,8 +626,8 @@ class TestDeepONetConstructor:
     @pytest.mark.parametrize(
         "config",
         [
-            {"variant": "u_deeponet", "width": 8, "decoder_type": "mlp"},
-            {"variant": "u_deeponet", "width": 16, "decoder_type": "conv"},
+            {"width": 8, "decoder_type": "mlp"},
+            {"width": 16, "decoder_type": "conv"},
         ],
         ids=["default-ish", "custom"],
     )
@@ -468,10 +641,8 @@ class TestDeepONetConstructor:
             decoder_type=config["decoder_type"],
             decoder_width=config["width"],
             decoder_layers=1,
-            variant=config["variant"],
         )
         assert model.dimension == 2
-        assert model.variant == config["variant"]
         assert model.width == config["width"]
         assert model.decoder_type == config["decoder_type"]
         assert model.decoder_activation_fn == "relu"
@@ -480,8 +651,8 @@ class TestDeepONetConstructor:
     @pytest.mark.parametrize(
         "config",
         [
-            {"variant": "u_deeponet", "width": 8, "decoder_type": "mlp"},
-            {"variant": "u_deeponet", "width": 16, "decoder_type": "conv"},
+            {"width": 8, "decoder_type": "mlp"},
+            {"width": 16, "decoder_type": "conv"},
         ],
         ids=["default-ish", "custom"],
     )
@@ -495,10 +666,8 @@ class TestDeepONetConstructor:
             decoder_type=config["decoder_type"],
             decoder_width=config["width"],
             decoder_layers=1,
-            variant=config["variant"],
         )
         assert model.dimension == 3
-        assert model.variant == config["variant"]
         assert model.width == config["width"]
         assert model.decoder_type == config["decoder_type"]
         assert model.decoder_activation_fn == "relu"
@@ -507,13 +676,13 @@ class TestDeepONetConstructor:
     @pytest.mark.parametrize(
         "config",
         [
-            {"padding": 8, "variant": "u_deeponet", "trunk_input": "time"},
-            {"padding": 16, "variant": "u_deeponet", "trunk_input": "grid"},
+            {"padding": 8, "trunk_input": "time"},
+            {"padding": 16, "trunk_input": "grid"},
         ],
         ids=["default-ish", "custom"],
     )
     def test_packed_2d(self, config):
-        """``DeepONet(auto_pad=True)`` exposes padding / variant / trunk_input."""
+        """``DeepONet(auto_pad=True)`` exposes padding / trunk_input."""
         model = DeepONet(
             branch1=_make_unet_spatial_branch(dimension=2, width=8),
             trunk=_make_trunk(out_features=8),
@@ -525,23 +694,21 @@ class TestDeepONetConstructor:
             auto_pad=True,
             padding=config["padding"],
             trunk_input=config["trunk_input"],
-            variant=config["variant"],
         )
         assert model.auto_pad is True
         assert model.padding == config["padding"]
-        assert model.variant == config["variant"]
         assert model.trunk_input == config["trunk_input"]
 
     @pytest.mark.parametrize(
         "config",
         [
-            {"padding": 8, "variant": "u_deeponet", "trunk_input": "time"},
-            {"padding": 16, "variant": "u_deeponet", "trunk_input": "grid"},
+            {"padding": 8, "trunk_input": "time"},
+            {"padding": 16, "trunk_input": "grid"},
         ],
         ids=["default-ish", "custom"],
     )
     def test_packed_3d(self, config):
-        """``DeepONet(dimension=3, auto_pad=True)`` exposes padding / variant / trunk_input."""
+        """``DeepONet(dimension=3, auto_pad=True)`` exposes padding / trunk_input."""
         model = DeepONet(
             branch1=_make_unet_spatial_branch(dimension=3, width=8),
             trunk=_make_trunk(out_features=8),
@@ -553,12 +720,10 @@ class TestDeepONetConstructor:
             auto_pad=True,
             padding=config["padding"],
             trunk_input=config["trunk_input"],
-            variant=config["variant"],
         )
         assert model.dimension == 3
         assert model.auto_pad is True
         assert model.padding == config["padding"]
-        assert model.variant == config["variant"]
         assert model.trunk_input == config["trunk_input"]
 
     def test_simple_fourier_construction(self):
@@ -596,11 +761,9 @@ class TestDeepONetConstructor:
             decoder_width=8,
             decoder_layers=1,
             decoder_activation_fn="relu",
-            variant="fourier_deeponet",
         )
         assert model.dimension == 2
         assert model.width == 8
-        assert model.variant == "fourier_deeponet"
         assert model.auto_pad is False
         # branch1 is a SpatialBranch -> not the MLP-branch path
         assert model._branch1_is_mlp is False
@@ -729,7 +892,6 @@ class TestDeepONetCheckpoint:
         loaded, y_loaded = self._roundtrip(model, args, tmp_path)
         assert type(loaded).__name__ == type(model).__name__
         assert loaded.padding == model.padding
-        assert loaded.variant == model.variant
         assert loaded.trunk_input == model.trunk_input
         torch.testing.assert_close(y_loaded, golden["y"], rtol=1e-5, atol=1e-6)
 
@@ -741,7 +903,6 @@ class TestDeepONetCheckpoint:
         loaded, y_loaded = self._roundtrip(model, args, tmp_path)
         assert type(loaded).__name__ == type(model).__name__
         assert loaded.padding == model.padding
-        assert loaded.variant == model.variant
         assert loaded.trunk_input == model.trunk_input
         torch.testing.assert_close(y_loaded, golden["y"], rtol=1e-5, atol=1e-6)
 
@@ -867,6 +1028,115 @@ class TestDeepONetCompile:
         compiled = torch.compile(model, fullgraph=True)
         with torch.no_grad():
             compiled(x)
+
+
+# ----------------------------------------------------------------------
+# Stress test: kitchen-sink configuration
+# ----------------------------------------------------------------------
+
+
+class TestDeepONetStress:
+    """Stress-test the kitchen-sink configurations end-to-end.
+
+    The fixture-pinned non-regression checks on
+    ``kitchen_sink_packed_2d`` and ``kitchen_sink_core_3d`` (above, in
+    :class:`TestDeepONetNonRegression`) already verify numerics against
+    committed goldens.  This class complements them by exercising the
+    same configurations through three dynamic-behaviour checks per
+    dimensionality, mirroring the structure of
+    :class:`TestDeepONetGradientFlow` and :class:`TestDeepONetCompile`:
+
+    - forward output shape matches the expected contract,
+    - the backward pass populates gradients on every input tensor and
+      on at least one trainable parameter,
+    - ``torch.compile(fullgraph=False)`` produces eager-equivalent
+      output (full-graph compile is probed on the simpler wrappers in
+      :class:`TestDeepONetCompile`; skipping it here to keep the test
+      runtime reasonable).
+
+    The 2D kitchen-sink combines: Fourier + UNet + Conv sub-stacks on
+    both branches, the mionet dual-branch Hadamard product, the
+    ``temporal_projection`` decoder with ``output_window > 1``,
+    multi-channel output, ``trunk_input="grid"``, a multi-layer
+    pointwise lift on branch1, asymmetric ``coord_features`` and
+    activation functions across branches, and the Sin trunk activation.
+
+    The 3D kitchen-sink covers a deliberately disjoint set of code
+    paths: ``auto_pad=False`` (core mode) with a 3D spatial branch,
+    ``decoder_type="conv"``, 3D mionet, all three sub-stacks on both
+    branches, ``lift_layers=3`` with ``lift_hidden_width`` set, a
+    3-layer trunk with ``output_activation=False``, and a non-default
+    activation palette (celu / leaky_relu / tanh / elu).
+
+    If any code path among these regresses, this class flags it
+    independently of any fixture-numerics drift.
+    """
+
+    def test_forward_shape_2d(self):
+        """2D kitchen-sink: output shape matches ``(B, H, W, K, oc)``."""
+        model, args = _packed_2d_kitchen_sink()
+        _init_lazy(model, *args)
+        with torch.no_grad():
+            y = model(*args)
+        assert y.shape == (1, 8, 8, 3, 2)
+
+    def test_forward_shape_3d(self):
+        """3D kitchen-sink: output shape matches ``(B, X, Y, Z, T, oc)``."""
+        model, args = _core_3d_kitchen_sink()
+        _init_lazy(model, *args)
+        with torch.no_grad():
+            y = model(*args)
+        assert y.shape == (1, 8, 8, 8, 3, 2)
+
+    def test_gradients_2d(self):
+        """2D kitchen-sink: backward populates gradients on inputs and params."""
+        model, args = _packed_2d_kitchen_sink()
+        _init_lazy(model, *args)
+        args = tuple(a.detach().requires_grad_(True) for a in args)
+        y = model(*args)
+        y.sum().backward()
+        for i, a in enumerate(args):
+            assert a.grad is not None, f"input arg[{i}] has no gradient"
+        trainable = [p for p in model.parameters() if p.requires_grad]
+        assert trainable, "model has no trainable parameters"
+        assert any(p.grad is not None for p in trainable)
+
+    def test_gradients_3d(self):
+        """3D kitchen-sink: backward populates gradients on inputs and params."""
+        model, args = _core_3d_kitchen_sink()
+        _init_lazy(model, *args)
+        args = tuple(a.detach().requires_grad_(True) for a in args)
+        y = model(*args)
+        y.sum().backward()
+        for i, a in enumerate(args):
+            assert a.grad is not None, f"input arg[{i}] has no gradient"
+        trainable = [p for p in model.parameters() if p.requires_grad]
+        assert trainable, "model has no trainable parameters"
+        assert any(p.grad is not None for p in trainable)
+
+    def test_compile_2d(self):
+        """2D kitchen-sink: ``torch.compile(fullgraph=False)`` parity."""
+        model, args = _packed_2d_kitchen_sink()
+        _init_lazy(model, *args)
+        with torch.no_grad():
+            y_eager = model(*args)
+        compiled = torch.compile(model, fullgraph=False)
+        with torch.no_grad():
+            y_compiled = compiled(*args)
+        assert y_compiled.shape == y_eager.shape
+        torch.testing.assert_close(y_compiled, y_eager, rtol=1e-4, atol=1e-5)
+
+    def test_compile_3d(self):
+        """3D kitchen-sink: ``torch.compile(fullgraph=False)`` parity."""
+        model, args = _core_3d_kitchen_sink()
+        _init_lazy(model, *args)
+        with torch.no_grad():
+            y_eager = model(*args)
+        compiled = torch.compile(model, fullgraph=False)
+        with torch.no_grad():
+            y_compiled = compiled(*args)
+        assert y_compiled.shape == y_eager.shape
+        torch.testing.assert_close(y_compiled, y_eager, rtol=1e-4, atol=1e-5)
 
 
 if __name__ == "__main__":
