@@ -44,7 +44,7 @@ class MeshDataReader(Reader):
         >>> reader = MeshDataReader("/path/to/mesh_stores/lattice")
         >>> filenames = reader.get_filenames()
         >>> td = reader.load(filenames[0])
-        >>> print(td["coordinates"].shape)  # (N, 3)
+        >>> print(td["coordinates"].shape)  # (N, 2)
     """
 
     def __init__(

@@ -71,7 +71,7 @@ def evaluate_lattice_qoi_torch(
     call recurses on the squeezed slot and re-adds the dim on the way out.
 
     Args:
-        cell_centers: (N, 3) or (1, N, 3)
+        cell_centers: (N, 2) or (1, N, 2)
         cell_areas: (N,) or (1, N)
         sigma_t: (N,) or (1, N)
         sigma_s: (N,) or (1, N)
@@ -151,7 +151,7 @@ def evaluate_hohlraum_qoi_torch(
     call recurses on the squeezed slot and re-adds the dim on the way out.
 
     Args:
-        cell_centers: (N, 3) or (1, N, 3)
+        cell_centers: (N, 2) or (1, N, 2)
         cell_areas: (N,) or (1, N)
         sigma_t: (N,) or (1, N)
         sigma_s: (N,) or (1, N)

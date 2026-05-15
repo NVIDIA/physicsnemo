@@ -107,12 +107,12 @@ class RTEFluxLogClip(Transform):
 
 GLOBAL_DOMAIN_BOUNDS = {
     "lattice": {
-        "min": torch.tensor([-3.5, -3.5, -0.01], dtype=torch.float32),
-        "max": torch.tensor([3.5, 3.5, 0.01], dtype=torch.float32),
+        "min": torch.tensor([-3.5, -3.5], dtype=torch.float32),
+        "max": torch.tensor([3.5, 3.5], dtype=torch.float32),
     },
     "hohlraum": {
-        "min": torch.tensor([-0.65, -0.65, -0.01], dtype=torch.float32),
-        "max": torch.tensor([0.65, 0.65, 0.01], dtype=torch.float32),
+        "min": torch.tensor([-0.65, -0.65], dtype=torch.float32),
+        "max": torch.tensor([0.65, 0.65], dtype=torch.float32),
     },
 }
 

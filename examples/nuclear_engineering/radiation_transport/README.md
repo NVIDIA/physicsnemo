@@ -124,7 +124,7 @@ Each `*.pmsh/` directory is one simulation, written by
 `physicsnemo.mesh.Mesh.save(...)`. The loader uses the first and final
 `scalar_flux` snapshots and ignores intermediate snapshots. The fields are:
 
-`Mesh.points` — `(N, 3)` float32 cell-center coordinates.
+`Mesh.points` — `(N, 2)` float32 cell-center coordinates.
 
 `Mesh.point_data` (per-cell tensors):
 

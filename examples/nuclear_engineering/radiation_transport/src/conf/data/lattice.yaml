@@ -21,7 +21,7 @@ normalize_coordinates: true
 cache_static_arrays: true
 
 # Fourier features for coordinates (adds 2 * coord_dims * num_frequencies features).
-# Default: 3 freq * 2 coords * 2 (sin/cos) = 12 extra features, on top of 3 raw coords.
+# Default: 3 freq * 2 coords * 2 (sin/cos) = 12 extra features, on top of 2 raw coords (x, y).
 use_fourier_features: true
 fourier_features:
   num_frequencies: 3

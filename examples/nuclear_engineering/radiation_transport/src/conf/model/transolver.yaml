@@ -20,7 +20,7 @@
 # — they configure the data adapter, not the model.
 
 _target_: physicsnemo.models.transolver.Transolver
-functional_dim: 15                                  # 3 coords + 12 Fourier features
+functional_dim: 14                                  # 2 coords + 12 Fourier features (2-D simulations)
 embedding_dim: ${case.embedding_dim_override}
 out_dim: 1                                          # predicted flux
 n_layers: 8
