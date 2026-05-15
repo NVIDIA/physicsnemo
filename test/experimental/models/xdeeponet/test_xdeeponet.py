@@ -37,7 +37,6 @@ from pathlib import Path
 
 import pytest
 import torch
-import torch.nn as nn
 
 from physicsnemo import Module
 from physicsnemo.core.meta import ModelMetaData
