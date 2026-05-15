@@ -18,19 +18,14 @@
 # Loads domain_*.pmsh files containing interior volume mesh + vehicle boundary + global_data.
 # Interior: tetrahedral volume mesh with fields in point_data.
 # Boundary: triangulated car-body surface mesh keyed `vehicle` (curated layout).
-# global_data: U_inf, rho_inf (baked into .pmsh); p_inf, nu, L_ref injected from metadata below.
+# global_data: freestream conditions (U_inf, rho_inf, p_inf, nu, L_ref) are
+# embedded directly in the .pmsh files and read straight out of each sample's
+# global_data by NonDimensionalizeByMetadata.
 # Splits are controlled by manifest.json + train_split/val_split in the training config.
 
 name: drivaer_ml_volume
 
 train_datadir: ${dataset_paths.drivaer_ml}
-
-metadata:
-  U_inf:  [30.0, 0.0, 0.0] # freestream velocity
-  p_inf: 0.0 # reference pressure, drivaerml is gauge pressure
-  rho_inf: 1.225 # freestream density
-  nu: 1
-  L_ref: 5.0                # reference length [m]
 
 pipeline:
   reader:

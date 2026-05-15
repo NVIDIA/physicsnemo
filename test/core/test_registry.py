@@ -57,9 +57,17 @@ def real_registry():
     return ModelRegistry()
 
 
-# Test models for use in various tests
+# Test models for use in various tests.
+#
+# These names intentionally start with "Test" because several tests below
+# assert that the model registers under its class ``__name__``
+# (e.g. ``test_register_without_name_uses_class_name`` checks for
+# ``"TestModelA"`` in ``registry.list_models()``).  We set
+# ``__test__ = False`` so pytest skips collecting them as test classes.
 class TestModelA(Module):
     """Test model A for registry tests"""
+
+    __test__ = False
 
     def __init__(self, size=32):
         super().__init__(meta=ModelMetaData())
@@ -72,6 +80,8 @@ class TestModelA(Module):
 
 class TestModelB(Module):
     """Test model B for registry tests"""
+
+    __test__ = False
 
     def __init__(self, hidden_dim=64):
         super().__init__(meta=ModelMetaData())

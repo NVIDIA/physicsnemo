@@ -35,8 +35,10 @@ PhysicsNeMo-Curator:
 
 The data processing pipeline in this example explicitly performs non dimensionalization
 of input data to unitless fields for model inputs.  Check out the yaml configurations
-in `conf/dataset/` to see examples: the metadata section describes the reference
-parameters for each data.  Because datasets are non-dimensionalized, and are loaded
+in `conf/dataset/` to see examples; the reference freestream conditions
+(`U_inf`, `rho_inf`, `p_inf`, ...) are stored per-sample in each data
+file's `global_data` and read directly from there by
+`MeshReaderWithGlobalData`.  Because datasets are non-dimensionalized, and are loaded
 with the physicsnemo datapipes which support a MultiDataset abstraction, it's 
 possible to merge datasets on-the-fly during training to perform multi-dataset
 training.  We at PhysicsNeMo haven't extensively explored all of the parameters
@@ -102,11 +104,18 @@ flowchart LR
 
 ### Why each step exists
 
-- **Metadata injection** — The dataset builder writes freestream conditions
-  (`U_inf`, `rho_inf`, `p_inf`, `nu`) from the YAML config's `metadata:`
-  block into each mesh's `global_data`. This makes physical reference
-  quantities available to downstream transforms without hardcoding them
-  in Python.
+- **Freestream conditions on `global_data`** — Each sample's freestream
+  conditions (`U_inf`, `rho_inf`, `p_inf`, `nu`, `L_ref`, and `T_inf`
+  for compressible datasets) are embedded directly in the data files'
+  `global_data` at conversion time, at the **domain level** of each
+  `.pdmsh` / `.pmsh`. Downstream transforms like
+  `NonDimensionalizeByMetadata` read them straight off the loaded
+  sample. The surface configs read a boundary `Mesh`
+  directly out of the parent DomainMesh's on-disk tensordict tree; the
+  boundary's own `global_data` is typically empty, so those configs use
+  the recipe-local `MeshReaderWithGlobalData` to merge the domain-level 
+  `global_data`  onto each boundary at load time (`merge_global_data_from:
+  "../../global_data"`).
 
 - **DropMeshFields** — Removes fields that are not needed for training
   (e.g. `TimeValue` in DrivaerML) to reduce memory and avoid schema
@@ -126,7 +135,8 @@ flowchart LR
   distribution to zero.
 
 - **NonDimensionalizeByMetadata** — Converts raw physical fields into
-  non-dimensional coefficients using the injected freestream metadata:
+  non-dimensional coefficients using the per-sample freestream
+  conditions stored on `metadata`:
     - Pressure → Cp: `(p - p_inf) / q_inf` where `q_inf = 0.5 * rho_inf * |U_inf|²`
     - Wall shear stress → Cf: `tau / q_inf`
     - Velocity → `U / |U_inf|`
@@ -139,7 +149,7 @@ flowchart LR
   In some recipes, the x/y/z axes are all scaled to unit-scale independently.
   Here, we've made a conscious decision to maintain the aspect ratios of the input
   positions and vectors deliberately use a scalar parameter for coordinate
-  non-dimensionalization.  To disable, set `L_ref` to 1.0.
+  non-dimensionalization.  
 
 - **ComputeSDFFromBoundary** — Volume pipelines only.  Computes a
   signed distance field (and surface normals) from an auxiliary STL
@@ -193,8 +203,9 @@ The pipeline applies two layers of field conditioning:
    converts raw simulation outputs to standard aerodynamic coefficients
    (Cp, Cf) or non-dimensional velocity.  This is essential when
    combining datasets that may use different freestream conditions, fluid
-   properties, or unit conventions.  The freestream metadata (`U_inf`,
-   `rho_inf`, `p_inf`) is declared per-dataset in the YAML config.
+   properties, or unit conventions.  The freestream conditions (`U_inf`,
+   `rho_inf`, `p_inf`, optional `T_inf`, `L_ref`) are stored per-sample
+   in each data file's `global_data` and read directly from there.
 
 2. **Statistical normalization** (`NormalizeMeshFields`) applies z-score
    scaling so that all field values fed to the model have roughly zero
@@ -241,8 +252,8 @@ that follows a simple semantic contract:
   uniformly across domains). Surface configs additionally carry
   precomputed cell normals on `boundaries.vehicle.cell_data` (from
   `ComputeSurfaceNormals` in the surface dataset pipelines).
-- **`global_data`** — scalar metadata (`U_inf`, `L_ref`, etc.) injected
-  from the dataset YAML's `metadata:` block.
+- **`global_data`** — per-sample freestream conditions (`U_inf`,
+  `L_ref`, etc.) embedded directly in the data files.
 
 **Each model YAML declares its data contract** with three top-level fields:
 
@@ -397,8 +408,9 @@ The recipe uses a two-level config structure:
   the model, optimizer, scheduler, precision, and which dataset configs
   to load.  Six are provided (see [Training configurations](#training-configurations)).
 - **`conf/dataset/*.yaml`** — Per-dataset configs.  Each declares the
-  reader, transform pipeline, freestream metadata, target field types,
-  and metrics.
+  reader, transform pipeline, target field types, and metrics.
+  Freestream conditions live on each sample's `global_data` (baked
+  into the data files at conversion time).
 
 ### Dataset config anatomy
 
@@ -411,21 +423,20 @@ name: drivaer_ml_surface
 
 train_datadir: /path/to/your/PhysicsNeMo-DrivaerML/
 
-# Freestream conditions (injected into global_data by the dataset builder)
-metadata:
-  U_inf: [30.0, 0.0, 0.0]
-  p_inf: 0.0
-  rho_inf: 1.225
-  nu: 1
-  L_ref: 5.0
+# Freestream conditions (U_inf, p_inf, rho_inf, nu, L_ref) are embedded
+# at the domain level of each .pdmsh at data-conversion time. The
+# surface reader points at the boundary tensordict inside that .pdmsh,
+# so we use MeshReaderWithGlobalData to merge the parent DomainMesh's
+# global_data onto each boundary Mesh at load time.
 
 # Transform pipeline — each entry is Hydra-instantiated
 pipeline:
   reader:
-    _target_: ${dp:MeshReader}
+    _target_: ${dp:MeshReaderWithGlobalData}
     path: ${train_datadir}
     pattern: "**/*.pdmsh/_tensordict/boundaries/vehicle"
     subsample_n_cells: ${sampling_resolution}
+    merge_global_data_from: "../../global_data"
   augmentations:
     - _target_: ${dp:RandomRotateMesh}
       axes: ["z"]
@@ -548,7 +559,7 @@ Rank-0 only; no external tracker required.
 
 | Module | Purpose |
 |---|---|
-| `src/datasets.py` | Factory functions: `build_dataset`, `load_dataset_config`. Hydra-instantiates readers and transforms from YAML; injects metadata into `global_data`. Auto-injects target names from the YAML's `targets:` block into `MeshToDomainMesh`. Also provides `load_manifest`, `resolve_manifest_indices`, and `ManifestSampler` for manifest-based splitting. |
+| `src/datasets.py` | Factory functions: `build_dataset`, `load_dataset_config`. Hydra-instantiates readers and transforms from YAML; freestream conditions are read straight from each sample's `global_data` (no YAML-side injection). Auto-injects target names from the YAML's `targets:` block into `MeshToDomainMesh`. Also provides `load_manifest`, `resolve_manifest_indices`, and `ManifestSampler` for manifest-based splitting. |
 | `src/nondim.py` | Recipe-local transform: `NonDimensionalizeByMetadata`. Registered into the global datapipe registry. Supports pressure, stress, velocity, temperature, density, and identity field types. |
 | `src/forward_kwargs.py` | Spec resolver. Walks declarative `forward_kwargs:` specs (paths, lists, nested dicts, `expand_like` modifiers) into actual `model.forward()` kwargs against a DomainMesh. Also provides `extract_targets` (interior.point_data lookup by target name). |
 | `src/collate.py` | `build_collate_fn(input_type, forward_kwargs_spec, target_config)`. Resolves forward kwargs from each `DomainMesh` sample, extracts targets from `interior.point_data`. For `input_type='tensors'`, batch-wraps tensors with the right token / per-element padding; for `input_type='mesh'`, passes Mesh / dict / scalar values through unchanged. |
@@ -575,13 +586,23 @@ rescales those coefficients so the model sees inputs with zero mean and unit
 variance, improving training stability. Separating them means you can
 change normalization strategy without touching the physics, and vice versa.
 
-**Why inject metadata from YAML instead of storing it in the mesh files?**
-The freestream conditions are not always stored in the converted mesh
-files.  Rather than modifying the data conversion pipeline, we inject
-them at runtime from the config.  This keeps the mesh files
-format-agnostic and makes it trivial to change conditions without
-reconverting data.  The dataset builder reads the `metadata:` block and
-prepends an injection step automatically.
+**Why store freestream conditions on each sample's `global_data` instead
+of in the YAML?**
+Freestream conditions vary per-sample for some datasets (e.g. the
+high-lift airplane cases have a different `U_inf` direction per angle
+of attack), so a single YAML value per dataset is the wrong approach.
+Storing them inside each `.pdmsh` / `.pmsh` file's `global_data`
+gives every transform a single, canonical place to read freestream
+quantities, keeps the dataset YAML focused on pipeline structure
+rather than physical constants, and lets `RandomRotateMesh` rotate
+`U_inf` together with the geometry through its existing
+`transform_global_data: true` path. The conditions are stored at the
+**domain level** of each file; surface configs that read a boundary
+`Mesh` directly use the recipe-local `MeshReaderWithGlobalData`
+(`src/merge_global_data.py`) to merge the parent's `global_data` onto
+each boundary at load time, so downstream transforms see a uniform
+shape regardless of whether the entry point was the domain or a
+boundary.
 
 **Why Hydra instantiation for the pipeline?**
 The entire pipeline is expressed in YAML with no conditional Python logic.

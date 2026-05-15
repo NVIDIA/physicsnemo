@@ -101,10 +101,10 @@ training:
 
 # -- DataLoader / Dataset Performance Tuning --------------------------------
 dataloader:
-  prefetch_factor: 4
+  prefetch_factor: 1
   num_streams: 1
   use_streams: false     # ball query is not stream-safe
-  num_workers: 4
+  num_workers: 1
   pin_memory: true
 
 # -- Logging -----------------------------------------------------------------

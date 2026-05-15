@@ -21,26 +21,26 @@
 # (derived from vertex-projected point_data during conversion).
 # Model inputs use cell centroids and face normals; topology (triangles)
 # is preserved for normal computation and cell-based subsampling.
+# global_data: the boundary tensordict's own global_data is empty; the
+# per-case freestream conditions (U_inf, p_inf, rho_inf, T_inf, L_ref)
+# live on the parent DomainMesh's _tensordict/global_data, so we use
+# MeshReaderWithGlobalData to merge them onto each boundary Mesh at load
+# time. Units are slug-inch-second-Rankine.
 # Splits are controlled by manifest.json + train_split/val_split in the training config.
 
 name: highlift_surface
 
 train_datadir: ${dataset_paths.highlift_aero_ml}
 
-# Freestream conditions — slug-inch-second-Rankine unit system
-metadata:
-  U_inf: [2672.95, 0.0, 186.92]   # 2679.505 in/s at AoA=4°
-  p_inf: 176.352                   # 14.696 psi × 12 → slug/(in·s²)
-  rho_inf: 1.3756e-6               # 0.002377 slug/ft³ → slug/in³
-  T_inf: 518.67                    # [°R]
-  L_ref: 1156.75                    # [in] — span
-
 pipeline:
   reader:
-    _target_: ${dp:MeshReader}
+    _target_: ${dp:MeshReaderWithGlobalData}
     path: ${train_datadir}
-    pattern: "geo_LHC*/*.pdmsh/_tensordict/boundaries/boundary"
+    pattern: "geo_LHC*/*.pdmsh/_tensordict/boundaries/vehicle"
     subsample_n_cells: ${sampling_resolution}
+    # Walk up two levels from the boundary tensordict to the parent
+    # DomainMesh's global_data and merge its keys onto each sample.
+    merge_global_data_from: "../../global_data"
   augmentations:
     - _target_: ${dp:RandomRotateMesh}
       axes: ["z"]
