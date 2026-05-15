@@ -33,7 +33,6 @@ from physicsnemo.utils.logging.mlflow import initialize_mlflow
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 
 
-
 def loss_func(x, y, p=2.0):
     yv = y.reshape(x.size()[0], -1)
     xv = x.reshape(x.size()[0], -1)

@@ -191,9 +191,7 @@ def main(cfg: DictConfig) -> None:
         weight_decay=cfg.training.weight_decay,
         fused=use_fused,
     )
-    rank_zero_logger.info(
-        f"Using AdamW optimizer (fused={use_fused})"
-    )
+    rank_zero_logger.info(f"Using AdamW optimizer (fused={use_fused})")
 
     # Learning rate scheduler
     scheduler = CosineAnnealingLR(

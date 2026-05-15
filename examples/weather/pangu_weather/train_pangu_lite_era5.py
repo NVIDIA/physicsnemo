@@ -33,7 +33,6 @@ from physicsnemo.utils.logging.mlflow import initialize_mlflow
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 
 
-
 def loss_func(x, y):
     return torch.nn.functional.l1_loss(x, y)
 
