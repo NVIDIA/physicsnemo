@@ -8,8 +8,11 @@ final-time mapping from the initial flux snapshot to the final scalar flux,
 using a physics-informed loss that combines region-weighted MSE with a
 quantity-of-interest (QoI) penalty based on absorption in key regions.
 
-The datasets used for this example were generated using
-[KiT-RT](https://github.com/KiT-RT) [^1].
+The dataset used for this example was generated using
+[KiT-RT](https://github.com/KiT-RT) [^1], and can be found on Hugging Face:
+[Linear Radiation Transport][hf-rte].
+
+[hf-rte]: https://huggingface.co/datasets/nvidia/Linear-Radiation-Transport
 
 ---
 
@@ -89,8 +92,9 @@ uv pip install -e ".[model-extras,datapipes-extras]" tensorboard
 
 ### 3.1 Data source
 
-**TODO:** HuggingFace dataset URL. Until then, raw simulation data may be
-curated from the [KiT-RT repositories](https://github.com/KiT-RT).
+The dataset is available on Hugging Face:
+[Linear Radiation Transport][hf-rte]. Alternatively, raw simulation data
+may be curated from the [KiT-RT repositories](https://github.com/KiT-RT).
 
 ### 3.2 Expected on-disk layout
 
