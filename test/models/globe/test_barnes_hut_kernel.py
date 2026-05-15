@@ -1660,9 +1660,6 @@ def test_compute_node_strengths_precision_at_scale() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="CUDA required for sync-event counting"
-)
 @pytest.mark.parametrize(
     "n_points, leaf_size, theta",
     [
@@ -1672,9 +1669,12 @@ def test_compute_node_strengths_precision_at_scale() -> None:
     ],
 )
 def test_dual_traversal_sync_budget(
-    n_points: int, leaf_size: int, theta: float
+    device: str, n_points: int, leaf_size: int, theta: float
 ) -> None:
     """Cluster-tree construction + dual traversal stays within a sync budget.
+
+    Runs in ~3 s on an RTX-class GPU (one warm-up traversal plus three
+    profiled traversals); CUDA-only and skipped on CPU-only runners.
 
     Profiling identified ``cudaStreamSynchronize`` as the dominant CPU
     stall in GLOBE training (9919 calls / ~3 s in a 10.5 s training step,
@@ -1716,9 +1716,11 @@ def test_dual_traversal_sync_budget(
     boolean-indexing regrowth, which would add ~5-10 syncs/iter and blow
     past the budget on any non-trivial tree).
     """
-    device = torch.device("cuda")
+    if not device.startswith("cuda"):
+        pytest.skip("CUDA required for sync-event counting")
+    device_obj = torch.device(device)
     torch.manual_seed(DEFAULT_SEED)
-    points = torch.randn(n_points, 3, device=device)
+    points = torch.randn(n_points, 3, device=device_obj)
 
     ### Warm up: first calls allocate / JIT, which can fire one-off syncs
     ### unrelated to the algorithmic structure under test.
@@ -1736,14 +1738,15 @@ def test_dual_traversal_sync_budget(
 
     sync_count = sum(1 for ev in prof.events() if ev.name == "cudaStreamSynchronize")
 
-    ### Observed at time of test authorship on an RTX 4090 with
-    ### PyTorch 2.11: 59 / 67 / 83 syncs for the three parametrisations
-    ### below.  Setting the budget at 100 gives ~20 % headroom for
-    ### platform-specific profiler-overhead variation (Kineto/CUPTI emit
-    ### a handful of extra ``cudaStreamSynchronize`` events at activity
-    ### boundaries that vary by driver / CUDA version), while staying
-    ### tight enough to catch a regression that re-introduces ~5+
-    ### syncs/iter into the dual-traversal loop.
+    ### Observed at time of test authorship on an RTX 4090 Laptop with
+    ### PyTorch 2.11: 59 / 67 / 83 syncs and 2.0 / 0.5 / 0.3 s wall-clock
+    ### for the three parametrisations below.  Setting the budget at 100
+    ### gives ~20 % headroom for platform-specific profiler-overhead
+    ### variation (Kineto/CUPTI emit a handful of extra
+    ### ``cudaStreamSynchronize`` events at activity boundaries that vary
+    ### by driver / CUDA version), while staying tight enough to catch a
+    ### regression that re-introduces ~5+ syncs/iter into the
+    ### dual-traversal loop.
     budget = 100
     assert sync_count <= budget, (
         f"dual_traversal sync count {sync_count} exceeds budget {budget} for "
