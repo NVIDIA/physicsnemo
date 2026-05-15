@@ -25,11 +25,6 @@ from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
 
 try:
-    import apex
-except:
-    pass
-
-try:
     import pyvista as pv
 except:
     raise ImportError(

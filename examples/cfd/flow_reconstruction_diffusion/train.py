@@ -35,13 +35,6 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 from misc import construct_class_by_name
 
-try:
-    from apex.optimizers import FusedAdam
-
-    apex_imported = True
-except ImportError:
-    apex_imported = False
-
 from omegaconf import OmegaConf
 import argparse
 
@@ -91,12 +84,11 @@ def main(cfg: DictConfig) -> None:
     c.network_kwargs = EasyDict()
     c.loss_kwargs = EasyDict()
     c.optimizer_kwargs = EasyDict(
-        class_name="apex.optimizers.FusedAdam"
-        if apex_imported and cfg.fused_adam
-        else "torch.optim.Adam",
+        class_name="torch.optim.Adam",
         lr=cfg.lr,
         betas=[0.9, 0.999],
         eps=1e-8,
+        fused=bool(cfg.fused_adam) and torch.cuda.is_available(),
     )
     dataset_name = cfg.dataset
 
