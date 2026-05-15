@@ -98,7 +98,8 @@ def test_model_checkpointing(
         conn.create_bucket(Bucket="checkpoint-test-bucket")
 
         # Initialize DistributedManager first since save_checkpoint instantiates it
-        DistributedManager.initialize()
+        if not DistributedManager.is_initialized():
+            DistributedManager.initialize()
 
         mlp_model_1 = model_generator(8).to(device)
         mlp_model_2 = model_generator(4).to(device)
@@ -190,7 +191,8 @@ def test_load_model_weights(
 
     from physicsnemo.utils import load_model_weights
 
-    DistributedManager.initialize()
+    if not DistributedManager.is_initialized():
+        DistributedManager.initialize()
 
     in_feats = 8
 
