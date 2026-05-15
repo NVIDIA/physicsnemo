@@ -32,6 +32,7 @@ Covers, per `MOD-008a/b/c <../../CODING_STANDARDS/MODELS_IMPLEMENTATION.md>`_:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,7 @@ import torch
 import torch.nn as nn
 
 from physicsnemo import Module
+from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.experimental.models.xdeeponet import DeepONet, SpatialBranch
 from physicsnemo.models.mlp import FullyConnected
 from physicsnemo.nn import get_activation
@@ -83,6 +85,80 @@ _GOLDEN_CORE_2D_MLPBRANCH = _DATA_DIR / "xdeeponet_core_2d_mlpbranch_v1.pth"
 # directly.  These helpers produce minimal modules so the golden files
 # stay tiny (test inputs are 1x8x8 or 1x8x8x8) and every test runs in
 # well under a second.
+#
+# Note on physicsnemo.Module compliance: every submodule passed into
+# DeepONet as a constructor argument (branch1, branch2, trunk) must be a
+# physicsnemo.Module instance, otherwise Module.save rejects the
+# hierarchy at serialization time (see Module._save_process).  A bare
+# nn.Sequential wrapper around a FullyConnected does not satisfy that
+# contract, so :class:`_MLPWithTrailingActivation` below replaces the
+# nn.Sequential pattern used by ``_make_trunk`` and ``_make_mlp_branch``.
+
+
+@dataclass
+class _MLPWithTrailingActivationMeta(ModelMetaData):
+    """PhysicsNeMo metadata for the test-only MLP+activation wrapper."""
+
+
+class _MLPWithTrailingActivation(Module):
+    """Test-only physicsnemo.Module replacement for
+    ``nn.Sequential(FullyConnected, get_activation(...))``.
+
+    A plain ``nn.Sequential`` cannot be a DeepONet constructor arg
+    because :meth:`Module._save_process` rejects ``torch.nn.Module``
+    instances in ``_args``; this lightweight subclass satisfies the
+    contract without changing forward semantics.  Production users
+    wanting the same pattern should define their own
+    :class:`physicsnemo.Module` subclass (or use
+    :meth:`Module.from_torch` on a custom class).
+
+    Parameters
+    ----------
+    in_features : int
+        Input feature count, forwarded to :class:`FullyConnected`.
+    layer_size : int
+        Hidden width, forwarded to :class:`FullyConnected.layer_size`.
+    out_features : int
+        Output feature count, forwarded to :class:`FullyConnected`.
+    num_layers : int
+        Hidden-layer count, forwarded to :class:`FullyConnected.num_layers`.
+    activation_fn : str
+        Activation name used both as the FullyConnected hidden activation
+        and as the trailing activation applied to the projection output.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape ``(..., in_features)``.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape ``(..., out_features)`` after the trailing
+        activation.
+    """
+
+    def __init__(
+        self,
+        *,
+        in_features: int,
+        layer_size: int,
+        out_features: int,
+        num_layers: int,
+        activation_fn: str,
+    ):
+        super().__init__(meta=_MLPWithTrailingActivationMeta())
+        self.fc = FullyConnected(
+            in_features=in_features,
+            layer_size=layer_size,
+            out_features=out_features,
+            num_layers=num_layers,
+            activation_fn=activation_fn,
+        )
+        self.activation = get_activation(activation_fn)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.activation(self.fc(x))
 
 
 def _make_unet_spatial_branch(dimension: int, width: int) -> SpatialBranch:
@@ -117,22 +193,22 @@ def _make_mlp_branch(
     out_features: int,
     num_layers: int,
     activation_fn: str = "relu",
-) -> nn.Module:
+) -> Module:
     """Flat MLP branch: ``num_layers`` activated linears in total.
 
     Composed as :class:`FullyConnected` (with ``num_layers - 1`` activated
     hidden layers + one unactivated projection) wrapped with a trailing
-    activation so every linear is followed by an activation.
+    activation so every linear is followed by an activation.  The
+    wrapping is a :class:`_MLPWithTrailingActivation` instance so the
+    branch is a :class:`physicsnemo.Module` and survives
+    :meth:`DeepONet.save`.
     """
-    return nn.Sequential(
-        FullyConnected(
-            in_features=in_features,
-            layer_size=hidden_width,
-            out_features=out_features,
-            num_layers=num_layers - 1,
-            activation_fn=activation_fn,
-        ),
-        get_activation(activation_fn),
+    return _MLPWithTrailingActivation(
+        in_features=in_features,
+        layer_size=hidden_width,
+        out_features=out_features,
+        num_layers=num_layers - 1,
+        activation_fn=activation_fn,
     )
 
 
@@ -144,24 +220,36 @@ def _make_trunk(
     num_layers: int = 2,
     activation_fn: str = "tanh",
     output_activation: bool = True,
-) -> nn.Module:
+) -> Module:
     """Trunk MLP.
 
     A :class:`FullyConnected` produces ``num_layers`` activated hidden
     linears followed by a single unactivated projection
     (``hidden_width -> out_features``); when ``output_activation`` is
     true the projection is wrapped with a trailing activation.
+
+    Both branches of the conditional return a :class:`physicsnemo.Module`
+    so the trunk survives :meth:`DeepONet.save`.  With
+    ``output_activation=False`` the bare :class:`FullyConnected` (already
+    a physicsnemo.Module) is returned; otherwise a
+    :class:`_MLPWithTrailingActivation` wraps the same FullyConnected
+    semantics plus a trailing activation.
     """
-    trunk = FullyConnected(
+    if output_activation:
+        return _MLPWithTrailingActivation(
+            in_features=in_features,
+            layer_size=hidden_width,
+            out_features=out_features,
+            num_layers=num_layers,
+            activation_fn=activation_fn,
+        )
+    return FullyConnected(
         in_features=in_features,
         layer_size=hidden_width,
         out_features=out_features,
         num_layers=num_layers,
         activation_fn=activation_fn,
     )
-    if output_activation:
-        return nn.Sequential(trunk, get_activation(activation_fn))
-    return trunk
 
 
 # ----- Fixture builders ----------------------------------------------------
@@ -960,15 +1048,15 @@ class TestDeepONetCompile:
       must compile end-to-end with graph breaks tolerated.  Output must
       match eager numerically.
     - ``fullgraph=True``: probes whether the entire forward is
-      graph-capturable with no breaks at all.  Marked ``xfail`` with
-      ``strict=False`` because graph-break behavior depends on jaxtyping
-      decorators and dynamic shape paths in
+      graph-capturable with no breaks at all.  Jaxtyping shape
+      decorators and the dynamic spatial-padding paths in
       :func:`~physicsnemo.experimental.models.xdeeponet._padding.pad_spatial_right`
-      that are evaluated under ``torch.compiler.is_compiling()`` guards.
-      The test reports XPASS once we eliminate the breaks (e.g. by
-      switching jaxtyping off during compile or by going dimensionally
-      generic so shape paths constant-fold), at which point the xfail
-      marker can be removed.
+      are evaluated under ``torch.compiler.is_compiling()`` guards so
+      they constant-fold during compile; both 2D and 3D forward paths
+      currently compile cleanly with no graph breaks across the
+      torch versions exercised in CI and locally.  If a future torch
+      update reintroduces breaks the assertion below will fail; re-add
+      ``@pytest.mark.xfail(strict=False)`` until the breaks are fixed.
     """
 
     def test_wrapper_2d_compile(self):
@@ -995,15 +1083,6 @@ class TestDeepONetCompile:
         assert y_compiled.shape == y_eager.shape
         torch.testing.assert_close(y_compiled, y_eager, rtol=1e-4, atol=1e-5)
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason=(
-            "Forward currently has graph breaks from jaxtyping shape "
-            "decorators and dynamic spatial-padding shapes. Marked "
-            "strict=False so an XPASS (no breaks) doesn't fail CI; if "
-            "the test starts passing reliably, remove this marker."
-        ),
-    )
     def test_wrapper_2d_compile_fullgraph(self):
         """2D model compiles cleanly with ``fullgraph=True``."""
         model, (x,) = _wrapper_2d()
@@ -1012,15 +1091,6 @@ class TestDeepONetCompile:
         with torch.no_grad():
             compiled(x)
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason=(
-            "Forward currently has graph breaks from jaxtyping shape "
-            "decorators and dynamic spatial-padding shapes. Marked "
-            "strict=False so an XPASS (no breaks) doesn't fail CI; if "
-            "the test starts passing reliably, remove this marker."
-        ),
-    )
     def test_wrapper_3d_compile_fullgraph(self):
         """3D model compiles cleanly with ``fullgraph=True``."""
         model, (x,) = _wrapper_3d()

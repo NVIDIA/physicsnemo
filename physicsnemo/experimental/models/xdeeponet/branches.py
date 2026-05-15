@@ -37,12 +37,16 @@ both spatial dimensionalities.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from jaxtyping import Float
 from torch import Tensor
 
+from physicsnemo.core.meta import ModelMetaData
+from physicsnemo.core.module import Module
 from physicsnemo.models.unet import UNet as _PhysicsNeMoUNet
 from physicsnemo.nn import SpectralConv2d, SpectralConv3d, get_activation
 
@@ -198,7 +202,12 @@ _DIM_LAYERS[3]["UNetAdapter"] = _UNet3DFromUNet3D
 # ---------------------------------------------------------------------------
 
 
-class SpatialBranch(nn.Module):
+@dataclass
+class _SpatialBranchMetaData(ModelMetaData):
+    """PhysicsNeMo model metadata for :class:`SpatialBranch`."""
+
+
+class SpatialBranch(Module):
     r"""Dimension-generic spatial branch composable from Fourier, UNet, and
     Conv layers.
 
@@ -323,7 +332,7 @@ class SpatialBranch(nn.Module):
         lift_layers: int = 1,
         lift_hidden_width: int | None = None,
     ):
-        super().__init__()
+        super().__init__(meta=_SpatialBranchMetaData())
 
         if dimension not in _DIM_LAYERS:
             raise ValueError(
