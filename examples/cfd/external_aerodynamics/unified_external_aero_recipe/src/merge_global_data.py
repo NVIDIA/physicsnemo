@@ -57,8 +57,11 @@ class MeshReaderWithGlobalData(MeshReader):
     ``merge_global_data_from`` parameter, which names a path
     *relative to each matched sample* pointing to a saved
     ``TensorDict`` directory whose keys should be merged into the
-    loaded :class:`Mesh`'s ``global_data``.  Existing keys on the
-    boundary are preserved; only keys that are absent are added.
+    loaded :class:`Mesh`'s ``global_data``.  If a key appears in
+    both the boundary's ``global_data`` and the external one, a
+    :class:`ValueError` is raised: ``global_data`` is case-level
+    by construction, so overlap is ambiguous and treated as a
+    data-layer bug rather than silently resolved.
 
     This is intended for boundary tensordicts whose own
     ``global_data`` is empty (or only carries dataset-local fields
@@ -116,12 +119,17 @@ class MeshReaderWithGlobalData(MeshReader):
 
         ext_td = TensorDict.load_memmap(ext_path)
         merged = mesh.global_data.clone()
-        for k in ext_td.keys():
-            if k in merged.keys():
-                ### Don't silently overwrite anything already on the
-                ### boundary -- the on-sample value wins.
-                continue
-            merged[k] = ext_td[k]
+        collisions = sorted(set(ext_td.keys()) & set(merged.keys()))
+        if collisions:
+            raise ValueError(
+                f"global_data key collision while merging {ext_path} "
+                f"into sample {sample_path}: keys {collisions} are "
+                f"present on both the boundary tensordict and the "
+                f"external one. global_data is case-level by "
+                f"definition, so an overlapping key is ambiguous and "
+                f"indicates inconsistent metadata at the data layer."
+            )
+        merged.update(ext_td)
 
         return Mesh(
             points=mesh.points,
