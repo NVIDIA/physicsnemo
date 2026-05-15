@@ -1,179 +1,163 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES. -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Cross-Unet PV Power Forecasting Usage
+# Cross-Unet Real PV Data Usage
 
-This guide describes the real-data Cross-Unet workflow under `examples/weather/pv_power_cross_unet`. It covers data preparation, training, inference, and paper-reproduction result checks.
+This guide describes the generic real-data Cross-Unet workflow under
+`examples/weather/pv_power_cross_unet`. The workflow reads one CSV file at a
+15-minute cadence and uses user-specified column names for time, power, and
+weather inputs.
 
 ## 1. Environment
 
-Install the example requirements in a PhysicsNeMo environment with PyTorch available. GPU training is recommended for the paper-size preset.
+Install the example requirements in a PhysicsNeMo environment with PyTorch
+available:
 
 ```bash
 cd /home/horde/tmp/physicsnemo
 pip install -r examples/weather/pv_power_cross_unet/requirements.txt
 ```
 
-When using the `physicsnemo_26.03` container, verify CUDA before launching sweeps:
+When using the `physicsnemo_26.03` container, verify CUDA before training:
 
 ```bash
 docker exec physicsnemo_26.03 bash -lc 'nvidia-smi && python -c "import torch; print(torch.cuda.is_available())"'
 ```
 
-If `nvidia-smi` reports an NVML initialization error inside the container, stop and start the container, then verify CUDA again before resuming.
+If `nvidia-smi` reports an NVML initialization error inside the container, stop
+and start the container, then verify CUDA again before resuming.
 
 ## 2. Data Preparation
 
-The real-data workflow expects this directory layout:
+Prepare a CSV with:
+
+- one timestamp column
+- one target power column
+- one or more weather columns
+- regular 15-minute timestamps with no duplicate times
+
+Extra columns are ignored. The default config points at an `obs_data2` file:
 
 ```text
-examples/weather/pv_power_cross_unet/dataset/
-  All_dataset/
-    S-1.csv
-    S-2.csv
-    S-3.csv
-    S-4.csv
-    KDASC.csv
-  AIweatherdata/
-    station_data/
-      0.csv
-      4.csv
-      7.csv
-      8.csv
-    data/
-      0/*.csv
-      4/*.csv
-      7/*.csv
-      8/*.csv
+examples/weather/pv_power_cross_unet/dataset/obs_data2/653206.csv
 ```
 
-Supported weather sources are:
+with these columns:
 
-- `nwp`: S-1 through S-4, with seven historical target channels and six NWP forecast channels.
-- `satellite`: S-1 through S-4 and KDASC, using `SWR` as the forward-looking irradiance channel.
-- `ai`: S-1 through S-4, mapped to AI station ids `0`, `4`, `7`, and `8`, using `ssrd_corrdiff` from issued AI forecast files.
+```text
+Time,r_apower,r_tirra
+```
 
-The AI loader filters large missing-value sentinels such as `9.96921e36` and builds historical weather windows only from forecasts issued before the prediction period.
+Set the column names in `conf/real_data.yaml` or through Hydra overrides:
 
-## 3. Training One Run
+```yaml
+data_file: ./dataset/obs_data2/653206.csv
+time_col: Time
+target_col: r_apower
+weather_cols:
+  - r_tirra
+freq_minutes: 15
+```
 
-Use `train_real_cross_unet.py` with Hydra overrides. The default config is a short smoke configuration. Set `paper_preset=True` for the paper-scale Cross-Unet preset.
+## 3. Training
 
-Example: train S-1 with NWP data for a 4-hour horizon.
+From the example directory:
 
 ```bash
-python examples/weather/pv_power_cross_unet/train_real_cross_unet.py \
+cd examples/weather/pv_power_cross_unet
+python train_real_cross_unet.py mode=train
+```
+
+A quick smoke run:
+
+```bash
+python train_real_cross_unet.py \
   mode=train \
-  dataset_root=examples/weather/pv_power_cross_unet/dataset \
-  station_name=S-1 \
-  weather_source=nwp \
-  seq_len=96 \
-  pred_len=16 \
-  paper_preset=True \
-  output_dir=examples/weather/pv_power_cross_unet/outputs/s1_nwp_4h
+  data_file=./dataset/obs_data2/653206.csv \
+  time_col=Time \
+  target_col=r_apower \
+  weather_cols='[r_tirra]' \
+  horizon_label=4h \
+  max_epochs=1 \
+  max_train_samples=4 \
+  max_valid_samples=2 \
+  batch_size=2 \
+  batch_size_valid=2 \
+  d_model=32 \
+  d_ff=64 \
+  output_dir=./outputs/smoke
 ```
 
-The checkpoint is written under:
+The default model settings follow the upstream Cross-Unet training script:
 
 ```text
-<output_dir>/<station_name>/checkpoints/real_cross_unet_<station_name>.pt
+d_model=256, d_ff=512, n_heads=4, e_layers=3,
+start_lr=1e-4, max_epochs=100, seed=2021,
+nonlinear_correlation_proj=True, use_bottleneck_in_decoder=True
 ```
 
-For paper reproduction, `paper_preset=True` applies:
+`early_stop_patience` defaults to `5` and can be overridden.
+
+## 4. Horizons
+
+Use `horizon_label` for common PV forecasting windows:
 
 ```text
-d_model=252, d_ff=492, n_heads=4, e_layers=3, seg_len=12,
-max_epochs=100, early_stop_patience=10, start_lr=1e-4,
-seed=2021, normalization=minmax
+4h -> pred_len=16,  seq_len=96,  seg_len=12
+1d -> pred_len=96,  seq_len=96,  seg_len=24
+7d -> pred_len=672, seq_len=672, seg_len=48
 ```
 
-## 4. Inference
+You can also set `seq_len`, `pred_len`, and `seg_len` directly.
 
-Run prediction with the same data root and output directory used for training:
+## 5. Prediction
+
+After training, run:
 
 ```bash
-python examples/weather/pv_power_cross_unet/train_real_cross_unet.py \
+python train_real_cross_unet.py \
   mode=predict \
-  dataset_root=examples/weather/pv_power_cross_unet/dataset \
-  station_name=S-1 \
-  weather_source=nwp \
-  paper_preset=True \
-  output_dir=examples/weather/pv_power_cross_unet/outputs/s1_nwp_4h \
-  prediction_path=examples/weather/pv_power_cross_unet/outputs/s1_nwp_4h/predictions.csv
+  data_file=./dataset/obs_data2/653206.csv \
+  horizon_label=4h \
+  output_dir=./outputs/smoke
 ```
 
 The prediction CSV contains:
 
 ```text
-station,timestamp,horizon_step,prediction,target
+data_file,timestamp,horizon_step,prediction,target
 ```
 
-Prediction and target values are saved on the original target scale for inspection. Paper-comparison MAE and MSE are computed on the normalized target range.
+Prediction and target values are saved on the original target scale.
 
-## 5. Paper-Reproduction Sweep
+## 6. Evaluation
 
-Use `run_paper_cross_unet.py` for Cross-Unet-only table reproduction. It supports Table 4 NWP, Table 5 satellite, and Table 6 AI weather cases.
-
-Representative smoke sweep:
+`mode=evaluate` runs prediction and appends one row to the metrics CSV:
 
 ```bash
-python examples/weather/pv_power_cross_unet/run_paper_cross_unet.py \
-  --phase representative \
-  --paper-targets-csv examples/weather/pv_power_cross_unet/paper_targets.csv
+python train_real_cross_unet.py \
+  mode=evaluate \
+  data_file=./dataset/obs_data2/653206.csv \
+  horizon_label=4h \
+  output_dir=./outputs/smoke \
+  metrics_csv_path=./outputs/smoke/metrics.csv
 ```
 
-Full 65-case sweep:
-
-```bash
-python examples/weather/pv_power_cross_unet/run_paper_cross_unet.py \
-  --phase full \
-  --resume \
-  --paper-targets-csv examples/weather/pv_power_cross_unet/paper_targets.csv \
-  --metric-scale normalized
-```
-
-Run only selected cases from a CSV with `station,source,horizon_label` columns:
-
-```bash
-python examples/weather/pv_power_cross_unet/run_paper_cross_unet.py \
-  --phase full \
-  --cases-csv examples/weather/pv_power_cross_unet/paper_repro_failed_cases.csv \
-  --resume \
-  --paper-targets-csv examples/weather/pv_power_cross_unet/paper_targets.csv \
-  --output-dir examples/weather/pv_power_cross_unet/outputs/paper_repro_retry \
-  --metric-scale normalized
-```
-
-## 6. Results and Checks
-
-The runner writes:
+The metrics CSV contains:
 
 ```text
-<output_dir>/metrics.csv
-<output_dir>/report.md
-<output_dir>/runs/<source>/<station>/<horizon>/...
+data_file,horizon_label,seq_len,pred_len,weather_cols,weather_channels,
+mae,mse,rmse,r2,best_valid_loss,epoch,checkpoint_path,prediction_path
 ```
 
-`metrics.csv` includes:
+MAE, MSE, RMSE, and R2 are computed over all forecast steps after flattening
+the prediction and target arrays.
 
-```text
-station,source,horizon_label,seq_len,pred_len,seed,
-mae,mse,r2,paper_mae,paper_mse,paper_r2,
-pass_mae,pass_mse,pass_r2,param_count
-```
+## 7. Verification
 
-Tolerance rules are:
-
-- MAE pass: `mae <= paper_mae * 1.05`
-- MSE pass: `mse <= paper_mse * 1.05`
-- R2 pass: `r2 >= paper_r2 * 0.95`
-
-For paper comparisons, use `--metric-scale normalized`. This keeps R2 unchanged under linear scaling and compares MAE/MSE in the same normalized scale used by the paper preprocessing.
-
-## 7. Useful Verification Commands
+Run the real-data workflow tests and the model tests:
 
 ```bash
-pytest test/examples/weather/test_pv_power_cross_unet_real_data.py   test/experimental/models/pv_power/cross_unet/test_cross_unet.py -q
-
-ruff check examples/weather/pv_power_cross_unet/train_real_cross_unet.py   examples/weather/pv_power_cross_unet/run_paper_cross_unet.py   test/examples/weather/test_pv_power_cross_unet_real_data.py   test/experimental/models/pv_power/cross_unet/test_cross_unet.py
+pytest test/examples/weather/test_pv_power_cross_unet_real_data.py \
+  test/experimental/models/pv_power/cross_unet/test_cross_unet.py -q
 ```

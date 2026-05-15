@@ -8,27 +8,30 @@ hydra:
   run:
     dir: .
 
-# train or predict
+# train, predict, or evaluate
 mode: train
 
 # Data
-dataset_root: ./dataset
-station_name: KDASC
-weather_source: nwp   # nwp, satellite, or ai; KDASC always uses SWR
+data_file: ./dataset/obs_data2/653206.csv
+time_col: Time
+target_col: r_apower
+weather_cols:
+  - r_tirra
+freq_minutes: 15
 seq_len: 96
 pred_len: 16
+horizon_label: null  # null, 4h, 1d, or 7d; labels override seq_len/pred_len/seg_len
+normalization: standard  # standard or minmax
 max_train_samples: null
 max_valid_samples: null
 max_predict_samples: null
-paper_preset: False
-normalization: standard  # standard or minmax; paper_preset switches to minmax
 
 # Model
 seg_len: 12
 e_layers: 3
-d_model: 64
+d_model: 256
 n_heads: 4
-d_ff: 128
+d_ff: 512
 dropout: 0.0
 nonlinear_correlation_proj: True
 attention_kind: two_stage
@@ -36,17 +39,16 @@ merge_kind: seg_merge
 use_bottleneck_in_decoder: True
 
 # Optimization
-seed: 0
+seed: 2021
 batch_size: 16
 batch_size_valid: 16
-max_epochs: 5
+max_epochs: 100
 early_stop_patience: 5
-start_lr: 1.0e-3
+start_lr: 1.0e-4
 lr_scheduler_gamma: 0.99
 
 # Outputs
 output_dir: ./outputs/real_cross_unet
 checkpoint_path: null
 prediction_path: null
-metrics_csv_path: ./outputs/paper_repro/metrics.csv
-metric_report_path: ./outputs/paper_repro/report.md
+metrics_csv_path: ./outputs/real_cross_unet/metrics.csv
