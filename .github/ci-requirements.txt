@@ -49,8 +49,12 @@ pyarrow==24.0.0
 # PyG CUDA wheels.  The `gnns` extra installs CPU-only wheels via
 # `uv sync` (no CUDA toolchain visible at build time), which makes
 # torch_scatter.segment_csr / similar fail on CUDA tensors with
-# "Not compiled with CUDA support".  The `--reinstall` in setup-uv-env
-# swaps these for the CUDA wheels from the --find-links index above.
+# "Not compiled with CUDA support".  setup-uv-env passes
+# `--reinstall-package` for each of these four names so they're swapped
+# for the CUDA wheels from the --find-links index above; the rest of
+# the resolved closure is left alone (a bare `--reinstall` would refresh
+# every transitive dep too and break ABI compatibility with lockfile-
+# pinned packages like pyarrow / cudf / cuml).
 torch_scatter==2.1.2
 torch_sparse==0.6.18
 torch_cluster==1.6.3

@@ -180,10 +180,21 @@ runs:
       run: |
         set -euo pipefail
         echo "::group::install CI-only test dependencies"
-        # `--reinstall` is required to swap the CPU-only PyG wheels that
-        # `uv sync` installs via the `gnns` extra for the CUDA wheels
-        # from the --find-links index baked into the requirements file.
-        uv pip install --python .venv/bin/python --reinstall \
+        # `--reinstall-package` (NOT bare `--reinstall`) is scoped to the
+        # four PyG names so we swap their CPU-only wheels (installed by
+        # `uv sync` via the `gnns` extra) for the CUDA wheels from the
+        # --find-links index baked into the requirements file.  Bare
+        # `--reinstall` would imply `--refresh` over the FULL resolved
+        # closure (~60 packages including transitive deps like pyarrow,
+        # cryptography, opentelemetry), bumping them to whatever's
+        # currently latest on PyPI and breaking ABI compatibility with
+        # the lockfile-pinned GPU stack (cudf / cuml / pylibcudf were
+        # built against the synced pyarrow ABI, etc.).
+        uv pip install --python .venv/bin/python \
+          --reinstall-package torch_scatter \
+          --reinstall-package torch_sparse \
+          --reinstall-package torch_cluster \
+          --reinstall-package pyg_lib \
           -r .github/ci-requirements.txt
         echo "::endgroup::"
 
