@@ -18,25 +18,26 @@
 # Reads the boundary surface Mesh directly from DomainMesh .pdmsh files
 # by navigating into the on-disk tensordict directory structure.
 # Triangulated surface mesh. Fields live in cell_data.
+# global_data: the boundary tensordict's own global_data carries only
+# dataset-local fields (e.g. TimeValue); the case-level freestream
+# conditions (U_inf, rho_inf, p_inf, nu, L_ref) live on the parent
+# DomainMesh's _tensordict/global_data, so we use MeshReaderWithGlobalData
+# to merge them onto each boundary Mesh at load time.
 # Splits are controlled by manifest.json + train_split/val_split in the training config.
 
 name: drivaer_ml_surface
 
 train_datadir: ${dataset_paths.drivaer_ml}
 
-metadata:
-  U_inf:  [30.0, 0.0, 0.0] # freestream velocity
-  p_inf: 0.0 # reference pressure, drivaerml is gauge pressure
-  rho_inf: 1.225 # freestream density
-  nu: 1
-  L_ref: 5.0                # reference length [m]
-
 pipeline:
   reader:
-    _target_: ${dp:MeshReader}
+    _target_: ${dp:MeshReaderWithGlobalData}
     path: ${train_datadir}
     pattern: "**/*.pdmsh/_tensordict/boundaries/vehicle"
     subsample_n_cells: ${sampling_resolution}
+    # Walk up two levels from the boundary tensordict to the parent
+    # DomainMesh's global_data and merge its keys onto each sample.
+    merge_global_data_from: "../../global_data"
   augmentations:
     - _target_: ${dp:RandomRotateMesh}
       axes: ["z"]

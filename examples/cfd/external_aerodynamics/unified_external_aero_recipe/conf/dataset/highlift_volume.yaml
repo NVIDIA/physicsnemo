@@ -18,7 +18,10 @@
 # Loads .pdmsh files from PhysicsNeMo-HighLiftAeroML.
 # Each case directory (e.g. geo_LHC001_AoA_4/) contains a DomainMesh .pdmsh.
 # Interior: volume point cloud with fields in point_data.
-# global_data: freestream conditions injected from metadata below.
+# global_data: per-case freestream conditions (U_inf, p_inf, rho_inf, T_inf,
+# L_ref) are embedded directly in the .pdmsh files; NonDimensionalizeByMetadata
+# reads them straight out of each sample's global_data. Units are slug-inch-
+# second-Rankine.
 # Splits are controlled by a manifest.json + train_split/val_split in the
 # training config (see train_geotransolver_automotive_volume.yaml).
 
@@ -26,20 +29,13 @@ name: highlift_volume
 
 train_datadir: ${dataset_paths.highlift_aero_ml}
 
-# Freestream conditions — slug-inch-second-Rankine unit system
-metadata:
-  U_inf: [2672.95, 0.0, 186.92]   # 2679.505 in/s at AoA=4°
-  p_inf: 176.352                   # 14.696 psi × 12 → slug/(in·s²)
-  rho_inf: 1.3756e-6               # 0.002377 slug/ft³ → slug/in³
-  T_inf: 518.67                    # [°R]
-  L_ref: 1156.75                    # [in] — span
-
 pipeline:
   reader:
     _target_: ${dp:DomainMeshReader}
     path: ${train_datadir}
     pattern: "**/*.pdmsh"
     subsample_n_points: ${sampling_resolution}
+    subsample_n_cells: ${sampling_resolution}
     extra_boundaries:
       stl_geometry:
         pattern: "*.stl.pmsh"

@@ -37,7 +37,6 @@ import math
 import sys
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
 ### Make this folder importable by its bare module names (`nondim`, `sdf`)
 ### regardless of whether the caller invoked `python src/train.py` (which
@@ -50,16 +49,15 @@ if _SRC_DIR not in sys.path:
 import hydra
 import torch
 from omegaconf import DictConfig, OmegaConf
-from tensordict import TensorDict
 from torch.utils.data import Sampler
 
 import physicsnemo.datapipes  # noqa: F401  (registers ${dp:...} resolvers)
 from physicsnemo.datapipes import MeshDataset
-from physicsnemo.datapipes.transforms.mesh import MeshTransform, NormalizeMeshFields
-from physicsnemo.mesh import DomainMesh, Mesh
+from physicsnemo.datapipes.transforms.mesh import NormalizeMeshFields
 
 import nondim  # noqa: F401  (registers NonDimensionalizeByMetadata)
 import sdf  # noqa: F401  (registers ComputeSDFFromBoundary, DropBoundary)
+import merge_global_data  # noqa: F401  (registers MeshReaderWithGlobalData)
 from metrics import MetricName
 from utils import FieldType
 
@@ -150,67 +148,6 @@ def _maybe_inject_targets(t_cfg: DictConfig, target_names: list[str]) -> DictCon
     return t_cfg
 
 
-class _InjectMetadata(MeshTransform):
-    """Inject dataset-wide metadata fields into a sample's ``global_data``.
-
-    The dataset YAML's ``metadata:`` block carries freestream conditions
-    (``U_inf``, ``rho_inf``, ``p_inf``, ``L_ref``, ...) that downstream
-    transforms like ``NonDimensionalizeByMetadata`` need to consume from
-    ``global_data``. This transform writes those values into the sample's
-    ``global_data`` (matching the sample's device/dtype) on every call.
-
-    For :class:`DomainMesh` inputs the values land in the domain-level
-    ``global_data`` (so they're visible to domain-aware transforms);
-    for :class:`Mesh` inputs they land in the mesh's ``global_data``.
-    Subclasses :class:`MeshTransform` so the recipe's dataset builder
-    can hand it to :class:`MeshDataset` alongside any other transform.
-    """
-
-    def __init__(self, metadata: dict[str, Any]) -> None:
-        super().__init__()
-        ### Coerce every field to a 0-D / 1-D float32 tensor up front and
-        ### pack the bundle into a single ``TensorDict``. Per-sample work
-        ### then collapses to one batched ``td.to(device, dtype)`` plus
-        ### one ``new_gd.update(...)`` -- no Python-level loop.
-        coerced: dict[str, torch.Tensor] = {}
-        for k, v in metadata.items():
-            if isinstance(v, torch.Tensor):
-                coerced[k] = v.float()
-            else:
-                ### Accepts list / tuple / scalar uniformly.
-                coerced[k] = torch.as_tensor(v, dtype=torch.float32)
-        self._fields: TensorDict = TensorDict(coerced, batch_size=[])
-
-    def __call__(self, mesh: Mesh) -> Mesh:
-        new_gd = mesh.global_data.clone()
-        new_gd.update(
-            self._fields.to(device=mesh.points.device, dtype=mesh.points.dtype)
-        )
-        return Mesh(
-            points=mesh.points,
-            cells=mesh.cells,
-            point_data=mesh.point_data,
-            cell_data=mesh.cell_data,
-            global_data=new_gd,
-        )
-
-    def apply_to_domain(self, domain: DomainMesh) -> DomainMesh:
-        """Inject metadata into ``domain.global_data``."""
-        interior_pts = domain.interior.points
-        new_gd = domain.global_data.clone()
-        new_gd.update(
-            self._fields.to(device=interior_pts.device, dtype=interior_pts.dtype)
-        )
-        return DomainMesh(
-            interior=domain.interior,
-            boundaries=domain.boundaries,
-            global_data=new_gd,
-        )
-
-    def extra_repr(self) -> str:
-        return f"fields={sorted(self._fields.keys())}"
-
-
 def find_normalizer(
     datasets: list[MeshDataset],
 ) -> NormalizeMeshFields | None:
@@ -231,18 +168,19 @@ def validate_dataset_consistency(
     ds_key: str,
     ds_targets: dict[str, FieldType],
     ds_metrics: list[MetricName],
-    ds_metadata: dict[str, Any],
     first_targets: dict[str, FieldType],
     first_metrics: list[MetricName],
-    first_metadata: dict[str, Any],
 ) -> None:
     """Reject ``targets:`` mismatch across multi-dataset training; warn on softer drift.
 
     ``targets:`` is the loss / metric contract; mismatched names or types
     silently produces wrong per-field losses (only the first dataset's
-    keys are honored downstream). ``metrics:`` and ``metadata:`` are
-    softer -- the recipe still uses the first dataset's view -- but
-    drift is almost always a config bug, so we warn loudly.
+    keys are honored downstream). ``metrics:`` is softer -- the recipe
+    still uses the first dataset's view -- but drift is almost always a
+    config bug, so we warn loudly. Freestream conditions used to be
+    declared per-dataset under ``metadata:`` and validated here too;
+    they now live inside each sample's ``global_data`` instead, so no
+    cross-dataset metadata check is needed.
     """
     if ds_targets != first_targets:
         raise ValueError(
@@ -257,14 +195,6 @@ def validate_dataset_consistency(
             f"Dataset {ds_key!r} declares metrics={ds_metrics!r}, "
             f"which differs from the first dataset's metrics="
             f"{first_metrics!r}. Using the first dataset's metrics."
-        )
-    if ds_metadata != first_metadata:
-        _LOGGER.warning(
-            f"Dataset {ds_key!r} has metadata that differs from the "
-            f"first dataset's; using the first dataset's metadata "
-            f"for the loss / non-dim back-conversion. Per-dataset "
-            f"metadata is still injected into each sample's "
-            f"global_data by the dataset builder."
         )
 
 
@@ -282,6 +212,13 @@ def resolve_manifest_spec(ds_yaml: DictConfig, ds_cfg_block: DictConfig) -> dict
 
     Returns a flat dict with both styles' fields present (extras are
     ``None``); returns ``None`` if neither style is configured.
+
+    Raises ``ValueError`` if the user clearly intended manifest mode (any
+    of ``manifest``, ``train_manifest``, ``val_manifest``, ``train_split``,
+    ``val_split`` is set) but no usable manifest could be located. This
+    prevents the silent fallback to directory mode, which - combined with
+    a dataset YAML that has no ``val_datadir`` - would otherwise leave the
+    val loader iterating the train data.
     """
     train_manifest = ds_cfg_block.get("train_manifest", None)
     val_manifest = ds_cfg_block.get("val_manifest", None)
@@ -291,17 +228,46 @@ def resolve_manifest_spec(ds_yaml: DictConfig, ds_cfg_block: DictConfig) -> dict
 
     ### Auto-derive manifest path from `train_datadir/manifest.json` when
     ### the user gave a split key but no explicit manifest path.
-    if manifest is None and train_split is not None:
-        train_datadir = OmegaConf.select(ds_yaml, "train_datadir", default=None)
-        if train_datadir:
-            derived = Path(str(train_datadir)) / "manifest.json"
-            if derived.exists():
-                manifest = str(derived)
+    train_datadir = OmegaConf.select(ds_yaml, "train_datadir", default=None)
+    derived_path: Path | None = None
+    if manifest is None and train_split is not None and train_datadir:
+        derived_path = Path(str(train_datadir)) / "manifest.json"
+        if derived_path.exists():
+            manifest = str(derived_path)
 
     has_manifest = train_manifest is not None or (
         manifest is not None and train_split is not None
     )
     if not has_manifest:
+        ### Distinguish "user wanted manifest mode but we couldn't find one"
+        ### (loud error) from "user is in pure directory mode" (silent None).
+        ### Returning None silently in the former case used to make the val
+        ### loader fall back to the train dataset; raise instead so the
+        ### misconfiguration surfaces at startup.
+        user_intended_manifest = any(
+            v is not None
+            for v in (train_manifest, val_manifest, manifest, train_split, val_split)
+        )
+        if user_intended_manifest:
+            looked_for = (
+                str(derived_path)
+                if derived_path is not None
+                else (
+                    f"{Path(str(train_datadir)) / 'manifest.json'}"
+                    if train_datadir
+                    else "<no train_datadir set in dataset YAML>"
+                )
+            )
+            raise ValueError(
+                f"Manifest mode was requested but no usable manifest could be "
+                f"located. Got train_manifest={train_manifest!r}, "
+                f"val_manifest={val_manifest!r}, manifest={manifest!r}, "
+                f"train_split={train_split!r}, val_split={val_split!r}. "
+                f"Looked for sibling manifest at {looked_for!r}. "
+                f"Either set 'manifest:' (or 'train_manifest:' / "
+                f"'val_manifest:') explicitly in the data block, or place a "
+                f"manifest.json next to the dataset's train_datadir."
+            )
         return None
     return {
         "train_manifest": train_manifest,
@@ -322,15 +288,19 @@ def build_dataset(
 ) -> MeshDataset:
     """Build a single MeshDataset from a Hydra-style pipeline config.
 
+    Freestream conditions (``U_inf``, ``rho_inf``, ``p_inf``, ``L_ref``,
+    ...) are read directly out of each sample's ``global_data`` by
+    downstream transforms (e.g. ``NonDimensionalizeByMetadata``); the
+    dataset YAML no longer carries a ``metadata:`` block, and this
+    builder no longer prepends a metadata-injection transform.
+
     Args:
         cfg: Dataset config with a ``pipeline:`` block containing
             ``reader:`` and ``transforms:`` entries. An optional
             ``pipeline.augmentations`` list defines stochastic
             augmentation transforms (e.g. ``RandomRotateMesh``,
             ``RandomTranslateMesh``) that are inserted after
-            ``CenterMesh`` when *augment* is ``True``. If a top-level
-            ``metadata:`` block is present, its values are injected into
-            ``mesh.global_data`` as the first transform step.
+            ``CenterMesh`` when *augment* is ``True``.
         base_dir: Root directory for resolving relative paths in
             transform configs (e.g. ``stats_file``). Defaults to the
             recipe root (two levels above this file).
@@ -350,17 +320,8 @@ def build_dataset(
     if base_dir is None:
         base_dir = Path(__file__).resolve().parent.parent
 
-    metadata = OmegaConf.to_container(
-        OmegaConf.select(cfg, "metadata", default=OmegaConf.create({})),
-        resolve=True,
-    )
-
     reader = hydra.utils.instantiate(cfg.pipeline.reader, pin_memory=pin_memory)
     resolved = []
-
-    # Inject dataset metadata into global_data as the first transform
-    if metadata:
-        resolved.append(_InjectMetadata(metadata))
 
     target_names = list(
         OmegaConf.to_container(
@@ -378,11 +339,9 @@ def build_dataset(
 
         if augment and "augmentations" in cfg.pipeline and cfg.pipeline.augmentations:
             aug = [hydra.utils.instantiate(a) for a in cfg.pipeline.augmentations]
-            # +1 for the metadata injector prepended above
-            offset = 1 if metadata else 0
             insert_idx = next(
                 (
-                    offset + i + 1
+                    i + 1
                     for i, t_cfg in enumerate(cfg.pipeline.transforms)
                     if t_cfg.get("_target_", "").endswith(_CENTER_MESH_TARGET_SUFFIX)
                 ),
