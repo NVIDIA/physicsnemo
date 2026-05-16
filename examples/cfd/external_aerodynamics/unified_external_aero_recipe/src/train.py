@@ -991,27 +991,20 @@ def build_dataloaders(
             OmegaConf.select(ds_yaml, "targets", default=OmegaConf.create({})),
             resolve=True,
         )
-        if first_targets is None:
-            first_targets = ds_targets
-        else:
-            validate_dataset_consistency(ds_name, ds_targets, first_targets)
-
-        ### Synthesize the per-dataset block `resolve_manifest_spec`
-        ### expects: it just needs the recipe-level split selectors
-        ### plumbed through. Manifest-mode datasets pick them up;
-        ### directory-mode datasets see no manifest keys at all and
-        ### `resolve_manifest_spec` returns None, falling through to
-        ### the directory branch below.
-        ds_cfg_block = OmegaConf.create(
-            {
-                k: v
-                for k, v in {
-                    "train_split": train_split,
-                    "val_split": val_split,
-                }.items()
-                if v is not None
-            }
+        ds_metrics = OmegaConf.to_container(
+            OmegaConf.select(ds_yaml, "metrics", default=OmegaConf.create([])),
+            resolve=True,
         )
+        if first_targets is None:
+            first_targets, first_metrics = ds_targets, ds_metrics
+        else:
+            validate_dataset_consistency(
+                ds_key,
+                ds_targets,
+                ds_metrics,
+                first_targets,
+                first_metrics,
+            )
 
         manifest_spec = resolve_manifest_spec(ds_yaml, ds_cfg_block)
         if manifest_spec is not None:
@@ -1181,6 +1174,7 @@ def main(cfg: DictConfig) -> None:
 
     train_loader, val_loader, normalizer, dataset_info = build_dataloaders(cfg)
     target_config: dict[str, FieldType] = dataset_info["targets"]
+    metrics_list: list[MetricName] = dataset_info["metrics"]
     logger.info(f"Train samples: {len(train_loader.sampler)}")
     logger.info(f"Val samples: {len(val_loader.sampler)}")
     logger.info(f"Targets (from dataset YAML): {target_config}")

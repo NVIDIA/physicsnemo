@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds xDeepONet to experimental models
+  (`physicsnemo.experimental.models.xdeeponet.DeepONet`).  A single
+  dimension-generic (2D/3D) DeepONet that accepts a spatial or MLP branch,
+  an optional trunk, and an optional second branch as `nn.Module` inputs
+  (dependency injection).  Six forward-call conventions cover trunked,
+  trunkless, packed/auto-padded, and xFNO-style time-axis-extend modes.
+  Supports multi-channel output, multiple decoder types (MLP, Conv,
+  temporal projection), composable Fourier / UNet / Conv spatial branches
+  (`SpatialBranch`), and coordinate features.
+- Adds `Sin` elementwise sine activation to `physicsnemo.nn`, registered
+  in `ACT2FN` so it can be looked up by name (`get_activation("sin")`).
 - Adds GLOBE model (`physicsnemo.experimental.models.globe.model.GLOBE`),
   including new variant that uses a dual tree traversal algorithm to reduce the
   complexity of the kernel evaluations from O(N^2) to O(N).

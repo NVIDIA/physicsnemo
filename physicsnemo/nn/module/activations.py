@@ -169,6 +169,21 @@ class CappedGELU(torch.nn.Module):
         return x
 
 
+class Sin(nn.Module):
+    """Elementwise sine activation: :math:`y = \\sin(x)`.
+
+    Example
+    -------
+    >>> sin_func = physicsnemo.nn.Sin()
+    >>> input = torch.tensor([0.0, 3.141592653589793 / 2])
+    >>> torch.allclose(sin_func(input), torch.tensor([0.0, 1.0]), atol=1e-6)
+    True
+    """
+
+    def forward(self, x: Tensor) -> Tensor:
+        return torch.sin(x)
+
+
 # Dictionary of activation functions
 ACT2FN = {
     "relu": nn.ReLU,
@@ -180,6 +195,7 @@ ACT2FN = {
     "selu": nn.SELU,
     "silu": nn.SiLU,
     "gelu": nn.GELU,
+    "sin": Sin,
     "sigmoid": nn.Sigmoid,
     "logsigmoid": nn.LogSigmoid,
     "softplus": nn.Softplus,

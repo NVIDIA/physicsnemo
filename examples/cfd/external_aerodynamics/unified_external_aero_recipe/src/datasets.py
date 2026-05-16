@@ -58,6 +58,7 @@ from physicsnemo.datapipes.transforms.mesh import NormalizeMeshFields
 import nondim  # noqa: F401  (registers NonDimensionalizeByMetadata)
 import sdf  # noqa: F401  (registers ComputeSDFFromBoundary, DropBoundary)
 import merge_global_data  # noqa: F401  (registers MeshReaderWithGlobalData)
+from metrics import MetricName
 from utils import FieldType
 
 ### Module-level logger used for warnings emitted from helpers below
@@ -166,27 +167,34 @@ def find_normalizer(
 def validate_dataset_consistency(
     ds_key: str,
     ds_targets: dict[str, FieldType],
+    ds_metrics: list[MetricName],
     first_targets: dict[str, FieldType],
+    first_metrics: list[MetricName],
 ) -> None:
     """Reject ``targets:`` mismatch across multi-dataset training.
 
-    ``targets:`` is the loss / metric contract; mismatched names or
-    types silently produce wrong per-field losses (only the first
-    dataset's keys are honored downstream). Metrics are no longer a
-    per-dataset declaration -- they are a recipe parameter
-    (``cfg.metrics``) -- so this check has nothing to validate beyond
-    targets. Freestream conditions used to be declared per-dataset
-    under ``metadata:`` and validated here too; they now live inside
-    each sample's ``global_data`` instead, so no cross-dataset metadata
-    check is needed.
+    ``targets:`` is the loss / metric contract; mismatched names or types
+    silently produces wrong per-field losses (only the first dataset's
+    keys are honored downstream). ``metrics:`` is softer -- the recipe
+    still uses the first dataset's view -- but drift is almost always a
+    config bug, so we warn loudly. Freestream conditions used to be
+    declared per-dataset under ``metadata:`` and validated here too;
+    they now live inside each sample's ``global_data`` instead, so no
+    cross-dataset metadata check is needed.
     """
     if ds_targets != first_targets:
         raise ValueError(
             f"Dataset {ds_key!r} declares targets={ds_targets!r}, "
-            f"which does not match the primary dataset's targets="
+            f"which does not match the first dataset's targets="
             f"{first_targets!r}. All datasets in `cfg.dataset` + "
             f"`cfg.extra_datasets` must declare the same `targets:` "
             f"block (same names, same types, same iteration order)."
+        )
+    if ds_metrics != first_metrics:
+        _LOGGER.warning(
+            f"Dataset {ds_key!r} declares metrics={ds_metrics!r}, "
+            f"which differs from the first dataset's metrics="
+            f"{first_metrics!r}. Using the first dataset's metrics."
         )
 
 

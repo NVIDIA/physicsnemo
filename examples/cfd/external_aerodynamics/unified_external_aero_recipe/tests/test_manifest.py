@@ -253,28 +253,48 @@ class TestValidateDatasetConsistency:
 
     @staticmethod
     def _first():
-        return {"pressure": "scalar", "wss": "vector"}
+        return (
+            {"pressure": "scalar", "wss": "vector"},
+            ["l1", "l2", "mae"],
+        )
 
-    def test_matching_targets_is_silent(self, caplog):
-        """Matching targets: no raise, no warning."""
-        first_targets = self._first()
+    def test_matching_targets_metrics_is_silent(self, caplog):
+        """All-equal blocks: no raise, no warning."""
+        first_targets, first_metrics = self._first()
         with caplog.at_level(logging.WARNING):
             validate_dataset_consistency(
                 ds_key="ds_b",
                 ds_targets=dict(first_targets),
+                ds_metrics=list(first_metrics),
                 first_targets=first_targets,
+                first_metrics=first_metrics,
             )
         assert caplog.records == []
 
     def test_targets_mismatch_raises(self):
         """Targets mismatch is the loss-correctness contract -- must raise."""
-        first_targets = self._first()
-        with pytest.raises(ValueError, match="does not match the primary dataset"):
+        first_targets, first_metrics = self._first()
+        with pytest.raises(ValueError, match="does not match the first dataset"):
             validate_dataset_consistency(
                 ds_key="ds_b",
                 ds_targets={"pressure": "scalar"},  # missing wss
+                ds_metrics=list(first_metrics),
                 first_targets=first_targets,
+                first_metrics=first_metrics,
             )
+
+    def test_metrics_mismatch_warns(self, caplog):
+        """Metrics mismatch is a soft drift -- warns, doesn't raise."""
+        first_targets, first_metrics = self._first()
+        with caplog.at_level(logging.WARNING, logger="training.build_dataloaders"):
+            validate_dataset_consistency(
+                ds_key="ds_b",
+                ds_targets=dict(first_targets),
+                ds_metrics=["l2"],  # softer
+                first_targets=first_targets,
+                first_metrics=first_metrics,
+            )
+        assert any("metrics=" in r.message for r in caplog.records)
 
 
 ### ---------------------------------------------------------------------------
