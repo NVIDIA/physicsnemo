@@ -107,8 +107,8 @@ runs:
         REPO: ${{ github.repository }}
       run: |
         set -euo pipefail
-        # GitHub's cache index is eventually consistent; allow a few
-        # seconds before failing.
+        # GitHub's cache index is eventually consistent; use linear back-off
+        # (10 s, 20 s, 30 s, 40 s, 50 s → 150 s total) before failing.
         for attempt in 1 2 3 4 5; do
           if gh cache list --repo "$REPO" --key "$CACHE_KEY" --json key --jq '.[].key' \
               | grep -Fxq "$CACHE_KEY"; then
@@ -116,7 +116,7 @@ runs:
             exit 0
           fi
           echo "attempt $attempt: ${CACHE_DESC} not yet visible, sleeping..."
-          sleep 5
+          sleep $((10 * attempt))
         done
         echo "::error::${CACHE_DESC} save did not take effect for key $CACHE_KEY"
         exit 1
