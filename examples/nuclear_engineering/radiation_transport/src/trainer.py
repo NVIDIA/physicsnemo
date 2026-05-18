@@ -626,11 +626,13 @@ def run_training_loop(
         scheduler.step()
         current_lr = scheduler.get_last_lr()[0]
 
-        logger.info(_format_epoch_log(epoch, train_log, val_log, val_loss, current_lr))
-
         val_loss_qoi = val_metrics.get("loss_qoi")
 
         if dist.rank == 0:
+            logger.info(
+                _format_epoch_log(epoch, train_log, val_log, val_loss, current_lr)
+            )
+
             if writer:
                 writer.add_scalar("Loss/train", train_loss, epoch)
                 writer.add_scalar("Loss/val", val_loss, epoch)
