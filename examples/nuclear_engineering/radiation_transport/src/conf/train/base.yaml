@@ -23,7 +23,7 @@ loss_metric: mse
 tensorboard: true
 
 optimizer:
-  type: adam                                        # adam | muon
+  type: muon                                        # adam | muon
   weight_decay: 0.0
   muon_momentum_beta: 0.95                          # Muon-only; AdamW (for 1D params) uses the shared learning_rate via match_rms_adamw
 
