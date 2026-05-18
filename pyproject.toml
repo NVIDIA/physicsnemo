@@ -29,11 +29,14 @@ dependencies = [
     "nvtx>=0.2.10",
     "treelib>=1.2.5",
     "numpy>=1.22.4",
-    "torch>=2.5.0",
-    "torchvision>=0.19.0",
+    "torch>=2.10.0",
+    "torchvision>=0.25.0",
     "tqdm>=4.60.0",
     "requests>=2.32.2",
-    "GitPython>=3.1.40",
+    # urllib3 is a transitive dependency (via requests/botocore/etc.); pin to
+    # >=2.7.0 to pick up the CVE-2026-44432 decompression-bomb fix.
+    "urllib3>=2.7.0",
+    "GitPython>=3.1.49",
     "s3fs>=2023.5.0",
     "packaging>=24.2",
     "timm>=1.0.22",
@@ -209,8 +212,8 @@ dev = [
 # When neither is specified, torch comes from PyPI and no RAPIDS
 # packages are installed.
 cu13 = [
-    "torch>=2.5.0",
-    "torchvision>=0.19.0",
+    "torch>=2.10.0",
+    "torchvision>=0.25.0",
     "cuml-cu13>=26.2.0",
     "pylibraft-cu13>=26.2.0",
     # Avoid cupy 14.x: 14.0.0 ships a broken cuda13 wheel
@@ -221,8 +224,8 @@ cu13 = [
     "nvidia-dali-cuda130",
 ]
 cu12 = [
-    "torch>=2.5.0",
-    "torchvision>=0.19.0",
+    "torch>=2.10.0",
+    "torchvision>=0.25.0",
     "cuml-cu12>=26.2.0",
     "pylibraft-cu12>=26.2.0",
     # See cu13 note: cupy 14.x also interacts badly with torch>=2.11 on the
@@ -245,7 +248,7 @@ natten-cu13 = [
 ]
 utils-extras = [
     "wandb",
-    "mlflow",
+    "mlflow>=3.11.0",
     "line_profiler",
     "vtk",
     "stl",

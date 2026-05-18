@@ -1,7 +1,7 @@
 plotly
 tensorly
 tensorly-torch
-mlflow>=2.1.1
+mlflow>=3.11.0
 imageio
 wandb
 ipython

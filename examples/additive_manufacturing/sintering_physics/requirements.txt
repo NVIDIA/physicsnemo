@@ -1,5 +1,4 @@
 # Core dependencies for training, inference, and rollout rendering
-tensorflow>=2.15,<3.0  # generate tfrecord
 dm-tree
 tqdm
 hydra-core

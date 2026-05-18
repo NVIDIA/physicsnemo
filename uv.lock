@@ -1962,14 +1962,14 @@ wheels = [
 
 [[package]]
 name = "gitpython"
-version = "3.1.46"
+version = "3.1.50"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gitdb" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/df/b5/59d16470a1f0dfe8c793f9ef56fd3826093fc52b3bd96d6b9d6c26c7e27b/gitpython-3.1.46.tar.gz", hash = "sha256:400124c7d0ef4ea03f7310ac2fbf7151e09ff97f2a3288d64a440c584a29c37f", size = 215371, upload-time = "2026-01-01T15:37:32.073Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/33/f6/354ae6491228b5eb40e10d89c4d13c651fe1cf7556e35ebdded50cff57ce/gitpython-3.1.50.tar.gz", hash = "sha256:80da2d12504d52e1f998772dc5baf6e553f8d2fcfe1fcc226c9d9a2ee3372dcc", size = 219798, upload-time = "2026-05-06T04:01:26.571Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6a/09/e21df6aef1e1ffc0c816f0522ddc3f6dcded766c3261813131c78a704470/gitpython-3.1.46-py3-none-any.whl", hash = "sha256:79812ed143d9d25b6d176a10bb511de0f9c67b1fa641d82097b0ab90398a2058", size = 208620, upload-time = "2026-01-01T15:37:30.574Z" },
+    { url = "https://files.pythonhosted.org/packages/20/7a/1c6e3562dfd8950adbb11ffbc65d21e7c89d01a6e4f137fa981056de25c5/gitpython-3.1.50-py3-none-any.whl", hash = "sha256:d352abe2908d07355014abdd21ddf798c2a961469239afec4962e9da884858f9", size = 212507, upload-time = "2026-05-06T04:01:23.799Z" },
 ]
 
 [[package]]
@@ -5430,6 +5430,7 @@ dependencies = [
     { name = "torchvision", version = "0.26.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "extra == 'extra-18-nvidia-physicsnemo-cu13' or (extra == 'extra-18-nvidia-physicsnemo-natten-cu12' and extra == 'extra-18-nvidia-physicsnemo-natten-cu13')" },
     { name = "tqdm" },
     { name = "treelib" },
+    { name = "urllib3" },
     { name = "warp-lang" },
 ]
 
@@ -5545,7 +5546,7 @@ requires-dist = [
     { name = "cupy-cuda13x", marker = "extra == 'cu13'", specifier = ">=13.6.0,<14.0.0" },
     { name = "dask", marker = "extra == 'datapipes-extras'" },
     { name = "einops", specifier = ">=0.8.1" },
-    { name = "gitpython", specifier = ">=3.1.40" },
+    { name = "gitpython", specifier = ">=3.1.49" },
     { name = "gpytorch", marker = "extra == 'uq-extras'", specifier = ">=1.11" },
     { name = "h5py", specifier = ">=3.15.1" },
     { name = "hydra-core", specifier = ">=1.3.2" },
@@ -5556,10 +5557,10 @@ requires-dist = [
     { name = "line-profiler", marker = "extra == 'nn-extras'" },
     { name = "line-profiler", marker = "extra == 'utils-extras'" },
     { name = "matplotlib", marker = "extra == 'mesh-extras'", specifier = ">=3.10.8" },
-    { name = "mlflow", marker = "extra == 'gnns'" },
-    { name = "mlflow", marker = "extra == 'model-extras'" },
-    { name = "mlflow", marker = "extra == 'nn-extras'" },
-    { name = "mlflow", marker = "extra == 'utils-extras'" },
+    { name = "mlflow", marker = "extra == 'gnns'", specifier = ">=3.11.0" },
+    { name = "mlflow", marker = "extra == 'model-extras'", specifier = ">=3.11.0" },
+    { name = "mlflow", marker = "extra == 'nn-extras'", specifier = ">=3.11.0" },
+    { name = "mlflow", marker = "extra == 'utils-extras'", specifier = ">=3.11.0" },
     { name = "natten", marker = "extra == 'natten-cu12'", specifier = ">=0.21.5", index = "https://whl.natten.org/cu128/torch2.10.0", conflict = { package = "nvidia-physicsnemo", extra = "natten-cu12" } },
     { name = "natten", marker = "extra == 'natten-cu13'", specifier = ">=0.21.5", index = "https://whl.natten.org/cu130/torch2.10.0", conflict = { package = "nvidia-physicsnemo", extra = "natten-cu13" } },
     { name = "netcdf4", marker = "extra == 'datapipes-extras'" },
@@ -5592,19 +5593,20 @@ requires-dist = [
     { name = "termcolor", specifier = ">=3.2.0" },
     { name = "tfrecord", marker = "extra == 'datapipes-extras'" },
     { name = "timm", specifier = ">=1.0.22" },
-    { name = "torch", specifier = ">=2.5.0" },
-    { name = "torch", marker = "extra == 'cu12'", specifier = ">=2.5.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "nvidia-physicsnemo", extra = "cu12" } },
-    { name = "torch", marker = "extra == 'cu13'", specifier = ">=2.5.0", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "nvidia-physicsnemo", extra = "cu13" } },
+    { name = "torch", specifier = ">=2.10.0" },
+    { name = "torch", marker = "extra == 'cu12'", specifier = ">=2.10.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "nvidia-physicsnemo", extra = "cu12" } },
+    { name = "torch", marker = "extra == 'cu13'", specifier = ">=2.10.0", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "nvidia-physicsnemo", extra = "cu13" } },
     { name = "torch-cluster", marker = "extra == 'gnns'" },
     { name = "torch-geometric", marker = "extra == 'gnns'" },
     { name = "torch-scatter", marker = "extra == 'gnns'" },
     { name = "torch-sparse", marker = "extra == 'gnns'" },
-    { name = "torchvision", specifier = ">=0.19.0" },
-    { name = "torchvision", marker = "extra == 'cu12'", specifier = ">=0.19.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "nvidia-physicsnemo", extra = "cu12" } },
-    { name = "torchvision", marker = "extra == 'cu13'", specifier = ">=0.19.0", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "nvidia-physicsnemo", extra = "cu13" } },
+    { name = "torchvision", specifier = ">=0.25.0" },
+    { name = "torchvision", marker = "extra == 'cu12'", specifier = ">=0.25.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "nvidia-physicsnemo", extra = "cu12" } },
+    { name = "torchvision", marker = "extra == 'cu13'", specifier = ">=0.25.0", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "nvidia-physicsnemo", extra = "cu13" } },
     { name = "tqdm", specifier = ">=4.60.0" },
     { name = "transformer-engine", extras = ["pytorch"], marker = "extra == 'perf'" },
     { name = "treelib", specifier = ">=1.2.5" },
+    { name = "urllib3", specifier = ">=2.7.0" },
     { name = "vtk", marker = "extra == 'gnns'" },
     { name = "vtk", marker = "extra == 'mesh-extras'", specifier = ">=9.6.0" },
     { name = "vtk", marker = "extra == 'model-extras'" },
@@ -7880,11 +7882,11 @@ wheels = [
 
 [[package]]
 name = "urllib3"
-version = "2.6.3"
+version = "2.7.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/c7/24/5f1b3bdffd70275f6661c76461e25f024d5a38a46f04aaca912426a2b1d3/urllib3-2.6.3.tar.gz", hash = "sha256:1b62b6884944a57dbe321509ab94fd4d3b307075e0c2eae991ac71ee15ad38ed", size = 435556, upload-time = "2026-01-07T16:24:43.925Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/53/0c/06f8b233b8fd13b9e5ee11424ef85419ba0d8ba0b3138bf360be2ff56953/urllib3-2.7.0.tar.gz", hash = "sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c", size = 433602, upload-time = "2026-05-07T16:13:18.596Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/39/08/aaaad47bc4e9dc8c725e68f9d04865dbcb2052843ff09c97b08904852d84/urllib3-2.6.3-py3-none-any.whl", hash = "sha256:bf272323e553dfb2e87d9bfd225ca7b0f467b919d7bbd355436d3fd37cb0acd4", size = 131584, upload-time = "2026-01-07T16:24:42.685Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl", hash = "sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897", size = 131087, upload-time = "2026-05-07T16:13:17.151Z" },
 ]
 
 [[package]]

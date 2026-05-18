@@ -58,13 +58,25 @@ For more sample parts simulation:
 
 - Download PhysicsNeMo, make or install
 
+- Install the example's Python dependencies:
+
+  ```bash
+  pip install -r requirements.txt
+  ```
+
 - Find the matching torch-scatter version with torch and cuda version enabled:
   - i.e. pip install torch-scatter-f `https://data.pyg.org/whl/torch-2.2.0%2Bcu121/torch_scatter-2.1.2%2Bpt22cu121-cp311-cp311-linux_x86_64.whl`
     (replace the torch-scatter wheel with the matching cuda, torch version )
   - torch-scatter installation guide: `https://pypi.org/project/torch-scatter/`
   - wheels source: `https://data.pyg.org/whl/`
 
-- pip install tensorflow
+- Install TensorFlow separately (used by `reading_utils.py`,
+  `graph_dataset.py`, and the `data_process/` scripts for
+  `tf.train.SequenceExample` I/O and `tf.data` pipelines):
+
+  ```bash
+  pip install "tensorflow>=2.15,<3.0"
+  ```
 
   - test version: tensorflow-2.15.0.post1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
 
