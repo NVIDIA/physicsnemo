@@ -519,6 +519,27 @@ guide in the documentation. For community and contributing overview, see the
 
 If PhysicsNeMo helped your research and you would like to cite it, please refer to the [guidelines](https://github.com/NVIDIA/physicsnemo/blob/main/CITATION.cff).
 
+If your work uses the domain parallelism components in PhysicsNeMo (e.g. `ShardTensor`),
+please consider citing:
+
+```bibtex
+@misc{pnm2026shardtensor,
+      title={ShardTensor: Domain Parallelism for Scientific Machine Learning},
+      author={Corey Adams
+              and Peter Harrington
+              and Akshay Subramaniam
+              and Mohammad Shoaib Abbas
+              and Jaideep Pathak
+              and Mike Pritchard
+              and Sanjay Choudhry},
+      year={2026},
+      eprint={2605.11111},
+      archivePrefix={arXiv},
+      primaryClass={cs.DC},
+      url={https://arxiv.org/abs/2605.11111},
+}
+```
+
 ## Communication
 
 - GitHub Discussions: Discuss new architectures, implementations, Physics-ML research, etc.
