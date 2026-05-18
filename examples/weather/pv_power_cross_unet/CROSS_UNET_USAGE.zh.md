@@ -3,8 +3,7 @@
 
 # Cross-Unet 真实光伏数据使用说明
 
-本文档说明 `examples/weather/pv_power_cross_unet` 下的通用真实数据
-Cross-Unet 工作流。该工作流读取一个 15 分钟频率的 CSV 文件，用户通过
+本文档说明使用Cross-Unet完成光伏功率预测的工作流。该工作流读取一个 15 分钟频率的 CSV 文件，用户通过
 配置指定时间列、功率目标列和天气输入列。
 
 ## 1. 环境准备
@@ -12,50 +11,32 @@ Cross-Unet 工作流。该工作流读取一个 15 分钟频率的 CSV 文件，
 在已安装 PhysicsNeMo 和 PyTorch 的环境中安装示例依赖：
 
 ```bash
-cd /home/horde/tmp/physicsnemo
+cd /path/to/physicsnemo
 pip install -r examples/weather/pv_power_cross_unet/requirements.txt
 ```
 
-如果使用 `physicsnemo_26.03` 容器，训练前先确认 CUDA 可用：
-
-```bash
-docker exec physicsnemo_26.03 bash -lc 'nvidia-smi && python -c "import torch; print(torch.cuda.is_available())"'
-```
-
-如果容器内 `nvidia-smi` 出现 NVML 初始化错误，先 stop 再 start 该容器，
-然后重新验证 CUDA，再继续训练。
-
 ## 2. 数据准备
 
-准备一个 CSV，要求如下：
+输入数据应为CSV格式，要求如下：
 
 - 一列时间戳
-- 一列待预测的光伏功率
-- 至少一列天气输入
-- 时间戳严格按 15 分钟间隔排列，不能有重复时间
+- 一列光伏功率历史数据
+- 至少一列天气数据
+- 时间戳严格按 15 分钟间隔排列，不能有重复时间或缺失
 
-其他列会被忽略。默认配置指向一个 `obs_data2` 文件：
-
-```text
-examples/weather/pv_power_cross_unet/dataset/obs_data2/653206.csv
-```
-
-默认使用这些列：
-
-```text
-Time,r_apower,r_tirra
-```
 
 可以在 `conf/real_data.yaml` 中修改列名，也可以用 Hydra override：
 
 ```yaml
-data_file: ./dataset/obs_data2/653206.csv
+data_file: ./dataset/your_data.csv
 time_col: Time
-target_col: r_apower
+target_col: pv_power
 weather_cols:
-  - r_tirra
+  - irradiation
 freq_minutes: 15
 ```
+
+数据列名称应与CSV文件中的列名称一致。
 
 ## 3. 模型训练
 
@@ -71,10 +52,10 @@ python train_real_cross_unet.py mode=train
 ```bash
 python train_real_cross_unet.py \
   mode=train \
-  data_file=./dataset/obs_data2/653206.csv \
+  data_file=./dataset/your_data.csv \
   time_col=Time \
-  target_col=r_apower \
-  weather_cols='[r_tirra]' \
+  target_col=pv_power \
+  weather_cols='[irradiation]' \
   horizon_label=4h \
   max_epochs=1 \
   max_train_samples=4 \
@@ -86,7 +67,7 @@ python train_real_cross_unet.py \
   output_dir=./outputs/smoke
 ```
 
-默认模型配置对齐上游 Cross-Unet 训练脚本：
+默认模型配置为Cross_Unet论文中的原始配置：
 
 ```text
 d_model=256, d_ff=512, n_heads=4, e_layers=3,
@@ -115,7 +96,7 @@ nonlinear_correlation_proj=True, use_bottleneck_in_decoder=True
 ```bash
 python train_real_cross_unet.py \
   mode=predict \
-  data_file=./dataset/obs_data2/653206.csv \
+  data_file=./dataset/your_data.csv \
   horizon_label=4h \
   output_dir=./outputs/smoke
 ```
@@ -135,7 +116,7 @@ data_file,timestamp,horizon_step,prediction,target
 ```bash
 python train_real_cross_unet.py \
   mode=evaluate \
-  data_file=./dataset/obs_data2/653206.csv \
+  data_file=./dataset/your_data.csv \
   horizon_label=4h \
   output_dir=./outputs/smoke \
   metrics_csv_path=./outputs/smoke/metrics.csv
@@ -150,11 +131,3 @@ mae,mse,rmse,r2,best_valid_loss,epoch,checkpoint_path,prediction_path
 
 MAE、MSE、RMSE、R2 会在所有预测步展平后统一计算。
 
-## 7. 验证命令
-
-运行真实数据工作流测试和模型测试：
-
-```bash
-pytest test/examples/weather/test_pv_power_cross_unet_real_data.py \
-  test/experimental/models/pv_power/cross_unet/test_cross_unet.py -q
-```

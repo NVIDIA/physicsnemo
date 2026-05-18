@@ -12,11 +12,11 @@ hydra:
 mode: train
 
 # Data
-data_file: ./dataset/obs_data2/653206.csv
+data_file: ./dataset/your_data.csv
 time_col: Time
-target_col: r_apower
+target_col: power
 weather_cols:
-  - r_tirra
+  - SWR
 freq_minutes: 15
 seq_len: 96
 pred_len: 16

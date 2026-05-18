@@ -37,26 +37,25 @@ The real-data script reads one CSV file. Configure the file and columns in
 `conf/real_data.yaml` or on the command line:
 
 ```yaml
-data_file: ./dataset/obs_data2/653206.csv
+data_file: ./dataset/your_data.csv
 time_col: Time
-target_col: r_apower
+target_col: pv_power
 weather_cols:
-  - r_tirra
+  - irradiation
 freq_minutes: 15
 ```
 
 CSV requirements:
 
 - regular 15-minute timestamps
-- no duplicate timestamps
-- one target power column
+- no duplicate or missing timestamps
+- one historical power column
 - at least one weather column
-- any extra columns are ignored
 
 Train with the default config:
 
 ```bash
-python train_real_cross_unet.py mode=train
+python train_real_cross_unet.py mode=train 
 ```
 
 Run prediction:
@@ -98,7 +97,7 @@ The same values can be set manually with `seq_len`, `pred_len`, and `seg_len`.
 
 ## Default Real-Data Model Settings
 
-The real-data config follows the upstream Cross-Unet script defaults used for
+The real-data config follows the Cross-Unet paper defaults used for
 actual PV runs:
 
 ```text

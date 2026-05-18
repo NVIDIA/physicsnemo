@@ -3,10 +3,8 @@
 
 # Cross-Unet Real PV Data Usage
 
-This guide describes the generic real-data Cross-Unet workflow under
-`examples/weather/pv_power_cross_unet`. The workflow reads one CSV file at a
-15-minute cadence and uses user-specified column names for time, power, and
-weather inputs.
+This guide describes how to use Cross-Unet to conduct photovoltaic power prediction. The workflow reads one CSV file at a
+15-minute cadence and uses user-specified column names for time, power, and weather inputs.
 
 ## 1. Environment
 
@@ -14,50 +12,31 @@ Install the example requirements in a PhysicsNeMo environment with PyTorch
 available:
 
 ```bash
-cd /home/horde/tmp/physicsnemo
+cd /path/to/physicsnemo
 pip install -r examples/weather/pv_power_cross_unet/requirements.txt
 ```
 
-When using the `physicsnemo_26.03` container, verify CUDA before training:
-
-```bash
-docker exec physicsnemo_26.03 bash -lc 'nvidia-smi && python -c "import torch; print(torch.cuda.is_available())"'
-```
-
-If `nvidia-smi` reports an NVML initialization error inside the container, stop
-and start the container, then verify CUDA again before resuming.
-
 ## 2. Data Preparation
 
-Prepare a CSV with:
+The input data should be in a CSV file:
 
 - one timestamp column
-- one target power column
+- one historical power column
 - one or more weather columns
-- regular 15-minute timestamps with no duplicate times
-
-Extra columns are ignored. The default config points at an `obs_data2` file:
-
-```text
-examples/weather/pv_power_cross_unet/dataset/obs_data2/653206.csv
-```
-
-with these columns:
-
-```text
-Time,r_apower,r_tirra
-```
+- regular 15-minute timestamps with no duplicate or missing times
 
 Set the column names in `conf/real_data.yaml` or through Hydra overrides:
 
 ```yaml
-data_file: ./dataset/obs_data2/653206.csv
+data_file: ./dataset/your_data.csv
 time_col: Time
-target_col: r_apower
+target_col: pv_power
 weather_cols:
-  - r_tirra
+  - irradiation
 freq_minutes: 15
 ```
+
+The name of the data columns should be in accordance with that in the CSV file.
 
 ## 3. Training
 
@@ -73,10 +52,10 @@ A quick smoke run:
 ```bash
 python train_real_cross_unet.py \
   mode=train \
-  data_file=./dataset/obs_data2/653206.csv \
+  data_file=./dataset/your_data.csv \
   time_col=Time \
-  target_col=r_apower \
-  weather_cols='[r_tirra]' \
+  target_col=pv_power \
+  weather_cols='[irradiation]' \
   horizon_label=4h \
   max_epochs=1 \
   max_train_samples=4 \
@@ -88,7 +67,7 @@ python train_real_cross_unet.py \
   output_dir=./outputs/smoke
 ```
 
-The default model settings follow the upstream Cross-Unet training script:
+The default model settings follow the Cross-Unet paper:
 
 ```text
 d_model=256, d_ff=512, n_heads=4, e_layers=3,
@@ -117,7 +96,7 @@ After training, run:
 ```bash
 python train_real_cross_unet.py \
   mode=predict \
-  data_file=./dataset/obs_data2/653206.csv \
+  data_file=./dataset/your_data.csv \
   horizon_label=4h \
   output_dir=./outputs/smoke
 ```
@@ -137,7 +116,7 @@ Prediction and target values are saved on the original target scale.
 ```bash
 python train_real_cross_unet.py \
   mode=evaluate \
-  data_file=./dataset/obs_data2/653206.csv \
+  data_file=./dataset/your_data.csv \
   horizon_label=4h \
   output_dir=./outputs/smoke \
   metrics_csv_path=./outputs/smoke/metrics.csv
@@ -153,11 +132,3 @@ mae,mse,rmse,r2,best_valid_loss,epoch,checkpoint_path,prediction_path
 MAE, MSE, RMSE, and R2 are computed over all forecast steps after flattening
 the prediction and target arrays.
 
-## 7. Verification
-
-Run the real-data workflow tests and the model tests:
-
-```bash
-pytest test/examples/weather/test_pv_power_cross_unet_real_data.py \
-  test/experimental/models/pv_power/cross_unet/test_cross_unet.py -q
-```
