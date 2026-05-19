@@ -9,6 +9,9 @@ src/*.npz
 # macOS metadata files.
 .DS_Store
 
+# manifests
+src/manifests/*.json
+
 # Local backup snapshots (e.g. manifest_class_*.json.bak_*).
 *.bak
 *.bak_*

@@ -154,6 +154,8 @@ pool indices (the rest) for that class. All AL runs then read the same
 manifests, ensuring fair comparison across acquisition strategies and
 seeds.
 
+Start by building the manifests:
+
 ```bash
 python src/create_manifests.py \
     --zarr-paths \
@@ -165,7 +167,9 @@ python src/create_manifests.py \
 
 This writes `src/manifests/manifest_class_SE.json` and
 `src/manifests/manifest_class_SF.json`, each containing
-`{class, zarr_path, test_indices, pool_indices}`.
+`{class, zarr_path, test_indices, pool_indices}`. The same files are
+read by `run_al.py`, `train_ceiling.py`, and any inference / metrology
+script that needs the held-out test pool.
 
 ## Quick start
 
