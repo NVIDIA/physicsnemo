@@ -1,21 +1,14 @@
-# Run artifacts and outputs
+# Example-local ignores only.
+# Run artifacts and outputs.
 runs/
-outputs/
+slurm/slurm_logs/
 
-# Local copies of normalization stats (sourced from
-# transformer_models/src/, kept here for the smoke / paper experiments;
-# not committed in the productizable example).
+# Local copies of normalization stats.
 src/*.npz
 
-# Python caches
-__pycache__/
-*.pyc
-*.pyo
-
-# Editor / OS
+# macOS metadata files.
 .DS_Store
-*.swp
 
-# Local backup snapshots (e.g. manifest_class_*.json.bak_*)
+# Local backup snapshots (e.g. manifest_class_*.json.bak_*).
 *.bak
 *.bak_*
