@@ -240,8 +240,8 @@ AL setup involves an oracle that synthesizes labels on demand.
 The plot below summarizes a experiment on the ShiftSUV
 out-of-distribution dataset (1727 total samples; 181 held out for test,
 leaving 1546 in the trainable pool). UQ and class-balanced random both
-close the gap between the pretrained Fastback-only model and a
-full-data ceiling that sees every trainable sample (n = 1546). Pressure
+close the gap between the pretrained DrivAerStar Fastback-only model and a
+ShiftSUV full-data ceiling that sees every trainable sample (n = 1546). Pressure
 and wall-shear-stress (WSS) RMS errors are reported in physical units
 after un-standardization.
 
@@ -291,7 +291,7 @@ Numbers from the rightmost panel of the summary plot —
 | 10% | 910 | 930 | ~60% |
 | 5% | 1040 | 1060 | ~67% |
 
-At the largest budget reached in this single-seed run — UQ at n=1120,
+At the largest budget reached in this run — UQ at n=1120,
 BAL at n=1100 — pressure RMS is **15.17 Pa (UQ) / 15.49 Pa (BAL)**
 against a full-data ceiling of **14.85 Pa**, i.e. +2.1% / +4.3% above
 the asymptote. Read the row as: *"to drive the
