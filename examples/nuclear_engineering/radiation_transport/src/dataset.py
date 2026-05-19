@@ -113,9 +113,10 @@ class MeshDataReader(Reader):
     def load(self, filename: str) -> TensorDict:
         """Load a Mesh memmap store into a ``TensorDict``.
 
-        Tensor fields (``coordinates``, ``cell_areas``, ``scalar_flux``,
-        ``sim_times``, ``material_properties``, ``geometric_features``,
-        ``sigma_*``, ``Q``) are stored as ``torch.Tensor`` entries. The
+        Reads cell-primary fields from ``mesh.cell_data`` and derives
+        ``coordinates`` and ``cell_areas`` from the mesh topology. Returned
+        tensor fields: ``coordinates``, ``cell_areas``, ``scalar_flux``,
+        ``sim_times``, ``material_properties``, ``sigma_a/s/t``, ``Q``. The
         sidecar attrs dict is stored as ``NonTensorData`` under ``metadata``.
         """
         filepath = self.data_path / filename
@@ -123,46 +124,43 @@ class MeshDataReader(Reader):
             raise FileNotFoundError(f"Mesh store {filepath} not found")
 
         mesh = Mesh.load(str(filepath))
-        point_data = mesh.point_data
+        cell_data = mesh.cell_data
         global_data = mesh.global_data
 
-        # Flux + timesteps (first -> final-time snapshots).
-        if "scalar_flux" not in point_data.keys():
-            raise KeyError(f"scalar_flux missing from {filepath}")
-        flux_nT = point_data["scalar_flux"]  # (N, T)
+        # Flux + timesteps (first -> final-time snapshots from the curated
+        # time series). ``cell_data['scalar_flux']`` is ``(n_cells, T)``.
+        if "scalar_flux" not in cell_data.keys():
+            raise KeyError(f"cell_data['scalar_flux'] missing from {filepath}")
+        flux_nT = cell_data["scalar_flux"]
         num_timesteps = flux_nT.shape[1] if flux_nT.ndim == 2 else 1
-        full = flux_nT.transpose(0, 1).contiguous().to(torch.float32)  # (T, N)
+        full = flux_nT.transpose(0, 1).contiguous().to(torch.float32)  # (T, n_cells)
         resolved = [0] if num_timesteps == 1 else [0, num_timesteps - 1]
 
         td = TensorDict({}, batch_size=[])
         td["scalar_flux"] = full[resolved].contiguous()
-        if "sim_times" in global_data.keys() and global_data["sim_times"].numel() > 0:
+        if "sim_time" in global_data.keys() and global_data["sim_time"].numel() > 0:
             td["sim_times"] = (
-                global_data["sim_times"].to(torch.float32)[resolved].contiguous()
+                global_data["sim_time"].to(torch.float32)[resolved].contiguous()
             )
 
         if self.cache_static_arrays and filename in self._static_cache:
             for key, tensor in self._static_cache[filename].items():
                 td[key] = tensor
         else:
-            td["coordinates"] = mesh.points.to(torch.float32).contiguous()
-            if "cell_areas" in point_data.keys():
-                td["cell_areas"] = (
-                    point_data["cell_areas"].to(torch.float32).contiguous()
-                )
-            if "material_properties" in point_data.keys():
-                td["material_properties"] = (
-                    point_data["material_properties"].to(torch.int32).contiguous()
-                )
-            else:
-                warnings.warn(f"Material properties not found in {filename}.")
-            if "geometric_features" in point_data.keys():
-                td["geometric_features"] = (
-                    point_data["geometric_features"].to(torch.float32).contiguous()
-                )
+            # Coordinates and cell areas come from the topology (Mesh
+            # properties) so the cell-primary fields share the same (n_cells,)
+            # indexing.
+            td["coordinates"] = mesh.cell_centroids.to(torch.float32).contiguous()
+            td["cell_areas"] = mesh.cell_areas.to(torch.float32).contiguous()
+            if "material_id" not in cell_data.keys():
+                raise KeyError(f"cell_data['material_id'] missing from {filepath}")
+            td["material_properties"] = (
+                cell_data["material_id"].to(torch.int32).contiguous()
+            )
             for key in ("sigma_t", "sigma_s", "sigma_a", "Q"):
-                if key in point_data.keys():
-                    td[key] = point_data[key].to(torch.float32).contiguous()
+                if key not in cell_data.keys():
+                    raise KeyError(f"cell_data['{key}'] missing from {filepath}")
+                td[key] = cell_data[key].to(torch.float32).contiguous()
 
             if self.cache_static_arrays:
                 self._static_cache[filename] = {
@@ -171,17 +169,16 @@ class MeshDataReader(Reader):
                         "coordinates",
                         "cell_areas",
                         "material_properties",
-                        "geometric_features",
                         "sigma_t",
                         "sigma_s",
                         "sigma_a",
                         "Q",
                     )
-                    if k in td
                 }
 
         sidecar = self._read_sidecar(filename)
-        td.set_non_tensor("metadata", dict(sidecar.get("raw_attrs", {})))
+        attrs = {k: v for k, v in sidecar.items() if k != "missing_fields"}
+        td.set_non_tensor("metadata", attrs)
         return td
 
     def get_metadata(self, filename: str) -> Dict:
@@ -192,33 +189,25 @@ class MeshDataReader(Reader):
 
         filepath = self.data_path / filename
         mesh = Mesh.load(str(filepath))
-        point_data = mesh.point_data
+        cell_data = mesh.cell_data
         global_data = mesh.global_data
 
         sidecar = self._read_sidecar(filename)
-        metadata: Dict = dict(sidecar.get("raw_attrs", {}))
+        metadata: Dict = {k: v for k, v in sidecar.items() if k != "missing_fields"}
 
-        if "scalar_flux" in point_data.keys():
-            flux_shape = point_data["scalar_flux"].shape  # (N, T)
-            metadata["num_cells"] = int(flux_shape[0])
-            metadata["num_timesteps"] = int(flux_shape[1]) if len(flux_shape) > 1 else 1
-        else:
-            metadata["num_cells"] = int(mesh.points.shape[0])
-            metadata["num_timesteps"] = 1
+        if "scalar_flux" not in cell_data.keys():
+            raise KeyError(f"cell_data['scalar_flux'] missing from {filepath}")
+        flux_shape = cell_data["scalar_flux"].shape  # (n_cells, T)
+        metadata["num_cells"] = int(flux_shape[0])
+        metadata["num_timesteps"] = int(flux_shape[1]) if len(flux_shape) > 1 else 1
 
-        metadata["has_geometric_features"] = "geometric_features" in point_data.keys()
-        metadata["has_material_properties"] = "material_properties" in point_data.keys()
+        metadata["has_material_properties"] = "material_id" in cell_data.keys()
         has_sim_times = (
-            "sim_times" in global_data.keys() and global_data["sim_times"].numel() > 0
+            "sim_time" in global_data.keys() and global_data["sim_time"].numel() > 0
         )
         metadata["has_sim_times"] = has_sim_times
         if has_sim_times:
-            try:
-                metadata["max_sim_time"] = float(global_data["sim_times"][-1].item())
-            except Exception as exc:  # pragma: no cover — defensive
-                raise ValueError(
-                    f"Failed to read sim_times tail from {filename}"
-                ) from exc
+            metadata["max_sim_time"] = float(global_data["sim_time"][-1].item())
 
         self._metadata_cache[filename] = metadata
         return metadata
