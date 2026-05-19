@@ -82,7 +82,7 @@ class LossMHD_PhysicsNeMo(object):
         self.use_weighted_mean = use_weighted_mean
         # Define 2D MHD PDEs
         self.mhd_pde_eq = MHD_PDE(self.nu, self.eta, self.rho0)
-        self.mhd_pde_node = self.mhd_pde_eq.make_nodes()
+        self.mhd_pde_node = self.mhd_pde_eq.make_computations()
 
         if not self.use_data_loss:
             self.data_weight = 0

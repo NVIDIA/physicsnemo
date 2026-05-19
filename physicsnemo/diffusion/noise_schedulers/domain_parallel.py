@@ -278,7 +278,8 @@ class DomainParallelNoiseScheduler(NoiseScheduler):
         if mesh is None:
             return self._inner.add_noise(x0, time)
 
-        t_bc = time.reshape(-1, *([1] * (x0.ndim - 1)))
+        expected_shape = (-1,) + (1,) * (x0.ndim - 1)
+        t_bc = time.reshape(expected_shape)
         alpha_t = self._inner.alpha(t_bc)
         sigma_t = self._inner.sigma(t_bc)
 

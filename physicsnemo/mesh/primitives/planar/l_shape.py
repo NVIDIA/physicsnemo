@@ -30,6 +30,7 @@ def load(
     """Create an L-shaped non-convex domain in 2D space.
 
     The L-shape consists of:
+
     - Bottom rectangle: [0, size] x [0, size/2]
     - Top rectangle: [0, size/2] x [size/2, size]
 

@@ -105,9 +105,9 @@ def run_radius_search_module(model, data_dict, reverse_mapping):
     # Bounding box grid
     s_grid = data_dict["surf_grid"]
 
-    # Scaling factors
-    surf_max = data_dict["surface_min_max"][:, 1]
-    surf_min = data_dict["surface_min_max"][:, 0]
+    # Scaling factors -- unsqueeze to (B, 1, 3) for broadcasting with (B, N, 3)
+    surf_max = data_dict["surface_min_max"][:, 1].unsqueeze(1)
+    surf_min = data_dict["surface_min_max"][:, 0].unsqueeze(1)
 
     # Normalize based on BBox around surface (car)
     geo_centers_surf = 2.0 * (geo_centers - surf_min) / (surf_max - surf_min) - 1
@@ -121,8 +121,9 @@ def run_radius_search_module(model, data_dict, reverse_mapping):
 @pytest.mark.parametrize("shard_points", [True, False])
 @pytest.mark.parametrize("shard_grid", [True, False])
 @pytest.mark.parametrize("reverse_mapping", [True])
+@pytest.mark.parametrize("bsize", [1, 2])
 def test_sharded_radius_search_layer_forward(
-    distributed_mesh, shard_points, shard_grid, reverse_mapping
+    distributed_mesh, shard_points, shard_grid, reverse_mapping, bsize
 ):
     from physicsnemo.nn import BQWarp
 
@@ -131,7 +132,6 @@ def test_sharded_radius_search_layer_forward(
     device = dm.device
 
     # Create the input dict:
-    bsize = 1
     npoints = 8 * 17
     nx, ny, nz = 8 * 12, 6, 4
     # This is pretty aggressive, it'd never actually be this many.

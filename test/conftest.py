@@ -41,7 +41,7 @@ import torch
 from packaging.requirements import Requirement
 from packaging.version import Version
 
-NFS_DATA_PATH = "/data/nfs/modulus-data"
+NFS_DATA_PATH = "/data/nfs/physicsnemo-data"
 
 # Total time per file
 file_timings = defaultdict(float)
@@ -93,8 +93,8 @@ def nfs_data_dir(request):
     if nfs_data_dir_opt:
         data_dir = pathlib.Path(nfs_data_dir_opt)
     elif test_data_dir_env:
-        # get-data clones into $(TEST_DATA_DIR)/modulus-data
-        data_dir = pathlib.Path(test_data_dir_env) / "modulus-data"
+        # CI downloads into $(TEST_DATA_DIR)/physicsnemo-data
+        data_dir = pathlib.Path(test_data_dir_env) / "physicsnemo-data"
     else:
         data_dir = pathlib.Path(NFS_DATA_PATH)
     if not data_dir.exists():
@@ -109,6 +109,12 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "multigpu_dynamic: mark test as multigpu to run")
     config.addinivalue_line(
         "markers", "multigpu_static: mark test to run only with --multigpu-static flag"
+    )
+    config.addinivalue_line(
+        "markers", "cuda: mark test as requiring CUDA (skipped if unavailable)"
+    )
+    config.addinivalue_line(
+        "markers", "slow: mark test as slow-running (for optional exclusion)"
     )
 
     # Conditionally register the distributed_print plugin for multigpu tests

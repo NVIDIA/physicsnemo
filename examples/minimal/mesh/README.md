@@ -48,6 +48,7 @@ pip install -e ".[mesh]"
 | **4. Neighbors & Spatial** | Queries | Adjacency, BVH, sampling, interpolation |
 | **5. Quality & Repair** | Mesh health | Validation, quality metrics, repair |
 | **6. ML Integration** | Production workflows | Performance, batching, torch.compile |
+| **7. Domain Mesh** | Simulation domains | DomainMesh, boundaries, transforms, validation |
 <!-- markdownlint-enable MD013 -->
 
 ## Running the Tutorials
@@ -152,6 +153,19 @@ Learn to use PhysicsNeMo-Mesh in production ML pipelines.
 - Boundary condition handling
 - End-to-end CAE preprocessing workflow
 - torch.compile compatibility
+
+### Tutorial 7: Simulation Domains with DomainMesh
+
+**File**: `tutorial_7_domain_mesh.ipynb`
+
+Learn to represent full simulation domains with interior meshes and named boundaries.
+
+- Building a DomainMesh from mesh primitives (cube volume + boundary surfaces)
+- Inspecting domain properties and iterating over meshes
+- Data augmentation via geometric transforms (quasi-equivariance)
+- Validation and boundary watertightness checking
+- Visualization of boundary patches by BC type
+- Domain-wide operations (subdivide, clean)
 
 ## Assets
 

@@ -1,0 +1,131 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ---------------------------------------------------------------------------
+# Unified External Aerodynamics - Volume Training Configuration (GLOBE)
+# ---------------------------------------------------------------------------
+# Trains GLOBE on DrivAerML volume data (predict velocity / pressure / nut
+# at the interior volume points using the car body surface as the
+# vehicle BC). Mirrors the surface variant: both configs key the body
+# boundary uniformly as `boundaries.vehicle` (the curated DrivAerML
+# .pdmsh files standardize on `vehicle` for the car-body boundary in
+# both surface and volume layouts).
+
+output_dir: "runs"
+checkpoint_dir: null
+run_id: "volume_globe_drivaer_ml"
+
+precision: "bfloat16"
+compile: false               # see surface variant for rationale
+profile: false
+augment: false
+benchmark_io: false
+
+# -- Data contract -----------------------------------------------------------
+input_type: mesh
+output_type: mesh
+
+forward_kwargs:
+  prediction_points: interior.points          # interior volume points
+  boundary_meshes:
+    vehicle: boundaries.vehicle               # car-body surface (curated key)
+  reference_lengths:
+    L_ref: 1.0                                # nondim
+    delta_turb: 0.015                         # nondim
+
+# -- Model (GLOBE) ----------------------------------------------------------
+model:
+  _target_: physicsnemo.experimental.models.globe.GLOBE
+  n_spatial_dims: 3
+  output_field_ranks:
+    velocity: 1                # vector
+    pressure: 0                # scalar
+    nut: 0                     # scalar
+  # GLOBE auto-injects cell_normals from the boundary mesh's geometry,
+  # and only pulls leaves it declared here from cell_data; anything else
+  # the dataset puts on the boundary (the .pdmsh files carry pMeanTrim,
+  # wallShearStressMeanTrim, etc. for other recipe models) is silently
+  # ignored. To use one of those as a real boundary-condition input,
+  # add it here as a rank-spec leaf and GLOBE will pick it up.
+  boundary_source_data_ranks:
+    vehicle: {}
+  reference_length_names: [L_ref, delta_turb]
+  reference_area: 0.0868       # 2.170 / 5.0^2 (nondim)
+  n_communication_hyperlayers: 2
+  hidden_layer_sizes: [256, 256, 256]
+  n_latent_scalars: 8
+  n_latent_vectors: 4
+  n_spherical_harmonics: 1
+  theta: 10.0
+  leaf_size: 1
+  network_type: "pade"
+  self_regularization_beta: 0.01
+  latent_compression_scale: 100.0
+  expand_far_targets: true
+
+# -- Dataset -----------------------------------------------------------------
+dataset:
+  name: drivaer_ml_volume
+  sampling_resolution: 50000
+  metrics: [l2]
+
+# -- Training ----------------------------------------------------------------
+training:
+  seed: 42
+  num_epochs: 10000
+  save_interval: 25
+  loss_type: "huber"
+  ### `field_weights:` is currently a no-op (every weight is 1.0, the
+  ### default) -- it's listed here as a placeholder so a maintainer can
+  ### see at a glance which fields exist for tuning. The volume targets
+  ### have not been calibrated yet; bump nut / velocity weights here once
+  ### the per-field loss curves diverge in real training.
+  field_weights:
+    velocity: 1.0
+    pressure: 1.0
+    nut: 1.0
+  batch_size: 1
+  scheduler_update_mode: "epoch"
+
+  optimizer:
+    lr: 1.0e-2
+    weight_decay: 1.0e-4
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+
+  scheduler:
+    _target_: torch.optim.lr_scheduler.StepLR
+    step_size: 100
+    gamma: 0.5
+
+# -- DataLoader / Dataset Performance Tuning --------------------------------
+dataloader:
+  prefetch_factor: 1
+  num_streams: 1
+  use_streams: false
+  num_workers: 1
+  pin_memory: true
+
+# -- Logging -----------------------------------------------------------------
+logging:
+  log_every_n_steps: 10
+
+# -- Data paths --------------------------------------------------------------
+data:
+  drivaer_ml:
+    config: conf/dataset/drivaer_ml_volume.yaml
+    train_split: train
+    val_split: val

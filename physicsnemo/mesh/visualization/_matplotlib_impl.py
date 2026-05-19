@@ -16,30 +16,46 @@
 
 """Matplotlib backend for mesh visualization."""
 
-import importlib
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 import torch
+from jaxtyping import Float
 
+from physicsnemo.core.version_check import OptionalImport
+
+### Optional dependencies. Each ``OptionalImport`` is a lazy proxy:
+### construction does not import the package; the friendly ``ImportError``
+### (with the ``[mesh-extras]`` install hint) fires only on first attribute
+### access. We therefore avoid extracting individual classes at module level
+### (e.g. ``ScalarMappable = _cm.ScalarMappable`` would import matplotlib at
+### load time) and reach through the proxy at the use sites instead.
+###
+### This module is only loaded by ``draw_mesh.draw_mesh(..., backend="matplotlib")``,
+### so that first attribute access already implies the user opted in.
 if TYPE_CHECKING:
-    from physicsnemo.mesh import Mesh
+    import matplotlib.cm as mpl_cm
+    import matplotlib.collections as mpl_collections
+    import matplotlib.colors as mpl_colors
+    import matplotlib.pyplot as plt
+    import mpl_toolkits.mplot3d.art3d as mpl_art3d
+    from matplotlib import axes as mpl_axes
+    from mpl_toolkits.mplot3d.axes3d import Axes3D
 
-# Dynamic imports for optional matplotlib dependency (invisible to static analysis)
-plt = importlib.import_module("matplotlib.pyplot")
-_cm = importlib.import_module("matplotlib.cm")
-ScalarMappable = _cm.ScalarMappable
-_collections = importlib.import_module("matplotlib.collections")
-LineCollection = _collections.LineCollection
-PolyCollection = _collections.PolyCollection
-_colors = importlib.import_module("matplotlib.colors")
-Normalize = _colors.Normalize
+    from physicsnemo.mesh import Mesh
+else:
+    plt = OptionalImport("matplotlib.pyplot")
+    mpl_cm = OptionalImport("matplotlib.cm")
+    mpl_collections = OptionalImport("matplotlib.collections")
+    mpl_colors = OptionalImport("matplotlib.colors")
+    mpl_axes = OptionalImport("matplotlib.axes")
+    mpl_art3d = OptionalImport("mpl_toolkits.mplot3d.art3d")
 
 
 def draw_mesh_matplotlib(
     mesh: "Mesh",
-    point_scalar_values: torch.Tensor | None,
-    cell_scalar_values: torch.Tensor | None,
+    point_scalar_values: Float[torch.Tensor, " n_points"] | None,
+    cell_scalar_values: Float[torch.Tensor, " n_cells"] | None,
     active_scalar_source: Literal["points", "cells", None],
     scalar_label: str | None,
     show: bool,
@@ -50,8 +66,8 @@ def draw_mesh_matplotlib(
     alpha_cells: float,
     alpha_edges: float,
     show_edges: bool,
-    ax=None,
-):
+    ax: Any = None,
+) -> Any:
     """Draw mesh using matplotlib backend.
 
     Supports 0D, 1D, 2D, and 3D spatial dimensions with appropriate matplotlib primitives.
@@ -85,13 +101,22 @@ def draw_mesh_matplotlib(
     show_edges : bool
         Whether to draw cell edges.
     ax : matplotlib.axes.Axes or None
-        Existing matplotlib axes (if None, creates new figure).
+        Existing matplotlib Axes to draw on. If ``None``, a new figure is
+        created. Use this to overlay multiple meshes on the same axes.
 
     Returns
     -------
     matplotlib.axes.Axes
         Matplotlib axes object.
     """
+    ### Validate ax type
+    if ax is not None and not isinstance(ax, mpl_axes.Axes):
+        raise ValueError(
+            f"Expected a matplotlib Axes for the 'ax' parameter, "
+            f"got {type(ax).__name__}. "
+            f"PyVista Plotters are only supported for pyvista backend."
+        )
+
     ### For volume meshes (3D+ manifold), reduce to a surface mesh.
     ### Matplotlib can only render 2D facets (polygons), not volumetric cells
     ### like tetrahedra. Extract boundary facets for clean surface visualization.
@@ -163,11 +188,11 @@ def draw_mesh_matplotlib(
         scalar_values_for_norm = None
 
     if scalar_values_for_norm is not None:
-        norm = Normalize(
+        norm = mpl_colors.Normalize(
             vmin=vmin if vmin is not None else scalar_values_for_norm.min(),
             vmax=vmax if vmax is not None else scalar_values_for_norm.max(),
         )
-        scalar_mapper = ScalarMappable(norm=norm, cmap=cmap)
+        scalar_mapper = mpl_cm.ScalarMappable(norm=norm, cmap=cmap)
     else:
         norm = None
         scalar_mapper = None
@@ -248,16 +273,23 @@ def draw_mesh_matplotlib(
         ax.set_ylabel("y")
         ax.set_aspect("equal", adjustable="box")
     elif mesh.n_spatial_dims == 3:
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.set_zlabel("z")  # ty: ignore[possibly-missing-attribute]
+        # ax was created with projection="3d" upstream when n_spatial_dims=3
+        # (see the figure setup earlier), or the caller provided a 3D-projected
+        # Axes. The 3D-only methods (set_zlabel, get_*lim3d, set_*lim3d) live on
+        # Axes3D, not the 2D base Axes - so narrow the static type once here so
+        # they're visible without per-line suppressions.
+        ax_3d = cast("Axes3D", ax)
+
+        ax_3d.set_xlabel("x")
+        ax_3d.set_ylabel("y")
+        ax_3d.set_zlabel("z")
 
         ### Make 3D axes equal by adjusting limits to have same range
-        ax.set_box_aspect((1, 1, 1))  # ty: ignore[invalid-argument-type]
+        ax_3d.set_box_aspect((1, 1, 1))
 
-        xlim = ax.get_xlim3d()  # ty: ignore[possibly-missing-attribute]
-        ylim = ax.get_ylim3d()  # ty: ignore[possibly-missing-attribute]
-        zlim = ax.get_zlim3d()  # ty: ignore[possibly-missing-attribute]
+        xlim = ax_3d.get_xlim3d()
+        ylim = ax_3d.get_ylim3d()
+        zlim = ax_3d.get_zlim3d()
 
         x_range = abs(xlim[1] - xlim[0])
         x_middle = np.mean(xlim)
@@ -269,9 +301,9 @@ def draw_mesh_matplotlib(
         # Use the maximum range to ensure all axes have equal scale
         plot_radius = 0.5 * max([x_range, y_range, z_range])
 
-        ax.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])  # ty: ignore[possibly-missing-attribute]
-        ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])  # ty: ignore[possibly-missing-attribute]
-        ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])  # ty: ignore[possibly-missing-attribute]
+        ax_3d.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])
+        ax_3d.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
+        ax_3d.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
 
     if show:
         plt.show()
@@ -342,7 +374,7 @@ def _draw_1d(
         else:
             colors = cell_neutral_color
 
-        lc = LineCollection(
+        lc = mpl_collections.LineCollection(
             segments, colors=colors, alpha=alpha_cells, linewidths=2, zorder=1
         )
         ax.add_collection(lc)
@@ -397,7 +429,7 @@ def _draw_2d(
             edgecolors = "none"
             linewidths = 0
 
-        pc = PolyCollection(
+        pc = mpl_collections.PolyCollection(
             verts,
             facecolors=facecolors,
             edgecolors=edgecolors,
@@ -460,10 +492,6 @@ def _draw_3d(
     show_edges,
 ):
     """Draw mesh in 3D space using mpl_toolkits.mplot3d."""
-    _art3d = importlib.import_module("mpl_toolkits.mplot3d.art3d")
-    Line3DCollection = _art3d.Line3DCollection
-    Poly3DCollection = _art3d.Poly3DCollection
-
     ### Draw cells based on manifold dimension
     if cells_np.shape[0] > 0 and alpha_cells > 0:
         n_manifold_dims = cells_np.shape[1] - 1
@@ -481,7 +509,7 @@ def _draw_3d(
             else:
                 colors = cell_neutral_color
 
-            lc = Line3DCollection(
+            lc = mpl_art3d.Line3DCollection(
                 segments, colors=colors, alpha=alpha_cells, linewidths=2, zorder=1
             )
             ax.add_collection3d(lc)
@@ -508,10 +536,16 @@ def _draw_3d(
                 edgecolors = [(0, 0, 0, alpha_edges)] * len(verts)
                 linewidths = 0.25
             else:
-                edgecolors = "none"
+                ### Per-face transparent RGBA, NOT the string "none":
+                ### Poly3DCollection with shade=True calls _shade_colors on
+                ### edgecolors, which crashes on the empty array that "none"
+                ### resolves to (matplotlib >= 3.7).  A transparent RGBA list
+                ### of the right length renders identically (invisible) and
+                ### threads through the shading code without breaking.
+                edgecolors = [(0, 0, 0, 0)] * len(verts)
                 linewidths = 0
 
-            pc = Poly3DCollection(
+            pc = mpl_art3d.Poly3DCollection(
                 verts,
                 facecolors=facecolors,
                 edgecolors=edgecolors,

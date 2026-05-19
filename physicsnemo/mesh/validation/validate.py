@@ -24,8 +24,12 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 import torch
+from jaxtyping import Int
 
-from physicsnemo.mesh.boundaries import extract_candidate_facets
+from physicsnemo.mesh.boundaries import (
+    categorize_facets_by_count,
+    extract_candidate_facets,
+)
 from physicsnemo.mesh.utilities._duplicate_detection import find_duplicate_pairs
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
@@ -76,6 +80,7 @@ def validate_mesh(
     -------
     Mapping[str, bool | int | torch.Tensor]
         Dictionary with validation results:
+
             - "valid": bool, True if all enabled checks passed
             - "n_degenerate_cells": int, number of degenerate cells found
             - "degenerate_cell_indices": Tensor of indices (if any found)
@@ -238,20 +243,14 @@ def validate_mesh(
     if check_manifoldness:
         if mesh.n_manifold_dims == 2 and mesh.n_spatial_dims >= 2:
             # Check that each edge is shared by at most 2 triangles
-            # Extract all edges (with duplicates)
-            edges_with_dupes, parent_cells = extract_candidate_facets(
+            candidate_edges, _parent_cells = extract_candidate_facets(
                 mesh.cells, manifold_codimension=1
             )
-
-            # Sort edges to canonical form
-            edges_sorted = torch.sort(edges_with_dupes, dim=1).values
-
-            # Find unique edges and their counts
-            unique_edges, inverse_indices, counts = torch.unique(
-                edges_sorted, dim=0, return_inverse=True, return_counts=True
+            unique_edges, _inverse, counts = categorize_facets_by_count(
+                candidate_edges,
+                target_counts="all",
+                index_bound=mesh.n_points,
             )
-
-            # Manifold edges should appear exactly 1 (boundary) or 2 (interior) times
             non_manifold_mask = counts > 2
             n_non_manifold = non_manifold_mask.sum().item()
 
@@ -289,7 +288,9 @@ def validate_mesh(
     return results
 
 
-def check_duplicate_cell_vertices(mesh: "Mesh") -> tuple[int, torch.Tensor]:
+def check_duplicate_cell_vertices(
+    mesh: "Mesh",
+) -> tuple[int, Int[torch.Tensor, " n_invalid"]]:
     """Check for cells with duplicate vertices (degenerate simplices).
 
     A valid n-simplex must have n+1 distinct vertices. Cells with duplicate

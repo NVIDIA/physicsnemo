@@ -28,133 +28,52 @@ Reference: Standard in CFD literature (Barth & Jespersen, AIAA 1989)
 from typing import TYPE_CHECKING
 
 import torch
-
-from physicsnemo.mesh.utilities._tolerances import safe_eps
+from jaxtyping import Float
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
 
-def _solve_batched_lsq_gradients(
-    positions: torch.Tensor,  # shape: (n_entities, n_spatial_dims)
-    values: torch.Tensor,  # shape: (n_entities, ...)
-    adjacency,  # Adjacency object
-    weight_power: float,
-    min_neighbors: int = 0,
+def _to_mesh_gradient_layout(
+    gradients: torch.Tensor,
+    values: torch.Tensor,
 ) -> torch.Tensor:
-    """Core batched LSQ gradient solver (shared by point and cell versions).
-
-    For each entity (point or cell), solves a weighted least-squares problem:
-        min_{∇φ} Σ_neighbors w_i ||∇φ·(x_i - x_0) - (φ_i - φ_0)||²
-
-    Parameters
-    ----------
-    positions : torch.Tensor
-        Entity positions (points or cell centroids)
-    values : torch.Tensor
-        Values at entities (scalars or tensor fields)
-    adjacency
-        Adjacency structure (entity-to-entity neighbors)
-    weight_power : float
-        Exponent for inverse distance weighting
-    min_neighbors : int
-        Minimum neighbors required for gradient computation
-
-    Returns
-    -------
-    torch.Tensor
-        Gradients at entities, shape (n_entities, n_spatial_dims) for scalars,
-        or (n_entities, n_spatial_dims, ...) for tensor fields.
-        Entities with insufficient neighbors have zero gradients.
-    """
-    n_entities = len(positions)
-    n_spatial_dims = positions.shape[1]
-    device = positions.device
-    dtype = values.dtype
-
-    ### Determine output shape
-    is_scalar = values.ndim == 1
-    if is_scalar:
-        gradient_shape = (n_entities, n_spatial_dims)
-    else:
-        gradient_shape = (n_entities, n_spatial_dims) + values.shape[1:]
-
-    gradients = torch.zeros(gradient_shape, dtype=dtype, device=device)
-
-    ### Process each neighbor-count group in parallel
-    from physicsnemo.mesh.calculus._neighborhoods import iter_neighborhood_batches
-
-    for batch in iter_neighborhood_batches(
-        positions, adjacency, min_neighbors=min_neighbors
-    ):
-        entity_indices = batch.entity_indices
-        neighbors_flat = batch.neighbor_indices
-        A = batch.relative_positions  # (n_group, n_neighbors, n_spatial_dims)
-        n_group = len(entity_indices)
-        n_neighbors = batch.n_neighbors
-
-        ### Entities with no neighbors retain their zero-initialized gradient
-        if n_neighbors == 0:
-            continue
-
-        ### Function differences (b vector)
-        b = values[neighbors_flat] - values[entity_indices].unsqueeze(1)
-
-        ### Compute inverse-distance weights
-        distances = torch.linalg.vector_norm(A, dim=-1)  # (n_group, n_neighbors)
-        weights = 1.0 / distances.pow(weight_power).clamp(min=safe_eps(distances.dtype))
-
-        ### Apply sqrt-weights to system
-        sqrt_w = weights.sqrt().unsqueeze(-1)  # (n_group, n_neighbors, 1)
-        A_weighted = sqrt_w * A  # (n_group, n_neighbors, n_spatial_dims)
-
-        ### Solve batched least-squares
-        if is_scalar:
-            b_weighted = sqrt_w.squeeze(-1) * b  # (n_group, n_neighbors)
-            solution = torch.linalg.lstsq(
-                A_weighted, b_weighted.unsqueeze(-1), rcond=None
-            ).solution.squeeze(-1)  # (n_group, n_spatial_dims)
-
-            gradients[entity_indices] = solution
-        else:
-            # Tensor field: flatten extra dims, solve, reshape back
-            b_weighted = sqrt_w * b  # (n_group, n_neighbors, ...)
-            orig_shape = b.shape[2:]
-            b_flat = b_weighted.reshape(n_group, n_neighbors, -1)
-
-            solution = torch.linalg.lstsq(
-                A_weighted, b_flat, rcond=None
-            ).solution  # (n_group, n_spatial_dims, n_components)
-
-            solution_reshaped = solution.reshape(n_group, n_spatial_dims, *orig_shape)
-            # Permute spatial_dims to second position
-            perm = [0] + list(range(2, solution_reshaped.ndim)) + [1]
-            gradients[entity_indices] = solution_reshaped.permute(*perm)
-
-    return gradients
+    """Convert functional layout ``(n, dims, ...)`` to mesh layout ``(n, ..., dims)``."""
+    if values.ndim == 1:
+        return gradients
+    perm = [0] + list(range(2, gradients.ndim)) + [1]
+    return gradients.permute(*perm)
 
 
 def compute_point_gradient_lsq(
     mesh: "Mesh",
-    point_values: torch.Tensor,
+    point_values: Float[torch.Tensor, "n_points ..."],
     weight_power: float = 2.0,
     min_neighbors: int = 0,
-) -> torch.Tensor:
-    """Compute gradient at vertices using weighted least-squares reconstruction.
+) -> Float[torch.Tensor, "n_points n_spatial_dims ..."]:
+    r"""Compute gradient at vertices using weighted least-squares reconstruction.
 
-    For each vertex, solves:
-        min_{∇φ} Σ_neighbors w_i ||∇φ·(x_i - x_0) - (φ_i - φ_0)||²
+    For each vertex with center :math:`x_0` and value :math:`\varphi_0`, and
+    a neighborhood :math:`N = \{x_1, \ldots, x_k\}` with values
+    :math:`\varphi_1, \ldots, \varphi_k`, solves
 
-    Where weights w_i = 1/||x_i - x_0||^α (typically α=2).
+    .. math::
+
+        \min_{\nabla \varphi} \sum_{i = 1}^{k}
+            w_i \, \bigl\| \nabla \varphi \cdot (x_i - x_0)
+                          - (\varphi_i - \varphi_0) \bigr\|^2,
+
+    with weights :math:`w_i = 1 / \|x_i - x_0\|^{\alpha}` (typically
+    :math:`\alpha = 2`).
 
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh
-    point_values : torch.Tensor
-        Values at vertices, shape (n_points,) or (n_points, ...)
+        Simplicial mesh.
+    point_values : Float[torch.Tensor, "n_points ..."]
+        Values at vertices.
     weight_power : float
-        Exponent for inverse distance weighting (default: 2.0)
+        Exponent :math:`\alpha` for inverse-distance weighting (default 2.0).
     min_neighbors : int
         Minimum neighbors required for gradient computation. Points with
         fewer neighbors get zero gradients. The default of 0 means all
@@ -164,65 +83,77 @@ def compute_point_gradient_lsq(
 
     Returns
     -------
-    torch.Tensor
-        Gradients at vertices, shape (n_points, n_spatial_dims) for scalars,
-        or (n_points, n_spatial_dims, ...) for tensor fields
+    Float[torch.Tensor, "n_points n_spatial_dims ..."]
+        Gradients at vertices, shape ``(n_points, n_spatial_dims, ...)``.
 
     Notes
     -----
-    Algorithm:
-        Solve weighted least-squares: (A^T W A) ∇φ = A^T W b
-        where:
-            A = [x₁-x₀, x₂-x₀, ...]^T  (n_neighbors × n_spatial_dims)
-            b = [φ₁-φ₀, φ₂-φ₀, ...]^T  (n_neighbors,)
-            W = diag([w₁, w₂, ...])     (n_neighbors × n_neighbors)
+    Solves the weighted least-squares system
+    :math:`(A^\top W A) \, \nabla \varphi = A^\top W b`, where, with
+    :math:`k` neighbors and :math:`d` spatial dimensions,
 
-    Implementation:
-        Fully vectorized using batched operations. Groups points by neighbor count
-        and processes each group in parallel to handle ragged neighbor structure.
+    .. math::
+
+        A &= [x_1 - x_0, x_2 - x_0, \ldots, x_k - x_0]^\top
+            \quad (k \times d), \\
+        b &= [\varphi_1 - \varphi_0, \varphi_2 - \varphi_0, \ldots,
+              \varphi_k - \varphi_0]^\top
+            \quad (k,), \\
+        W &= \operatorname{diag}(w_1, w_2, \ldots, w_k)
+            \quad (k \times k).
+
+    Here ``k`` is the number of neighbors of the point and ``d`` equals
+    ``n_spatial_dims``. Fully vectorized using batched operations. Points are
+    grouped by neighbor count and processed in parallel to handle the ragged
+    neighbor structure.
     """
     ### Get point-to-point adjacency
     adjacency = mesh.get_point_to_points_adjacency()
 
-    ### Use shared batched LSQ solver
-    return _solve_batched_lsq_gradients(
-        positions=mesh.points,
+    ### Delegate LSQ solve to the functional API using the torch backend.
+    from physicsnemo.nn.functional.derivatives.mesh_lsq_gradient import (
+        mesh_lsq_gradient,
+    )
+
+    gradients = mesh_lsq_gradient(
+        points=mesh.points,
         values=point_values,
-        adjacency=adjacency,
+        neighbor_offsets=adjacency.offsets,
+        neighbor_indices=adjacency.indices,
         weight_power=weight_power,
         min_neighbors=min_neighbors,
+        implementation="torch",
     )
+    return _to_mesh_gradient_layout(gradients, point_values)
 
 
 def compute_cell_gradient_lsq(
     mesh: "Mesh",
-    cell_values: torch.Tensor,
+    cell_values: Float[torch.Tensor, "n_cells ..."],
     weight_power: float = 2.0,
-) -> torch.Tensor:
-    """Compute gradient at cells using weighted least-squares reconstruction.
+) -> Float[torch.Tensor, "n_cells n_spatial_dims ..."]:
+    r"""Compute gradient at cells using weighted least-squares reconstruction.
 
-    Uses cell-to-cell adjacency to build LSQ system around each cell centroid.
+    Uses cell-to-cell adjacency to build a LSQ system around each cell centroid.
 
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh
-    cell_values : torch.Tensor
-        Values at cells, shape (n_cells,) or (n_cells, ...)
+        Simplicial mesh.
+    cell_values : Float[torch.Tensor, "n_cells ..."]
+        Values at cells.
     weight_power : float
-        Exponent for inverse distance weighting (default: 2.0)
+        Exponent for inverse-distance weighting (default 2.0).
 
     Returns
     -------
-    torch.Tensor
-        Gradients at cells, shape (n_cells, n_spatial_dims) for scalars,
-        or (n_cells, n_spatial_dims, ...) for tensor fields
+    Float[torch.Tensor, "n_cells n_spatial_dims ..."]
+        Gradients at cells, shape ``(n_cells, n_spatial_dims, ...)``.
 
     Notes
     -----
-    Implementation:
-        Fully vectorized using batched operations. Groups cells by neighbor count
-        and processes each group in parallel.
+    Fully vectorized using batched operations. Cells are grouped by neighbor
+    count and processed in parallel.
     """
     ### Get cell-to-cell adjacency
     adjacency = mesh.get_cell_to_cells_adjacency(adjacency_codimension=1)
@@ -230,11 +161,18 @@ def compute_cell_gradient_lsq(
     ### Get cell centroids
     cell_centroids = mesh.cell_centroids  # (n_cells, n_spatial_dims)
 
-    ### Use shared batched LSQ solver
-    return _solve_batched_lsq_gradients(
-        positions=cell_centroids,
-        values=cell_values,
-        adjacency=adjacency,
-        weight_power=weight_power,
-        min_neighbors=0,  # Cells may have fewer neighbors than points
+    ### Delegate LSQ solve to the functional API using the torch backend.
+    from physicsnemo.nn.functional.derivatives.mesh_lsq_gradient import (
+        mesh_lsq_gradient,
     )
+
+    gradients = mesh_lsq_gradient(
+        points=cell_centroids,
+        values=cell_values,
+        neighbor_offsets=adjacency.offsets,
+        neighbor_indices=adjacency.indices,
+        weight_power=weight_power,
+        min_neighbors=0,  # Cells may have fewer neighbors than points.
+        implementation="torch",
+    )
+    return _to_mesh_gradient_layout(gradients, cell_values)

@@ -21,6 +21,7 @@ from .module.activations import (
     CappedGELU,
     CappedLeakyReLU,
     Identity,
+    Sin,
     SquarePlus,
     Stan,
     get_activation,

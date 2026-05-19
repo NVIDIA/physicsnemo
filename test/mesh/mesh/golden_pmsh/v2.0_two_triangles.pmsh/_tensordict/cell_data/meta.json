@@ -1,0 +1,1 @@
+{"c_scalar":{"device":"cpu","shape":[2],"dtype":"torch.float32","is_nested":false},"c_vector":{"device":"cpu","shape":[2,3],"dtype":"torch.float32","is_nested":false},"shape":[2],"device":"cpu","_type":"<class 'tensordict._td.TensorDict'>"}

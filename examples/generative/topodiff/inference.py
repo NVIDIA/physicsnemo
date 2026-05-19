@@ -14,20 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import torch
-import torch.nn.functional as F
-from tqdm import trange
-import numpy as np
-import matplotlib.pyplot as plt
-
-
 import hydra
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
 from omegaconf import DictConfig
+from utils import (
+    ClassifierGuidance,
+    DDPMLinearNoiseScheduler,
+    DDPMSolver,
+    load_data,
+    load_data_topodiff,
+)
 
-from physicsnemo.models.topodiff import TopoDiff, Diffusion
-from physicsnemo.models.topodiff import UNetEncoder
+from physicsnemo.diffusion.guidance import DPSScorePredictor
+from physicsnemo.diffusion.samplers import sample
+from physicsnemo.models.topodiff import TopoDiff, UNetEncoder
 from physicsnemo.utils.logging import PythonLogger
-from utils import load_data_topodiff, load_data
 
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
@@ -60,7 +63,9 @@ def main(cfg: DictConfig) -> None:
     classifier.load_state_dict(torch.load(cfg.model_path_classifier))
     classifier.to(device)
 
-    diffusion = Diffusion(n_steps=1000, device=device)
+    n_steps = cfg.diffusion_steps
+    scheduler = DDPMLinearNoiseScheduler(n_steps=n_steps)
+
     batch_size = cfg.batch_size
     data = load_data_topodiff(
         topologies,
@@ -71,59 +76,64 @@ def main(cfg: DictConfig) -> None:
     )
 
     _, cons = next(data)
-
     cons = cons.float().to(device)
 
-    n_steps = 1000
-
-    xt = torch.randn(batch_size, 1, 64, 64).to(device)
-    floating_labels = torch.tensor([1] * batch_size).long().to(device)
-
-    for i in reversed(trange(n_steps)):
+    # Epsilon predictor (TopoDiff model with fixed conditions)
+    def eps_predictor(x, t):
         with torch.no_grad():
-            t = torch.tensor([i] * batch_size, device=device)
-            noisy = diffusion.p_sample(model, xt, t, cons)
+            return model(x, cons, t.long())
 
-        with torch.enable_grad():
-            xt.requires_grad_(True)
-            logits = classifier(xt, time_steps=t)
-            loss = F.cross_entropy(logits, floating_labels)
+    # X0 predictor (convert epsilon -> x0)
+    def x0_predictor(x, t):
+        eps = eps_predictor(x, t)
+        return scheduler.epsilon_to_x0(eps, x, t)
 
-            grad = torch.autograd.grad(loss, xt)[0]
+    # Classifier guidance
+    floating_labels = torch.tensor([1] * batch_size).long().to(device)
+    guidance = ClassifierGuidance(classifier, floating_labels, scale=0.2)
 
-        xt = (
-            1
-            / diffusion.alphas[i].sqrt()
-            * (
-                xt
-                - noisy
-                * (1 - diffusion.alphas[i])
-                / (1 - diffusion.alpha_bars[i]).sqrt()
-            )
+    # DPS guided score predictor (framework component)
+    dps_score = DPSScorePredictor(
+        x0_predictor=x0_predictor,
+        x0_to_score_fn=scheduler.x0_to_score,
+        guidances=guidance,
+    )
+
+    # DDPM solver (no stochastic noise, matching original)
+    solver = DDPMSolver(dps_score, scheduler, stochastic=False)
+
+    # Generate samples
+    xt = torch.randn(batch_size, 1, 64, 64).to(device)
+
+    # Note: the denoiser arg is required by sample() but unused when a custom
+    # Solver is provided — the DDPMSolver uses its own score_predictor internally.
+    with torch.inference_mode(False):
+        xt = sample(
+            denoiser=scheduler.get_denoiser(score_predictor=dps_score),
+            xN=xt,
+            noise_scheduler=scheduler,
+            num_steps=n_steps,
+            solver=solver,
         )
-
-        if i > 0:
-            z = torch.zeros_like(xt).to(device)
-            xt = xt + diffusion.betas[i].sqrt() * (z * 0.8 + 0.2 * grad.float())
 
     result = (xt.cpu().detach().numpy() + 1) * 2
 
     np.save(cfg.generation_path + "results_topology.npy", result)
 
     # plot images for the generated samples
-    fig, axes = plt.subplots(8, 8, figsize=(12, 6), dpi=300)
+    n_samples = result.shape[0]
+    ncols = min(8, n_samples)
+    nrows = min(8, (n_samples + ncols - 1) // ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(12, 6), dpi=300, squeeze=False)
 
-    for i in range(8):
-        for j in range(8):
-            img = result[i * 4 + j][0]
-            axes[i, j].imshow(img, cmap="gray")
-            axes[i, j].set_xticks([])
-            axes[i, j].set_yticks([])
-
-    plt.xticks([])  # Remove x-axis ticks
-    plt.yticks([])  # Remove y-axis ticks
-    plt.gca().xaxis.set_visible(False)  # Optionally hide x-axis
-    plt.gca().yaxis.set_visible(False)  # Optionally hide y-axis
+    for idx in range(min(nrows * ncols, n_samples)):
+        r, c = divmod(idx, ncols)
+        axes[r, c].imshow(result[idx][0], cmap="gray")
+        axes[r, c].set_xticks([])
+        axes[r, c].set_yticks([])
+    for idx in range(n_samples, nrows * ncols):
+        r, c = divmod(idx, ncols)
+        axes[r, c].axis("off")
 
     plt.savefig(
         cfg.generation_path + "grid_topology.png", bbox_inches="tight", pad_inches=0

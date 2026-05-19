@@ -396,6 +396,7 @@ class TestRandomPatching2D:
     # -----------------------------------------------------------------
     # torch.compile tests
     # -----------------------------------------------------------------
+    @pytest.mark.usefixtures("nop_compile")
     def test_apply_torch_compile(self, device):
         """apply() is compatible with torch.compile and does not recompile
         after reset_patch_indices()."""
@@ -733,6 +734,7 @@ class TestGridPatching2D:
     # torch.compile tests
     # -----------------------------------------------------------------
 
+    @pytest.mark.usefixtures("nop_compile")
     def test_apply_torch_compile(self, device):
         """apply() is compatible with torch.compile."""
         torch._dynamo.config.error_on_recompile = True
@@ -757,6 +759,7 @@ class TestGridPatching2D:
         out_compiled_2 = compiled_fn(x)
         torch.testing.assert_close(out_eager, out_compiled_2)
 
+    @pytest.mark.usefixtures("nop_compile")
     def test_fuse_torch_compile(self, device):
         """fuse() is compatible with torch.compile."""
         torch._dynamo.config.error_on_recompile = True

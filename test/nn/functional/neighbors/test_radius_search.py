@@ -365,3 +365,281 @@ def test_radius_search_error_handling(device: str):
             radius=0.2,
             implementation="warp",
         )
+
+
+# ---------------------------------------------------------------------------
+# Batched radius-search tests  (B > 1)
+# ---------------------------------------------------------------------------
+
+
+def _build_batched_problem(device: str, batch_size: int, n_points=40, n_queries=15):
+    """Build small (B, N, 3) / (B, Q, 3) point clouds for batched tests."""
+    torch.manual_seed(0)
+    points = torch.randn(batch_size, n_points, 3, device=device)
+    queries = torch.randn(batch_size, n_queries, 3, device=device)
+    return points, queries
+
+
+def _assert_batched_radius_outputs(
+    batch_size: int,
+    n_points: int,
+    n_queries: int,
+    radius: float,
+    max_points: int | None,
+    return_dists: bool,
+    return_points: bool,
+    results,
+) -> None:
+    """Validate shapes and value bounds for batched radius-search outputs."""
+    if return_points and return_dists:
+        indices, selected_points, distances = results
+    elif return_points:
+        indices, selected_points = results
+        distances = None
+    elif return_dists:
+        indices, distances = results
+        selected_points = None
+    else:
+        indices = results
+        selected_points = None
+        distances = None
+
+    if max_points is None:
+        # Dynamic output: indices (3, total_count) with batch/query/point rows
+        assert indices.ndim == 2
+        assert indices.shape[0] == 3
+        # Batch indices must be in [0, B)
+        assert (indices[0] >= 0).all() and (indices[0] < batch_size).all()
+        # Query indices must be in [0, Q)
+        assert (indices[1] >= 0).all() and (indices[1] < n_queries).all()
+        # Point indices must be in [0, N)
+        assert (indices[2] >= 0).all() and (indices[2] < n_points).all()
+
+        total = indices.shape[1]
+        if selected_points is not None:
+            assert selected_points.shape == (total, 3)
+        if distances is not None:
+            assert distances.shape == (total,)
+            assert (distances >= 0).all()
+            assert (distances <= radius).all()
+    else:
+        assert indices.shape == (batch_size, n_queries, max_points)
+        # Valid indices: 0 (sentinel) or in [0, n_points)
+        valid = (indices == 0) | ((indices >= 0) & (indices < n_points))
+        assert valid.all()
+
+        if selected_points is not None:
+            assert selected_points.shape == (batch_size, n_queries, max_points, 3)
+        if distances is not None:
+            assert distances.shape == (batch_size, n_queries, max_points)
+            assert (distances >= 0).all()
+            assert (distances <= radius).all()
+
+
+# Validate the torch implementation with batched inputs.
+@pytest.mark.parametrize("batch_size", [1, 2, 4])
+@pytest.mark.parametrize("return_dists", [True, False])
+@pytest.mark.parametrize("return_points", [True, False])
+@pytest.mark.parametrize("max_points", [5, None])
+def test_radius_search_batched_torch(
+    device: str,
+    batch_size: int,
+    return_dists: bool,
+    return_points: bool,
+    max_points: int | None,
+):
+    n_points, n_queries = 40, 15
+    points, queries = _build_batched_problem(device, batch_size, n_points, n_queries)
+    radius = 1.5
+    results = radius_search(
+        points=points,
+        queries=queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=return_dists,
+        return_points=return_points,
+        implementation="torch",
+    )
+    _assert_batched_radius_outputs(
+        batch_size,
+        n_points,
+        n_queries,
+        radius,
+        max_points,
+        return_dists,
+        return_points,
+        results,
+    )
+
+
+# Validate the warp implementation with batched inputs.
+@requires_module("warp")
+@pytest.mark.parametrize("batch_size", [1, 2, 4])
+@pytest.mark.parametrize("return_dists", [True, False])
+@pytest.mark.parametrize("return_points", [True, False])
+@pytest.mark.parametrize("max_points", [5, None])
+def test_radius_search_batched_warp(
+    device: str,
+    batch_size: int,
+    return_dists: bool,
+    return_points: bool,
+    max_points: int | None,
+):
+    n_points, n_queries = 40, 15
+    points, queries = _build_batched_problem(device, batch_size, n_points, n_queries)
+    radius = 1.5
+    results = radius_search(
+        points=points,
+        queries=queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=return_dists,
+        return_points=return_points,
+        implementation="warp",
+    )
+    _assert_batched_radius_outputs(
+        batch_size,
+        n_points,
+        n_queries,
+        radius,
+        max_points,
+        return_dists,
+        return_points,
+        results,
+    )
+
+
+# Verify backward parity between warp and torch for batched inputs.
+# Uses a small radius (0.5) so that max_points=8 does not truncate results,
+# ensuring both backends select the same neighbors for deterministic gradient comparison.
+@requires_module("warp")
+@pytest.mark.parametrize("max_points", [8, None])
+def test_radius_search_batched_backward_parity(device: str, max_points: int | None):
+    torch.manual_seed(42)
+    B, N, Q = 2, 88, 57
+    points = torch.randn(B, N, 3, device=device, requires_grad=True)
+    queries = torch.randn(B, Q, 3, device=device, requires_grad=True)
+
+    grads = {}
+    for implementation in ("warp", "torch"):
+        pts = points.clone().detach().requires_grad_(True)
+        qrs = queries.clone().detach().requires_grad_(True)
+        _, out_points = radius_search(
+            pts,
+            qrs,
+            radius=0.5,
+            max_points=max_points,
+            return_dists=False,
+            return_points=True,
+            implementation=implementation,
+        )
+        out_points.sum().backward()
+        grads[implementation] = (
+            pts.grad.detach().clone() if pts.grad is not None else None,
+            qrs.grad.detach().clone() if qrs.grad is not None else None,
+        )
+
+    pts_grad_warp, _ = grads["warp"]
+    pts_grad_torch, _ = grads["torch"]
+    assert pts_grad_warp is not None
+    assert pts_grad_torch is not None
+    RadiusSearch.compare_backward(pts_grad_warp, pts_grad_torch)
+
+
+# Verify 2D/3D input equivalence: unbatched result == batched[0] result.
+@pytest.mark.parametrize("max_points", [8, None])
+def test_radius_search_batched_2d_3d_equivalence(device: str, max_points: int | None):
+    torch.manual_seed(7)
+    pts_2d = torch.randn(40, 3, device=device)
+    qs_2d = torch.randn(15, 3, device=device)
+    radius = 1.5
+
+    result_2d = radius_search(
+        pts_2d,
+        qs_2d,
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+        implementation="torch",
+    )
+    result_3d = radius_search(
+        pts_2d.unsqueeze(0),
+        qs_2d.unsqueeze(0),
+        radius=radius,
+        max_points=max_points,
+        return_dists=True,
+        return_points=True,
+        implementation="torch",
+    )
+
+    if max_points is not None:
+        idx_2d, pts_out_2d, dists_2d = result_2d
+        idx_3d, pts_out_3d, dists_3d = result_3d
+        torch.testing.assert_close(idx_2d, idx_3d[0])
+        torch.testing.assert_close(pts_out_2d, pts_out_3d[0])
+        torch.testing.assert_close(dists_2d, dists_3d[0])
+    else:
+        idx_2d, pts_out_2d, dists_2d = result_2d
+        idx_3d, pts_out_3d, dists_3d = result_3d
+        # For dynamic output, 3D adds a batch-index row; strip it
+        torch.testing.assert_close(idx_2d, idx_3d[1:])
+        torch.testing.assert_close(pts_out_2d, pts_out_3d)
+        torch.testing.assert_close(dists_2d, dists_3d)
+
+
+# Verify that 4D+ inputs are rejected (no arbitrary batch dims).
+def test_radius_search_batched_rejects_4d(device: str):
+    pts_4d = torch.randn(2, 3, 10, 3, device=device)
+    qs_4d = torch.randn(2, 3, 5, 3, device=device)
+    with pytest.raises(ValueError, match="2D.*3D"):
+        radius_search(
+            pts_4d,
+            qs_4d,
+            radius=1.0,
+            max_points=5,
+            implementation="torch",
+        )
+
+
+# Validate batched torch.compile with deterministic (max_points) path.
+@requires_module("warp")
+def test_radius_search_batched_torch_compile(device: str):
+    if "cuda" in device:
+        pytest.skip("Skipping radius search torch.compile on CUDA")
+    if not hasattr(torch, "compile"):
+        pytest.skip("torch.compile not available in this version of PyTorch")
+
+    B = 2
+    points = torch.randn(B, 20, 3, device=device)
+    queries = torch.randn(B, 8, 3, device=device)
+
+    def search_fn(points: torch.Tensor, queries: torch.Tensor):
+        return radius_search(
+            points,
+            queries,
+            radius=1.5,
+            max_points=8,
+            return_dists=True,
+            return_points=True,
+            implementation="warp",
+        )
+
+    eager = search_fn(points, queries)
+    compiled = torch.compile(search_fn, fullgraph=True)(points, queries)
+    for eager_t, compiled_t in zip(eager, compiled):
+        torch.testing.assert_close(eager_t, compiled_t, atol=1e-6, rtol=1e-6)
+
+
+# Validate batched opcheck for custom-op schemas.
+@requires_module("warp")
+def test_radius_search_batched_opcheck(device: str):
+    if device == "cpu":
+        pytest.skip("CUDA only")
+    B = 2
+    points = torch.randn(B, 20, 3, device=device)
+    queries = torch.randn(B, 8, 3, device=device)
+    torch.library.opcheck(
+        radius_search_warp,
+        args=(points, queries, 1.5, 8, True, True),
+    )

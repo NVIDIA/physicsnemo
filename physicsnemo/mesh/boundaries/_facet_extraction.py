@@ -30,15 +30,17 @@ The pure PyTorch implementation here is highly optimized and performs excellentl
 from typing import TYPE_CHECKING, Literal
 
 import torch
+from jaxtyping import Float, Int
 from tensordict import TensorDict
 
+from physicsnemo.mesh.utilities._index_tuple_ops import unique_index_tuples
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
 
-def _generate_combination_indices(n: int, k: int) -> torch.Tensor:
+def _generate_combination_indices(n: int, k: int) -> Int[torch.Tensor, "n_choose_k k"]:
     """Generate all combinations of k elements from n elements.
 
     This is a vectorized implementation similar to itertools.combinations(range(n), k).
@@ -75,9 +77,14 @@ def _generate_combination_indices(n: int, k: int) -> torch.Tensor:
 
 
 def categorize_facets_by_count(
-    candidate_facets: torch.Tensor,  # shape: (n_candidate_facets, n_vertices_per_facet)
+    candidate_facets: Int[torch.Tensor, "n_candidates n_vertices_per_facet"],
     target_counts: list[int] | Literal["boundary", "shared", "interior", "all"] = "all",
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    index_bound: int | None = None,
+) -> tuple[
+    Int[torch.Tensor, "n_unique n_vertices_per_facet"],
+    Int[torch.Tensor, " n_candidates"],
+    Int[torch.Tensor, " n_unique"],
+]:
     """Deduplicate facets and optionally filter by occurrence count.
 
     This utility consolidates the common pattern of deduplicating facets using
@@ -89,16 +96,22 @@ def categorize_facets_by_count(
         All candidate facets (may contain duplicates), already sorted
     target_counts : list[int] | {"boundary", "shared", "interior", "all"}, optional
         How to filter the results:
+
         - "all": Return all unique facets with their counts (no filtering)
         - "boundary": Return facets appearing exactly once (counts == 1)
         - "interior": Return facets appearing exactly twice (counts == 2)
         - "shared": Return facets appearing 2+ times (counts >= 2)
         - list[int]: Return facets with counts in the specified list
+    index_bound : int, optional
+        Strict upper bound for vertex indices in ``candidate_facets``. Passing
+        this avoids a GPU synchronization and enables fast packed-int64
+        deduplication.
 
     Returns
     -------
     tuple[torch.Tensor, torch.Tensor, torch.Tensor]
         Tuple of (unique_facets, inverse_indices, counts):
+
         - unique_facets: Deduplicated facets, possibly filtered by count
         - inverse_indices: Mapping from candidate facets to unique facet indices
         - counts: How many times each unique facet appears
@@ -116,10 +129,15 @@ def categorize_facets_by_count(
     ... )
     >>> assert boundary_facets.shape[0] == 4  # 4 boundary edges
     """
+    if index_bound is None:
+        index_bound = (
+            int(candidate_facets.max().item()) + 1 if len(candidate_facets) > 0 else 1
+        )
+
     ### Deduplicate and count occurrences
-    unique_facets, inverse_indices, counts = torch.unique(
+    unique_facets, inverse_indices, counts = unique_index_tuples(
         candidate_facets,
-        dim=0,
+        index_bound=index_bound,
         return_inverse=True,
         return_counts=True,
     )
@@ -174,9 +192,12 @@ def categorize_facets_by_count(
 
 
 def extract_candidate_facets(
-    cells: torch.Tensor,  # shape: (n_cells, n_vertices_per_cell)
+    cells: Int[torch.Tensor, "n_cells n_vertices_per_cell"],
     manifold_codimension: int = 1,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[
+    Int[torch.Tensor, "n_candidates n_vertices_per_facet"],
+    Int[torch.Tensor, " n_candidates"],
+]:
     """Extract all candidate k-codimension simplices from n-simplicial mesh.
 
     Each n-simplex generates C(n+1, n+1-k) candidate sub-simplices, where k is the
@@ -191,6 +212,7 @@ def extract_candidate_facets(
         Parent mesh connectivity, shape (n_cells, n_vertices_per_cell)
     manifold_codimension : int, optional
         Codimension of the extracted mesh relative to parent.
+
         - 1: Extract (n-1)-facets (default, e.g., triangular faces from tets)
         - 2: Extract (n-2)-facets (e.g., edges from tets, vertices from triangles)
         - k: Extract (n-k)-facets
@@ -275,10 +297,10 @@ def extract_candidate_facets(
 
 def _aggregate_tensor_data(
     parent_data: torch.Tensor,  # shape: (n_parent_cells, *data_shape)
-    parent_cell_indices: torch.Tensor,  # shape: (n_candidate_facets,)
-    inverse_indices: torch.Tensor,  # shape: (n_candidate_facets,)
+    parent_cell_indices: Int[torch.Tensor, " n_candidates"],
+    inverse_indices: Int[torch.Tensor, " n_candidates"],
     n_unique_facets: int,
-    aggregation_weights: torch.Tensor | None,
+    aggregation_weights: Float[torch.Tensor, " n_candidates"] | None,
 ) -> torch.Tensor:
     """Aggregate tensor data from parent cells to unique facets.
 
@@ -317,11 +339,16 @@ def _aggregate_tensor_data(
 
 
 def deduplicate_and_aggregate_facets(
-    candidate_facets: torch.Tensor,  # shape: (n_candidate_facets, n_vertices_per_facet)
-    parent_cell_indices: torch.Tensor,  # shape: (n_candidate_facets,)
-    parent_cell_data: TensorDict,  # shape: (n_parent_cells, *data_shape)
-    aggregation_weights: torch.Tensor | None = None,  # shape: (n_candidate_facets,)
-) -> tuple[torch.Tensor, TensorDict, torch.Tensor]:
+    candidate_facets: Int[torch.Tensor, "n_candidates n_vertices_per_facet"],
+    parent_cell_indices: Int[torch.Tensor, " n_candidates"],
+    parent_cell_data: TensorDict,
+    aggregation_weights: Float[torch.Tensor, " n_candidates"] | None = None,
+    index_bound: int | None = None,
+) -> tuple[
+    Int[torch.Tensor, "n_unique n_vertices_per_facet"],
+    TensorDict,
+    Int[torch.Tensor, " n_candidates"],
+]:
     """Deduplicate facets and aggregate data from parent cells.
 
     Finds unique facets (topologically, based on vertex indices) and aggregates
@@ -337,6 +364,8 @@ def deduplicate_and_aggregate_facets(
         TensorDict with data to aggregate from parent cells
     aggregation_weights : torch.Tensor | None, optional
         Weights for aggregating data (optional, defaults to uniform)
+    index_bound : int, optional
+        Strict upper bound for vertex indices in ``candidate_facets``.
 
     Returns
     -------
@@ -347,10 +376,15 @@ def deduplicate_and_aggregate_facets(
     facet_to_parents : torch.Tensor
         Inverse mapping from candidate facets to unique facets, shape (n_candidate_facets,)
     """
+    if index_bound is None:
+        index_bound = (
+            int(candidate_facets.max().item()) + 1 if len(candidate_facets) > 0 else 1
+        )
+
     ### Find unique facets and inverse mapping
-    unique_facets, inverse_indices = torch.unique(
+    unique_facets, inverse_indices = unique_index_tuples(
         candidate_facets,
-        dim=0,
+        index_bound=index_bound,
         return_inverse=True,
     )
 
@@ -372,12 +406,11 @@ def deduplicate_and_aggregate_facets(
 
 def compute_aggregation_weights(
     aggregation_strategy: Literal["mean", "area_weighted", "inverse_distance"],
-    parent_cell_areas: torch.Tensor | None,  # shape: (n_parent_cells,)
-    parent_cell_centroids: torch.Tensor
-    | None,  # shape: (n_parent_cells, n_spatial_dims)
-    facet_centroids: torch.Tensor | None,  # shape: (n_candidate_facets, n_spatial_dims)
-    parent_cell_indices: torch.Tensor,  # shape: (n_candidate_facets,)
-) -> torch.Tensor:
+    parent_cell_areas: Float[torch.Tensor, " n_cells"] | None,
+    parent_cell_centroids: Float[torch.Tensor, "n_cells n_spatial_dims"] | None,
+    facet_centroids: Float[torch.Tensor, "n_candidates n_spatial_dims"] | None,
+    parent_cell_indices: Int[torch.Tensor, " n_candidates"],
+) -> Float[torch.Tensor, " n_candidates"]:
     """Compute weights for aggregating parent cell data to facets.
 
     Parameters
@@ -435,7 +468,7 @@ def extract_facet_mesh_data(
     data_source: Literal["points", "cells"] = "cells",
     data_aggregation: Literal["mean", "area_weighted", "inverse_distance"] = "mean",
     target_counts: list[int] | Literal["boundary", "shared", "interior", "all"] = "all",
-) -> tuple[torch.Tensor, TensorDict]:
+) -> tuple[Int[torch.Tensor, "n_unique n_vertices_per_facet"], TensorDict]:
     """Extract facet mesh data from parent mesh.
 
     Main entry point that orchestrates facet extraction, deduplication, and data
@@ -487,15 +520,16 @@ def extract_facet_mesh_data(
 
     ### Deduplicate, optionally filtering by occurrence count
     if target_counts == "all":
-        unique_facets, inverse_indices = torch.unique(
+        unique_facets, inverse_indices = unique_index_tuples(
             candidate_facets,
-            dim=0,
+            index_bound=parent_mesh.n_points,
             return_inverse=True,
         )
     else:
         unique_facets, inverse_indices, _ = categorize_facets_by_count(
             candidate_facets,
             target_counts=target_counts,
+            index_bound=parent_mesh.n_points,
         )
         # Discard candidates that were filtered out (inverse == -1)
         keep_mask = inverse_indices >= 0
@@ -570,8 +604,8 @@ def extract_facet_mesh_data(
 
 def _aggregate_point_data_to_facets(
     point_data: TensorDict,
-    candidate_facets: torch.Tensor,
-    inverse_indices: torch.Tensor,
+    candidate_facets: Int[torch.Tensor, "n_candidates n_vertices_per_facet"],
+    inverse_indices: Int[torch.Tensor, " n_candidates"],
     n_unique_facets: int,
 ) -> TensorDict:
     """Aggregate point data to facets by averaging over facet vertices.

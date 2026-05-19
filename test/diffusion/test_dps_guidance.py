@@ -353,7 +353,6 @@ class TestDataConsistencyDPSGuidanceConstructor:
         )
         assert g.std_y == pytest.approx(0.5)
         assert g.gamma == pytest.approx(2.0)
-        assert g.norm == 1
         assert g.retain_graph is True
         assert g.create_graph is True
 
@@ -395,7 +394,6 @@ class TestModelConsistencyDPSGuidanceConstructor:
         )
         assert g.std_y == pytest.approx(0.5)
         assert g.gamma == pytest.approx(2.0)
-        assert g.norm == 1
         assert g.retain_graph is True
         assert g.create_graph is True
 
@@ -606,6 +604,7 @@ class TestGradientFlow:
     SPATIAL_CONFIGS,
     ids=[c[0] for c in SPATIAL_CONFIGS],
 )
+@pytest.mark.usefixtures("nop_compile")
 class TestCompileSingleGuidance:
     """torch.compile tests for DPSScorePredictor with single guidance."""
 
@@ -653,6 +652,7 @@ class TestCompileSingleGuidance:
     SPATIAL_CONFIGS,
     ids=[c[0] for c in SPATIAL_CONFIGS],
 )
+@pytest.mark.usefixtures("nop_compile")
 class TestCompileMultiGuidance:
     """torch.compile tests for DPSScorePredictor with multiple guidances."""
 

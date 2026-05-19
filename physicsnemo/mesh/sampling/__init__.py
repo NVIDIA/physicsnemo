@@ -30,5 +30,6 @@ from physicsnemo.mesh.sampling.sample_data import (
     find_all_containing_cells,
     find_containing_cells,
     find_nearest_cells,
+    match_points,
     sample_data_at_points,
 )

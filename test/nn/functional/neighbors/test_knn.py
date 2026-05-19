@@ -75,12 +75,53 @@ def test_knn_torch(device: str, k: int, dtype: torch.dtype):
 def test_knn_cuml(device: str, k: int):
     if "cuda" not in device:
         pytest.skip("cuml backend is CUDA-only")
-    if not check_version_spec("cuml", "24.0.0", hard_fail=False):
+    if not check_version_spec("cuml", "26.2.0", hard_fail=False):
         pytest.skip("cuml not available")
 
     points, queries = _build_problem(device, torch.float32)
     indices, distances = knn(points, queries, k=k, implementation="cuml")
     _assert_knn_outputs(points, queries, indices, distances, k)
+
+
+# Verify cuML kNN respects non-default CUDA stream synchronization.
+def test_knn_cuml_non_default_cuda_stream(device: str):
+    if "cuda" not in device:
+        pytest.skip("cuml backend is CUDA-only")
+    if not check_version_spec("cuml", "24.0.0", hard_fail=False):
+        pytest.skip("cuml not available")
+
+    k = 5
+    cuda_device = torch.device(device)
+    caller_stream = torch.cuda.current_stream(cuda_device)
+    knn_stream = torch.cuda.Stream(device=cuda_device)
+
+    # Baseline: run cuML on the default stream so we have a reference from
+    # the same backend (any drift in the stream run is a real signal).
+    points_baseline, queries_baseline = _build_problem(device, torch.float32)
+    indices_baseline, distances_baseline = knn(
+        points_baseline, queries_baseline, k=k, implementation="cuml"
+    )
+    torch.cuda.synchronize(cuda_device)
+
+    # Stall knn_stream BEFORE creating the inputs so the input kernels are
+    # still pending when cuML is enqueued. If cuML/cuPy do not honor DLPack
+    # stream synchronization, cuML will read uninitialized memory and produce
+    # visibly wrong output. ``torch.cuda._sleep`` only blocks the current
+    # stream, so the CPU continues to enqueue normally.
+    with torch.cuda.stream(knn_stream):
+        torch.cuda._sleep(int(1e8))  # ~100 ms hazard window on knn_stream
+        points, queries = _build_problem(device, torch.float32)
+        indices, distances = knn(points, queries, k=k, implementation="cuml")
+        stream_indices = indices.clone()
+        stream_distances = distances.clone()
+
+    caller_stream.wait_stream(knn_stream)
+
+    _assert_knn_outputs(points, queries, stream_indices, stream_distances, k)
+    KNN.compare_forward(
+        (stream_indices, stream_distances),
+        (indices_baseline, distances_baseline),
+    )
 
 
 # Validate the SciPy implementation when available on CPU.
@@ -115,7 +156,7 @@ def test_knn_backend_forward_parity(device: str):
     k = 5
 
     if "cuda" in device:
-        if not check_version_spec("cuml", "24.0.0", hard_fail=False):
+        if not check_version_spec("cuml", "26.2.0", hard_fail=False):
             pytest.skip("cuml not available")
         output_a = knn(points, queries, k, implementation="cuml")
     else:
@@ -148,7 +189,7 @@ def test_knn_torch_compile_no_graph_break(device: str):
     k = 5
 
     implementation = (
-        None if check_version_spec("cuml", "24.0.0", hard_fail=False) else "torch"
+        None if check_version_spec("cuml", "26.2.0", hard_fail=False) else "torch"
     )
 
     def search_fn(points: torch.Tensor, queries: torch.Tensor):
@@ -167,7 +208,7 @@ def test_knn_opcheck(device: str):
     k = 5
 
     if "cuda" in device:
-        if not check_version_spec("cuml", "24.0.0", hard_fail=False):
+        if not check_version_spec("cuml", "26.2.0", hard_fail=False):
             pytest.skip("cuml not available")
         op = knn_cuml
     else:
@@ -192,7 +233,7 @@ def test_knn_error_handling(device: str):
         )
 
     # Accelerated implementation/device mismatch checks.
-    if "cpu" in device and check_version_spec("cuml", "24.0.0", hard_fail=False):
+    if "cpu" in device and check_version_spec("cuml", "26.2.0", hard_fail=False):
         with pytest.raises(ValueError, match="does not support CPU"):
             knn(points, queries, k=3, implementation="cuml")
     if "cuda" in device and check_version_spec("scipy", "1.7.0", hard_fail=False):

@@ -39,6 +39,7 @@ import torch.nn.functional as F
 from jaxtyping import Float, Int
 
 from physicsnemo.mesh.mesh import Mesh
+from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.nn.functional.neighbors import knn
 
 
@@ -52,9 +53,9 @@ class CellPartition(NamedTuple):
     cluster_areas : Float[torch.Tensor, " n_seeds"]
         Total cell area assigned to each seed.
         Sums to the total surface area of the original mesh by construction.
-    cluster_normals : Float[torch.Tensor, "n_seeds n_dims"]
+    cluster_normals : Float[torch.Tensor, "n_seeds n_spatial_dims"]
         Area-weighted average unit normal per cluster.
-    cluster_centroids : Float[torch.Tensor, "n_seeds n_dims"]
+    cluster_centroids : Float[torch.Tensor, "n_seeds n_spatial_dims"]
         Area-weighted centroid per cluster.
         For a well-centered seed this is close to the seed itself; the
         difference measures how far the seed is from its Voronoi centroid
@@ -63,13 +64,13 @@ class CellPartition(NamedTuple):
 
     assignments: Int[torch.Tensor, " n_cells"]
     cluster_areas: Float[torch.Tensor, " n_seeds"]
-    cluster_normals: Float[torch.Tensor, "n_seeds n_dims"]
-    cluster_centroids: Float[torch.Tensor, "n_seeds n_dims"]
+    cluster_normals: Float[torch.Tensor, "n_seeds n_spatial_dims"]
+    cluster_centroids: Float[torch.Tensor, "n_seeds n_spatial_dims"]
 
 
 def partition_cells(
     mesh: Mesh,
-    seeds: Float[torch.Tensor, "n_seeds n_dims"],
+    seeds: Float[torch.Tensor, "n_seeds n_spatial_dims"],
 ) -> CellPartition:
     """Partition mesh cells into Voronoi regions around seed points.
 
@@ -92,8 +93,9 @@ def partition_cells(
         Source mesh whose cells will be partitioned.  For codimension-1
         meshes (surfaces), cluster normals are computed from cell normals.
         For other meshes, cluster normals are zero vectors.
-    seeds : Float[torch.Tensor, "n_seeds n_dims"]
-        Seed point positions.  ``n_dims`` must match ``mesh.n_spatial_dims``.
+    seeds : Float[torch.Tensor, "n_seeds n_spatial_dims"]
+        Seed point positions.  ``n_spatial_dims`` must match
+        ``mesh.n_spatial_dims``.
 
     Returns
     -------
@@ -162,39 +164,35 @@ def partition_cells(
     assignments = assignments.squeeze(1)
 
     ### Accumulate areas per cluster
-    cluster_areas = torch.zeros(n_seeds, dtype=dtype, device=device)
-    cluster_areas.scatter_add_(0, assignments, cell_areas)
+    cluster_areas = scatter_aggregate(
+        cell_areas,
+        assignments,
+        n_seeds,
+        aggregation="sum",
+    )
 
     ### Accumulate area-weighted normals, then normalize to unit length
-    area_weights = cell_areas.unsqueeze(-1)  # (M, 1)
-
     if has_normals:
-        cell_normals = mesh.cell_normals  # (M, D)
-        weighted_normals = cell_normals * area_weights  # (M, D)
-
-        cluster_normals = torch.zeros(n_seeds, n_dims, dtype=dtype, device=device)
-        cluster_normals.scatter_add_(
-            0,
-            assignments.unsqueeze(-1).expand_as(weighted_normals),
-            weighted_normals,
+        cluster_normals = scatter_aggregate(
+            mesh.cell_normals,
+            assignments,
+            n_seeds,
+            weights=cell_areas,
+            aggregation="sum",
         )
         cluster_normals = F.normalize(cluster_normals, dim=-1)
     else:
         cluster_normals = torch.zeros(n_seeds, n_dims, dtype=dtype, device=device)
 
-    ### Accumulate area-weighted centroids, then divide by cluster area
-    weighted_centroids = cell_centroids * area_weights  # (M, D)
-
-    cluster_centroids = torch.zeros(n_seeds, n_dims, dtype=dtype, device=device)
-    cluster_centroids.scatter_add_(
-        0,
-        assignments.unsqueeze(-1).expand_as(weighted_centroids),
-        weighted_centroids,
+    ### Accumulate area-weighted centroids (weighted mean, with seed fallback)
+    cluster_centroids = scatter_aggregate(
+        cell_centroids,
+        assignments,
+        n_seeds,
+        weights=cell_areas,
+        aggregation="mean",
     )
-    # For empty clusters (area == 0), fall back to the seed position itself
-    nonempty = cluster_areas > 0
-    cluster_centroids[nonempty] /= cluster_areas[nonempty].unsqueeze(-1)
-    cluster_centroids[~nonempty] = seeds[~nonempty]
+    cluster_centroids[cluster_areas == 0] = seeds[cluster_areas == 0]
 
     return CellPartition(
         assignments=assignments,

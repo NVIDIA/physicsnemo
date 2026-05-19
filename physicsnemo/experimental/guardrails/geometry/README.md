@@ -49,7 +49,7 @@ to capture non-Gaussian patterns in your geometry distribution.
 ```python
 import pyvista as pv
 from physicsnemo.mesh.io import from_pyvista
-from physicsnemo.experimental.guardrails import GeometryGuardrail
+from physicsnemo.experimental.guardrails.geometry import GeometryGuardrail
 
 # Load or create training meshes
 train_meshes = [
@@ -83,7 +83,7 @@ automatic parallel processing:
 
 ```python
 from pathlib import Path
-from physicsnemo.experimental.guardrails import GeometryGuardrail
+from physicsnemo.experimental.guardrails.geometry import GeometryGuardrail
 
 # Fit from directory of STL files
 guardrail = GeometryGuardrail(
@@ -126,7 +126,7 @@ guardrail.fit_from_dir(
 
 ```python
 from pathlib import Path
-from physicsnemo.experimental.guardrails import GeometryGuardrail
+from physicsnemo.experimental.guardrails.geometry import GeometryGuardrail
 
 # Save fitted guardrail
 guardrail.save(Path("guardrail.npz"))
@@ -141,7 +141,7 @@ results = loaded_guardrail.query(test_meshes)
 Both GMM and PCE methods support GPU acceleration via PyTorch:
 
 ```python
-from physicsnemo.experimental.guardrails import GeometryGuardrail
+from physicsnemo.experimental.guardrails.geometry import GeometryGuardrail
 
 # Create guardrail with GPU support (requires PyTorch and CUDA)
 guardrail_gpu = GeometryGuardrail(

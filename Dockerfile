@@ -207,7 +207,7 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ "$NATTEN_AMD64_WHEEL" != "unkn
 RUN uv pip install --no-build-isolation "torch_sparse"
 
 # All pyproject extras (no dev); installs physicsnemo non-editable
-RUN cd /physicsnemo && uv pip install ".[cu13,utils-extras,mesh-extras,datapipes-extras,gnns]"
+RUN cd /physicsnemo && uv pip install ".[cu13,utils-extras,mesh-extras,datapipes-extras,gnns,sym]"
 
 # Cleanup builder stage
 RUN rm -rf /physicsnemo/
@@ -239,7 +239,7 @@ RUN uv pip install "tensorly>=0.8.1" "tensorly-torch>=0.4.0" "torchinfo>=1.8" "w
 
 # Other CI-only specs (moto, scikit-image, etc.)
 RUN uv pip install "moto[s3]>=5.0.28"
-RUN uv pip install "numpy-stl" "scikit-image>=0.24.0" "sparse-dot-mkl" "shapely"
+RUN uv pip install "numpy-stl" "scikit-image>=0.24.0" "shapely"
 RUN uv pip install "multi-storage-client[boto3]>=0.33.0"
 
 # E2Grid install

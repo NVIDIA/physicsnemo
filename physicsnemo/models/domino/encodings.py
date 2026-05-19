@@ -159,10 +159,11 @@ class LocalGeometryEncoding(Module):
         for j in range(encoding_g.shape[1]):
             geo_encoding = rearrange(encoding_g[:, j], "b nx ny nz -> b 1 (nx ny nz)")
 
-            geo_encoding_sampled = torch.index_select(
-                geo_encoding, 2, mapping.flatten()
-            )
-            geo_encoding_sampled = torch.reshape(geo_encoding_sampled, mask.shape)
+            sampled = []
+            for b in range(batch_size):
+                s = torch.index_select(geo_encoding[b], 1, mapping[b].flatten())
+                sampled.append(s.reshape(1, *mask.shape[1:]))
+            geo_encoding_sampled = torch.cat(sampled, dim=0)
             geo_encoding_sampled = geo_encoding_sampled * mask
 
             encoding_g_inner.append(geo_encoding_sampled)

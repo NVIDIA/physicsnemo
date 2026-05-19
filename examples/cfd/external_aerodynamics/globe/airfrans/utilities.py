@@ -14,13 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Training utilities for the GLOBE AirFRANS example.
+"""MLflow and hyperparameter logging utilities for the GLOBE AirFRANS example."""
 
-Contains helpers for hyperparameter logging and MLflow metric sanitization.
-"""
-
-import inspect
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -28,30 +23,22 @@ import numpy as np
 import torch
 import yaml
 from mlflow.tracking.fluent import active_run, log_params
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 from physicsnemo.utils.logging import PythonLogger
 
 logger = PythonLogger("globe.airfrans.utilities")
 
-### [torch.compile helpers] ###############################################
-
-
-def disable_autotune_printing() -> None:
-    """Silence the verbose command-line output of ``torch.compile(..., mode="max-autotune")``.
-
-    Uses private ``torch._inductor`` APIs that may change across PyTorch
-    versions, so failures are silently ignored.
-    """
-    try:
-        from torch._inductor import config, select_algorithm
-
-        config.max_autotune_report_choices_stats = False
-        select_algorithm.PRINT_AUTOTUNE = False  # ty: ignore[invalid-assignment]
-    except (ImportError, AttributeError):
-        pass
-
-
 ### [MLflow helpers] ######################################################
+
+
+resilient = retry(
+    stop=stop_after_attempt(2),
+    wait=wait_fixed(2),
+    retry_error_callback=lambda rs: logger.warning(
+        f"{rs.fn.__name__}() failed after {rs.attempt_number} attempts, skipping."
+    ),
+)
 
 
 def sanitize_metric_name(name: str) -> str:
@@ -137,14 +124,12 @@ def log_hyperparameters(
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    constructor_params: list[str] = list(
-        inspect.signature(type(model).__init__).parameters.keys()
-    )[1:]  # Skip 'self'
-
+    ### Use the canonical constructor args captured by Module.__new__,
+    ### which is the same source-of-truth that Module.save() serializes.
+    ### This avoids the fragile pattern of checking hasattr(model, param),
+    ### which silently drops any constructor arg not stored as self.xxx.
     model_hyperparameters = {
-        param: to_serializable(getattr(model, param))
-        for param in constructor_params
-        if hasattr(model, param)
+        k: to_serializable(v) for k, v in model._args["__args__"].items()
     }
     other_hyperparameters = {
         k: to_serializable(v) for k, v in other_hyperparameters.items()
@@ -172,10 +157,3 @@ def log_hyperparameters(
                 if len(str(v)) <= _MLFLOW_MAX_PARAM_LENGTH
             }
         )
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    from physicsnemo.core import get_physicsnemo_pkg_info
-
-    logger.info(str(get_physicsnemo_pkg_info()))

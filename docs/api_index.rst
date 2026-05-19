@@ -22,4 +22,5 @@ API Reference
    api/physicsnemo.metrics.rst
    api/physicsnemo.nn.rst
    api/physicsnemo.optim.rst
+   api/physicsnemo.sym.rst
    api/physicsnemo.utils.rst

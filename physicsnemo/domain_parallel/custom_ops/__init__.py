@@ -20,5 +20,5 @@ from physicsnemo.core.version_check import check_version_spec
 ST_AVAILABLE = check_version_spec("torch", "2.6.0a0", hard_fail=False)
 
 if ST_AVAILABLE:
+    from . import _tensor_ops  # noqa: F401  # registers unbind handlers
     from ._reductions import mean_wrapper, sum_wrapper
-    from ._tensor_ops import unbind_rules
