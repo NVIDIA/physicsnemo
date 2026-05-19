@@ -1,0 +1,29 @@
+# =============================================================================
+# *** PLACEHOLDER -- NOT A REAL LOCK FILE ***
+# =============================================================================
+#
+# This file is intentionally empty of constraints.  It exists so that
+# setup-uv-env's `--constraint .github/ci-requirements.lock` flag has a valid
+# file to point at, but it pins NOTHING and therefore does NOT yet provide the
+# testmon-env-stability guarantee it was designed for.
+#
+# To regenerate this file with the real pinned closure of
+# .github/ci-requirements.txt:
+#
+#   * Trigger the "Regen CI-deps Lock" workflow on this branch via the GitHub
+#     Actions UI (workflow_dispatch), then download the `ci-requirements-lock`
+#     artifact and replace this file with its contents.
+#
+#   * OR run .github/regen-ci-deps-lock.sh locally inside the CI container
+#     (see the header comment at the top of that script for the docker
+#     invocation).
+#
+# Until that happens, transitive dependencies of moto / scikit-image /
+# numpy-stl / shapely / multi-storage-client / tensorstore (responses,
+# xmltodict, jsonpath-ng, lazy-loader, tifffile, pywavelets, imageio,
+# antlr4-python3-runtime, ...) will continue to drift between nightly and PR
+# resolutions, invalidating the entire testmon cache on every PR.
+#
+# See .github/CACHE_CONTRACT.md (#why-a-separate-ci-requirementslock) and
+# .github/ci-requirements.txt for the full design.
+# =============================================================================
