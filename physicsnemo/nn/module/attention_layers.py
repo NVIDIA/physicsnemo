@@ -23,7 +23,7 @@ from torch import nn
 
 from physicsnemo.nn.module.conv_layers import Conv2d
 from physicsnemo.nn.module.group_norm import get_group_norm
-from physicsnemo.nn.module.utils import get_earth_position_index, trunc_normal_
+from physicsnemo.nn.module.utils import get_earth_position_index
 
 
 class AttentionOp(torch.autograd.Function):
@@ -237,9 +237,7 @@ class EarthAttention3D(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-        self.earth_position_bias_table = trunc_normal_(
-            self.earth_position_bias_table, std=0.02
-        )
+        torch.nn.init.trunc_normal_(self.earth_position_bias_table, std=0.02)
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x: torch.Tensor, mask=None):
@@ -345,9 +343,7 @@ class EarthAttention2D(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-        self.earth_position_bias_table = trunc_normal_(
-            self.earth_position_bias_table, std=0.02
-        )
+        torch.nn.init.trunc_normal_(self.earth_position_bias_table, std=0.02)
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x: torch.Tensor, mask=None):
