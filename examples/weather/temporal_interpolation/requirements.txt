@@ -1,2 +1,2 @@
-mlflow>=3.11.0
+mlflow>=3.12.0
 wandb>=0.13.7

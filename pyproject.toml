@@ -248,7 +248,7 @@ natten-cu13 = [
 ]
 utils-extras = [
     "wandb",
-    "mlflow>=3.11.0",
+    "mlflow>=3.12.0",
     "line_profiler",
     "vtk",
     "stl",
