@@ -86,9 +86,7 @@ def main(cfg: DictConfig) -> None:
     DistributedManager.initialize()
     dist_manager = DistributedManager()
     device = dist_manager.device
-    logger = RankZeroLoggingWrapper(
-        PythonLogger(name="active_learning"), dist_manager
-    )
+    logger = RankZeroLoggingWrapper(PythonLogger(name="active_learning"), dist_manager)
 
     # ---- Config ----
     al_rounds = getattr(cfg, "al_rounds", 5)
@@ -111,13 +109,13 @@ def main(cfg: DictConfig) -> None:
     consistency_every_n = getattr(cfg, "consistency_every_n_steps", 1)
     accumulation_steps = getattr(cfg.training, "gradient_accumulation_steps", 1)
     save_interval = getattr(cfg.training, "save_interval", 10)
-    prefetch_depth = int(
-        OmegaConf.select(cfg, "dataloader.prefetch_depth", default=0)
-    )
+    prefetch_depth = int(OmegaConf.select(cfg, "dataloader.prefetch_depth", default=0))
 
     initial_checkpoint = cfg.initial_checkpoint
     if initial_checkpoint is None:
-        raise ValueError("Must provide ++initial_checkpoint=/path/to/checkpoints_combined")
+        raise ValueError(
+            "Must provide ++initial_checkpoint=/path/to/checkpoints_combined"
+        )
 
     manifest_dir = getattr(cfg, "manifest_dir", None)
     if manifest_dir is None:
@@ -150,16 +148,17 @@ def main(cfg: DictConfig) -> None:
         class_paths=class_paths,
         surface_factors=surface_factors,
         local_indices_by_class=test_by_class,
-        train_indices=torch.arange(
-            sum(len(v) for v in test_by_class.values())
-        ).long(),
+        train_indices=torch.arange(sum(len(v) for v in test_by_class.values())).long(),
     )
 
     # ---- Original Fastback training data (replay to prevent forgetting) ----
     base_train_path = getattr(cfg.data.train, "data_path", None)
     base_train_datapipe = None
     if base_train_path is not None:
-        from physicsnemo.datapipes.cae.transolver_datapipe import create_transolver_dataset
+        from physicsnemo.datapipes.cae.transolver_datapipe import (
+            create_transolver_dataset,
+        )
+
         base_train_datapipe = create_transolver_dataset(
             cfg.data,
             phase="train",
@@ -245,10 +244,9 @@ def main(cfg: DictConfig) -> None:
         indices_path = last_ckpt / "train_indices.pt"
 
         if indices_path.exists():
-            is_incomplete = (
-                (last_ckpt / "round_started").exists()
-                and not (last_ckpt / "round_complete").exists()
-            )
+            is_incomplete = (last_ckpt / "round_started").exists() and not (
+                last_ckpt / "round_complete"
+            ).exists()
 
             if is_incomplete:
                 has_training_state = any(last_ckpt.glob("checkpoint.*.pt"))
@@ -267,10 +265,7 @@ def main(cfg: DictConfig) -> None:
                     # Selection saved but training not started yet; load
                     # model from the previous completed round if available.
                     prev_ckpt = out_dir / f"checkpoint_round_{round_num - 1}"
-                    if (
-                        prev_ckpt.exists()
-                        and (prev_ckpt / "train_indices.pt").exists()
-                    ):
+                    if prev_ckpt.exists() and (prev_ckpt / "train_indices.pt").exists():
                         load_checkpoint(
                             path=str(prev_ckpt),
                             models=[model, embedding_reduction, gp],
@@ -281,9 +276,7 @@ def main(cfg: DictConfig) -> None:
                         f"(selection preserved): {last_ckpt}"
                     )
 
-                train_pool.train_indices = torch.load(
-                    indices_path, weights_only=True
-                )
+                train_pool.train_indices = torch.load(indices_path, weights_only=True)
                 resume_round = round_num - 1
                 resuming_mid_round = True
                 logger.info(
@@ -294,17 +287,14 @@ def main(cfg: DictConfig) -> None:
                 # Fully completed round (has sentinel or old-style checkpoint)
                 resume_round = round_num
                 logger.info(
-                    f"Resuming from completed round {resume_round}: "
-                    f"{last_ckpt}"
+                    f"Resuming from completed round {resume_round}: {last_ckpt}"
                 )
                 load_checkpoint(
                     path=str(last_ckpt),
                     models=[model, embedding_reduction, gp],
                     device=device,
                 )
-                train_pool.train_indices = torch.load(
-                    indices_path, weights_only=True
-                )
+                train_pool.train_indices = torch.load(indices_path, weights_only=True)
                 logger.info(
                     f"Restored training pool: {len(train_pool)} samples "
                     f"from {indices_path}"
@@ -364,6 +354,7 @@ def main(cfg: DictConfig) -> None:
     label_strategy.attach(driver_stub)
 
     import logging as _logging
+
     query_strategy.logger.setLevel(_logging.INFO)
     metrology.logger.setLevel(_logging.INFO)
 
@@ -387,7 +378,7 @@ def main(cfg: DictConfig) -> None:
     for al_round in range(start_round, al_rounds + 1):
         driver_stub.active_learning_step_idx = al_round
         ckpt_dir = out_dir / f"checkpoint_round_{al_round}"
-        logger.info(f"\n{'='*60}")
+        logger.info(f"\n{'=' * 60}")
         logger.info(f"=== Active Learning Round {al_round}/{al_rounds} ===")
 
         if resuming_mid_round:
@@ -398,9 +389,7 @@ def main(cfg: DictConfig) -> None:
             resuming_mid_round = False
         else:
             logger.info(f"Training pool size: {len(train_pool)}")
-            logger.info(
-                f"Unlabeled pool size: {len(train_pool.unlabeled_indices())}"
-            )
+            logger.info(f"Unlabeled pool size: {len(train_pool.unlabeled_indices())}")
 
             # ---- Query (all ranks score in parallel) ----
             query_queue: Queue = Queue()
@@ -431,9 +420,7 @@ def main(cfg: DictConfig) -> None:
                 query_strategy.selection_history.clear()
 
                 ckpt_dir.mkdir(parents=True, exist_ok=True)
-                torch.save(
-                    train_pool.train_indices, ckpt_dir / "train_indices.pt"
-                )
+                torch.save(train_pool.train_indices, ckpt_dir / "train_indices.pt")
                 (ckpt_dir / "round_started").touch()
 
         # ---- Fine-tune ----
@@ -452,11 +439,16 @@ def main(cfg: DictConfig) -> None:
             {"params": embedding_reduction.parameters(), "lr": base_lr},
         ]
         if hasattr(gp, "gp_layer"):
-            param_groups.extend([
-                {"params": gp.gp_layer.variational_parameters(), "lr": base_lr * 10},
-                {"params": gp.gp_layer.hyperparameters(), "lr": base_lr * 10},
-                {"params": gp.likelihood.parameters(), "lr": base_lr * 10},
-            ])
+            param_groups.extend(
+                [
+                    {
+                        "params": gp.gp_layer.variational_parameters(),
+                        "lr": base_lr * 10,
+                    },
+                    {"params": gp.gp_layer.hyperparameters(), "lr": base_lr * 10},
+                    {"params": gp.likelihood.parameters(), "lr": base_lr * 10},
+                ]
+            )
             if gp.feature_extractor is not None:
                 param_groups.append(
                     {"params": gp.feature_extractor.parameters(), "lr": base_lr}
@@ -529,8 +521,10 @@ def main(cfg: DictConfig) -> None:
                 drop_last=True,
             )
             base_dl = torch.utils.data.DataLoader(
-                base_dataset_for_round, batch_size=1,
-                sampler=base_sampler, num_workers=0,
+                base_dataset_for_round,
+                batch_size=1,
+                sampler=base_sampler,
+                num_workers=0,
             )
             n_base = len(base_dataset_for_round)
 
@@ -546,8 +540,10 @@ def main(cfg: DictConfig) -> None:
                 drop_last=False,
             )
             al_dl = torch.utils.data.DataLoader(
-                train_pool, batch_size=1,
-                sampler=al_sampler, num_workers=0,
+                train_pool,
+                batch_size=1,
+                sampler=al_sampler,
+                num_workers=0,
             )
 
         n_al = len(train_pool)
@@ -571,16 +567,30 @@ def main(cfg: DictConfig) -> None:
                 base_sampler.set_epoch(epoch)
                 for batch in base_dl:
                     batch = base_train_datapipe(
-                        {k: v[0] if isinstance(v, torch.Tensor) else v
-                         for k, v in batch.items()}
+                        {
+                            k: v[0] if isinstance(v, torch.Tensor) else v
+                            for k, v in batch.items()
+                        }
                     )
-                    batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
-                             for k, v in batch.items()}
+                    batch = {
+                        k: v.to(device) if isinstance(v, torch.Tensor) else v
+                        for k, v in batch.items()
+                    }
                     epoch_loss += train_one_batch(
-                        batch, backbone_model, embedding_reduction, gp,
-                        surface_factors, device, precision, optimizer,
-                        lambda_gp, lambda_consistency, consistency_detach,
-                        consistency_every_n, n_batches, dist_manager,
+                        batch,
+                        backbone_model,
+                        embedding_reduction,
+                        gp,
+                        surface_factors,
+                        device,
+                        precision,
+                        optimizer,
+                        lambda_gp,
+                        lambda_consistency,
+                        consistency_detach,
+                        consistency_every_n,
+                        n_batches,
+                        dist_manager,
                     )
                     n_batches += 1
 
@@ -608,17 +618,27 @@ def main(cfg: DictConfig) -> None:
                         next_j = i + prefetch_depth
                         if next_j < len(al_sampler_order):
                             next_local = al_sampler_order[next_j]
-                            next_flat = int(
-                                train_pool.train_indices[next_local].item()
-                            )
+                            next_flat = int(train_pool.train_indices[next_local].item())
                             train_pool.prefetch(next_flat)
-                    batch = {k: v.squeeze(0).to(device) if isinstance(v, torch.Tensor) else v
-                             for k, v in batch.items()}
+                    batch = {
+                        k: v.squeeze(0).to(device) if isinstance(v, torch.Tensor) else v
+                        for k, v in batch.items()
+                    }
                     epoch_loss += train_one_batch(
-                        batch, backbone_model, embedding_reduction, gp,
-                        surface_factors, device, precision, optimizer,
-                        lambda_gp, lambda_consistency, consistency_detach,
-                        consistency_every_n, n_batches, dist_manager,
+                        batch,
+                        backbone_model,
+                        embedding_reduction,
+                        gp,
+                        surface_factors,
+                        device,
+                        precision,
+                        optimizer,
+                        lambda_gp,
+                        lambda_consistency,
+                        consistency_detach,
+                        consistency_every_n,
+                        n_batches,
+                        dist_manager,
                     )
                     n_batches += 1
 
@@ -626,15 +646,14 @@ def main(cfg: DictConfig) -> None:
 
             if (epoch + 1) % 5 == 0 or epoch == 0:
                 logger.info(
-                    f"  Epoch {epoch+1}/{fine_tune_epochs} "
+                    f"  Epoch {epoch + 1}/{fine_tune_epochs} "
                     f"avg_loss={epoch_loss / max(n_batches, 1):.6f} "
                     f"({n_batches} batches)"
                 )
 
             # Periodic intra-round checkpoint (survives Slurm timeouts)
             if is_rank0 and (
-                (epoch + 1) % save_interval == 0
-                or epoch == fine_tune_epochs - 1
+                (epoch + 1) % save_interval == 0 or epoch == fine_tune_epochs - 1
             ):
                 ckpt_dir.mkdir(parents=True, exist_ok=True)
                 save_checkpoint(

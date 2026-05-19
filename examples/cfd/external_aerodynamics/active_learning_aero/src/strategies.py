@@ -68,10 +68,12 @@ class JointUQQueryStrategy(QueryStrategy):
         self.selection_history: list[dict[str, Any]] = []
 
     def attach(self, other: object) -> None:
+        """Attach this strategy to its driver (called by the AL framework)."""
         self.driver = other
 
     @property
     def is_attached(self) -> bool:
+        """Return True once a driver has been attached."""
         return self.driver is not None
 
     @torch.no_grad()
@@ -106,8 +108,10 @@ class JointUQQueryStrategy(QueryStrategy):
                 self.logger.info(f"  UQ scoring: ~{ui * world_size}/{n_total}")
             flat_idx = flat_idx.item()
             batch = pool.get_by_flat_idx(flat_idx)
-            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
-                     for k, v in batch.items()}
+            batch = {
+                k: v.to(device) if isinstance(v, torch.Tensor) else v
+                for k, v in batch.items()
+            }
 
             features = cast_precisions(batch["fx"], self.precision)
             embeddings = cast_precisions(batch["embeddings"], self.precision)
@@ -157,25 +161,28 @@ class JointUQQueryStrategy(QueryStrategy):
         scores.sort(key=lambda x: x[1], reverse=True)
         selected = scores[: self.max_samples]
 
-        round_record = {"selected": [], "step": getattr(self.driver, "active_learning_step_idx", -1)}
+        round_record = {
+            "selected": [],
+            "step": getattr(self.driver, "active_learning_step_idx", -1),
+        }
         for flat_idx, uq, dis, std in selected:
             query_queue.put(flat_idx)
-            round_record["selected"].append({
-                "flat_idx": flat_idx,
-                "class": pool.class_of(flat_idx),
-                "joint_uq": float(uq),
-                "disagreement": float(dis),
-                "gp_std": float(std),
-            })
+            round_record["selected"].append(
+                {
+                    "flat_idx": flat_idx,
+                    "class": pool.class_of(flat_idx),
+                    "joint_uq": float(uq),
+                    "disagreement": float(dis),
+                    "gp_std": float(std),
+                }
+            )
         self.selection_history.append(round_record)
 
         if rank == 0:
             class_counts = defaultdict(int)
             for entry in round_record["selected"]:
                 class_counts[entry["class"]] += 1
-            self.logger.info(
-                f"Selected {len(selected)} samples: {dict(class_counts)}"
-            )
+            self.logger.info(f"Selected {len(selected)} samples: {dict(class_counts)}")
 
 
 class RandomQueryStrategy(QueryStrategy):
@@ -200,13 +207,16 @@ class RandomQueryStrategy(QueryStrategy):
         self.selection_history: list[dict[str, Any]] = []
 
     def attach(self, other: object) -> None:
+        """Attach this strategy to its driver (called by the AL framework)."""
         self.driver = other
 
     @property
     def is_attached(self) -> bool:
+        """Return True once a driver has been attached."""
         return self.driver is not None
 
     def sample(self, query_queue: AbstractQueue, *args: Any, **kwargs: Any) -> None:
+        """Pick ``max_samples`` indices uniformly at random from the unlabeled pool."""
         pool = self.driver.training_pool
         unlabeled = pool.unlabeled_indices().numpy()
 
@@ -216,22 +226,25 @@ class RandomQueryStrategy(QueryStrategy):
 
         chosen = self._rng.choice(unlabeled, size=n, replace=False)
 
-        round_record = {"selected": [], "step": getattr(self.driver, "active_learning_step_idx", -1)}
+        round_record = {
+            "selected": [],
+            "step": getattr(self.driver, "active_learning_step_idx", -1),
+        }
         for flat_idx in chosen:
             flat_idx = int(flat_idx)
             query_queue.put(flat_idx)
-            round_record["selected"].append({
-                "flat_idx": flat_idx,
-                "class": pool.class_of(flat_idx),
-            })
+            round_record["selected"].append(
+                {
+                    "flat_idx": flat_idx,
+                    "class": pool.class_of(flat_idx),
+                }
+            )
         self.selection_history.append(round_record)
 
         class_counts = defaultdict(int)
         for entry in round_record["selected"]:
             class_counts[entry["class"]] += 1
-        self.logger.info(
-            f"Randomly selected {n} samples: {dict(class_counts)}"
-        )
+        self.logger.info(f"Randomly selected {n} samples: {dict(class_counts)}")
 
 
 class ClassBalancedRandomQueryStrategy(QueryStrategy):
@@ -267,13 +280,16 @@ class ClassBalancedRandomQueryStrategy(QueryStrategy):
         self.selection_history: list[dict[str, Any]] = []
 
     def attach(self, other: object) -> None:
+        """Attach this strategy to its driver (called by the AL framework)."""
         self.driver = other
 
     @property
     def is_attached(self) -> bool:
+        """Return True once a driver has been attached."""
         return self.driver is not None
 
     def sample(self, query_queue: AbstractQueue, *args: Any, **kwargs: Any) -> None:
+        """Sample ``max_samples`` indices balanced across class labels."""
         pool = self.driver.training_pool
         unlabeled = pool.unlabeled_indices().numpy()
 
@@ -289,10 +305,7 @@ class ClassBalancedRandomQueryStrategy(QueryStrategy):
 
         base = self.max_samples // n_classes
         remainder = self.max_samples - base * n_classes
-        targets = {
-            c: base + (1 if i < remainder else 0)
-            for i, c in enumerate(classes)
-        }
+        targets = {c: base + (1 if i < remainder else 0) for i, c in enumerate(classes)}
 
         picks_by_class: dict[str, list[int]] = {}
         deficit = 0
@@ -334,10 +347,12 @@ class ClassBalancedRandomQueryStrategy(QueryStrategy):
         }
         for flat_idx in chosen:
             query_queue.put(int(flat_idx))
-            round_record["selected"].append({
-                "flat_idx": int(flat_idx),
-                "class": pool.class_of(int(flat_idx)),
-            })
+            round_record["selected"].append(
+                {
+                    "flat_idx": int(flat_idx),
+                    "class": pool.class_of(int(flat_idx)),
+                }
+            )
         self.selection_history.append(round_record)
 
         class_counts = defaultdict(int)
@@ -364,10 +379,12 @@ class DummyLabelStrategy(LabelStrategy):
         self.driver = None
 
     def attach(self, other: object) -> None:
+        """Attach this strategy to its driver (called by the AL framework)."""
         self.driver = other
 
     @property
     def is_attached(self) -> bool:
+        """Return True once a driver has been attached."""
         return self.driver is not None
 
     def label(
@@ -377,7 +394,7 @@ class DummyLabelStrategy(LabelStrategy):
         *args: Any,
         **kwargs: Any,
     ) -> None:
+        """Pass-through label: forward every queried item to the serialize queue."""
         while not queue_to_label.empty():
             item = queue_to_label.get()
             serialize_queue.put(item)
-

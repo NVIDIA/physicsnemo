@@ -69,9 +69,7 @@ def train_one_batch(
     features = cast_precisions(batch["fx"], precision)
     embeddings = cast_precisions(batch["embeddings"], precision)
     geometry = (
-        cast_precisions(batch["geometry"], precision)
-        if "geometry" in batch
-        else None
+        cast_precisions(batch["geometry"], precision) if "geometry" in batch else None
     )
 
     with get_autocast_context(precision):
@@ -86,9 +84,9 @@ def train_one_batch(
         mse_loss = torch.mean(loss_fn(outputs, batch["fields"]))
 
     reduced = embedding_reduction(embedding_states.flatten(1, 2))
-    drag_target = compute_drag_target_from_batch(
-        batch, surface_factors, device
-    ).to(reduced.dtype)
+    drag_target = compute_drag_target_from_batch(batch, surface_factors, device).to(
+        reduced.dtype
+    )
 
     head_mean, head_loss = gp.forward_and_loss(reduced, drag_target)
 
@@ -108,9 +106,7 @@ def train_one_batch(
     total_loss.backward()
 
     if dist_manager.world_size > 1:
-        sync_non_ddp_gradients(
-            [embedding_reduction, gp], dist_manager.world_size
-        )
+        sync_non_ddp_gradients([embedding_reduction, gp], dist_manager.world_size)
 
     optimizer.step()
     return total_loss.item()

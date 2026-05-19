@@ -273,9 +273,7 @@ def loss_fn(outputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 
-def padded_all_gather(
-    local_tensor: torch.Tensor, device: torch.device
-) -> torch.Tensor:
+def padded_all_gather(local_tensor: torch.Tensor, device: torch.device) -> torch.Tensor:
     """All-gather 2-D tensors that may have different row counts per rank.
 
     Pads each rank's tensor to the global max row count with NaN, runs
@@ -288,9 +286,7 @@ def padded_all_gather(
     if not dist.is_initialized() or dist.get_world_size() == 1:
         return local_tensor
 
-    local_size = torch.tensor(
-        [local_tensor.shape[0]], dtype=torch.long, device=device
-    )
+    local_size = torch.tensor([local_tensor.shape[0]], dtype=torch.long, device=device)
     all_sizes = [
         torch.zeros(1, dtype=torch.long, device=device)
         for _ in range(dist.get_world_size())

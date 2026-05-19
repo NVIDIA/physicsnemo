@@ -131,7 +131,10 @@ class AeroDataPool(Dataset):
             self._datapipes.append(datapipe)
             self._class_offsets.append(offset)
 
-            if local_indices_by_class is not None and cls_label in local_indices_by_class:
+            if (
+                local_indices_by_class is not None
+                and cls_label in local_indices_by_class
+            ):
                 local_idxs = local_indices_by_class[cls_label]
             else:
                 local_idxs = list(range(len(datapipe.dataset)))
@@ -148,13 +151,16 @@ class AeroDataPool(Dataset):
 
     @property
     def total_samples(self) -> int:
+        """Total number of samples across all underlying datasets."""
         return self._total_samples
 
     @property
     def class_labels(self) -> list[str]:
+        """Per-sample class label list, indexed by flat sample index."""
         return self._class_labels
 
     def class_of(self, flat_idx: int) -> str:
+        """Return the class label for a given flat sample index."""
         return self._class_labels[flat_idx]
 
     def _get_preprocessed(self, flat_idx: int) -> dict:
@@ -208,9 +214,7 @@ class AeroDataPool(Dataset):
 
     def append(self, item: int) -> None:
         """Add a flat index to the training set."""
-        self.train_indices = torch.cat(
-            [self.train_indices, torch.LongTensor([item])]
-        )
+        self.train_indices = torch.cat([self.train_indices, torch.LongTensor([item])])
 
     def set_indices(self, indices: list[int]) -> None:
         """Directly set the training indices (for DDP sampler compatibility)."""
@@ -246,9 +250,7 @@ def build_surface_factors(
         p_inf = float(OmegaConf.select(pn, "p_inf", default=0.0))
         wss_factor = float(OmegaConf.select(pn, "wss_factor", default=0.00183))
         q_inf = 0.5 * rho_inf * U_inf * U_inf
-        mean = torch.tensor(
-            [p_inf, 0.0, 0.0, 0.0], device=device, dtype=torch.float32
-        )
+        mean = torch.tensor([p_inf, 0.0, 0.0, 0.0], device=device, dtype=torch.float32)
         wss_std = q_inf * wss_factor
         std = torch.tensor(
             [q_inf, wss_std, wss_std, wss_std], device=device, dtype=torch.float32

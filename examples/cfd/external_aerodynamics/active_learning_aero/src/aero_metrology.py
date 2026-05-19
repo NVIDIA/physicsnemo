@@ -74,10 +74,12 @@ class FieldMetrologyStrategy(MetrologyStrategy):
         self.driver = None
 
     def attach(self, other: object) -> None:
+        """Attach this strategy to its driver (called by the AL framework)."""
         self.driver = other
 
     @property
     def is_attached(self) -> bool:
+        """Return True once a driver has been attached."""
         return self.driver is not None
 
     @torch.no_grad()
@@ -109,8 +111,10 @@ class FieldMetrologyStrategy(MetrologyStrategy):
             flat_idx = val_pool.train_indices[i].item()
             batch = val_pool.get_by_flat_idx(flat_idx)
             cls_label = val_pool.class_of(flat_idx)
-            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
-                     for k, v in batch.items()}
+            batch = {
+                k: v.to(device) if isinstance(v, torch.Tensor) else v
+                for k, v in batch.items()
+            }
 
             features = cast_precisions(batch["fx"], self.precision)
             embeddings = cast_precisions(batch["embeddings"], self.precision)
@@ -166,15 +170,15 @@ class FieldMetrologyStrategy(MetrologyStrategy):
     def serialize_records(
         self, path: Path | None = None, *args: Any, **kwargs: Any
     ) -> None:
+        """Persist accumulated validation records to JSON."""
         if path is None:
             path = self.strategy_dir / "validation_metrics.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
             json.dump(self.records, f, indent=2)
 
-    def load_records(
-        self, path: Path | None = None, *args: Any, **kwargs: Any
-    ) -> None:
+    def load_records(self, path: Path | None = None, *args: Any, **kwargs: Any) -> None:
+        """Load previously serialized validation records from JSON."""
         if path is None:
             path = self.strategy_dir / "validation_metrics.json"
         if path.exists():

@@ -46,13 +46,18 @@ def list_sample_names(zarr_dir: str) -> list[str]:
 
 
 def main():
+    """CLI entry point: build per-class test/pool split manifests for AL."""
     parser = argparse.ArgumentParser(description="Create AL split manifests")
     parser.add_argument("--class_F", required=True, help="Path to class_F/val zarr dir")
     parser.add_argument("--class_N", required=True, help="Path to class_N/val zarr dir")
     parser.add_argument("--class_E", required=True, help="Path to class_E/val zarr dir")
     parser.add_argument("--test_per_class", type=int, default=100)
-    parser.add_argument("--pool_per_class", type=int, default=500,
-                        help="Max samples per class in the AL pool (rest discarded)")
+    parser.add_argument(
+        "--pool_per_class",
+        type=int,
+        default=500,
+        help="Max samples per class in the AL pool (rest discarded)",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out_dir", default="manifests/")
     args = parser.parse_args()
@@ -109,7 +114,9 @@ def main():
     total_test = 0
     total_pool = 0
     for cls_label, counts in summary.items():
-        print(f"  {cls_label}: {counts['total']} total -> {counts['test']} test + {counts['pool']} pool")
+        print(
+            f"  {cls_label}: {counts['total']} total -> {counts['test']} test + {counts['pool']} pool"
+        )
         total_test += counts["test"]
         total_pool += counts["pool"]
     print(f"  Total: {total_test} test + {total_pool} pool = {total_test + total_pool}")

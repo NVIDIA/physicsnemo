@@ -7,6 +7,12 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Visualize predictions from a trained surface-CFD checkpoint as VTP point clouds.
 
@@ -130,9 +136,7 @@ def _force_resolution_none(cfg: DictConfig) -> None:
     OmegaConf.set_struct(cfg, True)
 
 
-@hydra.main(
-    version_base=None, config_path="conf", config_name="geotransolver_surface"
-)
+@hydra.main(version_base=None, config_path="conf", config_name="geotransolver_surface")
 def main(cfg: DictConfig) -> None:
     """Inference driver: load checkpoint, run on val pool, write .vtp clouds."""
     ### Try to import pyvista lazily -- the host python has no VTK install but
@@ -157,9 +161,7 @@ def main(cfg: DictConfig) -> None:
 
     manifest_dir = getattr(cfg, "manifest_dir", None)
     if manifest_dir is None:
-        raise ValueError(
-            "Must provide ++manifest_dir=src/manifests"
-        )
+        raise ValueError("Must provide ++manifest_dir=src/manifests")
 
     ### Inference knobs (all opt-in via Hydra overrides):
     ###   ++infer.n_samples=N    -- write VTPs for the first N val samples
@@ -385,7 +387,7 @@ def main(cfg: DictConfig) -> None:
             "true_cd_raw": true_cd_raw,
             "pred_cd_raw": pred_cd_raw,
             "cd_residual_raw": true_cd_raw - pred_cd_raw,
-            "pressure_residual_Pa_rms": float(np.sqrt(np.mean(p_res ** 2))),
+            "pressure_residual_Pa_rms": float(np.sqrt(np.mean(p_res**2))),
             "pressure_residual_Pa_max_abs": float(np.max(np.abs(p_res))),
             "wss_residual_Pa_rms": float(
                 np.sqrt(np.mean(np.linalg.norm(wss_res, axis=1) ** 2))
@@ -396,7 +398,7 @@ def main(cfg: DictConfig) -> None:
         summary.append(rec)
 
         logger.info(
-            f"[{n+1}/{len(sample_idxs)}] flat_idx={flat_idx:>4d} class={cls_label} "
+            f"[{n + 1}/{len(sample_idxs)}] flat_idx={flat_idx:>4d} class={cls_label} "
             f"N={pts.shape[0]} | Cd_raw true={true_cd_raw:+.4f} pred={pred_cd_raw:+.4f} "
             f"resid={true_cd_raw - pred_cd_raw:+.4f} | "
             f"p_res_rms={rec['pressure_residual_Pa_rms']:.2f}Pa "

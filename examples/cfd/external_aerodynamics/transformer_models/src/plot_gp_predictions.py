@@ -333,9 +333,7 @@ def main(cfg: DictConfig) -> None:
 
                 if gp_kernel is not None and inducing_pts_for_kernel is not None:
                     reduced_gp = gp._apply_fe(reduced)
-                    k_x_ind = gp_kernel(
-                        reduced_gp, inducing_pts_for_kernel
-                    ).evaluate()
+                    k_x_ind = gp_kernel(reduced_gp, inducing_pts_for_kernel).evaluate()
                     ks_np = k_x_ind.mean(dim=-1).float().cpu().numpy().flatten()
                 else:
                     ks_np = np.zeros(len(mean_np))
@@ -631,9 +629,7 @@ def main(cfg: DictConfig) -> None:
             for _, res in all_results
         )
         n_kde_cols = (
-            (2 if use_gp else 1)
-            + (1 if has_logprob else 0)
-            + (1 if has_kscore else 0)
+            (2 if use_gp else 1) + (1 if has_logprob else 0) + (1 if has_kscore else 0)
         )
         fig_kde, axes_kde = plt.subplots(
             1,
@@ -643,7 +639,8 @@ def main(cfg: DictConfig) -> None:
         if n_kde_cols == 1:
             axes_kde = [axes_kde]
         col = 0
-        ax_dis = axes_kde[col]; col += 1
+        ax_dis = axes_kde[col]
+        col += 1
         ax_std = axes_kde[col] if use_gp else None
         if use_gp:
             col += 1
