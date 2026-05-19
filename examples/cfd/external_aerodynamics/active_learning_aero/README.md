@@ -4,9 +4,9 @@
 This recipe uses the **uncertainty-aware GeoTransolver + Variational GP
 head** trained in [`../transformer_models/`](../transformer_models/README.md#variational-gp-head)
 as a starting point and **iteratively fine-tunes it on a target vehicle
-class via active learning (AL)**. The driving question is: *given a
-pretrained surrogate that is out-of-distribution on a new car family,
-how few labelled simulations does it take to recover full-data accuracy?*
+class via active learning (AL)**. This workflow aims to demonstrate the 
+use of Active Learning as a method to efficiently fine-tune a surrogate model
+on an out-of-distribution dataset.
 
 The example is implemented for surface CFD on the
 [ShiftSUV](https://huggingface.co/datasets/luminary-shift/SUV)
@@ -16,13 +16,13 @@ modules (`aero_physics.py`, `aero_metrology.py`) so the same loop can
 drive any uncertainty-quantified regression task. See
 [Adapting to a new problem](#adapting-to-a-new-problem) below.
 
-## What this example does
+## Overview
 
 Starting from a GP-augmented GeoTransolver checkpoint that has only ever
 seen one body style (the in-distribution / "Fastback" pretrain), the AL
 loop:
 
-1. Scores every unlabelled candidate in a held-out target-class pool
+1. Scores every unlabeled candidate in a held-out target-class pool
    with a **joint UQ signal** — the disagreement between the
    GP-predicted drag and the field-integrated drag, plus the GP's
    posterior variance.
@@ -63,7 +63,7 @@ The full AL loop, end-to-end:
    │                              │                                     │
    │                              ▼                                     │
    │   ┌─────────────────────────────────────────────────-┐             │
-   │   │  fine-tune fine_tune_epochs (CombinedOptimizer): │             │
+   │   │  Fine tune fine_tune_epochs (CombinedOptimizer): │             │
    │   │    L = field_MSE + λ_gp · GP_ELBO + λ_c · cons.  │             │
    │   └─────────────────────────────────────────────────-┘             │
    │                              │                                     │
@@ -74,20 +74,20 @@ The full AL loop, end-to-end:
    └────────────────────────────────────────────────────────────────────┘
 ```
 
-Internally the code is organised as **three architectural layers** that
+Internally the code is organized as **three architectural layers** that
 make customization explicit:
 
 | Layer | Files | What it does | Swap to adapt? |
 |-------|-------|--------------|----------------|
-| **1. Generic AL recipe** | `run_al.py`, `al_train_step.py`, `strategies.py`, `utils.py` | The driver loop, per-batch training step, query/label strategies, DDP helpers. Knows *nothing* about CFD or aerodynamics. | No — this is the recipe you reuse. |
+| **1. Generic AL recipe** | `run_al.py`, `al_train_step.py`, `strategies.py`, `utils.py` | The driver loop, per-batch training step, query/label strategies, DDP helpers. Not CFD or aerodynamics specific. | No — this is the recipe you reuse. |
 | **2. GP-UQ recipe** | `gp_utils.py` | Variational GP head wiring: spectral-norm embeddings, ramped weights, gradient sync for non-DDP modules. | Only if you change the UQ method (e.g. swap GP for an ensemble or MC-Dropout). |
-| **3. Aero adapter** | `aero_physics.py`, `aero_metrology.py`, `data_pool.py` | Drag integral / freestream non-dimensionalisation, field-MSE metrology, dataset I/O. | **Yes** — this is what you replace for a new problem. |
+| **3. Aero adapter** | `aero_physics.py`, `aero_metrology.py`, `data_pool.py` | Drag integral / freestream non-dimensionalization, field-MSE metrology, dataset I/O. | **Yes** — this is what you replace for a new problem. |
 
-The split is deliberate: layers 1 and 2 are written against the
+Layers 1 and 2 are written against the
 `physicsnemo.active_learning` protocols (`QueryStrategy`,
 `LabelStrategy`, `MetrologyStrategy`) and the
-`physicsnemo.experimental.uq.VariationalGPHead`; layer 3 is the only
-place where domain specific stuff like `pressure`, `wss`, `Cd`, or `freestream` appear.
+`physicsnemo.experimental.uq.VariationalGPHead`; layer 3 is CFD specific -
+domain specific stuff like `pressure`, `wss`, `Cd`, or `freestream` appear.
 
 ## Example layout
 
@@ -170,7 +170,7 @@ This writes `src/manifests/manifest_class_SE.json` and
 ## Quick start
 
 Once the pretraining checkpoint and manifests are in place, launch a
-joint-UQ AL experiment on 8 GPUs:
+joint-UQ AL experiment on 8 GPUs using:
 
 ```bash
 torchrun --nproc_per_node=8 src/run_al.py \
@@ -228,40 +228,77 @@ Three strategies ship with this example, all implementing the
 Adding a new strategy is a matter of subclassing `QueryStrategy` from
 `physicsnemo.active_learning.protocols`, implementing
 `select(pool, budget, …) → list[int]`, and registering it in the
-`if/elif` block near the top of `run_al.py`. The driver itself is
+`if/elif` block near the top of `run_al.py`. The driver is
 acquisition-agnostic.
 
 There is also a single `DummyLabelStrategy` (`LabelStrategy` protocol)
 that no-ops because labels are pre-computed on disk; replace it if your
-AL setup involves an oracle that synthesises labels on demand.
+AL setup involves an oracle that synthesizes labels on demand.
 
 ## Results
 
-The plot below summarises a single-seed experiment on the ShiftSUV
-out-of-distribution pool (1728 candidates after holding out 200 for
-test). UQ and class-balanced random both close the gap between the
-pretrained Fastback-only model and a full-data ceiling that sees every
-training sample (n = 1728). Pressure and wall-shear-stress (WSS) RMS
-errors are reported in physical units after un-standardisation.
+The plot below summarizes a experiment on the ShiftSUV
+out-of-distribution dataset (1727 total samples; 181 held out for test,
+leaving 1546 in the trainable pool). UQ and class-balanced random both
+close the gap between the pretrained Fastback-only model and a
+full-data ceiling that sees every trainable sample (n = 1546). Pressure
+and wall-shear-stress (WSS) RMS errors are reported in physical units
+after un-standardization.
 
 ![ShiftSUV active learning vs full-data ceiling](../../../../docs/img/al_aero_shiftsuv_summary.png)
 
-Headline numbers from the rightmost panel — **labels needed to land
-within X% of the full-data RMS asymptote** (n_pool = 1728):
+### Qualitative field comparison
+
+Below is a representative held-out SUV from the test pool with the trained AL
+model's predicted surface fields next to the ground truth. Top row is
+pressure (Pa); bottom row is wall-shear-stress magnitude (Pa). Left =
+ground truth from the simulator; right = model prediction.
+
+![Predicted vs ground-truth surface fields on a held-out SUV](../../../../docs/img/al_shiftsuv_field_predictions.png)
+
+VTP point clouds for any test sample at any saved AL checkpoint can be
+regenerated with `infer_aero.py`.
+
+### Per-sample spatial fidelity
+
+Aggregate RMS hides whether each individual surface field is
+*shape-correct*. To check that, we take the held-out test pool (181
+samples) at every saved AL checkpoint and compute, *per sample*, the
+Spearman rank correlation between predicted and ground-truth pressure
+and wall-shear-stress magnitude. The violins below show how the
+**distribution of per-sample correlations** tightens across rounds:
+the median moves toward 1.0, the 5th-percentile dashed line catches
+up (worst-case samples improve faster than the best-case ones), and
+the lower tail of the violin shrinks. Both UQ and class-balanced
+random reach median ρ > 0.97 by round 16 (n=160 labels) — well before
+the labels-needed thresholds in the table below — meaning the spatial
+patterns are already correct long before the absolute RMS hits its
+asymptote.
+
+![Per-sample Spearman correlations across AL rounds](../../../../docs/img/al_aero_shiftsuv_correlations.png)
+
+### Label efficiency
+
+Numbers from the rightmost panel of the summary plot —
+**labels needed to land within X% of the full-data RMS asymptote**
+(n_pool = 1546):
 
 | Within X% of ceiling | Joint-UQ labels | Class-bal random labels | Fraction of pool |
 |----------------------|-----------------|-------------------------|------------------|
-| 200% | ~50 | ~50 | ~3% |
-| 100% | ~140 | ~130 | ~8% |
-| 50% | ~240 | ~240 | ~14% |
-| 25% | ~360 | ~340 | ~20% |
-| 10% | ~480 | ~520 | ~28% |
-| 5% (engineering accuracy) | ~550 | ~550 | ~32% |
-| 2% | ~580 | ~600 | ~34% |
+| 100% | 220 | 210 | ~14% |
+| 50% | 410 | 390 | ~26% |
+| 25% | 650 | 630 | ~41% |
+| 10% | 910 | 930 | ~60% |
+| 5% | 1040 | 1060 | ~67% |
 
-Read the labels-to-engineering-accuracy column as: *"to drive the
+At the largest budget reached in this single-seed run — UQ at n=1120,
+BAL at n=1100 — pressure RMS is **15.17 Pa (UQ) / 15.49 Pa (BAL)**
+against a full-data ceiling of **14.85 Pa**, i.e. +2.1% / +4.3% above
+the asymptote. Read the row as: *"to drive the
 surface-field RMS to within 5% of what training on every available
-sample would give us, we need to hand-label only ~32% of the pool"*.
+sample would give us, we need to hand-label roughly two-thirds of the
+pool"* — and the +25% row as the more frugal *"with ~40% of the labels
+we already cut the gap-to-ceiling to a quarter of what it was."*
 
 ## Adapting to a new problem
 
