@@ -1,6 +1,0 @@
-# Paper-only SLURM launchers and their logs are kept on disk for
-# reproducibility but not tracked. The productizable workflow lives
-# in ../active_learning_aero/; curated launchers (when needed) will
-# live in active_learning_aero/slurm/.
-slurm_*.sh
-slurm_logs/
