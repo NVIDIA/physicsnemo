@@ -999,13 +999,29 @@ def build_dataloaders(
             first_targets, first_metrics = ds_targets, ds_metrics
         else:
             validate_dataset_consistency(
-                ds_key,
+                ds_name,
                 ds_targets,
                 ds_metrics,
                 first_targets,
                 first_metrics,
             )
 
+        ### resolve_manifest_spec expects a single "block" carrying both
+        ### the manifest paths (which live in the dataset YAML when set)
+        ### and the split selectors (which are recipe-level via cfg).
+        ### Assemble one here so each dataset's manifest resolution sees
+        ### the correct combination.
+        ds_cfg_block = OmegaConf.create(
+            {
+                "train_manifest": OmegaConf.select(
+                    ds_yaml, "train_manifest", default=None
+                ),
+                "val_manifest": OmegaConf.select(ds_yaml, "val_manifest", default=None),
+                "manifest": OmegaConf.select(ds_yaml, "manifest", default=None),
+                "train_split": train_split,
+                "val_split": val_split,
+            }
+        )
         manifest_spec = resolve_manifest_spec(ds_yaml, ds_cfg_block)
         if manifest_spec is not None:
             using_manifests = True
@@ -1142,6 +1158,24 @@ def main(cfg: DictConfig) -> None:
             ``compile``, ``profile``, ``benchmark_io``, ``logging``, and
             related keys.
     """
+    ### When the script is launched with bare ``python src/train.py`` (the
+    ### single-GPU path benchmark.sh takes for ``--gpus 1``) none of the
+    ### standard PyTorch distributed env vars are set, so
+    ### ``DistributedManager.initialize()`` would fall into its
+    ### "single process job" branch which never calls
+    ### ``dist.init_process_group`` or ``torch.cuda.set_device``. Anything
+    ### downstream that touches a collective (the NVIDIA-container
+    ### distributed Muon optimizer, in particular) then hangs on a
+    ### non-existent process group. Pinning the env vars here makes the
+    ### ``python`` launch behave identically to
+    ### ``torchrun --nproc_per_node 1`` -- ``setdefault`` is a no-op when
+    ### a real launcher (torchrun / SLURM / OpenMPI) has already set them.
+    os.environ.setdefault("RANK", "0")
+    os.environ.setdefault("WORLD_SIZE", "1")
+    os.environ.setdefault("LOCAL_RANK", "0")
+    os.environ.setdefault("MASTER_ADDR", "localhost")
+    os.environ.setdefault("MASTER_PORT", "29500")
+
     DistributedManager.initialize()
     dist_manager = DistributedManager()
     logger = RankZeroLoggingWrapper(PythonLogger(name="training"), dist_manager)
@@ -1170,11 +1204,17 @@ def main(cfg: DictConfig) -> None:
             with open(metrics_path, "a") as f:
                 f.write(json.dumps(record, default=str) + "\n")
 
-    logger.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
-
     train_loader, val_loader, normalizer, dataset_info = build_dataloaders(cfg)
     target_config: dict[str, FieldType] = dataset_info["targets"]
-    metrics_list: list[MetricName] = dataset_info["metrics"]
+    ### `metrics_list` is derived later from cfg.metrics (recipe-side);
+    ### build_dataloaders no longer ships a "metrics" key in dataset_info.
+
+    ### Log the resolved config AFTER build_dataloaders() because that's
+    ### where `cfg.out_dim` is auto-derived from the chosen dataset's
+    ### `targets:` block; resolving earlier would fail on the model
+    ### template's `out_dim: ${out_dim}` interpolation.
+    logger.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
+
     logger.info(f"Train samples: {len(train_loader.sampler)}")
     logger.info(f"Val samples: {len(val_loader.sampler)}")
     logger.info(f"Targets (from dataset YAML): {target_config}")
