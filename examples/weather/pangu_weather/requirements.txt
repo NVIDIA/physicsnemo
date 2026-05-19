@@ -1,4 +1,4 @@
-mlflow>=3.11.0
+mlflow>=3.12.0
 hydra-core
 wandb
 termcolor>=2.1.1
