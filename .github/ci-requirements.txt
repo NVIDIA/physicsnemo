@@ -9,10 +9,22 @@
 #   upstream release between the nightly that builds the testmon DB and
 #   the PR that consumes it would invalidate the entire cache.  Bumping a
 #   pin is a deliberate change: the next nightly repopulates the DB
-#   against the new fingerprint and PRs start hitting again.  Pinning
-#   here only stabilises *direct* deps; transitive churn (e.g. boto3 ->
-#   urllib3) can still trigger invalidations, in which case the next
-#   escalation is a constraints.txt passed via `uv pip install -c ...`.
+#   against the new fingerprint and PRs start hitting again.
+#
+# Why a companion `.github/ci-requirements.lock`:
+#   `==`-pinning the direct deps stabilises only the lines listed here.
+#   Several of them (moto, scikit-image, numpy-stl, shapely,
+#   multi-storage-client, tensorstore) are NOT in uv.lock, so their
+#   transitive closure (responses, xmltodict, jsonpath-ng, lazy-loader,
+#   tifffile, pywavelets, imageio, antlr4-python3-runtime, ...) gets
+#   resolved fresh against PyPI on every job and drifts between the
+#   nightly that builds the testmon DB and the PR that consumes it.  The
+#   companion `.github/ci-requirements.lock` (passed via `-c` in
+#   setup-uv-env) pins that closure so the fingerprint matches.
+#   Regenerate it whenever any `==` pin below changes; the three regen
+#   paths (nightly artifact, standalone workflow, local docker) are
+#   documented in .github/CACHE_CONTRACT.md under
+#   "Why a separate ci-requirements.lock".
 #
 # Coupling notes (bump in lockstep):
 #   * Dockerfile lines 240-243 still use `>=` lower bounds for the
