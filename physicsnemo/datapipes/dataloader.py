@@ -253,7 +253,7 @@ class DataLoader:
             Collated batch.
         """
         for batch_indices in self._generate_batches():
-            samples = [self.dataset[idx] for idx in batch_indices]
+            samples = [self.dataset[idx + 1] for idx in batch_indices]
             yield self.collate_fn(samples)
 
     def _iter_prefetch(
