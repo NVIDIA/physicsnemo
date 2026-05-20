@@ -1159,23 +1159,6 @@ def main(cfg: DictConfig) -> None:
             ``compile``, ``profile``, ``benchmark_io``, ``logging``, and
             related keys.
     """
-    ### When the script is launched with bare ``python src/train.py`` (the
-    ### single-GPU path benchmark.sh takes for ``--gpus 1``) none of the
-    ### standard PyTorch distributed env vars are set, so
-    ### ``DistributedManager.initialize()`` would fall into its
-    ### "single process job" branch which never calls
-    ### ``dist.init_process_group`` or ``torch.cuda.set_device``. Anything
-    ### downstream that touches a collective (the NVIDIA-container
-    ### distributed Muon optimizer, in particular) then hangs on a
-    ### non-existent process group. Pinning the env vars here makes the
-    ### ``python`` launch behave identically to
-    ### ``torchrun --nproc_per_node 1`` -- ``setdefault`` is a no-op when
-    ### a real launcher (torchrun / SLURM / OpenMPI) has already set them.
-    os.environ.setdefault("RANK", "0")
-    os.environ.setdefault("WORLD_SIZE", "1")
-    os.environ.setdefault("LOCAL_RANK", "0")
-    os.environ.setdefault("MASTER_ADDR", "localhost")
-    os.environ.setdefault("MASTER_PORT", "29500")
 
     DistributedManager.initialize()
     dist_manager = DistributedManager()
