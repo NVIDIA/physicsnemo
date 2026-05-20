@@ -52,11 +52,6 @@ coverage.xml
 .testmon*
 cover/
 
-# Downloaded artifacts from the `Regen CI-deps Lock` workflow (or the
-# bootstrap nightly variant).  The unzipped `ci-requirements.lock` is
-# committed; the wrapping zip is workflow exhaust and should never be.
-.github/ci-requirements-lock.zip
-
 # Translations
 *.mo
 *.pot
