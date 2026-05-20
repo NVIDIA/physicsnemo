@@ -179,46 +179,6 @@ jobs:
         description: uv download cache
         github-token: ${{ secrets.GITHUB_TOKEN }}
 
-    # --- Regenerate .github/ci-requirements.lock (BOOTSTRAP-ONLY) ---
-    #
-    # ***************************************************************
-    # *** REMOVE THESE THREE STEPS once .github/ci-requirements.lock ***
-    # *** has been committed to the branch.  They exist solely as a   ***
-    # *** bootstrap mechanism for producing the initial real lock,    ***
-    # *** because the standalone `Regen CI-deps Lock` workflow can't  ***
-    # *** be triggered until it has reached the default branch        ***
-    # *** (workflow_dispatch refuses non-default-branch invocations   ***
-    # *** for workflows that don't exist on the default branch -- see ***
-    # *** CACHE_CONTRACT.md `Why a separate ci-requirements.lock`).   ***
-    # ***                                                             ***
-    # *** Maintainers: trigger this workflow on the feature branch,   ***
-    # *** download the `ci-requirements-lock` artifact, replace the   ***
-    # *** placeholder lock with it, and commit.  Then delete the      ***
-    # *** three steps below (this comment block plus regen + diff +   ***
-    # *** upload-artifact).                                           ***
-    # ***************************************************************
-    #
-    # The script does its own `uv sync --frozen` + PyG CUDA-wheel
-    # reinstall, which duplicates setup-uv-env's work above and adds
-    # ~3 min to this job.  That's tolerated because this is a one-shot
-    # bootstrap; the redundancy goes away when these steps do.
-    - name: Regenerate .github/ci-requirements.lock
-      run: bash .github/regen-ci-deps-lock.sh
-
-    - name: Show diff vs committed ci-requirements.lock
-      run: |
-        echo "::group::diff vs HEAD"
-        git diff --no-color -- .github/ci-requirements.lock || true
-        echo "::endgroup::"
-
-    - name: Upload regenerated ci-requirements.lock
-      uses: actions/upload-artifact@v4
-      with:
-        name: ci-requirements-lock
-        path: .github/ci-requirements.lock
-        if-no-files-found: error
-        retention-days: 14
-
   # Stage 2: Run testmon tests and cache the database
   testmon:
     name: Testmon

@@ -136,13 +136,6 @@ Two ways to run the regen:
    feature branch where the workflow file has not yet landed on
    the default branch).
 
-> **Bootstrap-only:** While the initial lock is being committed for
-> the first time, the nightly's `build-environment` job carries a
-> temporary set of regen + upload-artifact steps that work around
-> the default-branch limitation above.  Those steps are marked
-> `BOOTSTRAP-ONLY` in `.github/workflows/github-nightly-uv.yml` and
-> are deleted once `ci-requirements.lock` has been committed.
-
 ### Coverage baseline cache (`.coverage*`)
 
 | Property | Value |

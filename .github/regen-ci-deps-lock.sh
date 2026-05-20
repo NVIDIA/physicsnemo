@@ -119,7 +119,7 @@ UV_LINK_MODE=copy uv pip install --python .venv/bin/python \
 # the constraints file is `-c` compatible.
 # ----------------------------------------------------------------------------
 echo "::: capture venv state as constraints ..."
-venv_constraints="$(mktemp)"
+venv_constraints="${RUNNER_TEMP:-/tmp}/uv-venv-state.txt"
 trap 'rm -f "$venv_constraints"' EXIT
 uv pip freeze --python .venv/bin/python \
   | grep -E '^[A-Za-z0-9][A-Za-z0-9._-]*==[^@[:space:]]+$' \
