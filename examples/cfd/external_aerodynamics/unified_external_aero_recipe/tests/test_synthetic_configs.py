@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import warnings
 from pathlib import Path
+from typing import NamedTuple
 
 import hydra
 import pytest
@@ -178,26 +179,41 @@ def _shrink_model_cfg(model_cfg: DictConfig) -> DictConfig:
 ### ---------------------------------------------------------------------------
 
 
-### Each entry: (recipe_id, model, dataset, domain, overrides).
 ### DoMINO is excluded by design (illustrative-only forward_kwargs.data_dict
 ### references fields the dataset doesn't expose).
-_TENSOR_INPUT_RECIPES: list[tuple[str, str, str, str, list[str]]] = [
-    (
+
+
+class _RecipeSpec(NamedTuple):
+    recipe_id: str
+    model: str
+    dataset: str
+    domain: str
+    overrides: list[str]
+
+
+_TENSOR_INPUT_RECIPES: list[_RecipeSpec] = [
+    _RecipeSpec(
         "geotransolver_surface",
         "geotransolver_surface",
         "drivaer_ml_surface",
         "surface",
         [],
     ),
-    ("geotransolver_volume", "geotransolver_volume", "drivaer_ml_volume", "volume", []),
-    (
+    _RecipeSpec(
+        "geotransolver_volume",
+        "geotransolver_volume",
+        "drivaer_ml_volume",
+        "volume",
+        [],
+    ),
+    _RecipeSpec(
         "geotransolver_fa_surface",
         "geotransolver_surface",
         "drivaer_ml_surface",
         "surface",
         ["+model.attention_type=GALE_FA"],
     ),
-    (
+    _RecipeSpec(
         "geotransolver_fa_volume",
         "geotransolver_volume",
         "drivaer_ml_volume",
@@ -208,19 +224,25 @@ _TENSOR_INPUT_RECIPES: list[tuple[str, str, str, str, list[str]]] = [
             "model.state_mixing_mode=concat_project",
         ],
     ),
-    (
+    _RecipeSpec(
         "geotransolver_fa_highlift_surface",
         "geotransolver_surface",
         "highlift_surface",
         "surface",
         ["+model.attention_type=GALE_FA"],
     ),
-    ("transolver_surface", "transolver_surface", "drivaer_ml_surface", "surface", []),
-    ("transolver_volume", "transolver_volume", "drivaer_ml_volume", "volume", []),
-    ("flare_surface", "flare_surface", "drivaer_ml_surface", "surface", []),
-    ("flare_volume", "flare_volume", "drivaer_ml_volume", "volume", []),
-    ("highlift_surface", "geotransolver_surface", "highlift_surface", "surface", []),
-    (
+    _RecipeSpec(
+        "transolver_surface", "transolver_surface", "drivaer_ml_surface", "surface", []
+    ),
+    _RecipeSpec(
+        "transolver_volume", "transolver_volume", "drivaer_ml_volume", "volume", []
+    ),
+    _RecipeSpec("flare_surface", "flare_surface", "drivaer_ml_surface", "surface", []),
+    _RecipeSpec("flare_volume", "flare_volume", "drivaer_ml_volume", "volume", []),
+    _RecipeSpec(
+        "highlift_surface", "geotransolver_surface", "highlift_surface", "surface", []
+    ),
+    _RecipeSpec(
         "highlift_volume",
         "geotransolver_volume_highlift",
         "highlift_volume",
@@ -257,7 +279,7 @@ def _output_to_tensordict(
 @pytest.mark.parametrize(
     "recipe_id,model,dataset,domain,overrides",
     _TENSOR_INPUT_RECIPES,
-    ids=[r[0] for r in _TENSOR_INPUT_RECIPES],
+    ids=[r.recipe_id for r in _TENSOR_INPUT_RECIPES],
 )
 def test_tensor_input_config_synthetic_e2e(
     recipe_id: str,
