@@ -46,7 +46,6 @@ import torch
 
 from physicsnemo.mesh import Mesh
 
-
 ### Fixtures ###
 
 
