@@ -24,8 +24,6 @@
 # MeshReaderWithGlobalData to merge them onto each boundary Mesh at
 # load time.
 
-name: shift_suv_fastback
-
 train_datadir: ${dataset_paths.shift_suv}/fastback/
 
 pipeline:
@@ -75,5 +73,3 @@ pipeline:
 targets:
   pressure: scalar
   wss: vector
-
-metrics: [l1, l2, mae]

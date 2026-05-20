@@ -1,0 +1,57 @@
+# @package _global_
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ---------------------------------------------------------------------------
+# DoMINO template -- SURFACE-only recipes.  >>> DRAFT (see comments).
+# ---------------------------------------------------------------------------
+# DoMINO uses a geometry-encoding UNet + basis-function architecture
+# that natively handles SDF grids and surface neighbor information.
+# Its forward method accepts a single ``data_dict`` argument; the
+# recipe's forward_kwargs resolver builds that dict by recursing into
+# the nested-dict spec below.
+#
+# >>> NOTE: DoMINO is still in progress in this recipe.  The dataset
+# YAML (drivaer_ml_surface.yaml) does not yet expose all the per-cell
+# neighbor / grid features that DoMINO's full `forward(data_dict)`
+# expects.  The references below are illustrative; running this config
+# end-to-end requires extending the dataset pipeline with a
+# DoMINO-specific pre-processing stage.
+input_type: tensors
+output_type: tensors
+
+forward_kwargs:
+  data_dict:
+    geometry_coordinates: interior.points
+    surface_mesh_centers: interior.points
+    surface_normals: boundaries.vehicle.cell_data.normals
+    global_params_values: global_data.U_inf
+    global_params_reference: global_data.U_inf
+
+model:
+  _target_: physicsnemo.models.domino.DoMINO
+  input_features: 3                # x, y, z coordinates
+  output_features_surf: ${out_dim} # auto-set from the chosen dataset's `targets:` block
+  output_features_vol: null        # surface-only mode
+  global_features: 3               # freestream velocity U_inf (3 components)
+  model_parameters:
+    interp_res: [128, 64, 64]
+    use_sdf_in_basis_func: true
+    surface_neighbors: true
+    num_neighbors_surface: 7
+    use_surface_normals: true
+    use_surface_area: true
+    geometry_encoding_type: "both"

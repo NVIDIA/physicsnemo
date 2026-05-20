@@ -23,8 +23,6 @@
 # global_data by NonDimensionalizeByMetadata.
 # Splits are controlled by manifest.json + train_split/val_split in the training config.
 
-name: drivaer_ml_volume
-
 train_datadir: ${dataset_paths.drivaer_ml}
 
 pipeline:
@@ -85,5 +83,3 @@ targets:
   velocity: vector
   pressure: scalar
   nut: scalar
-
-metrics: [l1, l2, mae]

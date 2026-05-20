@@ -22,10 +22,8 @@
 # L_ref) are embedded directly in the .pdmsh files; NonDimensionalizeByMetadata
 # reads them straight out of each sample's global_data. Units are slug-inch-
 # second-Rankine.
-# Splits are controlled by a manifest.json + train_split/val_split in the
-# training config (see train_geotransolver_automotive_volume.yaml).
-
-name: highlift_volume
+# Splits are controlled by a manifest.json + train_split/val_split in
+# conf/train.yaml (see Recipe Gallery in the README).
 
 train_datadir: ${dataset_paths.highlift_aero_ml}
 
@@ -85,5 +83,3 @@ targets:
   temperature: scalar
   density: scalar
   velocity: vector
-
-metrics: [l1, l2, mae]
