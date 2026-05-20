@@ -43,7 +43,6 @@ radius: 0.035
 dt: 0.005
 
 # performance configs
-use_apex: True
 amp: False
 jit: False
 num_dataloader_workers: 4 # 4

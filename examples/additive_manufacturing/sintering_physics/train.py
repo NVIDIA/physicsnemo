@@ -137,6 +137,12 @@ def Train(rank_zero_logger, dist, cfg: DictConfig):
     running_loss = 0.0
     best_loss = 1000.0
 
+    # Native PyTorch automatic mixed precision (AMP) replaces NVIDIA Apex.
+    # GradScaler is a no-op when enabled=False, so it is safe to construct
+    # unconditionally and only activate when fp16 training is requested.
+    use_amp = cfg.general.fp16
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+
     rank_zero_logger.info("Training started...")
 
     for features, targets in tqdm(dataset):
@@ -178,18 +184,24 @@ def Train(rank_zero_logger, dist, cfg: DictConfig):
 
         sampled_noise *= noise_mask
 
-        pred_target = model(
-            next_positions=targets.to(device),
-            position_sequence=inputs.to(device),
-            position_sequence_noise=sampled_noise.to(device),
-            n_particles_per_example=features["n_particles_per_example"].to(device),
-            n_edges_per_example=features["n_edges_per_example"].to(device),
-            senders=features["senders"].to(device),
-            receivers=features["receivers"].to(device),
-            predict_length=cfg.train_options.pred_len,
-            particle_types=features["particle_type"].to(device),
-            global_context=features.get("step_context").to(device),
+        amp_active = (
+            use_amp and isinstance(device, torch.device) and device.type == "cuda"
         )
+        with torch.autocast(
+            device_type="cuda", dtype=torch.float16, enabled=amp_active
+        ):
+            pred_target = model(
+                next_positions=targets.to(device),
+                position_sequence=inputs.to(device),
+                position_sequence_noise=sampled_noise.to(device),
+                n_particles_per_example=features["n_particles_per_example"].to(device),
+                n_edges_per_example=features["n_edges_per_example"].to(device),
+                senders=features["senders"].to(device),
+                receivers=features["receivers"].to(device),
+                predict_length=cfg.train_options.pred_len,
+                particle_types=features["particle_type"].to(device),
+                global_context=features.get("step_context").to(device),
+            )
 
         if optimizer is None:
             # first data need to inference the feature size
@@ -207,15 +219,8 @@ def Train(rank_zero_logger, dist, cfg: DictConfig):
             model.setMessagePassingDevices(message_passing_devices)
             model = model.to(device)
             optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
-            if cfg.general.fp16:
-                # double check if amp installed
-                try:
-                    from apex import amp
-
-                    model, optimizer = amp.initialize(model, optimizer, opt_level="O1")
-                except ImportError as e:
-                    print("Apex package not available -> ", e)
-                    exit()
+            # Mixed precision is handled via the torch.amp GradScaler / autocast
+            # constructed above; no extra optimizer wrapping is required.
 
             scheduler = torch.optim.lr_scheduler.ExponentialLR(
                 optimizer, gamma=0.1, verbose=True
@@ -393,12 +398,13 @@ def Train(rank_zero_logger, dist, cfg: DictConfig):
         rank_zero_logger.info(f"loss: {loss}")
         # back propogation
         optimizer.zero_grad()
-        if cfg.general.fp16:
-            with amp.scale_loss(loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
+        if use_amp:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
         else:
             loss.backward()
-        optimizer.step()
+            optimizer.step()
 
         running_loss += loss.item()
 

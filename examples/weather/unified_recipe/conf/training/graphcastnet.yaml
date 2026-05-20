@@ -18,10 +18,10 @@ amp_supported: !!bool False
 nr_input_steps: 2 # Number of input steps to model
 
 optimizer:
-  framework: apex
-  name: FusedAdam
+  name: Adam
   args:
     betas: [0.9, 0.999]
+    fused: true
 
 stages:
   - name: "Learning Rate Warmup"

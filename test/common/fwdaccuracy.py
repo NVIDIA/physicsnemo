@@ -18,6 +18,7 @@ import logging
 from pathlib import Path
 from typing import Tuple, Union
 
+import pytest
 import torch
 
 import physicsnemo
@@ -102,7 +103,27 @@ def validate_forward_accuracy(
     ------
     IOError
         Target output tensor file for this model was not found
+
+    Notes
+    -----
+    On ``torch < _REFERENCE_DATA_MIN_TORCH`` (currently ``"2.12"``) the
+    test is skipped via :func:`pytest.skip` instead of compared: the
+    saved ``.pth`` reference data is locked to post-2.12 RNG/init
+    algorithms (notably ``torch.nn.init.trunc_normal_``'s
+    rejection-sampling rewrite, `pytorch/pytorch#174997
+    <https://github.com/pytorch/pytorch/pull/174997>`_).
     """
+    # Bump when a PyTorch RNG/init algo change breaks reference .pth bit-stability
+    # (most recent: trunc_normal_ in 2.12; pytorch/pytorch#174997). Regen at bump.
+    _REFERENCE_DATA_MIN_TORCH = "2.12"
+    if torch.__version__ < _REFERENCE_DATA_MIN_TORCH:
+        pytest.skip(
+            f"Forward-accuracy reference data requires torch >= "
+            f"{_REFERENCE_DATA_MIN_TORCH} (got {torch.__version__}); "
+            f"init/RNG algorithms changed (e.g. trunc_normal_, "
+            f"pytorch/pytorch#174997)."
+        )
+
     # Perform a foward pass of the model
     output = model.forward(*in_args)
     # Always use tuples for this comparison / saving
