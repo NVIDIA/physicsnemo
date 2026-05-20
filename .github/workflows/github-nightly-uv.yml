@@ -156,17 +156,12 @@ jobs:
 
     # --- uv download cache (static key, delete-before-save) ---
     #
-    # GitHub Actions caches are immutable: actions/cache/save silently
-    # skips if the key already exists.  Because the uv cache uses a fixed
-    # "-latest" key, we must delete the old entry before saving a new
-    # one.  We then re-query gh cache list to confirm the save actually
-    # took effect (the previous implementation swallowed save failures
-    # silently, which is how a corrupted cache could persist for days).
-    #
     # Fires only on a cold cache (first run, prefix bump, or manual
     # purge).  In steady state uv_cache_hit is true and these steps
     # no-op: the warm cache already contains every wheel the frozen sync
-    # needed.
+    # needed.  The replace-cache action centralises the delete-before-
+    # save + verify dance shared by all four mutable-slot caches in
+    # this workflow.
     - name: Prune uv cache
       if: steps.setup-uv-env.outputs.uv_cache_hit != 'true'
       run: |
@@ -175,66 +170,14 @@ jobs:
         echo "uv cache after prune:"
         du -sh ~/.cache/uv 2>/dev/null || echo "  (not present)"
 
-    - name: Delete stale uv cache entry
+    - name: Replace uv download cache
       if: steps.setup-uv-env.outputs.uv_cache_hit != 'true'
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        UV_CACHE_KEY: ${{ env.UV_CACHE_KEY_PREFIX }}-latest
-        REPO: ${{ github.repository }}
-      run: |
-        set -euo pipefail
-        if ! command -v gh >/dev/null 2>&1; then
-          echo "::error::gh CLI not on PATH; cannot manage uv cache slot."
-          exit 1
-        fi
-        # Use --json key + --jq for robust matching (no false positives
-        # on prefix overlap from sibling cache keys).
-        existing="$(gh cache list \
-          --repo "$REPO" \
-          --key "$UV_CACHE_KEY" \
-          --json key \
-          --jq '.[].key' \
-          | grep -Fx "$UV_CACHE_KEY" || true)"
-        if [ -n "$existing" ]; then
-          gh cache delete "$UV_CACHE_KEY" --repo "$REPO"
-          echo "deleted stale uv cache: $UV_CACHE_KEY"
-        else
-          echo "no existing uv cache to delete: $UV_CACHE_KEY"
-        fi
-
-    - name: Save uv download cache
-      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true'
-      uses: actions/cache/save@v5
+      uses: ./.github/actions/replace-cache
       with:
         path: ~/.cache/uv
         key: ${{ env.UV_CACHE_KEY_PREFIX }}-latest
-
-    # Confirm the save actually took effect.  actions/cache/save@v4
-    # silently no-ops on key collision; if the previous delete step
-    # somehow left the entry in place (or a concurrent run repopulated
-    # it), we want a hard failure now rather than a stale cache fed to
-    # tomorrow's nightly.
-    - name: Verify uv download cache was saved
-      if: steps.setup-uv-env.outputs.uv_cache_hit != 'true'
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        UV_CACHE_KEY: ${{ env.UV_CACHE_KEY_PREFIX }}-latest
-        REPO: ${{ github.repository }}
-      run: |
-        set -euo pipefail
-        # GitHub's cache index is eventually consistent; allow a few
-        # seconds before failing.
-        for attempt in 1 2 3 4 5; do
-          if gh cache list --repo "$REPO" --key "$UV_CACHE_KEY" --json key --jq '.[].key' \
-              | grep -Fxq "$UV_CACHE_KEY"; then
-            echo "uv download cache present: $UV_CACHE_KEY"
-            exit 0
-          fi
-          echo "attempt $attempt: uv cache not yet visible, sleeping..."
-          sleep 5
-        done
-        echo "::error::uv download cache save did not take effect for key $UV_CACHE_KEY"
-        exit 1
+        description: uv download cache
+        github-token: ${{ secrets.GITHUB_TOKEN }}
 
   # Stage 2: Run testmon tests and cache the database
   testmon:
@@ -297,50 +240,46 @@ jobs:
     # --- JIT compilation cache (static key, delete-before-save) ---
     #
     # Same pattern as the uv download cache: the `-latest` key is a
-    # mutable slot.  GitHub Actions caches are immutable, so we delete
-    # the old entry before saving.  The cache is additive and each
-    # compiler handles its own source-hash invalidation, so it survives
-    # lockfile and kernel-source changes safely.
-    - name: Delete stale JIT cache entry
+    # mutable slot refreshed via replace-cache.  The cache is additive
+    # and each compiler handles its own source-hash invalidation, so it
+    # survives lockfile and kernel-source changes safely.  if: always()
+    # so a flaky-but-non-fatal pytest exit still publishes the warm
+    # JIT artifacts produced before the failure.
+    - name: Replace JIT compilation cache
       if: always()
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        JIT_CACHE_KEY: ${{ env.JIT_CACHE_KEY_PREFIX }}-latest
-        REPO: ${{ github.repository }}
-      run: |
-        set -euo pipefail
-        if ! command -v gh >/dev/null 2>&1; then
-          echo "::warning::gh CLI not on PATH; skipping JIT cache save."
-          exit 0
-        fi
-        existing="$(gh cache list \
-          --repo "$REPO" \
-          --key "$JIT_CACHE_KEY" \
-          --json key \
-          --jq '.[].key' \
-          | grep -Fx "$JIT_CACHE_KEY" || true)"
-        if [ -n "$existing" ]; then
-          gh cache delete "$JIT_CACHE_KEY" --repo "$REPO"
-          echo "deleted stale JIT cache: $JIT_CACHE_KEY"
-        else
-          echo "no existing JIT cache to delete: $JIT_CACHE_KEY"
-        fi
-
-    - name: Save JIT compilation cache
-      if: always()
-      uses: actions/cache/save@v5
+      uses: ./.github/actions/replace-cache
       with:
         path: ${{ env.JIT_CACHE_DIR }}
         key: ${{ env.JIT_CACHE_KEY_PREFIX }}-latest
+        description: JIT compilation cache
+        github-token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Save testmon database to cache
-      uses: actions/cache/save@v5
+    # --- Testmon database cache (mutable -latest slot) ---
+    #
+    # Previously keyed on hashFiles('uv.lock', 'pyproject.toml'), which
+    # collided with the previous nightly's save whenever the lockfile
+    # was unchanged (the common case): GitHub Actions caches are
+    # immutable, so the second save logged "Failed to save: Unable to
+    # reserve cache" as a *warning* and the stale DB persisted for
+    # days.  PRs then restored the stale DB and testmon invalidated
+    # everything because the env fingerprint had drifted.  Switching to
+    # a -latest mutable slot via replace-cache fixes both: the slot is
+    # always overwritten, and silent save failures become hard job
+    # failures via the embedded verify step.
+    #
+    # if: always() so a flaky-but-non-fatal pytest exit still updates
+    # the DB with whatever progress was made.
+    - name: Replace testmon database cache
+      if: always()
+      uses: ./.github/actions/replace-cache
       with:
         path: |
           .testmondata
           .testmondata-shm
           .testmondata-wal
-        key: ${{ env.TESTMON_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+        key: ${{ env.TESTMON_CACHE_KEY_PREFIX }}-latest
+        description: testmon database
+        github-token: ${{ secrets.GITHUB_TOKEN }}
 
   # Stage 3: Run coverage tests and upload artifacts
   coverage:
@@ -399,11 +338,19 @@ jobs:
         name: junit-coverage-doctest
         path: coverage-doctest-report.xml
 
-    - name: Save coverage files to cache
-      uses: actions/cache/save@v5
+    # --- Coverage baseline cache (mutable -latest slot) ---
+    #
+    # Same immutable-key bug as the testmon cache: the previous lockhash
+    # suffix could not be re-saved on consecutive nightlies with an
+    # unchanged lockfile.  Migrated to a -latest slot via replace-cache
+    # for parity with testmon and JIT.
+    - name: Replace coverage baseline cache
+      uses: ./.github/actions/replace-cache
       with:
         path: .coverage*
-        key: ${{ env.COVERAGE_CACHE_KEY_PREFIX }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+        key: ${{ env.COVERAGE_CACHE_KEY_PREFIX }}-latest
+        description: coverage baseline
+        github-token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Merge coverage reports
       run: |
