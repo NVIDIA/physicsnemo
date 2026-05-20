@@ -26,8 +26,14 @@ quantity of interest, swap those calls.
 
 from __future__ import annotations
 
+from typing import Any
+
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
+
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.experimental.uq import VariationalGPHead
 
 from utils import cast_precisions, get_autocast_context, loss_fn
 from gp_utils import sync_non_ddp_gradients
@@ -38,22 +44,22 @@ from aero_physics import (
 
 
 def train_one_batch(
-    batch,
-    backbone_model,
-    embedding_reduction,
-    gp,
-    surface_factors,
-    device,
-    precision,
-    optimizer,
-    lambda_gp,
-    lambda_consistency,
-    consistency_detach,
-    consistency_every_n,
-    step_idx,
-    dist_manager,
+    batch: dict[str, Any],
+    backbone_model: nn.Module,
+    embedding_reduction: nn.Module,
+    gp: VariationalGPHead,
+    surface_factors: dict[str, torch.Tensor],
+    device: torch.device,
+    precision: str,
+    optimizer: torch.optim.Optimizer,
+    lambda_gp: float,
+    lambda_consistency: float,
+    consistency_detach: bool,
+    consistency_every_n: int,
+    step_idx: int,
+    dist_manager: DistributedManager,
     accumulation_steps: int = 1,
-):
+) -> float:
     """Run a single training step and return the (unscaled) loss value.
 
     The total loss is::

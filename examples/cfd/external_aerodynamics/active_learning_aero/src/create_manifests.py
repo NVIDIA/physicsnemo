@@ -14,21 +14,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Create fixed test/pool split manifests for DrivAerStar active learning.
+"""Create fixed test/pool split manifests for active learning.
 
 Run once to produce JSON manifests that define exactly which samples
-are in the test set (100 per class) and pool (remaining).  All
-subsequent AL experiments read these manifests instead of re-splitting.
+are in the test set (N per class) and pool (remaining). All subsequent
+AL experiments read these manifests instead of re-splitting.
+
+Class labels are supplied as ``LABEL=PATH`` pairs to ``--zarr-paths``,
+so the same script works for any dataset (e.g. ShiftSUV's SE/SF or
+DrivAerStar's F/N/E).
 
 Usage::
 
     python create_manifests.py \\
-        --class_F /data/datasets/drivaerstar/surface_files_zarr/class_F/val \\
-        --class_N /data/datasets/drivaerstar/surface_files_zarr/class_N/val \\
-        --class_E /data/datasets/drivaerstar/surface_files_zarr/class_E/val \\
-        --test_per_class 100 \\
+        --zarr-paths \\
+            SE=/path/to/shift_suv_estateback_zarr/val \\
+            SF=/path/to/shift_suv_fastback_zarr/val \\
+        --test-samples-per-class 100 \\
         --seed 42 \\
-        --out_dir manifests/
+        --output-dir src/manifests
 """
 
 import argparse
@@ -45,32 +49,49 @@ def list_sample_names(zarr_dir: str) -> list[str]:
     return samples
 
 
+def _parse_label_path(s: str) -> tuple[str, str]:
+    """Parse a ``LABEL=PATH`` argument into a ``(label, path)`` tuple."""
+    if "=" not in s:
+        raise argparse.ArgumentTypeError(
+            f"Expected LABEL=PATH, got {s!r} (missing '=')."
+        )
+    label, _, path = s.partition("=")
+    if not label or not path:
+        raise argparse.ArgumentTypeError(
+            f"Expected LABEL=PATH with both fields non-empty, got {s!r}."
+        )
+    return label, path
+
+
 def main():
     """CLI entry point: build per-class test/pool split manifests for AL."""
     parser = argparse.ArgumentParser(description="Create AL split manifests")
-    parser.add_argument("--class_F", required=True, help="Path to class_F/val zarr dir")
-    parser.add_argument("--class_N", required=True, help="Path to class_N/val zarr dir")
-    parser.add_argument("--class_E", required=True, help="Path to class_E/val zarr dir")
-    parser.add_argument("--test_per_class", type=int, default=100)
     parser.add_argument(
-        "--pool_per_class",
+        "--zarr-paths",
+        type=_parse_label_path,
+        nargs="+",
+        required=True,
+        metavar="LABEL=PATH",
+        help="One or more class label / zarr-val-dir pairs, e.g. SE=/data/.../val",
+    )
+    parser.add_argument("--test-samples-per-class", type=int, default=100)
+    parser.add_argument(
+        "--pool-per-class",
         type=int,
         default=500,
         help="Max samples per class in the AL pool (rest discarded)",
     )
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--out_dir", default="manifests/")
+    parser.add_argument("--output-dir", default="manifests/")
     args = parser.parse_args()
 
-    out_dir = Path(args.out_dir)
+    out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(args.seed)
 
-    classes = {
-        "F": args.class_F,
-        "N": args.class_N,
-        "E": args.class_E,
-    }
+    classes = dict(args.zarr_paths)
+    if len(classes) != len(args.zarr_paths):
+        raise SystemExit("Duplicate class label in --zarr-paths.")
 
     summary = {}
     for cls_label, zarr_path in classes.items():
@@ -78,8 +99,8 @@ def main():
         n = len(samples)
         perm = rng.permutation(n)
 
-        test_idx = sorted(perm[: args.test_per_class].tolist())
-        remaining = perm[args.test_per_class :]
+        test_idx = sorted(perm[: args.test_samples_per_class].tolist())
+        remaining = perm[args.test_samples_per_class :]
         if args.pool_per_class is not None and len(remaining) > args.pool_per_class:
             remaining = remaining[: args.pool_per_class]
         pool_idx = sorted(remaining.tolist())
@@ -92,7 +113,7 @@ def main():
             "zarr_path": zarr_path,
             "total_samples": n,
             "seed": args.seed,
-            "test_per_class": args.test_per_class,
+            "test_per_class": args.test_samples_per_class,
             "test_indices": test_idx,
             "test_names": test_names,
             "pool_indices": pool_idx,

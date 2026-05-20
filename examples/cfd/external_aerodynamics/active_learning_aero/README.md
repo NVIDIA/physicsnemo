@@ -26,7 +26,9 @@ loop:
    with a **joint UQ signal** — the disagreement between the
    GP-predicted drag and the field-integrated drag, plus the GP's
    posterior variance.
-2. Selects the top-`k` most informative samples per round.
+2. Selects the top-`k` most informative samples per round (those with
+   the highest joint UQ signal — i.e. largest disagreement and/or
+   highest GP posterior std).
 3. Adds them to the training set and **fine-tunes** the backbone +
    pooling + GP head jointly (Field MSE + GP ELBO + consistency).
 4. Evaluates on a frozen, per-class validation pool, logging
@@ -86,8 +88,9 @@ make customization explicit:
 Layers 1 and 2 are written against the
 `physicsnemo.active_learning` protocols (`QueryStrategy`,
 `LabelStrategy`, `MetrologyStrategy`) and the
-`physicsnemo.experimental.uq.VariationalGPHead`; layer 3 is CFD specific -
-domain specific stuff like `pressure`, `wss`, `Cd`, or `freestream` appear.
+`physicsnemo.experimental.uq.VariationalGPHead`; layer 3 is CFD specific
+— this is where domain quantities such as `pressure`, `wss`, `Cd`, and
+`freestream` are referenced directly.
 
 ## Example layout
 

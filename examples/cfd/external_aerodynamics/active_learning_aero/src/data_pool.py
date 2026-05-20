@@ -53,11 +53,20 @@ def load_manifests(
 ) -> tuple[dict[str, list[int]], dict[str, list[int]], dict[str, str]]:
     """Load test/pool splits from JSON manifests.
 
+    Parameters
+    ----------
+    manifest_dir : str | Path
+        Directory containing ``manifest_class_*.json`` files written by
+        ``create_manifests.py``.
+
     Returns
     -------
-    pool_by_class : dict mapping class label -> list of local indices for AL pool
-    test_by_class : dict mapping class label -> list of local indices for test
-    paths_by_class : dict mapping class label -> zarr path
+    pool_by_class : dict[str, list[int]]
+        Class label -> list of local indices forming the AL pool.
+    test_by_class : dict[str, list[int]]
+        Class label -> list of local indices forming the held-out test set.
+    paths_by_class : dict[str, str]
+        Class label -> path to the zarr ``val`` directory for that class.
     """
     manifest_dir = Path(manifest_dir)
     pool_by_class: dict[str, list[int]] = {}

@@ -51,6 +51,10 @@ REFERENCE_VELOCITY = 40.0  # m/s
 REFERENCE_DENSITY = 1.225  # kg/m³
 DRAG_COEFF_SCALE = 0.35  # GP target = Cd / DRAG_COEFF_SCALE
 
+# Pre-computed Cd = 2 F / (rho * V^2 * A) prefactor; reused by drag-integration
+# helpers below and constant across all calls.
+_CD_PREFACTOR = 2.0 / (FRONTAL_AREA * REFERENCE_DENSITY * REFERENCE_VELOCITY**2)
+
 
 # ---------------------------------------------------------------------------
 # Force-coefficient computation
@@ -129,8 +133,9 @@ def compute_drag_target_from_batch(
     area = batch["surface_areas"].squeeze(0).to(device, dtype=fields_phys.dtype)
     p, wss = p.to(device), wss.to(device)
 
-    coeff = 2.0 / (FRONTAL_AREA * REFERENCE_DENSITY * REFERENCE_VELOCITY**2)
-    c_total, _, _ = compute_force_coefficients_torch(normals, area, coeff, p, wss)
+    c_total, _, _ = compute_force_coefficients_torch(
+        normals, area, _CD_PREFACTOR, p, wss
+    )
     return (c_total / drag_scale).unsqueeze(0)
 
 
@@ -161,13 +166,12 @@ def compute_drag_from_subsampled_outputs(
 
     n_full = batch["surface_areas"].squeeze(0).shape[0]
     n_sub = p.shape[0]
-    coeff = 2.0 / (FRONTAL_AREA * REFERENCE_DENSITY * REFERENCE_VELOCITY**2)
     scale = n_full / n_sub
 
     c_total, _, _ = compute_force_coefficients_torch(
         normals,
         areas,
-        coeff * scale,
+        _CD_PREFACTOR * scale,
         p,
         wss,
     )
