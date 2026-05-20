@@ -1,5 +1,5 @@
 torchinfo
 tensorboard
-cuml-cu13==25.10.*
+cuml-cu13==26.2.0
 einops
 tensorstore
