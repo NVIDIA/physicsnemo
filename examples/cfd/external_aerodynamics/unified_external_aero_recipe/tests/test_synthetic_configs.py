@@ -276,7 +276,7 @@ def test_tensor_input_config_synthetic_e2e(
         f"{recipe_id}: {model=} has {input_type=}, not 'tensors'"
     )
     assert OmegaConf.select(train_cfg, "output_type") == "tensors", (
-        f"{recipe_id}: model={model} output_type is not 'tensors'"
+        f"{recipe_id}: {model=} has {output_type=}, not 'tensors'"
     )
 
     target_config = _load_dataset_targets(dataset)
