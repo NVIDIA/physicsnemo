@@ -952,6 +952,7 @@ def build_dataloaders(
     manifest_val_indices: list[int] | None = None
     using_manifests = False
     first_targets: dict[str, str] | None = None
+    first_metrics: list[str] | None = None
 
     for ds_name in dataset_names:
         config_path = recipe_root / "datasets" / f"{ds_name}.yaml"
