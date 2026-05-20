@@ -345,8 +345,11 @@ def _run_epoch(
     Train and val share the same per-batch loop (``forward_pass`` +
     metric accumulation + per-step console log + per-epoch summary).
     Train mode additionally runs the backward / optimizer / scheduler
-    step and emits per-step TensorBoard + JSONL entries; val mode wraps
-    the loop in ``torch.no_grad()`` and skips the per-step writer logging.
+    step and emits per-step TensorBoard + JSONL entries (``phase: "step"``);
+    val mode wraps the loop in ``torch.no_grad()``, skips TensorBoard
+    per-step logging, and emits a lighter-weight JSONL record per step
+    (``phase: "val_step"``) carrying ``epoch``, ``val_step``, ``loss``
+    and ``step_time_s``.
 
     Args:
         mode: ``"train"`` or ``"val"``. ``"train"`` requires *optimizer*
@@ -446,42 +449,68 @@ def _run_epoch(
                 f"{mem_str}"
             )
 
-            ### Per-step TensorBoard + JSONL: train only. Val emits one
-            ### epoch-level entry below to keep dashboards uncluttered.
-            if is_train and dist_manager.rank == 0:
-                global_step = epoch * num_steps + i
+            ### Per-step TensorBoard: train only (val_writer is intentionally
+            ### epoch-only to keep dashboards uncluttered). Per-step JSONL is
+            ### emitted in both modes so downstream tooling can compute val
+            ### step-time statistics directly instead of inferring them from
+            ### ``val_ts - train_ts``.
+            if dist_manager.rank == 0:
                 losses_floats, metrics_floats = _to_float_dicts(losses, metrics)
-                if writer is not None:
-                    ### Loss keys already start with `loss/`, so the iteration
-                    ### prefix yields tags like `iteration/loss/pressure`;
-                    ### metric tags get an explicit `iteration/metrics/...`
-                    ### namespace so we never have to split by string prefix.
-                    _log_to_tensorboard(writer, losses_floats, "iteration", global_step)
-                    _log_to_tensorboard(
-                        writer, metrics_floats, "iteration/metrics", global_step
-                    )
-                    writer.add_scalar(
-                        "iteration/lr",
-                        scheduler.get_last_lr()[0],
-                        global_step=global_step,
-                    )
-                    writer.add_scalar(
-                        "iteration/performance/mem_gb",
-                        mem_gb,
-                        global_step=global_step,
-                    )
-                    writer.add_scalar(
-                        "iteration/performance/step_time_s",
-                        step_dt,
-                        global_step=global_step,
-                    )
-                if log_jsonl is not None:
+                if is_train:
+                    global_step = epoch * num_steps + i
+                    if writer is not None:
+                        ### Loss keys already start with `loss/`, so the iteration
+                        ### prefix yields tags like `iteration/loss/pressure`;
+                        ### metric tags get an explicit `iteration/metrics/...`
+                        ### namespace so we never have to split by string prefix.
+                        _log_to_tensorboard(
+                            writer, losses_floats, "iteration", global_step
+                        )
+                        _log_to_tensorboard(
+                            writer, metrics_floats, "iteration/metrics", global_step
+                        )
+                        writer.add_scalar(
+                            "iteration/lr",
+                            scheduler.get_last_lr()[0],
+                            global_step=global_step,
+                        )
+                        writer.add_scalar(
+                            "iteration/performance/mem_gb",
+                            mem_gb,
+                            global_step=global_step,
+                        )
+                        writer.add_scalar(
+                            "iteration/performance/step_time_s",
+                            step_dt,
+                            global_step=global_step,
+                        )
+                    if log_jsonl is not None:
+                        log_jsonl(
+                            {
+                                "phase": "step",
+                                "global_step": global_step,
+                                "loss": this_loss,
+                                "mem_gb": mem_gb,
+                                "step_time_s": step_dt,
+                                **losses_floats,
+                                **metrics_floats,
+                            }
+                        )
+                elif log_jsonl is not None:
+                    ### Val per-step record. ``epoch`` is explicit (unlike
+                    ### the train ``step`` records, which the parser infers
+                    ### from surrounding ``train`` markers) so val_step
+                    ### records can be associated with an epoch without
+                    ### relying on surrounding context. ``mem_gb`` is
+                    ### intentionally omitted -- the no_grad path is the
+                    ### lowest-noise place to measure step time and we
+                    ### don't want allocator state hopping in TB.
                     log_jsonl(
                         {
-                            "phase": "step",
-                            "global_step": global_step,
+                            "phase": "val_step",
+                            "epoch": epoch,
+                            "val_step": i,
                             "loss": this_loss,
-                            "mem_gb": mem_gb,
                             "step_time_s": step_dt,
                             **losses_floats,
                             **metrics_floats,
@@ -821,8 +850,18 @@ def _build_manifest_samplers(
     )
     ### When no explicit val split is configured, fall back to the train
     ### indices but build a separate non-shuffled, no-drop sampler so val
-    ### iteration is deterministic and covers every sample.
+    ### iteration is deterministic and covers every sample. This used to
+    ### happen silently; warn loudly so the duplication shows up in the
+    ### run log instead of producing a "val == train" loss curve that
+    ### looks correct.
     if val_indices is None:
+        _LOGGER.warning(
+            "Manifest mode: no val_split / val_manifest configured; "
+            "validation will iterate the train split (%d samples). "
+            "Set 'val_split:' or 'val_manifest:' on the data block to "
+            "use a real holdout.",
+            len(train_indices),
+        )
         val_indices = train_indices
     val_sampler = ManifestSampler(
         val_indices,
@@ -898,7 +937,6 @@ def build_dataloaders(
     manifest_train_indices: list[int] | None = None
     manifest_val_indices: list[int] | None = None
     using_manifests = False
-    first_metadata: dict | None = None
     first_targets: dict[str, str] | None = None
     first_metrics: list[str] | None = None
 
@@ -941,25 +979,15 @@ def build_dataloaders(
             OmegaConf.select(ds_yaml, "metrics", default=OmegaConf.create([])),
             resolve=True,
         )
-        ds_metadata = OmegaConf.to_container(
-            OmegaConf.select(ds_yaml, "metadata", default=OmegaConf.create({})),
-            resolve=True,
-        )
         if first_targets is None:
-            first_targets, first_metrics, first_metadata = (
-                ds_targets,
-                ds_metrics,
-                ds_metadata,
-            )
+            first_targets, first_metrics = ds_targets, ds_metrics
         else:
             validate_dataset_consistency(
                 ds_key,
                 ds_targets,
                 ds_metrics,
-                ds_metadata,
                 first_targets,
                 first_metrics,
-                first_metadata,
             )
 
         manifest_spec = resolve_manifest_spec(ds_yaml, ds_cfg_block)
@@ -1064,7 +1092,6 @@ def build_dataloaders(
     )
 
     dataset_info = {
-        "metadata": first_metadata or {},
         "targets": first_targets or {},
         "metrics": first_metrics or list(DEFAULT_METRICS),
     }
@@ -1123,19 +1150,23 @@ def main(cfg: DictConfig) -> None:
     train_loader, val_loader, normalizer, dataset_info = build_dataloaders(cfg)
     target_config: dict[str, FieldType] = dataset_info["targets"]
     metrics_list: list[MetricName] = dataset_info["metrics"]
-    ds_metadata: dict = dataset_info["metadata"]
     logger.info(f"Train samples: {len(train_loader.sampler)}")
     logger.info(f"Val samples: {len(val_loader.sampler)}")
     logger.info(f"Targets (from dataset YAML): {target_config}")
 
     # -- Log dataset metadata (rank 0) --------------------------------------------
     if dist_manager.rank == 0 and log_jsonl is not None:
+        ### Use len(sampler) so manifest mode (where train and val share
+        ### one underlying dataset) reports the actual per-split count,
+        ### not the always-identical len(dataset). PyTorch always assigns
+        ### a sampler (a default SequentialSampler when none is passed),
+        ### so len(loader.sampler) is always defined.
         log_jsonl(
             {
                 "phase": "dataset",
-                "train_samples": len(train_loader.dataset),
-                "val_samples": len(val_loader.dataset),
-                "metadata": ds_metadata or {},
+                "train_samples": len(train_loader.sampler),
+                "val_samples": len(val_loader.sampler),
+                "dataset_size": len(train_loader.dataset),
                 "targets": target_config,
             }
         )

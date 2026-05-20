@@ -15,26 +15,30 @@
 # limitations under the License.
 
 # SHIFT SUV Estate surface dataset
+# Reads the boundary surface Mesh inside each run's `domain.pdmsh`
+# by navigating into the on-disk tensordict directory structure.
 # Triangulated surface mesh. Fields live in cell_data.
+# global_data: the boundary tensordict's own global_data is empty; the
+# case-level freestream conditions (U_inf, p_inf, rho_inf, nu, L_ref)
+# live on the parent DomainMesh's _tensordict/global_data, so we use
+# MeshReaderWithGlobalData to merge them onto each boundary Mesh at
+# load time.
 
 name: shift_suv_estate
 
-train_datadir: ${dataset_paths.shift_suv}/SUV/estate/train/
-val_datadir: ${dataset_paths.shift_suv}/SUV/estate/val/
-test_datadir: ${dataset_paths.shift_suv}/SUV/estate/test/
-
-metadata:
-  U_inf: [30.0, 0.0, 0.0]  # freestream velocity
-  p_inf: 101325                # reference pressure (gauge)
-  rho_inf: 1.225            # freestream density
-  nu: 1.5e-5                # kinematic viscosity
-  L_ref: 5.0                # reference length [m]
+# All splits share this root; the train/val/test subsets are selected
+# by manifest.json (auto-discovered next to train_datadir) plus the
+# train_split / val_split keys in the training config's data block.
+train_datadir: ${dataset_paths.shift_suv}/estate/
 
 pipeline:
   reader:
-    _target_: ${dp:MeshReader}
+    _target_: ${dp:MeshReaderWithGlobalData}
     path: ${train_datadir}
-    pattern: "**/merged_surfaces.vtp.pmsh"
+    pattern: "**/domain.pdmsh/_tensordict/boundaries/vehicle"
+    # Walk up two levels from the boundary tensordict to the parent
+    # DomainMesh's global_data and merge its keys onto each sample.
+    merge_global_data_from: "../../global_data"
   augmentations:
     - _target_: ${dp:RandomRotateMesh}
       axes: ["z"]
