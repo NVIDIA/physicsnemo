@@ -30,6 +30,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from physicsnemo.distributed import DistributedManager
 from physicsnemo.active_learning.protocols import (
     AbstractQueue,
     ActiveLearningPhase,
@@ -91,8 +92,8 @@ class JointUQQueryStrategy(QueryStrategy):
         embedding_reduction = kwargs.get("embedding_reduction")
         surface_factors = kwargs.get("surface_factors")
         device = kwargs.get("device", torch.device("cuda"))
-        rank = kwargs.get("rank", 0)
-        world_size = kwargs.get("world_size", 1)
+        dm = DistributedManager()
+        rank, world_size = dm.rank, dm.world_size
 
         backbone = model.module if hasattr(model, "module") else model
         backbone.eval()

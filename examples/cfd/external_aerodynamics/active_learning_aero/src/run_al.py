@@ -330,8 +330,6 @@ def main(cfg: DictConfig) -> None:
         "embedding_reduction": embedding_reduction,
         "surface_factors": surface_factors,
         "device": device,
-        "rank": dist_manager.rank,
-        "world_size": dist_manager.world_size,
     }
 
     # ---- Simple driver-like object for strategies to attach to ----

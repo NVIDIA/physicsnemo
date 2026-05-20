@@ -34,6 +34,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from physicsnemo.distributed import DistributedManager
 from physicsnemo.active_learning.protocols import (
     ActiveLearningPhase,
     MetrologyStrategy,
@@ -88,8 +89,8 @@ class FieldMetrologyStrategy(MetrologyStrategy):
         val_pool = self.driver.validation_pool
         model = self.driver.learner
         device = kwargs.get("device", torch.device("cuda"))
-        rank = kwargs.get("rank", 0)
-        world_size = kwargs.get("world_size", 1)
+        dm = DistributedManager()
+        rank, world_size = dm.rank, dm.world_size
         n_train = len(self.driver.training_pool)
 
         backbone = model.module if hasattr(model, "module") else model
@@ -97,6 +98,9 @@ class FieldMetrologyStrategy(MetrologyStrategy):
 
         n_val = len(val_pool)
         my_indices = list(range(rank, n_val, world_size))
+        # Materialize train_indices once as a Python list so the inner loop
+        # uses CPU integer lookups rather than per-iteration tensor.item().
+        train_idx_list = val_pool.train_indices.tolist()
 
         # Build class<->index map dynamically from the validation pool so the
         # metrology works for any set of class labels (F/N/E, SE/SF, etc.).
@@ -108,7 +112,7 @@ class FieldMetrologyStrategy(MetrologyStrategy):
         for count, i in enumerate(my_indices):
             if count % 10 == 0 and rank == 0:
                 self.logger.info(f"  Metrology: ~{count * world_size}/{n_val}")
-            flat_idx = val_pool.train_indices[i].item()
+            flat_idx = train_idx_list[i]
             batch = val_pool.get_by_flat_idx(flat_idx)
             cls_label = val_pool.class_of(flat_idx)
             batch = {
