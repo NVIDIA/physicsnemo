@@ -591,6 +591,7 @@ def main(cfg: DictConfig) -> None:
                         consistency_every_n,
                         n_batches,
                         dist_manager,
+                        accumulation_steps=accumulation_steps,
                     )
                     n_batches += 1
 
@@ -639,6 +640,7 @@ def main(cfg: DictConfig) -> None:
                         consistency_every_n,
                         n_batches,
                         dist_manager,
+                        accumulation_steps=accumulation_steps,
                     )
                     n_batches += 1
 

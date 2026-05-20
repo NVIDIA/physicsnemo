@@ -52,8 +52,9 @@ def train_one_batch(
     consistency_every_n,
     step_idx,
     dist_manager,
+    accumulation_steps: int = 1,
 ):
-    """Run a single training step and return the loss value.
+    """Run a single training step and return the (unscaled) loss value.
 
     The total loss is::
 
@@ -62,9 +63,13 @@ def train_one_batch(
 
     where the consistency term is evaluated only when
     ``surface_*_sub`` are present in the batch and only every
-    ``consistency_every_n`` steps. After ``backward()`` the
-    embedding-reduction and GP-head gradients are all-reduced via
-    ``sync_non_ddp_gradients`` because they are not wrapped in DDP.
+    ``consistency_every_n`` steps.
+
+    With ``accumulation_steps > 1`` the loss is scaled by
+    ``1/accumulation_steps`` and ``zero_grad`` / non-DDP grad sync /
+    ``optimizer.step`` only fire on cycle boundaries (``step_idx``
+    counted across all batches in the epoch). Partial cycles at the
+    end of an epoch are dropped; size your batch count accordingly.
     """
     features = cast_precisions(batch["fx"], precision)
     embeddings = cast_precisions(batch["embeddings"], precision)
@@ -101,12 +106,16 @@ def train_one_batch(
             c_loss = F.mse_loss(head_mean, trans_cd)
 
     total_loss = mse_loss + lambda_gp * head_loss + lambda_consistency * c_loss
+    loss_for_logging = total_loss.item()
 
-    optimizer.zero_grad()
-    total_loss.backward()
+    if step_idx % accumulation_steps == 0:
+        optimizer.zero_grad()
 
-    if dist_manager.world_size > 1:
-        sync_non_ddp_gradients([embedding_reduction, gp], dist_manager.world_size)
+    (total_loss / accumulation_steps).backward()
 
-    optimizer.step()
-    return total_loss.item()
+    if (step_idx + 1) % accumulation_steps == 0:
+        if dist_manager.world_size > 1:
+            sync_non_ddp_gradients([embedding_reduction, gp], dist_manager.world_size)
+        optimizer.step()
+
+    return loss_for_logging

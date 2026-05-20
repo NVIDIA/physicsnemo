@@ -149,9 +149,12 @@ class JointUQQueryStrategy(QueryStrategy):
             joint_uq = max(disagreement, 2.0 * gp_std)
             local_rows.append([float(flat_idx), joint_uq, disagreement, gp_std])
 
-        local_t = torch.tensor(local_rows, dtype=torch.float64, device=device)
-        if local_t.ndim == 1:
-            local_t = local_t.unsqueeze(0)
+        # 4 columns: (flat_idx, joint_uq, disagreement, gp_std). Empty list
+        # must be a (0, 4) tensor, not (0,), so the gather sees consistent shape.
+        if local_rows:
+            local_t = torch.tensor(local_rows, dtype=torch.float64, device=device)
+        else:
+            local_t = torch.zeros((0, 4), dtype=torch.float64, device=device)
         all_data = padded_all_gather(local_t, device).cpu().numpy()
 
         scores = [

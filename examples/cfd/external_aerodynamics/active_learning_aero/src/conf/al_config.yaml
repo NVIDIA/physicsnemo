@@ -82,7 +82,7 @@ profile: false
 # --- Training overrides ---
 training:
   save_interval: 5
-  gradient_accumulation_steps: 8
+  gradient_accumulation_steps: 1
 
 model:
   functional_dim: 6

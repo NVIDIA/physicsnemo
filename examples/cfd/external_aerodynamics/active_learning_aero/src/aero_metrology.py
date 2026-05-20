@@ -137,9 +137,12 @@ class FieldMetrologyStrategy(MetrologyStrategy):
             cls_idx = cls_to_idx.get(cls_label, -1)
             local_rows.append([field_mse, float(cls_idx)])
 
-        local_t = torch.tensor(local_rows, dtype=torch.float64, device=device)
-        if local_t.ndim == 1:
-            local_t = local_t.unsqueeze(0)
+        # 2 columns: (field_mse, cls_idx). Empty list must be a (0, 2) tensor,
+        # not (0,), so the gather sees consistent shape across ranks.
+        if local_rows:
+            local_t = torch.tensor(local_rows, dtype=torch.float64, device=device)
+        else:
+            local_t = torch.zeros((0, 2), dtype=torch.float64, device=device)
         all_data = padded_all_gather(local_t, device).cpu().numpy()
 
         mse_arr = all_data[:, 0]
