@@ -21,9 +21,10 @@
 #   nightly that builds the testmon DB and the PR that consumes it.  The
 #   companion `.github/ci-requirements.lock` (passed via `-c` in
 #   setup-uv-env) pins that closure so the fingerprint matches.
-#   Regenerate it via `.github/regen-ci-deps-lock.sh` (or the
-#   "Regen CI-deps Lock" workflow_dispatch) whenever any `==` pin below
-#   changes.
+#   Regenerate it whenever any `==` pin below changes; the three regen
+#   paths (nightly artifact, standalone workflow, local docker) are
+#   documented in .github/CACHE_CONTRACT.md under
+#   "Why a separate ci-requirements.lock".
 #
 # Coupling notes (bump in lockstep):
 #   * Dockerfile lines 240-243 still use `>=` lower bounds for the
