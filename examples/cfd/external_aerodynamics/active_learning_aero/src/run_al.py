@@ -33,13 +33,8 @@ from __future__ import annotations
 
 import collections
 import json
-import os
-import sys
-import time
-from contextlib import nullcontext
 from pathlib import Path
 from queue import Queue
-from typing import Any
 
 import hydra
 import numpy as np
@@ -49,7 +44,6 @@ from omegaconf import DictConfig, OmegaConf
 
 torch.serialization.add_safe_globals([omegaconf.listconfig.ListConfig])
 torch.serialization.add_safe_globals([omegaconf.base.ContainerMetadata])
-torch.serialization.add_safe_globals([Any])
 torch.serialization.add_safe_globals([list])
 torch.serialization.add_safe_globals([collections.defaultdict])
 torch.serialization.add_safe_globals([dict])
@@ -127,9 +121,10 @@ def main(cfg: DictConfig) -> None:
     # ---- Normalization ----
     norm_dir = getattr(cfg.data, "normalization_dir", ".")
     norm_file = str(Path(norm_dir) / "surface_fields_normalization.npz")
+    norm_data = np.load(norm_file)
     surface_factors = {
-        "mean": torch.from_numpy(np.load(norm_file)["mean"]).to(device),
-        "std": torch.from_numpy(np.load(norm_file)["std"]).to(device),
+        "mean": torch.from_numpy(norm_data["mean"]).to(device),
+        "std": torch.from_numpy(norm_data["std"]).to(device),
     }
 
     # ---- Build data pools from manifests ----

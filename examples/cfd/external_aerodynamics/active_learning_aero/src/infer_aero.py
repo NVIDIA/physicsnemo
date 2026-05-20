@@ -50,11 +50,9 @@ from __future__ import annotations
 
 import collections
 import json
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 import hydra
 import numpy as np
@@ -66,7 +64,6 @@ from omegaconf import DictConfig, OmegaConf
 ### checkpoint loader pickles a dict that needs these classes whitelisted.
 torch.serialization.add_safe_globals([omegaconf.listconfig.ListConfig])
 torch.serialization.add_safe_globals([omegaconf.base.ContainerMetadata])
-torch.serialization.add_safe_globals([Any])
 torch.serialization.add_safe_globals([list])
 torch.serialization.add_safe_globals([collections.defaultdict])
 torch.serialization.add_safe_globals([dict])

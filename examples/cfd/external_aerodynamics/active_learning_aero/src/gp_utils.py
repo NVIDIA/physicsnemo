@@ -149,7 +149,7 @@ def create_embedding_reduction(
             target_scale=target_scale,
             **kwargs,
         )
-    if pooling == "mean":
+    elif pooling == "mean":
         return MeanPooling(
             feat_dim=feat_dim,
             embed_dim=embed_dim,
@@ -157,7 +157,8 @@ def create_embedding_reduction(
             normalize=normalize,
             target_scale=target_scale,
         )
-    raise ValueError(f"Unknown pooling: {pooling!r}. Use 'attention' or 'mean'.")
+    else:
+        raise ValueError(f"Unknown pooling: {pooling!r}. Use 'attention' or 'mean'.")
 
 
 # ---------------------------------------------------------------------------
