@@ -14,14 +14,13 @@ step).
 from pathlib import Path
 
 import hydra
-from omegaconf import DictConfig
 import torch
+from datasets import dataset_classes
+from omegaconf import DictConfig
+from utils.trainer import find_latest_model_checkpoint
 
 from physicsnemo.core import Module
 from physicsnemo.distributed import DistributedManager
-
-from datasets import dataset_classes
-from utils.trainer import find_latest_model_checkpoint
 
 
 def _resolve_checkpoints(cfg: DictConfig) -> list[str]:
@@ -31,9 +30,11 @@ def _resolve_checkpoints(cfg: DictConfig) -> list[str]:
     back to ``inference.checkpoint`` (single path or ``"latest"``). Single-
     model inference is just the length-1 deep-ensemble case.
     """
-    checkpoints = cfg.inference.get("checkpoints", None) if hasattr(
-        cfg.inference, "get"
-    ) else getattr(cfg.inference, "checkpoints", None)
+    checkpoints = (
+        cfg.inference.get("checkpoints", None)
+        if hasattr(cfg.inference, "get")
+        else getattr(cfg.inference, "checkpoints", None)
+    )
     if checkpoints:
         return [str(c) for c in checkpoints]
 
@@ -139,19 +140,25 @@ def run_inference(cfg: DictConfig) -> dict[str, float | str | int | list[int]]:
     # only uses the first step, so collapse to (B, C, H, W).
     if target.ndim == 5:
         target = target[:, 0]
-    background = sample["background"].unsqueeze(0).to(device=device, dtype=torch.float32)
+    background = (
+        sample["background"].unsqueeze(0).to(device=device, dtype=torch.float32)
+    )
 
     invariants = dataset.get_invariants()
     if invariants is not None:
-        invariants = torch.from_numpy(invariants).unsqueeze(0).to(
-            device=device, dtype=torch.float32
+        invariants = (
+            torch.from_numpy(invariants)
+            .unsqueeze(0)
+            .to(device=device, dtype=torch.float32)
         )
 
     all_trajectories: list[torch.Tensor] = []
     num_steps = int(cfg.inference.num_steps)
     output_only = dataset.output_only_channels()
     with torch.no_grad():
-        for ckpt_path, n_members in zip(checkpoint_paths, members_per_model, strict=True):
+        for ckpt_path, n_members in zip(
+            checkpoint_paths, members_per_model, strict=True
+        ):
             if n_members <= 0:
                 continue
             model = Module.from_checkpoint(ckpt_path).to(device).eval()

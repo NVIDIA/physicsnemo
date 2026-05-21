@@ -140,6 +140,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added support for Batched radius search, which enables Domino
   and GeoTransolver with local features and batch size > 1.
 - Added the underfill recipe.
+- Adds Functional Generative Networks (FGN) weather training example
+  (`examples/weather/fgn`). Implements the latent-conditioned U-Net
+  stochastic generator from
+  `arXiv:2506.10772 <https://arxiv.org/abs/2506.10772>`_ (WeatherNext 2)
+  as a PhysicsNeMo ``Module``, trained with fair-CRPS loss on ERA5 via the
+  earth2studio ARCO data source. Supports autoregressive rollout training
+  with per-channel normalization, FSDP + ShardTensor domain parallelism,
+  deep-ensemble inference (paper §2.2.1), and validation diagnostics
+  (CRPS, RMSE, spread-skill, rank histograms, power spectra).
 
 ### Changed
 

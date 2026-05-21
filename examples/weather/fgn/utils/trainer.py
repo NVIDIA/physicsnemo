@@ -7,14 +7,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-from omegaconf import OmegaConf
 import torch
-
-from physicsnemo.distributed import DistributedManager
-from physicsnemo.utils import load_checkpoint, save_checkpoint
-from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
-
 from datasets import dataset_classes
+from omegaconf import OmegaConf
 from utils.config import TrainMainConfig
 from utils.loss import (
     build_area_weights,
@@ -36,6 +31,10 @@ from utils.metrics import (
 )
 from utils.nn import build_model
 from utils.parallel import ParallelHelper
+
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 
 def find_latest_model_checkpoint(checkpoint_dir: Path) -> str:
@@ -82,11 +81,11 @@ class Trainer:
                 )
                 > 1
             ):
-                raise ValueError(
-                    "Domain parallelism requires a local batch size of 1"
-                )
+                raise ValueError("Domain parallelism requires a local batch size of 1")
 
-        self.checkpoint_dir = Path(self.cfg.training.rundir) / self.cfg.training.checkpoint_dir
+        self.checkpoint_dir = (
+            Path(self.cfg.training.rundir) / self.cfg.training.checkpoint_dir
+        )
         if self.dist.rank == 0:
             self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -94,9 +93,7 @@ class Trainer:
         torch.manual_seed(int(self.cfg.training.seed))
 
         dataset_cls = dataset_classes[self.cfg.dataset.name]
-        self.logger.info(
-            f"Building datasets: {self.cfg.dataset.name}"
-        )
+        self.logger.info(f"Building datasets: {self.cfg.dataset.name}")
         self.train_dataset = dataset_cls(self.cfg.dataset, train=True)
         self.valid_dataset = dataset_cls(self.cfg.dataset, train=False)
         self.logger.info(
@@ -170,14 +167,17 @@ class Trainer:
             # same way StormCast does — `sharded_data_iter(loader, N)`. By
             # default sweep one local epoch over each rank's shard.
             local_valid = max(
-                1, len(self.valid_dataset) // (max(self.dist.world_size, 1) * max(local_batch, 1))
+                1,
+                len(self.valid_dataset)
+                // (max(self.dist.world_size, 1) * max(local_batch, 1)),
             )
             self.validation_steps = int(
-                getattr(self.cfg.training, "validation_steps", local_valid) or local_valid
+                getattr(self.cfg.training, "validation_steps", local_valid)
+                or local_valid
             )
         else:
-            from torch.utils.data import DataLoader
             from datasets.dataset import worker_init
+            from torch.utils.data import DataLoader
 
             self.train_loader = DataLoader(
                 self.train_dataset,
@@ -310,9 +310,7 @@ class Trainer:
         # History shape per member: (B, T, C, H, W).
         B, T, C, H, W = history.shape
         per_member_hist = (
-            history.unsqueeze(1)
-            .expand(B, num_samples, T, C, H, W)
-            .contiguous()
+            history.unsqueeze(1).expand(B, num_samples, T, C, H, W).contiguous()
         )
 
         step_losses: list[torch.Tensor] = []
@@ -374,8 +372,7 @@ class Trainer:
         else:
             iterator = self.valid_loader
         with torch.no_grad():
-            for batch in iterator:
-                losses.append(float(self._loss(batch).detach().cpu()))
+            losses.extend(float(self._loss(batch).detach().cpu()) for batch in iterator)
         self.model.train()
         return sum(losses) / max(len(losses), 1)
 
@@ -414,9 +411,7 @@ class Trainer:
         # N parallel trajectories diverge step-by-step exactly as in the
         # training loop, but we don't need gradients.
         B, T, C, H, W = history.shape
-        per_member_hist = (
-            history.unsqueeze(1).expand(B, M, T, C, H, W).contiguous()
-        )
+        per_member_hist = history.unsqueeze(1).expand(B, M, T, C, H, W).contiguous()
         preds_all: list[torch.Tensor] = []
         with torch.no_grad():
             for k in range(K):
@@ -461,9 +456,7 @@ class Trainer:
         ensemble_mean = ensemble.mean(dim=2)
         k_vec, ens_spec, tgt_spec = power_spectra_per_variable(ensemble_mean, target)
 
-        out_dir = (
-            Path(self.cfg.training.rundir) / "validation" / f"step={self.step}"
-        )
+        out_dir = Path(self.cfg.training.rundir) / "validation" / f"step={self.step}"
         out_dir.mkdir(parents=True, exist_ok=True)
 
         summary = {
@@ -485,24 +478,37 @@ class Trainer:
 
         leads = np.arange(1, K + 1)
         plot_metric_vs_lead(
-            crps_kc, variables, leads, "CRPS", "fCRPS per lead (lower is better)",
+            crps_kc,
+            variables,
+            leads,
+            "CRPS",
+            "fCRPS per lead (lower is better)",
             str(out_dir / "crps_vs_lead.png"),
         )
         plot_metric_vs_lead(
-            rmse_kc, variables, leads, "ensemble-mean RMSE",
-            "Ensemble-mean RMSE per lead", str(out_dir / "rmse_vs_lead.png"),
+            rmse_kc,
+            variables,
+            leads,
+            "ensemble-mean RMSE",
+            "Ensemble-mean RMSE per lead",
+            str(out_dir / "rmse_vs_lead.png"),
         )
         plot_metric_vs_lead(
-            ratio_kc, variables, leads, "spread / skill",
+            ratio_kc,
+            variables,
+            leads,
+            "spread / skill",
             "Spread-skill ratio (1.0 = calibrated)",
             str(out_dir / "spread_skill_vs_lead.png"),
             hline_y=1.0,
         )
-        plot_rank_histograms(
-            ranks_cb, variables, str(out_dir / "rank_histograms.png")
-        )
+        plot_rank_histograms(ranks_cb, variables, str(out_dir / "rank_histograms.png"))
         plot_power_spectra(
-            k_vec, ens_spec, tgt_spec, variables, lead_idx=K - 1,
+            k_vec,
+            ens_spec,
+            tgt_spec,
+            variables,
+            lead_idx=K - 1,
             out_path=str(out_dir / f"power_spectra_lead{K}.png"),
         )
 
