@@ -112,7 +112,6 @@ def train_one_batch(
             c_loss = F.mse_loss(head_mean, trans_cd)
 
     total_loss = mse_loss + lambda_gp * head_loss + lambda_consistency * c_loss
-    loss_for_logging = total_loss.item()
 
     if step_idx % accumulation_steps == 0:
         optimizer.zero_grad()
@@ -124,4 +123,4 @@ def train_one_batch(
             sync_non_ddp_gradients([embedding_reduction, gp], dist_manager.world_size)
         optimizer.step()
 
-    return loss_for_logging
+    return total_loss.item()
