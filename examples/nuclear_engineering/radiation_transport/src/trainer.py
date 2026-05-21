@@ -278,7 +278,7 @@ def compute_losses(
             sigma_t=loss_inputs["sigma_t"],
             sigma_s=loss_inputs["sigma_s"],
             sim_time=loss_inputs["sim_time"],
-            metadata=loss_inputs.get("metadata"),
+            sample=loss_inputs,
             flux_normalization_stats=loss_inputs.get("flux_normalization_stats"),
         )
 
@@ -334,9 +334,11 @@ def loss_inputs(batch: Dict[str, Any], require_physics: bool = False) -> Dict[st
 
     for k in _PHYSICS_KEYS:
         inputs[k] = batch[k]
-    for k in ("metadata", "flux_normalization_stats"):
+    for k in ("ulr", "llr", "urr", "lrr", "hlr", "hrr", "cx", "cy"):
         if k in batch:
             inputs[k] = batch[k]
+    if "flux_normalization_stats" in batch:
+        inputs["flux_normalization_stats"] = batch["flux_normalization_stats"]
     return inputs
 
 

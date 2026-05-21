@@ -40,21 +40,33 @@ __all__ = [
 _HOHLRAUM_GEOMETRY_KEYS = ("ulr", "llr", "urr", "lrr", "hlr", "hrr", "cx", "cy")
 
 
-def extract_geometry_params(metadata) -> dict:
-    """Extract hohlraum geometry parameters from sample metadata.
+def extract_geometry_params(sample) -> dict:
+    """Extract hohlraum geometry parameters from a sample TensorDict.
 
-    Reads ``simulation_params.parameters`` out of the sidecar-derived metadata
-    dict and returns the 8-key geometry dict consumed by the hohlraum QoI
-    evaluator (``ulr, llr, urr, lrr, hlr, hrr, cx, cy``). Accepts either a
-    single metadata dict or a batched list of dicts.
+    Reads the eight 0-D float32 tensors that the curator writes into
+    ``mesh.global_data`` for hohlraum stores (``ulr, llr, urr, lrr, hlr,
+    hrr, cx, cy``) and that :meth:`MeshDataReader.load` promotes to the
+    TensorDict top level. Returns ``{}`` if any key is missing (e.g. on a
+    lattice sample, which has no geometry parameters).
     """
-    if isinstance(metadata, (list, tuple)):
-        metadata = metadata[0] if metadata else {}
-    if not isinstance(metadata, dict):
+    if sample is None:
+        return {}
+    try:
+        if not all(k in sample for k in _HOHLRAUM_GEOMETRY_KEYS):
+            return {}
+    except TypeError:
         return {}
 
-    params = metadata.get("simulation_params", {}).get("parameters", {})
-    return {k: float(params[k]) for k in _HOHLRAUM_GEOMETRY_KEYS if k in params}
+    out: dict = {}
+    for k in _HOHLRAUM_GEOMETRY_KEYS:
+        v = sample[k]
+        if hasattr(v, "ndim") and v.ndim > 0:
+            # Batched value (e.g. shape ``(B,)``): collapse to a single
+            # scalar by picking the first entry. Geometry parameters are
+            # static per simulation, so every batch element matches.
+            v = v.reshape(-1)[0]
+        out[k] = float(v.item() if hasattr(v, "item") else v)
+    return out
 
 
 def evaluate_lattice_qoi_torch(

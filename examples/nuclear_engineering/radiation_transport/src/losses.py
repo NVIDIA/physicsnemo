@@ -362,7 +362,7 @@ def compute_physics_loss(
     sigma_t: torch.Tensor,
     sigma_s: torch.Tensor,
     sim_time: torch.Tensor,
-    metadata: list = None,
+    sample=None,
     flux_normalization_stats: dict | None = None,
     qoi_epsilon: float = 1e-10,
 ) -> tuple[torch.Tensor, dict[str, float]]:
@@ -381,11 +381,18 @@ def compute_physics_loss(
     if case_type == "lattice":
         return compute_lattice_qoi_loss(**common)
     if case_type == "hohlraum":
-        geometry_params = extract_geometry_params(metadata) if metadata else {}
+        if sample is None:
+            raise ValueError(
+                "hohlraum physics loss requires the sample TensorDict to read "
+                "geometry parameters (ulr, llr, urr, lrr, hlr, hrr, cx, cy)"
+            )
+        geometry_params = extract_geometry_params(sample)
         if not geometry_params:
             raise ValueError(
-                "hohlraum physics loss requires sample metadata with "
-                "simulation_params.parameters"
+                "could not read hohlraum geometry parameters from the sample "
+                "TensorDict; expected 8 0-D float32 tensors (ulr, llr, urr, "
+                "lrr, hlr, hrr, cx, cy) on the TD top level (see "
+                "MeshDataReader.load)"
             )
         return compute_hohlraum_qoi_loss(**common, geometry_params=geometry_params)
     raise ValueError(

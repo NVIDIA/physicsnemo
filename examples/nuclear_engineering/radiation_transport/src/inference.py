@@ -121,7 +121,7 @@ def run_evaluation(
                     cell_areas_t[b],
                     sigma_t_t[b],
                     sigma_s_t[b],
-                    raw_meta,
+                    batch,
                     case_type,
                 )
 

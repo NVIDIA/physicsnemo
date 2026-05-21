@@ -77,11 +77,9 @@ class TransolverAdapter(Transform):
 
     Pass-through fields when present: ``coordinates_unnormalized``,
     ``material_labels``, ``cell_areas``, ``sigma_t``, ``sigma_s``,
-    ``sim_time``, and ``flux_normalization_stats`` (NonTensorData).
-
-    A trimmed ``metadata`` dict (timestep / filename / case_type) is also
-    re-attached as NonTensorData so downstream physics-loss + inference
-    code paths keep their existing ``batch["metadata"]`` access pattern.
+    ``sim_time``, ``flux_normalization_stats`` (NonTensorData), and the
+    eight hohlraum geometry parameters (``ulr``, ``llr``, ``urr``,
+    ``lrr``, ``hlr``, ``hrr``, ``cx``, ``cy``).
 
     The output has no batch dimension; :func:`collate_no_padding` adds one.
     """
@@ -143,28 +141,13 @@ class TransolverAdapter(Transform):
             out.set_non_tensor(
                 "flux_normalization_stats", data["flux_normalization_stats"]
             )
-        if "filename" in data:
-            out.set_non_tensor("filename", data["filename"])
 
-        # Trim the metadata dict to keys downstream code reads. The full
-        # metadata dict is also delivered as the second tuple element by
-        # the dataset; this is a convenience view for ``batch["metadata"]``.
-        # Bracket access (``data[key]``) unwraps ``NonTensorData`` to the raw
-        # payload; ``TensorDict.get`` does not, so prefer the former here.
-        get = lambda key: data[key] if key in data else None  # noqa: E731
-        src_meta = get("metadata") or {}
-        if not isinstance(src_meta, dict):
-            src_meta = {}
-        candidates = {
-            "timestep_input": get("timestep_input"),
-            "timestep_target": get("timestep_target"),
-            "max_timestep": src_meta.get("max_timestep"),
-            "filename": get("filename"),
-            "case_type": src_meta.get("case_type"),
-        }
-        out.set_non_tensor(
-            "metadata", {k: v for k, v in candidates.items() if v is not None}
-        )
+        # Forward the eight hohlraum geometry parameters (0-D float32
+        # tensors). Lattice samples never carry these keys.
+        for key in ("ulr", "llr", "urr", "lrr", "hlr", "hrr", "cx", "cy"):
+            if key in data:
+                out[key] = data[key]
+
         return out
 
     def extra_repr(self) -> str:
@@ -194,13 +177,16 @@ def collate_no_padding(
         value = td[key]
         out[key] = value.unsqueeze(0) if isinstance(value, torch.Tensor) else value
 
-    # Merge the trailing metadata dict with the trimmed view that
-    # TransolverAdapter set under ``metadata``. Overlapping keys
-    # (``filename``, ``case_type``, ``max_timestep``) carry the same
-    # values in both, so the merge is idempotent there.
+    # Merge the trailing metadata dict (filename / case_type / num_cells
+    # / num_timesteps / max_sim_time) under ``out["metadata"]``. Surface
+    # ``filename`` at the top level too for callers that use
+    # ``batch["filename"]`` directly (e.g. inference figure naming).
     if metadata:
         existing = out.get("metadata") or {}
-        out["metadata"] = {**metadata, **existing}
+        merged = {**metadata, **existing}
+        out["metadata"] = merged
+        if "filename" in merged and "filename" not in out:
+            out["filename"] = merged["filename"]
     return out
 
 

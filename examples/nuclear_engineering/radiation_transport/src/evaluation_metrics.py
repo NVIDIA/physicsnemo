@@ -76,7 +76,7 @@ def compute_sample_qoi(
     cell_areas: torch.Tensor,
     sigma_t: torch.Tensor,
     sigma_s: torch.Tensor,
-    raw_metadata: Dict[str, Any],
+    sample: Any,
     case_type: str,
 ) -> Optional[Dict[str, Dict[str, float]]]:
     """Compute QoI(pred) vs QoI(target) for one sample on the tensors' device.
@@ -84,7 +84,13 @@ def compute_sample_qoi(
     All tensor inputs may live on GPU; only the scalar QoI values are
     materialized to host (via ``.item()``). Returns ``{region: {predicted,
     ground_truth, absolute_error, relative_error_pct}}`` or ``None`` for the
-    hohlraum case when geometry params are missing from ``raw_metadata``.
+    hohlraum case when geometry params are missing from ``sample``.
+
+    Args:
+        sample: For ``case_type="hohlraum"``, a per-sample mapping carrying
+            the eight 0-D float32 geometry tensors (``ulr`` ... ``cy``),
+            typically the batch sliced at index ``b``, or a fresh dict
+            built from those entries by the caller. Ignored for lattice.
     """
     # The QoI evaluators expect ``(1, N)`` batched flux + flat (N,) cell fields.
     pred_batched = pred.float().reshape(1, -1)
@@ -105,7 +111,7 @@ def compute_sample_qoi(
             centers, areas, sigma_t_flat, sigma_s_flat, target_batched, sim_times
         )
     elif case_type == "hohlraum":
-        geometry_params = extract_geometry_params(raw_metadata)
+        geometry_params = extract_geometry_params(sample)
         if not geometry_params:
             return None
         qoi_pred = evaluate_hohlraum_qoi_torch(

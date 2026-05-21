@@ -287,18 +287,11 @@ class FinalTimeSampler(Transform):
 
         input_idx = 0
         target_idx = flux_all.shape[0] - 1
-        metadata = data["metadata"] if "metadata" in data else {}
-        max_timestep = (
-            metadata.get("max_timestep") if isinstance(metadata, dict) else None
-        )
 
         data["flux_input"] = flux_all[input_idx].clone()
         data["flux_target"] = flux_all[target_idx].clone()
         data.set_non_tensor("timestep_input", 0)
-        data.set_non_tensor(
-            "timestep_target",
-            int(max_timestep) if max_timestep is not None else int(target_idx),
-        )
+        data.set_non_tensor("timestep_target", int(target_idx))
         return data
 
 

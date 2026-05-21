@@ -116,8 +116,9 @@ class MeshDataReader(Reader):
         Reads cell-primary fields from ``mesh.cell_data`` and derives
         ``coordinates`` and ``cell_areas`` from the mesh topology. Returned
         tensor fields: ``coordinates``, ``cell_areas``, ``scalar_flux``,
-        ``sim_times``, ``material_properties``, ``sigma_a/s/t``, ``Q``. The
-        sidecar attrs dict is stored as ``NonTensorData`` under ``metadata``.
+        ``sim_times``, ``material_properties``, ``sigma_a/s/t``, ``Q``,
+        plus the eight hohlraum geometry parameters (``ulr, llr, urr, lrr,
+        hlr, hrr, cx, cy``) when present on the store (hohlraum only).
         """
         filepath = self.data_path / filename
         if not filepath.exists():
@@ -162,23 +163,34 @@ class MeshDataReader(Reader):
                     raise KeyError(f"cell_data['{key}'] missing from {filepath}")
                 td[key] = cell_data[key].to(torch.float32).contiguous()
 
+            # Hohlraum geometry parameters: eight 0-D float32 tensors in
+            # ``mesh.global_data``.
+            for key in ("ulr", "llr", "urr", "lrr", "hlr", "hrr", "cx", "cy"):
+                if key in global_data.keys():
+                    td[key] = global_data[key].to(torch.float32).contiguous()
+
             if self.cache_static_arrays:
+                cached_keys = (
+                    "coordinates",
+                    "cell_areas",
+                    "material_properties",
+                    "sigma_t",
+                    "sigma_s",
+                    "sigma_a",
+                    "Q",
+                    "ulr",
+                    "llr",
+                    "urr",
+                    "lrr",
+                    "hlr",
+                    "hrr",
+                    "cx",
+                    "cy",
+                )
                 self._static_cache[filename] = {
-                    k: td[k]
-                    for k in (
-                        "coordinates",
-                        "cell_areas",
-                        "material_properties",
-                        "sigma_t",
-                        "sigma_s",
-                        "sigma_a",
-                        "Q",
-                    )
+                    k: td[k] for k in cached_keys if k in td
                 }
 
-        sidecar = self._read_sidecar(filename)
-        attrs = {k: v for k, v in sidecar.items() if k != "missing_fields"}
-        td.set_non_tensor("metadata", attrs)
         return td
 
     def get_metadata(self, filename: str) -> Dict:
@@ -287,67 +299,6 @@ class RTEBaseDataset(PhysicsNeMoDataset):
 
     def __len__(self) -> int:
         return len(self.filenames)
-
-    def _build_metadata(self, filename: str, td: TensorDict) -> Dict[str, Any]:
-        """Per-sample metadata dict: sidecar attrs + filename + sim-time facts."""
-        attrs = dict(td["metadata"]) if "metadata" in td else {}
-        file_meta = self.reader.get_metadata(filename)
-        attrs["max_timestep"] = file_meta["num_timesteps"] - 1
-        attrs["max_sim_time"] = file_meta.get("max_sim_time")
-        if "sim_times" in td and td["sim_times"].numel() > 0:
-            attrs["sim_time"] = float(td["sim_times"][-1].item())
-        else:
-            attrs["sim_time"] = None
-        attrs["filename"] = filename
-        attrs["case_type"] = self.case_type
-        return attrs
-
-    def _load(self, idx: int) -> Tuple[TensorDict, Dict[str, Any]]:
-        """Synchronous load: filename-indexed reader -> device -> transforms.
-
-        Overrides the base ``Dataset._load`` because its int-indexed path
-        (``self.reader[index]``) goes through ``Reader.__getitem__`` ->
-        ``_load_sample``, which returns only ``dict[str, Tensor]`` and so
-        drops the NonTensorData entries (``filename`` / ``metadata``) that
-        RTE transforms and :class:`TransolverAdapter` read directly off
-        the TensorDict.
-        """
-        filename = self.filenames[idx]
-        td = self.reader.load(filename)
-        metadata = self._build_metadata(filename, td)
-        td.set_non_tensor("filename", filename)
-        td.set_non_tensor("metadata", metadata)
-
-        if self.target_device is not None:
-            td = td.to(self.target_device, non_blocking=True)
-        if self.transforms is not None:
-            td = self.transforms(td)
-        return td, metadata
-
-    def _load_and_transform(self, index, stream=None):
-        """Stream-aware variant of ``_load`` used by the prefetch path.
-
-        The base class's prefetch path goes through ``self.reader[index]``
-        directly (skipping ``self._load``), so we override here too. Thread
-        pool + CUDA-stream wiring is inherited from the base class.
-        """
-        from physicsnemo.datapipes.protocols import _PrefetchResult
-
-        result = _PrefetchResult(index=index)
-        try:
-            if stream is not None:
-                with torch.cuda.stream(stream):
-                    td, metadata = self._load(index)
-                if self.transforms is not None:
-                    result.event = torch.cuda.Event()
-                    result.event.record(stream)
-            else:
-                td, metadata = self._load(index)
-            result.data = td
-            result.metadata = metadata
-        except Exception as exc:  # pragma: no cover — surfaced via __getitem__
-            result.error = exc
-        return result
 
 
 def load_flux_stats(path: Union[str, Path]) -> dict:
