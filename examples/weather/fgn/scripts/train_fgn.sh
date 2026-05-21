@@ -77,7 +77,7 @@ torchrun \
     training.experiment_name="${EXP_NAME}" \
     "training.run_id='${RUN_ID}'" \
     training.total_train_steps="${STEPS}" \
-    training.batch_size=1 \
+    training.batch_size=2 \
     training.num_data_workers=0 \
     training.validation_steps=8 \
     training.validation_metrics=true \
