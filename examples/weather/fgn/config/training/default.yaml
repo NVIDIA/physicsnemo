@@ -1,0 +1,49 @@
+outdir: rundir
+experiment_name: fgn
+run_id: "0"
+rundir: ${training.outdir}/${training.experiment_name}/${training.run_id}
+checkpoint_dir: checkpoints
+num_data_workers: 0
+seed: 7
+batch_size: 8
+total_train_steps: 100
+print_progress_freq: 10
+checkpoint_freq: 50
+validation_freq: 25
+resume_checkpoint: latest
+clip_grad_norm: -1.0
+
+# Autoregressive rollout depth per training step.
+# Must match dataset.future_frames. 1 = single-step training (paper Stages
+# 1-3). Stage 4 ramps ar_steps up to 8 per Table A.2.
+ar_steps: 1
+
+# Data + domain parallelism knobs (mirrors StormCast's convention):
+# - domain_parallel_size=1 & force_sharding=false → pure single-process or
+#   plain DDP; smoke-test default.
+# - domain_parallel_size>1 → ShardTensor on a spatial axis of the input.
+# - force_sharding=true → wrap with ShardTensor even at domain size 1,
+#   to exercise the sharding code path end-to-end.
+domain_parallel_size: 1
+force_sharding: false
+
+# Number of validation batches per rank when running under ParallelHelper —
+# the rank-sharded sampler is infinite by design (StormCast convention),
+# so we cap iteration here. Null = use one local epoch (len(valid_dataset)
+# / (world_size * batch_size)).
+validation_steps: null
+
+# Figure 2 + 3 validation diagnostics (per-variable CRPS / RMSE /
+# spread-skill / rank hist / 1D power spectra). Off by default so the
+# smoke test stays cheap.
+validation_metrics: false
+validation_ensemble_size: 4
+
+optimizer:
+  lr: 3.0e-4
+  betas: [0.9, 0.999]
+  weight_decay: 1.0e-4
+
+loss:
+  num_samples: 4
+  mse_weight: 0.1
