@@ -7,12 +7,19 @@ probabilistic global weather forecasting, following the approach of:
 > Alet et al., "Skillful joint probabilistic weather forecasting from marginals"
 > ([arXiv:2506.10772](https://arxiv.org/abs/2506.10772))
 
+FGN is the architecture behind the production
+[WeatherNext 2](https://developers.google.com/weathernext/guides/models) model,
+which delivers 64-member ensemble forecasts (4 independently trained seeds ×
+16 trajectories each) at 0.25° global resolution. The full variable schema is
+described in the
+[WeatherNext 2 model specs](https://developers.google.com/weathernext/guides/model-specs-vmg).
+
 FGN generates ensemble weather forecasts by perturbing a deterministic backbone
 with a low-dimensional latent noise vector `z ~ N(0, I_32)` injected through
 conditional layer normalization (CLN) at every layer, producing globally coherent
 ensemble spread from a marginal (fair-CRPS) training loss. Multiple independently
-trained model seeds form a deep ensemble (J=4 in the paper) that captures both
-aleatoric and epistemic uncertainty.
+trained model seeds form a deep ensemble (J=4 seeds, 16 trajectories each = 64
+members in production) capturing both aleatoric and epistemic uncertainty.
 
 ## Problem Overview
 
@@ -50,6 +57,10 @@ and clock features (local time, year progress sin/cos) are added automatically.
 All variables use compact Earth2Studio / PhysicsNeMo names: `u10m`, `v10m`, `t2m`,
 `msl`, `sst`, `tp06`, `z{level}`, `q{level}`, `t{level}`, `u{level}`, `v{level}`,
 `w{level}`.
+
+> **Note:** The production WeatherNext 2 output also includes `u100m` / `v100m`
+> (100 m wind components). ERA5 via ARCO does not provide 100 m winds, so they
+> are omitted from this ERA5-based training example.
 
 ### Normalization Stats
 
@@ -248,6 +259,8 @@ For larger models (hidden_channels ≥ 256), use `domain_parallel_size=2` with
 ## References
 
 - [Skillful joint probabilistic weather forecasting from marginals](https://arxiv.org/abs/2506.10772)
+- [WeatherNext 2 model overview](https://developers.google.com/weathernext/guides/models)
+- [WeatherNext 2 variable schema](https://developers.google.com/weathernext/guides/model-specs-vmg)
 - [Generative Ensemble Downscaling with Diffusion Models (CorrDiff)](https://arxiv.org/abs/2308.14453)
 - [Kilometer-Scale Convection Allowing Model Emulation (StormCast)](https://arxiv.org/abs/2408.10958)
 - [GraphCast: Learning skillful medium-range global weather forecasting](https://arxiv.org/abs/2212.12794)
