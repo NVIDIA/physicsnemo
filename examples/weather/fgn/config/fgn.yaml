@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Base FGN config — required by train.py's @hydra.main(config_name="fgn").
+# Provides model defaults and a skeleton dataset section; override dataset
+# and training fields on the command line or via a derived config such as
+# fgn_arco.yaml.
+#
+# Minimal usage (all dataset fields required as overrides):
+#   python train.py \
+#     dataset.name=arco.ArcoFGNDataset \
+#     dataset.stats_path=/path/to/stats.npz \
+#     [dataset.train_start=... dataset.train_end=... ...]
+
+defaults:
+  - training: default
+  - _self_
+
+dataset:
+  name: ???   # required — e.g. arco.ArcoFGNDataset
+
+model:
+  model_name: fgn
+  history_frames: 2
+  latent_dim: 16
+  hidden_channels: 32
+  background_channels: auto
+  invariant_channels: auto
+  group_norm_groups: 8

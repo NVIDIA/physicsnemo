@@ -32,6 +32,11 @@ What we compute per validation rollout:
   batches. A uniform histogram indicates good calibration; U-shaped →
   under-dispersive, hump-shaped → over-dispersive.
   Canonical: :class:`earth2studio.statistics.rank_histogram`.
+- **Energy score per lead time** (multivariate CRPS generalisation).
+  Computed over the *variable* axis so that cross-channel calibration
+  is captured, averaged over a spatially subsampled grid to keep the
+  O(M²) pairwise term cheap.  A single scalar per lead; lower is better.
+  Added in earth2studio 0.13.0 as :class:`earth2studio.statistics.energy_score`.
 - **Azimuthal 1D power spectra** per variable for ensemble-mean vs
   ground truth (Figure 3 e-j). Uses
   :func:`physicsnemo.metrics.general.power_spectrum.power_spectrum` —
@@ -267,6 +272,63 @@ def power_spectra_per_variable(
         ens_pow.detach().cpu().numpy(),
         tgt_pow.detach().cpu().numpy(),
     )
+
+
+def energy_score_per_lead(
+    ensemble: torch.Tensor,
+    target: torch.Tensor,
+    spatial_stride: int = 8,
+    fair: bool = True,
+) -> np.ndarray:
+    """Fair energy score (multivariate CRPS) per lead, averaged over variables + grid.
+
+    The energy score is the multivariate generalisation of CRPS:
+
+        ES = E[||X - y||] - (1/2) E[||X - X'||]
+
+    where the norm is taken over the *variable* axis (dim C) at each spatial
+    point. This captures cross-channel calibration that per-variable CRPS misses.
+
+    Computing the O(M²) pairwise term over the full 721 × 1440 grid is
+    expensive; ``spatial_stride`` sub-samples before computing to keep it fast.
+    With the default stride of 8 the spatial footprint is ~91 × 180 = 16 k
+    points, well within budget for a validation hook.
+
+    Shapes: ensemble (B, K, M, C, H, W), target (B, K, C, H, W).
+    Returns numpy array of shape (K,).
+
+    Canonical coord-aware equivalent: :class:`earth2studio.statistics.energy_score`
+    (added in earth2studio 0.13.0, March 2026).
+    """
+    _check_shapes(ensemble, target)
+    B, K, M, C, H, W = ensemble.shape
+
+    ens = ensemble[:, :, :, :, ::spatial_stride, ::spatial_stride]
+    tgt = target[:, :, :, ::spatial_stride, ::spatial_stride]
+    Hs, Ws = ens.shape[-2], ens.shape[-1]
+    N = B * K * Hs * Ws
+
+    # (N, M, C) and (N, C)
+    flat_ens = ens.permute(0, 1, 4, 5, 2, 3).reshape(N, M, C).float()
+    flat_tgt = tgt.permute(0, 1, 3, 4, 2).reshape(N, C).float()
+
+    # Term 1: (1/M) * sum_m ||x_m - y||_C
+    term1 = (flat_ens - flat_tgt.unsqueeze(1)).norm(dim=-1).mean(dim=-1)  # (N,)
+
+    # Term 2: pairwise spread in batches to cap peak memory.
+    CHUNK = 65536
+    term2_parts: list[torch.Tensor] = []
+    for i in range(0, N, CHUNK):
+        pw = torch.cdist(flat_ens[i : i + CHUNK], flat_ens[i : i + CHUNK], p=2)
+        if fair:
+            mask = ~torch.eye(M, device=pw.device, dtype=torch.bool)
+            term2_parts.append((pw * mask).sum(dim=(-2, -1)) / (2.0 * M * (M - 1)))
+        else:
+            term2_parts.append(pw.sum(dim=(-2, -1)) / (2.0 * M * M))
+    term2 = torch.cat(term2_parts)  # (N,)
+
+    es = (term1 - term2).reshape(B, K, Hs, Ws).mean(dim=(0, 2, 3))  # (K,)
+    return es.detach().cpu().numpy()
 
 
 # ---------------------------------------------------------------------------

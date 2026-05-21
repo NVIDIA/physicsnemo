@@ -20,6 +20,7 @@ from utils.loss import (
 from utils.metrics import (
     crps_per_variable_per_lead,
     derived_variable_crps,
+    energy_score_per_lead,
     ensemble_rmse_per_variable_per_lead,
     plot_metric_vs_lead,
     plot_power_spectra,
@@ -452,6 +453,7 @@ class Trainer:
             ensemble, target
         )
         ranks_cb = rank_histogram_per_variable(ensemble, target)
+        es_k = energy_score_per_lead(ensemble, target)
         derived = derived_variable_crps(ensemble, target, variables)
         ensemble_mean = ensemble.mean(dim=2)
         k_vec, ens_spec, tgt_spec = power_spectra_per_variable(ensemble_mean, target)
@@ -466,6 +468,7 @@ class Trainer:
             "skill_per_lead_per_channel": skill_kc,
             "spread_skill_ratio": ratio_kc,
             "rank_histograms": ranks_cb,
+            "energy_score_per_lead": es_k,
             "variables": np.array(variables, dtype=object),
             "lead_steps": np.arange(1, K + 1, dtype=np.int64),
             "power_spectrum_k": k_vec,
@@ -503,6 +506,15 @@ class Trainer:
             hline_y=1.0,
         )
         plot_rank_histograms(ranks_cb, variables, str(out_dir / "rank_histograms.png"))
+        # Energy score is a (K,) scalar — plot as a single-series lead curve.
+        plot_metric_vs_lead(
+            es_k[:, None],
+            ["multivariate"],
+            leads,
+            "energy score",
+            "Energy score per lead (lower is better)",
+            str(out_dir / "energy_score_vs_lead.png"),
+        )
         plot_power_spectra(
             k_vec,
             ens_spec,
