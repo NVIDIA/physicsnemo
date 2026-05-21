@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
@@ -325,15 +326,16 @@ class Trainer:
                     device=self.device,
                     dtype=torch.float32,
                 )
-                members.append(
-                    self.model(
-                        history=hist_n,
-                        latent=latent,
-                        background=background,
-                        invariants=invariants,
+                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
+                    members.append(
+                        self.model(
+                            history=hist_n,
+                            latent=latent,
+                            background=background,
+                            invariants=invariants,
+                        )
                     )
-                )
-            preds = torch.stack(members, dim=1)  # (B, N, C, H, W)
+            preds = torch.stack(members, dim=1).float()  # (B, N, C, H, W)
 
             step_loss = fair_crps(preds, target[:, k], weights=self.loss_weights)
             if mse_weight > 0.0:
@@ -421,13 +423,14 @@ class Trainer:
                     latent = torch.randn(
                         B, latent_dim, device=self.device, dtype=torch.float32
                     )
-                    pred = self.model(
-                        history=per_member_hist[:, n],
-                        latent=latent,
-                        background=background,
-                        invariants=invariants,
-                    )
-                    members.append(pred)
+                    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
+                        pred = self.model(
+                            history=per_member_hist[:, n],
+                            latent=latent,
+                            background=background,
+                            invariants=invariants,
+                        )
+                    members.append(pred.float())
                 preds = torch.stack(members, dim=1)  # (B, M, C, H, W)
                 preds_all.append(preds)
                 if k < K - 1:
@@ -533,17 +536,32 @@ class Trainer:
             metadata={"best_val_loss": self.best_val_loss},
         )
 
+    def _make_train_iter(self) -> Iterator:
+        # When domain parallelism is active, sharded_data_iter handles both
+        # data-parallel sample routing and spatial scatter (ShardTensor).
+        # Mirrors StormCast's pattern (stormcast/utils/trainer.py).
+        if self.parallel_helper is not None:
+            remaining = int(self.cfg.training.total_train_steps) - self.step
+            return self.parallel_helper.sharded_data_iter(
+                self.train_loader, num_samples=remaining
+            )
+        # Plain single-process / DDP path: restart the DataLoader on exhaustion.
+        def _plain() -> Iterator:
+            loader_iter = iter(self.train_loader)
+            while True:
+                try:
+                    yield next(loader_iter)
+                except StopIteration:
+                    loader_iter = iter(self.train_loader)
+                    yield next(loader_iter)
+
+        return _plain()
+
     def train(self) -> None:
         self.model.train()
-        loader_iter = iter(self.train_loader)
+        total_steps = int(self.cfg.training.total_train_steps)
 
-        while self.step < int(self.cfg.training.total_train_steps):
-            try:
-                batch = next(loader_iter)
-            except StopIteration:
-                loader_iter = iter(self.train_loader)
-                batch = next(loader_iter)
-
+        for batch in self._make_train_iter():
             self.optimizer.zero_grad(set_to_none=True)
             loss = self._loss(batch)
             loss.backward()
@@ -569,6 +587,9 @@ class Trainer:
 
             if self.step % int(self.cfg.training.checkpoint_freq) == 0:
                 self.save_checkpoint()
+
+            if self.step >= total_steps:
+                break
 
         if self.step % int(self.cfg.training.checkpoint_freq) != 0:
             self.save_checkpoint()
