@@ -49,6 +49,10 @@ $$\mathrm{QoI}_{\mathrm{Lattice}} = \int_{B} \sigma_a(x)\,\phi(x, T)\,dx.$$
 In code this is `cur_absorption`, computed as
 `Σ_{c ∈ B} σ_a,c · φ_c · A_c` over absorber cells.
 
+![Lattice: target, prediction, absolute error of final-time flux][lattice-fig]
+
+[lattice-fig]: ../../../docs/img/radiation_transport/transolver_lattice.png
+
 ### 1.2 Hohlraum benchmark
 
 An axisymmetric cylindrical cavity with interior void regions,
@@ -69,6 +73,10 @@ In code the three regions are labeled
 additionally synthesizes a fourth `total` term as the mean of the three,
 so every region contributes to the gradient (mean-of-four). Inference
 reports the three component QoIs only.
+
+![Hohlraum: target, prediction, absolute error of final-time flux][hohlraum-fig]
+
+[hohlraum-fig]: ../../../docs/img/radiation_transport/transolver_hohlraum.png
 
 ---
 
