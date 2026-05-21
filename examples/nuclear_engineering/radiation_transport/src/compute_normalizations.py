@@ -71,7 +71,7 @@ def compute_flux_statistics(
     Returns:
         The statistics dict written to ``output_file``.
     """
-    print(f"Computing flux statistics for {case_type} [final time]")
+    print(f"Computing flux statistics for {case_type} [final time only]")
     print(f"Data path: {data_path}")
     print(f"Split file: {split_file}")
 
@@ -96,6 +96,12 @@ def compute_flux_statistics(
         if isinstance(flux, torch.Tensor):
             flux = flux.detach().cpu().numpy()
         flux = np.asarray(flux)
+
+        # ``scalar_flux`` from the reader is shape (T, n_cells) with T=2
+        # (first + final snapshots). The target the model predicts is the
+        # final-time only.
+        if flux.ndim > 1:
+            flux = flux[-1]
 
         # match training-pipeline preprocessing
         flux = np.clip(flux, clip_threshold, None)
@@ -126,7 +132,7 @@ def compute_flux_statistics(
         "case_type": case_type,
     }
 
-    stats["note"] = "computed from first and final snapshots only (final time)"
+    stats["note"] = "computed from the final-time snapshot only"
 
     output_file = Path(output_file)
     output_file.parent.mkdir(parents=True, exist_ok=True)
