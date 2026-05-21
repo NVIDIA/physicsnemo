@@ -53,6 +53,8 @@ torch.serialization.add_safe_globals([int])
 torch.serialization.add_safe_globals([omegaconf.nodes.AnyNode])
 torch.serialization.add_safe_globals([omegaconf.base.Metadata])
 
+import torch.distributions as td
+
 import gpytorch
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.datapipes.cae.transolver_datapipe import create_transolver_dataset
@@ -274,9 +276,30 @@ def main(cfg: DictConfig) -> None:
 
     precision = getattr(cfg, "precision", "float32")
 
+    # ---- Build inducing-point MVN for embedding-space log-prob ----
+    inducing_mvn = None
+    gp_kernel = None
+    inducing_pts_for_kernel = None
+    if use_gp:
+        with torch.no_grad():
+            ind_pts = gp.gp_layer.variational_strategy.inducing_points
+            ind_pts_cpu = ind_pts.float().cpu()
+            D = ind_pts_cpu.shape[-1]
+            mu = ind_pts_cpu.mean(dim=0)
+            cov = torch.cov(ind_pts_cpu.T)
+            cov = cov + 1e-4 * torch.eye(D, dtype=cov.dtype)
+            inducing_mvn = td.MultivariateNormal(mu, cov)
+            gp_kernel = gp.gp_layer.covar_module
+            inducing_pts_for_kernel = ind_pts
+        print(
+            f"Built inducing-point MVN and kernel score: "
+            f"{ind_pts.shape[0]} points in {D}-d embedding space"
+        )
+
     # ---- Prediction collector ----
     def collect_predictions(dl_sub, dl_full):
         true_list, mean_list, std_list, trans_list = [], [], [], []
+        logprob_list, kernel_score_list = [], []
         full_iter = iter(dl_full)
         with torch.no_grad():
             for batch in dl_sub:
@@ -301,6 +324,19 @@ def main(cfg: DictConfig) -> None:
                 mean_scaled, var_scaled, _, _ = gp.predict(reduced)
                 mean_np = mean_scaled.cpu().numpy().flatten()
                 std_np = np.sqrt(var_scaled.cpu().numpy().flatten())
+
+                if inducing_mvn is not None:
+                    lp = inducing_mvn.log_prob(reduced.float().cpu())
+                    lp_np = lp.numpy().flatten()
+                else:
+                    lp_np = np.zeros(len(mean_np))
+
+                if gp_kernel is not None and inducing_pts_for_kernel is not None:
+                    reduced_gp = gp._apply_fe(reduced)
+                    k_x_ind = gp_kernel(reduced_gp, inducing_pts_for_kernel).evaluate()
+                    ks_np = k_x_ind.mean(dim=-1).float().cpu().numpy().flatten()
+                else:
+                    ks_np = np.zeros(len(mean_np))
 
                 target_scaled = compute_drag_target_from_batch(
                     batch,
@@ -336,12 +372,16 @@ def main(cfg: DictConfig) -> None:
                     mean_list.append(float(mean_np[k] * DRAG_COEFF_SCALE))
                     std_list.append(float(std_np[k] * DRAG_COEFF_SCALE))
                     trans_list.append(trans_val)
+                    logprob_list.append(float(lp_np[k]))
+                    kernel_score_list.append(float(ks_np[k]))
 
         return {
             "true_cd": np.array(true_list),
             "pred_mean_cd": np.array(mean_list),
             "pred_std_cd": np.array(std_list),
             "transolver_cd": np.array(trans_list),
+            "inducing_logprob": np.array(logprob_list),
+            "kernel_score": np.array(kernel_score_list),
         }
 
     print("Collecting predictions on validation set ...")
@@ -371,6 +411,8 @@ def main(cfg: DictConfig) -> None:
             "transolver_cd",
             "abs_diff",
             "joint_uq",
+            "inducing_logprob",
+            "kernel_score",
         ):
             npz_data[f"{tag}__{key}"] = res[key]
     results_path = out_dir / "prediction_results.npz"
@@ -576,7 +618,19 @@ def main(cfg: DictConfig) -> None:
     if len(all_results) > 1:
         from scipy.stats import gaussian_kde
 
-        n_kde_cols = 2 if use_gp else 1
+        has_logprob = use_gp and any(
+            res.get("inducing_logprob") is not None
+            and np.isfinite(res["inducing_logprob"]).any()
+            for _, res in all_results
+        )
+        has_kscore = use_gp and any(
+            res.get("kernel_score") is not None
+            and np.isfinite(res["kernel_score"]).any()
+            for _, res in all_results
+        )
+        n_kde_cols = (
+            (2 if use_gp else 1) + (1 if has_logprob else 0) + (1 if has_kscore else 0)
+        )
         fig_kde, axes_kde = plt.subplots(
             1,
             n_kde_cols,
@@ -584,8 +638,16 @@ def main(cfg: DictConfig) -> None:
         )
         if n_kde_cols == 1:
             axes_kde = [axes_kde]
-        ax_dis = axes_kde[0]
-        ax_std = axes_kde[1] if use_gp else None
+        col = 0
+        ax_dis = axes_kde[col]
+        col += 1
+        ax_std = axes_kde[col] if use_gp else None
+        if use_gp:
+            col += 1
+        ax_lp = axes_kde[col] if has_logprob else None
+        if has_logprob:
+            col += 1
+        ax_ks = axes_kde[col] if has_kscore else None
 
         head_label = "GP" if use_gp else "MLP"
         cmap = plt.cm.get_cmap("tab10", len(all_results))
@@ -642,6 +704,58 @@ def main(cfg: DictConfig) -> None:
                         color=color,
                     )
 
+            if ax_lp is not None:
+                logprob = res.get("inducing_logprob")
+                if logprob is not None and len(logprob) > 2:
+                    finite = logprob[np.isfinite(logprob)]
+                    if len(finite) > 2:
+                        xs = np.linspace(
+                            finite.min() - abs(finite.min()) * 0.1,
+                            finite.max() + abs(finite.max()) * 0.1,
+                            500,
+                        )
+                        kde = gaussian_kde(finite)
+                        ax_lp.plot(
+                            xs,
+                            kde(xs),
+                            color=color,
+                            lw=lw,
+                            ls=ls,
+                            label=name,
+                        )
+                        ax_lp.fill_between(
+                            xs,
+                            kde(xs),
+                            alpha=0.1 if is_id else 0.05,
+                            color=color,
+                        )
+
+            if ax_ks is not None:
+                kscore = res.get("kernel_score")
+                if kscore is not None and len(kscore) > 2:
+                    finite = kscore[np.isfinite(kscore)]
+                    if len(finite) > 2:
+                        xs = np.linspace(
+                            max(0, finite.min() * 0.8),
+                            finite.max() * 1.2,
+                            500,
+                        )
+                        kde = gaussian_kde(finite)
+                        ax_ks.plot(
+                            xs,
+                            kde(xs),
+                            color=color,
+                            lw=lw,
+                            ls=ls,
+                            label=name,
+                        )
+                        ax_ks.fill_between(
+                            xs,
+                            kde(xs),
+                            alpha=0.1 if is_id else 0.05,
+                            color=color,
+                        )
+
         ax_dis.set_xlabel(f"|Cd_{head_label} − Cd_GeoTransolver|")
         ax_dis.set_ylabel("Density")
         ax_dis.set_title(f"Disagreement ({head_label}): ID vs OOD")
@@ -655,6 +769,20 @@ def main(cfg: DictConfig) -> None:
             ax_std.set_xscale("log")
             ax_std.legend(loc="best", fontsize=8)
             ax_std.grid(True, alpha=0.3, which="both")
+
+        if ax_lp is not None:
+            ax_lp.set_xlabel("Inducing-Point Log-Prob")
+            ax_lp.set_ylabel("Density")
+            ax_lp.set_title("Embedding Log-Prob: ID vs OOD")
+            ax_lp.legend(loc="best", fontsize=8)
+            ax_lp.grid(True, alpha=0.3)
+
+        if ax_ks is not None:
+            ax_ks.set_xlabel("Mean Kernel Similarity to Inducing Points")
+            ax_ks.set_ylabel("Density")
+            ax_ks.set_title("Kernel Score: ID vs OOD")
+            ax_ks.legend(loc="best", fontsize=8)
+            ax_ks.grid(True, alpha=0.3)
 
         fig_kde.tight_layout()
         kde_path = out_dir / "kde_id_vs_ood.png"

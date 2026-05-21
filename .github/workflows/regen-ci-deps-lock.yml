@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Regenerate .github/ci-requirements.lock inside the CUDA container that PR /
+# nightly jobs run in, and publish the result as a workflow artifact.  Use
+# this when bumping a `==` pin in .github/ci-requirements.txt (or any other
+# change that affects the transitive closure of the CI-only deps -- see the
+# header comment in .github/regen-ci-deps-lock.sh).
+#
+# Workflow:
+#   1. Trigger this workflow via `workflow_dispatch` on the branch that
+#      contains the updated ci-requirements.txt.
+#   2. Wait for it to complete (~3-5 minutes; no GPU needed, just downloads
+#      and runs `uv pip compile`).
+#   3. Download the `ci-requirements-lock` artifact from the run.
+#   4. Replace `.github/ci-requirements.lock` in your branch with the
+#      downloaded file and commit.
+#
+# This exists because the regen requires a Linux x86_64 / Python 3.12 / glibc
+# resolution context to match the CI runners; maintainers on macOS or Windows
+# would otherwise need a local Docker setup to produce a valid lock.
+
+name: Regen CI-deps Lock
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  regen:
+    name: Regen ci-requirements.lock
+    runs-on: linux-amd64-cpu8
+    container:
+      image: nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Run regen script
+      run: bash .github/regen-ci-deps-lock.sh
+
+    - name: Show diff vs committed lock
+      run: |
+        if [ -f .github/ci-requirements.lock ]; then
+          echo "::group::diff vs HEAD"
+          git diff --no-color -- .github/ci-requirements.lock || true
+          echo "::endgroup::"
+        fi
+
+    - name: Upload regenerated lock
+      uses: actions/upload-artifact@v4
+      with:
+        name: ci-requirements-lock
+        path: .github/ci-requirements.lock
+        if-no-files-found: error
+        retention-days: 14

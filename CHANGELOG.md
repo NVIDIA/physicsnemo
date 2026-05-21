@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Adds radiation transport example (`examples/nuclear_engineering/radiation_transport`)
+- Adds xDeepONet to experimental models
+  (`physicsnemo.experimental.models.xdeeponet.DeepONet`).  A single
+  dimension-generic (2D/3D) DeepONet that accepts a spatial or MLP branch,
+  an optional trunk, and an optional second branch as `nn.Module` inputs
+  (dependency injection).  Six forward-call conventions cover trunked,
+  trunkless, packed/auto-padded, and xFNO-style time-axis-extend modes.
+  Supports multi-channel output, multiple decoder types (MLP, Conv,
+  temporal projection), composable Fourier / UNet / Conv spatial branches
+  (`SpatialBranch`), and coordinate features.
+- Adds `Sin` elementwise sine activation to `physicsnemo.nn`, registered
+  in `ACT2FN` so it can be looked up by name (`get_activation("sin")`).
 - Adds GLOBE model (`physicsnemo.experimental.models.globe.model.GLOBE`),
   including new variant that uses a dual tree traversal algorithm to reduce the
   complexity of the kernel evaluations from O(N^2) to O(N).
@@ -20,6 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adds concrete dropout uncertainty quantification for GeoTransolver. Learnable
   per-layer dropout rates enable MC-Dropout inference for uncertainty
   estimates. Disabled by default (`concrete_dropout: false`).
+- Adds active-learning recipe for external-aerodynamics surrogates
+  (`examples/cfd/external_aerodynamics/active_learning_aero/`). Iteratively
+  fine-tunes a GP-augmented GeoTransolver onto an out-of-distribution
+  target class by scoring unlabeled candidates with a joint UQ signal
+  (GP-vs-integrated-drag disagreement + GP posterior std) and selecting
+  the top-`k` per round. Built on the `physicsnemo.active_learning`
+  protocols and `physicsnemo.experimental.uq.VariationalGPHead`, with a
+  layered structure (generic AL driver / GP-UQ recipe / aero adapter)
+  designed for reuse on other UQ-based regression problems.
 - Adds automatic support for `FSDP` and/or `ShardTensor` models in checkpoint save/load
   functionality
 - PhysicsNeMo-Mesh now supports conversion from PyVista/VTK/VTU meshes that may
