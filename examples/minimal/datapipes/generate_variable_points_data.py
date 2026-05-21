@@ -221,11 +221,14 @@ def save_zarr(
 
         # Save all fields for this sample
         for key, array in sample_data.items():
-            root.create_dataset(
-                key,
-                data=array,
+            # zarr v3: create_array does not accept a `data` kwarg, so create
+            # the array and assign the contents in a separate step.
+            zarr_array = root.create_array(
+                name=key,
                 shape=array.shape,
+                dtype=array.dtype,
             )
+            zarr_array[...] = array
 
         # Track size
         total_size += sum(array.nbytes for array in sample_data.values())

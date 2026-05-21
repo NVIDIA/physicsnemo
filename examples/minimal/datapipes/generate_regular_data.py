@@ -162,11 +162,14 @@ def save_zarr(data: Dict[str, np.ndarray], output_dir: Path):
         # Save all fields for this sample
         for key, array in data.items():
             sample_data = array[i]
-            root.create_dataset(
-                key,
-                data=sample_data,
+            # zarr v3: create_array does not accept a `data` kwarg, so create
+            # the array and assign the contents in a separate step.
+            zarr_array = root.create_array(
+                name=key,
                 shape=sample_data.shape,
+                dtype=sample_data.dtype,
             )
+            zarr_array[...] = sample_data
 
     total_size = sum(array.nbytes for array in data.values())
     print(
