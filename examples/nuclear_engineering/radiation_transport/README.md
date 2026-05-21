@@ -124,36 +124,32 @@ sidecar, loaded via `physicsnemo.mesh.Mesh.load(<name>.pmsh)`.
 
 ### 3.3 What's in each mesh store
 
-Each `*.pmsh/` directory is one simulation, written by
-`physicsnemo.mesh.Mesh.save(...)`. The loader uses the first and final
-`scalar_flux` snapshots and ignores intermediate snapshots. The fields are:
+Each `*.pmsh/` directory is one simulation written via
+`physicsnemo.mesh.Mesh.save(...)`. The flux series is stored as just
+the first and final snapshots (`T = 2`); only those are used.
 
-`Mesh.points` — `(N, 2)` float32 cell-center coordinates.
+Cell-center coordinates and per-cell areas are not stored as fields —
+the loader derives them from the mesh topology via `mesh.cell_centroids`
+and `mesh.cell_areas`.
 
-`Mesh.point_data` (per-cell tensors):
+`Mesh.cell_data` (per-cell tensors the loader requires):
 
 | Key | Shape | Dtype | Notes |
 |---|---|---|---|
-| `cell_areas` | `(N,)` | float32 | per-cell areas — used by physics loss for surface integrals |
-| `sigma_a`, `sigma_s`, `sigma_t` | `(N,)` | float32 | absorption / scattering / total cross-section per cell |
+| `scalar_flux` | `(N, 2)` | float32 | flux at first / final snapshot, cells-first |
+| `material_id` | `(N,)` | int64 | region IDs (mapped by `LatticeMaterialMapper` / `HohlraumMaterialMapper`) |
+| `sigma_a`, `sigma_s`, `sigma_t` | `(N,)` | float32 | absorption / scattering / total cross-section |
 | `Q` | `(N,)` | float32 | heat source (non-zero in lattice; zeros in hohlraum) |
-| `geometric_features` | `(N, k)` | float32 | optional per-cell geometric features |
-| `material_properties` | `(N,)` | int64 | integer region IDs (consumed by `LatticeMaterialMapper` / `HohlraumMaterialMapper`) |
-| `scalar_flux` | `(N, T)` | float32 | physical flux, transposed to put cells first |
 
-`Mesh.global_data` (per-simulation tensors):
+`Mesh.global_data`: the loader consumes only `sim_time` (shape `(2,)`,
+simulation time of each flux snapshot). Other simulation diagnostics
+shipped with the data (`cur_absorption`, `total_absorption`, `mass`,
+...) are ignored at training time, but may be useful for other downstream tasks.
 
-| Key | Shape | Notes |
-|---|---|---|
-| `sim_times` | `(T,)` | simulation times for each flux snapshot |
-| `attr__<key>` | scalar / `(...)` | numeric simulation attributes flattened from the source curator |
-
-`<name>.attrs.json` (sidecar):
-A JSON file holding `raw_attrs` (the verbatim source attrs dict — final
-simulation time, geometry params, etc.) and `residue_attrs` (the
-non-numeric attrs that don't fit in `global_data`). `RTEBaseDataset._load`
-reads the sidecar and exposes `raw_attrs` as the `metadata`
-`NonTensorData` entry on the returned `TensorDict`.
+`<name>.attrs.json` (sidecar): JSON with `case_type`,
+`simulation_params`, `solver_config`, and `mesh_info`. The loader
+exposes the full dict as a `metadata` `NonTensorData` entry on the
+returned `TensorDict`.
 
 `N` is the number of cells per simulation (~tens of thousands). Different
 simulations may have different `N` — point-cloud collation handles this.
