@@ -1,0 +1,9 @@
+*.mlus
+*.png
+*.pt
+*.tfevents*
+*wandb/
+rundir/
+logs/
+*.npz
+FGN.md
