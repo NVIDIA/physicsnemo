@@ -25,8 +25,6 @@
 # to merge them onto each boundary Mesh at load time.
 # Splits are controlled by manifest.json + train_split/val_split in the training config.
 
-name: drivaer_ml_surface
-
 train_datadir: ${dataset_paths.drivaer_ml}
 
 pipeline:
@@ -87,5 +85,3 @@ pipeline:
 targets:
   pressure: scalar
   wss: vector
-
-metrics: [l1, l2, mae]

@@ -1,0 +1,62 @@
+# @package _global_
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ---------------------------------------------------------------------------
+# GeoTransolver template -- SURFACE recipes (DrivAerML and HiLiftAeroML).
+# ---------------------------------------------------------------------------
+# Bundles the model class, its data contract (input_type / output_type /
+# forward_kwargs), and the surface-scale defaults shared by both
+# DrivAerML and HiLift surface datasets (small radii / neighbor counts,
+# no local-feature path).  The forward_kwargs block resolves DomainMesh
+# paths into model.forward(): the dataset YAML produces a DomainMesh
+# whose `interior` is a Mesh[0, 3] point cloud at the (subsampled)
+# surface cell centroids and whose `boundaries.vehicle` is the
+# triangulated surface with precomputed cell normals.
+#
+# Each train_*.yaml overrides `out_dim` (channel count from `targets:`)
+# and, for FA variants, `attention_type` and (sometimes) `state_mixing_mode`.
+input_type: tensors
+output_type: tensors
+
+forward_kwargs:
+  geometry: interior.points
+  local_embedding:
+    - interior.points
+    - boundaries.vehicle.cell_data.normals
+  local_positions: interior.points
+  global_embedding: global_data.U_inf
+
+model:
+  _target_: physicsnemo.experimental.models.geotransolver.GeoTransolver
+  out_dim: ${out_dim}     # auto-set from the chosen dataset's `targets:` block
+  functional_dim: 6       # local_embedding = geometry coords (3) + normals (3)
+  geometry_dim: 3         # point coordinates
+  global_dim: 3           # inlet velocity (3)
+  n_layers: 12
+  n_hidden: 256
+  dropout: 0.0
+  n_head: 8
+  act: "gelu"
+  mlp_ratio: 4
+  slice_num: 256
+  use_te: false
+  plus: false
+  include_local_features: false
+  radii: [0.1, 0.5, 2.0]
+  neighbors_in_radius: [16, 32, 64]
+  n_hidden_local: 32
+  state_mixing_mode: "weighted"  # "weighted" (default) or "concat_project"

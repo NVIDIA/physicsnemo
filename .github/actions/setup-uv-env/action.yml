@@ -172,7 +172,8 @@ runs:
     # uv.lock remains the single source of truth for the synced
     # environment; this step layers on top without invalidating that
     # guarantee.  Pin list and per-pin rationale live in
-    # .github/ci-requirements.txt.
+    # .github/ci-requirements.txt; the pinned transitive closure lives in
+    # .github/ci-requirements.lock (see .github/regen-ci-deps-lock.sh).
     - name: Install CI-only test dependencies
       shell: bash
       env:
@@ -190,11 +191,22 @@ runs:
         # currently latest on PyPI and breaking ABI compatibility with
         # the lockfile-pinned GPU stack (cudf / cuml / pylibcudf were
         # built against the synced pyarrow ABI, etc.).
+        #
+        # `--constraint .github/ci-requirements.lock` pins the transitive
+        # closure of the CI-only deps so testmon's `system_packages`
+        # fingerprint matches between the nightly that builds the testmon
+        # DB and the PR that consumes it.  Without this, unpinned
+        # transitives of moto / scikit-image / multi-storage-client /
+        # tensorstore / etc. resolve to whatever's latest on PyPI at job
+        # time and invalidate the entire testmon cache.  Regenerate the
+        # lock via .github/regen-ci-deps-lock.sh whenever a `==` pin in
+        # .github/ci-requirements.txt changes.
         uv pip install --python .venv/bin/python \
           --reinstall-package torch_scatter \
           --reinstall-package torch_sparse \
           --reinstall-package torch_cluster \
           --reinstall-package pyg_lib \
+          --constraint .github/ci-requirements.lock \
           -r .github/ci-requirements.txt
         echo "::endgroup::"
 
