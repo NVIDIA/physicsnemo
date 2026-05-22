@@ -14,20 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Utilities for the GeoTransolver + GP drag prediction pipeline.
+"""Generic GP / UQ recipe helpers for the active-learning example.
 
-This module provides:
+This is the *recipe* layer of the example: nothing in here knows about
+external aerodynamics. CFD-specific constants and surface-field
+integrals live in ``aero_physics.py``.
 
-* Aerodynamic force-coefficient computation from surface fields.
-* Drag-target extraction from dataloader batches.
-* An MLP drag-prediction head (``DragMLP``) used as a GP-free baseline.
+Contents:
+
 * Embedding-reduction factory (``create_embedding_reduction``).
-* GP warmup helpers, inducing-point re-initialisation, and gradient syncing.
+* GP warmup helpers, inducing-point re-initialisation, and gradient
+  syncing for non-DDP modules.
 * Spectral-norm utilities for SNGP-style distance preservation.
+* Simple MLP head (``DragMLP``) — a drop-in baseline for the GP head.
 * Checkpoint loading helpers.
-
-Designed to be imported by the training script (``train_gp_combined.py``)
-and evaluation / plotting scripts.
 """
 
 from __future__ import annotations
@@ -37,7 +37,6 @@ import types
 from typing import Any, Literal
 
 import fsspec
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -52,141 +51,8 @@ from physicsnemo.utils.checkpoint import (
     _unique_model_names,
     checkpoint_logging,
 )
-from physicsnemo.models.domino.utils import unstandardize
 
-from train import cast_precisions  # noqa: F401 (re-exported for convenience)
-
-# ---------------------------------------------------------------------------
-# Aerodynamic reference constants
-# ---------------------------------------------------------------------------
-
-FRONTAL_AREA = 1.85  # m²
-REFERENCE_VELOCITY = 40.0  # m/s
-REFERENCE_DENSITY = 1.225  # kg/m³
-DRAG_COEFF_SCALE = 0.35  # GP target = Cd / DRAG_COEFF_SCALE
-
-
-# ---------------------------------------------------------------------------
-# Force-coefficient computation
-# ---------------------------------------------------------------------------
-
-
-def compute_force_coefficients_torch(
-    normals: torch.Tensor,
-    area: torch.Tensor,
-    coeff: float,
-    p: torch.Tensor,
-    wss: torch.Tensor,
-    force_direction: torch.Tensor | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Compute force coefficients from surface pressure and wall shear stress.
-
-    Parameters
-    ----------
-    normals : torch.Tensor
-        Surface normals, shape ``(N, 3)``.
-    area : torch.Tensor
-        Cell areas, shape ``(N,)`` or ``(N, 1)``.
-    coeff : float
-        Reference coefficient ``2 / (A * rho * U²)``.
-    p : torch.Tensor
-        Surface pressure, shape ``(N,)``.
-    wss : torch.Tensor
-        Wall shear stress, shape ``(N, 3)``.
-    force_direction : torch.Tensor | None
-        Unit vector for force projection; defaults to ``[1, 0, 0]`` (drag).
-
-    Returns
-    -------
-    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
-        ``(c_total, c_pressure, c_friction)`` — scalar tensors.
-    """
-    if force_direction is None:
-        force_direction = torch.tensor(
-            [1.0, 0.0, 0.0],
-            device=normals.device,
-            dtype=normals.dtype,
-        )
-    area = area.view(-1)
-    n_dot_f = (normals * force_direction).sum(dim=-1)
-    c_p = coeff * (n_dot_f * area * p).sum()
-    wss_dot_f = (wss * force_direction).sum(dim=-1)
-    c_f = -coeff * (wss_dot_f * area).sum()
-    return c_p + c_f, c_p, c_f
-
-
-def compute_drag_target_from_batch(
-    batch: dict,
-    surface_factors: dict,
-    device: torch.device,
-    drag_scale: float = DRAG_COEFF_SCALE,
-) -> torch.Tensor:
-    """Extract a GP-scaled drag target from a dataloader batch.
-
-    Unnormalises predicted surface fields, integrates pressure and shear to
-    obtain the drag coefficient Cd, then returns ``Cd / drag_scale`` as a
-    ``(1,)`` tensor suitable for GP training.
-    """
-    if "fields_full" in batch:
-        fields = batch["fields_full"]
-    else:
-        fields = batch["fields"]
-    if isinstance(fields, list):
-        fields = fields[0]
-
-    fields_phys = unstandardize(fields, surface_factors["mean"], surface_factors["std"])
-    fields_phys = fields_phys.squeeze(0)
-    p = fields_phys[:, 0]
-    wss = fields_phys[:, 1:4]
-
-    normals = batch["surface_normals"].squeeze(0).to(device, dtype=fields_phys.dtype)
-    area = batch["surface_areas"].squeeze(0).to(device, dtype=fields_phys.dtype)
-    p, wss = p.to(device), wss.to(device)
-
-    coeff = 2.0 / (FRONTAL_AREA * REFERENCE_DENSITY * REFERENCE_VELOCITY**2)
-    c_total, _, _ = compute_force_coefficients_torch(normals, area, coeff, p, wss)
-    return (c_total / drag_scale).unsqueeze(0)
-
-
-def compute_drag_from_subsampled_outputs(
-    outputs: torch.Tensor,
-    batch: dict,
-    surface_factors: dict,
-    device: torch.device,
-    drag_scale: float = DRAG_COEFF_SCALE,
-) -> torch.Tensor:
-    """Monte-Carlo drag estimate from subsampled GeoTransolver predictions.
-
-    Preserves the computational graph through *outputs* so gradients can
-    flow back into the GeoTransolver.  Returns ``(1,)`` in GP-scaled space.
-    """
-    fields_phys = unstandardize(
-        outputs,
-        surface_factors["mean"],
-        surface_factors["std"],
-    ).squeeze(0)
-    p = fields_phys[:, 0]
-    wss = fields_phys[:, 1:4]
-
-    normals = (
-        batch["surface_normals_sub"].squeeze(0).to(device, dtype=fields_phys.dtype)
-    )
-    areas = batch["surface_areas_sub"].squeeze(0).to(device, dtype=fields_phys.dtype)
-
-    n_full = batch["surface_areas"].squeeze(0).shape[0]
-    n_sub = p.shape[0]
-    coeff = 2.0 / (FRONTAL_AREA * REFERENCE_DENSITY * REFERENCE_VELOCITY**2)
-    scale = n_full / n_sub
-
-    c_total, _, _ = compute_force_coefficients_torch(
-        normals,
-        areas,
-        coeff * scale,
-        p,
-        wss,
-    )
-    return (c_total / drag_scale).unsqueeze(0)
-
+from utils import cast_precisions
 
 # ---------------------------------------------------------------------------
 # DragMLP — simple baseline head

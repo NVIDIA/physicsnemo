@@ -1,0 +1,17 @@
+# Example-local ignores only.
+# Run artifacts and outputs.
+runs/
+slurm/slurm_logs/
+
+# Local copies of normalization stats.
+src/*.npz
+
+# macOS metadata files.
+.DS_Store
+
+# manifests
+src/manifests/*.json
+
+# Local backup snapshots (e.g. manifest_class_*.json.bak_*).
+*.bak
+*.bak_*

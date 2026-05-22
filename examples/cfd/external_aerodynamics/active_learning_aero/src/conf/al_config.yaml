@@ -1,0 +1,104 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Active learning config for GeoTransolver + GP
+# Inherits model/data settings from the GP training config.
+
+defaults:
+  - training: base
+  - model: geotransolver
+  - data: surface
+
+output_dir: "runs"
+run_id: "geotransolver/surface/active_learning"
+
+# --- Initial checkpoint (trained on Fastback only) ---
+initial_checkpoint: null  # Set via command line: ++initial_checkpoint=/path/to/checkpoints_combined
+
+# --- Head type (must match checkpoint) ---
+head_type: gp
+mlp_head_hidden: [256, 256]
+
+# --- Embedding reduction (must match checkpoint) ---
+embedding_pooling: attention
+embedding_feat_dim: 256
+spectral_norm_embedding: true
+normalize_embeddings: true
+embedding_target_scale: 1.0
+
+# --- GP parameters (must match checkpoint) ---
+embed_dim: 32
+n_inducing: 128
+gp_mlp_hidden: null
+gp_lengthscale_range: [0.01, 1.0]
+gp_lengthscale_prior: [3.0, 6.0]
+gp_outputscale_prior: [2.0, 0.5]
+
+# --- Loss weights for fine-tuning ---
+lambda_gp: 0.01
+lambda_consistency: 1.0
+consistency_every_n_steps: 1
+consistency_detach_transolver: false
+
+# --- Active learning parameters ---
+al_rounds: 5                   # Number of query-train-evaluate rounds
+samples_per_round: 50          # Samples selected per round
+test_samples_per_class: 100    # Held out for fixed test set (rest goes to pool)
+acquisition: "joint_uq"        # "joint_uq" or "random"
+random_seed: 42                # Seed for random baseline (used when acquisition=random)
+
+# --- Fine-tuning schedule ---
+fine_tune_epochs: 20           # Epochs per AL round
+fine_tune_lr: 5.0e-4           # LR for fine-tuning (lower than initial training)
+
+# --- GP warmup (set high so GP is always active during fine-tuning) ---
+gp_warmup_start: 0
+gp_warmup_end: 1
+
+# --- Data paths ---
+# manifest_dir: directory containing manifest_class_F.json, manifest_class_N.json,
+# manifest_class_E.json (created by create_manifests.py). Defines the fixed
+# test/pool split so all runs use the exact same evaluation set.
+manifest_dir: null  # Set via command line: ++manifest_dir=/path/to/manifests/
+
+# --- Performance ---
+precision: float32
+compile: false
+profile: false
+
+# --- Training overrides ---
+training:
+  save_interval: 5
+  gradient_accumulation_steps: 1
+
+model:
+  functional_dim: 6
+  include_local_features: true
+  radii: [0.01, 0.05, 0.25, 1.0, 2.5, 5.0]
+  neighbors_in_radius: [4, 8, 16, 64, 128, 256]
+  n_hidden_local: 32
+
+data:
+  include_sdf: false
+  include_geometry: true
+  geometry_sampling: 300_000
+  broadcast_global_features: false
+  resolution: 51200
+  return_mesh_features: true
+
+logging:
+  level: INFO
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
