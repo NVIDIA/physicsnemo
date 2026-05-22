@@ -17,9 +17,8 @@
 from __future__ import annotations
 
 import json
-import warnings
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Dict, List, Mapping, Optional, Sequence, Union
 
 import torch
 import yaml
@@ -41,15 +40,18 @@ class MeshDataReader(Reader):
     sidecar).
 
     Example:
-        >>> reader = MeshDataReader("/path/to/mesh_stores/lattice")
-        >>> filenames = reader.get_filenames()
-        >>> td = reader.load(filenames[0])
+        >>> reader = MeshDataReader(
+        ...     "/path/to/mesh_stores/lattice",
+        ...     filenames=["lattice_abs10.0_scatter0.1_p0.015_q6.pmsh"],
+        ... )
+        >>> td = reader.load(reader.get_filenames()[0])
         >>> print(td["coordinates"].shape)  # (N, 2)
     """
 
     def __init__(
         self,
         data_path: Path | str,
+        filenames: Sequence[str],
         case_type: Optional[str] = None,
         cache_static_arrays: bool = True,
     ):
@@ -71,7 +73,10 @@ class MeshDataReader(Reader):
         if not self.data_path.is_dir():
             raise ValueError(f"Data path {self.data_path} is not a directory")
 
-        self._filenames: List[str] = self._scan_filenames()
+        # ``filenames`` is required for train/val/test list
+        # (typically derived from a split JSON) so that
+        # ``Reader.__getitem__(idx)`` maps to a stable, intended file.
+        self._filenames: List[str] = list(filenames)
 
     def __len__(self) -> int:
         return len(self._filenames)
@@ -86,16 +91,8 @@ class MeshDataReader(Reader):
         meta["filename"] = filename
         return meta
 
-    def _scan_filenames(self) -> List[str]:
-        filenames = []
-        for item in self.data_path.iterdir():
-            if item.is_dir() and item.name.endswith(".pmsh"):
-                if self.case_type is None or item.name.startswith(self.case_type):
-                    filenames.append(item.name)
-        return sorted(filenames)
-
     def get_filenames(self) -> List[str]:
-        """Return a fresh list of discovered mesh store names."""
+        """Return a copy of the filenames the reader was constructed with."""
         return list(self._filenames)
 
     def _sidecar_path(self, filename: str) -> Path:
@@ -258,12 +255,6 @@ class RTEBaseDataset(PhysicsNeMoDataset):
         self.split_file = Path(split_file) if split_file else None
         self.seed = seed
 
-        reader = MeshDataReader(
-            data_path,
-            case_type,
-            cache_static_arrays=cache_static_arrays,
-        )
-
         if self.split_file is None:
             raise ValueError(
                 "split_file is required. RTE datasets must use explicit "
@@ -273,6 +264,16 @@ class RTEBaseDataset(PhysicsNeMoDataset):
 
         if not self.filenames:
             raise ValueError(f"No files in {phase} split")
+
+        # Hand the split list to the reader so its int-indexed
+        # ``__getitem__`` (called by ``Dataset._load``) resolves to the
+        # split's files.
+        reader = MeshDataReader(
+            data_path=data_path,
+            filenames=self.filenames,
+            case_type=case_type,
+            cache_static_arrays=cache_static_arrays,
+        )
 
         super().__init__(reader=reader, transforms=transforms, device=device)
 
@@ -296,9 +297,6 @@ class RTEBaseDataset(PhysicsNeMoDataset):
             base = f[: -len(".pmsh")] if f.endswith(".pmsh") else f
             normalized.append(base + ".pmsh")
         return normalized
-
-    def __len__(self) -> int:
-        return len(self.filenames)
 
 
 def load_flux_stats(path: Union[str, Path]) -> dict:
