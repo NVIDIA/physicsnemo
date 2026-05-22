@@ -396,23 +396,27 @@ def plot_rank_histograms(
     ncols = min(4, C)
     nrows = (C + ncols - 1) // ncols
     fig, axes = plt.subplots(
-        nrows, ncols, figsize=(3 * ncols, 2.5 * nrows), squeeze=False
+        nrows, ncols, figsize=(3 * ncols, 2.5 * nrows),
+        constrained_layout=True, squeeze=False,
     )
     for ci, name in enumerate(variables):
         ax = axes[ci // ncols][ci % ncols]
         ax.bar(np.arange(bins), histograms[ci], color="#2266aa")
         expected = histograms[ci].sum() / bins
         ax.axhline(expected, color="k", linestyle="--", linewidth=0.7)
-        ax.set_title(name, fontsize=9)
-        ax.set_xlabel("rank")
-        ax.set_ylabel("count")
+        ax.set_title(name, fontsize=8, pad=3)
+        ax.set_xlabel("rank", fontsize=7)
+        ax.set_ylabel("count", fontsize=7)
+        ax.tick_params(labelsize=6)
     for j in range(C, nrows * ncols):
-        axes[j // ncols][j % ncols].axis("off")
-    fig.suptitle("Rank histograms (uniform = well calibrated)", fontsize=10)
-    fig.tight_layout()
+        axes[j // ncols][j % ncols].set_visible(False)
+    fig.suptitle("Rank histograms (uniform = well calibrated)", fontsize=11)
     fig.savefig(out_path, dpi=120)
     plt.close(fig)
     return True
+
+
+_SPECTRA_VARS = ["z500", "q700", "t850", "u850", "v500", "t2m", "u10m", "v10m", "msl"]
 
 
 def plot_power_spectra(
@@ -423,40 +427,57 @@ def plot_power_spectra(
     lead_idx: int,
     out_path: str,
     grid_deg: float = 0.25,
+    var_subset: Sequence[str] | None = None,
 ) -> bool:
-    """Figure 3 e-j: log-log spectra with wavelength (km) on x-axis."""
+    """Figure 3 e-j: log-log spectra with wavelength (km) on x-axis.
+
+    Only plots a curated subset of variables (``var_subset``).  Defaults to
+    ``_SPECTRA_VARS``; any names not present in ``variables`` are skipped.
+    """
     plt = _import_matplotlib()
     if plt is None:
         return False
-    C = len(variables)
-    ncols = min(3, C)
-    nrows = (C + ncols - 1) // ncols
-    fig, axes = plt.subplots(
-        nrows, ncols, figsize=(4 * ncols, 3 * nrows), squeeze=False
-    )
-    # Convert wavenumber → wavelength in km; k=0 excluded, k=1 → full globe ~40030 km
+
+    # Build index list for the subset we want to show
+    subset = list(var_subset) if var_subset is not None else _SPECTRA_VARS
+    var_list = list(variables)
+    pairs = [(name, var_list.index(name)) for name in subset if name in var_list]
+    if not pairs:
+        # Fall back: first 9 channels
+        pairs = [(var_list[i], i) for i in range(min(9, len(var_list)))]
+
+    n = len(pairs)
+    ncols = min(3, n)
+    nrows = (n + ncols - 1) // ncols
+
     km_per_deg = 111.0
     grid_km = grid_deg * km_per_deg
-    # Nyquist wavelength = 2 * grid spacing
     kk = k[1:]
-    # wavelength (km) = (# grid cells in full globe / k) * grid_km
-    n_cells = round(40030 / grid_km)  # approximate full-globe grid cells
+    n_cells = round(40030 / grid_km)
     wavelength_km = n_cells * grid_km / kk
-    for ci, name in enumerate(variables):
-        ax = axes[ci // ncols][ci % ncols]
+
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(5 * ncols, 4 * nrows),
+        constrained_layout=True, squeeze=False,
+    )
+    for plot_i, (name, ci) in enumerate(pairs):
+        ax = axes[plot_i // ncols][plot_i % ncols]
         ax.loglog(wavelength_km, tgt_spectra[lead_idx, ci, 1:], label="truth", color="k")
         ax.loglog(wavelength_km, ens_spectra[lead_idx, ci, 1:], label="forecast", color="C0")
         ax.invert_xaxis()
-        ax.set_title(name, fontsize=9)
-        ax.set_xlabel("Wavelength (km)", fontsize=8)
-        ax.set_ylabel("Mean power", fontsize=8)
+        ax.set_title(name, fontsize=10, pad=4)
+        ax.set_xlabel("Wavelength (km)", fontsize=9)
+        ax.set_ylabel("Mean power", fontsize=9)
         ax.grid(True, which="both", alpha=0.3)
         ax.legend(fontsize=8)
-    for j in range(C, nrows * ncols):
-        axes[j // ncols][j % ncols].axis("off")
-    fig.suptitle(f"Spherical harmonic power spectra at lead step {lead_idx + 1}", fontsize=10)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    for j in range(n, nrows * ncols):
+        axes[j // ncols][j % ncols].set_visible(False)
+    fig.suptitle(
+        f"Power spectra at lead step {lead_idx + 1}  "
+        f"({', '.join(p[0] for p in pairs)})",
+        fontsize=11,
+    )
+    fig.savefig(out_path, dpi=120)
     plt.close(fig)
     return True
 
@@ -530,7 +551,8 @@ def plot_pooled_crps(
     ncols = min(4, C)
     nrows = (C + ncols - 1) // ncols
     fig, axes = plt.subplots(
-        nrows, ncols, figsize=(4 * ncols, 2.5 * nrows), squeeze=False
+        nrows, ncols, figsize=(4 * ncols, 2.5 * nrows),
+        constrained_layout=True, squeeze=False,
     )
     for ci, name in enumerate(variables):
         ax = axes[ci // ncols][ci % ncols]
@@ -546,12 +568,11 @@ def plot_pooled_crps(
         ax.set_yticklabels(km_labels, fontsize=7)
         ax.set_xlabel("lead time (h)", fontsize=8)
         ax.set_ylabel("scale (km)", fontsize=8)
-        ax.set_title(name, fontsize=9)
+        ax.set_title(name, fontsize=9, pad=3)
         fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02)
     for j in range(C, nrows * ncols):
-        axes[j // ncols][j % ncols].axis("off")
-    fig.suptitle(title, fontsize=10)
-    fig.tight_layout()
+        axes[j // ncols][j % ncols].set_visible(False)
+    fig.suptitle(title, fontsize=11)
     fig.savefig(out_path, dpi=120)
     plt.close(fig)
     return True
