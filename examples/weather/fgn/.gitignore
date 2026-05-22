@@ -7,3 +7,6 @@ rundir/
 logs/
 *.npz
 FGN.md
+# SLURM launcher scripts are cluster-specific; keep locally, don't track.
+scripts/train_fgn.sh
+scripts/eval_fgn.sh
