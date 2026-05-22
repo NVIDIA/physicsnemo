@@ -404,7 +404,8 @@ def run_eval(cfg: DictConfig) -> None:
     )
     plot_power_spectra(
         k_vec, power_ens_mean, power_tgt_mean, variables,
-        lead_idx=K - 1, out_path=str(out_dir / f"power_spectra_lead{K}.png"),
+        lead_hours_all=lead_hours,
+        out_path=str(out_dir / "power_spectra.png"),
     )
     plot_pooled_crps(
         pooled_avg_mean, pool_sizes, variables, lead_hours,

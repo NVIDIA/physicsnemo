@@ -416,7 +416,10 @@ def plot_rank_histograms(
     return True
 
 
-_SPECTRA_VARS = ["z500", "q700", "t850", "u850", "v500", "t2m", "u10m", "v10m", "msl"]
+# Paper Figure 3e-j: spectra for these 3 variables at 2 lead times.
+_SPECTRA_VARS_PAPER = ["t2m", "q700", "z500"]
+# Display labels matching the paper (t2m → "2t", etc.)
+_SPECTRA_LABELS: dict[str, str] = {"t2m": "2t"}
 
 
 def plot_power_spectra(
@@ -424,32 +427,39 @@ def plot_power_spectra(
     ens_spectra: np.ndarray,
     tgt_spectra: np.ndarray,
     variables: Sequence[str],
-    lead_idx: int,
+    lead_hours_all: np.ndarray,
     out_path: str,
     grid_deg: float = 0.25,
     var_subset: Sequence[str] | None = None,
+    target_lead_hours: Sequence[float] = (12, 360),
 ) -> bool:
-    """Figure 3 e-j: log-log spectra with wavelength (km) on x-axis.
+    """Figure 3 e-j: 2×3 grid — rows = lead times, cols = variables.
 
-    Only plots a curated subset of variables (``var_subset``).  Defaults to
-    ``_SPECTRA_VARS``; any names not present in ``variables`` are skipped.
+    Rows correspond to the two ``target_lead_hours`` (defaults: 12 h and
+    15 d = 360 h); the closest available lead is used when the exact value
+    is not present.  Columns show the paper variables {2t, q700, z500}
+    (or ``var_subset`` if provided).
     """
     plt = _import_matplotlib()
     if plt is None:
         return False
 
-    # Build index list for the subset we want to show
-    subset = list(var_subset) if var_subset is not None else _SPECTRA_VARS
+    subset = list(var_subset) if var_subset is not None else _SPECTRA_VARS_PAPER
     var_list = list(variables)
     pairs = [(name, var_list.index(name)) for name in subset if name in var_list]
     if not pairs:
-        # Fall back: first 9 channels
-        pairs = [(var_list[i], i) for i in range(min(9, len(var_list)))]
+        pairs = [(var_list[i], i) for i in range(min(3, len(var_list)))]
 
-    n = len(pairs)
-    ncols = min(3, n)
-    nrows = (n + ncols - 1) // ncols
+    # Find closest available lead indices for the requested target hours
+    lh = np.asarray(lead_hours_all, dtype=float)
+    lead_indices = [int(np.argmin(np.abs(lh - th))) for th in target_lead_hours]
+    # Deduplicate while preserving order
+    seen: set[int] = set()
+    lead_indices = [i for i in lead_indices if not (i in seen or seen.add(i))]  # type: ignore[func-returns-value]
+    lead_labels = [f"Mean power at {lh[i]:.0f} h" for i in lead_indices]
 
+    nrows = len(lead_indices)
+    ncols = len(pairs)
     km_per_deg = 111.0
     grid_km = grid_deg * km_per_deg
     kk = k[1:]
@@ -460,23 +470,20 @@ def plot_power_spectra(
         nrows, ncols, figsize=(5 * ncols, 4 * nrows),
         constrained_layout=True, squeeze=False,
     )
-    for plot_i, (name, ci) in enumerate(pairs):
-        ax = axes[plot_i // ncols][plot_i % ncols]
-        ax.loglog(wavelength_km, tgt_spectra[lead_idx, ci, 1:], label="truth", color="k")
-        ax.loglog(wavelength_km, ens_spectra[lead_idx, ci, 1:], label="forecast", color="C0")
-        ax.invert_xaxis()
-        ax.set_title(name, fontsize=10, pad=4)
-        ax.set_xlabel("Wavelength (km)", fontsize=9)
-        ax.set_ylabel("Mean power", fontsize=9)
-        ax.grid(True, which="both", alpha=0.3)
-        ax.legend(fontsize=8)
-    for j in range(n, nrows * ncols):
-        axes[j // ncols][j % ncols].set_visible(False)
-    fig.suptitle(
-        f"Power spectra at lead step {lead_idx + 1}  "
-        f"({', '.join(p[0] for p in pairs)})",
-        fontsize=11,
-    )
+    for ri, (li, row_label) in enumerate(zip(lead_indices, lead_labels)):
+        for ci_plot, (name, ci) in enumerate(pairs):
+            ax = axes[ri][ci_plot]
+            ax.loglog(wavelength_km, ens_spectra[li, ci, 1:], label="FGN", color="C0")
+            ax.loglog(wavelength_km, tgt_spectra[li, ci, 1:], label="truth", color="k")
+            ax.invert_xaxis()
+            display_name = _SPECTRA_LABELS.get(name, name)
+            ax.set_title(display_name, fontsize=10, pad=4)
+            ax.set_xlabel("Wavelength (km)", fontsize=9)
+            ax.set_ylabel(row_label, fontsize=9)
+            ax.grid(True, which="both", alpha=0.3)
+            if ri == 0 and ci_plot == ncols - 1:
+                ax.legend(fontsize=8)
+    fig.suptitle("Spherical Harmonic Power Spectrum", fontsize=11)
     fig.savefig(out_path, dpi=120)
     plt.close(fig)
     return True
@@ -528,6 +535,24 @@ def pooled_crps_per_lead(
     return np.stack(results, axis=0)  # (len(pool_sizes), K, C)
 
 
+# Paper Figure 3a/b: curated variable rows matching the paper's heatmap.
+# Each entry is (display_label, list_of_channel_names_to_average).
+_POOLED_VAR_GROUPS: list[tuple[str, list[str]]] = [
+    ("wspd 200",  ["u200", "v200"]),
+    ("wspd 1000", ["u1000", "v1000"]),
+    ("z 200",     ["z200"]),
+    ("z 500",     ["z500"]),
+    ("t 200",     ["t200"]),
+    ("t 850",     ["t850"]),
+    ("q 200",     ["q200"]),
+    ("q 700",     ["q700"]),
+    ("2t",        ["t2m"]),
+    ("msl",       ["msl"]),
+    ("10m wind",  ["u10m", "v10m"]),
+    ("tp",        ["tp06"]),
+]
+
+
 def plot_pooled_crps(
     pooled: np.ndarray,
     pool_sizes: Sequence[int],
@@ -536,42 +561,71 @@ def plot_pooled_crps(
     out_path: str,
     title: str = "Pooled CRPS",
     grid_deg: float = 0.25,
+    target_lead_days: Sequence[float] = (1, 7),
 ) -> bool:
-    """Figure 3 a-b: 2-D heatmap — pool size (km) × lead time, per variable.
+    """Figure 3 a-b: two side-by-side heatmaps at target lead days.
 
-    Matches the paper's heatmap layout: each panel covers one variable with
-    lead time on the x-axis and spatial scale on the y-axis.
+    Rows = curated variable groups (matching the paper), columns = pool sizes.
+    ``target_lead_days`` selects which lead times to show (default: 1 day and
+    7 days); the closest available lead hours are used.
     """
     plt = _import_matplotlib()
     if plt is None:
         return False
-    _P, _K, C = pooled.shape
-    km_per_cell = grid_deg * 111.0  # 1° ≈ 111 km
+    _P, _K, _C = pooled.shape
+    km_per_cell = grid_deg * 111.0
     km_labels = [f"{int(ps * km_per_cell)}" for ps in pool_sizes]
-    ncols = min(4, C)
-    nrows = (C + ncols - 1) // ncols
+    P = len(pool_sizes)
+    var_list = list(variables)
+
+    # Find closest lead indices for the requested days
+    lh = np.asarray(lead_hours, dtype=float)
+    lead_indices = [int(np.argmin(np.abs(lh - d * 24))) for d in target_lead_days]
+
+    # Build variable groups: keep only those with at least one channel present
+    groups: list[tuple[str, np.ndarray]] = []  # (label, (P,) crps averaged over group)
+    for label, chan_names in _POOLED_VAR_GROUPS:
+        indices = [var_list.index(c) for c in chan_names if c in var_list]
+        if indices:
+            # pooled shape: (P, K, C) → average over channels in group, select all leads
+            groups.append((label, pooled[:, :, indices].mean(axis=-1)))  # (P, K)
+
+    if not groups:
+        return False
+
+    R = len(groups)
+    ncols = len(lead_indices)
+    nrows = R
+
+    vmin = min(g[1][:, lead_indices].min() for g in groups)
+    vmax = max(g[1][:, lead_indices].max() for g in groups)
+
     fig, axes = plt.subplots(
-        nrows, ncols, figsize=(4 * ncols, 2.5 * nrows),
+        nrows, ncols,
+        figsize=(4 * ncols, 0.65 * nrows + 1.5),
         constrained_layout=True, squeeze=False,
     )
-    for ci, name in enumerate(variables):
-        ax = axes[ci // ncols][ci % ncols]
-        data = pooled[:, :, ci]  # (P, K)
-        im = ax.imshow(
-            data,
-            aspect="auto",
-            origin="lower",
-            extent=[lead_hours[0], lead_hours[-1], -0.5, len(pool_sizes) - 0.5],
-            cmap="Blues",
-        )
-        ax.set_yticks(range(len(pool_sizes)))
-        ax.set_yticklabels(km_labels, fontsize=7)
-        ax.set_xlabel("lead time (h)", fontsize=8)
-        ax.set_ylabel("scale (km)", fontsize=8)
-        ax.set_title(name, fontsize=9, pad=3)
-        fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02)
-    for j in range(C, nrows * ncols):
-        axes[j // ncols][j % ncols].set_visible(False)
+    for ri, (label, data_pk) in enumerate(groups):
+        for col_i, li in enumerate(lead_indices):
+            ax = axes[ri][col_i]
+            bar_vals = data_pk[:, li]          # (P,) one value per pool size
+            ax.barh(range(P), bar_vals, color="#2266aa", height=0.7)
+            ax.set_xlim(0, vmax * 1.05)
+            ax.set_yticks(range(P))
+            if col_i == 0:
+                ax.set_yticklabels(km_labels, fontsize=7)
+                ax.set_ylabel(label, fontsize=8, rotation=0, labelpad=50, va="center")
+            else:
+                ax.set_yticklabels([])
+            ax.tick_params(axis="x", labelsize=6)
+            if ri == 0:
+                day_val = target_lead_days[col_i]
+                ax.set_title(
+                    f"{int(day_val)} day{'s' if day_val != 1 else ''}",
+                    fontsize=9, pad=4,
+                )
+            if ri == nrows - 1:
+                ax.set_xlabel("CRPS", fontsize=7)
     fig.suptitle(title, fontsize=11)
     fig.savefig(out_path, dpi=120)
     plt.close(fig)
