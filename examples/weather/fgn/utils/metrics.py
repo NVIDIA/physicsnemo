@@ -446,6 +446,102 @@ def plot_power_spectra(
     return True
 
 
+def pooled_crps_per_lead(
+    ensemble: torch.Tensor,
+    target: torch.Tensor,
+    pool_sizes: Sequence[int],
+    pool_type: str = "avg",
+) -> np.ndarray:
+    """Pooled CRPS at multiple spatial scales (Figure 3 a-b of arXiv:2506.10772).
+
+    Coarsens ensemble and target by pooling P×P grid-cell windows and then
+    computes fair CRPS on the coarsened field. Tests calibration at scales
+    larger than a single grid point.
+
+    pool_sizes [4, 8, 16, 32] ≈ [120, 240, 480, 960] km at 0.25° resolution.
+
+    Parameters
+    ----------
+    pool_type : {"avg", "max"}
+        ``"avg"`` (Figure 3a) averages over the P×P window; ``"max"``
+        (Figure 3b) takes the maximum — tests tail / extreme calibration.
+
+    Shapes: ensemble (B, K, M, C, H, W), target (B, K, C, H, W).
+    Returns numpy array of shape (len(pool_sizes), K, C).
+    """
+    import torch.nn.functional as F
+
+    if pool_type not in ("avg", "max"):
+        raise ValueError(f"pool_type must be 'avg' or 'max', got {pool_type!r}")
+    _check_shapes(ensemble, target)
+    B, K, M, C, H, W = ensemble.shape
+    results = []
+    for P in pool_sizes:
+        ens_flat = ensemble.reshape(B * K * M, C, H, W)
+        tgt_flat = target.reshape(B * K, C, H, W)
+        if pool_type == "avg":
+            ens_p = F.avg_pool2d(ens_flat, kernel_size=P, stride=P, ceil_mode=True)
+            tgt_p = F.avg_pool2d(tgt_flat, kernel_size=P, stride=P, ceil_mode=True)
+        else:
+            ens_p = F.max_pool2d(ens_flat, kernel_size=P, stride=P, ceil_mode=True)
+            tgt_p = F.max_pool2d(tgt_flat, kernel_size=P, stride=P, ceil_mode=True)
+        Hp, Wp = ens_p.shape[-2], ens_p.shape[-1]
+        ens_p = ens_p.reshape(B, K, M, C, Hp, Wp)
+        tgt_p = tgt_p.reshape(B, K, C, Hp, Wp)
+        results.append(crps_per_variable_per_lead(ens_p, tgt_p))  # (K, C)
+    return np.stack(results, axis=0)  # (len(pool_sizes), K, C)
+
+
+def plot_pooled_crps(
+    pooled: np.ndarray,
+    pool_sizes: Sequence[int],
+    variables: Sequence[str],
+    lead_hours: Sequence[float],
+    out_path: str,
+    title: str = "Pooled CRPS",
+    grid_deg: float = 0.25,
+) -> bool:
+    """Figure 3 a-b: 2-D heatmap — pool size (km) × lead time, per variable.
+
+    Matches the paper's heatmap layout: each panel covers one variable with
+    lead time on the x-axis and spatial scale on the y-axis.
+    """
+    plt = _import_matplotlib()
+    if plt is None:
+        return False
+    _P, _K, C = pooled.shape
+    km_per_cell = grid_deg * 111.0  # 1° ≈ 111 km
+    km_labels = [f"{int(ps * km_per_cell)}" for ps in pool_sizes]
+    ncols = min(4, C)
+    nrows = (C + ncols - 1) // ncols
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(4 * ncols, 2.5 * nrows), squeeze=False
+    )
+    for ci, name in enumerate(variables):
+        ax = axes[ci // ncols][ci % ncols]
+        data = pooled[:, :, ci]  # (P, K)
+        im = ax.imshow(
+            data,
+            aspect="auto",
+            origin="lower",
+            extent=[lead_hours[0], lead_hours[-1], -0.5, len(pool_sizes) - 0.5],
+            cmap="Blues",
+        )
+        ax.set_yticks(range(len(pool_sizes)))
+        ax.set_yticklabels(km_labels, fontsize=7)
+        ax.set_xlabel("lead time (h)", fontsize=8)
+        ax.set_ylabel("scale (km)", fontsize=8)
+        ax.set_title(name, fontsize=9)
+        fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02)
+    for j in range(C, nrows * ncols):
+        axes[j // ncols][j % ncols].axis("off")
+    fig.suptitle(title, fontsize=10)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
+    return True
+
+
 def save_summary(metrics: dict[str, Any], out_path: str) -> None:
     """Persist a flat dict of numpy arrays + scalars as a single .npz file."""
     np.savez(out_path, **{k: np.asarray(v) for k, v in metrics.items()})
