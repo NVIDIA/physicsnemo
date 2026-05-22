@@ -54,6 +54,7 @@ from utils.config import EvalMainConfig
 from utils.metrics import (
     derived_variable_crps,
     energy_score_per_lead,
+    plot_crps_scorecard,
     plot_metric_vs_lead,
     plot_pooled_crps,
     plot_power_spectra,
@@ -381,22 +382,28 @@ def run_eval(cfg: DictConfig) -> None:
     log.info(f"Saved eval_metrics.npz ({n_batches} batches) → {out_dir}")
 
     # --- Plots ---
-    plot_metric_vs_lead(
-        crps_mean, variables, lead_hours, "CRPS",
-        "Fair CRPS per lead (lower is better)", str(out_dir / "crps_vs_lead.png"),
+    # Figure 2a: CRPS scorecard heatmap (rows=variables, cols=lead times)
+    plot_crps_scorecard(
+        crps_mean, variables, lead_hours,
+        str(out_dir / "crps_scorecard.png"),
+        title="Fair CRPS scorecard (normalised per variable)",
     )
-    plot_metric_vs_lead(
-        rmse_mean, variables, lead_hours, "RMSE",
-        "Ensemble-mean RMSE per lead", str(out_dir / "rmse_vs_lead.png"),
+    # Figure 2a equivalent for RMSE
+    plot_crps_scorecard(
+        rmse_mean, variables, lead_hours,
+        str(out_dir / "rmse_scorecard.png"),
+        title="Ensemble-mean RMSE scorecard (normalised per variable)",
     )
-    plot_metric_vs_lead(
-        ratio_mean, variables, lead_hours, "spread / skill",
-        "Spread-skill ratio (1.0 = calibrated)",
-        str(out_dir / "spread_skill_vs_lead.png"), hline_y=1.0,
+    # Figure 2a equivalent for spread-skill
+    plot_crps_scorecard(
+        ratio_mean, variables, lead_hours,
+        str(out_dir / "spread_skill_scorecard.png"),
+        title="Spread-skill ratio scorecard (normalised per variable)",
     )
     # rank_acc shape: (M+1, C) → plot expects (C, M+1)
     plot_rank_histograms(rank_acc.T.astype(np.int64), variables,
                          str(out_dir / "rank_histograms.png"))
+    # Energy score: single line, fine to keep
     plot_metric_vs_lead(
         energy_mean[:, None], ["multivariate"], lead_hours, "energy score",
         "Energy score per lead (lower is better)",
@@ -415,6 +422,7 @@ def run_eval(cfg: DictConfig) -> None:
         pooled_max_mean, pool_sizes, variables, lead_hours,
         str(out_dir / "max_pooled_crps.png"), title="Max-pooled CRPS (Figure 3b)",
     )
+    # Figure 3c: derived variable CRPS — single line per derived var, readable
     for dname, vals in derived_acc.items():
         plot_metric_vs_lead(
             (vals / n_batches)[:, None], [dname], lead_hours, "CRPS",

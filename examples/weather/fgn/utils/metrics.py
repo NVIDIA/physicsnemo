@@ -349,6 +349,104 @@ def _import_matplotlib():
         return None
 
 
+# Variable ordering for the scorecard — mirrors Figure 2a of the paper.
+# Groups: surface vars, then key pressure levels for each type (z, u, v, t, q, w).
+# Use 9 standard pressure levels to keep the figure compact (58 rows total).
+_KEY_LEVELS = ["1000", "925", "850", "700", "500", "300", "200", "100", "50"]
+_SCORECARD_GROUPS: list[tuple[str, list[str]]] = [
+    ("surface", ["t2m", "msl", "u10m", "v10m", "sst"]),
+    ("z", [f"z{p}" for p in _KEY_LEVELS]),
+    ("u", [f"u{p}" for p in _KEY_LEVELS]),
+    ("v", [f"v{p}" for p in _KEY_LEVELS]),
+    ("t", [f"t{p}" for p in _KEY_LEVELS]),
+    ("q", [f"q{p}" for p in _KEY_LEVELS]),
+    ("w", [f"w{p}" for p in _KEY_LEVELS]),
+]
+
+
+def plot_crps_scorecard(
+    crps: np.ndarray,
+    variables: Sequence[str],
+    lead_hours: Sequence[float],
+    out_path: str,
+    title: str = "CRPS scorecard",
+) -> bool:
+    """Figure 2a-style heatmap: rows = variables (grouped by type), cols = lead times.
+
+    Each row is normalised to its own [min, max] range so the colormap shows
+    the relative degradation with lead time, making all variables comparable
+    regardless of their absolute CRPS magnitude.
+    """
+    plt = _import_matplotlib()
+    if plt is None:
+        return False
+
+    var_list = list(variables)
+    # Build ordered rows: (display_name, channel_index)
+    rows: list[tuple[str, int]] = []
+    group_boundaries: list[int] = []       # row indices where a new group starts
+    group_labels: list[tuple[int, str]] = []  # (center_row, group_name)
+
+    for group_name, names in _SCORECARD_GROUPS:
+        present = [(n, var_list.index(n)) for n in names if n in var_list]
+        if not present:
+            continue
+        group_boundaries.append(len(rows))
+        group_labels.append((len(rows) + len(present) // 2, group_name))
+        rows.extend(present)
+
+    if not rows:
+        return False
+
+    R = len(rows)
+    K = len(lead_hours)
+    # Build data matrix (R, K), normalise each row to [0, 1]
+    data = np.zeros((R, K), dtype=np.float32)
+    for ri, (_, ci) in enumerate(rows):
+        row = crps[:, ci].astype(np.float32)
+        lo, hi = row.min(), row.max()
+        data[ri] = (row - lo) / (hi - lo + 1e-12)
+
+    fig, ax = plt.subplots(figsize=(max(4, K * 0.6 + 2), max(4, R * 0.12 + 1.5)),
+                           constrained_layout=True)
+    im = ax.imshow(data, aspect="auto", cmap="Blues", vmin=0, vmax=1,
+                   interpolation="nearest")
+
+    # x-axis: lead times in hours (or convert to days if ≥ 48 h)
+    lh = np.asarray(lead_hours)
+    if lh[-1] >= 48:
+        x_labels = [f"{h/24:.0f}d" for h in lh]
+        ax.set_xlabel("lead time (days)", fontsize=9)
+    else:
+        x_labels = [f"{h:.0f}h" for h in lh]
+        ax.set_xlabel("lead time (hours)", fontsize=9)
+    ax.set_xticks(range(K))
+    ax.set_xticklabels(x_labels, fontsize=8)
+
+    # y-axis: variable names (right side shows group labels)
+    y_names = [r[0] for r in rows]
+    ax.set_yticks(range(R))
+    ax.set_yticklabels(y_names, fontsize=7)
+
+    # Horizontal separators between groups
+    for b in group_boundaries[1:]:
+        ax.axhline(b - 0.5, color="white", linewidth=1.5)
+
+    # Group labels on the right
+    ax2 = ax.twinx()
+    ax2.set_ylim(ax.get_ylim())
+    ax2.set_yticks([c for _, (c, _) in enumerate(group_labels)])
+    ax2.set_yticks([c for c, _ in group_labels])
+    ax2.set_yticklabels([n for _, n in group_labels], fontsize=8, fontstyle="italic")
+    ax2.tick_params(length=0)
+
+    fig.colorbar(im, ax=ax, fraction=0.02, pad=0.12, label="normalised (per variable)")
+    ax.set_title(title, fontsize=10, pad=6)
+    fig.savefig(out_path, dpi=100)
+    plt.close(fig)
+    return True
+
+
 def plot_metric_vs_lead(
     metric: np.ndarray,
     variables: Sequence[str],
