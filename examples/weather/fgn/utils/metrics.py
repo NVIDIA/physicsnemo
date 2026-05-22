@@ -357,23 +357,28 @@ def plot_metric_vs_lead(
     title: str,
     out_path: str,
     hline_y: float | None = None,
+    xlabel: str = "lead time (hours)",
 ) -> bool:
     """One line per channel over lead-time axis. Returns True if plotted."""
     plt = _import_matplotlib()
     if plt is None:
         return False
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(10, 5))
     for ci, name in enumerate(variables):
-        ax.plot(steps, metric[:, ci], marker="o", label=name)
+        ax.plot(steps, metric[:, ci], marker="o", markersize=4, label=name)
     if hline_y is not None:
         ax.axhline(hline_y, color="k", linestyle="--", linewidth=0.7)
-    ax.set_xlabel("lead time (steps)")
+    ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8, ncol=2, loc="best")
+    # Legend outside axes so it never overlaps data (70+ channels)
+    ax.legend(
+        fontsize=7, ncol=2, loc="upper left",
+        bbox_to_anchor=(1.01, 1), borderaxespad=0,
+    )
     fig.tight_layout()
-    fig.savefig(out_path, dpi=120)
+    fig.savefig(out_path, dpi=120, bbox_inches="tight")
     plt.close(fig)
     return True
 
@@ -417,8 +422,9 @@ def plot_power_spectra(
     variables: Sequence[str],
     lead_idx: int,
     out_path: str,
+    grid_deg: float = 0.25,
 ) -> bool:
-    """Figure 3 e-j: log-log spectra, ensemble-mean vs ground truth."""
+    """Figure 3 e-j: log-log spectra with wavelength (km) on x-axis."""
     plt = _import_matplotlib()
     if plt is None:
         return False
@@ -428,20 +434,29 @@ def plot_power_spectra(
     fig, axes = plt.subplots(
         nrows, ncols, figsize=(4 * ncols, 3 * nrows), squeeze=False
     )
+    # Convert wavenumber → wavelength in km; k=0 excluded, k=1 → full globe ~40030 km
+    km_per_deg = 111.0
+    grid_km = grid_deg * km_per_deg
+    # Nyquist wavelength = 2 * grid spacing
+    kk = k[1:]
+    # wavelength (km) = (# grid cells in full globe / k) * grid_km
+    n_cells = round(40030 / grid_km)  # approximate full-globe grid cells
+    wavelength_km = n_cells * grid_km / kk
     for ci, name in enumerate(variables):
         ax = axes[ci // ncols][ci % ncols]
-        ax.loglog(k[1:], tgt_spectra[lead_idx, ci, 1:], label="truth", color="k")
-        ax.loglog(k[1:], ens_spectra[lead_idx, ci, 1:], label="forecast", color="C0")
+        ax.loglog(wavelength_km, tgt_spectra[lead_idx, ci, 1:], label="truth", color="k")
+        ax.loglog(wavelength_km, ens_spectra[lead_idx, ci, 1:], label="forecast", color="C0")
+        ax.invert_xaxis()
         ax.set_title(name, fontsize=9)
-        ax.set_xlabel("wavenumber k")
-        ax.set_ylabel("power")
+        ax.set_xlabel("Wavelength (km)", fontsize=8)
+        ax.set_ylabel("Mean power", fontsize=8)
         ax.grid(True, which="both", alpha=0.3)
         ax.legend(fontsize=8)
     for j in range(C, nrows * ncols):
         axes[j // ncols][j % ncols].axis("off")
-    fig.suptitle(f"Azimuthal power spectra at lead {lead_idx}", fontsize=10)
+    fig.suptitle(f"Spherical harmonic power spectra at lead step {lead_idx + 1}", fontsize=10)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=120)
+    fig.savefig(out_path, dpi=120, bbox_inches="tight")
     plt.close(fig)
     return True
 
