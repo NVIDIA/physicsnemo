@@ -350,7 +350,7 @@ def main():
             )
 
         if not args.print_only:
-            results_dir = Path(args.results_dir)
+            results_dir = Path(args.results_dir).expanduser()
             results_dir.mkdir(parents=True, exist_ok=True)
             fname = build_output_filename(
                 distributed=distributed,
