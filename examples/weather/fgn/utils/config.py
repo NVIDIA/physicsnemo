@@ -98,6 +98,18 @@ class InferenceConfig:
 
 
 @dataclass(config={"extra": "forbid"})
+class EvalConfig:
+    checkpoint: str = "latest"
+    checkpoints: list[str] | None = None
+    future_steps: int = Field(default=20, ge=1, le=60)
+    ensemble_size: int = Field(default=8, ge=2)
+    batch_size: int = Field(default=1, ge=1)
+    num_workers: int = Field(default=0, ge=0)
+    outdir: str = "rundir/fgn/0/eval"
+    pool_sizes: list[int] = Field(default_factory=lambda: [4, 8, 16, 32])
+
+
+@dataclass(config={"extra": "forbid"})
 class TrainMainConfig:
     dataset: DatasetConfig
     model: ModelConfig
@@ -110,3 +122,11 @@ class InferenceMainConfig:
     model: ModelConfig
     training: TrainingConfig
     inference: InferenceConfig
+
+
+@dataclass(config={"extra": "forbid"})
+class EvalMainConfig:
+    dataset: DatasetConfig
+    model: ModelConfig
+    training: TrainingConfig
+    eval: EvalConfig
