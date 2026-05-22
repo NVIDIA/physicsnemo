@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Standalone evaluation config for FGN (§4 of arXiv:2506.10772).
+#
+# Usage:
+#   python eval.py --config-name eval_fgn \
+#     dataset.stats_path=rundir/fgn_2024_val/stats_2024.npz \
+#     eval.checkpoint=rundir/fgn_2024_long/0/checkpoints/FGNUNet.0.5000.mdlus
+#
+# To evaluate a deep ensemble pass a list:
+#   eval.checkpoints=[seed0/FGNUNet.mdlus,seed1/FGNUNet.mdlus]
+
+defaults:
+  - fgn         # model + dataset schema defaults
+  - _self_
+
+dataset:
+  name: arco.ArcoFGNDataset
+  state_variables: null
+  invariant_variables:
+    - z
+    - lsm
+  step_hours: 6
+  history_frames: 2
+  # future_frames is overridden by eval.future_steps at runtime
+  future_frames: ${eval.future_steps}
+  val_start: "2024-10-01"
+  val_end:   "2025-01-01"
+  # train_{start,end} unused in eval but required by the dataset schema
+  train_start: "2024-01-01"
+  train_end:   "2024-10-01"
+  spatial_stride: 1
+  static_date: "2016-01-01"
+  arco_cache: true
+  stats_path: ???
+  tp_accumulation_hours: null
+
+model:
+  latent_dim: 16
+  hidden_channels: 64
+
+# training section is required by TrainMainConfig but unused during eval;
+# keep it minimal so Pydantic passes validation.
+training:
+  experiment_name: fgn_eval
+  run_id: "0"
+  batch_size: 1
+  total_train_steps: 1
+  ar_steps: ${eval.future_steps}
+
+eval:
+  # Path to a single .mdlus checkpoint, or "latest" to auto-detect.
+  checkpoint: "latest"
+  # For deep-ensemble eval, list multiple checkpoints; overrides checkpoint.
+  checkpoints: null
+  # Number of AR steps forward (each step = step_hours hours).
+  # 20 steps = 5 days at 6h.  Max ~40 steps (10 days) fits in memory.
+  future_steps: 20
+  # Ensemble members per checkpoint.  Paper uses 56 total (14×4 seeds).
+  ensemble_size: 8
+  # Batch size for the eval DataLoader.  Keep at 1 for full-resolution.
+  batch_size: 1
+  # Number of DataLoader workers.
+  num_workers: 0
+  # Output directory for plots + eval_metrics.npz.
+  outdir: "rundir/fgn_2024_long/0/eval"
+  # Pooled-CRPS cell sizes (number of 0.25° grid cells per side).
+  # [4,8,16,32] ≈ [120, 240, 480, 960] km.
+  pool_sizes: [4, 8, 16, 32]
