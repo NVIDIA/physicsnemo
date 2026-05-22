@@ -31,7 +31,7 @@ torchrun --nproc-per-node 4 benchmark_sharded_attention.py \
 | `--dtype` | `float32` | `float32`, `float16`, or `bfloat16` |
 | `--num_warmup` | 5 | Warmup iterations |
 | `--num_iterations` | 10 | Timed iterations |
-| `--results_dir` | `results/` | Directory for the auto-named JSON output |
+| `--results_dir` | `<script_dir>/results/` | Directory for the auto-named JSON output |
 | `--print-only` | off | Skip writing JSON; print to stdout only |
 
 By default the benchmark writes a JSON file to `results/` whose name
