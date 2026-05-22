@@ -47,6 +47,14 @@ vtk = OptionalImport("vtk")
 logger = logging.getLogger(__name__)
 
 
+def _init_pool_worker():
+    # Use file-system-backed shared memory for tensors returned from this
+    # pool. The default file-descriptor strategy passes one FD per tensor
+    # via SCM_RIGHTS and trips "RuntimeError: received 0 items of ancdata"
+    # when RLIMIT_NOFILE is exhausted (e.g. Ubuntu's default 1024).
+    torch.multiprocessing.set_sharing_strategy("file_system")
+
+
 @dataclass
 class FileInfo:
     """VTP file info storage."""
@@ -204,6 +212,7 @@ class AhmedBodyDataset(Dataset):
         with cf.ProcessPoolExecutor(
             max_workers=num_workers,
             mp_context=torch.multiprocessing.get_context("spawn"),
+            initializer=_init_pool_worker,
         ) as executor:
             for i, graph, coeff, normal, area in executor.map(
                 self.create_graph,

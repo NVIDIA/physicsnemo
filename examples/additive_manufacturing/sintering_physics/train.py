@@ -58,15 +58,6 @@ from physicsnemo.utils.logging import (
 )
 from physicsnemo.models.vfgn.graph_network_modules import VFGNLearnedSimulator
 
-physical_devices = tf.config.list_physical_devices("GPU")
-try:
-    for device_ in physical_devices:
-        tf.config.experimental.set_memory_growth(device_, True)
-except:
-    # Invalid device or cannot modify virtual devices once initialized.
-    pass
-
-
 def Train(rank_zero_logger, dist, cfg: DictConfig):
     """
     Trains a graph-based model, evaluating and saving its performance periodically.

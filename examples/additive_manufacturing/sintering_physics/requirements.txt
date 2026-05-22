@@ -1,3 +1,6 @@
 # pyvista is optional, required if need to run data preprocessing from raw simulation
 # pyvista==0.32.1
-tensorflow>=2.15,<3.0 # generate tfrecord
+# CPU-only TF avoids the bundled CUDA 12 runtime that conflicts with the
+# PhysicsNeMo container's CUDA 13 (PyTorch raises cudaErrorStubLibrary 302
+# and the process aborts). Only used here as a TFRecord parser.
+tensorflow-cpu>=2.15,<3.0
