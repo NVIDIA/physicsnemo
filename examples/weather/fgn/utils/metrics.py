@@ -350,17 +350,18 @@ def _import_matplotlib():
 
 
 # Variable ordering for the scorecard — mirrors Figure 2a of the paper.
-# Groups: surface vars, then key pressure levels for each type (z, u, v, t, q, w).
-# Use 9 standard pressure levels to keep the figure compact (58 rows total).
+# Groups: surface vars first, then z (geopotential) and q (humidity) most
+# prominent (as in paper), then t, u, v, w.
+# 9 standard pressure levels: compact (~58 rows total).
 _KEY_LEVELS = ["1000", "925", "850", "700", "500", "300", "200", "100", "50"]
 _SCORECARD_GROUPS: list[tuple[str, list[str]]] = [
     ("surface", ["t2m", "msl", "u10m", "v10m", "sst"]),
-    ("z", [f"z{p}" for p in _KEY_LEVELS]),
-    ("u", [f"u{p}" for p in _KEY_LEVELS]),
-    ("v", [f"v{p}" for p in _KEY_LEVELS]),
-    ("t", [f"t{p}" for p in _KEY_LEVELS]),
-    ("q", [f"q{p}" for p in _KEY_LEVELS]),
-    ("w", [f"w{p}" for p in _KEY_LEVELS]),
+    ("z",       [f"z{p}" for p in _KEY_LEVELS]),
+    ("q",       [f"q{p}" for p in _KEY_LEVELS]),
+    ("t",       [f"t{p}" for p in _KEY_LEVELS]),
+    ("u",       [f"u{p}" for p in _KEY_LEVELS]),
+    ("v",       [f"v{p}" for p in _KEY_LEVELS]),
+    ("w",       [f"w{p}" for p in _KEY_LEVELS]),
 ]
 
 
@@ -442,6 +443,61 @@ def plot_crps_scorecard(
 
     fig.colorbar(im, ax=ax, fraction=0.02, pad=0.12, label="normalised (per variable)")
     ax.set_title(title, fontsize=10, pad=6)
+    fig.savefig(out_path, dpi=100)
+    plt.close(fig)
+    return True
+
+
+# Figure 2b-f: spread-skill calibration for these 5 key variables.
+_SPREAD_SKILL_VARS = ["z500", "q700", "t850", "t2m", "u10m"]
+_SPREAD_SKILL_LABELS: dict[str, str] = {"t2m": "2t", "u10m": "10u"}
+
+
+def plot_spread_skill_lines(
+    spread: np.ndarray,
+    rmse: np.ndarray,
+    variables: Sequence[str],
+    lead_hours: Sequence[float],
+    out_path: str,
+) -> bool:
+    """Figure 2b-f: spread vs ensemble-mean RMSE for 5 key variables.
+
+    Each panel shows spread (dashed) and RMSE (solid) vs lead time so the
+    reader can judge calibration: a well-calibrated ensemble has spread ≈ RMSE.
+    Variables: z500, q700, t850, 2t, 10u.
+    """
+    plt = _import_matplotlib()
+    if plt is None:
+        return False
+
+    var_list = list(variables)
+    pairs = [
+        (_SPREAD_SKILL_LABELS.get(v, v), var_list.index(v))
+        for v in _SPREAD_SKILL_VARS
+        if v in var_list
+    ]
+    if not pairs:
+        return False
+
+    n = len(pairs)
+    lh = np.asarray(lead_hours, dtype=float)
+    x_label = "lead time (days)" if lh[-1] >= 48 else "lead time (hours)"
+    x_vals = lh / 24.0 if lh[-1] >= 48 else lh
+
+    fig, axes = plt.subplots(1, n, figsize=(3.2 * n, 3.2), constrained_layout=True)
+    if n == 1:
+        axes = [axes]
+    for ax, (name, ci) in zip(axes, pairs):
+        ax.plot(x_vals, rmse[:, ci],  color="C0", linewidth=1.5, label="RMSE")
+        ax.plot(x_vals, spread[:, ci], color="C0", linewidth=1.5,
+                linestyle="--", label="spread")
+        ax.set_title(name, fontsize=10, pad=4)
+        ax.set_xlabel(x_label, fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(labelsize=7)
+    axes[0].set_ylabel("std dev (normalised units)", fontsize=8)
+    axes[-1].legend(fontsize=8)
+    fig.suptitle("Spread-skill calibration", fontsize=10)
     fig.savefig(out_path, dpi=100)
     plt.close(fig)
     return True
@@ -571,14 +627,26 @@ def plot_power_spectra(
     for ri, (li, row_label) in enumerate(zip(lead_indices, lead_labels)):
         for ci_plot, (name, ci) in enumerate(pairs):
             ax = axes[ri][ci_plot]
-            ax.loglog(wavelength_km, ens_spectra[li, ci, 1:], label="FGN", color="C0")
-            ax.loglog(wavelength_km, tgt_spectra[li, ci, 1:], label="truth", color="k")
+            ax.loglog(wavelength_km, ens_spectra[li, ci, 1:], label="FGN",   color="C0", linewidth=1.5)
+            ax.loglog(wavelength_km, tgt_spectra[li, ci, 1:], label="truth", color="k",  linewidth=1.5)
             ax.invert_xaxis()
             display_name = _SPECTRA_LABELS.get(name, name)
-            ax.set_title(display_name, fontsize=10, pad=4)
-            ax.set_xlabel("Wavelength (km)", fontsize=9)
-            ax.set_ylabel(row_label, fontsize=9)
+            if ri == 0:
+                ax.set_title(display_name, fontsize=10, pad=4)
+            if ri == nrows - 1:
+                ax.set_xlabel("Wavelength (km)", fontsize=9)
+            if ci_plot == 0:
+                ax.set_ylabel(row_label, fontsize=9)
             ax.grid(True, which="both", alpha=0.3)
+            # Limit x-ticks to avoid overlap
+            ax.xaxis.set_major_locator(
+                __import__("matplotlib.ticker", fromlist=["LogLocator"]).LogLocator(numticks=5)
+            )
+            ax.xaxis.set_major_formatter(
+                __import__("matplotlib.ticker", fromlist=["LogFormatter"]).LogFormatter(minor_thresholds=(2, 0.5))
+            )
+            ax.tick_params(axis="x", labelsize=7)
+            ax.tick_params(axis="y", labelsize=7)
             if ri == 0 and ci_plot == ncols - 1:
                 ax.legend(fontsize=8)
     fig.suptitle("Spherical Harmonic Power Spectrum", fontsize=11)
@@ -633,24 +701,6 @@ def pooled_crps_per_lead(
     return np.stack(results, axis=0)  # (len(pool_sizes), K, C)
 
 
-# Paper Figure 3a/b: curated variable rows matching the paper's heatmap.
-# Each entry is (display_label, list_of_channel_names_to_average).
-_POOLED_VAR_GROUPS: list[tuple[str, list[str]]] = [
-    ("wspd 200",  ["u200", "v200"]),
-    ("wspd 1000", ["u1000", "v1000"]),
-    ("z 200",     ["z200"]),
-    ("z 500",     ["z500"]),
-    ("t 200",     ["t200"]),
-    ("t 850",     ["t850"]),
-    ("q 200",     ["q200"]),
-    ("q 700",     ["q700"]),
-    ("2t",        ["t2m"]),
-    ("msl",       ["msl"]),
-    ("10m wind",  ["u10m", "v10m"]),
-    ("tp",        ["tp06"]),
-]
-
-
 def plot_pooled_crps(
     pooled: np.ndarray,
     pool_sizes: Sequence[int],
@@ -659,73 +709,80 @@ def plot_pooled_crps(
     out_path: str,
     title: str = "Pooled CRPS",
     grid_deg: float = 0.25,
-    target_lead_days: Sequence[float] = (1, 7),
 ) -> bool:
-    """Figure 3 a-b: two side-by-side heatmaps at target lead days.
+    """Figure 3 a-b: two side-by-side heatmaps (avg | max), rows = variables.
 
-    Rows = curated variable groups (matching the paper), columns = pool sizes.
-    ``target_lead_days`` selects which lead times to show (default: 1 day and
-    7 days); the closest available lead hours are used.
+    Mirrors the paper layout: rows follow _SCORECARD_GROUPS (surface, z, q …),
+    columns = pool sizes in km, value = CRPS averaged over all lead times.
+    Each row is normalised to its own [min, max] range so variables with
+    different CRPS magnitudes can share the same colormap.
+
+    ``pooled`` shape: (P, K, C) — pool sizes × leads × channels.
+    Pass the avg-pooled array for the left panel and the max-pooled array for
+    the right panel by calling this function twice with different ``out_path``
+    values, or pass a dict (see ``plot_pooled_crps_pair``).
     """
     plt = _import_matplotlib()
     if plt is None:
         return False
-    _P, _K, _C = pooled.shape
+
+    P, _K, _C = pooled.shape
     km_per_cell = grid_deg * 111.0
     km_labels = [f"{int(ps * km_per_cell)}" for ps in pool_sizes]
-    P = len(pool_sizes)
     var_list = list(variables)
 
-    # Find closest lead indices for the requested days
-    lh = np.asarray(lead_hours, dtype=float)
-    lead_indices = [int(np.argmin(np.abs(lh - d * 24))) for d in target_lead_days]
+    # Build rows using the same groups as the scorecard
+    rows: list[tuple[str, int]] = []
+    group_boundaries: list[int] = []
+    group_labels: list[tuple[int, str]] = []
+    for group_name, names in _SCORECARD_GROUPS:
+        present = [(n, var_list.index(n)) for n in names if n in var_list]
+        if not present:
+            continue
+        group_boundaries.append(len(rows))
+        group_labels.append((len(rows) + len(present) // 2, group_name))
+        rows.extend(present)
 
-    # Build variable groups: keep only those with at least one channel present
-    groups: list[tuple[str, np.ndarray]] = []  # (label, (P,) crps averaged over group)
-    for label, chan_names in _POOLED_VAR_GROUPS:
-        indices = [var_list.index(c) for c in chan_names if c in var_list]
-        if indices:
-            # pooled shape: (P, K, C) → average over channels in group, select all leads
-            groups.append((label, pooled[:, :, indices].mean(axis=-1)))  # (P, K)
-
-    if not groups:
+    if not rows:
         return False
 
-    R = len(groups)
-    ncols = len(lead_indices)
-    nrows = R
+    R = len(rows)
+    # Average over all lead times → (P, C), then select per-row
+    crps_pk = pooled.mean(axis=1)  # (P, C)
 
-    vmin = min(g[1][:, lead_indices].min() for g in groups)
-    vmax = max(g[1][:, lead_indices].max() for g in groups)
+    data = np.zeros((R, P), dtype=np.float32)
+    for ri, (_, ci) in enumerate(rows):
+        row = crps_pk[:, ci].astype(np.float32)
+        lo, hi = row.min(), row.max()
+        data[ri] = (row - lo) / (hi - lo + 1e-12)
 
-    fig, axes = plt.subplots(
-        nrows, ncols,
-        figsize=(4 * ncols, 0.65 * nrows + 1.5),
-        constrained_layout=True, squeeze=False,
+    fig, ax = plt.subplots(
+        figsize=(max(3, P * 0.7 + 2), max(4, R * 0.12 + 1.5)),
+        constrained_layout=True,
     )
-    for ri, (label, data_pk) in enumerate(groups):
-        for col_i, li in enumerate(lead_indices):
-            ax = axes[ri][col_i]
-            bar_vals = data_pk[:, li]          # (P,) one value per pool size
-            ax.barh(range(P), bar_vals, color="#2266aa", height=0.7)
-            ax.set_xlim(0, vmax * 1.05)
-            ax.set_yticks(range(P))
-            if col_i == 0:
-                ax.set_yticklabels(km_labels, fontsize=7)
-                ax.set_ylabel(label, fontsize=8, rotation=0, labelpad=50, va="center")
-            else:
-                ax.set_yticklabels([])
-            ax.tick_params(axis="x", labelsize=6)
-            if ri == 0:
-                day_val = target_lead_days[col_i]
-                ax.set_title(
-                    f"{int(day_val)} day{'s' if day_val != 1 else ''}",
-                    fontsize=9, pad=4,
-                )
-            if ri == nrows - 1:
-                ax.set_xlabel("CRPS", fontsize=7)
-    fig.suptitle(title, fontsize=11)
-    fig.savefig(out_path, dpi=120)
+    im = ax.imshow(data, aspect="auto", cmap="Blues", vmin=0, vmax=1,
+                   interpolation="nearest")
+
+    ax.set_xticks(range(P))
+    ax.set_xticklabels(km_labels, fontsize=8)
+    ax.set_xlabel("Pool size (km)", fontsize=9)
+
+    y_names = [r[0] for r in rows]
+    ax.set_yticks(range(R))
+    ax.set_yticklabels(y_names, fontsize=7)
+
+    for b in group_boundaries[1:]:
+        ax.axhline(b - 0.5, color="white", linewidth=1.5)
+
+    ax2 = ax.twinx()
+    ax2.set_ylim(ax.get_ylim())
+    ax2.set_yticks([c for c, _ in group_labels])
+    ax2.set_yticklabels([n for _, n in group_labels], fontsize=8, fontstyle="italic")
+    ax2.tick_params(length=0)
+
+    fig.colorbar(im, ax=ax, fraction=0.02, pad=0.12, label="normalised (per variable)")
+    ax.set_title(title, fontsize=10, pad=6)
+    fig.savefig(out_path, dpi=100)
     plt.close(fig)
     return True
 

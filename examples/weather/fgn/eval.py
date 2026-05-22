@@ -59,6 +59,7 @@ from utils.metrics import (
     plot_pooled_crps,
     plot_power_spectra,
     plot_rank_histograms,
+    plot_spread_skill_lines,
     pooled_crps_per_lead,
     power_spectra_per_variable,
     save_summary,
@@ -394,11 +395,16 @@ def run_eval(cfg: DictConfig) -> None:
         str(out_dir / "rmse_scorecard.png"),
         title="Ensemble-mean RMSE scorecard (normalised per variable)",
     )
-    # Figure 2a equivalent for spread-skill
+    # Figure 2a equivalent for spread-skill ratio
     plot_crps_scorecard(
         ratio_mean, variables, lead_hours,
         str(out_dir / "spread_skill_scorecard.png"),
         title="Spread-skill ratio scorecard (normalised per variable)",
+    )
+    # Figure 2b-f: spread vs RMSE line plots for 5 key variables
+    plot_spread_skill_lines(
+        spread_mean, rmse_mean, variables, lead_hours,
+        str(out_dir / "spread_skill_lines.png"),
     )
     # rank_acc shape: (M+1, C) → plot expects (C, M+1)
     plot_rank_histograms(rank_acc.T.astype(np.int64), variables,
@@ -416,11 +422,11 @@ def run_eval(cfg: DictConfig) -> None:
     )
     plot_pooled_crps(
         pooled_avg_mean, pool_sizes, variables, lead_hours,
-        str(out_dir / "avg_pooled_crps.png"), title="Average-pooled CRPS (Figure 3a)",
+        str(out_dir / "avg_pooled_crps.png"), title="Average-pooled CRPS",
     )
     plot_pooled_crps(
         pooled_max_mean, pool_sizes, variables, lead_hours,
-        str(out_dir / "max_pooled_crps.png"), title="Max-pooled CRPS (Figure 3b)",
+        str(out_dir / "max_pooled_crps.png"), title="Max-pooled CRPS",
     )
     # Figure 3c: derived variable CRPS — single line per derived var, readable
     for dname, vals in derived_acc.items():
