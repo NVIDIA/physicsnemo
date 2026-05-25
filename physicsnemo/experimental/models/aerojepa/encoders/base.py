@@ -37,6 +37,10 @@ class BaseContextEncoder(nn.Module, ABC):
     volumetric_sample_pos)`` and an SDF channel in ``context_feat``
     distinguishes the two halves.
 
+    The context encoder is intentionally *not* conditioned on
+    ``gen_params``: operating conditions enter the model downstream at
+    the predictor head, not at the context branch.
+
     Subclasses must implement :meth:`forward`. The :meth:`forward_batched`
     path is optional — concrete encoders that support padded batched
     inputs override it and set ``supports_batched_forward = True`` on the
@@ -51,7 +55,6 @@ class BaseContextEncoder(nn.Module, ABC):
         *,
         context_pos: torch.Tensor,
         context_feat: torch.Tensor,
-        gen_params: torch.Tensor | None = None,
     ) -> EncoderOutput:
         raise NotImplementedError
 
@@ -61,7 +64,6 @@ class BaseContextEncoder(nn.Module, ABC):
         context_pos: torch.Tensor,
         context_feat: torch.Tensor,
         context_pos_n: torch.Tensor,
-        gen_params: torch.Tensor | None = None,
     ) -> EncoderOutput:
         r"""Optional batched forward over a padded batch.
 
@@ -77,8 +79,6 @@ class BaseContextEncoder(nn.Module, ABC):
             Padded per-point features of shape ``(B, N, F)``.
         context_pos_n : torch.Tensor
             Per-batch valid point counts of shape ``(B,)``.
-        gen_params : torch.Tensor, optional
-            Operating conditions broadcast across the batch.
 
         Returns
         -------
