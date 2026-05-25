@@ -30,4 +30,33 @@ Giral et al., "AeroJEPA: Learning Semantic Latent Representations for
 Scalable 3D Aerodynamic Field Modeling", preprint arXiv:2605.05586 (2026).
 """
 
-__all__ = []
+from .masking import flatten_valid_token_features, reshape_token_features_for_sigreg
+from .reconstruction import (
+    MSELoss,
+    RelativeL2Loss,
+    RelativeL2MSELoss,
+    RelativeMSELoss,
+    mse_loss,
+    relative_l2_loss,
+    relative_l2_mse_loss,
+    relative_mse_loss,
+)
+from .sigreg import SIGReg, TokenLatentSIGReg
+
+__all__ = [
+    # Masking helpers
+    "flatten_valid_token_features",
+    "reshape_token_features_for_sigreg",
+    # SIGReg
+    "SIGReg",
+    "TokenLatentSIGReg",
+    # Reconstruction (functional + Module pairs)
+    "MSELoss",
+    "RelativeL2Loss",
+    "RelativeL2MSELoss",
+    "RelativeMSELoss",
+    "mse_loss",
+    "relative_l2_loss",
+    "relative_l2_mse_loss",
+    "relative_mse_loss",
+]
