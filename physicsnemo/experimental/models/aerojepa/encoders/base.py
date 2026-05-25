@@ -37,10 +37,6 @@ class BaseContextEncoder(nn.Module, ABC):
     volumetric_sample_pos)`` and an SDF channel in ``context_feat``
     distinguishes the two halves.
 
-    The context encoder is intentionally *not* conditioned on
-    ``gen_params``: operating conditions enter the model downstream at
-    the predictor head, not at the context branch.
-
     Subclasses must implement :meth:`forward`. The :meth:`forward_batched`
     path is optional — concrete encoders that support padded batched
     inputs override it and set ``supports_batched_forward = True`` on the
@@ -121,7 +117,6 @@ class BaseTargetEncoder(nn.Module, ABC):
         volume_pos: torch.Tensor,
         volume_feat: torch.Tensor,
         context_tokens: TokenSet,
-        gen_params: torch.Tensor | None = None,
     ) -> EncoderOutput:
         raise NotImplementedError
 
@@ -135,7 +130,6 @@ class BaseTargetEncoder(nn.Module, ABC):
         volume_feat: torch.Tensor,
         volume_pos_n: torch.Tensor,
         context_tokens: TokenSet,
-        gen_params: torch.Tensor | None = None,
     ) -> EncoderOutput:
         r"""Optional batched forward; see :class:`BaseTargetEncoder`.
 
@@ -151,8 +145,6 @@ class BaseTargetEncoder(nn.Module, ABC):
             Per-batch valid volume-point counts of shape ``(B,)``.
         context_tokens : TokenSet
             Context tokens forwarded from the context encoder.
-        gen_params : torch.Tensor, optional
-            Operating conditions broadcast across the batch.
 
         Returns
         -------
