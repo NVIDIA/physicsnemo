@@ -23,7 +23,7 @@ from abc import ABC, abstractmethod
 import torch
 import torch.nn as nn
 
-from physicsnemo.experimental.nn.aerojepa import EncoderOutput, TokenSet
+from physicsnemo.experimental.nn.aerojepa import EncoderOutput
 
 
 class BaseContextEncoder(nn.Module, ABC):
@@ -93,9 +93,7 @@ class BaseTargetEncoder(nn.Module, ABC):
     target for the predictor head. Unlike the context encoder, it sees the
     surface and volume halves of the input *separately*: training-time
     subsampling for the two is intentionally decoupled (different point
-    counts, different tokenization strategies are allowed). The encoder
-    consumes the context tokens too — some implementations cross-attend
-    to them when constructing target tokens.
+    counts, different tokenization strategies are allowed).
 
     At inference, the target encoder is generally bypassed — only its
     tokenizer is reused (via the model's
@@ -116,7 +114,6 @@ class BaseTargetEncoder(nn.Module, ABC):
         surface_main_feat: torch.Tensor,
         volume_pos: torch.Tensor,
         volume_feat: torch.Tensor,
-        context_tokens: TokenSet,
     ) -> EncoderOutput:
         raise NotImplementedError
 
@@ -129,7 +126,6 @@ class BaseTargetEncoder(nn.Module, ABC):
         volume_pos: torch.Tensor,
         volume_feat: torch.Tensor,
         volume_pos_n: torch.Tensor,
-        context_tokens: TokenSet,
     ) -> EncoderOutput:
         r"""Optional batched forward; see :class:`BaseTargetEncoder`.
 
@@ -143,8 +139,6 @@ class BaseTargetEncoder(nn.Module, ABC):
             Padded volumetric positions and features.
         volume_pos_n : torch.Tensor
             Per-batch valid volume-point counts of shape ``(B,)``.
-        context_tokens : TokenSet
-            Context tokens forwarded from the context encoder.
 
         Returns
         -------
