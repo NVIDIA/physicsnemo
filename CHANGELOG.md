@@ -38,6 +38,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coordinates with no learnable parameters.
 - Adds radiation transport example (`examples/nuclear_engineering/radiation_transport`)
 - Adds agent skills structure, and initial skill for 'discoverability'.
+- Adds AeroJEPA reusable building blocks under
+  `physicsnemo.experimental.nn.aerojepa`. Includes the `TokenSet` and
+  `EncoderOutput` token dataclasses, a deterministic
+  `FourierPositionalEncoding` layer for INR-style coordinate queries,
+  `ResidualMLP` and the `LocalPointTransformerBlock` /
+  `LocalTokenCrossAttentionBlock` attention blocks (with optional
+  AdaLN / AdaLN-Zero conditioning), the `PointCloudTokenizer` (seven
+  center-selection strategies with k-NN cluster pooling), token
+  batching / mask / k-NN helpers, and prototype anchor build / load
+  utilities. The five layer classes are also re-exported at the parent
+  `physicsnemo.experimental.nn` namespace.
 - Adds xDeepONet to experimental models
   (`physicsnemo.experimental.models.xdeeponet.DeepONet`).  A single
   dimension-generic (2D/3D) DeepONet that accepts a spatial or MLP branch,
