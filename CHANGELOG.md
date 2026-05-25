@@ -38,6 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coordinates with no learnable parameters.
 - Adds radiation transport example (`examples/nuclear_engineering/radiation_transport`)
 - Adds agent skills structure, and initial skill for 'discoverability'.
+- Adds AeroJEPA loss family under
+  `physicsnemo.experimental.metrics.aerojepa`. Includes `SIGReg` and
+  `TokenLatentSIGReg` (the LeWorldModel sketch-isotropic-Gaussian
+  regularizer with a padding-aware token wrapper), the
+  `flatten_valid_token_features` / `reshape_token_features_for_sigreg`
+  masking helpers, and the reconstruction loss family
+  (`MSELoss` / `RelativeL2Loss` / `RelativeMSELoss` /
+  `RelativeL2MSELoss`, each with functional and `nn.Module` forms,
+  optional per-channel weights stored as a persistent buffer, optional
+  per-point weights, and an optional validity mask).
 - Adds AeroJEPA reusable building blocks under
   `physicsnemo.experimental.nn.aerojepa`. Includes the `TokenSet` and
   `EncoderOutput` token dataclasses, a deterministic
