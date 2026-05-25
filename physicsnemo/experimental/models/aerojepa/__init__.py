@@ -33,4 +33,29 @@ Giral et al., "AeroJEPA: Learning Semantic Latent Representations for
 Scalable 3D Aerodynamic Field Modeling", preprint arXiv:2605.05586 (2026).
 """
 
-__all__ = []
+from .aerojepa import AeroJEPA, AeroJEPAMetaData
+from .decoder import QueryTokenDecoder
+from .encoders.base import BaseContextEncoder, BaseTargetEncoder
+from .encoders.context import ContextTransformer
+from .encoders.point import PointTransformer
+from .encoders.target import TargetTransformer
+from .predictor import PrototypeTokenJEPAHead
+from .trunk import AeroJEPATrunk
+
+__all__ = [
+    # Top-level model
+    "AeroJEPA",
+    "AeroJEPAMetaData",
+    # Trunk and predictor
+    "AeroJEPATrunk",
+    "PrototypeTokenJEPAHead",
+    # Decoder
+    "QueryTokenDecoder",
+    # Encoder ABCs
+    "BaseContextEncoder",
+    "BaseTargetEncoder",
+    # Concrete encoders
+    "ContextTransformer",
+    "PointTransformer",
+    "TargetTransformer",
+]
