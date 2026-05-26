@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Top-level config for `inference.py`. Reuses the recipe's `data` and
+# `model` config groups; no `training` block is needed here.
+
+defaults:
+  - data: superwing
+  - model: aerojepa
+  - _self_
+
+seed: 42
+device: cuda
+
+# Required: path to the checkpoint produced by `train.py`.
+checkpoint: ???
+
+# Output subdirectory under Hydra's run dir. Plots land in
+# ``<output_dir>/plots/``, the predictions dump in
+# ``<output_dir>/predictions.npz``.
+output_dir: inference
+
+# Autocast precision for the encoder + predictor. Decoder chunks run
+# under the same precision and are accumulated on CPU.
+precision: bf16
+
+# Number of test cases to render to PNG. The full test split is always
+# written to ``predictions.npz``.
+num_plots: 4
+
+# Chunk size for the chunked decoder (set lower if VRAM is tight).
+decoder_chunk_size: 4096
+
+# Apply EMA weights from the checkpoint if present.
+use_ema: true
+
+logging:
+  level: INFO
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
