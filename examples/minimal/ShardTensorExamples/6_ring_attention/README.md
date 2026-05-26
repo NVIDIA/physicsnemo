@@ -37,6 +37,8 @@ torchrun --nproc-per-node 4 benchmark_sharded_attention.py \
 
 After collecting JSON results in `results/`, generate scaling plots:
 
+> Note!  To run the scaling plot, you will need matplotlib installed.  `pip install matplotlib`.
+
 ```bash
 python plot_scaling_results.py
 ```
