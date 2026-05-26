@@ -48,7 +48,8 @@ trunk:
 
   target_encoder:
     _target_: physicsnemo.experimental.models.aerojepa.TargetTransformer
-    point_input_dim: 3
+    # xyz (3) + per-point surface field (Cp, Cf_tau, Cf_z = 3 channels).
+    point_input_dim: 6
     token_dim: 128
     max_point_tokens: 256
     tokenizer_strategy: fps_cluster
