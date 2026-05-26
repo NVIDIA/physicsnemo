@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# AeroJEPA model for the SuperWing tutorial.
+#
+# This is a smaller-than-paper baseline so a single-GPU run can finish in
+# minutes on an L40-class card. The paper config uses
+# `max_point_tokens=1024`, `token_dim=256`, `num_layers=6` and 16384
+# sample points; scale these up once you have a feel for the recipe.
+
+_target_: physicsnemo.experimental.models.aerojepa.AeroJEPA
+
+trunk:
+  _target_: physicsnemo.experimental.models.aerojepa.AeroJEPATrunk
+  include_geometry_global_in_decoder_cond: false
+  mask_prediction_enabled: false
+
+  context_encoder:
+    _target_: physicsnemo.experimental.models.aerojepa.ContextTransformer
+    point_input_dim: 3
+    token_dim: 128
+    max_point_tokens: 256
+    tokenizer_strategy: fps_cluster
+    tokenizer_cluster_size: 16
+    tokenizer_knn_chunk_size: 128
+    point_pos_pe_bands: 6
+    num_heads: 4
+    num_layers: 4
+    neighbor_k: 16
+    mlp_ratio: 4
+    dropout: 0.0
+    use_sdf: false
+    use_solid_normals: false
+    use_solid_n_dot_uinf: false
+
+  target_encoder:
+    _target_: physicsnemo.experimental.models.aerojepa.TargetTransformer
+    point_input_dim: 3
+    token_dim: 128
+    max_point_tokens: 256
+    tokenizer_strategy: fps_cluster
+    tokenizer_cluster_size: 16
+    tokenizer_knn_chunk_size: 128
+    point_pos_pe_bands: 6
+    num_heads: 4
+    num_layers: 4
+    neighbor_k: 16
+    mlp_ratio: 4
+    dropout: 0.0
+
+  decoder:
+    _target_: physicsnemo.experimental.models.aerojepa.QueryTokenDecoder
+    token_dim: 128
+    hidden_dim: 128
+    num_layers: 2
+    out_dim: 3            # Cp, Cf_x, Cf_y (SuperWing surface targets)
+    use_sdf: false
+    cond_dim: 2           # aoa, mach
+    pe_num_bands: 16
+    cross_attention_heads: 4
+    cross_attention_layers: 2
+    cross_attention_k: 8
+    attention_mlp_ratio: 4
+    dropout: 0.0
+    query_chunk_size: 1024
+
+predictor:
+  _target_: physicsnemo.experimental.models.aerojepa.PrototypeTokenJEPAHead
+  token_dim: 128
+  cond_dim: 2
+  hidden_dim: 128
+  depth: 4
+  num_heads: 4
+  neighbor_k: 8
+  knn_chunk_size: 128
+  query_pe_bands: 6
+  mlp_ratio: 4
+  dropout: 0.0

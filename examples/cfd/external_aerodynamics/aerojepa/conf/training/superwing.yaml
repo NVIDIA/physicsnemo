@@ -1,0 +1,70 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Tutorial-sized training schedule for SuperWing. The paper config trains
+# for 200 epochs; this runs for 50 so a smoke check finishes in minutes.
+epochs: 50
+batch_size: 1
+eval_batch_size: 1
+max_eval_batches: 4
+precision: bf16
+save_every_epochs: 10
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-3
+  weight_decay: 1.0e-3
+  betas: [0.9, 0.95]
+
+scheduler:
+  name: warmup_cosine
+  warmup_epochs: 2
+
+grad_clip_norm: 10.0
+
+# Exponential moving average of model parameters (paper uses EMA at the
+# fork side; on by default for the tutorial since it stabilises eval).
+ema:
+  enabled: true
+  decay: 0.999
+
+# Loss configuration. The reconstruction term is the standard
+# `relative_l2_mse` blend. The JEPA terms (latent + SIGReg) are warmed up
+# linearly from 0 to their target weights over `*_warmup_epochs`.
+loss:
+  recon:
+    kind: relative_l2_mse
+    relative_mse_mode: pointwise
+    eps: 1.0e-2
+    relative_l2_weight: 1.0
+    mse_weight: 0.2
+    weight: 1.0
+    warmup_epochs: 0
+
+  latent:
+    weight: 1.0
+    mse_weight: 0.5
+    cosine_weight: 0.5
+    warmup_epochs: 5
+
+  sigreg:
+    weight: 1.0e-2
+    warmup_epochs: 5
+    knots: 17
+    num_proj: 1024
+
+  mask:
+    weight: 0.0

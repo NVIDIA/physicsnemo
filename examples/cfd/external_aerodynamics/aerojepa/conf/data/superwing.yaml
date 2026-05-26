@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+_target_: src.datapipes.superwing.SuperWingDataset
+
+# Path to the SuperWing dataset root produced by
+# `python -m src.datapipes.download_superwing`. Must be set on the CLI:
+#   python train.py data.path=/path/to/SuperWing_Dataset
+path: ???
+
+# Optional sidecar artifacts. If left null, they are derived/cached under
+# `data.path` on first use.
+split_manifest: null
+normalization_stats_path: null
+
+# Operating-condition columns inside `index.npy`.
+# SuperWing exposes (geom_id, group, aoa, mach, ...); we take aoa + mach.
+gen_params_columns: [2, 3]
+gen_params_names: [aoa, mach]
+
+# Sample sizes (tutorial-friendly defaults; paper uses 16384).
+surface_points: 4096
+query_points: 4096
+target_encoder_points: 4096
+
+# Normalization.
+normalize_xyz: true
+uvwp_normalization: standardize
+sdf_normalization: none
+gen_params_normalization: standardize
+normalization_max_target_samples: 4096
+
+# Sampling determinism.
+train_deterministic_sampling: false
+eval_deterministic_sampling: true
+
+# Evaluation behavior.
+eval_full_grid_query: true
+val_return_origingeom: true
+
+# Data-loader knobs.
+num_workers: 2
+pin_memory: true
