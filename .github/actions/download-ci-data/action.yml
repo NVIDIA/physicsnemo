@@ -57,7 +57,8 @@ runs:
         fi
 
         if ! command -v hf >/dev/null 2>&1; then
-          uv pip install --system --quiet huggingface_hub[hf_xet]
+          # See bootstrap-cudnn-ci: typer 0.26 dropped click; hf CLI still imports it.
+          uv pip install --system --quiet huggingface_hub[hf_xet] click
         fi
         hf download "${HF_REPO}" \
           --repo-type dataset \
