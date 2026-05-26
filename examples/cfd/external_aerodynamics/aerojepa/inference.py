@@ -126,7 +126,7 @@ def _build_test_loader(
         target_encoder_points=int(data_cfg.target_encoder_points),
         query_points=int(data_cfg.query_points),
         eval_full_grid_query=True,
-        return_origingeom=False,
+        return_origingeom=True,
         return_full_fields=True,
         deterministic_sampling=True,
         normalize_xyz=bool(data_cfg.normalize_xyz),
@@ -287,6 +287,9 @@ def main(cfg: DictConfig) -> None:
     mach_list: list[float] = []
     geom_idx_list: list[int] = []
     sample_idx_list: list[int] = []
+    ref_area_list: list[float] = []
+    half_span_list: list[float] = []
+    origingeom_list: list[np.ndarray] = []
 
     n_plots = int(cfg.num_plots)
     H, W = SUPERWING_GRID_SHAPE
@@ -322,6 +325,9 @@ def main(cfg: DictConfig) -> None:
         mach_list.append(float(sample["mach"]))
         geom_idx_list.append(int(sample["geom_idx"]))
         sample_idx_list.append(int(sample["sample_idx"]))
+        ref_area_list.append(float(sample["ref_area"]))
+        half_span_list.append(float(sample["half_span"]))
+        origingeom_list.append(sample["origingeom_full"].detach().cpu().numpy())
 
         if case_idx < n_plots:
             written = plot_surface_field(
@@ -347,6 +353,9 @@ def main(cfg: DictConfig) -> None:
         mach=np.asarray(mach_list, dtype=np.float32),
         geom_idx=np.asarray(geom_idx_list, dtype=np.int64),
         sample_idx=np.asarray(sample_idx_list, dtype=np.int64),
+        ref_area=np.asarray(ref_area_list, dtype=np.float32),
+        half_span=np.asarray(half_span_list, dtype=np.float32),
+        origingeom=np.stack(origingeom_list, axis=0),
         target_mean=target_mean,
         target_std=target_std,
     )
