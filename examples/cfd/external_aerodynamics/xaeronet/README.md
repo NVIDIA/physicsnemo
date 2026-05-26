@@ -88,7 +88,8 @@ constructs the correct URL:
 
 ```bash
 TORCH=$(python -c "import torch; print(torch.__version__.split('+')[0])")
-CUDA=$(python -c "import torch; v=torch.version.cuda; print('cu' + v.replace('.', '') if v else 'cpu')")
+CUDA=$(python -c "import torch; v=torch.version.cuda; \
+print('cu' + v.replace('.', '') if v else 'cpu')")
 pip install pyg-lib torch_scatter -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
 ```
 
