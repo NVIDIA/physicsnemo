@@ -14,43 +14,46 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: src.datapipes.superwing.SuperWingDataset
-
 # Path to the SuperWing dataset root produced by
 # `python -m src.datapipes.download_superwing`. Must be set on the CLI:
 #   python train.py data.path=/path/to/SuperWing_Dataset
 path: ???
 
-# Optional sidecar artifacts. If left null, they are derived/cached under
-# `data.path` on first use.
+# Optional sidecar artifacts. ``null`` triggers auto-build into
+# ``<path>/split_by_geometry.json`` and ``<path>/normalization_stats_train.json``
+# on the first run.
 split_manifest: null
 normalization_stats_path: null
 
-# Operating-condition columns inside `index.npy`.
-# SuperWing exposes (geom_id, group, aoa, mach, ...); we take aoa + mach.
+# Split ratios used when auto-building the manifest.
+train_ratio: 0.8
+val_ratio: 0.1
+split_seed: 0
+
+# Operating-condition columns inside ``index.npy``. SuperWing exposes
+# ``(geom_id, group, aoa, mach, ...)``; we take aoa + mach.
 gen_params_columns: [2, 3]
 gen_params_names: [aoa, mach]
 
+# Cap on training samples streamed for the normalization-stat builder.
+normalization_max_target_samples: 4096
+
 # Sample sizes (tutorial-friendly defaults; paper uses 16384).
 surface_points: 4096
-query_points: 4096
 target_encoder_points: 4096
+query_points: 4096
 
 # Normalization.
 normalize_xyz: true
-uvwp_normalization: standardize
-sdf_normalization: none
-gen_params_normalization: standardize
-normalization_max_target_samples: 4096
 
 # Sampling determinism.
 train_deterministic_sampling: false
 eval_deterministic_sampling: true
 
-# Evaluation behavior.
+# Evaluation behaviour.
 eval_full_grid_query: true
 val_return_origingeom: true
 
-# Data-loader knobs.
+# DataLoader knobs.
 num_workers: 2
 pin_memory: true
