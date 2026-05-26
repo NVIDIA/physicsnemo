@@ -188,9 +188,10 @@ def test_encode_geometry_and_flow_returns_dict(device):
     ctx = model.encode_geometry_and_flow(
         context_pos=torch.randn(40, 3, device=device),
         context_feat=torch.zeros(40, 0, device=device),
-        surface_main_feat=torch.randn(40, 3, device=device),
-        volume_pos=torch.randn(60, 3, device=device),
-        volume_feat=torch.randn(60, 3, device=device),
+        target_surface_pos=torch.randn(50, 3, device=device),
+        target_surface_main_feat=torch.randn(50, 3, device=device),
+        target_volume_pos=torch.randn(60, 3, device=device),
+        target_volume_feat=torch.randn(60, 3, device=device),
         gen_params=torch.randn(4, device=device),
     )
     assert set(ctx.keys()) == {"context_tokens", "target_tokens", "cond_global"}

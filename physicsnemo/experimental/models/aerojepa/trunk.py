@@ -134,9 +134,10 @@ class AeroJEPATrunk(nn.Module):
         *,
         context_pos: torch.Tensor,
         context_feat: torch.Tensor,
-        surface_main_feat: torch.Tensor | None = None,
-        volume_pos: torch.Tensor,
-        volume_feat: torch.Tensor,
+        target_surface_pos: torch.Tensor,
+        target_surface_main_feat: torch.Tensor,
+        target_volume_pos: torch.Tensor,
+        target_volume_feat: torch.Tensor,
         gen_params: torch.Tensor,
     ) -> dict:
         r"""Run the context and target encoders and assemble the decoder-side state.
@@ -144,15 +145,23 @@ class AeroJEPATrunk(nn.Module):
         Parameters
         ----------
         context_pos, context_feat : torch.Tensor
-            Context input. Used by the context encoder as
-            ``context_pos`` / ``context_feat``, and re-used by the
-            target encoder as its ``surface_pos`` (the surface half of
-            the dual-input target).
-        surface_main_feat : torch.Tensor, optional
-            Surface main-feature tensor passed to the target encoder.
-            When ``None``, ``context_feat`` is used as the fallback.
-        volume_pos, volume_feat : torch.Tensor
-            Volumetric inputs to the target encoder.
+            Context-encoder input — positions and per-point features
+            for the context view. In surface-only mode these are
+            surface points (``context_feat`` may be empty); in
+            full-domain mode the dataset hands in a concatenated
+            (surface ∪ volume) subsample with the appropriate per-point
+            features (e.g. SDF).
+        target_surface_pos : torch.Tensor
+            Target encoder's surface positions. An independent
+            subsample of the surface — the target encoder sees a
+            different view from the context.
+        target_surface_main_feat : torch.Tensor
+            Target encoder's per-point surface features at
+            ``target_surface_pos`` — typically ``xyz`` concatenated with
+            the surface flow channels.
+        target_volume_pos, target_volume_feat : torch.Tensor
+            Target encoder's volumetric inputs. Empty ``(0, *)``
+            tensors in surface-only datasets such as SuperWing.
         gen_params : torch.Tensor
             Operating conditions. Not forwarded to the encoders;
             used to build the decoder-side ``cond_global``.
@@ -167,12 +176,11 @@ class AeroJEPATrunk(nn.Module):
             context_pos=context_pos,
             context_feat=context_feat,
         )
-        surface_main = context_feat if surface_main_feat is None else surface_main_feat
         target_out = self.target_encoder(
-            surface_pos=context_pos,
-            surface_main_feat=surface_main,
-            volume_pos=volume_pos,
-            volume_feat=volume_feat,
+            surface_pos=target_surface_pos,
+            surface_main_feat=target_surface_main_feat,
+            volume_pos=target_volume_pos,
+            volume_feat=target_volume_feat,
         )
         context_global = context_out.global_token
         if context_global is None:
@@ -238,9 +246,10 @@ class AeroJEPATrunk(nn.Module):
         *,
         context_pos: torch.Tensor,
         context_feat: torch.Tensor,
-        surface_main_feat: torch.Tensor | None = None,
-        volume_pos: torch.Tensor,
-        volume_feat: torch.Tensor,
+        target_surface_pos: torch.Tensor,
+        target_surface_main_feat: torch.Tensor,
+        target_volume_pos: torch.Tensor,
+        target_volume_feat: torch.Tensor,
         query_pos: torch.Tensor,
         query_sdf: torch.Tensor,
         gen_params: torch.Tensor,
@@ -255,9 +264,10 @@ class AeroJEPATrunk(nn.Module):
         ctx = self.encode_context(
             context_pos=context_pos,
             context_feat=context_feat,
-            surface_main_feat=surface_main_feat,
-            volume_pos=volume_pos,
-            volume_feat=volume_feat,
+            target_surface_pos=target_surface_pos,
+            target_surface_main_feat=target_surface_main_feat,
+            target_volume_pos=target_volume_pos,
+            target_volume_feat=target_volume_feat,
             gen_params=gen_params,
         )
         return self.decode_queries(
@@ -272,11 +282,13 @@ class AeroJEPATrunk(nn.Module):
         *,
         context_pos: torch.Tensor,
         context_feat: torch.Tensor,
-        surface_main_feat: torch.Tensor | None = None,
         context_pos_n: torch.Tensor,
-        volume_pos: torch.Tensor,
-        volume_feat: torch.Tensor,
-        volume_pos_n: torch.Tensor,
+        target_surface_pos: torch.Tensor,
+        target_surface_main_feat: torch.Tensor,
+        target_surface_pos_n: torch.Tensor,
+        target_volume_pos: torch.Tensor,
+        target_volume_feat: torch.Tensor,
+        target_volume_pos_n: torch.Tensor,
         query_pos: torch.Tensor,
         query_sdf: torch.Tensor,
         query_pos_n: torch.Tensor,
@@ -293,18 +305,17 @@ class AeroJEPATrunk(nn.Module):
         Parameters
         ----------
         context_pos, context_feat : torch.Tensor
-            Padded context input ``(B, N, *)``. Also doubles as the
-            target encoder's surface half.
-        surface_main_feat : torch.Tensor, optional
-            Target encoder's surface main features. ``None`` falls back
-            to ``context_feat``.
+            Padded context-encoder input ``(B, N, *)``.
         context_pos_n : torch.Tensor
             Per-batch valid context-point counts of shape ``(B,)``.
-            Also doubles as the target encoder's ``surface_pos_n``.
-        volume_pos, volume_feat : torch.Tensor
-            Padded volumetric inputs to the target encoder.
-        volume_pos_n : torch.Tensor
-            Per-batch valid volume-point counts of shape ``(B,)``.
+        target_surface_pos, target_surface_main_feat : torch.Tensor
+            Padded target encoder surface inputs ``(B, M_s, *)``.
+        target_surface_pos_n : torch.Tensor
+            Per-batch valid target surface-point counts ``(B,)``.
+        target_volume_pos, target_volume_feat : torch.Tensor
+            Padded target encoder volume inputs ``(B, M_v, *)``.
+        target_volume_pos_n : torch.Tensor
+            Per-batch valid target volume-point counts ``(B,)``.
         query_pos, query_sdf : torch.Tensor
             Padded query positions and SDF of shape ``(B, Nq, *)``.
         query_pos_n : torch.Tensor
@@ -326,14 +337,13 @@ class AeroJEPATrunk(nn.Module):
             context_feat=context_feat,
             context_pos_n=context_pos_n,
         )
-        surface_main = context_feat if surface_main_feat is None else surface_main_feat
         target_out = self.target_encoder.forward_batched(
-            surface_pos=context_pos,
-            surface_main_feat=surface_main,
-            surface_pos_n=context_pos_n,
-            volume_pos=volume_pos,
-            volume_feat=volume_feat,
-            volume_pos_n=volume_pos_n,
+            surface_pos=target_surface_pos,
+            surface_main_feat=target_surface_main_feat,
+            surface_pos_n=target_surface_pos_n,
+            volume_pos=target_volume_pos,
+            volume_feat=target_volume_feat,
+            volume_pos_n=target_volume_pos_n,
         )
         context_global = context_out.global_token
         if context_global is None:

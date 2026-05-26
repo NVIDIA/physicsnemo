@@ -257,9 +257,10 @@ class AeroJEPA(Module):
         *,
         context_pos: torch.Tensor,
         context_feat: torch.Tensor,
-        surface_main_feat: torch.Tensor | None = None,
-        volume_pos: torch.Tensor,
-        volume_feat: torch.Tensor,
+        target_surface_pos: torch.Tensor,
+        target_surface_main_feat: torch.Tensor,
+        target_volume_pos: torch.Tensor,
+        target_volume_feat: torch.Tensor,
         gen_params: torch.Tensor,
     ) -> dict[str, object]:
         r"""Run both encoders (training-time path).
@@ -271,9 +272,10 @@ class AeroJEPA(Module):
         return self.trunk.encode_context(
             context_pos=context_pos,
             context_feat=context_feat,
-            surface_main_feat=surface_main_feat,
-            volume_pos=volume_pos,
-            volume_feat=volume_feat,
+            target_surface_pos=target_surface_pos,
+            target_surface_main_feat=target_surface_main_feat,
+            target_volume_pos=target_volume_pos,
+            target_volume_feat=target_volume_feat,
             gen_params=gen_params,
         )
 
