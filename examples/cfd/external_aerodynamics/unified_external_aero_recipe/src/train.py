@@ -66,7 +66,7 @@ from tensordict import TensorDict
 from torch.amp import GradScaler, autocast
 from torch.utils.data import Sampler
 from torch.utils.tensorboard import SummaryWriter
-from utils import FieldType, build_muon_optimizer, set_seed
+from utils import FieldType, build_muon_optimizer, field_dim, set_seed
 
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.core.version_check import OptionalImport
@@ -877,30 +877,38 @@ def _build_manifest_samplers(
 def build_dataloaders(
     cfg: DictConfig,
 ) -> tuple[DataLoader, DataLoader, "NormalizeMeshFields | None", dict[str, Any]]:
-    """Build train and val dataloaders from dataset configs.
+    """Build train and val dataloaders from the chosen dataset(s).
+
+    The recipe picks one primary dataset via ``cfg.dataset`` (a string
+    naming a file under ``datasets/``) and optionally combines it with
+    additional datasets listed in ``cfg.extra_datasets``. Each dataset
+    is loaded via :func:`load_dataset_config` from its standalone
+    pipeline YAML; ``cfg.sampling_resolution`` is applied as a uniform
+    cap.
 
     Supports two split strategies:
 
-    **Directory-based** (existing): separate ``train_datadir`` and
-    ``val_datadir`` in the dataset YAML. Each split gets its own reader
-    and dataset.
+    **Directory-based**: separate ``train_datadir`` and ``val_datadir``
+    in the dataset YAML. Each split gets its own reader and dataset.
 
-    **Manifest-based** (new): a single ``datadir`` in the dataset YAML
-    with ``train_manifest`` and ``val_manifest`` (or ``manifest`` +
-    ``train_split`` / ``val_split``) in the training config's
-    ``data.<key>`` block. One reader/dataset covers the full directory;
-    :class:`ManifestSampler` restricts each loader to the correct subset
-    of indices.
+    **Manifest-based**: a single ``train_datadir`` in the dataset YAML
+    with a sibling ``manifest.json`` (or explicit ``manifest`` /
+    ``train_manifest`` / ``val_manifest`` paths). The recipe-level
+    ``cfg.train_split`` / ``cfg.val_split`` keys select which subsets to
+    use; one reader covers the full directory and
+    :class:`ManifestSampler` restricts each loader to the matching
+    indices.
 
-    NOTE (limitation): only ONE ``data.<key>`` block may carry a
-    manifest today. If multiple blocks have ``manifest`` /
-    ``train_split``, the later block silently overwrites the earlier
-    block's indices and the resulting :class:`ManifestSampler` is
-    indexed against the last reader's local positions rather than the
-    :class:`MultiDataset`'s concatenated positions. To merge splits via
-    :class:`MultiDataset` (e.g. train on single_aoa_4 + single_aoa_12
-    together), this loop must first be extended to collect per-block
-    ``(offset, indices)`` pairs and build a single sampler over
+    NOTE (limitation): only ONE chosen dataset may carry a manifest
+    today. If both ``cfg.dataset`` and an entry in ``cfg.extra_datasets``
+    are manifest-mode, the later one silently overwrites the earlier's
+    indices and the resulting :class:`ManifestSampler` is indexed
+    against the last reader's local positions rather than the
+    :class:`MultiDataset`'s concatenated positions. The current
+    multi-dataset recipe (Transolver + DrivAerML + SHIFT SUV) sidesteps
+    this because the SHIFT SUV datasets are directory-mode (no
+    manifest). Lifting this limitation requires walking
+    ``(offset, indices)`` pairs and building a single sampler over
     offset-shifted indices against the :class:`MultiDataset`. Tracked
     as a follow-up.
     """
@@ -912,7 +920,9 @@ def build_dataloaders(
             f"All models in this recipe assume B=1; the YAML field is "
             f"reserved for future use."
         )
-    sampling_resolution = cfg.dataset.get("sampling_resolution", None)
+    sampling_resolution = cfg.get("sampling_resolution", None)
+    train_split = cfg.get("train_split", None)
+    val_split = cfg.get("val_split", None)
     augment = cfg.get("augment", False)
     dist_manager = DistributedManager()
     use_distributed = dist_manager.world_size > 1
@@ -927,11 +937,15 @@ def build_dataloaders(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     sampler_seed = cfg.training.get("seed", 0) or 0
 
-    ### Per-block accumulators. Manifest mode collects indices into the
-    ### single train_dataset; directory mode collects val_datasets per
-    ### block. Only one of (manifest_*_indices, val_datasets) is populated
-    ### per dataset block, but they're tracked across blocks here for the
-    ### final assembly step below.
+    ### The primary dataset is `cfg.dataset` (a single string); extras
+    ### combine via MultiDataset. The same `train_split`/`val_split`
+    ### apply to every chosen dataset (manifest-mode datasets honor
+    ### them; directory-mode datasets ignore them via
+    ### `resolve_manifest_spec`).
+    primary_name: str = cfg.dataset
+    extras: list[str] = list(cfg.get("extra_datasets", []) or [])
+    dataset_names: list[str] = [primary_name, *extras]
+
     train_datasets: list = []
     val_datasets: list = []
     manifest_train_indices: list[int] | None = None
@@ -940,26 +954,18 @@ def build_dataloaders(
     first_targets: dict[str, str] | None = None
     first_metrics: list[str] | None = None
 
-    for ds_key in cfg.data:
-        ds_cfg_block = cfg.data[ds_key]
-        config_path = recipe_root / ds_cfg_block.config
+    for ds_name in dataset_names:
+        config_path = recipe_root / "datasets" / f"{ds_name}.yaml"
         if not config_path.exists():
             ### Warn-and-skip on a missing dataset config so a typo in
-            ### `data.<key>.config` surfaces in the run log rather than
-            ### vanishing as an empty dataloader at training time.
+            ### `cfg.dataset` / `cfg.extra_datasets` surfaces in the run
+            ### log rather than vanishing as an empty dataloader at
+            ### training time.
             _LOGGER.warning(
-                f"Skipping dataset {ds_key!r}: config file not found at "
-                f"{str(config_path)!r}. Check `data.{ds_key}.config` in the "
-                f"training YAML."
-            )
-            continue
-        train_dir = ds_cfg_block.get("train_dir", "")
-        if train_dir and not Path(train_dir).exists():
-            _LOGGER.warning(
-                f"Skipping dataset {ds_key!r}: train_dir {str(train_dir)!r} "
-                f"does not exist. Check `data.{ds_key}.train_dir` in the "
-                f"training YAML or the `dataset_paths` interpolation it "
-                f"resolves to."
+                f"Skipping dataset {ds_name!r}: config file not found at "
+                f"{str(config_path)!r}. Check `cfg.dataset` / "
+                f"`cfg.extra_datasets` against the files under "
+                f"datasets/."
             )
             continue
 
@@ -969,8 +975,19 @@ def build_dataloaders(
                 ds_yaml, {"sampling_resolution": sampling_resolution}
             )
 
-        ### Read the dataset YAML's contract block so we can validate
-        ### consistency across multi-dataset training.
+        train_datadir = OmegaConf.select(ds_yaml, "train_datadir", default=None)
+        if train_datadir and not Path(str(train_datadir)).exists():
+            _LOGGER.warning(
+                f"Skipping dataset {ds_name!r}: train_datadir "
+                f"{str(train_datadir)!r} does not exist. Check the "
+                f"`dataset_paths` interpolation in "
+                f"datasets/dataset_paths.yaml."
+            )
+            continue
+
+        ### Read the dataset YAML's targets block so we can validate
+        ### consistency across multi-dataset training. Metrics are no
+        ### longer per-dataset (recipe-side via cfg.metrics).
         ds_targets = OmegaConf.to_container(
             OmegaConf.select(ds_yaml, "targets", default=OmegaConf.create({})),
             resolve=True,
@@ -983,23 +1000,32 @@ def build_dataloaders(
             first_targets, first_metrics = ds_targets, ds_metrics
         else:
             validate_dataset_consistency(
-                ds_key,
+                ds_name,
                 ds_targets,
                 ds_metrics,
                 first_targets,
                 first_metrics,
             )
 
+        ### resolve_manifest_spec expects a single "block" carrying both
+        ### the manifest paths (which live in the dataset YAML when set)
+        ### and the split selectors (which are recipe-level via cfg).
+        ### Assemble one here so each dataset's manifest resolution sees
+        ### the correct combination.
+        ds_cfg_block = OmegaConf.create(
+            {
+                "train_manifest": OmegaConf.select(
+                    ds_yaml, "train_manifest", default=None
+                ),
+                "val_manifest": OmegaConf.select(ds_yaml, "val_manifest", default=None),
+                "manifest": OmegaConf.select(ds_yaml, "manifest", default=None),
+                "train_split": train_split,
+                "val_split": val_split,
+            }
+        )
         manifest_spec = resolve_manifest_spec(ds_yaml, ds_cfg_block)
         if manifest_spec is not None:
             using_manifests = True
-            ### Manifest mode: the reader must see ALL runs under one
-            ### root. The config block can provide ``datadir`` to override
-            ### the dataset YAML's ``train_datadir`` with the parent
-            ### directory that contains every run (train + val).
-            datadir = ds_cfg_block.get("datadir", None)
-            if datadir:
-                ds_yaml = OmegaConf.merge(ds_yaml, {"train_datadir": datadir})
             dataset = build_dataset(
                 ds_yaml,
                 augment=augment,
@@ -1008,8 +1034,8 @@ def build_dataloaders(
                 pin_memory=pin_memory,
             )
             train_datasets.append(dataset)
-            ### NOTE: this overwrites any prior block's indices; see the
-            ### docstring's multi-block limitation note.
+            ### NOTE: this overwrites any prior dataset's indices; see the
+            ### docstring's multi-dataset limitation note.
             manifest_train_indices, manifest_val_indices = (
                 _resolve_manifest_indices_from_spec(dataset.reader, manifest_spec)
             )
@@ -1039,7 +1065,21 @@ def build_dataloaders(
             )
 
     if not train_datasets:
-        raise RuntimeError("No valid datasets found. Check data paths in config.")
+        raise RuntimeError(
+            "No valid datasets found. Check `cfg.dataset` and the "
+            "`dataset_paths` entries in datasets/dataset_paths.yaml."
+        )
+
+    ### Auto-derive the model's output channel count from the chosen
+    ### dataset's `targets:` block and inject it as a top-level cfg key
+    ### so the model template's `out_dim: ${out_dim}` interpolation
+    ### resolves before `hydra.utils.instantiate(cfg.model)`.  GLOBE's
+    ### model template doesn't reference `out_dim`, so the extra key is
+    ### a harmless no-op for it.
+    out_dim_total = sum(
+        field_dim(cast(FieldType, ftype)) for ftype in (first_targets or {}).values()
+    )
+    OmegaConf.update(cfg, "out_dim", out_dim_total, force_add=True)
 
     normalizer = find_normalizer(train_datasets)
     collate_fn = _build_collate(cfg, first_targets or {})
@@ -1091,9 +1131,11 @@ def build_dataloaders(
         seed=sampler_seed,
     )
 
+    ### `metrics` are now recipe-side (cfg.metrics) -- main() handles
+    ### that override below. We just hand back targets here so the loss /
+    ### metric calculators can be built against the dataset contract.
     dataset_info = {
         "targets": first_targets or {},
-        "metrics": first_metrics or list(DEFAULT_METRICS),
     }
     return train_loader, val_loader, normalizer, dataset_info
 
@@ -1117,6 +1159,7 @@ def main(cfg: DictConfig) -> None:
             ``compile``, ``profile``, ``benchmark_io``, ``logging``, and
             related keys.
     """
+
     DistributedManager.initialize()
     dist_manager = DistributedManager()
     logger = RankZeroLoggingWrapper(PythonLogger(name="training"), dist_manager)
@@ -1145,11 +1188,17 @@ def main(cfg: DictConfig) -> None:
             with open(metrics_path, "a") as f:
                 f.write(json.dumps(record, default=str) + "\n")
 
-    logger.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
-
     train_loader, val_loader, normalizer, dataset_info = build_dataloaders(cfg)
     target_config: dict[str, FieldType] = dataset_info["targets"]
-    metrics_list: list[MetricName] = dataset_info["metrics"]
+    ### `metrics_list` is derived later from cfg.metrics (recipe-side);
+    ### build_dataloaders no longer ships a "metrics" key in dataset_info.
+
+    ### Log the resolved config AFTER build_dataloaders() because that's
+    ### where `cfg.out_dim` is auto-derived from the chosen dataset's
+    ### `targets:` block; resolving earlier would fail on the model
+    ### template's `out_dim: ${out_dim}` interpolation.
+    logger.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
+
     logger.info(f"Train samples: {len(train_loader.sampler)}")
     logger.info(f"Val samples: {len(val_loader.sampler)}")
     logger.info(f"Targets (from dataset YAML): {target_config}")
@@ -1242,13 +1291,15 @@ def main(cfg: DictConfig) -> None:
         with open(config_artifact_path, "w") as f:
             f.write(resolved_yaml)
 
-    ### `target_config` and `metrics_list` were loaded from the dataset YAML
-    ### by `build_dataloaders` -- see the dataset_info dict above. The
-    ### training YAML may override the metrics list with a (typically
-    ### shorter) `dataset.metrics` selection.
-    metrics_override = OmegaConf.select(cfg, "dataset.metrics", default=None)
-    if metrics_override is not None:
-        metrics_list = OmegaConf.to_container(metrics_override, resolve=True)
+    ### `target_config` was loaded from the chosen dataset YAML's
+    ### `targets:` block by `build_dataloaders`.  The metrics list is
+    ### now recipe-side: train.yaml's `cfg.metrics` is the canonical
+    ### source. Falls back to the recipe's default set when unset.
+    metrics_cfg = OmegaConf.select(cfg, "metrics", default=None)
+    if metrics_cfg is None:
+        metrics_list: list[MetricName] = list(DEFAULT_METRICS)
+    else:
+        metrics_list = OmegaConf.to_container(metrics_cfg, resolve=True)
 
     field_weights = _resolve_dict(cfg, "training.field_weights")
 
@@ -1367,7 +1418,7 @@ def main(cfg: DictConfig) -> None:
 @hydra.main(
     version_base=None,
     config_path="../conf",
-    config_name="train_geotransolver_automotive_surface",
+    config_name="train",
 )
 def launch(cfg: DictConfig) -> None:
     """Hydra entry point: configure profiling and delegate to :func:`main`.

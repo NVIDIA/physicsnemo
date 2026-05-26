@@ -171,7 +171,7 @@ def validate_dataset_consistency(
     first_targets: dict[str, FieldType],
     first_metrics: list[MetricName],
 ) -> None:
-    """Reject ``targets:`` mismatch across multi-dataset training; warn on softer drift.
+    """Reject ``targets:`` mismatch across multi-dataset training.
 
     ``targets:`` is the loss / metric contract; mismatched names or types
     silently produces wrong per-field losses (only the first dataset's
@@ -186,9 +186,9 @@ def validate_dataset_consistency(
         raise ValueError(
             f"Dataset {ds_key!r} declares targets={ds_targets!r}, "
             f"which does not match the first dataset's targets="
-            f"{first_targets!r}. All datasets in `cfg.data` must "
-            f"declare the same `targets:` block (same names, same "
-            f"types, same iteration order)."
+            f"{first_targets!r}. All datasets in `cfg.dataset` + "
+            f"`cfg.extra_datasets` must declare the same `targets:` "
+            f"block (same names, same types, same iteration order)."
         )
     if ds_metrics != first_metrics:
         _LOGGER.warning(

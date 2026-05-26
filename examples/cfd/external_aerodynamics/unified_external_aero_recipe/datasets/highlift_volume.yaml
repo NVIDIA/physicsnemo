@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# High-lift airplane volume dataset (compressible, DomainMesh)
+# Loads .pdmsh files from PhysicsNeMo-HighLiftAeroML.
+# Each case directory (e.g. geo_LHC001_AoA_4/) contains a DomainMesh .pdmsh.
+# Interior: volume point cloud with fields in point_data.
+# global_data: per-case freestream conditions (U_inf, p_inf, rho_inf, T_inf,
+# L_ref) are embedded directly in the .pdmsh files; NonDimensionalizeByMetadata
+# reads them straight out of each sample's global_data. Units are slug-inch-
+# second-Rankine.
+# Splits are controlled by a manifest.json + train_split/val_split in
+# conf/train.yaml (see Recipe Gallery in the README).
+
+train_datadir: ${dataset_paths.highlift_aero_ml}
+
+pipeline:
+  reader:
+    _target_: ${dp:DomainMeshReader}
+    path: ${train_datadir}
+    pattern: "**/*.pdmsh"
+    subsample_n_points: ${sampling_resolution}
+    subsample_n_cells: ${sampling_resolution}
+    extra_boundaries:
+      stl_geometry:
+        pattern: "*.stl.pmsh"
+  # augmentations:
+  #   - _target_: ${dp:RandomRotateMesh}
+  #     axes: ["z"]
+  #     transform_point_data: true
+  #     transform_global_data: true
+  #   - _target_: ${dp:RandomTranslateMesh}
+  #     distribution:
+  #       _target_: torch.distributions.Uniform
+  #       low: [-1.0, -1.0, 0.0]
+  #       high: [1.0, 1.0, 0.0]
+  transforms:
+    # - _target_: ${dp:CenterMesh}
+    #   use_area_weighting: false
+    # - _target_: ${dp:NonDimensionalizeByMetadata}
+    #   fields:
+    #     avg(P): pressure
+    #     avg(T): temperature
+    #     avg(rho): density
+    #     avg(u): velocity
+    #   association: point_data
+    - _target_: ${dp:ComputeSDFFromBoundary}
+      boundary_name: stl_geometry
+      sdf_field: sdf
+      normals_field: sdf_normals
+      use_winding_number: true
+    - _target_: ${dp:DropBoundary}
+      names: [stl_geometry]
+    - _target_: ${dp:RenameMeshFields}
+      point_data:
+        avg(P): pressure
+        avg(T): temperature
+        avg(rho): density
+        avg(u): velocity
+    # z-score normalization — leave empty until stats are computed
+    # - _target_: ${dp:NormalizeMeshFields}
+    #   association: point_data
+    #   fields: {}
+    # No terminal MeshToTensorDict / RestructureTensorDict: the volume YAML
+    # already produces a DomainMesh natively. Each model YAML's
+    # `forward_kwargs:` spec maps DomainMesh paths to its forward kwargs.
+
+targets:
+  pressure: scalar
+  temperature: scalar
+  density: scalar
+  velocity: vector
