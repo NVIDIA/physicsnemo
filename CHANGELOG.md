@@ -38,6 +38,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coordinates with no learnable parameters.
 - Adds radiation transport example (`examples/nuclear_engineering/radiation_transport`)
 - Adds agent skills structure, and initial skill for 'discoverability'.
+- Adds top-level AeroJEPA model under
+  `physicsnemo.experimental.models.aerojepa`. The :class:`AeroJEPA`
+  model composes a context encoder, a target encoder, a query-token
+  field decoder (collectively the :class:`AeroJEPATrunk`), and a
+  JEPA predictor head (:class:`PrototypeTokenJEPAHead`) into a single
+  `physicsnemo.core.module.Module`. The forward entry takes
+  context positions / features, operating conditions, and query
+  positions, derives target-token coordinates internally via
+  ``build_target_token_coords``, and returns the decoded field at
+  the queries. ``predict`` is a no-grad convenience wrapper;
+  ``encode_geometry`` / ``encode_geometry_and_flow`` /
+  ``predict_field_tokens`` / ``decode_field`` /
+  ``decode_field_chunked`` are exposed for training and large-query
+  inference workflows. Concrete encoders (``ContextTransformer``,
+  ``TargetTransformer``, ``PointTransformer``), the
+  ``QueryTokenDecoder``, and the abstract encoder bases are all
+  available as composable components.
 - Adds AeroJEPA loss family under
   `physicsnemo.experimental.metrics.aerojepa`. Includes `SIGReg` and
   `TokenLatentSIGReg` (the LeWorldModel sketch-isotropic-Gaussian
