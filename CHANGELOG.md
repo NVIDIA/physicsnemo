@@ -333,10 +333,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed the sinusoidal positional embeddings formula in `SongUNet` and
   `MultiDiffusionModel2D` so it now follows the standard `sin / cos`
   convention. Affected reference data was regenerated.
+- Constructing a `Mesh` (or `DomainMesh`) inside a `torch.compile`-traced
+  function no longer raises `AttributeError` / `KeyError` or silently
+  produces wrong output. The breakage came from two regressions in
+  `tensordict >= 0.12.0` (PR `pytorch/tensordict#1552`), where the
+  `@tensorclass` init wrapper's bypass branch silently skipped both
+  field-default normalization and `__post_init__` under
+  `torch.compile`. We pin `tensordict < 0.12` until the upstream fix
+  (`pytorch/tensordict#1708`, `pytorch/tensordict#1709`) ships, and add
+  a regression test (`test/mesh/mesh/test_compile.py`) that constructs
+  a `Mesh` inside `torch.compile` and reads cached properties, so the
+  same bug cannot return on a future pin bump unnoticed.
 
 ### Dependencies
 
 - Increments minimum viable PyTorch version to `torch>=2.5.0` to support FSDP better
+- Upper-bounds `tensordict < 0.12` to avoid the `torch.compile` regressions
+  in `tensordict >= 0.12.0` (see corresponding entry under Fixed).
 
 ## [2.0.0] - 2026-03-09
 

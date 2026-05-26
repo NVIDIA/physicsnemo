@@ -46,7 +46,9 @@ dependencies = [
     "jaxtyping>=0.3.3",
     "termcolor>=3.2.0",
     "hydra-core>=1.3.2",
-    "tensordict>=0.10.0",
+    # Upper-bounded due to `torch.compile` regressions in tensordict 0.12.x
+    # Drop the upper bound once github.com/pytorch/tensordict/pull/1709 is merged + released.
+    "tensordict>=0.11.0,<0.12",
     "omegaconf>=2.3.0",
     "importlib-metadata>=8.7.1",
 ]
@@ -274,7 +276,6 @@ datapipes-extras = [
     "netCDF4",
     "xarray>=2025.6.1",
     "zarr>=3.0.0",
-    "tensordict>=0.11.0",
 ]
 uq-extras = [
     "gpytorch>=1.11",
