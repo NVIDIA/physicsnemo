@@ -58,14 +58,6 @@ from physicsnemo.utils.logging import (
 )
 from physicsnemo.models.vfgn.graph_network_modules import VFGNLearnedSimulator
 
-physical_devices = tf.config.list_physical_devices("GPU")
-try:
-    for device_ in physical_devices:
-        tf.config.experimental.set_memory_growth(device_, True)
-except:
-    # Invalid device or cannot modify virtual devices once initialized.
-    pass
-
 
 def Train(rank_zero_logger, dist, cfg: DictConfig):
     """
@@ -131,17 +123,12 @@ def Train(rank_zero_logger, dist, cfg: DictConfig):
     writer = SummaryWriter(log_dir=cfg.data_options.ckpt_path_vfgn)
 
     optimizer = None
+    scaler = None
     # todo : check device
     device = "cpu"
     step = 0
     running_loss = 0.0
     best_loss = 1000.0
-
-    # Native PyTorch automatic mixed precision (AMP) replaces NVIDIA Apex.
-    # GradScaler is a no-op when enabled=False, so it is safe to construct
-    # unconditionally and only activate when fp16 training is requested.
-    use_amp = cfg.general.fp16
-    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
     rank_zero_logger.info("Training started...")
 
@@ -184,11 +171,10 @@ def Train(rank_zero_logger, dist, cfg: DictConfig):
 
         sampled_noise *= noise_mask
 
-        amp_active = (
-            use_amp and isinstance(device, torch.device) and device.type == "cuda"
-        )
+        amp_enabled = cfg.general.fp16 and scaler is not None
         with torch.autocast(
-            device_type="cuda", dtype=torch.float16, enabled=amp_active
+            device_type=device.type if isinstance(device, torch.device) else "cpu",
+            enabled=amp_enabled,
         ):
             pred_target = model(
                 next_positions=targets.to(device),
@@ -219,8 +205,8 @@ def Train(rank_zero_logger, dist, cfg: DictConfig):
             model.setMessagePassingDevices(message_passing_devices)
             model = model.to(device)
             optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
-            # Mixed precision is handled via the torch.amp GradScaler / autocast
-            # constructed above; no extra optimizer wrapping is required.
+            if cfg.general.fp16:
+                scaler = torch.amp.GradScaler(device.type)
 
             scheduler = torch.optim.lr_scheduler.ExponentialLR(
                 optimizer, gamma=0.1, verbose=True
@@ -398,7 +384,7 @@ def Train(rank_zero_logger, dist, cfg: DictConfig):
         rank_zero_logger.info(f"loss: {loss}")
         # back propogation
         optimizer.zero_grad()
-        if use_amp:
+        if cfg.general.fp16:
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()

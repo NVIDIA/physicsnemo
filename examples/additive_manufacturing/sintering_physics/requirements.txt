@@ -9,3 +9,4 @@ vtk
 natsort
 scikit-learn
 tensorboard
+tensorflow-cpu>=2.15,<3.0
