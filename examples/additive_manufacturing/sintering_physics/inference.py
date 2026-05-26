@@ -32,15 +32,6 @@ except ImportError:
         "Mesh Graph Net Datapipe requires the Tensorflow library. Install the "
         + "package at: https://www.tensorflow.org/install"
     )
-physical_devices = tf.config.list_physical_devices("GPU")
-
-try:
-    for device_ in physical_devices:
-        tf.config.experimental.set_memory_growth(device_, True)
-except:
-    # Invalid device or cannot modify virtual devices once initialized.
-    pass
-
 import hydra
 import torch
 from graph_dataset import GraphDataset
