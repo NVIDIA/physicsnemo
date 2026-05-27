@@ -1,3 +1,12 @@
-# pyvista is optional, required if need to run data preprocessing from raw simulation
-# pyvista==0.32.1
-tensorflow>=2.15,<3.0 # generate tfrecord
+# Core dependencies for training, inference, and rollout rendering
+dm-tree
+tqdm
+hydra-core
+omegaconf
+matplotlib
+pyvista
+vtk
+natsort
+scikit-learn
+tensorboard
+tensorflow-cpu>=2.15,<3.0

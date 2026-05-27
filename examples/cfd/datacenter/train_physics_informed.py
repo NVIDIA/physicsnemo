@@ -29,7 +29,6 @@ from physicsnemo.utils.logging import PythonLogger, LaunchLogger
 from hydra.utils import to_absolute_path
 from torch.nn.parallel import DistributedDataParallel
 from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
-from apex import optimizers
 import os
 import numpy as np
 from sympy import Function, Number, Symbol
@@ -324,8 +323,12 @@ def main(cfg: DictConfig) -> None:
             shuffle=False,
         )
 
-    optimizer = optimizers.FusedAdam(
-        model.parameters(), betas=(0.9, 0.999), lr=cfg.start_lr, weight_decay=0.0
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        betas=(0.9, 0.999),
+        lr=cfg.start_lr,
+        weight_decay=0.0,
+        fused=torch.cuda.is_available(),
     )
 
     scheduler = torch.optim.lr_scheduler.ExponentialLR(

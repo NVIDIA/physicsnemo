@@ -38,7 +38,6 @@ base: &base_config
   lr: 1E-3
 
   enable_nhwc: !!bool False
-  optimizer_type: 'FusedAdam'
   clip_grad_norm: None
 
   two_step_training: !!bool False

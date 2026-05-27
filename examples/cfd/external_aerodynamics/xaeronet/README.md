@@ -75,12 +75,29 @@ dataset, please refer to their [paper](https://arxiv.org/pdf/2408.11969).
 
 ## XAeroNet-S prerequisites
 
-Install the requirements using:
+Install the base requirements:
 
 ```bash
 pip install -r requirements.txt
-pip install pyg-lib -f https://data.pyg.org/whl/torch-2.8.0+cu129.html
 ```
+
+`pyg-lib` and `torch_scatter` ship as compiled CUDA extensions and must be
+installed from PyG's pre-built wheel index that matches your installed
+`torch` and CUDA versions. The two-line snippet below detects both and
+constructs the correct URL:
+
+```bash
+TORCH=$(python -c "import torch; print(torch.__version__.split('+')[0])")
+CUDA=$(python -c "import torch; v=torch.version.cuda; \
+print('cu' + v.replace('.', '') if v else 'cpu')")
+pip install pyg-lib torch_scatter -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
+```
+
+If PyG has not published a wheel for your exact torch+CUDA combination
+yet, browse <https://data.pyg.org/whl/> to find the closest match, or
+build from source with `pip install --no-build-isolation torch_scatter`
+(plain `pip install torch_scatter` fails because pip's build isolation
+hides the installed `torch` from the build environment).
 
 See `pyg-lib` [installation instructions](https://github.com/pyg-team/pyg-lib?tab=readme-ov-file#installation)
 for more details.

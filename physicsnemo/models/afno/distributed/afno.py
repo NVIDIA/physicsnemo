@@ -44,7 +44,6 @@ from physicsnemo.models.afno.distributed.layers import (
     DistributedMLP,
     DistributedPatchEmbed,
     DropPath,
-    _trunc_normal_,
 )
 from physicsnemo.nn.module.layer_norm import get_layer_norm_class
 
@@ -361,7 +360,7 @@ class DistributedAFNONet(physicsnemo.Module):
         self.synchronized_head = False
 
         # init weights
-        _trunc_normal_(self.pos_embed, std=0.02)
+        torch.nn.init.trunc_normal_(self.pos_embed, std=0.02)
         self.apply(self._init_weights)
 
     def _init_weights(self, m: nn.Module) -> None:
@@ -373,7 +372,7 @@ class DistributedAFNONet(physicsnemo.Module):
             Module to initialize.
         """
         if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
-            _trunc_normal_(m.weight, std=0.02)
+            torch.nn.init.trunc_normal_(m.weight, std=0.02)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, _LayerNormClass):
