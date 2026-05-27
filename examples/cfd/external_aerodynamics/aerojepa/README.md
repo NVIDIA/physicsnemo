@@ -3,7 +3,7 @@
 # AeroJEPA — Tutorial Recipe
 
 This example trains and evaluates the
-[AeroJEPA](https://arxiv.org/abs/2605.05586) model on the **SuperWing**
+[AeroJEPA](https://arxiv.org/abs/2605.05586) (Giral et al.) model on the **SuperWing**
 3D aerodynamic dataset.
 
 AeroJEPA is a Joint-Embedding Predictive Architecture: instead of mapping
@@ -22,7 +22,7 @@ dataset download → training → inference → CL/CD estimation.
 2. [Get the SuperWing dataset](#2-get-the-superwing-dataset)
 3. [Train](#3-train)
 4. [Inference and field plots](#4-inference-and-field-plots)
-5. [CL / CD estimation](#5-cl--cd-estimation)
+5. [CL, CD and CM estimation](#5-cl-cd-and-cm-estimation)
 6. [Adding a new dataset](#6-adding-a-new-dataset)
 
 ---
@@ -86,15 +86,18 @@ python inference.py \
     output_dir=outputs/<run-name>/inference
 ```
 
-Example output (Cp on a held-out geometry / AoA):
+Example output on a held-out wing -- ground truth, prediction, and
+absolute error for each surface channel (``Cp``, ``Cf_tau``, ``Cf_z``):
 
-<!-- TODO: docs/img/inference_cp_field.png -->
+![SuperWing predicted Cp field](docs/img/Cp_predictor_triptych.png)
 
-![SuperWing predicted Cp field](docs/img/inference_cp_field.png)
+![SuperWing predicted Cf_tau field](docs/img/Cf_tau_predictor_triptych.png)
 
-## 5. CL / CD estimation
+![SuperWing predicted Cf_z field](docs/img/Cf_z_predictor_triptych.png)
 
-The surface field is integrated to lift and drag coefficients via:
+## 5. CL, CD and CM estimation
+
+The surface field is integrated to lift, drag and momentum coefficients via:
 
 ```bash
 python -m src.postprocessing.superwing_forces \
@@ -104,9 +107,7 @@ python -m src.postprocessing.superwing_forces \
 
 Predicted vs. ground-truth coefficients on the SuperWing test split:
 
-<!-- TODO: docs/img/cl_cd_parity.png -->
-
-![CL/CD parity plot](docs/img/cl_cd_parity.png)
+![CL/CD/CM parity plot](docs/img/cl_cd_parity.png)
 
 ## 6. Adding a new dataset
 
