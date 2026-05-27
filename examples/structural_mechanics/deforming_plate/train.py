@@ -166,19 +166,11 @@ class MGNTrainer:
         # instantiate loss, optimizer, and scheduler
         self.criterion = torch.nn.MSELoss()
 
-        self.optimizer = None
-        try:
-            if cfg.use_apex:
-                from apex.optimizers import FusedAdam
-
-                self.optimizer = FusedAdam(self.model.parameters(), lr=cfg.lr)
-        except ImportError:
-            rank_zero_logger.warning(
-                "NVIDIA Apex (https://github.com/nvidia/apex) is not installed, "
-                "FusedAdam optimizer will not be used."
-            )
-        if self.optimizer is None:
-            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=cfg.lr)
+        self.optimizer = torch.optim.Adam(
+            self.model.parameters(),
+            lr=cfg.lr,
+            fused=torch.cuda.is_available(),
+        )
         rank_zero_logger.info(f"Using {self.optimizer.__class__.__name__} optimizer")
 
         self.scheduler = torch.optim.lr_scheduler.LambdaLR(

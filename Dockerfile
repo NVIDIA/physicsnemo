@@ -26,7 +26,9 @@ FROM ${BASE_CONTAINER} AS builder
 ARG TARGETPLATFORM
 
 # Install uv (use system Python for installs; set so --system is default)
-COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
+# Pinned to 0.11.14 (latest stable as of May 2026) which bundles
+# rustls-webpki >= 0.103.13 (fixes GHSA-82j2-j2ch-gfr8).
+COPY --from=ghcr.io/astral-sh/uv:0.11.14 /uv /uvx /bin/
 ENV UV_SYSTEM_PYTHON=1
 # Base image Python is PEP 668 externally-managed; allow system installs in container
 ENV UV_BREAK_SYSTEM_PACKAGES=1

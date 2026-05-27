@@ -44,7 +44,6 @@ save_checkpoint_freq: 10
 # └───────────────────────────────────────────┘
 
 amp: True
-use_apex: True
 num_dataloader_workers: 8
 
 # ┌───────────────────────────────────────────┐

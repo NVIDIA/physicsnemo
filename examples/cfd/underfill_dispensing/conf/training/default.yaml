@@ -30,7 +30,6 @@ debug: True # Debug mode (verbose output)
 epochs: 1601
 num_time_steps: 20
 amp: true             # Automatic Mixed Precision
-use_apex: false       # Use Apex FusedAdam if available
 num_dataloader_workers: 8
 start_lr: 0.0002
 end_lr:  0.000001

@@ -31,6 +31,7 @@ from ._kernels import (
     _count_wse_neighbors,
     _generate_surface_candidates,
     _initialize_wse_weights_from_csr,
+    _mark_accepted_conflicts,
     _mark_wse_deleted_batch,
     _reject_candidates_vs_accepted,
     _resolve_candidate_conflicts,
@@ -851,7 +852,36 @@ def _mesh_poisson_disk_sample_warp(
             pass_seed=random_seed,
             pass_limit=max_points,
         )
-        return accepted_positions[:final_count].contiguous()
+        if final_count <= 1:
+            return accepted_positions[:final_count].contiguous()
+
+        final_positions = accepted_positions[:final_count]
+        final_radii = accepted_radii[:final_count]
+        final_alive = torch.ones(
+            (final_count,),
+            device=mesh_vertices.device,
+            dtype=torch.int32,
+        )
+        final_search_radius = max(min_distance, adaptive_max_radius)
+        accepted_grid.build(
+            points=wp.from_torch(final_positions, dtype=wp.vec3f),
+            radius=final_search_radius,
+        )
+        wp.launch(
+            kernel=_mark_accepted_conflicts,
+            dim=final_count,
+            inputs=[
+                accepted_grid.id,
+                wp.from_torch(final_positions, dtype=wp.vec3f, return_ctype=True),
+                wp.from_torch(final_radii, dtype=wp.float32, return_ctype=True),
+                wp.from_torch(final_alive, dtype=wp.int32, return_ctype=True),
+                float(final_search_radius),
+            ],
+            device=wp_launch_device,
+            stream=wp_launch_stream,
+        )
+        kept_indices = torch.nonzero(final_alive != 0, as_tuple=False).squeeze(1)
+        return final_positions.index_select(0, kept_indices).contiguous()
 
 
 # Public alias used by the FunctionSpec wrapper.
