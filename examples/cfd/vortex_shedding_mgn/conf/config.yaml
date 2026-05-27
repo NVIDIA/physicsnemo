@@ -35,7 +35,6 @@ num_output_features: 3
 num_edge_features: 3
 
 # performance configs
-use_apex: True
 amp: False
 jit: False
 num_dataloader_workers: 4

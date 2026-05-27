@@ -49,7 +49,6 @@ delta_t: 1200.0
 physics_loss_weight: 1.0
 
 # Performance and optimization configurations.
-use_apex: True            # Use NVIDIA Apex for mixed precision if available.
 amp: False                # Automatic mixed precision flag.
 jit: False                # Use TorchScript JIT compilation.
 num_dataloader_workers: 4
