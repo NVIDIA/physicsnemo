@@ -76,6 +76,10 @@ conflicts = [
         { extra = "natten-cu12" },
         { extra = "natten-cu13" },
     ],
+    [
+        { extra = "transformer-engine-cu12" },
+        { extra = "transformer-engine-cu13" },
+    ],
 ]
 
 [tool.uv.extra-build-dependencies]
@@ -150,6 +154,28 @@ nvidia-dali-cuda120 = { index = "nvidia" }
 natten = [
     { index = "natten-cu128-whl", extra = "natten-cu12" },
     { index = "natten-cu130-whl", extra = "natten-cu13" },
+]
+
+# transformer-engine-torch is an sdist whose setup.py dynamically pins
+# transformer_engine_cu{12,13} based on torch.version.cuda in the build
+# environment.  Without this override, uv lock freezes whichever CUDA
+# variant happened to be in the build env, which broke CI when PyTorch
+# 2.12 flipped the PyPI default to cu130 (the cu13 binary then got
+# pulled into a CUDA 12.8 runtime, producing missing libcublas.so.13
+# errors at import time).  We provide the CUDA-agnostic subset of the
+# dependencies here; the matching cuXX binary is pulled by the explicit
+# transformer-engine-cu12 / transformer-engine-cu13 extras below.
+# Static deps mirror TE 2.15's build_tools/pytorch.py::install_requirements().
+[[tool.uv.dependency-metadata]]
+name = "transformer-engine-torch"
+requires-dist = [
+    "torch>=2.1",
+    "einops",
+    "onnxscript",
+    "onnx",
+    "packaging",
+    "pydantic",
+    "nvdlfw-inspect",
 ]
 
 #####################################################################
@@ -248,6 +274,21 @@ natten-cu12 = [
 natten-cu13 = [
     "natten>=0.21.5",
 ]
+# Transformer Engine extras (mutually exclusive via [tool.uv] conflicts).
+# Pair with the matching CUDA backend extra, e.g.:
+#   pip install nvidia-physicsnemo[cu12,transformer-engine-cu12]
+#   pip install nvidia-physicsnemo[cu13,transformer-engine-cu13]
+# Uses the metapackage's `core_cu12` / `core_cu13` extras (introduced in
+# transformer-engine 2.14.0) to explicitly pin the CUDA backend binary,
+# so the resolution doesn't depend on torch.version.cuda in the build
+# env.  See [[tool.uv.dependency-metadata]] above for the matching
+# override on transformer-engine-torch's dynamic CUDA dep.
+transformer-engine-cu12 = [
+    "transformer_engine[pytorch,core_cu12]>=2.14.0",
+]
+transformer-engine-cu13 = [
+    "transformer_engine[pytorch,core_cu13]>=2.14.0",
+]
 utils-extras = [
     "wandb",
     "mlflow>=3.12.0",
@@ -293,10 +334,6 @@ gnns = [
 
 sym = [
     "sympy>=1.12",
-]
-
-perf = [
-    "transformer_engine[pytorch]",
 ]
 
 
