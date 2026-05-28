@@ -169,6 +169,53 @@ def test_transolver_irregular_forward(device):
     )
 
 
+@pytest.mark.parametrize(
+    "spatial",
+    [(16, 16), (8, 8, 8)],
+    ids=["structured_2d", "structured_3d"],
+)
+def test_transolver_structured_nonunified_spatial_embedding(device, spatial):
+    """Structured (unified_pos=False) models accept spatially-shaped embeddings.
+
+    Regression test: a spatially-shaped embedding ``(B, *spatial, C_emb)`` must
+    be flattened internally to align with ``fx`` rather than crashing in the
+    concatenation. Also checks that passing a spatial embedding is equivalent
+    to passing its pre-flattened ``(B, N, C_emb)`` form.
+    """
+    torch.manual_seed(0)
+    batch_size, functional_dim, embedding_dim, out_dim = 2, 3, 4, 2
+
+    model = Transolver(
+        functional_dim=functional_dim,
+        out_dim=out_dim,
+        embedding_dim=embedding_dim,
+        structured_shape=spatial,
+        unified_pos=False,
+        n_layers=2,
+        n_hidden=32,
+        n_head=4,
+        slice_num=8,
+        use_te=False,
+    ).to(device)
+    model.eval()
+
+    fx_spatial = torch.randn(batch_size, *spatial, functional_dim).to(device)
+    emb_spatial = torch.randn(batch_size, *spatial, embedding_dim).to(device)
+
+    # Spatially-shaped inputs: output should keep fx's spatial layout.
+    out_spatial = model(fx_spatial, embedding=emb_spatial)
+    assert out_spatial.shape == (batch_size, *spatial, out_dim)
+
+    # Pre-flattened inputs should give an identical result (same row-major flatten).
+    fx_flat = fx_spatial.reshape(batch_size, -1, functional_dim)
+    emb_flat = emb_spatial.reshape(batch_size, -1, embedding_dim)
+    out_flat = model(fx_flat, embedding=emb_flat)
+    assert out_flat.shape == (batch_size, fx_flat.shape[1], out_dim)
+    assert torch.allclose(
+        out_spatial.reshape(batch_size, -1, out_dim), out_flat, atol=1e-6
+    )
+
+
 def test_transolver_optims(device):
     """Test transolver optimizations"""
 
