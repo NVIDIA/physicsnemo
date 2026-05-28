@@ -43,7 +43,7 @@ set -euo pipefail
 
 # These MUST match the workflow `env:` values in
 # .github/workflows/github-{pr,nightly-uv}.yml.  Bump in lockstep.
-EXTRAS_TAG="${EXTRAS_TAG:-cu12,natten-cu12,utils-extras,mesh-extras,nn-extras,model-extras,datapipes-extras,uq-extras,gnns,sym,perf}"
+EXTRAS_TAG="${EXTRAS_TAG:-cu12,natten-cu12,utils-extras,mesh-extras,nn-extras,model-extras,datapipes-extras,uq-extras,gnns,sym,transformer-engine-cu12}"
 UV_VERSION="${UV_VERSION:-0.11.7}"
 # Matches the `--find-links` URL committed to .github/ci-requirements.txt.
 # Bump the torch-X.Y.Z+cu128 segment in lockstep with the locked torch version.
