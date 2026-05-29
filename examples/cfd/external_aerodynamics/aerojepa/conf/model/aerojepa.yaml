@@ -32,7 +32,7 @@ trunk:
     _target_: physicsnemo.experimental.models.aerojepa.ContextTransformer
     point_input_dim: 3
     token_dim: 128
-    max_point_tokens: 256
+    max_point_tokens: 512
     tokenizer_strategy: fps_cluster
     tokenizer_cluster_size: 16
     tokenizer_knn_chunk_size: 128
@@ -51,7 +51,7 @@ trunk:
     # xyz (3) + per-point surface field (Cp, Cf_tau, Cf_z = 3 channels).
     point_input_dim: 6
     token_dim: 128
-    max_point_tokens: 256
+    max_point_tokens: 512
     tokenizer_strategy: fps_cluster
     tokenizer_cluster_size: 16
     tokenizer_knn_chunk_size: 128
@@ -66,13 +66,13 @@ trunk:
     _target_: physicsnemo.experimental.models.aerojepa.QueryTokenDecoder
     token_dim: 128
     hidden_dim: 128
-    num_layers: 2
+    num_layers: 4
     out_dim: 3            # Cp, Cf_x, Cf_y (SuperWing surface targets)
     use_sdf: false
     cond_dim: 2           # aoa, mach
     pe_num_bands: 16
     cross_attention_heads: 4
-    cross_attention_layers: 2
+    cross_attention_layers: 4
     cross_attention_k: 8
     attention_mlp_ratio: 4
     dropout: 0.0
