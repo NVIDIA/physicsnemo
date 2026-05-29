@@ -198,8 +198,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a PhysicsNeMo ``Module``, trained with fair-CRPS loss on ERA5 via the
   earth2studio ARCO data source. Supports autoregressive rollout training
   with per-channel normalization, FSDP + ShardTensor domain parallelism,
-  deep-ensemble inference (paper §2.2.1), and validation diagnostics
-  (CRPS, RMSE, spread-skill, rank histograms, power spectra).
+  and deep-ensemble inference (paper §2.2.1). Includes a standalone
+  evaluation script (``eval.py``) reproducing the paper §4 diagnostics:
+  CRPS/RMSE/spread-skill scorecard heatmaps (Figure 2a), spread vs RMSE
+  calibration panels for key variables (Figure 2b-f), average- and
+  max-pooled CRPS heatmaps across spatial scales (Figure 3a-b), derived
+  variable CRPS line plots (Figure 3c), and spherical-harmonic power
+  spectra for 2t/q700/z500 (Figure 3e-j).
 
 ### Changed
 
