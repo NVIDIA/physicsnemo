@@ -383,22 +383,57 @@ class Trainer:
 
         return torch.stack(step_losses).mean()
 
-    def _validation_loss(self) -> float:
+    def _validation_loss(self) -> tuple[float, np.ndarray]:
+        """Return (scalar_loss, per_channel_mse) averaged over validation batches.
+
+        Per-channel MSE uses the ensemble-mean prediction — cheap (single
+        forward pass per member, no CRPS kernel) and mirrors StormCast's
+        per-channel val logging (stormcast/utils/trainer.py log_progress).
+        """
         self.model.eval()
-        losses = []
-        # Mirror StormCast: with parallel_helper the sampler is infinite, so
-        # bound iteration via sharded_data_iter(loader, N). Plain DataLoader
-        # path is finite and falls through to the default for-loop.
+        losses: list[float] = []
+        channel_acc: np.ndarray | None = None
+        n_batches = 0
+
         if self.parallel_helper is not None:
             iterator = self.parallel_helper.sharded_data_iter(
                 self.valid_loader, self.validation_steps
             )
         else:
             iterator = self.valid_loader
+
         with torch.no_grad():
-            losses.extend(float(self._loss(batch).detach().cpu()) for batch in iterator)
+            for batch in iterator:
+                losses.append(float(self._loss(batch).detach().cpu()))
+                # Per-channel MSE: use a single deterministic member (latent=0)
+                history = batch["history"].to(self.device, dtype=torch.float32)
+                target = batch["target"].to(self.device, dtype=torch.float32)
+                if target.ndim == 4:
+                    target = target.unsqueeze(1)
+                background = batch["background"].to(self.device, dtype=torch.float32)
+                inv_b = (
+                    self.invariants.unsqueeze(0).expand(history.shape[0], -1, -1, -1)
+                    if self.invariants is not None else None
+                )
+                latent = torch.zeros(
+                    history.shape[0], int(self.cfg.model.latent_dim),
+                    device=self.device, dtype=torch.float32
+                )
+                with torch.autocast("cuda", dtype=torch.bfloat16,
+                                    enabled=torch.cuda.is_available()):
+                    pred = self.model(
+                        history=history, latent=latent,
+                        background=background, invariants=inv_b,
+                    ).float()
+                # MSE vs first target step, averaged over batch and spatial dims → (C,)
+                mse_c = ((pred - target[:, 0]) ** 2).mean(dim=(0, -2, -1)).cpu().numpy()
+                channel_acc = mse_c if channel_acc is None else channel_acc + mse_c
+                n_batches += 1
+
         self.model.train()
-        return sum(losses) / max(len(losses), 1)
+        scalar = sum(losses) / max(len(losses), 1)
+        per_channel = channel_acc / max(n_batches, 1) if channel_acc is not None else np.array([])
+        return scalar, per_channel
 
     def _run_validation_metrics(self) -> None:
         """Figure 2 + 3 diagnostics on a single validation batch.
@@ -603,9 +638,18 @@ class Trainer:
                 )
 
             if self.step % int(self.cfg.training.validation_freq) == 0:
-                val_loss = self._validation_loss()
+                val_loss, per_ch = self._validation_loss()
                 self.best_val_loss = min(self.best_val_loss, val_loss)
                 self.logger.info(f"step={self.step} val_loss={val_loss:.6f}")
+                # Per-channel MSE — mirrors StormCast log_progress convention
+                if per_ch.size:
+                    channels = list(self.train_dataset.state_channels())
+                    ch_parts = " ".join(
+                        f"{ch}={per_ch[i]:.4f}"
+                        for i, ch in enumerate(channels)
+                        if i < len(per_ch)
+                    )
+                    self.logger.info(f"step={self.step} val_mse_per_ch: {ch_parts}")
                 if bool(self.cfg.training.validation_metrics):
                     self._run_validation_metrics()
 
