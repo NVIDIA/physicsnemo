@@ -118,7 +118,7 @@ def _make_coords(
     return x_coords, y_coords
 
 
-def _ar_rollout(
+def _ar_rollout_steps(
     model: torch.nn.Module,
     history: torch.Tensor,
     background: torch.Tensor,
@@ -128,18 +128,18 @@ def _ar_rollout(
     num_members: int,
     device: torch.device,
     output_only: list[int],
-) -> torch.Tensor:
-    """Return ``(B, K, M, C, H, W)`` ensemble from an M-member AR rollout.
+):
+    """Generator yielding ``(B, M, C, H, W)`` predictions one AR step at a time.
 
-    Mirrors ``utils/trainer.py:_run_validation_metrics``: each member advances
-    independently; predicted-only channels (e.g. tp06) are zeroed before being
-    fed back as history on the next step.
+    Mirrors earth2studio's ``yield`` / ``del`` pattern (e.g. GenCast mini):
+    each step's tensor is freed after the caller processes it, so only one
+    step's worth of data is in memory at a time (~2–3 GB at 0.25° vs. 51 GB
+    for the full stacked rollout).
     """
     B, T, C, H, W = history.shape
     per_member_hist = (
         history.unsqueeze(1).expand(B, num_members, T, C, H, W).contiguous()
     )
-    preds_all: list[torch.Tensor] = []
     for k in range(num_steps):
         members: list[torch.Tensor] = []
         for n in range(num_members):
@@ -154,10 +154,11 @@ def _ar_rollout(
                     invariants=invariants,
                 ).float()
             members.append(pred)
-        preds = torch.stack(members, dim=1)  # (B, M, C, H, W)
-        preds_all.append(preds.cpu())          # offload to CPU — keep GPU free for next step
+        preds_k = torch.stack(members, dim=1)  # (B, M, C, H, W) on GPU
+        yield preds_k                            # caller processes; history update waits
+        # Update history for the next step after the caller is done with preds_k
         if k < num_steps - 1:
-            next_frame = preds
+            next_frame = preds_k
             if output_only:
                 next_frame = next_frame.clone()
                 for ci in output_only:
@@ -165,7 +166,6 @@ def _ar_rollout(
             per_member_hist = torch.cat(
                 [per_member_hist[:, :, 1:], next_frame.unsqueeze(2)], dim=2
             )
-    return torch.stack(preds_all, dim=1)  # (B, K, M, C, H, W)
 
 
 # ---------------------------------------------------------------------------
@@ -247,25 +247,24 @@ def run_eval(cfg: DictConfig) -> None:
     members_per_model = [base_m + (1 if i < rem_m else 0) for i in range(n_models)]
 
     # --- Accumulators ---
-    # Shape (K, C) for per-lead per-variable metrics.
-    crps_acc = np.zeros((K, C), dtype=np.float64)
-    rmse_acc = np.zeros((K, C), dtype=np.float64)
-    # Spread-skill: accumulate ensemble std and RMSE separately.
-    spread_acc = np.zeros((K, C), dtype=np.float64)
-    rank_acc = np.zeros((M + 1, C), dtype=np.float64)  # aggregated over leads+batches
-    energy_acc = np.zeros(K, dtype=np.float64)
+    crps_acc    = np.zeros((K, C), dtype=np.float64)
+    rmse_acc    = np.zeros((K, C), dtype=np.float64)
+    spread_acc  = np.zeros((K, C), dtype=np.float64)
+    rank_acc    = np.zeros((M + 1, C), dtype=np.float64)
+    energy_acc  = np.zeros(K, dtype=np.float64)
+    # Spectra / pooled initialised on first batch (size depends on H, W, nbins)
     power_ens_acc: np.ndarray | None = None
     power_tgt_acc: np.ndarray | None = None
-    pooled_avg_acc: np.ndarray | None = None
-    pooled_max_acc: np.ndarray | None = None
+    pooled_avg_acc = np.zeros((len(pool_sizes), K, C), dtype=np.float64)
+    pooled_max_acc = np.zeros((len(pool_sizes), K, C), dtype=np.float64)
     derived_acc: dict[str, np.ndarray] = {}
     n_batches = 0
 
     # --- Eval loop ---
     with torch.no_grad():
         for batch_idx, batch in enumerate(val_loader):
-            history = batch["history"].to(device, dtype=torch.float32)
-            target = batch["target"].to(device, dtype=torch.float32)
+            history    = batch["history"].to(device, dtype=torch.float32)
+            target     = batch["target"].to(device, dtype=torch.float32)
             background = batch["background"].to(device, dtype=torch.float32)
             if target.ndim == 4:
                 target = target.unsqueeze(1)
@@ -276,62 +275,71 @@ def run_eval(cfg: DictConfig) -> None:
                 if invariants is not None
                 else None
             )
-
-            # AR rollout across all models → (B, K, M, C, H, W)
-            preds: list[torch.Tensor] = []
-            for model, n_mem in zip(models, members_per_model, strict=True):
-                if n_mem > 0:
-                    preds.append(
-                        _ar_rollout(
-                            model, history, background, inv_b,
-                            K, latent_dim, n_mem, device, output_only,
-                        )
-                    )
-            ensemble = torch.cat(preds, dim=2)  # (B, K, M, C, H, W)
-
-            # Per-lead metrics (earth2studio, area-weighted)
             xc, yc = _make_coords(B, M, variables, lats_np, lons_np)
-            for k in range(K):
-                ens_k = ensemble[:, k]   # (B, M, C, H, W)
-                tgt_k = target[:, k]     # (B, C, H, W)
 
-                crps_res, _ = crps_fn(ens_k, xc, tgt_k, yc)   # (B, C)
+            # One generator per model; advance all in lockstep, one step at a time.
+            # This keeps only (B, M, C, H, W) per step in memory instead of the
+            # full (B, K, M, C, H, W) rollout (~2-3 GB vs. ~51 GB at 0.25°).
+            model_iters = [
+                _ar_rollout_steps(
+                    mdl, history, background, inv_b,
+                    K, latent_dim, n_mem, device, output_only,
+                )
+                for mdl, n_mem in zip(models, members_per_model, strict=True)
+                if n_mem > 0
+            ]
+
+            for k in range(K):
+                # Gather one step from each model, concatenate along member dim
+                parts   = [next(it) for it in model_iters]   # list of (B, n_mem, C, H, W)
+                preds_k = torch.cat(parts, dim=1)             # (B, M, C, H, W) on GPU
+                tgt_k   = target[:, k]                        # (B, C, H, W) on GPU
+
+                # --- earth2studio area-weighted per-lead metrics ---
+                crps_res, _ = crps_fn(preds_k, xc, tgt_k, yc)
                 crps_acc[k] += crps_res.mean(dim=0).cpu().numpy()
 
-                rmse_res, _ = rmse_fn(ens_k, xc, tgt_k, yc)   # (B, C) RMSE
+                rmse_res, _ = rmse_fn(preds_k, xc, tgt_k, yc)
                 rmse_acc[k] += rmse_res.mean(dim=0).cpu().numpy()
 
-                # Spread: sqrt of mean ensemble variance over lat/lon (area-weighted)
-                ens_var = ens_k.var(dim=1, unbiased=True)  # (B, C, H, W) var over members
-                w = area_w_2d.to(ens_var.device)
-                spread_kc = (ens_var * w).sum(dim=(-2, -1)) / w.sum()  # (B, C) mean var
+                ens_var  = preds_k.var(dim=1, unbiased=True)
+                w        = area_w_2d.to(ens_var.device)
+                spread_kc = (ens_var * w).sum(dim=(-2, -1)) / w.sum()
                 spread_acc[k] += spread_kc.sqrt().mean(dim=0).cpu().numpy()
 
-                rh_res, _ = rh_fn(ens_k, xc, tgt_k, yc)
-                # rh_res: (2, M+1, B, C) → [bin_centers, bin_counts]; sum over batch
-                rank_acc += rh_res[1].sum(dim=-2).cpu().numpy()  # (M+1, C)
+                rh_res, _ = rh_fn(preds_k, xc, tgt_k, yc)
+                rank_acc  += rh_res[1].sum(dim=-2).cpu().numpy()
 
-            # Full-rollout metrics (utils/metrics.py)
-            ens_mean = ensemble.mean(dim=2)  # (B, K, C, H, W)
-            k_vec, ens_spec, tgt_spec = power_spectra_per_variable(ens_mean, target)
-            if power_ens_acc is None:
-                power_ens_acc, power_tgt_acc = ens_spec, tgt_spec
-            else:
-                power_ens_acc += ens_spec
-                power_tgt_acc += tgt_spec
+                # --- full-rollout metrics, called with K=1 via unsqueeze ---
+                pk1  = preds_k.unsqueeze(1)   # (B, 1, M, C, H, W)
+                tk1  = tgt_k.unsqueeze(1)     # (B, 1, C, H, W)
 
-            energy_acc += energy_score_per_lead(ensemble, target)
+                energy_acc[k] += float(energy_score_per_lead(pk1, tk1)[0])
 
-            p_avg = pooled_crps_per_lead(ensemble, target, pool_sizes, "avg")
-            p_max = pooled_crps_per_lead(ensemble, target, pool_sizes, "max")
-            if pooled_avg_acc is None:
-                pooled_avg_acc, pooled_max_acc = p_avg, p_max
-            else:
-                pooled_avg_acc += p_avg
-                pooled_max_acc += p_max
+                p_avg = pooled_crps_per_lead(pk1, tk1, pool_sizes, "avg")  # (P, 1, C)
+                p_max = pooled_crps_per_lead(pk1, tk1, pool_sizes, "max")
+                pooled_avg_acc[:, k] += p_avg[:, 0].cpu().numpy() if isinstance(p_avg, torch.Tensor) else p_avg[:, 0]
+                pooled_max_acc[:, k] += p_max[:, 0].cpu().numpy() if isinstance(p_max, torch.Tensor) else p_max[:, 0]
 
-            for dname, vals in derived_variable_crps(ensemble, target, variables).items():
-                derived_acc[dname] = derived_acc.get(dname, 0.0) + vals
+                ens_mean_k = preds_k.mean(dim=1)               # (B, C, H, W)
+                k_vec, ens_spec_k, tgt_spec_k = power_spectra_per_variable(
+                    ens_mean_k.unsqueeze(1), tk1               # (B, 1, C, H, W)
+                )  # returns (1, C, nbins) for K=1
+                if power_ens_acc is None:
+                    nbins = ens_spec_k.shape[-1]
+                    power_ens_acc = np.zeros((K, C, nbins), dtype=np.float64)
+                    power_tgt_acc = np.zeros((K, C, nbins), dtype=np.float64)
+                power_ens_acc[k] += ens_spec_k[0]
+                power_tgt_acc[k] += tgt_spec_k[0]
+
+                for dname, vals in derived_variable_crps(pk1, tk1, variables).items():
+                    if dname not in derived_acc:
+                        derived_acc[dname] = np.zeros(K, dtype=np.float64)
+                    derived_acc[dname][k] += float(vals[0])
+
+                del preds_k, parts, pk1, tk1, ens_mean_k
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
 
             n_batches += 1
             if (batch_idx + 1) % 50 == 0:
