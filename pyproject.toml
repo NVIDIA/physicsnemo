@@ -379,6 +379,9 @@ SongUNetPosEmbd = "physicsnemo.models.diffusion_unets:SongUNetPosEmbd"
 SongUNetPosLtEmbd = "physicsnemo.models.diffusion_unets:SongUNetPosLtEmbd"
 DhariwalUNet = "physicsnemo.models.diffusion_unets:DhariwalUNet"
 
+# DiT
+DiT = "physicsnemo.models.dit:DiT"
+
 # Diffusion wrappers
 CorrDiffRegressionUNet = "physicsnemo.models.diffusion_unets:CorrDiffRegressionUNet"
 StormCastUNet = "physicsnemo.models.diffusion_unets:StormCastUNet"
