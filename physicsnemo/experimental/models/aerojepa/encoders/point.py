@@ -42,7 +42,7 @@ from collections.abc import Sequence
 import torch
 import torch.nn as nn
 
-from physicsnemo.experimental.nn.aerojepa import (
+from ..layers import (
     EncoderOutput,
     FourierPositionalEncoding,
     LocalPointTransformerBlock,
@@ -139,7 +139,7 @@ class PointClusterGraphPool(nn.Module):
 
     For each tokenizer center, gathers its k-nearest source points (via
     ``cluster_idx`` produced by
-    :meth:`physicsnemo.experimental.nn.aerojepa.PointCloudTokenizer.tokenize_with_clusters`)
+    :meth:`physicsnemo.experimental.models.aerojepa.layers.PointCloudTokenizer.tokenize_with_clusters`)
     and aggregates them through a stack of message-passing-style updates:
     per-edge message and gate MLPs computed from neighbor + center
     features plus the relative position and distance, gated mean

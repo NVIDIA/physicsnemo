@@ -19,10 +19,10 @@
 The :class:`AeroJEPA` model composes a context encoder, a target encoder,
 a predictor head, a trunk that wires the encoders and decoder together,
 and a query-based field decoder. All five pieces live in this subpackage
-(the encoders under ``aerojepa.encoders``). Reusable building blocks the
-model is built from — attention blocks, the point-cloud tokenizer, the
-Fourier positional encoding, token dataclasses, and the batching/mask/k-NN
-helpers — live in :mod:`physicsnemo.experimental.nn.aerojepa`.
+(the encoders under ``aerojepa.encoders``). The building blocks the model
+is built from — attention blocks, the point-cloud tokenizer, the Fourier
+positional encoding, token dataclasses, and the batching/mask/k-NN
+helpers — live alongside the model in ``aerojepa.layers``.
 
 API stability: experimental. Names and signatures may change between
 releases until the design graduates out of ``physicsnemo.experimental``.
@@ -39,6 +39,7 @@ from .encoders.base import BaseContextEncoder, BaseTargetEncoder
 from .encoders.context import ContextTransformer
 from .encoders.point import PointTransformer
 from .encoders.target import TargetTransformer
+from .layers import EncoderOutput, TokenSet
 from .predictor import PrototypeTokenJEPAHead
 from .trunk import AeroJEPATrunk
 
@@ -58,4 +59,7 @@ __all__ = [
     "ContextTransformer",
     "PointTransformer",
     "TargetTransformer",
+    # Token dataclasses (commonly used by training/inference loops)
+    "TokenSet",
+    "EncoderOutput",
 ]

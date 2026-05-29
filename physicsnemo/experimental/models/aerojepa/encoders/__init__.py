@@ -18,7 +18,7 @@
 
 Abstract base classes and concrete encoder implementations
 (``ContextTransformer``, ``PointTransformer``, ``TargetTransformer``) that
-sit between :mod:`physicsnemo.experimental.nn.aerojepa` building blocks and
+sit between :mod:`physicsnemo.experimental.models.aerojepa.layers` building blocks and
 the top-level :class:`AeroJEPA` model.
 """
 

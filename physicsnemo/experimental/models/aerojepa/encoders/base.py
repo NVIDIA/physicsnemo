@@ -23,7 +23,7 @@ from abc import ABC, abstractmethod
 import torch
 import torch.nn as nn
 
-from physicsnemo.experimental.nn.aerojepa import EncoderOutput
+from ..layers import EncoderOutput
 
 
 class BaseContextEncoder(nn.Module, ABC):

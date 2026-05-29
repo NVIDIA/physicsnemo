@@ -149,7 +149,7 @@ class LocalPointTransformerBlock(nn.Module):
     r"""Local self-attention block over a per-point k-NN graph.
 
     For each point, attends to its ``neighbor_k`` nearest neighbors (chosen
-    by :func:`physicsnemo.experimental.nn.aerojepa.token_utils.chunked_knn_indices`)
+    by :func:`physicsnemo.experimental.models.aerojepa.layers.token_utils.chunked_knn_indices`)
     with a learned relative-position bias and per-head attention scores.
     Followed by a :class:`ResidualMLP`. Optional AdaLN/AdaLN-Zero
     conditioning modulates both the attention sublayer and the

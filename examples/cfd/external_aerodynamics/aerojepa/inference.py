@@ -216,7 +216,7 @@ def _predict_one_case(
     if pred_features.ndim == 3 and int(pred_features.shape[0]) == 1:
         pred_features = pred_features[0]
 
-    from physicsnemo.experimental.nn.aerojepa import TokenSet
+    from physicsnemo.experimental.models.aerojepa import TokenSet
 
     target_tokens = TokenSet(
         features=pred_features,

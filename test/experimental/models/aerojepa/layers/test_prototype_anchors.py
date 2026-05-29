@@ -19,7 +19,7 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.nn.aerojepa import (
+from physicsnemo.experimental.models.aerojepa.layers import (
     build_context_prototype_anchors,
     build_target_prototype_anchors,
     ensure_context_prototype_anchors,

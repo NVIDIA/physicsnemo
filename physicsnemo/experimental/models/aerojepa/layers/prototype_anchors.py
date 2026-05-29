@@ -17,7 +17,7 @@
 """Prototype anchor building and loading for AeroJEPA.
 
 The ``data_prototype_cluster`` tokenization strategy
-(:class:`physicsnemo.experimental.nn.aerojepa.point_tokenizer.PointCloudTokenizer`)
+(:class:`physicsnemo.experimental.models.aerojepa.layers.point_tokenizer.PointCloudTokenizer`)
 uses a fixed set of 3D anchor points as token centers. This module builds
 those anchors by sampling token coordinates from a training dataset (via
 the same tokenizer) and running a chunked k-means to compress them to a

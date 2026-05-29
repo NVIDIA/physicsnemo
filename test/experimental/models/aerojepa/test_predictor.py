@@ -19,8 +19,8 @@
 import pytest
 import torch
 
+from physicsnemo.experimental.models.aerojepa.layers import TokenSet
 from physicsnemo.experimental.models.aerojepa.predictor import PrototypeTokenJEPAHead
-from physicsnemo.experimental.nn.aerojepa import TokenSet
 
 
 def _build(*, cond_dim: int = 4) -> PrototypeTokenJEPAHead:

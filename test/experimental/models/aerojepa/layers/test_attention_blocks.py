@@ -19,7 +19,7 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.nn.aerojepa import (
+from physicsnemo.experimental.models.aerojepa.layers import (
     LocalPointTransformerBlock,
     LocalTokenCrossAttentionBlock,
     ResidualMLP,

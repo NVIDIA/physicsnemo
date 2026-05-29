@@ -28,7 +28,7 @@ from collections.abc import Sequence
 
 import torch
 
-from physicsnemo.experimental.nn.aerojepa import EncoderOutput
+from ..layers import EncoderOutput
 
 from .base import BaseContextEncoder
 from .point import PointTransformer, build_geometry_features

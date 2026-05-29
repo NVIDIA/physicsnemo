@@ -21,7 +21,7 @@ import math
 import pytest
 import torch
 
-from physicsnemo.experimental.nn.aerojepa import FourierPositionalEncoding
+from physicsnemo.experimental.models.aerojepa.layers import FourierPositionalEncoding
 
 
 def test_constructor_default_attributes():

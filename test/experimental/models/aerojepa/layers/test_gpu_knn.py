@@ -24,7 +24,7 @@ submodule path directly.
 import pytest
 import torch
 
-from physicsnemo.experimental.nn.aerojepa._gpu_knn import (
+from physicsnemo.experimental.models.aerojepa.layers._gpu_knn import (
     _gpu_knn_chunked,
     gpu_knn_bipartite,
     gpu_knn_interpolate,

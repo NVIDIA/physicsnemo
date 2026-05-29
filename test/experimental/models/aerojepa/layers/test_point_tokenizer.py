@@ -19,7 +19,7 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.nn.aerojepa import PointCloudTokenizer
+from physicsnemo.experimental.models.aerojepa.layers import PointCloudTokenizer
 
 
 def _make_pc(n=64, d=3, f=8, device="cpu"):

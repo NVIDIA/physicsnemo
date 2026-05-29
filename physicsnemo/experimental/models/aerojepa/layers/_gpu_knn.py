@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""GPU-native kNN utilities (private to ``physicsnemo.experimental.nn.aerojepa``).
+"""GPU-native kNN utilities (private to ``physicsnemo.experimental.models.aerojepa.layers``).
 
 Chunked ``torch.cdist`` plus ``topk`` to build homogeneous and bipartite
 k-nearest-neighbor graphs and to do inverse-distance interpolation, without

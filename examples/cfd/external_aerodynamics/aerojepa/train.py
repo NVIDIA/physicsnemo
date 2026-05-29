@@ -40,7 +40,7 @@ from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from physicsnemo.experimental.nn.aerojepa import TokenSet
+from physicsnemo.experimental.models.aerojepa import TokenSet
 from src.datapipes import (
     SuperWingDataset,
     build_superwing_split_manifest,

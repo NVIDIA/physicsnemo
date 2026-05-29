@@ -18,7 +18,7 @@
 
 import torch
 
-from physicsnemo.experimental.nn.aerojepa import EncoderOutput, TokenSet
+from physicsnemo.experimental.models.aerojepa.layers import EncoderOutput, TokenSet
 
 
 def test_tokenset_unbatched_construction(device):

@@ -24,7 +24,7 @@ from physicsnemo.experimental.models.aerojepa.decoder import (
     SineLayer,
     SirenHead,
 )
-from physicsnemo.experimental.nn.aerojepa import TokenSet
+from physicsnemo.experimental.models.aerojepa.layers import TokenSet
 
 
 def _build(**overrides) -> QueryTokenDecoder:

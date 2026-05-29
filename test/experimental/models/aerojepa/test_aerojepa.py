@@ -163,7 +163,7 @@ def test_decode_field_chunked_fp32_returns_cpu(device):
     )
     if pf.ndim == 3 and pf.shape[0] == 1:
         pf = pf[0]
-    from physicsnemo.experimental.nn.aerojepa import TokenSet
+    from physicsnemo.experimental.models.aerojepa.layers import TokenSet
 
     tt = TokenSet(
         features=pf,

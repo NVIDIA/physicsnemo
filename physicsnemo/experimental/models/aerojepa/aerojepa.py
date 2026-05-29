@@ -32,7 +32,7 @@ from jaxtyping import Float
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.nn.aerojepa import TokenSet
+from .layers import TokenSet
 
 from .predictor import PrototypeTokenJEPAHead
 from .trunk import AeroJEPATrunk

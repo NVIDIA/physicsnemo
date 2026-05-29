@@ -30,7 +30,7 @@ from collections.abc import Sequence
 
 import torch
 
-from physicsnemo.experimental.nn.aerojepa import EncoderOutput, counts_to_mask
+from ..layers import EncoderOutput, counts_to_mask
 
 from .base import BaseTargetEncoder
 from .point import PointTransformer
