@@ -68,4 +68,9 @@ training:
     use_channel_weights: true   # GraphCast-style per-variable weights (§2.2.3)
     use_area_weights: true      # cos(lat) area weighting
   optimizer:
-    lr: 3.0e-4
+    # Paper Table A.2: Stage 3 (0.25° ERA5) uses lr=8e-5 with 1000-step warmup.
+    # Stage 1 (1° 12h) uses lr=8e-4 — override on CLI if running Stage 1.
+    lr: 8.0e-5
+    weight_decay: 0.1
+    lr_warmup_steps: 1000
+    lr_min: 0.0
