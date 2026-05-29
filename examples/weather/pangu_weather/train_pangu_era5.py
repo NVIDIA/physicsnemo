@@ -32,14 +32,6 @@ from physicsnemo.utils.logging import LaunchLogger, PythonLogger
 from physicsnemo.utils.logging.mlflow import initialize_mlflow
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 
-try:
-    from apex import optimizers
-except:
-    raise ImportError(
-        "Pangu-Weather training requires apex package for optimizer."
-        + "See https://github.com/nvidia/apex for install details."
-    )
-
 
 def loss_func(x, y):
     return torch.nn.functional.l1_loss(x, y)
@@ -204,8 +196,12 @@ def main(cfg: DictConfig) -> None:
         torch.cuda.current_stream().wait_stream(ddps)
 
     # Initialize optimizer and scheduler
-    optimizer = optimizers.FusedAdam(
-        pangu_model.parameters(), betas=(0.9, 0.999), lr=0.0005, weight_decay=0.000003
+    optimizer = torch.optim.Adam(
+        pangu_model.parameters(),
+        betas=(0.9, 0.999),
+        lr=0.0005,
+        weight_decay=0.000003,
+        fused=torch.cuda.is_available(),
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
 

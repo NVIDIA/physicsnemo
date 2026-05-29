@@ -28,11 +28,6 @@ from torch.utils.data.distributed import DistributedSampler
 from torch_geometric.loader import DataLoader as PyGDataLoader
 
 
-try:
-    import apex
-except:
-    pass
-
 from physicsnemo.datapipes.gnn.stokes_dataset import StokesDataset
 from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.utils.logging import (
@@ -124,13 +119,12 @@ class MGNTrainer:
 
         # instantiate loss, optimizer, and scheduler
         self.criterion = torch.nn.MSELoss()
-        try:
-            self.optimizer = apex.optimizers.FusedAdam(
-                self.model.parameters(), lr=cfg.lr
-            )
-            rank_zero_logger.info("Using FusedAdam optimizer")
-        except:
-            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=cfg.lr)
+        self.optimizer = torch.optim.Adam(
+            self.model.parameters(),
+            lr=cfg.lr,
+            fused=torch.cuda.is_available(),
+        )
+        rank_zero_logger.info(f"Using {self.optimizer.__class__.__name__} optimizer")
         # If lr_decay_rate is not set, calculate it based on the number of epochs
         # and the final learning rate multiplier.
         lr_decay_rate = cfg.lr_decay_rate

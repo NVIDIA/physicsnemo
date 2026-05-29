@@ -46,8 +46,8 @@ def compute_statistics(graphs, fields, statistics):
     for etype in fields:
         for field_name in fields[etype]:
             cur_statistics = {}
-            minv = np.infty
-            maxv = np.NINF
+            minv = np.inf
+            maxv = -np.inf
             Ns = []
             Ms = []
             means = []

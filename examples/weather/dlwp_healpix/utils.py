@@ -97,7 +97,7 @@ def write_checkpoint(
     ckpt_paths = np.array(glob.glob(root_path + "/training-state-epoch-*.mdlus"))
     if len(ckpt_paths) > keep_n_checkpoints + 1:
         worst_path = ""
-        worst_error = -np.infty
+        worst_error = -np.inf
         for ckpt_path in ckpt_paths:
             if "NAN" in ckpt_path:
                 os.remove(ckpt_path)

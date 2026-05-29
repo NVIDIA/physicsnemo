@@ -79,7 +79,10 @@ runs:
         PIP_BREAK_SYSTEM_PACKAGES: "1"
       run: |
         set -euo pipefail
-        pip install --quiet huggingface_hub[hf_xet]
+        # typer >= 0.26 dropped click as a runtime dep, but huggingface_hub's
+        # `hf` CLI still does `import click`. Install click explicitly until
+        # upstream re-adds it (or the CLI stops importing click directly).
+        pip install --quiet huggingface_hub[hf_xet] click
 
     - name: Install uv (pinned)
       shell: bash
