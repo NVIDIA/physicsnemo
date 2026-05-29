@@ -86,7 +86,7 @@ env:
   # with no extras home (moto, scikit-image, pyg_lib, earth2grid, ...) are
   # installed by the `Install CI-only test dependencies` step inside the
   # setup-uv-env composite action.
-  EXTRAS_TAG: "cu12,natten-cu12,utils-extras,mesh-extras,nn-extras,model-extras,datapipes-extras,uq-extras,gnns,sym,perf"
+  EXTRAS_TAG: "cu12,natten-cu12,utils-extras,mesh-extras,nn-extras,model-extras,datapipes-extras,uq-extras,gnns,sym,transformer-engine-cu12"
 
   # ---- Cache key prefixes ------------------------------------------------
   # Inlined literally because GitHub Actions does not allow env-to-env

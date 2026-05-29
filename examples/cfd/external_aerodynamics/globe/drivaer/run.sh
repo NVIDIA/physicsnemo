@@ -51,6 +51,13 @@ CPUS_PER_NODE=${SLURM_CPUS_ON_NODE:-$(nproc)}
 export OMP_NUM_THREADS=1
 echo "OMP_NUM_THREADS=$OMP_NUM_THREADS (process-level parallelism via DataLoader workers; ${CPUS_PER_NODE} CPUs / ${NUM_GPUS_PER_NODE} GPUs)"
 
+### [CUDA Allocator]
+# expandable_segments: avoids the synchronizing cudaMalloc/cudaFree round-trips
+# that the default segment allocator performs when chunked kernel evaluations
+# stress the cache. Lets the allocator grow segments instead.
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+echo "PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF"
+
 ### [Sync Dependencies]
 # Select the right CUDA extra based on the detected driver version,
 # then install both the project deps and example-specific requirements.
