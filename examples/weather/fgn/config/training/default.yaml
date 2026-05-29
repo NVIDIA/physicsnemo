@@ -26,6 +26,10 @@ ar_steps: 1
 #   to exercise the sharding code path end-to-end.
 domain_parallel_size: 1
 force_sharding: false
+# torch.compile the model forward for ~10-30% throughput gain (CorrDiff/GraphCast
+# pattern). Skipped automatically when ShardTensor is active. First run adds ~60s
+# warm-up. Disable for quick smoke tests or CPU-only runs.
+torch_compile: false
 
 # Number of validation batches per rank when running under ParallelHelper —
 # the rank-sharded sampler is infinite by design (StormCast convention),
@@ -40,9 +44,12 @@ validation_metrics: false
 validation_ensemble_size: 4
 
 optimizer:
-  lr: 3.0e-4
+  # Paper Table A.2: lr=8e-5 (stages 2-4), weight_decay=0.1, warmup=1000 steps.
+  lr: 8.0e-5
   betas: [0.9, 0.999]
-  weight_decay: 1.0e-4
+  weight_decay: 0.1
+  lr_warmup_steps: 1000
+  lr_min: 0.0
 
 loss:
   num_samples: 4

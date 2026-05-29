@@ -72,6 +72,10 @@ class TrainingConfig:
     #   single domain rank (useful to test the sharding path end-to-end).
     domain_parallel_size: int = Field(default=1, ge=1)
     force_sharding: bool = False
+    # torch.compile the model forward before FSDP wrapping for ~10-30%
+    # throughput gain. Skipped automatically when ShardTensor is active
+    # (DTensor ops cause graph breaks). Warm-up adds ~60 s on first run.
+    torch_compile: bool = False
     # Validation diagnostic hooks. When enabled, the trainer runs a short
     # ensemble rollout on a single validation batch at each ``validation_freq``
     # step and writes per-variable CRPS / RMSE / spread-skill / rank-hist /

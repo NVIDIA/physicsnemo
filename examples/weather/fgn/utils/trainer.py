@@ -124,6 +124,14 @@ class Trainer:
             f"(params={sum(p.numel() for p in self.model.parameters()):,})"
         )
 
+        # torch.compile: applied BEFORE FSDP so the compiled graph covers the
+        # full model forward. Skipped when ShardTensor is active (DTensor ops
+        # cause graph breaks). Mirrors StormCast's torch_compile flag.
+        use_compile = bool(self.cfg.training.torch_compile) and not self.use_shard_tensor
+        if use_compile:
+            self.logger.info("Compiling model with torch.compile...")
+            self.model = torch.compile(self.model)
+
         # Wrap with FSDP / ShardTensor when running distributed. Domain-
         # sharded invariant tensor so forward passes on sharded inputs find
         # the invariant in the same layout.
@@ -584,9 +592,12 @@ class Trainer:
         )
 
     def save_checkpoint(self) -> None:
+        # Unwrap torch.compile wrapper: save_checkpoint needs the original
+        # physicsnemo.Module, not the OptimizedModule (which has no __len__).
+        model_to_save = getattr(self.model, "_orig_mod", self.model)
         save_checkpoint(
             self.checkpoint_dir,
-            models=self.model,
+            models=model_to_save,
             optimizer=self.optimizer,
             scheduler=self.scheduler,
             epoch=self.step,
