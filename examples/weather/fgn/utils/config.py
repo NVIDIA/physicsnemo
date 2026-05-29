@@ -46,7 +46,7 @@ class LossConfig:
 class TrainingConfig:
     outdir: str = "rundir"
     experiment_name: str = "fgn"
-    run_id: str = "0"
+    run_id: int | str = "0"
     rundir: str = "rundir/fgn/0"
     checkpoint_dir: str = "checkpoints"
     num_data_workers: int = Field(default=0, ge=0)
@@ -58,7 +58,7 @@ class TrainingConfig:
     validation_freq: int = Field(default=25, ge=1)
     resume_checkpoint: int | Literal["latest"] | None = "latest"
     clip_grad_norm: float = -1.0
-    ar_steps: int = Field(default=1, ge=1, le=8)
+    ar_steps: int = Field(default=1, ge=1)
     # Data + domain parallelism knobs. Mirrors StormCast's convention.
     # - domain_parallel_size=1 & force_sharding=False → pure single-process
     #   or plain DDP, no ShardTensor overhead (default for smoke tests).
