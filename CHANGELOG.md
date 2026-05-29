@@ -75,6 +75,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed bug in Pangu, FengWu attention window shift for asymmetric longitudes
 - Fixed a bug in `mesh.sampling.find_nearest_cells`, where a mixup between L2 and L-inf norms
   could cause slightly incorrect nearest-neighbor assignments in highly skewed meshes.
+- Fixed an import crash with recent Warp by using the public `wp.Device` instead of the
+  removed `wp.context.Device` in the `radius_search` Warp interop. This unblocks importing
+  `physicsnemo.nn` and `physicsnemo.models`.
 
 ### Security
 
