@@ -155,7 +155,7 @@ def _ar_rollout(
                 ).float()
             members.append(pred)
         preds = torch.stack(members, dim=1)  # (B, M, C, H, W)
-        preds_all.append(preds)
+        preds_all.append(preds.cpu())          # offload to CPU — keep GPU free for next step
         if k < num_steps - 1:
             next_frame = preds
             if output_only:
