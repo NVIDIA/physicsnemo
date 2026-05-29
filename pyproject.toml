@@ -51,6 +51,7 @@ dependencies = [
     "tensordict>=0.11.0,<0.12",
     "omegaconf>=2.3.0",
     "importlib-metadata>=8.7.1",
+    "psutil>=6.0.0",
 ]
 
 [project.urls]
