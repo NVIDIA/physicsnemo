@@ -23,7 +23,7 @@ outputs to what the decoder consumes. Operating conditions enter the
 model here via the ``cond`` argument; the encoders do not see them.
 
 The matching JEPA-side losses (SIGReg, TokenLatentSIGReg, reconstruction
-family) live in :mod:`physicsnemo.experimental.metrics.aerojepa`.
+family) live in :mod:`physicsnemo.experimental.models.aerojepa.losses`.
 """
 
 from __future__ import annotations

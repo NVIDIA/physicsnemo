@@ -19,7 +19,7 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.metrics.aerojepa import (
+from physicsnemo.experimental.models.aerojepa.losses import (
     flatten_valid_token_features,
     reshape_token_features_for_sigreg,
 )

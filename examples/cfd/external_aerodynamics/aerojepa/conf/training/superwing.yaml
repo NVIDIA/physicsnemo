@@ -16,12 +16,12 @@
 
 # Tutorial-sized training schedule for SuperWing. The paper config trains
 # for 200 epochs; this runs for 50 so a smoke check finishes in minutes.
-epochs: 50
+epochs: 200
 batch_size: 1
 eval_batch_size: 1
 max_eval_batches: 4
 precision: bf16
-save_every_epochs: 10
+save_every_epochs: 50
 
 optimizer:
   _target_: torch.optim.AdamW

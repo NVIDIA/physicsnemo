@@ -56,7 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``QueryTokenDecoder``, and the abstract encoder bases are all
   available as composable components.
 - Adds AeroJEPA loss family under
-  `physicsnemo.experimental.metrics.aerojepa`. Includes `SIGReg` and
+  `physicsnemo.experimental.models.aerojepa.losses`. Includes `SIGReg` and
   `TokenLatentSIGReg` (the LeWorldModel sketch-isotropic-Gaussian
   regularizer with a padding-aware token wrapper), the
   `flatten_valid_token_features` / `reshape_token_features_for_sigreg`

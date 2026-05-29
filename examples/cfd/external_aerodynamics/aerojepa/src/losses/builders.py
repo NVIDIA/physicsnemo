@@ -17,7 +17,7 @@
 r"""Hydra-friendly builders for the AeroJEPA training-loss stack.
 
 Library-side loss modules live in
-:mod:`physicsnemo.experimental.metrics.aerojepa`. This module is the
+:mod:`physicsnemo.experimental.models.aerojepa.losses`. This module is the
 recipe-side glue that picks one out by name + kwargs from a Hydra
 config block (the ``loss:`` section of ``conf/training/superwing.yaml``)
 and instantiates it. It also exposes :func:`compute_latent_loss`, the
@@ -34,7 +34,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from omegaconf import DictConfig
 
-from physicsnemo.experimental.metrics.aerojepa import (
+from physicsnemo.experimental.models.aerojepa.losses import (
     MSELoss,
     RelativeL2Loss,
     RelativeL2MSELoss,

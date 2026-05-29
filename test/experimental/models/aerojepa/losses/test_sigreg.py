@@ -19,7 +19,7 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.metrics.aerojepa import SIGReg, TokenLatentSIGReg
+from physicsnemo.experimental.models.aerojepa.losses import SIGReg, TokenLatentSIGReg
 
 # ---------------------------------------------------------------------------
 # SIGReg
