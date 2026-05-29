@@ -57,22 +57,24 @@ from hydra import compose, initialize  # noqa: E402
 from omegaconf import DictConfig, OmegaConf  # noqa: E402
 
 # Stage 4 of paper Table A.2.
+# LR: 8e-5 (1AR) → 8e-6 (2AR) → 8e-7 (3-8AR each)
+# Warmup: 800 (1AR) → 400 (2AR) → 100 (3-8AR each)
 PAPER_STAGES: list[dict] = [
-    {"ar_steps": 1, "total_train_steps": 8000, "lr": 8e-5},
-    {"ar_steps": 2, "total_train_steps": 4000, "lr": 8e-5},
-    {"ar_steps": 3, "total_train_steps": 1000, "lr": 8e-5},
-    {"ar_steps": 4, "total_train_steps": 1000, "lr": 8e-6},
-    {"ar_steps": 5, "total_train_steps": 1000, "lr": 8e-6},
-    {"ar_steps": 6, "total_train_steps": 1000, "lr": 8e-7},
-    {"ar_steps": 7, "total_train_steps": 1000, "lr": 8e-7},
-    {"ar_steps": 8, "total_train_steps": 1000, "lr": 8e-7},
+    {"ar_steps": 1, "total_train_steps": 8000, "lr": 8e-5, "lr_warmup_steps": 800},
+    {"ar_steps": 2, "total_train_steps": 4000, "lr": 8e-6, "lr_warmup_steps": 400},
+    {"ar_steps": 3, "total_train_steps": 1000, "lr": 8e-7, "lr_warmup_steps": 100},
+    {"ar_steps": 4, "total_train_steps": 1000, "lr": 8e-7, "lr_warmup_steps": 100},
+    {"ar_steps": 5, "total_train_steps": 1000, "lr": 8e-7, "lr_warmup_steps": 100},
+    {"ar_steps": 6, "total_train_steps": 1000, "lr": 8e-7, "lr_warmup_steps": 100},
+    {"ar_steps": 7, "total_train_steps": 1000, "lr": 8e-7, "lr_warmup_steps": 100},
+    {"ar_steps": 8, "total_train_steps": 1000, "lr": 8e-7, "lr_warmup_steps": 100},
 ]
 
 # Small-footprint dev schedule for quick smoke testing on ARCO.
 DEV_STAGES: list[dict] = [
-    {"ar_steps": 1, "total_train_steps": 20, "lr": 3e-4},
-    {"ar_steps": 2, "total_train_steps": 20, "lr": 1e-4},
-    {"ar_steps": 4, "total_train_steps": 10, "lr": 1e-4},
+    {"ar_steps": 1, "total_train_steps": 20, "lr": 8e-5, "lr_warmup_steps": 5},
+    {"ar_steps": 2, "total_train_steps": 20, "lr": 8e-6, "lr_warmup_steps": 5},
+    {"ar_steps": 4, "total_train_steps": 10, "lr": 8e-7, "lr_warmup_steps": 2},
 ]
 
 
@@ -164,6 +166,8 @@ def build_stage_cfg(
     cfg.training.ar_steps = int(stage["ar_steps"])
     cfg.training.total_train_steps = int(stage["total_train_steps"])
     cfg.training.optimizer.lr = float(stage["lr"])
+    if "lr_warmup_steps" in stage:
+        cfg.training.optimizer.lr_warmup_steps = int(stage["lr_warmup_steps"])
     cfg.training.resume_checkpoint = "latest"
     if stats_path is not None:
         cfg.dataset.stats_path = str(stats_path)
