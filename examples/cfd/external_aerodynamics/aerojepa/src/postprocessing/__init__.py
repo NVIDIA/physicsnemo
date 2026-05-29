@@ -18,8 +18,11 @@ from .superwing_forces import (
     integrate_pressure_forces,
     integrate_pressure_forces_batch,
 )
+from .superwing_metrics import per_case_field_metrics, summarise
 
 __all__ = [
     "integrate_pressure_forces",
     "integrate_pressure_forces_batch",
+    "per_case_field_metrics",
+    "summarise",
 ]
