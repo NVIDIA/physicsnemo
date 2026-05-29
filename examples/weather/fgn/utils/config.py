@@ -26,9 +26,14 @@ class ModelConfig:
 
 @dataclass(config={"extra": "forbid"})
 class OptimizerConfig:
-    lr: float = Field(default=3e-4, gt=0.0)
+    # Paper Table A.2: lr=8e-5 (stages 2-4), weight_decay=0.1, AdamW.
+    lr: float = Field(default=8e-5, gt=0.0)
     betas: tuple[float, float] = (0.9, 0.999)
-    weight_decay: float = Field(default=1e-4, ge=0.0)
+    weight_decay: float = Field(default=0.1, ge=0.0)
+    # Linear warmup for lr_warmup_steps then cosine decay to lr_min.
+    # Paper Table A.2: 1000 warmup steps for all stages.
+    lr_warmup_steps: int = Field(default=1000, ge=0)
+    lr_min: float = Field(default=0.0, ge=0.0)
 
 
 @dataclass(config={"extra": "forbid"})

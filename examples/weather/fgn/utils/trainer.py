@@ -135,11 +135,31 @@ class Trainer:
                 )
 
         # Optimizer must be built after FSDP wrapping.
+        opt_cfg = self.cfg.training.optimizer
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
-            lr=float(self.cfg.training.optimizer.lr),
-            betas=tuple(self.cfg.training.optimizer.betas),
-            weight_decay=float(self.cfg.training.optimizer.weight_decay),
+            lr=float(opt_cfg.lr),
+            betas=tuple(opt_cfg.betas),
+            weight_decay=float(opt_cfg.weight_decay),
+        )
+        # LR schedule: linear warmup then cosine decay (paper Table A.2).
+        warmup = int(opt_cfg.lr_warmup_steps)
+        total = int(self.cfg.training.total_train_steps)
+        lr_min = float(opt_cfg.lr_min)
+        lr_max = float(opt_cfg.lr)
+
+        def _lr_lambda(step: int) -> float:
+            if warmup > 0 and step < warmup:
+                return step / warmup
+            if total <= warmup:
+                return 1.0
+            import math
+            progress = (step - warmup) / max(1, total - warmup)
+            cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return lr_min / lr_max + (1.0 - lr_min / lr_max) * cosine
+
+        self.scheduler = torch.optim.lr_scheduler.LambdaLR(
+            self.optimizer, lr_lambda=_lr_lambda
         )
 
         # Train/val loaders: ranks get disjoint contiguous index slices via
@@ -238,6 +258,7 @@ class Trainer:
             self.checkpoint_dir,
             models=self.model,
             optimizer=self.optimizer,
+            scheduler=self.scheduler,
             epoch=epoch,
             metadata_dict=metadata,
             device=self.device,
@@ -532,6 +553,7 @@ class Trainer:
             self.checkpoint_dir,
             models=self.model,
             optimizer=self.optimizer,
+            scheduler=self.scheduler,
             epoch=self.step,
             metadata={"best_val_loss": self.best_val_loss},
         )
@@ -571,11 +593,13 @@ class Trainer:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), clip)
 
             self.optimizer.step()
+            self.scheduler.step()
             self.step += 1
 
             if self.step % int(self.cfg.training.print_progress_freq) == 0:
+                lr = self.optimizer.param_groups[0]["lr"]
                 self.logger.info(
-                    f"step={self.step} train_loss={float(loss.detach().cpu()):.6f}"
+                    f"step={self.step} train_loss={float(loss.detach().cpu()):.6f} lr={lr:.3e}"
                 )
 
             if self.step % int(self.cfg.training.validation_freq) == 0:
