@@ -76,6 +76,12 @@ class TrainingConfig:
     # throughput gain. Skipped automatically when ShardTensor is active
     # (DTensor ops cause graph breaks). Warm-up adds ~60 s on first run.
     torch_compile: bool = False
+    # Experiment tracking via physicsnemo.utils.logging.LaunchLogger.
+    # Set use_wandb=true to route metrics to W&B (requires wandb installed and
+    # WANDB_API_KEY set). wandb_project is the W&B project name.
+    use_wandb: bool = False
+    wandb_project: str = "fgn"
+    use_mlflow: bool = False
     # Validation diagnostic hooks. When enabled, the trainer runs a short
     # ensemble rollout on a single validation batch at each ``validation_freq``
     # step and writes per-variable CRPS / RMSE / spread-skill / rank-hist /

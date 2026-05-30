@@ -31,6 +31,13 @@ force_sharding: false
 # warm-up. Disable for quick smoke tests or CPU-only runs.
 torch_compile: false
 
+# Experiment tracking via physicsnemo.utils.logging.LaunchLogger.
+# use_wandb=true routes loss/lr/val metrics to W&B (needs WANDB_API_KEY).
+# use_mlflow=true routes to MLflow. Both default off.
+use_wandb: false
+wandb_project: fgn
+use_mlflow: false
+
 # Number of validation batches per rank when running under ParallelHelper —
 # the rank-sharded sampler is infinite by design (StormCast convention),
 # so we cap iteration here. Null = use one local epoch (len(valid_dataset)

@@ -36,7 +36,8 @@ from utils.parallel import ParallelHelper
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import load_checkpoint, save_checkpoint
-from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils.logging import LaunchLogger, PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils.logging.wandb import initialize_wandb
 
 
 def find_latest_model_checkpoint(checkpoint_dir: Path) -> str:
@@ -59,6 +60,20 @@ class Trainer:
         # record instead of sitting in a print() stdio buffer under srun.
         self.logger = RankZeroLoggingWrapper(PythonLogger("fgn"), self.dist)
         self.logger.info("Trainer.__init__ starting")
+
+        # Structured experiment logging — W&B / MLflow via LaunchLogger.
+        # Mirrors physicsnemo.utils.logging convention used across all examples.
+        # No-op when both flags are False (default).
+        if bool(self.cfg.training.use_wandb) and self.dist.rank == 0:
+            initialize_wandb(
+                project=str(self.cfg.training.wandb_project),
+                name=f"{self.cfg.training.experiment_name}/{self.cfg.training.run_id}",
+                mode="online",
+            )
+        LaunchLogger.initialize(
+            use_wandb=bool(self.cfg.training.use_wandb) and self.dist.rank == 0,
+            use_mlflow=bool(self.cfg.training.use_mlflow) and self.dist.rank == 0,
+        )
 
         # Data + domain parallel setup. For single-process runs we skip the
         # ParallelHelper entirely: DistributedManager may be in its fallback
@@ -587,7 +602,7 @@ class Trainer:
             ens_spec,
             tgt_spec,
             variables,
-            lead_idx=K - 1,
+            lead_hours_all=np.arange(1, K + 1, dtype=float),
             out_path=str(out_dir / f"power_spectra_lead{K}.png"),
         )
 
@@ -642,17 +657,25 @@ class Trainer:
             self.scheduler.step()
             self.step += 1
 
+            train_loss_val = float(loss.detach().cpu())
+            lr = self.optimizer.param_groups[0]["lr"]
+
+            # Route to LaunchLogger (W&B / MLflow when enabled, always stdout).
+            # step-based training → epoch=step, matching DLWP/diagnostic pattern.
+            with LaunchLogger("train", epoch=self.step) as launchlog:
+                launchlog.log_minibatch({"loss": train_loss_val, "lr": lr})
+
             if self.step % int(self.cfg.training.print_progress_freq) == 0:
-                lr = self.optimizer.param_groups[0]["lr"]
                 self.logger.info(
-                    f"step={self.step} train_loss={float(loss.detach().cpu()):.6f} lr={lr:.3e}"
+                    f"step={self.step} train_loss={train_loss_val:.6f} lr={lr:.3e}"
                 )
 
             if self.step % int(self.cfg.training.validation_freq) == 0:
                 val_loss, per_ch = self._validation_loss()
                 self.best_val_loss = min(self.best_val_loss, val_loss)
                 self.logger.info(f"step={self.step} val_loss={val_loss:.6f}")
-                # Per-channel MSE — mirrors StormCast log_progress convention
+
+                val_metrics: dict = {"val_loss": val_loss}
                 if per_ch.size:
                     channels = list(self.train_dataset.state_channels())
                     ch_parts = " ".join(
@@ -661,6 +684,13 @@ class Trainer:
                         if i < len(per_ch)
                     )
                     self.logger.info(f"step={self.step} val_mse_per_ch: {ch_parts}")
+                    val_metrics.update({
+                        f"val_mse/{ch}": float(per_ch[i])
+                        for i, ch in enumerate(channels)
+                        if i < len(per_ch)
+                    })
+                with LaunchLogger("valid", epoch=self.step) as launchlog:
+                    launchlog.log_minibatch(val_metrics)
                 if bool(self.cfg.training.validation_metrics):
                     self._run_validation_metrics()
 
