@@ -13,10 +13,12 @@ conditions, and reconstructs the field through a continuous implicit
 decoder when needed. This recipe walks through the full workflow —
 dataset download → training → inference → CL/CD estimation.
 
+AeroJEPA is a Joint-Embedding Predictive Architecture. Rather than mapping geometry directly to a flow field, it predicts a latent representation of the flow from a latent representation of the geometry and operating conditions, and reconstructs the field through a continuous implicit decoder when needed. This recipe walks through the full workflow, from dataset download through training, inference, and CL/CD estimation.
+
 > SuperWing is a more tutorial-friendly dataset (a parametric wing
 > family at varying angle of attack and mach number).
 
-## What this tutorial covers
+## Tutorial Process  
 
 1. [Setup](#1-setup)
 2. [Get the SuperWing dataset](#2-get-the-superwing-dataset)
@@ -29,17 +31,15 @@ dataset download → training → inference → CL/CD estimation.
 
 ## 1. Setup
 
+The [`requirements.txt`](requirements.txt) file lists the additional dependencies for this example, including Hugging Face Hub for dataset download and utilities for plotting and post-processing.
+
 ```bash
 # Inside an environment with physicsnemo installed:
 pip install -r requirements.txt
 ```
 
-See [`requirements.txt`](requirements.txt) for the full list of
-example-side dependencies (Hugging Face Hub for the dataset download,
-plotting and post-processing utilities, etc.) on top of what core
-PhysicsNeMo already provides.
 
-## 2. Get the SuperWing dataset
+## 2. Get the SuperWing Dataset
 
 The dataset lives on the Hugging Face Hub at
 [`yunplus/SuperWing`](https://huggingface.co/datasets/yunplus/SuperWing).
@@ -75,7 +75,7 @@ Default config: [`conf/config.yaml`](conf/config.yaml) (composes
 Checkpoints are written to `outputs/<run-name>/checkpoints/` under
 PhysicsNeMo's standard Hydra-driven output layout.
 
-## 4. Inference and field plots
+## 4. Inference and Field Plots
 
 After training, decode the predicted surface field on test cases:
 
@@ -86,7 +86,7 @@ python inference.py \
     output_dir=outputs/<run-name>/inference
 ```
 
-Example output on a held-out wing -- ground truth, prediction, and
+Example output on a held-out wing, showing ground truth, prediction, and
 absolute error for each surface channel (``Cp``, ``Cf_tau``, ``Cf_z``):
 
 ![SuperWing predicted Cp field](docs/img/Cp_predictor_triptych.png)
@@ -95,9 +95,9 @@ absolute error for each surface channel (``Cp``, ``Cf_tau``, ``Cf_z``):
 
 ![SuperWing predicted Cf_z field](docs/img/Cf_z_predictor_triptych.png)
 
-## 5. CL, CD and CM estimation
+## 5. CL, CD, and CM Estimation
 
-The surface field is integrated to lift, drag and momentum coefficients via:
+The surface field is integrated to lift, drag, and momentum coefficients using:
 
 ```bash
 python -m src.postprocessing.superwing_forces \
@@ -105,13 +105,13 @@ python -m src.postprocessing.superwing_forces \
     --output outputs/<run-name>/inference/forces.csv
 ```
 
-Predicted vs. ground-truth coefficients on the SuperWing test split:
+Predicted compared to ground-truth coefficients on the SuperWing test split:
 
 ![CL/CD/CM parity plot](docs/img/cl_cd_parity.png)
 
-## 6. Adding a new dataset
+## 6. Adding a New Dataset
 
-The recipe is structured so dropping in a new dataset (HiLift,
+The recipe is structured so that dropping in a new dataset (HiLift,
 DrivAerStar, your own h5 corpus) is a two-file change:
 
 1. Add `src/datapipes/<your_dataset>.py` exposing a `Dataset` class with
