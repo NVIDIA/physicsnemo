@@ -382,80 +382,6 @@ class TestClusterTree:
             agg.node_source_data["v"][0], expected_v, atol=1e-5, rtol=1e-5
         )
 
-    # -- Precomputed leaf field consistency tests ----------------------------
-
-    @pytest.mark.parametrize(
-        "n_points, leaf_size, n_dims",
-        [
-            (50, 4, 3),
-            (1, 4, 2),
-            (10, 100, 2),
-            (20, 1, 3),
-        ],
-        ids=["normal", "single_point", "root_only_leaf", "one_per_leaf"],
-    )
-    def test_precomputed_leaf_node_ids(
-        self,
-        n_points: int,
-        leaf_size: int,
-        n_dims: int,
-    ):
-        """Precomputed leaf_node_ids matches torch.where(leaf_count > 0)."""
-        torch.manual_seed(DEFAULT_SEED)
-        points = torch.randn(n_points, n_dims)
-        tree = ClusterTree.from_points(points, leaf_size=leaf_size)
-
-        expected = torch.where(tree.leaf_count > 0)[0]
-        assert torch.equal(tree.leaf_node_ids, expected)
-        assert tree.n_leaves == expected.shape[0]
-
-    @pytest.mark.parametrize(
-        "n_points, leaf_size, n_dims",
-        [
-            (50, 4, 3),
-            (1, 4, 2),
-            (10, 100, 2),
-            (20, 1, 3),
-        ],
-        ids=["normal", "single_point", "root_only_leaf", "one_per_leaf"],
-    )
-    def test_precomputed_leaf_seg_ids(
-        self,
-        n_points: int,
-        leaf_size: int,
-        n_dims: int,
-    ):
-        """Precomputed leaf_seg_ids matches on-the-fly _ragged_arange computation."""
-        torch.manual_seed(DEFAULT_SEED)
-        points = torch.randn(n_points, n_dims)
-        tree = ClusterTree.from_points(points, leaf_size=leaf_size)
-
-        assert tree.leaf_seg_ids.shape == (n_points,)
-        assert tree.leaf_seg_ids.dtype == torch.long
-        if n_points > 0:
-            assert tree.leaf_seg_ids.max() < tree.n_leaves
-
-        # Rebuild seg_ids from scratch and compare
-        leaf_starts = tree.leaf_start[tree.leaf_node_ids]
-        leaf_counts = tree.leaf_count[tree.leaf_node_ids]
-        positions, compact_ids = _ragged_arange(
-            leaf_starts,
-            leaf_counts,
-            total=n_points,
-        )
-        expected = torch.zeros(n_points, dtype=torch.long)
-        expected[positions] = compact_ids
-
-        assert torch.equal(tree.leaf_seg_ids, expected)
-
-    def test_precomputed_leaf_fields_empty_tree(self):
-        """Empty tree has empty leaf_node_ids and leaf_seg_ids."""
-        tree = ClusterTree.from_points(torch.empty(0, 2), leaf_size=4)
-
-        assert tree.leaf_node_ids.numel() == 0
-        assert tree.leaf_seg_ids.numel() == 0
-        assert tree.n_leaves == 0
-
     def test_compute_source_aggregates_single_point(self):
         """Single-point tree centroid equals the point itself."""
         point = torch.tensor([[3.0, -1.0, 7.0]])
@@ -473,7 +399,9 @@ class TestClusterTree:
         areas = torch.rand(n) + 0.1
         tree = ClusterTree.from_points(points, leaf_size=100, areas=areas)
 
-        assert tree.n_leaves == 1, "Expected single leaf (root)"
+        ### leaf_size > n means the root is the only leaf (single node tree).
+        assert tree.n_nodes == 1
+        assert int((tree.leaf_count > 0).sum()) == 1
         agg = tree.compute_source_aggregates(points, areas)
 
         expected = (points * areas.unsqueeze(-1)).sum(0) / areas.sum()
@@ -482,6 +410,77 @@ class TestClusterTree:
             expected,
             atol=1e-5,
             rtol=1e-5,
+        )
+
+    @pytest.mark.parametrize(
+        "n_points, coord_offset, coord_scale, leaf_size",
+        [
+            (10_000, 0.0, 5.0, 1),
+            (10_000, 5.0, 2.5, 1),
+            (10_000, 5.0, 2.5, 4),
+            (1_000, 50.0, 5.0, 1),
+        ],
+        ids=[
+            "centered_large",
+            "offset_large",
+            "offset_larger_leaves",
+            "small_extreme_offset",
+        ],
+    )
+    def test_compute_source_aggregates_precision_at_scale(
+        self,
+        n_points: int,
+        coord_offset: float,
+        coord_scale: float,
+        leaf_size: int,
+    ):
+        """Precision regression guard for the cumsum-cancellation regime.
+
+        An earlier implementation (commit ``de1b8c93``) ran the cumsum
+        and the range-subtract in fp32, which produced 1-100 % relative
+        error on small-leaf centroids when ``cumsum_total >> range_sum``
+        (large ``N`` with all-positive / offset coordinates - the regime
+        real car / airfoil surface meshes produce).  The current
+        implementation lifts the cumsum to fp64 internally and casts back;
+        this test checks that fp32 inputs agree with fp64 inputs to
+        within fp32 epsilon, which would not be true under the old
+        fp32-cumsum implementation.
+
+        CPU-only so the deterministic fp64 path is the reference (CUDA
+        cumsum has warp-level non-determinism even in fp64).
+        """
+        torch.manual_seed(DEFAULT_SEED)
+        pts = (torch.rand(n_points, 3) - 0.5) * (2.0 * coord_scale) + coord_offset
+        areas = (torch.rand(n_points) * 0.9 + 0.1) * 1e-3
+        normals = torch.nn.functional.normalize(torch.randn(n_points, 3), dim=-1)
+        sd = TensorDict({"face_normal": normals}, batch_size=[n_points])
+
+        tree = ClusterTree.from_points(pts, leaf_size=leaf_size, areas=areas)
+        actual = tree.compute_source_aggregates(pts, areas, source_data=sd)
+        expected = tree.compute_source_aggregates(
+            pts.double(),
+            areas.double(),
+            source_data=TensorDict(
+                {"face_normal": normals.double()}, batch_size=[n_points]
+            ),
+        )
+
+        torch.testing.assert_close(
+            actual.node_centroid.double(),
+            expected.node_centroid,
+            atol=1e-5,
+            rtol=1e-5,
+        )
+        ### Looser tolerance for ``face_normal``: averaging unit vectors
+        ### whose directions partially cancel can leave near-zero
+        ### components, making the relative error metric sensitive even
+        ### in the precise-arithmetic limit.  Absolute tolerance keeps
+        ### the assertion meaningful for non-degenerate components.
+        torch.testing.assert_close(
+            actual.node_source_data["face_normal"].double(),
+            expected.node_source_data["face_normal"],
+            atol=1e-4,
+            rtol=1e-4,
         )
 
 
@@ -1546,6 +1545,114 @@ def test_four_quadrant_per_category_accuracy(
         rtol=1e-3,
         msg="Low theta (0.01) not close enough to exact",
     )
+
+
+# ---------------------------------------------------------------------------
+# Autocast / mixed-precision regression guards
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "output_fields",
+    [
+        {"p": "scalar"},
+        {"u": "vector"},
+        {"p": "scalar", "u": "vector"},
+    ],
+    ids=["scalar_only", "vector_only", "scalar_and_vector"],
+)
+def test_bh_forward_under_bf16_autocast(
+    output_fields: dict[str, Literal["scalar", "vector"]],
+) -> None:
+    """BarnesHutKernel.forward must run under bf16 autocast with fp32 strengths.
+
+    Production training enables ``torch.autocast(..., dtype=torch.bfloat16)``
+    around the forward pass and passes fp32 ``source_strengths``.  The MLP
+    output is then bf16 while the strengths multiplicand is fp32, so
+    ``weighted = chunk * strengths`` is promoted to fp32 before
+    ``packed_buf.index_add_`` runs.  This test catches the bug where the
+    packed scatter buffer was allocated in the bf16 autocast dtype, causing
+    ``index_add_`` to raise ``RuntimeError: self (BFloat16) and source
+    (Float) must have the same scalar type`` on the first BH call.
+
+    The check is twofold:
+
+    1. The forward completes without raising (catches the dtype mismatch
+       directly).
+    2. The output approximately matches the fp32 baseline within bf16
+       tolerance (catches a future regression where the fix instead
+       silently downcasts the result, losing accumulation precision).
+    """
+    bh_kernel, _, data = _make_bh_kernel_and_data(
+        n_spatial_dims=2,
+        n_source_scalars=0,
+        n_source_vectors=1,
+        output_fields=output_fields,
+        hidden_layer_sizes=[16, 16],
+        n_source_points=20,
+        n_target_points=15,
+        leaf_size=DEFAULT_LEAF_SIZE,
+    )
+
+    with torch.no_grad():
+        baseline = bh_kernel(**data)
+
+    with (
+        torch.no_grad(),
+        torch.autocast(device_type="cpu", dtype=torch.bfloat16),
+    ):
+        autocast_output = bh_kernel(**data)
+
+    ### Output keys + shapes must match the fp32 baseline exactly.
+    assert set(autocast_output.keys()) == set(baseline.keys())
+    for key in baseline.keys():
+        assert autocast_output[key].shape == baseline[key].shape, (
+            f"shape mismatch for {key}: autocast={autocast_output[key].shape} "
+            f"baseline={baseline[key].shape}"
+        )
+
+    ### Values close within bf16 tolerance.  bf16 has ~3 decimal digits of
+    ### mantissa precision, and our scatter accumulates O(n_pairs) values,
+    ### so a few percent relative error is expected.
+    for key in baseline.keys():
+        torch.testing.assert_close(
+            autocast_output[key].float(),
+            baseline[key],
+            atol=5e-2,
+            rtol=5e-2,
+            msg=f"autocast output diverges from fp32 baseline for field {key!r}",
+        )
+
+
+def test_compute_node_strengths_precision_at_scale() -> None:
+    """Precision regression guard for ``BarnesHutKernel._compute_node_strengths``.
+
+    Same cumsum-cancellation regime as
+    :py:meth:`TestClusterTree.test_compute_source_aggregates_precision_at_scale`,
+    but for the per-node strength sum used to weight far-field kernel
+    contributions in :class:`BarnesHutKernel`.  The fp32-cumsum
+    implementation produced relative errors up to 186 % on individual
+    leaf strengths at drivaer scale; the current fp64-cumsum
+    implementation must agree with an fp64-input reference within fp32
+    epsilon.  CPU-only for the same reproducibility reasons.
+    """
+    torch.manual_seed(DEFAULT_SEED)
+    n_points = 10_000
+    pts = (torch.rand(n_points, 3) - 0.5) * 5.0 + 5.0
+    areas = (torch.rand(n_points) * 0.9 + 0.1) * 1e-3
+    strengths = areas.clone()
+
+    tree = ClusterTree.from_points(pts, leaf_size=1, areas=areas)
+    bh, _, _ = _make_bh_kernel_and_data(
+        n_spatial_dims=3,
+        hidden_layer_sizes=[8, 8],
+        n_source_points=n_points,
+        n_target_points=10,
+    )
+
+    actual = bh._compute_node_strengths(tree, strengths)
+    expected = bh._compute_node_strengths(tree, strengths.double())
+    torch.testing.assert_close(actual.double(), expected, atol=1e-5, rtol=1e-5)
 
 
 if __name__ == "__main__":

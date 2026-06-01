@@ -15,14 +15,19 @@
 # limitations under the License.
 
 # This script is for merge queue purposes only.
-# It's role is to post the blossom-ci status to a commit on a temp branch
-# in order to clear the branch protection rule.
+# Its role is to post auto-pass commit statuses (blossom-ci, Coverage,
+# Testmon) on the temp merge-queue branch in order to clear the branch
+# protection rule.  The real checks have already run on the PR before
+# it can enter the merge queue:
+#   - blossom-ci runs on the PR via the Blossom-CI workflow.
+#   - Coverage and Testmon run on the PR via the Pull Request Github CI
+#     workflow (github-pr.yml), which only triggers on push to
+#     `pull-request/[0-9]+` branches and therefore never fires on
+#     `merge_group`.
 
 # It must only ever be run on the `merge_group`.
-# Blossom-ci must be run as normal on the PR before a
-# merge can even get to the merge queue.
 
-name: blossom-ci-merge-queue-shim
+name: merge-queue-status-passthrough
 
 on:
   merge_group:
@@ -32,19 +37,22 @@ permissions:
   contents: read
 
 jobs:
-  post-blossom-ci-status:
-    name: Post blossom-ci status
+  post-merge-queue-statuses:
+    name: Post merge-queue passthrough statuses
     runs-on: ubuntu-latest
     steps:
-      - name: Post blossom-ci status
+      - name: Post merge-queue passthrough statuses
         uses: actions/github-script@v7
         with:
           script: |
-            await github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              sha: context.sha,
-              state: "success",
-              context: "blossom-ci",
-              description: "Auto-pass for merge queue"
-            })
+            const contexts = ["blossom-ci", "Coverage", "Testmon"];
+            for (const ctx of contexts) {
+              await github.rest.repos.createCommitStatus({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                sha: context.sha,
+                state: "success",
+                context: ctx,
+                description: "Auto-pass for merge queue"
+              });
+            }

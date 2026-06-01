@@ -188,27 +188,17 @@ def main(cfg: DictConfig) -> None:
         mode=interp_mode,
     )
 
-    # Create optimizer
-    optimizer_class = None
-    if torch.cuda.is_available():
-        try:
-            optimizer_class = getattr(
-                importlib.import_module("apex.optimizers"), "FusedAdam"
-            )
-            rank_zero_logger.info("Using FusedAdam optimizer")
-            use_FusedAdam = True
-        except ImportError:
-            pass
-    if optimizer_class is None:
-        optimizer_class = torch.optim.AdamW
-        rank_zero_logger.info("Using AdamW optimizer")
-        use_FusedAdam = False
-    optimizer = optimizer_class(
+    # Create optimizer. Use the native PyTorch fused AdamW kernel when on
+    # CUDA (functionally equivalent to apex.optimizers.FusedAdam).
+    use_fused = torch.cuda.is_available()
+    optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=cfg.training.lr,
         betas=(0.9, 0.999),
         weight_decay=cfg.training.weight_decay,
+        fused=use_fused,
     )
+    rank_zero_logger.info(f"Using AdamW optimizer (fused={use_fused})")
 
     # Learning rate scheduler
     scheduler = CosineAnnealingLR(
@@ -265,7 +255,7 @@ def main(cfg: DictConfig) -> None:
             batch_size = x.shape[0]
             epoch_samples += batch_size
 
-            optimizer.zero_grad(**({} if use_FusedAdam else {"set_to_none": True}))
+            optimizer.zero_grad(set_to_none=True)
 
             loss = loss_fn(x0=x, condition=y)
 

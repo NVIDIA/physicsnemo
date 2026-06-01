@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 import random
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 import numpy as np
 import torch
@@ -206,7 +206,7 @@ def to_physical_units(
     target_config: dict[str, FieldType],
     normalizer: "NormalizeMeshFields | None",
     nondim_transform: "NonDimensionalizeByMetadata | None",
-    metadata: dict[str, Any],
+    metadata: TensorDict | None,
     nondim_type_overrides: dict[str, "NondimFieldType"] | None = None,
 ) -> TensorDict:
     """Convert a per-field model-space TensorDict back to physical units.
@@ -240,15 +240,13 @@ def to_physical_units(
     nondim_transform : NonDimensionalizeByMetadata | None
         The dataset's non-dim transform (or ``None`` to skip the
         inverse-nondim step).
-    metadata : dict[str, Any]
-        Freestream conditions used to compute reference scales:
-        requires ``U_inf`` and ``rho_inf`` (and ``p_inf`` for pressure-
-        like fields). ``T_inf`` is required only when a field is mapped
-        to ``"temperature"``. Each value is coerced to a 0-D float32
-        tensor (matching the convention of
-        :func:`nondim.freestream_scales`); float32 scales stay
-        precision-stable through the inverse multiply even when
-        ``pred_td`` is in bfloat16 / fp16.
+    metadata : TensorDict | None
+        The sample's ``metadata`` (typically pulled straight off the
+        input :class:`~physicsnemo.mesh.DomainMesh` / :class:`Mesh`),
+        carrying freestream conditions: ``U_inf`` and ``rho_inf`` (and
+        ``p_inf`` for pressure-like fields), plus ``T_inf`` when a
+        field is mapped to ``"temperature"``. ``None`` (or an empty
+        TensorDict) skips the inverse-nondim step.
     nondim_type_overrides : dict[str, NondimFieldType] | None
         Per-field overrides to the default nondim-type lookup. Use for
         fields where the default ``scalar -> pressure`` /
@@ -260,31 +258,29 @@ def to_physical_units(
     TensorDict
         New TensorDict (same keys, batch_size, and device as *pred_td*)
         with leaves in physical units. Returned as-is when both
-        transforms are ``None`` and *metadata* is empty (no work to do).
+        transforms are ``None`` and no *metadata* is available (no
+        work to do).
     """
-    if normalizer is None and (nondim_transform is None or not metadata):
+    has_metadata = metadata is not None and len(metadata.keys()) > 0
+    if normalizer is None and (nondim_transform is None or not has_metadata):
         return pred_td
 
     out = pred_td
     if normalizer is not None:
         out = normalizer.inverse_td(out)
 
-    if nondim_transform is not None and metadata:
+    if nondim_transform is not None and has_metadata:
         ### Lazy import keeps the recipe's module-level dependency graph
         ### narrow -- ``utils`` is at the bottom of the import chain and
         ### only ``to_physical_units`` reaches into the non-dim module.
         from nondim import freestream_scales
 
-        ### Build a 0-D TensorDict from the YAML-decoded ``metadata``
-        ### dict so we can delegate the q_inf / U_inf_mag math to the
-        ### canonical ``freestream_scales`` helper rather than
-        ### reimplementing it here. Cast each entry to float32 to
-        ### match ``freestream_scales``'s convention (precision-stable
-        ### reference scales, even when ``pred_td`` is bfloat16 / fp16).
-        metadata_td = TensorDict(
-            {k: torch.as_tensor(v, dtype=torch.float32) for k, v in metadata.items()},
-        )
-        q_inf, p_inf, U_inf_mag, rho_inf, T_inf = freestream_scales(metadata_td)
+        ### ``freestream_scales`` is the canonical reader for the
+        ### freestream conditions on ``metadata``. It casts each
+        ### value to float32 so the reference scales stay precision-
+        ### stable through the inverse multiply even when ``pred_td``
+        ### is in bfloat16 / fp16.
+        q_inf, p_inf, U_inf_mag, rho_inf, T_inf = freestream_scales(metadata)
 
         ### Resolve each field's nondim recipe: explicit override wins,
         ### otherwise fall back on the scalar/vector default mapping.

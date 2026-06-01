@@ -35,7 +35,6 @@ import torchinfo
 
 from typing import Literal, Any
 
-import apex
 import numpy as np
 import hydra
 from hydra.utils import to_absolute_path
@@ -915,8 +914,9 @@ def main(cfg: DictConfig) -> None:
             static_graph=True,
         )
 
-    # optimizer = apex.optimizers.FusedAdam(model.parameters(), lr=0.001)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(
+        model.parameters(), lr=0.001, fused=torch.cuda.is_available()
+    )
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
         optimizer, milestones=[50, 100, 200, 250, 300, 350, 400, 450], gamma=0.5
     )

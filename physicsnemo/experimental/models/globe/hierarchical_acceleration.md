@@ -360,15 +360,17 @@ The branch-level and chunk-level checkpoints nest correctly:
 
 ### 6.4 Chunk-Size Determinism
 
-`_auto_chunk_size()` queries free GPU memory (`torch.cuda.mem_get_info`),
-which changes between the forward pass and a checkpoint replay during
-backward.  If the chunk size changes, intermediate tensors have different
-shapes, and the outer (branch-level) checkpoint raises `CheckpointError`.
+`_auto_chunk_size()` derives the chunk count from a static fraction of
+total device memory (cached `torch.cuda.get_device_properties.total_memory`)
+rather than current free memory.  This avoids the synchronizing
+`torch.cuda.mem_get_info` driver query and gives a deterministic chunk size
+across forward and checkpoint-replay backward passes.
 
-To prevent this, `MultiscaleKernel.forward()` precomputes each branch's chunk
-size **outside** the checkpoint boundary and passes it as a fixed input via
-the `near_chunk_size` kwarg.  The checkpoint saves this value as an input and
-replays with the identical value, regardless of current GPU memory state.
+`MultiscaleKernel.forward()` still precomputes each branch's chunk size
+**outside** the checkpoint boundary and passes it as a fixed input via the
+`near_chunk_size` kwarg, so future changes that re-introduce dynamic sizing
+won't break the outer (branch-level) checkpoint by changing intermediate
+shapes between the forward pass and its replay.
 
 ---
 

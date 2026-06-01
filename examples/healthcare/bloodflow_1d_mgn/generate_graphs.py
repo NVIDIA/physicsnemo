@@ -65,7 +65,7 @@ def add_field(graph, field, field_name, offset=0, pad=10):
         inc = th.tensor(field[times[0]], dtype=th.float32)
         deft = inc * 0
         if field_name == "pressure":
-            minp = np.infty
+            minp = np.inf
             for t in field:
                 minp = np.min((minp, np.min(field[t])))
             deft = deft + minp

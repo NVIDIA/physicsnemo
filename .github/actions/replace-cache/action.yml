@@ -1,0 +1,122 @@
+name: Replace mutable-slot cache
+description: |
+  Save a path to a GitHub Actions cache slot under a mutable key, replacing
+  any existing entry under that key.  The actions/cache/save action is a
+  silent no-op when its key already exists (caches are immutable), so the
+  canonical recipe to "refresh" a `-latest`-style slot is delete-before-save:
+
+    1. Look up the key with `gh cache list` and `gh cache delete` it if
+       present (tolerate missing key for first runs and prefix bumps).
+    2. Save with actions/cache/save@v5.
+    3. Optionally re-query `gh cache list` to confirm the save took effect.
+       GitHub's cache index is eventually consistent, so the verify step
+       retries a few times before failing.  Without this verify step, a
+       collision that prevented the save (e.g. a concurrent writer or a
+       stale slot the delete somehow missed) would surface only as a
+       `Warning: Cache save failed.` line and a corrupted slot would
+       persist indefinitely.
+
+  This action centralises that recipe so callers can express
+  delete-before-save as a single step.  Each invocation site supplies its
+  own `if:` gate (e.g. `if: always()` or `if: <cold-cache>`) at the
+  workflow level; this action does not encode any save policy of its own.
+
+  Failure semantics: the delete tolerates a missing slot, but the save
+  itself and (when enabled) the verify step will fail the job loudly.  A
+  silent save failure on a mutable slot is exactly the bug class this
+  action exists to prevent.
+inputs:
+  path:
+    description: |
+      Cache path(s), forwarded to actions/cache/save.  Multi-line values
+      are supported with the same semantics as actions/cache.
+    required: true
+  key:
+    description: |
+      Mutable-slot cache key (e.g. `foo-latest`).  This is the slot that
+      will be deleted (if present) and then saved.
+    required: true
+  description:
+    description: |
+      Short human-readable label used in log messages, e.g. "uv download
+      cache" or "testmon database".
+    required: false
+    default: "cache"
+  verify:
+    description: |
+      When `"true"` (default), re-query `gh cache list` after the save and
+      fail the job if the slot is not visible within a few retries.  Set
+      to `"false"` only when verification is genuinely undesirable; the
+      default exists because silent save failures are how stale slots
+      persist for days.
+    required: false
+    default: "true"
+  github-token:
+    description: |
+      Token for the `gh` CLI used by the delete and verify steps.  Pass
+      the workflow's `secrets.GITHUB_TOKEN` from the calling workflow.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Delete stale ${{ inputs.description }} entry
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        CACHE_KEY: ${{ inputs.key }}
+        CACHE_DESC: ${{ inputs.description }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        if ! command -v gh >/dev/null 2>&1; then
+          echo "::error::gh CLI not on PATH; cannot manage ${CACHE_DESC} slot."
+          exit 1
+        fi
+        # Use --json key + --jq for robust matching (no false positives
+        # on prefix overlap from sibling cache keys).
+        existing="$(gh cache list \
+          --repo "$REPO" \
+          --key "$CACHE_KEY" \
+          --json key \
+          --jq '.[].key' \
+          | grep -Fx "$CACHE_KEY" || true)"
+        if [ -n "$existing" ]; then
+          gh cache delete "$CACHE_KEY" --repo "$REPO"
+          echo "deleted stale ${CACHE_DESC}: $CACHE_KEY"
+        else
+          echo "no existing ${CACHE_DESC} to delete: $CACHE_KEY"
+        fi
+
+    - name: Save ${{ inputs.description }}
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ inputs.path }}
+        key: ${{ inputs.key }}
+
+    # actions/cache/save@v5 silently no-ops on key collision; if the
+    # previous delete step somehow left the entry in place (or a
+    # concurrent run repopulated it), we want a hard failure now rather
+    # than a stale cache fed to tomorrow's consumer.
+    - name: Verify ${{ inputs.description }} was saved
+      if: inputs.verify == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        CACHE_KEY: ${{ inputs.key }}
+        CACHE_DESC: ${{ inputs.description }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        # GitHub's cache index is eventually consistent; use linear back-off
+        # (10 s, 20 s, 30 s, 40 s, 50 s → 150 s total) before failing.
+        for attempt in 1 2 3 4 5; do
+          if gh cache list --repo "$REPO" --key "$CACHE_KEY" --json key --jq '.[].key' \
+              | grep -Fxq "$CACHE_KEY"; then
+            echo "${CACHE_DESC} present: $CACHE_KEY"
+            exit 0
+          fi
+          echo "attempt $attempt: ${CACHE_DESC} not yet visible, sleeping..."
+          sleep $((10 * attempt))
+        done
+        echo "::error::${CACHE_DESC} save did not take effect for key $CACHE_KEY"
+        exit 1

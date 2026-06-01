@@ -256,67 +256,45 @@ class TestValidateDatasetConsistency:
         return (
             {"pressure": "scalar", "wss": "vector"},
             ["l1", "l2", "mae"],
-            {"U_inf": [30.0, 0.0, 0.0]},
         )
 
-    def test_matching_metadata_targets_metrics_is_silent(self, caplog):
+    def test_matching_targets_metrics_is_silent(self, caplog):
         """All-equal blocks: no raise, no warning."""
-        first_targets, first_metrics, first_metadata = self._first()
+        first_targets, first_metrics = self._first()
         with caplog.at_level(logging.WARNING):
             validate_dataset_consistency(
                 ds_key="ds_b",
                 ds_targets=dict(first_targets),
                 ds_metrics=list(first_metrics),
-                ds_metadata=dict(first_metadata),
                 first_targets=first_targets,
                 first_metrics=first_metrics,
-                first_metadata=first_metadata,
             )
         assert caplog.records == []
 
     def test_targets_mismatch_raises(self):
         """Targets mismatch is the loss-correctness contract -- must raise."""
-        first_targets, first_metrics, first_metadata = self._first()
+        first_targets, first_metrics = self._first()
         with pytest.raises(ValueError, match="does not match the first dataset"):
             validate_dataset_consistency(
                 ds_key="ds_b",
                 ds_targets={"pressure": "scalar"},  # missing wss
                 ds_metrics=list(first_metrics),
-                ds_metadata=dict(first_metadata),
                 first_targets=first_targets,
                 first_metrics=first_metrics,
-                first_metadata=first_metadata,
             )
 
     def test_metrics_mismatch_warns(self, caplog):
         """Metrics mismatch is a soft drift -- warns, doesn't raise."""
-        first_targets, first_metrics, first_metadata = self._first()
+        first_targets, first_metrics = self._first()
         with caplog.at_level(logging.WARNING, logger="training.build_dataloaders"):
             validate_dataset_consistency(
                 ds_key="ds_b",
                 ds_targets=dict(first_targets),
                 ds_metrics=["l2"],  # softer
-                ds_metadata=dict(first_metadata),
                 first_targets=first_targets,
                 first_metrics=first_metrics,
-                first_metadata=first_metadata,
             )
         assert any("metrics=" in r.message for r in caplog.records)
-
-    def test_metadata_mismatch_warns(self, caplog):
-        """Metadata mismatch is a soft drift -- warns, doesn't raise."""
-        first_targets, first_metrics, first_metadata = self._first()
-        with caplog.at_level(logging.WARNING, logger="training.build_dataloaders"):
-            validate_dataset_consistency(
-                ds_key="ds_b",
-                ds_targets=dict(first_targets),
-                ds_metrics=list(first_metrics),
-                ds_metadata={"U_inf": [25.0, 0.0, 0.0]},
-                first_targets=first_targets,
-                first_metrics=first_metrics,
-                first_metadata=first_metadata,
-            )
-        assert any("metadata" in r.message for r in caplog.records)
 
 
 ### ---------------------------------------------------------------------------
@@ -383,12 +361,30 @@ class TestResolveManifestSpec:
         assert spec["manifest"] == str(derived)
         assert spec["train_split"] == "train"
 
-    def test_style_b_split_alone_without_derivable_manifest_returns_none(
+    def test_style_b_split_alone_without_derivable_manifest_raises(
         self, tmp_path: Path
     ):
-        """Split key with no manifest path AND no sibling file -> directory mode."""
+        """Split key with no manifest path AND no sibling file -> raise.
+
+        The user clearly intended manifest mode (they set ``train_split``);
+        silently falling back to directory mode used to make the val loader
+        iterate the train data when the dataset YAML had no ``val_datadir``,
+        so we now fail loud at config-resolution time instead.
+        """
         ds_yaml = OmegaConf.create({"train_datadir": str(tmp_path)})
         ds_block = OmegaConf.create({"train_split": "train"})
-        ### tmp_path has no manifest.json sibling -> can't derive -> falls
-        ### back to directory mode (returns None).
+        with pytest.raises(ValueError, match="Manifest mode was requested"):
+            resolve_manifest_spec(ds_yaml, ds_block)
+
+    def test_val_split_alone_without_manifest_raises(self, tmp_path: Path):
+        """A bare ``val_split`` is also a clear manifest-mode signal."""
+        ds_yaml = OmegaConf.create({"train_datadir": str(tmp_path)})
+        ds_block = OmegaConf.create({"val_split": "val"})
+        with pytest.raises(ValueError, match="Manifest mode was requested"):
+            resolve_manifest_spec(ds_yaml, ds_block)
+
+    def test_directory_mode_unaffected_by_loud_failure(self, tmp_path: Path):
+        """A fully-unset block remains valid directory mode (returns None)."""
+        ds_yaml = OmegaConf.create({"train_datadir": str(tmp_path)})
+        ds_block = OmegaConf.create({})
         assert resolve_manifest_spec(ds_yaml, ds_block) is None

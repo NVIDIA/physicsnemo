@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ---------------------------------------------------------------------------
+# Unified External Aerodynamics -- canonical training entry point.
+# ---------------------------------------------------------------------------
+# Picks one model template and one dataset, applies the centralized
+# training schedule below, and runs the loop.  Every previously-named
+# recipe (FA variants, GLOBE, multi-dataset Transolver, HiLift) is
+# reproducible from CLI overrides; see the Recipe Gallery in README.md.
+#
+#   Default invocation:
+#     python src/train.py
+#
+#   Pick a different model + dataset:
+#     python src/train.py model=transolver_volume dataset=drivaer_ml_volume
+#
+#   Multi-dataset:
+#     python src/train.py model=transolver_surface dataset=drivaer_ml_surface \
+#         'extra_datasets=[shift_suv_estate_surface, shift_suv_fastback_surface]'
+defaults:
+  - base
+  - model: geotransolver_volume
+  - _self_
+
+# -- Dataset selection -------------------------------------------------------
+# A string naming a file in datasets/ (without the `.yaml` suffix).
+dataset: drivaer_ml_volume
+
+# Additional datasets to combine via MultiDataset.  Each entry names a
+# file in datasets/.  Empty by default; the Transolver+SHIFT recipe
+# sets this to [shift_suv_estate_surface, shift_suv_fastback_surface].
+extra_datasets: []
+
+# Manifest-mode split selectors.  Datasets without a manifest fall
+# through to directory mode and ignore these.
+train_split: train
+val_split: val
+
+# -- Recipe-side dataset overrides (applied at pipeline-build time) ---------
+# Caps the SubsampleMesh `n_cells` / `n_points` across every chosen
+# dataset's pipeline (resolved as `${sampling_resolution}` inside each
+# dataset YAML).
+sampling_resolution: 200000
+
+# Subset of metrics the MetricCalculator will log.  Used to be declared
+# per-dataset; now lives recipe-side because the choice is a recipe
+# decision, not a dataset property.
+metrics: [l2]
+
+# -- Run identity -----------------------------------------------------------
+# `${hydra:runtime.choices.model}` is the model template the user
+# composed; `${dataset}` is the dataset string above.  Override on the
+# CLI for a stable / repeatable run name.
+run_id: "${hydra:runtime.choices.model}__${dataset}__${now:%Y%m%d_%H%M%S}"
+
+output_dir: "runs"
+checkpoint_dir: null
+compile: true
+
+# -- Training schedule ------------------------------------------------------
+# Defaults match the GeoTransolver recipes (the most common case).
+# Override on the CLI per recipe (see README's Recipe Gallery for
+# Transolver / FLARE / GLOBE / HiLift / DoMINO invocations).
+training:
+  num_epochs: 500
+  optimizer:
+    lr: 3.0e-3
+  scheduler:
+    _target_: torch.optim.lr_scheduler.StepLR
+    step_size: 100
+    gamma: 0.1

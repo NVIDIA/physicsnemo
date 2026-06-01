@@ -14,39 +14,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Synthetic end-to-end smoke tests for every training config in ``conf/``.
+"""Synthetic end-to-end smoke tests for every recipe-style invocation of train.yaml.
 
 Each test:
 
-1. Builds a synthetic post-pipeline ``DomainMesh`` matching the structure
-   the dataset YAML's pipeline would have produced (target fields in
-   ``interior.point_data``; surface boundaries with precomputed normals;
-   volume interior with sdf / sdf_normals; ``global_data`` carrying
-   ``U_inf`` etc.).
-2. Builds the recipe collate from the training YAML's ``forward_kwargs``
+1. Composes ``conf/train.yaml`` with ``model=<...> dataset=<...> [+ overrides]``
+   to mirror what each previously-named train_*.yaml recipe used to do.
+2. Loads the corresponding ``datasets/<dataset>.yaml`` to read the
+   ``targets:`` block and injects the resulting channel-count sum as
+   ``cfg.out_dim`` (production code does the same in
+   ``build_dataloaders``; the synthetic test path bypasses that and so
+   has to set it explicitly).
+3. Builds a synthetic post-pipeline ``DomainMesh`` matching the structure
+   the dataset's pipeline would have produced.
+4. Builds the recipe collate from the composed cfg's ``forward_kwargs``
    spec.
-3. Instantiates the model at shrunk dimensions (small ``n_layers``,
+5. Instantiates the model at shrunk dimensions (small ``n_layers``,
    ``n_hidden``, ``n_head``, ``slice_num``; ``include_local_features``
    off) so each test runs in seconds on CPU.
-4. Runs ``model.forward(**batch["forward_kwargs"])`` and verifies the
+6. Runs ``model.forward(**batch["forward_kwargs"])`` and verifies the
    output shape matches ``target_config``.
-5. Computes the dict-based loss to confirm pred / target shapes line up.
+7. Computes the dict-based loss to confirm pred / target shapes line up.
 
 Tests skip if the model class is not importable (e.g., FLARE under
 ``physicsnemo.experimental`` may be gated, or DoMINO is not yet wired
-up). The test set deliberately excludes DoMINO YAMLs because their
+up). The test set deliberately excludes DoMINO recipes because their
 ``forward_kwargs`` references fields the dataset doesn't expose
-(documented in the YAML comments).
+(documented in the model template comments).
 """
 
 from __future__ import annotations
 
 import warnings
 from pathlib import Path
+from typing import NamedTuple
 
 import hydra
 import pytest
 import torch
+from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
 
@@ -55,8 +61,48 @@ from physicsnemo.mesh import DomainMesh, Mesh
 from collate import build_collate_fn
 from loss import LossCalculator
 from output_normalize import normalize_output_to_tensordict
+from utils import field_dim
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+
+_RECIPE_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load_dataset_targets(dataset_name: str) -> dict[str, str]:
+    """Read the ``targets:`` block out of a dataset pipeline YAML."""
+    dataset_path = _RECIPE_ROOT / "datasets" / f"{dataset_name}.yaml"
+    dataset_cfg = OmegaConf.load(dataset_path)
+    targets = OmegaConf.to_container(dataset_cfg.targets, resolve=True)
+    assert isinstance(targets, dict) and targets, f"{dataset_name} has no targets:"
+    return targets
+
+
+def _compose_train_cfg(
+    model: str, dataset: str, *, overrides: list[str] | None = None
+) -> DictConfig:
+    """Compose ``conf/train.yaml`` with the given model + dataset selection.
+
+    Mirrors what ``@hydra.main`` does at runtime, then injects
+    ``cfg.out_dim`` from the chosen dataset's ``targets:`` block (the
+    production launcher does the same inside ``build_dataloaders``;
+    synthetic tests bypass that and have to do it themselves so the
+    model template's ``${out_dim}`` interpolation resolves).
+    """
+    targets = _load_dataset_targets(dataset)
+    out_dim = sum(field_dim(ftype) for ftype in targets.values())
+
+    cli_overrides = [
+        f"model={model}",
+        f"dataset={dataset}",
+        f"+out_dim={out_dim}",  # not declared in train.yaml; production sets it in build_dataloaders
+        *(overrides or []),
+    ]
+    with initialize_config_dir(
+        config_dir=str(_RECIPE_ROOT / "conf"),
+        version_base=None,
+    ):
+        return compose(config_name="train", overrides=cli_overrides)
 
 
 ### ---------------------------------------------------------------------------
@@ -128,71 +174,80 @@ def _shrink_model_cfg(model_cfg: DictConfig) -> DictConfig:
 
 
 ### ---------------------------------------------------------------------------
-### Configurations under test
+### Recipes under test (the previously-named train_*.yaml files mapped
+### to (model, dataset, [overrides]) tuples for the new train.yaml).
 ### ---------------------------------------------------------------------------
 
 
-_RECIPE_ROOT = Path(__file__).resolve().parent.parent
+### DoMINO is excluded by design (illustrative-only forward_kwargs.data_dict
+### references fields the dataset doesn't expose).
 
-### Each entry: (training-config name, dataset-config name, "surface" or "volume").
-### DoMINO is excluded by design (illustrative-only `forward_kwargs.data_dict`;
-### dataset doesn't expose all the per-cell neighbor / grid features its
-### `forward()` expects).
-_TENSOR_INPUT_CONFIGS: list[tuple[str, str, str]] = [
-    (
-        "train_geotransolver_automotive_surface",
+
+class _RecipeSpec(NamedTuple):
+    recipe_id: str
+    model: str
+    dataset: str
+    domain: str
+    overrides: list[str]
+
+
+_TENSOR_INPUT_RECIPES: list[_RecipeSpec] = [
+    _RecipeSpec(
+        "geotransolver_surface",
+        "geotransolver_surface",
         "drivaer_ml_surface",
         "surface",
+        [],
     ),
-    (
-        "train_geotransolver_automotive_volume",
+    _RecipeSpec(
+        "geotransolver_volume",
+        "geotransolver_volume",
         "drivaer_ml_volume",
         "volume",
+        [],
     ),
-    (
-        "train_geotransolver_fa_automotive_surface",
+    _RecipeSpec(
+        "geotransolver_fa_surface",
+        "geotransolver_surface",
         "drivaer_ml_surface",
         "surface",
+        ["+model.attention_type=GALE_FA"],
     ),
-    (
-        "train_geotransolver_fa_automotive_volume",
+    _RecipeSpec(
+        "geotransolver_fa_volume",
+        "geotransolver_volume",
         "drivaer_ml_volume",
         "volume",
+        [
+            "+model.attention_type=GALE_FA",
+            "model.n_layers=20",
+            "model.state_mixing_mode=concat_project",
+        ],
     ),
-    (
-        "train_geotransolver_fa_highlift_surface",
+    _RecipeSpec(
+        "geotransolver_fa_highlift_surface",
+        "geotransolver_surface",
         "highlift_surface",
         "surface",
+        ["+model.attention_type=GALE_FA"],
     ),
-    (
-        "train_transolver_automotive_surface",
-        "drivaer_ml_surface",
-        "surface",
+    _RecipeSpec(
+        "transolver_surface", "transolver_surface", "drivaer_ml_surface", "surface", []
     ),
-    (
-        "train_transolver_automotive_volume",
-        "drivaer_ml_volume",
-        "volume",
+    _RecipeSpec(
+        "transolver_volume", "transolver_volume", "drivaer_ml_volume", "volume", []
     ),
-    (
-        "train_flare_automotive_surface",
-        "drivaer_ml_surface",
-        "surface",
+    _RecipeSpec("flare_surface", "flare_surface", "drivaer_ml_surface", "surface", []),
+    _RecipeSpec("flare_volume", "flare_volume", "drivaer_ml_volume", "volume", []),
+    _RecipeSpec(
+        "highlift_surface", "geotransolver_surface", "highlift_surface", "surface", []
     ),
-    (
-        "train_flare_automotive_volume",
-        "drivaer_ml_volume",
-        "volume",
-    ),
-    (
-        "train_highlift_surface",
-        "highlift_surface",
-        "surface",
-    ),
-    (
-        "train_highlift_volume",
+    _RecipeSpec(
+        "highlift_volume",
+        "geotransolver_volume_highlift",
         "highlift_volume",
         "volume",
+        [],
     ),
 ]
 
@@ -222,32 +277,31 @@ def _output_to_tensordict(
 
 
 @pytest.mark.parametrize(
-    "train_name,dataset_name,domain",
-    _TENSOR_INPUT_CONFIGS,
-    ids=[name for name, _, _ in _TENSOR_INPUT_CONFIGS],
+    "recipe_id,model,dataset,domain,overrides",
+    _TENSOR_INPUT_RECIPES,
+    ids=[r.recipe_id for r in _TENSOR_INPUT_RECIPES],
 )
 def test_tensor_input_config_synthetic_e2e(
-    train_name: str, dataset_name: str, domain: str
+    recipe_id: str,
+    model: str,
+    dataset: str,
+    domain: str,
+    overrides: list[str],
 ) -> None:
     """Build a synthetic DomainMesh, run the configured model end-to-end."""
-    train_path = _RECIPE_ROOT / "conf" / f"{train_name}.yaml"
-    dataset_path = _RECIPE_ROOT / "conf" / "dataset" / f"{dataset_name}.yaml"
-    train_cfg = OmegaConf.load(train_path)
-    dataset_cfg = OmegaConf.load(dataset_path)
+    train_cfg = _compose_train_cfg(model, dataset, overrides=overrides)
 
-    ### Both YAMLs must declare `input_type` and `output_type`; the
-    ### `tensors` value is what `_run_tensor_input_config` is parametrized
-    ### over.
+    ### The chosen model template must declare a tensor-input contract
+    ### for the test driver below to work (it builds tensor batches via
+    ### the collate's `input_type='tensors'` branch).
     assert OmegaConf.select(train_cfg, "input_type") == "tensors", (
-        f"{train_name} input_type is not 'tensors'"
+        f"{recipe_id}: {model=} has {input_type=}, not 'tensors'"
     )
     assert OmegaConf.select(train_cfg, "output_type") == "tensors", (
-        f"{train_name} output_type is not 'tensors'"
+        f"{recipe_id}: {model=} has {output_type=}, not 'tensors'"
     )
-    target_config = OmegaConf.to_container(dataset_cfg.targets, resolve=True)
-    assert isinstance(target_config, dict) and target_config, (
-        f"{dataset_name} has no targets:"
-    )
+
+    target_config = _load_dataset_targets(dataset)
 
     ### Build a synthetic post-pipeline DomainMesh.
     if domain == "surface":
@@ -270,13 +324,13 @@ def test_tensor_input_config_synthetic_e2e(
     ### is not importable in this environment (e.g., experimental gates).
     try:
         small_model_cfg = _shrink_model_cfg(train_cfg.model)
-        model = hydra.utils.instantiate(small_model_cfg, _convert_="partial")
+        model_inst = hydra.utils.instantiate(small_model_cfg, _convert_="partial")
     except (ImportError, ModuleNotFoundError) as e:
         pytest.skip(f"model class not importable: {e}")
 
     ### Forward and verify output shape matches the target channel count.
     with torch.no_grad():
-        output = model(**batch["forward_kwargs"])
+        output = model_inst(**batch["forward_kwargs"])
     pred_td = _output_to_tensordict(output, target_config)
 
     for name, ftype in target_config.items():
@@ -308,7 +362,7 @@ def test_tensor_input_config_synthetic_e2e(
 
 
 ### ---------------------------------------------------------------------------
-### GLOBE (mesh-input / mesh-output) configs
+### GLOBE (mesh-input / mesh-output) recipes
 ### ---------------------------------------------------------------------------
 
 
@@ -324,27 +378,23 @@ _GLOBE_SHRINK_OVERRIDES = {
 }
 
 
-_MESH_INPUT_CONFIGS: list[tuple[str, str, str]] = [
-    (
-        "train_globe_automotive_surface",
-        "drivaer_ml_surface",
-        "surface",
-    ),
-    (
-        "train_globe_automotive_volume",
-        "drivaer_ml_volume",
-        "volume",
-    ),
+_MESH_INPUT_RECIPES: list[tuple[str, str, str, str, list[str]]] = [
+    ("globe_surface", "globe_surface", "drivaer_ml_surface", "surface", []),
+    ("globe_volume", "globe_volume", "drivaer_ml_volume", "volume", []),
 ]
 
 
 @pytest.mark.parametrize(
-    "train_name,dataset_name,domain",
-    _MESH_INPUT_CONFIGS,
-    ids=[name for name, _, _ in _MESH_INPUT_CONFIGS],
+    "recipe_id,model,dataset,domain,overrides",
+    _MESH_INPUT_RECIPES,
+    ids=[r[0] for r in _MESH_INPUT_RECIPES],
 )
 def test_mesh_input_config_synthetic_e2e(
-    train_name: str, dataset_name: str, domain: str
+    recipe_id: str,
+    model: str,
+    dataset: str,
+    domain: str,
+    overrides: list[str],
 ) -> None:
     """Same shape as the tensor-input test but for GLOBE-style mesh I/O.
 
@@ -353,15 +403,12 @@ def test_mesh_input_config_synthetic_e2e(
     (no batch dim added), and confirms the output Mesh's ``point_data``
     contains every target field at the right shape.
     """
-    train_path = _RECIPE_ROOT / "conf" / f"{train_name}.yaml"
-    dataset_path = _RECIPE_ROOT / "conf" / "dataset" / f"{dataset_name}.yaml"
-    train_cfg = OmegaConf.load(train_path)
-    dataset_cfg = OmegaConf.load(dataset_path)
+    train_cfg = _compose_train_cfg(model, dataset, overrides=overrides)
 
     assert OmegaConf.select(train_cfg, "input_type") == "mesh"
     assert OmegaConf.select(train_cfg, "output_type") == "mesh"
-    target_config = OmegaConf.to_container(dataset_cfg.targets, resolve=True)
-    assert isinstance(target_config, dict) and target_config
+
+    target_config = _load_dataset_targets(dataset)
 
     if domain == "surface":
         ds = _surface_domain_mesh(target_config)
@@ -384,12 +431,12 @@ def test_mesh_input_config_synthetic_e2e(
         train_cfg.model, OmegaConf.create(_GLOBE_SHRINK_OVERRIDES)
     )
     try:
-        model = hydra.utils.instantiate(small_model_cfg, _convert_="partial")
+        model_inst = hydra.utils.instantiate(small_model_cfg, _convert_="partial")
     except (ImportError, ModuleNotFoundError) as e:
         pytest.skip(f"GLOBE not importable: {e}")
 
     with torch.no_grad():
-        output = model(**batch["forward_kwargs"])
+        output = model_inst(**batch["forward_kwargs"])
     pred_td = _output_to_tensordict(output, target_config)
 
     for name, ftype in target_config.items():

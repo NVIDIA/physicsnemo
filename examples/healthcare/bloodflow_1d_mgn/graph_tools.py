@@ -264,14 +264,14 @@ def dijkstra_algorithm(nodes, edges1, edges2, index):
     """
     nnodes = nodes.shape[0]
     tovisit = np.arange(0, nnodes)
-    dists = np.ones((nnodes)) * np.infty
+    dists = np.ones((nnodes)) * np.inf
     prevs = np.ones((nnodes)) * (-1)
     b_edges = np.array([edges1, edges2]).transpose()
 
     dists[index] = 0
     while len(tovisit) != 0:
         minindex = -1
-        minlen = np.infty
+        minlen = np.inf
         for iinde in range(len(tovisit)):
             if dists[tovisit[iinde]] < minlen:
                 minindex = iinde
@@ -291,7 +291,7 @@ def dijkstra_algorithm(nodes, edges1, edges2, index):
                 if alt < dists[neib]:
                     dists[neib] = alt
                     prevs[neib] = curindex
-    if np.max(dists) == np.infty:
+    if np.max(dists) == np.inf:
         plt.figure()
         ax = plt.axes(projection="3d")
         ax.scatter(nodes[:, 0], nodes[:, 1], nodes[:, 2], s=0.5, c="black")
@@ -471,7 +471,7 @@ def generate_graph(point_data, points, edges1, edges2, add_boundary_edges, rcr_v
     # id might be different if we used different centerlines for
     # solution and generation of the rcr file
     def find_closest_point_in_rcr_file(point):
-        min_d = np.infty
+        min_d = np.inf
         sid = -1
         for id in rcr_values:
             if type(rcr_values[id]) is dict and "point" in rcr_values[id]:

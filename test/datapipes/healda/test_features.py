@@ -20,15 +20,25 @@ implementation matches the reference Python implementation.  The CPU reference
 tests run regardless of triton availability.
 """
 
+import warnings
+
 import pytest
 import torch
 
-from physicsnemo.experimental.datapipes.healda.transforms import (
-    obs_features as standard,
-)
-from physicsnemo.experimental.datapipes.healda.transforms import (
-    obs_features_ext as extended,
-)
+from physicsnemo.core.warnings import ExperimentalFeatureWarning
+
+# This test module deliberately exercises experimental APIs, so the
+# accompanying ``ExperimentalFeatureWarning`` is informational rather than
+# actionable.  Suppress it locally at import time (a module-level
+# ``pytest.mark.filterwarnings`` would not apply during collection).
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", ExperimentalFeatureWarning)
+    from physicsnemo.experimental.datapipes.healda.transforms import (
+        obs_features as standard,
+    )
+    from physicsnemo.experimental.datapipes.healda.transforms import (
+        obs_features_ext as extended,
+    )
 
 
 def _make_obs_data(n, device, include_lat=False):

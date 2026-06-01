@@ -1,0 +1,17 @@
+# Same closure as ../transformer_models/requirements.txt (the GP +
+# GeoTransolver pretraining recipe whose checkpoints feed this example),
+# plus the AL-specific extras: gpytorch for the variational GP head,
+# pyvista for VTP point-cloud writing in infer_aero.py, and matplotlib
+# for the convergence summary plotter.
+hydra-core
+tabulate
+tensorboard
+termcolor
+torchinfo
+einops
+transformer_engine[pytorch]
+tensorstore
+zarr>=3.0
+gpytorch
+pyvista
+matplotlib
