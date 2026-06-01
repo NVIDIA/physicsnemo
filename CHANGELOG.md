@@ -77,6 +77,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   utilities. ``TokenSet`` and ``EncoderOutput`` are re-exported from
   the model package (``physicsnemo.experimental.models.aerojepa``) for
   convenience.
+- Adds the AeroJEPA SuperWing tutorial recipe under
+  `examples/cfd/external_aerodynamics/aerojepa`. End-to-end Hydra-driven
+  workflow: dataset download (Hugging Face), automatic split-by-geometry
+  manifest + per-channel normalization stats, JEPA training (recon +
+  latent MSE/cosine + SIGReg with linear warmups; AdamW + warmup-cosine
+  schedule; optional EMA), checkpointed inference with chunked decoding,
+  three-panel ``GT | Pred | |Error|`` field plots for Cp / Cf_tau /
+  Cf_z, and a CL/CD post-processing script that integrates pressure on
+  the surface mesh and emits a per-case CSV plus a parity scatter.
 - Adds xDeepONet to experimental models
   (`physicsnemo.experimental.models.xdeeponet.DeepONet`).  A single
   dimension-generic (2D/3D) DeepONet that accepts a spatial or MLP branch,
@@ -401,15 +410,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added support for Batched radius search, which enables Domino
   and GeoTransolver with local features and batch size > 1.
 - Added the underfill recipe.
-- Adds the AeroJEPA SuperWing tutorial recipe under
-  `examples/cfd/external_aerodynamics/aerojepa`. End-to-end Hydra-driven
-  workflow: dataset download (Hugging Face), automatic split-by-geometry
-  manifest + per-channel normalization stats, JEPA training (recon +
-  latent MSE/cosine + SIGReg with linear warmups; AdamW + warmup-cosine
-  schedule; optional EMA), checkpointed inference with chunked decoding,
-  three-panel ``GT | Pred | |Error|`` field plots for Cp / Cf_tau /
-  Cf_z, and a CL/CD post-processing script that integrates pressure on
-  the surface mesh and emits a per-case CSV plus a parity scatter.
 
 ### Changed
 
