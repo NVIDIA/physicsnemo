@@ -1,0 +1,111 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""LoRA configuration for ``physicsnemo.experimental.peft``.
+
+See the MDLS-347 implementation plan §3.1 for the design rationale.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Callable, Literal
+
+if TYPE_CHECKING:
+    import torch.nn as nn
+
+
+@dataclass
+class LoRAConfig:
+    """Configuration for applying LoRA to a model.
+
+    Exactly one of ``target_modules``, ``target_pattern`` or ``target_filter``
+    must be provided. They select layers by *fully-qualified* module name
+    (e.g. ``blocks.3.Attn.qkv_project``), NOT bare leaf names — leaf names are
+    not unique (plan §3.1).
+
+    Parameters
+    ----------
+    rank : int
+        Low-rank dimension ``r``. Must be positive.
+    alpha : float | None
+        LoRA scaling numerator; ``scaling = alpha / rank``. ``None`` defaults
+        ``alpha`` to ``rank`` (scaling 1.0).
+    target_modules : list[str] | None
+        Exact fully-qualified module names to wrap.
+    target_pattern : str | None
+        Regex (``re.search``) matched against fully-qualified module names.
+    target_filter : Callable[[str, nn.Module], bool] | None
+        Predicate ``(name, module) -> bool`` (most flexible selector).
+    lora_dropout : float
+        Dropout on the LoRA input path; ``0.0`` disables it. In ``[0.0, 1.0)``.
+    extras_trainable : list[str]
+        Additional fully-qualified module names to leave fully trainable
+        (not low-rank), e.g. a final head or norm.
+    wrap_mlp : bool
+        Convenience flag to also amend the feed-forward MLP. Not implemented in
+        this version (planned; plan §5.3.2 / §14) — setting it raises at apply.
+    init : {"default"}
+        Reserved for future init strategies (PiSSA / DoRA).
+    """
+
+    rank: int = 16
+    alpha: float | None = None
+    target_modules: list[str] | None = None
+    target_pattern: str | None = None
+    target_filter: Callable[[str, "nn.Module"], bool] | None = None
+    lora_dropout: float = 0.0
+    extras_trainable: list[str] = field(default_factory=list)
+    wrap_mlp: bool = False
+    init: Literal["default"] = "default"
+
+    def __post_init__(self) -> None:
+        selectors = {
+            "target_modules": self.target_modules,
+            "target_pattern": self.target_pattern,
+            "target_filter": self.target_filter,
+        }
+        set_selectors = [k for k, v in selectors.items() if v is not None]
+        if len(set_selectors) != 1:
+            raise ValueError(
+                "Exactly one of target_modules, target_pattern, target_filter "
+                f"must be set, got {len(set_selectors)} ({set_selectors})."
+            )
+        if self.target_modules is not None and len(self.target_modules) == 0:
+            raise ValueError("target_modules is an empty list — nothing to select.")
+        if self.target_pattern is not None and self.target_pattern == "":
+            raise ValueError("target_pattern is an empty string — nothing to select.")
+        if self.rank <= 0:
+            raise ValueError(f"rank must be a positive integer, got {self.rank}.")
+        if not (0.0 <= self.lora_dropout < 1.0):
+            raise ValueError(
+                f"lora_dropout must be in [0.0, 1.0), got {self.lora_dropout}."
+            )
+        if self.init != "default":
+            raise ValueError(
+                f"init={self.init!r} is reserved; only 'default' is supported "
+                "in this version."
+            )
+
+    @property
+    def effective_alpha(self) -> float:
+        """``alpha`` if set, else equal to ``rank`` (→ scaling 1.0)."""
+        return float(self.alpha) if self.alpha is not None else float(self.rank)
+
+    @property
+    def scaling(self) -> float:
+        """The LoRA scaling factor ``alpha / rank``."""
+        return self.effective_alpha / self.rank
