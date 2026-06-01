@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Lattice benchmark: regular grid geometry with heterogeneous material blocks
+# and an interior heat source Q. Material properties are mapped from
+# integer region labels via LatticeMaterialMapper.
+
+type: lattice
+data_root: ???                                      # set by user (HF download root)
+data_path: ${case.data_root}/lattice
+split_file: ${case.data_root}/splits/lattice_splits.json
+
+# Physics-loss configuration (lattice-specific)
+physics_loss_weight: 0.005
+
+# Embedding/material configuration
+include_q_in_embedding: true                        # lattice has a heat source
+embedding_dim_override: 4                           # sigma_a, sigma_s, sigma_t, Q

@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+epochs: 501
+gradient_accumulation_steps: 1
+seed: 6
+amp: true
+amp_dtype: bf16                                     # bf16 | fp16
+loss_metric: mse
+tensorboard: true
+
+optimizer:
+  type: muon                                        # adam | muon
+  weight_decay: 0.0
+  muon_momentum_beta: 0.95                          # Muon-only; AdamW (for 1D params) uses the shared learning_rate via match_rms_adamw
+
+learning_rate: 3.0e-5
+min_learning_rate: 1.0e-6
+warmup_epochs: 10
+max_grad_norm: 10.0                                 # gradient L2-norm clip applied each optimizer step
+
+pretrain_checkpoint: null
+resume_checkpoint: null
+
+# objective = mse_weight * regression_mse + physics_loss.weight * qoi_loss; region_weighted swaps regression_mse for the weighted variant.
+# Physics-informed loss (case-specific weight).
+use_physics_loss: true
+physics_loss:
+  weight: ${case.physics_loss_weight}
+  mse_weight: 1.0
+  warmup_epochs: 0
+  warmup_start_fraction: 0.0
+
+# Region-weighted MSE (heavier penalty on low absorption (void) points).
+use_region_weighted_loss: true
+region_weights:
+  void_weight: 10.0
+  material_weight: 1.0
+
+dataloader:
+  batch_size: 1                                     # only batch_size=1 is supported (point-cloud adapter)
+  prefetch_factor: 4
+  num_streams: 4
+  use_streams: true
+
+sampler:
+  shuffle: true
+  drop_last: false
+
+val:
+  dataloader:
+    batch_size: 1
+    prefetch_factor: 4
+    num_streams: 4
+    use_streams: true
+  sampler:
+    shuffle: false
+    drop_last: false
