@@ -58,7 +58,7 @@ def test_device_dtype_inherited_from_base():
 
 
 def test_merge_matches_explicit_transpose():
-    # Guards the (A @ B).T transpose (plan §5.1): the merged weight must equal
+    # Guards the (A @ B).T transpose: the merged weight must equal
     # W + scaling*(A @ B).T, and the base forward must then equal the pre-merge
     # LoRA forward.
     torch.manual_seed(0)
@@ -112,7 +112,7 @@ def test_te_layernorm_mlp_residual():
         wrappable_types,
     )
 
-    assert te.LayerNormMLP in wrappable_types()  # registered (§5.3.2)
+    assert te.LayerNormMLP in wrappable_types()  # registered wrapper type
 
     base = te.LayerNormMLP(hidden_size=64, ffn_hidden_size=256).cuda()
     lora = LoRA_te_LayerNormMLP(base, rank=4, alpha=4).cuda()

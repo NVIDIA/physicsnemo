@@ -16,11 +16,14 @@
 
 """LoRA layer wrappers and the type→wrapper registry.
 
-``LoRALayer`` is a small stateful mixin; ``LoRALinear`` / ``LoRA_te_Linear``
-combine it with a concrete base layer type. The module-level ``_LORA_WRAPPERS``
-registry is the single extension seam (plan §14.1): supporting a new
-architecture means registering one ``(layer_type, wrapper)`` pair, with no
-changes to targeting / apply / save / merge.
+A LoRA wrapper holds a frozen base layer and adds a trainable low-rank update
+``((x @ A) @ B) * scaling`` to its output. ``LoRALayer`` is a small stateful
+mixin (holds ``lora_A``/``lora_B`` and the math); ``LoRALinear`` /
+``LoRA_te_Linear`` combine it with a concrete base layer type.
+
+New layer types plug in through the module-level ``_LORA_WRAPPERS`` registry:
+register one ``(layer_type, wrapper)`` pair and the targeting / apply / save /
+merge machinery picks it up unchanged.
 """
 
 from __future__ import annotations
@@ -43,13 +46,14 @@ class LoRALayer:
     """Stateful mixin holding ``lora_A``, ``lora_B``, scaling, dropout and the
     enable flag. Combined with a base layer type by the wrapper subclasses.
 
-    Math (plan §5.1): with ``lora_A: (in, r)`` and ``lora_B: (r, out)`` the
-    forward adds ``((dropout(x) @ A) @ B) * scaling``. ``B`` is zero at init so
-    the delta is exactly zero (the wrapped forward equals the base forward).
+    Math: with ``lora_A: (in, r)`` and ``lora_B: (r, out)`` the forward adds
+    ``((dropout(x) @ A) @ B) * scaling``. ``B`` is zero at init so the delta is
+    exactly zero — the wrapped forward equals the base forward until trained.
     """
 
     # Whether merge_lora can fold this adapter into base weights. False for the
-    # fused te.LayerNormMLP residual wrapper (plan §5.3.2).
+    # fused te.LayerNormMLP residual wrapper (its update can't be folded into the
+    # fused weights).
     mergeable: bool = True
 
     def _make_lora_params(
@@ -61,8 +65,9 @@ class LoRALayer:
         alpha: float,
         dropout: float,
     ) -> None:
-        """Create lora_A/lora_B + dropout. ``ref_weight`` supplies device/dtype
-        (inherited so DDP doesn't hit the CPU/CUDA mismatch — plan §5.2)."""
+        """Create lora_A/lora_B + dropout. ``ref_weight`` supplies device/dtype,
+        inherited so the LoRA params live wherever the base weight does (avoids a
+        device mismatch under DDP)."""
         self.rank = rank
         self.alpha = alpha
         self.scaling = alpha / rank
@@ -107,7 +112,7 @@ class LoRALayer:
     @torch.no_grad()
     def merge_into_base(self) -> None:
         """Fold ``scaling * (lora_A @ lora_B).T`` into ``base_layer.weight``
-        (shape ``(out, in)``). Accumulate in fp32 then cast (plan §5.1).
+        (shape ``(out, in)``). Accumulate in fp32 then cast to the base dtype.
 
         Note the transpose: ``lora_A @ lora_B`` is ``(in, out)``; the weight
         delta is its transpose. ``B @ A`` would be non-conformant.
@@ -164,7 +169,7 @@ if _TE_AVAILABLE:
             return out
 
     class LoRA_te_LayerNormMLP(nn.Module, LoRALayer):
-        """Option-B residual LoRA for the *fused* ``te.LayerNormMLP`` (plan §5.3.2).
+        """Residual LoRA for the *fused* ``te.LayerNormMLP``.
 
         ``te.LayerNormMLP`` fuses ``LayerNorm → fc1 → act → fc2`` into one op with
         flat params (``layer_norm_weight``, ``fc1_weight``, ``fc2_weight``) — there
@@ -212,7 +217,7 @@ if _TE_AVAILABLE:
             )
 
 
-# --- type → wrapper registry (the §14.1 extension seam) --------------------
+# --- type → wrapper registry (the extension seam for new layer types) ------
 _LORA_WRAPPERS: dict[type, Callable[..., nn.Module]] = {nn.Linear: LoRALinear}
 if _TE_AVAILABLE:
     _LORA_WRAPPERS[te.Linear] = LoRA_te_Linear
@@ -224,8 +229,8 @@ def register_lora_wrapper(
 ) -> None:
     """Register a LoRA wrapper for ``layer_type``.
 
-    This is how new architectures (equivariant, tensor, MoE — plan §14) plug in
-    without touching the targeting / apply / merge core. ``wrapper_factory`` is
+    This is how new architectures (e.g. equivariant, tensor, or MoE layers) plug
+    in without touching the targeting / apply / merge core. ``wrapper_factory`` is
     called as ``wrapper_factory(base_layer, rank=, alpha=, dropout=)``.
     """
     _LORA_WRAPPERS[layer_type] = wrapper_factory

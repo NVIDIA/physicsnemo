@@ -59,10 +59,9 @@ data:
   geometry_sampling: 300_000
   broadcast_global_features: false
 
-# LoRA configuration. Default targets the GALE attention projections (the §13
-# "attention-only" pattern). Set `wrap_mlp: true` to also adapt the feed-forward
-# MLP ("coverage > rank"); under Transformer Engine that uses the fused
-# te.LayerNormMLP residual adapter (plan §5.3.2).
+# LoRA configuration. Default targets the GALE attention projections. Set
+# `wrap_mlp: true` to also adapt the feed-forward MLP; under Transformer Engine
+# that uses the fused te.LayerNormMLP residual adapter.
 peft:
   _target_: physicsnemo.experimental.peft.LoRAConfig
   rank: 16

@@ -16,14 +16,18 @@
 
 """Adapter save/load — a ``.mdlus`` ZIP archive holding only adapter state.
 
-Layout (plan §3.3 / §5.5)::
+Only the trainable adapter tensors are stored (not the frozen base), so an
+adapter is small and reloads onto any architecturally-compatible base. Layout::
 
     adapter.mdlus (zip)
     ├── adapter_config.json   # loadable LoRAConfig (rank, alpha, target_modules=wrapped, ...)
     ├── adapter_model.pt      # state_dict slice: lora_A/lora_B + extras_trainable params
     └── metadata.json         # {format_version, kind: "lora_adapter", versions, base_fingerprint, ...}
 
-Disambiguated from full ``.mdlus`` checkpoints by ``metadata.kind``.
+Adapter archives reuse the ``.mdlus`` extension but are disambiguated from full
+model checkpoints by ``metadata.kind == "lora_adapter"``. The ``base_fingerprint``
+(a hash of the base model's structure, not its weights) lets ``load_adapter``
+reject an incompatible base.
 """
 
 from __future__ import annotations

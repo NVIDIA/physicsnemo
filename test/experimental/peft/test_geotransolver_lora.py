@@ -16,9 +16,9 @@
 
 """Integration: apply_lora + wrap_mlp on a real TE GeoTransolver (GPU+TE).
 
-Validates the §13 inventory and the §5.3.2 fused-MLP path on the actual target
-model: attention te.Linear layers wrap as LoRA_te_Linear, and each block's
-fused te.LayerNormMLP wraps as the LoRA_te_LayerNormMLP residual.
+Validates targeting + the fused-MLP path on the actual target model: attention
+te.Linear layers wrap as LoRA_te_Linear, and each block's fused te.LayerNormMLP
+wraps as the LoRA_te_LayerNormMLP residual.
 """
 
 import pytest

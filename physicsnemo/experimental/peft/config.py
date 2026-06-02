@@ -16,7 +16,10 @@
 
 """LoRA configuration for ``physicsnemo.experimental.peft``.
 
-See the MDLS-347 implementation plan §3.1 for the design rationale.
+LoRA (Low-Rank Adaptation) fine-tunes a frozen model by adding a small trainable
+low-rank update ``B @ A`` beside selected linear layers. ``LoRAConfig`` declares
+*which* layers to adapt and the adapter's capacity (``rank``) and strength
+(``alpha``).
 """
 
 from __future__ import annotations
@@ -35,7 +38,7 @@ class LoRAConfig:
     Exactly one of ``target_modules``, ``target_pattern`` or ``target_filter``
     must be provided. They select layers by *fully-qualified* module name
     (e.g. ``blocks.3.Attn.qkv_project``), NOT bare leaf names — leaf names are
-    not unique (plan §3.1).
+    not unique (the same short name can appear in many submodules).
 
     Parameters
     ----------
@@ -56,8 +59,9 @@ class LoRAConfig:
         Additional fully-qualified module names to leave fully trainable
         (not low-rank), e.g. a final head or norm.
     wrap_mlp : bool
-        Convenience flag to also amend the feed-forward MLP. Not implemented in
-        this version (planned; plan §5.3.2 / §14) — setting it raises at apply.
+        Convenience flag to also adapt the transformer feed-forward MLP layers
+        (in addition to the layers picked by the selector above), using the
+        known feed-forward naming of PhysicsNeMo transformer blocks.
     init : {"default"}
         Reserved for future init strategies (PiSSA / DoRA).
     """

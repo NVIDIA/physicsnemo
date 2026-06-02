@@ -32,11 +32,11 @@ def merge_lora(model: nn.Module) -> nn.Module:
     the base weight and replace the wrapper with the (now-updated) underlying
     ``nn.Linear`` / ``te.Linear``. Returns ``model`` for chaining.
 
-    Non-mergeable adapters (the fused ``te.LayerNormMLP`` residual, which can't
-    be folded into the fused weights — plan §5.3.2) are **left in place** and a
-    warning is logged. After merging, mergeable wrappers are gone, so a model
-    with only those can be saved as a normal ``.mdlus`` and served with zero
-    adapter overhead. Idempotent — a second call is a no-op for merged layers.
+    Non-mergeable adapters (the fused ``te.LayerNormMLP`` residual, whose update
+    can't be folded into the fused weights) are **left in place** and a warning
+    is logged. After merging, mergeable wrappers are gone, so a model with only
+    those can be saved as a normal ``.mdlus`` and served with zero adapter
+    overhead. Idempotent — a second call is a no-op for merged layers.
     """
     # Snapshot names first: we mutate the tree (replace leaf wrappers) as we go.
     n_merged = 0

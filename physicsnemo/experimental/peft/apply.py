@@ -16,10 +16,12 @@
 
 """``apply_lora`` and ``resolve_targets`` — in-place LoRA injection.
 
-Mutates the model in place (plan §3.2): wraps matched ``nn.Linear`` /
-``te.Linear`` layers and freezes the base (except ``extras_trainable``).
-Returns an :class:`ApplyResult` report — the model itself is the mutated
-object.
+``apply_lora`` mutates the model in place: it replaces each matched
+``nn.Linear`` / ``te.Linear`` with a LoRA-wrapped version and freezes the base
+(except ``extras_trainable``). The model keeps its class and identity — only the
+matched leaf layers change — so existing checkpoint/inference tooling still
+works. Returns an :class:`ApplyResult` report; the mutated model is the input
+object itself.
 """
 
 from __future__ import annotations
@@ -65,10 +67,10 @@ def _build_matcher(config: LoRAConfig) -> Callable[[str, nn.Module], bool]:
 
 
 # Default feed-forward MLP target patterns for known PhysicsNeMo transformer
-# blocks (GALE_block / TransolverBlock). Regex over fully-qualified names — NOT
-# a class-name cookbook (plan §5.4); editable by users for custom architectures.
-# The registry decides whether each match is the fused te.LayerNormMLP or plain
-# Linears, and non-Linear matches (norms, activations) are filtered out by type.
+# blocks (e.g. GALE_block / TransolverBlock). Regex over fully-qualified names;
+# editable by users for custom architectures. The registry decides whether each
+# match is the fused te.LayerNormMLP or plain Linears, and non-Linear matches
+# (norms, activations) are filtered out by type.
 _MLP_TARGET_PATTERNS: list[str] = [
     r"\.ln_mlp1$",  # GALE_block FFN under TE: fused te.LayerNormMLP
     r"\.ln_mlp1\.\d+\.layers\.\d+$",  # GALE_block FFN non-TE: Sequential(LayerNorm, Mlp(layers=...))
@@ -153,7 +155,8 @@ def apply_lora(model: nn.Module, config: LoRAConfig) -> ApplyResult:
             "Start from a fresh base model (or call merge_lora first)."
         )
 
-    # Fingerprint the PRISTINE base before any mutation (plan §5.5).
+    # Fingerprint the PRISTINE base before any mutation — once layers are
+    # wrapped, the original structure can no longer be recovered.
     fingerprint = compute_base_fingerprint(model)
 
     targets = resolve_targets(model, config)
@@ -175,8 +178,8 @@ def apply_lora(model: nn.Module, config: LoRAConfig) -> ApplyResult:
         setattr(parent, child, wrapped)
 
     _freeze_base_except_extras(model, config.extras_trainable)
-    # Stash for save_adapter so it need not re-derive from the now-mutated
-    # model: the pristine-base fingerprint (plan §5.5) and the config.
+    # Stash the pristine-base fingerprint and the config so save_adapter need not
+    # re-derive them from the now-mutated model.
     model._lora_base_fingerprint = fingerprint
     model._lora_config = config
 

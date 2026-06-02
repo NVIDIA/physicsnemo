@@ -18,7 +18,7 @@
 
 A standalone entry point that lives alongside ``train.py`` and reuses this
 example's configs (``conf/``) and data pipeline — without modifying
-``train.py``. Workflow (see ``FINETUNE_LORA.md``):
+``train.py``. Workflow (see the README in this directory for full details):
 
   1. Build the model and load a PRETRAINED base checkpoint (``init_from``).
   2. Inject LoRA adapters and freeze the base (``apply_lora``).
@@ -151,8 +151,8 @@ def main(cfg: DictConfig) -> None:
         )
     base = model.module if distributed else model
 
-    # Optimizer: LoRA (+extras) → AdamW. NOT Muon (Newton-Schulz is degenerate
-    # on rank-r factors; see plan §3.5). The base config's optimizer is AdamW.
+    # Optimizer: LoRA (+extras) → AdamW. NOT Muon (Newton-Schulz orthogonalization
+    # is degenerate on low-rank factors). The base config's optimizer is AdamW.
     optimizer = hydra.utils.instantiate(cfg.training.optimizer, params=trainable)
 
     # Data (reuses this example's library datapipe + normalization factors).

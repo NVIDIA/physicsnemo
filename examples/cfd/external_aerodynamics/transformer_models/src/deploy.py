@@ -21,7 +21,7 @@ Two modes:
     serve time (one base + N adapters, swappable per request).
   * Merge: fold the adapter into the base for zero inference overhead and save
     a plain ``.mdlus``. (Fused ``te.LayerNormMLP`` residual adapters are not
-    mergeable and are left in place — see plan §5.3.2.)
+    mergeable and are left in place; deploy those via adapter-swap instead.)
 
 Run from the example root::
 

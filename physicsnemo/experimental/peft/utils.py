@@ -32,8 +32,8 @@ def compute_base_fingerprint(model: nn.Module) -> str:
     """Stable short hash of module class names + state_dict keys/shapes.
 
     MUST be computed on the pristine base, *before* ``apply_lora`` wraps
-    anything (after wrapping, keys gain ``base_layer.`` prefixes and the
-    pristine set is unrecoverable — plan §5.5).
+    anything: after wrapping, keys gain ``base_layer.`` prefixes and the
+    original structure can no longer be recovered.
     """
     h = hashlib.sha256()
     for name, module in model.named_modules():
@@ -46,8 +46,8 @@ def compute_base_fingerprint(model: nn.Module) -> str:
 def split_params_for_optimizer(model: nn.Module) -> dict[str, list]:
     """Split parameters into ``{'lora', 'extras', 'frozen'}``.
 
-    Route ``lora + extras`` to AdamW — NOT to Muon: Newton-Schulz
-    orthogonalization is degenerate on rank-r factors (plan §3.5). ``frozen``
+    Route ``lora + extras`` to AdamW — NOT to optimizers like Muon whose
+    Newton-Schulz orthogonalization is degenerate on low-rank factors. ``frozen``
     is returned for reporting only.
     """
     lora: list = []
@@ -83,7 +83,7 @@ def set_adapter_enabled(model: nn.Module, enabled: bool) -> None:
     """Enable/disable all LoRA deltas in ``model``.
 
     Lets you run a base-only forward (e.g. for an adapter-vs-base comparison)
-    without merging or reloading (plan §3.2).
+    without merging or reloading.
     """
     for module in model.modules():
         if is_lora_layer(module):
