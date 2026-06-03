@@ -59,9 +59,14 @@ class LoRAConfig:
         Additional fully-qualified module names to leave fully trainable
         (not low-rank), e.g. a final head or norm.
     wrap_mlp : bool
-        Convenience flag to also adapt the transformer feed-forward MLP layers
-        (in addition to the layers picked by the selector above), using the
-        known feed-forward naming of PhysicsNeMo transformer blocks.
+        Convenience flag to *also* adapt the transformer **feed-forward (FFN)**
+        sub-block — the position-wise ``Linear -> activation -> Linear`` that
+        follows attention in a transformer block (NOT arbitrary or standalone
+        MLPs, and not the model as a whole). In PhysicsNeMo transformer blocks
+        this is the ``ln_mlp1`` module: under Transformer Engine the fused
+        ``te.LayerNormMLP``, otherwise a ``Sequential(LayerNorm, Mlp)``. Matched
+        by the known feed-forward naming of those blocks, so it is a no-op on
+        models without that structure. Additive to the selector above.
     init : {"default"}
         Reserved for future init strategies (PiSSA / DoRA).
     """

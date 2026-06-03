@@ -21,7 +21,6 @@ import torch
 import torch.nn as nn
 
 from physicsnemo.experimental.peft.lora import LoRALinear
-
 from test.conftest import requires_module  # noqa: E402
 
 

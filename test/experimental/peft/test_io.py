@@ -120,7 +120,9 @@ def test_kind_check_rejects_non_adapter(tmp_path):
                 }
             ),
         )
-        z.writestr("metadata.json", json.dumps({"kind": "model", "base_fingerprint": ""}))
+        z.writestr(
+            "metadata.json", json.dumps({"kind": "model", "base_fingerprint": ""})
+        )
         b = io.BytesIO()
         torch.save({}, b)
         z.writestr("adapter_model.pt", b.getvalue())

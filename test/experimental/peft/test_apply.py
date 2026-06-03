@@ -132,7 +132,8 @@ def test_extras_trainable_does_not_unfreeze_nested_lora_base():
     # not re-enable grad on their frozen base weights (would bloat the adapter).
     m = _model()
     apply_lora(
-        m, LoRAConfig(rank=4, target_pattern=_ATTN_PATTERN, extras_trainable=["blocks.0"])
+        m,
+        LoRAConfig(rank=4, target_pattern=_ATTN_PATTERN, extras_trainable=["blocks.0"]),
     )
     blk = m.blocks[0]
     assert not blk.Attn.qkv_project.base_layer.weight.requires_grad  # stays frozen
@@ -179,9 +180,7 @@ def test_wrap_mlp_includes_ffn_linears():
     m = _model()
     # attention pattern alone → 2 per block; + wrap_mlp adds the FFN Linears
     # (ln_mlp1.1.layers.0 and .2 — the GELU at .1 is filtered out by type).
-    res = apply_lora(
-        m, LoRAConfig(rank=4, target_pattern=_ATTN_PATTERN, wrap_mlp=True)
-    )
+    res = apply_lora(m, LoRAConfig(rank=4, target_pattern=_ATTN_PATTERN, wrap_mlp=True))
     assert res.n_wrapped == 3 * (2 + 2)  # (qkv, out_linear) + (ffn fc1, fc2) per block
     assert is_lora_layer(m.blocks[0].ln_mlp1[1].layers[0])
     assert is_lora_layer(m.blocks[0].ln_mlp1[1].layers[2])

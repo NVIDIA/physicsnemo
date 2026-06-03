@@ -17,7 +17,7 @@ This is a companion to `train.py`: same model, same data pipeline, same
 
 ## Workflow
 
-```
+```text
                 src/finetune.py                      src/deploy.py
  base.mdlus ───────────────────▶ adapter.lora ────────────────────▶ serve (swap)
 (pretrained)  apply_lora + train  (~hundreds KB)   load_adapter        or merge_lora
@@ -25,12 +25,15 @@ This is a companion to `train.py`: same model, same data pipeline, same
 ```
 
 1. **Fine-tune** (run from the example root, same as `train.py`):
+
    ```bash
    python src/finetune.py init_from=/path/to/base_geotransolver.mdlus
    # multi-GPU (single node):
    torchrun --nproc_per_node=8 src/finetune.py init_from=/path/to/base.mdlus
    ```
+
 2. **Deploy** — adapter-swap, or merge for zero overhead:
+
    ```bash
    python src/deploy.py init_from=/path/to/base.mdlus            # adapter-swap
    python src/deploy.py init_from=/path/to/base.mdlus merge=true # fold in → *_merged.mdlus

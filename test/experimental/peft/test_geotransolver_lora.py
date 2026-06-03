@@ -53,9 +53,19 @@ def test_geotransolver_attention_and_wrap_mlp():
 
     torch.manual_seed(0)
     model = GeoTransolver(
-        functional_dim=6, out_dim=4, geometry_dim=3, global_dim=3,
-        n_layers=2, n_hidden=64, dropout=0.0, n_head=8, act="gelu",
-        mlp_ratio=4, slice_num=16, use_te=True, plus=False,
+        functional_dim=6,
+        out_dim=4,
+        geometry_dim=3,
+        global_dim=3,
+        n_layers=2,
+        n_hidden=64,
+        dropout=0.0,
+        n_head=8,
+        act="gelu",
+        mlp_ratio=4,
+        slice_num=16,
+        use_te=True,
+        plus=False,
         include_local_features=False,
     ).cuda()
 
