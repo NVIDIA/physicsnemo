@@ -48,7 +48,7 @@ def main(cfg: DictConfig) -> None:
     if cfg.get("init_from"):
         model.load(str(cfg.init_from))
 
-    adapter_path = f"{cfg.output_dir}/{cfg.run_id}.mdlus"
+    adapter_path = f"{cfg.output_dir}/{cfg.run_id}.lora"
     # load_adapter verifies kind + base fingerprint, re-applies LoRA, loads weights.
     load_adapter(model, adapter_path)
     logger.info("loaded adapter %s onto base", adapter_path)

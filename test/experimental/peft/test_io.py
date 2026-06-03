@@ -58,7 +58,7 @@ def test_save_load_roundtrip(tmp_path):
     m = _trained_net()
     x = torch.randn(3, 16)
     trained_out = m(x).detach().clone()
-    p = tmp_path / "adapter.mdlus"
+    p = tmp_path / "adapter.lora"
     save_adapter(m, p)
 
     # Fresh base with identical init (same seed) → load should reproduce output.
@@ -72,7 +72,7 @@ def test_save_load_roundtrip(tmp_path):
 
 def test_archive_structure(tmp_path):
     m = _trained_net()
-    p = tmp_path / "adapter.mdlus"
+    p = tmp_path / "adapter.lora"
     save_adapter(m, p)
     with zipfile.ZipFile(p) as z:
         names = set(z.namelist())
@@ -87,13 +87,20 @@ def test_archive_structure(tmp_path):
 def test_save_requires_apply_first(tmp_path):
     m = _Net()  # never went through apply_lora
     with pytest.raises(ValueError, match="no stashed LoRA config"):
-        save_adapter(m, tmp_path / "x.mdlus")
+        save_adapter(m, tmp_path / "x.lora")
 
 
-def test_save_requires_mdlus_extension(tmp_path):
+def test_save_accepts_any_extension(tmp_path):
+    # The extension is not enforced — an arbitrary one still round-trips.
     m = _trained_net()
-    with pytest.raises(ValueError, match=r"\.mdlus"):
-        save_adapter(m, tmp_path / "adapter.zip")
+    x = torch.randn(3, 16)
+    trained_out = m(x).detach().clone()
+    p = tmp_path / "adapter.bin"  # arbitrary, neither .lora nor .mdlus
+    save_adapter(m, p)
+    torch.manual_seed(0)
+    fresh = _Net()
+    load_adapter(fresh, p)
+    assert torch.allclose(fresh(x), trained_out, atol=1e-5)
 
 
 def test_kind_check_rejects_non_adapter(tmp_path):
@@ -125,7 +132,7 @@ def test_kind_check_rejects_non_adapter(tmp_path):
 
 def test_fingerprint_mismatch_raises(tmp_path):
     m = _trained_net(d=16)
-    p = tmp_path / "adapter.mdlus"
+    p = tmp_path / "adapter.lora"
     save_adapter(m, p)
     # Different architecture → different fingerprint → strict load must refuse
     # before touching weights.

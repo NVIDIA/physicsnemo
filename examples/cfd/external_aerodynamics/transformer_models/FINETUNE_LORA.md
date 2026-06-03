@@ -19,7 +19,7 @@ This is a companion to `train.py`: same model, same data pipeline, same
 
 ```
                 src/finetune.py                      src/deploy.py
- base.mdlus ───────────────────▶ adapter.mdlus ───────────────────▶ serve (swap)
+ base.mdlus ───────────────────▶ adapter.lora ────────────────────▶ serve (swap)
 (pretrained)  apply_lora + train  (~hundreds KB)   load_adapter        or merge_lora
               only the adapters                                      → merged .mdlus
 ```
@@ -27,10 +27,8 @@ This is a companion to `train.py`: same model, same data pipeline, same
 1. **Fine-tune** (run from the example root, same as `train.py`):
    ```bash
    python src/finetune.py init_from=/path/to/base_geotransolver.mdlus
-   # multi-GPU:
+   # multi-GPU (single node):
    torchrun --nproc_per_node=8 src/finetune.py init_from=/path/to/base.mdlus
-   # SLURM:
-   INIT_FROM=/path/to/base.mdlus sbatch launch_finetune_lora.sub
    ```
 2. **Deploy** — adapter-swap, or merge for zero overhead:
    ```bash
@@ -55,8 +53,7 @@ This is a companion to `train.py`: same model, same data pipeline, same
   rank-`r` factors) — via `split_params_for_optimizer`.
 - DDP uses `find_unused_parameters=True` (frozen base params get no grad).
 - Multi-GPU shards the dataset per rank via `DistributedSampler` + `set_indices`
-  (same as `train.py`); launch with `srun` (one rank/GPU) via
-  `launch_finetune_lora.sub`, or `torchrun --nproc_per_node=<N>` for a single node.
+  (same as `train.py`); launch with `torchrun --nproc_per_node=<N>`.
 - **float32 only**: the minimal recipe does not wire the mixed/fp8 path (autocast,
   fp8 padding, GradScaler); it errors if `precision != float32`. Use `train.py`
   for fp8.

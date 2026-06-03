@@ -175,7 +175,7 @@ def main(cfg: DictConfig) -> None:
 
     out_dir = Path(cfg.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    adapter_path = out_dir / f"{cfg.run_id}.mdlus"
+    adapter_path = out_dir / f"{cfg.run_id}.lora"
     save_interval = int(cfg.training.get("save_interval", 10))
 
     for epoch in range(int(cfg.training.num_epochs)):

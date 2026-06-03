@@ -14,20 +14,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Adapter save/load — a ``.mdlus`` ZIP archive holding only adapter state.
+"""Adapter save/load — a plain ZIP archive holding only adapter state.
 
 Only the trainable adapter tensors are stored (not the frozen base), so an
-adapter is small and reloads onto any architecturally-compatible base. Layout::
+adapter is small and reloads onto any architecturally-compatible base. Works on
+any ``torch.nn.Module`` — no dependency on ``physicsnemo.Module`` or the
+``.mdlus`` checkpoint format. Layout::
 
-    adapter.mdlus (zip)
+    adapter (zip; any file extension)
     ├── adapter_config.json   # loadable LoRAConfig (rank, alpha, target_modules=wrapped, ...)
     ├── adapter_model.pt      # state_dict slice: lora_A/lora_B + extras_trainable params
     └── metadata.json         # {format_version, kind: "lora_adapter", versions, base_fingerprint, ...}
 
-Adapter archives reuse the ``.mdlus`` extension but are disambiguated from full
-model checkpoints by ``metadata.kind == "lora_adapter"``. The ``base_fingerprint``
-(a hash of the base model's structure, not its weights) lets ``load_adapter``
-reject an incompatible base.
+The file extension is unconstrained, but a dedicated one such as ``.lora`` is
+recommended: this archive is read only by :func:`load_adapter`. Naming it
+``.pt`` would wrongly imply ``torch.load`` and ``.mdlus`` would wrongly imply
+``physicsnemo.Module.load`` — neither can read it (they expect different
+contents and error out). The ``metadata.kind`` field marks it as an adapter, and
+``base_fingerprint`` (a hash of the base model's structure, not its weights)
+lets ``load_adapter`` reject an incompatible base.
 """
 
 from __future__ import annotations
@@ -69,17 +74,26 @@ def _wrapped_module_names(model: nn.Module) -> list[str]:
 
 
 def save_adapter(model: nn.Module, path: str | Path) -> None:
-    """Save adapter-only state for a LoRA-wrapped ``model`` to ``path`` (a
-    ``.mdlus`` archive). The model must have been processed by ``apply_lora``.
+    """Save adapter-only state for a LoRA-wrapped ``model`` to ``path``.
 
-    The stored config uses an explicit ``target_modules`` list of the
-    actually-wrapped names, so it reloads identically regardless of how the
-    layers were originally selected (including a non-serializable
-    ``target_filter``).
+    The archive is a plain multi-file ZIP (contents below) — load it with
+    :func:`load_adapter`, never ``torch.load`` or ``physicsnemo.Module.load``.
+    Any file extension is accepted, but a dedicated one such as ``.lora`` is
+    recommended: ``.pt`` implies ``torch.load`` and ``.mdlus`` implies
+    ``Module.load``, and neither can read this archive. The model must have been
+    processed by ``apply_lora``.
+
+    Archive contents:
+      - ``adapter_config.json`` — the ``LoRAConfig`` (rank, alpha, dropout, and an
+        explicit ``target_modules`` list of the actually-wrapped names, so it
+        reloads identically regardless of the original selector, including a
+        non-serializable ``target_filter``).
+      - ``adapter_model.pt`` — the trainable tensors only: ``lora_A``/``lora_B``
+        and any ``extras_trainable`` params (the frozen base is NOT stored).
+      - ``metadata.json`` — ``kind="lora_adapter"``, format/library versions, the
+        base fingerprint, and a summary (n_wrapped, rank, alpha, timestamp).
     """
     path = str(path)
-    if not path.endswith(".mdlus"):
-        raise ValueError(f"adapter path must end with .mdlus, got {path!r}")
 
     config = getattr(model, "_lora_config", None)
     if config is None:
