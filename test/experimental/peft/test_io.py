@@ -141,3 +141,20 @@ def test_fingerprint_mismatch_raises(tmp_path):
     other = _Net(d=8)
     with pytest.raises(ValueError, match="fingerprint"):
         load_adapter(other, p)
+
+
+def test_save_creates_missing_parent_dirs(tmp_path):
+    # A run_id-style nested path whose parent dirs do not exist yet must be
+    # created by save_adapter (e.g. run_id="geotransolver/surface/...").
+    m = _trained_net()
+    x = torch.randn(3, 16)
+    trained_out = m(x).detach().clone()
+    p = (
+        tmp_path / "runs" / "geotransolver" / "surface" / "run.lora"
+    )  # nonexistent parents
+    save_adapter(m, p)
+    assert p.exists()
+    torch.manual_seed(0)
+    fresh = _Net()
+    load_adapter(fresh, p)
+    assert torch.allclose(fresh(x), trained_out, atol=1e-5)

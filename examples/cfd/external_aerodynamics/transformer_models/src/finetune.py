@@ -24,7 +24,7 @@ example's configs (``conf/``) and data pipeline — without modifying
   2. Inject LoRA adapters and freeze the base (``apply_lora``).
   3. Train ONLY the adapters on a (small) target dataset, routing the LoRA
      parameters to AdamW via ``split_params_for_optimizer`` (never Muon).
-  4. Save a small ``.mdlus`` adapter (``save_adapter``).
+  4. Save a small ``.lora`` adapter (``save_adapter``).
 
 Run from the example root (same convention as ``train.py``)::
 

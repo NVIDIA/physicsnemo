@@ -81,7 +81,7 @@ def test_peft_train_save_load_merge_roundtrip(tmp_path):
     trained_out = model(x).detach().clone()
 
     # Save the adapter, reload into a fresh (identically-initialized) base.
-    adapter = tmp_path / "adapter.mdlus"
+    adapter = tmp_path / "adapter.lora"
     save_adapter(model, adapter)
     torch.manual_seed(0)
     fresh = _Net()

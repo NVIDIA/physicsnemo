@@ -130,6 +130,10 @@ def save_adapter(model: nn.Module, path: str | Path) -> None:
     state_buffer = io.BytesIO()
     torch.save(_adapter_state_dict(model), state_buffer)
 
+    parent = Path(path).parent
+    if str(parent) not in ("", "."):
+        parent.mkdir(parents=True, exist_ok=True)
+
     with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as archive:
         archive.writestr("adapter_model.pt", state_buffer.getvalue())
         archive.writestr("adapter_config.json", json.dumps(adapter_config, indent=2))
