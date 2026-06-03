@@ -57,8 +57,9 @@ consistency_detach_transolver: false
 al_rounds: 5                   # Number of query-train-evaluate rounds
 samples_per_round: 50          # Samples selected per round
 test_samples_per_class: 100    # Held out for fixed test set (rest goes to pool)
-acquisition: "joint_uq"        # "joint_uq" or "random"
+acquisition: "joint_uq"        # "joint_uq" | "random" | "class_balanced_random" | "latent_novelty"
 random_seed: 42                # Seed for random baseline (used when acquisition=random)
+latent_novelty_knn_k: 10       # k for OODGuard kNN scoring (only used when acquisition=latent_novelty); auto-clamped to labeled-pool size
 
 # --- Fine-tuning schedule ---
 fine_tune_epochs: 20           # Epochs per AL round

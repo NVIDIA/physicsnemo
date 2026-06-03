@@ -32,6 +32,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   protocols and `physicsnemo.experimental.uq.VariationalGPHead`, with a
   layered structure (generic AL driver / GP-UQ recipe / aero adapter)
   designed for reuse on other UQ-based regression problems.
+- Adds `LatentNoveltyQueryStrategy` to the active-learning aero recipe,
+  a third acquisition strategy that ranks unlabeled samples by their
+  average kNN cosine distance in the encoder's learned geometry latent
+  — reusing the same `OODGuard`
+  (`physicsnemo.experimental.guardrails.embedded`) that flags
+  out-of-distribution inputs at inference time. The guard is calibrated
+  on the currently labeled set each round; round 1 falls back to
+  class-balanced random because the calibration buffer is empty. New
+  public `OODGuard.score_geometry()` method exposes the raw per-sample
+  geometry-latent kNN distance as a continuous score for downstream
+  consumers (e.g. AL acquisition) without the boolean thresholding /
+  warning emission of `OODGuard.check()`.
 
 ### Changed
 
