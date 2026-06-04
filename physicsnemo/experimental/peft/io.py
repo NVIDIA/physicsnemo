@@ -103,6 +103,13 @@ def save_adapter(model: nn.Module, path: str | Path) -> None:
         )
     fingerprint = getattr(model, "_lora_base_fingerprint", "")
     wrapped = _wrapped_module_names(model)
+    if not wrapped:
+        raise ValueError(
+            "no LoRA layers found in model; cannot save an adapter. If "
+            "merge_lora was already called, the adapter has been folded into "
+            "the base weights — save a full model checkpoint (e.g. model.save() "
+            "for a physicsnemo.Module) instead."
+        )
 
     adapter_config = {
         "rank": config.rank,
@@ -198,7 +205,10 @@ def load_adapter(model: nn.Module, path: str | Path, strict: bool = True) -> Non
     )
     apply_lora(model, config)
 
-    state = torch.load(io.BytesIO(state_bytes), map_location="cpu")
+    # weights_only=True restricts unpickling to safe tensor types: adapters may
+    # be distributed independently of the base model (community / NIM), so a
+    # malicious adapter_model.pt must not be able to execute arbitrary code.
+    state = torch.load(io.BytesIO(state_bytes), map_location="cpu", weights_only=True)
     incompatible = model.load_state_dict(state, strict=False)
     # load_state_dict(strict=False) reports the (expected) frozen base keys as
     # "missing"; what must be empty is "unexpected" — adapter keys not in model.

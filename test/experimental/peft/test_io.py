@@ -90,6 +90,18 @@ def test_save_requires_apply_first(tmp_path):
         save_adapter(m, tmp_path / "x.lora")
 
 
+def test_save_after_merge_raises(tmp_path):
+    # merge_lora folds the adapter into the base, leaving no LoRA layers — saving
+    # an adapter now would write a corrupt target_modules=[] archive, so it must
+    # raise a clear error instead.
+    from physicsnemo.experimental.peft import merge_lora
+
+    m = _trained_net()
+    merge_lora(m)  # mergeable LoRA layers folded in; none remain
+    with pytest.raises(ValueError, match="no LoRA layers found"):
+        save_adapter(m, tmp_path / "merged.lora")
+
+
 def test_save_accepts_any_extension(tmp_path):
     # The extension is not enforced — an arbitrary one still round-trips.
     m = _trained_net()
@@ -158,3 +170,41 @@ def test_save_creates_missing_parent_dirs(tmp_path):
     fresh = _Net()
     load_adapter(fresh, p)
     assert torch.allclose(fresh(x), trained_out, atol=1e-5)
+
+
+class _NotATensor:
+    """Module-level (so it is picklable by reference) non-tensor object used to
+    verify that load_adapter refuses unsafe pickles."""
+
+
+def test_load_rejects_unsafe_pickle(tmp_path):
+    # A malicious adapter_model.pt with a non-tensor pickle payload must be
+    # rejected by weights_only=True (no arbitrary code execution on load).
+    # The message-match ensures the failure is the weights_only guard, not a
+    # later unexpected-keys error — so removing weights_only=True fails this test.
+    p = tmp_path / "evil.lora"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr(
+            "adapter_config.json",
+            json.dumps(
+                {
+                    "rank": 4,
+                    "alpha": 4.0,
+                    "lora_dropout": 0.0,
+                    "target_modules": ["fc1"],
+                    "extras_trainable": [],
+                    "init": "default",
+                }
+            ),
+        )
+        z.writestr(
+            "metadata.json",
+            json.dumps({"kind": "lora_adapter", "base_fingerprint": ""}),
+        )
+        b = io.BytesIO()
+        torch.save({"x": _NotATensor()}, b)  # non-tensor object
+        z.writestr("adapter_model.pt", b.getvalue())
+
+    m = _Net()
+    with pytest.raises(Exception, match=r"(?i)weights.?only|unsupported global"):
+        load_adapter(m, p)
