@@ -260,7 +260,7 @@ class OneHotEmbedding(Module):
         return torch.clamp(1 - torch.abs(ind - self.indices), min=0)
 
 
-class FourierPositionalEmbedding(torch.nn.Module):
+class FourierPositionalEmbedding(Module):
     r"""Deterministic axis-wise Fourier positional embedding (NeRF-style).
 
     Lifts each input coordinate into a higher-dimensional feature by
@@ -352,9 +352,10 @@ class FourierPositionalEmbedding(torch.nn.Module):
                 raise ValueError("freqs must contain at least one frequency.")
         self.in_dim = int(in_dim)
         self.include_input = bool(include_input)
-        # Non-persistent: deterministic and rebuilt in __init__, so it neither
-        # bloats checkpoints nor breaks loading when the schedule changes.
-        self.register_buffer("freqs", freqs, persistent=False)
+        # Persistent so an explicitly supplied ``freqs`` schedule survives a
+        # state_dict round-trip; it cannot always be regenerated from the
+        # constructor arguments.
+        self.register_buffer("freqs", freqs)
 
     @property
     def num_bands(self) -> int:
@@ -369,8 +370,13 @@ class FourierPositionalEmbedding(torch.nn.Module):
 
     def forward(self, x: Float[Tensor, "... in_dim"]) -> Float[Tensor, "... out_dim"]:
         r"""Encode coordinates ``x``; see the class docstring for shapes."""
-        if x.shape[-1] != self.in_dim:
-            raise ValueError(f"Expected last dim {self.in_dim}, got {x.shape[-1]}")
+        # Skip validation when running under torch.compile (MOD-005).
+        if not torch.compiler.is_compiling():
+            if x.shape[-1] != self.in_dim:
+                raise ValueError(
+                    f"Expected tensor with last dim {self.in_dim}, "
+                    f"got tensor of shape {tuple(x.shape)}"
+                )
         # (..., D, F): each coordinate scaled by every frequency.
         scaled = x.unsqueeze(-1) * self.freqs.to(x.dtype)
         # Axis-major layout: per axis, num_bands sines then num_bands cosines.

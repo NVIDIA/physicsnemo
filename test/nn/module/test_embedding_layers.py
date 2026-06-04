@@ -520,7 +520,32 @@ def test_fourier_positional_embedding_validation(device):
         FourierPositionalEmbedding(in_dim=3, num_bands=0)
 
 
-def test_fourier_positional_embedding_state_dict_no_freqs(device):
-    # freqs is a non-persistent buffer; it must not appear in the state dict.
-    emb = FourierPositionalEmbedding(in_dim=3, num_bands=4).to(device)
-    assert "freqs" not in emb.state_dict()
+def test_fourier_positional_embedding_state_dict_roundtrip(device):
+    # freqs is a persistent buffer, so a custom schedule survives save/load.
+    emb = FourierPositionalEmbedding(
+        in_dim=3, freqs=torch.tensor([0.7, 1.3, 2.9]), include_input=True
+    ).to(device)
+    assert "freqs" in emb.state_dict()
+    # Fresh module with the same shape but different freqs values.
+    fresh = FourierPositionalEmbedding(
+        in_dim=3, freqs=torch.zeros(3), include_input=True
+    ).to(device)
+    fresh.load_state_dict(emb.state_dict())
+    torch.testing.assert_close(fresh.freqs, emb.freqs)
+    x = torch.randn(6, 3, device=device)
+    torch.testing.assert_close(fresh(x), emb(x))
+
+
+def test_fourier_positional_embedding_forward_accuracy(device):
+    # MOD-008b: compare the forward output against committed reference data.
+    model = FourierPositionalEmbedding(in_dim=3, num_bands=4).to(device)
+    model.eval()
+    # Deterministic, reproducible input (the layer has no random parameters).
+    x = torch.linspace(-1.0, 1.0, steps=24, device=device).reshape(8, 3)
+    assert validate_forward_accuracy(
+        model,
+        (x,),
+        file_name="nn/module/data/fourier_positional_embedding_in3_nb4_bs8.pth",
+        rtol=1e-4,
+        atol=1e-4,
+    )
