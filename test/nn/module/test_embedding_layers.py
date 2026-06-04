@@ -448,9 +448,9 @@ def test_fourier_positional_embedding_out_dim_and_shape(device):
 
 
 def test_fourier_positional_embedding_no_include_input(device):
-    emb = FourierPositionalEmbedding(
-        in_dim=2, num_bands=3, include_input=False
-    ).to(device)
+    emb = FourierPositionalEmbedding(in_dim=2, num_bands=3, include_input=False).to(
+        device
+    )
     assert emb.out_dim == 2 * 2 * 3  # 12
     assert emb(torch.zeros(4, 2, device=device)).shape == (4, 12)
 
@@ -464,9 +464,9 @@ def test_fourier_positional_embedding_leading_dims(device):
 
 def test_fourier_positional_embedding_values(device):
     # Single coord, single band at base_freq=pi -> [sin(pi*x), cos(pi*x)].
-    emb = FourierPositionalEmbedding(
-        in_dim=1, num_bands=1, include_input=False
-    ).to(device)
+    emb = FourierPositionalEmbedding(in_dim=1, num_bands=1, include_input=False).to(
+        device
+    )
     x = torch.tensor([[0.5]], device=device)
     f = math.pi
     torch.testing.assert_close(

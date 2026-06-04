@@ -367,9 +367,7 @@ class FourierPositionalEmbedding(torch.nn.Module):
         base = self.in_dim if self.include_input else 0
         return base + 2 * self.in_dim * self.num_bands
 
-    def forward(
-        self, x: Float[Tensor, "... in_dim"]
-    ) -> Float[Tensor, "... out_dim"]:
+    def forward(self, x: Float[Tensor, "... in_dim"]) -> Float[Tensor, "... out_dim"]:
         r"""Encode coordinates ``x``; see the class docstring for shapes."""
         if x.shape[-1] != self.in_dim:
             raise ValueError(f"Expected last dim {self.in_dim}, got {x.shape[-1]}")
