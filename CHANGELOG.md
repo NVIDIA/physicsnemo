@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds `FourierPositionalEmbedding` to `physicsnemo.nn`, a deterministic
+  axis-wise (NeRF-style) Fourier positional embedding for continuous
+  coordinates with no learnable parameters. It owns a fixed frequency schedule
+  (octave by default, or an explicit `freqs` tensor), reports `out_dim`, and
+  optionally concatenates the raw input.
 - Adds radiation transport example (`examples/nuclear_engineering/radiation_transport`)
 - Adds agent skills structure, and initial skill for 'discoverability'.
 - Adds xDeepONet to experimental models

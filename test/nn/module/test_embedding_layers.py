@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from typing import Any
 
 import pytest
@@ -21,6 +22,7 @@ import torch
 
 from physicsnemo.nn import (
     FourierEmbedding,
+    FourierPositionalEmbedding,
     OneHotEmbedding,
     PositionalEmbedding,
     SinusoidalTimestepEmbedding,
@@ -405,3 +407,120 @@ class TestOneHotEmbedding:
         model = OneHotEmbedding(num_channels=64).to(device)
         t = torch.tensor([[0.0], [0.5], [1.0]], device=device)
         torch.testing.assert_close(model(t), model(t))
+
+
+# ---------------------------------------------------------------------------
+# FourierPositionalEmbedding
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "kwargs, exp_in_dim, exp_num_bands, exp_include_input, exp_out_dim",
+    [
+        ({}, 3, 10, True, 3 + 2 * 3 * 10),  # all defaults
+        (
+            {"in_dim": 2, "num_bands": 6, "include_input": False},
+            2,
+            6,
+            False,
+            2 * 2 * 6,
+        ),  # non-defaults
+    ],
+)
+def test_fourier_positional_embedding_constructor_attrs(
+    device, kwargs, exp_in_dim, exp_num_bands, exp_include_input, exp_out_dim
+):
+    emb = FourierPositionalEmbedding(**kwargs).to(device)
+    assert emb.in_dim == exp_in_dim
+    assert emb.num_bands == exp_num_bands
+    assert emb.include_input == exp_include_input
+    assert emb.out_dim == exp_out_dim
+
+
+def test_fourier_positional_embedding_out_dim_and_shape(device):
+    emb = FourierPositionalEmbedding(in_dim=3, num_bands=4).to(device)
+    assert emb.num_bands == 4
+    assert emb.out_dim == 3 + 2 * 3 * 4  # 27
+    y = emb(torch.randn(5, 3, device=device))
+    assert y.shape == (5, 27)
+    # No learnable parameters.
+    assert sum(p.numel() for p in emb.parameters()) == 0
+
+
+def test_fourier_positional_embedding_no_include_input(device):
+    emb = FourierPositionalEmbedding(
+        in_dim=2, num_bands=3, include_input=False
+    ).to(device)
+    assert emb.out_dim == 2 * 2 * 3  # 12
+    assert emb(torch.zeros(4, 2, device=device)).shape == (4, 12)
+
+
+def test_fourier_positional_embedding_leading_dims(device):
+    emb = FourierPositionalEmbedding(in_dim=3, num_bands=2).to(device)
+    for shape in [(3,), (7, 3), (2, 7, 3)]:
+        out = emb(torch.randn(*shape, device=device))
+        assert out.shape == (*shape[:-1], emb.out_dim)
+
+
+def test_fourier_positional_embedding_values(device):
+    # Single coord, single band at base_freq=pi -> [sin(pi*x), cos(pi*x)].
+    emb = FourierPositionalEmbedding(
+        in_dim=1, num_bands=1, include_input=False
+    ).to(device)
+    x = torch.tensor([[0.5]], device=device)
+    f = math.pi
+    torch.testing.assert_close(
+        emb(x),
+        torch.tensor([[math.sin(f * 0.5), math.cos(f * 0.5)]], device=device),
+    )
+
+
+def test_fourier_positional_embedding_explicit_freqs(device):
+    emb = FourierPositionalEmbedding(
+        in_dim=3, freqs=torch.tensor([1.0, 2.0, 4.0]), include_input=True
+    ).to(device)
+    assert emb.num_bands == 3
+    assert emb.out_dim == 3 + 2 * 3 * 3
+    assert emb(torch.randn(8, 3, device=device)).shape == (8, emb.out_dim)
+
+
+def test_fourier_positional_embedding_axis_major_layout(device):
+    # With include_input=False the layout is axis-major: for each axis, the
+    # num_bands sines followed by the num_bands cosines.
+    emb = FourierPositionalEmbedding(
+        in_dim=2, num_bands=2, include_input=False, freqs=torch.tensor([1.0, 2.0])
+    ).to(device)
+    x = torch.tensor([[0.3, 0.7]], device=device)
+    out = emb(x)
+    expected = torch.tensor(
+        [
+            [
+                math.sin(1.0 * 0.3),
+                math.sin(2.0 * 0.3),
+                math.cos(1.0 * 0.3),
+                math.cos(2.0 * 0.3),
+                math.sin(1.0 * 0.7),
+                math.sin(2.0 * 0.7),
+                math.cos(1.0 * 0.7),
+                math.cos(2.0 * 0.7),
+            ]
+        ],
+        device=device,
+    )
+    torch.testing.assert_close(out, expected)
+
+
+def test_fourier_positional_embedding_validation(device):
+    emb = FourierPositionalEmbedding(in_dim=3).to(device)
+    with pytest.raises(ValueError):
+        emb(torch.zeros(4, 2, device=device))
+    with pytest.raises(ValueError):
+        FourierPositionalEmbedding(in_dim=0)
+    with pytest.raises(ValueError):
+        FourierPositionalEmbedding(in_dim=3, num_bands=0)
+
+
+def test_fourier_positional_embedding_state_dict_no_freqs(device):
+    # freqs is a non-persistent buffer; it must not appear in the state dict.
+    emb = FourierPositionalEmbedding(in_dim=3, num_bands=4).to(device)
+    assert "freqs" not in emb.state_dict()
