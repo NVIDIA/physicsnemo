@@ -288,21 +288,20 @@ class FourierPositionalEmbedding(Module):
 
     Parameters
     ----------
-    in_dim : int, optional
-        Dimension of the input coordinates. Default 3.
-    num_bands : int, optional
-        Number of frequency bands when ``freqs`` is not given. Default 10.
-    include_input : bool, optional
-        Prepend the raw input coordinates to the embedding. Default True.
-    base_freq : float, optional
+    in_dim : int, optional, default=3
+        Dimension of the input coordinates.
+    num_bands : int, optional, default=10
+        Number of frequency bands when ``freqs`` is not given.
+    include_input : bool, optional, default=True
+        Prepend the raw input coordinates to the embedding.
+    base_freq : float, optional, default=math.pi
         Frequency of the first band for the generated schedule.
-        Default ``math.pi``.
-    freq_scale : float, optional
+    freq_scale : float, optional, default=2.0
         Geometric ratio between consecutive band frequencies for the
-        generated schedule. Default 2.0.
-    freqs : torch.Tensor or sequence of float, optional
+        generated schedule.
+    freqs : torch.Tensor or sequence of float, optional, default=None
         Explicit 1-D frequency schedule. Overrides ``num_bands``,
-        ``base_freq`` and ``freq_scale`` when provided. Default None.
+        ``base_freq`` and ``freq_scale`` when provided.
 
     Forward
     -------
