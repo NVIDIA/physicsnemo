@@ -110,6 +110,7 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 ### Active Learning
 
 1. [Classify the famous two-moons data distribution using Active learning](./active_learning/moons/)
+2. [Active Learning for Surface-CFD Aerodynamic Surrogates](./cfd/external_aerodynamics/active_learning_aero/)
 
 ## Additional examples
 
