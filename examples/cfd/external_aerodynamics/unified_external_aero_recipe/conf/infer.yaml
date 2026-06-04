@@ -1,0 +1,89 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ---------------------------------------------------------------------------
+# Unified External Aerodynamics -- inference entry point.
+# ---------------------------------------------------------------------------
+# Companion to train.yaml.  Loads a trained checkpoint, runs it over a
+# split, reports metrics (in training space, matching validation), and
+# writes physical-unit predictions back as native .pdmsh DomainMeshes.
+# Shares conf/base.yaml with the trainer so precision / dataloader knobs
+# stay consistent; the training schedule is replaced by checkpoint /
+# output knobs below.
+#
+#   # HiLift surface (vanilla GeoTransolver)
+#   python src/infer.py model=geotransolver_surface dataset=highlift_surface \
+#       run_id=<the trained run_id> infer_split=test
+#
+#   # HiLift volume
+#   python src/infer.py model=geotransolver_volume_highlift \
+#       dataset=highlift_volume run_id=<the trained run_id> infer_split=test
+defaults:
+  - base
+  - model: ???   # must match the model the checkpoint was trained with
+  - _self_
+
+# -- Dataset selection ------------------------------------------------------
+# Must declare the same `targets:` contract the model was trained on.
+dataset: ???
+extra_datasets: []
+
+# -- Split selection --------------------------------------------------------
+# Which manifest split to run inference over.  `val_split` is what
+# build_dataloaders actually reads; we alias it to `infer_split` so the
+# val loader iterates the requested holdout.  Directory-mode datasets
+# (no manifest) ignore these and iterate their own val/train dir.
+infer_split: test
+train_split: train
+val_split: ${infer_split}
+
+# -- Checkpoint location ----------------------------------------------------
+# The trainer writes to `${checkpoint_dir or output_dir}/${run_id}/checkpoints`,
+# with the training output_dir defaulting to "runs".  Point `checkpoint_dir`
+# at that *training* output directory (NOT this script's output_dir) and set
+# `run_id` to the run you want to load.  Or set `checkpoint_path` to the
+# checkpoints directory directly to bypass the derivation.
+checkpoint_dir: runs
+run_id: ???
+checkpoint_path: null
+
+# -- Output -----------------------------------------------------------------
+# Where predictions are written: one DomainMesh per sample under
+# `${output_dir}/${run_id}/predictions/<sample_id>.pdmsh`.
+output_dir: inference
+
+# Re-dimensionalize predicted (and reference) fields to physical units by
+# inverting NormalizeMeshFields then NonDimensionalizeByMetadata.  A no-op
+# for datasets that declare neither transform (fields already physical).
+redimensionalize: true
+
+# Best-effort physical-scale geometry: multiply coordinates by L_ref.  The
+# per-sample CenterMesh offset is not stored, so geometry remains centered
+# at the origin; field values are unaffected either way.  Off by default.
+rescale_geometry: false
+
+# -- Runtime ----------------------------------------------------------------
+# torch.compile off by default: per-sample point counts vary, so compiling
+# would trigger repeated recompiles for little benefit at inference.
+compile: false
+
+# Run inference at full mesh resolution.  A large cap turns the reader's
+# subsample and the SubsampleMesh transform into no-ops (both resolve
+# `${sampling_resolution}`).  Lower it if a full volume mesh does not fit.
+sampling_resolution: 100000000
+
+# Metrics to report (training space, identical to validation).
+metrics: [l2]
