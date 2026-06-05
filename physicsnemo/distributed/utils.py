@@ -164,8 +164,8 @@ def split_tensor_along_dim(
     Raises
     ------
     ValueError
-        If ``dim`` exceeds the tensor's number of dimensions, or if the
-        dimension size is smaller than ``num_chunks``.
+        If ``dim`` is greater than or equal to the tensor's number of
+        dimensions, or if the dimension size is smaller than ``num_chunks``.
     """
     if dim >= tensor.dim():
         raise ValueError(
