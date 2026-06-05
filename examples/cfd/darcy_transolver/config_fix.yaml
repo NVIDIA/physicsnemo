@@ -30,7 +30,7 @@ hydra:
     dir: .
 
 output_dir: ./output/
-run_id: ${hydra:runtime.choices.model}-muon_${precision}_r${resolution}_b${data.batch_size}_s${model.slice_num}
+run_id: ${hydra:runtime.choices.model}-${optimizer.type}_${precision}_r${resolution}_b${data.batch_size}_s${model.slice_num}
 
 resolution: 85 #421, 211, 141, 106, 85 all viable
 
