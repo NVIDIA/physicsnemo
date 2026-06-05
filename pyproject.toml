@@ -30,7 +30,7 @@ dependencies = [
     "treelib>=1.2.5",
     "numpy>=1.22.4",
     "torch>=2.10.0",
-    "torchvision>=0.25.0",
+    "torchvision>=0.25.0a0",
     "tqdm>=4.60.0",
     "requests>=2.32.2",
     # urllib3 is a transitive dependency (via requests/botocore/etc.); pin to
@@ -240,7 +240,7 @@ dev = [
 # packages are installed.
 cu13 = [
     "torch>=2.10.0",
-    "torchvision>=0.25.0",
+    "torchvision>=0.25.0a0",
     "cuml-cu13>=26.2.0",
     "pylibraft-cu13>=26.2.0",
     # Avoid cupy 14.x: 14.0.0 ships a broken cuda13 wheel
@@ -252,7 +252,7 @@ cu13 = [
 ]
 cu12 = [
     "torch>=2.10.0",
-    "torchvision>=0.25.0",
+    "torchvision>=0.25.0a0",
     "cuml-cu12>=26.2.0",
     "pylibraft-cu12>=26.2.0",
     # See cu13 note: cupy 14.x also interacts badly with torch>=2.11 on the

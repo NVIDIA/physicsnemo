@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed `DefaultTrainingLoop` reading `DistributedManager.device` at the class
+  level (a `property` descriptor) instead of `DistributedManager().device`, which
+  left the loop's device set to a `property` object under an initialized
+  `DistributedManager` (`physicsnemo/active_learning/loop.py`).
 - Replaced three plain-string regex / docstring literals containing invalid
   escape sequences with raw-string equivalents
   (`physicsnemo/utils/logging/launch.py`,
