@@ -299,9 +299,10 @@ class FourierPositionalEmbedding(Module):
     freq_scale : float, optional, default=2.0
         Geometric ratio between consecutive band frequencies for the
         generated schedule.
-    freqs : torch.Tensor or sequence of float, optional, default=None
-        Explicit 1-D frequency schedule. Overrides ``num_bands``,
-        ``base_freq`` and ``freq_scale`` when provided.
+    freqs : torch.Tensor, optional, default=None
+        Explicit 1-D frequency schedule of shape :math:`(F,)` with
+        :math:`F \geq 1`. Overrides ``num_bands``, ``base_freq`` and
+        ``freq_scale`` when provided. A non-1-D ``freqs`` raises ``ValueError``.
 
     Forward
     -------
@@ -334,7 +335,7 @@ class FourierPositionalEmbedding(Module):
         include_input: bool = True,
         base_freq: float = math.pi,
         freq_scale: float = 2.0,
-        freqs: Tensor | None = None,
+        freqs: Float[Tensor, "num_freqs"] | None = None,  # noqa: F821
     ):
         super().__init__()
         if in_dim < 1:
@@ -346,9 +347,12 @@ class FourierPositionalEmbedding(Module):
                 num_bands, dtype=torch.float32
             )
         else:
-            freqs = torch.as_tensor(freqs, dtype=torch.float32).flatten()
-            if freqs.numel() < 1:
-                raise ValueError("freqs must contain at least one frequency.")
+            freqs = freqs.to(torch.float32)
+            if freqs.ndim != 1 or freqs.numel() < 1:
+                raise ValueError(
+                    "freqs must be a 1-D tensor of shape (F,) with F >= 1, "
+                    f"got shape {tuple(freqs.shape)}."
+                )
         self.in_dim = int(in_dim)
         self.include_input = bool(include_input)
         # Persistent so an explicitly supplied ``freqs`` schedule survives a
@@ -367,7 +371,9 @@ class FourierPositionalEmbedding(Module):
         base = self.in_dim if self.include_input else 0
         return base + 2 * self.in_dim * self.num_bands
 
-    def forward(self, x: Float[Tensor, "... in_dim"]) -> Float[Tensor, "... out_dim"]:
+    def forward(
+        self, x: Float[Tensor, "*dims in_dim"]
+    ) -> Float[Tensor, "*dims out_dim"]:
         r"""Encode coordinates ``x``; see the class docstring for shapes."""
         # Skip validation when running under torch.compile (MOD-005).
         if not torch.compiler.is_compiling():
