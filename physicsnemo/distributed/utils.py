@@ -15,7 +15,7 @@
 # limitations under the License.
 
 # TODO this also needs more docstrings
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -65,7 +65,7 @@ def get_memory_format(tensor: torch.Tensor) -> torch.memory_format:
 
 
 def pad_helper(
-    tensor: torch.Tensor, dim: int, new_size: int, mode: str = "zero"
+    tensor: torch.Tensor, dim: int, new_size: int, mode: Literal["zero", "conj"] = "zero"
 ) -> torch.Tensor:
     """Pads a tensor along a specified dimension to a new size.
 
@@ -77,7 +77,7 @@ def pad_helper(
         Dimension along which to pad. Negative indices are supported.
     new_size : int
         Target size of the dimension after padding.
-    mode : str, optional
+    mode : Literal["zero", "conj"], optional
         Padding mode. ``"zero"`` fills new entries with zeros;
         ``"conj"`` fills with the conjugate-symmetric reflection of the
         existing data (useful for Hermitian-symmetric spectra), by default ``"zero"``.
