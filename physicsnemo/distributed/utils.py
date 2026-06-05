@@ -231,7 +231,7 @@ def distributed_transpose(
     dim1: int,
     group: Optional[dist.ProcessGroup] = None,
     async_op: bool = False,
-) -> Tuple[List[torch.Tensor], Optional[dist.Work]]:
+) -> tuple[list[torch.Tensor, ...], dist.Work | None]:
     """Performs a distributed transpose to switch the sharding dimension.
 
     Splits ``tensor`` along ``dim0`` across all ranks in the process group,
