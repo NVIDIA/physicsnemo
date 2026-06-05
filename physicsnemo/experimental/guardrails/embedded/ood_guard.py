@@ -39,6 +39,7 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float
 
 from physicsnemo.nn.functional import knn
 
@@ -197,6 +198,72 @@ class OODGuard(nn.Module):
             self.compute_threshold()
             self._threshold_stale = False
         self._check_geometry(geometry_latent)
+
+    @torch.compiler.disable
+    @torch.no_grad()
+    def score_geometry(
+        self,
+        geometry_latent: Float[torch.Tensor, "batch dim"],
+    ) -> Float[torch.Tensor, "batch"]:
+        """Return per-sample average kNN distance in the geometry latent space.
+
+        Same computation as the geometry surface of :meth:`check` but
+        returns the raw distances without thresholding or warning
+        emission.  Intended for downstream consumers — e.g. active
+        learning acquisition strategies — that need a continuous OOD
+        score rather than a boolean verdict.
+
+        Both the calibration buffer and the query are L2-normalised
+        prior to kNN, so distances are bounded in ``[0, 2]`` on the
+        unit hypersphere.  Higher values indicate samples whose
+        geometry latent is farther (in cosine distance) from the
+        nearest neighbours in the calibration buffer.
+
+        Parameters
+        ----------
+        geometry_latent : Tensor
+            Shape ``(B, D)`` — pre-pooled per-sample geometry latent
+            vector(s) to score.
+
+        Returns
+        -------
+        Tensor
+            Shape ``(B,)`` — per-sample mean cosine distance to the top
+            ``min(knn_k, n_valid)`` neighbours in the calibration buffer,
+            on the same device as ``geometry_latent``.
+
+        Raises
+        ------
+        ValueError
+            If the guard was constructed without ``geometry_embed_dim``
+            (no geometry surface to score against).
+        RuntimeError
+            If the calibration buffer is empty (``collect`` has not been
+            called with a geometry latent).
+        """
+        self._validate_shapes(None, geometry_latent)
+        if self.geo_embeddings is None:
+            raise ValueError(
+                "OODGuard.score_geometry requires geometry_embed_dim to be "
+                "set at construction time; this guard has no geometry surface."
+            )
+        n_valid = self._n_valid()
+        if n_valid == 0:
+            raise RuntimeError(
+                "OODGuard.score_geometry called with an empty calibration "
+                "buffer; call `collect(geometry_latent=...)` on at least one "
+                "in-distribution sample first."
+            )
+        # Upcast so cdist against the fp32 store works under AMP inputs.
+        pooled = geometry_latent.detach().to(self.geo_embeddings.dtype)
+        # Normalise both query and buffer to unit vectors so that knn returns
+        # cosine distances bounded in [0, 2] on the unit hypersphere.
+        z = pooled / (pooled.norm(dim=-1, keepdim=True) + 1e-8)
+        store = self.geo_embeddings[:n_valid]
+        store_norm = store / (store.norm(dim=-1, keepdim=True) + 1e-8)
+        k = min(self.knn_k, n_valid)
+        _, dists = knn(store_norm, z, k)  # (B, k)
+        return dists.mean(dim=-1)  # (B,)
 
     @torch.compiler.disable
     @torch.no_grad()

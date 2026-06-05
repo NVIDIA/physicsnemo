@@ -218,6 +218,106 @@ def test_geometry_threshold_computes_and_detects_ood(device, caplog):
 
 
 # ---------------------------------------------------------------------------
+# score_geometry: continuous score for downstream consumers (e.g. AL)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("device", _DEVICES)
+def test_score_geometry_returns_distances_and_orders_in_vs_ood(device):
+    """``score_geometry`` returns ``(B,)`` distances; OOD queries score higher.
+
+    Calibrate on a tight cluster shifted along ``+e_0``; an in-cluster
+    probe should yield a small mean kNN distance, an antipodal query
+    should yield a large one (~2.0 on the unit sphere).  Verifies both
+    the shape contract and the monotonicity that AL acquisition relies on.
+    """
+    guard = OODGuard(buffer_size=32, geometry_embed_dim=8, knn_k=4, sensitivity=1.5).to(
+        device
+    )
+
+    # Tight cluster of in-distribution latents around +e_0.
+    gen = torch.Generator(device=device).manual_seed(13)
+    shift = torch.zeros(8, device=device)
+    shift[0] = 3.0
+    in_dist = torch.randn(32, 8, device=device, generator=gen) * 0.3 + shift
+    for i in range(0, 32, 4):
+        guard.collect(geometry_latent=in_dist[i : i + 4])
+
+    # Two queries: one drawn from the same cluster, one antipodal.
+    z_in = in_dist[:1].clone()
+    z_ood = torch.zeros(1, 8, device=device)
+    z_ood[0, 0] = -1.0
+
+    scores = guard.score_geometry(torch.cat([z_in, z_ood], dim=0))
+    assert scores.shape == (2,)
+    assert scores.device.type == torch.device(device).type
+    assert torch.isfinite(scores).all()
+    # OOD query is much farther from the calibration cluster than the
+    # in-distribution query.
+    assert scores[1] > scores[0] + 1.0
+
+
+def test_score_geometry_raises_when_buffer_empty():
+    """Calling score before any ``collect`` is a usage error, not a silent NaN."""
+    guard = OODGuard(buffer_size=8, geometry_embed_dim=4)
+    with pytest.raises(RuntimeError, match="empty calibration buffer"):
+        guard.score_geometry(torch.zeros(1, 4))
+
+
+def test_score_geometry_raises_when_geometry_surface_disabled():
+    """Guards built without ``geometry_embed_dim`` cannot score geometry."""
+    guard = OODGuard(buffer_size=8, global_dim=3, geometry_embed_dim=None)
+    with pytest.raises(ValueError, match="no geometry surface"):
+        guard.score_geometry(torch.zeros(1, 4))
+
+
+def test_score_geometry_validates_shape():
+    """Bad-rank inputs raise the same actionable error as ``collect`` / ``check``."""
+    guard = OODGuard(buffer_size=8, geometry_embed_dim=4, knn_k=2)
+    guard.collect(geometry_latent=torch.randn(4, 4))
+    with pytest.raises(ValueError, match="must be rank-2"):
+        guard.score_geometry(torch.zeros(2, 3, 4))
+    with pytest.raises(ValueError, match="channel dim mismatch"):
+        guard.score_geometry(torch.zeros(2, 5))
+
+
+def test_score_geometry_clamps_k_to_buffer_size():
+    """``k`` is clamped to ``n_valid`` so a sparsely-calibrated guard still scores."""
+    # buffer_size=16 but only 3 samples collected; knn_k=10 must clamp.
+    guard = OODGuard(buffer_size=16, geometry_embed_dim=4, knn_k=10)
+    guard.collect(geometry_latent=torch.randn(3, 4))
+    scores = guard.score_geometry(torch.randn(2, 4))
+    assert scores.shape == (2,)
+    assert torch.isfinite(scores).all()
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    [pytest.param(torch.float16, id="fp16"), pytest.param(torch.bfloat16, id="bf16")],
+)
+def test_score_geometry_accepts_amp_inputs(dtype):
+    """AMP query latents are upcast to the buffer's fp32 before kNN."""
+    guard = OODGuard(buffer_size=8, geometry_embed_dim=4, knn_k=2)
+    guard.collect(geometry_latent=torch.randn(8, 4))
+    z = torch.randn(2, 4, dtype=dtype)
+    scores = guard.score_geometry(z)
+    assert scores.shape == (2,)
+    assert scores.dtype == torch.float32
+    assert torch.isfinite(scores).all()
+
+
+def test_score_geometry_does_not_emit_log_warnings(caplog):
+    """Continuous scoring must be silent; guarding warnings live on ``check``."""
+    guard = OODGuard(buffer_size=8, geometry_embed_dim=4, knn_k=2)
+    guard.collect(geometry_latent=torch.randn(8, 4))
+    with caplog.at_level(logging.WARNING, logger=_GUARD_LOGGER):
+        guard.score_geometry(torch.randn(3, 4))
+    assert not any("OOD Guard" in r.getMessage() for r in caplog.records), [
+        r.getMessage() for r in caplog.records
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Shape validation
 # ---------------------------------------------------------------------------
 

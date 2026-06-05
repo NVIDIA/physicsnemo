@@ -390,16 +390,20 @@ class Transolver(Module):
         :math:`(B, H_s, W_s, C_{in})` for 2D or :math:`(B, H_s, W_s, D_s, C_{in})`
         for 3D, where :math:`H_s, W_s, D_s` are spatial dimensions.
     embedding : torch.Tensor | None, optional
-        Embedding tensor. Required if ``unified_pos=False``. Shape should
-        match ``fx`` spatial dimensions.
+        Embedding tensor. Required if ``unified_pos=False``. For structured
+        data it may be passed either flattened as :math:`(B, N, C_{emb})` or
+        with the same spatial layout as ``fx``, i.e.
+        :math:`(B, H_s, W_s, C_{emb})` for 2D or
+        :math:`(B, H_s, W_s, D_s, C_{emb})` for 3D; spatially-shaped embeddings
+        are flattened internally to align with ``fx``.
     time : torch.Tensor | None, optional
         Time tensor of shape :math:`(B,)` for time-dependent models.
 
     Outputs
     -------
     torch.Tensor
-        Output tensor with same spatial shape as input and :math:`C_{out}`
-        features (equal to ``out_dim``).
+        Output tensor with the same spatial layout as ``fx`` and
+        :math:`C_{out}` features (equal to ``out_dim``).
 
     Examples
     --------
@@ -657,15 +661,17 @@ class Transolver(Module):
             :math:`B` is batch size, :math:`N` is number of tokens, and
             :math:`C_{in}` is functional dimension.
         embedding : torch.Tensor | None, optional
-            Embedding tensor. Required if ``unified_pos=False``.
+            Embedding tensor. Required if ``unified_pos=False``. For structured
+            data, accepts either a flattened :math:`(B, N, C_{emb})` tensor or
+            one with the same spatial layout as ``fx`` (flattened internally).
         time : torch.Tensor | None, optional
             Time tensor of shape :math:`(B,)` for time-dependent models.
 
         Returns
         -------
         torch.Tensor
-            Output tensor with same spatial shape as input and :math:`C_{out}`
-            features.
+            Output tensor with the same spatial layout as ``fx`` and
+            :math:`C_{out}` features.
         """
         # Input validation (skip during torch.compile for performance)
         if not torch.compiler.is_compiling():
@@ -692,8 +698,10 @@ class Transolver(Module):
                 unflatten_output = True
                 fx = fx.reshape(fx.shape[0], -1, fx.shape[-1])
             if embedding is not None and len(embedding.shape) != 3:
+                # Flatten spatial dims to tokens, mirroring fx, so the two
+                # stay per-token aligned for the concatenation below.
                 embedding = embedding.reshape(
-                    embedding.shape[0], *self.structured_shape, -1
+                    embedding.shape[0], -1, embedding.shape[-1]
                 )
         else:
             if embedding is None:

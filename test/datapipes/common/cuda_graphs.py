@@ -101,11 +101,19 @@ def check_cuda_graphs(
         loss = dummy_loss_fn(output)
         loss.backward()
 
+    # Build the iterator once and advance it across both loops. Using
+    # ``next(iter(datapipe))`` inside the loop body would re-enter
+    # ``Datapipe.__iter__`` every step, which for DALI-backed datapipes resets
+    # ``self.pipe`` and rebuilds a ``DALIGenericIterator`` on each call. That
+    # repeated reset/observer-resync cycle widens a known race in DALI's
+    # multiprocessing pool ``_observer_thread`` and can SIGABRT the interpreter.
+    data_iter = iter(datapipe)
+
     # Warmup stream (if cuda graphs)
     warmup_stream = torch.cuda.Stream()
     with torch.cuda.stream(warmup_stream):
         for _ in range(warmup_length):
-            inputs = next(iter(datapipe))
+            inputs = next(data_iter)
             if input_fn:
                 inputs = input_fn(inputs)
             foward(inputs)
@@ -115,7 +123,7 @@ def check_cuda_graphs(
     g = torch.cuda.CUDAGraph()
     optimizer.zero_grad(set_to_none=True)
     for i in range(iterations):
-        inputs = next(iter(datapipe))
+        inputs = next(data_iter)
         if input_fn:
             inputs = input_fn(inputs)
 
