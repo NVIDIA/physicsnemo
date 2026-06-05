@@ -143,7 +143,7 @@ def truncate_helper(tensor: torch.Tensor, dim: int, new_size: int) -> torch.Tens
 
 def split_tensor_along_dim(
     tensor: torch.Tensor, dim: int, num_chunks: int
-) -> Tuple[torch.Tensor, ...]:
+) -> tuple[torch.Tensor, ...]:
     """Splits a tensor along a dimension into balanced chunks.
 
     Parameters
