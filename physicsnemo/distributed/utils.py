@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# TODO this also needs more docstrings
 from typing import List, Literal, Optional, Tuple
 
 import torch
@@ -196,6 +195,11 @@ def reduce_loss(loss: float, dst_rank: int = 0, mean: bool = True) -> Optional[f
         destination rank to redce to, by default 0.
     mean : bool, Optional
         Calculate the mean of the losses gathered, by default True.
+
+    Returns
+    -------
+    Optional[float]
+        The reduced loss value on ``dst_rank``; ``None`` on all other ranks.
 
     Raises
     ------
