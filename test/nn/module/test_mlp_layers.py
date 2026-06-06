@@ -196,7 +196,7 @@ def test_mlp_norm_layer_batchnorm_string(device):
 
 
 def test_mlp_norm_layer_layernorm(device):
-    """Test that norm_layer='layernorm' inserts layer norm after each linear."""
+    """Test that norm_layer='layernorm' inserts PyTorch LayerNorm layers."""
     target_device = torch.device(device)
     model = Mlp(
         in_features=10,
@@ -205,15 +205,22 @@ def test_mlp_norm_layer_layernorm(device):
         norm_layer="layernorm",
     ).to(target_device)
 
-    ln_count = sum(
-        1
-        for m in model.modules()
-        if m.__class__.__name__ == "LayerNorm" or isinstance(m, torch.nn.LayerNorm)
-    )
+    ln_count = sum(1 for m in model.modules() if isinstance(m, torch.nn.LayerNorm))
     assert ln_count == 2
 
     output = model(torch.randn(4, 10, device=target_device))
     assert output.shape == torch.Size([4, 5])
+
+
+def test_mlp_stores_norm_layer():
+    """Test that the norm_layer argument is stored on the module."""
+    model = Mlp(
+        in_features=10,
+        hidden_features=20,
+        out_features=5,
+        norm_layer="layernorm",
+    )
+    assert model.norm_layer == "layernorm"
 
 
 def test_mlp_norm_layer_callable(device):
@@ -275,6 +282,44 @@ def test_mlp_norm_layer_te_layernorm_class(device):
     )
     assert ln_count == 2
 
+    output = model(torch.randn(2, 10, device=target_device))
+    assert output.shape == torch.Size([2, 5])
+
+
+@requires_module(["transformer_engine"])
+def test_mlp_te_layernorm_string(device):
+    """Test norm_layer='te_layernorm' requires Transformer Engine and CUDA."""
+    import importlib.util
+
+    if "cuda" not in device:
+        with pytest.raises(RuntimeError, match="te_layernorm"):
+            Mlp(
+                in_features=10,
+                hidden_features=20,
+                out_features=5,
+                norm_layer="te_layernorm",
+            )
+        return
+
+    te_available = importlib.util.find_spec("transformer_engine") is not None
+    if not te_available:
+        with pytest.raises(RuntimeError, match="transformer_engine"):
+            Mlp(
+                in_features=10,
+                hidden_features=20,
+                out_features=5,
+                norm_layer="te_layernorm",
+            )
+        return
+
+    target_device = torch.device(device)
+    model = Mlp(
+        in_features=10,
+        hidden_features=20,
+        out_features=5,
+        norm_layer="te_layernorm",
+    ).to(target_device)
+    assert model.norm_layer == "te_layernorm"
     output = model(torch.randn(2, 10, device=target_device))
     assert output.shape == torch.Size([2, 5])
 

@@ -25,12 +25,22 @@ from torch import nn
 from physicsnemo.core.version_check import OptionalImport
 
 from .activations import get_activation
-from .layer_norm import get_layer_norm_class
+from .layer_norm import TE_AVAILABLE
 
 # Check for Transformer Engine availability
 te = OptionalImport("transformer_engine.pytorch")
 
 NormLayerSpec = type[nn.Module] | Callable[[int], nn.Module] | str | None
+
+
+def _require_te_layernorm() -> None:
+    """Raise if Transformer Engine LayerNorm cannot be used."""
+    if not TE_AVAILABLE:
+        raise RuntimeError(
+            "norm_layer='te_layernorm' requires transformer_engine to be installed."
+        )
+    if not torch.cuda.is_available():
+        raise RuntimeError("norm_layer='te_layernorm' requires a CUDA device.")
 
 
 def _resolve_norm_factory(
@@ -49,9 +59,11 @@ def _resolve_norm_factory(
             key = norm_layer.lower().replace("-", "_")
             if key in {"batchnorm", "batch_norm", "bn"}:
                 return nn.BatchNorm1d
-            if key in {"layernorm", "layer_norm", "ln", "te_layernorm"}:
-                layer_norm = get_layer_norm_class()
-                return layer_norm
+            if key in {"layernorm", "layer_norm", "ln"}:
+                return nn.LayerNorm
+            if key in {"te_layernorm", "te_layer_norm"}:
+                _require_te_layernorm()
+                return te.LayerNorm
             raise ValueError(
                 f"Unknown norm_layer string {norm_layer!r}. "
                 "Expected one of 'batchnorm', 'layernorm', or 'te_layernorm'."
@@ -109,9 +121,12 @@ class Mlp(nn.Module):
     norm_layer : type[nn.Module] | Callable[[int], nn.Module] | str | None, optional
         Normalization applied after each linear layer. Can be:
         - ``None``: no normalization (unless ``use_batchnorm=True``)
-        - ``str``: ``"batchnorm"``, ``"layernorm"``, or ``"te_layernorm"``
+        - ``str``: ``"batchnorm"`` for ``BatchNorm1d``; ``"layernorm"`` for PyTorch
+          ``LayerNorm``; ``"te_layernorm"`` for Transformer Engine ``LayerNorm``
+          (requires ``transformer_engine`` and CUDA)
         - ``type`` or callable: factory invoked as ``norm_layer(out_features)``
-          (for example ``nn.LayerNorm`` or ``get_layer_norm_class()``)
+          (for example ``nn.LayerNorm`` or ``get_layer_norm_class()`` for TE-aware
+          auto selection)
         Default is ``None``.
     spectral_norm : bool, optional
         If ``True``, applies spectral normalization to all linear layer
@@ -173,6 +188,7 @@ class Mlp(nn.Module):
         super().__init__()
 
         self.use_te = use_te
+        self.norm_layer = norm_layer
         norm_factory = _resolve_norm_factory(norm_layer, use_batchnorm)
 
         out_features = out_features or in_features

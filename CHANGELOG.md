@@ -45,8 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consumers (e.g. AL acquisition) without the boolean thresholding /
   warning emission of `OODGuard.check()`.
 - Adds configurable normalization to ``physicsnemo.nn.Mlp`` via the
-  ``norm_layer`` parameter (``"batchnorm"``, ``"layernorm"``,
-  ``"te_layernorm"``, or a user-supplied norm factory). ``use_batchnorm``
+  ``norm_layer`` parameter (``"batchnorm"``, PyTorch ``"layernorm"``,
+  TE-only ``"te_layernorm"``, or a user-supplied norm factory). ``use_batchnorm``
   remains supported for backward compatibility.
 
 ### Changed
