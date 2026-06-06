@@ -295,6 +295,46 @@ class Module(torch.nn.Module):
         return args
 
     @classmethod
+    def _backward_compat_state_dict_mapper(
+        cls, version: str, state_dict: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Map state-dict keys from older checkpoint versions to the current layout.
+
+        This base implementation is a no-op. Subclasses should override this method
+        when refactoring parameter or buffer names across checkpoint versions.
+
+        Parameters
+        ----------
+        version : str
+            Version of the checkpoint being loaded
+        state_dict : Dict[str, Any]
+            State dictionary loaded from the checkpoint
+
+        Returns
+        -------
+        Dict[str, Any]
+            Updated state dictionary compatible with the current module layout
+        """
+        return state_dict
+
+    @staticmethod
+    def _apply_backward_compat_state_dict(
+        model: "Module",
+        state_dict: Dict[str, Any],
+        metadata: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Apply version-aware state-dict key remapping before ``load_state_dict``."""
+        model_cls = type(model)
+        version = metadata.get(
+            "mdlus_file_version",
+            model_cls.__model_checkpoint_version__,
+        )
+        if version != model_cls.__model_checkpoint_version__:
+            if version in model_cls.__supported_model_checkpoint_version__:
+                return model_cls._backward_compat_state_dict_mapper(version, state_dict)
+        return state_dict
+
+    @classmethod
     def _override_args(
         cls, args: Dict[str, Any], override_args: Dict[str, Any]
     ) -> None:
@@ -1064,6 +1104,9 @@ class Module(torch.nn.Module):
 
             # Load state dict after closing archive
             model_dict = torch.load(io.BytesIO(model_bytes), map_location=model.device)
+            model_dict = Module._apply_backward_compat_state_dict(
+                model, model_dict, metadata
+            )
 
             # Load state_dict into the model
             _load_state_dict_with_logging(model, model_dict, strict=strict)
@@ -1107,6 +1150,9 @@ class Module(torch.nn.Module):
                 model_dict = torch.load(
                     local_path.joinpath("model.pt"), map_location=model.device
                 )
+            model_dict = Module._apply_backward_compat_state_dict(
+                model, model_dict, metadata
+            )
 
             # Load state_dict into the model
             _load_state_dict_with_logging(model, model_dict, strict=strict)

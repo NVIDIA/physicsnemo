@@ -458,6 +458,40 @@ def _extract_mdlus_state_dict(
         )
 
 
+def _resolve_checkpoint_index(
+    fs,
+    path: str,
+    base_name: str,
+    model_parallel_rank: int,
+    file_extension: str,
+    index: int | None,
+    saving: bool,
+) -> int:
+    """Resolve the numeric checkpoint index when ``index`` is ``None``."""
+    if index is not None:
+        return index
+
+    checkpoint_prefix = f"{path}/{base_name}.{model_parallel_rank}"
+    file_names = [fname for fname in fs.glob(checkpoint_prefix + "*" + file_extension)]
+
+    if len(file_names) == 0:
+        return 0 if saving else 0
+
+    file_idx = []
+    pattern = rf"^{re.escape(base_name)}\.{model_parallel_rank}\.(\d+){re.escape(file_extension)}$"
+    for fname in file_names:
+        file_stem = PurePath(fname).name
+        match = re.match(pattern, file_stem)
+        if match:
+            file_idx.append(int(match.group(1)))
+
+    if not file_idx:
+        return 0
+
+    file_idx.sort()
+    return file_idx[-1] + 1 if saving else file_idx[-1]
+
+
 def _get_checkpoint_filename(
     path: str,
     base_name: str = "checkpoint",
@@ -465,6 +499,7 @@ def _get_checkpoint_filename(
     saving: bool = False,
     model_type: str = "mdlus",
     distributed: bool = False,
+    filename_format: str | None = None,
 ) -> str:
     r"""Build the filename for a numbered checkpoint.
 
@@ -499,6 +534,12 @@ def _get_checkpoint_filename(
         When ``True`` the model_parallel_rank component of the filename is
         forced to ``0`` because FSDP/DTensor distribution is handled by the
         DCP APIs, not per-rank files.  By default ``False``.
+    filename_format : str | None, optional
+        Optional ``str.format`` template for the checkpoint basename (without
+        directory or extension).  Supported fields are ``name`` (model or
+        checkpoint stem), ``epoch`` (checkpoint index), and ``mp_rank``.
+        Example: ``"{name}.{epoch:06d}"`` produces zero-padded epoch numbers.
+        When ``None``, the legacy ``{name}.{mp_rank}.{epoch}`` layout is used.
 
     Returns
     -------
@@ -534,6 +575,30 @@ def _get_checkpoint_filename(
 
     # File extension for PhysicsNeMo models or PyTorch models
     file_extension = ".mdlus" if model_type == "mdlus" else ".pt"
+
+    resolved_index = _resolve_checkpoint_index(
+        fs,
+        path,
+        base_name,
+        model_parallel_rank,
+        file_extension,
+        index,
+        saving,
+    )
+
+    if filename_format is not None:
+        try:
+            formatted_name = filename_format.format(
+                name=base_name,
+                epoch=resolved_index,
+                mp_rank=model_parallel_rank,
+            )
+        except KeyError as exc:
+            raise ValueError(
+                "filename_format contains unsupported placeholders. "
+                "Supported fields are: name, epoch, mp_rank."
+            ) from exc
+        return f"{path}/{formatted_name}{file_extension}"
 
     # If epoch is provided load that file
     if index is not None:
@@ -629,6 +694,7 @@ def save_checkpoint(
     epoch: int | None = None,
     metadata: dict[str, Any] | None = None,
     optimizer_model: torch.nn.Module | None = None,
+    filename_format: str | None = None,
 ) -> None:
     r"""Save a training checkpoint to disk (or a remote store).
 
@@ -683,6 +749,10 @@ def save_checkpoint(
         them is a distributed model (FSDP/ShardTensor). When ``None``, the
         first model in ``models`` is used.  Ignored when *not* in distributed
         mode.
+    filename_format : str | None, optional
+        Optional ``str.format`` template for model checkpoint basenames.
+        Supported fields: ``name``, ``epoch``, ``mp_rank``. When ``None``,
+        the legacy ``{name}.{mp_rank}.{epoch}`` naming is used.
 
     Examples
     --------
@@ -754,6 +824,7 @@ def save_checkpoint(
             saving=True,
             model_type=model_type,
             distributed=is_distributed,
+            filename_format=filename_format,
         )
 
         if _is_distributed_model(model):
