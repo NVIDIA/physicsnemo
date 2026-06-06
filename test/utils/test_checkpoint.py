@@ -175,6 +175,21 @@ def test_save_checkpoint_filename_format(tmp_path):
     assert (tmp_path / "FullyConnected.000042.mdlus").exists()
 
 
+def test_save_checkpoint_filename_format_auto_index(tmp_path):
+    """Custom filename_format auto-increments epoch when epoch is omitted."""
+    from physicsnemo.utils import save_checkpoint
+
+    if not DistributedManager.is_initialized():
+        DistributedManager.initialize()
+
+    model = FullyConnected(in_features=4, out_features=4, num_layers=1, layer_size=4)
+    fmt = "{name}.{epoch:06d}"
+    save_checkpoint(tmp_path, models=model, filename_format=fmt)
+    save_checkpoint(tmp_path, models=model, filename_format=fmt)
+    assert (tmp_path / "FullyConnected.000000.mdlus").exists()
+    assert (tmp_path / "FullyConnected.000001.mdlus").exists()
+
+
 def test_save_checkpoint_filename_format_invalid_placeholder(tmp_path):
     """Unsupported filename_format placeholders raise a clear error."""
     from physicsnemo.utils import save_checkpoint

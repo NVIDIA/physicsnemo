@@ -458,6 +458,34 @@ def _extract_mdlus_state_dict(
         )
 
 
+def _filename_format_index_pattern(
+    filename_format: str,
+    base_name: str,
+    model_parallel_rank: int,
+    file_extension: str,
+) -> re.Pattern[str]:
+    """Build a regex that matches formatted checkpoint filenames and captures epoch."""
+    token_pattern = re.compile(r"\{(name|mp_rank|epoch)(?::[^}]*)?\}")
+
+    regex_parts: list[str] = ["^"]
+    last_end = 0
+    for match in token_pattern.finditer(filename_format):
+        regex_parts.append(re.escape(filename_format[last_end : match.start()]))
+        field = match.group(1)
+        if field == "name":
+            regex_parts.append(re.escape(base_name))
+        elif field == "mp_rank":
+            regex_parts.append(re.escape(str(model_parallel_rank)))
+        elif field == "epoch":
+            regex_parts.append(r"(\d+)")
+        last_end = match.end()
+
+    regex_parts.append(re.escape(filename_format[last_end:]))
+    regex_parts.append(re.escape(file_extension))
+    regex_parts.append("$")
+    return re.compile("".join(regex_parts))
+
+
 def _resolve_checkpoint_index(
     fs,
     path: str,
@@ -466,22 +494,36 @@ def _resolve_checkpoint_index(
     file_extension: str,
     index: int | None,
     saving: bool,
+    filename_format: str | None = None,
 ) -> int:
     """Resolve the numeric checkpoint index when ``index`` is ``None``."""
     if index is not None:
         return index
 
-    checkpoint_prefix = f"{path}/{base_name}.{model_parallel_rank}"
-    file_names = [fname for fname in fs.glob(checkpoint_prefix + "*" + file_extension)]
+    if filename_format is not None:
+        if "{name}" in filename_format:
+            glob_pattern = f"{path}/{base_name}*{file_extension}"
+        else:
+            glob_pattern = f"{path}/*{file_extension}"
+        file_names = fs.glob(glob_pattern)
+        pattern = _filename_format_index_pattern(
+            filename_format, base_name, model_parallel_rank, file_extension
+        )
+    else:
+        checkpoint_prefix = f"{path}/{base_name}.{model_parallel_rank}"
+        file_names = fs.glob(checkpoint_prefix + "*" + file_extension)
+        pattern = re.compile(
+            rf"^{re.escape(base_name)}\.{model_parallel_rank}\.(\d+)"
+            rf"{re.escape(file_extension)}$"
+        )
 
     if len(file_names) == 0:
-        return 0 if saving else 0
+        return 0
 
     file_idx = []
-    pattern = rf"^{re.escape(base_name)}\.{model_parallel_rank}\.(\d+){re.escape(file_extension)}$"
     for fname in file_names:
         file_stem = PurePath(fname).name
-        match = re.match(pattern, file_stem)
+        match = pattern.match(file_stem)
         if match:
             file_idx.append(int(match.group(1)))
 
@@ -571,7 +613,6 @@ def _get_checkpoint_filename(
     fs = fsspec.filesystem(protocol)
     if protocol == "file":
         path = str(Path(path).resolve())
-    checkpoint_filename = f"{path}/{base_name}.{model_parallel_rank}"
 
     # File extension for PhysicsNeMo models or PyTorch models
     file_extension = ".mdlus" if model_type == "mdlus" else ".pt"
@@ -584,6 +625,7 @@ def _get_checkpoint_filename(
         file_extension,
         index,
         saving,
+        filename_format,
     )
 
     if filename_format is not None:
@@ -600,42 +642,7 @@ def _get_checkpoint_filename(
             ) from exc
         return f"{path}/{formatted_name}{file_extension}"
 
-    # If epoch is provided load that file
-    if index is not None:
-        checkpoint_filename = checkpoint_filename + f".{index}"
-        checkpoint_filename += file_extension
-    # Otherwise try loading the latest epoch or rolling checkpoint
-    else:
-        file_names = [
-            fname for fname in fs.glob(checkpoint_filename + "*" + file_extension)
-        ]
-
-        if len(file_names) > 0:
-            # If checkpoint from a null index save exists load that
-            # This is the most likely line to error since it will fail with
-            # invalid checkpoint names
-
-            file_idx = []
-
-            for fname in file_names:
-                fname_path = PurePath(fname)
-                file_stem = fname_path.name
-
-                pattern = rf"^{re.escape(base_name)}\.{model_parallel_rank}\.(\d+){re.escape(file_extension)}$"
-                match = re.match(pattern, file_stem)
-                if match:
-                    file_idx.append(int(match.group(1)))
-            file_idx.sort()
-            # If we are saving index by 1 to get the next free file name
-            if saving:
-                checkpoint_filename = checkpoint_filename + f".{file_idx[-1] + 1}"
-            else:
-                checkpoint_filename = checkpoint_filename + f".{file_idx[-1]}"
-            checkpoint_filename += file_extension
-        else:
-            checkpoint_filename += ".0" + file_extension
-
-    return checkpoint_filename
+    return f"{path}/{base_name}.{model_parallel_rank}.{resolved_index}{file_extension}"
 
 
 def _unique_model_names(
