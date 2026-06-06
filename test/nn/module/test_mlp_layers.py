@@ -18,6 +18,7 @@ import pytest
 import torch
 
 from physicsnemo.nn import Mlp
+from physicsnemo.nn.module.layer_norm import get_layer_norm_class
 from test.common import (
     validate_forward_accuracy,
 )
@@ -175,6 +176,141 @@ def test_mlp_batchnorm(device):
 
     output = model(torch.randn(4, 10, device=target_device))
     assert output.shape == torch.Size([4, 5])
+
+
+def test_mlp_norm_layer_batchnorm_string(device):
+    """Test that norm_layer='batchnorm' matches use_batchnorm=True."""
+    target_device = torch.device(device)
+    model = Mlp(
+        in_features=10,
+        hidden_features=20,
+        out_features=5,
+        norm_layer="batchnorm",
+    ).to(target_device)
+
+    bn_count = sum(1 for m in model.modules() if isinstance(m, torch.nn.BatchNorm1d))
+    assert bn_count == 2
+
+    output = model(torch.randn(4, 10, device=target_device))
+    assert output.shape == torch.Size([4, 5])
+
+
+def test_mlp_norm_layer_layernorm(device):
+    """Test that norm_layer='layernorm' inserts layer norm after each linear."""
+    target_device = torch.device(device)
+    model = Mlp(
+        in_features=10,
+        hidden_features=20,
+        out_features=5,
+        norm_layer="layernorm",
+    ).to(target_device)
+
+    ln_count = sum(
+        1
+        for m in model.modules()
+        if m.__class__.__name__ == "LayerNorm" or isinstance(m, torch.nn.LayerNorm)
+    )
+    assert ln_count == 2
+
+    output = model(torch.randn(4, 10, device=target_device))
+    assert output.shape == torch.Size([4, 5])
+
+
+def test_mlp_norm_layer_callable(device):
+    """Test that a custom norm factory can be supplied."""
+    target_device = torch.device(device)
+
+    def norm_factory(out_dim: int) -> torch.nn.Module:
+        return torch.nn.LayerNorm(out_dim, elementwise_affine=False)
+
+    model = Mlp(
+        in_features=10,
+        hidden_features=20,
+        out_features=5,
+        norm_layer=norm_factory,
+    ).to(target_device)
+
+    ln_count = sum(
+        1
+        for m in model.modules()
+        if isinstance(m, torch.nn.LayerNorm) and not m.elementwise_affine
+    )
+    assert ln_count == 2
+
+    output = model(torch.randn(2, 10, device=target_device))
+    assert output.shape == torch.Size([2, 5])
+
+
+def test_mlp_norm_layer_type(device):
+    """Test that norm_layer=nn.LayerNorm works."""
+    target_device = torch.device(device)
+    model = Mlp(
+        in_features=10,
+        hidden_features=20,
+        out_features=5,
+        norm_layer=torch.nn.LayerNorm,
+    ).to(target_device)
+
+    ln_count = sum(1 for m in model.modules() if isinstance(m, torch.nn.LayerNorm))
+    assert ln_count == 2
+
+    output = model(torch.randn(2, 10, device=target_device))
+    assert output.shape == torch.Size([2, 5])
+
+
+def test_mlp_norm_layer_te_layernorm_class(device):
+    """Test that get_layer_norm_class() works as a user-supplied norm factory."""
+    target_device = torch.device(device)
+    model = Mlp(
+        in_features=10,
+        hidden_features=20,
+        out_features=5,
+        norm_layer=get_layer_norm_class(),
+    ).to(target_device)
+
+    ln_count = sum(
+        1
+        for m in model.modules()
+        if m.__class__.__name__ == "LayerNorm" or isinstance(m, torch.nn.LayerNorm)
+    )
+    assert ln_count == 2
+
+    output = model(torch.randn(2, 10, device=target_device))
+    assert output.shape == torch.Size([2, 5])
+
+
+def test_mlp_norm_layer_conflicts_with_use_batchnorm():
+    """Test that norm_layer and use_batchnorm cannot both be set."""
+    with pytest.raises(ValueError, match="Cannot specify both norm_layer"):
+        Mlp(
+            in_features=10,
+            hidden_features=20,
+            out_features=5,
+            use_batchnorm=True,
+            norm_layer="layernorm",
+        )
+
+
+def test_mlp_norm_layer_rejects_module_instance():
+    """Test that a pre-instantiated norm module is rejected."""
+    with pytest.raises(ValueError, match="not a module instance"):
+        Mlp(
+            in_features=10,
+            hidden_features=20,
+            out_features=5,
+            norm_layer=torch.nn.LayerNorm(5),
+        )
+
+
+def test_mlp_unknown_norm_layer_string():
+    """Test that an unknown norm_layer string raises ValueError."""
+    with pytest.raises(ValueError, match="Unknown norm_layer string"):
+        Mlp(
+            in_features=10,
+            hidden_features=20,
+            out_features=5,
+            norm_layer="groupnorm",
+        )
 
 
 def test_mlp_spectral_norm(device):
