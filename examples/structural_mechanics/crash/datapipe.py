@@ -68,6 +68,7 @@ class SimSample:
         self.target_series = target_series
 
     def to(self, device: torch.device):
+        """Move all sample tensors and optional graph data to *device*."""
         for k, v in self.node_features.items():
             self.node_features[k] = v.to(device)
         self.node_target = self.node_target.to(device)
@@ -80,6 +81,7 @@ class SimSample:
         return self
 
     def is_graph(self) -> bool:
+        """Return True when this sample includes a PyG graph."""
         return self.graph is not None
 
     def __repr__(self) -> str:
@@ -197,13 +199,26 @@ class CrashBaseDataset:
                     "training.global_features_filepath=/path/to/global_features.json"
                 )
 
-        self.srcs, self.dsts, point_data, global_features = reader(
+        reader_out = reader(
             data_dir=self.data_dir,
             num_samples=num_samples,
             split=split,
             global_features_filepath=self.global_features_filepath,
             logger=self.logger,
         )
+        if len(reader_out) == 3:
+            self.srcs, self.dsts, point_data = reader_out
+            global_features = []
+        else:
+            self.srcs, self.dsts, point_data, global_features = reader_out
+
+        self._lazy_mode = bool(point_data) and point_data[0].get("_lazy", False)
+        if self._lazy_mode:
+            self._lazy_records = point_data
+            self.logger.info(
+                f"[{self.__class__.__name__}] Lazy Zarr loading enabled; "
+                "samples are materialized on first access."
+            )
         # Check if any global features are present
         # global_features is a list of dictionaries, each containing the global features for a sample
         has_global = global_features and any(gf for gf in global_features)
@@ -227,90 +242,38 @@ class CrashBaseDataset:
             self.global_features = global_features
 
         # Storage for per-sample tensors
-        self.mesh_pos_seq: list[torch.Tensor] = []  # [T,N,3]
-        self.node_features_data: list[torch.Tensor] = []  # [N,F]
+        self.mesh_pos_seq: list[torch.Tensor | None] = []  # [T,N,3]
+        self.node_features_data: list[torch.Tensor | None] = []  # [N,F]
         self._feature_slices: dict[
             str, tuple[int, int]
         ] = {}  # per-sample feature slices
-        self.target_series_data: list[dict[str, torch.Tensor]] = []
+        self.target_series_data: list[dict[str, torch.Tensor] | None] = []
 
-        for rec in point_data:
-            # Coordinates
-            if "coords" not in rec:
-                raise KeyError(f"Missing coordinates key 'coords' in reader record")
-            coords_np = rec["coords"][:num_steps]
-            assert coords_np.ndim == 3 and coords_np.shape[-1] == 3, (
-                f"coords must be [T,N,3], got {coords_np.shape}"
-            )
-            self.mesh_pos_seq.append(torch.as_tensor(coords_np, dtype=torch.float32))
-
-            # Features: concatenate requested keys if present; allow empty
-            parts = []
-            # Static features: use as-is (N,[C])
-            for k in self.static_features:
-                arr = self._get_static_feature(rec, k)
-                if arr.ndim == 1:
-                    arr = arr[:, None]
-                parts.append(arr)
-            # Dynamic features: collect series up to num_steps, flatten to [N, T*C]
-            T = coords_np.shape[0]
-            for k in self.dynamic_features:
-                dyn = self._get_dynamic_feature(rec, k, T)
-                # dyn: [T,N] or [T,N,C] -> [N, T*C]
-                if dyn.ndim == 2:
-                    dyn_flat = dyn.transpose(1, 0)  # [N,T]
-                else:
-                    dyn_flat = dyn.transpose(1, 0, 2).reshape(
-                        dyn.shape[1], -1
-                    )  # [N,T*C]
-                parts.append(dyn_flat)
-
-            feats_np = (
-                np.concatenate(parts, axis=-1)
-                if len(parts) > 0
-                else np.zeros((coords_np.shape[1], 0), dtype=np.float32)
-            )
-            assert feats_np.ndim == 2 and feats_np.shape[0] == coords_np.shape[1], (
-                f"features must be [N,F], got {feats_np.shape}, N mismatch with {coords_np.shape}"
-            )
-
-            # build slice map on first record to make future slicing trivial
-            if len(self._feature_slices) == 0:
-                start = 0
-                for k in self.static_features:
-                    arr_k = self._get_static_feature(rec, k)
-                    width = arr_k.shape[1] if arr_k.ndim > 1 else 1
-                    self._feature_slices[k] = (start, start + width)
-                    start += width
-                for k in self.dynamic_features:
-                    dyn_k = self._get_dynamic_feature(rec, k, T)
-                    width = (
-                        dyn_k.shape[0]
-                        if dyn_k.ndim == 2
-                        else dyn_k.shape[0] * dyn_k.shape[2]
-                    )
-                    # After flattening to [N, width]
-                    self._feature_slices[k] = (start, start + width)
-                    start += width
-
-            self.node_features_data.append(
-                torch.as_tensor(feats_np, dtype=torch.float32)
-            )
-
-            # Collect dynamic target series (kept as [T,N] or [T,N,C])
-            target_series_rec: dict[str, torch.Tensor] = {}
-            for k in self.dynamic_targets:
-                dyn = self._get_dynamic_feature(rec, k, T)  # [T,N] or [T,N,C]
-                target_series_rec[k] = torch.as_tensor(dyn, dtype=torch.float32)
-            self.target_series_data.append(target_series_rec)
+        if self._lazy_mode:
+            self.mesh_pos_seq = [None] * self.num_samples
+            self.node_features_data = [None] * self.num_samples
+            self.target_series_data = [None] * self.num_samples
+            first_rec = self._materialize_record(0)
+            self._build_feature_slices(first_rec)
+            del first_rec
+        else:
+            for rec in point_data:
+                mesh, feats, targets = self._build_tensors_from_record(rec)
+                self.mesh_pos_seq.append(mesh)
+                self.node_features_data.append(feats)
+                self.target_series_data.append(targets)
 
         # Stats (node + generic features)
         node_stats_path = os.path.join(self._stats_dir, NODE_STATS_FILE)
         feat_stats_path = os.path.join(self._stats_dir, FEATURE_STATS_FILE)
 
         if self.split == "train":
-            self.node_stats = self._compute_autoreg_node_stats()
-            self.feature_stats = self._compute_feature_stats()
+            if self._lazy_mode:
+                self.node_stats = self._compute_autoreg_node_stats_lazy()
+                self.feature_stats = self._compute_feature_stats_lazy()
+            else:
+                self.node_stats = self._compute_autoreg_node_stats()
+                self.feature_stats = self._compute_feature_stats()
             save_json(self.node_stats, node_stats_path)
             save_json(self.feature_stats, feat_stats_path)
         else:
@@ -322,25 +285,8 @@ class CrashBaseDataset:
                     f"Node stats file {node_stats_path} or feature stats file {feat_stats_path} not found"
                 )
 
-        # Normalize trajectories and features
-        for i in range(self.num_samples):
-            self.mesh_pos_seq[i] = self._normalize_node_tensor(
-                self.mesh_pos_seq[i],
-                self.node_stats["pos_mean"],
-                self.node_stats["pos_std"],
-            )
-            if self.node_features_data[i].numel() > 0:
-                mu = torch.as_tensor(
-                    self.feature_stats.get("feature_mean", []), dtype=torch.float32
-                )
-                std = torch.as_tensor(
-                    self.feature_stats.get("feature_std", []), dtype=torch.float32
-                )
-                if mu.numel() == 0:
-                    continue
-                self.node_features_data[i] = (
-                    self.node_features_data[i] - mu.view(1, -1)
-                ) / (std.view(1, -1) + EPS)
+        if not self._lazy_mode:
+            self._normalize_loaded_samples()
 
     def __len__(self):
         return self._max_idx
@@ -358,6 +304,7 @@ class CrashBaseDataset:
             assert 0 <= time_idx < self.num_steps - 1, (
                 f"time_idx {time_idx} out of range [0, {self.num_steps - 1})"
             )
+        self._ensure_sample_loaded(batch_idx)
         pos_seq = self.mesh_pos_seq[batch_idx]  # [T,N,3]
         feats = self.node_features_data[batch_idx]  # [N,F]
         T, N, _ = pos_seq.shape
@@ -414,6 +361,213 @@ class CrashBaseDataset:
                 f"target shape {y.shape} does not match expected (N={N}, T={T_out}, Fo={Fo})"
             )
         return x, y
+
+    def _materialize_record(self, batch_idx: int) -> dict:
+        """Load a lazy Zarr record into an in-memory reader dict."""
+        from zarr_reader import materialize_zarr_record
+
+        rec_meta = self._lazy_records[batch_idx]
+        return materialize_zarr_record(
+            rec_meta["_zarr_path"], num_timesteps=self.num_steps
+        )
+
+    def _build_feature_slices(self, rec: dict):
+        if "coords" not in rec:
+            raise KeyError(f"Missing coordinates key 'coords' in reader record")
+        coords_np = rec["coords"][: self.num_steps]
+        T = coords_np.shape[0]
+        start = 0
+        for k in self.static_features:
+            arr_k = self._get_static_feature(rec, k)
+            width = arr_k.shape[1] if arr_k.ndim > 1 else 1
+            self._feature_slices[k] = (start, start + width)
+            start += width
+        for k in self.dynamic_features:
+            dyn_k = self._get_dynamic_feature(rec, k, T)
+            width = (
+                dyn_k.shape[0] if dyn_k.ndim == 2 else dyn_k.shape[0] * dyn_k.shape[2]
+            )
+            self._feature_slices[k] = (start, start + width)
+            start += width
+
+    def _build_tensors_from_record(
+        self, rec: dict
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        if "coords" not in rec:
+            raise KeyError(f"Missing coordinates key 'coords' in reader record")
+        coords_np = rec["coords"][: self.num_steps]
+        assert coords_np.ndim == 3 and coords_np.shape[-1] == 3, (
+            f"coords must be [T,N,3], got {coords_np.shape}"
+        )
+        mesh = torch.as_tensor(coords_np, dtype=torch.float32)
+
+        parts = []
+        T = coords_np.shape[0]
+        for k in self.static_features:
+            arr = self._get_static_feature(rec, k)
+            if arr.ndim == 1:
+                arr = arr[:, None]
+            parts.append(arr)
+        for k in self.dynamic_features:
+            dyn = self._get_dynamic_feature(rec, k, T)
+            if dyn.ndim == 2:
+                dyn_flat = dyn.transpose(1, 0)
+            else:
+                dyn_flat = dyn.transpose(1, 0, 2).reshape(dyn.shape[1], -1)
+            parts.append(dyn_flat)
+
+        feats_np = (
+            np.concatenate(parts, axis=-1)
+            if len(parts) > 0
+            else np.zeros((coords_np.shape[1], 0), dtype=np.float32)
+        )
+        assert feats_np.ndim == 2 and feats_np.shape[0] == coords_np.shape[1], (
+            f"features must be [N,F], got {feats_np.shape}, N mismatch with {coords_np.shape}"
+        )
+
+        if len(self._feature_slices) == 0:
+            self._build_feature_slices(rec)
+
+        feats = torch.as_tensor(feats_np, dtype=torch.float32)
+
+        target_series_rec: dict[str, torch.Tensor] = {}
+        for k in self.dynamic_targets:
+            dyn = self._get_dynamic_feature(rec, k, T)
+            target_series_rec[k] = torch.as_tensor(dyn, dtype=torch.float32)
+
+        return mesh, feats, target_series_rec
+
+    def _normalize_sample_tensors(
+        self,
+        mesh: torch.Tensor,
+        feats: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        mesh = self._normalize_node_tensor(
+            mesh,
+            self.node_stats["pos_mean"],
+            self.node_stats["pos_std"],
+        )
+        if feats.numel() > 0:
+            mu = torch.as_tensor(
+                self.feature_stats.get("feature_mean", []), dtype=torch.float32
+            )
+            std = torch.as_tensor(
+                self.feature_stats.get("feature_std", []), dtype=torch.float32
+            )
+            if mu.numel() > 0:
+                feats = (feats - mu.view(1, -1)) / (std.view(1, -1) + EPS)
+        return mesh, feats
+
+    def _normalize_loaded_samples(self):
+        for i in range(self.num_samples):
+            mesh, feats = self._normalize_sample_tensors(
+                self.mesh_pos_seq[i], self.node_features_data[i]
+            )
+            self.mesh_pos_seq[i] = mesh
+            self.node_features_data[i] = feats
+
+    def _load_sample_tensors(
+        self, batch_idx: int, *, retain: bool = True, normalize: bool = True
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        if not self._lazy_mode:
+            mesh = self.mesh_pos_seq[batch_idx]
+            feats = self.node_features_data[batch_idx]
+            targets = self.target_series_data[batch_idx]
+            if normalize:
+                mesh, feats = self._normalize_sample_tensors(mesh, feats)
+            return mesh, feats, targets
+
+        if retain and self.mesh_pos_seq[batch_idx] is not None:
+            return (
+                self.mesh_pos_seq[batch_idx],
+                self.node_features_data[batch_idx],
+                self.target_series_data[batch_idx],
+            )
+
+        rec = self._materialize_record(batch_idx)
+        mesh, feats, targets = self._build_tensors_from_record(rec)
+        if normalize:
+            mesh, feats = self._normalize_sample_tensors(mesh, feats)
+
+        if retain:
+            self.mesh_pos_seq[batch_idx] = mesh
+            self.node_features_data[batch_idx] = feats
+            self.target_series_data[batch_idx] = targets
+
+        return mesh, feats, targets
+
+    def _ensure_sample_loaded(self, batch_idx: int):
+        if self._lazy_mode and self.mesh_pos_seq[batch_idx] is None:
+            self._load_sample_tensors(batch_idx, retain=True)
+
+    def _compute_autoreg_node_stats_lazy(self):
+        pos_mean = torch.zeros(3, dtype=torch.float32)
+        pos_meansqr = torch.zeros(3, dtype=torch.float32)
+        for i in range(self.num_samples):
+            mesh, _, _ = self._load_sample_tensors(i, retain=False, normalize=False)
+            pos_mean += torch.mean(mesh, dim=(0, 1)) / self.num_samples
+            pos_meansqr += torch.mean(mesh * mesh, dim=(0, 1)) / self.num_samples
+
+        pos_var = torch.clamp(pos_meansqr - pos_mean * pos_mean, min=0.0)
+        pos_std = torch.sqrt(pos_var + EPS)
+
+        dt = self.dt
+        vel_mean = torch.zeros(3, dtype=torch.float32)
+        vel_meansqr = torch.zeros(3, dtype=torch.float32)
+        for i in range(self.num_samples):
+            mesh, _, _ = self._load_sample_tensors(i, retain=False, normalize=False)
+            vel = (mesh[1:] - mesh[:-1]) / dt
+            vel = vel / pos_std
+            vel_mean += torch.mean(vel, dim=(0, 1)) / self.num_samples
+            vel_meansqr += torch.mean(vel * vel, dim=(0, 1)) / self.num_samples
+        vel_var = torch.clamp(vel_meansqr - vel_mean * vel_mean, min=0.0)
+        vel_std = torch.sqrt(vel_var + EPS)
+
+        acc_mean = torch.zeros(3, dtype=torch.float32)
+        acc_meansqr = torch.zeros(3, dtype=torch.float32)
+        for i in range(self.num_samples):
+            mesh, _, _ = self._load_sample_tensors(i, retain=False, normalize=False)
+            acc = (mesh[:-2] + mesh[2:] - 2 * mesh[1:-1]) / (dt * dt)
+            acc = acc / pos_std
+            acc_mean += torch.mean(acc, dim=(0, 1)) / self.num_samples
+            acc_meansqr += torch.mean(acc * acc, dim=(0, 1)) / self.num_samples
+        acc_var = torch.clamp(acc_meansqr - acc_mean * acc_mean, min=0.0)
+        acc_std = torch.sqrt(acc_var + EPS)
+
+        return {
+            "pos_mean": pos_mean,
+            "pos_std": pos_std,
+            "norm_vel_mean": vel_mean,
+            "norm_vel_std": vel_std,
+            "norm_acc_mean": acc_mean,
+            "norm_acc_std": acc_std,
+        }
+
+    def _compute_feature_stats_lazy(self):
+        if not self.static_features and not self.dynamic_features:
+            mu = torch.zeros(0, dtype=torch.float32)
+            std = torch.ones(0, dtype=torch.float32)
+            return {"feature_mean": mu, "feature_std": std}
+
+        feat_mean = None
+        feat_meansqr = None
+        fdim = None
+        for i in range(self.num_samples):
+            _, feats, _ = self._load_sample_tensors(i, retain=False, normalize=False)
+            x = feats.to(torch.float32)
+            if fdim is None:
+                fdim = x.shape[1]
+            assert x.shape[1] == fdim, f"Feature dim mismatch: {x.shape[1]} vs {fdim}"
+            m = torch.mean(x, dim=0)
+            msq = torch.mean(x * x, dim=0)
+            feat_mean = m if feat_mean is None else feat_mean + m / self.num_samples
+            feat_meansqr = (
+                msq if feat_meansqr is None else feat_meansqr + msq / self.num_samples
+            )
+
+        feat_var = torch.clamp(feat_meansqr - feat_mean * feat_mean, min=0.0)
+        feat_std = torch.sqrt(feat_var + EPS)
+        return {"feature_mean": feat_mean, "feature_std": feat_std}
 
     # ---- stats helpers ----
     def _compute_autoreg_node_stats(self):
@@ -581,23 +735,28 @@ class CrashGraphDataset(CrashBaseDataset):
             _dsts.append(np.asarray(dst)[mask])
         self.srcs, self.dsts = _srcs, _dsts
 
-        Data = _pyg_data.Data
-        self.graphs = []
-        for i in range(self.num_samples):
-            g = self.create_graph(
-                self.srcs[i],
-                self.dsts[i],
-                num_nodes=self.mesh_pos_seq[i][0].shape[0],
-                dtype=torch.long,
-            )
-            pos0 = self.mesh_pos_seq[i][0]
-            g = self.add_edge_features(g, pos0)
-            self.graphs.append(g)
+        self.graphs: list[Any | None] = []
+        if self._lazy_mode:
+            self.graphs = [None] * self.num_samples
+        else:
+            for i in range(self.num_samples):
+                g = self.create_graph(
+                    self.srcs[i],
+                    self.dsts[i],
+                    num_nodes=self.mesh_pos_seq[i][0].shape[0],
+                    dtype=torch.long,
+                )
+                pos0 = self.mesh_pos_seq[i][0]
+                g = self.add_edge_features(g, pos0)
+                self.graphs.append(g)
 
         # Edge stats
         edge_stats_path = os.path.join(self._stats_dir, EDGE_STATS_FILE)
         if self.split == "train":
-            self.edge_stats = self._compute_edge_stats()
+            if self._lazy_mode:
+                self.edge_stats = self._compute_edge_stats_lazy()
+            else:
+                self.edge_stats = self._compute_edge_stats()
             save_json(self.edge_stats, edge_stats_path)
         else:
             if os.path.exists(edge_stats_path):
@@ -613,17 +772,66 @@ class CrashGraphDataset(CrashBaseDataset):
             self.edge_stats["edge_std"], dtype=torch.float32
         )
 
-        # Normalize edge features
+        if not self._lazy_mode:
+            for i in range(self.num_samples):
+                self.graphs[i].edge_attr = self._normalize_edge(
+                    self.graphs[i].edge_attr,
+                    self.edge_stats["edge_mean"],
+                    self.edge_stats["edge_std"],
+                )
+
+    def _ensure_graph_loaded(self, batch_idx: int):
+        if not self._lazy_mode:
+            return
+        if self.graphs[batch_idx] is not None:
+            return
+        self._ensure_sample_loaded(batch_idx)
+        g = self.create_graph(
+            self.srcs[batch_idx],
+            self.dsts[batch_idx],
+            num_nodes=self.mesh_pos_seq[batch_idx][0].shape[0],
+            dtype=torch.long,
+        )
+        pos0 = self.mesh_pos_seq[batch_idx][0]
+        g = self.add_edge_features(g, pos0)
+        g.edge_attr = self._normalize_edge(
+            g.edge_attr,
+            self.edge_stats["edge_mean"],
+            self.edge_stats["edge_std"],
+        )
+        self.graphs[batch_idx] = g
+
+    def _compute_edge_stats_lazy(self):
+        edge_mean = None
+        edge_meansqr = None
         for i in range(self.num_samples):
-            self.graphs[i].edge_attr = self._normalize_edge(
-                self.graphs[i].edge_attr,
-                self.edge_stats["edge_mean"],
-                self.edge_stats["edge_std"],
+            mesh, _, _ = self._load_sample_tensors(i, retain=False, normalize=False)
+            g = self.create_graph(
+                self.srcs[i],
+                self.dsts[i],
+                num_nodes=mesh[0].shape[0],
+                dtype=torch.long,
             )
+            g = self.add_edge_features(g, mesh[0])
+            x_e = g.edge_attr.to(torch.float32)
+            m = torch.mean(x_e, dim=0)
+            msq = torch.mean(x_e * x_e, dim=0)
+            edge_mean = m if edge_mean is None else edge_mean + m / self.num_samples
+            edge_meansqr = (
+                msq if edge_meansqr is None else edge_meansqr + msq / self.num_samples
+            )
+
+        edge_var = torch.clamp(edge_meansqr - edge_mean * edge_mean, min=0.0)
+        edge_std = torch.sqrt(edge_var + EPS)
+        return {
+            "edge_mean": edge_mean,
+            "edge_std": edge_std,
+        }
 
     def __getitem__(self, idx: int):
         assert 0 <= idx < self._max_idx, f"Index {idx} out of range"
         batch_idx, time_idx = self._resolve_idx(idx)
+        self._ensure_graph_loaded(batch_idx)
         g = self.graphs[batch_idx]
         x, y = self.build_xy(batch_idx, time_idx)
         if self.global_features is not None:
@@ -649,6 +857,7 @@ class CrashGraphDataset(CrashBaseDataset):
     # ----- graph-specific helpers (use _pyg_data / _pyg_utils so PyG loads only when used) -----
     @staticmethod
     def create_graph(src, dst, num_nodes: int, dtype=torch.long):
+        """Build a bidirectional PyG graph with self-loops from edge lists."""
         src = torch.as_tensor(src, dtype=dtype)
         dst = torch.as_tensor(dst, dtype=dtype)
         edge_index = torch.stack(
@@ -660,6 +869,7 @@ class CrashGraphDataset(CrashBaseDataset):
 
     @staticmethod
     def add_edge_features(data, pos: torch.Tensor):
+        """Attach displacement and distance edge features from t0 positions."""
         # data: PyG Data; pos: [N,3]
         row, col = data.edge_index
         pos_t = torch.as_tensor(pos, dtype=torch.float32)
