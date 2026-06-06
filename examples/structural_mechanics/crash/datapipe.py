@@ -881,14 +881,17 @@ class CrashGraphDataset(CrashBaseDataset):
     def _compute_edge_stats(self):
         edge_mean = None
         edge_meansqr = None
+        edge_dim = None
         for i in range(self.num_samples):
             x_e = self.graphs[i].edge_attr.to(torch.float32)  # [E,De]
+            if edge_dim is None:
+                edge_dim = x_e.shape[1]
+                edge_mean = torch.zeros(edge_dim, dtype=torch.float32)
+                edge_meansqr = torch.zeros(edge_dim, dtype=torch.float32)
             m = torch.mean(x_e, dim=0)
             msq = torch.mean(x_e * x_e, dim=0)
-            edge_mean = m if edge_mean is None else edge_mean + m / self.num_samples
-            edge_meansqr = (
-                msq if edge_meansqr is None else edge_meansqr + msq / self.num_samples
-            )
+            edge_mean += m / self.num_samples
+            edge_meansqr += msq / self.num_samples
 
         edge_var = torch.clamp(edge_meansqr - edge_mean * edge_mean, min=0.0)
         edge_std = torch.sqrt(edge_var + EPS)
