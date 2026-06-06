@@ -470,12 +470,11 @@ class CrashBaseDataset:
         self, batch_idx: int, *, retain: bool = True, normalize: bool = True
     ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
         if not self._lazy_mode:
-            mesh = self.mesh_pos_seq[batch_idx]
-            feats = self.node_features_data[batch_idx]
-            targets = self.target_series_data[batch_idx]
-            if normalize:
-                mesh, feats = self._normalize_sample_tensors(mesh, feats)
-            return mesh, feats, targets
+            return (
+                self.mesh_pos_seq[batch_idx],
+                self.node_features_data[batch_idx],
+                self.target_series_data[batch_idx],
+            )
 
         if retain and self.mesh_pos_seq[batch_idx] is not None:
             return (
@@ -549,21 +548,19 @@ class CrashBaseDataset:
             std = torch.ones(0, dtype=torch.float32)
             return {"feature_mean": mu, "feature_std": std}
 
-        feat_mean = None
-        feat_meansqr = None
-        fdim = None
+        first_feats = self._load_sample_tensors(0, retain=False, normalize=False)[1]
+        fdim = first_feats.shape[1]
+
+        feat_mean = torch.zeros(fdim, dtype=torch.float32)
+        feat_meansqr = torch.zeros(fdim, dtype=torch.float32)
         for i in range(self.num_samples):
             _, feats, _ = self._load_sample_tensors(i, retain=False, normalize=False)
             x = feats.to(torch.float32)
-            if fdim is None:
-                fdim = x.shape[1]
             assert x.shape[1] == fdim, f"Feature dim mismatch: {x.shape[1]} vs {fdim}"
             m = torch.mean(x, dim=0)
             msq = torch.mean(x * x, dim=0)
-            feat_mean = m if feat_mean is None else feat_mean + m / self.num_samples
-            feat_meansqr = (
-                msq if feat_meansqr is None else feat_meansqr + msq / self.num_samples
-            )
+            feat_mean += m / self.num_samples
+            feat_meansqr += msq / self.num_samples
 
         feat_var = torch.clamp(feat_meansqr - feat_mean * feat_mean, min=0.0)
         feat_std = torch.sqrt(feat_var + EPS)
@@ -804,8 +801,9 @@ class CrashGraphDataset(CrashBaseDataset):
     def _compute_edge_stats_lazy(self):
         edge_mean = None
         edge_meansqr = None
+        edge_dim = None
         for i in range(self.num_samples):
-            mesh, _, _ = self._load_sample_tensors(i, retain=False, normalize=False)
+            mesh, _, _ = self._load_sample_tensors(i, retain=False, normalize=True)
             g = self.create_graph(
                 self.srcs[i],
                 self.dsts[i],
@@ -814,12 +812,14 @@ class CrashGraphDataset(CrashBaseDataset):
             )
             g = self.add_edge_features(g, mesh[0])
             x_e = g.edge_attr.to(torch.float32)
+            if edge_dim is None:
+                edge_dim = x_e.shape[1]
+                edge_mean = torch.zeros(edge_dim, dtype=torch.float32)
+                edge_meansqr = torch.zeros(edge_dim, dtype=torch.float32)
             m = torch.mean(x_e, dim=0)
             msq = torch.mean(x_e * x_e, dim=0)
-            edge_mean = m if edge_mean is None else edge_mean + m / self.num_samples
-            edge_meansqr = (
-                msq if edge_meansqr is None else edge_meansqr + msq / self.num_samples
-            )
+            edge_mean += m / self.num_samples
+            edge_meansqr += msq / self.num_samples
 
         edge_var = torch.clamp(edge_meansqr - edge_mean * edge_mean, min=0.0)
         edge_std = torch.sqrt(edge_var + EPS)
