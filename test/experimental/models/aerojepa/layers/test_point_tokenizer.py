@@ -61,6 +61,19 @@ def test_cluster_size_nonpositive_raises():
         PointCloudTokenizer(max_point_tokens=8, strategy="fps_cluster", cluster_size=0)
 
 
+@pytest.mark.parametrize(
+    "strategy",
+    ["random_cluster", "fps_cluster", "voxel_fps_cluster"],
+)
+def test_cluster_size_missing_for_clustering_strategy_raises(strategy):
+    """The clustering strategies reject a missing ``cluster_size``."""
+    kwargs = {"max_point_tokens": 8, "strategy": strategy}
+    if strategy == "voxel_fps_cluster":
+        kwargs["voxel_size"] = 0.3
+    with pytest.raises(ValueError, match="cluster_size must be provided"):
+        PointCloudTokenizer(**kwargs)
+
+
 def test_knn_chunk_size_nonpositive_raises():
     """``knn_chunk_size <= 0`` is rejected."""
     with pytest.raises(ValueError, match="knn_chunk_size must be > 0"):

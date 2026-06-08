@@ -263,6 +263,14 @@ class PointCloudTokenizer(nn.Module):
                 "prototype_coords must be provided for "
                 "tokenizer_strategy='data_prototype_cluster'."
             )
+        if (
+            self.strategy in {"random_cluster", "fps_cluster", "voxel_fps_cluster"}
+            and self.cluster_size is None
+        ):
+            raise ValueError(
+                f"cluster_size must be provided for tokenizer_strategy="
+                f"'{self.strategy}'."
+            )
 
     @property
     def uses_cluster_pooling(self) -> bool:
@@ -420,9 +428,7 @@ class PointCloudTokenizer(nn.Module):
             max_tokens=max_tokens,
         )
 
-        cluster_size = (
-            max_tokens if self.cluster_size is None else int(self.cluster_size)
-        )
+        cluster_size = int(self.cluster_size)
         cluster_idx = chunked_knn_indices(
             query_coords=token_positions,
             key_coords=point_positions,
