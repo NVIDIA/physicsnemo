@@ -674,7 +674,7 @@ pipeline:
   reader:
     _target_: ${dp:MeshReaderWithGlobalData}
     path: ${train_datadir}
-    pattern: "**/*.pdmsh/_tensordict/boundaries/vehicle"
+    pattern: "run_*/*.pdmsh/_tensordict/boundaries/vehicle"
     subsample_n_cells: ${sampling_resolution}
     merge_global_data_from: "../../global_data"
   augmentations:
