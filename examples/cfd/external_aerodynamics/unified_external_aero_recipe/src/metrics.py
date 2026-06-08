@@ -37,8 +37,8 @@ from typing import Literal, TypeAlias
 import torch
 import torch.distributed as dist
 from jaxtyping import Float
+from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
-
 from utils import FieldType, align_scalar_shapes, field_dim, validate_field_coverage
 
 ### Recipe-wide alias for the metric-name enum that the dataset YAMLs use.
