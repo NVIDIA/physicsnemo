@@ -150,7 +150,7 @@ def _load_checkpoint(
     device: torch.device,
 ) -> None:
     """Load model weights, applying EMA shadow when present and requested."""
-    payload = torch.load(ckpt_path, map_location=device, weights_only=False)
+    payload = torch.load(ckpt_path, map_location=device, weights_only=True)
     model.load_state_dict(payload["model"], strict=True)
     if use_ema and "ema_shadow" in payload:
         ema = ExponentialMovingAverage(
