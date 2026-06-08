@@ -88,6 +88,52 @@ def compute_right_pad_to_multiple(
     return tuple(pads)
 
 
+def compute_right_pad_to_multiple_per_dim(
+    spatial_shape: Sequence[int],
+    *,
+    multiple: int = 8,
+    min_right_pad: int | Sequence[int] = 0,
+) -> tuple[int, ...]:
+    r"""Per-dimension-minimum variant of :func:`compute_right_pad_to_multiple`.
+
+    Used by the 4D xFNO wrapper
+    (:class:`~physicsnemo.experimental.models.xdeeponet.FNO4DWrapper`) so
+    each of the convolved axes :math:`(X, Y, Z, T)` can carry its own
+    minimum right-pad while sharing the same alignment ``multiple``.
+
+    Parameters
+    ----------
+    spatial_shape : Sequence[int]
+        Current spatial dimension sizes.
+    multiple : int, optional
+        Target alignment (default ``8``).
+    min_right_pad : int or Sequence[int], optional
+        Minimum right-side padding.  An ``int`` applies the same minimum to
+        every dimension; a sequence must have length ``len(spatial_shape)``
+        and supplies a per-dimension minimum (default ``0``).
+
+    Returns
+    -------
+    tuple[int, ...]
+        Right-side padding per dimension such that each ``(d + pad)`` is a
+        multiple of *multiple* and ``pad`` is at least that dimension's
+        minimum.
+    """
+    if isinstance(min_right_pad, int):
+        mins = [min_right_pad] * len(spatial_shape)
+    else:
+        mins = list(min_right_pad)
+        if len(mins) != len(spatial_shape):
+            raise ValueError(
+                f"min_right_pad length must match spatial_shape length "
+                f"({len(mins)} vs {len(spatial_shape)})"
+            )
+    return tuple(
+        compute_right_pad_to_multiple((d,), multiple=multiple, min_right_pad=m)[0]
+        for d, m in zip(spatial_shape, mins)
+    )
+
+
 def pad_right_nd(
     x: Shaped[Tensor, "..."],
     *,
@@ -248,6 +294,7 @@ def pad_spatial_right(
 
 __all__ = [
     "compute_right_pad_to_multiple",
+    "compute_right_pad_to_multiple_per_dim",
     "pad_right_nd",
     "pad_spatial_right",
 ]

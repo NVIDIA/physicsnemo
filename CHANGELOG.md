@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Supports multi-channel output, multiple decoder types (MLP, Conv,
   temporal projection), composable Fourier / UNet / Conv spatial branches
   (`SpatialBranch`), and coordinate features.
+- Adds the 4D xFNO operator alongside `DeepONet` in the xdeeponet package:
+  `FNO4D` / `FNO4DWrapper` (pure 4D FNO over `(B, X, Y, Z, T, C)`, i.e. 3D
+  space + time).  The wrapper adds automatic right-side spectral padding and
+  optional autoregressive time-axis extension.  Behavior-preserving port of
+  the Neural Operator Factory source; this is the higher-dimensional operator
+  the dimension-capped (`dimension=2|3`) `DeepONet` core does not cover.  3D
+  FNO / Conv-FNO / U-FNO operators are expressed directly as
+  `DeepONet(trunk=None, dimension=3)` with a Fourier/UNet/Conv `SpatialBranch`
+  rather than as separate classes.
 - Adds `Sin` elementwise sine activation to `physicsnemo.nn`, registered
   in `ACT2FN` so it can be looked up by name (`get_activation("sin")`).
 - Adds active-learning recipe for external-aerodynamics surrogates

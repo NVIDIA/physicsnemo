@@ -38,12 +38,27 @@ plus the ``temporal_projection`` decoder variant.  See the
 examples; see :class:`SpatialBranch` for the spatial-encoder
 composition options (Fourier / UNet / Conv layers, multi-layer
 pointwise lift, optional coordinate-feature channels).
+
+The 4D xFNO operator ships alongside :class:`DeepONet` in this package:
+
+- :class:`FNO4D` / :class:`FNO4DWrapper` — pure 4D FNO over
+  :math:`(B, X, Y, Z, T, C)` (3D space + time), the higher-dimensional
+  operator that the :class:`DeepONet` core (capped at ``dimension=3``)
+  does not cover.
+
+3D FNO / Conv-FNO / U-FNO operators are *not* provided as separate classes:
+they are expressed directly as :class:`DeepONet` with ``trunk=None`` and a
+:class:`SpatialBranch` composed of Fourier / UNet / Conv layers over the
+:math:`(H, W, T)` axes.
 """
 
 from .branches import SpatialBranch
 from .deeponet import DeepONet
+from .fno4d import FNO4D, FNO4DWrapper
 
 __all__ = [
     "DeepONet",
     "SpatialBranch",
+    "FNO4D",
+    "FNO4DWrapper",
 ]
