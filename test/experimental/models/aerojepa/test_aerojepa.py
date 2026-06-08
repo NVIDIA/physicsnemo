@@ -18,6 +18,7 @@
 
 import inspect
 
+import pytest
 import torch
 
 from physicsnemo.core.module import Module
@@ -110,6 +111,32 @@ def test_forward_returns_plain_tensor(device):
     )
     assert isinstance(field, torch.Tensor)
     assert field.shape == (30, 4)
+
+
+def test_forward_rejects_rank3_inputs(device):
+    """``forward`` raises when ``context_pos`` / ``context_feat`` are not rank 2."""
+    model = _build_model().to(device).eval()
+    with pytest.raises(ValueError, match="rank 2"):
+        model.forward(
+            context_pos=torch.randn(2, 40, 3, device=device),
+            context_feat=torch.zeros(2, 40, 0, device=device),
+            gen_params=torch.randn(4, device=device),
+            query_pos=torch.randn(30, 3, device=device),
+            query_sdf=torch.randn(30, 1, device=device),
+        )
+
+
+def test_forward_rejects_mismatched_point_counts(device):
+    """``forward`` raises when ``context_pos`` and ``context_feat`` disagree on N."""
+    model = _build_model().to(device).eval()
+    with pytest.raises(ValueError, match="agree on the point count"):
+        model.forward(
+            context_pos=torch.randn(40, 3, device=device),
+            context_feat=torch.zeros(41, 0, device=device),
+            gen_params=torch.randn(4, device=device),
+            query_pos=torch.randn(30, 3, device=device),
+            query_sdf=torch.randn(30, 1, device=device),
+        )
 
 
 def test_forward_signature_drops_target_coords():
