@@ -22,7 +22,7 @@ must be paired with explicit ``isinstance(obj, TensorDict)`` branches
 for TD inputs to be walked at all. These tests pin that explicit
 handling for:
 
-- :func:`train._recursive_to_device`: must move TensorDict leaves to
+- :func:`utils.recursive_to_device`: must move TensorDict leaves to
   the requested device, including when the TD is nested under a plain
   dict. The tests assert ``result.device == cpu`` -- a freshly built
   ``TensorDict(..., batch_size=[N])`` has ``device is None``, and
@@ -43,6 +43,10 @@ import pytest
 import torch
 from tensordict import TensorDict
 
+### `recursive_to_device` lives in `utils` (tensorboard-free), so it is
+### imported unconditionally.
+from utils import recursive_to_device
+
 ### `train.py` imports `torch.utils.tensorboard.SummaryWriter` at module
 ### load, which transitively requires the `tensorboard` package. That
 ### dep is not declared in pyproject.toml; CI / training environments
@@ -51,10 +55,7 @@ from tensordict import TensorDict
 ### directly (no skip).
 pytest.importorskip("tensorboard")
 
-from train import (  # noqa: E402  -- after the importorskip guard
-    _recursive_to_device,
-    _walk_batch_for_logging,
-)
+from train import _walk_batch_for_logging  # noqa: E402  -- after the skip guard
 from output_normalize import normalize_output_to_tensordict  # noqa: E402
 from physicsnemo.mesh import (  # noqa: E402  -- after the importorskip guard
     DomainMesh,
@@ -63,12 +64,12 @@ from physicsnemo.mesh import (  # noqa: E402  -- after the importorskip guard
 
 
 ### ---------------------------------------------------------------------------
-### _recursive_to_device
+### recursive_to_device
 ### ---------------------------------------------------------------------------
 
 
 class TestRecursiveToDevice:
-    """Tests for `_recursive_to_device`."""
+    """Tests for `recursive_to_device`."""
 
     def test_tensordict_input_moves_to_device(self):
         """Bare TD input goes through `.to(device)`."""
@@ -80,7 +81,7 @@ class TestRecursiveToDevice:
         ### Baseline: TD with no explicit device has .device is None.
         assert td.device is None
 
-        result = _recursive_to_device(td, cpu)
+        result = recursive_to_device(td, cpu)
         assert isinstance(result, TensorDict)
         ### `.to(cpu)` sets `.device`, so a non-None `.device` here is
         ### proof the walker recursed into the TD branch (a skipped TD
@@ -100,7 +101,7 @@ class TestRecursiveToDevice:
         }
         assert batch["targets"].device is None
 
-        result = _recursive_to_device(batch, cpu)
+        result = recursive_to_device(batch, cpu)
         assert isinstance(result, dict)
         assert isinstance(result["targets"], TensorDict)
         assert result["targets"].device == cpu
