@@ -173,6 +173,17 @@ def test_build_target_token_coords_single_arg(device):
     assert coords.shape[-1] == 3
 
 
+def test_build_target_token_coords_rejects_non_transformer_encoder(device):
+    """``build_target_token_coords`` raises when the target encoder lacks ``_tokenize_single``."""
+    model = _build_model().to(device).eval()
+    # Drop the inner PointTransformer so the defensive branch trips.
+    del model.trunk.target_encoder._modules["encoder"]
+    with pytest.raises(ValueError, match="transformer tokenization path"):
+        model.build_target_token_coords(
+            point_positions=torch.randn(40, 3, device=device)
+        )
+
+
 def test_decode_field_chunked_fp32_returns_cpu(device):
     """``decode_field_chunked`` with fp32 returns a CPU tensor of the right shape."""
     model = _build_model().to(device).eval()
