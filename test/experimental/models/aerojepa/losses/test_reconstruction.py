@@ -90,6 +90,41 @@ def test_mse_shape_mismatch_raises():
         mse_loss(torch.zeros(3, 4), torch.zeros(3, 5))
 
 
+@pytest.mark.parametrize(
+    "loss_fn",
+    [mse_loss, relative_l2_loss, relative_mse_loss, relative_l2_mse_loss],
+)
+def test_uniform_point_weights_match_unweighted(loss_fn, device):
+    """``point_weights=ones`` produces the same scalar as omitting them."""
+    pred = torch.randn(8, 3, device=device)
+    target = torch.randn(8, 3, device=device)
+    weights = torch.ones(8, device=device)
+    weighted = loss_fn(pred, target, point_weights=weights)
+    unweighted = loss_fn(pred, target)
+    assert torch.allclose(weighted, unweighted, atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "loss_fn",
+    [mse_loss, relative_l2_loss, relative_mse_loss, relative_l2_mse_loss],
+)
+def test_zero_point_weight_drops_row(loss_fn, device):
+    """A zeroed point weight makes that row contribute nothing to the loss."""
+    pred = torch.randn(8, 3, device=device)
+    target = torch.randn(8, 3, device=device)
+    weights = torch.ones(8, device=device)
+    weights[2] = 0.0
+    # A massive outlier in the dropped row would dominate an unweighted
+    # loss; the weighted loss should ignore it entirely and match the
+    # unweighted loss on the surviving 7 rows.
+    target_bad = target.clone()
+    target_bad[2] = 1.0e6
+    keep = weights.bool()
+    weighted = loss_fn(pred, target_bad, point_weights=weights)
+    expected = loss_fn(pred[keep], target_bad[keep])
+    assert torch.allclose(weighted, expected, atol=1e-5)
+
+
 # ---------------------------------------------------------------------------
 # Per-channel relative L2
 # ---------------------------------------------------------------------------
