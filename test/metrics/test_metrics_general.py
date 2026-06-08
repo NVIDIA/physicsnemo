@@ -915,3 +915,22 @@ def test_ensemble_mse_rmse(device, rtol: float = 1e-5, atol: float = 1e-5):
 
     # EnsembleRMSE <= EnsembleMSE when MSE > 1, else >= — just check consistency
     assert torch.allclose(R.finalize() ** 2, M.finalize(), rtol=rtol, atol=atol)
+
+    # __call__ with wrong spatial shape should also raise via _check_shape
+    with pytest.raises(ValueError):
+        M(torch.zeros((5, 7, 14), device=device), target)
+
+    # finalize() on a fresh (uninitialized) instance should raise ValueError, not return NaN
+    with pytest.raises(ValueError):
+        em.EnsembleMSE((1, 72, 144), device=device).finalize()
+    with pytest.raises(ValueError):
+        em.EnsembleRMSE((1, 72, 144), device=device).finalize()
+
+    # EnsembleRMSE.finalize() must store self.rmse, not just self.mse
+    R2 = em.EnsembleRMSE((1, 72, 144), device=device)
+    R2(preds, target)
+    R2.finalize()
+    assert hasattr(R2, "rmse"), "EnsembleRMSE.finalize() must set self.rmse"
+    assert torch.allclose(
+        R2.rmse, torch.sqrt(R2.mse), rtol=rtol, atol=atol
+    ), "self.rmse must equal sqrt(self.mse)"

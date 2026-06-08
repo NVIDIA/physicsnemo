@@ -467,6 +467,7 @@ class EnsembleMSE(EnsembleMetrics):
         Tensor
             Running ensemble MSE using samples seen so far.
         """
+        self._check_shape(preds)
         if preds.device != self.device:
             raise AssertionError(
                 f"Input device, {preds.device}, and Module device, {self.device}, must be the same."
@@ -531,6 +532,10 @@ class EnsembleMSE(EnsembleMetrics):
         Tensor
             Final ensemble mean squared error.
         """
+        if not (self.n > 0):
+            raise ValueError(
+                "Error! finalize() called before any samples were accumulated."
+            )
         self.mse = self.sum_sq_err / self.n
         return self.mse
 
@@ -594,4 +599,5 @@ class EnsembleRMSE(EnsembleMSE):
         Tensor
             Final ensemble root mean squared error.
         """
-        return torch.sqrt(super().finalize())
+        self.rmse = torch.sqrt(super().finalize())
+        return self.rmse
