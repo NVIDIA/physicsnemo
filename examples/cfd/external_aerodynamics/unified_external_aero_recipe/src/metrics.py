@@ -96,6 +96,19 @@ METRIC_FUNCTIONS: dict[MetricName, Callable[..., torch.Tensor]] = {
 DEFAULT_METRICS: tuple[MetricName, ...] = ("l1", "l2", "mae")
 
 
+def resolve_metrics(cfg: DictConfig) -> list[MetricName]:
+    """Resolve the recipe-side ``cfg.metrics`` list, or the default set.
+
+    ``metrics:`` is a recipe-level (not per-dataset) choice; both the
+    trainer and the inference companion read it the same way. Falls back
+    to :data:`DEFAULT_METRICS` when the key is unset.
+    """
+    metrics_cfg = OmegaConf.select(cfg, "metrics", default=None)
+    if metrics_cfg is None:
+        return list(DEFAULT_METRICS)
+    return OmegaConf.to_container(metrics_cfg, resolve=True)
+
+
 ### ---------------------------------------------------------------------------
 ### MetricCalculator
 ### ---------------------------------------------------------------------------

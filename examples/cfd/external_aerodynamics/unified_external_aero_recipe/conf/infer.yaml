@@ -87,3 +87,27 @@ sampling_resolution: 100000000
 
 # Metrics to report (training space, identical to validation).
 metrics: [l2]
+
+# -- Integrated force / moment coefficients (surface cases) -----------------
+# Integrates the predicted (and reference) surface traction (-Cp*n + Cf)
+# over the vehicle into force/moment coefficients: CD/CL/CS (drag/lift/side)
+# and CMR/CMP/CMY (roll/pitch/yaw). Auto-skips when the dataset has no
+# Cp/Cf surface fields (e.g. volume runs). See src/forces.py for the math
+# and sign/orientation conventions.
+force_coefficients:
+  enabled: true
+  # A_ref in physical units. CD/CL/CM magnitudes are only physically
+  # meaningful when this matches the dataset's convention (e.g. the vehicle
+  # frontal area); the predicted-vs-reference comparison is independent of
+  # it. Set this to your reference area for absolute coefficients.
+  reference_area: 1.0
+  # L_ref for the moment coefficient. null -> use each sample's
+  # global_data.L_ref (the same length used to non-dimensionalize geometry).
+  reference_length: null
+  # Moment reference point, in the centered + physical-scale body frame
+  # (origin = the CenterMesh area/point centroid; the absolute offset is
+  # not recoverable). Predicted and reference moments use the same frame.
+  moment_center: [0.0, 0.0, 0.0]
+  # Global "up" axis; the drag axis is taken from each sample's U_inf and
+  # the lift axis is `up` orthogonalized against drag.
+  up_direction: [0.0, 0.0, 1.0]

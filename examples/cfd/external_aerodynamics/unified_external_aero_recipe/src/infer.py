@@ -62,11 +62,9 @@ Caveats:
   all-reduced), but distributed writing has not been a focus.
 """
 
-import json
 import logging
 import os
 from collections import defaultdict
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -74,20 +72,21 @@ import hydra
 import torch
 import torch.distributed as dist
 from collate import build_collate_fn
-from datasets import load_dataset_config
-from metrics import DEFAULT_METRICS, MetricCalculator, MetricName
+from datasets import build_dataloaders, load_dataset_config
+from forces import ForceAccumulator, ForceContext
+from metrics import MetricCalculator, resolve_metrics
 from nondim import NonDimensionalizeByMetadata, NondimFieldType, freestream_scales
 from omegaconf import DictConfig, OmegaConf
-from output_normalize import IOType, normalize_output_to_tensordict
+from output_normalize import IOType, normalize_output_to_tensordict, require_output_type
 from tabulate import tabulate
 from tensordict import TensorDict
-from utils import FieldType, set_seed
-
-### Reuse the trainer's dataloader assembly, autocast helper, and the
-### Mesh/TensorDict-aware device mover rather than duplicating them. The
-### `@hydra.main`-decorated launcher in train.py is not executed on
-### import, so importing these is side-effect free.
-from train import _recursive_to_device, build_dataloaders, get_autocast_context
+from utils import (
+    FieldType,
+    get_autocast_context,
+    make_jsonl_logger,
+    recursive_to_device,
+    set_seed,
+)
 
 from physicsnemo import datapipes  # noqa: F401 - registers ${dp:...} resolver
 from physicsnemo.distributed import DistributedManager
@@ -169,9 +168,7 @@ def build_redim_field_types(ds_yaml: DictConfig) -> dict[str, NondimFieldType]:
             for assoc in ("cell_data", "point_data"):
                 rename_map.update(t.get(assoc, {}) or {})
 
-    return {
-        rename_map.get(raw, raw): ftype for raw, ftype in nondim_fields.items()
-    }
+    return {rename_map.get(raw, raw): ftype for raw, ftype in nondim_fields.items()}
 
 
 def redimensionalize(
@@ -235,9 +232,7 @@ def _sample_id(metadata: dict[str, Any], idx: int) -> str:
     hint = ""
     if src:
         parts = Path(src).parts
-        mesh_part = next(
-            (p for p in parts if p.endswith((".pdmsh", ".pmsh"))), None
-        )
+        mesh_part = next((p for p in parts if p.endswith((".pdmsh", ".pmsh"))), None)
         if mesh_part is not None:
             stem = mesh_part.rsplit(".", 1)[0]
             pos = parts.index(mesh_part)
@@ -301,6 +296,30 @@ def attach_and_save(
 
 
 ### ---------------------------------------------------------------------------
+### Aggregation
+### ---------------------------------------------------------------------------
+
+
+def _allreduce_sums(
+    totals: dict[str, float], count: int, device: torch.device | str
+) -> tuple[dict[str, float], int]:
+    """All-reduce a ``{key: running_sum}`` dict and the sample count.
+
+    No-op (returns a plain copy) when not running distributed. Folds every
+    sum plus the count into a single collective.
+    """
+    if not (
+        dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1
+    ):
+        return dict(totals), count
+    keys = sorted(totals)
+    packed = torch.tensor([totals[k] for k in keys] + [float(count)], device=device)
+    dist.all_reduce(packed)
+    *sums, total = packed.tolist()
+    return {k: s for k, s in zip(keys, sums)}, int(total)
+
+
+### ---------------------------------------------------------------------------
 ### Driver
 ### ---------------------------------------------------------------------------
 
@@ -331,11 +350,7 @@ def main(cfg: DictConfig) -> None:
     ### built and discarded -- a minor cost for full reuse.
     _train_loader, val_loader, normalizer, dataset_info = build_dataloaders(cfg)
     target_config: dict[str, FieldType] = dataset_info["targets"]
-    output_type: IOType | None = cfg.get("output_type", None)
-    if output_type is None:
-        raise ValueError(
-            "Model YAML must declare `output_type` (one of 'mesh', 'tensors')."
-        )
+    output_type = require_output_type(cfg)
 
     logger.info(f"Config:\n{OmegaConf.to_yaml(cfg, resolve=True)}")
     logger.info(f"Targets (from dataset YAML): {target_config}")
@@ -353,12 +368,7 @@ def main(cfg: DictConfig) -> None:
     log_jsonl = None
     if is_rank0:
         pred_dir.mkdir(parents=True, exist_ok=True)
-        metrics_path = run_dir / "metrics.jsonl"
-
-        def log_jsonl(record: dict) -> None:
-            record["ts"] = datetime.now(timezone.utc).isoformat()
-            with open(metrics_path, "a") as f:
-                f.write(json.dumps(record, default=str) + "\n")
+        log_jsonl = make_jsonl_logger(run_dir / "metrics.jsonl")
 
     # -- Model + checkpoint -----------------------------------------------------
     model = hydra.utils.instantiate(cfg.model, _convert_="partial").to(device)
@@ -390,29 +400,44 @@ def main(cfg: DictConfig) -> None:
     )
 
     # -- Re-dimensionalization setup --------------------------------------------
+    ### `field_types` is computed unconditionally because the force
+    ### integration needs it to identify Cp / Cf even when written fields
+    ### stay in training space; `active_*` gate the physical conversion.
     redimensionalize_on = bool(cfg.get("redimensionalize", True))
     recipe_root = Path(__file__).resolve().parent.parent
     ds_yaml = load_dataset_config(recipe_root / "datasets" / f"{cfg.dataset}.yaml")
-    field_types = build_redim_field_types(ds_yaml) if redimensionalize_on else {}
+    field_types = build_redim_field_types(ds_yaml)
     nondim_helper = (
         NonDimensionalizeByMetadata(fields=field_types) if field_types else None
     )
     active_normalizer = normalizer if redimensionalize_on else None
+    active_nondim = nondim_helper if redimensionalize_on else None
     logger.info(
         f"Re-dimensionalization: {'on' if redimensionalize_on else 'off'} "
         f"(field types: {field_types}, "
-        f"normalizer: {'yes' if active_normalizer is not None else 'no'})"
+        f"normalizer: {'yes' if normalizer is not None else 'no'})"
     )
 
+    # -- Force / moment coefficient setup (surface cases) -----------------------
+    force_cfg = OmegaConf.select(cfg, "force_coefficients", default=None)
+    force_ctx = ForceContext.from_config(force_cfg, field_types, device)
+    force_acc = ForceAccumulator()
+    if force_ctx is not None:
+        logger.info(
+            f"Force coefficients: integrating Cp='{force_ctx.pressure_field}', "
+            f"Cf='{force_ctx.shear_field}' "
+            f"(reference_area={force_ctx.reference_area}, reference_length="
+            f"{force_ctx.reference_length if force_ctx.reference_length is not None else 'L_ref'})"
+        )
+    elif force_cfg is not None and force_cfg.get("enabled", False):
+        logger.info(
+            "Force coefficients enabled but unavailable for this dataset "
+            "(no pressure + shear surface fields); skipping."
+        )
+
     # -- Metrics ----------------------------------------------------------------
-    metrics_cfg = OmegaConf.select(cfg, "metrics", default=None)
-    metrics_list: list[MetricName] = (
-        list(DEFAULT_METRICS)
-        if metrics_cfg is None
-        else OmegaConf.to_container(metrics_cfg, resolve=True)
-    )
     metric_calculator = MetricCalculator(
-        target_config=target_config, metrics=metrics_list
+        target_config=target_config, metrics=resolve_metrics(cfg)
     )
 
     if is_rank0 and log_jsonl is not None:
@@ -441,7 +466,7 @@ def main(cfg: DictConfig) -> None:
     for i, idx in enumerate(sampler):
         sample = dataset[idx]
         domain, metadata = sample
-        batch = _recursive_to_device(collate_fn([sample]), device)
+        batch = recursive_to_device(collate_fn([sample]), device)
 
         with torch.no_grad(), get_autocast_context(cfg.precision):
             output = model(**batch["forward_kwargs"])
@@ -458,19 +483,33 @@ def main(cfg: DictConfig) -> None:
             totals[k] += v
         count += 1
 
+        pred_pts = _to_pointwise(pred_td, output_type)
+        true_pts = _to_pointwise(batch["targets"], output_type)
+
+        ### Integrated force / moment coefficients (surface cases). The
+        ### ForceContext un-normalizes to Cp / Cf internally and returns
+        ### None for non-surface samples.
+        sample_forces = None
+        if force_ctx is not None:
+            sample_forces = force_ctx.coefficients(
+                domain, pred_pts, true_pts, normalizer
+            )
+            if sample_forces is not None:
+                force_acc.update(*sample_forces)
+
         ### Re-dimensionalize predictions + reference to physical units,
         ### then write them back onto the DomainMesh.
         pred_phys = redimensionalize(
-            _to_pointwise(pred_td, output_type),
+            pred_pts,
             normalizer=active_normalizer,
-            nondim=nondim_helper,
+            nondim=active_nondim,
             field_types=field_types,
             global_data=domain.global_data,
         )
         true_phys = redimensionalize(
-            _to_pointwise(batch["targets"], output_type),
+            true_pts,
             normalizer=active_normalizer,
-            nondim=nondim_helper,
+            nondim=active_nondim,
             field_types=field_types,
             global_data=domain.global_data,
         )
@@ -488,27 +527,32 @@ def main(cfg: DictConfig) -> None:
 
         if is_rank0 and (i % log_every == 0 or i == n_samples - 1):
             metrics_str = "  ".join(f"{k}={v:.4f}" for k, v in sample_metrics.items())
+            if sample_forces is not None:
+                pred_c, true_c = sample_forces
+                metrics_str += (
+                    f"  | CD(p/t)={pred_c['CD']:.4f}/{true_c['CD']:.4f}"
+                    f"  CL(p/t)={pred_c['CL']:.4f}/{true_c['CL']:.4f}"
+                )
             logger.info(f"  [{i + 1}/{n_samples}] {sample_id}  {metrics_str}")
             if log_jsonl is not None:
-                log_jsonl(
-                    {
-                        "phase": "sample",
-                        "step": i,
-                        "sample_id": sample_id,
-                        "metrics": sample_metrics,
+                record: dict[str, Any] = {
+                    "phase": "sample",
+                    "step": i,
+                    "sample_id": sample_id,
+                    "metrics": sample_metrics,
+                }
+                if sample_forces is not None:
+                    record["forces"] = {
+                        "pred": sample_forces[0],
+                        "true": sample_forces[1],
                     }
-                )
+                log_jsonl(record)
 
     # -- Aggregate (all-reduce when distributed) --------------------------------
-    if dist_manager.world_size > 1 and dist.is_initialized():
-        keys = sorted(totals)
-        packed = torch.tensor(
-            [totals[k] for k in keys] + [float(count)], device=device
-        )
-        dist.all_reduce(packed)
-        *sums, total_count = packed.tolist()
-        totals = {k: s for k, s in zip(keys, sums)}
-        count = int(total_count)
+    totals, count = _allreduce_sums(totals, count, device)
+    force_acc.totals, force_acc.count = _allreduce_sums(
+        force_acc.totals, force_acc.count, device
+    )
 
     averages = {k: totals[k] / max(count, 1) for k in sorted(totals)}
     if is_rank0:
@@ -520,6 +564,27 @@ def main(cfg: DictConfig) -> None:
         logger.info(f"\nInference metrics over {count} samples:\n{table}\n")
         if log_jsonl is not None:
             log_jsonl({"phase": "summary", "num_samples": count, "metrics": averages})
+
+        ### Force / moment coefficient summary (surface cases only).
+        if force_acc.count > 0:
+            rows, coeff_summary = force_acc.summary()
+            ftable = tabulate(
+                rows,
+                headers=["Coeff", "pred (mean)", "true (mean)", "MAE"],
+                tablefmt="pretty",
+            )
+            logger.info(
+                f"\nForce / moment coefficients over {force_acc.count} samples:\n"
+                f"{ftable}\n"
+            )
+            if log_jsonl is not None:
+                log_jsonl(
+                    {
+                        "phase": "forces_summary",
+                        "num_samples": force_acc.count,
+                        "coefficients": coeff_summary,
+                    }
+                )
 
     logger.info(f"Inference complete! Predictions written to {pred_dir}")
 

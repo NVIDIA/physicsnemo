@@ -36,17 +36,32 @@ from typing import Any, Literal, TypeAlias
 
 import torch
 from jaxtyping import Float
+from omegaconf import DictConfig
 from tensordict import TensorDict
+from utils import FieldType, field_dim
 
 from physicsnemo.mesh import Mesh
-
-from utils import FieldType, field_dim
 
 ### Recipe-wide I/O contract literal: every model declares whether its
 ### `forward()` consumes / returns Mesh-like objects or plain `(B, N, C)`
 ### tensors. The collate, output normalizer, and forward-pass dispatch
 ### all key off this same enum.
 IOType: TypeAlias = Literal["mesh", "tensors"]
+
+
+def require_output_type(cfg: DictConfig) -> IOType:
+    """Return the model's declared ``output_type``, or raise if missing.
+
+    Both entry points (``train.py`` / ``infer.py``) require the model YAML
+    to declare ``output_type`` (``"mesh"`` or ``"tensors"``) so the forward
+    output can be unpacked; this is the shared validation.
+    """
+    output_type = cfg.get("output_type", None)
+    if output_type is None:
+        raise ValueError(
+            "Model YAML must declare `output_type` (one of 'mesh', 'tensors')."
+        )
+    return output_type
 
 
 def split_concat_by_target(
