@@ -131,3 +131,43 @@ def test_from_checkpoint_override(device):
         )
 
     Path("checkpoint.mdlus").unlink(missing_ok=False)
+
+
+def test_from_checkpoint_state_dict_mapper(device, tmp_path):
+    """Version-aware state-dict key remapping loads refactored checkpoints."""
+
+    class LegacyLinearModel(physicsnemo.core.Module):
+        __model_checkpoint_version__ = "0.1.0"
+
+        def __init__(self, features=4):
+            super().__init__()
+            self.features = features
+            self.layer = torch.nn.Linear(features, features)
+
+    class CurrentLinearModel(physicsnemo.core.Module):
+        __model_checkpoint_version__ = "0.2.0"
+        __supported_model_checkpoint_version__ = {
+            "0.1.0": "Loading legacy checkpoint with renamed layer keys."
+        }
+
+        def __init__(self, features=4):
+            super().__init__()
+            self.features = features
+            self.block = torch.nn.Linear(features, features)
+
+        @classmethod
+        def _backward_compat_state_dict_mapper(cls, version, state_dict):
+            if version == "0.1.0":
+                return {k.replace("layer.", "block."): v for k, v in state_dict.items()}
+            return state_dict
+
+    torch.manual_seed(0)
+    ckpt_path = tmp_path / "refactored.mdlus"
+    model = LegacyLinearModel().to(device)
+    layer_weight = model.layer.weight.detach().clone()
+    layer_bias = model.layer.bias.detach().clone()
+    model.save(ckpt_path)
+
+    loaded = CurrentLinearModel.from_checkpoint(ckpt_path).to(device)
+    assert torch.allclose(loaded.block.weight, layer_weight)
+    assert torch.allclose(loaded.block.bias, layer_bias)
