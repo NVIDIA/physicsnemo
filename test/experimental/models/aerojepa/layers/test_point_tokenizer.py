@@ -183,6 +183,23 @@ def test_voxel_fps_cluster_missing_voxel_size_raises(device):
         )
 
 
+def test_data_prototype_cluster_empty_input(device):
+    """``data_prototype_cluster`` on empty input returns zero-feature prototype tokens."""
+    prototype_coords = torch.randn(5, 3, device=device)
+    tok = PointCloudTokenizer(
+        max_point_tokens=8,
+        strategy="data_prototype_cluster",
+        prototype_coords=prototype_coords,
+    ).to(device)
+    out_pos, out_feat = tok(
+        point_positions=torch.zeros(0, 3, device=device),
+        point_features=torch.zeros(0, 4, device=device),
+    )
+    assert out_pos.shape == (5, 3)
+    assert out_feat.shape == (5, 4)
+    assert torch.all(out_feat == 0)
+
+
 def test_forward_rank_mismatch_raises(device):
     """``forward`` rejects rank-3 inputs (use ``forward_batched``)."""
     tok = PointCloudTokenizer(max_point_tokens=8, strategy="random").to(device)

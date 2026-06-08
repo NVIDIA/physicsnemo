@@ -393,6 +393,18 @@ class PointCloudTokenizer(nn.Module):
             token_positions = self.prototype_coords.to(
                 device=point_positions.device, dtype=point_positions.dtype
             )
+            n_proto = int(token_positions.shape[0])
+            if n_points == 0:
+                # No source points: emit zero-feature tokens at the prototype
+                # coordinates with an empty cluster index. Avoids running KNN
+                # on an empty key set.
+                token_features = point_features.new_zeros(
+                    (n_proto, int(point_features.shape[-1]))
+                )
+                cluster_idx = point_positions.new_zeros(
+                    (n_proto, 0), dtype=torch.long
+                )
+                return token_positions, token_features, cluster_idx
             k = (
                 self.prototype_knn_k
                 if self.prototype_knn_k is not None
