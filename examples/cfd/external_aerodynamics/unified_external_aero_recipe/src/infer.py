@@ -93,7 +93,6 @@ from physicsnemo.mesh import DomainMesh
 from physicsnemo.utils import load_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
-
 ### ---------------------------------------------------------------------------
 ### Checkpoint resolution
 ### ---------------------------------------------------------------------------

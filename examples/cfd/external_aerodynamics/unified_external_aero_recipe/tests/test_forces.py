@@ -33,12 +33,12 @@ The rest pins the config/aggregation glue (`build_axis_frame`,
 
 from __future__ import annotations
 
+import forces
 import pytest
 import torch
 from conftest import make_surface_domain_mesh, make_volume_domain_mesh
 from omegaconf import OmegaConf
 
-import forces
 from physicsnemo.mesh import Mesh
 
 
@@ -113,6 +113,7 @@ def test_reference_area_scales_coefficients():
 
 
 def test_build_axis_frame_orthonormal():
+    """drag/lift/side are unit-length, mutually orthogonal, with drag along flow."""
     drag, lift, side = forces.build_axis_frame(
         torch.tensor([2.0, 0.0, 0.0]), torch.tensor([0.0, 0.0, 3.0])
     )
@@ -142,6 +143,7 @@ def test_build_axis_frame_degenerate_up_parallel_to_flow():
 
 
 def test_surface_force_fields_identifies_cp_cf():
+    """A surface field map (pressure + stress) resolves to its (pressure, shear) keys."""
     assert forces.surface_force_fields({"pressure": "pressure", "wss": "stress"}) == (
         "pressure",
         "wss",
@@ -149,6 +151,7 @@ def test_surface_force_fields_identifies_cp_cf():
 
 
 def test_surface_force_fields_missing_shear_returns_none():
+    """No stress field (the volume contract) returns None: forces need a shear field."""
     # volume contract: pressure present, no stress field
     assert (
         forces.surface_force_fields(
@@ -171,6 +174,7 @@ def _force_cfg(**overrides):
 
 
 def test_force_context_from_config_variants():
+    """from_config builds for surface fields; disabled/None/non-surface all give None."""
     ft = {"pressure": "pressure", "wss": "stress"}
     ctx = forces.ForceContext.from_config(_force_cfg(), ft, "cpu")
     assert ctx is not None
@@ -185,6 +189,7 @@ def test_force_context_from_config_variants():
 
 
 def test_force_context_coefficients_surface_and_volume():
+    """coefficients() integrates on a surface mesh and skips (None) a volume mesh."""
     ft = {"pressure": "pressure", "wss": "stress"}
     ctx = forces.ForceContext.from_config(_force_cfg(), ft, "cpu")
 
@@ -210,6 +215,7 @@ def test_force_context_coefficients_surface_and_volume():
 
 
 def test_force_accumulator_means_and_mae():
+    """Accumulator reports per-coefficient pred/true means and MAE over samples."""
     acc = forces.ForceAccumulator()
     pred_a = dict.fromkeys(forces.COEFFICIENT_NAMES, 1.0)
     true_a = dict.fromkeys(forces.COEFFICIENT_NAMES, 0.0)

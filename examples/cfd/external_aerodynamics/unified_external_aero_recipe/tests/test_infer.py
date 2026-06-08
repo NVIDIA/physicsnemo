@@ -29,17 +29,17 @@ import json
 import os
 from pathlib import Path
 
+import infer
 import pytest
 import torch
 from conftest import make_surface_domain_mesh, make_volume_domain_mesh
-from omegaconf import OmegaConf
-from tensordict import TensorDict
-
-import infer
 from metrics import DEFAULT_METRICS, resolve_metrics
 from nondim import NonDimensionalizeByMetadata, freestream_scales
-from physicsnemo.mesh import DomainMesh
+from omegaconf import OmegaConf
+from tensordict import TensorDict
 from utils import make_jsonl_logger, resolve_dict
+
+from physicsnemo.mesh import DomainMesh
 
 _RECIPE = Path(__file__).resolve().parent.parent
 _DATASETS = _RECIPE / "datasets"
@@ -51,6 +51,7 @@ _DATASETS = _RECIPE / "datasets"
 
 
 def test_build_redim_field_types_surface():
+    """Surface dataset config -> {pressure, wss} mapped to their nondim field types."""
     ds_yaml = infer.load_dataset_config(_DATASETS / "drivaer_ml_surface.yaml")
     assert infer.build_redim_field_types(ds_yaml) == {
         "pressure": "pressure",
@@ -59,6 +60,7 @@ def test_build_redim_field_types_surface():
 
 
 def test_build_redim_field_types_volume():
+    """Volume dataset config -> {velocity, pressure, nut} nondim field types."""
     ds_yaml = infer.load_dataset_config(_DATASETS / "drivaer_ml_volume.yaml")
     assert infer.build_redim_field_types(ds_yaml) == {
         "velocity": "velocity",
@@ -84,6 +86,7 @@ def _freestream_td() -> TensorDict:
 
 
 def test_redimensionalize_noop_without_transforms():
+    """No normalizer and no nondim transform -> fields returned unchanged (float-cast)."""
     td = TensorDict({"pressure": torch.randn(8)}, batch_size=[8])
     out = infer.redimensionalize(
         td, normalizer=None, nondim=None, field_types={}, global_data=_freestream_td()
@@ -92,6 +95,7 @@ def test_redimensionalize_noop_without_transforms():
 
 
 def test_redimensionalize_inverts_nondim():
+    """redimensionalize inverts the nondim transform: Cp -> p = Cp * q_inf + p_inf."""
     gd = _freestream_td()
     q_inf, p_inf, _u, _rho, _t = freestream_scales(gd)
     cp = torch.tensor([0.0, 1.0, -2.0])
@@ -115,6 +119,7 @@ def test_redimensionalize_inverts_nondim():
 
 
 def test_to_pointwise_tensors_squeezes_batch():
+    """'tensors' output: the leading batch-of-1 dim is squeezed to per-point shape."""
     td = TensorDict(
         {"pressure": torch.randn(1, 5), "wss": torch.randn(1, 5, 3)}, batch_size=[1, 5]
     )
@@ -124,6 +129,7 @@ def test_to_pointwise_tensors_squeezes_batch():
 
 
 def test_to_pointwise_mesh_passthrough():
+    """'mesh' output: an already point-wise TensorDict passes through unchanged."""
     td = TensorDict({"pressure": torch.randn(5)}, batch_size=[5])
     out = infer._to_pointwise(td, "mesh")
     assert list(out.batch_size) == [5]
@@ -135,16 +141,19 @@ def test_to_pointwise_mesh_passthrough():
 
 
 def test_sample_id_from_pdmsh_path():
+    """A .pdmsh path -> zero-padded index + parent case dir + file stem."""
     md = {"source_path": "/data/case/geo_LHC001_AoA_4/domain_0.pdmsh"}
     assert infer._sample_id(md, 7) == "00007_geo_LHC001_AoA_4_domain_0"
 
 
 def test_sample_id_surface_boundary_path():
+    """A boundary path inside a .pdmsh tree resolves back to the mesh's id."""
     md = {"source_path": "/d/geo_X/run.pdmsh/_tensordict/boundaries/vehicle"}
     assert infer._sample_id(md, 0) == "00000_geo_X_run"
 
 
 def test_sample_id_sanitizes_and_falls_back():
+    """Non-mesh path -> sanitized stem; missing source_path -> index-only fallback."""
     # non-mesh path -> stem; spaces / specials sanitized to underscores
     assert infer._sample_id({"source_path": "/d/a b*c.txt"}, 3) == "00003_a_b_c"
     # no source_path -> index-only fallback
@@ -157,6 +166,7 @@ def test_sample_id_sanitizes_and_falls_back():
 
 
 def test_resolve_checkpoint_path_explicit_wins():
+    """An explicit checkpoint_path takes precedence over run_id-derived paths."""
     cfg = OmegaConf.create(
         {"checkpoint_path": "/abs/ckpts", "run_id": "r", "output_dir": "inference"}
     )
@@ -164,6 +174,7 @@ def test_resolve_checkpoint_path_explicit_wins():
 
 
 def test_resolve_checkpoint_path_from_run_id():
+    """No explicit path -> <checkpoint_dir>/<run_id>/checkpoints."""
     cfg = OmegaConf.create(
         {
             "checkpoint_path": None,
@@ -178,6 +189,7 @@ def test_resolve_checkpoint_path_from_run_id():
 
 
 def test_resolve_checkpoint_path_falls_back_to_output_dir():
+    """checkpoint_dir=None -> falls back to <output_dir>/<run_id>/checkpoints."""
     cfg = OmegaConf.create(
         {
             "checkpoint_path": None,
@@ -192,6 +204,7 @@ def test_resolve_checkpoint_path_falls_back_to_output_dir():
 
 
 def test_resolve_checkpoint_path_requires_run_id_or_path():
+    """Neither checkpoint_path nor run_id -> ValueError."""
     cfg = OmegaConf.create({"checkpoint_path": None, "run_id": None, "output_dir": "x"})
     with pytest.raises(ValueError):
         infer.resolve_checkpoint_path(cfg)
@@ -203,6 +216,7 @@ def test_resolve_checkpoint_path_requires_run_id_or_path():
 
 
 def test_attach_and_save_surface_roundtrip(tmp_path):
+    """Surface save writes pred_/true_ fields and drops the training-space targets."""
     targets = {"pressure": "scalar", "wss": "vector"}
     domain = make_surface_domain_mesh(targets, n_cells=16)
     phys = domain.interior.point_data.select("pressure", "wss")
@@ -216,6 +230,7 @@ def test_attach_and_save_surface_roundtrip(tmp_path):
 
 
 def test_attach_and_save_keeps_non_target_inputs(tmp_path):
+    """Non-target geometry inputs (sdf, sdf_normals) survive alongside pred_/true_ fields."""
     targets = {"velocity": "vector", "pressure": "scalar", "nut": "scalar"}
     domain = make_volume_domain_mesh(targets, n_pts=64)
     phys = domain.interior.point_data.select(*targets)
@@ -229,6 +244,7 @@ def test_attach_and_save_keeps_non_target_inputs(tmp_path):
 
 
 def test_attach_and_save_rescale_geometry_scales_points(tmp_path):
+    """rescale_geometry=True scales saved interior points back to physical (x * L_ref)."""
     targets = {"pressure": "scalar", "wss": "vector"}
     domain = make_surface_domain_mesh(targets, n_cells=16)  # global_data L_ref = 5.0
     l_ref = float(domain.global_data["L_ref"])
@@ -247,6 +263,7 @@ def test_attach_and_save_rescale_geometry_scales_points(tmp_path):
 
 
 def test_make_jsonl_logger_writes_timestamped_line(tmp_path):
+    """Logger appends one JSON object per call, each stamped with a 'ts' field."""
     path = tmp_path / "metrics.jsonl"
     log = make_jsonl_logger(path)
     log({"phase": "summary", "value": 1.5})
@@ -258,11 +275,13 @@ def test_make_jsonl_logger_writes_timestamped_line(tmp_path):
 
 
 def test_resolve_metrics_default_and_override():
+    """A configured metrics list passes through; an absent one -> DEFAULT_METRICS."""
     assert resolve_metrics(OmegaConf.create({"metrics": ["l2"]})) == ["l2"]
     assert resolve_metrics(OmegaConf.create({})) == list(DEFAULT_METRICS)
 
 
 def test_resolve_dict():
+    """A populated key -> a plain dict; an empty or missing key -> None."""
     cfg = OmegaConf.create({"a": {"b": 1}, "empty": {}})
     assert resolve_dict(cfg, "a") == {"b": 1}
     assert resolve_dict(cfg, "empty") is None  # empty -> None
