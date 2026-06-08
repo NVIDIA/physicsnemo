@@ -142,9 +142,10 @@ def test_build_axis_frame_degenerate_up_parallel_to_flow():
 
 
 def test_surface_force_fields_identifies_cp_cf():
-    assert forces.surface_force_fields(
-        {"pressure": "pressure", "wss": "stress"}
-    ) == ("pressure", "wss")
+    assert forces.surface_force_fields({"pressure": "pressure", "wss": "stress"}) == (
+        "pressure",
+        "wss",
+    )
 
 
 def test_surface_force_fields_missing_shear_returns_none():

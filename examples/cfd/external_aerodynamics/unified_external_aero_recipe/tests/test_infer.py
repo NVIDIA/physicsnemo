@@ -165,8 +165,12 @@ def test_resolve_checkpoint_path_explicit_wins():
 
 def test_resolve_checkpoint_path_from_run_id():
     cfg = OmegaConf.create(
-        {"checkpoint_path": None, "run_id": "myrun", "checkpoint_dir": "runs",
-         "output_dir": "inference"}
+        {
+            "checkpoint_path": None,
+            "run_id": "myrun",
+            "checkpoint_dir": "runs",
+            "output_dir": "inference",
+        }
     )
     assert infer.resolve_checkpoint_path(cfg) == os.path.join(
         "runs", "myrun", "checkpoints"
@@ -175,8 +179,12 @@ def test_resolve_checkpoint_path_from_run_id():
 
 def test_resolve_checkpoint_path_falls_back_to_output_dir():
     cfg = OmegaConf.create(
-        {"checkpoint_path": None, "run_id": "myrun", "checkpoint_dir": None,
-         "output_dir": "out"}
+        {
+            "checkpoint_path": None,
+            "run_id": "myrun",
+            "checkpoint_dir": None,
+            "output_dir": "out",
+        }
     )
     assert infer.resolve_checkpoint_path(cfg) == os.path.join(
         "out", "myrun", "checkpoints"
