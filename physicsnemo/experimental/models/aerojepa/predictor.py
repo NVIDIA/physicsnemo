@@ -31,6 +31,8 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from physicsnemo.nn.module.layer_norm import LayerNorm
+
 from .layers import (
     FourierPositionalEncoding,
     LocalPointTransformerBlock,
@@ -157,7 +159,7 @@ class PrototypeTokenJEPAHead(nn.Module):
                 for _ in range(self.depth)
             ]
         )
-        self.out_norm = nn.LayerNorm(self.hidden_dim)
+        self.out_norm = LayerNorm(self.hidden_dim)
         self.out_proj = nn.Linear(self.hidden_dim, self.token_dim)
 
     def _prepare_inputs(

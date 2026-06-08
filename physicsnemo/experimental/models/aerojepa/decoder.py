@@ -35,6 +35,8 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from physicsnemo.nn.module.layer_norm import LayerNorm
+
 from .layers import (
     FourierPositionalEncoding,
     LocalTokenCrossAttentionBlock,
@@ -323,7 +325,7 @@ class QueryTokenDecoder(nn.Module):
             ]
         )
         self.trunk = nn.Sequential(
-            nn.LayerNorm(int(token_dim)),
+            LayerNorm(int(token_dim)),
             nn.Linear(int(token_dim), int(hidden_dim)),
             nn.SiLU(),
             *[

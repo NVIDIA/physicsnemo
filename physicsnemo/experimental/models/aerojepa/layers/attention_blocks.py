@@ -30,6 +30,8 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from physicsnemo.nn.module.layer_norm import LayerNorm
+
 from .token_utils import chunked_knn_indices, gather_rows
 
 
@@ -110,7 +112,7 @@ class ResidualMLP(nn.Module):
     ):
         super().__init__()
         hidden = max(1, int(mlp_ratio)) * int(dim)
-        self.norm = nn.LayerNorm(int(dim))
+        self.norm = LayerNorm(int(dim))
         self.conditioning = (
             None
             if conditioning_dim is None
@@ -223,7 +225,7 @@ class LocalPointTransformerBlock(nn.Module):
         self.neighbor_k = int(neighbor_k)
         self.dilation = int(max(1, dilation))
         self.knn_chunk_size = int(knn_chunk_size)
-        self.norm = nn.LayerNorm(self.dim)
+        self.norm = LayerNorm(self.dim)
         self.adaln_zero = bool(adaln_zero)
         self.conditioning = (
             None
@@ -391,9 +393,9 @@ class LocalTokenCrossAttentionBlock(nn.Module):
         self.head_dim = self.dim // self.num_heads
         self.neighbor_k = int(neighbor_k)
         self.knn_chunk_size = int(knn_chunk_size)
-        self.norm_q = nn.LayerNorm(self.dim)
+        self.norm_q = LayerNorm(self.dim)
         self.adaln_zero = bool(adaln_zero)
-        self.norm_kv = nn.LayerNorm(self.dim)
+        self.norm_kv = LayerNorm(self.dim)
         self.conditioning = (
             None
             if conditioning_dim is None

@@ -42,6 +42,8 @@ from collections.abc import Sequence
 import torch
 import torch.nn as nn
 
+from physicsnemo.nn.module.layer_norm import LayerNorm
+
 from ..layers import (
     EncoderOutput,
     FourierPositionalEncoding,
@@ -217,7 +219,7 @@ class PointClusterGraphPool(nn.Module):
                     nn.Linear(self.hidden_dim, self.point_feature_dim),
                 )
             )
-        self.out_norm = nn.LayerNorm(self.point_feature_dim)
+        self.out_norm = LayerNorm(self.point_feature_dim)
 
     def forward(
         self,
@@ -452,7 +454,7 @@ class PointTransformer(nn.Module):
                 for i in range(int(num_layers))
             ]
         )
-        self.out_norm = nn.LayerNorm(int(token_dim))
+        self.out_norm = LayerNorm(int(token_dim))
 
     def _compute_gen_embedding(
         self, gen_params: torch.Tensor | None
