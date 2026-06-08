@@ -205,3 +205,56 @@ def test_accessor_properties(device):
     assert model.decoder is model.trunk.decoder
     assert model.mask_head is None
     assert model.include_geometry_global_in_decoder_cond is False
+
+
+def _build_model_with_global_cond(*, gen_dim: int, token_dim: int) -> AeroJEPA:
+    """Same as ``_build_model`` but with ``include_geometry_global_in_decoder_cond=True``."""
+    enc_kwargs = _enc_kwargs()
+    enc_kwargs["token_dim"] = token_dim
+    trunk = AeroJEPATrunk(
+        context_encoder=ContextTransformer(**enc_kwargs),
+        target_encoder=TargetTransformer(**enc_kwargs),
+        decoder=QueryTokenDecoder(
+            token_dim=token_dim,
+            hidden_dim=64,
+            num_layers=2,
+            out_dim=4,
+            use_sdf=True,
+            cond_dim=gen_dim + token_dim,
+            pe_num_bands=4,
+            cross_attention_heads=4,
+            cross_attention_layers=1,
+            cross_attention_k=4,
+            query_chunk_size=128,
+        ),
+        include_geometry_global_in_decoder_cond=True,
+    )
+    predictor = PrototypeTokenJEPAHead(
+        token_dim=token_dim,
+        cond_dim=gen_dim,
+        depth=2,
+        num_heads=4,
+        neighbor_k=4,
+        knn_chunk_size=32,
+        query_pe_bands=4,
+        mlp_ratio=2,
+        dropout=0.0,
+    )
+    return AeroJEPA(trunk=trunk, predictor=predictor)
+
+
+def test_encode_geometry_includes_context_global(device):
+    """When ``include_geometry_global_in_decoder_cond=True``, ``cond_global`` widens by the context-global dim."""
+    gen_dim = 4
+    token_dim = 32
+    model = (
+        _build_model_with_global_cond(gen_dim=gen_dim, token_dim=token_dim)
+        .to(device)
+        .eval()
+    )
+    _, cond_global = model.encode_geometry(
+        context_pos=torch.randn(40, 3, device=device),
+        context_feat=torch.zeros(40, 0, device=device),
+        gen_params=torch.randn(gen_dim, device=device),
+    )
+    assert cond_global.shape == (gen_dim + token_dim,)
