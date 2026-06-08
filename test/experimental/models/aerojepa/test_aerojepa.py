@@ -209,6 +209,46 @@ def test_decode_field_chunked_fp32_returns_cpu(device):
     assert out.shape == (200, 4)
 
 
+@pytest.mark.parametrize("precision", ["fp16", "bf16"])
+def test_decode_field_chunked_autocast_returns_cpu(device, precision):
+    """``decode_field_chunked`` under autocast (fp16/bf16) returns a finite CPU tensor."""
+    if precision == "fp16" and str(device).startswith("cpu"):
+        pytest.skip("fp16 autocast on CPU is not generally supported by torch")
+    model = _build_model().to(device).eval()
+    ctx_pos = torch.randn(40, 3, device=device)
+    ctx_feat = torch.zeros(40, 0, device=device)
+    gen = torch.randn(4, device=device)
+    ctx_tokens, cg = model.encode_geometry(
+        context_pos=ctx_pos, context_feat=ctx_feat, gen_params=gen
+    )
+    tc = model.build_target_token_coords(point_positions=ctx_pos)
+    pf = model.predict_field_tokens(
+        context_tokens=ctx_tokens,
+        target_positions=tc,
+        conditions=gen.unsqueeze(0),
+    )
+    if pf.ndim == 3 and pf.shape[0] == 1:
+        pf = pf[0]
+    from physicsnemo.experimental.models.aerojepa.layers import TokenSet
+
+    tt = TokenSet(
+        features=pf,
+        coords=tc,
+        mask=torch.ones(tc.shape[0], dtype=torch.bool, device=device),
+    )
+    out = model.decode_field_chunked(
+        target_tokens=tt,
+        cond_global=cg,
+        query_pos=torch.randn(200, 3),
+        query_sdf=torch.randn(200, 1),
+        chunk_size=64,
+        precision=precision,
+    )
+    assert out.device.type == "cpu"
+    assert out.shape == (200, 4)
+    assert torch.isfinite(out).all()
+
+
 def test_encode_geometry_and_flow_returns_dict(device):
     """``encode_geometry_and_flow`` returns the dict the decoder consumes."""
     model = _build_model().to(device).eval()
