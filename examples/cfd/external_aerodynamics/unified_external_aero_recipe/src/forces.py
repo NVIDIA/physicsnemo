@@ -220,7 +220,7 @@ def surface_force_fields(
     return pressure, shear
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class ForceContext:
     """Resolved configuration for integrating surface force/moment coefficients.
 

@@ -62,7 +62,6 @@ Caveats:
   all-reduced), but distributed writing has not been a focus.
 """
 
-import logging
 import os
 from collections import defaultdict
 from pathlib import Path
@@ -93,8 +92,6 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.mesh import DomainMesh
 from physicsnemo.utils import load_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
-
-_LOGGER = logging.getLogger("inference")
 
 
 ### ---------------------------------------------------------------------------
