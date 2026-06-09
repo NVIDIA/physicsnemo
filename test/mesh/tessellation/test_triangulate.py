@@ -233,6 +233,69 @@ def test_assume_convex_path_is_fullgraph_compilable():
     torch.testing.assert_close(compiled(points, polygons), fan(points, polygons))
 
 
+def test_2d_input_matches_3d_embedding():
+    """2D (n, 2) points are lifted to z = 0 and triangulate identically to 3D."""
+    for poly in (CONVEX_PENTAGON, DART):
+        pts3d = torch.as_tensor(poly, dtype=torch.float64)
+        polys = _adjacency(list(range(poly.shape[0])))
+        cells3d, parent3d = triangulate(pts3d, polys)
+        cells2d, parent2d = triangulate(pts3d[:, :2].contiguous(), polys)
+        assert torch.equal(cells2d, cells3d)
+        assert torch.equal(parent2d, parent3d)
+
+    # The non-convex dart is still area-corrected when fed as 2D points (area is
+    # measured via the 3D embedding of the same cells to avoid a 2D normal).
+    dart3d = torch.as_tensor(DART, dtype=torch.float64)
+    cells2d, _ = triangulate(dart3d[:, :2].contiguous(), _adjacency([0, 1, 2, 3]))
+    scalar, _ = _areas(dart3d, cells2d)
+    assert scalar == pytest.approx(DART_TRUE_AREA, rel=1e-9)
+
+
+@pytest.mark.parametrize("spatial_dim", [1, 4])
+def test_non_2d_or_3d_points_raise(spatial_dim: int):
+    """Point coordinates outside D in {2, 3} are rejected with a clear error."""
+    points = torch.zeros(4, spatial_dim)
+    with pytest.raises(ValueError, match="2-D or 3-D"):
+        triangulate(points, _adjacency([0, 1, 2, 3]))
+
+
+def test_out_of_range_index_raises():
+    """A vertex index outside the points array is rejected with a clear error."""
+    points = torch.zeros(4, 3)
+    with pytest.raises(ValueError, match="reference vertex"):
+        triangulate(points, _adjacency([0, 1, 2, 9]))  # index 9 >= 4 points
+
+
+def test_assume_convex_matches_default_on_convex_input():
+    """On a convex polygon, the assume_convex fast path equals the default path."""
+    points = torch.as_tensor(CONVEX_PENTAGON, dtype=torch.float64)
+    polys = _adjacency(list(range(CONVEX_PENTAGON.shape[0])))
+    cells_default, parent_default = triangulate(points, polys)
+    cells_fast, parent_fast = triangulate(points, polys, assume_convex=True)
+    assert torch.equal(cells_fast, cells_default)
+    assert torch.equal(parent_fast, parent_default)
+
+
+def test_nonconvex_area_correct_in_float32():
+    """The non-convex area correction holds in float32, not just float64."""
+    points = torch.as_tensor(DART, dtype=torch.float32)
+    cells, _ = triangulate(points, _adjacency([0, 1, 2, 3]))
+    scalar, _ = _areas(points, cells)  # _areas upcasts to float64 internally
+    assert scalar == pytest.approx(DART_TRUE_AREA, rel=1e-6)
+
+
+def test_cells_are_int64_even_with_int32_indices():
+    """cells is always int64 (Mesh's expected dtype), regardless of index dtype."""
+    points = torch.as_tensor(DART, dtype=torch.float64)  # dart -> ear-clip path
+    polys = Adjacency(
+        offsets=torch.tensor([0, 4], dtype=torch.int32),
+        indices=torch.tensor([0, 1, 2, 3], dtype=torch.int32),
+    )
+    cells, parent_index = triangulate(points, polys)
+    assert cells.dtype == torch.long
+    assert parent_index.dtype == torch.long
+
+
 class TestAgainstPyvista:
     """Cross-check against VTK's triangulation (the reference implementation)."""
 

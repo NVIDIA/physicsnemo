@@ -52,6 +52,14 @@ from physicsnemo.mesh.utilities._tolerances import safe_eps
 #: vertices stay on the cheap convex fan path.
 _REFLEX_SIN_TOL: float = 1e-6
 
+#: ``(poly_id, prev_pos, next_pos)`` from :func:`_ring_neighbors`: for each flat
+#: connectivity slot, its owning polygon and the slots of its cyclic neighbors.
+_RingNeighbors = tuple[
+    Int[torch.Tensor, " n_ring_positions"],
+    Int[torch.Tensor, " n_ring_positions"],
+    Int[torch.Tensor, " n_ring_positions"],
+]
+
 
 def triangulate(
     points: Float[torch.Tensor, "n_points n_spatial"],
@@ -96,7 +104,19 @@ def triangulate(
     NotImplementedError
         If ``manifold_dim != 2``.
     ValueError
-        If any polygon has fewer than three vertices.
+        If any polygon has fewer than three vertices, or if ``polygons.indices``
+        references a vertex outside ``points`` (both checked off the
+        ``torch.compile`` path).
+
+    Notes
+    -----
+    Each polygon ring must be a *simple* polygon (no self-intersections) with no
+    repeated consecutive vertices or zero-length edges. Degenerate or
+    self-intersecting rings are not detected and produce undefined results. The
+    non-convex (ear-clip) path additionally assumes each ring is approximately
+    planar: a badly non-planar non-convex ring can project to a
+    self-intersecting 2-D polygon and triangulate incorrectly (convex rings are
+    unaffected by planarity).
 
     Examples
     --------
@@ -174,34 +194,41 @@ def _triangulate_polygons(
     Raises
     ------
     ValueError
-        If any polygon has fewer than three vertices (checked only off the
-        ``torch.compile`` path, where a host sync would force a graph break).
+        If any polygon has fewer than three vertices, or references an
+        out-of-range vertex index (both checked only off the ``torch.compile``
+        path, where a host sync would force a graph break).
     """
     counts = polygons.counts
-    if (
-        not torch.compiler.is_compiling()
-        and counts.numel() > 0
-        and bool((counts < 3).any())
-    ):
-        raise ValueError(
-            f"Every polygon needs >= 3 vertices to triangulate; got a polygon with "
-            f"{int(counts.min())} vertices."
-        )
+    # Cheap structural validation, off the torch.compile path (each check is a
+    # host sync that would otherwise force a graph break).
+    if not torch.compiler.is_compiling() and counts.numel() > 0:
+        if bool((counts < 3).any()):
+            raise ValueError(
+                f"Every polygon needs >= 3 vertices to triangulate; got a "
+                f"polygon with {int(counts.min())} vertices."
+            )
+        if bool((polygons.indices >= points.shape[0]).any()):
+            raise ValueError(
+                f"polygons.indices reference vertex "
+                f"{int(polygons.indices.max())}, but points has only "
+                f"{points.shape[0]} vertices."
+            )
 
     # Fan every polygon (correct for convex cells; non-convex blocks are
     # overwritten below). This is the only path under ``assume_convex``.
     cells, parent_index = _fan(polygons)
     if assume_convex:
-        return cells, parent_index
+        return cells.long(), parent_index
 
     points = _to_3d(points)  # normals / projection need a 3D embedding
-    normals = _polygon_normals(points, polygons)
-    nonconvex = ~_convex_mask(points, polygons, normals)
+    ring = _ring_neighbors(polygons)  # shared by normals + convexity, computed once
+    normals = _polygon_normals(points, polygons, ring)
+    nonconvex = ~_convex_mask(points, polygons, normals, ring)
     if bool(nonconvex.any()):  # the only host sync on the all-convex common path
         from physicsnemo.mesh.tessellation._ear_clipping import reclip_nonconvex
 
         cells = reclip_nonconvex(points, polygons, normals, cells, nonconvex)
-    return cells, parent_index
+    return cells.long(), parent_index
 
 
 def _fan(
@@ -252,7 +279,9 @@ def _fan(
 
 
 def _polygon_normals(
-    points: Float[torch.Tensor, "n_points 3"], polygons: Adjacency
+    points: Float[torch.Tensor, "n_points 3"],
+    polygons: Adjacency,
+    ring: _RingNeighbors | None = None,
 ) -> Float[torch.Tensor, "n_polygons 3"]:
     """Per-polygon (unnormalized) Newell normal ``sum_i v_i x v_{i+1}``.
 
@@ -273,13 +302,22 @@ def _polygon_normals(
         Vertex coordinates embedded in 3D, shape ``(n_points, 3)``.
     polygons : Adjacency
         Cell-to-vertex rings in CSR form.
+    ring : tuple of torch.Tensor, optional
+        Precomputed ``(poly_id, prev_pos, next_pos)`` from
+        :func:`_ring_neighbors`. Both this function and :func:`_convex_mask`
+        need the same ring decomposition, so :func:`_triangulate_polygons`
+        computes it once and passes it to both, avoiding a redundant pass on the
+        common convex path. Defaults to ``None``, in which case it is computed
+        internally so the function stays correct when called on its own.
 
     Returns
     -------
     torch.Tensor
         Unnormalized per-polygon normals, shape ``(n_polygons, 3)``.
     """
-    poly_id, _, next_pos = _ring_neighbors(polygons)
+    if ring is None:
+        ring = _ring_neighbors(polygons)
+    poly_id, _, next_pos = ring
     conn = polygons.indices
     ref = points[conn[polygons.offsets[:-1]]][poly_id]  # this position's polygon v0
     edge_cross = torch.linalg.cross(points[conn] - ref, points[conn[next_pos]] - ref)
@@ -293,6 +331,7 @@ def _convex_mask(
     points: Float[torch.Tensor, "n_points 3"],
     polygons: Adjacency,
     normals: Float[torch.Tensor, "n_polygons 3"],
+    ring: _RingNeighbors | None = None,
 ) -> Bool[torch.Tensor, " n_polygons"]:
     """Flag polygons that are convex, and therefore safe to fan-triangulate.
 
@@ -318,6 +357,11 @@ def _convex_mask(
     normals : torch.Tensor
         Per-polygon Newell normals from :func:`_polygon_normals`, shape
         ``(n_polygons, 3)``.
+    ring : tuple of torch.Tensor, optional
+        Precomputed ``(poly_id, prev_pos, next_pos)`` from
+        :func:`_ring_neighbors`, shared with :func:`_polygon_normals` to avoid
+        recomputing it on the common convex path (see that function). Defaults
+        to ``None``, in which case it is computed internally.
 
     Returns
     -------
@@ -325,7 +369,9 @@ def _convex_mask(
         Boolean mask, ``True`` where a polygon is convex (or degenerate), shape
         ``(n_polygons,)``.
     """
-    poly_id, prev_pos, next_pos = _ring_neighbors(polygons)
+    if ring is None:
+        ring = _ring_neighbors(polygons)
+    poly_id, prev_pos, next_pos = ring
     conn = polygons.indices
     eps = safe_eps(points.dtype)
 
@@ -345,13 +391,7 @@ def _convex_mask(
     return (reflex_count == 0) | degenerate
 
 
-def _ring_neighbors(
-    polygons: Adjacency,
-) -> tuple[
-    Int[torch.Tensor, " n_ring_positions"],
-    Int[torch.Tensor, " n_ring_positions"],
-    Int[torch.Tensor, " n_ring_positions"],
-]:
+def _ring_neighbors(polygons: Adjacency) -> _RingNeighbors:
     """Cyclic previous/next neighbors of every vertex in the flattened rings.
 
     Walks the flat connectivity (one slot per polygon-vertex incidence) and, for
