@@ -122,9 +122,9 @@ from .module.kan_layers import KolmogorovArnoldNetwork
 from .module.mlp_layers import Mlp
 from .module.pade import Pade
 from .module.point_transformer_attention import (
+    AdaLNResidualMLP,
     LocalPointTransformerBlock,
     LocalTokenCrossAttentionBlock,
-    ResidualMLP,
 )
 from .module.pooling import AttentionPooling, MeanPooling
 from .module.resample_layers import (

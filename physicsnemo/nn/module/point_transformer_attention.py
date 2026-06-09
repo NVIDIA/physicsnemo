@@ -29,7 +29,7 @@ the scores and the aggregated values.
 
 Three layers are exposed:
 
-- :class:`ResidualMLP` -- pre-norm residual MLP with optional AdaLN/AdaLN-Zero
+- :class:`AdaLNResidualMLP` -- pre-norm residual MLP with optional AdaLN/AdaLN-Zero
   conditioning, used as the feed-forward sublayer.
 - :class:`LocalPointTransformerBlock` -- local self-attention over a
   per-point k-NN graph.
@@ -51,6 +51,7 @@ from physicsnemo.core import Module
 from physicsnemo.nn.functional import knn
 
 from .layer_norm import LayerNorm
+from .mlp_layers import Mlp
 
 
 def _gather_rows(x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
@@ -126,14 +127,18 @@ def _dilated_knn(
     return idx[:, :out_k].long()
 
 
-def _make_conditioning_mlp(cond_dim: int, out_dim: int) -> nn.Sequential:
+def _make_conditioning_mlp(cond_dim: int, out_dim: int) -> Mlp:
     hidden_dim = max(int(cond_dim), int(out_dim))
-    mlp = nn.Sequential(
-        nn.Linear(int(cond_dim), hidden_dim),
-        nn.SiLU(),
-        nn.Linear(hidden_dim, int(out_dim)),
+    mlp = Mlp(
+        in_features=int(cond_dim),
+        hidden_features=hidden_dim,
+        out_features=int(out_dim),
+        act_layer=nn.SiLU,
+        drop=0.0,
     )
-    last = mlp[-1]
+    # Zero-init the final linear so AdaLN/AdaLN-Zero starts as identity
+    # (shift = scale = gate = 0 at initialization).
+    last = mlp.layers[-1]
     nn.init.zeros_(last.weight)
     nn.init.zeros_(last.bias)
     return mlp
@@ -162,14 +167,14 @@ def _apply_neighbor_mask(
     return attn / attn.sum(dim=-1, keepdim=True).clamp_min(1e-12)
 
 
-class ResidualMLP(Module):
+class AdaLNResidualMLP(Module):
     r"""Pre-norm residual MLP with optional AdaLN/AdaLN-Zero conditioning.
 
-    Applies ``LayerNorm`` -> ``Linear -> GELU -> Dropout -> Linear ->
-    Dropout`` and adds the result back to the input. When
-    ``conditioning_dim`` is set, a small zero-initialized MLP turns ``cond``
-    into ``(shift, scale, gate)`` that modulate the pre-MLP and post-MLP
-    signals in the AdaLN / AdaLN-Zero style.
+    Applies ``LayerNorm`` then a two-layer :class:`~physicsnemo.nn.Mlp`
+    (``Linear -> GELU -> Linear``, with dropout) and adds the result back to
+    the input. When ``conditioning_dim`` is set, a small zero-initialized MLP
+    turns ``cond`` into ``(shift, scale, gate)`` that modulate the pre-MLP and
+    post-MLP signals in the AdaLN / AdaLN-Zero style.
 
     Parameters
     ----------
@@ -218,12 +223,13 @@ class ResidualMLP(Module):
             else _make_conditioning_mlp(int(conditioning_dim), 3 * int(dim))
         )
         self.adaln_zero = bool(adaln_zero)
-        self.net = nn.Sequential(
-            nn.Linear(int(dim), hidden),
-            nn.GELU(),
-            nn.Dropout(float(dropout)),
-            nn.Linear(hidden, int(dim)),
-            nn.Dropout(float(dropout)),
+        self.net = Mlp(
+            in_features=int(dim),
+            hidden_features=hidden,
+            out_features=int(dim),
+            act_layer=nn.GELU,
+            drop=float(dropout),
+            final_dropout=True,
         )
 
     def forward(
@@ -242,7 +248,7 @@ class ResidualMLP(Module):
         if self.conditioning is not None:
             if cond is None:
                 raise ValueError(
-                    "conditioning input must be provided for conditioned ResidualMLP."
+                    "conditioning input must be provided for conditioned AdaLNResidualMLP."
                 )
             shift, scale, gate = self.conditioning(_reshape_condition(cond)).chunk(
                 3, dim=-1
@@ -261,7 +267,7 @@ class LocalPointTransformerBlock(Module):
     learned relative-position bias and per-head (grouped) vector-attention
     scores -- the score for each neighbour is produced by an MLP applied to
     :math:`q - k + \delta` (Point Transformer), not a dot product. Followed
-    by a :class:`ResidualMLP`. Optional AdaLN/AdaLN-Zero conditioning
+    by a :class:`AdaLNResidualMLP`. Optional AdaLN/AdaLN-Zero conditioning
     modulates both the attention sublayer and the feed-forward sublayer.
 
     When the input has at most one point, the attention sublayer is skipped
@@ -281,7 +287,7 @@ class LocalPointTransformerBlock(Module):
         receptive fields without re-running the search. Clamped to at least
         1.
     mlp_ratio : int
-        Hidden multiplier for the inner ``ResidualMLP``.
+        Hidden multiplier for the inner ``AdaLNResidualMLP``.
     dropout : float
         Dropout used after the output projection and inside the FFN.
     knn_chunk_size : int
@@ -351,19 +357,23 @@ class LocalPointTransformerBlock(Module):
         self.q_proj = nn.Linear(self.dim, self.dim)
         self.k_proj = nn.Linear(self.dim, self.dim)
         self.v_proj = nn.Linear(self.dim, self.dim)
-        self.pos_proj = nn.Sequential(
-            nn.Linear(3, self.dim),
-            nn.GELU(),
-            nn.Linear(self.dim, self.dim),
+        self.pos_proj = Mlp(
+            in_features=3,
+            hidden_features=self.dim,
+            out_features=self.dim,
+            act_layer=nn.GELU,
+            drop=0.0,
         )
-        self.attn_proj = nn.Sequential(
-            nn.Linear(self.dim, self.dim),
-            nn.GELU(),
-            nn.Linear(self.dim, self.num_heads),
+        self.attn_proj = Mlp(
+            in_features=self.dim,
+            hidden_features=self.dim,
+            out_features=self.num_heads,
+            act_layer=nn.GELU,
+            drop=0.0,
         )
         self.out_proj = nn.Linear(self.dim, self.dim)
         self.dropout = nn.Dropout(float(dropout))
-        self.ffn = ResidualMLP(
+        self.ffn = AdaLNResidualMLP(
             dim=self.dim,
             mlp_ratio=int(mlp_ratio),
             dropout=float(dropout),
@@ -452,7 +462,7 @@ class LocalTokenCrossAttentionBlock(Module):
     Each query attends to its ``neighbor_k`` nearest context tokens (by
     Euclidean distance in coordinate space) with a learned relative-position
     bias and per-head (grouped) vector-attention scores. Followed by a
-    :class:`ResidualMLP`.
+    :class:`AdaLNResidualMLP`.
 
     When conditioning is enabled, a single MLP produces a 5-way chunked
     output ``(q_shift, q_scale, kv_shift, kv_scale, gate)``. The query side
@@ -473,7 +483,7 @@ class LocalTokenCrossAttentionBlock(Module):
     neighbor_k : int
         Number of nearest context tokens used per query.
     mlp_ratio : int
-        Hidden multiplier for the inner ``ResidualMLP``.
+        Hidden multiplier for the inner ``AdaLNResidualMLP``.
     dropout : float
         Dropout used after the output projection and inside the FFN.
     knn_chunk_size : int
@@ -549,19 +559,23 @@ class LocalTokenCrossAttentionBlock(Module):
         self.q_proj = nn.Linear(self.dim, self.dim)
         self.k_proj = nn.Linear(self.dim, self.dim)
         self.v_proj = nn.Linear(self.dim, self.dim)
-        self.pos_proj = nn.Sequential(
-            nn.Linear(3, self.dim),
-            nn.GELU(),
-            nn.Linear(self.dim, self.dim),
+        self.pos_proj = Mlp(
+            in_features=3,
+            hidden_features=self.dim,
+            out_features=self.dim,
+            act_layer=nn.GELU,
+            drop=0.0,
         )
-        self.attn_proj = nn.Sequential(
-            nn.Linear(self.dim, self.dim),
-            nn.GELU(),
-            nn.Linear(self.dim, self.num_heads),
+        self.attn_proj = Mlp(
+            in_features=self.dim,
+            hidden_features=self.dim,
+            out_features=self.num_heads,
+            act_layer=nn.GELU,
+            drop=0.0,
         )
         self.out_proj = nn.Linear(self.dim, self.dim)
         self.dropout = nn.Dropout(float(dropout))
-        self.ffn = ResidualMLP(
+        self.ffn = AdaLNResidualMLP(
             dim=self.dim,
             mlp_ratio=int(mlp_ratio),
             dropout=float(dropout),
@@ -664,8 +678,10 @@ class LocalTokenCrossAttentionBlock(Module):
         logits = self.attn_proj(attn_in).transpose(1, 2)
         attn = _apply_neighbor_mask(logits, neighbor_mask)
         value = (v + rel_bias).permute(0, 2, 1, 3)
-        out = (attn.unsqueeze(-1) * value).sum(dim=2).reshape(
-            int(q_in.shape[0]), self.dim
+        out = (
+            (attn.unsqueeze(-1) * value)
+            .sum(dim=2)
+            .reshape(int(q_in.shape[0]), self.dim)
         )
         out = self.dropout(self.out_proj(out))
         if gate is not None:
@@ -675,7 +691,7 @@ class LocalTokenCrossAttentionBlock(Module):
 
 
 __all__ = [
-    "ResidualMLP",
+    "AdaLNResidualMLP",
     "LocalPointTransformerBlock",
     "LocalTokenCrossAttentionBlock",
 ]
