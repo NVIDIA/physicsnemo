@@ -23,8 +23,27 @@ from physicsnemo.nn import (
     LocalPointTransformerBlock,
     LocalTokenCrossAttentionBlock,
 )
+from physicsnemo.nn.module import layer_norm as _layer_norm
 from physicsnemo.nn.module.point_transformer_attention import _dilated_knn
 from test.common import validate_checkpoint, validate_forward_accuracy
+
+# The blocks normalize with the TE-aware ``LayerNorm``, which resolves once at
+# import to Transformer Engine's CUDA-only LayerNorm whenever TE + CUDA are
+# available. It cannot run on CPU tensors, so on a TE-enabled GPU node the
+# ``device="cpu"`` parametrization is skipped (mirroring physicsnemo's own
+# ``test_layer_norm`` handling). On CPU-only environments TE is unavailable,
+# ``LayerNorm`` falls back to ``torch.nn.LayerNorm`` and CPU cases run.
+_TE_LAYERNORM_CUDA_ONLY = not issubclass(_layer_norm.LayerNorm, torch.nn.LayerNorm)
+
+
+@pytest.fixture(autouse=True)
+def _skip_cpu_under_te_layernorm(request):
+    if (
+        _TE_LAYERNORM_CUDA_ONLY
+        and "device" in request.fixturenames
+        and request.getfixturevalue("device") == "cpu"
+    ):
+        pytest.skip("TE LayerNorm backend is CUDA-only; CPU case not applicable")
 
 
 # --------------------------------------------------------------------------- #
