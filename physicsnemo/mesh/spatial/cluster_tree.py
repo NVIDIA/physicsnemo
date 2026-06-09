@@ -14,10 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Spatial cluster tree for dual-tree Barnes-Hut acceleration of GLOBE kernels.
+"""Spatial cluster tree for dual-tree Barnes-Hut acceleration.
 
 This module provides a GPU-compatible hierarchical spatial decomposition over a
-set of points, designed for dual-tree Barnes-Hut O(N) kernel acceleration.
+set of points, designed for dual-tree Barnes-Hut O(N) acceleration of
+kernel-summation and attention-style operators (e.g. GLOBE's field kernels and
+mesh attention layers).
 Trees are built over both source and target points.  The dual-tree traversal
 classifies (target_node, source_node) pairs as near-field or far-field:
 
@@ -51,7 +53,7 @@ from torch.profiler import record_function
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
 from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
 
-logger = logging.getLogger("globe.cluster_tree")
+logger = logging.getLogger("mesh.spatial.cluster_tree")
 
 
 # ---------------------------------------------------------------------------

@@ -28,7 +28,7 @@ import torch
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from physicsnemo.experimental.models.globe.cluster_tree import (
+from physicsnemo.mesh.spatial.cluster_tree import (
     ClusterTree,
     DualInteractionPlan,
 )
