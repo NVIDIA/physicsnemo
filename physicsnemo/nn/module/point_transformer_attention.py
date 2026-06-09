@@ -260,7 +260,109 @@ class AdaLNResidualMLP(Module):
         return x + out
 
 
-class LocalPointTransformerBlock(Module):
+class _LocalVectorAttentionBlock(Module):
+    r"""Shared projections and grouped vector-attention kernel.
+
+    Private base for :class:`LocalPointTransformerBlock` and
+    :class:`LocalTokenCrossAttentionBlock`. It owns the query/key/value
+    projections, the relative-position and score MLPs, the output projection,
+    dropout, the conditioning MLP, and the feed-forward block, and implements
+    the grouped vector-attention kernel in :meth:`_attend`. Subclasses add the
+    normalization layers and conditioning split and orchestrate the neighbor
+    search in their own ``forward``.
+    """
+
+    def __init__(
+        self,
+        *,
+        dim: int,
+        num_heads: int,
+        neighbor_k: int,
+        mlp_ratio: int,
+        dropout: float,
+        coord_dim: int,
+        conditioning_dim: int | None,
+        adaln_zero: bool,
+        num_cond_chunks: int,
+    ):
+        super().__init__()
+        if int(dim) % int(num_heads) != 0:
+            raise ValueError("dim must be divisible by num_heads.")
+        self.dim = int(dim)
+        self.num_heads = int(num_heads)
+        self.head_dim = self.dim // self.num_heads
+        self.neighbor_k = int(neighbor_k)
+        self.coord_dim = int(coord_dim)
+        self.adaln_zero = bool(adaln_zero)
+        self.conditioning = (
+            None
+            if conditioning_dim is None
+            else _make_conditioning_mlp(
+                int(conditioning_dim), int(num_cond_chunks) * self.dim
+            )
+        )
+        self.q_proj = nn.Linear(self.dim, self.dim)
+        self.k_proj = nn.Linear(self.dim, self.dim)
+        self.v_proj = nn.Linear(self.dim, self.dim)
+        self.pos_proj = Mlp(
+            in_features=self.coord_dim,
+            hidden_features=self.dim,
+            out_features=self.dim,
+            act_layer=nn.GELU,
+            drop=0.0,
+        )
+        self.attn_proj = Mlp(
+            in_features=self.dim,
+            hidden_features=self.dim,
+            out_features=self.num_heads,
+            act_layer=nn.GELU,
+            drop=0.0,
+        )
+        self.out_proj = nn.Linear(self.dim, self.dim)
+        self.dropout = nn.Dropout(float(dropout))
+        self.ffn = AdaLNResidualMLP(
+            dim=self.dim,
+            mlp_ratio=int(mlp_ratio),
+            dropout=float(dropout),
+            conditioning_dim=conditioning_dim,
+            adaln_zero=adaln_zero,
+        )
+
+    def _attend(
+        self,
+        q_in: torch.Tensor,
+        kv_in: torch.Tensor,
+        query_coords: torch.Tensor,
+        key_coords: torch.Tensor,
+        idx: torch.Tensor,
+        neighbor_mask: torch.Tensor | None,
+    ) -> torch.Tensor:
+        # Grouped vector attention shared by the self- and cross-attention
+        # blocks: softmax(MLP(q - k + delta))-weighted sum of (v + delta), with
+        # delta the relative-position bias. ``idx`` maps each query (row of
+        # ``q_in`` / ``query_coords``) to its neighbors among the keys (rows of
+        # ``kv_in`` / ``key_coords``). Returns the projected output before
+        # gating / residual / FFN.
+        n = int(q_in.shape[0])
+        kk = int(idx.shape[1])
+        q = self.q_proj(q_in).reshape(n, self.num_heads, self.head_dim)
+        k = _gather_rows(self.k_proj(kv_in), idx).reshape(
+            n, kk, self.num_heads, self.head_dim
+        )
+        v = _gather_rows(self.v_proj(kv_in), idx).reshape(
+            n, kk, self.num_heads, self.head_dim
+        )
+        rel = _gather_rows(key_coords, idx) - query_coords.unsqueeze(1)
+        rel_bias = self.pos_proj(rel).reshape(n, kk, self.num_heads, self.head_dim)
+        attn_in = (q.unsqueeze(1) - k + rel_bias).reshape(n, kk, self.dim)
+        logits = self.attn_proj(attn_in).transpose(1, 2)
+        attn = _apply_neighbor_mask(logits, neighbor_mask)
+        value = (v + rel_bias).permute(0, 2, 1, 3)
+        out = (attn.unsqueeze(-1) * value).sum(dim=2).reshape(n, self.dim)
+        return self.dropout(self.out_proj(out))
+
+
+class LocalPointTransformerBlock(_LocalVectorAttentionBlock):
     r"""Local self-attention block over a per-point k-NN graph.
 
     For each point, attends to its ``neighbor_k`` nearest neighbors with a
@@ -337,48 +439,19 @@ class LocalPointTransformerBlock(Module):
         conditioning_dim: int | None = None,
         adaln_zero: bool = False,
     ):
-        super().__init__()
-        if int(dim) % int(num_heads) != 0:
-            raise ValueError("dim must be divisible by num_heads.")
-        self.dim = int(dim)
-        self.num_heads = int(num_heads)
-        self.head_dim = self.dim // self.num_heads
-        self.neighbor_k = int(neighbor_k)
-        self.dilation = int(max(1, dilation))
-        self.coord_dim = int(coord_dim)
-        self.norm = LayerNorm(self.dim)
-        self.adaln_zero = bool(adaln_zero)
-        self.conditioning = (
-            None
-            if conditioning_dim is None
-            else _make_conditioning_mlp(int(conditioning_dim), 3 * self.dim)
-        )
-        self.q_proj = nn.Linear(self.dim, self.dim)
-        self.k_proj = nn.Linear(self.dim, self.dim)
-        self.v_proj = nn.Linear(self.dim, self.dim)
-        self.pos_proj = Mlp(
-            in_features=self.coord_dim,
-            hidden_features=self.dim,
-            out_features=self.dim,
-            act_layer=nn.GELU,
-            drop=0.0,
-        )
-        self.attn_proj = Mlp(
-            in_features=self.dim,
-            hidden_features=self.dim,
-            out_features=self.num_heads,
-            act_layer=nn.GELU,
-            drop=0.0,
-        )
-        self.out_proj = nn.Linear(self.dim, self.dim)
-        self.dropout = nn.Dropout(float(dropout))
-        self.ffn = AdaLNResidualMLP(
-            dim=self.dim,
-            mlp_ratio=int(mlp_ratio),
-            dropout=float(dropout),
+        super().__init__(
+            dim=dim,
+            num_heads=num_heads,
+            neighbor_k=neighbor_k,
+            mlp_ratio=mlp_ratio,
+            dropout=dropout,
+            coord_dim=coord_dim,
             conditioning_dim=conditioning_dim,
             adaln_zero=adaln_zero,
+            num_cond_chunks=3,
         )
+        self.dilation = int(max(1, dilation))
+        self.norm = LayerNorm(self.dim)
 
     def forward(
         self,
@@ -430,32 +503,14 @@ class LocalPointTransformerBlock(Module):
         if batch_ids is not None:
             gathered_batch_ids = _gather_rows(batch_ids.unsqueeze(-1), idx).squeeze(-1)
             neighbor_mask = gathered_batch_ids == batch_ids.unsqueeze(1)
-        q = self.q_proj(h).reshape(int(h.shape[0]), self.num_heads, self.head_dim)
-        k = _gather_rows(self.k_proj(h), idx).reshape(
-            int(h.shape[0]), idx.shape[1], self.num_heads, self.head_dim
-        )
-        v = _gather_rows(self.v_proj(h), idx).reshape(
-            int(h.shape[0]), idx.shape[1], self.num_heads, self.head_dim
-        )
-        rel = _gather_rows(coords, idx) - coords.unsqueeze(1)
-        rel_bias = self.pos_proj(rel).reshape(
-            int(h.shape[0]), idx.shape[1], self.num_heads, self.head_dim
-        )
-        attn_in = (q.unsqueeze(1) - k + rel_bias).reshape(
-            int(h.shape[0]), idx.shape[1], self.dim
-        )
-        logits = self.attn_proj(attn_in).transpose(1, 2)
-        attn = _apply_neighbor_mask(logits, neighbor_mask)
-        value = (v + rel_bias).permute(0, 2, 1, 3)
-        out = (attn.unsqueeze(-1) * value).sum(dim=2).reshape(int(h.shape[0]), self.dim)
-        out = self.dropout(self.out_proj(out))
+        out = self._attend(h, h, coords, coords, idx, neighbor_mask)
         if gate is not None:
             out = out * (gate if self.adaln_zero else (1.0 + gate))
         out = residual + out
         return self.ffn(out, cond=cond)
 
 
-class LocalTokenCrossAttentionBlock(Module):
+class LocalTokenCrossAttentionBlock(_LocalVectorAttentionBlock):
     r"""Local cross-attention from query tokens to a per-query k-NN of context.
 
     Each query attends to its ``neighbor_k`` nearest context tokens (by
@@ -542,48 +597,19 @@ class LocalTokenCrossAttentionBlock(Module):
         conditioning_dim: int | None = None,
         adaln_zero: bool = False,
     ):
-        super().__init__()
-        if int(dim) % int(num_heads) != 0:
-            raise ValueError("dim must be divisible by num_heads.")
-        self.dim = int(dim)
-        self.num_heads = int(num_heads)
-        self.head_dim = self.dim // self.num_heads
-        self.neighbor_k = int(neighbor_k)
-        self.coord_dim = int(coord_dim)
-        self.norm_q = LayerNorm(self.dim)
-        self.adaln_zero = bool(adaln_zero)
-        self.norm_kv = LayerNorm(self.dim)
-        self.conditioning = (
-            None
-            if conditioning_dim is None
-            else _make_conditioning_mlp(int(conditioning_dim), 5 * self.dim)
-        )
-        self.q_proj = nn.Linear(self.dim, self.dim)
-        self.k_proj = nn.Linear(self.dim, self.dim)
-        self.v_proj = nn.Linear(self.dim, self.dim)
-        self.pos_proj = Mlp(
-            in_features=self.coord_dim,
-            hidden_features=self.dim,
-            out_features=self.dim,
-            act_layer=nn.GELU,
-            drop=0.0,
-        )
-        self.attn_proj = Mlp(
-            in_features=self.dim,
-            hidden_features=self.dim,
-            out_features=self.num_heads,
-            act_layer=nn.GELU,
-            drop=0.0,
-        )
-        self.out_proj = nn.Linear(self.dim, self.dim)
-        self.dropout = nn.Dropout(float(dropout))
-        self.ffn = AdaLNResidualMLP(
-            dim=self.dim,
-            mlp_ratio=int(mlp_ratio),
-            dropout=float(dropout),
+        super().__init__(
+            dim=dim,
+            num_heads=num_heads,
+            neighbor_k=neighbor_k,
+            mlp_ratio=mlp_ratio,
+            dropout=dropout,
+            coord_dim=coord_dim,
             conditioning_dim=conditioning_dim,
             adaln_zero=adaln_zero,
+            num_cond_chunks=5,
         )
+        self.norm_q = LayerNorm(self.dim)
+        self.norm_kv = LayerNorm(self.dim)
 
     def forward(
         self,
@@ -671,29 +697,9 @@ class LocalTokenCrossAttentionBlock(Module):
                 context_batch_ids.unsqueeze(-1), idx
             ).squeeze(-1)
             neighbor_mask = gathered_batch_ids == query_batch_ids.unsqueeze(1)
-        q = self.q_proj(q_in).reshape(int(q_in.shape[0]), self.num_heads, self.head_dim)
-        k = _gather_rows(self.k_proj(kv_in), idx).reshape(
-            int(q_in.shape[0]), idx.shape[1], self.num_heads, self.head_dim
+        out = self._attend(
+            q_in, kv_in, query_coords, context_coords, idx, neighbor_mask
         )
-        v = _gather_rows(self.v_proj(kv_in), idx).reshape(
-            int(q_in.shape[0]), idx.shape[1], self.num_heads, self.head_dim
-        )
-        rel = _gather_rows(context_coords, idx) - query_coords.unsqueeze(1)
-        rel_bias = self.pos_proj(rel).reshape(
-            int(q_in.shape[0]), idx.shape[1], self.num_heads, self.head_dim
-        )
-        attn_in = (q.unsqueeze(1) - k + rel_bias).reshape(
-            int(q_in.shape[0]), idx.shape[1], self.dim
-        )
-        logits = self.attn_proj(attn_in).transpose(1, 2)
-        attn = _apply_neighbor_mask(logits, neighbor_mask)
-        value = (v + rel_bias).permute(0, 2, 1, 3)
-        out = (
-            (attn.unsqueeze(-1) * value)
-            .sum(dim=2)
-            .reshape(int(q_in.shape[0]), self.dim)
-        )
-        out = self.dropout(self.out_proj(out))
         if gate is not None:
             out = out * (gate if self.adaln_zero else (1.0 + gate))
         out = residual + out
