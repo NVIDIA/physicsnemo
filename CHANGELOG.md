@@ -10,11 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Adds Point-Transformer local vector-attention blocks to `physicsnemo.nn`
-  (`LocalPointTransformerBlock`, `LocalTokenCrossAttentionBlock`, `AdaLNResidualMLP`):
-  k-NN-local grouped vector attention (`softmax(MLP(q - k + pos_bias))`) with a
-  relative-position bias and optional DiT-style AdaLN/AdaLN-Zero conditioning.
-  The k-NN search is delegated to `physicsnemo.nn.functional.knn`.
+- Adds Point-Transformer local vector-attention blocks to `physicsnemo.nn`.
 - Adds radiation transport example (`examples/nuclear_engineering/radiation_transport`)
 - Adds agent skills structure, and initial skill for 'discoverability'.
 - Adds xDeepONet to experimental models

@@ -53,7 +53,9 @@ def _self_block(
     )
 
 
-def _cross_block(dim=32, num_heads=4, neighbor_k=6, conditioning_dim=None, adaln_zero=False):
+def _cross_block(
+    dim=32, num_heads=4, neighbor_k=6, conditioning_dim=None, adaln_zero=False
+):
     return LocalTokenCrossAttentionBlock(
         dim=dim,
         num_heads=num_heads,
@@ -172,14 +174,18 @@ def test_adaln_zero_gating_runs(device, block_kind):
     cond_dim = 4
     cond = torch.randn(cond_dim, device=device)
     if block_kind == "self":
-        block = _self_block(conditioning_dim=cond_dim, adaln_zero=True).to(device).eval()
+        block = (
+            _self_block(conditioning_dim=cond_dim, adaln_zero=True).to(device).eval()
+        )
         out = block(
             torch.randn(20, 32, device=device),
             torch.randn(20, 3, device=device),
             cond=cond,
         )
     else:
-        block = _cross_block(conditioning_dim=cond_dim, adaln_zero=True).to(device).eval()
+        block = (
+            _cross_block(conditioning_dim=cond_dim, adaln_zero=True).to(device).eval()
+        )
         out = block(
             torch.randn(18, 32, device=device),
             torch.randn(18, 3, device=device),
@@ -200,8 +206,12 @@ def test_cross_block_context_cond_modulates(device):
     cf = torch.randn(12, 32, device=device)
     cc = torch.randn(12, 3, device=device)
     cond = torch.randn(cond_dim, device=device)
-    out_a = block(qf, qc, cf, cc, cond=cond, context_cond=torch.randn(cond_dim, device=device))
-    out_b = block(qf, qc, cf, cc, cond=cond, context_cond=torch.randn(cond_dim, device=device))
+    out_a = block(
+        qf, qc, cf, cc, cond=cond, context_cond=torch.randn(cond_dim, device=device)
+    )
+    out_b = block(
+        qf, qc, cf, cc, cond=cond, context_cond=torch.randn(cond_dim, device=device)
+    )
     assert out_a.shape == (18, 32)
     assert not torch.allclose(out_a, out_b)
 
@@ -237,17 +247,26 @@ def test_cross_block_batch_ids_isolate_neighbors(device):
     cc = torch.randn(nc, 3, device=device)
     query_batch_ids = torch.zeros(nq, dtype=torch.long, device=device)
     context_batch_ids = torch.cat(
-        [torch.zeros(nc // 2, dtype=torch.long), torch.ones(nc - nc // 2, dtype=torch.long)]
+        [
+            torch.zeros(nc // 2, dtype=torch.long),
+            torch.ones(nc - nc // 2, dtype=torch.long),
+        ]
     ).to(device)
     out1 = block(
-        qf, qc, cf, cc,
+        qf,
+        qc,
+        cf,
+        cc,
         query_batch_ids=query_batch_ids,
         context_batch_ids=context_batch_ids,
     )
     cf2 = cf.clone()
     cf2[nc // 2 :] += 5.0  # perturb only batch-1 context
     out2 = block(
-        qf, qc, cf2, cc,
+        qf,
+        qc,
+        cf2,
+        cc,
         query_batch_ids=query_batch_ids,
         context_batch_ids=context_batch_ids,
     )
@@ -259,12 +278,24 @@ def test_cross_block_batch_ids_isolate_neighbors(device):
     [
         (
             LocalPointTransformerBlock,
-            dict(dim=32, num_heads=4, neighbor_k=6, dilation=2, mlp_ratio=2, dropout=0.0, coord_dim=3),
-            dict(dim=32, num_heads=4, head_dim=8, neighbor_k=6, dilation=2, coord_dim=3),
+            dict(
+                dim=32,
+                num_heads=4,
+                neighbor_k=6,
+                dilation=2,
+                mlp_ratio=2,
+                dropout=0.0,
+                coord_dim=3,
+            ),
+            dict(
+                dim=32, num_heads=4, head_dim=8, neighbor_k=6, dilation=2, coord_dim=3
+            ),
         ),
         (
             LocalTokenCrossAttentionBlock,
-            dict(dim=64, num_heads=8, neighbor_k=8, mlp_ratio=4, dropout=0.0, coord_dim=2),
+            dict(
+                dim=64, num_heads=8, neighbor_k=8, mlp_ratio=4, dropout=0.0, coord_dim=2
+            ),
             dict(dim=64, num_heads=8, head_dim=8, neighbor_k=8, coord_dim=2),
         ),
     ],
