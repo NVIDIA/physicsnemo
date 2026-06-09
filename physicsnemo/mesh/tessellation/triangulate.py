@@ -41,7 +41,7 @@ is broadcast to the output identically via the returned ``parent_index``
 """
 
 import torch
-from jaxtyping import Float, Int
+from jaxtyping import Bool, Float, Int
 
 from physicsnemo.mesh.neighbors._adjacency import Adjacency
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
@@ -206,13 +206,13 @@ def _convex_mask(
     points: Float[torch.Tensor, "n_points 3"],
     polygons: Adjacency,
     normals: Float[torch.Tensor, "n_polygons 3"],
-) -> Int[torch.Tensor, " n_polygons"]:
+) -> Bool[torch.Tensor, " n_polygons"]:
     """Boolean mask, ``True`` where a polygon is convex (or degenerate).
 
     A polygon is convex iff no vertex is reflex. The signed sine of
     each vertex turn is measured relative to the polygon normal (scale-free, in
-    ``[-1, 1]``) and count reflex vertices per polygon. Degenerate (zero-area)
-    polygons are reported convex so they stay on the cheap fan path.
+    ``[-1, 1]``) and reflex vertices are counted per polygon. Degenerate
+    (zero-area) polygons are reported convex so they stay on the cheap fan path.
     """
     poly_id, prev_pos, next_pos = _ring_neighbors(polygons)
     conn = polygons.indices
@@ -251,5 +251,10 @@ def _to_3d(points: torch.Tensor) -> torch.Tensor:
     """Embed 2D points in 3D (z = 0) so cross products are well-defined."""
     if points.shape[-1] == 3:
         return points
-    pad = points.new_zeros((points.shape[0], 3 - points.shape[-1]))
+    if points.shape[-1] != 2:
+        raise ValueError(
+            f"triangulate supports 2-D or 3-D point coordinates; got "
+            f"{points.shape[-1]}-D points."
+        )
+    pad = points.new_zeros((points.shape[0], 1))
     return torch.cat([points, pad], dim=-1)
