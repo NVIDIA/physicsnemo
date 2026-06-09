@@ -16,7 +16,7 @@ signed *vector* area of a vertex-0 fan telescopes to the polygon's regardless
 of convexity, but the sum of *unsigned* triangle areas does not.
 
 Every ``k``-gon yields exactly ``k - 2`` triangles, so per-polygon data is
-broadcast to the output identically in both paths via the returned
+broadcast to the output identically in both paths using the returned
 ``parent_index``.
 
 .. code:: python
