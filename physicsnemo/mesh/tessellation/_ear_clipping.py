@@ -21,7 +21,7 @@ fan triangles overlap and exit the polygon, so their unsigned areas no longer
 sum to the polygon's. Ear clipping produces a true triangulation (`k - 2`
 triangles, no added points) instead.
 
-Ear clipping is sequential per polygon, but we vectorize across polygons by
+Ear clipping is sequential per polygon, but is vectorized across polygons by
 grouping them by valence ``k`` (the ``torch.unique`` group-by-count pattern used
 in :mod:`physicsnemo.mesh.calculus._neighborhoods`): every polygon in a group is
 clipped in lockstep over a static ``k - 2`` rounds. This is the rare fallback,
