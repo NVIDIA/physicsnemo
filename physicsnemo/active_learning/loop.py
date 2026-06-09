@@ -212,7 +212,7 @@ class DefaultTrainingLoop(p.TrainingLoop):
             device = torch.device(device)
         # check to see if we can rely on DistributedManager
         if device is None and DistributedManager.is_initialized():
-            device = DistributedManager.device
+            device = DistributedManager().device
         self.device = device
         if dtype is None:
             dtype = torch.get_default_dtype()

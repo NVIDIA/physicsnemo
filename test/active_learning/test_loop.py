@@ -166,6 +166,24 @@ class TestDefaultTrainingLoop:
         assert loop.use_progress_bars is True
         assert loop.dtype == torch.get_default_dtype()
 
+    def test_device_resolves_from_distributed_manager(self):
+        """``device=None`` must resolve to ``DistributedManager().device`` (a
+        torch.device), not the class-level ``device`` property descriptor."""
+        from physicsnemo.distributed import DistributedManager
+
+        was_initialized = DistributedManager.is_initialized()
+        if not was_initialized:
+            DistributedManager.initialize()
+        try:
+            loop = DefaultTrainingLoop(
+                enable_static_capture=False, use_progress_bars=False
+            )
+            assert isinstance(loop.device, torch.device)
+            assert loop.device == DistributedManager().device
+        finally:
+            if not was_initialized:
+                DistributedManager._shared_state.clear()
+
     def test_instantiation_with_train_step(self):
         """Test instantiation with custom train step function."""
 
