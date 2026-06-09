@@ -11,7 +11,7 @@ vectorized vertex-0 fan for convex polygons and `ear clipping
 ones.
 
 Handling non-convex polygons correctly matters for any unsigned-area-weighted
-quantity (wall-shear / viscous force integration, total wetted area): the
+quantity (wall-shear / viscous force integration, or total wetted area): the
 signed *vector* area of a vertex-0 fan telescopes to the polygon's regardless
 of convexity, but the sum of *unsigned* triangle areas does not.
 
