@@ -20,7 +20,7 @@ corresponding submodules. The methods are thin wrappers that pass ``self`` to
 the standalone functions.
 
 To construct a triangle mesh from a non-simplicial polygon soup, use
-:meth:`Mesh.from_polygons` (see :doc:`tessellation`).
+:meth:`Mesh.from_polygons` (refer to :doc:`tessellation`).
 
 .. code:: python
 
