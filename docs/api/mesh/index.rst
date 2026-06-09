@@ -181,7 +181,7 @@ Key Features
 - **Mesh operations**: subdivision (linear, Loop, Butterfly), smoothing,
   remeshing, repair
 - **Tessellation**: triangulate polygon soups into simplicial meshes (convex
-  fan with an ear-clip fallback for non-convex polygons), e.g. via
+  fan with an ear-clip fallback for non-convex polygons), for example, using
   ``Mesh.from_polygons``
 - **Spatial queries**: BVH-accelerated point containment and nearest-cell search
 - **Topology**: boundary detection, watertight/manifold checking, adjacency
