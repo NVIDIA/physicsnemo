@@ -37,15 +37,15 @@ Three layers are exposed:
   query tokens to a per-query k-NN of context tokens.
 
 All three are tensor-in/tensor-out (operating on flat :math:`(N, D)`
-features plus :math:`(N, 3)` coordinates) and carry no model-specific data
-structures.
+features plus :math:`(N, D_{pos})` coordinates) and carry no model-specific
+data structures.
 """
 
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
-from jaxtyping import Float
+from jaxtyping import Float, Int
 
 from physicsnemo.core import Module
 from physicsnemo.nn.functional import knn
@@ -235,7 +235,7 @@ class AdaLNResidualMLP(Module):
     def forward(
         self,
         x: Float[torch.Tensor, "*dims dim"],
-        cond: torch.Tensor | None = None,
+        cond: Float[torch.Tensor, "*batch cond_dim"] | None = None,
     ) -> Float[torch.Tensor, "*dims dim"]:
         if not torch.compiler.is_compiling():
             if x.shape[-1] != self.dim:
@@ -294,6 +294,9 @@ class LocalPointTransformerBlock(Module):
         Unused. Retained for backwards-compatible construction; the k-NN is
         delegated to :func:`physicsnemo.nn.functional.knn`, which selects and
         chunks its own backend.
+    coord_dim : int, optional
+        Dimensionality :math:`D_{pos}` of the point coordinates (e.g. 3 for
+        3D point clouds, 2 for planar meshes). Default ``3``.
     conditioning_dim : int, optional
         Size of the conditioning vector. ``None`` disables conditioning on
         both sublayers.
@@ -306,7 +309,7 @@ class LocalPointTransformerBlock(Module):
     features : torch.Tensor
         Per-point features of shape :math:`(N, D)`.
     coords : torch.Tensor
-        Per-point coordinates of shape :math:`(N, 3)`.
+        Per-point coordinates of shape :math:`(N, D_{pos})`.
     cond : torch.Tensor, optional
         Conditioning of shape :math:`(D_{cond},)`, :math:`(1, D_{cond})` or
         :math:`(N, D_{cond})`. Required when ``conditioning_dim`` is set.
@@ -335,6 +338,7 @@ class LocalPointTransformerBlock(Module):
         mlp_ratio: int,
         dropout: float,
         knn_chunk_size: int,
+        coord_dim: int = 3,
         conditioning_dim: int | None = None,
         adaln_zero: bool = False,
     ):
@@ -347,6 +351,7 @@ class LocalPointTransformerBlock(Module):
         self.neighbor_k = int(neighbor_k)
         self.dilation = int(max(1, dilation))
         self.knn_chunk_size = int(knn_chunk_size)
+        self.coord_dim = int(coord_dim)
         self.norm = LayerNorm(self.dim)
         self.adaln_zero = bool(adaln_zero)
         self.conditioning = (
@@ -358,7 +363,7 @@ class LocalPointTransformerBlock(Module):
         self.k_proj = nn.Linear(self.dim, self.dim)
         self.v_proj = nn.Linear(self.dim, self.dim)
         self.pos_proj = Mlp(
-            in_features=3,
+            in_features=self.coord_dim,
             hidden_features=self.dim,
             out_features=self.dim,
             act_layer=nn.GELU,
@@ -384,9 +389,9 @@ class LocalPointTransformerBlock(Module):
     def forward(
         self,
         features: Float[torch.Tensor, "n dim"],
-        coords: Float[torch.Tensor, "n 3"],
-        cond: torch.Tensor | None = None,
-        batch_ids: torch.Tensor | None = None,
+        coords: Float[torch.Tensor, "n d_pos"],
+        cond: Float[torch.Tensor, "*batch cond_dim"] | None = None,
+        batch_ids: Int[torch.Tensor, "n"] | None = None,  # noqa: F821
     ) -> Float[torch.Tensor, "n dim"]:
         if not torch.compiler.is_compiling():
             if features.ndim != 2 or features.shape[1] != self.dim:
@@ -394,10 +399,10 @@ class LocalPointTransformerBlock(Module):
                     f"Expected features of shape (N, {self.dim}), got tensor of "
                     f"shape {tuple(features.shape)}"
                 )
-            if coords.ndim != 2 or coords.shape[1] != 3:
+            if coords.ndim != 2 or coords.shape[1] != self.coord_dim:
                 raise ValueError(
-                    f"Expected coords of shape (N, 3), got tensor of shape "
-                    f"{tuple(coords.shape)}"
+                    f"Expected coords of shape (N, {self.coord_dim}), got tensor "
+                    f"of shape {tuple(coords.shape)}"
                 )
             if coords.shape[0] != features.shape[0]:
                 raise ValueError(
@@ -490,6 +495,9 @@ class LocalTokenCrossAttentionBlock(Module):
         Unused. Retained for backwards-compatible construction; the k-NN is
         delegated to :func:`physicsnemo.nn.functional.knn`, which selects and
         chunks its own backend.
+    coord_dim : int, optional
+        Dimensionality :math:`D_{pos}` of the query and context coordinates.
+        Default ``3``.
     conditioning_dim : int, optional
         Size of the conditioning vector. ``None`` disables conditioning.
     adaln_zero : bool, optional
@@ -501,11 +509,11 @@ class LocalTokenCrossAttentionBlock(Module):
     query_features : torch.Tensor
         Query features of shape :math:`(N_q, D)`.
     query_coords : torch.Tensor
-        Query coordinates of shape :math:`(N_q, 3)`.
+        Query coordinates of shape :math:`(N_q, D_{pos})`.
     context_features : torch.Tensor
         Context features of shape :math:`(N_c, D)`.
     context_coords : torch.Tensor
-        Context coordinates of shape :math:`(N_c, 3)`.
+        Context coordinates of shape :math:`(N_c, D_{pos})`.
     cond : torch.Tensor, optional
         Query-side conditioning of shape :math:`(D_{cond},)` or
         :math:`(N_q, D_{cond})`. Required when ``conditioning_dim`` is set.
@@ -537,6 +545,7 @@ class LocalTokenCrossAttentionBlock(Module):
         mlp_ratio: int,
         dropout: float,
         knn_chunk_size: int,
+        coord_dim: int = 3,
         conditioning_dim: int | None = None,
         adaln_zero: bool = False,
     ):
@@ -548,6 +557,7 @@ class LocalTokenCrossAttentionBlock(Module):
         self.head_dim = self.dim // self.num_heads
         self.neighbor_k = int(neighbor_k)
         self.knn_chunk_size = int(knn_chunk_size)
+        self.coord_dim = int(coord_dim)
         self.norm_q = LayerNorm(self.dim)
         self.adaln_zero = bool(adaln_zero)
         self.norm_kv = LayerNorm(self.dim)
@@ -560,7 +570,7 @@ class LocalTokenCrossAttentionBlock(Module):
         self.k_proj = nn.Linear(self.dim, self.dim)
         self.v_proj = nn.Linear(self.dim, self.dim)
         self.pos_proj = Mlp(
-            in_features=3,
+            in_features=self.coord_dim,
             hidden_features=self.dim,
             out_features=self.dim,
             act_layer=nn.GELU,
@@ -586,13 +596,13 @@ class LocalTokenCrossAttentionBlock(Module):
     def forward(
         self,
         query_features: Float[torch.Tensor, "nq dim"],
-        query_coords: Float[torch.Tensor, "nq 3"],
+        query_coords: Float[torch.Tensor, "nq d_pos"],
         context_features: Float[torch.Tensor, "nc dim"],
-        context_coords: Float[torch.Tensor, "nc 3"],
-        cond: torch.Tensor | None = None,
-        context_cond: torch.Tensor | None = None,
-        query_batch_ids: torch.Tensor | None = None,
-        context_batch_ids: torch.Tensor | None = None,
+        context_coords: Float[torch.Tensor, "nc d_pos"],
+        cond: Float[torch.Tensor, "*batch cond_dim"] | None = None,
+        context_cond: Float[torch.Tensor, "*batch cond_dim"] | None = None,
+        query_batch_ids: Int[torch.Tensor, "nq"] | None = None,  # noqa: F821
+        context_batch_ids: Int[torch.Tensor, "nc"] | None = None,  # noqa: F821
     ) -> Float[torch.Tensor, "nq dim"]:
         if not torch.compiler.is_compiling():
             if query_features.ndim != 2 or query_features.shape[1] != self.dim:
@@ -605,15 +615,15 @@ class LocalTokenCrossAttentionBlock(Module):
                     f"Expected context_features of shape (Nc, {self.dim}), got "
                     f"tensor of shape {tuple(context_features.shape)}"
                 )
-            if query_coords.ndim != 2 or query_coords.shape[1] != 3:
+            if query_coords.ndim != 2 or query_coords.shape[1] != self.coord_dim:
                 raise ValueError(
-                    f"Expected query_coords of shape (Nq, 3), got tensor of "
-                    f"shape {tuple(query_coords.shape)}"
+                    f"Expected query_coords of shape (Nq, {self.coord_dim}), got "
+                    f"tensor of shape {tuple(query_coords.shape)}"
                 )
-            if context_coords.ndim != 2 or context_coords.shape[1] != 3:
+            if context_coords.ndim != 2 or context_coords.shape[1] != self.coord_dim:
                 raise ValueError(
-                    f"Expected context_coords of shape (Nc, 3), got tensor of "
-                    f"shape {tuple(context_coords.shape)}"
+                    f"Expected context_coords of shape (Nc, {self.coord_dim}), got "
+                    f"tensor of shape {tuple(context_coords.shape)}"
                 )
             if query_coords.shape[0] != query_features.shape[0]:
                 raise ValueError(

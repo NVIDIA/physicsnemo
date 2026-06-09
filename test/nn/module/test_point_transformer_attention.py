@@ -176,6 +176,29 @@ def test_dim_not_divisible_by_heads_raises():
         _cross_block(dim=30, num_heads=4)
 
 
+@pytest.mark.parametrize("coord_dim", [2, 3, 6])
+def test_non_3d_coords(device, coord_dim):
+    # coord_dim generalizes the layer beyond 3D point clouds (e.g. 2D meshes,
+    # 6-DoF poses); pos_proj adapts to the coordinate dimensionality.
+    block = LocalPointTransformerBlock(
+        dim=32,
+        num_heads=4,
+        neighbor_k=6,
+        dilation=1,
+        mlp_ratio=2,
+        dropout=0.0,
+        knn_chunk_size=64,
+        coord_dim=coord_dim,
+    ).to(device).eval()
+    feats = torch.randn(20, 32, device=device)
+    coords = torch.randn(20, coord_dim, device=device)
+    out = block(feats, coords)
+    assert out.shape == (20, 32)
+    # wrong coord dim must fail fast
+    with pytest.raises(ValueError, match="coords"):
+        block(feats, torch.randn(20, coord_dim + 1, device=device))
+
+
 def test_forward_shape_validation_raises(device):
     # MOD-005: forward validates tensor shapes at the API boundary.
     block = _self_block(dim=32).to(device).eval()
