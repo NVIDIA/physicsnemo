@@ -209,7 +209,7 @@ def _convex_mask(
 ) -> Int[torch.Tensor, " n_polygons"]:
     """Boolean mask, ``True`` where a polygon is convex (or degenerate).
 
-    A polygon is convex iff no vertex is reflex. We measure the signed sine of
+    A polygon is convex iff no vertex is reflex. The signed sine of
     each vertex turn relative to the polygon normal (scale-free, in
     ``[-1, 1]``) and count reflex vertices per polygon. Degenerate (zero-area)
     polygons are reported convex so they stay on the cheap fan path.
