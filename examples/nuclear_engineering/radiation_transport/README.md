@@ -3,13 +3,15 @@
 A PhysicsNeMo example that trains a [Transolver](https://arxiv.org/abs/2402.02366)
 surrogate model for the 2-D linear radiation transport benchmark defined in
 [Reference solutions for linear radiation transport: the Hohlraum and Lattice
-benchmarks](https://arxiv.org/pdf/2505.17284). The pipeline learns the
+benchmarks](https://arxiv.org/pdf/2505.17284).[^2] The pipeline learns the
 final-time mapping from the initial flux snapshot to the final scalar flux,
-using a physics-informed loss that combines region-weighted MSE with a
-quantity-of-interest (QoI) penalty based on absorption in key regions.
+using a physics-informed training objective that can combine void/material-
+weighted MSE with a quantity-of-interest (QoI) penalty based on absorption in
+key regions.
 
 The dataset used for this example was generated using
-[KiT-RT](https://github.com/KiT-RT) [^1], and can be found on Hugging Face:
+[KiT-RT](https://github.com/KiT-RT),[^1] curated into the
+PhysicsNeMo `Mesh` format, and published on Hugging Face:
 [Linear Radiation Transport][hf-rte].
 
 [hf-rte]: https://huggingface.co/datasets/nvidia/Linear-Radiation-Transport
@@ -26,8 +28,9 @@ is not run to convergence. Inputs to the surrogate are:
 - **Coordinates** `(x, y)` per cell, normalized to `[-1, 1]` and augmented with
   Fourier features (3 frequencies × 2 axes × {sin, cos} = 12 extra channels).
 - **Material properties** per cell: absorption coefficient `σ_a`, scattering
-  coefficient `σ_s`, total cross-section `σ_t`, and, for lattice cases, heat
-  source `Q`. Boundary input flux may be incorporated from upstream hohlraum
+  coefficient `σ_s`, total cross-section `σ_t`, and particle source `Q`.
+  `Q` is non-zero for source cells in the lattice case and zero in the
+  hohlraum case. Boundary input flux may be present in upstream simulation
   data, but it is not used as a model input in this example.
 
 The surrogate predicts the **z-score-of-log scalar flux**, which is then
@@ -35,13 +38,13 @@ inverted via `transforms.denormalize_flux` to recover the physical flux.
 
 ### 1.1 Lattice benchmark
 
-A square domain partitioned into a 7×7 grid of material blocks. Each block is
-either **absorber** (high `σ_a`, low `σ_s`), **scatterer** (low `σ_a`, high
-`σ_s`), or **source** (interior `Q > 0`). The model has to capture sharp flux
+A square domain partitioned into a 7×7 grid of material blocks. The material
+layout contains blue absorbing blocks, red scattering/source blocks, and a
+white scattering background. The model has to capture sharp flux
 discontinuities at material interfaces and reproduce the integrated
 absorption in the absorbing regions.
 
-**QoI** — matches **QoI-3** of the reference paper (Kusch et al. 2025, §3.1):
+**QoI** — matches **QoI-3** of the reference paper (Schotthöfer et al. 2025, §3.1):
 the final-time radiation absorption over the absorbing blocks `B`:
 
 $$\mathrm{QoI}_{\mathrm{Lattice}} = \int_{B} \sigma_a(x)\,\phi(x, T)\,dx.$$
@@ -55,24 +58,30 @@ In code this is `cur_absorption`, computed as
 
 ### 1.2 Hohlraum benchmark
 
-An axisymmetric cylindrical cavity with interior void regions,
-representing a simplified inertial-confinement-fusion target. There is no
-interior heat source — flux enters from boundary conditions and propagates
-through the cavity. Geometry parameters (upper/lower laser-entry radii,
-center offsets) vary across simulations.
+A symmetric 2-D hohlraum-style cavity benchmark with interior void regions,
+red wall strips, and a center insert/capsule region. There is no interior
+particle source — flux enters from boundary conditions and propagates through
+the cavity. Geometry varies across simulations through eight scalar
+parameters:
 
-**QoI** — variation of **QoI-2** of the reference paper (Kusch et al.
-2025, §3.2): per-material final-time absorption, evaluated separately
-over each of three regions `S ∈ {G ∪ B, R, K}`:
+- `ulr`, `llr`: upper/lower extent of the left red wall strip
+- `urr`, `lrr`: upper/lower extent of the right red wall strip
+- `hlr`, `hrr`: left/right horizontal wall-strip positions
+- `cx`, `cy`: center insert/capsule offsets
+
+**QoI** — variation of **QoI-2** of the reference paper (Schotthöfer et al.
+2025, §3.2): final-time absorption evaluated separately over three regions:
 
 $$\mathrm{QoI}_{\mathrm{Hohlraum}, S} = \int_{S} \sigma_a(x)\,\phi(x, T)\,dx.$$
 
-In code the three regions are labeled
+In the PhysicsNeMo evaluator, the three regions are labeled
 `cur_absorption_{center, vertical, horizontal}` and each is computed as
-`Σ_{c ∈ S} σ_a,c · φ_c · A_c`. The training-time physics loss
-additionally synthesizes a fourth `total` term as the mean of the three,
-so every region contributes to the gradient (mean-of-four). Inference
-reports the three component QoIs only.
+`Σ_{c ∈ S} σ_a,c · φ_c · A_c`.
+
+The training-time physics loss evaluates relative-squared-error losses for
+the three component absorptions and adds a fourth `total` loss on the sum
+of those three component absorptions. The QoI penalty is the mean of these
+four loss terms. Inference reports the three component QoIs only.
 
 ![Hohlraum: target, prediction, absolute error of final-time flux][hohlraum-fig]
 
@@ -100,15 +109,21 @@ uv pip install -e ".[model-extras,datapipes-extras]" tensorboard
 
 ### 3.1 Data source
 
-The dataset is available on Hugging Face:
-[Linear Radiation Transport][hf-rte]. Alternatively, raw simulation data
-may be curated from the [KiT-RT repositories](https://github.com/KiT-RT).
+The curated dataset is available on Hugging Face:
+[Linear Radiation Transport][hf-rte]. Raw simulations can be regenerated or
+curated using the [KiT-RT](https://github.com/KiT-RT/kitrt_code) solver and
+the [CharmKiT](https://github.com/KiT-RT/charm_kit) workflow scripts.
 
 ### 3.2 Expected on-disk layout
 
 The runtime data format is the PhysicsNeMo `Mesh` memmap layout. Each
 simulation lives in a `<name>.pmsh/` directory next to a `<name>.attrs.json`
 sidecar, loaded via `physicsnemo.mesh.Mesh.load(<name>.pmsh)`.
+
+Set `<DATA_ROOT>` to the directory that directly contains the `lattice/`,
+`hohlraum/`, `splits/`, and `stats/` directories. If using the Hugging Face
+tarballs exactly as published, this may be the extracted `mesh/` directory
+rather than the parent download directory.
 
 ```text
 <DATA_ROOT>/
@@ -136,31 +151,32 @@ Each `*.pmsh/` directory is one simulation written via
 `physicsnemo.mesh.Mesh.save(...)`. The flux series is stored as just
 the first and final snapshots (`T = 2`); only those are used.
 
-Cell-center coordinates and per-cell areas are not stored as fields —
-the loader derives them from the mesh topology via `mesh.cell_centroids`
-and `mesh.cell_areas`.
+Cell-center coordinates and per-cell areas are derived from the mesh topology
+via `mesh.cell_centroids` and `mesh.cell_areas`.
 
 `Mesh.cell_data` (per-cell tensors the loader requires):
 
 | Key | Shape | Dtype | Notes |
 |---|---|---|---|
 | `scalar_flux` | `(N, 2)` | float32 | flux at first / final snapshot, cells-first |
-| `material_id` | `(N,)` | int64 | region IDs (mapped by `LatticeMaterialMapper` / `HohlraumMaterialMapper`) |
+| `material_id` | `(N,)` | int64 | region IDs mapped by the material-property transforms |
 | `sigma_a`, `sigma_s`, `sigma_t` | `(N,)` | float32 | absorption / scattering / total cross-section |
-| `Q` | `(N,)` | float32 | heat source (non-zero in lattice; zeros in hohlraum) |
+| `Q` | `(N,)` | float32 | particle source; non-zero in lattice source cells, zero in hohlraum |
 
 `Mesh.global_data`: the loader consumes only `sim_time` (shape `(2,)`,
-simulation time of each flux snapshot). Other simulation diagnostics
-shipped with the data (`cur_absorption`, `total_absorption`, `mass`,
-...) are ignored at training time, but may be useful for other downstream tasks.
+simulation time of each flux snapshot).
+Other simulation diagnostics shipped with the data (`cur_absorption`,
+`total_absorption`, `mass`, ...) are ignored at training time, but may be
+useful for other downstream tasks.
 
 `<name>.attrs.json` (sidecar): JSON with `case_type`,
-`simulation_params`, `solver_config`, and `mesh_info`. The loader
-exposes the full dict as a `metadata` `NonTensorData` entry on the
-returned `TensorDict`.
+`simulation_params`, `solver_config`, and `mesh_info`. The dataset exposes
+sidecar-derived metadata alongside each loaded sample.
 
-`N` is the number of cells per simulation (~tens of thousands). Different
-simulations may have different `N` — point-cloud collation handles this.
+`N` is the number of cells per simulation (~tens of thousands). In the
+published dataset, lattice samples use a fixed cell count, while hohlraum
+samples may have different `N`; point-cloud collation handles variable-size
+meshes.
 
 ### 3.4 Splits file format
 
@@ -176,15 +192,16 @@ JSON document with a `"splits"` key:
   "val_size": 106,
   "test_size": 107,
   "splits": {
-    "train": ["lattice_abs52.5_scatter4.6_p0.015_q6", ...],
-    "val":   ["lattice_abs85.0_scatter9.1_p0.015_q6", ...],
-    "test":  ["lattice_abs77.5_scatter4.1_p0.015_q6", ...]
+    "train": ["lattice_abs52.5_scatter4.6_p0.015_q6", "..."],
+    "val":   ["lattice_abs85.0_scatter9.1_p0.015_q6", "..."],
+    "test":  ["lattice_abs77.5_scatter4.1_p0.015_q6", "..."]
   }
 }
 ```
 
-Filenames in the splits arrays are **basenames** without any format
-suffix; the reader appends `.pmsh` when opening stores.
+Filenames in the splits arrays may be basenames with no suffix or filenames
+ending in `.pmsh`; the reader normalizes entries to `.pmsh` when opening
+stores.
 
 If the splits file is named with a different suffix, point at it explicitly:
 
@@ -194,9 +211,9 @@ If the splits file is named with a different suffix, point at it explicitly:
 
 ### 3.5 Computing normalization stats
 
-If `<DATA_ROOT>/stats/<case>_{flux,material}_stats.yaml` are missing (e.g. you
-re-curated the data, or you started from a fresh download that only ships
-flux stats), generate them with:
+The Hugging Face dataset includes both flux and material-property statistics
+under `stats/`. If `<DATA_ROOT>/stats/<case>_{flux,material}_stats.yaml` are
+missing after custom curation or relocation, regenerate them with:
 
 ```bash
 python src/compute_normalizations.py \
@@ -268,7 +285,7 @@ single process.
 | `train.dataloader.num_streams=4` | CUDA streams used by `physicsnemo.datapipes.DataLoader` for prefetch overlap (no CPU fork workers) |
 | `train.dataloader.use_streams=false` | Disable CUDA-stream prefetching — useful for debugging or CPU-only runs |
 | `train.dataloader.prefetch_factor=4` | How many batches to prefetch ahead |
-| `model.num_spatial_points=8192` | Subsample cells per training step (–1 = use all) |
+| `model.num_spatial_points=8192` | Subsample cells per training step (`-1` = use all) |
 | `model.n_layers=12 model.n_hidden=384` | Bigger Transolver |
 | `model.use_te=true` | Use NVIDIA TransformerEngine layers (requires `[model-extras]`) |
 | `train.resume_checkpoint=.../checkpoints/best_model` | Resume from a checkpoint directory |
@@ -377,9 +394,9 @@ dominating the mean).
 
 For lattice, the only region is `cur_absorption`. For hohlraum, inference
 reports `cur_absorption_{center, vertical, horizontal}` when geometry
-metadata is available on the sample (the training-time physics loss
-additionally averages in a synthesized `total` term across those three
-regions; inference does not).
+metadata is available on the sample. The training-time physics loss
+additionally includes a synthesized `total` loss on the sum of those three
+component absorptions; inference does not report this total term.
 
 ### 5.4 Comparing runs
 
@@ -478,6 +495,10 @@ so case-specific overrides propagate automatically.
 "KiT-RT: An extendable framework for radiative transfer and therapy."
 *ACM Transactions on Mathematical Software*, **49**(4), 1–24.
 
+[^2]: Schotthoefer, S., & Hauck, C. (2025).
+"Reference solutions for linear radiation transport: the Hohlraum and Lattice benchmarks."
+*arXiv preprint arXiv:2505.17284*.
+
 ```bibtex
 @article{kitrt2023,
   title     = {KiT-RT: An extendable framework for radiative transfer and therapy},
@@ -489,5 +510,16 @@ so case-specific overrides propagate automatically.
   pages     = {1--24},
   year      = {2023},
   publisher = {ACM New York, NY}
+}
+
+@misc{schotthoefer2025reference,
+  title         = {Reference solutions for linear radiation transport:
+                   the Hohlraum and Lattice benchmarks},
+  author        = {Schotthoefer, Steffen and Hauck, Cory},
+  year          = {2025},
+  eprint        = {2505.17284},
+  archivePrefix = {arXiv},
+  primaryClass  = {physics.comp-ph},
+  url           = {https://arxiv.org/abs/2505.17284}
 }
 ```
