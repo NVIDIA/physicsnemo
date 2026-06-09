@@ -84,6 +84,23 @@ def test_mse_mask_drops_invalid_rows(device):
     assert torch.allclose(base, no_mask)
 
 
+def test_mse_partial_mask_excludes_invalid_rows(device):
+    """A partial mask makes the loss equal to ``mse_loss`` over only the kept rows."""
+    pred = torch.randn(8, 3, device=device)
+    target = torch.randn(8, 3, device=device)
+    mask = torch.ones(8, dtype=torch.bool, device=device)
+    mask[2] = False
+    mask[5] = False
+    # Massive outliers in the dropped rows would dominate if they leaked
+    # in; the masked loss should ignore them entirely.
+    target_bad = target.clone()
+    target_bad[2] = 1.0e6
+    target_bad[5] = -1.0e6
+    masked = mse_loss(pred, target_bad, mask=mask)
+    expected = mse_loss(pred[mask], target_bad[mask])
+    assert torch.allclose(masked, expected, atol=1e-5)
+
+
 def test_mse_shape_mismatch_raises():
     """Disagreeing shapes are rejected with a clear error."""
     with pytest.raises(ValueError, match=r"shapes must match"):
