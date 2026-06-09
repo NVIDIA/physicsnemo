@@ -5,7 +5,7 @@ Tessellation
 
 Decompose non-simplicial cells into the simplices that the
 :class:`~physicsnemo.mesh.mesh.Mesh` data structure stores. Currently this
-provides polygon-soup triangulation (:func:`triangulate_polygons`): a
+provides polygon-soup triangulation (:func:`triangulate`): a
 vectorized vertex-0 fan for convex polygons and `ear clipping
 <https://en.wikipedia.org/wiki/Polygon_triangulation>`_ for the rare non-convex
 ones.
@@ -23,22 +23,23 @@ broadcast to the output identically in both paths using the returned
 
     import torch
     from physicsnemo.mesh import Mesh
-    from physicsnemo.mesh.tessellation import triangulate_polygons
+    from physicsnemo.mesh.neighbors import Adjacency
+    from physicsnemo.mesh.tessellation import triangulate
 
-    # A polygon soup in the flat VTK layout: one quad (vertices 0-3).
+    # A polygon soup as a cell-to-vertex Adjacency (CSR): one quad (vertices 0-3).
     points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0],
                            [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]])
-    connectivity = torch.tensor([0, 1, 2, 3])
-    offsets = torch.tensor([4])
+    polygons = Adjacency(offsets=torch.tensor([0, 4]),
+                         indices=torch.tensor([0, 1, 2, 3]))
 
     # Low-level: triangle connectivity plus the parent-polygon index.
-    result = triangulate_polygons(points, connectivity, offsets)
-    result.cells          # tensor([[0, 1, 2], [0, 2, 3]])
-    result.parent_index   # tensor([0, 0]); broadcast data via cell_data[parent_index]
+    cells, parent_index = triangulate(points, polygons)
+    cells          # tensor([[0, 1, 2], [0, 2, 3]])
+    parent_index   # tensor([0, 0]); broadcast data via cell_data[parent_index]
 
     # High-level: build a Mesh directly, broadcasting per-polygon cell data.
     mesh = Mesh.from_polygons(
-        points, connectivity, offsets, cell_data={"pressure": torch.tensor([2.5])}
+        points, polygons, cell_data={"pressure": torch.tensor([2.5])}
     )
 
 A :class:`~physicsnemo.mesh.mesh.Mesh` can also be constructed in one step with
