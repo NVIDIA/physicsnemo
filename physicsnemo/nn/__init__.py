@@ -85,6 +85,7 @@ from .module.dit_layers import (
 from .module.drop import DropPath
 from .module.embedding_layers import (
     FourierEmbedding,
+    FourierPositionalEmbedding,
     OneHotEmbedding,
     PositionalEmbedding,
     SinusoidalTimestepEmbedding,
