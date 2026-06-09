@@ -20,6 +20,7 @@ import pytest
 import torch
 import torch.nn as nn
 
+from physicsnemo.core import Module
 from physicsnemo.nn import (
     LocalPointTransformerBlock,
     LocalTokenCrossAttentionBlock,
@@ -71,8 +72,11 @@ def _ref_dilated_knn(query, key, k, dilation):
 # --------------------------------------------------------------------------- #
 # forward shape / basic behaviour
 # --------------------------------------------------------------------------- #
-def test_self_block_forward_shape(device):
-    block = _self_block().to(device).eval()
+@pytest.mark.parametrize("dilation", [1, 2, 3])
+def test_self_block_forward(device, dilation):
+    # forward smoke + finite output across dilation regimes (dilation == 1 is
+    # the plain-k-NN path; > 1 exercises the wider-then-strided path)
+    block = _self_block(dilation=dilation).to(device).eval()
     feats = torch.randn(40, 32, device=device)
     coords = torch.randn(40, 3, device=device)
     out = block(feats, coords)
@@ -80,7 +84,7 @@ def test_self_block_forward_shape(device):
     assert torch.isfinite(out).all()
 
 
-def test_cross_block_forward_shape(device):
+def test_cross_block_forward(device):
     block = _cross_block().to(device).eval()
     qf = torch.randn(25, 32, device=device)
     qc = torch.randn(25, 3, device=device)
@@ -91,18 +95,12 @@ def test_cross_block_forward_shape(device):
     assert torch.isfinite(out).all()
 
 
-def test_residual_mlp_forward_shape(device):
+def test_residual_mlp_forward(device):
     mlp = ResidualMLP(dim=16, mlp_ratio=4, dropout=0.0).to(device).eval()
     x = torch.randn(7, 16, device=device)
-    assert mlp(x).shape == (7, 16)
-
-
-@pytest.mark.parametrize("dilation", [1, 2, 3])
-def test_self_block_dilation_runs(device, dilation):
-    block = _self_block(dilation=dilation).to(device).eval()
-    feats = torch.randn(50, 32, device=device)
-    coords = torch.randn(50, 3, device=device)
-    assert block(feats, coords).shape == (50, 32)
+    out = mlp(x)
+    assert out.shape == (7, 16)
+    assert torch.isfinite(out).all()
 
 
 # --------------------------------------------------------------------------- #
@@ -175,6 +173,18 @@ def test_dim_not_divisible_by_heads_raises():
         _self_block(dim=30, num_heads=4)
     with pytest.raises(ValueError, match="divisible"):
         _cross_block(dim=30, num_heads=4)
+
+
+def test_forward_shape_validation_raises(device):
+    # MOD-005: forward validates tensor shapes at the API boundary.
+    block = _self_block(dim=32).to(device).eval()
+    coords = torch.randn(10, 3, device=device)
+    with pytest.raises(ValueError, match="features"):
+        block(torch.randn(10, 16, device=device), coords)  # wrong feature dim
+    with pytest.raises(ValueError, match="coords"):
+        block(torch.randn(10, 32, device=device), torch.randn(10, 2, device=device))
+    with pytest.raises(ValueError, match="share"):
+        block(torch.randn(10, 32, device=device), torch.randn(8, 3, device=device))
 
 
 def test_batch_ids_isolate_neighbors(device):
@@ -285,3 +295,23 @@ def test_state_dict_roundtrip(device):
     block2 = _self_block(conditioning_dim=4).to(device).eval()
     block2.load_state_dict(torch.load(buf, weights_only=True))
     torch.testing.assert_close(block2(feats, coords, cond=cond), ref)
+
+
+def test_serialization_roundtrip(device, tmp_path):
+    # MOD-008c: the layers are physicsnemo.Module, so they must round-trip
+    # through save() / Module.from_checkpoint() (the .mdlus path). This is also
+    # the synergy that lets a physicsnemo.Module model embed these blocks and
+    # serialize cleanly.
+    torch.manual_seed(0)
+    block = _self_block(conditioning_dim=4).to(device).eval()
+    feats = torch.randn(20, 32, device=device)
+    coords = torch.randn(20, 3, device=device)
+    cond = torch.randn(4, device=device)
+    ref = block(feats, coords, cond=cond)
+
+    path = str(tmp_path / "block.mdlus")
+    block.save(path)
+    loaded = Module.from_checkpoint(path).to(device).eval()
+    assert loaded.dim == 32
+    assert loaded.num_heads == 4
+    torch.testing.assert_close(loaded(feats, coords, cond=cond), ref)

@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Point-Transformer local vector-attention blocks.
+r"""Point-Transformer local vector-attention blocks.
 
 This module provides local (k-NN) *vector* attention over point clouds in
 the style of Point Transformer (Zhao et al., 2021), generalized with the
@@ -22,10 +22,10 @@ grouped (per-head) weighting of Point Transformer v2 and optional
 DiT-style AdaLN / AdaLN-Zero conditioning.
 
 Unlike scaled dot-product attention, the per-neighbour score is produced by
-a small MLP applied to ``query - key + positional_bias`` (a learned
-comparison rather than an inner product), restricted to each query's
-``k`` nearest neighbours. A relative-position MLP biases both the scores
-and the aggregated values.
+a small MLP applied to :math:`q - k + \delta` (a learned comparison rather
+than an inner product), restricted to each query's :math:`k` nearest
+neighbours. A relative-position MLP produces :math:`\delta` and biases both
+the scores and the aggregated values.
 
 Three layers are exposed:
 
@@ -36,35 +36,39 @@ Three layers are exposed:
 - :class:`LocalTokenCrossAttentionBlock` -- local cross-attention from
   query tokens to a per-query k-NN of context tokens.
 
-All three are tensor-in/tensor-out (operating on flat ``(N, dim)`` features
-plus ``(N, D)`` coordinates) and carry no model-specific data structures.
+All three are tensor-in/tensor-out (operating on flat :math:`(N, D)`
+features plus :math:`(N, 3)` coordinates) and carry no model-specific data
+structures.
 """
 
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float
 
+from physicsnemo.core import Module
 from physicsnemo.nn.functional import knn
 
 from .layer_norm import LayerNorm
 
 
 def _gather_rows(x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
-    """Gather rows of ``x`` by an arbitrary-shape index tensor.
+    r"""Gather rows of ``x`` by an arbitrary-shape index tensor.
 
     Parameters
     ----------
     x : torch.Tensor
-        Source tensor of shape ``(N, F)``.
+        Source tensor of shape :math:`(N, F)`.
     idx : torch.Tensor
-        Index tensor of any shape ``(*S,)`` holding integer indices into the
-        first axis of ``x``.
+        Index tensor of any shape holding integer indices into the first
+        axis of ``x``.
 
     Returns
     -------
     torch.Tensor
-        Tensor of shape ``(*S, F)`` whose entries are ``x[idx[*s]]``.
+        Tensor whose entries are ``x[idx[...]]``, of shape ``idx.shape``
+        followed by :math:`F`.
     """
     flat = idx.reshape(-1)
     gathered = x.index_select(0, flat)
@@ -78,31 +82,32 @@ def _dilated_knn(
     k: int,
     dilation: int,
 ) -> torch.Tensor:
-    """Distance-sorted k-NN indices with optional dilation.
+    r"""Distance-sorted k-NN indices with optional dilation.
 
     Returns, for each query, the indices into ``key_coords`` of its nearest
     neighbours (ascending distance). With ``dilation > 1`` the search widens
-    to the ``k * dilation`` nearest neighbours and then keeps every
-    ``dilation``-th, giving a coarser receptive field at the same neighbour
-    count -- a strided subsample of the sorted neighbour list.
+    to the :math:`k \cdot \mathrm{dilation}` nearest neighbours and then
+    keeps every ``dilation``-th, giving a coarser receptive field at the same
+    neighbour count -- a strided subsample of the sorted neighbour list.
 
     Parameters
     ----------
     query_coords : torch.Tensor
-        Query positions of shape ``(Nq, D)``.
+        Query positions of shape :math:`(N_q, D)`.
     key_coords : torch.Tensor
-        Key positions of shape ``(Nk, D)``.
+        Key positions of shape :math:`(N_k, D)`.
     k : int
         Number of neighbours retained per query (post-dilation).
     dilation : int
-        Stride applied to the top-``k * dilation`` sorted indices before
-        keeping the first ``k``.
+        Stride applied to the top-:math:`k \cdot \mathrm{dilation}` sorted
+        indices before keeping the first :math:`k`.
 
     Returns
     -------
     torch.Tensor
-        Index tensor of shape ``(Nq, k_eff)``, dtype ``int64``, where
-        ``k_eff = max(1, min(k * dilation, Nk) // dilation)``.
+        Index tensor of shape :math:`(N_q, k_{eff})`, dtype ``int64``, where
+        :math:`k_{eff} = \max(1, \min(k \cdot \mathrm{dilation}, N_k) //
+        \mathrm{dilation})`.
     """
     n_keys = int(key_coords.shape[0])
     k_wide = min(int(k) * int(dilation), n_keys)
@@ -157,35 +162,42 @@ def _apply_neighbor_mask(
     return attn / attn.sum(dim=-1, keepdim=True).clamp_min(1e-12)
 
 
-class ResidualMLP(nn.Module):
+class ResidualMLP(Module):
     r"""Pre-norm residual MLP with optional AdaLN/AdaLN-Zero conditioning.
 
-    Applies ``LayerNorm`` -> ``Linear -> GELU -> Dropout -> Linear -> Dropout``
-    and adds the result back to the input. When ``conditioning_dim`` is
-    set, a small zero-initialized MLP turns ``cond`` into ``(shift, scale,
-    gate)`` that modulate the pre-MLP and post-MLP signals in the AdaLN /
-    AdaLN-Zero style.
+    Applies ``LayerNorm`` -> ``Linear -> GELU -> Dropout -> Linear ->
+    Dropout`` and adds the result back to the input. When
+    ``conditioning_dim`` is set, a small zero-initialized MLP turns ``cond``
+    into ``(shift, scale, gate)`` that modulate the pre-MLP and post-MLP
+    signals in the AdaLN / AdaLN-Zero style.
 
     Parameters
     ----------
     dim : int
-        Feature dimension.
+        Feature dimension :math:`D`.
     mlp_ratio : int
-        Hidden dimension is ``max(1, mlp_ratio) * dim``.
+        Hidden dimension is :math:`\max(1, \mathrm{mlp\_ratio}) \cdot D`.
     dropout : float
         Dropout probability used inside the MLP.
     conditioning_dim : int, optional
         Size of the conditioning vector. ``None`` disables conditioning.
     adaln_zero : bool, optional
         If ``True``, the residual is gated by ``gate`` (AdaLN-Zero); if
-        ``False``, it is gated by ``1 + gate``. Default ``False``.
+        ``False``, it is gated by :math:`1 + \mathrm{gate}`. Default
+        ``False``.
 
-    Shape
-    -----
-    - Input ``x``: ``(N, dim)`` or ``(B, N, dim)``.
-    - Conditioning ``cond`` (if used): ``(dim,)``, ``(1, D_cond)`` or
-      ``(N, D_cond)``.
-    - Output: same shape as ``x``.
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(N, D)` or :math:`(B, N, D)`.
+    cond : torch.Tensor, optional
+        Conditioning of shape :math:`(D_{cond},)`, :math:`(1, D_{cond})` or
+        :math:`(N, D_{cond})`. Required when ``conditioning_dim`` is set.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor with the same shape as ``x``.
     """
 
     def __init__(
@@ -197,6 +209,7 @@ class ResidualMLP(nn.Module):
         adaln_zero: bool = False,
     ):
         super().__init__()
+        self.dim = int(dim)
         hidden = max(1, int(mlp_ratio)) * int(dim)
         self.norm = LayerNorm(int(dim))
         self.conditioning = (
@@ -214,8 +227,16 @@ class ResidualMLP(nn.Module):
         )
 
     def forward(
-        self, x: torch.Tensor, cond: torch.Tensor | None = None
-    ) -> torch.Tensor:
+        self,
+        x: Float[torch.Tensor, "*dims dim"],
+        cond: torch.Tensor | None = None,
+    ) -> Float[torch.Tensor, "*dims dim"]:
+        if not torch.compiler.is_compiling():
+            if x.shape[-1] != self.dim:
+                raise ValueError(
+                    f"Expected x with last dim {self.dim}, got tensor of "
+                    f"shape {tuple(x.shape)}"
+                )
         h = self.norm(x)
         gate = None
         if self.conditioning is not None:
@@ -233,63 +254,69 @@ class ResidualMLP(nn.Module):
         return x + out
 
 
-class LocalPointTransformerBlock(nn.Module):
+class LocalPointTransformerBlock(Module):
     r"""Local self-attention block over a per-point k-NN graph.
 
     For each point, attends to its ``neighbor_k`` nearest neighbors with a
     learned relative-position bias and per-head (grouped) vector-attention
     scores -- the score for each neighbour is produced by an MLP applied to
-    ``query - key + positional_bias`` (Point Transformer), not a dot
-    product. Followed by a :class:`ResidualMLP`. Optional AdaLN/AdaLN-Zero
-    conditioning modulates both the attention sublayer and the
-    feed-forward sublayer.
+    :math:`q - k + \delta` (Point Transformer), not a dot product. Followed
+    by a :class:`ResidualMLP`. Optional AdaLN/AdaLN-Zero conditioning
+    modulates both the attention sublayer and the feed-forward sublayer.
 
-    When the input has at most one point, the attention sublayer is
-    skipped and only the FFN is applied (still receiving ``cond`` if
-    provided).
+    When the input has at most one point, the attention sublayer is skipped
+    and only the FFN is applied (still receiving ``cond`` if provided).
 
     Parameters
     ----------
     dim : int
-        Feature dimension. Must be divisible by ``num_heads``.
+        Feature dimension :math:`D`. Must be divisible by ``num_heads``.
     num_heads : int
         Number of attention heads (groups for the grouped vector attention).
     neighbor_k : int
         Number of nearest neighbors used per query point (post-dilation).
     dilation : int
-        Stride applied to the top-``k * dilation`` neighbor indices before
-        truncation. Lets the block attend at coarser receptive fields
-        without re-running the search. Clamped to at least 1.
+        Stride applied to the top-:math:`k \cdot \mathrm{dilation}` neighbor
+        indices before truncation. Lets the block attend at coarser
+        receptive fields without re-running the search. Clamped to at least
+        1.
     mlp_ratio : int
         Hidden multiplier for the inner ``ResidualMLP``.
     dropout : float
         Dropout used after the output projection and inside the FFN.
     knn_chunk_size : int
-        Unused. Retained for backwards-compatible construction; the k-NN
-        is delegated to :func:`physicsnemo.nn.functional.knn`, which
-        selects and chunks its own backend.
+        Unused. Retained for backwards-compatible construction; the k-NN is
+        delegated to :func:`physicsnemo.nn.functional.knn`, which selects and
+        chunks its own backend.
     conditioning_dim : int, optional
-        Size of the conditioning vector. ``None`` disables conditioning
-        on both sublayers.
+        Size of the conditioning vector. ``None`` disables conditioning on
+        both sublayers.
     adaln_zero : bool, optional
-        Forwarded to the FFN and used to gate the attention output the
-        same way (``gate`` vs ``1 + gate``). Default ``False``.
+        Forwarded to the FFN and used to gate the attention output the same
+        way (``gate`` vs :math:`1 + \mathrm{gate}`). Default ``False``.
 
-    Shape
+    Forward
+    -------
+    features : torch.Tensor
+        Per-point features of shape :math:`(N, D)`.
+    coords : torch.Tensor
+        Per-point coordinates of shape :math:`(N, 3)`.
+    cond : torch.Tensor, optional
+        Conditioning of shape :math:`(D_{cond},)`, :math:`(1, D_{cond})` or
+        :math:`(N, D_{cond})`. Required when ``conditioning_dim`` is set.
+    batch_ids : torch.Tensor, optional
+        Integer tensor of shape :math:`(N,)`; when provided, neighbors from
+        different batches are masked out of attention.
+
+    Outputs
+    -------
+    torch.Tensor
+        Updated per-point features of shape :math:`(N, D)`.
+
+    Notes
     -----
-    - ``features``: ``(N, dim)``.
-    - ``coords``: ``(N, D)``.
-    - ``cond`` (if used): ``(D_cond,)``, ``(1, D_cond)`` or
-      ``(N, D_cond)``.
-    - ``batch_ids`` (optional): ``(N,)`` ``int64``; when provided, neighbors
-      from different batches are masked out of attention.
-    - Output: ``(N, dim)``.
-
-    Raises
-    ------
-    ValueError
-        If ``dim`` is not divisible by ``num_heads``, or if conditioning
-        is requested but ``cond`` is not provided.
+    Raises ``ValueError`` if ``dim`` is not divisible by ``num_heads``, or if
+    conditioning is requested but ``cond`` is not provided.
     """
 
     def __init__(
@@ -346,11 +373,28 @@ class LocalPointTransformerBlock(nn.Module):
 
     def forward(
         self,
-        features: torch.Tensor,
-        coords: torch.Tensor,
+        features: Float[torch.Tensor, "n dim"],
+        coords: Float[torch.Tensor, "n 3"],
         cond: torch.Tensor | None = None,
         batch_ids: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    ) -> Float[torch.Tensor, "n dim"]:
+        if not torch.compiler.is_compiling():
+            if features.ndim != 2 or features.shape[1] != self.dim:
+                raise ValueError(
+                    f"Expected features of shape (N, {self.dim}), got tensor of "
+                    f"shape {tuple(features.shape)}"
+                )
+            if coords.ndim != 2 or coords.shape[1] != 3:
+                raise ValueError(
+                    f"Expected coords of shape (N, 3), got tensor of shape "
+                    f"{tuple(coords.shape)}"
+                )
+            if coords.shape[0] != features.shape[0]:
+                raise ValueError(
+                    "features and coords must share the point count N, got "
+                    f"{int(features.shape[0])} and {int(coords.shape[0])}"
+                )
+
         if int(features.shape[0]) <= 1:
             return self.ffn(features, cond=cond)
 
@@ -402,7 +446,7 @@ class LocalPointTransformerBlock(nn.Module):
         return self.ffn(out, cond=cond)
 
 
-class LocalTokenCrossAttentionBlock(nn.Module):
+class LocalTokenCrossAttentionBlock(Module):
     r"""Local cross-attention from query tokens to a per-query k-NN of context.
 
     Each query attends to its ``neighbor_k`` nearest context tokens (by
@@ -412,9 +456,9 @@ class LocalTokenCrossAttentionBlock(nn.Module):
 
     When conditioning is enabled, a single MLP produces a 5-way chunked
     output ``(q_shift, q_scale, kv_shift, kv_scale, gate)``. The query side
-    is modulated by ``(q_shift, q_scale)`` from ``cond``; the key/value
-    side is modulated by ``(kv_shift, kv_scale)`` from
-    ``context_cond if context_cond is not None else cond``.
+    is modulated by ``(q_shift, q_scale)`` from ``cond``; the key/value side
+    is modulated by ``(kv_shift, kv_scale)`` from ``context_cond if
+    context_cond is not None else cond``.
 
     When either input has zero tokens the block is a no-op (returns
     ``query_features`` unchanged).
@@ -422,8 +466,8 @@ class LocalTokenCrossAttentionBlock(nn.Module):
     Parameters
     ----------
     dim : int
-        Feature dimension shared by queries and context. Must be divisible
-        by ``num_heads``.
+        Feature dimension :math:`D` shared by queries and context. Must be
+        divisible by ``num_heads``.
     num_heads : int
         Number of attention heads (groups for the grouped vector attention).
     neighbor_k : int
@@ -433,31 +477,45 @@ class LocalTokenCrossAttentionBlock(nn.Module):
     dropout : float
         Dropout used after the output projection and inside the FFN.
     knn_chunk_size : int
-        Unused. Retained for backwards-compatible construction; the k-NN
-        is delegated to :func:`physicsnemo.nn.functional.knn`, which
-        selects and chunks its own backend.
+        Unused. Retained for backwards-compatible construction; the k-NN is
+        delegated to :func:`physicsnemo.nn.functional.knn`, which selects and
+        chunks its own backend.
     conditioning_dim : int, optional
         Size of the conditioning vector. ``None`` disables conditioning.
     adaln_zero : bool, optional
-        Forwarded to the FFN and used to gate the attention output the
-        same way. Default ``False``.
+        Forwarded to the FFN and used to gate the attention output the same
+        way. Default ``False``.
 
-    Shape
+    Forward
+    -------
+    query_features : torch.Tensor
+        Query features of shape :math:`(N_q, D)`.
+    query_coords : torch.Tensor
+        Query coordinates of shape :math:`(N_q, 3)`.
+    context_features : torch.Tensor
+        Context features of shape :math:`(N_c, D)`.
+    context_coords : torch.Tensor
+        Context coordinates of shape :math:`(N_c, 3)`.
+    cond : torch.Tensor, optional
+        Query-side conditioning of shape :math:`(D_{cond},)` or
+        :math:`(N_q, D_{cond})`. Required when ``conditioning_dim`` is set.
+    context_cond : torch.Tensor, optional
+        Key/value-side conditioning; defaults to ``cond`` when ``None``.
+    query_batch_ids : torch.Tensor, optional
+        Integer tensor of shape :math:`(N_q,)`.
+    context_batch_ids : torch.Tensor, optional
+        Integer tensor of shape :math:`(N_c,)`; when both batch-id tensors
+        are provided, neighbors from different batches are masked out.
+
+    Outputs
+    -------
+    torch.Tensor
+        Updated query features of shape :math:`(N_q, D)`.
+
+    Notes
     -----
-    - ``query_features``: ``(Nq, dim)``; ``query_coords``: ``(Nq, D)``.
-    - ``context_features``: ``(Nc, dim)``; ``context_coords``: ``(Nc, D)``.
-    - ``cond`` / ``context_cond`` (if used): ``(D_cond,)`` or
-      ``(N, D_cond)``.
-    - ``query_batch_ids`` / ``context_batch_ids`` (optional): ``(Nq,)`` /
-      ``(Nc,)`` ``int64``; when both are provided, neighbors from
-      different batches are masked out of attention.
-    - Output: ``(Nq, dim)``.
-
-    Raises
-    ------
-    ValueError
-        If ``dim`` is not divisible by ``num_heads``, or if conditioning
-        is requested but ``cond`` is not provided.
+    Raises ``ValueError`` if ``dim`` is not divisible by ``num_heads``, or if
+    conditioning is requested but ``cond`` is not provided.
     """
 
     def __init__(
@@ -513,15 +571,48 @@ class LocalTokenCrossAttentionBlock(nn.Module):
 
     def forward(
         self,
-        query_features: torch.Tensor,
-        query_coords: torch.Tensor,
-        context_features: torch.Tensor,
-        context_coords: torch.Tensor,
+        query_features: Float[torch.Tensor, "nq dim"],
+        query_coords: Float[torch.Tensor, "nq 3"],
+        context_features: Float[torch.Tensor, "nc dim"],
+        context_coords: Float[torch.Tensor, "nc 3"],
         cond: torch.Tensor | None = None,
         context_cond: torch.Tensor | None = None,
         query_batch_ids: torch.Tensor | None = None,
         context_batch_ids: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    ) -> Float[torch.Tensor, "nq dim"]:
+        if not torch.compiler.is_compiling():
+            if query_features.ndim != 2 or query_features.shape[1] != self.dim:
+                raise ValueError(
+                    f"Expected query_features of shape (Nq, {self.dim}), got "
+                    f"tensor of shape {tuple(query_features.shape)}"
+                )
+            if context_features.ndim != 2 or context_features.shape[1] != self.dim:
+                raise ValueError(
+                    f"Expected context_features of shape (Nc, {self.dim}), got "
+                    f"tensor of shape {tuple(context_features.shape)}"
+                )
+            if query_coords.ndim != 2 or query_coords.shape[1] != 3:
+                raise ValueError(
+                    f"Expected query_coords of shape (Nq, 3), got tensor of "
+                    f"shape {tuple(query_coords.shape)}"
+                )
+            if context_coords.ndim != 2 or context_coords.shape[1] != 3:
+                raise ValueError(
+                    f"Expected context_coords of shape (Nc, 3), got tensor of "
+                    f"shape {tuple(context_coords.shape)}"
+                )
+            if query_coords.shape[0] != query_features.shape[0]:
+                raise ValueError(
+                    "query_features and query_coords must share Nq, got "
+                    f"{int(query_features.shape[0])} and {int(query_coords.shape[0])}"
+                )
+            if context_coords.shape[0] != context_features.shape[0]:
+                raise ValueError(
+                    "context_features and context_coords must share Nc, got "
+                    f"{int(context_features.shape[0])} and "
+                    f"{int(context_coords.shape[0])}"
+                )
+
         if int(query_features.shape[0]) == 0 or int(context_features.shape[0]) == 0:
             return query_features
 
@@ -573,10 +664,8 @@ class LocalTokenCrossAttentionBlock(nn.Module):
         logits = self.attn_proj(attn_in).transpose(1, 2)
         attn = _apply_neighbor_mask(logits, neighbor_mask)
         value = (v + rel_bias).permute(0, 2, 1, 3)
-        out = (
-            (attn.unsqueeze(-1) * value)
-            .sum(dim=2)
-            .reshape(int(q_in.shape[0]), self.dim)
+        out = (attn.unsqueeze(-1) * value).sum(dim=2).reshape(
+            int(q_in.shape[0]), self.dim
         )
         out = self.dropout(self.out_proj(out))
         if gate is not None:
