@@ -290,10 +290,6 @@ class LocalPointTransformerBlock(Module):
         Hidden multiplier for the inner ``AdaLNResidualMLP``.
     dropout : float
         Dropout used after the output projection and inside the FFN.
-    knn_chunk_size : int
-        Unused. Retained for backwards-compatible construction; the k-NN is
-        delegated to :func:`physicsnemo.nn.functional.knn`, which selects and
-        chunks its own backend.
     coord_dim : int, optional
         Dimensionality :math:`D_{pos}` of the point coordinates (e.g. 3 for
         3D point clouds, 2 for planar meshes). Default ``3``.
@@ -337,7 +333,6 @@ class LocalPointTransformerBlock(Module):
         dilation: int,
         mlp_ratio: int,
         dropout: float,
-        knn_chunk_size: int,
         coord_dim: int = 3,
         conditioning_dim: int | None = None,
         adaln_zero: bool = False,
@@ -350,7 +345,6 @@ class LocalPointTransformerBlock(Module):
         self.head_dim = self.dim // self.num_heads
         self.neighbor_k = int(neighbor_k)
         self.dilation = int(max(1, dilation))
-        self.knn_chunk_size = int(knn_chunk_size)
         self.coord_dim = int(coord_dim)
         self.norm = LayerNorm(self.dim)
         self.adaln_zero = bool(adaln_zero)
@@ -491,10 +485,6 @@ class LocalTokenCrossAttentionBlock(Module):
         Hidden multiplier for the inner ``AdaLNResidualMLP``.
     dropout : float
         Dropout used after the output projection and inside the FFN.
-    knn_chunk_size : int
-        Unused. Retained for backwards-compatible construction; the k-NN is
-        delegated to :func:`physicsnemo.nn.functional.knn`, which selects and
-        chunks its own backend.
     coord_dim : int, optional
         Dimensionality :math:`D_{pos}` of the query and context coordinates.
         Default ``3``.
@@ -518,7 +508,11 @@ class LocalTokenCrossAttentionBlock(Module):
         Query-side conditioning of shape :math:`(D_{cond},)` or
         :math:`(N_q, D_{cond})`. Required when ``conditioning_dim`` is set.
     context_cond : torch.Tensor, optional
-        Key/value-side conditioning; defaults to ``cond`` when ``None``.
+        Key/value-side conditioning of shape :math:`(D_{cond},)`,
+        :math:`(1, D_{cond})` or :math:`(N_c, D_{cond})`. When ``None``, the
+        key/value side falls back to ``cond`` reduced to a single global
+        vector (mean over the query axis), so it broadcasts against the
+        :math:`N_c` context tokens even when ``cond`` is per-query.
     query_batch_ids : torch.Tensor, optional
         Integer tensor of shape :math:`(N_q,)`.
     context_batch_ids : torch.Tensor, optional
@@ -544,7 +538,6 @@ class LocalTokenCrossAttentionBlock(Module):
         neighbor_k: int,
         mlp_ratio: int,
         dropout: float,
-        knn_chunk_size: int,
         coord_dim: int = 3,
         conditioning_dim: int | None = None,
         adaln_zero: bool = False,
@@ -556,7 +549,6 @@ class LocalTokenCrossAttentionBlock(Module):
         self.num_heads = int(num_heads)
         self.head_dim = self.dim // self.num_heads
         self.neighbor_k = int(neighbor_k)
-        self.knn_chunk_size = int(knn_chunk_size)
         self.coord_dim = int(coord_dim)
         self.norm_q = LayerNorm(self.dim)
         self.adaln_zero = bool(adaln_zero)
@@ -654,10 +646,18 @@ class LocalTokenCrossAttentionBlock(Module):
                 _reshape_condition(cond)
             ).chunk(5, dim=-1)
             q_in = q_in * (1.0 + q_scale) + q_shift
-            kv_source = cond if context_cond is None else context_cond
-            kv_shift, kv_scale = self.conditioning(_reshape_condition(kv_source)).chunk(
-                5, dim=-1
-            )[2:4]
+            if context_cond is not None:
+                kv_source = _reshape_condition(context_cond)
+            else:
+                # The KV/context side must broadcast against the context tokens
+                # (N_c). ``cond`` is the query-side signal and may be per-query
+                # (N_q, .); reduce it to a single global vector so it applies
+                # uniformly to the context regardless of how N_q relates to N_c
+                # (a per-query source would otherwise fail to broadcast).
+                kv_source = _reshape_condition(cond)
+                if int(kv_source.shape[0]) > 1:
+                    kv_source = kv_source.mean(dim=0, keepdim=True)
+            kv_shift, kv_scale = self.conditioning(kv_source).chunk(5, dim=-1)[2:4]
             kv_in = kv_in * (1.0 + kv_scale) + kv_shift
         idx = _dilated_knn(
             query_coords=query_coords,

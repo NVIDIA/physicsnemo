@@ -33,7 +33,14 @@ from physicsnemo.nn.module.point_transformer_attention import _dilated_knn
 # --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #
-def _self_block(dim=32, num_heads=4, neighbor_k=6, dilation=1, conditioning_dim=None):
+def _self_block(
+    dim=32,
+    num_heads=4,
+    neighbor_k=6,
+    dilation=1,
+    conditioning_dim=None,
+    adaln_zero=False,
+):
     return LocalPointTransformerBlock(
         dim=dim,
         num_heads=num_heads,
@@ -41,20 +48,20 @@ def _self_block(dim=32, num_heads=4, neighbor_k=6, dilation=1, conditioning_dim=
         dilation=dilation,
         mlp_ratio=2,
         dropout=0.0,
-        knn_chunk_size=128,
         conditioning_dim=conditioning_dim,
+        adaln_zero=adaln_zero,
     )
 
 
-def _cross_block(dim=32, num_heads=4, neighbor_k=6, conditioning_dim=None):
+def _cross_block(dim=32, num_heads=4, neighbor_k=6, conditioning_dim=None, adaln_zero=False):
     return LocalTokenCrossAttentionBlock(
         dim=dim,
         num_heads=num_heads,
         neighbor_k=neighbor_k,
         mlp_ratio=2,
         dropout=0.0,
-        knn_chunk_size=128,
         conditioning_dim=conditioning_dim,
+        adaln_zero=adaln_zero,
     )
 
 
@@ -148,6 +155,127 @@ def test_adaln_zero_init_is_identity_on_attention(device):
     torch.testing.assert_close(out_a, out_b)
 
 
+def _activate_conditioning(block):
+    # The AdaLN conditioning MLP is zero-initialized (identity at init); perturb
+    # its final layer so conditioning actually modulates the output, for tests
+    # that assert the conditioning has an effect.
+    with torch.no_grad():
+        last = block.conditioning.layers[-1]
+        last.weight.normal_(0.0, 0.1)
+        last.bias.normal_(0.0, 0.1)
+
+
+@pytest.mark.parametrize("block_kind", ["self", "cross"])
+def test_adaln_zero_gating_runs(device, block_kind):
+    # Exercise the adaln_zero=True gating branch (out * gate), distinct from the
+    # default out * (1 + gate).
+    cond_dim = 4
+    cond = torch.randn(cond_dim, device=device)
+    if block_kind == "self":
+        block = _self_block(conditioning_dim=cond_dim, adaln_zero=True).to(device).eval()
+        out = block(
+            torch.randn(20, 32, device=device),
+            torch.randn(20, 3, device=device),
+            cond=cond,
+        )
+    else:
+        block = _cross_block(conditioning_dim=cond_dim, adaln_zero=True).to(device).eval()
+        out = block(
+            torch.randn(18, 32, device=device),
+            torch.randn(18, 3, device=device),
+            torch.randn(12, 32, device=device),
+            torch.randn(12, 3, device=device),
+            cond=cond,
+        )
+    assert torch.isfinite(out).all()
+
+
+def test_cross_block_context_cond_modulates(device):
+    # context_cond modulates the key/value side; changing it must change output.
+    cond_dim = 4
+    block = _cross_block(conditioning_dim=cond_dim).to(device).eval()
+    _activate_conditioning(block)
+    qf = torch.randn(18, 32, device=device)
+    qc = torch.randn(18, 3, device=device)
+    cf = torch.randn(12, 32, device=device)
+    cc = torch.randn(12, 3, device=device)
+    cond = torch.randn(cond_dim, device=device)
+    out_a = block(qf, qc, cf, cc, cond=cond, context_cond=torch.randn(cond_dim, device=device))
+    out_b = block(qf, qc, cf, cc, cond=cond, context_cond=torch.randn(cond_dim, device=device))
+    assert out_a.shape == (18, 32)
+    assert not torch.allclose(out_a, out_b)
+
+
+def test_cross_block_per_query_cond_without_context_cond(device):
+    # Regression: per-query cond with context_cond=None must not crash even when
+    # N_q != N_c. The KV side reduces the per-query cond to a single global
+    # vector so it broadcasts against the N_c context tokens.
+    cond_dim = 4
+    block = _cross_block(conditioning_dim=cond_dim).to(device).eval()
+    nq, nc = 18, 12  # N_q != N_c
+    cond = torch.randn(nq, cond_dim, device=device)  # per-query conditioning
+    out = block(
+        torch.randn(nq, 32, device=device),
+        torch.randn(nq, 3, device=device),
+        torch.randn(nc, 32, device=device),
+        torch.randn(nc, 3, device=device),
+        cond=cond,
+    )
+    assert out.shape == (nq, 32)
+    assert torch.isfinite(out).all()
+
+
+def test_cross_block_batch_ids_isolate_neighbors(device):
+    # Cross-block neighbor mask: batch-0 queries must be unaffected by batch-1
+    # context tokens, even though coords overlap (so unmasked they'd be picked).
+    torch.manual_seed(0)
+    block = _cross_block(neighbor_k=4).to(device).eval()
+    nq, nc = 10, 10
+    qf = torch.randn(nq, 32, device=device)
+    qc = torch.randn(nq, 3, device=device)
+    cf = torch.randn(nc, 32, device=device)
+    cc = torch.randn(nc, 3, device=device)
+    query_batch_ids = torch.zeros(nq, dtype=torch.long, device=device)
+    context_batch_ids = torch.cat(
+        [torch.zeros(nc // 2, dtype=torch.long), torch.ones(nc - nc // 2, dtype=torch.long)]
+    ).to(device)
+    out1 = block(
+        qf, qc, cf, cc,
+        query_batch_ids=query_batch_ids,
+        context_batch_ids=context_batch_ids,
+    )
+    cf2 = cf.clone()
+    cf2[nc // 2 :] += 5.0  # perturb only batch-1 context
+    out2 = block(
+        qf, qc, cf2, cc,
+        query_batch_ids=query_batch_ids,
+        context_batch_ids=context_batch_ids,
+    )
+    torch.testing.assert_close(out1, out2)
+
+
+@pytest.mark.parametrize(
+    "block_cls, kwargs, expected",
+    [
+        (
+            LocalPointTransformerBlock,
+            dict(dim=32, num_heads=4, neighbor_k=6, dilation=2, mlp_ratio=2, dropout=0.0, coord_dim=3),
+            dict(dim=32, num_heads=4, head_dim=8, neighbor_k=6, dilation=2, coord_dim=3),
+        ),
+        (
+            LocalTokenCrossAttentionBlock,
+            dict(dim=64, num_heads=8, neighbor_k=8, mlp_ratio=4, dropout=0.0, coord_dim=2),
+            dict(dim=64, num_heads=8, head_dim=8, neighbor_k=8, coord_dim=2),
+        ),
+    ],
+)
+def test_constructor_attributes(block_cls, kwargs, expected):
+    # MOD-008a: constructor/attribute coverage across >= 2 configurations.
+    block = block_cls(**kwargs)
+    for name, value in expected.items():
+        assert getattr(block, name) == value
+
+
 # --------------------------------------------------------------------------- #
 # edge cases
 # --------------------------------------------------------------------------- #
@@ -180,16 +308,19 @@ def test_dim_not_divisible_by_heads_raises():
 def test_non_3d_coords(device, coord_dim):
     # coord_dim generalizes the layer beyond 3D point clouds (e.g. 2D meshes,
     # 6-DoF poses); pos_proj adapts to the coordinate dimensionality.
-    block = LocalPointTransformerBlock(
-        dim=32,
-        num_heads=4,
-        neighbor_k=6,
-        dilation=1,
-        mlp_ratio=2,
-        dropout=0.0,
-        knn_chunk_size=64,
-        coord_dim=coord_dim,
-    ).to(device).eval()
+    block = (
+        LocalPointTransformerBlock(
+            dim=32,
+            num_heads=4,
+            neighbor_k=6,
+            dilation=1,
+            mlp_ratio=2,
+            dropout=0.0,
+            coord_dim=coord_dim,
+        )
+        .to(device)
+        .eval()
+    )
     feats = torch.randn(20, 32, device=device)
     coords = torch.randn(20, coord_dim, device=device)
     out = block(feats, coords)
@@ -324,8 +455,8 @@ def test_state_dict_roundtrip(device):
 _DATA_DIR = Path(__file__).parent / "data"
 
 # (checkpoint stem, expected attrs, call(model, inputs) -> output). Reference
-# artifacts are generated by ``gen_pta_golden`` (seeded, CPU). Regenerate after
-# an intentional behavior change.
+# artifacts are produced by data/generate_point_transformer_attention_references.py
+# (seeded, CPU). Re-run that script to regenerate after an intentional change.
 _REFERENCE_CASES = [
     (
         "local_point_transformer_block_v1",
