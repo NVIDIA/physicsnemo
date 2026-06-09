@@ -24,6 +24,9 @@
 # MeshReaderWithGlobalData to merge them onto each boundary Mesh at
 # load time.
 
+# All splits share this root; the train/val/test subsets are selected
+# by manifest.json (auto-discovered next to train_datadir) plus the
+# top-level train_split / val_split keys in the training config.
 train_datadir: ${dataset_paths.shift_suv}/fastback/
 
 pipeline:
