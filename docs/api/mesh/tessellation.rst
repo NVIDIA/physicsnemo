@@ -12,7 +12,7 @@ ones.
 
 Handling non-convex polygons correctly matters for any unsigned-area-weighted
 quantity (wall-shear / viscous force integration, or total wetted area): the
-signed *vector* area of a vertex-0 fan telescopes to the polygon's regardless
+signed *vector* area of a vertex-0 fan telescopes to the polygon's total area regardless
 of convexity, but the sum of *unsigned* triangle areas does not.
 
 Every ``k``-gon yields exactly ``k - 2`` triangles, so per-polygon data is
