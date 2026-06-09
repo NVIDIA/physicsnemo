@@ -39,6 +39,7 @@ def _farthest_point_sampling(
     *,
     num_samples: int,
     random_start: bool,
+    seed: int | None = None,
 ) -> torch.Tensor:
     n = int(points.shape[0])
     if num_samples >= n:
@@ -48,9 +49,20 @@ def _farthest_point_sampling(
 
     selected = torch.empty((num_samples,), device=points.device, dtype=torch.long)
     if random_start:
-        current = torch.randint(
-            0, n, (1,), device=points.device, dtype=torch.long
-        ).item()
+        if seed is not None:
+            gen = torch.Generator(device=points.device)
+            gen.manual_seed(int(seed))
+            current = int(
+                torch.randint(
+                    0, n, (1,), generator=gen, device=points.device, dtype=torch.long
+                ).item()
+            )
+        else:
+            current = int(
+                torch.randint(
+                    0, n, (1,), device=points.device, dtype=torch.long
+                ).item()
+            )
     else:
         current = 0
     selected[0] = current

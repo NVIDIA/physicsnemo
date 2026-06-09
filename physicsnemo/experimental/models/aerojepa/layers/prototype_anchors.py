@@ -33,7 +33,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from .point_tokenizer import PointCloudTokenizer
+from .point_tokenizer import PointCloudTokenizer, _farthest_point_sampling
 
 
 def _concat_target_points(sample: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
@@ -114,31 +114,6 @@ def _concat_context_points(
     return positions, features
 
 
-def _farthest_point_sampling(
-    points: torch.Tensor, num_samples: int, *, seed: int
-) -> torch.Tensor:
-    n = int(points.shape[0])
-    if num_samples >= n:
-        return torch.arange(n, dtype=torch.long)
-    gen = torch.Generator(device=points.device)
-    gen.manual_seed(int(seed))
-    selected = torch.empty((num_samples,), device=points.device, dtype=torch.long)
-    current = int(
-        torch.randint(0, n, (1,), generator=gen, device=points.device).item()
-    )
-    selected[0] = current
-    min_dist_sq = torch.full(
-        (n,), float("inf"), device=points.device, dtype=points.dtype
-    )
-    for i in range(1, num_samples):
-        ref = points[current : current + 1]
-        dist_sq = torch.sum((points - ref) ** 2, dim=-1)
-        min_dist_sq = torch.minimum(min_dist_sq, dist_sq)
-        current = int(torch.argmax(min_dist_sq).item())
-        selected[i] = current
-    return selected
-
-
 def _assign_points(
     points: torch.Tensor,
     centers: torch.Tensor,
@@ -166,7 +141,9 @@ def _run_chunked_kmeans(
 ) -> torch.Tensor:
     if int(points.shape[0]) <= int(num_clusters):
         return points.clone()
-    center_idx = _farthest_point_sampling(points, int(num_clusters), seed=seed)
+    center_idx = _farthest_point_sampling(
+        points, num_samples=int(num_clusters), random_start=True, seed=seed
+    )
     centers = points[center_idx].clone()
     for _ in range(max(1, int(num_iters))):
         assign, _ = _assign_points(points, centers, chunk_size=chunk_size)
@@ -186,7 +163,10 @@ def _run_chunked_kmeans(
         new_centers[valid] = new_centers[valid] / counts[valid].clamp_min(1.0)
         if (~valid).any():
             refill_idx = _farthest_point_sampling(
-                points, int((~valid).sum().item()), seed=seed + 17
+                points,
+                num_samples=int((~valid).sum().item()),
+                random_start=True,
+                seed=seed + 17,
             )
             new_centers[~valid] = points[refill_idx]
         centers = new_centers
