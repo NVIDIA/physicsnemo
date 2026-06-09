@@ -51,7 +51,7 @@ from physicsnemo.nn.functional.equivariant_ops import (
 logger = logging.getLogger("globe.field_kernel")
 
 if TYPE_CHECKING:
-    from physicsnemo.experimental.models.globe.cluster_tree import (
+    from physicsnemo.mesh.spatial.cluster_tree import (
         ClusterTree,
         DualInteractionPlan,
         SourceAggregates,
@@ -919,7 +919,7 @@ class BarnesHutKernel(Kernel):
         TensorDict[str, Float[torch.Tensor, "n_targets ..."]]
             Kernel output fields at target points.
         """
-        from physicsnemo.experimental.models.globe.cluster_tree import (
+        from physicsnemo.mesh.spatial.cluster_tree import (
             ClusterTree,
             DualInteractionPlan,
             SourceAggregates,
@@ -1757,7 +1757,7 @@ class MultiscaleKernel(Module):
         TensorDict[str, Float[torch.Tensor, "n_targets ..."]]
             Summed results from all kernel branches.
         """
-        from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
+        from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
 
         n_sources: int = len(source_points)
         device = source_points.device
