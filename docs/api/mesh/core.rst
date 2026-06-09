@@ -19,6 +19,9 @@ available both as ``Mesh`` methods and as standalone functions in the
 corresponding submodules. The methods are thin wrappers that pass ``self`` to
 the standalone functions.
 
+To construct a triangle mesh from a non-simplicial polygon soup, use
+:meth:`Mesh.from_polygons` (see :doc:`tessellation`).
+
 .. code:: python
 
     import torch
