@@ -92,6 +92,11 @@ from .hpx import (
 )
 from .kan_layers import KolmogorovArnoldNetwork
 from .mlp_layers import Mlp
+from .point_transformer_attention import (
+    LocalPointTransformerBlock,
+    LocalTokenCrossAttentionBlock,
+    ResidualMLP,
+)
 from .resample_layers import (
     DownSample2D,
     DownSample3D,
