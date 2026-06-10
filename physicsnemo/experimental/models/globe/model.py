@@ -27,7 +27,7 @@ from torch.profiler import record_function
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.experimental.models.globe.cluster_tree import (
+from physicsnemo.mesh.spatial.cluster_tree import (
     ClusterTree,
     DualInteractionPlan,
 )
@@ -428,7 +428,7 @@ class GLOBE(Module):
         comm_plans : dict[str, dict[str, DualInteractionPlan]]
             Communication plans indexed as ``comm_plans[dst_bc][src_bc]``.
         """
-        from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
+        from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
 
         ### ``no_grad`` is safe: tree inputs (centroids, areas) carry no grad
         ### and the outputs are consumed downstream as integer indices and as
@@ -515,7 +515,7 @@ class GLOBE(Module):
             Plans indexed by source BC type, each computed from that source
             BC's tree to ``pred_target_tree``.
         """
-        from physicsnemo.experimental.models.globe.cluster_tree import ClusterTree
+        from physicsnemo.mesh.spatial.cluster_tree import ClusterTree
 
         ### See ``_build_trees_and_plans`` for the ``no_grad`` + build-device
         ### rationale.  ``cluster_trees`` arrive on the caller's device from

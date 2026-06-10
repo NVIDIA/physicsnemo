@@ -31,6 +31,7 @@ from .equivariant_ops import (
 )
 from .fourier_spectral import imag, irfft, irfft2, real, rfft, rfft2, view_as_complex
 from .geometry import (
+    farthest_point_sampling,
     mesh_poisson_disk_sample,
     mesh_to_voxel_fraction,
     signed_distance_field,
@@ -48,6 +49,7 @@ __all__ = [
     "irfft",
     "irfft2",
     "drop_path",
+    "farthest_point_sampling",
     "grid_to_point_interpolation",
     "imag",
     "interpolation",
