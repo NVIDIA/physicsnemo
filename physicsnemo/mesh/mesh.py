@@ -285,8 +285,12 @@ class Mesh:
     recomputation from raw vertex data.
 
     Slicing operations (``slice_cells``, ``slice_points``) produce new
-    ``Mesh`` instances with topology caches cleared (since connectivity has
-    changed) but cell-level geometric caches sliced in lockstep.
+    ``Mesh`` instances with topology and all point-level caches cleared, and
+    only the purely-local per-cell geometric caches (centroids, areas, normals)
+    carried forward (sliced in lockstep). Non-local caches -- point normals,
+    curvatures, and per-cell quantities derived from neighbours (e.g.
+    ``gaussian_curvature``) -- are dropped so they recompute correctly for the
+    new connectivity.
 
     Access cached values directly via nested keys::
 
@@ -1134,14 +1138,24 @@ class Mesh:
                     raise ValueError(
                         f"All meshes must have the same {name}. Got:\n{values=}"
                     )
-            ref_keys = set(
-                meshes[0].cell_data.keys(include_nested=True, leaves_only=True)
-            )
-            if not all(
-                set(m.cell_data.keys(include_nested=True, leaves_only=True)) == ref_keys
-                for m in meshes
-            ):
-                raise ValueError("All meshes must have the same cell_data keys.")
+            for field_name in ("point_data", "cell_data", "global_data"):
+                ref_keys = set(
+                    getattr(meshes[0], field_name).keys(
+                        include_nested=True, leaves_only=True
+                    )
+                )
+                if not all(
+                    set(
+                        getattr(m, field_name).keys(
+                            include_nested=True, leaves_only=True
+                        )
+                    )
+                    == ref_keys
+                    for m in meshes
+                ):
+                    raise ValueError(
+                        f"All meshes must have the same {field_name} keys."
+                    )
 
         ### Merge the meshes
 
@@ -1289,13 +1303,28 @@ class Mesh:
         Mesh
             New Mesh with subset of cells.
         """
+        ### Handle no-op cases: None or Ellipsis means keep all cells (returns self),
+        # matching slice_points and the documented type hint (which previously raised
+        # on None and silently no-op'd on Ellipsis).
+        if indices is None or indices is ...:
+            return self
+
         if isinstance(indices, int):
             indices = torch.tensor([indices], device=self.cells.device)
         new_cell_data = cast(TensorDict, self.cell_data[indices])
+        # Only purely-local per-cell geometry caches survive a cell slice: each
+        # cell's centroid/area/normal depends solely on that cell's own vertices.
+        # Non-local cell caches (e.g. "gaussian_curvature", computed from adjacent
+        # cell centroids) and ALL point-level caches (point_normals / curvatures
+        # depend on each point's incident-cell set, which slicing changes) are
+        # dropped so they recompute lazily and correctly on the sliced mesh.
+        local_cell_cache = self._cache["cell"].select(
+            "centroids", "areas", "normals", strict=False
+        )
         new_cache = TensorDict(
             {
-                "cell": self._cache["cell"][indices],
-                "point": self._cache["point"],
+                "cell": local_cell_cache[indices],
+                "point": TensorDict({}, batch_size=torch.Size([self.n_points])),
                 "topology": TensorDict({}),
             },
             device=self.points.device,
@@ -1513,7 +1542,10 @@ class Mesh:
             point_data=new_point_data,
             cell_data=self.cell_data,
             global_data=self.global_data,
-            _cache=self._cache,
+            # Shallow-copy so the derived mesh has its own cache container
+            # (geometry is unchanged, so the cached tensors stay valid) rather
+            # than aliasing the source mesh's mutable _cache.
+            _cache=self._cache.copy(),
         )
 
     def point_data_to_cell_data(self, overwrite_keys: bool = False) -> "Mesh":
@@ -1572,7 +1604,10 @@ class Mesh:
             point_data=self.point_data,
             cell_data=new_cell_data,
             global_data=self.global_data,
-            _cache=self._cache,
+            # Shallow-copy so the derived mesh has its own cache container
+            # (geometry is unchanged, so the cached tensors stay valid) rather
+            # than aliasing the source mesh's mutable _cache.
+            _cache=self._cache.copy(),
         )
 
     def get_facet_mesh(
