@@ -42,9 +42,10 @@ def compute_cell_normals(
     """Compute unit normal vectors for codimension-1 simplices.
 
     Given the edge vectors ``e_i = v_{i+1} - v_0`` for each simplex, computes
-    the outward-pointing unit normal via the generalized cross product.
-    The caller must ensure the codimension-1 constraint:
-    ``n_manifold_dims == n_spatial_dims - 1``.
+    an orientation-defined unit normal via the generalized cross product. The
+    sign/direction follows each simplex's vertex ordering (it is not guaranteed
+    to point "outward" -- that depends on the mesh's orientation). The caller
+    must ensure the codimension-1 constraint: ``n_manifold_dims == n_spatial_dims - 1``.
 
     Parameters
     ----------

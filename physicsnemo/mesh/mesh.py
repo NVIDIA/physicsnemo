@@ -1008,10 +1008,11 @@ class Mesh:
 
     @property
     def gaussian_curvature_cells(self) -> torch.Tensor:
-        """Compute Gaussian curvature at cell centers using dual mesh concept.
+        """Compute Gaussian curvature at cell centers.
 
-        Treats cell centroids as vertices of a dual mesh and computes curvature
-        based on angles between connections to adjacent cell centroids.
+        Averages the intrinsic vertex-based Gaussian curvature (angle defect) over
+        each cell's vertices, giving a cell-centered field consistent with
+        :attr:`gaussian_curvature_vertices`.
 
         The result is cached in ``_cache["cell", "gaussian_curvature"]`` for efficiency.
 
@@ -2552,8 +2553,9 @@ class Mesh:
         Returns
         -------
         Mesh
-            Self (mesh) with gradient fields added to point_data (modified in place).
-            Field naming: "{field}_gradient" or "{field}_gradient_intrinsic/extrinsic"
+            A new Mesh with gradient fields added to point_data (the input mesh is
+            not modified; its point_data is cloned). Field naming:
+            "{field}_gradient" or "{field}_gradient_intrinsic/extrinsic"
 
         Examples
         --------
