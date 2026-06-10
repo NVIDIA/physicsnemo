@@ -38,54 +38,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coordinates with no learnable parameters.
 - Adds radiation transport example (`examples/nuclear_engineering/radiation_transport`)
 - Adds agent skills structure, and initial skill for 'discoverability'.
-- Adds top-level AeroJEPA model under
-  `physicsnemo.experimental.models.aerojepa`. The :class:`AeroJEPA`
-  model composes a context encoder, a target encoder, a query-token
-  field decoder (collectively the :class:`AeroJEPATrunk`), and a
-  JEPA predictor head (:class:`PrototypeTokenJEPAHead`) into a single
-  `physicsnemo.core.module.Module`. The forward entry takes
-  context positions / features, operating conditions, and query
-  positions, derives target-token coordinates internally via
-  ``build_target_token_coords``, and returns the decoded field at
-  the queries. ``predict`` is a no-grad convenience wrapper;
-  ``encode_geometry`` / ``encode_geometry_and_flow`` /
-  ``predict_field_tokens`` / ``decode_field`` /
-  ``decode_field_chunked`` are exposed for training and large-query
-  inference workflows. Concrete encoders (``ContextTransformer``,
-  ``TargetTransformer``, ``PointTransformer``), the
-  ``QueryTokenDecoder``, and the abstract encoder bases are all
-  available as composable components.
-- Adds AeroJEPA loss family under
-  `physicsnemo.experimental.models.aerojepa.losses`. Includes `SIGReg` and
-  `TokenLatentSIGReg` (the LeWorldModel sketch-isotropic-Gaussian
-  regularizer with a padding-aware token wrapper), the
-  `flatten_valid_token_features` / `reshape_token_features_for_sigreg`
-  masking helpers, and the reconstruction loss family
-  (`MSELoss` / `RelativeL2Loss` / `RelativeMSELoss` /
-  `RelativeL2MSELoss`, each with functional and `nn.Module` forms,
-  optional per-channel weights stored as a persistent buffer, optional
-  per-point weights, and an optional validity mask).
-- Adds AeroJEPA building blocks under
-  `physicsnemo.experimental.models.aerojepa.layers`. Includes the
-  `TokenSet` and `EncoderOutput` token dataclasses, a deterministic
-  `FourierPositionalEncoding` layer for INR-style coordinate queries,
-  `ResidualMLP` and the `LocalPointTransformerBlock` /
-  `LocalTokenCrossAttentionBlock` attention blocks (with optional
-  AdaLN / AdaLN-Zero conditioning), the `PointCloudTokenizer` (seven
-  center-selection strategies with k-NN cluster pooling), token
-  batching / mask / k-NN helpers, and prototype anchor build / load
-  utilities. ``TokenSet`` and ``EncoderOutput`` are re-exported from
-  the model package (``physicsnemo.experimental.models.aerojepa``) for
-  convenience.
-- Adds the AeroJEPA SuperWing tutorial recipe under
-  `examples/cfd/external_aerodynamics/aerojepa`. End-to-end Hydra-driven
-  workflow: dataset download (Hugging Face), automatic split-by-geometry
-  manifest + per-channel normalization stats, JEPA training (recon +
-  latent MSE/cosine + SIGReg with linear warmups; AdamW + warmup-cosine
-  schedule; optional EMA), checkpointed inference with chunked decoding,
-  three-panel ``GT | Pred | |Error|`` field plots for Cp / Cf_tau /
-  Cf_z, and a CL/CD post-processing script that integrates pressure on
-  the surface mesh and emits a per-case CSV plus a parity scatter.
+- Adds the experimental AeroJEPA model
+  (`physicsnemo.experimental.models.aerojepa.AeroJEPA`), a joint-embedding
+  predictive architecture for 3D aerodynamic fields composing context and
+  target encoders, a query-token field decoder, and a JEPA predictor head,
+  together with its SIGReg, token-latent, and reconstruction loss family.
+  The generic building blocks (point-cloud tokenizer, local point-transformer
+  attention blocks, residual MLP, Fourier positional encoding, and the
+  batch/mask/k-NN helpers) are added under `physicsnemo.experimental.nn`.
+- Adds the AeroJEPA SuperWing tutorial recipe
+  (`examples/cfd/external_aerodynamics/aerojepa`), an end-to-end Hydra-driven
+  workflow covering dataset download, normalization, JEPA training, chunked
+  inference, field-error plots, and CL/CD post-processing.
 - Adds xDeepONet to experimental models
   (`physicsnemo.experimental.models.xdeeponet.DeepONet`).  A single
   dimension-generic (2D/3D) DeepONet that accepts a spatial or MLP branch,
