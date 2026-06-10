@@ -39,6 +39,7 @@ from .layers import (
     LocalPointTransformerBlock,
     LocalTokenCrossAttentionBlock,
     TokenSet,
+    chunked_knn_indices,
     compute_batch_offset_step,
     flatten_batched_coords,
     flatten_padded_batch,
@@ -319,6 +320,32 @@ class PrototypeTokenJEPAHead(nn.Module):
             context_mask,
         )
 
+        # Static-coords kNN: target / context coords are constant across the
+        # stack. Compute the two neighbour graphs once and thread them in.
+        self_idx = None
+        cross_idx = None
+        if self.depth > 0:
+            self_blk0 = self.self_blocks[0]
+            cross_blk0 = self.cross_blocks[0]
+            self_idx = chunked_knn_indices(
+                query_coords=flat_target_coords,
+                key_coords=flat_target_coords,
+                k=min(
+                    int(self_blk0.neighbor_k) * int(self_blk0.dilation),
+                    int(flat_target_coords.shape[0]),
+                ),
+                chunk_size=int(self_blk0.knn_chunk_size),
+            )
+            cross_idx = chunked_knn_indices(
+                query_coords=flat_target_coords,
+                key_coords=flat_context_coords,
+                k=min(
+                    int(cross_blk0.neighbor_k),
+                    int(flat_context_coords.shape[0]),
+                ),
+                chunk_size=int(cross_blk0.knn_chunk_size),
+            )
+
         for self_block, cross_block in zip(
             self.self_blocks, self.cross_blocks, strict=True
         ):
@@ -327,6 +354,7 @@ class PrototypeTokenJEPAHead(nn.Module):
                 flat_target_coords,
                 cond=flat_target_cond,
                 batch_ids=target_batch_ids,
+                precomputed_idx=self_idx,
             )
             flat_query = cross_block(
                 flat_query,
@@ -337,6 +365,7 @@ class PrototypeTokenJEPAHead(nn.Module):
                 context_cond=flat_context_cond,
                 query_batch_ids=target_batch_ids,
                 context_batch_ids=context_batch_ids,
+                precomputed_idx=cross_idx,
             )
 
         out = self.out_proj(

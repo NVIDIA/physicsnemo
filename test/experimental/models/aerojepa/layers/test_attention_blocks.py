@@ -23,6 +23,7 @@ from physicsnemo.experimental.models.aerojepa.layers import (
     LocalPointTransformerBlock,
     LocalTokenCrossAttentionBlock,
     ResidualMLP,
+    chunked_knn_indices,
 )
 
 # ---------------------------------------------------------------------------
@@ -224,3 +225,39 @@ def test_ltca_conditioning_requires_cond(device):
     cc = torch.randn(12, 3, device=device)
     with pytest.raises(ValueError, match="conditioning input must be provided"):
         blk(qf, qc, cf, cc)
+
+
+def test_lpt_precomputed_idx_matches_auto(device):
+    """Self-attention block with ``precomputed_idx`` matches the auto-kNN path."""
+    torch.manual_seed(0)
+    blk = _make_lpt(neighbor_k=6, dilation=2, knn_chunk_size=64).to(device).eval()
+    features = torch.randn(20, 32, device=device)
+    coords = torch.randn(20, 3, device=device)
+    idx = chunked_knn_indices(
+        query_coords=coords,
+        key_coords=coords,
+        k=blk.neighbor_k * blk.dilation,
+        chunk_size=blk.knn_chunk_size,
+    )
+    out_auto = blk(features, coords)
+    out_pre = blk(features, coords, precomputed_idx=idx)
+    assert torch.allclose(out_auto, out_pre, atol=1e-6, rtol=1e-6)
+
+
+def test_ltca_precomputed_idx_matches_auto(device):
+    """Cross-attention block with ``precomputed_idx`` matches the auto-kNN path."""
+    torch.manual_seed(0)
+    blk = _make_ltca(neighbor_k=4).to(device).eval()
+    qf = torch.randn(10, 32, device=device)
+    qc = torch.randn(10, 3, device=device)
+    cf = torch.randn(20, 32, device=device)
+    cc = torch.randn(20, 3, device=device)
+    idx = chunked_knn_indices(
+        query_coords=qc,
+        key_coords=cc,
+        k=blk.neighbor_k,
+        chunk_size=blk.knn_chunk_size,
+    )
+    out_auto = blk(qf, qc, cf, cc)
+    out_pre = blk(qf, qc, cf, cc, precomputed_idx=idx)
+    assert torch.allclose(out_auto, out_pre, atol=1e-6, rtol=1e-6)

@@ -43,6 +43,7 @@ from .layers import (
     FourierPositionalEncoding,
     LocalTokenCrossAttentionBlock,
     TokenSet,
+    chunked_knn_indices,
     compute_batch_offset_step,
     counts_to_mask,
     flatten_batched_coords,
@@ -389,12 +390,25 @@ class QueryTokenDecoder(nn.Module):
                 query_pos=query_pos, query_sdf=query_sdf, cond=cond
             )
         )
+        # Static-coords kNN: query_pos and token_coords don't change across
+        # blocks in this stack, and no block uses dilation > 1, so the
+        # neighbour graph is identical for every block. Compute it once.
+        precomputed_idx = None
+        if len(self.cross_blocks) > 0:
+            blk0 = self.cross_blocks[0]
+            precomputed_idx = chunked_knn_indices(
+                query_coords=query_pos,
+                key_coords=token_coords,
+                k=min(int(blk0.neighbor_k), int(token_coords.shape[0])),
+                chunk_size=int(blk0.knn_chunk_size),
+            )
         for block in self.cross_blocks:
             query_tokens = block(
                 query_tokens,
                 query_pos,
                 token_features,
                 token_coords,
+                precomputed_idx=precomputed_idx,
             )
         hidden = self.trunk(query_tokens)
         if self.final_refinement is not None:
@@ -539,6 +553,18 @@ class QueryTokenDecoder(nn.Module):
                     cond=cond_chunk,
                 )
             )
+            # Static-coords kNN: shared across all blocks in the stack.
+            precomputed_idx_chunk = None
+            if len(self.cross_blocks) > 0:
+                blk0 = self.cross_blocks[0]
+                precomputed_idx_chunk = chunked_knn_indices(
+                    query_coords=flat_query_coords[start:end],
+                    key_coords=flat_token_coords,
+                    k=min(
+                        int(blk0.neighbor_k), int(flat_token_coords.shape[0])
+                    ),
+                    chunk_size=int(blk0.knn_chunk_size),
+                )
             for block in self.cross_blocks:
                 query_tokens = block(
                     query_tokens,
@@ -547,6 +573,7 @@ class QueryTokenDecoder(nn.Module):
                     flat_token_coords,
                     query_batch_ids=query_batch_ids[start:end],
                     context_batch_ids=token_batch_ids,
+                    precomputed_idx=precomputed_idx_chunk,
                 )
             hidden = self.trunk(query_tokens)
             if self.final_refinement is not None:

@@ -267,6 +267,7 @@ class LocalPointTransformerBlock(nn.Module):
         coords: torch.Tensor,
         cond: torch.Tensor | None = None,
         batch_ids: torch.Tensor | None = None,
+        precomputed_idx: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if int(features.shape[0]) <= 1:
             return self.ffn(features, cond=cond)
@@ -284,13 +285,22 @@ class LocalPointTransformerBlock(nn.Module):
                 _reshape_condition(cond)
             ).chunk(3, dim=-1)
             h = h * (1.0 + scale) + shift
-        idx = chunked_knn_indices(
-            query_coords=coords,
-            key_coords=coords,
-            k=min(self.neighbor_k, int(coords.shape[0])),
-            chunk_size=self.knn_chunk_size,
-            dilation=self.dilation,
-        )
+        if precomputed_idx is None:
+            idx = chunked_knn_indices(
+                query_coords=coords,
+                key_coords=coords,
+                k=min(self.neighbor_k, int(coords.shape[0])),
+                chunk_size=self.knn_chunk_size,
+                dilation=self.dilation,
+            )
+        else:
+            # Caller pre-ran kNN at >= neighbor_k * dilation; apply our
+            # dilation stride and per-block neighbor cap as a pure index op.
+            idx = precomputed_idx
+            if self.dilation > 1:
+                idx = idx[:, :: int(self.dilation)]
+            target_k = min(self.neighbor_k, int(coords.shape[0]), int(idx.shape[1]))
+            idx = idx[:, :target_k]
         neighbor_mask = None
         if batch_ids is not None:
             gathered_batch_ids = gather_rows(batch_ids.unsqueeze(-1), idx).squeeze(-1)
@@ -444,6 +454,7 @@ class LocalTokenCrossAttentionBlock(nn.Module):
         context_cond: torch.Tensor | None = None,
         query_batch_ids: torch.Tensor | None = None,
         context_batch_ids: torch.Tensor | None = None,
+        precomputed_idx: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if int(query_features.shape[0]) == 0 or int(context_features.shape[0]) == 0:
             return query_features
@@ -467,12 +478,20 @@ class LocalTokenCrossAttentionBlock(nn.Module):
                 _reshape_condition(kv_source)
             ).chunk(5, dim=-1)[2:4]
             kv_in = kv_in * (1.0 + kv_scale) + kv_shift
-        idx = chunked_knn_indices(
-            query_coords=query_coords,
-            key_coords=context_coords,
-            k=min(self.neighbor_k, int(context_coords.shape[0])),
-            chunk_size=self.knn_chunk_size,
-        )
+        if precomputed_idx is None:
+            idx = chunked_knn_indices(
+                query_coords=query_coords,
+                key_coords=context_coords,
+                k=min(self.neighbor_k, int(context_coords.shape[0])),
+                chunk_size=self.knn_chunk_size,
+            )
+        else:
+            target_k = min(
+                self.neighbor_k,
+                int(context_coords.shape[0]),
+                int(precomputed_idx.shape[1]),
+            )
+            idx = precomputed_idx[:, :target_k]
         neighbor_mask = None
         if query_batch_ids is not None and context_batch_ids is not None:
             gathered_batch_ids = gather_rows(

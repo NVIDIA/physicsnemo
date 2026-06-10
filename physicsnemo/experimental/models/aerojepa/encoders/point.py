@@ -51,12 +51,41 @@ from ..layers import (
     LocalPointTransformerBlock,
     PointCloudTokenizer,
     TokenSet,
+    chunked_knn_indices,
     compute_batch_offset_step,
     flatten_batched_coords,
     flatten_padded_batch,
     masked_mean,
     unflatten_to_padded,
 )
+
+
+def _precomputed_idx_for_blocks(
+    blocks: nn.ModuleList,
+    *,
+    query_coords: torch.Tensor,
+    key_coords: torch.Tensor,
+) -> torch.Tensor | None:
+    r"""Run a single kNN at ``max(neighbor_k * dilation)`` across a block stack.
+
+    The block coordinates are constant within a stack and ``LocalPointTransformerBlock``
+    only differs by ``dilation``, so the neighbour graph the blocks need is a
+    superset of any single block's. Caller threads the returned index into each
+    ``block.forward(..., precomputed_idx=idx)``.
+    """
+    if len(blocks) == 0:
+        return None
+    n_key = int(key_coords.shape[0])
+    k_max = 1
+    chunk_size = int(blocks[0].knn_chunk_size)
+    for b in blocks:
+        k_max = max(k_max, min(int(b.neighbor_k) * int(b.dilation), n_key))
+    return chunked_knn_indices(
+        query_coords=query_coords,
+        key_coords=key_coords,
+        k=k_max,
+        chunk_size=chunk_size,
+    )
 
 
 def build_geometry_features(
@@ -614,8 +643,16 @@ class PointTransformer(nn.Module):
             token_features=token_features,
             gen_params=gen_params,
         )
+        # Static-coords kNN: token_coords is constant across the stack.
+        # Compute once at neighbor_k * max(dilation) and each block applies
+        # its own dilation stride as a pure index op.
+        precomputed_idx = _precomputed_idx_for_blocks(
+            self.blocks, query_coords=token_coords, key_coords=token_coords
+        )
         for block in self.blocks:
-            x = block(x, token_coords, cond=gen_embed)
+            x = block(
+                x, token_coords, cond=gen_embed, precomputed_idx=precomputed_idx
+            )
         x = self.out_norm(x)
         global_token = masked_mean(x, None)
         tokens = TokenSet(features=x, coords=token_coords, global_token=global_token)
@@ -685,9 +722,18 @@ class PointTransformer(nn.Module):
                 gen_embed.unsqueeze(1).expand(-1, int(token_positions.shape[1]), -1),
                 token_mask,
             )
+        precomputed_idx = _precomputed_idx_for_blocks(
+            self.blocks,
+            query_coords=flat_offset_coords,
+            key_coords=flat_offset_coords,
+        )
         for block in self.blocks:
             flat_x = block(
-                flat_x, flat_offset_coords, cond=flat_cond, batch_ids=batch_ids
+                flat_x,
+                flat_offset_coords,
+                cond=flat_cond,
+                batch_ids=batch_ids,
+                precomputed_idx=precomputed_idx,
             )
         flat_x = self.out_norm(flat_x)
         padded_x = unflatten_to_padded(flat_x, token_mask)
