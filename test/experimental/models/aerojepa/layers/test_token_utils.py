@@ -189,18 +189,6 @@ def test_chunked_knn_indices_validation():
         )
 
 
-def test_chunked_knn_indices_bad_backend_env_raises(monkeypatch):
-    """Unknown ``AE_KNN_BACKEND`` values produce a clear error."""
-    monkeypatch.setenv("AE_KNN_BACKEND", "bogus")
-    with pytest.raises(ValueError, match="AE_KNN_BACKEND must be one of"):
-        chunked_knn_indices(
-            query_coords=torch.zeros(4, 3),
-            key_coords=torch.zeros(4, 3),
-            k=2,
-            chunk_size=4,
-        )
-
-
 # ---------------------------------------------------------------------------
 # masked_mean
 # ---------------------------------------------------------------------------

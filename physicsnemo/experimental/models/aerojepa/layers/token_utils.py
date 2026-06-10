@@ -24,13 +24,11 @@ and pack/unpack lists of :class:`TokenSet` instances.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterable
-from contextlib import nullcontext
 
-import numpy as np
 import torch
-from scipy.spatial import cKDTree
+
+from physicsnemo.nn.functional.neighbors.knn import knn
 
 from .types import TokenSet
 
@@ -295,12 +293,12 @@ def chunked_knn_indices(
     chunk_size: int,
     dilation: int = 1,
 ) -> torch.Tensor:
-    r"""Build a chunked k-NN index from queries to keys.
+    r"""Build a k-NN index from queries to keys with optional dilation.
 
-    Chooses a CPU (``scipy.spatial.cKDTree``) or GPU (chunked GEMM + topk)
-    backend automatically based on tensor devices. The backend can be
-    overridden via the ``AE_KNN_BACKEND`` environment variable, which
-    accepts ``auto`` (default), ``cpu`` or ``gpu``.
+    Thin wrapper over :func:`physicsnemo.nn.functional.neighbors.knn.knn`:
+    runs the canonical kNN search once at ``k * dilation`` neighbors,
+    then applies the dilation stride and keeps the first ``k`` indices
+    per query.
 
     Parameters
     ----------
@@ -311,7 +309,8 @@ def chunked_knn_indices(
     k : int
         Number of nearest neighbors retained per query (post-dilation).
     chunk_size : int
-        Number of query points processed per chunk.
+        Accepted for call-site signature compatibility; the canonical kNN
+        handles chunking internally and this value is unused.
     dilation : int, optional
         Stride applied to the top-``k * dilation`` indices before keeping
         the first ``k``. Lets blocks subsample at coarser scales without
@@ -320,16 +319,14 @@ def chunked_knn_indices(
     Returns
     -------
     torch.Tensor
-        Index tensor of shape ``(Nq, k_eff)`` with dtype ``int64``, where
-        ``k_eff = min(k // dilation, Nk)`` (clamped to at least 1).
+        Index tensor of shape ``(Nq, k_eff)`` with dtype ``int64``.
 
     Raises
     ------
     ValueError
         If ranks or coordinate dimensions disagree, if either coord set is
-        empty, if any of ``k``, ``chunk_size``, ``dilation`` are
-        non-positive, if ``AE_KNN_BACKEND='gpu'`` and a tensor is on CPU,
-        or if ``AE_KNN_BACKEND`` has an unrecognized value.
+        empty, or if any of ``k``, ``chunk_size``, ``dilation`` are
+        non-positive.
     """
     if query_coords.ndim != 2 or key_coords.ndim != 2:
         raise ValueError(
@@ -346,94 +343,13 @@ def chunked_knn_indices(
     if k <= 0 or chunk_size <= 0 or dilation <= 0:
         raise ValueError("k, chunk_size, and dilation must be positive.")
 
-    k_eff = min(int(k) * int(dilation), int(key_coords.shape[0]))
-    backend = str(os.environ.get("AE_KNN_BACKEND", "auto")).strip().lower()
-    if backend not in {"auto", "cpu", "gpu"}:
-        raise ValueError("AE_KNN_BACKEND must be one of: 'auto', 'cpu', 'gpu'.")
-    if backend == "auto":
-        backend = "gpu" if query_coords.is_cuda and key_coords.is_cuda else "cpu"
-    if backend == "gpu":
-        if not (query_coords.is_cuda and key_coords.is_cuda):
-            raise ValueError(
-                "AE_KNN_BACKEND='gpu' requires both query_coords and key_coords on CUDA."
-            )
-        return _chunked_knn_indices_gpu(
-            query_coords=query_coords,
-            key_coords=key_coords,
-            k=k_eff,
-            chunk_size=int(chunk_size),
-            dilation=int(dilation),
-        )
-    return _chunked_knn_indices_cpu(
-        query_coords=query_coords,
-        key_coords=key_coords,
-        k=k_eff,
-        chunk_size=int(chunk_size),
-        dilation=int(dilation),
-    )
-
-
-def _chunked_knn_indices_cpu(
-    *,
-    query_coords: torch.Tensor,
-    key_coords: torch.Tensor,
-    k: int,
-    chunk_size: int,
-    dilation: int,
-) -> torch.Tensor:
-    query_np = np.asarray(query_coords.detach().float().cpu().numpy(), dtype=np.float64)
-    key_np = np.asarray(key_coords.detach().float().cpu().numpy(), dtype=np.float64)
-    tree = cKDTree(key_np)
-    idx_chunks = []
-    for start in range(0, int(query_coords.shape[0]), int(chunk_size)):
-        query_chunk = query_np[start : start + int(chunk_size)]
-        idx_np = tree.query(query_chunk, k=k, workers=-1)[1]
-        idx_np = np.asarray(idx_np, dtype=np.int64)
-        if idx_np.ndim == 1:
-            idx_np = idx_np[:, None]
-        idx = torch.from_numpy(idx_np).to(device=query_coords.device, dtype=torch.long)
-        if dilation > 1:
-            idx = idx[:, :: int(dilation)]
-        idx_chunks.append(
-            idx[:, : min(max(1, int(k) // int(dilation)), idx.shape[1])]
-        )
-    return torch.cat(idx_chunks, dim=0)
-
-
-def _chunked_knn_indices_gpu(
-    *,
-    query_coords: torch.Tensor,
-    key_coords: torch.Tensor,
-    k: int,
-    chunk_size: int,
-    dilation: int,
-) -> torch.Tensor:
-    out_k = min(max(1, int(k) // int(dilation)), int(key_coords.shape[0]))
-    device_type = query_coords.device.type
-    autocast_ctx = (
-        torch.autocast(device_type=device_type, enabled=False)
-        if device_type in {"cuda", "cpu"}
-        else nullcontext()
-    )
-    idx_chunks = []
-    with torch.no_grad():
-        with autocast_ctx:
-            query_f = query_coords.detach().float()
-            key_f = key_coords.detach().float()
-            key_t = key_f.transpose(0, 1).contiguous()
-            key_sq = key_f.square().sum(dim=-1).unsqueeze(0)
-            for start in range(0, int(query_coords.shape[0]), int(chunk_size)):
-                query_chunk = query_f[start : start + int(chunk_size)]
-                query_sq = query_chunk.square().sum(dim=-1, keepdim=True)
-                dist_sq = query_sq + key_sq - 2.0 * (query_chunk @ key_t)
-                dist_sq = torch.clamp_min(dist_sq, 0.0)
-                idx = torch.topk(
-                    dist_sq, k=int(k), dim=-1, largest=False, sorted=True
-                ).indices
-                if dilation > 1:
-                    idx = idx[:, :: int(dilation)]
-                idx_chunks.append(idx[:, :out_k])
-    return torch.cat(idx_chunks, dim=0)
+    k_request = min(int(k) * int(dilation), int(key_coords.shape[0]))
+    idx, _ = knn(points=key_coords, queries=query_coords, k=k_request)
+    idx = idx.to(dtype=torch.long)
+    if dilation > 1:
+        idx = idx[:, :: int(dilation)]
+    out_k = min(max(1, int(k)), idx.shape[1])
+    return idx[:, :out_k]
 
 
 def masked_mean(

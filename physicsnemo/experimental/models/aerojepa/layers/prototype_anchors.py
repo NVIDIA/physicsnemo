@@ -33,6 +33,8 @@ from typing import Any
 import numpy as np
 import torch
 
+from physicsnemo.nn.functional.neighbors.knn import knn
+
 from .point_tokenizer import PointCloudTokenizer, _farthest_point_sampling
 
 
@@ -114,21 +116,10 @@ def _concat_context_points(
     return positions, features
 
 
-def _assign_points(
-    points: torch.Tensor,
-    centers: torch.Tensor,
-    *,
-    chunk_size: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    assign_chunks = []
-    dist_chunks = []
-    for start in range(0, int(points.shape[0]), int(chunk_size)):
-        chunk = points[start : start + int(chunk_size)]
-        dists = torch.cdist(chunk, centers)
-        min_dist, assign = torch.min(dists, dim=1)
-        assign_chunks.append(assign)
-        dist_chunks.append(min_dist)
-    return torch.cat(assign_chunks, dim=0), torch.cat(dist_chunks, dim=0)
+def _assign_points(points: torch.Tensor, centers: torch.Tensor) -> torch.Tensor:
+    """Assign each point to its nearest center (k=1 kNN)."""
+    idx, _ = knn(points=centers, queries=points, k=1)
+    return idx[:, 0].to(dtype=torch.long)
 
 
 def _run_chunked_kmeans(
@@ -146,7 +137,7 @@ def _run_chunked_kmeans(
     )
     centers = points[center_idx].clone()
     for _ in range(max(1, int(num_iters))):
-        assign, _ = _assign_points(points, centers, chunk_size=chunk_size)
+        assign = _assign_points(points, centers)
         new_centers = torch.zeros_like(centers)
         counts = torch.zeros(
             (int(num_clusters), 1), dtype=points.dtype, device=points.device
