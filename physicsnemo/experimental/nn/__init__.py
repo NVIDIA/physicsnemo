@@ -39,12 +39,10 @@ from .point_utils import (
     masked_mean,
     unflatten_to_padded,
 )
-from .positional_encoding import FourierPositionalEncoding
 
 __all__ = [
     "Conv3D",
     "FLARE",
-    "FourierPositionalEncoding",
     "GroupNorm3D",
     "LocalPointTransformerBlock",
     "LocalTokenCrossAttentionBlock",

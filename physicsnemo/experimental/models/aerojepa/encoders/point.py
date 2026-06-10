@@ -43,6 +43,7 @@ import torch
 import torch.nn as nn
 
 from physicsnemo.core.module import Module
+from physicsnemo.nn import FourierPositionalEmbedding
 from physicsnemo.nn.module.layer_norm import LayerNorm
 from physicsnemo.nn.module.mlp_layers import Mlp
 
@@ -50,7 +51,6 @@ from .._metadata import AeroJEPAMetaData
 
 from ..layers import (
     EncoderOutput,
-    FourierPositionalEncoding,
     LocalPointTransformerBlock,
     PointCloudTokenizer,
     TokenSet,
@@ -466,7 +466,7 @@ class PointTransformer(Module):
                 dropout=float(dropout),
             )
         self.feature_in = nn.Linear(int(point_input_dim), int(token_dim))
-        self.pos_enc = FourierPositionalEncoding(
+        self.pos_enc = FourierPositionalEmbedding(
             in_dim=3, num_bands=int(point_pos_pe_bands), include_input=True
         )
         self.pos_proj = nn.Linear(self.pos_enc.out_dim, int(token_dim))

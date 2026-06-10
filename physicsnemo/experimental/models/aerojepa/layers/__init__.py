@@ -20,10 +20,10 @@ This package owns the AeroJEPA-specific contract — :class:`TokenSet` and
 :class:`EncoderOutput` dataclasses, the prototype-anchor utilities, and
 two ``TokenSet``-coupled batching helpers. The generic layers it composes
 (``ResidualMLP``, ``LocalPointTransformerBlock``,
-``LocalTokenCrossAttentionBlock``, ``PointCloudTokenizer``,
-``FourierPositionalEncoding``, and the batch/gather/k-NN utilities) now
-live at :mod:`physicsnemo.experimental.nn` and are re-exported here for
-backward-compatible imports.
+``LocalTokenCrossAttentionBlock``, ``PointCloudTokenizer``, and the
+batch/gather/k-NN utilities) now live at :mod:`physicsnemo.experimental.nn`
+and are re-exported here for backward-compatible imports. Query coordinates
+are embedded with :class:`physicsnemo.nn.FourierPositionalEmbedding`.
 
 API stability: experimental. Names and signatures may change between releases
 until the design graduates out of ``physicsnemo.experimental``.
@@ -35,7 +35,6 @@ Scalable 3D Aerodynamic Field Modeling", preprint arXiv:2605.05586 (2026).
 """
 
 from physicsnemo.experimental.nn import (
-    FourierPositionalEncoding,
     LocalPointTransformerBlock,
     LocalTokenCrossAttentionBlock,
     PointCloudTokenizer,
@@ -66,7 +65,6 @@ __all__ = [
     "EncoderOutput",
     "TokenSet",
     # Re-exports from physicsnemo.experimental.nn
-    "FourierPositionalEncoding",
     "LocalPointTransformerBlock",
     "LocalTokenCrossAttentionBlock",
     "PointCloudTokenizer",

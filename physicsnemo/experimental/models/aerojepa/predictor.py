@@ -33,12 +33,12 @@ import torch.nn as nn
 
 from physicsnemo.core.module import Module
 from physicsnemo.nn.module.layer_norm import LayerNorm
+from physicsnemo.nn import FourierPositionalEmbedding
 from physicsnemo.nn.module.mlp_layers import Mlp
 
 from ._metadata import AeroJEPAMetaData
 
 from .layers import (
-    FourierPositionalEncoding,
     LocalPointTransformerBlock,
     LocalTokenCrossAttentionBlock,
     TokenSet,
@@ -123,7 +123,7 @@ class PrototypeTokenJEPAHead(Module):
         )
         self.cond_dim = int(cond_dim)
         self.depth = int(max(1, depth))
-        self.query_pos_enc = FourierPositionalEncoding(
+        self.query_pos_enc = FourierPositionalEmbedding(
             in_dim=3, num_bands=int(query_pe_bands), include_input=True
         )
         self.query_in = nn.Linear(self.query_pos_enc.out_dim, self.hidden_dim)

@@ -36,6 +36,7 @@ import torch
 import torch.nn as nn
 
 from physicsnemo.core.module import Module
+from physicsnemo.nn import FourierPositionalEmbedding
 from physicsnemo.nn.module.layer_norm import LayerNorm
 from physicsnemo.nn.module.mlp_layers import Mlp
 from physicsnemo.nn.module.siren_layers import SirenLayer, SirenLayerType
@@ -43,7 +44,6 @@ from physicsnemo.nn.module.siren_layers import SirenLayer, SirenLayerType
 from ._metadata import AeroJEPAMetaData
 
 from .layers import (
-    FourierPositionalEncoding,
     LocalTokenCrossAttentionBlock,
     TokenSet,
     chunked_knn_indices,
@@ -268,7 +268,7 @@ class QueryTokenDecoder(Module):
         self.extra_sdf_features_enabled = bool(extra_sdf_features_enabled)
         self.extra_sdf_inv_eps = float(extra_sdf_inv_eps)
 
-        self.pe = FourierPositionalEncoding(
+        self.pe = FourierPositionalEmbedding(
             in_dim=int(query_dim),
             num_bands=int(pe_num_bands),
             include_input=True,
