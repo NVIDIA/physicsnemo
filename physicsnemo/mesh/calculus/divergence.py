@@ -171,3 +171,33 @@ def compute_divergence_points_lsq(
 
     ### Divergence = trace of Jacobian = Σ_k ∂v_k/∂x_k
     return torch.einsum("...ii", jacobian)
+
+
+def compute_divergence_cells_lsq(
+    mesh: "Mesh",
+    vector_field: Float[torch.Tensor, "n_cells n_spatial_dims"],
+) -> Float[torch.Tensor, " n_cells"]:
+    r"""Compute divergence at cell centers using the LSQ Jacobian trace.
+
+    Cell-centered analogue of :func:`compute_divergence_points_lsq`: computes
+    the full Jacobian via a single batched cell-neighbour LSQ solve, then takes
+    the trace.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh.
+    vector_field : torch.Tensor
+        Vectors at cell centers, shape ``(n_cells, n_spatial_dims)``.
+
+    Returns
+    -------
+    Float[torch.Tensor, " n_cells"]
+        Divergence at cell centers, shape ``(n_cells,)``.
+    """
+    from physicsnemo.mesh.calculus._lsq_reconstruction import compute_cell_gradient_lsq
+
+    # J[i, j, k] = ∂v_j/∂x_k, shape (n_cells, n_spatial_dims, n_spatial_dims)
+    jacobian = compute_cell_gradient_lsq(mesh, vector_field)
+
+    return torch.einsum("...ii", jacobian)
