@@ -27,6 +27,10 @@ identically for surface and volume mesh configs because the distinction
 is entirely in the YAML transform chain (volume YAMLs already produce a
 ``DomainMesh`` natively via ``DomainMeshReader``; surface YAMLs append a
 ``MeshToDomainMesh`` terminal transform to reach the same shape).
+
+Also hosts ``build_dataloaders`` -- the train/val ``DataLoader`` assembly
+(samplers, collate, manifest splits) shared by ``train.py`` and
+``infer.py``.
 """
 
 from __future__ import annotations
@@ -68,16 +72,11 @@ from metrics import MetricName  # noqa: E402
 from utils import FieldType, field_dim, resolve_dict  # noqa: E402
 
 ### Module-level logger used for warnings emitted from helpers below
-### (e.g. ``validate_dataset_consistency``). Goes through the same Python
-### logging pipeline as the recipe's ``PythonLogger``, so it shows up in
-### whatever handlers the training script has configured.
+### (e.g. ``validate_dataset_consistency``, ``build_dataloaders``). Goes
+### through the same Python logging pipeline as the recipe's
+### ``PythonLogger``, so it shows up in whatever handlers the training
+### script has configured.
 _LOGGER = logging.getLogger("training.datasets")
-
-### `build_dataloaders` (and the sampler / collate helpers it owns) emit
-### their dataset-skip and val-fallback warnings under this name so the
-### logger identity stays stable regardless of which module hosts the
-### function (tests assert against ``"training.build_dataloaders"``).
-_DATALOADER_LOGGER = logging.getLogger("training.build_dataloaders")
 
 
 def load_dataset_config(yaml_path: str | Path) -> DictConfig:
@@ -585,7 +584,7 @@ def _resolve_manifest_indices_from_spec(
 def _build_collate(
     cfg: DictConfig, target_config: dict[str, FieldType]
 ) -> Callable[[list[tuple[Any, Any]]], dict[str, Any]]:
-    """Build the per-sample collate from the training YAML's I/O contract."""
+    """Build the per-sample collate from the model YAML's I/O contract."""
     if not target_config:
         raise ValueError(
             "Dataset YAML must declare a non-empty `targets:` block. "
@@ -595,13 +594,11 @@ def _build_collate(
     input_type = cfg.get("input_type", None)
     if input_type is None:
         raise ValueError(
-            "Training YAML must declare `input_type` (one of 'mesh', 'tensors')."
+            "Model YAML must declare `input_type` (one of 'mesh', 'tensors')."
         )
     forward_kwargs_spec = resolve_dict(cfg, "forward_kwargs")
     if not forward_kwargs_spec:
-        raise ValueError(
-            "Training YAML must declare a non-empty `forward_kwargs:` block."
-        )
+        raise ValueError("Model YAML must declare a non-empty `forward_kwargs:` block.")
     return build_collate_fn(
         input_type=input_type,
         forward_kwargs_spec=forward_kwargs_spec,
@@ -671,7 +668,7 @@ def _build_manifest_samplers(
     ### run log instead of producing a "val == train" loss curve that
     ### looks correct.
     if val_indices is None:
-        _DATALOADER_LOGGER.warning(
+        _LOGGER.warning(
             "Manifest mode: no val_split / val_manifest configured; "
             "validation will iterate the train split (%d samples). "
             "Set 'val_split:' or 'val_manifest:' on the data block to "
@@ -755,9 +752,10 @@ def build_dataloaders(
 
     ### The primary dataset is `cfg.dataset` (a single string); extras
     ### combine via MultiDataset. The same `train_split`/`val_split`
-    ### apply to every chosen dataset (manifest-mode datasets honor
-    ### them; directory-mode datasets ignore them via
-    ### `resolve_manifest_spec`).
+    ### apply to every chosen dataset; when they are set,
+    ### `resolve_manifest_spec` requires each dataset to have a locatable
+    ### manifest (it raises otherwise) -- clear them (null) for
+    ### directory-mode datasets.
     primary_name: str = cfg.dataset
     extras: list[str] = list(cfg.get("extra_datasets", []) or [])
     dataset_names: list[str] = [primary_name, *extras]
@@ -777,7 +775,7 @@ def build_dataloaders(
             ### `cfg.dataset` / `cfg.extra_datasets` surfaces in the run
             ### log rather than vanishing as an empty dataloader at
             ### training time.
-            _DATALOADER_LOGGER.warning(
+            _LOGGER.warning(
                 f"Skipping dataset {ds_name!r}: config file not found at "
                 f"{str(config_path)!r}. Check `cfg.dataset` / "
                 f"`cfg.extra_datasets` against the files under "
@@ -793,7 +791,7 @@ def build_dataloaders(
 
         train_datadir = OmegaConf.select(ds_yaml, "train_datadir", default=None)
         if train_datadir and not Path(str(train_datadir)).exists():
-            _DATALOADER_LOGGER.warning(
+            _LOGGER.warning(
                 f"Skipping dataset {ds_name!r}: train_datadir "
                 f"{str(train_datadir)!r} does not exist. Check the "
                 f"`dataset_paths` interpolation in "
@@ -922,29 +920,29 @@ def build_dataloaders(
             sampler_seed=sampler_seed,
         )
 
-    train_loader = DataLoader(
-        train_dataset,
+    ### Shared loader knobs; the two splits differ only in dataset / shuffle /
+    ### sampler / drop_last.
+    loader_kwargs = dict(
         batch_size=batch_size,
-        shuffle=(train_sampler is None),
-        sampler=train_sampler,
         collate_fn=collate_fn,
-        drop_last=True,
         prefetch_factor=prefetch_factor,
         num_streams=num_streams,
         use_streams=use_streams,
         seed=sampler_seed,
     )
+    train_loader = DataLoader(
+        train_dataset,
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
+        drop_last=True,
+        **loader_kwargs,
+    )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=batch_size,
         shuffle=False,
         sampler=val_sampler,
-        collate_fn=collate_fn,
         drop_last=False,
-        prefetch_factor=prefetch_factor,
-        num_streams=num_streams,
-        use_streams=use_streams,
-        seed=sampler_seed,
+        **loader_kwargs,
     )
 
     ### `metrics` are now recipe-side (cfg.metrics) -- the training /
