@@ -30,6 +30,8 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from physicsnemo.nn.module.mlp_layers import Mlp
+
 from .encoders.base import BaseContextEncoder, BaseTargetEncoder
 
 
@@ -90,12 +92,15 @@ class AeroJEPATrunk(nn.Module):
                 + (cond_dim if self.mask_head_use_cond else 0)
                 + (1 if getattr(self.decoder, "use_sdf", True) else 0)
             )
-            self.mask_head = nn.Sequential(
-                nn.Linear(mask_in_dim, int(mask_head_hidden_dim)),
-                nn.SiLU(),
-                nn.Linear(int(mask_head_hidden_dim), int(mask_head_hidden_dim)),
-                nn.SiLU(),
-                nn.Linear(int(mask_head_hidden_dim), 1),
+            self.mask_head = Mlp(
+                in_features=mask_in_dim,
+                hidden_features=[
+                    int(mask_head_hidden_dim),
+                    int(mask_head_hidden_dim),
+                ],
+                out_features=1,
+                act_layer=nn.SiLU,
+                final_dropout=False,
             )
         else:
             self.mask_head = None

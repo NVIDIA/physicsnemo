@@ -36,6 +36,7 @@ import torch
 import torch.nn as nn
 
 from physicsnemo.nn.module.layer_norm import LayerNorm
+from physicsnemo.nn.module.mlp_layers import Mlp
 from physicsnemo.nn.module.siren_layers import SirenLayer, SirenLayerType
 
 from .layers import (
@@ -319,10 +320,12 @@ class QueryTokenDecoder(nn.Module):
                     omega_0=float(pressure_head_siren_omega0),
                 )
             else:
-                self.p_head = nn.Sequential(
-                    nn.Linear(int(hidden_dim), self.pressure_head_hidden_dim),
-                    nn.SiLU(),
-                    nn.Linear(self.pressure_head_hidden_dim, 1),
+                self.p_head = Mlp(
+                    in_features=int(hidden_dim),
+                    hidden_features=self.pressure_head_hidden_dim,
+                    out_features=1,
+                    act_layer=nn.SiLU,
+                    final_dropout=False,
                 )
             self.out = None
         else:

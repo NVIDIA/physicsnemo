@@ -31,6 +31,7 @@ import torch
 import torch.nn as nn
 
 from physicsnemo.nn.module.layer_norm import LayerNorm
+from physicsnemo.nn.module.mlp_layers import Mlp
 
 from .token_utils import chunked_knn_indices, gather_rows
 
@@ -119,12 +120,13 @@ class ResidualMLP(nn.Module):
             else _make_conditioning_mlp(int(conditioning_dim), 3 * int(dim))
         )
         self.adaln_zero = bool(adaln_zero)
-        self.net = nn.Sequential(
-            nn.Linear(int(dim), hidden),
-            nn.GELU(),
-            nn.Dropout(float(dropout)),
-            nn.Linear(hidden, int(dim)),
-            nn.Dropout(float(dropout)),
+        self.net = Mlp(
+            in_features=int(dim),
+            hidden_features=hidden,
+            out_features=int(dim),
+            act_layer=nn.GELU,
+            drop=float(dropout),
+            final_dropout=True,
         )
 
     def forward(
@@ -235,15 +237,19 @@ class LocalPointTransformerBlock(nn.Module):
         self.q_proj = nn.Linear(self.dim, self.dim)
         self.k_proj = nn.Linear(self.dim, self.dim)
         self.v_proj = nn.Linear(self.dim, self.dim)
-        self.pos_proj = nn.Sequential(
-            nn.Linear(3, self.dim),
-            nn.GELU(),
-            nn.Linear(self.dim, self.dim),
+        self.pos_proj = Mlp(
+            in_features=3,
+            hidden_features=self.dim,
+            out_features=self.dim,
+            act_layer=nn.GELU,
+            final_dropout=False,
         )
-        self.attn_proj = nn.Sequential(
-            nn.Linear(self.dim, self.dim),
-            nn.GELU(),
-            nn.Linear(self.dim, self.num_heads),
+        self.attn_proj = Mlp(
+            in_features=self.dim,
+            hidden_features=self.dim,
+            out_features=self.num_heads,
+            act_layer=nn.GELU,
+            final_dropout=False,
         )
         self.out_proj = nn.Linear(self.dim, self.dim)
         self.dropout = nn.Dropout(float(dropout))
@@ -404,15 +410,19 @@ class LocalTokenCrossAttentionBlock(nn.Module):
         self.q_proj = nn.Linear(self.dim, self.dim)
         self.k_proj = nn.Linear(self.dim, self.dim)
         self.v_proj = nn.Linear(self.dim, self.dim)
-        self.pos_proj = nn.Sequential(
-            nn.Linear(3, self.dim),
-            nn.GELU(),
-            nn.Linear(self.dim, self.dim),
+        self.pos_proj = Mlp(
+            in_features=3,
+            hidden_features=self.dim,
+            out_features=self.dim,
+            act_layer=nn.GELU,
+            final_dropout=False,
         )
-        self.attn_proj = nn.Sequential(
-            nn.Linear(self.dim, self.dim),
-            nn.GELU(),
-            nn.Linear(self.dim, self.num_heads),
+        self.attn_proj = Mlp(
+            in_features=self.dim,
+            hidden_features=self.dim,
+            out_features=self.num_heads,
+            act_layer=nn.GELU,
+            final_dropout=False,
         )
         self.out_proj = nn.Linear(self.dim, self.dim)
         self.dropout = nn.Dropout(float(dropout))

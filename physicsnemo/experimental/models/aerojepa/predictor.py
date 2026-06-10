@@ -32,6 +32,7 @@ import torch
 import torch.nn as nn
 
 from physicsnemo.nn.module.layer_norm import LayerNorm
+from physicsnemo.nn.module.mlp_layers import Mlp
 
 from .layers import (
     FourierPositionalEncoding,
@@ -125,10 +126,12 @@ class PrototypeTokenJEPAHead(nn.Module):
         self.context_in = nn.Linear(self.token_dim, self.hidden_dim)
         self.cond_proj = None
         if self.cond_dim > 0:
-            self.cond_proj = nn.Sequential(
-                nn.Linear(self.cond_dim, self.hidden_dim),
-                nn.SiLU(),
-                nn.Linear(self.hidden_dim, self.hidden_dim),
+            self.cond_proj = Mlp(
+                in_features=self.cond_dim,
+                hidden_features=self.hidden_dim,
+                out_features=self.hidden_dim,
+                act_layer=nn.SiLU,
+                final_dropout=False,
             )
         self.self_blocks = nn.ModuleList(
             [

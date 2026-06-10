@@ -43,6 +43,7 @@ import torch
 import torch.nn as nn
 
 from physicsnemo.nn.module.layer_norm import LayerNorm
+from physicsnemo.nn.module.mlp_layers import Mlp
 
 from ..layers import (
     EncoderOutput,
@@ -197,26 +198,32 @@ class PointClusterGraphPool(nn.Module):
         self.update_mlps = nn.ModuleList()
         for _ in range(self.num_layers):
             self.msg_mlps.append(
-                nn.Sequential(
-                    nn.Linear(edge_in_dim, self.hidden_dim),
-                    nn.SiLU(),
-                    nn.Dropout(float(dropout)),
-                    nn.Linear(self.hidden_dim, self.point_feature_dim),
+                Mlp(
+                    in_features=edge_in_dim,
+                    hidden_features=self.hidden_dim,
+                    out_features=self.point_feature_dim,
+                    act_layer=nn.SiLU,
+                    drop=float(dropout),
+                    final_dropout=False,
                 )
             )
             self.gate_mlps.append(
-                nn.Sequential(
-                    nn.Linear(edge_in_dim, self.hidden_dim),
-                    nn.SiLU(),
-                    nn.Linear(self.hidden_dim, 1),
+                Mlp(
+                    in_features=edge_in_dim,
+                    hidden_features=self.hidden_dim,
+                    out_features=1,
+                    act_layer=nn.SiLU,
+                    final_dropout=False,
                 )
             )
             self.update_mlps.append(
-                nn.Sequential(
-                    nn.Linear(2 * self.point_feature_dim, self.hidden_dim),
-                    nn.SiLU(),
-                    nn.Dropout(float(dropout)),
-                    nn.Linear(self.hidden_dim, self.point_feature_dim),
+                Mlp(
+                    in_features=2 * self.point_feature_dim,
+                    hidden_features=self.hidden_dim,
+                    out_features=self.point_feature_dim,
+                    act_layer=nn.SiLU,
+                    drop=float(dropout),
+                    final_dropout=False,
                 )
             )
         self.out_norm = LayerNorm(self.point_feature_dim)
@@ -422,10 +429,12 @@ class PointTransformer(nn.Module):
                 raise ValueError(
                     "gen_conditioning_dim must be provided when use_gen_conditioning=True."
                 )
-            self.gen_proj = nn.Sequential(
-                nn.Linear(int(gen_conditioning_dim), int(token_dim)),
-                nn.SiLU(),
-                nn.Linear(int(token_dim), int(token_dim)),
+            self.gen_proj = Mlp(
+                in_features=int(gen_conditioning_dim),
+                hidden_features=int(token_dim),
+                out_features=int(token_dim),
+                act_layer=nn.SiLU,
+                final_dropout=False,
             )
         else:
             self.gen_proj = None
