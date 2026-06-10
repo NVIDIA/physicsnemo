@@ -35,6 +35,16 @@ from jaxtyping import Bool, Float, Int
 from physicsnemo.mesh.neighbors._adjacency import Adjacency
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
+#: Containment tolerance for the ear test, relative to each candidate ear's own
+#: area: an active vertex whose signed area against an ear edge is within this
+#: fraction of the ear's ``|2 x area|`` is treated as lying *on* that edge and
+#: blocks the clip. Without it, a vertex sitting exactly on an ear edge slips
+#: through a strict interior test, letting the ear be clipped anyway and emit
+#: overlapping triangles that over-count the polygon's unsigned area. The
+#: magnitude matches ``triangulate``'s reflex tolerance and stays comfortably
+#: above float32 round-off for well-conditioned (origin-centered) polygons.
+_IN_TRIANGLE_REL_TOL: float = 1e-6
+
 
 def reclip_nonconvex(
     points: Float[torch.Tensor, "n_points 3"],
@@ -202,11 +212,38 @@ def _signed_area2(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor) -> torch.Te
 def _point_in_triangle(
     p: torch.Tensor, a: torch.Tensor, b: torch.Tensor, c: torch.Tensor
 ) -> torch.Tensor:
-    """Whether ``p`` lies strictly inside CCW triangle ``(a, b, c)``."""
+    r"""Whether ``p`` lies in the *closed* CCW triangle ``(a, b, c)``.
+
+    The test is boundary-inclusive: a point lying on an edge -- within
+    :data:`_IN_TRIANGLE_REL_TOL` of it, relative to the triangle's own area --
+    counts as contained. Ear clipping needs this. A vertex sitting exactly on a
+    candidate ear's edge must block the clip; a strict interior test (``> 0``)
+    classifies that vertex as outside, lets the ear be clipped, and produces
+    overlapping triangles whose unsigned areas over-count the polygon (see
+    :data:`_IN_TRIANGLE_REL_TOL`).
+
+    Parameters
+    ----------
+    p : torch.Tensor
+        Query point(s), shape :math:`(\dots, 2)`.
+    a, b, c : torch.Tensor
+        Triangle vertices in counter-clockwise order, each shape
+        :math:`(\dots, 2)`.
+
+    Returns
+    -------
+    torch.Tensor
+        Boolean tensor, broadcast over the leading dimensions of the inputs,
+        ``True`` where ``p`` is inside or on the boundary of ``(a, b, c)``.
+    """
+    # Tolerance relative to the triangle's own size (its ``|2 x area|``) keeps
+    # the boundary test scale-free; a point is "on" an edge when its signed area
+    # against that edge is within round-off of zero.
+    tol = _IN_TRIANGLE_REL_TOL * _signed_area2(a, b, c).abs()
     return (
-        (_signed_area2(a, b, p) > 0)
-        & (_signed_area2(b, c, p) > 0)
-        & (_signed_area2(c, a, p) > 0)
+        (_signed_area2(a, b, p) >= -tol)
+        & (_signed_area2(b, c, p) >= -tol)
+        & (_signed_area2(c, a, p) >= -tol)
     )
 
 
