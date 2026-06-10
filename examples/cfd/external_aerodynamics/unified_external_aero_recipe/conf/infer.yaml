@@ -46,17 +46,23 @@ dataset: ???
 
 # -- Split selection --------------------------------------------------------
 # Which manifest split to run inference over.  `val_split` is what
-# build_dataloaders actually reads; we alias it to `infer_split` so the
-# val loader iterates the requested holdout.  Directory-mode datasets
-# (no manifest) ignore these and iterate their own val/train dir.
+# build_dataloaders actually reads; it is set from `infer_split` so the
+# val loader iterates the requested holdout.  `train_split` must still
+# resolve (exist in the manifest and match at least one on-disk run)
+# because the shared loader assembly also builds the -- never iterated --
+# train loader; on a machine holding only the inference split, override
+# it (e.g. `train_split=test`).  Setting these keys requests manifest
+# mode, so a manifest-less (directory-mode) dataset needs
+# `train_split=null val_split=null` on the CLI.
 infer_split: test
 train_split: train
 val_split: ${infer_split}
 
 # -- Checkpoint location ----------------------------------------------------
-# The trainer writes to `${checkpoint_dir or output_dir}/${run_id}/checkpoints`,
-# with the training output_dir defaulting to "runs".  Point `checkpoint_dir`
-# at that *training* output directory (NOT this script's output_dir) and set
+# The trainer writes to `${output_dir}/${run_id}/checkpoints` (its
+# output_dir defaults to "runs"; the trainer's optional `checkpoint_dir`
+# overrides that root).  Point this script's `checkpoint_dir` at that
+# *training* output directory (NOT this script's output_dir) and set
 # `run_id` to the run you want to load.  Or set `checkpoint_path` to the
 # checkpoints directory directly to bypass the derivation.
 checkpoint_dir: runs
@@ -95,8 +101,11 @@ metrics: [l2]
 # Integrates the predicted (and reference) surface traction (-Cp*n + Cf)
 # over the vehicle into force/moment coefficients: CD/CL/CS (drag/lift/side)
 # and CMR/CMP/CMY (roll/pitch/yaw). Auto-skips when the dataset has no
-# Cp/Cf surface fields (e.g. volume runs). See src/forces.py for the math
-# and sign/orientation conventions.
+# Cp/Cf surface fields (e.g. volume runs). Magnitudes are only physical at
+# full surface resolution: a `sampling_resolution` below the mesh's cell
+# count truncates the integral (pred and true alike; infer.py warns when
+# it detects this). See src/forces.py for the math and sign/orientation
+# conventions.
 force_coefficients:
   enabled: true
   # A_ref in physical units. CD/CL/CM magnitudes are only physically

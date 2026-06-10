@@ -32,7 +32,7 @@ loss, not in diagnostic summaries.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Literal, TypeAlias
+from typing import Literal, TypeAlias, cast
 
 import torch
 import torch.distributed as dist
@@ -102,11 +102,32 @@ def resolve_metrics(cfg: DictConfig) -> list[MetricName]:
     ``metrics:`` is a recipe-level (not per-dataset) choice; both the
     trainer and the inference companion read it the same way. Falls back
     to :data:`DEFAULT_METRICS` when the key is unset.
+
+    The resolved list is validated against :data:`METRIC_FUNCTIONS` here so
+    a typo (e.g. ``rmse``) fails fast with a clear message rather than
+    surfacing later as a :class:`MetricCalculator` lookup error (which
+    still guards as a backstop).
+
+    Raises:
+        TypeError: If ``metrics:`` is set but is not a list.
+        ValueError: If any entry is not a known metric name.
     """
     metrics_cfg = OmegaConf.select(cfg, "metrics", default=None)
     if metrics_cfg is None:
         return list(DEFAULT_METRICS)
-    return OmegaConf.to_container(metrics_cfg, resolve=True)
+    resolved = OmegaConf.to_container(metrics_cfg, resolve=True)
+    if not isinstance(resolved, list):
+        raise TypeError(
+            f"`metrics:` must be a list of metric names, got "
+            f"{type(resolved).__name__} ({resolved!r})."
+        )
+    unknown = [m for m in resolved if m not in METRIC_FUNCTIONS]
+    if unknown:
+        raise ValueError(
+            f"Unknown metric(s) {unknown!r} in `metrics:`; "
+            f"available: {list(METRIC_FUNCTIONS)!r}."
+        )
+    return cast("list[MetricName]", resolved)
 
 
 ### ---------------------------------------------------------------------------
@@ -174,6 +195,29 @@ class MetricCalculator:
         """
         key = "_".join(parts)
         return f"{self.prefix}/{key}" if self.prefix else key
+
+    def expected_keys(self) -> list[str]:
+        """The exact key set :meth:`__call__` produces, derivable without data.
+
+        Vector fields contribute one key per spatial component plus the
+        aggregate-magnitude key; scalars contribute one key per metric.
+        Lets callers pre-size accumulators identically on every rank --
+        e.g. ``infer.py`` zero-fills its running sums with these keys so
+        the cross-rank all-reduce packs the same tensor length even on a
+        rank whose sampler shard was empty.
+        """
+        keys: list[str] = []
+        for name, field_type in self.target_config.items():
+            if field_type == "vector":
+                for i in range(self.n_spatial_dims):
+                    comp = (
+                        VECTOR_COMPONENTS[i] if i < len(VECTOR_COMPONENTS) else str(i)
+                    )
+                    keys.extend(
+                        self._make_key(name, comp, m) for m in self.metric_names
+                    )
+            keys.extend(self._make_key(name, m) for m in self.metric_names)
+        return keys
 
     def _metrics_for_tensor(
         self, pred: torch.Tensor, target: torch.Tensor, name_parts: tuple[str, ...]

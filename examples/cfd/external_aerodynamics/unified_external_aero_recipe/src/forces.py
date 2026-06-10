@@ -66,6 +66,16 @@ Conventions and assumptions:
   L_ref`` to integrate on a physical-scale surface; areas and moment
   arms are translation-invariant, so the lost ``CenterMesh`` offset does
   not affect forces (and only shifts the moment reference for moments).
+- **Full surface resolution.** The quadrature covers exactly the cells
+  present on the ``vehicle`` mesh. If the pipeline subsampled the
+  surface (``sampling_resolution`` below the mesh's cell count), the
+  integral covers only the kept cells and every coefficient shrinks by
+  roughly the kept-to-total area fraction -- for predicted and reference
+  values alike, so the *comparison* stays meaningful but the magnitudes
+  do not. ``ForceContext.coefficients``'s 1:1 points/cells contract
+  check cannot detect this (a subsampled surface still satisfies it);
+  ``infer.py`` warns when a vehicle's cell count sits at the
+  ``sampling_resolution`` cap.
 """
 
 from dataclasses import dataclass
@@ -74,7 +84,7 @@ from typing import Any
 import torch
 from jaxtyping import Float
 from nondim import NondimFieldType
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 from tensordict import TensorDict
 
 from physicsnemo.mesh import DomainMesh, Mesh
@@ -144,7 +154,8 @@ def force_moment_coefficients(
             body. Its cells define the quadrature; ``cell_normals`` and
             ``cell_areas`` are taken from this mesh.
         pressure_coeff: Per-cell pressure coefficient :math:`C_p`, shape
-            ``(n_cells,)``. Must align 1:1 with ``vehicle`` cells.
+            ``(n_cells,)`` (a trailing singleton dim, e.g. ``(n_cells, 1)``,
+            is flattened internally). Must align 1:1 with ``vehicle`` cells.
         shear_coeff: Per-cell skin-friction coefficient vector
             :math:`C_f`, shape ``(n_cells, 3)``.
         flow_direction: Freestream velocity for the sample, shape ``(3,)``
@@ -256,22 +267,21 @@ class ForceContext:
             return None
         pressure_field, shear_field = fields
         ref_len = force_cfg.get("reference_length", None)
+        ### `list()` resolves a ListConfig (iteration resolves any
+        ### interpolations) and passes a plain-list default through
+        ### unchanged, so absent keys genuinely fall back to the defaults.
         return cls(
             pressure_field=pressure_field,
             shear_field=shear_field,
             reference_area=float(force_cfg.get("reference_area", 1.0)),
             reference_length=float(ref_len) if ref_len is not None else None,
             moment_center=torch.tensor(
-                OmegaConf.to_container(
-                    force_cfg.get("moment_center", [0.0, 0.0, 0.0]), resolve=True
-                ),
+                list(force_cfg.get("moment_center", [0.0, 0.0, 0.0])),
                 dtype=torch.float32,
                 device=device,
             ),
             up_direction=torch.tensor(
-                OmegaConf.to_container(
-                    force_cfg.get("up_direction", [0.0, 0.0, 1.0]), resolve=True
-                ),
+                list(force_cfg.get("up_direction", [0.0, 0.0, 1.0])),
                 dtype=torch.float32,
                 device=device,
             ),
@@ -303,16 +313,9 @@ class ForceContext:
         if domain.interior.points.shape[0] != vehicle.n_cells:
             return None
 
-        pred_coeff = (
-            normalizer.inverse_td(pred_pts.float())
-            if normalizer is not None
-            else pred_pts.float()
-        )
-        true_coeff = (
-            normalizer.inverse_td(true_pts.float())
-            if normalizer is not None
-            else true_pts.float()
-        )
+        unnorm = normalizer.inverse_td if normalizer is not None else (lambda td: td)
+        pred_coeff = unnorm(pred_pts.float())
+        true_coeff = unnorm(true_pts.float())
 
         gd = domain.global_data
         length_scale = float(gd["L_ref"].item()) if "L_ref" in gd else 1.0
@@ -329,13 +332,13 @@ class ForceContext:
         )
         pred = force_moment_coefficients(
             vehicle,
-            pred_coeff[self.pressure_field].reshape(-1),
+            pred_coeff[self.pressure_field],
             pred_coeff[self.shear_field],
             **common,
         )
         true = force_moment_coefficients(
             vehicle,
-            true_coeff[self.pressure_field].reshape(-1),
+            true_coeff[self.pressure_field],
             true_coeff[self.shear_field],
             **common,
         )

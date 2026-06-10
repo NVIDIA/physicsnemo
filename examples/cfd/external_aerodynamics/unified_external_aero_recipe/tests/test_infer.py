@@ -14,30 +14,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for `src/infer.py` helpers and the shared utils/metrics helpers.
+"""Unit tests for `src/infer.py`'s pure helpers.
 
 `infer.py` is tensorboard-free (it imports nothing from `train.py`), so it
 imports directly with no skip guard. These pin the pure helpers -- field-type
 resolution, re-dimensionalization, point-wise squeezing, sample-id derivation,
-checkpoint-path resolution, and the DomainMesh write/round-trip -- none of
-which need a model, checkpoint, or on-disk dataset.
+checkpoint-path resolution, aggregation, and the DomainMesh write/round-trip
+-- none of which need a model, checkpoint, or on-disk dataset.
 """
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
 import infer
-import pytest
 import torch
 from conftest import make_surface_domain_mesh, make_volume_domain_mesh
-from metrics import DEFAULT_METRICS, resolve_metrics
 from nondim import NonDimensionalizeByMetadata, freestream_scales
 from omegaconf import OmegaConf
 from tensordict import TensorDict
-from utils import make_jsonl_logger, resolve_dict
 
 from physicsnemo.mesh import DomainMesh
 
@@ -67,6 +63,17 @@ def test_build_redim_field_types_volume():
         "pressure": "pressure",
         "nut": "identity",
     }
+
+
+def test_build_redim_field_types_no_nondim_is_empty():
+    """No NonDimensionalizeByMetadata transform (or no pipeline at all) -> {}.
+
+    This is the contract that makes re-dimensionalization a no-op for
+    datasets whose fields are already physical.
+    """
+    ds_yaml = OmegaConf.create({"pipeline": {"transforms": []}})
+    assert infer.build_redim_field_types(ds_yaml) == {}
+    assert infer.build_redim_field_types(OmegaConf.create({})) == {}
 
 
 ### ---------------------------------------------------------------------------
@@ -188,26 +195,22 @@ def test_resolve_checkpoint_path_from_run_id():
     )
 
 
-def test_resolve_checkpoint_path_falls_back_to_output_dir():
-    """checkpoint_dir=None -> falls back to <output_dir>/<run_id>/checkpoints."""
-    cfg = OmegaConf.create(
-        {
-            "checkpoint_path": None,
-            "run_id": "myrun",
-            "checkpoint_dir": None,
-            "output_dir": "out",
-        }
-    )
-    assert infer.resolve_checkpoint_path(cfg) == os.path.join(
-        "out", "myrun", "checkpoints"
-    )
+### ---------------------------------------------------------------------------
+### _allreduce_sums
+### ---------------------------------------------------------------------------
 
 
-def test_resolve_checkpoint_path_requires_run_id_or_path():
-    """Neither checkpoint_path nor run_id -> ValueError."""
-    cfg = OmegaConf.create({"checkpoint_path": None, "run_id": None, "output_dir": "x"})
-    with pytest.raises(ValueError):
-        infer.resolve_checkpoint_path(cfg)
+def test_allreduce_sums_single_process_is_copy():
+    """Non-distributed: returns an equal-but-distinct dict and unchanged count.
+
+    This is the branch every single-GPU inference run takes for both the
+    metric totals and the ForceAccumulator totals.
+    """
+    totals = {"b": 2.0, "a": 1.0}
+    out, n = infer._allreduce_sums(totals, 3, "cpu")
+    assert out == totals
+    assert out is not totals
+    assert n == 3
 
 
 ### ---------------------------------------------------------------------------
@@ -255,34 +258,3 @@ def test_attach_and_save_rescale_geometry_scales_points(tmp_path):
 
     reloaded = DomainMesh.load(str(out_path))
     assert torch.allclose(reloaded.interior.points, orig_points * l_ref, atol=1e-4)
-
-
-### ---------------------------------------------------------------------------
-### Shared utils / metrics helpers
-### ---------------------------------------------------------------------------
-
-
-def test_make_jsonl_logger_writes_timestamped_line(tmp_path):
-    """Logger appends one JSON object per call, each stamped with a 'ts' field."""
-    path = tmp_path / "metrics.jsonl"
-    log = make_jsonl_logger(path)
-    log({"phase": "summary", "value": 1.5})
-    log({"phase": "sample", "step": 0})
-    lines = path.read_text().strip().splitlines()
-    assert len(lines) == 2
-    first = json.loads(lines[0])
-    assert first["phase"] == "summary" and first["value"] == 1.5 and "ts" in first
-
-
-def test_resolve_metrics_default_and_override():
-    """A configured metrics list passes through; an absent one -> DEFAULT_METRICS."""
-    assert resolve_metrics(OmegaConf.create({"metrics": ["l2"]})) == ["l2"]
-    assert resolve_metrics(OmegaConf.create({})) == list(DEFAULT_METRICS)
-
-
-def test_resolve_dict():
-    """A populated key -> a plain dict; an empty or missing key -> None."""
-    cfg = OmegaConf.create({"a": {"b": 1}, "empty": {}})
-    assert resolve_dict(cfg, "a") == {"b": 1}
-    assert resolve_dict(cfg, "empty") is None  # empty -> None
-    assert resolve_dict(cfg, "missing") is None

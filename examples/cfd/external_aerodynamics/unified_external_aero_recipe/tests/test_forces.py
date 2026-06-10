@@ -47,14 +47,12 @@ def _closed_tetrahedron() -> Mesh:
     verts = torch.tensor(
         [[1.0, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]], dtype=torch.float32
     )
-    faces = torch.tensor([[1, 2, 3], [0, 3, 2], [0, 1, 3], [0, 2, 1]])
+    faces = torch.tensor([[1, 3, 2], [0, 2, 3], [0, 3, 1], [0, 1, 2]])
     mesh = Mesh(points=verts, cells=faces)
-    ### Flip any inward-facing cell (normal . centroid < 0, mesh centered
-    ### at the origin) so every normal points outward.
-    inward = (mesh.cell_normals * mesh.cell_centroids).sum(-1) < 0
-    faces = faces.clone()
-    faces[inward] = faces[inward][:, [0, 2, 1]]
-    return Mesh(points=verts, cells=faces)
+    ### Guard the winding convention: every normal must point away from the
+    ### origin-centered body, or the pressure-force sign tests are invalid.
+    assert ((mesh.cell_normals * mesh.cell_centroids).sum(-1) > 0).all()
+    return mesh
 
 
 _COMMON = dict(
@@ -73,13 +71,15 @@ _COMMON = dict(
 
 
 def test_uniform_pressure_on_closed_surface_is_zero_force():
-    """Uniform Cp over a closed surface -> ~zero net pressure force."""
+    """Uniform Cp over a closed surface -> ~zero net pressure force and moment."""
     vehicle = _closed_tetrahedron()
     n = vehicle.n_cells
     res = forces.force_moment_coefficients(
         vehicle, torch.ones(n), torch.zeros(n, 3), **_COMMON
     )
-    for key in ("CD", "CL", "CS"):
+    ### The closed-surface identity (integral of n dA = 0) covers the
+    ### moments too, so all six coefficients vanish.
+    for key in forces.COEFFICIENT_NAMES:
         assert abs(res[key]) < 1e-4, f"{key}={res[key]} should be ~0 for a closed body"
 
 
@@ -93,6 +93,32 @@ def test_uniform_shear_gives_drag_equal_to_c_times_area():
     res = forces.force_moment_coefficients(vehicle, torch.zeros(n), cf, **_COMMON)
     assert res["CD"] == pytest.approx(c * area_total, abs=1e-3)
     assert abs(res["CL"]) < 1e-4 and abs(res["CS"]) < 1e-4
+
+
+def test_uniform_shear_moment_about_offset_center():
+    """Uniform traction + offset moment center -> analytic yaw moment.
+
+    For uniform traction ``t`` over a closed surface whose area-weighted
+    centroid is the origin, ``M = -x_ref x (t * A_total)``. With
+    ``t = [c, 0, 0]`` and ``x_ref = [0, 1, 0]`` that is ``[0, 0, c * A]``:
+    the entire moment lands on the lift axis (yaw, CMY), pinning the
+    ``cross(arm, traction)`` order, the moment-center subtraction, and the
+    CMR/CMP/CMY projections at once.
+    """
+    vehicle = _closed_tetrahedron()
+    n = vehicle.n_cells
+    area_total = float(vehicle.cell_areas.sum())
+    c = 2.0
+    cf = torch.tensor([[c, 0.0, 0.0]]).repeat(n, 1)
+    res = forces.force_moment_coefficients(
+        vehicle,
+        torch.zeros(n),
+        cf,
+        **{**_COMMON, "moment_center": torch.tensor([0.0, 1.0, 0.0])},
+    )
+    assert res["CMY"] == pytest.approx(c * area_total, abs=1e-3)
+    assert abs(res["CMR"]) < 1e-4
+    assert abs(res["CMP"]) < 1e-4
 
 
 def test_reference_area_scales_coefficients():
@@ -231,3 +257,27 @@ def test_force_accumulator_means_and_mae():
     assert cd["pred_mean"] == pytest.approx(2.0)  # (1 + 3) / 2
     assert cd["true_mean"] == pytest.approx(2.0)  # (0 + 4) / 2
     assert cd["mae"] == pytest.approx(1.0)  # (|1-0| + |3-4|) / 2
+
+
+def test_force_accumulator_keys_are_rank_invariant():
+    """A never-updated accumulator carries the same `totals` keys as an updated one.
+
+    ``infer._allreduce_sums`` folds ``totals`` into one fixed-length tensor
+    for the cross-rank all-reduce, so the key set must not depend on whether
+    a given rank's shard happened to contain a surface sample. A rank that
+    never calls ``update`` (e.g. an empty or all-volume shard) must still
+    expose every coefficient key, else the collective would mismatch and
+    hang/abort.
+    """
+    fresh = forces.ForceAccumulator()
+    updated = forces.ForceAccumulator()
+    updated.update(
+        dict.fromkeys(forces.COEFFICIENT_NAMES, 1.0),
+        dict.fromkeys(forces.COEFFICIENT_NAMES, 0.5),
+    )
+    assert fresh.totals.keys() == updated.totals.keys()
+    assert len(fresh.totals) == 3 * len(forces.COEFFICIENT_NAMES)
+    ### A fresh accumulator contributes only zeros (and count 0), so it is a
+    ### no-op in the all-reduced sums.
+    assert set(fresh.totals.values()) == {0.0}
+    assert fresh.count == 0

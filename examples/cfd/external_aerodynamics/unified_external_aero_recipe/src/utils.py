@@ -42,10 +42,8 @@ from physicsnemo.optim import CombinedOptimizer
 FieldType: TypeAlias = Literal["scalar", "vector"]
 
 ### Allowed mixed-precision modes for the autocast context. ``"float8"`` is
-### intentionally absent: TE fp8 needs every GEMM dimension (including the
-### per-sample point count and the target ``out_dim``) padded to a multiple
-### of 16, which this recipe does not do, so it is rejected at runtime in
-### `get_autocast_context` rather than silently mis-running.
+### intentionally absent; `get_autocast_context` rejects it at runtime (see
+### its error message for the padding rationale).
 Precision: TypeAlias = Literal["float32", "float16", "bfloat16"]
 
 
@@ -222,25 +220,22 @@ def get_autocast_context(precision: Precision):
 
     Args:
         precision: One of ``"float32"``, ``"float16"``, or ``"bfloat16"``.
-            ``"float32"`` (or any unrecognized value) yields a no-op
-            ``nullcontext``.
+            ``"float32"`` yields a no-op ``nullcontext``.
 
     Returns:
         An autocast context manager for the requested precision, or a
         no-op ``nullcontext`` when no casting is needed.
 
     Raises:
-        NotImplementedError: For ``"float8"``. Transformer Engine fp8
-            requires every GEMM dimension divisible by 16 -- including the
-            per-sample point count and the target ``out_dim`` (e.g. 4) --
-            which this recipe does not pad, so fp8 would error (TE models)
-            or silently no-op (non-TE models). See
-            ``examples/cfd/external_aerodynamics/transformer_models``
-            (``update_model_params_for_fp8`` / ``pad_input_for_fp8`` /
-            ``unpad_output_for_fp8``) and TE's ``Fp8Padding`` /
-            ``Fp8Unpadding`` for what real support would require.
+        NotImplementedError: For ``"float8"`` -- intentionally scoped out
+            of this recipe; the raised message carries the padding
+            rationale.
+        ValueError: For any other unrecognized value (e.g. a YAML typo
+            like ``"bf16"``), rather than silently running in fp32.
     """
-    if precision == "float16":
+    if precision == "float32":
+        return nullcontext()
+    elif precision == "float16":
         return autocast("cuda", dtype=torch.float16)
     elif precision == "bfloat16":
         return autocast("cuda", dtype=torch.bfloat16)
@@ -255,7 +250,10 @@ def get_autocast_context(precision: Precision):
             "unpad_output_for_fp8) and TE's Fp8Padding / Fp8Unpadding modules."
         )
     else:
-        return nullcontext()
+        raise ValueError(
+            f"Unknown precision {precision!r}; expected one of "
+            f"'float32', 'float16', 'bfloat16'."
+        )
 
 
 # ---------------------------------------------------------------------------

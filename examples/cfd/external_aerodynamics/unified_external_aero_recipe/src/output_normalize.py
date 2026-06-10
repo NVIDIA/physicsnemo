@@ -50,16 +50,17 @@ IOType: TypeAlias = Literal["mesh", "tensors"]
 
 
 def require_output_type(cfg: DictConfig) -> IOType:
-    """Return the model's declared ``output_type``, or raise if missing.
+    """Return the model's declared ``output_type``, or raise if missing/invalid.
 
     Both entry points (``train.py`` / ``infer.py``) require the model YAML
     to declare ``output_type`` (``"mesh"`` or ``"tensors"``) so the forward
     output can be unpacked; this is the shared validation.
     """
     output_type = cfg.get("output_type", None)
-    if output_type is None:
+    if output_type not in ("mesh", "tensors"):
         raise ValueError(
-            "Model YAML must declare `output_type` (one of 'mesh', 'tensors')."
+            f"Model YAML must declare `output_type` as one of 'mesh', "
+            f"'tensors'; got {output_type!r}."
         )
     return output_type
 

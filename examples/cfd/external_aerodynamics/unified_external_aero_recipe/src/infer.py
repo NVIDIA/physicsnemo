@@ -48,9 +48,10 @@ Output layout::
 Caveats:
 
 - Metrics are reported in training space (non-dimensional / normalized),
-  identical to the validation loop, so they line up with the numbers
-  logged during training.  Re-dimensionalization is applied only to the
-  written fields.
+  identical to the training / validation loop, so they line up with the
+  numbers logged during training.  Physical, actionable quantities come
+  from the re-dimensionalized fields written to disk and the integrated
+  force / moment coefficients (CD/CL/...), not from the metric tables.
 - ``CenterMesh``'s per-sample translation offset is not stored, so the
   written geometry is physical-*scale* (when ``rescale_geometry=true``)
   but remains centered at the origin.  Field values are unaffected.
@@ -63,19 +64,25 @@ Caveats:
   shard's predictions, and the metrics / force coefficients are
   all-reduced across ranks, so the full split is covered.  Per-sample
   JSONL rows for non-zero ranks land in ``metrics.rank<r>.jsonl``; the
-  aggregate summary is written once on rank 0.
+  aggregate summary is written once on rank 0.  When the split size is
+  not divisible by the world size, the samplers pad by replaying
+  indices, so a few samples are processed on two ranks (both write the
+  same prediction path) and the all-reduced averages count them twice.
+- When the checkpoint directory carries ``norm_stats.pt`` (persisted by
+  the trainer at save time), those training-time normalization stats are
+  used -- overriding the dataset YAML's stats on mismatch -- so the
+  normalization applied here always matches how the checkpoint was
+  trained.
 """
 
 import os
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 import hydra
 import torch
 import torch.distributed as dist
-from collate import build_collate_fn
-from datasets import build_dataloaders, load_dataset_config
+from datasets import build_dataloaders, find_normalizer, load_dataset_config
 from forces import ForceAccumulator, ForceContext
 from metrics import MetricCalculator, resolve_metrics
 from nondim import NonDimensionalizeByMetadata, NondimFieldType, freestream_scales
@@ -106,25 +113,15 @@ def resolve_checkpoint_path(cfg: DictConfig) -> str:
     """Resolve the directory `load_checkpoint` should scan.
 
     Prefers an explicit ``checkpoint_path``; otherwise reproduces the
-    trainer's ``${checkpoint_dir or output_dir}/${run_id}/checkpoints``
-    layout. Note ``checkpoint_dir`` should point at the *training* output
-    directory (default ``runs``), not this script's ``output_dir``.
-
-    Raises:
-        ValueError: If neither ``checkpoint_path`` nor ``run_id`` is set.
+    trainer's ``${checkpoint_dir}/${run_id}/checkpoints`` layout. Note
+    ``checkpoint_dir`` should point at the *training* output directory
+    (default ``runs``), not this script's ``output_dir``. ``run_id`` is
+    always required (``main()`` validates it before calling this).
     """
     explicit = OmegaConf.select(cfg, "checkpoint_path", default=None)
     if explicit:
         return str(explicit)
-    run_id = OmegaConf.select(cfg, "run_id", default=None)
-    if not run_id:
-        raise ValueError(
-            "Set either `checkpoint_path=<dir>` (a checkpoints directory) or "
-            "`run_id=<trained run>` (resolved under `checkpoint_dir`, default "
-            "'runs') so the trained weights can be located."
-        )
-    ckpt_root = OmegaConf.select(cfg, "checkpoint_dir", default=None) or cfg.output_dir
-    return os.path.join(str(ckpt_root), str(run_id), "checkpoints")
+    return os.path.join(str(cfg.checkpoint_dir), str(cfg.run_id), "checkpoints")
 
 
 ### ---------------------------------------------------------------------------
@@ -147,13 +144,15 @@ def build_redim_field_types(ds_yaml: DictConfig) -> dict[str, NondimFieldType]:
     declares no ``NonDimensionalizeByMetadata`` transform (e.g. a dataset
     whose fields are already physical), making re-dim a no-op.
     """
+    ### Select without a default so a dataset with no `pipeline.transforms`
+    ### node yields None -> [] (`OmegaConf.to_container` rejects the plain
+    ### Python list a `default=[]` would produce).
+    transforms_node = OmegaConf.select(ds_yaml, "pipeline.transforms", default=None)
     transforms = (
-        OmegaConf.to_container(
-            OmegaConf.select(ds_yaml, "pipeline.transforms", default=[]),
-            resolve=False,
-        )
-        or []
-    )
+        OmegaConf.to_container(transforms_node, resolve=False)
+        if transforms_node is not None
+        else []
+    ) or []
     nondim_fields: dict[str, str] = {}
     rename_map: dict[str, str] = {}
     for t in transforms:
@@ -204,6 +203,26 @@ def redimensionalize(
             T_inf=T_inf,
         )
     return out
+
+
+def _norm_stats_match(a: dict[str, dict], b: dict[str, dict]) -> bool:
+    """True when two ``NormalizeMeshFields.stats`` dicts agree.
+
+    Compares the field-name key sets and, per field, the ``type`` string
+    and the ``mean`` / ``std`` values (``allclose``).
+    """
+    if a.keys() != b.keys():
+        return False
+    for name in a:
+        sa, sb = a[name], b[name]
+        if sa["type"] != sb["type"]:
+            return False
+        for stat in ("mean", "std"):
+            va = torch.as_tensor(sa[stat], dtype=torch.float32)
+            vb = torch.as_tensor(sb[stat], dtype=torch.float32)
+            if va.shape != vb.shape or not torch.allclose(va, vb):
+                return False
+    return True
 
 
 ### ---------------------------------------------------------------------------
@@ -330,9 +349,9 @@ def main(cfg: DictConfig) -> None:
 
     Args:
         cfg: Hydra config composed from ``conf/infer.yaml`` (see that file
-            and this module's docstring for the knobs). Requires
-            ``model=``, ``dataset=``, and either ``run_id=`` or
-            ``checkpoint_path=`` on the CLI.
+            and this module's docstring for the knobs). Requires ``model=``,
+            ``dataset=``, and ``run_id=`` on the CLI (``checkpoint_path=``
+            optionally overrides where the weights are read from).
     """
     DistributedManager.initialize()
     dist_manager = DistributedManager()
@@ -354,20 +373,10 @@ def main(cfg: DictConfig) -> None:
             f"set `dataset=<name>` and leave `extra_datasets` empty."
         )
 
-    ### Reuse the trainer's loader assembly: this resolves the split via
-    ### `val_split` (aliased to `infer_split` in the YAML), returns the
-    ### NormalizeMeshFields normalizer, and auto-derives `cfg.out_dim`
-    ### from the dataset's `targets:` block (needed before the model
-    ### template's `out_dim: ${out_dim}` resolves). The train loader is
-    ### built and discarded -- a minor cost for full reuse.
-    _train_loader, val_loader, normalizer, dataset_info = build_dataloaders(cfg)
-    target_config: dict[str, FieldType] = dataset_info["targets"]
-    output_type = require_output_type(cfg)
-
-    logger.info(f"Config:\n{OmegaConf.to_yaml(cfg, resolve=True)}")
-    logger.info(f"Targets (from dataset YAML): {target_config}")
-
-    # -- Output dir + JSONL logging (rank 0) ------------------------------------
+    ### Fail fast on checkpoint misconfiguration before the (expensive)
+    ### dataset construction below. `run_id` is always required: it
+    ### identifies the checkpoint run and namespaces the output directory
+    ### (`checkpoint_path` only overrides where the weights are read from).
     run_id = OmegaConf.select(cfg, "run_id", default=None)
     if not run_id:
         raise ValueError(
@@ -375,41 +384,101 @@ def main(cfg: DictConfig) -> None:
             "namespaces the output directory. (Use `checkpoint_path=<dir>` to "
             "additionally override where the weights are read from.)"
         )
-    run_dir = Path(cfg.output_dir) / str(run_id)
-    pred_dir = run_dir / "predictions"
-    log_jsonl = None
-    if is_rank0:
-        pred_dir.mkdir(parents=True, exist_ok=True)
-        log_jsonl = make_jsonl_logger(run_dir / "metrics.jsonl")
-
-    # -- Model + checkpoint -----------------------------------------------------
-    model = hydra.utils.instantiate(cfg.model, _convert_="partial").to(device)
-    num_params = sum(p.numel() for p in model.parameters())
-    logger.info(f"Model: {model.__class__.__name__} ({num_params:,} params)")
-
     ckpt_path = resolve_checkpoint_path(cfg)
     if not Path(ckpt_path).exists():
         raise FileNotFoundError(
             f"Checkpoint directory {ckpt_path!r} does not exist. Check "
             f"`run_id` / `checkpoint_dir` (or set `checkpoint_path`)."
         )
+
+    ### Reuse the trainer's loader assembly: this resolves the split via
+    ### `val_split` (aliased to `infer_split` in the YAML), returns the
+    ### NormalizeMeshFields normalizer, and auto-derives `cfg.out_dim`
+    ### from the dataset's `targets:` block (needed before the model
+    ### template's `out_dim: ${out_dim}` resolves). The train loader is
+    ### built and discarded, but the train split must still resolve:
+    ### `cfg.train_split` (default 'train') has to exist in the manifest
+    ### and match at least one on-disk run even though inference never
+    ### iterates it. On a machine holding only the inference split,
+    ### override it, e.g. `train_split=test`.
+    _train_loader, val_loader, normalizer, dataset_info = build_dataloaders(cfg)
+    target_config: dict[str, FieldType] = dataset_info["targets"]
+    output_type = require_output_type(cfg)
+
+    logger.info(f"Config:\n{OmegaConf.to_yaml(cfg, resolve=True)}")
+    logger.info(f"Targets (from dataset YAML): {target_config}")
+
+    # -- Output dir + JSONL logging ----------------------------------------------
+    run_dir = Path(cfg.output_dir) / str(run_id)
+    pred_dir = run_dir / "predictions"
+    ### Every rank writes its own sampler shard's predictions, so every rank
+    ### ensures the output dirs exist (mkdir is race-safe with exist_ok=True).
+    pred_dir.mkdir(parents=True, exist_ok=True)
+    ### Rank 0 owns the aggregate ``metrics.jsonl`` (config + summary + its
+    ### own shard's per-sample rows); every other rank writes its shard's
+    ### per-sample rows to ``metrics.rank<r>.jsonl`` so distributed shards
+    ### are not silently dropped.
+    log_jsonl = make_jsonl_logger(
+        run_dir
+        / ("metrics.jsonl" if is_rank0 else f"metrics.rank{dist_manager.rank}.jsonl")
+    )
+
+    # -- Model + checkpoint -----------------------------------------------------
+    model = hydra.utils.instantiate(cfg.model, _convert_="partial").to(device)
+    num_params = sum(p.numel() for p in model.parameters())
+    logger.info(f"Model: {model.__class__.__name__} ({num_params:,} params)")
+
     loaded_epoch = load_checkpoint(path=ckpt_path, models=model, device=device)
+    ### The trainer always saves with epoch >= 1, so 0 here means nothing
+    ### was restored (`load_checkpoint` only logs in that case) -- e.g.
+    ### `checkpoint_path` pointing at the run directory instead of its
+    ### `checkpoints/` subdirectory. Without this check, inference would
+    ### proceed on randomly initialized weights.
+    if loaded_epoch == 0:
+        raise FileNotFoundError(
+            f"No checkpoint restored from {ckpt_path!r}: the directory exists "
+            f"but holds no checkpoint for this model. Check `run_id` / "
+            f"`checkpoint_dir` (or `checkpoint_path`)."
+        )
     logger.info(f"Loaded checkpoint from {ckpt_path!r} (epoch {loaded_epoch}).")
+
+    ### The trainer persists the normalizer's stats next to the weights
+    ### (norm_stats.pt) so inference applies the exact training-time
+    ### normalization even if the dataset YAML's stats are edited later.
+    ### On mismatch the persisted stats win: every live NormalizeMeshFields
+    ### is updated in place. `normalizer` comes from the train pipeline,
+    ### which the val split shares in manifest mode; a directory-mode
+    ### `val_datadir` builds its own instance, so the val pipeline's copy
+    ### is updated too. This keeps the forward normalization, the
+    ### training-space metrics, and the inverses consistent with training.
+    norm_stats_path = Path(ckpt_path) / "norm_stats.pt"
+    if normalizer is not None and norm_stats_path.exists():
+        saved_stats = torch.load(norm_stats_path, weights_only=True)
+        if not _norm_stats_match(normalizer.stats, saved_stats):
+            logger.warning(
+                f"Dataset-YAML normalization stats differ from the "
+                f"training-time stats persisted at {str(norm_stats_path)!r}; "
+                f"using the persisted stats."
+            )
+            val_normalizer = find_normalizer([val_loader.dataset])
+            for live in {
+                id(n): n for n in (normalizer, val_normalizer) if n is not None
+            }.values():
+                live.stats.clear()
+                live.stats.update(saved_stats)
 
     if cfg.get("compile", False):
         model = torch.compile(model)
     model.eval()
 
-    # -- Collate (rebuilt here so we keep the source DomainMesh in hand) --------
-    ### The trainer's collate returns only forward_kwargs + targets and
-    ### discards the DomainMesh; we re-index the dataset per sample so the
-    ### domain stays available for writing, then run the same collate on a
-    ### 1-element list to get the batched forward kwargs.
-    collate_fn = build_collate_fn(
-        input_type=cfg.input_type,
-        forward_kwargs_spec=OmegaConf.to_container(cfg.forward_kwargs, resolve=True),
-        target_config=target_config,
-    )
+    # -- Collate ----------------------------------------------------------------
+    ### Reuse the loader's own collate (same input_type / forward_kwargs /
+    ### targets contract) so inference can never drift from training/validation.
+    ### The DomainMesh is kept by indexing the dataset per sample below (which
+    ### yields the source ``(DomainMesh, metadata)`` pair), not by the collate;
+    ### we run this collate on the 1-element list to get the batched
+    ### forward kwargs.
+    collate_fn = val_loader.collate_fn
 
     # -- Re-dimensionalization setup --------------------------------------------
     ### `field_types` is computed unconditionally because the force
@@ -452,13 +521,13 @@ def main(cfg: DictConfig) -> None:
         target_config=target_config, metrics=resolve_metrics(cfg)
     )
 
-    if is_rank0 and log_jsonl is not None:
+    if is_rank0:
         log_jsonl(
             {
                 "phase": "config",
                 "model": model.__class__.__name__,
                 "dataset": cfg.dataset,
-                "infer_split": cfg.get("infer_split", cfg.get("val_split")),
+                "infer_split": cfg.infer_split,
                 "checkpoint": ckpt_path,
                 "epoch": loaded_epoch,
                 "redimensionalize": redimensionalize_on,
@@ -473,8 +542,15 @@ def main(cfg: DictConfig) -> None:
     log_every = max(1, int(cfg.get("logging", {}).get("log_every_n_steps", 10)))
     logger.info(f"Running inference over {n_samples} sample(s) -> {pred_dir}")
 
-    totals: dict[str, float] = defaultdict(float)
+    ### Zero-fill the running sums with the calculator's deterministic key
+    ### set so every rank packs the same tensor length into the final
+    ### all-reduce -- even a rank whose sampler shard is empty (possible
+    ### when world_size exceeds the split size). ForceAccumulator does the
+    ### same for the force sums.
+    totals: dict[str, float] = {k: 0.0 for k in metric_calculator.expected_keys()}
     count = 0
+    sampling_cap = cfg.get("sampling_resolution", None)
+    truncation_warned = False
     for i, idx in enumerate(sampler):
         sample = dataset[idx]
         domain, metadata = sample
@@ -508,6 +584,23 @@ def main(cfg: DictConfig) -> None:
             )
             if sample_forces is not None:
                 force_acc.update(*sample_forces)
+                ### Force magnitudes are only physical at full surface
+                ### resolution (see forces.py): a vehicle cell count
+                ### sitting exactly at the subsample cap means the surface
+                ### was almost certainly truncated by the reader.
+                if (
+                    not truncation_warned
+                    and sampling_cap is not None
+                    and domain.boundaries["vehicle"].n_cells == sampling_cap
+                ):
+                    logger.warning(
+                        f"Vehicle surface has exactly sampling_resolution="
+                        f"{sampling_cap} cells, so it was likely subsampled; "
+                        f"integrated force/moment coefficients cover only the "
+                        f"kept cells and their magnitudes are not physical. "
+                        f"Raise `sampling_resolution` for absolute CD/CL/CM."
+                    )
+                    truncation_warned = True
 
         ### Re-dimensionalize predictions + reference to physical units,
         ### then write them back onto the DomainMesh.
@@ -526,6 +619,12 @@ def main(cfg: DictConfig) -> None:
             global_data=domain.global_data,
         )
 
+        ### Every rank writes its own shard. Sample ids embed the dataset
+        ### index, so they are unique within and across ranks -- except when
+        ### drop_last=False padding replays an index on a second rank, which
+        ### then writes the same sample to the same path (see the module
+        ### docstring's torchrun caveat). attach_and_save self-creates
+        ### parent dirs.
         sample_id = _sample_id(metadata, idx)
         attach_and_save(
             domain,
@@ -536,32 +635,27 @@ def main(cfg: DictConfig) -> None:
             rescale_geometry=bool(cfg.get("rescale_geometry", False)),
         )
 
-        if i % log_every == 0 or i == n_samples - 1:
-            if is_rank0:
-                metrics_str = "  ".join(
-                    f"{k}={v:.4f}" for k, v in sample_metrics.items()
+        ### One JSONL row per sample -- the documented metrics.jsonl
+        ### contract. Console logging below is throttled by log_every.
+        record: dict[str, Any] = {
+            "phase": "sample",
+            "step": i,
+            "sample_id": sample_id,
+            "metrics": sample_metrics,
+        }
+        if sample_forces is not None:
+            record["forces"] = {"pred": sample_forces[0], "true": sample_forces[1]}
+        log_jsonl(record)
+
+        if is_rank0 and (i % log_every == 0 or i == n_samples - 1):
+            metrics_str = "  ".join(f"{k}={v:.4f}" for k, v in sample_metrics.items())
+            if sample_forces is not None:
+                pred_c, true_c = sample_forces
+                metrics_str += (
+                    f"  | CD(p/t)={pred_c['CD']:.4f}/{true_c['CD']:.4f}"
+                    f"  CL(p/t)={pred_c['CL']:.4f}/{true_c['CL']:.4f}"
                 )
-                if sample_forces is not None:
-                    pred_c, true_c = sample_forces
-                    metrics_str += (
-                        f"  | CD(p/t)={pred_c['CD']:.4f}/{true_c['CD']:.4f}"
-                        f"  CL(p/t)={pred_c['CL']:.4f}/{true_c['CL']:.4f}"
-                    )
-                logger.info(f"  [{i + 1}/{n_samples}] {sample_id}  {metrics_str}")
-            ### Per-rank JSONL so a non-zero rank's rows are not dropped.
-            if sample_log_jsonl is not None:
-                record: dict[str, Any] = {
-                    "phase": "sample",
-                    "step": i,
-                    "sample_id": sample_id,
-                    "metrics": sample_metrics,
-                }
-                if sample_forces is not None:
-                    record["forces"] = {
-                        "pred": sample_forces[0],
-                        "true": sample_forces[1],
-                    }
-                log_jsonl(record)
+            logger.info(f"  [{i + 1}/{n_samples}] {sample_id}  {metrics_str}")
 
     # -- Aggregate (all-reduce when distributed) --------------------------------
     totals, count = _allreduce_sums(totals, count, device)
@@ -576,9 +670,18 @@ def main(cfg: DictConfig) -> None:
             headers=["Metric", "Value"],
             tablefmt="pretty",
         )
-        logger.info(f"\nInference metrics over {count} samples:\n{table}\n")
-        if log_jsonl is not None:
-            log_jsonl({"phase": "summary", "num_samples": count, "metrics": averages})
+        logger.info(
+            f"\nInference metrics (training space / normalized) over "
+            f"{count} samples:\n{table}\n"
+        )
+        log_jsonl(
+            {
+                "phase": "summary",
+                "space": "training",
+                "num_samples": count,
+                "metrics": averages,
+            }
+        )
 
         ### Force / moment coefficient summary (surface cases only).
         if force_acc.count > 0:
@@ -592,14 +695,13 @@ def main(cfg: DictConfig) -> None:
                 f"\nForce / moment coefficients over {force_acc.count} samples:\n"
                 f"{ftable}\n"
             )
-            if log_jsonl is not None:
-                log_jsonl(
-                    {
-                        "phase": "forces_summary",
-                        "num_samples": force_acc.count,
-                        "coefficients": coeff_summary,
-                    }
-                )
+            log_jsonl(
+                {
+                    "phase": "forces_summary",
+                    "num_samples": force_acc.count,
+                    "coefficients": coeff_summary,
+                }
+            )
 
     logger.info(f"Inference complete! Predictions written to {pred_dir}")
 
