@@ -105,7 +105,8 @@ def triangulate(
         If ``manifold_dim != 2``.
     ValueError
         If any polygon has fewer than three vertices, or if ``polygons.indices``
-        references a vertex outside ``points`` (both checked off the
+        contains a negative index or one ``>= n_points`` (i.e. outside the valid
+        :math:`[0, N_\text{points})` range; both checked off the
         ``torch.compile`` path).
 
     Notes
@@ -194,9 +195,10 @@ def _triangulate_polygons(
     Raises
     ------
     ValueError
-        If any polygon has fewer than three vertices, or references an
-        out-of-range vertex index (both checked only off the ``torch.compile``
-        path, where a host sync would force a graph break).
+        If any polygon has fewer than three vertices, or references a vertex
+        index outside ``[0, n_points)`` (negative or too large; both checked
+        only off the ``torch.compile`` path, where a host sync would force a
+        graph break).
     """
     counts = polygons.counts
     # Cheap structural validation, off the torch.compile path (each check is a
@@ -206,6 +208,13 @@ def _triangulate_polygons(
             raise ValueError(
                 f"Every polygon needs >= 3 vertices to triangulate; got a "
                 f"polygon with {int(counts.min())} vertices."
+            )
+        if bool((polygons.indices < 0).any()):
+            raise ValueError(
+                f"polygons.indices must be non-negative, but the minimum is "
+                f"{int(polygons.indices.min())}. A negative index would silently "
+                f"wrap around the points array under PyTorch gather semantics and "
+                f"triangulate the wrong vertex rather than raising."
             )
         if bool((polygons.indices >= points.shape[0]).any()):
             raise ValueError(
