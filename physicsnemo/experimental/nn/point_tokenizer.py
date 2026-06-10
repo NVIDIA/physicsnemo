@@ -31,52 +31,9 @@ from collections.abc import Sequence
 import torch
 import torch.nn as nn
 
+from physicsnemo.nn.functional import farthest_point_sampling
+
 from .point_utils import chunked_knn_indices
-
-
-def _farthest_point_sampling(
-    points: torch.Tensor,
-    *,
-    num_samples: int,
-    random_start: bool,
-    seed: int | None = None,
-) -> torch.Tensor:
-    n = int(points.shape[0])
-    if num_samples >= n:
-        return torch.arange(n, device=points.device, dtype=torch.long)
-    if num_samples <= 0:
-        raise ValueError("num_samples must be > 0")
-
-    selected = torch.empty((num_samples,), device=points.device, dtype=torch.long)
-    if random_start:
-        if seed is not None:
-            gen = torch.Generator(device=points.device)
-            gen.manual_seed(int(seed))
-            current = int(
-                torch.randint(
-                    0, n, (1,), generator=gen, device=points.device, dtype=torch.long
-                ).item()
-            )
-        else:
-            current = int(
-                torch.randint(
-                    0, n, (1,), device=points.device, dtype=torch.long
-                ).item()
-            )
-    else:
-        current = 0
-    selected[0] = current
-    min_dist_sq = torch.full(
-        (n,), float("inf"), device=points.device, dtype=points.dtype
-    )
-
-    for i in range(1, num_samples):
-        ref = points[current : current + 1]
-        dist_sq = torch.sum((points - ref) ** 2, dim=-1)
-        min_dist_sq = torch.minimum(min_dist_sq, dist_sq)
-        current = int(torch.argmax(min_dist_sq).item())
-        selected[i] = current
-    return selected
 
 
 def _normalize_voxel_size(
@@ -318,9 +275,11 @@ class PointCloudTokenizer(nn.Module):
             return torch.randperm(n_points, device=point_positions.device)[
                 :max_tokens
             ]
-        return _farthest_point_sampling(
+        if max_tokens >= n_points:
+            return torch.arange(n_points, device=point_positions.device)
+        return farthest_point_sampling(
             point_positions,
-            num_samples=max_tokens,
+            max_tokens,
             random_start=bool(self.training or not self.deterministic_eval),
         )
 
@@ -348,9 +307,9 @@ class PointCloudTokenizer(nn.Module):
         )
         if int(candidate_positions.shape[0]) <= max_tokens:
             return candidate_positions
-        idx = _farthest_point_sampling(
+        idx = farthest_point_sampling(
             candidate_positions,
-            num_samples=max_tokens,
+            max_tokens,
             random_start=bool(self.training or not self.deterministic_eval),
         )
         return candidate_positions[idx]

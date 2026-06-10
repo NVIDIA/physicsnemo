@@ -36,7 +36,6 @@ import torch
 from physicsnemo.nn.functional.neighbors.knn import knn
 
 from physicsnemo.experimental.nn import PointCloudTokenizer
-from physicsnemo.experimental.nn.point_tokenizer import _farthest_point_sampling
 
 
 def _concat_target_points(sample: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
@@ -117,6 +116,43 @@ def _concat_context_points(
     return positions, features
 
 
+def _seeded_farthest_point_sampling(
+    points: torch.Tensor, num_samples: int, *, seed: int
+) -> torch.Tensor:
+    """Deterministic greedy farthest-point sampling with a seeded random start.
+
+    Offline anchor generation must be reproducible from a seed. The runtime
+    tokenizer uses ``physicsnemo.nn.functional.farthest_point_sampling``, but
+    that primitive does not expose a seed for its random start, so this small
+    seeded variant is kept here for the (non-performance-critical) k-means
+    initialization and empty-cluster refill.
+    """
+    n = int(points.shape[0])
+    if num_samples >= n:
+        return torch.arange(n, device=points.device, dtype=torch.long)
+    if num_samples <= 0:
+        raise ValueError("num_samples must be > 0")
+    gen = torch.Generator(device=points.device)
+    gen.manual_seed(int(seed))
+    selected = torch.empty((num_samples,), device=points.device, dtype=torch.long)
+    current = int(
+        torch.randint(
+            0, n, (1,), generator=gen, device=points.device, dtype=torch.long
+        ).item()
+    )
+    selected[0] = current
+    min_dist_sq = torch.full(
+        (n,), float("inf"), device=points.device, dtype=points.dtype
+    )
+    for i in range(1, num_samples):
+        ref = points[current : current + 1]
+        dist_sq = torch.sum((points - ref) ** 2, dim=-1)
+        min_dist_sq = torch.minimum(min_dist_sq, dist_sq)
+        current = int(torch.argmax(min_dist_sq).item())
+        selected[i] = current
+    return selected
+
+
 def _assign_points(points: torch.Tensor, centers: torch.Tensor) -> torch.Tensor:
     """Assign each point to its nearest center (k=1 kNN)."""
     idx, _ = knn(points=centers, queries=points, k=1)
@@ -133,8 +169,8 @@ def _run_chunked_kmeans(
 ) -> torch.Tensor:
     if int(points.shape[0]) <= int(num_clusters):
         return points.clone()
-    center_idx = _farthest_point_sampling(
-        points, num_samples=int(num_clusters), random_start=True, seed=seed
+    center_idx = _seeded_farthest_point_sampling(
+        points, int(num_clusters), seed=seed
     )
     centers = points[center_idx].clone()
     for _ in range(max(1, int(num_iters))):
@@ -154,10 +190,9 @@ def _run_chunked_kmeans(
         valid = counts.squeeze(-1) > 0
         new_centers[valid] = new_centers[valid] / counts[valid].clamp_min(1.0)
         if (~valid).any():
-            refill_idx = _farthest_point_sampling(
+            refill_idx = _seeded_farthest_point_sampling(
                 points,
-                num_samples=int((~valid).sum().item()),
-                random_start=True,
+                int((~valid).sum().item()),
                 seed=seed + 17,
             )
             new_centers[~valid] = points[refill_idx]
