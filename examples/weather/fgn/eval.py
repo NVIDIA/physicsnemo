@@ -1,6 +1,18 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Standalone evaluation for FGN — paper §4 (arXiv:2506.10772v1).
 
@@ -160,7 +172,7 @@ def _ar_rollout_steps(
                 ).float()
             members.append(pred)
         preds_k = torch.stack(members, dim=1)  # (B, M, C, H, W) on GPU
-        yield preds_k                            # caller processes; history update waits
+        yield preds_k  # caller processes; history update waits
         # Update history for the next step after the caller is done with preds_k
         if k < num_steps - 1:
             next_frame = preds_k
@@ -254,11 +266,11 @@ def run_eval(cfg: DictConfig) -> None:
     members_per_model = [base_m + (1 if i < rem_m else 0) for i in range(n_models)]
 
     # --- Accumulators ---
-    crps_acc    = np.zeros((K, C), dtype=np.float64)
-    rmse_acc    = np.zeros((K, C), dtype=np.float64)
-    spread_acc  = np.zeros((K, C), dtype=np.float64)
-    rank_acc    = np.zeros((M + 1, C), dtype=np.float64)
-    energy_acc  = np.zeros(K, dtype=np.float64)
+    crps_acc = np.zeros((K, C), dtype=np.float64)
+    rmse_acc = np.zeros((K, C), dtype=np.float64)
+    spread_acc = np.zeros((K, C), dtype=np.float64)
+    rank_acc = np.zeros((M + 1, C), dtype=np.float64)
+    energy_acc = np.zeros(K, dtype=np.float64)
     # Spectra / pooled initialised on first batch (size depends on H, W, nbins)
     power_ens_acc: np.ndarray | None = None
     power_tgt_acc: np.ndarray | None = None
@@ -273,8 +285,8 @@ def run_eval(cfg: DictConfig) -> None:
     # --- Eval loop ---
     with torch.no_grad():
         for batch_idx, batch in enumerate(val_loader):
-            history    = batch["history"].to(device, dtype=torch.float32)
-            target     = batch["target"].to(device, dtype=torch.float32)
+            history = batch["history"].to(device, dtype=torch.float32)
+            target = batch["target"].to(device, dtype=torch.float32)
             background = batch["background"].to(device, dtype=torch.float32)
             if target.ndim == 4:
                 target = target.unsqueeze(1)
@@ -292,8 +304,15 @@ def run_eval(cfg: DictConfig) -> None:
             # full (B, K, M, C, H, W) rollout (~2-3 GB vs. ~51 GB at 0.25°).
             model_iters = [
                 _ar_rollout_steps(
-                    mdl, history, background, inv_b,
-                    K, latent_dim, n_mem, device, output_only,
+                    mdl,
+                    history,
+                    background,
+                    inv_b,
+                    K,
+                    latent_dim,
+                    n_mem,
+                    device,
+                    output_only,
                 )
                 for mdl, n_mem in zip(models, members_per_model, strict=True)
                 if n_mem > 0
@@ -301,9 +320,9 @@ def run_eval(cfg: DictConfig) -> None:
 
             for k in range(K):
                 # Gather one step from each model, concatenate along member dim
-                parts   = [next(it) for it in model_iters]   # list of (B, n_mem, C, H, W)
-                preds_k = torch.cat(parts, dim=1)             # (B, M, C, H, W) on GPU
-                tgt_k   = target[:, k]                        # (B, C, H, W) on GPU
+                parts = [next(it) for it in model_iters]  # list of (B, n_mem, C, H, W)
+                preds_k = torch.cat(parts, dim=1)  # (B, M, C, H, W) on GPU
+                tgt_k = target[:, k]  # (B, C, H, W) on GPU
 
                 # --- earth2studio area-weighted per-lead metrics ---
                 crps_res, _ = crps_fn(preds_k, xc, tgt_k, yc)
@@ -312,28 +331,37 @@ def run_eval(cfg: DictConfig) -> None:
                 rmse_res, _ = rmse_fn(preds_k, xc, tgt_k, yc)
                 rmse_acc[k] += rmse_res.mean(dim=0).cpu().numpy()
 
-                ens_var  = preds_k.var(dim=1, unbiased=True)
-                w        = area_w_2d.to(ens_var.device)
+                ens_var = preds_k.var(dim=1, unbiased=True)
+                w = area_w_2d.to(ens_var.device)
                 spread_kc = (ens_var * w).sum(dim=(-2, -1)) / w.sum()
                 spread_acc[k] += spread_kc.sqrt().mean(dim=0).cpu().numpy()
 
                 rh_res, _ = rh_fn(preds_k, xc, tgt_k, yc)
-                rank_acc  += rh_res[1].sum(dim=-2).cpu().numpy()
+                rank_acc += rh_res[1].sum(dim=-2).cpu().numpy()
 
                 # --- full-rollout metrics, called with K=1 via unsqueeze ---
-                pk1  = preds_k.unsqueeze(1)   # (B, 1, M, C, H, W)
-                tk1  = tgt_k.unsqueeze(1)     # (B, 1, C, H, W)
+                pk1 = preds_k.unsqueeze(1)  # (B, 1, M, C, H, W)
+                tk1 = tgt_k.unsqueeze(1)  # (B, 1, C, H, W)
 
                 energy_acc[k] += float(energy_score_per_lead(pk1, tk1)[0])
 
                 p_avg = pooled_crps_per_lead(pk1, tk1, pool_sizes, "avg")  # (P, 1, C)
                 p_max = pooled_crps_per_lead(pk1, tk1, pool_sizes, "max")
-                pooled_avg_acc[:, k] += p_avg[:, 0].cpu().numpy() if isinstance(p_avg, torch.Tensor) else p_avg[:, 0]
-                pooled_max_acc[:, k] += p_max[:, 0].cpu().numpy() if isinstance(p_max, torch.Tensor) else p_max[:, 0]
+                pooled_avg_acc[:, k] += (
+                    p_avg[:, 0].cpu().numpy()
+                    if isinstance(p_avg, torch.Tensor)
+                    else p_avg[:, 0]
+                )
+                pooled_max_acc[:, k] += (
+                    p_max[:, 0].cpu().numpy()
+                    if isinstance(p_max, torch.Tensor)
+                    else p_max[:, 0]
+                )
 
-                ens_mean_k = preds_k.mean(dim=1)               # (B, C, H, W)
+                ens_mean_k = preds_k.mean(dim=1)  # (B, C, H, W)
                 k_vec, ens_spec_k, tgt_spec_k = power_spectra_per_variable(
-                    ens_mean_k.unsqueeze(1), tk1               # (B, 1, C, H, W)
+                    ens_mean_k.unsqueeze(1),
+                    tk1,  # (B, 1, C, H, W)
                 )  # returns (1, C, nbins) for K=1
                 if power_ens_acc is None:
                     nbins = ens_spec_k.shape[-1]
@@ -401,7 +429,7 @@ def run_eval(cfg: DictConfig) -> None:
     for dname, vals in derived_acc.items():
         summary[f"derived_crps_{dname}"] = vals / n_batches
     rev_mean = rev_acc / n_batches
-    summary["rev_per_lead"] = rev_mean          # (K, n_thresh, n_cl, C)
+    summary["rev_per_lead"] = rev_mean  # (K, n_thresh, n_cl, C)
     summary["rev_thresholds"] = np.array(REV_THRESHOLDS)
     summary["rev_threshold_names"] = np.array(REV_THRESHOLD_NAMES, dtype=object)
     summary["rev_cl_ratios"] = REV_CL_RATIOS
@@ -411,59 +439,90 @@ def run_eval(cfg: DictConfig) -> None:
     # --- Plots ---
     # Figure 2a: CRPS scorecard heatmap (rows=variables, cols=lead times)
     plot_crps_scorecard(
-        crps_mean, variables, lead_hours,
+        crps_mean,
+        variables,
+        lead_hours,
         str(out_dir / "crps_scorecard.png"),
         title="CRPS scorecard (normalised per variable)",
     )
     # Figure 2a equivalent for RMSE
     plot_crps_scorecard(
-        rmse_mean, variables, lead_hours,
+        rmse_mean,
+        variables,
+        lead_hours,
         str(out_dir / "rmse_scorecard.png"),
         title="Ensemble-mean RMSE scorecard (normalised per variable)",
     )
     # Figure 2a equivalent for spread-skill ratio
     plot_crps_scorecard(
-        ratio_mean, variables, lead_hours,
+        ratio_mean,
+        variables,
+        lead_hours,
         str(out_dir / "spread_skill_scorecard.png"),
         title="Spread-skill ratio scorecard (normalised per variable)",
     )
     # Figure 2b-f: spread vs RMSE line plots for 5 key variables
     plot_spread_skill_lines(
-        spread_mean, rmse_mean, variables, lead_hours,
+        spread_mean,
+        rmse_mean,
+        variables,
+        lead_hours,
         str(out_dir / "spread_skill_lines.png"),
     )
     # rank_acc shape: (M+1, C) → plot expects (C, M+1)
-    plot_rank_histograms(rank_acc.T.astype(np.int64), variables,
-                         str(out_dir / "rank_histograms.png"))
+    plot_rank_histograms(
+        rank_acc.T.astype(np.int64), variables, str(out_dir / "rank_histograms.png")
+    )
     # Energy score: single line, fine to keep
     plot_metric_vs_lead(
-        energy_mean[:, None], ["multivariate"], lead_hours, "energy score",
+        energy_mean[:, None],
+        ["multivariate"],
+        lead_hours,
+        "energy score",
         "Energy score per lead (lower is better)",
         str(out_dir / "energy_score_vs_lead.png"),
     )
     plot_power_spectra(
-        k_vec, power_ens_mean, power_tgt_mean, variables,
+        k_vec,
+        power_ens_mean,
+        power_tgt_mean,
+        variables,
         lead_hours_all=lead_hours,
         out_path=str(out_dir / "power_spectra.png"),
     )
     plot_pooled_crps(
-        pooled_avg_mean, pool_sizes, variables, lead_hours,
-        str(out_dir / "avg_pooled_crps.png"), title="Average-pooled CRPS",
+        pooled_avg_mean,
+        pool_sizes,
+        variables,
+        lead_hours,
+        str(out_dir / "avg_pooled_crps.png"),
+        title="Average-pooled CRPS",
     )
     plot_pooled_crps(
-        pooled_max_mean, pool_sizes, variables, lead_hours,
-        str(out_dir / "max_pooled_crps.png"), title="Max-pooled CRPS",
+        pooled_max_mean,
+        pool_sizes,
+        variables,
+        lead_hours,
+        str(out_dir / "max_pooled_crps.png"),
+        title="Max-pooled CRPS",
     )
     # Figure 3c: derived variable CRPS — single line per derived var, readable
     for dname, vals in derived_acc.items():
         plot_metric_vs_lead(
-            (vals / n_batches)[:, None], [dname], lead_hours, "CRPS",
+            (vals / n_batches)[:, None],
+            [dname],
+            lead_hours,
+            "CRPS",
             f"{dname} CRPS per lead (Figure 3c)",
             str(out_dir / f"derived_crps_{dname}.png"),
         )
     # Figure 2 g-h: REV curves per variable per threshold
     plot_rev_curves(
-        rev_mean, variables, REV_CL_RATIOS, REV_THRESHOLD_NAMES, lead_hours,
+        rev_mean,
+        variables,
+        REV_CL_RATIOS,
+        REV_THRESHOLD_NAMES,
+        lead_hours,
         str(out_dir / "rev_curves.png"),
     )
 

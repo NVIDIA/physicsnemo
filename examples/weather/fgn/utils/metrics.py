@@ -1,6 +1,18 @@
 # SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Validation diagnostics for FGN, drawing on Figures 2 + 3 of arXiv:2506.10772v1.
 
@@ -390,37 +402,37 @@ def rev_score(
     results: list[np.ndarray] = []
     for thresh in thresholds:
         t = float(thresh)
-        events = (target >= t).float()           # (B, C, H, W)
-        p_fore  = (ensemble >= t).float().mean(dim=1)  # (B, C, H, W) ∈ [0,1]
+        events = (target >= t).float()  # (B, C, H, W)
+        p_fore = (ensemble >= t).float().mean(dim=1)  # (B, C, H, W) ∈ [0,1]
 
         # Flatten spatial + batch axes → (N, C)
-        ev_flat = events.permute(0, 2, 3, 1).reshape(-1, C)    # (N, C)
-        pf_flat = p_fore.permute(0, 2, 3, 1).reshape(-1, C)    # (N, C)
+        ev_flat = events.permute(0, 2, 3, 1).reshape(-1, C)  # (N, C)
+        pf_flat = p_fore.permute(0, 2, 3, 1).reshape(-1, C)  # (N, C)
 
         # μ: climatological event rate per channel
         mu = ev_flat.mean(dim=0)  # (C,)
 
         # For each C/L ratio: binary decision = p_fore >= r
         # pf_flat: (N, C) → (N, 1, C); cl: (n_cl,) → (1, n_cl, 1)
-        pf_exp = pf_flat.unsqueeze(1)           # (N, 1, C)
-        cl_exp = cl.view(1, n_cl, 1)            # (1, n_cl, 1)
-        pred = (pf_exp >= cl_exp).float()        # (N, n_cl, C)
+        pf_exp = pf_flat.unsqueeze(1)  # (N, 1, C)
+        cl_exp = cl.view(1, n_cl, 1)  # (1, n_cl, 1)
+        pred = (pf_exp >= cl_exp).float()  # (N, n_cl, C)
 
-        ev_exp = ev_flat.unsqueeze(1)            # (N, 1, C)
-        hits = (pred * ev_exp).mean(dim=0)             # (n_cl, C) = P(pred & event)
-        fas  = (pred * (1.0 - ev_exp)).mean(dim=0)     # (n_cl, C) = P(pred & no-event)
+        ev_exp = ev_flat.unsqueeze(1)  # (N, 1, C)
+        hits = (pred * ev_exp).mean(dim=0)  # (n_cl, C) = P(pred & event)
+        fas = (pred * (1.0 - ev_exp)).mean(dim=0)  # (n_cl, C) = P(pred & no-event)
 
-        mu1 = mu.unsqueeze(0)                    # (1, C)
-        cl1 = cl.unsqueeze(-1)                   # (n_cl, 1)
+        mu1 = mu.unsqueeze(0)  # (1, C)
+        cl1 = cl.unsqueeze(-1)  # (n_cl, 1)
 
-        H_r = hits / mu1.clamp_min(1e-7)        # (n_cl, C) hit rate
-        F_r = fas  / (1.0 - mu1).clamp_min(1e-7)  # (n_cl, C) false-alarm rate
+        H_r = hits / mu1.clamp_min(1e-7)  # (n_cl, C) hit rate
+        F_r = fas / (1.0 - mu1).clamp_min(1e-7)  # (n_cl, C) false-alarm rate
 
-        V      = H_r * mu1 * (1 - cl1) - F_r * (1 - mu1) * cl1   # (n_cl, C)
-        V_perf = mu1 * (1 - cl1)                                    # (n_cl, C)
-        V_clim = torch.clamp(mu1 - cl1, min=0.0)                    # (n_cl, C)
+        V = H_r * mu1 * (1 - cl1) - F_r * (1 - mu1) * cl1  # (n_cl, C)
+        V_perf = mu1 * (1 - cl1)  # (n_cl, C)
+        V_clim = torch.clamp(mu1 - cl1, min=0.0)  # (n_cl, C)
 
-        rev = (V - V_clim) / (V_perf - V_clim).clamp_min(1e-7)     # (n_cl, C)
+        rev = (V - V_clim) / (V_perf - V_clim).clamp_min(1e-7)  # (n_cl, C)
         results.append(rev.detach().cpu().numpy())
 
     return np.stack(results, axis=0)  # (n_thresh, n_cl, C)
@@ -451,12 +463,12 @@ def _import_matplotlib():
 _KEY_LEVELS = ["1000", "925", "850", "700", "500", "300", "200", "100", "50"]
 _SCORECARD_GROUPS: list[tuple[str, list[str]]] = [
     ("surface", ["t2m", "msl", "u10m", "v10m", "sst"]),
-    ("z",       [f"z{p}" for p in _KEY_LEVELS]),
-    ("q",       [f"q{p}" for p in _KEY_LEVELS]),
-    ("t",       [f"t{p}" for p in _KEY_LEVELS]),
-    ("u",       [f"u{p}" for p in _KEY_LEVELS]),
-    ("v",       [f"v{p}" for p in _KEY_LEVELS]),
-    ("w",       [f"w{p}" for p in _KEY_LEVELS]),
+    ("z", [f"z{p}" for p in _KEY_LEVELS]),
+    ("q", [f"q{p}" for p in _KEY_LEVELS]),
+    ("t", [f"t{p}" for p in _KEY_LEVELS]),
+    ("u", [f"u{p}" for p in _KEY_LEVELS]),
+    ("v", [f"v{p}" for p in _KEY_LEVELS]),
+    ("w", [f"w{p}" for p in _KEY_LEVELS]),
 ]
 
 
@@ -480,7 +492,7 @@ def plot_crps_scorecard(
     var_list = list(variables)
     # Build ordered rows: (display_name, channel_index)
     rows: list[tuple[str, int]] = []
-    group_boundaries: list[int] = []       # row indices where a new group starts
+    group_boundaries: list[int] = []  # row indices where a new group starts
     group_labels: list[tuple[int, str]] = []  # (center_row, group_name)
 
     for group_name, names in _SCORECARD_GROUPS:
@@ -503,15 +515,17 @@ def plot_crps_scorecard(
         lo, hi = row.min(), row.max()
         data[ri] = (row - lo) / (hi - lo + 1e-12)
 
-    fig, ax = plt.subplots(figsize=(max(4, K * 0.6 + 2), max(4, R * 0.12 + 1.5)),
-                           constrained_layout=True)
-    im = ax.imshow(data, aspect="auto", cmap="Blues", vmin=0, vmax=1,
-                   interpolation="nearest")
+    fig, ax = plt.subplots(
+        figsize=(max(4, K * 0.6 + 2), max(4, R * 0.12 + 1.5)), constrained_layout=True
+    )
+    im = ax.imshow(
+        data, aspect="auto", cmap="Blues", vmin=0, vmax=1, interpolation="nearest"
+    )
 
     # x-axis: lead times in hours (or convert to days if ≥ 48 h)
     lh = np.asarray(lead_hours)
     if lh[-1] >= 48:
-        x_labels = [f"{h/24:.0f}d" for h in lh]
+        x_labels = [f"{h / 24:.0f}d" for h in lh]
         ax.set_xlabel("lead time (days)", fontsize=9)
     else:
         x_labels = [f"{h:.0f}h" for h in lh]
@@ -583,9 +597,15 @@ def plot_spread_skill_lines(
     if n == 1:
         axes = [axes]
     for ax, (name, ci) in zip(axes, pairs):
-        ax.plot(x_vals, rmse[:, ci],  color="C0", linewidth=1.5, label="RMSE")
-        ax.plot(x_vals, spread[:, ci], color="C0", linewidth=1.5,
-                linestyle="--", label="spread")
+        ax.plot(x_vals, rmse[:, ci], color="C0", linewidth=1.5, label="RMSE")
+        ax.plot(
+            x_vals,
+            spread[:, ci],
+            color="C0",
+            linewidth=1.5,
+            linestyle="--",
+            label="spread",
+        )
         ax.set_title(name, fontsize=10, pad=4)
         ax.set_xlabel(x_label, fontsize=8)
         ax.grid(True, alpha=0.3)
@@ -623,8 +643,11 @@ def plot_metric_vs_lead(
     ax.grid(True, alpha=0.3)
     # Legend outside axes so it never overlaps data (70+ channels)
     ax.legend(
-        fontsize=7, ncol=2, loc="upper left",
-        bbox_to_anchor=(1.01, 1), borderaxespad=0,
+        fontsize=7,
+        ncol=2,
+        loc="upper left",
+        bbox_to_anchor=(1.01, 1),
+        borderaxespad=0,
     )
     fig.tight_layout()
     fig.savefig(out_path, dpi=120, bbox_inches="tight")
@@ -645,8 +668,11 @@ def plot_rank_histograms(
     ncols = min(4, C)
     nrows = (C + ncols - 1) // ncols
     fig, axes = plt.subplots(
-        nrows, ncols, figsize=(3 * ncols, 2.5 * nrows),
-        constrained_layout=True, squeeze=False,
+        nrows,
+        ncols,
+        figsize=(3 * ncols, 2.5 * nrows),
+        constrained_layout=True,
+        squeeze=False,
     )
     for ci, name in enumerate(variables):
         ax = axes[ci // ncols][ci % ncols]
@@ -716,14 +742,29 @@ def plot_power_spectra(
     wavelength_km = n_cells * grid_km / kk
 
     fig, axes = plt.subplots(
-        nrows, ncols, figsize=(5 * ncols, 4 * nrows),
-        constrained_layout=True, squeeze=False,
+        nrows,
+        ncols,
+        figsize=(5 * ncols, 4 * nrows),
+        constrained_layout=True,
+        squeeze=False,
     )
     for ri, (li, row_label) in enumerate(zip(lead_indices, lead_labels)):
         for ci_plot, (name, ci) in enumerate(pairs):
             ax = axes[ri][ci_plot]
-            ax.loglog(wavelength_km, ens_spectra[li, ci, 1:], label="FGN",   color="C0", linewidth=1.5)
-            ax.loglog(wavelength_km, tgt_spectra[li, ci, 1:], label="truth", color="k",  linewidth=1.5)
+            ax.loglog(
+                wavelength_km,
+                ens_spectra[li, ci, 1:],
+                label="FGN",
+                color="C0",
+                linewidth=1.5,
+            )
+            ax.loglog(
+                wavelength_km,
+                tgt_spectra[li, ci, 1:],
+                label="truth",
+                color="k",
+                linewidth=1.5,
+            )
             ax.invert_xaxis()
             display_name = _SPECTRA_LABELS.get(name, name)
             if ri == 0:
@@ -735,10 +776,14 @@ def plot_power_spectra(
             ax.grid(True, which="both", alpha=0.3)
             # Limit x-ticks to avoid overlap
             ax.xaxis.set_major_locator(
-                __import__("matplotlib.ticker", fromlist=["LogLocator"]).LogLocator(numticks=5)
+                __import__("matplotlib.ticker", fromlist=["LogLocator"]).LogLocator(
+                    numticks=5
+                )
             )
             ax.xaxis.set_major_formatter(
-                __import__("matplotlib.ticker", fromlist=["LogFormatter"]).LogFormatter(minor_thresholds=(2, 0.5))
+                __import__("matplotlib.ticker", fromlist=["LogFormatter"]).LogFormatter(
+                    minor_thresholds=(2, 0.5)
+                )
             )
             ax.tick_params(axis="x", labelsize=7)
             ax.tick_params(axis="y", labelsize=7)
@@ -855,8 +900,9 @@ def plot_pooled_crps(
         figsize=(max(3, P * 0.7 + 2), max(4, R * 0.12 + 1.5)),
         constrained_layout=True,
     )
-    im = ax.imshow(data, aspect="auto", cmap="Blues", vmin=0, vmax=1,
-                   interpolation="nearest")
+    im = ax.imshow(
+        data, aspect="auto", cmap="Blues", vmin=0, vmax=1, interpolation="nearest"
+    )
 
     ax.set_xticks(range(P))
     ax.set_xticklabels(km_labels, fontsize=8)
@@ -936,8 +982,11 @@ def plot_rev_curves(
     fig_h = max(3, n_rows * 1.6 + 1.5)
     fig_w = max(4, n_cols * 2.5 + 1.0)
     fig, axes = plt.subplots(
-        n_rows, n_cols, figsize=(fig_w, fig_h),
-        squeeze=False, constrained_layout=True,
+        n_rows,
+        n_cols,
+        figsize=(fig_w, fig_h),
+        squeeze=False,
+        constrained_layout=True,
     )
 
     colors = ["steelblue", "darkorange", "forestgreen", "crimson", "purple"]
@@ -947,8 +996,13 @@ def plot_rev_curves(
         for vi, (vname, ci) in enumerate(var_indices):
             for ti, tname in enumerate(threshold_names):
                 ax = axes[row][ti]
-                ax.plot(cl, rev[ki, ti, :, ci], color=colors[vi % len(colors)],
-                        linewidth=1.5, label=vname)
+                ax.plot(
+                    cl,
+                    rev[ki, ti, :, ci],
+                    color=colors[vi % len(colors)],
+                    linewidth=1.5,
+                    label=vname,
+                )
                 ax.axhline(0, color="black", linewidth=0.6, linestyle="--", alpha=0.5)
                 ax.axhline(1, color="black", linewidth=0.6, linestyle=":", alpha=0.3)
                 ax.set_xlim(min(cl), max(cl))
