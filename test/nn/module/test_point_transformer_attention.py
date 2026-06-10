@@ -503,28 +503,32 @@ class TestAdaLNResidualMLP:
 # --------------------------------------------------------------------------- #
 # _dilated_knn (the kNN backing the blocks)
 # --------------------------------------------------------------------------- #
-def _ref_dilated_knn(query, key, k, dilation):
-    """Independent brute-force reference for the dilated k-NN."""
-    order = torch.argsort(torch.cdist(query.float(), key.float()), dim=1, stable=True)
-    k_wide = min(k * dilation, key.shape[0])
-    wide = order[:, :k_wide]
-    if dilation > 1:
-        wide = wide[:, ::dilation]
-    return wide[:, : max(1, k_wide // dilation)]
-
-
 class TestDilatedKnn:
     @pytest.mark.parametrize("dilation", [1, 2, 3])
     @pytest.mark.parametrize("k", [1, 4, 8])
-    def test_matches_reference(self, device, k, dilation):
+    def test_selected_distances_match_reference(self, device, k, dilation):
+        # _dilated_knn must select neighbors at the correct (dilation-strided)
+        # distance ranks. Validate via the *distances* of the selected
+        # neighbors, not raw indices: backends (torch / scipy / cuML) order
+        # equal- and near-equal-distance neighbors differently, so exact index
+        # equality is not a stable cross-backend invariant -- cf.
+        # ``KNN.compare_forward``, which compares distances rather than indices.
         torch.manual_seed(123)
-        # well-separated -> tie-free, so neighbor order is deterministic
         key = torch.rand(64, 3, device=device) * 100.0
         query = torch.rand(20, 3, device=device) * 100.0
         got = _dilated_knn(query_coords=query, key_coords=key, k=k, dilation=dilation)
-        torch.testing.assert_close(
-            got, _ref_dilated_knn(query, key, k, dilation).to(got.dtype)
-        )
+
+        dist = torch.cdist(query.float(), key.float())
+        sorted_dist = dist.sort(dim=1).values
+        k_wide = min(k * dilation, key.shape[0])
+        expected = sorted_dist[:, :k_wide]
+        if dilation > 1:
+            expected = expected[:, ::dilation]
+        expected = expected[:, : max(1, k_wide // dilation)]
+
+        got_dist = torch.gather(dist, 1, got).sort(dim=1).values
+        assert got_dist.shape == expected.shape
+        torch.testing.assert_close(got_dist, expected, rtol=1e-3, atol=1e-2)
 
     def test_self_includes_self(self, device):
         pts = torch.rand(30, 3, device=device) * 100.0
