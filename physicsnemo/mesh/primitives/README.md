@@ -7,16 +7,16 @@ category and dimensional configuration.
 ## Quick Start
 
 ```python
-from physicsnemo.mesh import examples
+from physicsnemo.mesh import primitives
 
 # Load a simple sphere
-mesh = examples.surfaces.sphere_icosahedral.load(radius=1.0, subdivisions=2)
+mesh = primitives.surfaces.sphere_icosahedral.load(radius=1.0, subdivisions=2)
 
 # Load the Stanford bunny
-mesh = examples.pyvista_datasets.bunny.load()
+mesh = primitives.pyvista_datasets.bunny.load()
 
 # Create a lumpy sphere with noise
-mesh = examples.procedural.lumpy_sphere.load(noise_amplitude=0.1)
+mesh = primitives.procedural.lumpy_sphere.load(noise_amplitude=0.1)
 ```
 
 ## Categories
