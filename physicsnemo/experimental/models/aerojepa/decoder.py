@@ -25,9 +25,9 @@ set, runs a trunk MLP, and produces per-query predictions via either a
 single linear head or a velocity / pressure split (with an optional
 SIREN-style pressure head and final refinement).
 
-:class:`SineLayer` and :class:`SirenHead` are the small SIREN building
-blocks used when the SIREN-style pressure head or final refinement are
-enabled.
+:class:`SirenHead` is a small SIREN composition (built from
+:class:`physicsnemo.nn.SirenLayer`) used when the SIREN-style pressure
+head or final refinement are enabled.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ import torch
 import torch.nn as nn
 
 from physicsnemo.nn.module.layer_norm import LayerNorm
+from physicsnemo.nn.module.siren_layers import SirenLayer, SirenLayerType
 
 from .layers import (
     FourierPositionalEncoding,
@@ -49,60 +50,12 @@ from .layers import (
 )
 
 
-class SineLayer(nn.Module):
-    r"""Linear layer with a SIREN-style sine activation.
-
-    Computes ``sin(omega_0 * (W x + b))`` with the SIREN initialisation
-    scheme: the first layer of a stack samples its weights uniformly
-    from ``[-1/in_dim, 1/in_dim]``; subsequent layers use
-    ``[-sqrt(6/in_dim)/omega_0, sqrt(6/in_dim)/omega_0]``.
-
-    Parameters
-    ----------
-    in_dim : int
-        Input dimension.
-    out_dim : int
-        Output dimension.
-    omega_0 : float, optional
-        Frequency multiplier inside the sine. Default 30.0.
-    is_first : bool, optional
-        Use the first-layer initialisation rule. Default ``False``.
-    """
-
-    def __init__(
-        self,
-        in_dim: int,
-        out_dim: int,
-        *,
-        omega_0: float = 30.0,
-        is_first: bool = False,
-    ):
-        super().__init__()
-        self.in_dim = int(in_dim)
-        self.omega_0 = float(omega_0)
-        self.is_first = bool(is_first)
-        self.linear = nn.Linear(int(in_dim), int(out_dim))
-        self.reset_parameters()
-
-    def reset_parameters(self) -> None:
-        with torch.no_grad():
-            if self.is_first:
-                bound = 1.0 / max(self.in_dim, 1)
-            else:
-                bound = (6.0 / max(self.in_dim, 1)) ** 0.5 / max(self.omega_0, 1e-6)
-            self.linear.weight.uniform_(-bound, bound)
-            self.linear.bias.uniform_(-bound, bound)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.sin(self.omega_0 * self.linear(x))
-
-
 class SirenHead(nn.Module):
-    r"""Small SIREN network: ``num_layers`` of :class:`SineLayer` + final ``Linear``.
+    r"""Small SIREN network composed from :class:`physicsnemo.nn.SirenLayer`.
 
-    The hidden layers use the SIREN sine activation; the final layer is
-    a plain ``nn.Linear`` initialised with the SIREN bound. Used by the
-    decoder when ``pressure_head_style='siren'`` or
+    Stacks ``num_layers`` hidden SIREN layers (one ``FIRST`` + the rest
+    ``HIDDEN``) followed by a single ``LAST`` SIREN layer producing the
+    output. Used by the decoder when ``pressure_head_style='siren'`` or
     ``final_refinement_style='siren'``.
 
     Parameters
@@ -117,8 +70,7 @@ class SirenHead(nn.Module):
     num_layers : int
         Number of sine layers (clamped to at least 1).
     omega_0 : float, optional
-        Frequency multiplier passed to every :class:`SineLayer`.
-        Default 30.0.
+        Frequency multiplier passed to every SIREN layer. Default 30.0.
     """
 
     def __init__(
@@ -133,21 +85,30 @@ class SirenHead(nn.Module):
         super().__init__()
         hidden_dim = int(hidden_dim)
         num_layers = max(1, int(num_layers))
-        layers = [
-            SineLayer(int(in_dim), hidden_dim, omega_0=float(omega_0), is_first=True)
+        layers: list[nn.Module] = [
+            SirenLayer(
+                int(in_dim),
+                hidden_dim,
+                layer_type=SirenLayerType.FIRST,
+                omega_0=float(omega_0),
+            )
         ]
         for _ in range(max(0, num_layers - 1)):
             layers.append(
-                SineLayer(
-                    hidden_dim, hidden_dim, omega_0=float(omega_0), is_first=False
+                SirenLayer(
+                    hidden_dim,
+                    hidden_dim,
+                    layer_type=SirenLayerType.HIDDEN,
+                    omega_0=float(omega_0),
                 )
             )
         self.hidden = nn.Sequential(*layers)
-        self.out = nn.Linear(hidden_dim, int(out_dim))
-        with torch.no_grad():
-            bound = (6.0 / max(hidden_dim, 1)) ** 0.5 / max(float(omega_0), 1e-6)
-            self.out.weight.uniform_(-bound, bound)
-            self.out.bias.uniform_(-bound, bound)
+        self.out = SirenLayer(
+            hidden_dim,
+            int(out_dim),
+            layer_type=SirenLayerType.LAST,
+            omega_0=float(omega_0),
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.out(self.hidden(x))

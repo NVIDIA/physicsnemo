@@ -21,7 +21,6 @@ import torch
 
 from physicsnemo.experimental.models.aerojepa.decoder import (
     QueryTokenDecoder,
-    SineLayer,
     SirenHead,
 )
 from physicsnemo.experimental.models.aerojepa.layers import TokenSet
@@ -50,12 +49,6 @@ def _build(**overrides) -> QueryTokenDecoder:
 # ---------------------------------------------------------------------------
 # SIREN helpers
 # ---------------------------------------------------------------------------
-
-
-def test_sine_layer_shape(device):
-    """``SineLayer`` forward returns ``(N, out_dim)``."""
-    layer = SineLayer(8, 16, omega_0=30.0).to(device)
-    assert layer(torch.randn(5, 8, device=device)).shape == (5, 16)
 
 
 def test_siren_head_shape(device):
