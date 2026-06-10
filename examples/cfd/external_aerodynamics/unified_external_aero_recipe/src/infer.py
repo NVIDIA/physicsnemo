@@ -338,6 +338,18 @@ def main(cfg: DictConfig) -> None:
 
     set_seed(cfg.training.get("seed", None), rank=dist_manager.rank)
 
+    ### Inference runs one dataset at a time: re-dimensionalization keys off
+    ### the single ``cfg.dataset`` (its field types + normalization stats),
+    ### so folding in ``extra_datasets`` with different conditioning would
+    ### silently de-normalize those samples with the wrong scales.
+    extra_datasets = list(OmegaConf.select(cfg, "extra_datasets", default=[]) or [])
+    if extra_datasets:
+        raise ValueError(
+            f"Inference does not support `extra_datasets` (got {extra_datasets!r}). "
+            f"Re-dimensionalization is per-dataset, so run one dataset at a time: "
+            f"set `dataset=<name>` and leave `extra_datasets` empty."
+        )
+
     ### Reuse the trainer's loader assembly: this resolves the split via
     ### `val_split` (aliased to `infer_split` in the YAML), returns the
     ### NormalizeMeshFields normalizer, and auto-derives `cfg.out_dim`

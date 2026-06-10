@@ -38,8 +38,11 @@ defaults:
 
 # -- Dataset selection ------------------------------------------------------
 # Must declare the same `targets:` contract the model was trained on.
+# Inference runs one dataset at a time: re-dimensionalization keys off this
+# single dataset's field types + normalization stats, so `extra_datasets`
+# (multi-dataset training) is intentionally unsupported here -- infer.py
+# raises if it is set.
 dataset: ???
-extra_datasets: []
 
 # -- Split selection --------------------------------------------------------
 # Which manifest split to run inference over.  `val_split` is what
