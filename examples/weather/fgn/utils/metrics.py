@@ -335,6 +335,98 @@ def energy_score_per_lead(
 
 
 # ---------------------------------------------------------------------------
+# Relative Economic Value (REV) — paper §4.1 / Figure 2 g-h
+# ---------------------------------------------------------------------------
+
+# Normalized exceedance thresholds ≈ 90th / 95th / 99th percentile of N(0,1).
+# Data is z-scored before training so these map onto the correct tails.
+REV_THRESHOLDS: list[float] = [1.28, 1.64, 2.33]
+REV_THRESHOLD_NAMES: list[str] = ["p90", "p95", "p99"]
+# 19 cost/loss ratios in (0, 1) matching Richardson (2000) convention.
+REV_CL_RATIOS: np.ndarray = np.linspace(0.05, 0.95, 19)
+
+
+def rev_score(
+    ensemble: torch.Tensor,
+    target: torch.Tensor,
+    thresholds: Sequence[float] = REV_THRESHOLDS,
+    cl_ratios: Sequence[float] = REV_CL_RATIOS,
+) -> np.ndarray:
+    """Relative Economic Value (Richardson 2000) for exceedance events.
+
+    REV quantifies the decision-making value of a probabilistic forecast
+    for binary events (variable exceeds a threshold).  REV = 0 means no
+    better than always using climatological frequency; REV = 1 is a perfect
+    forecast.  Paper §4.1 (Figure 2 g-h) reports REV for 2m-temperature
+    and 10m-wind-speed exceedance at the 99.99th percentile.
+
+    Formula (Richardson 2000):
+        REV(r) = [V(r) - V_clim(r)] / [V_perf(r) - V_clim(r)]
+    where
+        V(r)      = H·μ·(1-r) - F·(1-μ)·r
+        V_perf(r) = μ·(1-r)
+        V_clim(r) = max(0, μ - r)
+    and H = hit rate, F = false-alarm rate, μ = climatological event rate.
+
+    Thresholds are in normalised (z-scored) units so that the default
+    values [1.28, 1.64, 2.33] correspond to ≈ 90th / 95th / 99th
+    percentiles of a standard-normal variable.
+
+    Parameters
+    ----------
+    ensemble : ``(B, M, C, H, W)``
+    target   : ``(B, C, H, W)``
+    thresholds : exceedance thresholds in normalised units
+    cl_ratios  : cost/loss ratios r ∈ (0, 1)
+
+    Returns
+    -------
+    np.ndarray of shape ``(len(thresholds), len(cl_ratios), C)``
+    """
+    B, M, C, H, W = ensemble.shape
+    cl = torch.as_tensor(list(cl_ratios), dtype=torch.float32, device=ensemble.device)
+    n_cl = len(cl)
+
+    results: list[np.ndarray] = []
+    for thresh in thresholds:
+        t = float(thresh)
+        events = (target >= t).float()           # (B, C, H, W)
+        p_fore  = (ensemble >= t).float().mean(dim=1)  # (B, C, H, W) ∈ [0,1]
+
+        # Flatten spatial + batch axes → (N, C)
+        ev_flat = events.permute(0, 2, 3, 1).reshape(-1, C)    # (N, C)
+        pf_flat = p_fore.permute(0, 2, 3, 1).reshape(-1, C)    # (N, C)
+
+        # μ: climatological event rate per channel
+        mu = ev_flat.mean(dim=0)  # (C,)
+
+        # For each C/L ratio: binary decision = p_fore >= r
+        # pf_flat: (N, C) → (N, 1, C); cl: (n_cl,) → (1, n_cl, 1)
+        pf_exp = pf_flat.unsqueeze(1)           # (N, 1, C)
+        cl_exp = cl.view(1, n_cl, 1)            # (1, n_cl, 1)
+        pred = (pf_exp >= cl_exp).float()        # (N, n_cl, C)
+
+        ev_exp = ev_flat.unsqueeze(1)            # (N, 1, C)
+        hits = (pred * ev_exp).mean(dim=0)             # (n_cl, C) = P(pred & event)
+        fas  = (pred * (1.0 - ev_exp)).mean(dim=0)     # (n_cl, C) = P(pred & no-event)
+
+        mu1 = mu.unsqueeze(0)                    # (1, C)
+        cl1 = cl.unsqueeze(-1)                   # (n_cl, 1)
+
+        H_r = hits / mu1.clamp_min(1e-7)        # (n_cl, C) hit rate
+        F_r = fas  / (1.0 - mu1).clamp_min(1e-7)  # (n_cl, C) false-alarm rate
+
+        V      = H_r * mu1 * (1 - cl1) - F_r * (1 - mu1) * cl1   # (n_cl, C)
+        V_perf = mu1 * (1 - cl1)                                    # (n_cl, C)
+        V_clim = torch.clamp(mu1 - cl1, min=0.0)                    # (n_cl, C)
+
+        rev = (V - V_clim) / (V_perf - V_clim).clamp_min(1e-7)     # (n_cl, C)
+        results.append(rev.detach().cpu().numpy())
+
+    return np.stack(results, axis=0)  # (n_thresh, n_cl, C)
+
+
+# ---------------------------------------------------------------------------
 # Plotting (matplotlib-gated; skip silently if unavailable so the lightweight
 # smoke test still runs in headless CI).
 # ---------------------------------------------------------------------------
@@ -793,6 +885,84 @@ def plot_pooled_crps(
 def save_summary(metrics: dict[str, Any], out_path: str) -> None:
     """Persist a flat dict of numpy arrays + scalars as a single .npz file."""
     np.savez(out_path, **{k: np.asarray(v) for k, v in metrics.items()})
+
+
+def plot_rev_curves(
+    rev: np.ndarray,
+    variables: Sequence[str],
+    cl_ratios: Sequence[float],
+    threshold_names: Sequence[str],
+    lead_hours: Sequence[float],
+    out_path: str,
+    plot_variables: Sequence[str] = ("t2m", "u10m", "v10m", "z500", "t850"),
+    plot_lead_indices: Sequence[int] | None = None,
+) -> bool:
+    """Figure 2 g-h: REV curves (x = C/L ratio, y = REV) for key variables.
+
+    Parameters
+    ----------
+    rev : ``(K, n_thresh, n_cl, C)``
+        Per-lead REV array from eval loop.
+    variables : channel names in order.
+    cl_ratios : C/L ratios used (x axis).
+    threshold_names : e.g. ["p90", "p95", "p99"].
+    lead_hours : forecast lead times in hours.
+    out_path : output PNG path.
+    plot_variables : subset to show; unavailable names are silently skipped.
+    plot_lead_indices : which K indices to plot; defaults to [K//2 - 1, K - 1]
+        (≈ mid-range and final lead).
+    """
+    plt = _import_matplotlib()
+    if plt is None:
+        return False
+
+    K, n_thresh, n_cl, _C = rev.shape
+    var_list = list(variables)
+    cl = list(cl_ratios)
+
+    if plot_lead_indices is None:
+        plot_lead_indices = sorted({max(0, K // 2 - 1), K - 1})
+
+    # Keep only variables that are present
+    var_indices = [(v, var_list.index(v)) for v in plot_variables if v in var_list]
+    if not var_indices:
+        return False
+
+    n_vars = len(var_indices)
+    n_leads = len(plot_lead_indices)
+    n_cols = n_thresh
+    n_rows = n_vars * n_leads
+
+    fig_h = max(3, n_rows * 1.6 + 1.5)
+    fig_w = max(4, n_cols * 2.5 + 1.0)
+    fig, axes = plt.subplots(
+        n_rows, n_cols, figsize=(fig_w, fig_h),
+        squeeze=False, constrained_layout=True,
+    )
+
+    colors = ["steelblue", "darkorange", "forestgreen", "crimson", "purple"]
+    row = 0
+    for ki in plot_lead_indices:
+        lh = float(lead_hours[ki]) if ki < len(lead_hours) else (ki + 1) * 6
+        for vi, (vname, ci) in enumerate(var_indices):
+            for ti, tname in enumerate(threshold_names):
+                ax = axes[row][ti]
+                ax.plot(cl, rev[ki, ti, :, ci], color=colors[vi % len(colors)],
+                        linewidth=1.5, label=vname)
+                ax.axhline(0, color="black", linewidth=0.6, linestyle="--", alpha=0.5)
+                ax.axhline(1, color="black", linewidth=0.6, linestyle=":", alpha=0.3)
+                ax.set_xlim(min(cl), max(cl))
+                ax.set_ylim(-0.1, 1.1)
+                ax.set_xlabel("C/L ratio", fontsize=7)
+                ax.set_ylabel("REV", fontsize=7)
+                ax.set_title(f"{vname} · {tname} · +{lh:.0f}h", fontsize=8)
+                ax.tick_params(labelsize=7)
+            row += 1
+
+    fig.suptitle("Relative Economic Value (Richardson 2000)", fontsize=10)
+    fig.savefig(out_path, dpi=100)
+    plt.close(fig)
+    return True
 
 
 # ---------------------------------------------------------------------------

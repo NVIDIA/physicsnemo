@@ -52,6 +52,9 @@ from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from utils.config import EvalMainConfig
 from utils.metrics import (
+    REV_CL_RATIOS,
+    REV_THRESHOLD_NAMES,
+    REV_THRESHOLDS,
     derived_variable_crps,
     energy_score_per_lead,
     plot_crps_scorecard,
@@ -59,9 +62,11 @@ from utils.metrics import (
     plot_pooled_crps,
     plot_power_spectra,
     plot_rank_histograms,
+    plot_rev_curves,
     plot_spread_skill_lines,
     pooled_crps_per_lead,
     power_spectra_per_variable,
+    rev_score,
     save_summary,
 )
 from utils.trainer import find_latest_model_checkpoint
@@ -257,6 +262,9 @@ def run_eval(cfg: DictConfig) -> None:
     # Spectra / pooled initialised on first batch (size depends on H, W, nbins)
     power_ens_acc: np.ndarray | None = None
     power_tgt_acc: np.ndarray | None = None
+    n_thresh = len(REV_THRESHOLDS)
+    n_cl = len(REV_CL_RATIOS)
+    rev_acc = np.zeros((K, n_thresh, n_cl, C), dtype=np.float64)
     pooled_avg_acc = np.zeros((len(pool_sizes), K, C), dtype=np.float64)
     pooled_max_acc = np.zeros((len(pool_sizes), K, C), dtype=np.float64)
     derived_acc: dict[str, np.ndarray] = {}
@@ -339,6 +347,9 @@ def run_eval(cfg: DictConfig) -> None:
                         derived_acc[dname] = np.zeros(K, dtype=np.float64)
                     derived_acc[dname][k] += float(vals[0])
 
+                # REV (Richardson 2000) — paper §4.1 / Figure 2 g-h
+                rev_acc[k] += rev_score(preds_k, tgt_k, REV_THRESHOLDS, REV_CL_RATIOS)
+
                 del preds_k, parts, pk1, tk1, ens_mean_k
                 if device.type == "cuda":
                     torch.cuda.empty_cache()
@@ -389,6 +400,11 @@ def run_eval(cfg: DictConfig) -> None:
     }
     for dname, vals in derived_acc.items():
         summary[f"derived_crps_{dname}"] = vals / n_batches
+    rev_mean = rev_acc / n_batches
+    summary["rev_per_lead"] = rev_mean          # (K, n_thresh, n_cl, C)
+    summary["rev_thresholds"] = np.array(REV_THRESHOLDS)
+    summary["rev_threshold_names"] = np.array(REV_THRESHOLD_NAMES, dtype=object)
+    summary["rev_cl_ratios"] = REV_CL_RATIOS
     save_summary(summary, str(out_dir / "eval_metrics.npz"))
     log.info(f"Saved eval_metrics.npz ({n_batches} batches) → {out_dir}")
 
@@ -445,6 +461,11 @@ def run_eval(cfg: DictConfig) -> None:
             f"{dname} CRPS per lead (Figure 3c)",
             str(out_dir / f"derived_crps_{dname}.png"),
         )
+    # Figure 2 g-h: REV curves per variable per threshold
+    plot_rev_curves(
+        rev_mean, variables, REV_CL_RATIOS, REV_THRESHOLD_NAMES, lead_hours,
+        str(out_dir / "rev_curves.png"),
+    )
 
     log.info(f"Eval complete. All outputs in {out_dir}")
 
