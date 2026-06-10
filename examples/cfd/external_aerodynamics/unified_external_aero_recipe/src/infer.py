@@ -56,10 +56,14 @@ Caveats:
   but remains centered at the origin.  Field values are unaffected.
 - Inference runs at whatever ``sampling_resolution`` allows (default:
   effectively the full mesh).  Very large volume meshes may need a
-  smaller cap to fit in memory; chunked inference is left as future work.
-- v1 is intended for single-process inference.  It does not break under
-  ``torchrun`` (each rank handles its sampler shard and metrics are
-  all-reduced), but distributed writing has not been a focus.
+  smaller cap to fit in memory.  Chunked / windowed inference is
+  deliberately out of scope for this recipe -- use ``physicsnemo-cfd``
+  for that.
+- Under ``torchrun`` each rank runs its own sampler shard, writes that
+  shard's predictions, and the metrics / force coefficients are
+  all-reduced across ranks, so the full split is covered.  Per-sample
+  JSONL rows for non-zero ranks land in ``metrics.rank<r>.jsonl``; the
+  aggregate summary is written once on rank 0.
 """
 
 import os
@@ -523,26 +527,29 @@ def main(cfg: DictConfig) -> None:
         )
 
         sample_id = _sample_id(metadata, idx)
-        if is_rank0:
-            attach_and_save(
-                domain,
-                pred_phys,
-                true_phys,
-                target_config,
-                pred_dir / f"{sample_id}.pdmsh",
-                rescale_geometry=bool(cfg.get("rescale_geometry", False)),
-            )
+        attach_and_save(
+            domain,
+            pred_phys,
+            true_phys,
+            target_config,
+            pred_dir / f"{sample_id}.pdmsh",
+            rescale_geometry=bool(cfg.get("rescale_geometry", False)),
+        )
 
-        if is_rank0 and (i % log_every == 0 or i == n_samples - 1):
-            metrics_str = "  ".join(f"{k}={v:.4f}" for k, v in sample_metrics.items())
-            if sample_forces is not None:
-                pred_c, true_c = sample_forces
-                metrics_str += (
-                    f"  | CD(p/t)={pred_c['CD']:.4f}/{true_c['CD']:.4f}"
-                    f"  CL(p/t)={pred_c['CL']:.4f}/{true_c['CL']:.4f}"
+        if i % log_every == 0 or i == n_samples - 1:
+            if is_rank0:
+                metrics_str = "  ".join(
+                    f"{k}={v:.4f}" for k, v in sample_metrics.items()
                 )
-            logger.info(f"  [{i + 1}/{n_samples}] {sample_id}  {metrics_str}")
-            if log_jsonl is not None:
+                if sample_forces is not None:
+                    pred_c, true_c = sample_forces
+                    metrics_str += (
+                        f"  | CD(p/t)={pred_c['CD']:.4f}/{true_c['CD']:.4f}"
+                        f"  CL(p/t)={pred_c['CL']:.4f}/{true_c['CL']:.4f}"
+                    )
+                logger.info(f"  [{i + 1}/{n_samples}] {sample_id}  {metrics_str}")
+            ### Per-rank JSONL so a non-zero rank's rows are not dropped.
+            if sample_log_jsonl is not None:
                 record: dict[str, Any] = {
                     "phase": "sample",
                     "step": i,
