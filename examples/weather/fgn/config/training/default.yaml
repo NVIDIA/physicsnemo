@@ -26,6 +26,9 @@ ar_steps: 1
 #   to exercise the sharding code path end-to-end.
 domain_parallel_size: 1
 force_sharding: false
+# bf16 autocast (mirrors graphcast amp convention). Default true for H100;
+# set false for fp32 debugging or CPU-only smoke tests.
+amp: true
 # torch.compile the model forward for ~10-30% throughput gain (CorrDiff/GraphCast
 # pattern). Skipped automatically when ShardTensor is active. First run adds ~60s
 # warm-up. Disable for quick smoke tests or CPU-only runs.

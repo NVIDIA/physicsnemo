@@ -72,6 +72,9 @@ class TrainingConfig:
     #   single domain rank (useful to test the sharding path end-to-end).
     domain_parallel_size: int = Field(default=1, ge=1)
     force_sharding: bool = False
+    # bf16 autocast — enabled by default (H100 native). Set amp=false for
+    # fp32 debugging. Mirrors graphcast/conf/config.yaml amp convention.
+    amp: bool = True
     # torch.compile the model forward before FSDP wrapping for ~10-30%
     # throughput gain. Skipped automatically when ShardTensor is active
     # (DTensor ops cause graph breaks). Warm-up adds ~60 s on first run.

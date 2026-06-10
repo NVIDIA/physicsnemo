@@ -60,6 +60,7 @@ class Trainer:
         # record instead of sitting in a print() stdio buffer under srun.
         self.logger = RankZeroLoggingWrapper(PythonLogger("fgn"), self.dist)
         self.logger.info("Trainer.__init__ starting")
+        self.amp = bool(self.cfg.training.amp) and torch.cuda.is_available()
 
         # Structured experiment logging — W&B / MLflow via LaunchLogger.
         # Mirrors physicsnemo.utils.logging convention used across all examples.
@@ -290,36 +291,6 @@ class Trainer:
         if metadata.get("best_val_loss") is not None:
             self.best_val_loss = float(metadata["best_val_loss"])
 
-    def _step_ensemble(
-        self,
-        history: torch.Tensor,
-        background: torch.Tensor,
-        invariants: torch.Tensor | None,
-        num_samples: int,
-    ) -> torch.Tensor:
-        """Run `num_samples` forward passes of the model, one per latent draw.
-
-        Returns a tensor of shape ``(B, num_samples, C, H, W)``.
-        """
-
-        members = []
-        for _ in range(num_samples):
-            latent = torch.randn(
-                history.shape[0],
-                int(self.cfg.model.latent_dim),
-                device=self.device,
-                dtype=torch.float32,
-            )
-            members.append(
-                self.model(
-                    history=history,
-                    latent=latent,
-                    background=background,
-                    invariants=invariants,
-                )
-            )
-        return torch.stack(members, dim=1)
-
     def _loss(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         history = batch["history"].to(self.device, dtype=torch.float32)
         target = batch["target"].to(self.device, dtype=torch.float32)
@@ -370,7 +341,7 @@ class Trainer:
                     device=self.device,
                     dtype=torch.float32,
                 )
-                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
+                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.amp):
                     members.append(
                         self.model(
                             history=hist_n,
@@ -502,7 +473,7 @@ class Trainer:
                     latent = torch.randn(
                         B, latent_dim, device=self.device, dtype=torch.float32
                     )
-                    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
+                    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.amp):
                         pred = self.model(
                             history=per_member_hist[:, n],
                             latent=latent,
