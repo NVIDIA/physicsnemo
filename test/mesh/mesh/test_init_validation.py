@@ -356,3 +356,35 @@ class TestParametrized:
         assert mesh.n_cells == n_cells
         assert mesh.n_spatial_dims == n_spatial_dims
         assert mesh.n_manifold_dims == n_manifold_dims
+
+
+def test_to_float_dtype_preserves_integer_cells_and_data():
+    """Regression: Mesh.to(<float dtype>) must cast floating tensors only. The
+    integer `cells` (and integer data) must NOT be cast to a float dtype, which
+    previously raised in __post_init__ ('cells must have an int-like dtype')."""
+    mesh = Mesh(points=torch.randn(4, 3), cells=torch.tensor([[0, 1, 2], [1, 3, 2]]))
+    mesh.point_data["temp"] = torch.randn(4)  # float -> cast
+    mesh.point_data["region"] = torch.tensor([1, 2, 3, 4])  # int -> preserved
+    _ = mesh.cell_areas  # warm a float cache
+
+    m64 = mesh.to(torch.float64)
+    assert m64.points.dtype == torch.float64
+    assert m64.cells.dtype == torch.int64
+    assert m64.point_data["temp"].dtype == torch.float64
+    assert m64.point_data["region"].dtype == torch.int64
+    assert m64._cache.get(("cell", "areas")).dtype == torch.float64
+    assert torch.allclose(m64.points, mesh.points.double())
+
+    # Point cloud (empty cells) must also round-trip.
+    pc = Mesh(points=torch.randn(5, 2)).to(torch.float64)
+    assert pc.points.dtype == torch.float64 and pc.cells.dtype == torch.int64
+
+
+def test_to_same_device_preserves_values_and_int_cells():
+    """A device-only Mesh.to delegates to the tensorclass mover (it sets device
+    metadata, so it returns a new mesh) and preserves point values and integer cells."""
+    mesh = Mesh(points=torch.randn(3, 3), cells=torch.tensor([[0, 1, 2]]))
+    out = mesh.to("cpu")
+    assert out.cells.dtype == torch.int64
+    assert torch.equal(out.points, mesh.points)
+    assert torch.equal(out.cells, mesh.cells)

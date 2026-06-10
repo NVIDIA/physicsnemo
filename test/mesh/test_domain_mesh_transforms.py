@@ -717,3 +717,22 @@ class TestDomainGlobalDataTransform:
         )
         assert dm2.global_data["velocity"][0].item() == pytest.approx(0.0, abs=1e-6)
         assert dm2.global_data["velocity"][1].item() == pytest.approx(1.0, abs=1e-6)
+
+
+def test_domain_mesh_to_float_dtype_preserves_integer_cells():
+    """Regression: DomainMesh.to(<float dtype>) must cast floating tensors only;
+    the integer cells of the interior and boundary meshes must stay integer (the
+    generated tensorclass .to recursed in and cast them to float, failing
+    Mesh.__post_init__)."""
+    interior = Mesh(
+        points=torch.randn(4, 3), cells=torch.tensor([[0, 1, 2], [1, 3, 2]])
+    )
+    dm = DomainMesh(interior=interior, boundaries={"b": interior.get_boundary_mesh()})
+    dm.global_data["scale"] = torch.tensor(2.0)
+
+    dm64 = dm.to(torch.float64)
+    assert dm64.interior.points.dtype == torch.float64
+    assert dm64.interior.cells.dtype == torch.int64
+    assert dm64.boundaries["b"].points.dtype == torch.float64
+    assert dm64.boundaries["b"].cells.dtype == torch.int64
+    assert dm64.global_data["scale"].dtype == torch.float64

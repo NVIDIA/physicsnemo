@@ -1161,3 +1161,32 @@ def _domain_mesh_repr(self: DomainMesh) -> str:
 
 
 DomainMesh.__repr__ = _domain_mesh_repr  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+
+
+### Override the tensorclass ``to`` for the same reason as ``Mesh.to``: a floating/
+# complex dtype cast via the generated tensorclass ``to`` recurses into the interior/
+# boundary meshes and casts their integer ``cells`` to a float dtype, which fails
+# ``Mesh.__post_init__``. Device-only moves are delegated unchanged (cells-safe and
+# metadata-preserving); only a floating dtype cast takes the per-mesh path through the
+# (cells-safe) ``Mesh.to`` via ``apply_to_meshes``, with ``global_data`` cast too.
+def _domain_mesh_to(self, *args: Any, **kwargs: Any) -> "DomainMesh":
+    # Zero-length probe: resolves the requested dtype/device without copying data.
+    probe = self.interior.points[:0].to(*args, **kwargs)
+    cast_dtype = None
+    if probe.dtype != self.interior.points.dtype and (
+        probe.dtype.is_floating_point or probe.dtype.is_complex
+    ):
+        cast_dtype = probe.dtype
+
+    if cast_dtype is None:
+        return _tensorclass_domain_to(self, *args, **kwargs)
+
+    moved = self.apply_to_meshes(lambda mesh: mesh.to(*args, **kwargs))
+    moved.global_data = moved.global_data.to(probe.device).apply(
+        lambda t: t.to(cast_dtype) if (t.is_floating_point() or t.is_complex()) else t
+    )
+    return moved
+
+
+_tensorclass_domain_to = DomainMesh.to  # the generated tensorclass ``to``
+DomainMesh.to = _domain_mesh_to  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]

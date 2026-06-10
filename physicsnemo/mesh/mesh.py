@@ -3060,3 +3060,48 @@ def _mesh_repr(self) -> str:
 
 
 Mesh.__repr__ = _mesh_repr  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+
+
+### Override the tensorclass ``to`` so a floating/complex dtype is applied only to
+# floating tensors. The generated tensorclass ``to`` casts *every* leaf -- including
+# the integer ``cells`` -- which then fails ``__post_init__``'s int-dtype check, so
+# ``mesh.to(torch.float64)`` was broken for any mesh with cells. Device-only moves
+# (and non-float dtypes) are delegated unchanged to the generated ``to`` so device
+# metadata, ``non_blocking``, etc. behave exactly as before; only a floating/complex
+# dtype cast takes the cells-safe path. Reassigned after the class because
+# @tensorclass overrides a body-defined ``to`` (same reason as ``__repr__`` above).
+def _mesh_to(self, *args: Any, **kwargs: Any) -> "Mesh":
+    # Probe with a zero-length slice of the (always-floating) points tensor to
+    # resolve the requested dtype/device, reusing torch's own ``.to`` overload
+    # parsing without copying any data.
+    probe = self.points[:0].to(*args, **kwargs)
+    cast_dtype = None
+    if probe.dtype != self.points.dtype and (
+        probe.dtype.is_floating_point or probe.dtype.is_complex
+    ):
+        cast_dtype = probe.dtype
+
+    if cast_dtype is None:
+        # Device move and/or non-float dtype: the generated tensorclass ``to`` is
+        # correct (it never turns the integer cells into a float dtype) and preserves
+        # the device metadata shown in repr.
+        return _tensorclass_mesh_to(self, *args, **kwargs)
+
+    # Floating/complex dtype cast: move to the target device with the generated ``to``
+    # (cells-safe, sets device metadata), then cast only the floating leaves so the
+    # integer cells (and any integer data) are never cast to a float dtype.
+    moved = _tensorclass_mesh_to(self, device=probe.device)
+
+    def _cast(t: torch.Tensor) -> torch.Tensor:
+        return t.to(cast_dtype) if (t.is_floating_point() or t.is_complex()) else t
+
+    moved.points = _cast(moved.points)
+    moved.point_data = moved.point_data.apply(_cast)
+    moved.cell_data = moved.cell_data.apply(_cast)
+    moved.global_data = moved.global_data.apply(_cast)
+    moved._cache = moved._cache.apply(_cast)
+    return moved
+
+
+_tensorclass_mesh_to = Mesh.to  # the generated tensorclass ``to``
+Mesh.to = _mesh_to  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
