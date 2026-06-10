@@ -50,6 +50,7 @@ from jaxtyping import Float, Int
 from tensordict import TensorDict, tensorclass
 from torch.profiler import record_function
 
+from physicsnemo.mesh.spatial._lbvh import build_lbvh_topology
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
 from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
 
@@ -708,136 +709,36 @@ class ClusterTree:
             sorted_points = points[sorted_order]  # (n_points, D)
             sorted_areas = areas[sorted_order]  # (n_points,)
 
-        ### Pre-allocate node storage.
-        # The midpoint split guarantees each child gets at least
-        # floor(parent_size / 2) sources, so the minimum leaf occupancy
-        # is ceil(leaf_size / 2).  From that we bound the maximum number
-        # of leaves and apply the full-binary-tree identity (n_internal =
-        # n_leaves - 1) to get max_nodes.
-        min_per_leaf = max(1, (leaf_size + 1) // 2)
-        max_leaves = (n_points + min_per_leaf - 1) // min_per_leaf
-        max_nodes = max(1, 2 * max_leaves - 1)
+        ### Build the shared morton-LBVH node topology over the sorted points.
+        with record_function("cluster_tree::top_down_build"):
+            topo = build_lbvh_topology(n_points, leaf_size, device)
 
+        ### Fill leaf AABBs + total areas from the source points/areas (single
+        # combined pass over the compacted leaf segments), then propagate AABBs
+        # and areas bottom-up so each internal node summarises its subtree.
         aabb_min_buf = torch.full(
-            (max_nodes, D), float("inf"), dtype=dtype, device=device
+            (topo.max_nodes, D), float("inf"), dtype=dtype, device=device
         )
         aabb_max_buf = torch.full(
-            (max_nodes, D), float("-inf"), dtype=dtype, device=device
+            (topo.max_nodes, D), float("-inf"), dtype=dtype, device=device
         )
-        left_child = torch.full((max_nodes,), -1, dtype=torch.long, device=device)
-        right_child = torch.full((max_nodes,), -1, dtype=torch.long, device=device)
-        leaf_start_buf = torch.full((max_nodes,), -1, dtype=torch.long, device=device)
-        leaf_count_buf = torch.zeros(max_nodes, dtype=torch.long, device=device)
-        range_start_buf = torch.zeros(max_nodes, dtype=torch.long, device=device)
-        range_count_buf = torch.zeros(max_nodes, dtype=torch.long, device=device)
-        total_area_buf = torch.zeros(max_nodes, dtype=dtype, device=device)
+        total_area_buf = torch.zeros(topo.max_nodes, dtype=dtype, device=device)
+        with record_function("cluster_tree::leaf_aggregates"):
+            _fill_leaf_aggregates(
+                topo.leaf_node_ids,
+                topo.leaf_starts,
+                topo.leaf_sizes,
+                sorted_points,
+                sorted_areas,
+                aabb_min_buf,
+                aabb_max_buf,
+                total_area_buf,
+            )
 
-        # -----------------------------------------------------------
-        # Phase 1: Top-down LBVH construction (O(log N) iterations)
-        # -----------------------------------------------------------
-        with record_function("cluster_tree::top_down_build"):
-            seg_starts = torch.tensor([0], dtype=torch.long, device=device)
-            seg_ends = torch.tensor([n_points], dtype=torch.long, device=device)
-            seg_node_ids = torch.tensor([0], dtype=torch.long, device=device)
-            node_count = 1
-            actual_depth = 0
-
-            internal_nodes_per_level: list[torch.Tensor] = []
-
-            ### Defer leaf-segment processing to a single end-of-loop pass.
-            # Per-iter ``torch.where(is_leaf_seg)[0]`` was a CPU-GPU sync
-            # point on every level of every tree (~16 levels x 4 trees x
-            # 28 samples).  We instead accumulate (node_id, start, size,
-            # validity) for each segment seen during the loop and pay one
-            # boolean compaction at the end.  ``torch.where(is_internal_seg)``
-            # remains in-loop because the next iteration's active segments
-            # are derived from this iteration's internals.
-            leaf_seg_node_ids: list[torch.Tensor] = []
-            leaf_seg_starts: list[torch.Tensor] = []
-            leaf_seg_sizes: list[torch.Tensor] = []
-            leaf_seg_validity: list[torch.Tensor] = []
-
-            while len(seg_starts) > 0:
-                seg_sizes = seg_ends - seg_starts
-
-                ### Store the sorted-order range for ALL nodes at this level.
-                # Each node covers a contiguous range [seg_start, seg_end)
-                # in the morton-sorted order.  Used by dual-tree traversal
-                # to expand node-level results to individual points.
-                range_start_buf[seg_node_ids] = seg_starts
-                range_count_buf[seg_node_ids] = seg_sizes
-
-                ### Classify segments as leaf or internal
-                is_leaf_seg = seg_sizes <= leaf_size
-                is_internal_seg = ~is_leaf_seg
-
-                ### Defer leaf processing: accumulate, compact once at end.
-                leaf_seg_node_ids.append(seg_node_ids)
-                leaf_seg_starts.append(seg_starts)
-                leaf_seg_sizes.append(seg_sizes)
-                leaf_seg_validity.append(is_leaf_seg)
-
-                ### Process internal segments: split at the midpoint of the
-                # morton-sorted range.  Because morton codes preserve spatial
-                # locality, this approximates a spatial median split and produces
-                # a balanced binary tree in O(log N) iterations.
-                internal_indices = torch.where(is_internal_seg)[0]
-                if len(internal_indices) == 0:
-                    break
-
-                actual_depth += 1
-                int_starts = seg_starts[internal_indices]
-                int_ends = seg_ends[internal_indices]
-                int_sizes = seg_sizes[internal_indices]
-                int_node_ids = seg_node_ids[internal_indices]
-
-                midpoints = int_starts + int_sizes // 2
-
-                n_internal = len(internal_indices)
-                left_ids = (
-                    node_count
-                    + torch.arange(n_internal, dtype=torch.long, device=device) * 2
-                )
-                right_ids = left_ids + 1
-                node_count += 2 * n_internal
-
-                left_child[int_node_ids] = left_ids
-                right_child[int_node_ids] = right_ids
-                internal_nodes_per_level.append(int_node_ids)
-
-                seg_starts = torch.cat([int_starts, midpoints])
-                seg_ends = torch.cat([midpoints, int_ends])
-                seg_node_ids = torch.cat([left_ids, right_ids])
-
-            ### Single-pass leaf fill: one boolean compaction across all
-            ### levels, then one combined ``_fill_leaf_aggregates`` call
-            ### instead of one per level.
-            if leaf_seg_node_ids:
-                all_leaf_validity = torch.cat(leaf_seg_validity)
-                leaf_nids = torch.cat(leaf_seg_node_ids)[all_leaf_validity]
-                l_starts = torch.cat(leaf_seg_starts)[all_leaf_validity]
-                l_sizes = torch.cat(leaf_seg_sizes)[all_leaf_validity]
-
-                leaf_start_buf[leaf_nids] = l_starts
-                leaf_count_buf[leaf_nids] = l_sizes
-                _fill_leaf_aggregates(
-                    leaf_nids,
-                    l_starts,
-                    l_sizes,
-                    sorted_points,
-                    sorted_areas,
-                    aabb_min_buf,
-                    aabb_max_buf,
-                    total_area_buf,
-                )
-
-        # -----------------------------------------------------------
-        # Phase 2: Bottom-up AABB and area propagation
-        # -----------------------------------------------------------
         with record_function("cluster_tree::bottom_up_aabb"):
-            for level_node_ids in reversed(internal_nodes_per_level):
-                left = left_child[level_node_ids]
-                right = right_child[level_node_ids]
+            for level_node_ids in reversed(topo.internal_nodes_per_level):
+                left = topo.left_child[level_node_ids]
+                right = topo.right_child[level_node_ids]
                 aabb_min_buf[level_node_ids] = torch.minimum(
                     aabb_min_buf[left], aabb_min_buf[right]
                 )
@@ -849,16 +750,16 @@ class ClusterTree:
                 )
 
         ### Compute squared AABB diagonals
+        node_count = topo.node_count
         aabb_min_trimmed = aabb_min_buf[:node_count]
         aabb_max_trimmed = aabb_max_buf[:node_count]
         diameter_sq = (aabb_max_trimmed - aabb_min_trimmed).pow(2).sum(dim=-1)
 
-        leaf_count_trimmed = leaf_count_buf[:node_count]
         logger.debug(
             "ClusterTree: %d points -> %d nodes, depth %d, leaf_size=%d",
             n_points,
             node_count,
-            actual_depth,
+            topo.max_depth,
             leaf_size,
         )
 
@@ -866,16 +767,16 @@ class ClusterTree:
             node_aabb_min=aabb_min_trimmed,
             node_aabb_max=aabb_max_trimmed,
             node_diameter_sq=diameter_sq,
-            node_left_child=left_child[:node_count],
-            node_right_child=right_child[:node_count],
-            leaf_start=leaf_start_buf[:node_count],
-            leaf_count=leaf_count_trimmed,
-            node_range_start=range_start_buf[:node_count],
-            node_range_count=range_count_buf[:node_count],
+            node_left_child=topo.left_child[:node_count],
+            node_right_child=topo.right_child[:node_count],
+            leaf_start=topo.leaf_start[:node_count],
+            leaf_count=topo.leaf_count[:node_count],
+            node_range_start=topo.range_start[:node_count],
+            node_range_count=topo.range_count[:node_count],
             node_total_area=total_area_buf[:node_count],
             sorted_source_order=sorted_order,
             source_points=points,
-            max_depth=torch.tensor(actual_depth, dtype=torch.long, device=device),
+            max_depth=torch.tensor(topo.max_depth, dtype=torch.long, device=device),
             batch_size=torch.Size([]),
         )
 

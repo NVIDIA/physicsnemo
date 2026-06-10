@@ -52,6 +52,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `physicsnemo.mesh.spatial`: `BVH.from_mesh` and `ClusterTree.from_points` now
+  share a single morton-LBVH node-topology builder (`spatial/_lbvh.py`),
+  removing ~80 lines of duplicated build logic; construction output is
+  byte-identical. `BVH.from_mesh` now defaults to `leaf_size=1` (was 8),
+  matching `ClusterTree.from_points` and measured to be more performant across
+  platforms (smaller leaves yield fewer candidate cells per query). Containment /
+  nearest-cell query results are unchanged. Adds the first direct unit tests for
+  `ClusterTree` (construction invariants, aggregates, dual-tree cover).
+
 ### Deprecated
 
 ### Removed
