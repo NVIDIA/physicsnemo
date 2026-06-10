@@ -41,7 +41,7 @@ def remesh(
     mesh: "Mesh",
     n_clusters: int,
 ) -> "Mesh":
-    """Uniform remeshing via clustering (dimension-agnostic).
+    """Uniform remeshing of a 2D triangle surface (in 3D) via clustering.
 
     Creates a simplified mesh with approximately n_clusters cells uniformly
     distributed across the geometry. Uses the ACVD (Approximate Centroidal
@@ -53,8 +53,8 @@ def remesh(
     3. Minimizes energy by iteratively reassigning vertices
     4. Reconstructs a simplified mesh from cluster adjacency
 
-    This works for arbitrary manifold dimensions (1D curves, 2D surfaces,
-    3D volumes, etc.) in arbitrary embedding spaces.
+    This is restricted to 2D triangle surfaces embedded in 3D space -- the only
+    case the underlying ``pyacvd`` ACVD clustering supports.
 
     Parameters
     ----------
@@ -72,8 +72,10 @@ def remesh(
 
     Raises
     ------
-    ValueError
-        If n_clusters <= 0 or weights have wrong shape
+    NotImplementedError
+        If the mesh is not a 2D triangle surface embedded in 3D.
+    ImportError
+        If the optional ``pyacvd`` dependency is not installed.
 
     Examples
     --------
@@ -86,16 +88,34 @@ def remesh(
 
     Notes
     -----
-    - Works for 1D, 2D, 3D, and higher-dimensional manifolds
+    - Restricted to 2D triangle surfaces embedded in 3D (``pyacvd`` limitation)
     - Preserves mesh topology qualitatively but not quantitatively
     - Point and cell data are not transferred (topology changes fundamentally)
     - Output cell orientation may differ from input
     """
     from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista
+    from physicsnemo.mesh.mesh import Mesh
     from physicsnemo.mesh.repair import repair_mesh
+
+    # pyacvd ACVD clustering is a triangle-surface algorithm: it only handles a
+    # PolyData of triangles (a 2D manifold in 3D). Guard explicitly so any other
+    # mesh gets a clear error instead of a confusing downstream pyacvd failure.
+    if mesh.n_manifold_dims != 2 or mesh.n_spatial_dims != 3:
+        raise NotImplementedError(
+            "remesh only supports 2D triangle surfaces embedded in 3D "
+            "(the pyacvd ACVD clustering is surface-only). Got "
+            f"n_manifold_dims={mesh.n_manifold_dims}, "
+            f"n_spatial_dims={mesh.n_spatial_dims}."
+        )
 
     clustering = pyacvd.Clustering(to_pyvista(mesh))
     clustering.cluster(n_clusters)
-    new_mesh = from_pyvista(clustering.create_mesh())
-    new_mesh, stats = repair_mesh(new_mesh)
-    return new_mesh
+    new_mesh, _stats = repair_mesh(from_pyvista(clustering.create_mesh()))
+
+    # pyacvd/pyvista round-trip through float32 on CPU. Restore the input's device
+    # and dtype. (Mesh.to(dtype) can't be used here -- it would also cast the
+    # integer cells; remesh discards field data, so only points/cells are kept.)
+    return Mesh(
+        points=new_mesh.points.to(device=mesh.points.device, dtype=mesh.points.dtype),
+        cells=new_mesh.cells.to(device=mesh.points.device),
+    )

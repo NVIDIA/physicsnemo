@@ -52,12 +52,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `physicsnemo.mesh.remesh` now raises `NotImplementedError` for non-2D-in-3D
+  inputs (the pyacvd ACVD clustering is surface-only) instead of failing
+  confusingly downstream, and its docstring reflects that restriction.
+
 ### Deprecated
 
 ### Removed
 
 ### Fixed
 
+- `physicsnemo.mesh.remesh` now preserves the input mesh's device and floating
+  dtype (the pyacvd/pyvista round-trip previously dropped them to CPU/float32).
 - Fixed `DefaultTrainingLoop` reading `DistributedManager.device` at the class
   level (a `property` descriptor) instead of `DistributedManager().device`, which
   left the loop's device set to a `property` object under an initialized
