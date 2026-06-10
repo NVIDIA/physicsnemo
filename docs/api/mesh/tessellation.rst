@@ -5,10 +5,24 @@ Tessellation
 
 Decompose non-simplicial cells into the simplices that the
 :class:`~physicsnemo.mesh.mesh.Mesh` data structure stores. Currently this
-provides polygon-soup triangulation (:func:`triangulate`): a
-vectorized vertex-0 fan for convex polygons and `ear clipping
+provides triangulation of a *polygon soup* (:func:`triangulate`): a vectorized
+vertex-0 fan for convex polygons and `ear clipping
 <https://en.wikipedia.org/wiki/Polygon_triangulation>`_ for the rare non-convex
 ones.
+
+A *polygon soup* is a flat list of polygonal cells, each given only by its
+vertex ring, with no shared-edge connectivity between cells -- the form a
+surface mesh takes when read straight from a polygonal face list (e.g. a VTP or
+STL file). Equivalently, it is a surface mesh whose cells may be arbitrary
+polygons rather than triangles.
+
+.. note::
+
+   This is unrelated to the (now deprecated) ``Tessellation`` *geometry* class
+   in PhysicsNeMo-Sym (``physicsnemo.sym.geometry.tessellation``), which
+   represents a tessellated STL surface as a solid for sampling
+   surface/interior points and signed-distance values. The utilities here
+   instead split the polygonal cells of an existing mesh into simplices.
 
 Handling non-convex polygons correctly matters for any unsigned-area-weighted
 quantity (wall-shear / viscous force integration, or total wetted area): the
