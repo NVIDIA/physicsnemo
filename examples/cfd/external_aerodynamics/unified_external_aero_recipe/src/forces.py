@@ -68,7 +68,6 @@ Conventions and assumptions:
   not affect forces (and only shifts the moment reference for moments).
 """
 
-from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
@@ -352,7 +351,19 @@ class ForceAccumulator:
     """
 
     def __init__(self) -> None:
-        self.totals: dict[str, float] = defaultdict(float)
+        ### Pre-populate every coefficient key at zero so the key set is
+        ### identical on every rank, whether or not that rank's shard
+        ### contained a surface sample. ``infer._allreduce_sums`` folds
+        ### ``totals`` into a single fixed-length tensor for the cross-rank
+        ### all-reduce; a rank that never called ``update`` would otherwise
+        ### pack a shorter tensor and deadlock (NCCL) / abort (gloo) the
+        ### collective. ``count`` stays 0 on such a rank, so the reported
+        ### means are unaffected.
+        self.totals: dict[str, float] = {
+            f"{name}_{stat}": 0.0
+            for name in COEFFICIENT_NAMES
+            for stat in ("pred", "true", "mae")
+        }
         self.count: int = 0
 
     def update(self, pred: dict[str, float], true: dict[str, float]) -> None:
