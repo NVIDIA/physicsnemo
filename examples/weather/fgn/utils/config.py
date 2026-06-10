@@ -17,7 +17,7 @@ class DatasetConfig:
 class ModelConfig:
     model_name: Literal["fgn"] = "fgn"
     history_frames: int = Field(default=2, ge=2)
-    latent_dim: int = Field(default=16, ge=1)
+    latent_dim: int = Field(default=32, ge=1)  # paper §2.3: z ∈ N(0,1)^32
     hidden_channels: int = Field(default=32, ge=4)
     background_channels: int | Literal["auto"] = "auto"
     invariant_channels: int | Literal["auto"] = "auto"

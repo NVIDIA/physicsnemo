@@ -218,11 +218,13 @@ def run_eval(cfg: DictConfig) -> None:
     area_w_2d = area_w_1d.unsqueeze(-1).expand(H, W).contiguous()  # (H, W)
 
     # --- earth2studio stat objects (area-weighted, per-batch per-lead) ---
+    # Paper §4.1: evaluation uses biased CRPS (fair=False) because the deep
+    # ensemble violates the independence assumption of the unbiased estimator.
     crps_fn = e2s_crps(
         ensemble_dimension="ensemble",
         reduction_dimensions=["lat", "lon"],
         weights=area_w_2d,
-        fair=True,
+        fair=False,
     )
     rmse_fn = e2s_rmse(
         reduction_dimensions=["lat", "lon"],
@@ -395,7 +397,7 @@ def run_eval(cfg: DictConfig) -> None:
     plot_crps_scorecard(
         crps_mean, variables, lead_hours,
         str(out_dir / "crps_scorecard.png"),
-        title="Fair CRPS scorecard (normalised per variable)",
+        title="CRPS scorecard (normalised per variable)",
     )
     # Figure 2a equivalent for RMSE
     plot_crps_scorecard(

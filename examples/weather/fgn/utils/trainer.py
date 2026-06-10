@@ -538,7 +538,7 @@ class Trainer:
             variables,
             leads,
             "CRPS",
-            "fCRPS per lead (lower is better)",
+            "CRPS per lead (lower is better)",
             str(out_dir / "crps_vs_lead.png"),
         )
         plot_metric_vs_lead(

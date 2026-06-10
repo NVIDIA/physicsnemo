@@ -47,7 +47,7 @@ dataset:
   tp_accumulation_hours: null   # set to 6 to include tp06 (paper §3)
 
 model:
-  latent_dim: 16
+  latent_dim: 32  # paper §2.3: z ∈ N(0,1)^32
   hidden_channels: 64     # larger than smoke-test default (32); ~4× more params
 
 training:

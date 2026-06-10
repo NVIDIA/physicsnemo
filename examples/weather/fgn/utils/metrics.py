@@ -99,7 +99,10 @@ def _check_shapes(ensemble: torch.Tensor, target: torch.Tensor) -> None:
 def crps_per_variable_per_lead(
     ensemble: torch.Tensor, target: torch.Tensor
 ) -> np.ndarray:
-    """Fair CRPS averaged over batch + spatial dims, retaining (K, C).
+    """CRPS averaged over batch + spatial dims, retaining (K, C).
+
+    Uses the biased estimator (paper §4.1) — the deep-ensemble structure
+    violates the independence assumption of the fair/unbiased variant.
 
     Shapes: ensemble (B, K, M, C, H, W), target (B, K, C, H, W).
     Returns numpy array of shape (K, C).
@@ -108,7 +111,7 @@ def crps_per_variable_per_lead(
     B, K, M, C, H, W = ensemble.shape
     flat_ens = ensemble.reshape(B * K, M, C, H, W)
     flat_tgt = target.reshape(B * K, C, H, W)
-    per_loc = kcrps(flat_ens, flat_tgt, dim=1, biased=False)  # (B*K, C, H, W)
+    per_loc = kcrps(flat_ens, flat_tgt, dim=1, biased=True)  # (B*K, C, H, W)
     per_loc = per_loc.reshape(B, K, C, H, W)
     return per_loc.mean(dim=(0, -2, -1)).detach().cpu().numpy()
 
