@@ -466,6 +466,13 @@ class Mesh:
         Mesh
             A triangle mesh (``cells`` of shape :math:`(N_\text{triangles}, 3)`).
 
+        Notes
+        -----
+        Each polygon ring must be a simple, approximately planar polygon with no
+        repeated consecutive vertices; see
+        :func:`physicsnemo.mesh.tessellation.triangulate` for the full input
+        contract.
+
         Examples
         --------
         >>> import torch

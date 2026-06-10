@@ -39,6 +39,23 @@ CONVEX_PENTAGON = np.array(
 DART = np.array([[0.0, 0.0, 0.0], [4.0, 2.0, 0.0], [0.0, 4.0, 0.0], [1.0, 2.0, 0.0]])
 DART_TRUE_AREA = 6.0
 
+### A non-convex pentagon whose reflex tip (vertex 3) lies *exactly* on the
+### diagonal joining vertices 1 and 4 -- an edge of the candidate ear (4, 0, 1).
+### A strict point-in-triangle test classifies that on-edge vertex as outside,
+### clips the invalid ear, and emits overlapping triangles whose unsigned areas
+### sum to 7.5 instead of the true 4.5. The boundary-inclusive ear test rejects
+### that ear (regression for GH #1711).
+ON_EDGE_PENTAGON = np.array(
+    [
+        [0.0, 0.0, 0.0],
+        [3.0, 0.0, 0.0],
+        [3.0, 2.0, 0.0],
+        [1.5, 1.0, 0.0],
+        [0.0, 2.0, 0.0],
+    ]
+)
+ON_EDGE_PENTAGON_TRUE_AREA = 4.5
+
 
 def _adjacency(*rings: list[int]) -> Adjacency:
     """Build a polygon Adjacency from explicit vertex-index rings."""
@@ -140,7 +157,7 @@ def test_nonconvex_scalar_area_is_corrected():
     fan_scalar, fan_vector = _areas(
         torch.as_tensor(DART, dtype=torch.float64), fan_cells
     )
-    assert fan_scalar == pytest.approx(10.0, rel=1e-9)  # the over-count we fix
+    assert fan_scalar == pytest.approx(10.0, rel=1e-9)  # the over-count this fixes
 
     # Signed vector area telescopes regardless of triangulation, so both agree.
     truth = _newell_vector_area(DART)
@@ -156,6 +173,31 @@ def test_nonconvex_triangles_are_consistently_wound():
     normal_hat = normal_hat / np.linalg.norm(normal_hat)
     dots = mesh.cell_normals.to(torch.float64).numpy() @ normal_hat
     assert np.all(dots > 0.0)
+
+
+def test_nonconvex_boundary_vertex_area_is_corrected():
+    """A reflex vertex lying exactly on a candidate ear's edge must block that
+    ear instead of slipping through a strict interior test (regression for the
+    boundary-vertex over-count, GH #1711).
+
+    The bare fan happens to give the right area here -- its degenerate diagonal
+    triangle has zero area -- so this specifically guards the ear-clip path,
+    which over-counted to 7.5 before the boundary-inclusive containment fix.
+    Random rigid transforms confirm the *relative* tolerance keeps the fix
+    robust when the on-edge coincidence is only approximate in floating point.
+    """
+    points, cells, _ = _single(ON_EDGE_PENTAGON)
+    scalar, vector = _areas(points, cells)
+    assert scalar == pytest.approx(ON_EDGE_PENTAGON_TRUE_AREA, rel=1e-9)
+    np.testing.assert_allclose(vector, _newell_vector_area(ON_EDGE_PENTAGON), atol=1e-9)
+
+    rng = np.random.default_rng(0)
+    for _ in range(16):
+        rotation, _r = np.linalg.qr(rng.standard_normal((3, 3)))
+        transformed = ON_EDGE_PENTAGON @ rotation.T + rng.uniform(-5.0, 5.0, 3)
+        points, cells, _ = _single(transformed)
+        scalar, _ = _areas(points, cells)
+        assert scalar == pytest.approx(ON_EDGE_PENTAGON_TRUE_AREA, rel=1e-9)
 
 
 def test_mixed_soup_parent_index_and_cell_data():
@@ -231,6 +273,78 @@ def test_assume_convex_path_is_fullgraph_compilable():
 
     compiled = torch.compile(fan, fullgraph=True)
     torch.testing.assert_close(compiled(points, polygons), fan(points, polygons))
+
+
+def test_2d_input_matches_3d_embedding():
+    """2D (n, 2) points are lifted to z = 0 and triangulate identically to 3D."""
+    for poly in (CONVEX_PENTAGON, DART):
+        pts3d = torch.as_tensor(poly, dtype=torch.float64)
+        polys = _adjacency(list(range(poly.shape[0])))
+        cells3d, parent3d = triangulate(pts3d, polys)
+        cells2d, parent2d = triangulate(pts3d[:, :2].contiguous(), polys)
+        assert torch.equal(cells2d, cells3d)
+        assert torch.equal(parent2d, parent3d)
+
+    # The non-convex dart is still area-corrected when fed as 2D points (area is
+    # measured via the 3D embedding of the same cells to avoid a 2D normal).
+    dart3d = torch.as_tensor(DART, dtype=torch.float64)
+    cells2d, _ = triangulate(dart3d[:, :2].contiguous(), _adjacency([0, 1, 2, 3]))
+    scalar, _ = _areas(dart3d, cells2d)
+    assert scalar == pytest.approx(DART_TRUE_AREA, rel=1e-9)
+
+
+@pytest.mark.parametrize("spatial_dim", [1, 4])
+def test_non_2d_or_3d_points_raise(spatial_dim: int):
+    """Point coordinates outside D in {2, 3} are rejected with a clear error."""
+    points = torch.zeros(4, spatial_dim)
+    with pytest.raises(ValueError, match="2-D or 3-D"):
+        triangulate(points, _adjacency([0, 1, 2, 3]))
+
+
+def test_out_of_range_index_raises():
+    """A vertex index outside the points array is rejected with a clear error."""
+    points = torch.zeros(4, 3)
+    with pytest.raises(ValueError, match="reference vertex"):
+        triangulate(points, _adjacency([0, 1, 2, 9]))  # index 9 >= 4 points
+
+
+def test_negative_index_raises():
+    """A negative vertex index is rejected; it would otherwise silently wrap
+    around the points array (PyTorch gather semantics) and triangulate the
+    wrong vertex instead of raising."""
+    points = torch.zeros(4, 3)
+    with pytest.raises(ValueError, match="non-negative"):
+        triangulate(points, _adjacency([0, 1, 2, -1]))
+
+
+def test_assume_convex_matches_default_on_convex_input():
+    """On a convex polygon, the assume_convex fast path equals the default path."""
+    points = torch.as_tensor(CONVEX_PENTAGON, dtype=torch.float64)
+    polys = _adjacency(list(range(CONVEX_PENTAGON.shape[0])))
+    cells_default, parent_default = triangulate(points, polys)
+    cells_fast, parent_fast = triangulate(points, polys, assume_convex=True)
+    assert torch.equal(cells_fast, cells_default)
+    assert torch.equal(parent_fast, parent_default)
+
+
+def test_nonconvex_area_correct_in_float32():
+    """The non-convex area correction holds in float32, not just float64."""
+    points = torch.as_tensor(DART, dtype=torch.float32)
+    cells, _ = triangulate(points, _adjacency([0, 1, 2, 3]))
+    scalar, _ = _areas(points, cells)  # _areas upcasts to float64 internally
+    assert scalar == pytest.approx(DART_TRUE_AREA, rel=1e-6)
+
+
+def test_cells_are_int64_even_with_int32_indices():
+    """cells is always int64 (Mesh's expected dtype), regardless of index dtype."""
+    points = torch.as_tensor(DART, dtype=torch.float64)  # dart -> ear-clip path
+    polys = Adjacency(
+        offsets=torch.tensor([0, 4], dtype=torch.int32),
+        indices=torch.tensor([0, 1, 2, 3], dtype=torch.int32),
+    )
+    cells, parent_index = triangulate(points, polys)
+    assert cells.dtype == torch.long
+    assert parent_index.dtype == torch.long
 
 
 class TestAgainstPyvista:
