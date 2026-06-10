@@ -2599,6 +2599,29 @@ class TestMeshCalculusConvenienceMethods:
         with pytest.raises(ValueError, match="method"):
             mesh.divergence("f", method="bogus")
 
+    def test_invalid_data_source_raises(self):
+        """A typo'd data_source (e.g. 'cell' for 'cells') must raise, never
+        silently fall back to the points path. Raw tensors are passed so the
+        methods' own dispatch (not just _resolve_field's key lookup) is what
+        rejects the value."""
+        mesh = self._surface()
+        f = mesh.points[:, 0].clone()
+        v = mesh.points.clone()
+        with pytest.raises(ValueError, match="data_source"):
+            mesh.gradient(f, data_source="cell")
+        with pytest.raises(ValueError, match="data_source"):
+            mesh.divergence(v, data_source="Points")
+        with pytest.raises(ValueError, match="data_source"):
+            mesh.curl(v, data_source="bogus")
+        with pytest.raises(ValueError, match="data_source"):
+            mesh.laplacian(f, data_source="vertices")
+
+    def test_invalid_gradient_type_raises(self):
+        mesh = self._surface()
+        f = mesh.points[:, 0].clone()
+        with pytest.raises(ValueError, match="gradient_type"):
+            mesh.gradient(f, gradient_type="bogus")
+
     def test_gradient_cells_matches_free_function(self):
         from physicsnemo.mesh.calculus import compute_gradient_cells_lsq
         from physicsnemo.mesh.calculus.gradient import project_to_tangent_space
