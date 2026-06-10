@@ -21,13 +21,43 @@ that are under active development. These components may have breaking API
 changes between releases.
 """
 
-from .flare_attention import FLARE
+from .attention_blocks import (
+    LocalPointTransformerBlock,
+    LocalTokenCrossAttentionBlock,
+    ResidualMLP,
+)
 from .diffusion_unet_3d_blocks import UNetBlock3D, Conv3D, GroupNorm3D, UNetAttention3D
+from .flare_attention import FLARE
+from .point_tokenizer import PointCloudTokenizer
+from .point_utils import (
+    chunked_knn_indices,
+    compute_batch_offset_step,
+    counts_to_mask,
+    flatten_batched_coords,
+    flatten_padded_batch,
+    gather_rows,
+    masked_mean,
+    unflatten_to_padded,
+)
+from .positional_encoding import FourierPositionalEncoding
 
 __all__ = [
-    "FLARE",
-    "UNetBlock3D",
     "Conv3D",
+    "FLARE",
+    "FourierPositionalEncoding",
     "GroupNorm3D",
+    "LocalPointTransformerBlock",
+    "LocalTokenCrossAttentionBlock",
+    "PointCloudTokenizer",
+    "ResidualMLP",
     "UNetAttention3D",
+    "UNetBlock3D",
+    "chunked_knn_indices",
+    "compute_batch_offset_step",
+    "counts_to_mask",
+    "flatten_batched_coords",
+    "flatten_padded_batch",
+    "gather_rows",
+    "masked_mean",
+    "unflatten_to_padded",
 ]

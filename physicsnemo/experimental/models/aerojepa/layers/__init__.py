@@ -14,16 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""AeroJEPA neural network building blocks (experimental).
+"""AeroJEPA-specific building blocks (experimental).
 
-Reusable layers for the AeroJEPA framework: token dataclasses
-(:class:`TokenSet`, :class:`EncoderOutput`), a deterministic Fourier
-positional encoding, residual MLP and local point/cross attention blocks,
-the point-cloud tokenizer, batching/mask/k-NN helpers, and the
-prototype-anchor build/load utilities. These are exposed for composition
-by users who want to build JEPA-style architectures for steady 3D
-aerodynamic surrogate modeling independently of the full ``AeroJEPA``
-model class (which lives in ``physicsnemo.experimental.models.aerojepa``).
+This package owns the AeroJEPA-specific contract — :class:`TokenSet` and
+:class:`EncoderOutput` dataclasses, the prototype-anchor utilities, and
+two ``TokenSet``-coupled batching helpers. The generic layers it composes
+(``ResidualMLP``, ``LocalPointTransformerBlock``,
+``LocalTokenCrossAttentionBlock``, ``PointCloudTokenizer``,
+``FourierPositionalEncoding``, and the batch/gather/k-NN utilities) now
+live at :mod:`physicsnemo.experimental.nn` and are re-exported here for
+backward-compatible imports.
 
 API stability: experimental. Names and signatures may change between releases
 until the design graduates out of ``physicsnemo.experimental``.
@@ -34,13 +34,22 @@ Giral et al., "AeroJEPA: Learning Semantic Latent Representations for
 Scalable 3D Aerodynamic Field Modeling", preprint arXiv:2605.05586 (2026).
 """
 
-from .attention_blocks import (
+from physicsnemo.experimental.nn import (
+    FourierPositionalEncoding,
     LocalPointTransformerBlock,
     LocalTokenCrossAttentionBlock,
+    PointCloudTokenizer,
     ResidualMLP,
+    chunked_knn_indices,
+    compute_batch_offset_step,
+    counts_to_mask,
+    flatten_batched_coords,
+    flatten_padded_batch,
+    gather_rows,
+    masked_mean,
+    unflatten_to_padded,
 )
-from .point_tokenizer import PointCloudTokenizer
-from .positional_encoding import FourierPositionalEncoding
+
 from .prototype_anchors import (
     build_context_prototype_anchors,
     build_target_prototype_anchors,
@@ -49,33 +58,19 @@ from .prototype_anchors import (
     load_context_prototype_anchors,
     load_target_prototype_anchors,
 )
-from .token_utils import (
-    chunked_knn_indices,
-    compute_batch_offset_step,
-    counts_to_mask,
-    flatten_batched_coords,
-    flatten_padded_batch,
-    gather_rows,
-    masked_mean,
-    pad_token_sets,
-    trim_batched_tokens,
-    unflatten_to_padded,
-)
+from .token_utils import pad_token_sets, trim_batched_tokens
 from .types import EncoderOutput, TokenSet
 
 __all__ = [
     # Core dataclasses
     "EncoderOutput",
     "TokenSet",
-    # Positional encoding
+    # Re-exports from physicsnemo.experimental.nn
     "FourierPositionalEncoding",
-    # Attention blocks
     "LocalPointTransformerBlock",
     "LocalTokenCrossAttentionBlock",
-    "ResidualMLP",
-    # Tokenizer
     "PointCloudTokenizer",
-    # Token batching / mask / k-NN helpers
+    "ResidualMLP",
     "chunked_knn_indices",
     "compute_batch_offset_step",
     "counts_to_mask",
@@ -83,9 +78,10 @@ __all__ = [
     "flatten_padded_batch",
     "gather_rows",
     "masked_mean",
+    "unflatten_to_padded",
+    # TokenSet-coupled helpers (this package only)
     "pad_token_sets",
     "trim_batched_tokens",
-    "unflatten_to_padded",
     # Prototype anchors
     "build_context_prototype_anchors",
     "build_target_prototype_anchors",

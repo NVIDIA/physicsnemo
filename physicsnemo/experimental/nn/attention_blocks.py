@@ -33,7 +33,7 @@ import torch.nn as nn
 from physicsnemo.nn.module.layer_norm import LayerNorm
 from physicsnemo.nn.module.mlp_layers import Mlp
 
-from .token_utils import chunked_knn_indices, gather_rows
+from .point_utils import chunked_knn_indices, gather_rows
 
 
 def _make_conditioning_mlp(cond_dim: int, out_dim: int) -> nn.Sequential:

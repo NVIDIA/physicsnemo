@@ -17,7 +17,7 @@
 """Prototype anchor building and loading for AeroJEPA.
 
 The ``data_prototype_cluster`` tokenization strategy
-(:class:`physicsnemo.experimental.models.aerojepa.layers.point_tokenizer.PointCloudTokenizer`)
+(:class:`physicsnemo.experimental.nn.PointCloudTokenizer`)
 uses a fixed set of 3D anchor points as token centers. This module builds
 those anchors by sampling token coordinates from a training dataset (via
 the same tokenizer) and running a chunked k-means to compress them to a
@@ -35,7 +35,8 @@ import torch
 
 from physicsnemo.nn.functional.neighbors.knn import knn
 
-from .point_tokenizer import PointCloudTokenizer, _farthest_point_sampling
+from physicsnemo.experimental.nn import PointCloudTokenizer
+from physicsnemo.experimental.nn.point_tokenizer import _farthest_point_sampling
 
 
 def _concat_target_points(sample: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:

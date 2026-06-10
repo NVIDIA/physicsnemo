@@ -31,7 +31,7 @@ from collections.abc import Sequence
 import torch
 import torch.nn as nn
 
-from .token_utils import chunked_knn_indices
+from .point_utils import chunked_knn_indices
 
 
 def _farthest_point_sampling(
