@@ -485,3 +485,21 @@ class TestRepairIntegration:
         # Meshes should be identical
         assert mesh1.n_points == mesh2.n_points
         assert mesh1.n_cells == mesh2.n_cells
+
+
+def test_fix_orientation_component_size_not_overcounted():
+    """Regression: the orientation BFS front must be deduplicated. A child face
+    reached from two parents in one level was counted twice, making
+    largest_component_size exceed n_cells on any mesh with cycles (every closed
+    surface). Here a single closed connected surface must yield exactly one
+    component covering all cells.
+    """
+    from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    from physicsnemo.mesh.repair.orientation import fix_orientation
+
+    mesh = sphere_icosahedral.load(subdivisions=2)  # closed, connected, has cycles
+    oriented, stats = fix_orientation(mesh)
+
+    assert oriented.n_cells == mesh.n_cells
+    assert stats["n_components"] == 1
+    assert stats["largest_component_size"] == mesh.n_cells

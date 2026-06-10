@@ -634,3 +634,19 @@ class TestDataConversionParametrized:
         # Devices should be preserved
         assert_on_device(result1.points, device)
         assert_on_device(result2.points, device)
+
+
+def test_cell_data_to_point_data_does_not_alias_source_cache():
+    """Regression: a derived mesh must own its cache container, so caching a new
+    property on it does not leak back into the source mesh's cache (the methods
+    previously passed ``_cache=self._cache`` by reference).
+    """
+    points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    cells = torch.tensor([[0, 1, 2]])
+    mesh = Mesh(points=points, cells=cells, cell_data={"x": torch.tensor([1.0])})
+
+    derived = mesh.cell_data_to_point_data()
+    assert mesh._cache.get(("cell", "centroids"), None) is None
+    _ = derived.cell_centroids  # populate a NEW cache entry on the derived mesh
+    # The source mesh's cache must remain untouched (independent container).
+    assert mesh._cache.get(("cell", "centroids"), None) is None
