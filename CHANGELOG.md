@@ -52,16 +52,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `physicsnemo.mesh`: reconciled the README feature matrix and several docstrings
-  with the implementation — Laplace-Beltrami (DEC) is marked implemented
-  (`physicsnemo.mesh.calculus.compute_laplacian_points_dec`); the README
-  "Projection" row is split into the implemented coordinate projection (drop
-  ambient dims) and the still-WIP surface projection / mesh intersection; and the
-  `compute_point_derivatives` (returns a new mesh, not in place),
-  `gaussian_curvature_cells`, `compute_cell_normals` (orientation-defined, not
-  "outward"), and butterfly-subdivision docstrings (and the primitives README
-  import path) were corrected.
-
 ### Deprecated
 
 ### Removed
