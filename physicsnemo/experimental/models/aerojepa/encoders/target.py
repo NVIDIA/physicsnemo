@@ -30,8 +30,8 @@ from collections.abc import Sequence
 
 import torch
 
+from .._metadata import AeroJEPAMetaData
 from ..layers import EncoderOutput, counts_to_mask
-
 from .base import BaseTargetEncoder
 from .point import PointTransformer
 
@@ -118,7 +118,11 @@ class TargetTransformer(BaseTargetEncoder):
         tokenizer_graph_pool_hidden_dim: int | None = None,
         tokenizer_graph_pool_layers: int = 2,
     ):
-        super().__init__()
+        super().__init__(meta=AeroJEPAMetaData())
+        if isinstance(tokenizer_prototype_coords, torch.Tensor):
+            self._args["__args__"]["tokenizer_prototype_coords"] = (
+                tokenizer_prototype_coords.detach().cpu().tolist()
+            )
         self.encoder = PointTransformer(
             point_input_dim=int(point_input_dim),
             token_dim=int(token_dim),

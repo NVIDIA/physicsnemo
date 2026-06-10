@@ -31,8 +31,11 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from physicsnemo.core.module import Module
 from physicsnemo.nn.module.layer_norm import LayerNorm
 from physicsnemo.nn.module.mlp_layers import Mlp
+
+from ._metadata import AeroJEPAMetaData
 
 from .layers import (
     FourierPositionalEncoding,
@@ -47,7 +50,7 @@ from .layers import (
 )
 
 
-class PrototypeTokenJEPAHead(nn.Module):
+class PrototypeTokenJEPAHead(Module):
     r"""Predict target-token features from context tokens and a conditioning vector.
 
     Pipeline per call:
@@ -113,7 +116,7 @@ class PrototypeTokenJEPAHead(nn.Module):
         mlp_ratio: int = 4,
         dropout: float = 0.0,
     ):
-        super().__init__()
+        super().__init__(meta=AeroJEPAMetaData())
         self.token_dim = int(token_dim)
         self.hidden_dim = (
             int(hidden_dim) if hidden_dim is not None else int(token_dim)

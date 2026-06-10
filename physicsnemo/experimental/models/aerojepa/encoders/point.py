@@ -42,8 +42,11 @@ from collections.abc import Sequence
 import torch
 import torch.nn as nn
 
+from physicsnemo.core.module import Module
 from physicsnemo.nn.module.layer_norm import LayerNorm
 from physicsnemo.nn.module.mlp_layers import Mlp
+
+from .._metadata import AeroJEPAMetaData
 
 from ..layers import (
     EncoderOutput,
@@ -289,7 +292,7 @@ class PointClusterGraphPool(nn.Module):
         return self.out_norm(token_feat)
 
 
-class PointTransformer(nn.Module):
+class PointTransformer(Module):
     r"""Point-cloud transformer encoder for AeroJEPA.
 
     Pipeline per call:
@@ -411,7 +414,22 @@ class PointTransformer(nn.Module):
         use_gen_conditioning: bool = False,
         gen_conditioning_dim: int | None,
     ):
-        super().__init__()
+        super().__init__(meta=AeroJEPAMetaData())
+        # ``tokenizer_prototype_coords`` is a torch.Tensor and is not
+        # JSON-serializable by ``Module.save``. Stash the list form in
+        # ``_args`` so checkpoint round-trips work; the runtime path uses
+        # the tensor. Constructor also accepts the list form on load.
+        if tokenizer_prototype_coords is None:
+            prototype_coords_t = None
+        elif isinstance(tokenizer_prototype_coords, torch.Tensor):
+            self._args["__args__"]["tokenizer_prototype_coords"] = (
+                tokenizer_prototype_coords.detach().cpu().tolist()
+            )
+            prototype_coords_t = tokenizer_prototype_coords
+        else:
+            prototype_coords_t = torch.tensor(
+                tokenizer_prototype_coords, dtype=torch.float32
+            )
         self.tokenizer = PointCloudTokenizer(
             max_point_tokens=int(max_point_tokens),
             strategy=str(tokenizer_strategy).lower(),
@@ -419,7 +437,7 @@ class PointTransformer(nn.Module):
             cluster_size=tokenizer_cluster_size,
             knn_chunk_size=int(tokenizer_knn_chunk_size),
             voxel_size=tokenizer_voxel_size,
-            prototype_coords=tokenizer_prototype_coords,
+            prototype_coords=prototype_coords_t,
             prototype_knn_k=tokenizer_prototype_knn_k,
         )
         self.tokenizer_cluster_pooling = str(tokenizer_cluster_pooling).lower()

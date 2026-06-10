@@ -25,58 +25,15 @@ positions; output is the decoded field at the queries.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import torch
 from jaxtyping import Float
 
-from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from .layers import TokenSet
 
+from ._metadata import AeroJEPAMetaData
+from .layers import TokenSet
 from .predictor import PrototypeTokenJEPAHead
 from .trunk import AeroJEPATrunk
-
-
-@dataclass
-class AeroJEPAMetaData(ModelMetaData):
-    r"""Meta-data for the :class:`AeroJEPA` model.
-
-    Attributes
-    ----------
-    jit : bool
-        Whether ``torch.jit.script`` is supported. Default ``False``.
-    cuda_graphs : bool
-        Whether CUDA graphs are supported. Default ``False``.
-    amp : bool
-        Whether automatic mixed precision is supported. Default ``True``.
-    onnx_cpu : bool
-        Whether ONNX export to CPU is supported. Default ``False``.
-    onnx_gpu : bool
-        Whether ONNX export to GPU is supported. Default ``False``.
-    onnx_runtime : bool
-        Whether ONNX runtime is supported. Default ``False``.
-    var_dim : int
-        Variable dimension for physics-informed features. Default ``1``.
-    func_torch : bool
-        Whether ``torch.func`` is used. Default ``False``.
-    auto_grad : bool
-        Whether automatic differentiation through the forward pass is
-        used by the model. Default ``False``.
-    """
-
-    # Optimization
-    jit: bool = False
-    cuda_graphs: bool = False
-    amp: bool = True
-    # Inference
-    onnx_cpu: bool = False
-    onnx_gpu: bool = False
-    onnx_runtime: bool = False
-    # Physics informed
-    var_dim: int = 1
-    func_torch: bool = False
-    auto_grad: bool = False
 
 
 class AeroJEPA(Module):

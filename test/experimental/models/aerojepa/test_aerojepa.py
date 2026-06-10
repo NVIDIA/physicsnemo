@@ -289,6 +289,37 @@ def test_encode_geometry_and_flow_returns_dict(device):
     assert set(ctx.keys()) == {"context_tokens", "target_tokens", "cond_global"}
 
 
+def test_save_and_load_round_trip(tmp_path, device):
+    """``Module.save`` succeeds and ``Module.from_checkpoint`` rebuilds the model."""
+    model = _build_model().to(device).eval()
+    ckpt_path = tmp_path / "m.mdlus"
+    model.save(str(ckpt_path))
+    loaded = AeroJEPA.from_checkpoint(str(ckpt_path)).to(device).eval()
+    # Same forward output to confirm the load reconstructed the architecture
+    # and state dict correctly.
+    ctx_pos = torch.randn(40, 3, device=device)
+    ctx_feat = torch.zeros(40, 0, device=device)
+    gen = torch.randn(4, device=device)
+    qp = torch.randn(30, 3, device=device)
+    qsdf = torch.randn(30, 1, device=device)
+    with torch.no_grad():
+        out_a = model(
+            context_pos=ctx_pos,
+            context_feat=ctx_feat,
+            gen_params=gen,
+            query_pos=qp,
+            query_sdf=qsdf,
+        )
+        out_b = loaded(
+            context_pos=ctx_pos,
+            context_feat=ctx_feat,
+            gen_params=gen,
+            query_pos=qp,
+            query_sdf=qsdf,
+        )
+    assert torch.allclose(out_a, out_b, atol=1e-6)
+
+
 def test_accessor_properties(device):
     """``context_encoder`` / ``target_encoder`` / ``decoder`` delegate to the trunk."""
     model = _build_model().to(device)

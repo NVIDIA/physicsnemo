@@ -35,9 +35,12 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from physicsnemo.core.module import Module
 from physicsnemo.nn.module.layer_norm import LayerNorm
 from physicsnemo.nn.module.mlp_layers import Mlp
 from physicsnemo.nn.module.siren_layers import SirenLayer, SirenLayerType
+
+from ._metadata import AeroJEPAMetaData
 
 from .layers import (
     FourierPositionalEncoding,
@@ -116,7 +119,7 @@ class SirenHead(nn.Module):
         return self.out(self.hidden(x))
 
 
-class QueryTokenDecoder(nn.Module):
+class QueryTokenDecoder(Module):
     r"""Implicit field decoder driven by cross-attention to target tokens.
 
     For each query position, builds a per-query embedding from a Fourier
@@ -242,7 +245,7 @@ class QueryTokenDecoder(nn.Module):
         extra_sdf_features_enabled: bool = False,
         extra_sdf_inv_eps: float = 1e-3,
     ):
-        super().__init__()
+        super().__init__(meta=AeroJEPAMetaData())
         self.use_sdf = bool(use_sdf)
         self.cond_dim = int(cond_dim)
         self.query_chunk_size = int(query_chunk_size)

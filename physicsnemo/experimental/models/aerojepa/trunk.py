@@ -30,12 +30,14 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from physicsnemo.core.module import Module
 from physicsnemo.nn.module.mlp_layers import Mlp
 
+from ._metadata import AeroJEPAMetaData
 from .encoders.base import BaseContextEncoder, BaseTargetEncoder
 
 
-class AeroJEPATrunk(nn.Module):
+class AeroJEPATrunk(Module):
     r"""Owns the context encoder, target encoder, and decoder, and wires them together.
 
     Parameters
@@ -68,13 +70,13 @@ class AeroJEPATrunk(nn.Module):
         *,
         context_encoder: BaseContextEncoder,
         target_encoder: BaseTargetEncoder,
-        decoder: nn.Module,
+        decoder: Module,
         include_geometry_global_in_decoder_cond: bool = True,
         mask_prediction_enabled: bool = False,
         mask_head_hidden_dim: int = 128,
         mask_head_use_cond: bool = True,
     ):
-        super().__init__()
+        super().__init__(meta=AeroJEPAMetaData())
         self.context_encoder = context_encoder
         self.target_encoder = target_encoder
         self.decoder = decoder

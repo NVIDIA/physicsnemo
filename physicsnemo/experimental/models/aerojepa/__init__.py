@@ -33,7 +33,8 @@ Giral et al., "AeroJEPA: Learning Semantic Latent Representations for
 Scalable 3D Aerodynamic Field Modeling", preprint arXiv:2605.05586 (2026).
 """
 
-from .aerojepa import AeroJEPA, AeroJEPAMetaData
+from ._metadata import AeroJEPAMetaData
+from .aerojepa import AeroJEPA
 from .decoder import QueryTokenDecoder
 from .encoders.base import BaseContextEncoder, BaseTargetEncoder
 from .encoders.context import ContextTransformer

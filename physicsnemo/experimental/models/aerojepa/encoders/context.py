@@ -28,8 +28,8 @@ from collections.abc import Sequence
 
 import torch
 
+from .._metadata import AeroJEPAMetaData
 from ..layers import EncoderOutput
-
 from .base import BaseContextEncoder
 from .point import PointTransformer, build_geometry_features
 
@@ -129,7 +129,11 @@ class ContextTransformer(BaseContextEncoder):
         use_solid_normals: bool = False,
         use_solid_n_dot_uinf: bool = False,
     ):
-        super().__init__()
+        super().__init__(meta=AeroJEPAMetaData())
+        if isinstance(tokenizer_prototype_coords, torch.Tensor):
+            self._args["__args__"]["tokenizer_prototype_coords"] = (
+                tokenizer_prototype_coords.detach().cpu().tolist()
+            )
         self.use_sdf = bool(use_sdf)
         self.use_solid_normals = bool(use_solid_normals)
         self.use_solid_n_dot_uinf = bool(use_solid_n_dot_uinf)

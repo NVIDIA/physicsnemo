@@ -21,12 +21,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 import torch
-import torch.nn as nn
+
+from physicsnemo.core.module import Module
 
 from ..layers import EncoderOutput
 
 
-class BaseContextEncoder(nn.Module, ABC):
+class BaseContextEncoder(Module, ABC):
     r"""Abstract base class for context encoders.
 
     A context encoder ingests the geometry-side input and produces an
@@ -86,7 +87,7 @@ class BaseContextEncoder(nn.Module, ABC):
         )
 
 
-class BaseTargetEncoder(nn.Module, ABC):
+class BaseTargetEncoder(Module, ABC):
     r"""Abstract base class for target encoders.
 
     A target encoder runs at training time and produces the supervision
