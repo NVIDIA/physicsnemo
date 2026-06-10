@@ -241,15 +241,12 @@ class AeroJEPA(Module):
             context_pos=context_pos,
             context_feat=context_feat,
         )
-        cond_global = gen_params.unsqueeze(0)
-        if self.trunk.include_geometry_global_in_decoder_cond:
-            context_global = context_out.global_token
-            if context_global is None:
-                context_global = context_out.tokens.global_token
-            if context_global is not None:
-                cond_global = torch.cat(
-                    [cond_global, context_global.reshape(1, -1)], dim=-1
-                )
+        context_global = context_out.global_token
+        if context_global is None:
+            context_global = context_out.tokens.global_token
+        cond_global = self.trunk._build_cond_global_single(
+            gen_params=gen_params, context_global=context_global
+        )
         return context_out.tokens, cond_global.squeeze(0)
 
     def encode_geometry_and_flow(
