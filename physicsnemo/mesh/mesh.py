@@ -2739,6 +2739,132 @@ class Mesh:
             data_source=data_source,
         )
 
+    def gradient(
+        self,
+        field: "str | tuple[str, ...] | torch.Tensor",
+        method: Literal["lsq", "dec"] = "lsq",
+        gradient_type: Literal["intrinsic", "extrinsic"] = "intrinsic",
+    ) -> torch.Tensor:
+        r"""Gradient of a point field, returned as a tensor.
+
+        Single-field convenience that returns the gradient tensor directly,
+        accepting a field key (looked up in ``point_data``) or a raw tensor --
+        mirroring :meth:`integrate`. (Contrast :meth:`compute_point_derivatives`,
+        which returns a *new mesh* with the gradient stored under an auto-generated
+        key, and can process several fields at once.)
+
+        Parameters
+        ----------
+        field : str, tuple[str, ...], or torch.Tensor
+            Point field, by ``point_data`` key or by value.
+        method : {"lsq", "dec"}
+            Discretization (default ``"lsq"``).
+        gradient_type : {"intrinsic", "extrinsic"}
+            Project onto the tangent space (``"intrinsic"``, default) or use the
+            full ambient-space gradient (``"extrinsic"``).
+
+        Returns
+        -------
+        torch.Tensor
+            Gradient of shape ``(n_points, n_spatial_dims, *field.shape[1:])``.
+        """
+        from physicsnemo.mesh.calculus.gradient import (
+            compute_gradient_points_dec,
+            compute_gradient_points_lsq,
+            project_to_tangent_space,
+        )
+        from physicsnemo.mesh.calculus.integration import _resolve_field
+
+        values = _resolve_field(self, field, "points")
+        if method == "lsq":
+            return compute_gradient_points_lsq(
+                self, values, intrinsic=(gradient_type == "intrinsic")
+            )
+        if method == "dec":
+            grad = compute_gradient_points_dec(self, values)
+            if gradient_type == "intrinsic":
+                grad = project_to_tangent_space(self, grad, "points")
+            return grad
+        raise ValueError(f"Invalid {method=}. Must be 'lsq' or 'dec'.")
+
+    def divergence(
+        self,
+        field: "str | tuple[str, ...] | torch.Tensor",
+        method: Literal["lsq", "dec"] = "lsq",
+    ) -> torch.Tensor:
+        r"""Divergence of a vector point field, returned as a tensor.
+
+        Accepts a field key (looked up in ``point_data``) or a raw vector tensor
+        of shape ``(n_points, n_spatial_dims)``, mirroring :meth:`integrate`.
+
+        Parameters
+        ----------
+        field : str, tuple[str, ...], or torch.Tensor
+            Vector point field, by ``point_data`` key or by value.
+        method : {"lsq", "dec"}
+            Discretization (default ``"lsq"``).
+
+        Returns
+        -------
+        torch.Tensor
+            Scalar divergence at each vertex, shape ``(n_points,)``.
+        """
+        from physicsnemo.mesh.calculus.divergence import (
+            compute_divergence_points_dec,
+            compute_divergence_points_lsq,
+        )
+        from physicsnemo.mesh.calculus.integration import _resolve_field
+
+        values = _resolve_field(self, field, "points")
+        if method == "lsq":
+            return compute_divergence_points_lsq(self, values)
+        if method == "dec":
+            return compute_divergence_points_dec(self, values)
+        raise ValueError(f"Invalid {method=}. Must be 'lsq' or 'dec'.")
+
+    def curl(
+        self,
+        field: "str | tuple[str, ...] | torch.Tensor",
+    ) -> torch.Tensor:
+        r"""Curl of a 3D vector point field (LSQ), returned as a tensor.
+
+        Accepts a field key (looked up in ``point_data``) or a raw vector tensor
+        of shape ``(n_points, 3)``, mirroring :meth:`integrate`. Only defined for
+        ``n_spatial_dims == 3``.
+
+        Returns
+        -------
+        torch.Tensor
+            Curl vector at each vertex, shape ``(n_points, 3)``.
+        """
+        from physicsnemo.mesh.calculus.curl import compute_curl_points_lsq
+        from physicsnemo.mesh.calculus.integration import _resolve_field
+
+        values = _resolve_field(self, field, "points")
+        return compute_curl_points_lsq(self, values)
+
+    def laplacian(
+        self,
+        field: "str | tuple[str, ...] | torch.Tensor",
+    ) -> torch.Tensor:
+        r"""Laplace-Beltrami operator on a point field (DEC), returned as a tensor.
+
+        Uses the intrinsic cotangent Laplacian
+        (:func:`physicsnemo.mesh.calculus.compute_laplacian_points_dec`). Accepts a
+        field key (looked up in ``point_data``) or a raw point tensor, mirroring
+        :meth:`integrate`.
+
+        Returns
+        -------
+        torch.Tensor
+            Laplace-Beltrami of the field, same shape as the input field.
+        """
+        from physicsnemo.mesh.calculus.integration import _resolve_field
+        from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
+
+        values = _resolve_field(self, field, "points")
+        return compute_laplacian_points_dec(self, values)
+
     def validate(
         self,
         check_degenerate_cells: bool = True,

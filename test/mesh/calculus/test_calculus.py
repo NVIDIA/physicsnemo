@@ -2536,5 +2536,69 @@ class TestCotanWeightsFEM:
         assert len(weights) == len(edges)
 
 
+class TestMeshCalculusConvenienceMethods:
+    """The tensor-returning Mesh.gradient/divergence/curl/laplacian methods.
+
+    They mirror Mesh.integrate (return a tensor; accept a point_data key or a raw
+    tensor) and must agree with the underlying free functions.
+    """
+
+    @staticmethod
+    def _surface():
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        return sphere_icosahedral.load(subdivisions=2)  # 2-manifold in 3D
+
+    def test_gradient_matches_free_function_by_key_and_tensor(self):
+        from physicsnemo.mesh.calculus import compute_gradient_points_lsq
+
+        mesh = self._surface()
+        f = mesh.points[:, 0].clone()
+        mesh.point_data["f"] = f
+        expected = compute_gradient_points_lsq(mesh, f, intrinsic=True)
+        assert torch.allclose(mesh.gradient(f), expected, atol=1e-6)
+        assert torch.allclose(mesh.gradient("f"), expected, atol=1e-6)
+        # extrinsic differs from the (default) intrinsic gradient on a curved surface
+        assert not torch.allclose(
+            mesh.gradient("f", gradient_type="extrinsic"), expected, atol=1e-4
+        )
+
+    def test_divergence_matches_free_function(self):
+        from physicsnemo.mesh.calculus import compute_divergence_points_lsq
+
+        mesh = self._surface()
+        v = mesh.points.clone()
+        mesh.point_data["v"] = v
+        expected = compute_divergence_points_lsq(mesh, v)
+        assert torch.allclose(mesh.divergence("v"), expected, atol=1e-6)
+        assert torch.allclose(mesh.divergence(v), expected, atol=1e-6)
+
+    def test_curl_matches_free_function(self):
+        from physicsnemo.mesh.calculus import compute_curl_points_lsq
+
+        mesh = self._surface()
+        v = mesh.points.clone()
+        expected = compute_curl_points_lsq(mesh, v)
+        assert torch.allclose(mesh.curl(v), expected, atol=1e-6)
+
+    def test_laplacian_matches_free_function(self):
+        from physicsnemo.mesh.calculus import compute_laplacian_points_dec
+
+        mesh = self._surface()
+        f = (mesh.points**2).sum(-1)
+        mesh.point_data["f"] = f
+        expected = compute_laplacian_points_dec(mesh, f)
+        assert torch.allclose(mesh.laplacian("f"), expected, atol=1e-6)
+        assert torch.allclose(mesh.laplacian(f), expected, atol=1e-6)
+
+    def test_invalid_method_raises(self):
+        mesh = self._surface()
+        mesh.point_data["f"] = mesh.points[:, 0].clone()
+        with pytest.raises(ValueError, match="method"):
+            mesh.gradient("f", method="bogus")
+        with pytest.raises(ValueError, match="method"):
+            mesh.divergence("f", method="bogus")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

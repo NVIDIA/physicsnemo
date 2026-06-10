@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds tensor-returning `Mesh.gradient`, `Mesh.divergence`, `Mesh.curl`, and
+  `Mesh.laplacian` convenience methods to `physicsnemo.mesh`, mirroring
+  `Mesh.integrate` (each returns a tensor and accepts a `point_data` key or a raw
+  tensor). This gives the discrete differential operators a consistent,
+  discoverable surface on `Mesh`; previously divergence/curl/laplacian were
+  reachable only as free functions in `physicsnemo.mesh.calculus`.
 - Adds `FourierPositionalEmbedding` to `physicsnemo.nn`, a deterministic
   axis-wise (NeRF-style) Fourier positional embedding for continuous
   coordinates with no learnable parameters. It owns a fixed frequency schedule
