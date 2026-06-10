@@ -20,11 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Adds `compute_divergence_cells_lsq` and `compute_curl_cells_lsq` free
   functions (cell-centered LSQ analogues); DEC operators and the cotangent
   Laplacian remain vertex-only and raise `NotImplementedError` for cell data.
+- Adds `farthest_point_sampling` to `physicsnemo.nn.functional`, a greedy
+  farthest-point sampling (FPS) functional for point clouds.
 - Adds `FourierPositionalEmbedding` to `physicsnemo.nn`, a deterministic
   axis-wise (NeRF-style) Fourier positional embedding for continuous
-  coordinates with no learnable parameters. It owns a fixed frequency schedule
-  (octave by default, or an explicit `freqs` tensor), reports `out_dim`, and
-  optionally concatenates the raw input.
+  coordinates with no learnable parameters.
 - Adds radiation transport example (`examples/nuclear_engineering/radiation_transport`)
 - Adds agent skills structure, and initial skill for 'discoverability'.
 - Adds xDeepONet to experimental models
