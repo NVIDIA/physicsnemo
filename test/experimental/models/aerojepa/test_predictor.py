@@ -115,6 +115,17 @@ def test_no_conditioning(device):
     assert out.shape == (12, 32)
 
 
+def test_cond_dim_zero_disables_block_conditioning(device):
+    """``cond_dim=0`` should leave the self/cross blocks unconditioned."""
+    head = _build(cond_dim=0).to(device).eval()
+    for blk in head.self_blocks:
+        assert blk.conditioning is None
+        assert blk.ffn.conditioning is None
+    for blk in head.cross_blocks:
+        assert blk.conditioning is None
+        assert blk.ffn.conditioning is None
+
+
 def test_missing_cond_raises(device):
     """``cond_dim>0`` without ``cond`` is rejected."""
     head = _build().to(device).eval()

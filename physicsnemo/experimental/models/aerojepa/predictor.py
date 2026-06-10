@@ -125,6 +125,7 @@ class PrototypeTokenJEPAHead(nn.Module):
         self.query_in = nn.Linear(self.query_pos_enc.out_dim, self.hidden_dim)
         self.context_in = nn.Linear(self.token_dim, self.hidden_dim)
         self.cond_proj = None
+        block_conditioning_dim: int | None = None
         if self.cond_dim > 0:
             self.cond_proj = Mlp(
                 in_features=self.cond_dim,
@@ -133,6 +134,7 @@ class PrototypeTokenJEPAHead(nn.Module):
                 act_layer=nn.SiLU,
                 final_dropout=False,
             )
+            block_conditioning_dim = self.hidden_dim
         self.self_blocks = nn.ModuleList(
             [
                 LocalPointTransformerBlock(
@@ -143,7 +145,7 @@ class PrototypeTokenJEPAHead(nn.Module):
                     mlp_ratio=int(mlp_ratio),
                     dropout=float(dropout),
                     knn_chunk_size=int(knn_chunk_size),
-                    conditioning_dim=self.hidden_dim,
+                    conditioning_dim=block_conditioning_dim,
                 )
                 for _ in range(self.depth)
             ]
@@ -157,7 +159,7 @@ class PrototypeTokenJEPAHead(nn.Module):
                     mlp_ratio=int(mlp_ratio),
                     dropout=float(dropout),
                     knn_chunk_size=int(knn_chunk_size),
-                    conditioning_dim=self.hidden_dim,
+                    conditioning_dim=block_conditioning_dim,
                 )
                 for _ in range(self.depth)
             ]
