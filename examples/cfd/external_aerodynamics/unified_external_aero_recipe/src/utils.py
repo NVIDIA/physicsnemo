@@ -32,15 +32,8 @@ from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
 from torch.amp import autocast
 
-from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.mesh import DomainMesh, Mesh
 from physicsnemo.optim import CombinedOptimizer
-
-### Transformer Engine is an optional dependency; only the float8 autocast
-### path touches it, so it is loaded lazily via OptionalImport.
-te = OptionalImport("transformer_engine.pytorch")
-te_recipe = OptionalImport("transformer_engine.common.recipe")
-TE_AVAILABLE = te.available
 
 ### Recipe-wide type aliases. Re-exported for use in loss.py, metrics.py,
 ### output_normalize.py, forward_kwargs.py, collate.py, train.py, infer.py,
@@ -48,10 +41,12 @@ TE_AVAILABLE = te.available
 ### truth.
 FieldType: TypeAlias = Literal["scalar", "vector"]
 
-### Allowed mixed-precision modes for the autocast context. Validated only
-### structurally (via the type), not at runtime: an unknown value falls
-### through to a no-op autocast in `get_autocast_context`.
-Precision: TypeAlias = Literal["float32", "float16", "bfloat16", "float8"]
+### Allowed mixed-precision modes for the autocast context. ``"float8"`` is
+### intentionally absent: TE fp8 needs every GEMM dimension (including the
+### per-sample point count and the target ``out_dim``) padded to a multiple
+### of 16, which this recipe does not do, so it is rejected at runtime in
+### `get_autocast_context` rather than silently mis-running.
+Precision: TypeAlias = Literal["float32", "float16", "bfloat16"]
 
 
 def set_seed(seed: int | None, rank: int = 0) -> None:
@@ -226,24 +221,39 @@ def get_autocast_context(precision: Precision):
     """Return an autocast context manager for the given precision.
 
     Args:
-        precision: One of ``"float16"``, ``"bfloat16"``, ``"float8"``, or
-            ``"float32"``. For ``"float8"``, Transformer Engine must be
-            available.
+        precision: One of ``"float32"``, ``"float16"``, or ``"bfloat16"``.
+            ``"float32"`` (or any unrecognized value) yields a no-op
+            ``nullcontext``.
 
     Returns:
         An autocast context manager for the requested precision, or a
         no-op ``nullcontext`` when no casting is needed.
+
+    Raises:
+        NotImplementedError: For ``"float8"``. Transformer Engine fp8
+            requires every GEMM dimension divisible by 16 -- including the
+            per-sample point count and the target ``out_dim`` (e.g. 4) --
+            which this recipe does not pad, so fp8 would error (TE models)
+            or silently no-op (non-TE models). See
+            ``examples/cfd/external_aerodynamics/transformer_models``
+            (``update_model_params_for_fp8`` / ``pad_input_for_fp8`` /
+            ``unpad_output_for_fp8``) and TE's ``Fp8Padding`` /
+            ``Fp8Unpadding`` for what real support would require.
     """
     if precision == "float16":
         return autocast("cuda", dtype=torch.float16)
     elif precision == "bfloat16":
         return autocast("cuda", dtype=torch.bfloat16)
-    elif precision == "float8" and TE_AVAILABLE:
-        fp8_format = te_recipe.Format.HYBRID
-        fp8_recipe = te_recipe.DelayedScaling(
-            fp8_format=fp8_format, amax_history_len=16, amax_compute_algo="max"
+    elif precision == "float8":
+        raise NotImplementedError(
+            "precision='float8' is not supported in this recipe: TE fp8 needs "
+            "every GEMM dimension (the per-sample point count and the target "
+            "out_dim, e.g. 4) divisible by 16, which is not padded here. Use "
+            "float32 / float16 / bfloat16. For an fp8 reference see "
+            "examples/cfd/external_aerodynamics/transformer_models "
+            "(update_model_params_for_fp8 / pad_input_for_fp8 / "
+            "unpad_output_for_fp8) and TE's Fp8Padding / Fp8Unpadding modules."
         )
-        return te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe)
     else:
         return nullcontext()
 
