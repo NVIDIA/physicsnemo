@@ -139,6 +139,20 @@ def test_forward_rejects_mismatched_point_counts(device):
         )
 
 
+def test_forward_rejects_missing_query_sdf_when_decoder_uses_sdf(device):
+    """``forward`` raises when ``query_sdf`` is omitted but ``decoder.use_sdf=True``."""
+    model = _build_model().to(device).eval()
+    assert model.decoder.use_sdf is True
+    with pytest.raises(ValueError, match="query_sdf must be provided"):
+        model.forward(
+            context_pos=torch.randn(40, 3, device=device),
+            context_feat=torch.zeros(40, 0, device=device),
+            gen_params=torch.randn(4, device=device),
+            query_pos=torch.randn(30, 3, device=device),
+            query_sdf=None,
+        )
+
+
 def test_forward_signature_drops_target_coords():
     """The forward API no longer accepts ``target_coords``."""
     sig = inspect.signature(AeroJEPA.forward)

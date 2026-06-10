@@ -481,6 +481,10 @@ class AeroJEPA(Module):
                     "context_pos and context_feat must agree on the point count; "
                     f"got {int(context_pos.shape[0])} vs {int(context_feat.shape[0])}."
                 )
+            if query_sdf is None and getattr(self.decoder, "use_sdf", False):
+                raise ValueError(
+                    "query_sdf must be provided when the decoder has use_sdf=True."
+                )
 
         context_tokens, cond_global = self.encode_geometry(
             context_pos=context_pos,
