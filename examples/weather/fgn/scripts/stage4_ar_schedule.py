@@ -16,6 +16,12 @@
 
 """Paper Stage-4 AR-finetune scheduler (arXiv:2506.10772v1 Table A.2).
 
+**Data note**: Paper Stage 4 uses HRES-fc0 (ECMWF's high-resolution analysis)
+as ground-truth targets (Appendix A.1.2). HRES-fc0 is not publicly available
+via ARCO, so this script continues to use ERA5 ARCO throughout. This is a known
+deviation from the paper; ERA5-based AR fine-tuning still meaningfully improves
+multi-step calibration, just without the additional skill from HRES initialization.
+
 Chains multiple training stages at increasing ``ar_steps``. Table A.2
 Stage 4 is:
 

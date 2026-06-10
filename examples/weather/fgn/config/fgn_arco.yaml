@@ -53,6 +53,9 @@ model:
 training:
   experiment_name: fgn_era5
   run_id: "0"
+  # Paper trains with batch_size=64 on multi-GPU. With a single H100 at batch=4
+  # the linear scaling rule (lr ∝ batch_size) suggests lr ≈ 8e-5 × (4/64) = 5e-6,
+  # but in practice lr=8e-5 works fine for quick experiments; reduce for long runs.
   batch_size: 4
   total_train_steps: 5000   # ~1 h on a single H100 at full resolution
   print_progress_freq: 100

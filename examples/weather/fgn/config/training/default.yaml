@@ -27,7 +27,9 @@ print_progress_freq: 10
 checkpoint_freq: 50
 validation_freq: 25
 resume_checkpoint: latest
-clip_grad_norm: -1.0
+# Gradient norm clipping. All comparable models (StormCast: 1.0, GraphCast: 32.0)
+# enable this. -1.0 disables; 1.0 is a safe default for AR rollout training.
+clip_grad_norm: 1.0
 
 # Autoregressive rollout depth per training step.
 # Must match dataset.future_frames. 1 = single-step training (paper Stages

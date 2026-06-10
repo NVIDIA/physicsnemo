@@ -155,7 +155,9 @@ class Trainer:
         # torch.compile: applied BEFORE FSDP so the compiled graph covers the
         # full model forward. Skipped when ShardTensor is active (DTensor ops
         # cause graph breaks). Mirrors StormCast's torch_compile flag.
-        use_compile = bool(self.cfg.training.torch_compile) and not self.use_shard_tensor
+        use_compile = (
+            bool(self.cfg.training.torch_compile) and not self.use_shard_tensor
+        )
         if use_compile:
             self.logger.info("Compiling model with torch.compile...")
             self.model = torch.compile(self.model)
@@ -190,6 +192,7 @@ class Trainer:
             if total <= warmup:
                 return 1.0
             import math
+
             progress = (step - warmup) / max(1, total - warmup)
             cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
             return lr_min / lr_max + (1.0 - lr_min / lr_max) * cosine
@@ -419,17 +422,23 @@ class Trainer:
                 background = batch["background"].to(self.device, dtype=torch.float32)
                 inv_b = (
                     self.invariants.unsqueeze(0).expand(history.shape[0], -1, -1, -1)
-                    if self.invariants is not None else None
+                    if self.invariants is not None
+                    else None
                 )
                 latent = torch.zeros(
-                    history.shape[0], int(self.cfg.model.latent_dim),
-                    device=self.device, dtype=torch.float32
+                    history.shape[0],
+                    int(self.cfg.model.latent_dim),
+                    device=self.device,
+                    dtype=torch.float32,
                 )
-                with torch.autocast("cuda", dtype=torch.bfloat16,
-                                    enabled=torch.cuda.is_available()):
+                with torch.autocast(
+                    "cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()
+                ):
                     pred = self.model(
-                        history=history, latent=latent,
-                        background=background, invariants=inv_b,
+                        history=history,
+                        latent=latent,
+                        background=background,
+                        invariants=inv_b,
                     ).float()
                 # MSE vs first target step, averaged over batch and spatial dims → (C,)
                 mse_c = ((pred - target[:, 0]) ** 2).mean(dim=(0, -2, -1)).cpu().numpy()
@@ -438,7 +447,19 @@ class Trainer:
 
         self.model.train()
         scalar = sum(losses) / max(len(losses), 1)
-        per_channel = channel_acc / max(n_batches, 1) if channel_acc is not None else np.array([])
+        per_channel = (
+            channel_acc / max(n_batches, 1) if channel_acc is not None else np.array([])
+        )
+
+        # Sync val loss across all ranks so rank-0 logs the global mean.
+        if self.dist.world_size > 1:
+            # Pack [sum_of_losses, n_batches] so we can correctly weight each rank's
+            # contribution (ranks may see different numbers of batches at epoch end).
+            n = len(losses)
+            t = torch.tensor([scalar * n, float(n)], device=self.device)
+            torch.distributed.all_reduce(t, op=torch.distributed.ReduceOp.SUM)
+            scalar = float(t[0] / t[1].clamp_min(1.0))
+
         return scalar, per_channel
 
     def _run_validation_metrics(self) -> None:
@@ -611,6 +632,7 @@ class Trainer:
             return self.parallel_helper.sharded_data_iter(
                 self.train_loader, num_samples=remaining
             )
+
         # Plain single-process / DDP path: restart the DataLoader on exhaustion.
         def _plain() -> Iterator:
             loader_iter = iter(self.train_loader)
@@ -636,11 +658,28 @@ class Trainer:
             if clip > 0.0:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), clip)
 
+            # NaN/Inf gradients can appear in AR rollouts with bf16; zero them
+            # before the optimizer step so one bad batch doesn't corrupt params.
+            for p in self.model.parameters():
+                if p.grad is not None:
+                    torch.nan_to_num(
+                        p.grad, nan=0.0, posinf=1e5, neginf=-1e5, out=p.grad
+                    )
+
             self.optimizer.step()
             self.scheduler.step()
             self.step += 1
 
-            train_loss_val = float(loss.detach().cpu())
+            # Sync train loss across ranks so the logged value is the global mean.
+            if self.dist.world_size > 1:
+                loss_sync = loss.detach().clone()
+                torch.distributed.all_reduce(
+                    loss_sync, op=torch.distributed.ReduceOp.AVG
+                )
+                train_loss_val = float(loss_sync.cpu())
+            else:
+                train_loss_val = float(loss.detach().cpu())
+
             lr = self.optimizer.param_groups[0]["lr"]
 
             # Route to LaunchLogger (W&B / MLflow when enabled, always stdout).
@@ -667,11 +706,13 @@ class Trainer:
                         if i < len(per_ch)
                     )
                     self.logger.info(f"step={self.step} val_mse_per_ch: {ch_parts}")
-                    val_metrics.update({
-                        f"val_mse/{ch}": float(per_ch[i])
-                        for i, ch in enumerate(channels)
-                        if i < len(per_ch)
-                    })
+                    val_metrics.update(
+                        {
+                            f"val_mse/{ch}": float(per_ch[i])
+                            for i, ch in enumerate(channels)
+                            if i < len(per_ch)
+                        }
+                    )
                 with LaunchLogger("valid", epoch=self.step) as launchlog:
                     launchlog.log_minibatch(val_metrics)
                 if bool(self.cfg.training.validation_metrics):
