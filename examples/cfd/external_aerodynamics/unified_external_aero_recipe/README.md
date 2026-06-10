@@ -239,7 +239,7 @@ geometric embeddings.
 | Loss | Huber (smooth L1), normalized by total channels |
 | Optimizer | Muon (2D params) + AdamW (other params) |
 | Scheduler | StepLR (step=100, gamma=0.1) |
-| Precision | bfloat16 (float16/float32/float8 also supported) |
+| Precision | bfloat16 (float16/float32 also supported) |
 | Batch size | 1 |
 
 ### DomainMesh contract and the data-to-model mapping
@@ -395,7 +395,7 @@ python src/train.py precision=float32 training.num_epochs=100
 ```
 
 Supports checkpointing (auto-resume), TensorBoard + JSONL logging,
-mixed precision (float16/bfloat16/float8 via Transformer Engine),
+mixed precision (float16/bfloat16),
 `torch.compile`, and NVIDIA profiling.
 
 ### Infer

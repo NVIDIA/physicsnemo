@@ -157,9 +157,9 @@ def forward_pass(
             (tensor-input mode).
         model: Model whose ``forward`` accepts the resolved
             ``forward_kwargs`` as keyword arguments.
-        precision: One of ``"float32"``, ``"float16"``, ``"bfloat16"``,
-            ``"float8"``. Wraps the forward call in the matching
-            ``torch.autocast`` context; inputs keep their native dtype.
+        precision: One of ``"float32"``, ``"float16"``, or ``"bfloat16"``.
+            Wraps the forward call in the matching ``torch.autocast``
+            context; inputs keep their native dtype.
         loss_calculator: Returns ``(loss, loss_td)`` from
             ``(pred, target)`` TensorDicts.
         metric_calculator: Returns a per-field metrics ``TensorDict``.
