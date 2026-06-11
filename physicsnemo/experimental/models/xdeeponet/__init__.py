@@ -44,14 +44,12 @@ A thin 4D-FNO convenience wrapper ships alongside :class:`DeepONet`:
 - :class:`FNO4DWrapper` — wraps the library
   :class:`physicsnemo.models.fno.FNO` (``dimension=4``) and adds
   autoregressive time-axis extension over :math:`(B, X, Y, Z, T, C)` inputs.
-  The 4D FNO itself is **not** re-implemented here; use
-  :class:`physicsnemo.models.fno.FNO` with ``dimension=4`` directly when the
-  time-axis extension is not needed.
+  Use :class:`physicsnemo.models.fno.FNO` with ``dimension=4`` directly when
+  the time-axis extension is not needed.
 
-3D FNO / Conv-FNO / U-FNO operators are *not* provided as separate classes:
-they are expressed directly as :class:`DeepONet` with ``trunk=None`` and a
-:class:`SpatialBranch` composed of Fourier / UNet / Conv layers over the
-:math:`(H, W, T)` axes.
+3D FNO / Conv-FNO / U-FNO operators are expressed as :class:`DeepONet` with
+``trunk=None`` and a :class:`SpatialBranch` composed of Fourier / UNet / Conv
+layers over the :math:`(H, W, T)` axes.
 """
 
 from .branches import SpatialBranch

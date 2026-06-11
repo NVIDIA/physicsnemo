@@ -16,24 +16,14 @@
 
 """4D xFNO wrapper (3D space + time) for the xDeepONet family.
 
-The 4D Fourier Neural Operator itself is **not** re-implemented here: it is
-provided by the library model :class:`physicsnemo.models.fno.FNO` with
-``dimension=4`` (backed by
-:class:`physicsnemo.nn.module.fno_layers.FNO4DEncoder`).  This module only
-adds the one capability that the core ``FNO`` does not provide:
-
-- :class:`FNO4DWrapper` — wraps :class:`physicsnemo.models.fno.FNO`
-  (``dimension=4``) and adds **autoregressive time-axis extension**: given an
-  explicit forecast horizon via ``target_times``, the time axis is
-  right-replicate-padded so the operator predicts ``K`` future steps, and the
-  output is cropped back to those ``K`` steps.  It also adopts the channel-last
-  :math:`(B, X, Y, Z, T, C)` input/output convention and squeezes a trailing
-  unit channel.
-
-This consolidation follows reviewer feedback on the PR: the standalone 4D FNO
-core duplicated ``physicsnemo.models.fno`` / ``physicsnemo.nn.module.fno_layers``
-and was removed.  The autoregressive time-axis extension (originally from the
-Neural Operator Factory ``FNO4DNet`` wrapper) is the only piece retained here.
+Provides :class:`FNO4DWrapper`, built on the library model
+:class:`physicsnemo.models.fno.FNO` (``dimension=4``, backed by
+:class:`physicsnemo.nn.module.fno_layers.FNO4DEncoder`).  The wrapper adds
+**autoregressive time-axis extension**: given an explicit forecast horizon via
+``target_times``, the time axis is right-replicate-padded so the operator
+predicts ``K`` future steps, and the output is cropped back to those ``K``
+steps.  It also adopts the channel-last :math:`(B, X, Y, Z, T, C)`
+input/output convention and squeezes a trailing unit channel.
 
 References
 ----------
@@ -68,18 +58,18 @@ class FNO4DWrapper(Module):
     r"""4D FNO wrapper with autoregressive time-axis extension.
 
     Wraps the library :class:`physicsnemo.models.fno.FNO` (``dimension=4``)
-    and adds the autoregressive forecasting behavior that the core model does
-    not provide.  The inner ``FNO`` handles the 4D spectral encoding, optional
-    coordinate features, domain padding, and decoding; this wrapper adds:
+    and adds autoregressive time-axis forecasting on top of it.  The inner
+    ``FNO`` handles the 4D spectral encoding, optional coordinate features,
+    domain padding, and decoding; this wrapper adds:
 
     1. a channel-last :math:`(B, X, Y, Z, T, C)` input/output convention
-       (the core ``FNO`` is channel-first :math:`(B, C, X, Y, Z, T)`);
+       (the inner ``FNO`` is channel-first :math:`(B, C, X, Y, Z, T)`);
     2. **time-axis extension** — when ``target_times`` of length :math:`K`
        is supplied, the time axis is right-replicate-padded so the operator
        runs on at least :math:`\max(T_{in} + K, 2\,m_T)` steps (where
        :math:`m_T` is the time-axis Fourier-mode count) and the output is
        cropped to the last :math:`K` steps;
-    3. a trailing unit-channel squeeze (matching the original NOF behavior).
+    3. a trailing unit-channel squeeze.
 
     Parameters
     ----------
@@ -175,7 +165,6 @@ class FNO4DWrapper(Module):
         else:
             self.time_modes = int(num_fno_modes)
 
-        # The 4D FNO core is the library model -- not re-implemented here.
         self.fno = FNO(
             in_channels=in_channels,
             out_channels=out_channels,
