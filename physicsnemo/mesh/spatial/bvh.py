@@ -147,15 +147,17 @@ def _expand_leaf_hits(
     counts = leaf_count[leaf_node_indices]  # (n_hits,)
     device = leaf_query_indices.device
 
-    if int(counts.sum()) == 0:
-        return (
-            torch.empty(0, dtype=torch.long, device=device),
-            torch.empty(0, dtype=torch.long, device=device),
-        )
-
+    # repeat_interleave already materializes the expanded length, so reuse its shape
+    # (no host sync) for both the empty-check and _ragged_arange's ``total`` -- this
+    # replaces an int(counts.sum()) sync and a second sync inside _ragged_arange.
     expanded_queries = torch.repeat_interleave(leaf_query_indices, counts)
+    total = expanded_queries.shape[0]
 
-    sorted_positions, _ = _ragged_arange(starts, counts)
+    if total == 0:
+        empty = torch.empty(0, dtype=torch.long, device=device)
+        return empty, empty
+
+    sorted_positions, _ = _ragged_arange(starts, counts, total=total)
     expanded_cells = sorted_cell_order[sorted_positions]
 
     return expanded_queries, expanded_cells

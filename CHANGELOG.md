@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- FSDP2 checkpoint support: full save/load round-trip for
+  ``torch.distributed.fsdp`` v2 models, including DTensor edge cases,
+  cross-mesh reloads, and optimizer state loading.
+- Migrated the StormCast example from DDP + Domain Parallel  to FSDP2 +
+  Domain Parallel. StormCast previously used ``FullyShardedDataParallel``
+  with ``ShardingStrategy.NO_SHARD`` (equivalent to DDP) alongside domain
+  parallelism; it now uses the FSDP2 ``fully_shard`` API, producing 2D-mesh
+  DTensor parameters when ``use_shard_tensor`` is enabled.
 - Adds tensor-returning `Mesh.gradient`, `Mesh.divergence`, `Mesh.curl`, and
   `Mesh.laplacian` convenience methods to `physicsnemo.mesh`, mirroring
   `Mesh.integrate` (each returns a tensor and accepts a data key or a raw
@@ -36,6 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Supports multi-channel output, multiple decoder types (MLP, Conv,
   temporal projection), composable Fourier / UNet / Conv spatial branches
   (`SpatialBranch`), and coordinate features.
+- Adds `FNO4DWrapper` to the xdeeponet package: a thin wrapper around the
+  library `physicsnemo.models.fno.FNO` (`dimension=4`) that adds
+  autoregressive time-axis extension over `(B, X, Y, Z, T, C)` inputs (predict
+  a `K`-step forecast horizon via `target_times`).  Use
+  `physicsnemo.models.fno.FNO(dimension=4)` directly when the time-axis
+  extension is not needed.  3D FNO / Conv-FNO / U-FNO operators are expressed
+  as `DeepONet(trunk=None, dimension=3)` with a Fourier/UNet/Conv
+  `SpatialBranch`.
 - Adds `Sin` elementwise sine activation to `physicsnemo.nn`, registered
   in `ACT2FN` so it can be looked up by name (`get_activation("sin")`).
 - Adds active-learning recipe for external-aerodynamics surrogates
@@ -62,6 +78,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `physicsnemo.mesh` performance: eliminated host-device syncs on hot paths.
+  Cached topological adjacencies now store the `Adjacency` object directly instead
+  of reconstructing it (which re-ran its syncing `__post_init__` validation) on every
+  lookup — making cached adjacency lookups ~120x faster on GPU (~335us → ~3us for a
+  10k-point sphere); the BVH leaf-hit expansion drops two per-traversal-level syncs;
+  and the Laplacian smoother reuses its per-iteration buffers in place instead of
+  reallocating them.
 - `physicsnemo.mesh.Mesh.slice_cells` now accepts `None`/`Ellipsis` (keep all
   cells, return self), matching its type hint and `slice_points`;
   `gaussian_curvature_cells` reuses the cached `gaussian_curvature_vertices`

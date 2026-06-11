@@ -130,8 +130,9 @@ class Trainer:
         self._setup_data()
 
         # All ranks use the same seed so parameter initialization is identical.
-        # FSDP sync_module_states and distribute_tensor also broadcast from
-        # rank 0, but explicit seeding avoids silent dependence on those.
+        # FSDP2 (fully_shard) does not broadcast initial weights from rank 0,
+        # so this deterministic seeding is what keeps the unsharded parameter
+        # values consistent across ranks.
         torch.manual_seed(self.cfg.training.seed)
 
         # Create model and move to device
@@ -147,10 +148,10 @@ class Trainer:
         # Sharding and FSDP wrapping
         if self.use_shard_tensor:
             self.logger.info(
-                "Distributing model with FSDP and sharding for domain parallelism"
+                "Distributing model with FSDP2 and sharding for domain parallelism"
             )
         else:
-            self.logger.info("Distributing model with FSDP")
+            self.logger.info("Distributing model with FSDP2")
         self.net = self.parallel_helper.distribute_model(self.net)
         if self.regression_net is not None:
             self.regression_net = self.parallel_helper.distribute_model(

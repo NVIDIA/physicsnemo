@@ -38,12 +38,26 @@ plus the ``temporal_projection`` decoder variant.  See the
 examples; see :class:`SpatialBranch` for the spatial-encoder
 composition options (Fourier / UNet / Conv layers, multi-layer
 pointwise lift, optional coordinate-feature channels).
+
+A thin 4D-FNO convenience wrapper ships alongside :class:`DeepONet`:
+
+- :class:`FNO4DWrapper` — wraps the library
+  :class:`physicsnemo.models.fno.FNO` (``dimension=4``) and adds
+  autoregressive time-axis extension over :math:`(B, X, Y, Z, T, C)` inputs.
+  Use :class:`physicsnemo.models.fno.FNO` with ``dimension=4`` directly when
+  the time-axis extension is not needed.
+
+3D FNO / Conv-FNO / U-FNO operators are expressed as :class:`DeepONet` with
+``trunk=None`` and a :class:`SpatialBranch` composed of Fourier / UNet / Conv
+layers over the :math:`(H, W, T)` axes.
 """
 
 from .branches import SpatialBranch
 from .deeponet import DeepONet
+from .fno4d import FNO4DWrapper
 
 __all__ = [
     "DeepONet",
     "SpatialBranch",
+    "FNO4DWrapper",
 ]
