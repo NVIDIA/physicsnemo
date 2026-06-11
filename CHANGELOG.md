@@ -10,11 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds tensor-returning `Mesh.gradient`, `Mesh.divergence`, `Mesh.curl`, and
+  `Mesh.laplacian` convenience methods to `physicsnemo.mesh`, mirroring
+  `Mesh.integrate` (each returns a tensor and accepts a data key or a raw
+  tensor, with a `data_source="points"|"cells"` kwarg selecting vertex or
+  cell-centered fields). This gives the discrete differential operators a
+  consistent, discoverable surface on `Mesh`; previously divergence/curl/
+  laplacian were reachable only as free functions in `physicsnemo.mesh.calculus`.
+  Adds `compute_divergence_cells_lsq` and `compute_curl_cells_lsq` free
+  functions (cell-centered LSQ analogues); DEC operators and the cotangent
+  Laplacian remain vertex-only and raise `NotImplementedError` for cell data.
+- Adds `farthest_point_sampling` to `physicsnemo.nn.functional`, a greedy
+  farthest-point sampling (FPS) functional for point clouds.
 - Adds `FourierPositionalEmbedding` to `physicsnemo.nn`, a deterministic
   axis-wise (NeRF-style) Fourier positional embedding for continuous
-  coordinates with no learnable parameters. It owns a fixed frequency schedule
-  (octave by default, or an explicit `freqs` tensor), reports `out_dim`, and
-  optionally concatenates the raw input.
+  coordinates with no learnable parameters.
 - Adds radiation transport example (`examples/nuclear_engineering/radiation_transport`)
 - Adds agent skills structure, and initial skill for 'discoverability'.
 - Adds xDeepONet to experimental models
@@ -60,6 +70,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   platforms (smaller leaves yield fewer candidate cells per query). Containment /
   nearest-cell query results are unchanged. Adds the first direct unit tests for
   `ClusterTree` (construction invariants, aggregates, dual-tree cover).
+- `physicsnemo.mesh.Mesh.slice_cells` now accepts `None`/`Ellipsis` (keep all
+  cells, return self), matching its type hint and `slice_points`;
+  `gaussian_curvature_cells` reuses the cached `gaussian_curvature_vertices`
+  property instead of recomputing it.
+- `physicsnemo.mesh`: `validate_mesh(check_self_intersection=True)` now raises
+  `NotImplementedError` (the check is unimplemented) instead of silently returning a
+  `None` sentinel that masquerades as "no self-intersections found".
 
 ### Deprecated
 
@@ -67,6 +84,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `physicsnemo.mesh`: fixed several silent-wrong-result bugs — `slice_cells`
+  carried stale point-level and non-local (`gaussian_curvature`) caches onto the
+  sliced mesh; the intrinsic LSQ gradient returned all-zeros for codimension >= 2
+  manifolds (now estimates the tangent space via local PCA); `smooth_laplacian`
+  returned stale geometry caches after its in-place point update; `transform`
+  propagated an incorrect point-normals cache under anisotropic/shear maps; and the
+  derived-mesh methods (`compute_point_derivatives`, `compute_cell_derivatives`,
+  `cell_data_to_point_data`, `point_data_to_cell_data`) aliased the source mesh's
+  mutable `_cache`.
+- `physicsnemo.mesh`: fixed crash / data-integrity bugs — `project(...)` with
+  `transform_point_data`/`transform_cell_data=True` mutated the input mesh in
+  place; visualization and `to_pyvista` crashed on autograd-tracked tensors (now
+  detached before `.numpy()`); and integer/bool data crashed (`safe_eps` on an
+  integer dtype) or truncated via integer division during facet/scatter
+  aggregation (now computed in a floating dtype).
+- `physicsnemo.mesh`: fixed Loop subdivision pulling open boundaries inward (now
+  applies the boundary/crease mask); subdivision zero-filling integer/bool
+  `point_data` at new edge vertices (now inherits a parent label);
+  non-deterministic orientation flips and over-counted component sizes in
+  `repair.fix_orientation`; random point sampling drawing barycentric weights in
+  float32 for float64 meshes; and `Mesh.merge` not validating `point_data` /
+  `global_data` key consistency.
 - Fixed `DefaultTrainingLoop` reading `DistributedManager.device` at the class
   level (a `property` descriptor) instead of `DistributedManager().device`, which
   left the loop's device set to a `property` object under an initialized

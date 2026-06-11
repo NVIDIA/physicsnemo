@@ -411,6 +411,21 @@ def _maybe_transform_data(
     return cloned
 
 
+def _is_similarity_transform(matrix: torch.Tensor, atol: float = 1e-6) -> bool:
+    r"""Whether ``matrix`` is orthogonal up to a uniform scale (:math:`M^\top M = cI`).
+
+    Such maps -- rotations, reflections, isotropic scales, and their compositions
+    -- preserve angles. Angle-based vertex-normal weighting is therefore invariant
+    under them, so the inverse-transpose cache propagation of point normals is exact.
+    Shears and non-uniform scales fail this test.
+    """
+    n = matrix.shape[-1]
+    gram = matrix.T @ matrix
+    scale = gram.diagonal(dim1=-2, dim2=-1).mean()
+    identity = torch.eye(n, device=matrix.device, dtype=matrix.dtype)
+    return bool(torch.allclose(gram, scale * identity, atol=atol, rtol=1e-5))
+
+
 ### Public API ###
 
 
@@ -498,29 +513,42 @@ def transform(
 
             ### Full-dimensional meshes: global area scaling
             if mesh.n_manifold_dims == mesh.n_spatial_dims:
-                if (v := mesh._cache.get(("point", "areas"), None)) is not None:
-                    new_cache["point", "areas"] = v * det_abs
                 if (v := mesh._cache.get(("cell", "areas"), None)) is not None:
                     new_cache["cell", "areas"] = v * det_abs
 
             ### Codimension-1 manifolds: per-element area scaling via normals
             # Formula: area' = area * |det(M)| * ||M^{-T} n||
             elif mesh.codimension == 1:
-                if (v := mesh._cache.get(("point", "normals"), None)) is not None:
-                    transformed = torch.linalg.solve(matrix.T, v.T).T
-                    norm_scale = transformed.norm(dim=-1)
-                    if (areas := mesh._cache.get(("point", "areas"), None)) is not None:
-                        new_cache["point", "areas"] = areas * det_abs * norm_scale
-                    new_cache["point", "normals"] = det_sign * F.normalize(
-                        transformed, dim=-1
-                    )
-
+                ### Cell (face) normals: the inverse-transpose law is exact per face.
                 if (v := mesh._cache.get(("cell", "normals"), None)) is not None:
                     transformed = torch.linalg.solve(matrix.T, v.T).T
                     norm_scale = transformed.norm(dim=-1)
                     if (areas := mesh._cache.get(("cell", "areas"), None)) is not None:
                         new_cache["cell", "areas"] = areas * det_abs * norm_scale
                     new_cache["cell", "normals"] = det_sign * F.normalize(
+                        transformed, dim=-1
+                    )
+
+                ### Vertex (point) normals are a *weighted average* of incident
+                # cell normals, so the inverse-transpose law applies to the average
+                # only when M preserves the averaging weights. Area weighting (used
+                # for 1-manifolds) is preserved under any invertible M, but the
+                # angle / angle_area weighting used for 2+ manifolds is NOT preserved
+                # by anisotropic maps (interior angles change). Only propagate when
+                # the weighting is area-based (n_manifold_dims < 2) or M is a
+                # similarity; otherwise drop the cache so point_normals recomputes
+                # lazily and correctly. (Under torch.compile we conservatively skip
+                # the similarity check -- a host sync -- and drop the cache to avoid
+                # a graph break.)
+                if (v := mesh._cache.get(("point", "normals"), None)) is not None and (
+                    mesh.n_manifold_dims < 2
+                    or (
+                        not torch.compiler.is_compiling()
+                        and _is_similarity_transform(matrix)
+                    )
+                ):
+                    transformed = torch.linalg.solve(matrix.T, v.T).T
+                    new_cache["point", "normals"] = det_sign * F.normalize(
                         transformed, dim=-1
                     )
 

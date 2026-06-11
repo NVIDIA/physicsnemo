@@ -71,7 +71,9 @@ def process_scalars(
 
     ### Case 1: Direct tensor specification
     if isinstance(scalar_spec, torch.Tensor):
-        scalar_tensor = scalar_spec.cpu()
+        # .detach() so autograd-tracked scalars (e.g. a model output used to colour
+        # the mesh) don't crash the downstream .numpy() calls in either backend.
+        scalar_tensor = scalar_spec.detach().cpu()
 
         # Check first dimension matches expected count
         if scalar_tensor.shape[0] != n_expected:
@@ -95,7 +97,7 @@ def process_scalars(
     ### Case 2: Key lookup in TensorDict (str or tuple[str, ...])
     if isinstance(scalar_spec, (str, tuple)):
         try:
-            scalar_tensor = data_dict[scalar_spec].cpu()
+            scalar_tensor = data_dict[scalar_spec].detach().cpu()
         except KeyError as e:
             raise KeyError(
                 f"{name}_scalars key {scalar_spec!r} not found in {name}_data.\n"

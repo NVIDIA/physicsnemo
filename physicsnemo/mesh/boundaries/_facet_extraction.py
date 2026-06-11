@@ -635,8 +635,12 @@ def _aggregate_point_data_to_facets(
         # Shape: (n_candidate_facets, n_vertices_per_facet, *data_shape)
         facet_point_data = tensor[candidate_facets]
 
-        ### Average over vertices to get candidate facet data
+        ### Average over vertices to get candidate facet data.
+        # Promote integer/bool point data to float first: torch.mean rejects integer
+        # dtypes, and a mean of integers is real-valued anyway.
         # Shape: (n_candidate_facets, *data_shape)
+        if not torch.is_floating_point(facet_point_data):
+            facet_point_data = facet_point_data.to(torch.float64)
         candidate_facet_data = facet_point_data.mean(dim=1)
 
         ### Aggregate to unique facets using scatter_aggregate

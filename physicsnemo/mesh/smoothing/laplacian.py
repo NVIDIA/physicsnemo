@@ -232,6 +232,13 @@ def smooth_laplacian(
             if max_displacement < convergence_threshold:
                 break
 
+    ### The loop mutated mesh.points in place, so geometry caches derived from
+    ### point positions (cell_areas / cell_normals / cell_centroids, point_normals,
+    ### curvature, ...) are now stale. Invalidate them so callers recompute from the
+    ### smoothed geometry. Topology/adjacency caches depend only on `cells` (which
+    ### smoothing does not change), so they remain valid and are preserved.
+    mesh._cache["cell"] = mesh._cache["cell"].empty()
+    mesh._cache["point"] = mesh._cache["point"].empty()
     return mesh
 
 
