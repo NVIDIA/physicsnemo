@@ -1870,6 +1870,34 @@ class TestHigherCodeimension:
         grad = mesh_grad.point_data["test_gradient"]
         assert grad.shape == (mesh.n_points, 3)
 
+    def test_intrinsic_gradient_on_curve_in_3d_is_nonzero(self):
+        """Regression: intrinsic LSQ gradient on a codimension-2 manifold (a 1D
+        curve in 3D) must use a PCA-estimated tangent and return a real gradient,
+        not silently fall through to all-zeros (the pre-fix behaviour for
+        codimension >= 2, which was also the DEFAULT compute_point_derivatives path).
+        """
+        t = torch.linspace(0, 2 * torch.pi, 40)
+        points = torch.stack([torch.cos(t), torch.sin(t), t], dim=-1)
+        cells = torch.stack([torch.arange(39), torch.arange(1, 40)], dim=-1)
+        mesh = Mesh(points=points, cells=cells)
+        assert mesh.codimension == 2
+
+        # f = curve parameter t. Its intrinsic (tangential) gradient has magnitude
+        # |df/ds| = 1/||dP/dt|| = 1/sqrt(2) for this helix parametrisation.
+        mesh.point_data["f"] = t
+        mesh_grad = mesh.compute_point_derivatives(keys="f", gradient_type="intrinsic")
+        grad = mesh_grad.point_data["f_gradient"]
+
+        assert grad.shape == (mesh.n_points, 3)
+        assert torch.isfinite(grad).all()
+
+        # Interior points (2 neighbours) -- the core regression: NOT all ~zero.
+        norms = grad[1:-1].norm(dim=-1)
+        assert (norms > 0.3).all(), f"intrinsic gradient collapsed to ~zero: {norms=}"
+        # And it recovers the analytic tangential magnitude 1/sqrt(2) ~= 0.707.
+        expected = 1.0 / (2.0**0.5)
+        assert abs(norms.mean().item() - expected) / expected < 0.25
+
 
 class TestLSQWeighting:
     """Test LSQ weight variations."""

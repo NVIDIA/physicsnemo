@@ -126,6 +126,11 @@ def is_manifold(
     This function checks topological constraints but does not check for
     geometric self-intersections (which would require expensive spatial queries).
     """
+    if check_level not in ("facets", "edges", "full"):
+        raise ValueError(
+            f"Invalid {check_level=!r}. Must be 'facets', 'edges', or 'full'."
+        )
+
     ### Empty mesh is considered a valid manifold
     if mesh.n_cells == 0:
         return True

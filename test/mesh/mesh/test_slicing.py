@@ -379,3 +379,62 @@ class TestSlicingEdgeCases:
         assert sliced.n_points == 4
         assert sliced.n_cells == 2
         assert sliced.cells.tolist() == [[0, 1, 2], [0, 2, 3]]
+
+
+class TestSliceCacheInvalidation:
+    """Regression: slice_cells must not carry stale point-level / non-local caches."""
+
+    @staticmethod
+    def _surface():
+        # Two triangles sharing edge (1, 2), non-coplanar, embedded in 3D
+        # (a codimension-1 surface, so point_normals is defined).
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 1.0]],
+            dtype=torch.float64,
+        )
+        cells = torch.tensor([[0, 1, 2], [1, 3, 2]], dtype=torch.int64)
+        return Mesh(points=points, cells=cells)
+
+    def test_slice_cells_invalidates_stale_point_normals(self):
+        mesh = self._surface()
+        _ = mesh.point_normals  # warm the point-normals cache on the FULL mesh
+        assert mesh._cache.get(("point", "normals"), None) is not None
+
+        # Keep only cell [0, 1, 2]; this orphans point 3 (no incident cell).
+        sliced = mesh.slice_cells(torch.tensor([0]))
+
+        # The carried point cache must NOT be reused: point_normals must match a
+        # freshly-built mesh with the same (sliced) connectivity.
+        fresh = Mesh(points=sliced.points, cells=sliced.cells)
+        assert torch.allclose(sliced.point_normals, fresh.point_normals, atol=1e-6)
+        # Orphaned vertex 3 now has no incident cells -> zero normal (pre-fix it
+        # would have kept its stale non-zero normal from the dropped cell).
+        assert torch.allclose(
+            sliced.point_normals[3], torch.zeros(3, dtype=torch.float64)
+        )
+
+    def test_slice_cells_keeps_valid_local_cell_caches(self):
+        mesh = self._surface()
+        _ = mesh.cell_areas
+        _ = mesh.cell_normals
+        _ = mesh.cell_centroids
+        sliced = mesh.slice_cells(torch.tensor([0]))
+        # Purely-local per-cell geometry caches are validly carried (sliced).
+        assert sliced._cache.get(("cell", "areas"), None) is not None
+        fresh = Mesh(points=sliced.points, cells=sliced.cells)
+        assert torch.allclose(sliced.cell_areas, fresh.cell_areas, atol=1e-6)
+        assert torch.allclose(sliced.cell_normals, fresh.cell_normals, atol=1e-6)
+
+
+def test_slice_cells_none_and_ellipsis_keep_all():
+    """Regression: slice_cells documents None/Ellipsis (keep all) in its type hint;
+    these must return the mesh unchanged, not raise (None) or silently misbehave.
+    """
+    points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+    mesh = Mesh(points=points, cells=cells)
+    for sel in (None, ...):
+        out = mesh.slice_cells(sel)
+        assert out.n_cells == mesh.n_cells
+        assert out.n_points == mesh.n_points
+        assert torch.equal(out.cells, mesh.cells)
