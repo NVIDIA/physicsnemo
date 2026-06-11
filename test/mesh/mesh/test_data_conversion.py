@@ -227,6 +227,28 @@ class TestCellDataToPointData:
         ### Cached property should not be in point_data (should not leak from cell_data)
         assert result._cache.get(("point", "centroids"), None) is None
 
+    def test_integer_cell_field_promoted_to_float(self):
+        """Regression: integer cell fields are averaged in float, not truncated.
+
+        Averaging a per-cell integer field (e.g. a material/region ID) onto
+        points yields a generally non-integral mean, so the resulting point
+        field is promoted to floating point rather than int-truncated.
+        """
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+        cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            cell_data={"material_id": torch.tensor([1, 2], dtype=torch.int64)},
+        )
+
+        result = mesh.cell_data_to_point_data()
+
+        material = result.point_data["material_id"]
+        assert torch.is_floating_point(material)
+        # Point 1 is shared by both cells: mean(1, 2) = 1.5 (not truncated to 1).
+        assert torch.allclose(material[1], torch.tensor(1.5, dtype=material.dtype))
+
 
 class TestPointDataToCellData:
     """Tests for point_data_to_cell_data method."""
