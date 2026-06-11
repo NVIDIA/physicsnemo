@@ -931,6 +931,12 @@ class Mesh:
                 )
                 weights = weights * area_weights
 
+        else:
+            raise ValueError(
+                f"Invalid {weighting=!r}. Must be one of: "
+                f"'unweighted', 'area', 'angle', 'angle_area'."
+            )
+
         ### Apply weights and accumulate
         normals_to_accumulate = cell_normals_flat * weights.unsqueeze(-1)
 
@@ -1615,7 +1621,8 @@ class Mesh:
         manifold_codimension: int = 1,
         data_source: Literal["points", "cells"] = "cells",
         data_aggregation: Literal["mean", "area_weighted", "inverse_distance"] = "mean",
-        target_counts: "list[int] | Literal['boundary', 'shared', 'interior', 'all']" = "all",
+        target_counts: list[int]
+        | Literal["boundary", "shared", "interior", "all"] = "all",
     ) -> "Mesh":
         """Extract k-codimension facet mesh from this n-dimensional mesh.
 
@@ -1845,7 +1852,7 @@ class Mesh:
         )
 
     def to_point_cloud(
-        self, point_source: "Literal['vertices', 'cell_centroids']" = "vertices"
+        self, point_source: Literal["vertices", "cell_centroids"] = "vertices"
     ) -> "Mesh[0, ...]":
         r"""Return a 0D Mesh (point cloud) with no cell connectivity.
 
