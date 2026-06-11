@@ -58,8 +58,7 @@ def _download_or_skip(loader):
         return loader()
     except OSError as exc:
         pytest.skip(
-            f"Upstream pyvista data server unavailable for "
-            f"{loader.__name__!r}: {exc!r}"
+            f"Upstream pyvista data server unavailable for {loader.__name__!r}: {exc!r}"
         )
 
 
