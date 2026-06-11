@@ -274,9 +274,11 @@ class TestLocalPointTransformerBlock:
         # MOD-008b: non-regression against committed reference output.
         torch.manual_seed(0)
         block = _self_block(conditioning_dim=4).to(device).eval()
-        feats = torch.randn(24, 32, device=device)
-        coords = torch.randn(24, 3, device=device)
-        cond = torch.randn(4, device=device)
+        # Generate on CPU so CPU and CUDA cases consume the same RNG stream
+        # and can compare against one shared reference output.
+        feats = torch.randn(24, 32).to(device)
+        coords = torch.randn(24, 3).to(device)
+        cond = torch.randn(4).to(device)
         assert validate_forward_accuracy(
             block,
             (feats, coords, cond),
@@ -449,11 +451,13 @@ class TestLocalTokenCrossAttentionBlock:
     def test_forward_accuracy(self, device):
         torch.manual_seed(0)
         block = _cross_block(conditioning_dim=4).to(device).eval()
-        qf = torch.randn(20, 32, device=device)
-        qc = torch.randn(20, 3, device=device)
-        cf = torch.randn(14, 32, device=device)
-        cc = torch.randn(14, 3, device=device)
-        cond = torch.randn(4, device=device)
+        # Generate on CPU so CPU and CUDA cases consume the same RNG stream
+        # and can compare against one shared reference output.
+        qf = torch.randn(20, 32).to(device)
+        qc = torch.randn(20, 3).to(device)
+        cf = torch.randn(14, 32).to(device)
+        cc = torch.randn(14, 3).to(device)
+        cond = torch.randn(4).to(device)
         assert validate_forward_accuracy(
             block,
             (qf, qc, cf, cc, cond),
