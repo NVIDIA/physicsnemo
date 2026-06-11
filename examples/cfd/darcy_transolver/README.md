@@ -89,6 +89,15 @@ To train Transolver on your own physics problem, modify the `dataloader` in
 `train_transolver_darcy.py` to use your own pre-computed data or on-the-fly
 solver.
 
+#### Other models
+
+You can also use GeoTransolver, Flare, or GeoTransolver with flare attention
+for the darcy example with the "fixed" usage.  Change the `model` parameter
+to update it!  Note that the inputs to geotransolver here uses the positions
+and the `x` diffusivity to both the model trunk and encoder paths.  For these
+problems, GeoTransolver is not yet extensively tested, and your results
+may vary.
+
 ## Additional Information
 
 More components are added for convenience. `Validators` calculate the loss

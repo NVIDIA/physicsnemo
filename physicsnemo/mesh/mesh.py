@@ -30,6 +30,7 @@ from typing import (
 
 import torch
 import torch.nn.functional as F
+from jaxtyping import Float
 from tensordict import NonTensorData, TensorDict, tensorclass
 
 from physicsnemo.mesh.geometry._cell_areas import compute_cell_areas
@@ -48,6 +49,8 @@ from physicsnemo.mesh.visualization.draw_mesh import draw_mesh
 if TYPE_CHECKING:
     import matplotlib.axes
     import pyvista
+
+    from physicsnemo.mesh.neighbors._adjacency import Adjacency
 
 
 # A field on a `Mesh` is "associated with" either points (e.g. a per-vertex
@@ -416,6 +419,98 @@ class Mesh:
                     f"`points` and `cells` must be on the same device, "
                     f"but got {self.points.device=} and {self.cells.device=}."
                 )
+
+    @classmethod
+    def from_polygons(
+        cls,
+        points: torch.Tensor,
+        polygons: "Adjacency",
+        *,
+        point_data: TensorDict | dict[str, torch.Tensor] | None = None,
+        cell_data: TensorDict | dict[str, torch.Tensor] | None = None,
+        global_data: TensorDict | dict[str, torch.Tensor] | None = None,
+        assume_convex: bool = False,
+    ) -> Self:
+        r"""Build a triangulated surface :class:`Mesh` from a polygon soup.
+
+        Triangulates a polygon cell-to-vertex incidence (an
+        :class:`~physicsnemo.mesh.neighbors.Adjacency` of vertex rings, as
+        produced by VTK-style readers) into the simplex-only :class:`Mesh`
+        representation, and broadcasts any per-polygon ``cell_data`` to the
+        resulting triangles.
+
+        Triangulation uses
+        :func:`physicsnemo.mesh.tessellation.triangulate`: a vectorized
+        vertex-0 fan for convex polygons and ear clipping for the rare
+        non-convex ones (so unsigned-area-weighted integrals stay correct).
+
+        Parameters
+        ----------
+        points : torch.Tensor
+            Vertex coordinates of shape :math:`(N_\text{points}, D)`.
+        polygons : Adjacency
+            Cell-to-vertex incidence (CSR): polygon ``p`` is the vertex ring
+            ``polygons.indices[polygons.offsets[p] : polygons.offsets[p + 1]]``.
+        point_data : TensorDict or dict[str, torch.Tensor], optional
+            Per-vertex data, carried through unchanged.
+        cell_data : TensorDict or dict[str, torch.Tensor], optional
+            Per-polygon data; broadcast to each polygon's triangles via the
+            triangulation's ``parent_index``.
+        global_data : TensorDict or dict[str, torch.Tensor], optional
+            Mesh-level data, carried through unchanged.
+        assume_convex : bool, default False
+            If ``True``, skip the convexity test and ear-clip fallback and
+            fan-triangulate every polygon (correct only for convex inputs).
+
+        Returns
+        -------
+        Mesh
+            A triangle mesh (``cells`` of shape :math:`(N_\text{triangles}, 3)`).
+
+        Notes
+        -----
+        Each polygon ring must be a simple, approximately planar polygon with no
+        repeated consecutive vertices; see
+        :func:`physicsnemo.mesh.tessellation.triangulate` for the full input
+        contract.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> from physicsnemo.mesh.neighbors import Adjacency
+        >>> points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+        ...                        [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]])
+        >>> polygons = Adjacency(offsets=torch.tensor([0, 4]),  # one quad
+        ...                      indices=torch.tensor([0, 1, 2, 3]))
+        >>> mesh = Mesh.from_polygons(
+        ...     points, polygons, cell_data={"p": torch.tensor([2.5])}
+        ... )
+        >>> mesh.n_cells
+        2
+        >>> mesh.cell_data["p"].tolist()
+        [2.5, 2.5]
+        """
+        from physicsnemo.mesh.tessellation import triangulate
+
+        cells, parent_index = triangulate(points, polygons, assume_convex=assume_convex)
+
+        expanded_cell_data: TensorDict | dict[str, torch.Tensor] | None = None
+        if cell_data is not None:
+            if isinstance(cell_data, TensorDict):
+                expanded_cell_data = cell_data[parent_index]
+            else:
+                expanded_cell_data = {
+                    key: value[parent_index] for key, value in dict(cell_data).items()
+                }
+
+        return cls(
+            points=points,
+            cells=cells,
+            point_data=point_data,
+            cell_data=expanded_cell_data,
+            global_data=global_data,
+        )
 
     @classmethod
     def __class_getitem__(cls, params: tuple) -> type:
@@ -1008,10 +1103,11 @@ class Mesh:
 
     @property
     def gaussian_curvature_cells(self) -> torch.Tensor:
-        """Compute Gaussian curvature at cell centers using dual mesh concept.
+        """Compute Gaussian curvature at cell centers.
 
-        Treats cell centroids as vertices of a dual mesh and computes curvature
-        based on angles between connections to adjacent cell centroids.
+        Averages the intrinsic vertex-based Gaussian curvature (angle defect) over
+        each cell's vertices, giving a cell-centered field consistent with
+        :attr:`gaussian_curvature_vertices`.
 
         The result is cached in ``_cache["cell", "gaussian_curvature"]`` for efficiency.
 
@@ -2552,8 +2648,9 @@ class Mesh:
         Returns
         -------
         Mesh
-            Self (mesh) with gradient fields added to point_data (modified in place).
-            Field naming: "{field}_gradient" or "{field}_gradient_intrinsic/extrinsic"
+            A new Mesh with gradient fields added to point_data (the input mesh is
+            not modified; its point_data is cloned). Field naming:
+            "{field}_gradient" or "{field}_gradient_intrinsic/extrinsic"
 
         Examples
         --------
@@ -2738,6 +2835,228 @@ class Mesh:
             field=field,
             data_source=data_source,
         )
+
+    def gradient(
+        self,
+        field: str | tuple[str, ...] | Float[torch.Tensor, "n ..."],
+        method: Literal["lsq", "dec"] = "lsq",
+        gradient_type: Literal["intrinsic", "extrinsic"] = "intrinsic",
+        data_source: Literal["points", "cells"] = "points",
+    ) -> Float[torch.Tensor, "n n_spatial_dims ..."]:
+        r"""Gradient of a point or cell field, returned as a tensor.
+
+        Single-field convenience that returns the gradient tensor directly,
+        accepting a field key (looked up in ``point_data`` / ``cell_data``
+        according to ``data_source``) or a raw tensor -- mirroring
+        :meth:`integrate`. (Contrast :meth:`compute_point_derivatives` /
+        :meth:`compute_cell_derivatives`, which return a *new mesh* with the
+        gradient stored under an auto-generated key, and can process several
+        fields at once.)
+
+        Parameters
+        ----------
+        field : str, tuple[str, ...], or torch.Tensor
+            Field, by data key or by value.
+        method : {"lsq", "dec"}
+            Discretization (default ``"lsq"``). ``"dec"`` is only available for
+            point data: the DEC exterior derivative maps vertex 0-forms to edge
+            1-forms, and there is no analogous cell-to-cell operator.
+        gradient_type : {"intrinsic", "extrinsic"}
+            Project onto the tangent space (``"intrinsic"``, default) or use the
+            full ambient-space gradient (``"extrinsic"``).
+        data_source : {"points", "cells"}, optional
+            Whether ``field`` lives at vertices (default) or at cell centers.
+
+        Returns
+        -------
+        torch.Tensor
+            Gradient of shape ``(n, n_spatial_dims, *field.shape[1:])``, where
+            ``n`` is ``n_points`` or ``n_cells`` according to ``data_source``.
+        """
+        from physicsnemo.mesh.calculus.gradient import (
+            compute_gradient_cells_lsq,
+            compute_gradient_points_dec,
+            compute_gradient_points_lsq,
+            project_to_tangent_space,
+        )
+        from physicsnemo.mesh.calculus.integration import _resolve_field
+
+        if gradient_type not in ("intrinsic", "extrinsic"):
+            raise ValueError(
+                f"Invalid {gradient_type=!r}. Must be 'intrinsic' or 'extrinsic'."
+            )
+
+        values = _resolve_field(self, field, data_source)
+        match method, data_source:
+            case ("lsq", "points"):
+                return compute_gradient_points_lsq(
+                    self, values, intrinsic=(gradient_type == "intrinsic")
+                )
+            case ("lsq", "cells"):
+                grad = compute_gradient_cells_lsq(self, values)
+            case ("dec", "points"):
+                grad = compute_gradient_points_dec(self, values)
+            case ("dec", "cells"):
+                raise NotImplementedError(
+                    "DEC gradients are not available for cell data: the DEC "
+                    "exterior derivative maps vertex 0-forms to edge 1-forms, and "
+                    "there is no analogous cell-to-cell operator. Use method='lsq'."
+                )
+            case _:
+                raise ValueError(
+                    f"Invalid {method=!r} (must be 'lsq' or 'dec') or "
+                    f"{data_source=!r} (must be 'points' or 'cells')."
+                )
+        if gradient_type == "intrinsic":
+            grad = project_to_tangent_space(self, grad, data_source)
+        return grad
+
+    def divergence(
+        self,
+        field: str | tuple[str, ...] | Float[torch.Tensor, "n n_spatial_dims"],
+        method: Literal["lsq", "dec"] = "lsq",
+        data_source: Literal["points", "cells"] = "points",
+    ) -> Float[torch.Tensor, " n"]:
+        r"""Divergence of a vector point or cell field, returned as a tensor.
+
+        Accepts a field key (looked up in ``point_data`` / ``cell_data``
+        according to ``data_source``) or a raw vector tensor of shape
+        ``(n, n_spatial_dims)``, mirroring :meth:`integrate`.
+
+        Parameters
+        ----------
+        field : str, tuple[str, ...], or torch.Tensor
+            Vector field, by data key or by value.
+        method : {"lsq", "dec"}
+            Discretization (default ``"lsq"``). ``"dec"`` is only available for
+            point data (the DEC operators act on vertex forms).
+        data_source : {"points", "cells"}, optional
+            Whether ``field`` lives at vertices (default) or at cell centers.
+
+        Returns
+        -------
+        torch.Tensor
+            Scalar divergence per entity, shape ``(n_points,)`` or ``(n_cells,)``
+            according to ``data_source``.
+        """
+        from physicsnemo.mesh.calculus.divergence import (
+            compute_divergence_cells_lsq,
+            compute_divergence_points_dec,
+            compute_divergence_points_lsq,
+        )
+        from physicsnemo.mesh.calculus.integration import _resolve_field
+
+        values = _resolve_field(self, field, data_source)
+        match method, data_source:
+            case ("lsq", "points"):
+                return compute_divergence_points_lsq(self, values)
+            case ("lsq", "cells"):
+                return compute_divergence_cells_lsq(self, values)
+            case ("dec", "points"):
+                return compute_divergence_points_dec(self, values)
+            case ("dec", "cells"):
+                raise NotImplementedError(
+                    "DEC divergence is not available for cell data (the DEC "
+                    "operators act on vertex forms). Use method='lsq'."
+                )
+            case _:
+                raise ValueError(
+                    f"Invalid {method=!r} (must be 'lsq' or 'dec') or "
+                    f"{data_source=!r} (must be 'points' or 'cells')."
+                )
+
+    def curl(
+        self,
+        field: str | tuple[str, ...] | Float[torch.Tensor, "n 3"],
+        data_source: Literal["points", "cells"] = "points",
+    ) -> Float[torch.Tensor, "n 3"]:
+        r"""Curl of a 3D vector point or cell field (LSQ), returned as a tensor.
+
+        Accepts a field key (looked up in ``point_data`` / ``cell_data``
+        according to ``data_source``) or a raw vector tensor of shape
+        ``(n, 3)``, mirroring :meth:`integrate`. Only defined for
+        ``n_spatial_dims == 3``.
+
+        Parameters
+        ----------
+        field : str, tuple[str, ...], or torch.Tensor
+            Vector field, by data key or by value.
+        data_source : {"points", "cells"}, optional
+            Whether ``field`` lives at vertices (default) or at cell centers.
+
+        Returns
+        -------
+        torch.Tensor
+            Curl vector per entity, shape ``(n_points, 3)`` or ``(n_cells, 3)``
+            according to ``data_source``.
+        """
+        from physicsnemo.mesh.calculus.curl import (
+            compute_curl_cells_lsq,
+            compute_curl_points_lsq,
+        )
+        from physicsnemo.mesh.calculus.integration import _resolve_field
+
+        values = _resolve_field(self, field, data_source)
+        match data_source:
+            case "points":
+                return compute_curl_points_lsq(self, values)
+            case "cells":
+                return compute_curl_cells_lsq(self, values)
+            case _:
+                raise ValueError(
+                    f"Invalid {data_source=!r}. Must be 'points' or 'cells'."
+                )
+
+    def laplacian(
+        self,
+        field: str | tuple[str, ...] | Float[torch.Tensor, "n ..."],
+        data_source: Literal["points", "cells"] = "points",
+    ) -> Float[torch.Tensor, "n ..."]:
+        r"""Laplace-Beltrami operator on a point field (DEC), returned as a tensor.
+
+        Uses the intrinsic cotangent Laplacian
+        (:func:`physicsnemo.mesh.calculus.compute_laplacian_points_dec`). Accepts a
+        field key (looked up in ``point_data``) or a raw point tensor, mirroring
+        :meth:`integrate`.
+
+        Parameters
+        ----------
+        field : str, tuple[str, ...], or torch.Tensor
+            Point field, by ``point_data`` key or by value.
+        data_source : {"points", "cells"}, optional
+            Only ``"points"`` is supported: the cotangent Laplace-Beltrami
+            operator is defined on vertex functions, and there is no DEC
+            Laplacian for cell-centered data. The kwarg exists for signature
+            consistency with :meth:`gradient` / :meth:`divergence` / :meth:`curl`;
+            passing ``"cells"`` raises. (For a cell-centered Laplacian, compose
+            ``mesh.divergence(mesh.gradient(f, gradient_type="extrinsic",
+            data_source="cells"), data_source="cells")`` explicitly -- a double-LSQ
+            discretization with different accuracy properties.)
+
+        Returns
+        -------
+        torch.Tensor
+            Laplace-Beltrami of the field, same shape as the input field.
+        """
+        from physicsnemo.mesh.calculus.integration import _resolve_field
+        from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
+
+        match data_source:
+            case "points":
+                values = _resolve_field(self, field, "points")
+                return compute_laplacian_points_dec(self, values)
+            case "cells":
+                raise NotImplementedError(
+                    "Mesh.laplacian only supports point data: the cotangent "
+                    "Laplace-Beltrami operator is defined on vertex functions, and "
+                    "there is no DEC Laplacian for cell-centered data. For a "
+                    "cell-centered Laplacian, compose divergence(gradient(...)) with "
+                    "data_source='cells' explicitly."
+                )
+            case _:
+                raise ValueError(
+                    f"Invalid {data_source=!r}. Must be 'points' or 'cells'."
+                )
 
     def validate(
         self,

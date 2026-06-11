@@ -14,10 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Spatial cluster tree for dual-tree Barnes-Hut acceleration of GLOBE kernels.
+"""Spatial cluster tree for dual-tree Barnes-Hut acceleration.
 
 This module provides a GPU-compatible hierarchical spatial decomposition over a
-set of points, designed for dual-tree Barnes-Hut O(N) kernel acceleration.
+set of points, designed for dual-tree Barnes-Hut O(N) acceleration of
+kernel-summation and attention-style operators (e.g. GLOBE's field kernels and
+mesh attention layers).
 Trees are built over both source and target points.  The dual-tree traversal
 classifies (target_node, source_node) pairs as near-field or far-field:
 
@@ -44,14 +46,14 @@ import logging
 from typing import NamedTuple
 
 import torch
-from jaxtyping import Bool, Float, Int
+from jaxtyping import Float, Int
 from tensordict import TensorDict, tensorclass
 from torch.profiler import record_function
 
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
 from physicsnemo.mesh.spatial.bvh import _compute_morton_codes
 
-logger = logging.getLogger("globe.cluster_tree")
+logger = logging.getLogger("mesh.spatial.cluster_tree")
 
 
 # ---------------------------------------------------------------------------
@@ -134,14 +136,30 @@ class DualInteractionPlan:
         """
         ### Shape pairing: matched tensor pairs must have identical lengths
         pairs: list[tuple[str, torch.Tensor, str, torch.Tensor]] = [
-            ("near_target_ids", self.near_target_ids,
-             "near_source_ids", self.near_source_ids),
-            ("far_target_node_ids", self.far_target_node_ids,
-             "far_source_node_ids", self.far_source_node_ids),
-            ("nf_target_ids", self.nf_target_ids,
-             "nf_source_node_ids", self.nf_source_node_ids),
-            ("fn_target_node_ids", self.fn_target_node_ids,
-             "fn_source_ids", self.fn_source_ids),
+            (
+                "near_target_ids",
+                self.near_target_ids,
+                "near_source_ids",
+                self.near_source_ids,
+            ),
+            (
+                "far_target_node_ids",
+                self.far_target_node_ids,
+                "far_source_node_ids",
+                self.far_source_node_ids,
+            ),
+            (
+                "nf_target_ids",
+                self.nf_target_ids,
+                "nf_source_node_ids",
+                self.nf_source_node_ids,
+            ),
+            (
+                "fn_target_node_ids",
+                self.fn_target_node_ids,
+                "fn_source_ids",
+                self.fn_source_ids,
+            ),
         ]
         for name_a, a, name_b, b in pairs:
             if a.shape != b.shape:
@@ -157,9 +175,7 @@ class DualInteractionPlan:
             ("fn_broadcast_counts", self.fn_broadcast_counts),
         ]:
             if tensor.shape != (n_fn,):
-                raise ValueError(
-                    f"{name}.shape={tensor.shape!r}, expected ({n_fn},)"
-                )
+                raise ValueError(f"{name}.shape={tensor.shape!r}, expected ({n_fn},)")
             if tensor.numel() > 0 and (tensor < 0).any():
                 raise ValueError(f"{name} contains negative values")
 
@@ -169,7 +185,10 @@ class DualInteractionPlan:
         if n_fn > 0:
             nonzero = self.fn_broadcast_counts > 0
             if nonzero.any():
-                ends = self.fn_broadcast_starts[nonzero] + self.fn_broadcast_counts[nonzero]
+                ends = (
+                    self.fn_broadcast_starts[nonzero]
+                    + self.fn_broadcast_counts[nonzero]
+                )
                 max_end = ends.max().item()
                 bcast_len = self.fn_broadcast_targets.shape[0]
                 if max_end > bcast_len:
@@ -233,11 +252,18 @@ class _ExpandedLeafHits(NamedTuple):
         el = torch.empty(0, dtype=torch.long, device=device)
         eb = torch.empty(0, dtype=torch.bool, device=device)
         return cls(
-            near_tgts=el, near_srcs=el.clone(),
-            nf_tgts=el.clone(), nf_snids=el.clone(), nf_validity=eb,
-            fn_sids=el.clone(), fn_tnids=el.clone(), fn_validity=eb.clone(),
-            fn_bcast_starts=el.clone(), fn_bcast_counts=el.clone(),
-            fn_bcast_targets=el.clone(), fn_bcast_targets_validity=eb.clone(),
+            near_tgts=el,
+            near_srcs=el.clone(),
+            nf_tgts=el.clone(),
+            nf_snids=el.clone(),
+            nf_validity=eb,
+            fn_sids=el.clone(),
+            fn_tnids=el.clone(),
+            fn_validity=eb.clone(),
+            fn_bcast_starts=el.clone(),
+            fn_bcast_counts=el.clone(),
+            fn_bcast_targets=el.clone(),
+            fn_bcast_targets_validity=eb.clone(),
         )
 
 
@@ -398,9 +424,7 @@ def _expand_dual_leaf_hits(
     ### Per-lp active count via weighted ``scatter_add_``.  Weight =
     ### ``active_validity.long()``, so non-active entries contribute zero.
     active_counts_per_lp = torch.zeros(n_pairs, dtype=torch.long, device=device)
-    active_counts_per_lp.scatter_add_(
-        0, leaf_pair_ids_t, active_validity.long()
-    )
+    active_counts_per_lp.scatter_add_(0, leaf_pair_ids_t, active_validity.long())
     active_starts_per_lp = active_counts_per_lp.cumsum(0) - active_counts_per_lp
 
     ### Return broadcast_starts/counts aligned with the *full* per-source
@@ -413,9 +437,7 @@ def _expand_dual_leaf_hits(
     # ==================================================================
     ### Per-lp count of close sources via weighted ``scatter_add_``.
     close_counts_per_lp = torch.zeros(n_pairs, dtype=torch.long, device=device)
-    close_counts_per_lp.scatter_add_(
-        0, leaf_pair_ids_s, (~source_is_far).long()
-    )
+    close_counts_per_lp.scatter_add_(0, leaf_pair_ids_s, (~source_is_far).long())
 
     ### Sort sources by ``(leaf_pair_id, source_is_far)`` so within each
     ### lp's contiguous block the close sources come first (key
@@ -834,7 +856,10 @@ class ClusterTree:
         leaf_count_trimmed = leaf_count_buf[:node_count]
         logger.debug(
             "ClusterTree: %d points -> %d nodes, depth %d, leaf_size=%d",
-            n_points, node_count, actual_depth, leaf_size,
+            n_points,
+            node_count,
+            actual_depth,
+            leaf_size,
         )
 
         return cls(
@@ -932,9 +957,9 @@ class ClusterTree:
         ### range-sum; cast back to ``source_points.dtype`` at the end.
         safe_areas_64 = self.node_total_area.double().clamp(min=1e-30)
         with record_function("cluster_tree::node_centroids"):
-            centroid_buf = (
-                node_total_weighted_pts / safe_areas_64.unsqueeze(-1)
-            ).to(source_points.dtype)
+            centroid_buf = (node_total_weighted_pts / safe_areas_64.unsqueeze(-1)).to(
+                source_points.dtype
+            )
 
         node_source_data: TensorDict | None = None
         if source_data is not None:
@@ -1138,9 +1163,7 @@ class ClusterTree:
                     counts_masked = torch.where(
                         is_far, counts_full, torch.zeros_like(counts_full)
                     )
-                    positions, pair_ids = _ragged_arange(
-                        starts_full, counts_masked
-                    )
+                    positions, pair_ids = _ragged_arange(starts_full, counts_masked)
                     nf_filtered_target_list.append(
                         target_tree.sorted_source_order[positions]
                     )
@@ -1186,12 +1209,8 @@ class ClusterTree:
                 # the original implementation.  After unioning the eight
                 # potential child slots we pay ONE boolean compaction
                 # instead of the original ~12 ``.any()``-gated indexings.
-                do_split_T = (~is_leaf_T) & (
-                    is_leaf_S | (diam_sq_T >= diam_sq_S)
-                )
-                do_split_S = (~is_leaf_S) & (
-                    is_leaf_T | (diam_sq_S >= diam_sq_T)
-                )
+                do_split_T = (~is_leaf_T) & (is_leaf_S | (diam_sq_T >= diam_sq_S))
+                do_split_S = (~is_leaf_S) & (is_leaf_T | (diam_sq_S >= diam_sq_T))
                 case_T_only = need_split & do_split_T & (~do_split_S)
                 case_S_only = need_split & do_split_S & (~do_split_T)
                 case_both = need_split & do_split_T & do_split_S
@@ -1215,26 +1234,42 @@ class ClusterTree:
                 # 6: case_both,   (left_T,  right_S)
                 # 7: case_both,   (right_T, left_S)
                 # 8: case_both,   (right_T, right_S)
-                slot_t = torch.stack([
-                    left_T, right_T,
-                    active_tgt_nodes, active_tgt_nodes,
-                    left_T, left_T, right_T, right_T,
-                ])
-                slot_s = torch.stack([
-                    active_src_nodes, active_src_nodes,
-                    left_S, right_S,
-                    left_S, right_S, left_S, right_S,
-                ])
-                slot_v = torch.stack([
-                    case_T_only & left_T_ok,
-                    case_T_only & right_T_ok,
-                    case_S_only & left_S_ok,
-                    case_S_only & right_S_ok,
-                    case_both & left_T_ok & left_S_ok,
-                    case_both & left_T_ok & right_S_ok,
-                    case_both & right_T_ok & left_S_ok,
-                    case_both & right_T_ok & right_S_ok,
-                ])
+                slot_t = torch.stack(
+                    [
+                        left_T,
+                        right_T,
+                        active_tgt_nodes,
+                        active_tgt_nodes,
+                        left_T,
+                        left_T,
+                        right_T,
+                        right_T,
+                    ]
+                )
+                slot_s = torch.stack(
+                    [
+                        active_src_nodes,
+                        active_src_nodes,
+                        left_S,
+                        right_S,
+                        left_S,
+                        right_S,
+                        left_S,
+                        right_S,
+                    ]
+                )
+                slot_v = torch.stack(
+                    [
+                        case_T_only & left_T_ok,
+                        case_T_only & right_T_ok,
+                        case_S_only & left_S_ok,
+                        case_S_only & right_S_ok,
+                        case_both & left_T_ok & left_S_ok,
+                        case_both & left_T_ok & right_S_ok,
+                        case_both & right_T_ok & left_S_ok,
+                        case_both & right_T_ok & right_S_ok,
+                    ]
+                )
 
                 ### One sync per iteration: the boolean compaction below.
                 ### Each ``tensor[bool_mask]`` lowers to ``aten::nonzero``;
@@ -1252,30 +1287,40 @@ class ClusterTree:
             ### :func:`_compact_sentinel_padded` for the protocol.
             empty_long = torch.empty(0, dtype=torch.long, device=device)
 
-            near_tgt = torch.cat(near_target_list) if near_target_list else \
-                empty_long.clone()
-            near_src = torch.cat(near_source_list) if near_source_list else \
-                empty_long.clone()
+            near_tgt = (
+                torch.cat(near_target_list) if near_target_list else empty_long.clone()
+            )
+            near_src = (
+                torch.cat(near_source_list) if near_source_list else empty_long.clone()
+            )
 
             ### Far-field stream: deferred (unfiltered + validity).
             far_tgt_nid, far_src_nid = _compact_deferred(
-                far_tgt_unfiltered_list, far_src_unfiltered_list,
-                validity_list=far_validity_list, device=device,
+                far_tgt_unfiltered_list,
+                far_src_unfiltered_list,
+                validity_list=far_validity_list,
+                device=device,
             )
 
             ### (near, far) stream: combine deferred entries from
             ### ``_expand_dual_leaf_hits`` with the already-filtered
             ### entries from the ``expand_far_targets=True`` branch.
             nf_def_tgt, nf_def_snid = _compact_deferred(
-                nf_deferred_target_list, nf_deferred_source_node_list,
-                validity_list=nf_deferred_validity_list, device=device,
+                nf_deferred_target_list,
+                nf_deferred_source_node_list,
+                validity_list=nf_deferred_validity_list,
+                device=device,
             )
-            nf_tgt = torch.cat(
-                [nf_def_tgt, *nf_filtered_target_list]
-            ) if nf_filtered_target_list else nf_def_tgt
-            nf_snid = torch.cat(
-                [nf_def_snid, *nf_filtered_source_node_list]
-            ) if nf_filtered_source_node_list else nf_def_snid
+            nf_tgt = (
+                torch.cat([nf_def_tgt, *nf_filtered_target_list])
+                if nf_filtered_target_list
+                else nf_def_tgt
+            )
+            nf_snid = (
+                torch.cat([nf_def_snid, *nf_filtered_source_node_list])
+                if nf_filtered_source_node_list
+                else nf_def_snid
+            )
 
             ### (far, near) + broadcast streams.  The fn tensors and
             ### the per-source ``fn_bcast_starts/counts`` are aligned
@@ -1286,9 +1331,12 @@ class ClusterTree:
             ### into the compacted space.
             if fn_deferred_validity_list:
                 fn_tnid, fn_sid, fn_bstarts_padded, fn_bcounts = _compact_deferred(
-                    fn_deferred_tgt_node_list, fn_deferred_src_list,
-                    fn_bcast_starts_list, fn_bcast_counts_list,
-                    validity_list=fn_deferred_validity_list, device=device,
+                    fn_deferred_tgt_node_list,
+                    fn_deferred_src_list,
+                    fn_bcast_starts_list,
+                    fn_bcast_counts_list,
+                    validity_list=fn_deferred_validity_list,
+                    device=device,
                 )
                 fn_btgts, fn_bstarts = _compact_sentinel_padded(
                     torch.cat(fn_bcast_targets_list),
@@ -1334,8 +1382,13 @@ class ClusterTree:
         logger.debug(
             "dual traversal: %d near + %d nf + %d fn + %d far_node pairs, "
             "theta=%.2f, self_interaction=%s, %d iterations",
-            plan.n_near, plan.n_nf, plan.n_fn, plan.n_far_nodes,
-            theta, is_self, depth,
+            plan.n_near,
+            plan.n_nf,
+            plan.n_fn,
+            plan.n_far_nodes,
+            theta,
+            is_self,
+            depth,
         )
 
         return plan
@@ -1410,5 +1463,3 @@ def _fill_leaf_aggregates(
     aabb_min_buf[leaf_nids] = seg_min
     aabb_max_buf[leaf_nids] = seg_max
     total_area_buf[leaf_nids] = leaf_areas
-
-

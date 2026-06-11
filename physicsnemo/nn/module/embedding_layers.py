@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from typing import Literal
 
 import numpy as np
@@ -257,3 +258,134 @@ class OneHotEmbedding(Module):
         r"""Forward pass computing soft one-hot embeddings."""
         ind = (t.view(-1, 1) * (self.num_channels - 1)).to(self.indices.dtype)
         return torch.clamp(1 - torch.abs(ind - self.indices), min=0)
+
+
+class FourierPositionalEmbedding(Module):
+    r"""Deterministic axis-wise Fourier positional embedding (NeRF-style).
+
+    Lifts each input coordinate into a higher-dimensional feature by
+    concatenating ``sin`` and ``cos`` of the coordinate scaled by a fixed set
+    of frequencies. Unlike :class:`FourierEmbedding` (random Gaussian
+    frequencies on a scalar) and
+    :class:`physicsnemo.nn.module.fourier_layers.FourierLayer` (a learned /
+    projected frequency matrix that mixes coordinate axes), this layer applies
+    a deterministic frequency schedule independently per coordinate axis and
+    has no learnable parameters. It is the encoding commonly used by implicit
+    / INR-style decoders that map continuous query coordinates to a field.
+
+    The output is laid out axis-major: for each input axis, the ``num_bands``
+    sine terms are followed by the ``num_bands`` cosine terms, optionally
+    preceded by the raw input. See also
+    :func:`physicsnemo.nn.module.fourier_layers.fourier_encode`, the functional
+    per-axis Fourier feature map used by :class:`FourierMLP`.
+
+    By default the frequencies follow a geometric (octave) schedule
+    ``base_freq * freq_scale ** i`` for ``i`` in ``[0, num_bands)`` (the
+    defaults ``base_freq = pi`` and ``freq_scale = 2`` give
+    ``pi, 2*pi, 4*pi, ...``). An explicit ``freqs`` tensor may be supplied
+    instead, in which case ``num_bands`` / ``base_freq`` / ``freq_scale`` are
+    ignored.
+
+    Parameters
+    ----------
+    in_dim : int, optional, default=3
+        Dimension of the input coordinates.
+    num_bands : int, optional, default=10
+        Number of frequency bands when ``freqs`` is not given.
+    include_input : bool, optional, default=True
+        Prepend the raw input coordinates to the embedding.
+    base_freq : float, optional, default=math.pi
+        Frequency of the first band for the generated schedule.
+    freq_scale : float, optional, default=2.0
+        Geometric ratio between consecutive band frequencies for the
+        generated schedule.
+    freqs : torch.Tensor, optional, default=None
+        Explicit 1-D frequency schedule of shape :math:`(F,)` with
+        :math:`F \geq 1`. Overrides ``num_bands``, ``base_freq`` and
+        ``freq_scale`` when provided. A non-1-D ``freqs`` raises ``ValueError``.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input coordinates of shape :math:`(\ldots, D_{in})`, where
+        :math:`D_{in}` is ``in_dim`` and :math:`\ldots` is any number of
+        leading (batch) dimensions.
+
+    Outputs
+    -------
+    torch.Tensor
+        Encoded coordinates of shape :math:`(\ldots, D_{out})` with
+        :math:`D_{out} =` ``in_dim * include_input + 2 * in_dim * num_bands``.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.nn import FourierPositionalEmbedding
+    >>> emb = FourierPositionalEmbedding(in_dim=3, num_bands=4)
+    >>> emb.out_dim
+    27
+    >>> emb(torch.zeros(5, 3)).shape
+    torch.Size([5, 27])
+    """
+
+    def __init__(
+        self,
+        in_dim: int = 3,
+        num_bands: int = 10,
+        include_input: bool = True,
+        base_freq: float = math.pi,
+        freq_scale: float = 2.0,
+        freqs: Float[Tensor, "num_freqs"] | None = None,  # noqa: F821
+    ):
+        super().__init__()
+        if in_dim < 1:
+            raise ValueError(f"in_dim must be >= 1, got {in_dim}")
+        if freqs is None:
+            if num_bands < 1:
+                raise ValueError(f"num_bands must be >= 1, got {num_bands}")
+            freqs = base_freq * freq_scale ** torch.arange(
+                num_bands, dtype=torch.float32
+            )
+        else:
+            freqs = freqs.to(torch.float32)
+            if freqs.ndim != 1 or freqs.numel() < 1:
+                raise ValueError(
+                    "freqs must be a 1-D tensor of shape (F,) with F >= 1, "
+                    f"got shape {tuple(freqs.shape)}."
+                )
+        self.in_dim = int(in_dim)
+        self.include_input = bool(include_input)
+        # Persistent so an explicitly supplied ``freqs`` schedule survives a
+        # state_dict round-trip; it cannot always be regenerated from the
+        # constructor arguments.
+        self.register_buffer("freqs", freqs)
+
+    @property
+    def num_bands(self) -> int:
+        r"""Number of frequency bands in the schedule."""
+        return int(self.freqs.numel())
+
+    @property
+    def out_dim(self) -> int:
+        r"""Output feature dimension :math:`D_{out}`."""
+        base = self.in_dim if self.include_input else 0
+        return base + 2 * self.in_dim * self.num_bands
+
+    def forward(
+        self, x: Float[Tensor, "*dims in_dim"]
+    ) -> Float[Tensor, "*dims out_dim"]:
+        r"""Encode coordinates ``x``; see the class docstring for shapes."""
+        # Skip validation when running under torch.compile (MOD-005).
+        if not torch.compiler.is_compiling():
+            if x.shape[-1] != self.in_dim:
+                raise ValueError(
+                    f"Expected tensor with last dim {self.in_dim}, "
+                    f"got tensor of shape {tuple(x.shape)}"
+                )
+        # (..., D, F): each coordinate scaled by every frequency.
+        scaled = x.unsqueeze(-1) * self.freqs.to(x.dtype)
+        # Axis-major layout: per axis, num_bands sines then num_bands cosines.
+        enc = torch.cat([scaled.sin(), scaled.cos()], dim=-1).flatten(-2)
+        if self.include_input:
+            return torch.cat([x, enc], dim=-1)
+        return enc
