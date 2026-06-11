@@ -91,6 +91,9 @@ performance benefits.
   with feature preservation
 - **Remeshing**: Uniform remeshing via clustering (dimension-agnostic)
 - **Repair**: Remove duplicates, fix orientation, fill holes, clean topology
+- **Tessellation**: Triangulate polygon soups into simplicial meshes (convex
+  fan + [ear clipping](https://en.wikipedia.org/wiki/Polygon_triangulation) for
+  non-convex polygons); also `Mesh.from_polygons`
 
 **Analysis Tools:**
 
@@ -301,6 +304,8 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | Laplacian smoothing | ✅ | |
 | **Remeshing** | | |
 | Uniform remeshing | ✅ | Clustering-based |
+| **Tessellation** | | |
+| Polygon-soup triangulation | ✅ | Convex fan + ear-clip; `Mesh.from_polygons` |
 | **Spatial Queries** | | |
 | BVH construction | ✅ | |
 | Point containment | ✅ | |
@@ -554,6 +559,8 @@ Key design decisions enable these principles:
   curvature
 - [`physicsnemo.mesh.subdivision`](./subdivision/) - Mesh refinement
   schemes
+- [`physicsnemo.mesh.tessellation`](./tessellation/) - Polygon-soup
+  triangulation
 - [`physicsnemo.mesh.boundaries`](./boundaries/) - Boundary detection
   and facet extraction
 - [`physicsnemo.mesh.neighbors`](./neighbors/) - Adjacency computations
