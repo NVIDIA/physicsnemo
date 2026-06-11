@@ -14,18 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .farthest_point_sampling import FarthestPointSampling, farthest_point_sampling
-from .mesh_poisson_disk_sample import MeshPoissonDiskSample, mesh_poisson_disk_sample
-from .mesh_to_voxel_fraction import MeshToVoxelFraction, mesh_to_voxel_fraction
-from .sdf import SignedDistanceField, signed_distance_field
+"""Tessellation: decompose non-simplicial cells into a simplex mesh.
 
-__all__ = [
-    "FarthestPointSampling",
-    "MeshPoissonDiskSample",
-    "MeshToVoxelFraction",
-    "SignedDistanceField",
-    "farthest_point_sampling",
-    "mesh_poisson_disk_sample",
-    "mesh_to_voxel_fraction",
-    "signed_distance_field",
-]
+Exposes :func:`triangulate`, which converts a polygon soup (an ``Adjacency`` of
+cell-to-vertex rings) into a triangle connectivity, staying correct for
+non-convex polygons. It branches on manifold dimension and currently implements
+the 2D (polygon -> triangle) case.
+"""
+
+from physicsnemo.mesh.tessellation.triangulate import triangulate
+
+__all__ = ["triangulate"]

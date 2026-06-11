@@ -19,6 +19,10 @@ available both as ``Mesh`` methods and as standalone functions in the
 corresponding submodules. The methods are thin wrappers that pass ``self`` to
 the standalone functions.
 
+To construct a triangle mesh from a surface mesh whose cells are arbitrary
+polygons -- a "polygon soup" (see :doc:`tessellation`) -- use
+:meth:`Mesh.from_polygons`.
+
 .. code:: python
 
     import torch
