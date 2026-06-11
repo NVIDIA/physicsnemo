@@ -222,7 +222,7 @@ runs/geotransolver/surface/al_shiftsuv_uq/joint_uq/
 
 ## Acquisition strategies
 
-Three strategies ship with this example, all implementing the
+Four strategies ship with this example, all implementing the
 `physicsnemo.active_learning.QueryStrategy` protocol. Select via
 `++acquisition=…`:
 
@@ -231,6 +231,7 @@ Three strategies ship with this example, all implementing the
 | **JointUQQueryStrategy** | `joint_uq` | The recommended UQ-driven default. Per-sample score is `max(|disagreement|, 2 · GP_std)`, where *disagreement* is `|Cd_GP − Cd_field|` — i.e. the gap between the GP-head Cd prediction and the field-integrated Cd recovered from the same forward pass. |
 | **RandomQueryStrategy** | `random` | Pure random baseline (uniform over the pool). Use as a UQ-vs-random sanity check. |
 | **ClassBalancedRandomQueryStrategy** | `class_balanced_random` | Random *within each class*, with the per-round budget split proportionally. Use as a strong baseline that controls for class imbalance in the pool. |
+| **LatentNoveltyQueryStrategy** | `latent_novelty` | Encoder-only novelty signal: each round we calibrate the embedded `OODGuard` (from `physicsnemo.experimental.guardrails.embedded`) on the currently labeled set, then rank unlabeled samples by their average kNN cosine distance in the learned geometry-latent space. Reuses the same guardrail that flags OOD inputs at inference time as the acquisition signal. The first round falls back to class-balanced random because the calibration buffer is empty. |
 
 Adding a new strategy is a matter of subclassing `QueryStrategy` from
 `physicsnemo.active_learning.protocols`, implementing
@@ -246,9 +247,10 @@ AL setup involves an oracle that synthesizes labels on demand.
 
 The plot below summarizes a experiment on the ShiftSUV
 out-of-distribution dataset (1727 total samples; 181 held out for test,
-leaving 1546 in the trainable pool). UQ and class-balanced random both
-close the gap between the pretrained DrivAerStar Fastback-only model and a
-ShiftSUV full-data ceiling that sees every trainable sample (n = 1546). Pressure
+leaving 1546 in the trainable pool). All three acquisition strategies —
+joint UQ, class-balanced random, and latent novelty — close the gap
+between the pretrained DrivAerStar Fastback-only model and a ShiftSUV
+full-data ceiling that sees every trainable sample (n = 1546). Pressure
 and wall-shear-stress (WSS) RMS errors are reported in physical units
 after un-standardization.
 
@@ -276,11 +278,11 @@ and wall-shear-stress magnitude. The violins below show how the
 **distribution of per-sample correlations** tightens across rounds:
 the median moves toward 1.0, the 5th-percentile dashed line catches
 up (worst-case samples improve faster than the best-case ones), and
-the lower tail of the violin shrinks. Both UQ and class-balanced
-random reach median ρ > 0.97 by round 16 (n=160 labels) — well before
-the labels-needed thresholds in the table below — meaning the spatial
-patterns are already correct long before the absolute RMS hits its
-asymptote.
+the lower tail of the violin shrinks. All three strategies — UQ,
+class-balanced random, and latent novelty — reach median ρ > 0.97 by
+round 16 (n=160 labels) — well before the labels-needed thresholds in
+the table below — meaning the spatial patterns are already correct
+long before the absolute RMS hits its asymptote.
 
 ![Per-sample Spearman correlations across AL rounds](../../../../docs/img/al_aero_shiftsuv_correlations.png)
 
@@ -290,22 +292,26 @@ Numbers from the rightmost panel of the summary plot —
 **labels needed to land within X% of the full-data RMS asymptote**
 (n_pool = 1546):
 
-| Within X% of ceiling | Joint-UQ labels | Class-bal random labels | Fraction of pool |
-|----------------------|-----------------|-------------------------|------------------|
-| 100% | 220 | 210 | ~14% |
-| 50% | 410 | 390 | ~26% |
-| 25% | 650 | 630 | ~41% |
-| 10% | 910 | 930 | ~60% |
-| 5% | 1040 | 1060 | ~67% |
+| Within X% of ceiling | Joint-UQ labels | Class-bal random labels | Latent-novelty labels | Fraction of pool |
+|----------------------|-----------------|-------------------------|-----------------------|------------------|
+| 100% | 230 | 210 | 210 | ~14% |
+| 50% | 430 | 410 | 410 | ~27% |
+| 25% | 670 | 670 | 680 | ~43% |
+| 10% | 970 | 990 | 980 | ~63% |
+| 5% | 1090 | 1120 | 1120 | ~72% |
 
-At the largest budget reached in this run — UQ at n=1120,
-BAL at n=1100 — pressure RMS is **15.17 Pa (UQ) / 15.49 Pa (BAL)**
-against a full-data ceiling of **14.85 Pa**, i.e. +2.1% / +4.3% above
-the asymptote. Read the row as: *"to drive the
-surface-field RMS to within 5% of what training on every available
-sample would give us, we need to hand-label roughly two-thirds of the
-pool"* — and the +25% row as the more frugal *"with ~40% of the labels
-we already cut the gap-to-ceiling to a quarter of what it was."*
+At the final round of each chain (UQ at n=1150; BAL and LN at n=1140),
+pressure RMS is **15.00 Pa (UQ) / 15.30 Pa (BAL) / 15.22 Pa (LN)**
+against a full-data ceiling of **14.57 Pa**, i.e. +3.0% / +5.0% / +4.5%
+above the asymptote. Read the +5% row as: *"to drive the surface-field
+RMS to within 5% of what training on every available sample would give
+us, we need to hand-label roughly two-thirds of the pool"* — and the
++25% row as the more frugal *"with ~40% of the labels we already cut
+the gap-to-ceiling to a quarter of what it was."* Joint-UQ wins by a
+small but consistent margin at every threshold; latent novelty matches
+class-balanced random closely without using class labels at
+acquisition time, making it a viable drop-in for problems where class
+metadata is unavailable.
 
 ## Adapting to a new problem
 

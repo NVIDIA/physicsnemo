@@ -32,14 +32,6 @@ from physicsnemo.utils.logging import LaunchLogger, PythonLogger
 from physicsnemo.utils.logging.mlflow import initialize_mlflow
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 
-try:
-    from apex import optimizers
-except:
-    raise ImportError(
-        "FCN training requires apex package for optimizer."
-        + "See https://github.com/nvidia/apex for install details."
-    )
-
 
 def loss_func(x, y, p=2.0):
     yv = y.reshape(x.size()[0], -1)
@@ -181,8 +173,12 @@ def main(cfg: DictConfig) -> None:
         torch.cuda.current_stream().wait_stream(ddps)
 
     # Initialize optimizer and scheduler
-    optimizer = optimizers.FusedAdam(
-        fcn_model.parameters(), betas=(0.9, 0.999), lr=0.0005, weight_decay=0.0
+    optimizer = torch.optim.Adam(
+        fcn_model.parameters(),
+        betas=(0.9, 0.999),
+        lr=0.0005,
+        weight_decay=0.0,
+        fused=torch.cuda.is_available(),
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=150)
 

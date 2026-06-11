@@ -271,19 +271,17 @@ def validate_mesh(
             results["is_manifold"] = None  # Only defined for 2D manifolds
             results["n_non_manifold_edges"] = -1  # Not applicable
 
-    ### Check for self-intersections (very expensive, opt-in only)
+    ### Check for self-intersections (opt-in only) -- NOT YET IMPLEMENTED.
     if check_self_intersection:
-        # This is very expensive: O(n^2) cell-cell intersection tests
-        # For production use, would need BVH acceleration
-        results["has_self_intersection"] = None  # Not implemented yet
-        results["intersecting_cell_pairs"] = None
-
-        # TODO: Implement BVH-accelerated self-intersection detection
-        if raise_on_error:
-            raise NotImplementedError(
-                "Self-intersection checking not yet implemented.\n"
-                "This is a very expensive operation requiring BVH acceleration."
-            )
+        # Fail loudly rather than returning a None sentinel that masquerades as
+        # "no self-intersections found". Implementing this needs BVH-accelerated
+        # cell-cell intersection tests (the naive version is O(n^2)).
+        # TODO: implement BVH-accelerated self-intersection detection.
+        raise NotImplementedError(
+            "Self-intersection checking is not yet implemented (it requires "
+            "BVH-accelerated cell-cell intersection tests). Do not pass "
+            "check_self_intersection=True until it is available."
+        )
 
     return results
 

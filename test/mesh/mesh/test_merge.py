@@ -439,3 +439,15 @@ class TestMergeParametrized:
 
         assert merged.n_points == 10 * n_meshes
         assert merged.n_cells == 5 * n_meshes
+
+
+def test_merge_validates_point_data_keys():
+    """Regression: merge must validate point_data (and global_data) key consistency,
+    not only cell_data, so a mismatch fails loudly instead of producing a malformed
+    concatenation."""
+    points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    cells = torch.tensor([[0, 1, 2]])
+    m1 = Mesh(points=points, cells=cells, point_data={"a": torch.zeros(3)})
+    m2 = Mesh(points=points, cells=cells, point_data={"b": torch.zeros(3)})
+    with pytest.raises(ValueError, match="point_data"):
+        Mesh.merge([m1, m2])

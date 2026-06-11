@@ -71,7 +71,7 @@ def test_wrapper_timesteps_replicated(distributed_mesh):
     from physicsnemo.diffusion.noise_schedulers import DomainParallelNoiseScheduler
 
     scheduler = EDMNoiseScheduler()
-    wrapper = DomainParallelNoiseScheduler(scheduler, distributed_mesh)
+    wrapper = DomainParallelNoiseScheduler(scheduler, distributed_mesh, shard_dim=2)
 
     t_steps = wrapper.timesteps(10, device="cuda")
 

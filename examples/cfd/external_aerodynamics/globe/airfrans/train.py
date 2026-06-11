@@ -104,6 +104,7 @@ def main(
     n_spherical_harmonics: int = 1,
     theta: float = 0.0,
     leaf_size: int = 1,
+    tree_build_device: Literal["cpu", "cuda"] | None = None,
     airfrans_task: Literal["full", "scarce", "reynolds", "aoa"] = "full",
     patience_steps: int = 1600,
     use_profiler: bool = True,
@@ -140,6 +141,8 @@ def main(
         n_spherical_harmonics: Number of Legendre polynomial terms for angle features.
         theta: Barnes-Hut opening angle. Larger = more aggressive approximation.
         leaf_size: Maximum sources per leaf node in the Barnes-Hut tree.
+        tree_build_device: Device on which to build cluster trees and run the
+            dual-tree Barnes-Hut traversal. ``None`` (default) uses the input's device.
         airfrans_task: Which AirFRANS dataset task to train on.
         patience_steps: ReduceLROnPlateau patience expressed in gradient
             steps (world-size independent).  Converted to epochs internally.
@@ -270,6 +273,7 @@ def main(
         self_regularization_beta=self_regularization_beta,
         latent_compression_scale=latent_compression_scale,
         expand_far_targets=expand_far_targets,
+        tree_build_device=tree_build_device,
     ).to(device)
 
     logger0.info(f"{output_dir.name=!r}")
@@ -347,8 +351,6 @@ def main(
         min_lr=learning_rate / 64,
         threshold=1e-3,
     )
-    scaler = torch.amp.GradScaler(device=device.type, enabled=amp)
-
     ### [Checkpoint Save/Load]
     metadata_dict: dict[str, Any] = {}
     epoch = load_checkpoint(
@@ -356,7 +358,6 @@ def main(
         models=base_model,
         optimizer=optimizer,
         scheduler=scheduler,
-        scaler=scaler,
         metadata_dict=metadata_dict,
         device=dist.device,
     )
@@ -430,7 +431,6 @@ def main(
                 **config_settings,
                 "optimizer": optimizer.__class__.__name__,
                 "scheduler": scheduler.__class__.__name__,
-                "scaler": scaler.__class__.__name__,
                 "physicsnemo_pkg_info": get_physicsnemo_pkg_info(),
                 "world_size": dist.world_size,
                 **{f"n_{split}_samples": len(sample_paths[split]) for split in splits},
@@ -526,15 +526,13 @@ def main(
                     if torch.isnan(batch_loss):
                         warnings.warn(f"{batch_loss=} at: {dist.rank=}, {epoch=}")
                     with record_function("backward"):
-                        scaler.scale(batch_loss).backward()
+                        batch_loss.backward()
                     if gradient_clip_norm is not None:
-                        scaler.unscale_(optimizer)
                         torch.nn.utils.clip_grad_norm_(
                             model.parameters(), max_norm=gradient_clip_norm
                         )
                     with record_function("optimizer_step"):
-                        scaler.step(optimizer)
-                        scaler.update()
+                        optimizer.step()
                 all_batch_losses.append(batch_loss.detach().clone())
                 for k, v in batch_loss_components.items():
                     all_batch_loss_components[k].append(v.detach().clone())
@@ -614,7 +612,6 @@ def main(
                 models=base_model,
                 optimizer=optimizer,
                 scheduler=scheduler,
-                scaler=scaler,
                 epoch=epoch,
                 metadata=checkpoint_metadata(),
             )

@@ -68,6 +68,7 @@ from strategies import (
     ClassBalancedRandomQueryStrategy,
     DummyLabelStrategy,
     JointUQQueryStrategy,
+    LatentNoveltyQueryStrategy,
     RandomQueryStrategy,
 )
 from aero_metrology import FieldMetrologyStrategy
@@ -304,23 +305,33 @@ def main(cfg: DictConfig) -> None:
         )
 
     # ---- Strategies ----
-    if acquisition == "joint_uq":
-        query_strategy = JointUQQueryStrategy(
-            max_samples=samples_per_round, precision=precision
-        )
-    elif acquisition == "class_balanced_random":
-        query_strategy = ClassBalancedRandomQueryStrategy(
-            max_samples=samples_per_round, seed=random_seed
-        )
-    elif acquisition == "random":
-        query_strategy = RandomQueryStrategy(
-            max_samples=samples_per_round, seed=random_seed
-        )
-    else:
-        raise ValueError(
-            f"Unknown acquisition strategy: {acquisition!r}. "
-            f"Expected one of: 'joint_uq', 'random', 'class_balanced_random'."
-        )
+    match acquisition:
+        case "joint_uq":
+            query_strategy = JointUQQueryStrategy(
+                max_samples=samples_per_round, precision=precision
+            )
+        case "class_balanced_random":
+            query_strategy = ClassBalancedRandomQueryStrategy(
+                max_samples=samples_per_round, seed=random_seed
+            )
+        case "random":
+            query_strategy = RandomQueryStrategy(
+                max_samples=samples_per_round, seed=random_seed
+            )
+        case "latent_novelty":
+            knn_k = int(getattr(cfg, "latent_novelty_knn_k", 10))
+            query_strategy = LatentNoveltyQueryStrategy(
+                max_samples=samples_per_round,
+                precision=precision,
+                knn_k=knn_k,
+                cold_start_seed=random_seed,
+            )
+        case _:
+            raise ValueError(
+                f"Unknown acquisition strategy: {acquisition!r}. "
+                f"Expected one of: 'joint_uq', 'random', 'class_balanced_random', "
+                f"'latent_novelty'."
+            )
 
     metrology = FieldMetrologyStrategy(precision=precision)
     label_strategy = DummyLabelStrategy()

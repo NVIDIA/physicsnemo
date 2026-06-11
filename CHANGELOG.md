@@ -6,10 +6,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.1.0a0] - 2026-XX-YY
+## [2.2.0] - 2026-XX-YY
 
 ### Added
 
+- FSDP2 checkpoint support: full save/load round-trip for
+  ``torch.distributed.fsdp`` v2 models, including DTensor edge cases,
+  cross-mesh reloads, and optimizer state loading.
+- Migrated the StormCast example from DDP + Domain Parallel  to FSDP2 +
+  Domain Parallel. StormCast previously used ``FullyShardedDataParallel``
+  with ``ShardingStrategy.NO_SHARD`` (equivalent to DDP) alongside domain
+  parallelism; it now uses the FSDP2 ``fully_shard`` API, producing 2D-mesh
+  DTensor parameters when ``use_shard_tensor`` is enabled.
+- Adds tensor-returning `Mesh.gradient`, `Mesh.divergence`, `Mesh.curl`, and
+  `Mesh.laplacian` convenience methods to `physicsnemo.mesh`, mirroring
+  `Mesh.integrate` (each returns a tensor and accepts a data key or a raw
+  tensor, with a `data_source="points"|"cells"` kwarg selecting vertex or
+  cell-centered fields). This gives the discrete differential operators a
+  consistent, discoverable surface on `Mesh`; previously divergence/curl/
+  laplacian were reachable only as free functions in `physicsnemo.mesh.calculus`.
+  Adds `compute_divergence_cells_lsq` and `compute_curl_cells_lsq` free
+  functions (cell-centered LSQ analogues); DEC operators and the cotangent
+  Laplacian remain vertex-only and raise `NotImplementedError` for cell data.
+- Adds `farthest_point_sampling` to `physicsnemo.nn.functional`, a greedy
+  farthest-point sampling (FPS) functional for point clouds.
+- Adds `FourierPositionalEmbedding` to `physicsnemo.nn`, a deterministic
+  axis-wise (NeRF-style) Fourier positional embedding for continuous
+  coordinates with no learnable parameters.
+- Adds radiation transport example (`examples/nuclear_engineering/radiation_transport`)
+- Adds agent skills structure, and initial skill for 'discoverability'.
 - Adds xDeepONet to experimental models
   (`physicsnemo.experimental.models.xdeeponet.DeepONet`).  A single
   dimension-generic (2D/3D) DeepONet that accepts a spatial or MLP branch,
@@ -21,15 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`SpatialBranch`), and coordinate features.
 - Adds `Sin` elementwise sine activation to `physicsnemo.nn`, registered
   in `ACT2FN` so it can be looked up by name (`get_activation("sin")`).
-- Adds GLOBE model (`physicsnemo.experimental.models.globe.model.GLOBE`),
-  including new variant that uses a dual tree traversal algorithm to reduce the
-  complexity of the kernel evaluations from O(N^2) to O(N).
-- Adds GLOBE AirFRANS example case (`examples/cfd/external_aerodynamics/globe/airfrans`)
-- Adds GLOBE DrivAerML example case (`examples/cfd/external_aerodynamics/globe/drivaer`)
-- Adds drop-test dynamics recipe.
-- Adds concrete dropout uncertainty quantification for GeoTransolver. Learnable
-  per-layer dropout rates enable MC-Dropout inference for uncertainty
-  estimates. Disabled by default (`concrete_dropout: false`).
 - Adds active-learning recipe for external-aerodynamics surrogates
   (`examples/cfd/external_aerodynamics/active_learning_aero/`). Iteratively
   fine-tunes a GP-augmented GeoTransolver onto an out-of-distribution
@@ -39,6 +55,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   protocols and `physicsnemo.experimental.uq.VariationalGPHead`, with a
   layered structure (generic AL driver / GP-UQ recipe / aero adapter)
   designed for reuse on other UQ-based regression problems.
+- Adds `LatentNoveltyQueryStrategy` to the active-learning aero recipe,
+  a third acquisition strategy that ranks unlabeled samples by their
+  average kNN cosine distance in the encoder's learned geometry latent
+  — reusing the same `OODGuard`
+  (`physicsnemo.experimental.guardrails.embedded`) that flags
+  out-of-distribution inputs at inference time. The guard is calibrated
+  on the currently labeled set each round; round 1 falls back to
+  class-balanced random because the calibration buffer is empty. New
+  public `OODGuard.score_geometry()` method exposes the raw per-sample
+  geometry-latent kNN distance as a continuous score for downstream
+  consumers (e.g. AL acquisition) without the boolean thresholding /
+  warning emission of `OODGuard.check()`.
+
+### Changed
+
+- `physicsnemo.mesh.Mesh.slice_cells` now accepts `None`/`Ellipsis` (keep all
+  cells, return self), matching its type hint and `slice_points`;
+  `gaussian_curvature_cells` reuses the cached `gaussian_curvature_vertices`
+  property instead of recomputing it.
+- `physicsnemo.mesh`: `validate_mesh(check_self_intersection=True)` now raises
+  `NotImplementedError` (the check is unimplemented) instead of silently returning a
+  `None` sentinel that masquerades as "no self-intersections found".
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+- `physicsnemo.mesh`: fixed several silent-wrong-result bugs — `slice_cells`
+  carried stale point-level and non-local (`gaussian_curvature`) caches onto the
+  sliced mesh; the intrinsic LSQ gradient returned all-zeros for codimension >= 2
+  manifolds (now estimates the tangent space via local PCA); `smooth_laplacian`
+  returned stale geometry caches after its in-place point update; `transform`
+  propagated an incorrect point-normals cache under anisotropic/shear maps; and the
+  derived-mesh methods (`compute_point_derivatives`, `compute_cell_derivatives`,
+  `cell_data_to_point_data`, `point_data_to_cell_data`) aliased the source mesh's
+  mutable `_cache`.
+- `physicsnemo.mesh`: fixed crash / data-integrity bugs — `project(...)` with
+  `transform_point_data`/`transform_cell_data=True` mutated the input mesh in
+  place; visualization and `to_pyvista` crashed on autograd-tracked tensors (now
+  detached before `.numpy()`); and integer/bool data crashed (`safe_eps` on an
+  integer dtype) or truncated via integer division during facet/scatter
+  aggregation (now computed in a floating dtype).
+- `physicsnemo.mesh`: fixed Loop subdivision pulling open boundaries inward (now
+  applies the boundary/crease mask); subdivision zero-filling integer/bool
+  `point_data` at new edge vertices (now inherits a parent label);
+  non-deterministic orientation flips and over-counted component sizes in
+  `repair.fix_orientation`; random point sampling drawing barycentric weights in
+  float32 for float64 meshes; and `Mesh.merge` not validating `point_data` /
+  `global_data` key consistency.
+- Fixed `DefaultTrainingLoop` reading `DistributedManager.device` at the class
+  level (a `property` descriptor) instead of `DistributedManager().device`, which
+  left the loop's device set to a `property` object under an initialized
+  `DistributedManager` (`physicsnemo/active_learning/loop.py`).
+- Replaced three plain-string regex / docstring literals containing invalid
+  escape sequences with raw-string equivalents
+  (`physicsnemo/utils/logging/launch.py`,
+  `physicsnemo/metrics/general/calibration.py`,
+  `physicsnemo/metrics/general/crps.py`); these were `SyntaxWarning`s today
+  and become `SyntaxError`s in Python 3.16.
+- Various test cleanups to remove self-inflicted warnings in CI output:
+  disabled pytest collection for `TestModelA`/`TestModelB` helpers in
+  `test/core/test_registry.py` via `__test__ = False`; migrated
+  `test/nn/module/test_interpolation.py` to call the non-deprecated
+  `grid_to_point_interpolation` and added a dedicated test for the
+  deprecation alias; scoped a `lr_scheduler.step()`-before-`optimizer.step()`
+  `UserWarning` filter to a single test in
+  `test/optim/test_combined_optimizer.py`; guarded the
+  `DistributedManager.initialize()` calls in `test/utils/test_checkpoint.py`
+  with `is_initialized()`; and suppressed the import-time
+  `ExperimentalFeatureWarning` in `test/datapipes/healda/test_features.py`
+  via `warnings.catch_warnings()`.
+- Fixed `physicsnemo.utils.get_checkpoint_dir` returning paths with `\`
+  separators on Windows (e.g. `.\checkpoints_model`), which was inconsistent
+  with the `/`-based paths used elsewhere in the checkpoint utilities and
+  broke the `test_get_checkpoint_dir` CI test on Windows. The function now
+  always joins with `/`, working uniformly for local paths and `fsspec`
+  URIs (`msc://`, etc.) across operating systems.
+
+### Security
+
+### Dependencies
+
+## [2.1.0] - 2026-05-26
+
+### Added
+
+- Adds GLOBE model (`physicsnemo.experimental.models.globe.model.GLOBE`),
+  including new variant that uses a dual tree traversal algorithm to reduce the
+  complexity of the kernel evaluations from O(N^2) to O(N).
+- Adds GLOBE AirFRANS example case (`examples/cfd/external_aerodynamics/globe/airfrans`)
+- Adds GLOBE DrivAerML example case (`examples/cfd/external_aerodynamics/globe/drivaer`)
+- Adds drop-test dynamics recipe.
+- Adds concrete dropout uncertainty quantification for GeoTransolver. Learnable
+  per-layer dropout rates enable MC-Dropout inference for uncertainty
+  estimates. Disabled by default (`concrete_dropout: false`).
 - Adds automatic support for `FSDP` and/or `ShardTensor` models in checkpoint save/load
   functionality
 - PhysicsNeMo-Mesh now supports conversion from PyVista/VTK/VTU meshes that may
@@ -226,6 +339,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   combined-workflow and from-checkpoint round-trip tests. Most tests
   run with `fullgraph=True` and `error_on_recompile` to catch
   `torch.compile` regressions.
+- Internal weight initialization in the distributed AFNO layers and the
+  `EarthAttention` blocks of `physicsnemo.nn.module.attention_layers` now
+  dispatches to `torch.nn.init.trunc_normal_` directly instead of going
+  through frozen in-tree copies of the pre-PyTorch-2.12 inverse-CDF
+  implementation. PyTorch 2.12 reimplemented `trunc_normal_` as a
+  rejection-sampling loop on top of `normal_()` (see
+  [pytorch/pytorch#174997](https://github.com/pytorch/pytorch/pull/174997)),
+  so seeded from-scratch initialization consumes the RNG stream
+  differently on 2.12+ vs older versions. Existing trained checkpoints
+  are unaffected (loading bypasses init). Forward-accuracy reference
+  outputs for `AFNO`, `ModAFNO`, `Transolver`, `FLARE`, and `Pangu` were
+  regenerated against the new algorithm. Rather than wiring per-model
+  skips, `test.common.validate_forward_accuracy` now uniformly skips on
+  `torch < 2.12` (the reference data is locked to that floor via a single
+  `_REFERENCE_DATA_MIN_TORCH` constant; bump it when a PyTorch
+  release next changes an init/RNG algorithm any forward-accuracy model
+  depends on, and regenerate the `.pth` files at the same time).
 
 ### Deprecated
 
@@ -233,35 +363,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   isosurface extraction, use `physicsnemo.mesh.generate.marching_cubes` instead
   of `sdf_to_stl`. For VTP/OBJ/STL file conversion (`combine_vtp_files`,
   `convert_tesselated_files_in_directory`), use VTK or PyVista directly.
+- `physicsnemo.nn.module.utils.trunc_normal_` (and its submodule path
+  `physicsnemo.nn.module.utils.weight_init.trunc_normal_`) is deprecated
+  and will be removed in v2.2.0. It is now a thin wrapper around
+  `torch.nn.init.trunc_normal_` that emits a `DeprecationWarning` on
+  call, replacing the frozen in-tree copy of the legacy inverse-CDF
+  implementation. Use `torch.nn.init.trunc_normal_` directly.
 
 ### Removed
 
+- The legacy in-tree `trunc_normal_` implementation that lived in
+  `physicsnemo/models/afno/distributed/layers.py` (`_trunc_normal_` /
+  `_no_grad_trunc_normal_`) is removed. These names were private; all
+  in-tree call sites now use `torch.nn.init.trunc_normal_`.
+
 ### Fixed
 
-- Replaced three plain-string regex / docstring literals containing invalid
-  escape sequences with raw-string equivalents
-  (`physicsnemo/utils/logging/launch.py`,
-  `physicsnemo/metrics/general/calibration.py`,
-  `physicsnemo/metrics/general/crps.py`); these were `SyntaxWarning`s today
-  and become `SyntaxError`s in Python 3.16.
-- Various test cleanups to remove self-inflicted warnings in CI output:
-  disabled pytest collection for `TestModelA`/`TestModelB` helpers in
-  `test/core/test_registry.py` via `__test__ = False`; migrated
-  `test/nn/module/test_interpolation.py` to call the non-deprecated
-  `grid_to_point_interpolation` and added a dedicated test for the
-  deprecation alias; scoped a `lr_scheduler.step()`-before-`optimizer.step()`
-  `UserWarning` filter to a single test in
-  `test/optim/test_combined_optimizer.py`; guarded the
-  `DistributedManager.initialize()` calls in `test/utils/test_checkpoint.py`
-  with `is_initialized()`; and suppressed the import-time
-  `ExperimentalFeatureWarning` in `test/datapipes/healda/test_features.py`
-  via `warnings.catch_warnings()`.
-- Fixed `physicsnemo.utils.get_checkpoint_dir` returning paths with `\`
-  separators on Windows (e.g. `.\checkpoints_model`), which was inconsistent
-  with the `/`-based paths used elsewhere in the checkpoint utilities and
-  broke the `test_get_checkpoint_dir` CI test on Windows. The function now
-  always joins with `/`, working uniformly for local paths and `fsspec`
-  URIs (`msc://`, etc.) across operating systems.
 - Fixed functional benchmark plot fallback labeling so unlabeled ASV results use
   the same key ordering as the benchmark runner.
 - Fixed graph break caused by `FunctionSpec` dispatch (`max(key=)` is not supported by `torch.compile`)
@@ -305,12 +422,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed the sinusoidal positional embeddings formula in `SongUNet` and
   `MultiDiffusionModel2D` so it now follows the standard `sin / cos`
   convention. Affected reference data was regenerated.
-
-### Security
+- Constructing a `Mesh` (or `DomainMesh`) inside a `torch.compile`-traced
+  function no longer raises `AttributeError` / `KeyError` or silently
+  produces wrong output. The breakage came from two regressions in
+  `tensordict >= 0.12.0` (PR `pytorch/tensordict#1552`), where the
+  `@tensorclass` init wrapper's bypass branch silently skipped both
+  field-default normalization and `__post_init__` under
+  `torch.compile`. We pin `tensordict < 0.12` until the upstream fix
+  (`pytorch/tensordict#1708`, `pytorch/tensordict#1709`) ships, and add
+  a regression test (`test/mesh/mesh/test_compile.py`) that constructs
+  a `Mesh` inside `torch.compile` and reads cached properties, so the
+  same bug cannot return on a future pin bump unnoticed.
 
 ### Dependencies
 
 - Increments minimum viable PyTorch version to `torch>=2.5.0` to support FSDP better
+- Upper-bounds `tensordict < 0.12` to avoid the `torch.compile` regressions
+  in `tensordict >= 0.12.0` (see corresponding entry under Fixed).
 
 ## [2.0.0] - 2026-03-09
 

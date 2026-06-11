@@ -208,6 +208,41 @@ def _commit_accepted_candidates(
     accepted_radii[accepted_idx] = candidate_radii[candidate_idx]
 
 
+# Deterministically prune any conflicts left by the parallel candidate pass.
+@wp.kernel
+def _mark_accepted_conflicts(
+    hashgrid_id: wp.uint64,
+    accepted_positions: wp.array(dtype=wp.vec3f),
+    accepted_radii: wp.array(dtype=wp.float32),
+    accepted_alive: wp.array(dtype=wp.int32),
+    search_radius: wp.float32,
+):
+    sample_idx = wp.tid()
+    if accepted_alive[sample_idx] == 0:
+        return
+
+    sample_position = accepted_positions[sample_idx]
+    sample_radius = accepted_radii[sample_idx]
+
+    neighbor_idx = int(0)
+    query = wp.hash_grid_query(hashgrid_id, sample_position, search_radius)
+    while wp.hash_grid_query_next(query, neighbor_idx):
+        if neighbor_idx >= sample_idx:
+            continue
+        if neighbor_idx >= accepted_positions.shape[0]:
+            continue
+
+        neighbor_radius = accepted_radii[neighbor_idx]
+        min_radius = wp.min(sample_radius, neighbor_radius)
+        if _points_too_close(
+            sample_position,
+            accepted_positions[neighbor_idx],
+            min_radius,
+        ):
+            accepted_alive[sample_idx] = 0
+            return
+
+
 # Compute Yuksel sample-elimination contribution for one pairwise distance.
 @wp.func
 def _wse_pair_weight(

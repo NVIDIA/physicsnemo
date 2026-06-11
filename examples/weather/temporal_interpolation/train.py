@@ -17,7 +17,6 @@
 import os
 import datetime
 from typing import Any, Dict
-import warnings
 
 import hydra
 from omegaconf import OmegaConf
@@ -37,11 +36,6 @@ from physicsnemo.utils import load_checkpoint
 from datapipe.climate_interp import InterpClimateDatapipe
 from utils import distribute, loss
 from utils.trainer import Trainer
-
-try:
-    from apex.optimizers import FusedAdam
-except ImportError:
-    warnings.warn("Apex is not installed, defaulting to PyTorch optimizers.")
 
 
 def setup_datapipes(
@@ -241,8 +235,8 @@ def setup_optimizer(
     max_epoch : int
         Maximum number of training epochs (used for scheduler setup).
     opt_cls : type[torch.optim.Optimizer] or None, optional
-        Optimizer class. When None, will setup apex.optimizers.FusedAdam
-        if available, otherwise PyTorch Adam.
+        Optimizer class. When None, will setup PyTorch Adam with the native
+        fused CUDA kernel when available.
     opt_params : dict or None, optional
         Dict of parameters (e.g. learning rate) to pass to optimizer.
     scheduler_cls : type[torch.optim.lr_scheduler.LRScheduler] or None, optional
@@ -260,10 +254,8 @@ def setup_optimizer(
     if opt_params is not None:
         opt_kwargs.update(opt_params)
     if opt_cls is None:
-        try:
-            opt_cls = FusedAdam
-        except NameError:  # in case we don't have apex
-            opt_cls = torch.optim.Adam
+        opt_cls = torch.optim.Adam
+        opt_kwargs.setdefault("fused", torch.cuda.is_available())
 
     scheduler_kwargs = {}
     if scheduler_cls is None:

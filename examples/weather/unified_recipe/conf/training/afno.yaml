@@ -18,11 +18,11 @@ amp_supported: !!bool False
 nr_input_steps: 1
 
 optimizer:
-  framework: apex
-  name: FusedAdam
+  name: Adam
   args:
     lr: 0.0005
     betas: [0.9, 0.999]
+    fused: true
 
 stages:
   - name: "Cosine Annealing LR"

@@ -1,5 +1,5 @@
 nvidia-physicsnemo[datapipes-extras]
-pyarrow>=14.0.0
+pyarrow>=14.0.1
 triton>=3.0.0
 fsspec>=2023.5.0
 dotenv

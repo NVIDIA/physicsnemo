@@ -49,6 +49,7 @@ pip install -e ".[mesh]"
 | **5. Quality & Repair** | Mesh health | Validation, quality metrics, repair |
 | **6. ML Integration** | Production workflows | Performance, batching, torch.compile |
 | **7. Domain Mesh** | Simulation domains | DomainMesh, boundaries, transforms, validation |
+| **8. I/O, Interop & Serialization** | Getting data in/out | PyVista import/export, polygon tessellation, save/load |
 <!-- markdownlint-enable MD013 -->
 
 ## Running the Tutorials
@@ -166,6 +167,20 @@ Learn to represent full simulation domains with interior meshes and named bounda
 - Validation and boundary watertightness checking
 - Visualization of boundary patches by BC type
 - Domain-wide operations (subdivide, clean)
+
+### Tutorial 8: I/O - Interoperability and Serialization
+
+**File**: `tutorial_8_io_interop.ipynb`
+
+Learn to get meshes in and out of PhysicsNeMo-Mesh.
+
+- The simplex-only data model (why importing usually means triangulating)
+- Importing from PyVista with `from_pyvista` (automatic triangulation)
+- Importing raw polygon soups with `Adjacency` + `triangulate` / `Mesh.from_polygons`
+- Convex vs non-convex polygons: ear clipping for correct areas and forces
+- Exporting to PyVista with `to_pyvista`
+- Saving and loading the native, folder-based memmap format, including its
+  on-disk layout (`.pmsh` for `Mesh`, `.pdmsh` for `DomainMesh`)
 
 ## Assets
 
