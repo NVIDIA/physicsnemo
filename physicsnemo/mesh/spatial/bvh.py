@@ -314,8 +314,11 @@ class BVH:
         mesh : Mesh
             The mesh to build the BVH for.
         leaf_size : int, optional
-            Maximum number of cells per leaf node. Larger values reduce tree
-            depth and memory at the cost of more candidate cells per query hit.
+            Maximum number of cells per leaf node. The default of 1 minimizes
+            candidate cells per query hit but maximizes node count
+            (``2 * n_cells - 1`` nodes) and tree depth. Larger values reduce
+            build time and memory at the cost of more candidate cells per
+            query hit.
 
         Returns
         -------
