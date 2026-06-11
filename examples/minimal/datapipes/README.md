@@ -215,3 +215,41 @@ python tutorial_04_hydra_config.py --config-name tutorial_04_pointcloud
 python tutorial_04_hydra_config.py --config-name tutorial_04_pointcloud \
     subsample.n_points=5000
 ```
+
+### Tutorial 5: Iterable Datasets for Online Simulation
+
+**File:** `tutorial_5_iterable_online_simulation.py`
+
+Not every dataset is map-style. When data is *generated* on the fly --
+an online physics simulation, a procedural sampler, an unbounded stream --
+there is no fixed length and no index to address. PhysicsNeMo models these
+with `IterableDatasetBase`:
+
+- Iterable datasets only support iteration: no `__len__`, no `__getitem__`,
+  no sampler, and no prefetch worker pool.
+- They run entirely on the **main thread**, so they may freely launch Warp
+  kernels and use CUDA streams. Warp's only requirement is a single
+  launching thread, which the main thread satisfies -- this is what makes
+  an online GPU simulation safe on this path.
+- The `DataLoader` still drives generation on a preprocessing stream (when
+  `use_streams=True`) and hands each item to the compute stream via a CUDA
+  event, so generating the next batch can overlap training on the current
+  one.
+
+This tutorial wraps the built-in Warp `Darcy2D` flow generator (a
+multigrid Jacobi solver) as an iterable dataset and iterates it through the
+`DataLoader`. Because `Darcy2D` produces a full batch per step, the wrapper
+is *self-batching* (`yields_batches = True`) and the loader passes each
+batch through unchanged.
+
+**When to use the iterable path vs the map/descriptor path:** use the
+map-style `Dataset` when you have a fixed corpus on disk addressable by
+index (storage-backed, benefits from threaded prefetch). Use an
+`IterableDatasetBase` when samples are produced by a generator/simulation,
+the length is unbounded or unknown, or the producer itself must launch
+device kernels.
+
+```bash
+# Requires a CUDA device (the Darcy solver runs Warp kernels on the GPU)
+python tutorial_5_iterable_online_simulation.py
+```

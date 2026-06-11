@@ -108,6 +108,47 @@ def test_signed_distance_field_index_layout_compatibility(device: str):
     torch.testing.assert_close(hit_flat, hit_faces)
 
 
+@requires_module("warp")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_signed_distance_field_repeated_non_default_streams():
+    """Repeated Warp SDF launches can retire resources without host sync."""
+    device = torch.device("cuda")
+    mesh_vertices = _tetrahedron_vertices().to(device=device, dtype=torch.float32)
+    mesh_indices_flat = torch.tensor(
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+        device=device,
+        dtype=torch.int32,
+    )
+    query_points = torch.tensor(
+        [[1.0, 1.0, 1.0], [0.05, 0.1, 0.1]],
+        device=device,
+        dtype=torch.float32,
+    )
+    streams = [torch.cuda.Stream(device=device) for _ in range(2)]
+    default_stream = torch.cuda.current_stream(device)
+
+    outputs = []
+    for i in range(12):
+        stream = streams[i % len(streams)]
+        with torch.cuda.stream(stream):
+            sdf_out, _hit_points = signed_distance_field(
+                mesh_vertices,
+                mesh_indices_flat,
+                query_points,
+                use_sign_winding_number=False,
+            )
+            outputs.append((stream, sdf_out))
+
+    for stream, sdf_out in outputs:
+        default_stream.wait_stream(stream)
+        torch.testing.assert_close(
+            sdf_out,
+            torch.tensor([1.1547, -0.05], device=device),
+            atol=1e-6,
+            rtol=1e-6,
+        )
+
+
 # Validate benchmark input generation contract for SDF.
 @requires_module("warp")
 def test_signed_distance_field_make_inputs_forward(device: str):

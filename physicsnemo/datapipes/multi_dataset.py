@@ -304,6 +304,51 @@ class MultiDataset:
         metadata[DATASET_INDEX_METADATA_KEY] = ds_id
         return data, metadata
 
+    def submit(self, index: int, stream: Optional[Any] = None) -> tuple[int, Any]:
+        """
+        Submit a global index for background loading (FIFO prefetch primitive).
+
+        Maps the global index to its owning sub-dataset and delegates to
+        that dataset's :meth:`~DatasetBase.submit`. The returned handle is
+        wrapped with the owning dataset id so :meth:`consume` can restore
+        the ``dataset_index`` metadata.
+
+        Parameters
+        ----------
+        index : int
+            Global sample index to load.
+        stream : object, optional
+            CUDA stream for the consume step.
+
+        Returns
+        -------
+        tuple[int, PrefetchHandle]
+            ``(dataset_index, handle)`` to pass to :meth:`consume`.
+        """
+        ds_id, local_i = self._index_to_dataset_and_local(index)
+        handle = self._datasets[ds_id].submit(local_i, stream=stream)
+        return ds_id, handle
+
+    def consume(self, handle: tuple[int, Any]) -> tuple[TensorDict, dict[str, Any]]:
+        """
+        Resolve a :meth:`submit` handle into ``(data, metadata)``.
+
+        Parameters
+        ----------
+        handle : tuple[int, PrefetchHandle]
+            The ``(dataset_index, handle)`` returned by :meth:`submit`.
+
+        Returns
+        -------
+        tuple[TensorDict, dict[str, Any]]
+            Sample and metadata, enriched with ``dataset_index``.
+        """
+        ds_id, inner = handle
+        data, metadata = self._datasets[ds_id].consume(inner)
+        metadata = dict(metadata)
+        metadata[DATASET_INDEX_METADATA_KEY] = ds_id
+        return data, metadata
+
     def prefetch(
         self,
         index: int,

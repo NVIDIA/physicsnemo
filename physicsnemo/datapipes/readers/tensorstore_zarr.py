@@ -155,7 +155,6 @@ class TensorStoreZarrReader(Reader):
         self._user_fields = fields
         self.default_values = default_values or {}
         self.group_pattern = group_pattern
-        self._subsample_generator: torch.Generator | None = None
 
         if not self.path.exists():
             raise FileNotFoundError(f"Path not found: {self.path}")
@@ -235,17 +234,6 @@ class TensorStoreZarrReader(Reader):
             return self._user_fields
         return self._available_fields
 
-    def set_generator(self, generator: torch.Generator) -> None:
-        """Assign a ``torch.Generator`` for reproducible subsampling."""
-        self._subsample_generator = generator
-
-    def set_epoch(self, epoch: int) -> None:
-        """Reseed the subsample RNG for a new epoch."""
-        if self._subsample_generator is not None:
-            self._subsample_generator.manual_seed(
-                self._subsample_generator.initial_seed() + epoch
-            )
-
     def _read_attributes(self, group_path: Path) -> dict[str, Any]:
         """Read attributes from a Zarr group (v2 or v3)."""
         store_spec = {"driver": "file", "path": str(group_path)}
@@ -274,6 +262,7 @@ class TensorStoreZarrReader(Reader):
         slice_start: int,
         slice_stop: int,
         n_points: int,
+        generator: Optional[torch.Generator] = None,
     ) -> slice:
         """
         Select a random contiguous slice from a range.
@@ -286,6 +275,9 @@ class TensorStoreZarrReader(Reader):
             Stop index of the available range (exclusive).
         n_points : int
             Number of points to sample.
+        generator : torch.Generator, optional
+            Per-sample generator for reproducible, order-independent
+            selection. ``None`` uses the global default RNG.
 
         Returns
         -------
@@ -309,13 +301,15 @@ class TensorStoreZarrReader(Reader):
             slice_start,
             slice_stop - n_points + 1,
             (1,),
-            generator=self._subsample_generator,
+            generator=generator,
         ).item()
         return slice(start, start + n_points)
 
     def _load_sample(self, index: int) -> dict[str, torch.Tensor]:
         """Load a single sample from a Zarr group using TensorStore."""
         group_path = self._groups[index]
+        # Per-sample generator: reproducible regardless of read order/thread.
+        generator = self._index_generator(index)
 
         # Read attributes (stored as tensors in sample)
         attributes = self._read_attributes(group_path)
@@ -368,7 +362,7 @@ class TensorStoreZarrReader(Reader):
                 if key in stores:
                     array_shape = stores[key].shape[0]
                     subsample_slice = self._select_random_sections_from_slice(
-                        0, array_shape, n_points
+                        0, array_shape, n_points, generator=generator
                     )
                     break
 

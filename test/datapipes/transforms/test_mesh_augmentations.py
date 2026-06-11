@@ -732,14 +732,15 @@ class TestDataLoaderDrivenReproducibility:
         master = torch.Generator().manual_seed(42)
         ds.set_generator(master)
 
-        # Reader and both transforms should have received generators
-        assert reader._subsample_generator is not None
+        # Reader (base seed) and both transforms should have received seeds
+        assert reader._seed_base is not None
         assert transforms[0]._generator is not None
         assert transforms[1]._generator is not None
 
-        # Generators should have different seeds (independent forks)
+        # Seeds should differ (independent forks): the reader's base seed
+        # plus each transform's generator seed.
         seeds = {
-            reader._subsample_generator.initial_seed(),
+            reader._seed_base,
             transforms[0]._generator.initial_seed(),
             transforms[1]._generator.initial_seed(),
         }

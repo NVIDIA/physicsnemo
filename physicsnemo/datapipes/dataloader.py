@@ -25,6 +25,8 @@ When collate_metadata=True, returns (TensorDict, list[dict]) tuples.
 
 from __future__ import annotations
 
+import itertools
+import warnings
 from typing import Any, Callable, Iterator, Optional, Sequence
 
 import torch
@@ -33,7 +35,13 @@ from torch.utils.data import RandomSampler, Sampler, SequentialSampler
 
 from physicsnemo.datapipes._rng import fork_generator
 from physicsnemo.datapipes.collate import Collator, get_collator
-from physicsnemo.datapipes.protocols import DatasetBase
+from physicsnemo.datapipes.io_pump import BATCH_BOUNDARY, IOPump
+from physicsnemo.datapipes.protocols import (
+    DatasetBase,
+    IterableDatasetBase,
+    preprocessing_stream,
+    record_stream,
+)
 from physicsnemo.datapipes.registry import register
 
 
@@ -56,6 +64,38 @@ class DataLoader:
     - Toggleable prefetching for debugging
     - Compatible with PyTorch samplers (DistributedSampler, etc.)
     - Familiar torch DataLoader interface
+
+    Two data paths
+    --------------
+    The path is selected by dataset type:
+
+    - **Map-style** (:class:`~physicsnemo.datapipes.protocols.DatasetBase`):
+      a dispatcher thread (:class:`~physicsnemo.datapipes.io_pump.IOPump`)
+      lazily submits sample loads to a worker pool and forwards batch
+      boundaries, while the main thread consumes handles (host-to-device
+      transfer + transforms on a preprocessing stream).
+    - **Iterable** (:class:`~physicsnemo.datapipes.protocols.IterableDatasetBase`):
+      a generator dataset driven main-thread-only (no sampler, no pump, no
+      worker pool). ``len()`` is undefined and ``shuffle``/``sampler`` are
+      ignored; generation runs on a preprocessing stream with the same
+      event handoff so it overlaps training.
+
+    Concurrency model
+    -----------------
+    A dedicated dispatcher thread keeps the I/O pipeline primed by
+    submitting sample loads ahead of consumption, bounded by
+    ``prefetch_factor`` batches worth of in-flight samples. The main
+    thread is the sole consumer: it performs all host-to-device transfers
+    and GPU transforms (including Warp kernels) on the prefetch streams.
+    Warp's invariant is the single launching thread, not a single stream,
+    so transforms run on the assigned preprocessing stream and overlap the
+    compute stream.
+
+    For the pipeline to stay primed, the main thread must not block: keep
+    reader output (optionally) pinned (so host-to-device copies are asynchronous) and
+    avoid host readbacks (``.item()``, ``wp.synchronize()``), data-
+    dependent shapes, and GIL-bound pure-Python transforms on the launch
+    path.
 
     Examples
     --------
@@ -80,7 +120,7 @@ class DataLoader:
 
     def __init__(
         self,
-        dataset: DatasetBase,
+        dataset: DatasetBase | IterableDatasetBase,
         *,
         batch_size: int = 1,
         shuffle: bool = False,
@@ -104,9 +144,10 @@ class DataLoader:
 
         Parameters
         ----------
-        dataset : DatasetBase
-            Dataset to load from. Any subclass of :class:`DatasetBase`
-            (e.g. :class:`Dataset`, :class:`MeshDataset`).
+        dataset : DatasetBase or IterableDatasetBase
+            Dataset to load from. A map-style :class:`DatasetBase`
+            (e.g. :class:`Dataset`, :class:`MeshDataset`) or an
+            :class:`IterableDatasetBase` generator dataset.
         batch_size : int, default=1
             Number of samples per batch.
         shuffle : bool, default=False
@@ -151,6 +192,9 @@ class DataLoader:
         self.num_streams = num_streams
         self.use_streams = use_streams and torch.cuda.is_available()
         self._seed = seed
+        # Iterable (generator) datasets are driven main-thread-only: no
+        # sampler, no worker-pool prefetch (see _iter_iterable).
+        self._iterable = isinstance(dataset, IterableDatasetBase)
 
         # Build master generator and fork for sampler + dataset
         sampler_generator: torch.Generator | None = None
@@ -163,14 +207,18 @@ class DataLoader:
             if hasattr(dataset, "set_generator"):
                 dataset.set_generator(forks[1])
 
-        # Handle sampler
-        if sampler is not None:
+        # Handle sampler. Iterable datasets have no indices, so they carry
+        # no sampler and ignore shuffle.
+        if self._iterable:
+            if sampler is not None or shuffle:
+                warnings.warn(
+                    "shuffle/sampler are ignored for iterable datasets; "
+                    "the generator controls sample order.",
+                    stacklevel=2,
+                )
+            self.sampler = None
+        elif sampler is not None:
             self.sampler = sampler
-            # For DistributedSampler, propagate seed if available
-            if seed is not None and hasattr(sampler, "seed"):
-                # DistributedSampler exposes seed as a constructor arg
-                # but it's read-only; users should pass seed at construction.
-                pass
         elif shuffle:
             self.sampler = RandomSampler(dataset, generator=sampler_generator)
         else:
@@ -179,7 +227,8 @@ class DataLoader:
         # Handle collation
         self.collate_fn = get_collator(collate_fn, collate_metadata=collate_metadata)
 
-        # Create CUDA streams for prefetching
+        # Create CUDA streams: prefetch uses several round-robin streams; the
+        # iterable path uses the first as its preprocessing stream.
         self._streams: list[torch.cuda.Stream] = []
         if self.use_streams:
             for _ in range(num_streams):
@@ -193,7 +242,15 @@ class DataLoader:
         -------
         int
             Number of batches in the dataloader.
+
+        Raises
+        ------
+        TypeError
+            If the dataset is iterable (generator-style), which has no
+            defined length.
         """
+        if self._iterable:
+            raise TypeError("len() is undefined for an iterable (generator) dataset")
         n_samples = (
             len(self.sampler) if hasattr(self.sampler, "__len__") else len(self.dataset)
         )
@@ -226,8 +283,15 @@ class DataLoader:
         """
         Iterate over batches.
 
-        Uses stream-based prefetching when enabled to overlap IO,
-        GPU transfers, and computation.
+        Uses the self-priming :class:`IOPump` to overlap host-side I/O
+        (on the dataset's worker threads) with main-thread consumption
+        whenever ``prefetch_factor > 0``. This threaded producer path is
+        independent of CUDA streams: when streams are enabled (and CUDA
+        is available) each prefetched sample is also assigned a stream so
+        the host-to-device copy and GPU transforms overlap; otherwise the
+        same path runs with ``stream=None`` (still overlapping disk I/O
+        with the main thread). Set ``prefetch_factor=0`` for fully
+        synchronous iteration.
 
         Yields
         ------
@@ -236,7 +300,9 @@ class DataLoader:
             or tuple of (batched TensorDict, list of metadata dicts)
             if collate_metadata=True.
         """
-        if self.prefetch_factor > 0 and self.use_streams:
+        if self._iterable:
+            yield from self._iter_iterable()
+        elif self.prefetch_factor > 0:
             yield from self._iter_prefetch()
         else:
             yield from self._iter_simple()
@@ -256,59 +322,156 @@ class DataLoader:
             samples = [self.dataset[idx] for idx in batch_indices]
             yield self.collate_fn(samples)
 
+    def _work_stream(self) -> Iterator[Any]:
+        """Lazily yield sampler indices delimited by :data:`BATCH_BOUNDARY`.
+
+        Buffers at most one batch of indices (never the whole epoch), so
+        arbitrarily long samplers stream without up-front materialization.
+        A boundary is emitted after each full batch; a trailing partial
+        batch is emitted only when ``drop_last`` is False.
+
+        Yields
+        ------
+        int or object
+            Sample indices, with :data:`BATCH_BOUNDARY` after each batch.
+        """
+        batch: list[int] = []
+        for index in self.sampler:
+            batch.append(index)
+            if len(batch) == self.batch_size:
+                yield from batch
+                yield BATCH_BOUNDARY
+                batch = []
+        if batch and not self.drop_last:
+            yield from batch
+            yield BATCH_BOUNDARY
+
     def _iter_prefetch(
         self,
     ) -> Iterator[TensorDict | tuple[TensorDict, list[dict[str, Any]]]]:
         """
-        Iteration with stream-based prefetching.
+        Iteration driven by a self-priming prefetch pump.
 
-        Strategy:
+        A dedicated dispatcher thread (the :class:`IOPump`) lazily pulls
+        the index stream and submits sample loads to the dataset's worker
+        pool, keeping a bounded number of samples in flight regardless of
+        the consumer's cadence. The main thread is a pure drain loop: it
+        pulls ready handles in order, runs the per-sample consume step
+        (host-to-device transfer plus GPU transforms, including Warp, on
+        the assigned stream), and reassembles batches from the boundary
+        markers the pump forwards.
 
-        1. Prefetch `prefetch_factor` batches worth of samples
-        2. As we yield batches, prefetch more to keep the pipeline full
-        3. Each sample in a batch uses a different stream for overlap
+        Stream assignment is optional and decoupled from the threaded
+        producer: when CUDA streams are enabled a stream is round-robined
+        per sample (so preprocessing overlaps the previous batch's compute);
+        otherwise dispatch passes ``stream=None`` and the path still
+        overlaps host-side I/O with main-thread consumption.
+
+        Because dispatch lives off the main thread, the pipeline stays
+        primed even while the main thread is blocked launching kernels or
+        running the model. All device-kernel launches happen here, on the
+        single main thread.
 
         Yields
         ------
         TensorDict or tuple[TensorDict, list[dict[str, Any]]]
             Collated batch.
         """
-        # Collect all batches upfront for prefetch planning
-        all_batches = list(self._generate_batches())
-        if not all_batches:
-            return
+        # Streams are an optional accelerator on top of the threaded
+        # producer; only assign them when actually available.
+        use_streams = self.use_streams and len(self._streams) > 0
 
-        num_prefetch_batches = min(self.prefetch_factor, len(all_batches))
-        stream_idx = 0
+        # Round-robin a stream per sample at dispatch time (when enabled);
+        # submit returns a handle the consumer resolves in order.
+        stream_counter = itertools.count()
 
-        # Start initial prefetch
-        prefetched_up_to = 0
-        for batch_idx in range(num_prefetch_batches):
-            for sample_idx in all_batches[batch_idx]:
-                stream = self._streams[stream_idx % self.num_streams]
-                self.dataset.prefetch(sample_idx, stream=stream)
-                stream_idx += 1
-            prefetched_up_to = batch_idx + 1
+        def dispatch(index: int) -> Any:
+            stream = (
+                self._streams[next(stream_counter) % self.num_streams]
+                if use_streams
+                else None
+            )
+            return self.dataset.submit(index, stream=stream)
 
-        # Yield batches and prefetch more
-        for batch_idx, batch_indices in enumerate(all_batches):
-            # Collect samples (uses prefetched if available)
-            samples = [self.dataset[idx] for idx in batch_indices]
-            batch = self.collate_fn(samples)
+        # Depth = prefetch_factor batches worth of samples kept in flight
+        # (at least the stream count when streams drive the overlap).
+        depth = max(self.prefetch_factor * self.batch_size, 1)
+        if use_streams:
+            depth = max(depth, self.num_streams)
 
-            # Prefetch next batch if available
-            next_prefetch_idx = prefetched_up_to
-            if next_prefetch_idx < len(all_batches):
-                for sample_idx in all_batches[next_prefetch_idx]:
-                    stream = self._streams[stream_idx % self.num_streams]
-                    self.dataset.prefetch(sample_idx, stream=stream)
-                    stream_idx += 1
-                prefetched_up_to += 1
+        pump = IOPump(self._work_stream(), dispatch, depth=depth)
+        try:
+            samples: list[Any] = []
+            for item in pump:
+                if item is BATCH_BOUNDARY:
+                    yield self.collate_fn(samples)
+                    samples = []
+                else:
+                    samples.append(self.dataset.consume(item))
+        finally:
+            # Stop the dispatcher (handles early break / exhaustion) and
+            # drop any prefetched-but-unconsumed handles.
+            pump.stop()
+            self.dataset.cancel_prefetch()
 
-            yield batch
+    def _iter_iterable(
+        self,
+    ) -> Iterator[Any]:
+        """
+        Main-thread-only iteration for generator (iterable) datasets.
 
-        # Clean up any remaining prefetch state
-        self.dataset.cancel_prefetch()
+        There is no worker pool: the dataset's generator runs on the main
+        thread, so it may freely launch Warp kernels / use streams. Each
+        item is generated on a preprocessing stream (when streams are
+        enabled) and handed to the compute stream via a CUDA event, so
+        generation of the next item can overlap training on the current
+        one. A generator that forces a host readback simply serializes
+        itself.
+
+        Two emission modes are supported (see :class:`IterableDatasetBase`):
+        per-sample items are collated into ``batch_size`` batches (with
+        ``drop_last`` trimming the trailing partial batch); a self-batching
+        generator (``yields_batches = True``) has each batch passed through
+        unchanged.
+
+        Yields
+        ------
+        Any
+            Collated batches, or generator-produced batches when the
+            dataset is self-batching.
+        """
+        use_stream = self.use_streams and len(self._streams) > 0
+        prep_stream = self._streams[0] if use_stream else None
+        compute_stream = torch.cuda.current_stream() if use_stream else None
+        self_batching = getattr(self.dataset, "yields_batches", False)
+
+        iterator = iter(self.dataset)
+        samples: list[Any] = []
+        while True:
+            # Generate the next item on the preprocessing stream, then order
+            # it before the compute stream without blocking the host.
+            with preprocessing_stream(prep_stream):
+                try:
+                    item = next(iterator)
+                except StopIteration:
+                    break
+            if use_stream:
+                record_stream(item, compute_stream)
+                event = torch.cuda.Event()
+                event.record(prep_stream)
+                compute_stream.wait_event(event)
+
+            if self_batching:
+                yield item
+                continue
+
+            samples.append(item)
+            if len(samples) == self.batch_size:
+                yield self.collate_fn(samples)
+                samples = []
+
+        if not self_batching and samples and not self.drop_last:
+            yield self.collate_fn(samples)
 
     def set_epoch(self, epoch: int) -> None:
         """

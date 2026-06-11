@@ -30,6 +30,7 @@ from typing import Any, Iterator
 
 import torch
 
+from physicsnemo.datapipes._rng import spawn_generator
 from physicsnemo.datapipes.registry import register
 from physicsnemo.mesh import DomainMesh, Mesh
 
@@ -188,7 +189,10 @@ class MeshReader:
         self.include_index_in_metadata = include_index_in_metadata
         self.subsample_n_points = subsample_n_points
         self.subsample_n_cells = subsample_n_cells
-        self._subsample_generator: torch.Generator | None = None
+        # Base seed + epoch for deterministic per-index RNG (see
+        # :meth:`set_generator`). ``None`` means unseeded.
+        self._seed_base: int | None = None
+        self._epoch: int = 0
 
         if not self._root.exists():
             raise FileNotFoundError(f"Path not found: {self._root}")
@@ -212,38 +216,43 @@ class MeshReader:
         return len(self._paths)
 
     def set_generator(self, generator: torch.Generator) -> None:
-        """Assign a ``torch.Generator`` for reproducible subsampling.
+        """Assign a base seed for reproducible, order-independent subsampling.
 
         Called by :class:`MeshDataset` when the DataLoader provides a
-        seed.  Replaces any previously assigned generator.
+        seed.  Stores ``generator.initial_seed()`` as the base seed; each
+        sample then derives its own generator from
+        ``(base_seed, epoch, index)``, so subsampling is reproducible
+        regardless of read order or worker thread.
 
         Parameters
         ----------
         generator : torch.Generator
-            Generator to use for contiguous block selection.
+            Generator whose ``initial_seed()`` seeds all per-sample RNG.
         """
-        self._subsample_generator = generator
+        self._seed_base = generator.initial_seed()
 
     def set_epoch(self, epoch: int) -> None:
-        """Reseed the subsample RNG for a new epoch.
+        """Set the epoch used to vary per-sample RNG deterministically.
 
-        Produces a different (but deterministic) sequence of contiguous
-        blocks each epoch when a generator has been assigned via
-        :meth:`set_generator`.
+        The epoch is folded into each sample's derived seed, producing a
+        different (but deterministic) sequence of contiguous blocks each
+        epoch when a base seed has been assigned via :meth:`set_generator`.
         """
-        if self._subsample_generator is not None:
-            self._subsample_generator.manual_seed(
-                self._subsample_generator.initial_seed() + epoch
-            )
+        self._epoch = epoch
 
     def __getitem__(self, index: int) -> tuple[Mesh, dict[str, Any]]:
         mesh = self._load_sample(index)
 
+        generator = (
+            None
+            if self._seed_base is None
+            else spawn_generator(self._seed_base, self._epoch, index)
+        )
         mesh = _subsample_mesh(
             mesh,
             self.subsample_n_cells,
             self.subsample_n_points,
-            generator=self._subsample_generator,
+            generator=generator,
         )
 
         if self.pin_memory:
@@ -339,7 +348,10 @@ class DomainMeshReader:
         self.include_index_in_metadata = include_index_in_metadata
         self.subsample_n_points = subsample_n_points
         self.subsample_n_cells = subsample_n_cells
-        self._subsample_generator: torch.Generator | None = None
+        # Base seed + epoch for deterministic per-index RNG (see
+        # :meth:`set_generator`). ``None`` means unseeded.
+        self._seed_base: int | None = None
+        self._epoch: int = 0
         self._extra_boundaries = extra_boundaries or {}
 
         if not self._root.exists():
@@ -359,38 +371,43 @@ class DomainMeshReader:
         return len(self._paths)
 
     def set_generator(self, generator: torch.Generator) -> None:
-        """Assign a ``torch.Generator`` for reproducible subsampling.
+        """Assign a base seed for reproducible, order-independent subsampling.
 
         Called by :class:`MeshDataset` when the DataLoader provides a
-        seed.  Replaces any previously assigned generator.
+        seed.  Stores ``generator.initial_seed()`` as the base seed; each
+        sample then derives its own generator from
+        ``(base_seed, epoch, index)``, so subsampling is reproducible
+        regardless of read order or worker thread.
 
         Parameters
         ----------
         generator : torch.Generator
-            Generator to use for contiguous block selection.
+            Generator whose ``initial_seed()`` seeds all per-sample RNG.
         """
-        self._subsample_generator = generator
+        self._seed_base = generator.initial_seed()
 
     def set_epoch(self, epoch: int) -> None:
-        """Reseed the subsample RNG for a new epoch.
+        """Set the epoch used to vary per-sample RNG deterministically.
 
-        Produces a different (but deterministic) sequence of contiguous
-        blocks each epoch when a generator has been assigned via
-        :meth:`set_generator`.
+        The epoch is folded into each sample's derived seed, producing a
+        different (but deterministic) sequence of contiguous blocks each
+        epoch when a base seed has been assigned via :meth:`set_generator`.
         """
-        if self._subsample_generator is not None:
-            self._subsample_generator.manual_seed(
-                self._subsample_generator.initial_seed() + epoch
-            )
+        self._epoch = epoch
 
     def __getitem__(self, index: int) -> tuple[DomainMesh, dict[str, Any]]:
         dm = self._load_sample(index)
 
         if self.subsample_n_cells is not None or self.subsample_n_points is not None:
+            generator = (
+                None
+                if self._seed_base is None
+                else spawn_generator(self._seed_base, self._epoch, index)
+            )
             sub_kw = dict(
                 n_cells=self.subsample_n_cells,
                 n_points=self.subsample_n_points,
-                generator=self._subsample_generator,
+                generator=generator,
             )
             dm = DomainMesh(
                 interior=_subsample_mesh(dm.interior, **sub_kw),

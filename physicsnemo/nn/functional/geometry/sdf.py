@@ -122,7 +122,6 @@ def signed_distance_field_impl(
     >>> signed_distance_field(mesh_vertices, mesh_indices, input_points)
     (tensor([0.5]), tensor([0.5, 0.5, 0.5]))
     """
-
     if input_points.shape[-1] != 3:
         raise ValueError("input_points must have last dimension of size 3")
 
@@ -154,12 +153,23 @@ def signed_distance_field_impl(
     with wp.ScopedStream(wp_launch_stream):
         wp.init()
 
-        # zero copy the vertices, indices, and input points to warp:
-        wp_vertices = wp.from_torch(mesh_vertices.to(torch.float32), dtype=wp.vec3)
-        wp_indices = wp.from_torch(
-            mesh_indices.to(torch.int32).contiguous(), dtype=wp.int32
+        mesh_vertices_f32 = mesh_vertices.to(torch.float32)
+        mesh_indices_i32 = mesh_indices.to(torch.int32).contiguous()
+        input_points_f32 = input_points.to(torch.float32)
+        torch_launch_stream = (
+            torch.cuda.current_stream(input_points.device)
+            if input_points.device.type == "cuda"
+            else None
         )
-        wp_input_points = wp.from_torch(input_points.to(torch.float32), dtype=wp.vec3)
+        if torch_launch_stream is not None:
+            mesh_vertices_f32.record_stream(torch_launch_stream)
+            mesh_indices_i32.record_stream(torch_launch_stream)
+            input_points_f32.record_stream(torch_launch_stream)
+
+        # zero copy the vertices, indices, and input points to warp:
+        wp_vertices = wp.from_torch(mesh_vertices_f32, dtype=wp.vec3)
+        wp_indices = wp.from_torch(mesh_indices_i32, dtype=wp.int32)
+        wp_input_points = wp.from_torch(input_points_f32, dtype=wp.vec3)
 
         # Convert output points:
         wp_sdf = wp.from_torch(sdf, dtype=wp.float32)
@@ -190,7 +200,9 @@ def signed_distance_field_impl(
     sdf = sdf.reshape(input_shape[:-1])
     sdf_hit_point = sdf_hit_point.reshape(input_shape)
 
-    return sdf.to(input_points.dtype), sdf_hit_point.to(input_points.dtype)
+    sdf_out = sdf.to(input_points.dtype)
+    sdf_hit_point_out = sdf_hit_point.to(input_points.dtype)
+    return sdf_out, sdf_hit_point_out
 
 
 @signed_distance_field_impl.register_fake

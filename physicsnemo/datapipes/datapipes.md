@@ -141,106 +141,144 @@ preprocessing.  Threads are a natural fit:
   duplication overhead.
 - **I/O concurrency** -- the GIL is released during disk reads and CUDA
   kernel launches, so multiple threads usefully overlap I/O with GPU work.
-- **Stream parallelism** -- each prefetched sample is assigned its own
-  CUDA stream, allowing host-to-device transfers and GPU transforms to
-  run concurrently with the main training computation.
+- **Stream parallelism** -- when enabled, each prefetched sample is
+  assigned a CUDA stream so its host-to-device transfer can overlap with
+  the main training computation.
 
-### Thread-pool prefetch
+### Producer / consumer split
+
+Prefetching is split into two stages so that **no device kernels are
+launched off the main thread** -- a hard requirement for Warp-based
+transforms, which must share the model's single launching thread:
+
+- `_load_host` is the **producer**.  It runs on a worker thread and does
+  only thread-safe work: reading, decoding, and staging into pinned host
+  memory.  It returns a `HostPayload`.
+- `_consume` is the **consumer**.  It runs on whatever thread calls
+  `__getitem__` (the main thread, in practice) and performs the
+  host-to-device transfer and device transforms (including Warp kernels).
 
 `DatasetBase` owns a `ThreadPoolExecutor` (configurable via
-`num_workers`, default 2).  Calling `prefetch(index)` submits the
-load-and-transform pipeline to the pool and stashes the `Future`:
+`num_workers`) and exposes a FIFO prefetch primitive.  `submit(work_item,
+stream=...)` runs only the producer on the pool and returns a
+`PrefetchHandle` bundling the future with the stream the consumer should
+use; `consume(handle)` resolves it on the calling thread:
 
 ```python
-def prefetch(self, index, stream=None):
-    if index in self._prefetch_futures:
-        return
-    executor = self._ensure_executor()
-    self._prefetch_futures[index] = executor.submit(self._load, index)
+def submit(self, work_item, stream=None):
+    future = self._executor.submit(self._load_host, work_item)
+    return PrefetchHandle(future=future, stream=stream)
+
+def consume(self, handle):
+    payload = handle.future.result()       # re-raises producer errors
+    return self._consume(payload, handle.stream)   # H2D + transforms here
 ```
 
-`__getitem__` pops the `Future` if one exists, otherwise loads
-synchronously:
+Correlation is purely by handle identity (FIFO), so work items need not
+be hashable, unique, or even integers -- an `int` index is just the
+common case.  The index-keyed `prefetch(index)` / `__getitem__(index)`
+convenience API is a thin layer over `submit`/`consume` for random
+access, and is what map-style tests and `MultiDataset` use.
+
+### Self-priming dispatch (IOPump)
+
+The threaded producer is driven by `IOPump`, a dedicated dispatcher
+thread that keeps a *bounded* number of samples in flight regardless of
+the consumer's cadence.  It pulls a work-item stream **lazily** (one item
+per free backpressure slot, so an arbitrarily long or unbounded source
+never materializes up front), calls `submit` for each, and hands the
+returned handles back to the main thread in FIFO order.  The source
+interleaves `BATCH_BOUNDARY` markers between work items; the pump forwards
+them in place without consuming a slot, so the consumer reassembles
+dynamically-sized batches from the boundaries -- the DataLoader never
+builds the epoch's batch list in advance.  Because dispatch lives off the
+main thread, the pipeline stays primed even while the main thread is busy
+launching kernels or running the model.  This path is active whenever
+`prefetch_factor > 0`; set `prefetch_factor=0` for fully synchronous
+iteration.
+
+### CUDA stream handoff
+
+CUDA streams are an *optional* accelerator layered on top of the threaded
+producer.  When `use_streams=True` (and CUDA is available), each sample is
+round-robined a **preprocessing stream**.  The consumer runs *both* the
+host-to-device copy and the transforms on that stream, then hands the
+result to the compute stream via a CUDA **event** (never a host
+`synchronize()`):
 
 ```python
-def __getitem__(self, index):
-    future = self._prefetch_futures.pop(index, None)
-    if future is not None:
-        return future.result()
-    return self._load(index)
+def _consume(self, payload, stream=None):
+    data = payload.data
+    if device is not None and stream is not None:
+        compute_stream = torch.cuda.current_stream()
+        # Bind torch AND Warp to the preprocessing stream.
+        with preprocessing_stream(stream):              # torch + wp.ScopedStream
+            data = data.to(device, non_blocking=True)   # H2D on prep stream
+            data = self.transforms(data)                # transforms on SAME stream
+        data.record_stream(compute_stream)              # keep memory alive
+        event = torch.cuda.Event()
+        event.record(stream)
+        compute_stream.wait_event(event)                # order, no host block
+    else:
+        data = self.transforms(data)
+    return data, payload.metadata
 ```
 
-This means the DataLoader can keep the next batch loading in background
-threads while the current batch is being consumed by the model.
-
-### CUDA stream overlap
-
-When GPU execution is available, `Dataset` (and `MeshDataset`) override
-`prefetch` to run device transfer and transforms on a caller-supplied
-CUDA stream, then record an event for later synchronization:
-
-```python
-def _load_and_transform(self, index, stream=None):
-    result = _PrefetchResult(index=index)
-    data, metadata = self.reader[index]           # CPU I/O in worker thread
-
-    if stream is not None:
-        with torch.cuda.stream(stream):
-            data = data.to(device, non_blocking=True)  # H2D on stream
-            data = self.transforms(data)               # GPU transforms on stream
-        result.event = torch.cuda.Event()
-        result.event.record(stream)                    # mark completion
-
-    result.data, result.metadata = data, metadata
-    return result
-```
-
-On retrieval, `__getitem__` synchronizes the event before returning:
-
-```python
-if result.event is not None:
-    result.event.synchronize()
-return result.data, result.metadata
-```
-
-The `DataLoader` owns a pool of `num_streams` CUDA streams (default 4)
-and round-robins them across samples.  It also maintains a sliding
-prefetch window of `prefetch_factor` batches (default 2) ahead of the
-current yield position:
-
-```python
-# Prefetch the next batch as we yield the current one
-for sample_idx in all_batches[next_prefetch_idx]:
-    stream = self._streams[stream_idx % self.num_streams]
-    self.dataset.prefetch(sample_idx, stream=stream)
-    stream_idx += 1
-```
+**The single launching thread -- not a single stream -- is Warp's real
+invariant.**  Warp kernels may run on any CUDA stream provided they are
+launched from the main thread *and* Warp's current stream matches torch's.
+`preprocessing_stream` (in `protocols.py`) binds both via
+`wp.ScopedStream(wp.stream_from_torch(stream))`, so transforms (including
+Warp mesh-query / BVH kernels) run correctly on the side stream.  A
+previous `cudaErrorIllegalAddress` here was a torch/Warp stream
+*divergence* (data on a side stream, the Warp kernel on Warp's own
+stream), not a prohibition on non-default streams; binding both fixes it
+and lets GPU preprocessing genuinely overlap training.  `record_stream`
+keeps the device tensors from being recycled while the compute stream
+reads them; the pinned host source is held by the caching host allocator
+until the copy completes.
 
 ### Concurrency timeline
 
-The diagram below shows how threads and streams overlap for a two-sample
-batch with `prefetch_factor=1`:
+With everything launched from the main thread, the worker pool, the
+preprocessing stream, and the compute stream form a triple buffer:
 
 ```text
-Main thread       Worker 1            Worker 2            Stream 1    Stream 2
-    │                 │                   │                   │           │
-    ├─prefetch(0,S1)─►│                   │                   │           │
-    ├─prefetch(1,S2)─────────────────────►│                   │           │
-    │                 ├─ Read (I/O)       │                   │           │
-    │                 │                   ├─ Read (I/O)       │           │
-    │                 ├─ to(device) ─────────────────────────►│           │
-    │                 ├─ transforms ─────────────────────────►│           │
-    │                 ├─ event.record() ─────────────────────►│           │
-    │                 │                   ├─ to(device) ─────────────────►│
-    │                 │                   ├─ transforms ─────────────────►│
-    │                 │                   ├─ event.record() ─────────────►│
-    ├─ event.synchronize() ×2             │                   │           │
-    ├─ collate + yield batch              │                   │           │
-    │                 │                   │                   │           │
+Worker pool       │ load N+2 ─ load N+1 ...   (host I/O + thread-safe CPU work)
+Preprocess stream │            H2D + Warp transforms for N+1
+Compute stream    │                         train N
 ```
 
-While the main thread consumes batch N, worker threads are already
-loading batch N+1 on different streams.
+GPU preprocessing of batch N+1 genuinely overlaps training of batch N on
+a separate stream; the two are ordered by a CUDA event, never a host-side
+`synchronize`.  A transform (or generator) that forces a host readback
+simply serializes itself -- a property of that code, not of the pipeline.
+
+### Two data paths: map/descriptor vs iterable
+
+The DataLoader selects one of two mutually-exclusive paths by dataset
+type:
+
+- **Preload path (`DatasetBase`)** -- map-style and descriptor-keyed
+  datasets.  Uses the worker pool + `IOPump` described above: workers do
+  thread-safe host I/O, the main thread consumes handles (H2D + transforms
+  on the preprocessing stream).  This is the path for storage-backed data
+  addressable by index.
+- **Generator path (`IterableDatasetBase`)** -- iterable datasets that
+  *produce* data (online simulation, procedural samplers, unbounded
+  streams).  Driven **main-thread-only**: no sampler, no pump, no worker
+  pool.  `__iter__` may freely launch Warp kernels and use CUDA streams
+  (the single-launching-thread invariant holds), and the loader still
+  drives generation on a preprocessing stream with the same event handoff,
+  so generation of batch N+1 overlaps training of batch N.
+
+An iterable dataset yields either per-sample `(data, metadata)` (the
+loader collates `batch_size` of them, `drop_last` trims the tail) or, when
+`yields_batches = True`, ready-made batches that the loader passes through
+unchanged.  Iterable datasets have no length: `len(loader)` raises
+`TypeError`, and `shuffle`/`sampler` are ignored.  See
+`examples/minimal/datapipes/tutorial_5_iterable_online_simulation.py` for
+a Warp `Darcy2D` online simulation wired through this path.
 
 ### Pinned memory
 
@@ -258,8 +296,9 @@ loader.disable_prefetch()   # synchronous, single-stream -- easy to debug
 loader.enable_prefetch()    # re-enable after debugging
 ```
 
-Setting `use_streams=False` or `prefetch_factor=0` at construction time
-also forces synchronous execution.
+`use_streams=False` keeps the threaded producer but drops the CUDA
+stream handoff (the consumer copies and transforms on the default
+stream); `prefetch_factor=0` forces fully synchronous execution.
 
 ## RNG and reproducibility
 
