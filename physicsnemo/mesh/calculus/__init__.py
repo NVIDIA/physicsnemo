@@ -35,12 +35,16 @@ Both intrinsic (manifold tangent space) and extrinsic (ambient space) derivative
 are supported for manifolds embedded in higher-dimensional spaces.
 """
 
-from physicsnemo.mesh.calculus.curl import compute_curl_points_lsq
+from physicsnemo.mesh.calculus.curl import (
+    compute_curl_cells_lsq,
+    compute_curl_points_lsq,
+)
 from physicsnemo.mesh.calculus.derivatives import (
     compute_cell_derivatives,
     compute_point_derivatives,
 )
 from physicsnemo.mesh.calculus.divergence import (
+    compute_divergence_cells_lsq,
     compute_divergence_points_dec,
     compute_divergence_points_lsq,
 )

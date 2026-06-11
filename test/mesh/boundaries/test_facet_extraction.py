@@ -1228,3 +1228,33 @@ class TestFacetExtractionParametrized:
             n_spatial_dims,
         ), f"Velocity shape mismatch: {facet_mesh_cd.cell_data['velocity'].shape=}"
         assert_on_device(facet_mesh_cd.cell_data["velocity"], device)
+
+
+def test_facet_aggregation_handles_integer_data():
+    """Regression: integer/bool data (e.g. material/region IDs) must aggregate onto
+    facets without crashing and without integer-division truncation. Previously the
+    'mean' path raised (safe_eps(int64) -> torch.finfo) for cell data, and .mean(dim=1)
+    raised for point data; integers are now promoted to float for the mean.
+    """
+    # Two triangles sharing edge (1, 2); the shared facet averages both parents.
+    points = torch.tensor(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], dtype=torch.float32
+    )
+    cells = torch.tensor([[0, 1, 2], [1, 3, 2]], dtype=torch.int64)
+    mesh = Mesh(points=points, cells=cells)
+    mesh.cell_data["material_id"] = torch.tensor([1, 2], dtype=torch.int64)
+    mesh.point_data["region"] = torch.tensor([1, 1, 2, 2], dtype=torch.int64)
+
+    # Cell-sourced: shared edge = mean(1, 2) = 1.5 (not int-truncated to 1).
+    facet_cells = mesh.get_facet_mesh(data_source="cells", data_aggregation="mean")
+    agg_cells = facet_cells.cell_data["material_id"]
+    assert torch.is_floating_point(agg_cells)
+    assert torch.isclose(agg_cells, torch.full_like(agg_cells, 1.5)).any(), (
+        f"shared-facet mean 1.5 missing: {agg_cells=}"
+    )
+
+    # Point-sourced: shared edge (1,2) = mean(region[1]=1, region[2]=2) = 1.5.
+    facet_pts = mesh.get_facet_mesh(data_source="points", data_aggregation="mean")
+    agg_pts = facet_pts.cell_data["region"]
+    assert torch.is_floating_point(agg_pts)
+    assert torch.isclose(agg_pts, torch.full_like(agg_pts, 1.5)).any()

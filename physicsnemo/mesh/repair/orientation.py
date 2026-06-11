@@ -227,6 +227,18 @@ def fix_orientation(
             current_front = next_front  # Triggers re-seeding on next iteration
             continue
 
+        ### Deduplicate the discovered front. A child face can be reached from
+        # several parents in the same BFS level (any mesh with cycles); keep each
+        # child once with a single, deterministic parent. Otherwise the flip flag
+        # would be written more than once (last-write-wins, order-dependent) and
+        # component_sizes would over-count (potentially exceeding n_cells).
+        order = torch.argsort(next_front, stable=True)
+        sorted_children = next_front[order]
+        keep = torch.ones(len(sorted_children), dtype=torch.bool, device=device)
+        keep[1:] = sorted_children[1:] != sorted_children[:-1]
+        next_front = sorted_children[keep]
+        parent_faces = parent_faces[order][keep]
+
         is_oriented[next_front] = True
         component_id[next_front] = len(component_sizes) - 1
         component_sizes[-1] += len(next_front)

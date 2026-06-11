@@ -516,3 +516,53 @@ class TestSubdivisionScaling:
         # Should handle reasonably large mesh
         subdivided = mesh.subdivide(levels=1, filter="linear")
         assert subdivided.n_cells == mesh.n_cells * 4
+
+
+def test_loop_subdivision_preserves_open_boundary():
+    """Regression: Loop subdivision must apply the boundary mask to boundary
+    vertices, not the interior one-ring rule. On a flat patch the boundary must
+    stay straight (no inward shrinkage). Loop preserves original-vertex indices, so
+    the original boundary mid-edge vertices stay at indices 0..n-1.
+    """
+    # 3x3 grid -> 8 triangles, a flat unit-square patch with an open boundary.
+    coords = [[i * 0.5, j * 0.5] for j in range(3) for i in range(3)]
+    points = torch.tensor(coords, dtype=torch.float64)
+    cells = []
+    for j in range(2):
+        for i in range(2):
+            v00, v10 = j * 3 + i, j * 3 + i + 1
+            v01, v11 = (j + 1) * 3 + i, (j + 1) * 3 + i + 1
+            cells += [[v00, v10, v11], [v00, v11, v01]]
+    mesh = Mesh(points=points, cells=torch.tensor(cells, dtype=torch.int64))
+
+    sub = mesh.subdivide(levels=1, filter="loop")
+
+    zero = torch.tensor(0.0, dtype=torch.float64)
+    one = torch.tensor(1.0, dtype=torch.float64)
+    # Mid-edge boundary vertices have two collinear boundary neighbours, so the
+    # boundary mask keeps them exactly on their straight boundary line.
+    assert torch.isclose(sub.points[1, 1], zero, atol=1e-9)  # bottom-mid stays y=0
+    assert torch.isclose(sub.points[7, 1], one, atol=1e-9)  # top-mid stays y=1
+    assert torch.isclose(sub.points[3, 0], zero, atol=1e-9)  # left-mid stays x=0
+    assert torch.isclose(sub.points[5, 0], one, atol=1e-9)  # right-mid stays x=1
+
+
+def test_subdivision_preserves_integer_point_data():
+    """Regression: integer/bool point_data at new edge vertices must inherit a parent
+    label (not be zero-filled, which silently introduced a spurious 0 label).
+    """
+    points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+    cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+    mesh = Mesh(points=points, cells=cells)
+    mesh.point_data["region"] = torch.tensor([10, 20, 30], dtype=torch.int64)
+
+    sub = mesh.subdivide(levels=1, filter="linear")
+    region = sub.point_data["region"]
+
+    assert region.dtype == torch.int64
+    # Original vertices unchanged (originals come first).
+    assert torch.equal(region[:3], torch.tensor([10, 20, 30]))
+    # New edge-midpoint labels must be valid parent labels, never the spurious 0.
+    new_labels = region[3:]
+    assert (new_labels != 0).all()
+    assert torch.isin(new_labels, torch.tensor([10, 20, 30])).all()

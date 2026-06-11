@@ -865,5 +865,18 @@ class TestValidationCodePaths:
         # Degenerate check should be skipped (no key or not computed)
 
 
+def test_self_intersection_check_raises_not_implemented():
+    """check_self_intersection is unimplemented and must fail loudly (regardless of
+    raise_on_error) rather than returning a None sentinel that looks like
+    'no self-intersections found'."""
+    points = torch.tensor(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0]], dtype=torch.float32
+    )
+    cells = torch.tensor([[0, 1, 2]], dtype=torch.long)
+    mesh = Mesh(points=points, cells=cells)
+    with pytest.raises(NotImplementedError, match="[Ss]elf-intersection"):
+        validate_mesh(mesh, check_self_intersection=True, raise_on_error=False)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

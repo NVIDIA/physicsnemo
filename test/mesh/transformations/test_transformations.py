@@ -141,6 +141,35 @@ def validate_caches(
             )
 
 
+def test_point_normals_cache_correct_under_shear():
+    """Regression: the point-normals cache must not be propagated via the per-face
+    inverse-transpose law under an anisotropic/shear map. Vertex normals are an
+    angle_area-weighted average of incident face normals, and those weights are not
+    preserved by anisotropic maps, so the propagated value diverges from a true
+    recompute. After the fix the cache is dropped and lazily recomputed, so it must
+    match a freshly-built sheared mesh.
+    """
+    from physicsnemo.mesh.primitives.surfaces import tetrahedron_surface
+
+    # A tetrahedron surface is non-coplanar: each vertex is shared by 3 faces with
+    # distinct normals, so angle_area weighting genuinely blends directions.
+    mesh = tetrahedron_surface.load()
+    _ = mesh.point_normals  # warm the point-normals cache on the original mesh
+    assert mesh._cache.get(("point", "normals"), None) is not None
+
+    shear = torch.tensor(
+        [[1.0, 0.6, 0.2], [0.0, 1.0, 0.4], [0.0, 0.0, 1.0]],
+        dtype=mesh.points.dtype,
+    )
+    transformed = mesh.transform(shear)
+
+    fresh = Mesh(points=transformed.points, cells=transformed.cells).point_normals
+    assert torch.allclose(transformed.point_normals, fresh, atol=1e-5), (
+        "point_normals after a shear must match a fresh recompute, not a stale "
+        "inverse-transpose propagation"
+    )
+
+
 def assert_on_device(tensor: torch.Tensor, expected_device: str) -> None:
     """Assert tensor is on expected device."""
     actual_device = tensor.device.type

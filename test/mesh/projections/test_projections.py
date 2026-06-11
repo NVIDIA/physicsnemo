@@ -1343,6 +1343,49 @@ class TestProject:
         ### Original mesh's global_data should be unmodified
         assert mesh.global_data["freestream_dir"].shape == (3,)
 
+    def test_project_transform_does_not_mutate_input_point_cell_data(self):
+        """Regression: project(transform_point_data/transform_cell_data=True) must
+        NOT mutate the input mesh's point/cell data in place (global_data was already
+        cloned; point/cell data were not, so projection leaked back into the caller).
+        """
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32
+        )
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+        point_data = TensorDict(
+            {
+                "velocity": torch.tensor(
+                    [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]
+                )
+            },
+            batch_size=[3],
+        )
+        cell_data = TensorDict(
+            {"flux": torch.tensor([[1.0, 2.0, 3.0]])}, batch_size=[1]
+        )
+        mesh = Mesh(
+            points=points, cells=cells, point_data=point_data, cell_data=cell_data
+        )
+
+        pt_before = mesh.point_data["velocity"].clone()
+        cd_before = mesh.cell_data["flux"].clone()
+
+        result = project(
+            mesh,
+            target_n_spatial_dims=2,
+            transform_point_data=True,
+            transform_cell_data=True,
+        )
+
+        # Result is projected to 2D ...
+        assert result.point_data["velocity"].shape == (3, 2)
+        assert result.cell_data["flux"].shape == (1, 2)
+        # ... but the INPUT mesh must be untouched (still 3D, same values).
+        assert mesh.point_data["velocity"].shape == (3, 3)
+        assert mesh.cell_data["flux"].shape == (1, 3)
+        assert torch.allclose(mesh.point_data["velocity"], pt_before)
+        assert torch.allclose(mesh.cell_data["flux"], cd_before)
+
     def test_project_transform_with_keep_dims_reorder(self):
         """Test that data transformation respects keep_dims ordering."""
         points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
