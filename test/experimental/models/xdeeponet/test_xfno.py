@@ -14,30 +14,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Test suite for the 4D xFNO operator (FNO4D) of the xDeepONet family.
+"""Test suite for :class:`FNO4DWrapper` (4D xFNO) of the xDeepONet family.
 
 Covers, per `MOD-008a/b/c <../../CODING_STANDARDS/MODELS_IMPLEMENTATION.md>`_,
 mirroring the structure of ``test_xdeeponet.py``:
 
-- **Constructor + public attributes** (MOD-008a) — default and custom configs.
+- **Constructor + public attributes** (MOD-008a) — verify the wrapper wires a
+  4D :class:`physicsnemo.models.fno.FNO` and exposes its config.
 - **Forward non-regression** (MOD-008b) — compare a single forward pass
-  against committed golden ``.pth`` fixtures.
+  against a committed golden ``.pth`` fixture.
 - **Checkpoint round-trip** (MOD-008c) — ``save`` to ``.mdlus``, reload via
   :meth:`physicsnemo.Module.from_checkpoint`, and verify the loaded model
   reproduces the committed golden output.
 - **Gradient flow** — backward pass produces non-None gradients on input
   and parameters.
-- **torch.compile smoke** — wrapping the model in :func:`torch.compile`
-  (``fullgraph=False``) succeeds and matches eager numerically.
-- **Time-axis extension** — wrapper ``target_times`` autoregressive
-  forecast horizon ``K``.
+- **torch.compile smoke** — ``torch.compile(fullgraph=False)`` succeeds and
+  matches eager numerically.
+- **Time-axis extension** — wrapper ``target_times`` autoregressive forecast
+  horizon ``K``.
 
-The 3D FNO / Conv-FNO / U-FNO operators are intentionally *not* tested here:
-they are not separate classes but configurations of
-:class:`~physicsnemo.experimental.models.xdeeponet.DeepONet` (``trunk=None``
-+ a :class:`~physicsnemo.experimental.models.xdeeponet.SpatialBranch`), and
-are exercised by ``test_xdeeponet.py``.  ``FNO4D`` is the genuinely new 4D
-operator the dimension-capped ``DeepONet`` core cannot express.
+The 4D FNO core itself is the library model
+(:class:`physicsnemo.models.fno.FNO` with ``dimension=4``) and is tested by
+its own suite; this file only covers the wrapper's added behavior.  The 3D
+FNO / Conv-FNO / U-FNO operators are configurations of
+:class:`~physicsnemo.experimental.models.xdeeponet.DeepONet` and are exercised
+by ``test_xdeeponet.py``.
 """
 
 from __future__ import annotations
@@ -48,67 +49,36 @@ import pytest
 import torch
 
 from physicsnemo import Module
-from physicsnemo.experimental.models.xdeeponet import FNO4D, FNO4DWrapper
+from physicsnemo.experimental.models.xdeeponet import FNO4DWrapper
+from physicsnemo.models.fno import FNO
 
 _DATA_DIR = Path(__file__).parent / "data"
 _SEED = 0
 
 # ----- Golden fixture paths ------------------------------------------------
-#
-# One ``.pth`` per scenario.  Filenames are versioned (``_v1``) so a new
-# ``v2`` can land alongside an older fixture during a numerics transition.
 
-_GOLDEN_FNO4D_CORE = _DATA_DIR / "xfno_fno4d_core_v1.pth"
 _GOLDEN_FNO4D_WRAPPER = _DATA_DIR / "xfno_fno4d_wrapper_v1.pth"
 
 
 # ----- Fixture builders ----------------------------------------------------
 #
-# Each builder returns ``(model, args)`` where ``args`` is the positional
-# forward-argument tuple.  Inputs are kept tiny (1x4x4x4x4) so the golden
-# files stay small and every test runs in well under a second.  ``FNO4D``
-# uses ``ConvNdFCLayer`` (no ``LazyLinear``), so there are no lazy
-# parameters to materialise.
-
-
-def _fno4d_core() -> tuple[FNO4D, tuple[torch.Tensor, ...]]:
-    """4D FNO core with coordinate features (the higher-dimension operator)."""
-    torch.manual_seed(_SEED)
-    model = FNO4D(
-        in_channels=2,
-        out_channels=1,
-        width=8,
-        modes1=2,
-        modes2=2,
-        modes3=2,
-        modes4=2,
-        num_fno_layers=2,
-        lifting_layers=2,
-        decoder_layers=1,
-        decoder_width=16,
-        coord_features=True,
-    )
-    x = torch.randn(1, 4, 4, 4, 4, 2)  # (B, X, Y, Z, T, C)
-    return model, (x,)
+# The builder returns ``(model, args)``.  Inputs are kept tiny (1x4x4x4x4) so
+# the golden file stays small and the test runs in well under a second.
 
 
 def _fno4d_wrapper() -> tuple[FNO4DWrapper, tuple[torch.Tensor, ...]]:
-    """4D FNO wrapper: per-dim auto-pad + crop."""
+    """4D FNO wrapper around the library ``FNO(dimension=4)``."""
     torch.manual_seed(_SEED)
     model = FNO4DWrapper(
-        modes1=2,
-        modes2=2,
-        modes3=2,
-        modes4=2,
-        width=8,
         in_channels=2,
         out_channels=1,
+        latent_channels=8,
         num_fno_layers=2,
-        lifting_layers=1,
-        decoder_layers=1,
-        decoder_width=16,
-        coord_features=True,
+        num_fno_modes=2,
         padding=0,
+        decoder_layers=1,
+        decoder_layer_size=16,
+        coord_features=True,
     )
     x = torch.randn(1, 4, 4, 4, 4, 2)  # (B, X, Y, Z, T_in, C)
     return model, (x,)
@@ -153,10 +123,8 @@ def _golden_args(golden: dict) -> tuple[torch.Tensor, ...]:
 
 # Registry of all (name, builder, golden-path) scenarios; consumed by the
 # parameterised non-regression test below and by the golden generator
-# script (``_generate_xfno_goldens.py``) so new scenarios are picked up in
-# both places by adding one entry here.
+# script (``_generate_xfno_goldens.py``).
 _FIXTURE_REGISTRY = [
-    ("fno4d_core", _fno4d_core, _GOLDEN_FNO4D_CORE),
     ("fno4d_wrapper", _fno4d_wrapper, _GOLDEN_FNO4D_WRAPPER),
 ]
 
@@ -166,42 +134,38 @@ _FIXTURE_REGISTRY = [
 # ----------------------------------------------------------------------
 
 
-class TestFNO4DConstructor:
-    """``FNO4D`` instantiates and exposes the documented public attributes."""
+class TestFNO4DWrapperConstructor:
+    """``FNO4DWrapper`` wires a 4D ``FNO`` and exposes its config."""
 
     @pytest.mark.parametrize(
         "coord_features",
         [True, False],
         ids=["coords", "no-coords"],
     )
-    def test_fno4d_attrs(self, coord_features):
-        """``FNO4D`` stores the constructor arguments on public attrs."""
-        model = FNO4D(
+    def test_wrapper_attrs(self, coord_features):
+        """The wrapper builds an inner ``FNO(dimension=4)`` and stores attrs."""
+        model = FNO4DWrapper(
             in_channels=2,
             out_channels=3,
-            width=8,
-            modes1=2,
-            modes2=2,
-            modes3=2,
-            modes4=2,
+            latent_channels=8,
             num_fno_layers=2,
-            lifting_layers=2,
+            num_fno_modes=[2, 2, 2, 3],
+            padding=0,
             decoder_layers=1,
-            decoder_width=16,
+            decoder_layer_size=16,
             coord_features=coord_features,
         )
-        assert model.in_channels == 2
-        assert model.out_channels == 3
-        assert model.width == 8
-        assert model.modes1 == 2 and model.modes4 == 2
-        assert model.num_fno_layers == 2
-        assert model.coord_features is coord_features
-        assert model.activation_fn_name == "gelu"
+        assert isinstance(model.fno, FNO)
+        assert model.fno.dimension == 4
+        assert model.fno.in_channels == 2
+        assert model.fno.coord_features is coord_features
+        # The time-axis mode count is the last entry of num_fno_modes.
+        assert model.time_modes == 3
 
-    def test_nonpositive_layers_rejected(self):
-        """``num_fno_layers <= 0`` is rejected at construction."""
-        with pytest.raises(ValueError, match="num_fno_layers must be positive"):
-            FNO4D(in_channels=2, out_channels=1, num_fno_layers=0)
+    def test_time_modes_from_scalar(self):
+        """A scalar ``num_fno_modes`` is used as the time-axis mode count."""
+        model = FNO4DWrapper(in_channels=2, num_fno_modes=4, num_fno_layers=2)
+        assert model.time_modes == 4
 
 
 # ----------------------------------------------------------------------
@@ -210,11 +174,7 @@ class TestFNO4DConstructor:
 
 
 class TestXFNONonRegression:
-    """Forward output matches the committed golden fixture.
-
-    Parameterised on the full :data:`_FIXTURE_REGISTRY` so adding a new
-    scenario is a one-line addition (and a regenerated ``.pth``).
-    """
+    """Forward output matches the committed golden fixture."""
 
     @pytest.mark.parametrize(
         "name, builder, golden_path",
@@ -242,30 +202,24 @@ class TestXFNONonRegression:
 class TestXFNOCheckpoint:
     """``Module.save`` + ``Module.from_checkpoint`` round-trip.
 
-    Verifies that :meth:`physicsnemo.Module.from_checkpoint` reconstructs a
-    model whose forward output matches the committed golden fixture — not a
-    second forward pass on the in-memory model — so the test fails if the
-    serialized state is incomplete, corrupted, or silently re-initialised.
+    The reloaded model's forward output is compared against the committed
+    golden fixture so the test fails if the serialized state is incomplete,
+    corrupted, or silently re-initialised.
     """
 
-    def _roundtrip(self, model, args, tmp_path):
+    def test_wrapper_roundtrip(self, tmp_path):
+        """FNO4DWrapper: reloaded output matches the committed golden."""
+        golden = _load_golden(_GOLDEN_FNO4D_WRAPPER)
+        args = _golden_args(golden)
+        model, _ = _fno4d_wrapper()
         _init_lazy(model, *args)
         ckpt = tmp_path / "model.mdlus"
         model.save(str(ckpt))
         loaded = Module.from_checkpoint(str(ckpt))
+        assert type(loaded).__name__ == type(model).__name__
+        assert loaded.time_modes == model.time_modes
         with torch.no_grad():
             y_loaded = loaded(*args)
-        return loaded, y_loaded
-
-    def test_fno4d_roundtrip(self, tmp_path):
-        """FNO4D: reloaded output matches the committed golden."""
-        golden = _load_golden(_GOLDEN_FNO4D_CORE)
-        args = _golden_args(golden)
-        model, _ = _fno4d_core()
-        loaded, y_loaded = self._roundtrip(model, args, tmp_path)
-        assert type(loaded).__name__ == type(model).__name__
-        assert loaded.width == model.width
-        assert loaded.coord_features == model.coord_features
         torch.testing.assert_close(y_loaded, golden["y"], rtol=1e-5, atol=1e-6)
 
 
@@ -277,9 +231,9 @@ class TestXFNOCheckpoint:
 class TestXFNOGradientFlow:
     """Backward pass produces non-None gradients on input and parameters."""
 
-    def test_fno4d_gradients(self):
-        """Gradients flow through FNO4D."""
-        model, (x,) = _fno4d_core()
+    def test_wrapper_gradients(self):
+        """Gradients flow through FNO4DWrapper."""
+        model, (x,) = _fno4d_wrapper()
         _init_lazy(model, x)
         x = x.detach().requires_grad_(True)
         y = model(x)
@@ -300,14 +254,13 @@ class TestXFNOCompile:
 
     ``fullgraph=True`` is not asserted: the spectral convolutions use
     ``torch.fft`` (complex tensors), which introduces graph breaks under
-    ``torch.compile`` on the torch versions exercised in CI.  The default
-    production path (``fullgraph=False``) tolerates those breaks and is what
-    we verify here.
+    ``torch.compile``.  The default production path (``fullgraph=False``)
+    tolerates those breaks and is what we verify here.
     """
 
-    def test_fno4d_compile(self):
-        """FNO4D compiled model produces eager-equivalent output."""
-        model, (x,) = _fno4d_core()
+    def test_wrapper_compile(self):
+        """FNO4DWrapper compiled model produces eager-equivalent output."""
+        model, (x,) = _fno4d_wrapper()
         _init_lazy(model, x)
         with torch.no_grad():
             y_eager = model(x)
@@ -327,12 +280,12 @@ class TestXFNOTimeExtend:
     """Wrapper ``target_times`` autoregressive forecast-horizon extension.
 
     When ``target_times`` of length ``K != T_in`` is supplied, the time
-    axis is right-replicate-padded so the inner operator sees at least
-    ``T_in + K`` (and ``2 * modes_t``) timesteps; the output is cropped to
+    axis is right-replicate-padded so the operator runs on at least
+    ``T_in + K`` (and ``2 * time_modes``) timesteps; the output is cropped to
     the last ``K`` timesteps.
     """
 
-    def test_fno4d_wrapper_extends_to_K(self):
+    def test_wrapper_extends_to_K(self):
         """FNO4DWrapper: output time-axis equals the requested horizon K."""
         model, (x,) = _fno4d_wrapper()
         _init_lazy(model, x)
@@ -341,6 +294,15 @@ class TestXFNOTimeExtend:
             y = model(x, target_times=target_times)
         # x: (1, 4, 4, 4, 4, 2); squeezed output -> (1, 4, 4, 4, K=6)
         assert y.shape == (1, 4, 4, 4, 6)
+
+    def test_wrapper_K_equals_T_in(self):
+        """FNO4DWrapper: K == T_in short-circuits the extension."""
+        model, (x,) = _fno4d_wrapper()
+        _init_lazy(model, x)
+        target_times = torch.linspace(0.0, 1.0, 4)  # K == T_in == 4
+        with torch.no_grad():
+            y = model(x, target_times=target_times)
+        assert y.shape == (1, 4, 4, 4, 4)
 
 
 if __name__ == "__main__":

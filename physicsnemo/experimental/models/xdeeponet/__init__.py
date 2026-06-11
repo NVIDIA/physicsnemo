@@ -39,12 +39,14 @@ examples; see :class:`SpatialBranch` for the spatial-encoder
 composition options (Fourier / UNet / Conv layers, multi-layer
 pointwise lift, optional coordinate-feature channels).
 
-The 4D xFNO operator ships alongside :class:`DeepONet` in this package:
+A thin 4D-FNO convenience wrapper ships alongside :class:`DeepONet`:
 
-- :class:`FNO4D` / :class:`FNO4DWrapper` — pure 4D FNO over
-  :math:`(B, X, Y, Z, T, C)` (3D space + time), the higher-dimensional
-  operator that the :class:`DeepONet` core (capped at ``dimension=3``)
-  does not cover.
+- :class:`FNO4DWrapper` — wraps the library
+  :class:`physicsnemo.models.fno.FNO` (``dimension=4``) and adds
+  autoregressive time-axis extension over :math:`(B, X, Y, Z, T, C)` inputs.
+  The 4D FNO itself is **not** re-implemented here; use
+  :class:`physicsnemo.models.fno.FNO` with ``dimension=4`` directly when the
+  time-axis extension is not needed.
 
 3D FNO / Conv-FNO / U-FNO operators are *not* provided as separate classes:
 they are expressed directly as :class:`DeepONet` with ``trunk=None`` and a
@@ -54,11 +56,10 @@ they are expressed directly as :class:`DeepONet` with ``trunk=None`` and a
 
 from .branches import SpatialBranch
 from .deeponet import DeepONet
-from .fno4d import FNO4D, FNO4DWrapper
+from .fno4d import FNO4DWrapper
 
 __all__ = [
     "DeepONet",
     "SpatialBranch",
-    "FNO4D",
     "FNO4DWrapper",
 ]
