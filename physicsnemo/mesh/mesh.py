@@ -2090,9 +2090,16 @@ class Mesh:
     def _cached_adjacency(self, cache_key: str, compute_fn, **kwargs):
         r"""Look up or compute-and-cache a topological adjacency.
 
-        All four ``get_*_adjacency`` methods delegate here. The
-        ``offsets`` and ``indices`` tensors are stored as a sub-TensorDict
-        under ``_cache["topology", "{cache_key}"]``.
+        All four ``get_*_adjacency`` methods delegate here. The ``Adjacency``
+        object (itself a tensorclass) is stored directly under
+        ``_cache["topology", "{cache_key}"]``.
+
+        The object is cached as-is rather than as its raw ``offsets``/``indices``
+        tensors: reconstructing ``Adjacency(...)`` on every cache hit re-ran its
+        ``__post_init__`` validation, which performs host-device syncs (``.item()``)
+        on every lookup. ``Adjacency`` is effectively immutable and used read-only,
+        so sharing the cached instance is safe (and mirrors how the cell/point
+        geometry caches share their tensors).
 
         Parameters
         ----------
@@ -2109,18 +2116,11 @@ class Mesh:
         Adjacency
             Cached or freshly computed adjacency.
         """
-        from physicsnemo.mesh.neighbors import Adjacency
-
         cached = self._cache.get(("topology", cache_key), None)
         if cached is not None:
-            return Adjacency(
-                offsets=cached["offsets"],
-                indices=cached["indices"],
-            )
+            return cached
         result = compute_fn(self, **kwargs)
-        self._cache["topology", cache_key] = TensorDict(
-            {"offsets": result.offsets, "indices": result.indices},
-        )
+        self._cache["topology", cache_key] = result
         return result
 
     def get_point_to_cells_adjacency(self):
