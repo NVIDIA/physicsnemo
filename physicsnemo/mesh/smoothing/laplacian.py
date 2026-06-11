@@ -214,9 +214,10 @@ def smooth_laplacian(
         weight_sum.scatter_add_(0, edges[:, 0], edge_weights)
         weight_sum.scatter_add_(0, edges[:, 1], edge_weights)
 
-        ### Normalize by total weight per vertex
-        weight_sum = weight_sum.clamp(min=safe_eps(dtype))
-        laplacian = laplacian / weight_sum.unsqueeze(-1)
+        ### Normalize by total weight per vertex (in place, to actually reuse the
+        # pre-allocated buffers across iterations rather than reallocating each step).
+        weight_sum.clamp_(min=safe_eps(dtype))
+        laplacian /= weight_sum.unsqueeze(-1)
 
         ### Apply relaxation
         mesh.points = mesh.points + relaxation_factor * laplacian
