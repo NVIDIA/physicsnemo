@@ -388,3 +388,39 @@ def test_to_same_device_preserves_values_and_int_cells():
     assert out.cells.dtype == torch.int64
     assert torch.equal(out.points, mesh.points)
     assert torch.equal(out.cells, mesh.cells)
+
+
+def test_to_same_float_dtype_preserves_integer_cells():
+    """Regression (PR #1716 review): casting to the float dtype the mesh already has
+    must still take the cells-safe path. The old `probe.dtype != points.dtype` guard
+    fell through to the generated tensorclass `.to`, which cast the integer cells to
+    float and re-raised 'cells must have an int-like dtype'."""
+    mesh = Mesh(
+        points=torch.randn(4, 3).double(),  # already float64
+        cells=torch.tensor([[0, 1, 2], [1, 3, 2]]),
+    )
+    out = mesh.to(torch.float64)  # same dtype -> must not raise
+    assert out.points.dtype == torch.float64
+    assert out.cells.dtype == torch.int64
+
+
+def test_to_device_move_preserves_mixed_precision_float_dtypes():
+    """A device-only Mesh.to must NOT homogenize floating dtypes: a float16 data leaf
+    stays float16. Only an explicit float-dtype request casts the floating leaves, so
+    blindly routing device moves through the cast path (casting every float leaf to the
+    points' dtype) would be a silent regression."""
+    mesh = Mesh(points=torch.randn(4, 3), cells=torch.tensor([[0, 1, 2], [1, 3, 2]]))
+    mesh.point_data["half"] = torch.randn(4, dtype=torch.float16)
+    out = mesh.to("cpu")
+    assert out.points.dtype == torch.float32
+    assert out.point_data["half"].dtype == torch.float16  # preserved, not upcast
+
+
+def test_to_float_dtype_forwards_transfer_kwargs():
+    """Regression (PR #1716 review): a float-dtype cast must accept (and forward)
+    transfer kwargs like `non_blocking` on the device-move step rather than dropping
+    them, while still preserving the integer cells."""
+    mesh = Mesh(points=torch.randn(4, 3), cells=torch.tensor([[0, 1, 2], [1, 3, 2]]))
+    out = mesh.to(dtype=torch.float64, non_blocking=True)
+    assert out.points.dtype == torch.float64
+    assert out.cells.dtype == torch.int64
