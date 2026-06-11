@@ -28,16 +28,16 @@ import torch
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from physicsnemo.experimental.models.globe.cluster_tree import (
-    ClusterTree,
-    DualInteractionPlan,
-)
 from physicsnemo.experimental.models.globe.field_kernel import (
     BarnesHutKernel,
     Kernel,
     MultiscaleKernel,
 )
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
+from physicsnemo.mesh.spatial.cluster_tree import (
+    ClusterTree,
+    DualInteractionPlan,
+)
 
 DEFAULT_SEED = 42
 DEFAULT_LEAF_SIZE = 4

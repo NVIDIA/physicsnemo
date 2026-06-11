@@ -22,18 +22,18 @@ mesh entities (points, cells, facets).
 """
 
 import torch
-from jaxtyping import Float, Int
+from jaxtyping import Float, Int, Shaped
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 
 def scatter_aggregate(
-    src_data: Float[torch.Tensor, "n_src ..."],
+    src_data: Shaped[torch.Tensor, "n_src ..."],
     src_to_dst_mapping: Int[torch.Tensor, " n_src"],
     n_dst: int,
     weights: Float[torch.Tensor, " n_src"] | None = None,
     aggregation: str = "mean",
-) -> Float[torch.Tensor, "n_dst ..."]:
+) -> Shaped[torch.Tensor, "n_dst ..."]:
     """Aggregate source data to destination using scatter operations.
 
     This is the core scatter-based aggregation pattern used throughout physicsnemo.mesh
@@ -74,6 +74,14 @@ def scatter_aggregate(
         For "mean" mode, values are weighted averages.
         For "sum" mode, values are weighted sums.
 
+    Notes
+    -----
+    The output dtype follows ``src_data``, with one exception: a ``"mean"`` of
+    an integer or boolean ``src_data`` is promoted to ``torch.float64``. A mean
+    of integers is generally non-integral, so computing it in the source integer
+    dtype would truncate (e.g. ``(1 + 2) // 2 == 1``); promoting to a floating
+    dtype avoids this. A ``"sum"`` always preserves the source dtype.
+
     Examples
     --------
     >>> # Aggregate cell data to points
@@ -91,6 +99,15 @@ def scatter_aggregate(
     if aggregation not in ("mean", "sum"):
         raise ValueError(f"Invalid {aggregation=}. Must be 'mean' or 'sum'.")
 
+    ### Choose the compute dtype. A "mean" of integer/bool data must be computed in a
+    ### floating dtype: integer division truncates (e.g. (1 + 2) // 2 == 1), and the
+    ### division guard ``safe_eps()`` -> ``torch.finfo`` raises on integer dtypes. A
+    ### "sum" preserves the native (possibly integer) dtype.
+    if aggregation == "mean" and not torch.is_floating_point(src_data):
+        compute_dtype = torch.float64
+    else:
+        compute_dtype = dtype
+
     ### Fast path: unweighted sum is a single scatter_add_ with no extra work
     if weights is None and aggregation == "sum":
         aggregated_data = torch.zeros((n_dst, *data_shape), dtype=dtype, device=device)
@@ -102,21 +119,23 @@ def scatter_aggregate(
 
     ### Initialize weights if not provided
     if weights is None:
-        weights = torch.ones(len(src_to_dst_mapping), dtype=dtype, device=device)
+        weights = torch.ones(
+            len(src_to_dst_mapping), dtype=compute_dtype, device=device
+        )
 
-    ### Ensure weights have same dtype as data (avoid dtype mismatch in multiplication)
-    if weights.dtype != dtype:
-        weights = weights.to(dtype)
+    ### Ensure weights share the compute dtype (avoid dtype mismatch in multiplication)
+    if weights.dtype != compute_dtype:
+        weights = weights.to(compute_dtype)
 
     ### Weight the source data
     # Broadcast weights to match data shape: (n_src, *data_shape)
     weight_shape = [len(weights)] + [1] * len(data_shape)
-    weighted_data = src_data * weights.view(weight_shape)
+    weighted_data = src_data.to(compute_dtype) * weights.view(weight_shape)
 
     ### Scatter-add weighted data to destinations
     aggregated_data = torch.zeros(
         (n_dst, *data_shape),
-        dtype=dtype,
+        dtype=compute_dtype,
         device=device,
     )
 
@@ -134,7 +153,7 @@ def scatter_aggregate(
     ### Normalize weighted sum to weighted mean
     if aggregation == "mean":
         ### Compute sum of weights at each destination
-        weight_sums = torch.zeros(n_dst, dtype=dtype, device=device)
+        weight_sums = torch.zeros(n_dst, dtype=compute_dtype, device=device)
         weight_sums.scatter_add_(
             dim=0,
             index=src_to_dst_mapping,

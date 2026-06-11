@@ -280,7 +280,7 @@ def subdivide_butterfly(mesh: "Mesh") -> "Mesh":
     - Interpolating: original vertices remain unchanged
     - New edge midpoints use weighted neighbor stencils
     - Designed for 2D manifolds (triangular meshes)
-    - For non-2D manifolds: falls back to linear subdivision with warning
+    - For non-2D manifolds: raises NotImplementedError (use linear subdivision)
 
     The connectivity pattern is identical to linear subdivision (same topology),
     but the geometric positions of new vertices differ.

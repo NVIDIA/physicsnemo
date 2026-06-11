@@ -79,16 +79,13 @@ def interpolate_point_data_to_edges(
     ### Interpolate all fields using TensorDict.apply()
     def interpolate_tensor(tensor: torch.Tensor) -> torch.Tensor:
         """Interpolate a single tensor to edge midpoints."""
-        # Only interpolate floating point or complex tensors
-        # Integer/bool metadata (like IDs) cannot be meaningfully averaged
+        # Only floating/complex tensors can be averaged; integer/bool metadata
+        # (IDs, region tags, markers) cannot be meaningfully averaged.
         if not (tensor.dtype.is_floating_point or tensor.dtype.is_complex):
-            # For non-floating types, pad with zeros (will be filtered later if needed)
-            # or we could assign arbitrary values; zeros are safe default
-            edge_midpoint_values = torch.zeros(
-                (len(edges), *tensor.shape[1:]),
-                dtype=tensor.dtype,
-                device=tensor.device,
-            )
+            # Inherit one endpoint's value (the first) so the new edge vertex carries
+            # a valid label from one of its parents, rather than a spurious zero that
+            # would silently corrupt ID/marker fields.
+            edge_midpoint_values = tensor[edges[:, 0]]
         else:
             # Get endpoint values and average: shape (n_edges, *data_shape)
             edge_midpoint_values = tensor[edges].mean(dim=1)

@@ -355,10 +355,13 @@ jobs:
     - name: Merge coverage reports
       run: |
         uv run --no-sync coverage combine
-        uv run --no-sync coverage report --show-missing --omit="*test*" --omit="*internal*" --omit="*experimental*" --fail-under=45
-        uv run --no-sync coverage html
+        # -i / --ignore-errors downgrades coverage's fatal "No source for
+        # code" error to a warning, matching the PR workflow.  Kept in
+        # lockstep with github-pr.yml per .github/CACHE_CONTRACT.md.
+        uv run --no-sync coverage report -i --show-missing --omit="*test*" --omit="*internal*" --omit="*experimental*" --fail-under=45
+        uv run --no-sync coverage html -i
         # Also create an XML report for potential CI integrations
-        uv run --no-sync coverage xml -o coverage.xml
+        uv run --no-sync coverage xml -i -o coverage.xml
 
     - name: Upload coverage HTML report
       uses: actions/upload-artifact@v4

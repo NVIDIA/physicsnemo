@@ -14,11 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from physicsnemo.experimental.models.globe.cluster_tree import (
-    ClusterTree,
-    DualInteractionPlan,
-    SourceAggregates,
-)
 from physicsnemo.experimental.models.globe.field_kernel import (
     BarnesHutKernel,
     Kernel,
@@ -31,7 +26,4 @@ __all__ = [
     "Kernel",
     "BarnesHutKernel",
     "MultiscaleKernel",
-    "ClusterTree",
-    "DualInteractionPlan",
-    "SourceAggregates",
 ]

@@ -34,7 +34,10 @@ from physicsnemo.nn.functional.fourier_spectral import (
     Real,
     ViewAsComplex,
 )
-from physicsnemo.nn.functional.geometry import SignedDistanceField
+from physicsnemo.nn.functional.geometry import (
+    FarthestPointSampling,
+    SignedDistanceField,
+)
 from physicsnemo.nn.functional.interpolation import (
     GridToPointInterpolation,
     PointToGridInterpolation,
@@ -62,6 +65,7 @@ FUNCTIONAL_SPECS: tuple[type[FunctionSpec], ...] = (
     SpectralGridGradient,
     MeshlessFDDerivatives,
     # Geometry.
+    FarthestPointSampling,
     SignedDistanceField,
     # Interpolation.
     GridToPointInterpolation,
