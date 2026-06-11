@@ -633,5 +633,38 @@ class TestVisualizationParametrized:
             result.close()
 
 
+def test_process_scalars_detaches_grad_tensors():
+    """Regression: scalars that require grad must be detached so the downstream
+    .numpy() calls in both backends don't raise 'Can't call numpy() on Tensor that
+    requires grad'."""
+    from tensordict import TensorDict
+
+    from physicsnemo.mesh.visualization._scalar_utils import process_scalars
+
+    vals = torch.randn(5, requires_grad=True)
+    scalar_tensor, _assoc, _label = process_scalars(
+        vals, TensorDict({}, batch_size=[]), n_expected=5, name="point"
+    )
+    assert scalar_tensor is not None and not scalar_tensor.requires_grad
+    _ = scalar_tensor.numpy()  # must not raise
+
+
+def test_draw_with_autograd_tracked_scalars_does_not_crash():
+    """End-to-end: colouring a mesh by a grad-tracked field (a routine ML workflow)
+    must not crash on the backend's .numpy() call."""
+    points = torch.tensor(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], dtype=torch.float32
+    )
+    cells = torch.tensor([[0, 1, 2], [1, 3, 2]], dtype=torch.int64)
+    mesh = Mesh(points=points, cells=cells)
+    field = (mesh.points**2).sum(dim=-1)
+    field.requires_grad_(True)
+    mesh.point_data["pred"] = field
+
+    ax = mesh.draw(backend="matplotlib", point_scalars="pred", show=False)
+    assert ax is not None
+    plt.close("all")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

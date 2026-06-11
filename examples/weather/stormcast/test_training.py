@@ -14,28 +14,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from contextlib import nullcontext
 import os
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Literal
 
-from hydra import compose, initialize
-from omegaconf import DictConfig
 import pytest
 import torch
-from torch.distributed.checkpoint.state_dict import get_state_dict, StateDictOptions
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.distributed.fsdp import (
-    StateDictType,
-    ShardedStateDictConfig,
-    ShardedOptimStateDictConfig,
-)
+import train
+from hydra import compose, initialize
+from omegaconf import DictConfig
+from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
 from torch.distributed.tensor import DTensor
+from utils import trainer
 
 from physicsnemo.distributed import DistributedManager
-
-import train
-from utils import trainer
 
 DistributedManager.initialize()
 
