@@ -168,6 +168,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies
 
+- Updates the minimum supported `warp-lang` version to 1.14.0.
+
 ## [2.1.0] - 2026-05-26
 
 ### Added
