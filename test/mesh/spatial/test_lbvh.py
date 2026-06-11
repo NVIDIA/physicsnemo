@@ -86,10 +86,10 @@ class TestBuilderInvariants:
         assert range_start[0].item() == 0
         assert range_count[0].item() == n_items
         internal = torch.where(~is_leaf)[0]
-        l, r = left[internal], right[internal]
-        assert torch.equal(range_start[l], range_start[internal])
-        assert torch.equal(range_start[r], range_start[l] + range_count[l])
-        assert torch.equal(range_count[internal], range_count[l] + range_count[r])
+        lc, rc = left[internal], right[internal]
+        assert torch.equal(range_start[lc], range_start[internal])
+        assert torch.equal(range_start[rc], range_start[lc] + range_count[lc])
+        assert torch.equal(range_count[internal], range_count[lc] + range_count[rc])
 
     def test_leaf_size_invalid(self):
         with pytest.raises(ValueError, match="leaf_size"):
