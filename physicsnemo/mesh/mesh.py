@@ -49,6 +49,8 @@ if TYPE_CHECKING:
     import matplotlib.axes
     import pyvista
 
+    from physicsnemo.mesh.neighbors._adjacency import Adjacency
+
 
 # A field on a `Mesh` is "associated with" either points (e.g. a per-vertex
 # temperature), cells (e.g. a per-element pressure), or the mesh-as-a-whole
@@ -416,6 +418,98 @@ class Mesh:
                     f"`points` and `cells` must be on the same device, "
                     f"but got {self.points.device=} and {self.cells.device=}."
                 )
+
+    @classmethod
+    def from_polygons(
+        cls,
+        points: torch.Tensor,
+        polygons: "Adjacency",
+        *,
+        point_data: TensorDict | dict[str, torch.Tensor] | None = None,
+        cell_data: TensorDict | dict[str, torch.Tensor] | None = None,
+        global_data: TensorDict | dict[str, torch.Tensor] | None = None,
+        assume_convex: bool = False,
+    ) -> Self:
+        r"""Build a triangulated surface :class:`Mesh` from a polygon soup.
+
+        Triangulates a polygon cell-to-vertex incidence (an
+        :class:`~physicsnemo.mesh.neighbors.Adjacency` of vertex rings, as
+        produced by VTK-style readers) into the simplex-only :class:`Mesh`
+        representation, and broadcasts any per-polygon ``cell_data`` to the
+        resulting triangles.
+
+        Triangulation uses
+        :func:`physicsnemo.mesh.tessellation.triangulate`: a vectorized
+        vertex-0 fan for convex polygons and ear clipping for the rare
+        non-convex ones (so unsigned-area-weighted integrals stay correct).
+
+        Parameters
+        ----------
+        points : torch.Tensor
+            Vertex coordinates of shape :math:`(N_\text{points}, D)`.
+        polygons : Adjacency
+            Cell-to-vertex incidence (CSR): polygon ``p`` is the vertex ring
+            ``polygons.indices[polygons.offsets[p] : polygons.offsets[p + 1]]``.
+        point_data : TensorDict or dict[str, torch.Tensor], optional
+            Per-vertex data, carried through unchanged.
+        cell_data : TensorDict or dict[str, torch.Tensor], optional
+            Per-polygon data; broadcast to each polygon's triangles via the
+            triangulation's ``parent_index``.
+        global_data : TensorDict or dict[str, torch.Tensor], optional
+            Mesh-level data, carried through unchanged.
+        assume_convex : bool, default False
+            If ``True``, skip the convexity test and ear-clip fallback and
+            fan-triangulate every polygon (correct only for convex inputs).
+
+        Returns
+        -------
+        Mesh
+            A triangle mesh (``cells`` of shape :math:`(N_\text{triangles}, 3)`).
+
+        Notes
+        -----
+        Each polygon ring must be a simple, approximately planar polygon with no
+        repeated consecutive vertices; see
+        :func:`physicsnemo.mesh.tessellation.triangulate` for the full input
+        contract.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> from physicsnemo.mesh.neighbors import Adjacency
+        >>> points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+        ...                        [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]])
+        >>> polygons = Adjacency(offsets=torch.tensor([0, 4]),  # one quad
+        ...                      indices=torch.tensor([0, 1, 2, 3]))
+        >>> mesh = Mesh.from_polygons(
+        ...     points, polygons, cell_data={"p": torch.tensor([2.5])}
+        ... )
+        >>> mesh.n_cells
+        2
+        >>> mesh.cell_data["p"].tolist()
+        [2.5, 2.5]
+        """
+        from physicsnemo.mesh.tessellation import triangulate
+
+        cells, parent_index = triangulate(points, polygons, assume_convex=assume_convex)
+
+        expanded_cell_data: TensorDict | dict[str, torch.Tensor] | None = None
+        if cell_data is not None:
+            if isinstance(cell_data, TensorDict):
+                expanded_cell_data = cell_data[parent_index]
+            else:
+                expanded_cell_data = {
+                    key: value[parent_index] for key, value in dict(cell_data).items()
+                }
+
+        return cls(
+            points=points,
+            cells=cells,
+            point_data=point_data,
+            cell_data=expanded_cell_data,
+            global_data=global_data,
+        )
 
     @classmethod
     def __class_getitem__(cls, params: tuple) -> type:
@@ -1008,10 +1102,11 @@ class Mesh:
 
     @property
     def gaussian_curvature_cells(self) -> torch.Tensor:
-        """Compute Gaussian curvature at cell centers using dual mesh concept.
+        """Compute Gaussian curvature at cell centers.
 
-        Treats cell centroids as vertices of a dual mesh and computes curvature
-        based on angles between connections to adjacent cell centroids.
+        Averages the intrinsic vertex-based Gaussian curvature (angle defect) over
+        each cell's vertices, giving a cell-centered field consistent with
+        :attr:`gaussian_curvature_vertices`.
 
         The result is cached in ``_cache["cell", "gaussian_curvature"]`` for efficiency.
 
@@ -2552,8 +2647,9 @@ class Mesh:
         Returns
         -------
         Mesh
-            Self (mesh) with gradient fields added to point_data (modified in place).
-            Field naming: "{field}_gradient" or "{field}_gradient_intrinsic/extrinsic"
+            A new Mesh with gradient fields added to point_data (the input mesh is
+            not modified; its point_data is cloned). Field naming:
+            "{field}_gradient" or "{field}_gradient_intrinsic/extrinsic"
 
         Examples
         --------

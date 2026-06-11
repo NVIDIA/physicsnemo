@@ -91,6 +91,9 @@ performance benefits.
   with feature preservation
 - **Remeshing**: Uniform remeshing via clustering (dimension-agnostic)
 - **Repair**: Remove duplicates, fix orientation, fill holes, clean topology
+- **Tessellation**: Triangulate polygon soups into simplicial meshes (convex
+  fan + [ear clipping](https://en.wikipedia.org/wiki/Polygon_triangulation) for
+  non-convex polygons); also `Mesh.from_polygons`
 
 **Analysis Tools:**
 
@@ -279,7 +282,7 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | Divergence (LSQ) | ✅ | Component-wise gradients |
 | Divergence (DEC) | ✅ | Explicit dual volume formula |
 | Curl (LSQ, 3D only) | ✅ | Antisymmetric [Jacobian](https://en.wikipedia.org/wiki/Jacobian_matrix_and_determinant) |
-| Laplace-Beltrami (DEC) | ❌ |  Work in progress |
+| Laplace-Beltrami (DEC) | ✅ | Cotangent Laplacian (`physicsnemo.mesh.calculus.compute_laplacian_points_dec`) |
 | Intrinsic derivatives | ✅ | Tangent space projection |
 | Extrinsic derivatives | ✅ | Ambient space |
 | **Geometry** | | |
@@ -301,6 +304,8 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | Laplacian smoothing | ✅ | |
 | **Remeshing** | | |
 | Uniform remeshing | ✅ | Clustering-based |
+| **Tessellation** | | |
+| Polygon-soup triangulation | ✅ | Convex fan + ear-clip; `Mesh.from_polygons` |
 | **Spatial Queries** | | |
 | BVH construction | ✅ | |
 | Point containment | ✅ | |
@@ -315,7 +320,8 @@ Comprehensive overview of PhysicsNeMo-Mesh capabilities:
 | Scaling | ✅ | Uniform or anisotropic |
 | Arbitrary matrix transform | ✅ | |
 | Extrusion | ✅ | Manifold → higher dimension |
-| Projection / Intersection | ❌ | Manifold → lower dimension; work in progress |
+| Coordinate projection (drop ambient dims) | ✅ | `projections.project` (e.g. 3D → 2D embedding) |
+| Surface projection / mesh intersection | ❌ | Manifold → lower *manifold* dimension; work in progress |
 | **Neighbors & Adjacency** | | |
 | Point-to-points | ✅ | Graph edges |
 | Point-to-cells | ✅ | Vertex star |
@@ -553,6 +559,8 @@ Key design decisions enable these principles:
   curvature
 - [`physicsnemo.mesh.subdivision`](./subdivision/) - Mesh refinement
   schemes
+- [`physicsnemo.mesh.tessellation`](./tessellation/) - Polygon-soup
+  triangulation
 - [`physicsnemo.mesh.boundaries`](./boundaries/) - Boundary detection
   and facet extraction
 - [`physicsnemo.mesh.neighbors`](./neighbors/) - Adjacency computations
