@@ -29,6 +29,7 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.mesh import _requested_float_dtype
 
 
 class TestPointsValidation:
@@ -424,3 +425,37 @@ def test_to_float_dtype_forwards_transfer_kwargs():
     out = mesh.to(dtype=torch.float64, non_blocking=True)
     assert out.points.dtype == torch.float64
     assert out.cells.dtype == torch.int64
+
+
+@pytest.mark.parametrize(
+    "args, kwargs, expected",
+    [
+        ((torch.float64,), {}, torch.float64),  # to(dtype)
+        (("cpu", torch.float64), {}, torch.float64),  # to(device, dtype) positional
+        ((torch.zeros(1, dtype=torch.float64),), {}, torch.float64),  # to(other)
+        ((), {"dtype": torch.float64}, torch.float64),  # to(dtype=...)
+        ((torch.complex64,), {}, torch.complex64),  # complex is cast-worthy
+        (("cuda",), {}, None),  # device-only (str)
+        ((), {"device": "cpu"}, None),  # device-only (kwarg)
+        ((torch.int32,), {}, None),  # integer dtype -> delegate
+        ((), {}, None),  # no args
+    ],
+)
+def test_requested_float_dtype_detects_overloads(args, kwargs, expected):
+    """`_requested_float_dtype` drives the cast-vs-delegate decision: it must detect an
+    explicitly requested float/complex dtype across torch's `.to` overloads (positional
+    dtype, device+dtype, `other` tensor, `dtype=` kwarg) and return None for device-only
+    moves and integer dtypes -- independent of any current dtype."""
+    assert _requested_float_dtype(args, kwargs) == expected
+
+
+def test_to_other_tensor_overload_casts_floats_preserves_int_cells():
+    """The `to(other)` overload (copying another tensor's dtype/device) must take the
+    cells-safe path for a floating `other`: floating leaves are cast while integer cells
+    and data are preserved."""
+    mesh = Mesh(points=torch.randn(4, 3), cells=torch.tensor([[0, 1, 2], [1, 3, 2]]))
+    mesh.point_data["region"] = torch.tensor([1, 2, 3, 4])  # int -> preserved
+    out = mesh.to(torch.zeros(1, dtype=torch.float64))  # other is float64
+    assert out.points.dtype == torch.float64
+    assert out.cells.dtype == torch.int64
+    assert out.point_data["region"].dtype == torch.int64
