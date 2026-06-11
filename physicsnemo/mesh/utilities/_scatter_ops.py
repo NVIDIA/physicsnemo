@@ -22,18 +22,18 @@ mesh entities (points, cells, facets).
 """
 
 import torch
-from jaxtyping import Float, Int
+from jaxtyping import Float, Int, Shaped
 
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 
 def scatter_aggregate(
-    src_data: Float[torch.Tensor, "n_src ..."],
+    src_data: Shaped[torch.Tensor, "n_src ..."],
     src_to_dst_mapping: Int[torch.Tensor, " n_src"],
     n_dst: int,
     weights: Float[torch.Tensor, " n_src"] | None = None,
     aggregation: str = "mean",
-) -> Float[torch.Tensor, "n_dst ..."]:
+) -> Shaped[torch.Tensor, "n_dst ..."]:
     """Aggregate source data to destination using scatter operations.
 
     This is the core scatter-based aggregation pattern used throughout physicsnemo.mesh
@@ -73,6 +73,14 @@ def scatter_aggregate(
         Aggregated data at destinations, shape (n_dst, *data_shape).
         For "mean" mode, values are weighted averages.
         For "sum" mode, values are weighted sums.
+
+    Notes
+    -----
+    The output dtype follows ``src_data``, with one exception: a ``"mean"`` of
+    an integer or boolean ``src_data`` is promoted to ``torch.float64``. A mean
+    of integers is generally non-integral, so computing it in the source integer
+    dtype would truncate (e.g. ``(1 + 2) // 2 == 1``); promoting to a floating
+    dtype avoids this. A ``"sum"`` always preserves the source dtype.
 
     Examples
     --------

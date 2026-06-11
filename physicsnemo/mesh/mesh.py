@@ -1224,6 +1224,13 @@ class Mesh:
             New Mesh with subset of points. Cells that reference any removed
             points are also removed, and remaining cell indices are remapped.
 
+        Notes
+        -----
+        The no-op selections ``None`` / ``Ellipsis`` return this mesh itself,
+        and ``global_data`` is shared with the source by reference rather than
+        copied. Mutating shared data on the result therefore also mutates the
+        source; clone first if you need an independent copy.
+
         Examples
         --------
         >>> import torch
@@ -1308,6 +1315,15 @@ class Mesh:
         -------
         Mesh
             New Mesh with subset of cells.
+
+        Notes
+        -----
+        Slicing shares unsliced data with the source by reference rather than
+        copying: the returned mesh shares ``points``, ``point_data``, and
+        ``global_data`` with this mesh, and the no-op selections ``None`` /
+        ``Ellipsis`` return this mesh itself. Mutating any shared field on the
+        result therefore also mutates the source; clone first if you need an
+        independent copy.
         """
         ### Handle no-op cases: None or Ellipsis means keep all cells (returns self),
         # matching slice_points and the documented type hint (which previously raised
@@ -1494,6 +1510,13 @@ class Mesh:
         ------
         ValueError
             If a cell_data key already exists in point_data and overwrite_keys=False.
+
+        Notes
+        -----
+        Cell fields are averaged in floating point, so an integer or boolean
+        cell field is returned as a ``torch.float64`` point field (the per-point
+        mean of integers is generally non-integral and is not truncated). See
+        ``scatter_aggregate`` for the underlying dtype-promotion rule.
 
         Examples
         --------
