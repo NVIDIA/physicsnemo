@@ -342,7 +342,9 @@ def to_pyvista(
         If pyvista is not installed.
     """
     ### Convert points to numpy and pad to 3D if needed (PyVista requires 3D points)
-    points_np = mesh.points.float().cpu().numpy()
+    # .detach() first so a grad-tracked mesh can still be exported (.numpy() would
+    # otherwise raise on a tensor that requires grad).
+    points_np = mesh.points.detach().float().cpu().numpy()
 
     if mesh.n_spatial_dims < 3:
         # Pad with zeros to make 3D
@@ -396,7 +398,7 @@ def to_pyvista(
         (mesh.global_data, pv_mesh.field_data),
     ]:
         for k, v in source.items(include_nested=True, leaves_only=True):
-            arr = v.float().cpu().numpy()
+            arr = v.detach().float().cpu().numpy()
             target[str(k)] = arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
 
     return pv_mesh

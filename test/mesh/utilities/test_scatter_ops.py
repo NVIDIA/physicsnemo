@@ -267,6 +267,34 @@ class TestScatterAggregateDtypes:
 
         assert result.dtype == torch.float64
 
+    @pytest.mark.parametrize("int_dtype", [torch.int32, torch.int64, torch.bool])
+    def test_integer_mean_promotes_to_float64(self, int_dtype):
+        """A "mean" of integer/bool data is promoted to float64.
+
+        Computing the mean in the source integer dtype would truncate
+        (e.g. ``(1 + 2) // 2 == 1``), and the division guard ``safe_eps`` cannot
+        be evaluated on an integer dtype, so the aggregation promotes to float64.
+        """
+        src_data = torch.tensor([1, 2, 3], dtype=int_dtype)
+        src_to_dst = torch.tensor([0, 0, 1])
+
+        result = scatter_aggregate(src_data, src_to_dst, n_dst=2, aggregation="mean")
+
+        assert result.dtype == torch.float64
+        if int_dtype != torch.bool:
+            # Mean of [1, 2] is 1.5: it must not be truncated back to an integer.
+            assert torch.allclose(result, torch.tensor([1.5, 3.0], dtype=torch.float64))
+
+    def test_integer_sum_preserves_dtype(self):
+        """A "sum" preserves the native integer dtype (no float promotion)."""
+        src_data = torch.tensor([1, 2, 3], dtype=torch.int64)
+        src_to_dst = torch.tensor([0, 0, 1])
+
+        result = scatter_aggregate(src_data, src_to_dst, n_dst=2, aggregation="sum")
+
+        assert result.dtype == torch.int64
+        assert torch.equal(result, torch.tensor([3, 3], dtype=torch.int64))
+
 
 class TestScatterAggregateDevices:
     """Tests for device handling."""

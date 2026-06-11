@@ -90,19 +90,30 @@ def test_basic_smoothing_reduces_roughness():
     assert roughness_after < 1.0, f"Roughness should be bounded: {roughness_after=}"
 
 
-def test_smoothing_approximately_preserves_volume():
-    """Check that smoothing approximately preserves total mesh volume."""
+def test_smoothing_shrinks_volume_but_does_not_collapse():
+    """Plain (non-Taubin) Laplacian smoothing is a discrete curvature flow, so it
+    *shrinks* a convex shape rather than preserving its volume (true volume
+    preservation requires Taubin lambda|mu smoothing). Verify the expected
+    behaviour: volume strictly decreases but the mesh does not collapse.
 
+    Regression guard: this also pins the cache-invalidation fix -- ``cell_areas``
+    must be recomputed from the *smoothed* geometry, not read stale from the cache
+    populated before the in-place point update (which would make volume_after ==
+    volume_before and mask the real flow).
+    """
     mesh = create_noisy_sphere(n_points=50, noise_scale=0.1)
     volume_before = mesh.cell_areas.sum()
 
     smoothed = smooth_laplacian(mesh, n_iter=20, relaxation_factor=0.05, inplace=False)
     volume_after = smoothed.cell_areas.sum()
 
-    # Allow 20% variation (smoothing changes volume somewhat)
-    rel_change = abs(volume_after - volume_before) / volume_before
-    assert rel_change < 0.2, (
-        f"Volume change too large: {volume_before=}, {volume_after=}, {rel_change=}"
+    # Curvature flow shrinks the surface area / enclosed volume ...
+    assert volume_after < volume_before, (
+        f"Laplacian smoothing should shrink volume: {volume_before=}, {volume_after=}"
+    )
+    # ... but the mesh must remain a meaningful, non-degenerate fraction of the original.
+    assert volume_after > 0.5 * volume_before, (
+        f"Mesh collapsed under smoothing: {volume_before=}, {volume_after=}"
     )
 
 

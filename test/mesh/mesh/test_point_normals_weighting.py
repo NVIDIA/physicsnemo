@@ -409,3 +409,11 @@ class TestCaching:
         # Second access uses cache
         normals2 = mesh.point_normals
         assert torch.equal(normals1, normals2)
+
+
+def test_invalid_weighting_raises():
+    """A typo'd weighting (e.g. 'areas') must raise a clear ValueError, not crash
+    later with UnboundLocalError from the unbound weights buffer."""
+    mesh = create_triangle_surface_3d()
+    with pytest.raises(ValueError, match="weighting"):
+        mesh.compute_point_normals(weighting="areas")
