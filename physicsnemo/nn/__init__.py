@@ -139,9 +139,14 @@ from .module.resample_layers import (
 from .module.rope import (
     RotaryPositionEmbedding1D,
     RotaryPositionEmbedding2D,
+    StereographicRotaryPositionEmbedding2D,
     apply_rotary_pos_emb,
     build_axial_rope_cos_sin_2d,
+    build_axial_rope_cos_sin_2d_continuous,
     build_rope_cos_sin_1d,
+    build_rope_cos_sin_1d_continuous,
+    spherical_centroid,
+    stereographic_projection,
 )
 from .module.running_norm import RunningNorm
 from .module.siren_layers import SirenLayer, SirenLayerType

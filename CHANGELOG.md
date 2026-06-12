@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adds a stereographic 2D rotary position embedding to `physicsnemo.nn`
+  (`StereographicRotaryPositionEmbedding2D`) for tokens on a sphere:
+  latitude/longitude are mapped to a local tangent plane via a stereographic
+  projection and the resulting continuous coordinates drive a 2D RoPE that
+  composes with the existing `apply_rotary_pos_emb`. Also adds
+  `build_rope_cos_sin_1d_continuous` and `build_axial_rope_cos_sin_2d_continuous`
+  (the continuous-coordinate generalizations of `build_rope_cos_sin_1d` and
+  `build_axial_rope_cos_sin_2d`), `stereographic_projection`, and `spherical_centroid`
+  to `physicsnemo.nn.module.rope`.
 - Adds Point-Transformer local vector-attention blocks to `physicsnemo.nn`.
 - FSDP2 checkpoint support: full save/load round-trip for
   ``torch.distributed.fsdp`` v2 models, including DTensor edge cases,
