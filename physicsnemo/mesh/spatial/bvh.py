@@ -32,6 +32,7 @@ from jaxtyping import Bool, Float, Int
 from tensordict import tensorclass
 
 from physicsnemo.mesh.neighbors._adjacency import Adjacency, build_adjacency_from_pairs
+from physicsnemo.mesh.spatial._lbvh import build_lbvh_topology
 from physicsnemo.mesh.spatial._ragged import _ragged_arange
 
 if TYPE_CHECKING:
@@ -300,7 +301,7 @@ class BVH:
         return self.node_aabb_min.device
 
     @classmethod
-    def from_mesh(cls, mesh: "Mesh", leaf_size: int = 8) -> "BVH":
+    def from_mesh(cls, mesh: "Mesh", leaf_size: int = 1) -> "BVH":
         """Construct a BVH from a mesh using morton-code LBVH.
 
         Cells are sorted by the morton code of their centroids, then the tree
@@ -315,8 +316,11 @@ class BVH:
         mesh : Mesh
             The mesh to build the BVH for.
         leaf_size : int, optional
-            Maximum number of cells per leaf node. Larger values reduce tree
-            depth and memory at the cost of more candidate cells per query hit.
+            Maximum number of cells per leaf node. The default of 1 minimizes
+            candidate cells per query hit but maximizes node count
+            (``2 * n_cells - 1`` nodes) and tree depth. Larger values reduce
+            build time and memory at the cost of more candidate cells per
+            query hit.
 
         Returns
         -------
@@ -361,104 +365,26 @@ class BVH:
         sorted_aabb_min = cell_aabb_min[sorted_order]  # (n_cells, D)
         sorted_aabb_max = cell_aabb_max[sorted_order]  # (n_cells, D)
 
-        ### Pre-allocate node storage with tight upper bound
-        # Midpoint splits guarantee min leaf size of (leaf_size + 1) // 2,
-        # bounding the maximum number of leaves (and thus total nodes).
-        min_cells_per_leaf = max(1, (leaf_size + 1) // 2)
-        max_leaves = (n_cells + min_cells_per_leaf - 1) // min_cells_per_leaf
-        max_nodes = max(1, 2 * max_leaves - 1)
+        ### Build the shared morton-LBVH node topology over the sorted cells.
+        topo = build_lbvh_topology(n_cells, leaf_size, device)
 
+        ### Fill leaf AABBs from per-cell bounds (segmented reduction), then
+        # propagate bottom-up so each internal node bounds its two children.
         node_aabb_min_buf = torch.full(
-            (max_nodes, D), float("inf"), dtype=dtype, device=device
+            (topo.max_nodes, D), float("inf"), dtype=dtype, device=device
         )
         node_aabb_max_buf = torch.full(
-            (max_nodes, D), float("-inf"), dtype=dtype, device=device
+            (topo.max_nodes, D), float("-inf"), dtype=dtype, device=device
         )
-        node_left_child = torch.full((max_nodes,), -1, dtype=torch.long, device=device)
-        node_right_child = torch.full((max_nodes,), -1, dtype=torch.long, device=device)
-        leaf_start_buf = torch.full((max_nodes,), -1, dtype=torch.long, device=device)
-        leaf_count_buf = torch.zeros(max_nodes, dtype=torch.long, device=device)
+        seg_min, seg_max = _compute_leaf_aabbs(
+            topo.leaf_starts, topo.leaf_sizes, sorted_aabb_min, sorted_aabb_max
+        )
+        node_aabb_min_buf[topo.leaf_node_ids] = seg_min
+        node_aabb_max_buf[topo.leaf_node_ids] = seg_max
 
-        # ---------------------------------------------------------------
-        # Phase 1: Top-down construction (O(log N) iterations)
-        # ---------------------------------------------------------------
-        # Each segment is a contiguous range [start, end) in the sorted
-        # cell array, associated with a BVH node.
-
-        seg_starts = torch.tensor([0], dtype=torch.long, device=device)
-        seg_ends = torch.tensor([n_cells], dtype=torch.long, device=device)
-        seg_node_ids = torch.tensor([0], dtype=torch.long, device=device)
-        node_count = 1  # root already allocated
-
-        # Track internal nodes per level for the bottom-up AABB pass
-        internal_nodes_per_level: list[torch.Tensor] = []
-
-        while len(seg_starts) > 0:
-            seg_sizes = seg_ends - seg_starts  # (n_segs,)
-
-            ### Classify segments as leaf or internal
-            is_leaf_seg = seg_sizes <= leaf_size
-            is_internal_seg = ~is_leaf_seg
-
-            ### Process leaf segments: record ranges and compute AABBs
-            leaf_indices = torch.where(is_leaf_seg)[0]
-            if len(leaf_indices) > 0:
-                leaf_nids = seg_node_ids[leaf_indices]
-                l_starts = seg_starts[leaf_indices]
-                l_sizes = seg_sizes[leaf_indices]
-
-                leaf_start_buf[leaf_nids] = l_starts
-                leaf_count_buf[leaf_nids] = l_sizes
-
-                # Segmented AABB reduction (total work across all levels = O(N))
-                seg_min, seg_max = _compute_leaf_aabbs(
-                    l_starts, l_sizes, sorted_aabb_min, sorted_aabb_max
-                )
-                node_aabb_min_buf[leaf_nids] = seg_min
-                node_aabb_max_buf[leaf_nids] = seg_max
-
-            ### Process internal segments: split at midpoint, assign children
-            internal_indices = torch.where(is_internal_seg)[0]
-            if len(internal_indices) == 0:
-                break
-
-            int_starts = seg_starts[internal_indices]
-            int_ends = seg_ends[internal_indices]
-            int_sizes = seg_sizes[internal_indices]
-            int_node_ids = seg_node_ids[internal_indices]
-
-            midpoints = int_starts + int_sizes // 2
-
-            # Assign child node IDs (breadth-first within each level)
-            n_internal = len(internal_indices)
-            left_ids = (
-                node_count
-                + torch.arange(n_internal, dtype=torch.long, device=device) * 2
-            )
-            right_ids = left_ids + 1
-            node_count += 2 * n_internal
-
-            # Record parent-child links
-            node_left_child[int_node_ids] = left_ids
-            node_right_child[int_node_ids] = right_ids
-
-            # Track for bottom-up pass
-            internal_nodes_per_level.append(int_node_ids)
-
-            # Prepare next level: left children then right children
-            seg_starts = torch.cat([int_starts, midpoints])
-            seg_ends = torch.cat([midpoints, int_ends])
-            seg_node_ids = torch.cat([left_ids, right_ids])
-
-        # ---------------------------------------------------------------
-        # Phase 2: Bottom-up AABB propagation (O(log N) iterations)
-        # ---------------------------------------------------------------
-        # Internal node AABB = union of its two children's AABBs.
-        # Process from deepest internal level to root.
-
-        for level_node_ids in reversed(internal_nodes_per_level):
-            left = node_left_child[level_node_ids]
-            right = node_right_child[level_node_ids]
+        for level_node_ids in reversed(topo.internal_nodes_per_level):
+            left = topo.left_child[level_node_ids]
+            right = topo.right_child[level_node_ids]
             node_aabb_min_buf[level_node_ids] = torch.minimum(
                 node_aabb_min_buf[left], node_aabb_min_buf[right]
             )
@@ -467,13 +393,14 @@ class BVH:
             )
 
         ### Trim to actual node count
+        node_count = topo.node_count
         return cls(
             node_aabb_min=node_aabb_min_buf[:node_count],
             node_aabb_max=node_aabb_max_buf[:node_count],
-            node_left_child=node_left_child[:node_count],
-            node_right_child=node_right_child[:node_count],
-            leaf_start=leaf_start_buf[:node_count],
-            leaf_count=leaf_count_buf[:node_count],
+            node_left_child=topo.left_child[:node_count],
+            node_right_child=topo.right_child[:node_count],
+            leaf_start=topo.leaf_start[:node_count],
+            leaf_count=topo.leaf_count[:node_count],
             sorted_cell_order=sorted_order,
         )
 

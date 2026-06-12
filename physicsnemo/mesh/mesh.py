@@ -3444,3 +3444,72 @@ def _mesh_repr(self) -> str:
 
 
 Mesh.__repr__ = _mesh_repr  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+
+
+### Override the tensorclass ``to`` so a floating/complex dtype is applied only to
+# floating tensors. The generated tensorclass ``to`` casts *every* leaf -- including
+# the integer ``cells`` -- which then fails ``__post_init__``'s int-dtype check, so
+# ``mesh.to(torch.float64)`` was broken for any mesh with cells. Only an explicitly
+# requested floating/complex dtype takes the cells-safe path; device-only moves and
+# non-float dtypes are delegated unchanged to the generated ``to`` so device metadata,
+# ``non_blocking``, etc. behave exactly as before. Reassigned after the class because
+# @tensorclass overrides a body-defined ``to`` (same reason as ``__repr__`` above).
+def _requested_float_dtype(
+    args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> torch.dtype | None:
+    """Return the explicitly requested dtype iff it is floating/complex, else ``None``.
+
+    Detects the dtype across torch's ``Tensor.to`` overloads -- ``to(dtype, ...)``,
+    ``to(device, dtype, ...)``, ``to(other, ...)`` (a tensor whose dtype is copied),
+    and ``to(..., dtype=...)``. A device-only move (no dtype) or an integer dtype
+    returns ``None``. Crucially the result does not depend on the caller's current
+    dtype, so re-casting to the dtype a tensor already has (e.g. ``float64 ->
+    float64``) still routes through the cells-safe path rather than the generated
+    ``to`` that would cast the integer cells and raise.
+    """
+    dtype = kwargs.get("dtype")
+    if dtype is None:
+        for arg in args:
+            if isinstance(arg, torch.dtype):
+                dtype = arg
+                break
+            if isinstance(arg, torch.Tensor):  # ``to(other)`` copies other's dtype
+                dtype = arg.dtype
+                break
+    if isinstance(dtype, torch.dtype) and (dtype.is_floating_point or dtype.is_complex):
+        return dtype
+    return None
+
+
+def _mesh_to(self, *args: Any, **kwargs: Any) -> "Mesh":
+    cast_dtype = _requested_float_dtype(args, kwargs)
+    if cast_dtype is None:
+        # Device move and/or non-float dtype: the generated tensorclass ``to`` is
+        # correct (it never turns the integer cells into a float dtype), preserves
+        # per-leaf dtypes, and forwards device/``non_blocking``/etc. unchanged.
+        return _tensorclass_mesh_to(self, *args, **kwargs)
+
+    # Floating/complex dtype cast. Resolve the target device by probing a zero-length
+    # slice of the (always-floating) points -- this reuses torch's own ``.to`` overload
+    # parsing without copying data. Move every leaf to that device with the generated
+    # ``to`` (cells-safe, forwarding all transfer options except ``dtype``), then cast
+    # only the floating leaves so the integer cells (and any integer data) are never
+    # cast to a float dtype.
+    probe = self.points[:0].to(*args, **kwargs)
+    transfer_kwargs = {k: v for k, v in kwargs.items() if k != "dtype"}
+    transfer_kwargs["device"] = probe.device
+    moved = _tensorclass_mesh_to(self, **transfer_kwargs)
+
+    def _cast(t: torch.Tensor) -> torch.Tensor:
+        return t.to(cast_dtype) if (t.is_floating_point() or t.is_complex()) else t
+
+    moved.points = _cast(moved.points)
+    moved.point_data = moved.point_data.apply(_cast)
+    moved.cell_data = moved.cell_data.apply(_cast)
+    moved.global_data = moved.global_data.apply(_cast)
+    moved._cache = moved._cache.apply(_cast)
+    return moved
+
+
+_tensorclass_mesh_to = Mesh.to  # the generated tensorclass ``to``
+Mesh.to = _mesh_to  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]

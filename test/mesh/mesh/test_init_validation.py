@@ -29,6 +29,7 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.mesh import _requested_float_dtype
 
 
 class TestPointsValidation:
@@ -356,3 +357,105 @@ class TestParametrized:
         assert mesh.n_cells == n_cells
         assert mesh.n_spatial_dims == n_spatial_dims
         assert mesh.n_manifold_dims == n_manifold_dims
+
+
+def test_to_float_dtype_preserves_integer_cells_and_data():
+    """Regression: Mesh.to(<float dtype>) must cast floating tensors only. The
+    integer `cells` (and integer data) must NOT be cast to a float dtype, which
+    previously raised in __post_init__ ('cells must have an int-like dtype')."""
+    mesh = Mesh(points=torch.randn(4, 3), cells=torch.tensor([[0, 1, 2], [1, 3, 2]]))
+    mesh.point_data["temp"] = torch.randn(4)  # float -> cast
+    mesh.point_data["region"] = torch.tensor([1, 2, 3, 4])  # int -> preserved
+    _ = mesh.cell_areas  # warm a float cache
+
+    m64 = mesh.to(torch.float64)
+    assert m64.points.dtype == torch.float64
+    assert m64.cells.dtype == torch.int64
+    assert m64.point_data["temp"].dtype == torch.float64
+    assert m64.point_data["region"].dtype == torch.int64
+    assert m64._cache.get(("cell", "areas")).dtype == torch.float64
+    assert torch.allclose(m64.points, mesh.points.double())
+
+    # Point cloud (empty cells) must also round-trip.
+    pc = Mesh(points=torch.randn(5, 2)).to(torch.float64)
+    assert pc.points.dtype == torch.float64 and pc.cells.dtype == torch.int64
+
+
+def test_to_same_device_preserves_values_and_int_cells():
+    """A device-only Mesh.to delegates to the tensorclass mover (it sets device
+    metadata, so it returns a new mesh) and preserves point values and integer cells."""
+    mesh = Mesh(points=torch.randn(3, 3), cells=torch.tensor([[0, 1, 2]]))
+    out = mesh.to("cpu")
+    assert out.cells.dtype == torch.int64
+    assert torch.equal(out.points, mesh.points)
+    assert torch.equal(out.cells, mesh.cells)
+
+
+def test_to_same_float_dtype_preserves_integer_cells():
+    """Regression (PR #1716 review): casting to the float dtype the mesh already has
+    must still take the cells-safe path. The old `probe.dtype != points.dtype` guard
+    fell through to the generated tensorclass `.to`, which cast the integer cells to
+    float and re-raised 'cells must have an int-like dtype'."""
+    mesh = Mesh(
+        points=torch.randn(4, 3).double(),  # already float64
+        cells=torch.tensor([[0, 1, 2], [1, 3, 2]]),
+    )
+    out = mesh.to(torch.float64)  # same dtype -> must not raise
+    assert out.points.dtype == torch.float64
+    assert out.cells.dtype == torch.int64
+
+
+def test_to_device_move_preserves_mixed_precision_float_dtypes():
+    """A device-only Mesh.to must NOT homogenize floating dtypes: a float16 data leaf
+    stays float16. Only an explicit float-dtype request casts the floating leaves, so
+    blindly routing device moves through the cast path (casting every float leaf to the
+    points' dtype) would be a silent regression."""
+    mesh = Mesh(points=torch.randn(4, 3), cells=torch.tensor([[0, 1, 2], [1, 3, 2]]))
+    mesh.point_data["half"] = torch.randn(4, dtype=torch.float16)
+    out = mesh.to("cpu")
+    assert out.points.dtype == torch.float32
+    assert out.point_data["half"].dtype == torch.float16  # preserved, not upcast
+
+
+def test_to_float_dtype_forwards_transfer_kwargs():
+    """Regression (PR #1716 review): a float-dtype cast must accept (and forward)
+    transfer kwargs like `non_blocking` on the device-move step rather than dropping
+    them, while still preserving the integer cells."""
+    mesh = Mesh(points=torch.randn(4, 3), cells=torch.tensor([[0, 1, 2], [1, 3, 2]]))
+    out = mesh.to(dtype=torch.float64, non_blocking=True)
+    assert out.points.dtype == torch.float64
+    assert out.cells.dtype == torch.int64
+
+
+@pytest.mark.parametrize(
+    "args, kwargs, expected",
+    [
+        ((torch.float64,), {}, torch.float64),  # to(dtype)
+        (("cpu", torch.float64), {}, torch.float64),  # to(device, dtype) positional
+        ((torch.zeros(1, dtype=torch.float64),), {}, torch.float64),  # to(other)
+        ((), {"dtype": torch.float64}, torch.float64),  # to(dtype=...)
+        ((torch.complex64,), {}, torch.complex64),  # complex is cast-worthy
+        (("cuda",), {}, None),  # device-only (str)
+        ((), {"device": "cpu"}, None),  # device-only (kwarg)
+        ((torch.int32,), {}, None),  # integer dtype -> delegate
+        ((), {}, None),  # no args
+    ],
+)
+def test_requested_float_dtype_detects_overloads(args, kwargs, expected):
+    """`_requested_float_dtype` drives the cast-vs-delegate decision: it must detect an
+    explicitly requested float/complex dtype across torch's `.to` overloads (positional
+    dtype, device+dtype, `other` tensor, `dtype=` kwarg) and return None for device-only
+    moves and integer dtypes -- independent of any current dtype."""
+    assert _requested_float_dtype(args, kwargs) == expected
+
+
+def test_to_other_tensor_overload_casts_floats_preserves_int_cells():
+    """The `to(other)` overload (copying another tensor's dtype/device) must take the
+    cells-safe path for a floating `other`: floating leaves are cast while integer cells
+    and data are preserved."""
+    mesh = Mesh(points=torch.randn(4, 3), cells=torch.tensor([[0, 1, 2], [1, 3, 2]]))
+    mesh.point_data["region"] = torch.tensor([1, 2, 3, 4])  # int -> preserved
+    out = mesh.to(torch.zeros(1, dtype=torch.float64))  # other is float64
+    assert out.points.dtype == torch.float64
+    assert out.cells.dtype == torch.int64
+    assert out.point_data["region"].dtype == torch.int64

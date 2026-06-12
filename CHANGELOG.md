@@ -82,6 +82,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `physicsnemo.mesh.remesh` now raises `NotImplementedError` for non-2D-in-3D
   inputs (the pyacvd ACVD clustering is surface-only) instead of failing
   confusingly downstream, and its docstring reflects that restriction.
+- `physicsnemo.mesh.spatial`: `BVH.from_mesh` and `ClusterTree.from_points` now
+  share a single morton-LBVH node-topology builder (`spatial/_lbvh.py`),
+  removing ~80 lines of duplicated build logic; construction output is
+  byte-identical. `BVH.from_mesh` now defaults to `leaf_size=1` (was 8),
+  matching `ClusterTree.from_points` and measured to be more performant across
+  platforms (smaller leaves yield fewer candidate cells per query). Containment /
+  nearest-cell query results are unchanged. Adds the first direct unit tests for
+  `ClusterTree` (construction invariants, aggregates, dual-tree cover).
 - `physicsnemo.mesh` performance: eliminated host-device syncs on hot paths.
   Cached topological adjacencies now store the `Adjacency` object directly instead
   of reconstructing it (which re-ran its syncing `__post_init__` validation) on every
@@ -105,6 +113,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `physicsnemo.mesh.remesh` now preserves the input mesh's device and floating
   dtype (the pyacvd/pyvista round-trip previously dropped them to CPU/float32).
+- `physicsnemo.mesh`: `Mesh.to(<float dtype>)` and `DomainMesh.to(<float dtype>)`
+  raised `TypeError: cells must have an int-like dtype` because the cast was applied
+  to the integer `cells` tensor. A floating/complex dtype is now applied only to
+  floating tensors; the integer `cells` (and any integer data) are preserved. Device
+  moves are unchanged.
 - `physicsnemo.mesh`: fixed several silent-wrong-result bugs — `slice_cells`
   carried stale point-level and non-local (`gaussian_curvature`) caches onto the
   sliced mesh; the intrinsic LSQ gradient returned all-zeros for codimension >= 2
